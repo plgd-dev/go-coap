@@ -85,8 +85,10 @@ func TestOptionToBytes(t *testing.T) {
 
 	for _, test := range tests {
 		op := option{Value: test.in}
-		got := op.toBytes()
-		if !bytes.Equal(test.exp, got) {
+		got, err := op.toBytes()
+		if err != nil {
+			t.Error(err)
+		} else if !bytes.Equal(test.exp, got) {
 			t.Errorf("Error on %T(%v), got %#v, wanted %#v",
 				test.in, test.in, got, test.exp)
 		}

@@ -154,17 +154,10 @@ func (co *Conn) ReadMsg(timeout time.Duration) (Message, error) {
 	switch co.Conn.(type) {
 	case *net.TCPConn, *tls.Conn:
 		resp, _, err := PullTcp(m)
-		if err != nil {
-			return nil, err
-		}
-		return resp, nil
+		return resp, err
 	}
 	// UDP connection
-	resp, err := ParseDgramMessage(m)
-	if err != nil {
-		return nil, err
-	}
-	return resp, nil
+	return ParseDgramMessage(m)
 }
 
 func tcpReadBuf(conn *Conn) ([]byte, error) {
@@ -239,10 +232,8 @@ func (c *Client) getTimeoutForRequest(timeout time.Duration) time.Duration {
 	}
 	// net.Dialer.Timeout has priority if smaller than the timeouts computed so
 	// far
-	if c.Dialer != nil && c.Dialer.Timeout != 0 {
-		if c.Dialer.Timeout < requestTimeout {
-			requestTimeout = c.Dialer.Timeout
-		}
+	if c.Dialer != nil && c.Dialer.Timeout != 0 && c.Dialer.Timeout < requestTimeout {
+		requestTimeout = c.Dialer.Timeout
 	}
 	return requestTimeout
 }
@@ -250,21 +241,13 @@ func (c *Client) getTimeoutForRequest(timeout time.Duration) time.Duration {
 // Dial connects to the address on the named network.
 func Dial(network, address string) (conn *Conn, err error) {
 	client := Client{Net: network}
-	conn, err = client.Dial(address)
-	if err != nil {
-		return nil, err
-	}
-	return conn, nil
+	return client.Dial(address)
 }
 
 // DialTimeout acts like Dial but takes a timeout.
 func DialTimeout(network, address string, timeout time.Duration) (conn *Conn, err error) {
 	client := Client{Net: network, Dialer: &net.Dialer{Timeout: timeout}}
-	conn, err = client.Dial(address)
-	if err != nil {
-		return nil, err
-	}
-	return conn, nil
+	return client.Dial(address)
 }
 
 // DialWithTLS connects to the address on the named network with TLS.
@@ -273,12 +256,7 @@ func DialWithTLS(network, address string, tlsConfig *tls.Config) (conn *Conn, er
 		network += "-tls"
 	}
 	client := Client{Net: network, TLSConfig: tlsConfig}
-	conn, err = client.Dial(address)
-
-	if err != nil {
-		return nil, err
-	}
-	return conn, nil
+	return client.Dial(address)
 }
 
 // DialTimeoutWithTLS acts like DialWithTLS but takes a timeout.
@@ -287,9 +265,5 @@ func DialTimeoutWithTLS(network, address string, tlsConfig *tls.Config, timeout 
 		network += "-tls"
 	}
 	client := Client{Net: network, Dialer: &net.Dialer{Timeout: timeout}, TLSConfig: tlsConfig}
-	conn, err = client.Dial(address)
-	if err != nil {
-		return nil, err
-	}
-	return conn, nil
+	return client.Dial(address)
 }

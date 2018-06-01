@@ -71,7 +71,6 @@ Fork of https://github.com/dustin/go-coap
 		if err != nil {
 			log.Fatalf("Error dialing: %v", err)
 		}
-		defer co.Close()
 
 		req := co.NewMessage(coap.MessageParams{
 			Type:      coap.Confirmable,
@@ -149,7 +148,6 @@ Fork of https://github.com/dustin/go-coap
 		if err != nil {
 			log.Fatalf("Error dialing: %v", err)
 		}
-		defer conn.Close()
 
 		req := conn.NewMessage(coap.MessageParams{
 			Type:      coap.NonConfirmable,

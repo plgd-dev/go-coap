@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"reflect"
 	"strings"
 )
@@ -269,14 +270,14 @@ func decodeInt(b []byte) uint32 {
 	return binary.BigEndian.Uint32(tmp)
 }
 
-func (o option) toBytes() []byte {
+func (o option) toBytes() ([]byte, error) {
 	var v uint32
 
 	switch i := o.Value.(type) {
 	case string:
-		return []byte(i)
+		return []byte(i), nil
 	case []byte:
-		return i
+		return i, nil
 	case MediaType:
 		v = uint32(i)
 	case int:
@@ -288,11 +289,11 @@ func (o option) toBytes() []byte {
 	case uint32:
 		v = i
 	default:
-		panic(fmt.Errorf("invalid type for option %x: %T (%v)",
-			o.ID, o.Value, o.Value))
+		return nil, fmt.Errorf("invalid type for option %x: %T (%v)",
+			o.ID, o.Value, o.Value)
 	}
 
-	return encodeInt(v)
+	return encodeInt(v), nil
 }
 
 func parseOptionValue(optionID OptionID, valueBuf []byte) interface{} {
@@ -588,9 +589,13 @@ func writeOpt(o option, buf io.Writer, delta int) {
 		writeExt(l, lx)
 	}
 
-	b := o.toBytes()
-	writeOptHeader(delta, len(b))
-	buf.Write(b)
+	b, err := o.toBytes()
+	if err != nil {
+		log.Fatal(err)
+	} else {
+		writeOptHeader(delta, len(b))
+		buf.Write(b)
+	}
 }
 
 func writeOpts(buf io.Writer, opts options) {

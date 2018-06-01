@@ -150,23 +150,24 @@ func readTcpMsgInfo(r io.Reader) (msgTcpInfo, error) {
 	tkl := firstByte & 0x0f
 
 	var opLen int
-	if lenNib < TCP_MESSAGE_LEN13_BASE {
+	switch {
+	case lenNib < TCP_MESSAGE_LEN13_BASE:
 		opLen = int(lenNib)
-	} else if lenNib == 13 {
+	case lenNib == 13:
 		var extLen byte
 		if err := binary.Read(r, binary.BigEndian, &extLen); err != nil {
 			return mti, err
 		}
 		hdrOff++
 		opLen = TCP_MESSAGE_LEN13_BASE + int(extLen)
-	} else if lenNib == 14 {
+	case lenNib == 14:
 		var extLen uint16
 		if err := binary.Read(r, binary.BigEndian, &extLen); err != nil {
 			return mti, err
 		}
 		hdrOff += 2
 		opLen = TCP_MESSAGE_LEN14_BASE + int(extLen)
-	} else if lenNib == 15 {
+	case lenNib == 15:
 		var extLen uint32
 		if err := binary.Read(r, binary.BigEndian, &extLen); err != nil {
 			return mti, err

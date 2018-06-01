@@ -12,7 +12,6 @@ func main() {
 	if err != nil {
 		log.Fatalf("Error dialing: %v", err)
 	}
-	defer conn.Close()
 
 	req := conn.NewMessage(coap.MessageParams{
 		Type:      coap.NonConfirmable,

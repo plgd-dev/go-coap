@@ -277,6 +277,24 @@ type Server struct {
 	started bool
 }
 
+func (srv *Server) workerChannelHandler(inUse bool, timeout *time.Timer) bool {
+	select {
+	case w, ok := <-srv.queue:
+		if !ok {
+			return false
+		}
+		inUse = true
+		srv.serve(w)
+	case <-timeout.C:
+		if !inUse {
+			return false
+		}
+		inUse = false
+		timeout.Reset(idleWorkerTimeout)
+	}
+	return true
+}
+
 func (srv *Server) worker(w *requestCtx) {
 	srv.serve(w)
 
@@ -295,22 +313,7 @@ func (srv *Server) worker(w *requestCtx) {
 	inUse := false
 	timeout := time.NewTimer(idleWorkerTimeout)
 	defer timeout.Stop()
-LOOP:
-	for {
-		select {
-		case w, ok := <-srv.queue:
-			if !ok {
-				break LOOP
-			}
-			inUse = true
-			srv.serve(w)
-		case <-timeout.C:
-			if !inUse {
-				break LOOP
-			}
-			inUse = false
-			timeout.Reset(idleWorkerTimeout)
-		}
+	for srv.workerChannelHandler(inUse, timeout) {
 	}
 }
 
@@ -325,8 +328,8 @@ func (srv *Server) spawnWorker(w *requestCtx) {
 // ListenAndServe starts a coapserver on the configured address in *Server.
 func (srv *Server) ListenAndServe() error {
 	srv.lock.Lock()
-	defer srv.lock.Unlock()
 	if srv.started {
+		srv.lock.Unlock()
 		return errors.New("server already started")
 	}
 
@@ -345,18 +348,18 @@ func (srv *Server) ListenAndServe() error {
 	case "tcp", "tcp4", "tcp6":
 		a, err := net.ResolveTCPAddr(srv.Net, addr)
 		if err != nil {
+			srv.lock.Unlock()
 			return err
 		}
 		l, err := net.ListenTCP(srv.Net, a)
 		if err != nil {
+			srv.lock.Unlock()
 			return err
 		}
 		srv.Listener = l
 		srv.started = true
 		srv.lock.Unlock()
-		err = srv.serveTCP(l)
-		srv.lock.Lock() // to satisfy the defer at the top
-		return err
+		return srv.serveTCP(l)
 	case "tcp-tls", "tcp4-tls", "tcp6-tls":
 		network := "tcp"
 		if srv.Net == "tcp4-tls" {
@@ -367,33 +370,34 @@ func (srv *Server) ListenAndServe() error {
 
 		l, err := tls.Listen(network, addr, srv.TLSConfig)
 		if err != nil {
+			srv.lock.Unlock()
 			return err
 		}
 		srv.Listener = l
 		srv.started = true
 		srv.lock.Unlock()
-		err = srv.serveTCP(l)
-		srv.lock.Lock() // to satisfy the defer at the top
-		return err
+		return srv.serveTCP(l)
 	case "udp", "udp4", "udp6":
 		a, err := net.ResolveUDPAddr(srv.Net, addr)
 		if err != nil {
+			srv.lock.Unlock()
 			return err
 		}
 		l, err := net.ListenUDP(srv.Net, a)
 		if err != nil {
+			srv.lock.Unlock()
 			return err
 		}
-		if e := setUDPSocketOptions(l); e != nil {
-			return e
+		if err := setUDPSocketOptions(l); err != nil {
+			srv.lock.Unlock()
+			return err
 		}
 		srv.PacketConn = l
 		srv.started = true
 		srv.lock.Unlock()
-		err = srv.serveUDP(l)
-		srv.lock.Lock() // to satisfy the defer at the top
-		return err
+		return srv.serveUDP(l)
 	}
+	srv.lock.Unlock()
 	return errors.New("bad network")
 }
 
@@ -401,8 +405,8 @@ func (srv *Server) ListenAndServe() error {
 // configured in *Server. Its main use is to start a server from systemd.
 func (srv *Server) ActivateAndServe() error {
 	srv.lock.Lock()
-	defer srv.lock.Unlock()
 	if srv.started {
+		srv.lock.Unlock()
 		return errors.New("server already started")
 	}
 
@@ -423,18 +427,15 @@ func (srv *Server) ActivateAndServe() error {
 			}
 			srv.started = true
 			srv.lock.Unlock()
-			e := srv.serveUDP(t)
-			srv.lock.Lock() // to satisfy the defer at the top
-			return e
+			return srv.serveUDP(t)
 		}
 	}
 	if l != nil {
 		srv.started = true
 		srv.lock.Unlock()
-		e := srv.serveTCP(l)
-		srv.lock.Lock() // to satisfy the defer at the top
-		return e
+		return srv.serveTCP(l)
 	}
+	srv.lock.Unlock()
 	return errors.New("bad listeners")
 }
 
