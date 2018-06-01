@@ -2,10 +2,7 @@ sudo: false
 language: go
 
 go:
-    - 1.10.x
-
-install:
-    - make
+ - 1.10.x
 
 script:
-    - make alltest
+ - go test -v ./...
