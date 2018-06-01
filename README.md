@@ -1,3 +1,7 @@
+[![Build Status](https://travis-ci.com/ondrejtomcik/go-coap.svg?branch=master)](https://travis-ci.com/ondrejtomcik/go-coap)
+[![codecov](https://codecov.io/gh/ondrejtomcik/go-coap/branch/master/graph/badge.svg)](https://codecov.io/gh/ondrejtomcik/go-coap)
+[![Go Report](https://goreportcard.com/badge/github.com/ondrejtomcik/go-coap)](https://goreportcard.com/report/github.com/ondrejtomcik/go-coap)
+
 # CoAP Client and Server for go
 
 Features supported:
