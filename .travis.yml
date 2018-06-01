@@ -7,7 +7,7 @@ script:
  - GOOS=linux go build
  - GOOS=darwin go build
  - GOOS=freebsd go build
- - GOOS=windows go build
+# - GOOS=windows go build
 
  - go test -v -coverprofile=coverage.txt -covermode=atomic
  - go test -v -race
