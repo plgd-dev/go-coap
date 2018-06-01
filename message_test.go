@@ -119,16 +119,13 @@ func TestMissingOption(t *testing.T) {
 	}
 }
 
-func TestOptionToBytesPanic(t *testing.T) {
-	defer func() {
-		err := recover()
-		if err == nil {
-			t.Error("Expected panic. Didn't")
-		} else {
-			t.Logf("Got expected error: %v", err)
-		}
-	}()
-	option{Value: 3.1415926535897}.toBytes()
+func TestOptionToBytesError(t *testing.T) {
+	_, err := option{Value: 3.1415926535897}.toBytes()
+	if err == nil {
+		t.Error("Expected panic. Didn't")
+	} else {
+		t.Logf("Got expected error: %v", err)
+	}
 }
 
 func TestTypeString(t *testing.T) {
