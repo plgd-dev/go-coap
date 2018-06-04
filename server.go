@@ -525,9 +525,8 @@ func (srv *Server) serveTCP(l net.Listener) error {
 		numRunningDesc++
 		go func() {
 			rw.SetReadDeadline(time.Now().Add(rtimeout))
-			reqCtx := requestCtx{tcp: rw, s: srv}
-			br := acquireReader(&reqCtx)
-			defer releaseReader(srv, br)
+			br := srv.acquireReader(rw)
+			defer srv.releaseReader(br)
 			for {
 				mti, err := readTcpMsgInfo(br)
 				if err != nil {
@@ -541,11 +540,10 @@ func (srv *Server) serveTCP(l net.Listener) error {
 
 				msg.fill(mti, o, p)
 
-				reqCtx.request = &msg
 				// We will block poller wait loop when
 				// all pool workers are busy.
 
-				srv.spawnWorker(&reqCtx)
+				srv.spawnWorker(&requestCtx{tcp: rw, s: srv, request: &msg})
 			}
 		}()
 	}
@@ -684,21 +682,21 @@ func (w *requestCtx) IsTCP() bool {
 	return false
 }
 
-func acquireReader(ctx *requestCtx) *bufio.Reader {
-	v := ctx.s.readerPool.Get()
+func (s *Server) acquireReader(tcp net.Conn) *bufio.Reader {
+	v := s.readerPool.Get()
 	if v == nil {
-		n := ctx.s.TCPReadBufferSize
+		n := s.TCPReadBufferSize
 		if n <= 0 {
 			n = defaultReadBufferSize
 		}
-		return bufio.NewReaderSize(ctx.tcp, n)
+		return bufio.NewReaderSize(tcp, n)
 	}
 	r := v.(*bufio.Reader)
-	r.Reset(ctx.tcp)
+	r.Reset(tcp)
 	return r
 }
 
-func releaseReader(s *Server, r *bufio.Reader) {
+func (s *Server) releaseReader(r *bufio.Reader) {
 	s.readerPool.Put(r)
 }
 
