@@ -147,6 +147,9 @@ type OptionID uint8
    |  15 | x  | x | - | x | Uri-Query      | string | 0-255  | (none)  |
    |  17 | x  |   |   |   | Accept         | uint   | 0-2    | (none)  |
    |  20 |    |   |   | x | Location-Query | string | 0-255  | (none)  |
+   |  23 | x  | x | - | - | Block2         | uint   | 0-3    | (none)  |
+   |  27 | x  | x | - | - | Block1         | uint   | 0-3    | (none)  |
+   |  28 |    |   | x |   | Size2          | uint   | 0-4    | (none)  |
    |  35 | x  | x | - |   | Proxy-Uri      | string | 1-1034 | (none)  |
    |  39 | x  | x | - |   | Proxy-Scheme   | string | 1-255  | (none)  |
    |  60 |    |   | x |   | Size1          | uint   | 0-4    | (none)  |
@@ -168,6 +171,9 @@ const (
 	URIQuery      OptionID = 15
 	Accept        OptionID = 17
 	LocationQuery OptionID = 20
+	Block2        OptionID = 23
+	Block1        OptionID = 27
+	Size2         OptionID = 28
 	ProxyURI      OptionID = 35
 	ProxyScheme   OptionID = 39
 	Size1         OptionID = 60
@@ -204,6 +210,9 @@ var optionDefs = [256]optionDef{
 	URIQuery:      optionDef{valueFormat: valueString, minLen: 0, maxLen: 255},
 	Accept:        optionDef{valueFormat: valueUint, minLen: 0, maxLen: 2},
 	LocationQuery: optionDef{valueFormat: valueString, minLen: 0, maxLen: 255},
+	Block2:        optionDef{valueFormat: valueUint, minLen: 0, maxLen: 3},
+	Block1:        optionDef{valueFormat: valueUint, minLen: 0, maxLen: 3},
+	Size2:         optionDef{valueFormat: valueUint, minLen: 0, maxLen: 4},
 	ProxyURI:      optionDef{valueFormat: valueString, minLen: 1, maxLen: 1034},
 	ProxyScheme:   optionDef{valueFormat: valueString, minLen: 1, maxLen: 255},
 	Size1:         optionDef{valueFormat: valueUint, minLen: 0, maxLen: 4},
