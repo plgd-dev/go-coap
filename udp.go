@@ -3,6 +3,7 @@
 package coap
 
 import (
+	"bytes"
 	"net"
 
 	"golang.org/x/net/ipv4"
@@ -25,31 +26,44 @@ var udpOOBSize = func() int {
 	return len(oob6)
 }()
 
-// SessionUDP holds the remote address and the associated
+// SessionUDPData holds the remote address and the associated
 // out-of-band data.
-type SessionUDP struct {
+type SessionUDPData struct {
 	raddr   *net.UDPAddr
 	context []byte
 }
 
 // RemoteAddr returns the remote network address.
-func (s *SessionUDP) RemoteAddr() net.Addr { return s.raddr }
+func (s *SessionUDPData) RemoteAddr() net.Addr { return s.raddr }
+
+// Key returns the key session for the map using
+func (s *SessionUDPData) Key() string {
+	var sessionKey bytes.Buffer
+	sessionKey.WriteString(s.RemoteAddr().String())
+	sessionKey.Write(s.context)
+	return sessionKey.String()
+}
 
 // ReadFromSessionUDP acts just like net.UDPConn.ReadFrom(), but returns a session object instead of a
 // net.UDPAddr.
-func ReadFromSessionUDP(conn *net.UDPConn, b []byte) (int, *SessionUDP, error) {
+func ReadFromSessionUDP(conn *net.UDPConn, b []byte) (int, *SessionUDPData, error) {
 	oob := make([]byte, udpOOBSize)
 	n, oobn, _, raddr, err := conn.ReadMsgUDP(b, oob)
 	if err != nil {
 		return n, nil, err
 	}
-	return n, &SessionUDP{raddr, oob[:oobn]}, err
+	return n, &SessionUDPData{raddr, oob[:oobn]}, err
 }
 
 // WriteToSessionUDP acts just like net.UDPConn.WriteTo(), but uses a *SessionUDP instead of a net.Addr.
-func WriteToSessionUDP(conn *net.UDPConn, b []byte, session *SessionUDP) (int, error) {
+func WriteToSessionUDP(conn *net.UDPConn, b []byte, session *SessionUDPData) (int, error) {
 	oob := correctSource(session.context)
-	n, _, err := conn.WriteMsgUDP(b, oob, session.raddr)
+	addr := session.raddr
+	//check if socket is connected via Dial
+	if conn.RemoteAddr() != nil {
+		addr = nil
+	}
+	n, _, err := conn.WriteMsgUDP(b, oob, addr)
 	return n, err
 }
 

@@ -2,7 +2,6 @@ package coap
 
 import (
 	"encoding/binary"
-	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -118,13 +117,6 @@ func init() {
 func (c COAPCode) String() string {
 	return codeNames[c]
 }
-
-// Message encoding errors.
-var (
-	ErrInvalidTokenLen   = errors.New("invalid token length")
-	ErrOptionTooLong     = errors.New("option is too long")
-	ErrOptionGapTooLarge = errors.New("option gap too large")
-)
 
 // OptionID identifies an option in a message.
 type OptionID uint8
@@ -383,6 +375,7 @@ type Message interface {
 	SetOption(opID OptionID, val interface{})
 	MarshalBinary() ([]byte, error)
 	UnmarshalBinary(data []byte) error
+	SetToken(t []byte)
 }
 
 type MessageParams struct {
@@ -500,6 +493,11 @@ func (m *MessageBase) SetObserve(b int) {
 // SetPayload
 func (m *MessageBase) SetPayload(p []byte) {
 	m.payload = p
+}
+
+// SetToken
+func (m *MessageBase) SetToken(p []byte) {
+	m.token = p
 }
 
 // RemoveOption removes all references to an option
@@ -625,13 +623,13 @@ func parseBody(data []byte) (options, []byte, error) {
 		switch opt {
 		case extoptByteCode:
 			if len(data) < 1 {
-				return -1, errors.New("truncated")
+				return -1, ErrOptionTruncated
 			}
 			opt = int(data[0]) + extoptByteAddend
 			data = data[1:]
 		case extoptWordCode:
 			if len(data) < 2 {
-				return -1, errors.New("truncated")
+				return -1, ErrOptionTruncated
 			}
 			opt = int(binary.BigEndian.Uint16(data[:2])) + extoptWordAddend
 			data = data[2:]
@@ -651,7 +649,7 @@ func parseBody(data []byte) (options, []byte, error) {
 		length := int(data[0] & 0x0f)
 
 		if delta == extoptError || length == extoptError {
-			return nil, nil, errors.New("unexpected extended option marker")
+			return nil, nil, ErrOptionUnexpectedExtendMarker
 		}
 
 		data = data[1:]
@@ -666,7 +664,7 @@ func parseBody(data []byte) (options, []byte, error) {
 		}
 
 		if len(data) < length {
-			return nil, nil, errors.New("truncated")
+			return nil, nil, ErrMessageTruncated
 		}
 
 		oid := OptionID(prev + delta)

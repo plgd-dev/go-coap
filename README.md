@@ -28,7 +28,7 @@ Fork of https://github.com/dustin/go-coap
 ```go
 	// Server
 	// See /examples/simpler/server/main.go
-	func handleA(w coap.ResponseWriter, req coap.Message) {
+	func handleA(w coap.Session, req coap.Message) {
 		log.Printf("Got message in handleA: path=%q: %#v from %v", req.Path(), req, w.RemoteAddr())
 		if req.IsConfirmable() {
 			res := w.NewMessage(coap.MessageParams{
@@ -80,10 +80,11 @@ Fork of https://github.com/dustin/go-coap
 			Code:      coap.GET,
 			MessageID: 12345,
 			Payload:   []byte("client: hello, world!"),
+			Token:	   []byte("TOKEN"),
 		})
 		req.SetPathString("/a")
 
-		rv, _, err := co.Exchange(req)
+		rv, _, err := co.Exchange(req, 1 * time.Second)
 		if err != nil {
 			log.Fatalf("Error sending request: %v", err)
 		}
@@ -101,7 +102,8 @@ Fork of https://github.com/dustin/go-coap
 ```go
 	// Server
 	// See /examples/observe/server/main.go
-	func periodicTransmitter(w coap.ResponseWriter, req coap.Message) {
+
+	func periodicTransmitter(w coap.Session, req coap.Message) {
 		subded := time.Now()
 
 		for {
@@ -128,7 +130,7 @@ Fork of https://github.com/dustin/go-coap
 
 	func main() {
 		log.Fatal(coap.ListenAndServe(":5688", "udp",
-			coap.HandlerFunc(func(w coap.ResponseWriter, req coap.Message) {
+			coap.HandlerFunc(func(w coap.Session, req coap.Message) {
 				log.Printf("Got message path=%q: %#v from %v", req.Path(), req, w.RemoteAddr())
 				if req.Code() == coap.GET && req.Option(coap.Observe) != nil {
 					value := req.Option(coap.Observe)
@@ -139,6 +141,7 @@ Fork of https://github.com/dustin/go-coap
 					}
 				}
 			})))
+	}
 }
 ```
 
@@ -146,8 +149,14 @@ Fork of https://github.com/dustin/go-coap
 ```go
 	// Client
 	// See /examples/observe/client/main.go
+	func observe(s coap.Session, m coap.Message) {
+		log.Printf("Got %s", m.Payload())
+	}
+
 	func main() {
-		conn, err := coap.Dial("udp", "localhost:5688")
+		client := &coap.Client{ObserveFunc: observe}
+
+		conn, err := client.Dial("localhost:5688")
 		if err != nil {
 			log.Fatalf("Error dialing: %v", err)
 		}
@@ -161,23 +170,13 @@ Fork of https://github.com/dustin/go-coap
 		req.AddOption(coap.Observe, 1)
 		req.SetPathString("/some/path")
 
-		err = conn.WriteMsg(req, 1*time.Second)
+		err = conn.WriteMsg(req)
 		if err != nil {
 			log.Fatalf("Error sending request: %v", err)
 		}
 
-		for err == nil {
-			var rv coap.Message
-			rv, err = conn.ReadMsg(2 * time.Second)
-			if err != nil {
-				log.Fatalf("Error receiving: %v", err)
-			} else if rv != nil {
-				log.Printf("Got %s", rv.Payload())
-			}
-
-		}
+		time.Sleep(20 * time.Second)
 		log.Printf("Done...\n")
-
 	}
 ```
 
