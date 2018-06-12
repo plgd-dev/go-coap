@@ -12,7 +12,7 @@ func observe(s coap.Session, m coap.Message) {
 }
 
 func main() {
-	client := &coap.Client{ObserveFunc: observe}
+	client := &coap.Client{ObserverFunc: observe}
 
 	conn, err := client.Dial("localhost:5688")
 	if err != nil {
@@ -28,11 +28,12 @@ func main() {
 	req.AddOption(coap.Observe, 1)
 	req.SetPathString("/some/path")
 
-	err = conn.WriteMsg(req)
+	err = conn.WriteMsg(req, time.Hour)
 	if err != nil {
 		log.Fatalf("Error sending request: %v", err)
 	}
 
+	// waiting for messages that arrives in 20seconds
 	time.Sleep(20 * time.Second)
 	log.Printf("Done...\n")
 

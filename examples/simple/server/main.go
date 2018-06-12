@@ -2,6 +2,7 @@ package main
 
 import (
 	"log"
+	"time"
 
 	"github.com/ondrejtomcik/go-coap"
 )
@@ -19,7 +20,7 @@ func handleA(w coap.Session, req coap.Message) {
 		res.SetOption(coap.ContentFormat, coap.TextPlain)
 
 		log.Printf("Transmitting from A %#v", res)
-		w.WriteMsg(res)
+		w.WriteMsg(res, time.Hour)
 	}
 }
 
@@ -36,7 +37,7 @@ func handleB(w coap.Session, req coap.Message) {
 		res.SetOption(coap.ContentFormat, coap.TextPlain)
 
 		log.Printf("Transmitting from B %#v", res)
-		w.WriteMsg(res)
+		w.WriteMsg(res, time.Hour)
 	}
 }
 

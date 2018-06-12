@@ -42,13 +42,13 @@ func CreateRespMessageByReq(isTCP bool, code COAPCode, req Message) Message {
 
 func EchoServer(w Session, req Message) {
 	if req.IsConfirmable() {
-		w.WriteMsg(CreateRespMessageByReq(w.IsTCP(), Valid, req))
+		w.WriteMsg(CreateRespMessageByReq(w.IsTCP(), Valid, req), coapTimeout)
 	}
 }
 
 func EchoServerBadID(w Session, req Message) {
 	if req.IsConfirmable() {
-		w.WriteMsg(CreateRespMessageByReq(w.IsTCP(), BadRequest, req))
+		w.WriteMsg(CreateRespMessageByReq(w.IsTCP(), BadRequest, req), coapTimeout)
 	}
 }
 
@@ -164,14 +164,14 @@ func RunLocalTLSServer(laddr string, config *tls.Config) (*Server, string, chan 
 
 type clientHandler func(t *testing.T, payload []byte, co *ClientConn)
 
-func testServingTCPwithMsg(t *testing.T, net string, payload []byte, ch clientHandler) {
+func testServingTCPWithMsgWithObserver(t *testing.T, net string, payload []byte, ch clientHandler, observeFunc HandlerFunc) {
 	HandleFunc("/test", EchoServer)
 	defer HandleRemove("/test")
 
 	var s *Server
 	var addrstr string
 	var err error
-	c := new(Client)
+	c := &Client{ObserverFunc: observeFunc}
 	c.Net = net
 	var fin chan error
 	switch net {
@@ -235,28 +235,32 @@ func simpleMsg(t *testing.T, payload []byte, co *ClientConn) {
 	assertEqualMessages(t, res, m)
 }
 
+func testServingTCPWithMsg(t *testing.T, net string, payload []byte, ch clientHandler) {
+	testServingTCPWithMsgWithObserver(t, net, payload, ch, nil)
+}
+
 func TestServingUDP(t *testing.T) {
-	testServingTCPwithMsg(t, "udp", make([]byte, 128), simpleMsg)
+	testServingTCPWithMsg(t, "udp", make([]byte, 128), simpleMsg)
 }
 
 func TestServingUDPBigMsg(t *testing.T) {
-	testServingTCPwithMsg(t, "udp", make([]byte, 1300), simpleMsg)
+	testServingTCPWithMsg(t, "udp", make([]byte, 1300), simpleMsg)
 }
 
 func TestServingTCP(t *testing.T) {
-	testServingTCPwithMsg(t, "tcp", make([]byte, 128), simpleMsg)
+	testServingTCPWithMsg(t, "tcp", make([]byte, 128), simpleMsg)
 }
 
 func TestServingTCPBigMsg(t *testing.T) {
-	testServingTCPwithMsg(t, "tcp", make([]byte, 10*1024*1024), simpleMsg)
+	testServingTCPWithMsg(t, "tcp", make([]byte, 10*1024*1024), simpleMsg)
 }
 
 func TestServingTLS(t *testing.T) {
-	testServingTCPwithMsg(t, "tcp-tls", make([]byte, 128), simpleMsg)
+	testServingTCPWithMsg(t, "tcp-tls", make([]byte, 128), simpleMsg)
 }
 
 func TestServingTLSBigMsg(t *testing.T) {
-	testServingTCPwithMsg(t, "tcp-tls", make([]byte, 10*1024*1024), simpleMsg)
+	testServingTCPWithMsg(t, "tcp-tls", make([]byte, 10*1024*1024), simpleMsg)
 }
 
 func ChallegingServer(w Session, req Message) {
@@ -267,12 +271,12 @@ func ChallegingServer(w Session, req Message) {
 		Payload:   []byte("hello, world!"),
 		Token:     []byte("abcd"),
 	})
-	_, err := w.Exchange(r, time.Second*3)
+	_, err := w.Exchange(r, time.Second)
 	if err != nil {
 		panic(err.Error())
 	}
 
-	w.WriteMsg(CreateRespMessageByReq(w.IsTCP(), Valid, req))
+	w.WriteMsg(CreateRespMessageByReq(w.IsTCP(), Valid, req), coapTimeout)
 }
 
 func ChallegingServerTimeout(w Session, req Message) {
@@ -284,12 +288,12 @@ func ChallegingServerTimeout(w Session, req Message) {
 		Token:     []byte("abcd"),
 	})
 	r.SetOption(ContentFormat, TextPlain)
-	_, err := w.Exchange(r, time.Second*0)
+	_, err := w.Exchange(r, time.Second)
 	if err == nil {
 		panic("Error: expected timeout")
 	}
 
-	w.WriteMsg(CreateRespMessageByReq(w.IsTCP(), Valid, req))
+	w.WriteMsg(CreateRespMessageByReq(w.IsTCP(), Valid, req), coapTimeout)
 }
 
 func simpleChallengingMsg(t *testing.T, payload []byte, co *ClientConn) {
@@ -312,7 +316,7 @@ func simpleChallengingPathMsg(t *testing.T, payload []byte, co *ClientConn, path
 	req0.SetOption(ContentFormat, TextPlain)
 	req0.SetPathString(path)
 
-	resp0, err := co.Exchange(req0, 1*time.Second)
+	resp0, err := co.Exchange(req0, coapTimeout)
 	if err != nil {
 		t.Fatalf("unable to read msg from server: %v", err)
 	}
@@ -324,37 +328,46 @@ func simpleChallengingPathMsg(t *testing.T, payload []byte, co *ClientConn, path
 func TestServingChallengingClient(t *testing.T) {
 	HandleFunc("/challenging", ChallegingServer)
 	defer HandleRemove("/challenging")
-	testServingTCPwithMsg(t, "udp", make([]byte, 128), simpleChallengingMsg)
+	testServingTCPWithMsg(t, "udp", make([]byte, 128), simpleChallengingMsg)
 }
 
 func TestServingChallengingClientTCP(t *testing.T) {
 	HandleFunc("/challenging", ChallegingServer)
 	defer HandleRemove("/challenging")
-	testServingTCPwithMsg(t, "tcp", make([]byte, 128), simpleChallengingMsg)
+	testServingTCPWithMsg(t, "tcp", make([]byte, 128), simpleChallengingMsg)
 }
 
 func TestServingChallengingClientTLS(t *testing.T) {
 	HandleFunc("/challenging", ChallegingServer)
 	defer HandleRemove("/challenging")
-	testServingTCPwithMsg(t, "tcp-tls", make([]byte, 128), simpleChallengingMsg)
+	testServingTCPWithMsg(t, "tcp-tls", make([]byte, 128), simpleChallengingMsg)
 }
 
 func TestServingChallengingTimeoutClient(t *testing.T) {
 	HandleFunc("/challengingTimeout", ChallegingServerTimeout)
 	defer HandleRemove("/challengingTimeout")
-	testServingTCPwithMsg(t, "udp", make([]byte, 128), simpleChallengingTimeoutMsg)
+	testServingTCPWithMsgWithObserver(t, "udp", make([]byte, 128), simpleChallengingTimeoutMsg, func(Session, Message) {
+		//for timeout
+		time.Sleep(2 * time.Second)
+	})
 }
 
 func TestServingChallengingTimeoutClientTCP(t *testing.T) {
 	HandleFunc("/challengingTimeout", ChallegingServerTimeout)
 	defer HandleRemove("/challengingTimeout")
-	testServingTCPwithMsg(t, "tcp", make([]byte, 128), simpleChallengingTimeoutMsg)
+	testServingTCPWithMsgWithObserver(t, "tcp", make([]byte, 128), simpleChallengingTimeoutMsg, func(Session, Message) {
+		//for timeout
+		time.Sleep(2 * time.Second)
+	})
 }
 
 func TestServingChallengingTimeoutClientTLS(t *testing.T) {
 	HandleFunc("/challengingTimeout", ChallegingServerTimeout)
 	defer HandleRemove("/challengingTimeout")
-	testServingTCPwithMsg(t, "tcp-tls", make([]byte, 128), simpleChallengingTimeoutMsg)
+	testServingTCPWithMsgWithObserver(t, "tcp-tls", make([]byte, 128), simpleChallengingTimeoutMsg, func(Session, Message) {
+		//for timeout
+		time.Sleep(2 * time.Second)
+	})
 }
 
 func BenchmarkServe(b *testing.B) {

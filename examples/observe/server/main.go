@@ -24,7 +24,7 @@ func periodicTransmitter(w coap.Session, req coap.Message) {
 		msg.SetOption(coap.LocationPath, req.Path())
 
 		log.Printf("Transmitting %v", msg)
-		err := w.WriteMsg(msg)
+		err := w.WriteMsg(msg, time.Hour)
 		if err != nil {
 			log.Printf("Error on transmitter, stopping: %v", err)
 			return

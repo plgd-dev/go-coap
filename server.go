@@ -19,6 +19,8 @@ const maxWorkersCount = 10000
 
 const coapTimeout time.Duration = 3600 * time.Second
 
+const syncTimeout time.Duration = 30 * time.Second
+
 const maxPktLen = 1500
 
 const (
@@ -61,7 +63,7 @@ func HandleFailed(w Session, req Message) {
 		MessageID: req.MessageID(),
 		Token:     req.Token(),
 	})
-	w.WriteMsg(msg)
+	w.WriteMsg(msg, coapTimeout)
 }
 
 func failedHandler() Handler { return HandlerFunc(HandleFailed) }
@@ -121,12 +123,14 @@ type Server struct {
 	// Default buffer size to use to read incoming UDP messages. If not set
 	// it defaults to 1500 B.
 	UDPSize uint16
-	// The net.Conn.SetReadTimeout value for new connections, defaults to 2 * time.Second.
+	// The net.Conn.SetReadTimeout value for new connections, defaults to 1hour.
 	ReadTimeout time.Duration
-	// The net.Conn.SetWriteTimeout value for new connections, defaults to 2 * time.Second.
+	// The net.Conn.SetWriteTimeout value for new connections, defaults to 1hour.
 	WriteTimeout time.Duration
 	// If NotifyStartedFunc is set it is called once the server has started listening.
 	NotifyStartedFunc func()
+	// The maximum of time for synchronization go-routines, defaults to 30 seconds, if it occurs, then it call log.Fatal
+	SyncTimeout time.Duration
 	// If CreateSessionUDPFunc is set it is called when session UDP want to be created
 	CreateSessionUDPFunc func(connection conn, srv *Server, sessionUDPData *SessionUDPData) Session
 	// If CreateSessionUDPFunc is set it is called when session TCP want to be created
@@ -343,26 +347,31 @@ func (srv *Server) Shutdown() error {
 	return nil
 }
 
-// getReadTimeout is a helper func to use system timeout if server did not intend to change it.
-func (srv *Server) getReadTimeout() time.Duration {
-	rtimeout := coapTimeout
+// readTimeout is a helper func to use system timeout if server did not intend to change it.
+func (srv *Server) readTimeout() time.Duration {
 	if srv.ReadTimeout != 0 {
-		rtimeout = srv.ReadTimeout
+		return srv.ReadTimeout
 	}
-	return rtimeout
+	return coapTimeout
 }
 
-// getReadTimeout is a helper func to use system timeout if server did not intend to change it.
-func (srv *Server) getWriteTimeout() time.Duration {
-	wtimeout := coapTimeout
+// readTimeout is a helper func to use system timeout if server did not intend to change it.
+func (srv *Server) writeTimeout() time.Duration {
 	if srv.WriteTimeout != 0 {
-		wtimeout = srv.WriteTimeout
+		return srv.WriteTimeout
 	}
-	return wtimeout
+	return coapTimeout
+}
+
+func (srv *Server) syncTimeout() time.Duration {
+	if srv.SyncTimeout != 0 {
+		return srv.SyncTimeout
+	}
+	return syncTimeout
 }
 
 func (srv *Server) serveTCPconnection(conn net.Conn) error {
-	conn.SetReadDeadline(time.Now().Add(srv.getReadTimeout()))
+	conn.SetReadDeadline(time.Now().Add(srv.readTimeout()))
 	session := srv.CreateSessionTCPFunc(newConnectionTCP(conn, srv), srv)
 	br := srv.acquireReader(conn)
 	defer srv.releaseReader(br)
@@ -462,7 +471,7 @@ func (srv *Server) serveUDP(conn *net.UDPConn) error {
 		srv.NotifyStartedFunc()
 	}
 
-	rtimeout := srv.getReadTimeout()
+	rtimeout := srv.readTimeout()
 	// deadline is not used here
 
 	connUDP := newConnectionUDP(conn, srv).(*connUDP)
@@ -512,11 +521,7 @@ func (srv *Server) serveUDP(conn *net.UDPConn) error {
 
 func (srv *Server) serve(w *requestCtx) {
 	if w.request.Token() != nil {
-		var token [8]byte
-		copy(token[:], w.request.Token())
-		ch := w.session.getPairChannel(token)
-		if ch != nil {
-			ch <- w.request
+		if w.session.HandlePairMsg(w.request) {
 			return
 		}
 	}

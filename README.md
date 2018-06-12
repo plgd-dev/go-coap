@@ -41,7 +41,7 @@ Fork of https://github.com/dustin/go-coap
 			res.SetOption(coap.ContentFormat, coap.TextPlain)
 
 			log.Printf("Transmitting from B %#v", res)
-			w.WriteMsg(res)
+			w.WriteMsg(res, time.Hour)
 		}
 	}
 
@@ -118,7 +118,7 @@ Fork of https://github.com/dustin/go-coap
 			msg.SetOption(coap.LocationPath, req.Path())
 
 			log.Printf("Transmitting %v", msg)
-			err := w.WriteMsg(msg)
+			err := w.WriteMsg(msg, time.Hour)
 			if err != nil {
 				log.Printf("Error on transmitter, stopping: %v", err)
 				return
@@ -154,7 +154,7 @@ Fork of https://github.com/dustin/go-coap
 	}
 
 	func main() {
-		client := &coap.Client{ObserveFunc: observe}
+		client := &coap.Client{ObserverFunc: observe}
 
 		conn, err := client.Dial("localhost:5688")
 		if err != nil {
@@ -170,11 +170,12 @@ Fork of https://github.com/dustin/go-coap
 		req.AddOption(coap.Observe, 1)
 		req.SetPathString("/some/path")
 
-		err = conn.WriteMsg(req)
+		err = conn.WriteMsg(req, time.Hour)
 		if err != nil {
 			log.Fatalf("Error sending request: %v", err)
 		}
 
+		// waiting for messages that arrives in 20seconds
 		time.Sleep(20 * time.Second)
 		log.Printf("Done...\n")
 	}

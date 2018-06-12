@@ -1,6 +1,7 @@
 package coap
 
 import (
+	"log"
 	"net"
 	"sync"
 	"time"
@@ -14,7 +15,7 @@ type Session interface {
 	// RemoteAddr returns the net.Addr of the client that sent the current request.
 	RemoteAddr() net.Addr
 	// WriteMsg writes a reply back to the client.
-	WriteMsg(Message) error
+	WriteMsg(resp Message, timeout time.Duration) error
 	// Close closes the connection.
 	Close() error
 	// Return type of network
@@ -25,8 +26,8 @@ type Session interface {
 	// it is safe to use in goroutines
 	Exchange(req Message, timeout time.Duration) (Message, error)
 
-	// getPairChannel find channel by token to sending Message
-	getPairChannel(token [8]byte) chan Message
+	// Message was handled by pair
+	HandlePairMsg(req Message) bool
 
 	// close session with error
 	closeWithError(err error) error
@@ -34,23 +35,27 @@ type Session interface {
 
 // NewSessionUDP create new session for UDP connection
 func NewSessionUDP(connection conn, srv *Server, sessionUDPData *SessionUDPData) Session {
-	s := &sessionUDP{sessionBase: sessionBase{srv: srv, mapPairs: make(map[[8]byte](chan Message)), connection: connection}, sessionUDPData: sessionUDPData}
+	s := &sessionUDP{sessionBase: sessionBase{srv: srv, mapPairs: make(map[[8]byte](*sessionResp)), connection: connection}, sessionUDPData: sessionUDPData}
 	return s
 }
 
 // NewSessionTCP create new session for TCP connection
 func NewSessionTCP(connection conn, srv *Server) Session {
-	s := &sessionTCP{sessionBase: sessionBase{srv: srv, mapPairs: make(map[[8]byte](chan Message)), connection: connection}}
+	s := &sessionTCP{sessionBase: sessionBase{srv: srv, mapPairs: make(map[[8]byte](*sessionResp)), connection: connection}}
 	return s
+}
+
+type sessionResp struct {
+	ch chan Message // channel must have size 1 for non-blocking write to channel
 }
 
 type sessionBase struct {
 	srv        *Server
 	connection conn
 
-	pairNextToken uint32                     //to create unique token for connection WriteMsgAndWait
-	mapPairs      map[[8]byte](chan Message) //storage of channel Message
-	mapPairsLock  sync.Mutex                 //to sync add remove token
+	pairNextToken uint32                   //to create unique token for connection WriteMsgAndWait
+	mapPairs      map[[8]byte]*sessionResp //storage of channel Message
+	mapPairsLock  sync.Mutex               //to sync add remove token
 
 }
 
@@ -136,7 +141,7 @@ func (s *sessionTCP) IsTCP() bool {
 	return true
 }
 
-func (s *sessionBase) exchangeFunc(req Message, timeout time.Duration, write func(msg Message) error) (Message, error) {
+func (s *sessionBase) exchangeFunc(req Message, timeout time.Duration, write func(msg Message, timeout time.Duration) error) (Message, error) {
 	if req.Token() == nil {
 		return nil, ErrTokenNotSet
 	}
@@ -146,8 +151,8 @@ func (s *sessionBase) exchangeFunc(req Message, timeout time.Duration, write fun
 	for s.mapPairs[pairToken] != nil {
 		return nil, ErrTokenAlreadyExist
 	}
-	ch := make(chan Message)
-	s.mapPairs[pairToken] = ch
+	pair := &sessionResp{make(chan Message, 1)}
+	s.mapPairs[pairToken] = pair
 	s.mapPairsLock.Unlock()
 
 	defer func() {
@@ -156,13 +161,13 @@ func (s *sessionBase) exchangeFunc(req Message, timeout time.Duration, write fun
 		s.mapPairsLock.Unlock()
 	}()
 
-	err := write(req)
+	err := write(req, timeout)
 	if err != nil {
 		return nil, err
 	}
 
 	select {
-	case resp := <-ch:
+	case resp := <-pair.ch:
 		return resp, nil
 	case <-time.After(timeout):
 		return nil, ErrTimeout
@@ -178,18 +183,29 @@ func (s *sessionUDP) Exchange(req Message, timeout time.Duration) (Message, erro
 }
 
 // WriteMsg implements the Session.WriteMsg method.
-func (s *sessionTCP) WriteMsg(m Message) (err error) {
-	return s.connection.Write(&writeReqTCP{writeReqBase{req: m, respChan: make(chan error)}})
+func (s *sessionTCP) WriteMsg(m Message, timeout time.Duration) error {
+	return s.connection.Write(&writeReqTCP{writeReqBase{req: m, respChan: make(chan error, 1)}}, timeout)
 }
 
 // WriteMsg implements the Session.WriteMsg method.
-func (s *sessionUDP) WriteMsg(m Message) (err error) {
-	return s.connection.Write(&writeReqUDP{writeReqBase{req: m, respChan: make(chan error)}, s.sessionUDPData})
+func (s *sessionUDP) WriteMsg(m Message, timeout time.Duration) error {
+	return s.connection.Write(&writeReqUDP{writeReqBase{req: m, respChan: make(chan error, 1)}, s.sessionUDPData}, timeout)
 }
 
-func (s *sessionBase) getPairChannel(token [8]byte) chan Message {
+func (s *sessionBase) HandlePairMsg(m Message) bool {
+	var token [8]byte
+	copy(token[:], m.Token())
 	s.mapPairsLock.Lock()
-	ch := s.mapPairs[token]
+	pair := s.mapPairs[token]
 	s.mapPairsLock.Unlock()
-	return ch
+	if pair != nil {
+		select {
+		case pair.ch <- m:
+		default:
+			log.Fatal("Exactly one message can be send to pair. This is second message.")
+		}
+
+		return true
+	}
+	return false
 }

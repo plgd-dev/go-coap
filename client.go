@@ -4,6 +4,7 @@ package coap
 
 import (
 	"crypto/tls"
+	"log"
 	"net"
 	"strings"
 	"time"
@@ -23,10 +24,11 @@ type Client struct {
 	UDPSize      uint16        // minimum receive buffer for UDP messages
 	TLSConfig    *tls.Config   // TLS connection configuration
 	Dialer       *net.Dialer   // a net.Dialer used to set local address, timeouts and more
-	ReadTimeout  time.Duration // net.ClientConn.SetReadTimeout value for connections, defaults to 2 seconds - overridden by Timeout when that value is non-zero
-	WriteTimeout time.Duration // net.ClientConn.SetWriteTimeout value for connections, defaults to 2 seconds - overridden by Timeout when that value is non-zero
+	ReadTimeout  time.Duration // net.ClientConn.SetReadTimeout value for connections, defaults to 1 hour - overridden by Timeout when that value is non-zero
+	WriteTimeout time.Duration // net.ClientConn.SetWriteTimeout value for connections, defaults to 1 hour - overridden by Timeout when that value is non-zero
+	SyncTimeout  time.Duration // The maximum of time for synchronization go-routines, defaults to 30 seconds - overridden by Timeout when that value is non-zero if it occurs, then it call log.Fatal
 
-	ObserveFunc HandlerFunc // for handling observation messages from server
+	ObserverFunc HandlerFunc // for handling observation messages from server
 }
 
 func (c *Client) readTimeout() time.Duration {
@@ -41,6 +43,13 @@ func (c *Client) writeTimeout() time.Duration {
 		return c.WriteTimeout
 	}
 	return coapTimeout
+}
+
+func (c *Client) syncTimeout() time.Duration {
+	if c.SyncTimeout != 0 {
+		return c.SyncTimeout
+	}
+	return syncTimeout
 }
 
 // Dial connects to the address on the named network.
@@ -75,7 +84,12 @@ func (c *Client) Dial(address string) (clientConn *ClientConn, err error) {
 	sync := make(chan bool)
 	clientConn = &ClientConn{srv: &Server{Net: network, TLSConfig: c.TLSConfig, ReadTimeout: c.readTimeout(), WriteTimeout: c.writeTimeout(), UDPSize: c.UDPSize,
 		NotifyStartedFunc: func() {
-			sync <- true
+			timeout := c.syncTimeout()
+			select {
+			case sync <- true:
+			case <-time.After(timeout):
+				log.Fatal("Client cannot send start: Timeout")
+			}
 		},
 		CreateSessionTCPFunc: func(connection conn, srv *Server) Session {
 			return clientConn.session
@@ -83,7 +97,7 @@ func (c *Client) Dial(address string) (clientConn *ClientConn, err error) {
 		CreateSessionUDPFunc: func(connection conn, srv *Server, sessionUDPData *SessionUDPData) Session {
 			clientConn.session.(*sessionUDP).sessionUDPData = sessionUDPData
 			return clientConn.session
-		}, Handler: c.ObserveFunc},
+		}, Handler: c.ObserverFunc},
 		shutdownSync: make(chan error)}
 	if useTLS {
 		clientConn.srv.Conn, err = tls.DialWithDialer(&d, network, address, c.TLSConfig)
@@ -104,9 +118,19 @@ func (c *Client) Dial(address string) (clientConn *ClientConn, err error) {
 	}
 
 	go func() {
-		clientConn.shutdownSync <- clientConn.srv.ActivateAndServe()
+		timeout := c.syncTimeout()
+		err := clientConn.srv.ActivateAndServe()
+		select {
+		case clientConn.shutdownSync <- err:
+		case <-time.After(timeout):
+			log.Fatal("Client cannot send shutdown: Timeout")
+		}
 	}()
-	<-sync
+	select {
+	case <-sync:
+	case <-time.After(c.syncTimeout()):
+		log.Fatal("Client cannot recv start: Timeout")
+	}
 
 	clientConn.client = c
 
@@ -130,14 +154,18 @@ func (co *ClientConn) NewMessage(p MessageParams) Message {
 }
 
 // WriteMsg sends a message through the connection co.
-func (co *ClientConn) WriteMsg(m Message) (err error) {
-	return co.session.WriteMsg(m)
+func (co *ClientConn) WriteMsg(m Message, timeout time.Duration) (err error) {
+	return co.session.WriteMsg(m, timeout)
 }
 
 // Close close connection
 func (co *ClientConn) Close() {
 	co.srv.Shutdown()
-	<-co.shutdownSync
+	select {
+	case <-co.shutdownSync:
+	case <-time.After(co.client.syncTimeout()):
+		log.Fatal("Client cannot recv shutdown: Timeout")
+	}
 }
 
 // Dial connects to the address on the named network.
@@ -152,20 +180,21 @@ func DialTimeout(network, address string, timeout time.Duration) (conn *ClientCo
 	return client.Dial(address)
 }
 
-// DialWithTLS connects to the address on the named network with TLS.
-func DialWithTLS(network, address string, tlsConfig *tls.Config) (conn *ClientConn, err error) {
+func fixNetTLS(network string) string {
 	if !strings.HasSuffix(network, "-tls") {
 		network += "-tls"
 	}
-	client := Client{Net: network, TLSConfig: tlsConfig}
+	return network
+}
+
+// DialWithTLS connects to the address on the named network with TLS.
+func DialWithTLS(network, address string, tlsConfig *tls.Config) (conn *ClientConn, err error) {
+	client := Client{Net: fixNetTLS(network), TLSConfig: tlsConfig}
 	return client.Dial(address)
 }
 
 // DialTimeoutWithTLS acts like DialWithTLS but takes a timeout.
 func DialTimeoutWithTLS(network, address string, tlsConfig *tls.Config, timeout time.Duration) (conn *ClientConn, err error) {
-	if !strings.HasSuffix(network, "-tls") {
-		network += "-tls"
-	}
-	client := Client{Net: network, Dialer: &net.Dialer{Timeout: timeout}, TLSConfig: tlsConfig}
+	client := Client{Net: fixNetTLS(network), Dialer: &net.Dialer{Timeout: timeout}, TLSConfig: tlsConfig}
 	return client.Dial(address)
 }

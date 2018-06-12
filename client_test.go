@@ -21,7 +21,7 @@ func periodicTransmitter(w Session, req Message) {
 		msg.SetOption(ContentFormat, TextPlain)
 		msg.SetOption(LocationPath, req.Path())
 
-		err := w.WriteMsg(msg)
+		err := w.WriteMsg(msg, coapTimeout)
 		if err != nil {
 			log.Printf("Error on transmitter, stopping: %v", err)
 			return
@@ -34,7 +34,7 @@ func periodicTransmitter(w Session, req Message) {
 func testServingObservation(t *testing.T, net string, addrstr string) {
 	sync := make(chan bool)
 
-	client := &Client{ObserveFunc: func(s Session, m Message) {
+	client := &Client{ObserverFunc: func(s Session, m Message) {
 		log.Printf("Gotaaa %s", m.Payload())
 		sync <- true
 	}, Net: net}
@@ -55,7 +55,7 @@ func testServingObservation(t *testing.T, net string, addrstr string) {
 	req.AddOption(Observe, 1)
 	req.SetPathString("/some/path")
 
-	err = conn.WriteMsg(req)
+	err = conn.WriteMsg(req, coapTimeout)
 	if err != nil {
 		t.Fatalf("Error sending request: %v", err)
 	}
