@@ -2,11 +2,12 @@ package main
 
 import (
 	"log"
+	"time"
 
 	"github.com/ondrejtomcik/go-coap"
 )
 
-func handleA(w coap.ResponseWriter, req coap.Message) {
+func handleA(w coap.Session, req coap.Message) {
 	log.Printf("Got message in handleA: path=%q: %#v from %v", req.Path(), req, w.RemoteAddr())
 	if req.IsConfirmable() {
 		res := w.NewMessage(coap.MessageParams{
@@ -19,11 +20,11 @@ func handleA(w coap.ResponseWriter, req coap.Message) {
 		res.SetOption(coap.ContentFormat, coap.TextPlain)
 
 		log.Printf("Transmitting from A %#v", res)
-		w.WriteMsg(res)
+		w.WriteMsg(res, time.Hour)
 	}
 }
 
-func handleB(w coap.ResponseWriter, req coap.Message) {
+func handleB(w coap.Session, req coap.Message) {
 	log.Printf("Got message in handleB: path=%q: %#v from %v", req.Path(), req, w.RemoteAddr())
 	if req.IsConfirmable() {
 		res := w.NewMessage(coap.MessageParams{
@@ -36,7 +37,7 @@ func handleB(w coap.ResponseWriter, req coap.Message) {
 		res.SetOption(coap.ContentFormat, coap.TextPlain)
 
 		log.Printf("Transmitting from B %#v", res)
-		w.WriteMsg(res)
+		w.WriteMsg(res, time.Hour)
 	}
 }
 

@@ -3,7 +3,6 @@ package coap
 import (
 	"bytes"
 	"encoding/binary"
-	"errors"
 	"sort"
 )
 
@@ -49,6 +48,10 @@ func (m *DgramMessage) MarshalBinary() ([]byte, error) {
 		byte(m.MessageBase.code),
 		tmpbuf[0], tmpbuf[1],
 	})
+
+	if len(m.MessageBase.token) > 8 {
+		return nil, ErrInvalidTokenLen
+	}
 	buf.Write(m.MessageBase.token)
 
 	sort.Stable(&m.MessageBase.opts)
@@ -66,11 +69,11 @@ func (m *DgramMessage) MarshalBinary() ([]byte, error) {
 // UnmarshalBinary parses the given binary slice as a DgramMessage.
 func (m *DgramMessage) UnmarshalBinary(data []byte) error {
 	if len(data) < 4 {
-		return errors.New("short packet")
+		return ErrMessageTruncated
 	}
 
 	if data[0]>>6 != 1 {
-		return errors.New("invalid version")
+		return ErrMessageInvalidVersion
 	}
 
 	m.MessageBase.typ = COAPType((data[0] >> 4) & 0x3)
@@ -86,7 +89,7 @@ func (m *DgramMessage) UnmarshalBinary(data []byte) error {
 		m.MessageBase.token = make([]byte, tokenLen)
 	}
 	if len(data) < 4+tokenLen {
-		return errors.New("truncated")
+		return ErrMessageTruncated
 	}
 	copy(m.MessageBase.token, data[4:4+tokenLen])
 	b := data[4+tokenLen:]

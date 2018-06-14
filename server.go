@@ -4,8 +4,8 @@ package coap
 import (
 	"bufio"
 	"crypto/tls"
-	"errors"
 	"net"
+	"reflect"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -19,6 +19,8 @@ const maxWorkersCount = 10000
 
 const coapTimeout time.Duration = 3600 * time.Second
 
+const syncTimeout time.Duration = 30 * time.Second
+
 const maxPktLen = 1500
 
 const (
@@ -30,80 +32,38 @@ const (
 
 // Handler is implemented by any value that implements ServeCOAP.
 type Handler interface {
-	ServeCOAP(w ResponseWriter, r Message)
-}
-
-// A ResponseWriter interface is used by an COAP handler to
-// construct an COAP requestCtx.
-type ResponseWriter interface {
-	// LocalAddr returns the net.Addr of the server
-	LocalAddr() net.Addr
-	// RemoteAddr returns the net.Addr of the client that sent the current request.
-	RemoteAddr() net.Addr
-	// WriteMsg writes a reply back to the client.
-	WriteMsg(Message) error
-	// Write writes a raw buffer back to the client.
-	Write([]byte) (int, error)
-	// Close closes the connection.
-	Close() error
-	// Return type of network
-	IsTCP() bool
-	// Create message for response via writter
-	NewMessage(params MessageParams) Message
+	ServeCOAP(w Session, r Message)
 }
 
 type requestCtx struct {
-	request    Message
-	udp        *net.UDPConn // i/o connection if UDP was used
-	tcp        net.Conn     // i/o connection if TCP was used
-	udpSession *SessionUDP  // oob data to get egress interface right
-	s          *Server
+	request Message
+	session Session
 }
-
-// ServeMux is an COAP request multiplexer. It matches the
-// zone name of each incoming request against a list of
-// registered patterns add calls the handler for the pattern
-// that most closely matches the zone name. ServeMux is COAPSEC aware, meaning
-// that queries for the DS record are redirected to the parent zone (if that
-// is also registered), otherwise the child gets the query.
-// ServeMux is also safe for concurrent access from multiple goroutines.
-type ServeMux struct {
-	z map[string]muxEntry
-	m *sync.RWMutex
-}
-
-type muxEntry struct {
-	h       Handler
-	pattern string
-}
-
-// NewServeMux allocates and returns a new ServeMux.
-func NewServeMux() *ServeMux { return &ServeMux{z: make(map[string]muxEntry), m: new(sync.RWMutex)} }
-
-// DefaultServeMux is the default ServeMux used by Serve.
-var DefaultServeMux = NewServeMux()
 
 // The HandlerFunc type is an adapter to allow the use of
 // ordinary functions as COAP handlers.  If f is a function
 // with the appropriate signature, HandlerFunc(f) is a
 // Handler object that calls f.
-type HandlerFunc func(ResponseWriter, Message)
+type HandlerFunc func(Session, Message)
 
 // ServeCOAP calls f(w, r).
-func (f HandlerFunc) ServeCOAP(w ResponseWriter, r Message) {
+func (f HandlerFunc) ServeCOAP(w Session, r Message) {
 	f(w, r)
 }
 
 // HandleFailed returns a HandlerFunc that returns NotFound for every request it gets.
-func HandleFailed(w ResponseWriter, req Message) {
+func HandleFailed(w Session, req Message) {
+	typ := NonConfirmable
 	if req.IsConfirmable() {
-		msg := w.NewMessage(MessageParams{
-			Type:      Acknowledgement,
-			Code:      NotFound,
-			MessageID: req.MessageID(),
-		})
-		w.WriteMsg(msg)
+		typ = Acknowledgement
 	}
+	msg := w.NewMessage(MessageParams{
+		Type:      typ,
+		Code:      NotFound,
+		MessageID: req.MessageID(),
+		Token:     req.Token(),
+	})
+	w.WriteMsg(msg, coapTimeout)
 }
 
 func failedHandler() Handler { return HandlerFunc(HandleFailed) }
@@ -141,102 +101,9 @@ func ListenAndServeTLS(addr, certFile, keyFile string, handler Handler) error {
 // l and p should not both be non-nil.
 // If both l and p are not nil only p will be used.
 // Invoke handler for incoming queries.
-func ActivateAndServe(l net.Listener, p net.PacketConn, handler Handler) error {
-	server := &Server{Listener: l, PacketConn: p, Handler: handler}
+func ActivateAndServe(l net.Listener, p net.Conn, handler Handler) error {
+	server := &Server{Listener: l, Conn: p, Handler: handler}
 	return server.ActivateAndServe()
-}
-
-// Does path match pattern?
-func pathMatch(pattern, path string) bool {
-	if len(pattern) == 0 {
-		// should not happen
-		return false
-	}
-	n := len(pattern)
-	if pattern[n-1] != '/' {
-		return pattern == path
-	}
-	return len(path) >= n && path[0:n] == pattern
-}
-
-// Find a handler on a handler map given a path string
-// Most-specific (longest) pattern wins
-func (mux *ServeMux) match(path string) (h Handler, pattern string) {
-	mux.m.RLock()
-	defer mux.m.RUnlock()
-	var n = 0
-	for k, v := range mux.z {
-		if !pathMatch(k, path) {
-			continue
-		}
-		if h == nil || len(k) > n {
-			n = len(k)
-			h = v.h
-			pattern = v.pattern
-		}
-	}
-	return
-}
-
-// Handle adds a handler to the ServeMux for pattern.
-func (mux *ServeMux) Handle(pattern string, handler Handler) {
-	for pattern != "" && pattern[0] == '/' {
-		pattern = pattern[1:]
-	}
-
-	if pattern == "" {
-		panic("COAP: invalid pattern " + pattern)
-	}
-	if handler == nil {
-		panic("COAP: nil handler")
-	}
-
-	mux.m.Lock()
-	mux.z[pattern] = muxEntry{h: handler, pattern: pattern}
-	mux.m.Unlock()
-}
-
-// HandleFunc adds a handler function to the ServeMux for pattern.
-func (mux *ServeMux) HandleFunc(pattern string, handler func(ResponseWriter, Message)) {
-	mux.Handle(pattern, HandlerFunc(handler))
-}
-
-// HandleRemove deregistrars the handler specific for pattern from the ServeMux.
-func (mux *ServeMux) HandleRemove(pattern string) {
-	if pattern == "" {
-		panic("COAP: invalid pattern " + pattern)
-	}
-	mux.m.Lock()
-	delete(mux.z, pattern)
-	mux.m.Unlock()
-}
-
-// ServeCOAP dispatches the request to the handler whose
-// pattern most closely matches the request message. If DefaultServeMux
-// is used the correct thing for DS queries is done: a possible parent
-// is sought.
-// If no handler is found a standard NotFound message is returned
-func (mux *ServeMux) ServeCOAP(w ResponseWriter, request Message) {
-	h, _ := mux.match(request.PathString())
-	if h == nil {
-		h = failedHandler()
-	}
-	h.ServeCOAP(w, request)
-}
-
-// Handle registers the handler with the given pattern
-// in the DefaultServeMux. The documentation for
-// ServeMux explains how patterns are matched.
-func Handle(pattern string, handler Handler) { DefaultServeMux.Handle(pattern, handler) }
-
-// HandleRemove deregisters the handle with the given pattern
-// in the DefaultServeMux.
-func HandleRemove(pattern string) { DefaultServeMux.HandleRemove(pattern) }
-
-// HandleFunc registers the handler function with the given pattern
-// in the DefaultServeMux.
-func HandleFunc(pattern string, handler func(ResponseWriter, Message)) {
-	DefaultServeMux.HandleFunc(pattern, handler)
 }
 
 // A Server defines parameters for running an COAP server.
@@ -249,19 +116,27 @@ type Server struct {
 	Listener net.Listener
 	// TLS connection configuration
 	TLSConfig *tls.Config
-	// UDP "Listener" to use, this is to aid in systemd's socket activation.
-	PacketConn net.PacketConn
+	// UDP/TCP "Listener/Connection" to use, this is to aid in systemd's socket activation.
+	Conn net.Conn
 	// Handler to invoke, COAP.DefaultServeMux if nil.
 	Handler Handler
 	// Default buffer size to use to read incoming UDP messages. If not set
 	// it defaults to 1500 B.
-	UDPSize int
-	// The net.Conn.SetReadTimeout value for new connections, defaults to 2 * time.Second.
+	UDPSize uint16
+	// The net.Conn.SetReadTimeout value for new connections, defaults to 1hour.
 	ReadTimeout time.Duration
-	// The net.Conn.SetWriteTimeout value for new connections, defaults to 2 * time.Second.
+	// The net.Conn.SetWriteTimeout value for new connections, defaults to 1hour.
 	WriteTimeout time.Duration
 	// If NotifyStartedFunc is set it is called once the server has started listening.
 	NotifyStartedFunc func()
+	// The maximum of time for synchronization go-routines, defaults to 30 seconds, if it occurs, then it call log.Fatal
+	SyncTimeout time.Duration
+	// If CreateSessionUDPFunc is set it is called when session UDP want to be created
+	CreateSessionUDPFunc func(connection conn, srv *Server, sessionUDPData *SessionUDPData) Session
+	// If CreateSessionUDPFunc is set it is called when session TCP want to be created
+	CreateSessionTCPFunc func(connection conn, srv *Server) Session
+	// If NotifyNewSession is set it is called when session TCP/UDP was ended.
+	NotifySessionEndFunc func(w Session, err error)
 
 	TCPReadBufferSize  int
 	TCPWriteBufferSize int
@@ -275,6 +150,9 @@ type Server struct {
 	// Shutdown handling
 	lock    sync.RWMutex
 	started bool
+
+	sessionUDPMapLock sync.Mutex
+	sessionUDPMap     map[string]Session
 }
 
 func (srv *Server) workerChannelHandler(inUse bool, timeout *time.Timer) bool {
@@ -327,39 +205,22 @@ func (srv *Server) spawnWorker(w *requestCtx) {
 
 // ListenAndServe starts a coapserver on the configured address in *Server.
 func (srv *Server) ListenAndServe() error {
-	srv.lock.Lock()
-	if srv.started {
-		srv.lock.Unlock()
-		return errors.New("server already started")
-	}
-
 	addr := srv.Addr
 	if addr == "" {
 		addr = ":domain"
 	}
-	if srv.UDPSize == 0 {
-		srv.UDPSize = maxPktLen
-	}
-
-	srv.queue = make(chan *requestCtx)
-	defer close(srv.queue)
 
 	switch srv.Net {
 	case "tcp", "tcp4", "tcp6":
 		a, err := net.ResolveTCPAddr(srv.Net, addr)
 		if err != nil {
-			srv.lock.Unlock()
 			return err
 		}
 		l, err := net.ListenTCP(srv.Net, a)
 		if err != nil {
-			srv.lock.Unlock()
 			return err
 		}
 		srv.Listener = l
-		srv.started = true
-		srv.lock.Unlock()
-		return srv.serveTCP(l)
 	case "tcp-tls", "tcp4-tls", "tcp6-tls":
 		network := "tcp"
 		if srv.Net == "tcp4-tls" {
@@ -370,35 +231,51 @@ func (srv *Server) ListenAndServe() error {
 
 		l, err := tls.Listen(network, addr, srv.TLSConfig)
 		if err != nil {
-			srv.lock.Unlock()
 			return err
 		}
 		srv.Listener = l
-		srv.started = true
-		srv.lock.Unlock()
-		return srv.serveTCP(l)
 	case "udp", "udp4", "udp6":
 		a, err := net.ResolveUDPAddr(srv.Net, addr)
 		if err != nil {
-			srv.lock.Unlock()
 			return err
 		}
 		l, err := net.ListenUDP(srv.Net, a)
 		if err != nil {
-			srv.lock.Unlock()
 			return err
 		}
 		if err := setUDPSocketOptions(l); err != nil {
-			srv.lock.Unlock()
 			return err
 		}
-		srv.PacketConn = l
-		srv.started = true
-		srv.lock.Unlock()
-		return srv.serveUDP(l)
+		srv.Conn = l
+	default:
+		return ErrInvalidServerNetParameter
 	}
+	return srv.ActivateAndServe()
+}
+
+func (srv *Server) initServeUDP(conn *net.UDPConn) error {
+	if srv.UDPSize == 0 {
+		srv.UDPSize = maxPktLen
+	}
+	// Check PacketConn interface's type is valid and value
+	// is not nil
+	if e := setUDPSocketOptions(conn); e != nil {
+		return e
+	}
+	srv.lock.Lock()
+	srv.started = true
 	srv.lock.Unlock()
-	return errors.New("bad network")
+	return srv.serveUDP(conn)
+}
+
+func (srv *Server) initServeTCP(conn net.Conn) error {
+	srv.lock.Lock()
+	srv.started = true
+	srv.lock.Unlock()
+	if srv.NotifyStartedFunc != nil {
+		srv.NotifyStartedFunc()
+	}
+	return srv.serveTCPconnection(conn)
 }
 
 // ActivateAndServe starts a coapserver with the PacketConn or Listener
@@ -407,36 +284,47 @@ func (srv *Server) ActivateAndServe() error {
 	srv.lock.Lock()
 	if srv.started {
 		srv.lock.Unlock()
-		return errors.New("server already started")
+		return ErrServerAlreadyStarted
 	}
+	srv.lock.Unlock()
 
-	pConn := srv.PacketConn
+	pConn := srv.Conn
 	l := srv.Listener
+
+	srv.sessionUDPMap = make(map[string]Session)
+
 	srv.queue = make(chan *requestCtx)
 	defer close(srv.queue)
 
+	if srv.CreateSessionTCPFunc == nil {
+		srv.CreateSessionTCPFunc = NewSessionTCP
+	}
+
+	if srv.CreateSessionUDPFunc == nil {
+		srv.CreateSessionUDPFunc = NewSessionUDP
+	}
+
+	if srv.NotifySessionEndFunc == nil {
+		srv.NotifySessionEndFunc = func(w Session, err error) {}
+	}
+
 	if pConn != nil {
-		if srv.UDPSize == 0 {
-			srv.UDPSize = maxPktLen
+		switch pConn.(type) {
+		case *net.TCPConn, *tls.Conn:
+			return srv.initServeTCP(pConn)
+		case *net.UDPConn:
+			return srv.initServeUDP(pConn.(*net.UDPConn))
 		}
-		// Check PacketConn interface's type is valid and value
-		// is not nil
-		if t, ok := pConn.(*net.UDPConn); ok && t != nil {
-			if e := setUDPSocketOptions(t); e != nil {
-				return e
-			}
-			srv.started = true
-			srv.lock.Unlock()
-			return srv.serveUDP(t)
-		}
+		return ErrInvalidServerConnParameter
 	}
 	if l != nil {
+		srv.lock.Lock()
 		srv.started = true
 		srv.lock.Unlock()
 		return srv.serveTCP(l)
 	}
 	srv.lock.Unlock()
-	return errors.New("bad listeners")
+	return ErrInvalidServerListenerParameter
 }
 
 // Shutdown shuts down a server. After a call to Shutdown, ListenAndServe and
@@ -445,13 +333,13 @@ func (srv *Server) Shutdown() error {
 	srv.lock.Lock()
 	if !srv.started {
 		srv.lock.Unlock()
-		return errors.New("server not started")
+		return ErrServerNotStarted
 	}
 	srv.started = false
 	srv.lock.Unlock()
 
-	if srv.PacketConn != nil {
-		srv.PacketConn.Close()
+	if srv.Conn != nil {
+		srv.Conn.Close()
 	}
 	if srv.Listener != nil {
 		srv.Listener.Close()
@@ -459,22 +347,58 @@ func (srv *Server) Shutdown() error {
 	return nil
 }
 
-// getReadTimeout is a helper func to use system timeout if server did not intend to change it.
-func (srv *Server) getReadTimeout() time.Duration {
-	rtimeout := coapTimeout
+// readTimeout is a helper func to use system timeout if server did not intend to change it.
+func (srv *Server) readTimeout() time.Duration {
 	if srv.ReadTimeout != 0 {
-		rtimeout = srv.ReadTimeout
+		return srv.ReadTimeout
 	}
-	return rtimeout
+	return coapTimeout
 }
 
-// getReadTimeout is a helper func to use system timeout if server did not intend to change it.
-func (srv *Server) getWriteTimeout() time.Duration {
-	wtimeout := coapTimeout
+// readTimeout is a helper func to use system timeout if server did not intend to change it.
+func (srv *Server) writeTimeout() time.Duration {
 	if srv.WriteTimeout != 0 {
-		wtimeout = srv.WriteTimeout
+		return srv.WriteTimeout
 	}
-	return wtimeout
+	return coapTimeout
+}
+
+func (srv *Server) syncTimeout() time.Duration {
+	if srv.SyncTimeout != 0 {
+		return srv.SyncTimeout
+	}
+	return syncTimeout
+}
+
+func (srv *Server) serveTCPconnection(conn net.Conn) error {
+	conn.SetReadDeadline(time.Now().Add(srv.readTimeout()))
+	session := srv.CreateSessionTCPFunc(newConnectionTCP(conn, srv), srv)
+	br := srv.acquireReader(conn)
+	defer srv.releaseReader(br)
+	for {
+		srv.lock.RLock()
+		if !srv.started {
+			srv.lock.RUnlock()
+			return session.Close()
+		}
+		srv.lock.RUnlock()
+		mti, err := readTcpMsgInfo(br)
+		if err != nil {
+			return session.closeWithError(err)
+		}
+		o, p, err := readTcpMsgBody(mti, br)
+		if err != nil {
+			return session.closeWithError(err)
+		}
+		msg := new(TcpMessage)
+		//msg := TcpMessage{MessageBase{}}
+
+		msg.fill(mti, o, p)
+
+		// We will block poller wait loop when
+		// all pool workers are busy.
+		srv.spawnWorker(&requestCtx{session: session, request: msg})
+	}
 }
 
 // serveTCP starts a TCP listener for the server.
@@ -487,8 +411,6 @@ func (srv *Server) serveTCP(l net.Listener) error {
 
 	doneDescChan := make(chan bool)
 	numRunningDesc := 0
-
-	rtimeout := srv.getReadTimeout()
 
 	for {
 	LOOP_CLOSE_CHANNEL:
@@ -523,169 +445,102 @@ func (srv *Server) serveTCP(l net.Listener) error {
 		}
 
 		numRunningDesc++
+
 		go func() {
-			rw.SetReadDeadline(time.Now().Add(rtimeout))
-			br := srv.acquireReader(rw)
-			defer srv.releaseReader(br)
-			for {
-				mti, err := readTcpMsgInfo(br)
-				if err != nil {
-					return
-				}
-				o, p, err := readTcpMsgBody(mti, br)
-				if err != nil {
-					return
-				}
-				msg := TcpMessage{MessageBase{}}
-
-				msg.fill(mti, o, p)
-
-				// We will block poller wait loop when
-				// all pool workers are busy.
-
-				srv.spawnWorker(&requestCtx{tcp: rw, s: srv, request: &msg})
-			}
+			srv.serveTCPconnection(rw)
+			doneDescChan <- true
 		}()
 	}
 }
 
+func (srv *Server) closeSessions(err error) {
+	srv.sessionUDPMapLock.Lock()
+	tmp := srv.sessionUDPMap
+	srv.sessionUDPMap = make(map[string]Session)
+	srv.sessionUDPMapLock.Unlock()
+	for _, v := range tmp {
+		srv.NotifySessionEndFunc(v, err)
+	}
+}
+
 // serveUDP starts a UDP listener for the server.
-func (srv *Server) serveUDP(l *net.UDPConn) error {
-	defer l.Close()
+func (srv *Server) serveUDP(conn *net.UDPConn) error {
+	defer conn.Close()
 
 	if srv.NotifyStartedFunc != nil {
 		srv.NotifyStartedFunc()
 	}
 
-	rtimeout := srv.getReadTimeout()
+	rtimeout := srv.readTimeout()
 	// deadline is not used here
+
+	connUDP := newConnectionUDP(conn, srv).(*connUDP)
+	m := make([]byte, srv.UDPSize)
 	for {
-		m, s, err := srv.readUDP(l, rtimeout)
 		srv.lock.RLock()
 		if !srv.started {
 			srv.lock.RUnlock()
+			srv.closeSessions(nil)
 			return nil
 		}
 		srv.lock.RUnlock()
+
+		err := connUDP.SetReadDeadline(time.Now().Add(rtimeout))
+		if err != nil {
+			srv.closeSessions(err)
+			return err
+		}
+		m = m[:cap(m)]
+		n, s, err := connUDP.ReadFromSessionUDP(m)
 		if err != nil {
 			if netErr, ok := err.(net.Error); ok && netErr.Temporary() {
 				continue
 			}
+			srv.closeSessions(err)
 			return err
 		}
-		//TODO: check fortruncated
-		/*
-			if len(m) < headerSize {
-				continue
-			}
-		*/
+		m = m[:n]
+
+		srv.sessionUDPMapLock.Lock()
+		session := srv.sessionUDPMap[s.Key()]
+		if session == nil {
+			session = srv.CreateSessionUDPFunc(connUDP, srv, s)
+			srv.sessionUDPMap[s.Key()] = session
+			srv.sessionUDPMapLock.Unlock()
+		} else {
+			srv.sessionUDPMapLock.Unlock()
+		}
+
 		msg, err := ParseDgramMessage(m)
 		if err != nil {
 			continue
 		}
-		srv.spawnWorker(&requestCtx{request: msg, udp: l, udpSession: s, s: srv})
+		srv.spawnWorker(&requestCtx{request: msg, session: session})
 	}
 }
 
 func (srv *Server) serve(w *requestCtx) {
+	if w.request.Token() != nil {
+		if w.session.HandlePairMsg(w.request) {
+			return
+		}
+	}
 	srv.serveCOAP(w)
 }
 
 func (srv *Server) serveCOAP(w *requestCtx) {
 	handler := srv.Handler
-	if handler == nil {
+	if handler == nil || reflect.ValueOf(handler).IsNil() {
 		handler = DefaultServeMux
 	}
 
-	handler.ServeCOAP(w, w.request) // Writes back to the client
+	handler.ServeCOAP(w.session, w.request) // Writes back to the client
 }
 
-func (srv *Server) readUDP(conn *net.UDPConn, timeout time.Duration) ([]byte, *SessionUDP, error) {
-	conn.SetReadDeadline(time.Now().Add(timeout))
-	m := make([]byte, srv.UDPSize)
-	n, s, err := ReadFromSessionUDP(conn, m)
-	if err != nil {
-		return nil, nil, err
-	}
-	return m[:n], s, nil
-}
-
-// WriteMsg implements the ResponseWriter.WriteMsg method.
-func (w *requestCtx) WriteMsg(m Message) (err error) {
-	data, err := m.MarshalBinary()
-	if err != nil {
-		return err
-	}
-	_, err = w.Write(data)
-	return err
-}
-
-// Write implements the ResponseWriter.Write method.
-func (w *requestCtx) Write(m []byte) (int, error) {
-	writeTimeout := w.s.getWriteTimeout()
-	switch {
-	case w.udp != nil:
-		w.udp.SetWriteDeadline(time.Now().Add(writeTimeout))
-		n, err := WriteToSessionUDP(w.udp, m, w.udpSession)
-		return n, err
-	case w.tcp != nil:
-		w.tcp.SetWriteDeadline(time.Now().Add(writeTimeout))
-		wr := acquireWriter(w)
-		n, err := wr.Write(m)
-		wr.Flush()
-		releaseWriter(w.s, wr)
-		return n, err
-	}
-	panic("not reached")
-}
-
-// LocalAddr implements the ResponseWriter.LocalAddr method.
-func (w *requestCtx) LocalAddr() net.Addr {
-	if w.tcp != nil {
-		return w.tcp.LocalAddr()
-	}
-	return w.udp.LocalAddr()
-}
-
-// RemoteAddr implements the ResponseWriter.RemoteAddr method.
-func (w *requestCtx) RemoteAddr() net.Addr {
-	if w.tcp != nil {
-		return w.tcp.RemoteAddr()
-	}
-	return w.udpSession.RemoteAddr()
-}
-
-// Close implements the ResponseWriter.Close method
-func (w *requestCtx) Close() error {
-	// Can't close the udp conn, as that is actually the listener.
-	if w.tcp != nil {
-		e := w.tcp.Close()
-		w.tcp = nil
-		return e
-	}
-	return nil
-}
-
-// NewMessage Create message for response
-func (w *requestCtx) NewMessage(p MessageParams) Message {
-	if w.IsTCP() {
-		return NewTcpMessage(p)
-	}
-	return NewDgramMessage(p)
-}
-
-// Close implements the ResponseWriter.Close method
-func (w *requestCtx) IsTCP() bool {
-	if w.tcp != nil {
-		return true
-	}
-	return false
-}
-
-func (s *Server) acquireReader(tcp net.Conn) *bufio.Reader {
-	v := s.readerPool.Get()
+func (srv *Server) acquireReader(tcp net.Conn) *bufio.Reader {
+	v := srv.readerPool.Get()
 	if v == nil {
-		n := s.TCPReadBufferSize
+		n := srv.TCPReadBufferSize
 		if n <= 0 {
 			n = defaultReadBufferSize
 		}
@@ -696,24 +551,24 @@ func (s *Server) acquireReader(tcp net.Conn) *bufio.Reader {
 	return r
 }
 
-func (s *Server) releaseReader(r *bufio.Reader) {
-	s.readerPool.Put(r)
+func (srv *Server) releaseReader(r *bufio.Reader) {
+	srv.readerPool.Put(r)
 }
 
-func acquireWriter(ctx *requestCtx) *bufio.Writer {
-	v := ctx.s.writerPool.Get()
+func (srv *Server) acquireWriter(tcp net.Conn) *bufio.Writer {
+	v := srv.writerPool.Get()
 	if v == nil {
-		n := ctx.s.TCPWriteBufferSize
+		n := srv.TCPWriteBufferSize
 		if n <= 0 {
 			n = defaultWriteBufferSize
 		}
-		return bufio.NewWriterSize(ctx.tcp, n)
+		return bufio.NewWriterSize(tcp, n)
 	}
-	w := v.(*bufio.Writer)
-	w.Reset(ctx.tcp)
-	return w
+	wr := v.(*bufio.Writer)
+	wr.Reset(tcp)
+	return wr
 }
 
-func releaseWriter(s *Server, w *bufio.Writer) {
-	s.writerPool.Put(w)
+func (srv *Server) releaseWriter(wr *bufio.Writer) {
+	srv.writerPool.Put(wr)
 }

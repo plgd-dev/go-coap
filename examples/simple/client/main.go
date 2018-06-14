@@ -3,6 +3,7 @@ package main
 import (
 	"log"
 	"os"
+	"time"
 
 	"github.com/ondrejtomcik/go-coap"
 )
@@ -18,6 +19,7 @@ func main() {
 		Code:      coap.GET,
 		MessageID: 12345,
 		Payload:   []byte("hello, world!"),
+		Token:     []byte("1234"),
 	})
 
 	path := "/a"
@@ -29,7 +31,7 @@ func main() {
 	req.SetOption(coap.MaxAge, 3)
 	req.SetPathString(path)
 
-	rv, _, err := co.Exchange(req)
+	rv, err := co.Exchange(req, 1*time.Second)
 	if err != nil {
 		log.Fatalf("Error sending request: %v", err)
 	}

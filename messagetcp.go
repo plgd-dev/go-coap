@@ -60,6 +60,10 @@ func (m *TcpMessage) MarshalBinary() ([]byte, error) {
 	   | 15         | 4                     | Extended Length + 65805   |
 	*/
 
+	if len(m.MessageBase.token) > 8 {
+		return nil, ErrInvalidTokenLen
+	}
+
 	buf := bytes.Buffer{}
 
 	sort.Stable(&m.MessageBase.opts)
