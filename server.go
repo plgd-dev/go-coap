@@ -132,9 +132,9 @@ type Server struct {
 	// The maximum of time for synchronization go-routines, defaults to 30 seconds, if it occurs, then it call log.Fatal
 	SyncTimeout time.Duration
 	// If CreateSessionUDPFunc is set it is called when session UDP want to be created
-	CreateSessionUDPFunc func(connection conn, srv *Server, sessionUDPData *SessionUDPData) Session
+	CreateSessionUDPFunc func(connection Conn, srv *Server, sessionUDPData *SessionUDPData) Session
 	// If CreateSessionUDPFunc is set it is called when session TCP want to be created
-	CreateSessionTCPFunc func(connection conn, srv *Server) Session
+	CreateSessionTCPFunc func(connection Conn, srv *Server) Session
 	// If NotifyNewSession is set it is called when session TCP/UDP was ended.
 	NotifySessionEndFunc func(w Session, err error)
 

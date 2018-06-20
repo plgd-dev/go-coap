@@ -63,7 +63,7 @@ func RunLocalServerUDPWithHandler(laddr string, handler HandlerFunc) (*Server, s
 	}
 
 	server := &Server{Conn: pc, ReadTimeout: time.Hour, WriteTimeout: time.Hour,
-		CreateSessionUDPFunc: func(connection conn, srv *Server, sessionUDPData *SessionUDPData) Session {
+		CreateSessionUDPFunc: func(connection Conn, srv *Server, sessionUDPData *SessionUDPData) Session {
 			w := NewSessionUDP(connection, srv, sessionUDPData)
 			fmt.Printf("Session start %v\n", w.RemoteAddr())
 			return w
@@ -100,7 +100,7 @@ func RunLocalServerTCPWithHandler(laddr string, handler HandlerFunc) (*Server, s
 	}
 
 	server := &Server{Listener: l, ReadTimeout: time.Second * 3600, WriteTimeout: time.Second * 3600,
-		CreateSessionTCPFunc: func(connection conn, srv *Server) Session {
+		CreateSessionTCPFunc: func(connection Conn, srv *Server) Session {
 			w := NewSessionTCP(connection, srv)
 			fmt.Printf("Session start %v\n", w.RemoteAddr())
 			return w
@@ -136,7 +136,7 @@ func RunLocalTLSServer(laddr string, config *tls.Config) (*Server, string, chan 
 	}
 
 	server := &Server{Listener: l, ReadTimeout: time.Hour, WriteTimeout: time.Hour,
-		CreateSessionTCPFunc: func(connection conn, srv *Server) Session {
+		CreateSessionTCPFunc: func(connection Conn, srv *Server) Session {
 			w := NewSessionTCP(connection, srv)
 			fmt.Printf("Session start %v\n", w.RemoteAddr())
 			return w

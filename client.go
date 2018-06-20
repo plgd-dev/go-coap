@@ -91,10 +91,10 @@ func (c *Client) Dial(address string) (clientConn *ClientConn, err error) {
 				log.Fatal("Client cannot send start: Timeout")
 			}
 		},
-		CreateSessionTCPFunc: func(connection conn, srv *Server) Session {
+		CreateSessionTCPFunc: func(connection Conn, srv *Server) Session {
 			return clientConn.session
 		},
-		CreateSessionUDPFunc: func(connection conn, srv *Server, sessionUDPData *SessionUDPData) Session {
+		CreateSessionUDPFunc: func(connection Conn, srv *Server, sessionUDPData *SessionUDPData) Session {
 			clientConn.session.(*sessionUDP).sessionUDPData = sessionUDPData
 			return clientConn.session
 		}, Handler: c.ObserverFunc},

@@ -34,13 +34,13 @@ type Session interface {
 }
 
 // NewSessionUDP create new session for UDP connection
-func NewSessionUDP(connection conn, srv *Server, sessionUDPData *SessionUDPData) Session {
+func NewSessionUDP(connection Conn, srv *Server, sessionUDPData *SessionUDPData) Session {
 	s := &sessionUDP{sessionBase: sessionBase{srv: srv, mapPairs: make(map[[8]byte](*sessionResp)), connection: connection}, sessionUDPData: sessionUDPData}
 	return s
 }
 
 // NewSessionTCP create new session for TCP connection
-func NewSessionTCP(connection conn, srv *Server) Session {
+func NewSessionTCP(connection Conn, srv *Server) Session {
 	s := &sessionTCP{sessionBase: sessionBase{srv: srv, mapPairs: make(map[[8]byte](*sessionResp)), connection: connection}}
 	return s
 }
@@ -51,7 +51,7 @@ type sessionResp struct {
 
 type sessionBase struct {
 	srv        *Server
-	connection conn
+	connection Conn
 
 	pairNextToken uint32                   //to create unique token for connection WriteMsgAndWait
 	mapPairs      map[[8]byte]*sessionResp //storage of channel Message
@@ -184,12 +184,12 @@ func (s *sessionUDP) Exchange(req Message, timeout time.Duration) (Message, erro
 
 // WriteMsg implements the Session.WriteMsg method.
 func (s *sessionTCP) WriteMsg(m Message, timeout time.Duration) error {
-	return s.connection.Write(&writeReqTCP{writeReqBase{req: m, respChan: make(chan error, 1)}}, timeout)
+	return s.connection.write(&writeReqTCP{writeReqBase{req: m, respChan: make(chan error, 1)}}, timeout)
 }
 
 // WriteMsg implements the Session.WriteMsg method.
 func (s *sessionUDP) WriteMsg(m Message, timeout time.Duration) error {
-	return s.connection.Write(&writeReqUDP{writeReqBase{req: m, respChan: make(chan error, 1)}, s.sessionUDPData}, timeout)
+	return s.connection.write(&writeReqUDP{writeReqBase{req: m, respChan: make(chan error, 1)}, s.sessionUDPData}, timeout)
 }
 
 func (s *sessionBase) HandlePairMsg(m Message) bool {

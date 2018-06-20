@@ -312,9 +312,8 @@ func parseOptionValue(optionID OptionID, valueBuf []byte) interface{} {
 		intValue := decodeInt(valueBuf)
 		if optionID == ContentFormat || optionID == Accept {
 			return MediaType(intValue)
-		} else {
-			return intValue
 		}
+		return intValue
 	case valueString:
 		return string(valueBuf)
 	case valueOpaque, valueEmpty:
@@ -351,6 +350,7 @@ func (o options) Minus(oid OptionID) options {
 	return rv
 }
 
+// Message represents the COAP message
 type Message interface {
 	Type() COAPType
 	Code() COAPCode
@@ -378,6 +378,7 @@ type Message interface {
 	SetToken(t []byte)
 }
 
+// MessageParams params to create COAP message
 type MessageParams struct {
 	Type      COAPType
 	Code      COAPCode
