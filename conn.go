@@ -49,11 +49,16 @@ type writeReqUDP struct {
 	sessionData *SessionUDPData
 }
 
-type conn interface {
+// Conn represents the connection
+type Conn interface {
+	// LocalAddr get local address of the connection
 	LocalAddr() net.Addr
+	// RemoteAddr get peer address of the connection
 	RemoteAddr() net.Addr
-	Write(w writeReq, timeout time.Duration) error
+	// Close close the connection
 	Close() error
+
+	write(w writeReq, timeout time.Duration) error
 }
 
 type connWriter interface {
@@ -107,7 +112,7 @@ func (conn *connBase) writeEndHandler(timeout time.Duration) bool {
 	}
 }
 
-func (conn *connBase) Write(w writeReq, timeout time.Duration) error {
+func (conn *connBase) write(w writeReq, timeout time.Duration) error {
 	if atomic.LoadInt32(&conn.closed) > 0 {
 		return ErrConnectionClosed
 	}
@@ -212,13 +217,13 @@ func (conn *connUDP) writeHandler(srv *Server) bool {
 	})
 }
 
-func newConnectionTCP(c net.Conn, srv *Server) conn {
+func newConnectionTCP(c net.Conn, srv *Server) Conn {
 	connection := &connTCP{connBase: connBase{writeChan: make(chan writeReq, 10000), closeChan: make(chan bool), finChan: make(chan bool), closed: 0}, connection: c}
 	go writeToConnection(connection, srv)
 	return connection
 }
 
-func newConnectionUDP(c *net.UDPConn, srv *Server) conn {
+func newConnectionUDP(c *net.UDPConn, srv *Server) Conn {
 	connection := &connUDP{connBase: connBase{writeChan: make(chan writeReq, 10000), closeChan: make(chan bool), finChan: make(chan bool), closed: 0}, connection: c}
 	go writeToConnection(connection, srv)
 	return connection
