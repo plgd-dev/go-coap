@@ -44,8 +44,8 @@ const ErrMessageInvalidVersion = Error("invalid version of Message")
 // ErrServerAlreadyStarted server already started
 const ErrServerAlreadyStarted = Error("server already started")
 
-// ErrInvalidServerNetParameter invalid Server.Net parameter
-const ErrInvalidServerNetParameter = Error("invalid Server.Net parameter")
+// ErrInvalidServerNetParameter invalid .Net parameter
+const ErrInvalidNetParameter = Error("invalid .Net parameter")
 
 // ErrInvalidServerConnParameter invalid Server.Conn parameter
 const ErrInvalidServerConnParameter = Error("invalid Server.Conn parameter")

@@ -57,25 +57,20 @@ func ReadFromSessionUDP(conn *net.UDPConn, b []byte) (int, *SessionUDPData, erro
 
 // WriteToSessionUDP acts just like net.UDPConn.WriteTo(), but uses a *SessionUDP instead of a net.Addr.
 func WriteToSessionUDP(conn *net.UDPConn, b []byte, session *SessionUDPData) (int, error) {
-	oob := correctSource(session.context)
-	addr := session.raddr
 	//check if socket is connected via Dial
-	if conn.RemoteAddr() != nil {
-		addr = nil
+	if conn.RemoteAddr() == nil {
+		return conn.WriteToUDP(b, session.raddr)
 	}
-	n, _, err := conn.WriteMsgUDP(b, oob, addr)
+
+	n, _, err := conn.WriteMsgUDP(b, correctSource(session.context), nil)
 	return n, err
 }
 
 func setUDPSocketOptions(conn *net.UDPConn) error {
-	// Try setting the flags for both families and ignore the errors unless they
-	// both error.
-	err6 := ipv6.NewPacketConn(conn).SetControlMessage(ipv6.FlagDst|ipv6.FlagInterface, true)
-	err4 := ipv4.NewPacketConn(conn).SetControlMessage(ipv4.FlagDst|ipv4.FlagInterface, true)
-	if err6 != nil && err4 != nil {
-		return err4
+	if ip4 := conn.LocalAddr().(*net.UDPAddr).IP.To4(); ip4 != nil {
+		return ipv4.NewPacketConn(conn).SetControlMessage(ipv4.FlagDst|ipv4.FlagInterface, true)
 	}
-	return nil
+	return ipv6.NewPacketConn(conn).SetControlMessage(ipv6.FlagDst|ipv6.FlagInterface, true)
 }
 
 // parseDstFromOOB takes oob data and returns the destination IP.
@@ -113,4 +108,12 @@ func correctSource(oob []byte) []byte {
 		oob = cm.Marshal()
 	}
 	return oob
+}
+
+func joinGroup(conn *net.UDPConn, ifi *net.Interface, gaddr *net.UDPAddr) error {
+	if ip4 := conn.LocalAddr().(*net.UDPAddr).IP.To4(); ip4 != nil {
+		return ipv4.NewPacketConn(conn).JoinGroup(ifi, gaddr)
+	} else {
+		return ipv6.NewPacketConn(conn).JoinGroup(ifi, gaddr)
+	}
 }
