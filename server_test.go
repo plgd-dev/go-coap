@@ -5,7 +5,9 @@ import (
 	"crypto/tls"
 	"encoding/binary"
 	"fmt"
+	"log"
 	"net"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -52,16 +54,22 @@ func EchoServerBadID(w Session, req Message) {
 	}
 }
 
-func RunLocalServerUDPWithHandler(laddr string, handler HandlerFunc) (*Server, string, chan error, error) {
-	a, err := net.ResolveUDPAddr("udp", laddr)
-	if err != nil {
-		return nil, "", nil, err
-	}
-	pc, err := net.ListenUDP("udp", a)
-	if err != nil {
-		return nil, "", nil, err
-	}
+func RunLocalServerUDPWithHandler(lnet, laddr string, handler HandlerFunc) (*Server, string, chan error, error) {
+	network := strings.TrimSuffix(lnet, "-mcast")
 
+	a, err := net.ResolveUDPAddr(network, laddr)
+	if err != nil {
+		return nil, "", nil, err
+	}
+	var pc *net.UDPConn
+	if strings.Contains(lnet, "-mcast") {
+		pc, err = net.ListenMulticastUDP(network, nil, a)
+	} else {
+		pc, err = net.ListenUDP(network, a)
+	}
+	if err != nil {
+		return nil, "", nil, err
+	}
 	server := &Server{Conn: pc, ReadTimeout: time.Hour, WriteTimeout: time.Hour,
 		CreateSessionUDPFunc: func(connection Conn, srv *Server, sessionUDPData *SessionUDPData) Session {
 			w := NewSessionUDP(connection, srv, sessionUDPData)
@@ -89,8 +97,8 @@ func RunLocalServerUDPWithHandler(laddr string, handler HandlerFunc) (*Server, s
 	return server, pc.LocalAddr().String(), fin, nil
 }
 
-func RunLocalUDPServer(laddr string) (*Server, string, chan error, error) {
-	return RunLocalServerUDPWithHandler(laddr, nil)
+func RunLocalUDPServer(net, laddr string) (*Server, string, chan error, error) {
+	return RunLocalServerUDPWithHandler(net, laddr, nil)
 }
 
 func RunLocalServerTCPWithHandler(laddr string, handler HandlerFunc) (*Server, string, chan error, error) {
@@ -171,14 +179,13 @@ func testServingTCPWithMsgWithObserver(t *testing.T, net string, payload []byte,
 	var s *Server
 	var addrstr string
 	var err error
-	c := &Client{ObserverFunc: observeFunc}
-	c.Net = net
+	c := &Client{Net: net, ObserverFunc: observeFunc}
 	var fin chan error
 	switch net {
 	case "tcp", "tcp4", "tcp6":
 		s, addrstr, fin, err = RunLocalTCPServer(":0")
 	case "udp", "udp4", "udp6":
-		s, addrstr, fin, err = RunLocalUDPServer(":0")
+		s, addrstr, fin, err = RunLocalUDPServer(net, ":0")
 	case "tcp-tls", "tcp4-tls", "tcp6-tls":
 		cert, err := tls.X509KeyPair(CertPEMBlock, KeyPEMBlock)
 		if err != nil {
@@ -370,12 +377,65 @@ func TestServingChallengingTimeoutClientTLS(t *testing.T) {
 	})
 }
 
+func testServingMCast(t *testing.T, lnet, laddr string) {
+	payload := []byte("mcast payload")
+	addrMcast := laddr
+	ansArrived := make(chan bool)
+
+	HandleFunc("/test", func(s Session, m Message) {
+		if bytes.Equal(m.Payload(), payload) {
+			log.Printf("mcast %v -> %v", s.RemoteAddr(), s.LocalAddr())
+			ansArrived <- true
+		} else {
+			t.Fatalf("unknown payload %v arrived from %v", m.Payload(), s.RemoteAddr())
+		}
+	})
+	defer HandleRemove("/test")
+
+	s, _, fin, err := RunLocalUDPServer(lnet, addrMcast)
+	if err != nil {
+		t.Fatalf("unable to run test server: %v", err)
+	}
+	defer func() {
+		s.Shutdown()
+		<-fin
+	}()
+
+	co, err := Dial(strings.TrimSuffix(lnet, "-mcast"), addrMcast)
+	if err != nil {
+		t.Fatalf("unable to dialing: %v", err)
+	}
+	defer co.Close()
+
+	req := &DgramMessage{
+		MessageBase{
+			typ:       NonConfirmable,
+			code:      GET,
+			messageID: 1234,
+			payload:   payload,
+		}}
+	req.SetOption(ContentFormat, TextPlain)
+	req.SetPathString("/test")
+
+	co.WriteMsg(req, time.Second)
+
+	<-ansArrived
+}
+
+func TestServingIPv4MCast(t *testing.T) {
+	testServingMCast(t, "udp4-mcast", "225.0.1.187:11111")
+}
+
+func TestServingIPv6MCast(t *testing.T) {
+	testServingMCast(t, "udp6-mcast", "[ff03::158]:11111")
+}
+
 func BenchmarkServe(b *testing.B) {
 	b.StopTimer()
 	HandleFunc("/test", EchoServer)
 	defer HandleRemove("/test")
 
-	s, addrstr, fin, err := RunLocalUDPServer(":0")
+	s, addrstr, fin, err := RunLocalUDPServer("udp", ":0")
 	if err != nil {
 		b.Fatalf("unable to run test server: %v", err)
 	}

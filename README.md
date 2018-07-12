@@ -8,11 +8,11 @@ Features supported:
 * CoAP over UDP [RFC 7252][coap].
 * CoAP over TCP/TLS [RFC 8232][coap-tcp]
 * request multiplexer
+* multicast
 
 Not yet implemented:
 * CoAP over DTLS
 * Block-wise transfers in COAP [RFC 7959][coap-block-wise-transfers]
-* Discovering devices
 * Signaling Message for CoAP over TCP (iotivity 1.4+)
 
 Fork of https://github.com/dustin/go-coap

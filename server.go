@@ -6,6 +6,7 @@ import (
 	"crypto/tls"
 	"net"
 	"reflect"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -137,6 +138,8 @@ type Server struct {
 	CreateSessionTCPFunc func(connection Conn, srv *Server) Session
 	// If NotifyNewSession is set it is called when session TCP/UDP was ended.
 	NotifySessionEndFunc func(w Session, err error)
+	// The interfaces that will be used for udp-mcast (default uses the system assigned for multicast)
+	UDPMcastInterfaces []net.Interface
 
 	TCPReadBufferSize  int
 	TCPWriteBufferSize int
@@ -222,12 +225,7 @@ func (srv *Server) ListenAndServe() error {
 		}
 		srv.Listener = l
 	case "tcp-tls", "tcp4-tls", "tcp6-tls":
-		network := "tcp"
-		if srv.Net == "tcp4-tls" {
-			network = "tcp4"
-		} else if srv.Net == "tcp6-tls" {
-			network = "tcp6"
-		}
+		network := strings.TrimSuffix(srv.Net, "-tls")
 
 		l, err := tls.Listen(network, addr, srv.TLSConfig)
 		if err != nil {
@@ -247,8 +245,34 @@ func (srv *Server) ListenAndServe() error {
 			return err
 		}
 		srv.Conn = l
+	case "udp-mcast", "udp4-mcast", "udp6-mcast":
+		network := strings.TrimSuffix(srv.Net, "-mcast")
+
+		a, err := net.ResolveUDPAddr(network, addr)
+		if err != nil {
+			return err
+		}
+		l, err := net.ListenUDP(network, a)
+		if err != nil {
+			return err
+		}
+		if err := setUDPSocketOptions(l); err != nil {
+			return err
+		}
+		if len(srv.UDPMcastInterfaces) > 0 {
+			for _, ifi := range srv.UDPMcastInterfaces {
+				if err := joinGroup(l, &ifi, &net.UDPAddr{IP: a.IP, Zone: a.Zone}); err != nil {
+					return err
+				}
+			}
+		} else {
+			if err := joinGroup(l, nil, &net.UDPAddr{IP: a.IP, Zone: a.Zone}); err != nil {
+				return err
+			}
+		}
+		srv.Conn = l
 	default:
-		return ErrInvalidServerNetParameter
+		return ErrInvalidNetParameter
 	}
 	return srv.ActivateAndServe()
 }
@@ -256,11 +280,6 @@ func (srv *Server) ListenAndServe() error {
 func (srv *Server) initServeUDP(conn *net.UDPConn) error {
 	if srv.UDPSize == 0 {
 		srv.UDPSize = maxPktLen
-	}
-	// Check PacketConn interface's type is valid and value
-	// is not nil
-	if e := setUDPSocketOptions(conn); e != nil {
-		return e
 	}
 	srv.lock.Lock()
 	srv.started = true

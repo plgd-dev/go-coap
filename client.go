@@ -20,10 +20,10 @@ type ClientConn struct {
 
 // A Client defines parameters for a COAP client.
 type Client struct {
-	Net          string        // if "tcp" or "tcp-tls" (COAP over TLS) a TCP query will be initiated, otherwise an UDP one (default is "" for UDP)
+	Net          string        // if "tcp" or "tcp-tls" (COAP over TLS) a TCP query will be initiated, otherwise an UDP one (default is "" for UDP) or "udp-mcast" for multicast
 	UDPSize      uint16        // minimum receive buffer for UDP messages
 	TLSConfig    *tls.Config   // TLS connection configuration
-	Dialer       *net.Dialer   // a net.Dialer used to set local address, timeouts and more
+	DialTimeout  time.Duration // set Timeout for dialer
 	ReadTimeout  time.Duration // net.ClientConn.SetReadTimeout value for connections, defaults to 1 hour - overridden by Timeout when that value is non-zero
 	WriteTimeout time.Duration // net.ClientConn.SetWriteTimeout value for connections, defaults to 1 hour - overridden by Timeout when that value is non-zero
 	SyncTimeout  time.Duration // The maximum of time for synchronization go-routines, defaults to 30 seconds - overridden by Timeout when that value is non-zero if it occurs, then it call log.Fatal
@@ -54,35 +54,56 @@ func (c *Client) syncTimeout() time.Duration {
 
 // Dial connects to the address on the named network.
 func (c *Client) Dial(address string) (clientConn *ClientConn, err error) {
-	// create a new dialer with the appropriate timeout
-	var d net.Dialer
-	if c.Dialer == nil {
-		d = net.Dialer{}
-	} else {
-		d = net.Dialer(*c.Dialer)
-	}
 
-	network := "udp"
-	useTLS := false
+	var conn net.Conn
+	var network string
+	var sessionUPDData *SessionUDPData
+
+	dialer := &net.Dialer{Timeout: c.DialTimeout}
 
 	switch c.Net {
-	case "tcp-tls":
-		network = "tcp"
-		useTLS = true
-	case "tcp4-tls":
-		network = "tcp4"
-		useTLS = true
-	case "tcp6-tls":
-		network = "tcp6"
-		useTLS = true
-	default:
-		if c.Net != "" {
-			network = c.Net
+	case "tcp-tls", "tcp4-tls", "tcp6-tls":
+		network = strings.TrimSuffix(c.Net, "-tls")
+		conn, err = tls.DialWithDialer(dialer, network, address, c.TLSConfig)
+		if err != nil {
+			return nil, err
 		}
+	case "tcp", "tcp4", "tcp6":
+		network = c.Net
+		conn, err = dialer.Dial(c.Net, address)
+		if err != nil {
+			return nil, err
+		}
+	case "udp", "udp4", "udp6", "":
+		network = c.Net
+		if network == "" {
+			network = "udp"
+		}
+		if conn, err = dialer.Dial(network, address); err != nil {
+			return nil, err
+		}
+		sessionUPDData = &SessionUDPData{raddr: conn.(*net.UDPConn).RemoteAddr().(*net.UDPAddr)}
+	case "udp-mcast", "udp4-mcast", "udp6-mcast":
+		network = strings.TrimSuffix(c.Net, "-mcast")
+		var a *net.UDPAddr
+		if a, err = net.ResolveUDPAddr(network, address); err != nil {
+			return nil, err
+		}
+		var udpConn *net.UDPConn
+		if udpConn, err = net.ListenUDP(network, a); err != nil {
+			return nil, err
+		}
+		if err := setUDPSocketOptions(udpConn); err != nil {
+			return nil, err
+		}
+		sessionUPDData = &SessionUDPData{raddr: a}
+		conn = udpConn
+	default:
+		return nil, ErrInvalidNetParameter
 	}
 
 	sync := make(chan bool)
-	clientConn = &ClientConn{srv: &Server{Net: network, TLSConfig: c.TLSConfig, ReadTimeout: c.readTimeout(), WriteTimeout: c.writeTimeout(), UDPSize: c.UDPSize,
+	clientConn = &ClientConn{srv: &Server{Net: network, TLSConfig: c.TLSConfig, Conn: conn, ReadTimeout: c.readTimeout(), WriteTimeout: c.writeTimeout(), UDPSize: c.UDPSize,
 		NotifyStartedFunc: func() {
 			timeout := c.syncTimeout()
 			select {
@@ -95,26 +116,21 @@ func (c *Client) Dial(address string) (clientConn *ClientConn, err error) {
 			return clientConn.session
 		},
 		CreateSessionUDPFunc: func(connection Conn, srv *Server, sessionUDPData *SessionUDPData) Session {
-			clientConn.session.(*sessionUDP).sessionUDPData = sessionUDPData
-			return clientConn.session
+			if sessionUDPData.RemoteAddr().String() == clientConn.session.RemoteAddr().String() {
+				clientConn.session.(*sessionUDP).sessionUDPData = sessionUDPData
+				return clientConn.session
+			}
+			return NewSessionUDP(connection, srv, sessionUDPData)
 		}, Handler: c.ObserverFunc},
 		shutdownSync: make(chan error)}
-	if useTLS {
-		clientConn.srv.Conn, err = tls.DialWithDialer(&d, network, address, c.TLSConfig)
-	} else {
-		clientConn.srv.Conn, err = d.Dial(network, address)
-	}
-	if err != nil {
-		return nil, err
-	}
+
 	switch clientConn.srv.Conn.(type) {
 	case *net.TCPConn, *tls.Conn:
 		clientConn.session = NewSessionTCP(newConnectionTCP(clientConn.srv.Conn, clientConn.srv), clientConn.srv)
 	case *net.UDPConn:
 		// WriteMsgUDP returns error when addr is filled in SessionUDPData for connected socket
-		d := &SessionUDPData{raddr: clientConn.srv.Conn.(*net.UDPConn).RemoteAddr().(*net.UDPAddr)}
 		setUDPSocketOptions(clientConn.srv.Conn.(*net.UDPConn))
-		clientConn.session = NewSessionUDP(newConnectionUDP(clientConn.srv.Conn.(*net.UDPConn), clientConn.srv), clientConn.srv, d)
+		clientConn.session = NewSessionUDP(newConnectionUDP(clientConn.srv.Conn.(*net.UDPConn), clientConn.srv), clientConn.srv, sessionUPDData)
 	}
 
 	go func() {
@@ -126,6 +142,7 @@ func (c *Client) Dial(address string) (clientConn *ClientConn, err error) {
 			log.Fatal("Client cannot send shutdown: Timeout")
 		}
 	}()
+
 	select {
 	case <-sync:
 	case <-time.After(c.syncTimeout()):
@@ -135,6 +152,11 @@ func (c *Client) Dial(address string) (clientConn *ClientConn, err error) {
 	clientConn.client = c
 
 	return clientConn, nil
+}
+
+// LocalAddr implements the Session.LocalAddr method.
+func (co *ClientConn) LocalAddr() net.Addr {
+	return co.session.LocalAddr()
 }
 
 // Exchange performs a synchronous query. It sends the message m to the address
@@ -176,7 +198,7 @@ func Dial(network, address string) (conn *ClientConn, err error) {
 
 // DialTimeout acts like Dial but takes a timeout.
 func DialTimeout(network, address string, timeout time.Duration) (conn *ClientConn, err error) {
-	client := Client{Net: network, Dialer: &net.Dialer{Timeout: timeout}}
+	client := Client{Net: network, DialTimeout: timeout}
 	return client.Dial(address)
 }
 
@@ -195,6 +217,6 @@ func DialWithTLS(network, address string, tlsConfig *tls.Config) (conn *ClientCo
 
 // DialTimeoutWithTLS acts like DialWithTLS but takes a timeout.
 func DialTimeoutWithTLS(network, address string, tlsConfig *tls.Config, timeout time.Duration) (conn *ClientConn, err error) {
-	client := Client{Net: fixNetTLS(network), Dialer: &net.Dialer{Timeout: timeout}, TLSConfig: tlsConfig}
+	client := Client{Net: fixNetTLS(network), DialTimeout: timeout, TLSConfig: tlsConfig}
 	return client.Dial(address)
 }
