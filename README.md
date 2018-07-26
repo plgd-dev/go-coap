@@ -1,6 +1,6 @@
-[![Build Status](https://travis-ci.com/ondrejtomcik/go-coap.svg?branch=master)](https://travis-ci.com/ondrejtomcik/go-coap)
-[![codecov](https://codecov.io/gh/ondrejtomcik/go-coap/branch/master/graph/badge.svg)](https://codecov.io/gh/ondrejtomcik/go-coap)
-[![Go Report](https://goreportcard.com/badge/github.com/ondrejtomcik/go-coap)](https://goreportcard.com/report/github.com/ondrejtomcik/go-coap)
+[![Build Status](https://travis-ci.com/go-ocf/go-coap.svg?branch=master)](https://travis-ci.com/go-ocf/go-coap)
+[![codecov](https://codecov.io/gh/go-ocf/go-coap/branch/master/graph/badge.svg)](https://codecov.io/gh/go-ocf/go-coap)
+[![Go Report](https://goreportcard.com/badge/github.com/go-ocf/go-coap)](https://goreportcard.com/report/github.com/go-ocf/go-coap)
 
 # CoAP Client and Server for go
 
