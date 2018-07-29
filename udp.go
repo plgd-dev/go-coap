@@ -1,10 +1,9 @@
-// +build !windows
-
 package coap
 
 import (
 	"encoding/base64"
 	"net"
+	"runtime"
 
 	"golang.org/x/net/ipv4"
 	"golang.org/x/net/ipv6"
@@ -65,6 +64,9 @@ func WriteToSessionUDP(conn *net.UDPConn, b []byte, session *SessionUDPData) (in
 }
 
 func setUDPSocketOptions(conn *net.UDPConn) error {
+	if runtime.GOOS == "windows" {
+		return nil
+	}
 	if ip4 := conn.LocalAddr().(*net.UDPAddr).IP.To4(); ip4 != nil {
 		return ipv4.NewPacketConn(conn).SetControlMessage(ipv4.FlagDst|ipv4.FlagInterface, true)
 	}
@@ -89,6 +91,9 @@ func parseDstFromOOB(oob []byte) net.IP {
 
 // correctSource takes oob data and returns new oob data with the Src equal to the Dst
 func correctSource(oob []byte) []byte {
+	if runtime.GOOS == "windows" {
+		return oob
+	}
 	dst := parseDstFromOOB(oob)
 	if dst == nil {
 		return nil

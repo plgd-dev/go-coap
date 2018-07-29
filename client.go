@@ -7,6 +7,7 @@ import (
 	"io"
 	"log"
 	"net"
+	"runtime"
 	"strings"
 	"time"
 )
@@ -58,6 +59,22 @@ func (c *Client) syncTimeout() time.Duration {
 	return syncTimeout
 }
 
+func listenUDP(network, address string) (*net.UDPAddr, *net.UDPConn, error) {
+	var a *net.UDPAddr
+	var err error
+	if a, err = net.ResolveUDPAddr(network, address); err != nil {
+		return nil, nil, err
+	}
+	var udpConn *net.UDPConn
+	if udpConn, err = net.ListenUDP(network, a); err != nil {
+		return nil, nil, err
+	}
+	if err := setUDPSocketOptions(udpConn); err != nil {
+		return nil, nil, err
+	}
+	return a, udpConn, nil
+}
+
 // Dial connects to the address on the named network.
 func (c *Client) Dial(address string) (clientConn *ClientConn, err error) {
 
@@ -86,26 +103,28 @@ func (c *Client) Dial(address string) (clientConn *ClientConn, err error) {
 		}
 		BlockWiseTransferSzx = BlockWiseSzxBERT
 	case "udp", "udp4", "udp6", "":
-		network = c.Net
-		if network == "" {
-			network = "udp"
+		if runtime.GOOS == "windows" {
+			a, udpConn, err := listenUDP(network, address)
+			if err != nil {
+				return nil, err
+			}
+			sessionUPDData = &SessionUDPData{raddr: a}
+			conn = udpConn
+		} else {
+			network = c.Net
+			if network == "" {
+				network = "udp"
+			}
+			if conn, err = dialer.Dial(network, address); err != nil {
+				return nil, err
+			}
+			sessionUPDData = &SessionUDPData{raddr: conn.(*net.UDPConn).RemoteAddr().(*net.UDPAddr)}
 		}
-		if conn, err = dialer.Dial(network, address); err != nil {
-			return nil, err
-		}
-		sessionUPDData = &SessionUDPData{raddr: conn.(*net.UDPConn).RemoteAddr().(*net.UDPAddr)}
 		BlockWiseTransfer = true
 	case "udp-mcast", "udp4-mcast", "udp6-mcast":
 		network = strings.TrimSuffix(c.Net, "-mcast")
-		var a *net.UDPAddr
-		if a, err = net.ResolveUDPAddr(network, address); err != nil {
-			return nil, err
-		}
-		var udpConn *net.UDPConn
-		if udpConn, err = net.ListenUDP(network, a); err != nil {
-			return nil, err
-		}
-		if err := setUDPSocketOptions(udpConn); err != nil {
+		a, udpConn, err := listenUDP(network, address)
+		if err != nil {
 			return nil, err
 		}
 		sessionUPDData = &SessionUDPData{raddr: a}

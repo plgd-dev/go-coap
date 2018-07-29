@@ -127,6 +127,10 @@ func testServingMCastByClient(t *testing.T, lnet, laddr string, BlockWiseTransfe
 		t.Fatalf("cannot resolve addr: %v", err)
 	}
 	co, err := c.Dial(addrMcast)
+	if err != nil {
+		t.Fatalf("cannot dial addr: %v", err)
+	}
+
 	if err := joinGroup(co.srv.Conn.(*net.UDPConn), nil, a); err != nil {
 		t.Fatalf("cannot join self to multicast group: %v", err)
 	}
