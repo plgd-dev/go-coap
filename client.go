@@ -20,13 +20,13 @@ type ClientConn struct {
 
 // A Client defines parameters for a COAP client.
 type Client struct {
-	Net          string        // if "tcp" or "tcp-tls" (COAP over TLS) a TCP query will be initiated, otherwise an UDP one (default is "" for UDP) or "udp-mcast" for multicast
-	UDPSize      uint16        // minimum receive buffer for UDP messages
-	TLSConfig    *tls.Config   // TLS connection configuration
-	DialTimeout  time.Duration // set Timeout for dialer
-	ReadTimeout  time.Duration // net.ClientConn.SetReadTimeout value for connections, defaults to 1 hour - overridden by Timeout when that value is non-zero
-	WriteTimeout time.Duration // net.ClientConn.SetWriteTimeout value for connections, defaults to 1 hour - overridden by Timeout when that value is non-zero
-	SyncTimeout  time.Duration // The maximum of time for synchronization go-routines, defaults to 30 seconds - overridden by Timeout when that value is non-zero if it occurs, then it call log.Fatal
+	Net            string        // if "tcp" or "tcp-tls" (COAP over TLS) a TCP query will be initiated, otherwise an UDP one (default is "" for UDP) or "udp-mcast" for multicast
+	MaxMessageSize uint16        // Max message size that could be received from peer. If not set it defaults to 1152 B.
+	TLSConfig      *tls.Config   // TLS connection configuration
+	DialTimeout    time.Duration // set Timeout for dialer
+	ReadTimeout    time.Duration // net.ClientConn.SetReadTimeout value for connections, defaults to 1 hour - overridden by Timeout when that value is non-zero
+	WriteTimeout   time.Duration // net.ClientConn.SetWriteTimeout value for connections, defaults to 1 hour - overridden by Timeout when that value is non-zero
+	SyncTimeout    time.Duration // The maximum of time for synchronization go-routines, defaults to 30 seconds - overridden by Timeout when that value is non-zero if it occurs, then it call log.Fatal
 
 	ObserverFunc HandlerFunc // for handling observation messages from server
 }
@@ -103,7 +103,7 @@ func (c *Client) Dial(address string) (clientConn *ClientConn, err error) {
 	}
 
 	sync := make(chan bool)
-	clientConn = &ClientConn{srv: &Server{Net: network, TLSConfig: c.TLSConfig, Conn: conn, ReadTimeout: c.readTimeout(), WriteTimeout: c.writeTimeout(), UDPSize: c.UDPSize,
+	clientConn = &ClientConn{srv: &Server{Net: network, TLSConfig: c.TLSConfig, Conn: conn, ReadTimeout: c.readTimeout(), WriteTimeout: c.writeTimeout(), MaxMessageSize: c.MaxMessageSize,
 		NotifyStartedFunc: func() {
 			timeout := c.syncTimeout()
 			select {
@@ -112,13 +112,13 @@ func (c *Client) Dial(address string) (clientConn *ClientConn, err error) {
 				log.Fatal("Client cannot send start: Timeout")
 			}
 		},
-		CreateSessionTCPFunc: func(connection Conn, srv *Server) Session {
-			return clientConn.session
+		CreateSessionTCPFunc: func(connection Conn, srv *Server) (Session, error) {
+			return clientConn.session, nil
 		},
-		CreateSessionUDPFunc: func(connection Conn, srv *Server, sessionUDPData *SessionUDPData) Session {
+		CreateSessionUDPFunc: func(connection Conn, srv *Server, sessionUDPData *SessionUDPData) (Session, error) {
 			if sessionUDPData.RemoteAddr().String() == clientConn.session.RemoteAddr().String() {
 				clientConn.session.(*sessionUDP).sessionUDPData = sessionUDPData
-				return clientConn.session
+				return clientConn.session, nil
 			}
 			return NewSessionUDP(connection, srv, sessionUDPData)
 		}, Handler: c.ObserverFunc},
@@ -126,11 +126,17 @@ func (c *Client) Dial(address string) (clientConn *ClientConn, err error) {
 
 	switch clientConn.srv.Conn.(type) {
 	case *net.TCPConn, *tls.Conn:
-		clientConn.session = NewSessionTCP(newConnectionTCP(clientConn.srv.Conn, clientConn.srv), clientConn.srv)
+		clientConn.session, err = NewSessionTCP(newConnectionTCP(clientConn.srv.Conn, clientConn.srv), clientConn.srv)
+		if err != nil {
+			return nil, err
+		}
 	case *net.UDPConn:
 		// WriteMsgUDP returns error when addr is filled in SessionUDPData for connected socket
 		setUDPSocketOptions(clientConn.srv.Conn.(*net.UDPConn))
-		clientConn.session = NewSessionUDP(newConnectionUDP(clientConn.srv.Conn.(*net.UDPConn), clientConn.srv), clientConn.srv, sessionUPDData)
+		clientConn.session, err = NewSessionUDP(newConnectionUDP(clientConn.srv.Conn.(*net.UDPConn), clientConn.srv), clientConn.srv, sessionUPDData)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	go func() {
@@ -178,6 +184,11 @@ func (co *ClientConn) NewMessage(p MessageParams) Message {
 // WriteMsg sends a message through the connection co.
 func (co *ClientConn) WriteMsg(m Message, timeout time.Duration) (err error) {
 	return co.session.WriteMsg(m, timeout)
+}
+
+// Ping send a ping message and wait for a pong response
+func (co *ClientConn) Ping(timeout time.Duration) (err error) {
+	return co.session.Ping(timeout)
 }
 
 // Close close connection

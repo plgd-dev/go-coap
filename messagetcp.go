@@ -15,6 +15,82 @@ const (
 	TCP_MESSAGE_MAX_LEN    = 0x7fff0000 // Large number that works in 32-bit builds.
 )
 
+// Signal CSM Option IDs
+/*
+   +-----+---+---+-------------------+--------+--------+---------+
+   | No. | C | R | Name              | Format | Length | Default |
+   +-----+---+---+-------------------+--------+--------+---------+
+   |   2 |   |   | MaxMessageSize    | uint   | 0-4    | 1152    |
+   |   4 |   |   | BlockWiseTransfer | empty  | 0      | (none)  |
+   +-----+---+---+-------------------+--------+--------+---------+
+   C=Critical, R=Repeatable
+*/
+
+const (
+	MaxMessageSize    OptionID = 2
+	BlockWiseTransfer OptionID = 4
+)
+
+// Signal Ping/Pong Option IDs
+/*
+   +-----+---+---+-------------------+--------+--------+---------+
+   | No. | C | R | Name              | Format | Length | Default |
+   +-----+---+---+-------------------+--------+--------+---------+
+   |   2 |   |   | Custody           | empty  | 0      | (none)  |
+   +-----+---+---+-------------------+--------+--------+---------+
+   C=Critical, R=Repeatable
+*/
+
+const (
+	Custody OptionID = 2
+)
+
+// Signal Release Option IDs
+/*
+   +-----+---+---+---------------------+--------+--------+---------+
+   | No. | C | R | Name                | Format | Length | Default |
+   +-----+---+---+---------------------+--------+--------+---------+
+   |   2 |   | x | Alternative-Address | string | 1-255  | (none)  |
+   |   4 |   |   | Hold-Off            | uint3  | 0-3    | (none)  |
+   +-----+---+---+---------------------+--------+--------+---------+
+   C=Critical, R=Repeatable
+*/
+const (
+	AlternativeAddress OptionID = 2
+	HoldOff            OptionID = 4
+)
+
+// Signal Abort Option IDs
+/*
+   +-----+---+---+---------------------+--------+--------+---------+
+   | No. | C | R | Name                | Format | Length | Default |
+   +-----+---+---+---------------------+--------+--------+---------+
+   |   2 |   |   | Bad-CSM-Option      | uint   | 0-2    | (none)  |
+   +-----+---+---+---------------------+--------+--------+---------+
+   C=Critical, R=Repeatable
+*/
+const (
+	BadCSMOption OptionID = 2
+)
+
+var signalCSMOptionDefs = map[OptionID]optionDef{
+	MaxMessageSize:    optionDef{valueFormat: valueUint, minLen: 0, maxLen: 4},
+	BlockWiseTransfer: optionDef{valueFormat: valueEmpty, minLen: 0, maxLen: 0},
+}
+
+var signalPingPongOptionDefs = map[OptionID]optionDef{
+	Custody: optionDef{valueFormat: valueEmpty, minLen: 0, maxLen: 0},
+}
+
+var signalReleaseOptionDefs = map[OptionID]optionDef{
+	AlternativeAddress: optionDef{valueFormat: valueString, minLen: 1, maxLen: 255},
+	HoldOff:            optionDef{valueFormat: valueUint, minLen: 0, maxLen: 3},
+}
+
+var signalAbortOptionDefs = map[OptionID]optionDef{
+	BadCSMOption: optionDef{valueFormat: valueUint, minLen: 0, maxLen: 2},
+}
+
 // TcpMessage is a CoAP MessageBase that can encode itself for TCP
 // transport.
 type TcpMessage struct {
@@ -60,7 +136,7 @@ func (m *TcpMessage) MarshalBinary() ([]byte, error) {
 	   | 15         | 4                     | Extended Length + 65805   |
 	*/
 
-	if len(m.MessageBase.token) > 8 {
+	if len(m.MessageBase.token) > MaxTokenSize {
 		return nil, ErrInvalidTokenLen
 	}
 
@@ -204,8 +280,19 @@ func readTcpMsgBody(mti msgTcpInfo, r io.Reader) (options, []byte, error) {
 	if _, err := io.ReadFull(r, b); err != nil {
 		return nil, nil, err
 	}
+	optionDefs := coapOptionDefs
+	switch COAPCode(mti.code) {
+	case CSM:
+		optionDefs = signalCSMOptionDefs
+	case Ping, Pong:
+		optionDefs = signalPingPongOptionDefs
+	case Release:
+		optionDefs = signalReleaseOptionDefs
+	case Abort:
+		optionDefs = signalAbortOptionDefs
+	}
 
-	o, p, err := parseBody(b)
+	o, p, err := parseBody(optionDefs, b)
 	if err != nil {
 		return nil, nil, err
 	}

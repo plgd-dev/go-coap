@@ -55,3 +55,12 @@ const ErrInvalidServerListenerParameter = Error("invalid Server.Listener paramet
 
 // ErrServerNotStarted server not started
 const ErrServerNotStarted = Error("server not started")
+
+// ErrMsgTooLarge message it too large, for processing
+const ErrMsgTooLarge = Error("message it too large, for processing")
+
+// ErrInvalidResponse invalid response received for certain token
+const ErrInvalidResponse = Error("invalid response")
+
+// ErrNotSupported invalid response received for certain token
+const ErrNotSupported = Error("not supported")
