@@ -9,12 +9,12 @@ import (
 
 type writeReq interface {
 	sendResp(err error, timeout time.Duration)
-	marshalBinary() ([]byte, error)
 	waitResp(timeout time.Duration) error
+	data() []byte
 }
 
 type writeReqBase struct {
-	req      Message
+	req      []byte
 	respChan chan error // channel must have size 1 for non-blocking write to channel
 }
 
@@ -36,8 +36,8 @@ func (wreq *writeReqBase) waitResp(timeout time.Duration) error {
 	}
 }
 
-func (wreq *writeReqBase) marshalBinary() ([]byte, error) {
-	return wreq.req.MarshalBinary()
+func (wreq *writeReqBase) data() []byte {
+	return wreq.req
 }
 
 type writeReqTCP struct {
@@ -145,10 +145,7 @@ func (conn *connTCP) Close() error {
 
 func (conn *connTCP) writeHandler(srv *Server) bool {
 	return conn.writeHandlerWithFunc(srv, func(srv *Server, wreq writeReq) error {
-		data, err := wreq.marshalBinary()
-		if err != nil {
-			return err
-		}
+		data := wreq.data()
 		wr := srv.acquireWriter(conn.connection)
 		defer srv.releaseWriter(wr)
 		writeTimeout := srv.writeTimeout()
@@ -196,10 +193,7 @@ func (conn *connUDP) Close() error {
 
 func (conn *connUDP) writeHandler(srv *Server) bool {
 	return conn.writeHandlerWithFunc(srv, func(srv *Server, wreq writeReq) error {
-		data, err := wreq.marshalBinary()
-		if err != nil {
-			return err
-		}
+		data := wreq.data()
 		wreqUDP := wreq.(*writeReqUDP)
 		writeTimeout := srv.writeTimeout()
 		conn.connection.SetWriteDeadline(time.Now().Add(writeTimeout))

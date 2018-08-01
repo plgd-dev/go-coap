@@ -22,7 +22,7 @@ const coapTimeout time.Duration = 3600 * time.Second
 
 const syncTimeout time.Duration = 30 * time.Second
 
-const maxPktLen = 1500
+const maxMessageSize = 1152
 
 const (
 	defaultReadBufferSize  = 4096
@@ -54,10 +54,7 @@ func (f HandlerFunc) ServeCOAP(w Session, r Message) {
 
 // HandleFailed returns a HandlerFunc that returns NotFound for every request it gets.
 func HandleFailed(w Session, req Message) {
-	typ := NonConfirmable
-	if req.IsConfirmable() {
-		typ = Acknowledgement
-	}
+	typ := Reset
 	msg := w.NewMessage(MessageParams{
 		Type:      typ,
 		Code:      NotFound,
@@ -121,9 +118,9 @@ type Server struct {
 	Conn net.Conn
 	// Handler to invoke, COAP.DefaultServeMux if nil.
 	Handler Handler
-	// Default buffer size to use to read incoming UDP messages. If not set
-	// it defaults to 1500 B.
-	UDPSize uint16
+	// Max message size that could be received from peer. If not set
+	// it defaults to 1152 B.
+	MaxMessageSize uint16
 	// The net.Conn.SetReadTimeout value for new connections, defaults to 1hour.
 	ReadTimeout time.Duration
 	// The net.Conn.SetWriteTimeout value for new connections, defaults to 1hour.
@@ -133,9 +130,9 @@ type Server struct {
 	// The maximum of time for synchronization go-routines, defaults to 30 seconds, if it occurs, then it call log.Fatal
 	SyncTimeout time.Duration
 	// If CreateSessionUDPFunc is set it is called when session UDP want to be created
-	CreateSessionUDPFunc func(connection Conn, srv *Server, sessionUDPData *SessionUDPData) Session
+	CreateSessionUDPFunc func(connection Conn, srv *Server, sessionUDPData *SessionUDPData) (Session, error)
 	// If CreateSessionUDPFunc is set it is called when session TCP want to be created
-	CreateSessionTCPFunc func(connection Conn, srv *Server) Session
+	CreateSessionTCPFunc func(connection Conn, srv *Server) (Session, error)
 	// If NotifyNewSession is set it is called when session TCP/UDP was ended.
 	NotifySessionEndFunc func(w Session, err error)
 	// The interfaces that will be used for udp-mcast (default uses the system assigned for multicast)
@@ -278,8 +275,8 @@ func (srv *Server) ListenAndServe() error {
 }
 
 func (srv *Server) initServeUDP(conn *net.UDPConn) error {
-	if srv.UDPSize == 0 {
-		srv.UDPSize = maxPktLen
+	if srv.MaxMessageSize == 0 {
+		srv.MaxMessageSize = maxMessageSize
 	}
 	srv.lock.Lock()
 	srv.started = true
@@ -391,7 +388,10 @@ func (srv *Server) syncTimeout() time.Duration {
 
 func (srv *Server) serveTCPconnection(conn net.Conn) error {
 	conn.SetReadDeadline(time.Now().Add(srv.readTimeout()))
-	session := srv.CreateSessionTCPFunc(newConnectionTCP(conn, srv), srv)
+	session, err := srv.CreateSessionTCPFunc(newConnectionTCP(conn, srv), srv)
+	if err != nil {
+		return err
+	}
 	br := srv.acquireReader(conn)
 	defer srv.releaseReader(br)
 	for {
@@ -494,7 +494,7 @@ func (srv *Server) serveUDP(conn *net.UDPConn) error {
 	// deadline is not used here
 
 	connUDP := newConnectionUDP(conn, srv).(*connUDP)
-	m := make([]byte, srv.UDPSize)
+	m := make([]byte, srv.MaxMessageSize)
 	for {
 		srv.lock.RLock()
 		if !srv.started {
@@ -523,7 +523,10 @@ func (srv *Server) serveUDP(conn *net.UDPConn) error {
 		srv.sessionUDPMapLock.Lock()
 		session := srv.sessionUDPMap[s.Key()]
 		if session == nil {
-			session = srv.CreateSessionUDPFunc(connUDP, srv, s)
+			session, err = srv.CreateSessionUDPFunc(connUDP, srv, s)
+			if err != nil {
+				return err
+			}
 			srv.sessionUDPMap[s.Key()] = session
 			srv.sessionUDPMapLock.Unlock()
 		} else {
@@ -539,11 +542,14 @@ func (srv *Server) serveUDP(conn *net.UDPConn) error {
 }
 
 func (srv *Server) serve(w *requestCtx) {
-	if w.request.Token() != nil {
-		if w.session.HandlePairMsg(w.request) {
-			return
-		}
+	if w.session.handlePairMsg(w.request) {
+		return
 	}
+
+	if w.session.handleSignals(w.request) {
+		return
+	}
+
 	srv.serveCOAP(w)
 }
 
@@ -552,7 +558,6 @@ func (srv *Server) serveCOAP(w *requestCtx) {
 	if handler == nil || reflect.ValueOf(handler).IsNil() {
 		handler = DefaultServeMux
 	}
-
 	handler.ServeCOAP(w.session, w.request) // Writes back to the client
 }
 

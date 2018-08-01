@@ -71,10 +71,14 @@ func RunLocalServerUDPWithHandler(lnet, laddr string, handler HandlerFunc) (*Ser
 		return nil, "", nil, err
 	}
 	server := &Server{Conn: pc, ReadTimeout: time.Hour, WriteTimeout: time.Hour,
-		CreateSessionUDPFunc: func(connection Conn, srv *Server, sessionUDPData *SessionUDPData) Session {
-			w := NewSessionUDP(connection, srv, sessionUDPData)
+		CreateSessionUDPFunc: func(connection Conn, srv *Server, sessionUDPData *SessionUDPData) (Session, error) {
+			w, err := NewSessionUDP(connection, srv, sessionUDPData)
+			if err != nil {
+				fmt.Printf("Session start failed: %v\n", err)
+				return nil, err
+			}
 			fmt.Printf("Session start %v\n", w.RemoteAddr())
-			return w
+			return w, nil
 		}, NotifySessionEndFunc: func(w Session, err error) {
 			fmt.Printf("Session end %v: %v\n", w.RemoteAddr(), err)
 		}, Handler: handler}
@@ -108,10 +112,14 @@ func RunLocalServerTCPWithHandler(laddr string, handler HandlerFunc) (*Server, s
 	}
 
 	server := &Server{Listener: l, ReadTimeout: time.Second * 3600, WriteTimeout: time.Second * 3600,
-		CreateSessionTCPFunc: func(connection Conn, srv *Server) Session {
-			w := NewSessionTCP(connection, srv)
+		CreateSessionTCPFunc: func(connection Conn, srv *Server) (Session, error) {
+			w, err := NewSessionTCP(connection, srv)
+			if err != nil {
+				fmt.Printf("Session start failed: %v\n", err)
+				return nil, err
+			}
 			fmt.Printf("Session start %v\n", w.RemoteAddr())
-			return w
+			return w, nil
 		}, NotifySessionEndFunc: func(w Session, err error) {
 			fmt.Printf("Session end %v: %v\n", w.RemoteAddr(), err)
 		}, Handler: handler}
@@ -144,10 +152,14 @@ func RunLocalTLSServer(laddr string, config *tls.Config) (*Server, string, chan 
 	}
 
 	server := &Server{Listener: l, ReadTimeout: time.Hour, WriteTimeout: time.Hour,
-		CreateSessionTCPFunc: func(connection Conn, srv *Server) Session {
-			w := NewSessionTCP(connection, srv)
+		CreateSessionTCPFunc: func(connection Conn, srv *Server) (Session, error) {
+			w, err := NewSessionTCP(connection, srv)
+			if err != nil {
+				fmt.Printf("Session start failed: %v\n", err)
+				return nil, err
+			}
 			fmt.Printf("Session start %v\n", w.RemoteAddr())
-			return w
+			return w, nil
 		}, NotifySessionEndFunc: func(w Session, err error) {
 			fmt.Printf("Session end %v: %v\n", w.RemoteAddr(), err)
 		}}
@@ -242,6 +254,13 @@ func simpleMsg(t *testing.T, payload []byte, co *ClientConn) {
 	assertEqualMessages(t, res, m)
 }
 
+func pingMsg(t *testing.T, payload []byte, co *ClientConn) {
+	err := co.Ping(1 * time.Second)
+	if err != nil {
+		t.Fatal("failed to exchange", err)
+	}
+}
+
 func testServingTCPWithMsg(t *testing.T, net string, payload []byte, ch clientHandler) {
 	testServingTCPWithMsgWithObserver(t, net, payload, ch, nil)
 }
@@ -250,8 +269,17 @@ func TestServingUDP(t *testing.T) {
 	testServingTCPWithMsg(t, "udp", make([]byte, 128), simpleMsg)
 }
 
+func TestServingUDPPing(t *testing.T) {
+
+	testServingTCPWithMsg(t, "udp", nil, pingMsg)
+}
+
+func TestServingTCPPing(t *testing.T) {
+	testServingTCPWithMsg(t, "tcp", nil, pingMsg)
+}
+
 func TestServingUDPBigMsg(t *testing.T) {
-	testServingTCPWithMsg(t, "udp", make([]byte, 1300), simpleMsg)
+	testServingTCPWithMsg(t, "udp", make([]byte, 1000), simpleMsg)
 }
 
 func TestServingTCP(t *testing.T) {

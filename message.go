@@ -12,6 +12,9 @@ import (
 // COAPType represents the message type.
 type COAPType uint8
 
+// MaxTokenSize maximum of token size that can be used in message
+const MaxTokenSize = 8
+
 const (
 	// Confirmable messages require acknowledgements.
 	Confirmable COAPType = 0
@@ -55,6 +58,7 @@ const (
 
 // Response Codes
 const (
+	Empty                 COAPCode = 0
 	Created               COAPCode = 65
 	Deleted               COAPCode = 66
 	Valid                 COAPCode = 67
@@ -76,6 +80,15 @@ const (
 	ServiceUnavailable    COAPCode = 163
 	GatewayTimeout        COAPCode = 164
 	ProxyingNotSupported  COAPCode = 165
+)
+
+//Signaling Codes for TCP
+const (
+	CSM     COAPCode = 225
+	Ping    COAPCode = 226
+	Pong    COAPCode = 227
+	Release COAPCode = 228
+	Abort   COAPCode = 229
 )
 
 var codeNames = [256]string{
@@ -104,6 +117,11 @@ var codeNames = [256]string{
 	ServiceUnavailable:    "ServiceUnavailable",
 	GatewayTimeout:        "GatewayTimeout",
 	ProxyingNotSupported:  "ProxyingNotSupported",
+	CSM:                   "Capabilities and Settings Messages",
+	Ping:                  "Ping",
+	Pong:                  "Pong",
+	Release:               "Release",
+	Abort:                 "Abort",
 }
 
 func init() {
@@ -146,6 +164,7 @@ type OptionID uint8
    |  39 | x  | x | - |   | Proxy-Scheme   | string | 1-255  | (none)  |
    |  60 |    |   | x |   | Size1          | uint   | 0-4    | (none)  |
    +-----+----+---+---+---+----------------+--------+--------+---------+
+   C=Critical, U=Unsafe, N=NoCacheKey, R=Repeatable
 */
 
 // Option IDs.
@@ -188,7 +207,7 @@ type optionDef struct {
 	maxLen      int
 }
 
-var optionDefs = [256]optionDef{
+var coapOptionDefs = map[OptionID]optionDef{
 	IfMatch:       optionDef{valueFormat: valueOpaque, minLen: 0, maxLen: 8},
 	URIHost:       optionDef{valueFormat: valueString, minLen: 1, maxLen: 255},
 	ETag:          optionDef{valueFormat: valueOpaque, minLen: 1, maxLen: 8},
@@ -297,27 +316,28 @@ func (o option) toBytes() ([]byte, error) {
 	return encodeInt(v), nil
 }
 
-func parseOptionValue(optionID OptionID, valueBuf []byte) interface{} {
-	def := optionDefs[optionID]
-	if def.valueFormat == valueUnknown {
-		// Skip unrecognized options (RFC7252 section 5.4.1)
-		return nil
-	}
-	if len(valueBuf) < def.minLen || len(valueBuf) > def.maxLen {
-		// Skip options with illegal value length (RFC7252 section 5.4.3)
-		return nil
-	}
-	switch def.valueFormat {
-	case valueUint:
-		intValue := decodeInt(valueBuf)
-		if optionID == ContentFormat || optionID == Accept {
-			return MediaType(intValue)
+func parseOptionValue(optionDefs map[OptionID]optionDef, optionID OptionID, valueBuf []byte) interface{} {
+	if def, ok := optionDefs[optionID]; ok {
+		if def.valueFormat == valueUnknown {
+			// Skip unrecognized options (RFC7252 section 5.4.1)
+			return nil
 		}
-		return intValue
-	case valueString:
-		return string(valueBuf)
-	case valueOpaque, valueEmpty:
-		return valueBuf
+		if len(valueBuf) < def.minLen || len(valueBuf) > def.maxLen {
+			// Skip options with illegal value length (RFC7252 section 5.4.3)
+			return nil
+		}
+		switch def.valueFormat {
+		case valueUint:
+			intValue := decodeInt(valueBuf)
+			if optionID == ContentFormat || optionID == Accept {
+				return MediaType(intValue)
+			}
+			return intValue
+		case valueString:
+			return string(valueBuf)
+		case valueOpaque, valueEmpty:
+			return valueBuf
+		}
 	}
 	// Skip unrecognized options (should never be reached)
 	return nil
@@ -617,7 +637,7 @@ func writeOpts(buf io.Writer, opts options) {
 // parseBody extracts the options and payload from a byte slice.  The supplied
 // byte slice contains everything following the message header (everything
 // after the token).
-func parseBody(data []byte) (options, []byte, error) {
+func parseBody(optionDefs map[OptionID]optionDef, data []byte) (options, []byte, error) {
 	prev := 0
 
 	parseExtOpt := func(opt int) (int, error) {
@@ -669,7 +689,7 @@ func parseBody(data []byte) (options, []byte, error) {
 		}
 
 		oid := OptionID(prev + delta)
-		opval := parseOptionValue(oid, data[:length])
+		opval := parseOptionValue(optionDefs, oid, data[:length])
 		data = data[length:]
 		prev = int(oid)
 

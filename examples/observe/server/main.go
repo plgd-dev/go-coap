@@ -5,7 +5,7 @@ import (
 	"log"
 	"time"
 
-	"github.com/ondrejtomcik/go-coap"
+	coap "github.com/go-ocf/go-coap"
 )
 
 func periodicTransmitter(w coap.Session, req coap.Message) {

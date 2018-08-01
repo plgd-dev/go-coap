@@ -4,7 +4,7 @@ import (
 	"log"
 	"time"
 
-	"github.com/ondrejtomcik/go-coap"
+	coap "github.com/go-ocf/go-coap"
 )
 
 func observe(s coap.Session, m coap.Message) {

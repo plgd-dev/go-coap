@@ -49,7 +49,7 @@ func (m *DgramMessage) MarshalBinary() ([]byte, error) {
 		tmpbuf[0], tmpbuf[1],
 	})
 
-	if len(m.MessageBase.token) > 8 {
+	if len(m.MessageBase.token) > MaxTokenSize {
 		return nil, ErrInvalidTokenLen
 	}
 	buf.Write(m.MessageBase.token)
@@ -94,7 +94,7 @@ func (m *DgramMessage) UnmarshalBinary(data []byte) error {
 	copy(m.MessageBase.token, data[4:4+tokenLen])
 	b := data[4+tokenLen:]
 
-	o, p, err := parseBody(b)
+	o, p, err := parseBody(coapOptionDefs, b)
 	if err != nil {
 		return err
 	}
