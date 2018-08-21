@@ -112,28 +112,28 @@ func (c *Client) Dial(address string) (clientConn *ClientConn, err error) {
 				log.Fatal("Client cannot send start: Timeout")
 			}
 		},
-		CreateSessionTCPFunc: func(connection Conn, srv *Server) (Session, error) {
+		createSessionTCPFunc: func(connection Conn, srv *Server) (Session, error) {
 			return clientConn.session, nil
 		},
-		CreateSessionUDPFunc: func(connection Conn, srv *Server, sessionUDPData *SessionUDPData) (Session, error) {
+		createSessionUDPFunc: func(connection Conn, srv *Server, sessionUDPData *SessionUDPData) (Session, error) {
 			if sessionUDPData.RemoteAddr().String() == clientConn.session.RemoteAddr().String() {
 				clientConn.session.(*sessionUDP).sessionUDPData = sessionUDPData
 				return clientConn.session, nil
 			}
-			return NewSessionUDP(connection, srv, sessionUDPData)
+			return newSessionUDP(connection, srv, sessionUDPData)
 		}, Handler: c.ObserverFunc},
 		shutdownSync: make(chan error)}
 
 	switch clientConn.srv.Conn.(type) {
 	case *net.TCPConn, *tls.Conn:
-		clientConn.session, err = NewSessionTCP(newConnectionTCP(clientConn.srv.Conn, clientConn.srv), clientConn.srv)
+		clientConn.session, err = newSessionTCP(newConnectionTCP(clientConn.srv.Conn, clientConn.srv), clientConn.srv)
 		if err != nil {
 			return nil, err
 		}
 	case *net.UDPConn:
 		// WriteMsgUDP returns error when addr is filled in SessionUDPData for connected socket
 		setUDPSocketOptions(clientConn.srv.Conn.(*net.UDPConn))
-		clientConn.session, err = NewSessionUDP(newConnectionUDP(clientConn.srv.Conn.(*net.UDPConn), clientConn.srv), clientConn.srv, sessionUPDData)
+		clientConn.session, err = newSessionUDP(newConnectionUDP(clientConn.srv.Conn.(*net.UDPConn), clientConn.srv), clientConn.srv, sessionUPDData)
 		if err != nil {
 			return nil, err
 		}
@@ -163,6 +163,11 @@ func (c *Client) Dial(address string) (clientConn *ClientConn, err error) {
 // LocalAddr implements the Session.LocalAddr method.
 func (co *ClientConn) LocalAddr() net.Addr {
 	return co.session.LocalAddr()
+}
+
+// RemoteAddr implements the Session.RemoteAddr method.
+func (co *ClientConn) RemoteAddr() net.Addr {
+	return co.session.RemoteAddr()
 }
 
 // Exchange performs a synchronous query. It sends the message m to the address
