@@ -44,13 +44,13 @@ type Session interface {
 }
 
 // NewSessionUDP create new session for UDP connection
-func NewSessionUDP(connection Conn, srv *Server, sessionUDPData *SessionUDPData) (Session, error) {
+func newSessionUDP(connection Conn, srv *Server, sessionUDPData *SessionUDPData) (Session, error) {
 	s := &sessionUDP{sessionBase: sessionBase{srv: srv, mapPairs: make(map[[8]byte](*sessionResp)), connection: connection}, sessionUDPData: sessionUDPData, mapMsgIdPairs: make(map[uint16](*sessionResp))}
 	return s, nil
 }
 
 // NewSessionTCP create new session for TCP connection
-func NewSessionTCP(connection Conn, srv *Server) (Session, error) {
+func newSessionTCP(connection Conn, srv *Server) (Session, error) {
 	s := &sessionTCP{sessionBase: sessionBase{srv: srv, mapPairs: make(map[[8]byte](*sessionResp)), connection: connection}}
 	if err := s.sendCSM(); err != nil {
 		return nil, err

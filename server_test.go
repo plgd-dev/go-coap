@@ -71,14 +71,8 @@ func RunLocalServerUDPWithHandler(lnet, laddr string, handler HandlerFunc) (*Ser
 		return nil, "", nil, err
 	}
 	server := &Server{Conn: pc, ReadTimeout: time.Hour, WriteTimeout: time.Hour,
-		CreateSessionUDPFunc: func(connection Conn, srv *Server, sessionUDPData *SessionUDPData) (Session, error) {
-			w, err := NewSessionUDP(connection, srv, sessionUDPData)
-			if err != nil {
-				fmt.Printf("Session start failed: %v\n", err)
-				return nil, err
-			}
-			fmt.Printf("Session start %v\n", w.RemoteAddr())
-			return w, nil
+		NotifySessionNewFunc: func(s Session) {
+			fmt.Printf("Session start %v\n", s.RemoteAddr())
 		}, NotifySessionEndFunc: func(w Session, err error) {
 			fmt.Printf("Session end %v: %v\n", w.RemoteAddr(), err)
 		}, Handler: handler}
@@ -112,14 +106,8 @@ func RunLocalServerTCPWithHandler(laddr string, handler HandlerFunc) (*Server, s
 	}
 
 	server := &Server{Listener: l, ReadTimeout: time.Second * 3600, WriteTimeout: time.Second * 3600,
-		CreateSessionTCPFunc: func(connection Conn, srv *Server) (Session, error) {
-			w, err := NewSessionTCP(connection, srv)
-			if err != nil {
-				fmt.Printf("Session start failed: %v\n", err)
-				return nil, err
-			}
-			fmt.Printf("Session start %v\n", w.RemoteAddr())
-			return w, nil
+		NotifySessionNewFunc: func(s Session) {
+			fmt.Printf("Session start %v\n", s.RemoteAddr())
 		}, NotifySessionEndFunc: func(w Session, err error) {
 			fmt.Printf("Session end %v: %v\n", w.RemoteAddr(), err)
 		}, Handler: handler}
@@ -152,14 +140,8 @@ func RunLocalTLSServer(laddr string, config *tls.Config) (*Server, string, chan 
 	}
 
 	server := &Server{Listener: l, ReadTimeout: time.Hour, WriteTimeout: time.Hour,
-		CreateSessionTCPFunc: func(connection Conn, srv *Server) (Session, error) {
-			w, err := NewSessionTCP(connection, srv)
-			if err != nil {
-				fmt.Printf("Session start failed: %v\n", err)
-				return nil, err
-			}
-			fmt.Printf("Session start %v\n", w.RemoteAddr())
-			return w, nil
+		NotifySessionNewFunc: func(s Session) {
+			fmt.Printf("Session start %v\n", s.RemoteAddr())
 		}, NotifySessionEndFunc: func(w Session, err error) {
 			fmt.Printf("Session end %v: %v\n", w.RemoteAddr(), err)
 		}}
