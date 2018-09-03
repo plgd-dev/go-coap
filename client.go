@@ -28,7 +28,8 @@ type Client struct {
 	WriteTimeout   time.Duration // net.ClientConn.SetWriteTimeout value for connections, defaults to 1 hour - overridden by Timeout when that value is non-zero
 	SyncTimeout    time.Duration // The maximum of time for synchronization go-routines, defaults to 30 seconds - overridden by Timeout when that value is non-zero if it occurs, then it call log.Fatal
 
-	ObserverFunc HandlerFunc // for handling observation messages from server
+	ObserverFunc         HandlerFunc     // for handling observation messages from server
+	NotifySessionEndFunc func(err error) // if NotifySessionEndFunc is set it is called when TCP/UDP session was ended.
 }
 
 func (c *Client) readTimeout() time.Duration {
@@ -110,6 +111,11 @@ func (c *Client) Dial(address string) (clientConn *ClientConn, err error) {
 			case sync <- true:
 			case <-time.After(timeout):
 				log.Fatal("Client cannot send start: Timeout")
+			}
+		},
+		NotifySessionEndFunc: func(s Session, err error) {
+			if c.NotifySessionEndFunc != nil {
+				c.NotifySessionEndFunc(err)
 			}
 		},
 		createSessionTCPFunc: func(connection Conn, srv *Server) (Session, error) {
