@@ -7,12 +7,12 @@
 Features supported:
 * CoAP over UDP [RFC 7252][coap].
 * CoAP over TCP/TLS [RFC 8232][coap-tcp]
+* Block-wise transfers in COAP [RFC 7959][coap-block-wise-transfers]
 * request multiplexer
 * multicast
 
 Not yet implemented:
 * CoAP over DTLS
-* Block-wise transfers in COAP [RFC 7959][coap-block-wise-transfers]
 
 Fork of https://github.com/dustin/go-coap
 
@@ -28,7 +28,7 @@ Fork of https://github.com/dustin/go-coap
 ```go
 	// Server
 	// See /examples/simpler/server/main.go
-	func handleA(w coap.Session, req coap.Message) {
+	func handleA(w coap.SessionNet, req coap.Message) {
 		log.Printf("Got message in handleA: path=%q: %#v from %v", req.Path(), req, w.RemoteAddr())
 		if req.IsConfirmable() {
 			res := w.NewMessage(coap.MessageParams{
@@ -103,7 +103,7 @@ Fork of https://github.com/dustin/go-coap
 	// Server
 	// See /examples/observe/server/main.go
 
-	func periodicTransmitter(w coap.Session, req coap.Message) {
+	func periodicTransmitter(w coap.SessionNet, req coap.Message) {
 		subded := time.Now()
 
 		for {
@@ -130,7 +130,7 @@ Fork of https://github.com/dustin/go-coap
 
 	func main() {
 		log.Fatal(coap.ListenAndServe(":5688", "udp",
-			coap.HandlerFunc(func(w coap.Session, req coap.Message) {
+			coap.HandlerFunc(func(w coap.SessionNet, req coap.Message) {
 				log.Printf("Got message path=%q: %#v from %v", req.Path(), req, w.RemoteAddr())
 				if req.Code() == coap.GET && req.Option(coap.Observe) != nil {
 					value := req.Option(coap.Observe)
@@ -149,7 +149,7 @@ Fork of https://github.com/dustin/go-coap
 ```go
 	// Client
 	// See /examples/observe/client/main.go
-	func observe(s coap.Session, m coap.Message) {
+	func observe(s coap.SessionNet, m coap.Message) {
 		log.Printf("Got %s", m.Payload())
 	}
 

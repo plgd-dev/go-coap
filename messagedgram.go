@@ -23,6 +23,11 @@ func NewDgramMessage(p MessageParams) *DgramMessage {
 	}
 }
 
+// SetMessageID
+func (m *DgramMessage) SetMessageID(messageID uint16) {
+	m.messageID = messageID
+}
+
 // MarshalBinary produces the binary form of this DgramMessage.
 func (m *DgramMessage) MarshalBinary() ([]byte, error) {
 	tmpbuf := []byte{0, 0}

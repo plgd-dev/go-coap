@@ -22,7 +22,7 @@ func GenerateToken(n int) ([]byte, error) {
 
 var msgIdIter = uint32(0)
 
-// GenerateMessageId generates a message id for UDP-coap
-func GenerateMessageId() uint16 {
+// GenerateMessageID generates a message id for UDP-coap
+func GenerateMessageID() uint16 {
 	return uint16(atomic.AddUint32(&msgIdIter, 1) % 0xffff)
 }

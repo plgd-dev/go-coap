@@ -7,7 +7,7 @@ import (
 	coap "github.com/go-ocf/go-coap"
 )
 
-func handleMcast(w coap.Session, req coap.Message) {
+func handleMcast(w coap.SessionNet, req coap.Message) {
 	log.Printf("Got message in handleA: path=%q: %#v from %v", req.Path(), req, w.RemoteAddr())
 	res := w.NewMessage(coap.MessageParams{
 		Type:      coap.Acknowledgement,

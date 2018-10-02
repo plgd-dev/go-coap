@@ -58,28 +58,30 @@ const (
 
 // Response Codes
 const (
-	Empty                 COAPCode = 0
-	Created               COAPCode = 65
-	Deleted               COAPCode = 66
-	Valid                 COAPCode = 67
-	Changed               COAPCode = 68
-	Content               COAPCode = 69
-	BadRequest            COAPCode = 128
-	Unauthorized          COAPCode = 129
-	BadOption             COAPCode = 130
-	Forbidden             COAPCode = 131
-	NotFound              COAPCode = 132
-	MethodNotAllowed      COAPCode = 133
-	NotAcceptable         COAPCode = 134
-	PreconditionFailed    COAPCode = 140
-	RequestEntityTooLarge COAPCode = 141
-	UnsupportedMediaType  COAPCode = 143
-	InternalServerError   COAPCode = 160
-	NotImplemented        COAPCode = 161
-	BadGateway            COAPCode = 162
-	ServiceUnavailable    COAPCode = 163
-	GatewayTimeout        COAPCode = 164
-	ProxyingNotSupported  COAPCode = 165
+	Empty                   COAPCode = 0
+	Created                 COAPCode = 65
+	Deleted                 COAPCode = 66
+	Valid                   COAPCode = 67
+	Changed                 COAPCode = 68
+	Content                 COAPCode = 69
+	Continue                COAPCode = 95
+	BadRequest              COAPCode = 128
+	Unauthorized            COAPCode = 129
+	BadOption               COAPCode = 130
+	Forbidden               COAPCode = 131
+	NotFound                COAPCode = 132
+	MethodNotAllowed        COAPCode = 133
+	NotAcceptable           COAPCode = 134
+	RequestEntityIncomplete COAPCode = 136
+	PreconditionFailed      COAPCode = 140
+	RequestEntityTooLarge   COAPCode = 141
+	UnsupportedMediaType    COAPCode = 143
+	InternalServerError     COAPCode = 160
+	NotImplemented          COAPCode = 161
+	BadGateway              COAPCode = 162
+	ServiceUnavailable      COAPCode = 163
+	GatewayTimeout          COAPCode = 164
+	ProxyingNotSupported    COAPCode = 165
 )
 
 //Signaling Codes for TCP
@@ -396,6 +398,7 @@ type Message interface {
 	MarshalBinary() ([]byte, error)
 	UnmarshalBinary(data []byte) error
 	SetToken(t []byte)
+	SetMessageID(messageID uint16)
 }
 
 // MessageParams params to create COAP message

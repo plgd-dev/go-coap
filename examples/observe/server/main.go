@@ -8,7 +8,7 @@ import (
 	coap "github.com/go-ocf/go-coap"
 )
 
-func periodicTransmitter(w coap.Session, req coap.Message) {
+func periodicTransmitter(w coap.SessionNet, req coap.Message) {
 	subded := time.Now()
 
 	for {
@@ -36,7 +36,7 @@ func periodicTransmitter(w coap.Session, req coap.Message) {
 
 func main() {
 	log.Fatal(coap.ListenAndServe(":5688", "udp",
-		coap.HandlerFunc(func(w coap.Session, req coap.Message) {
+		coap.HandlerFunc(func(w coap.SessionNet, req coap.Message) {
 			log.Printf("Got message path=%q: %#v from %v", req.Path(), req, w.RemoteAddr())
 			if req.Code() == coap.GET && req.Option(coap.Observe) != nil {
 				value := req.Option(coap.Observe)

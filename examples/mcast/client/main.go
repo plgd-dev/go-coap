@@ -7,7 +7,7 @@ import (
 	coap "github.com/go-ocf/go-coap"
 )
 
-func mcastResp(s coap.Session, m coap.Message) {
+func mcastResp(s coap.SessionNet, m coap.Message) {
 	log.Printf("Got message: %#v from %v", m, s.RemoteAddr())
 }
 

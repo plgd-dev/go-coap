@@ -17,8 +17,8 @@ const ErrConnectionClosed = Error("connection closed")
 // ErrTokenAlreadyExist Token in request is not unique for session
 const ErrTokenAlreadyExist = Error("token is not unique for session")
 
-// ErrTokenNotSet Token in request is not set
-const ErrTokenNotSet = Error("token in request is not set")
+// ErrTokenNotExist Token in request is not exist
+const ErrTokenNotExist = Error("token is not exist")
 
 // ErrInvalidTokenLen invalid token length in Message
 const ErrInvalidTokenLen = Error("invalid token length")
@@ -64,3 +64,21 @@ const ErrInvalidResponse = Error("invalid response")
 
 // ErrNotSupported invalid response received for certain token
 const ErrNotSupported = Error("not supported")
+
+const ErrBlockNumberExceedLimit = Error("block number exceed limit 1,048,576")
+
+const ErrBlockInvalidSize = Error("block has invalid size")
+
+const ErrInvalidOptionBlock2 = Error("message has invalid value of Block2")
+
+const ErrInvalidOptionBlock1 = Error("message has invalid value of Block1")
+
+const ErrInvalidReponseCode = Error("response code has invalid value")
+
+const ErrInvalidPayloadSize = Error("invalid payload size")
+
+const ErrInvalidBlockSzx = Error("invalid block-wise transfer szx")
+
+const ErrRequestEntityIncomplete = Error("payload comes in bad order")
+
+const ErrInvalidRequest = Error("invalid request")
