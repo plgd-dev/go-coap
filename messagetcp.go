@@ -100,13 +100,18 @@ type TcpMessage struct {
 func NewTcpMessage(p MessageParams) *TcpMessage {
 	return &TcpMessage{
 		MessageBase{
-			typ:       p.Type,
-			code:      p.Code,
-			messageID: p.MessageID,
-			token:     p.Token,
-			payload:   p.Payload,
+			//typ:       p.Type, not used by COAP over TCP
+			code: p.Code,
+			//messageID: p.MessageID,  not used by COAP over TCP
+			token:   p.Token,
+			payload: p.Payload,
 		},
 	}
+}
+
+// SetMessageID
+func (m *TcpMessage) SetMessageID(messageID uint16) {
+	//not used by COAP over TCP
 }
 
 func (m *TcpMessage) MarshalBinary() ([]byte, error) {

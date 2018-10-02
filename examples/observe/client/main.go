@@ -7,7 +7,7 @@ import (
 	coap "github.com/go-ocf/go-coap"
 )
 
-func observe(s coap.Session, m coap.Message) {
+func observe(s coap.SessionNet, m coap.Message) {
 	log.Printf("Got %s", m.Payload())
 }
 

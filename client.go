@@ -14,7 +14,7 @@ import (
 type ClientConn struct {
 	srv          *Server
 	client       *Client
-	session      Session
+	session      SessionNet
 	shutdownSync chan error
 }
 
@@ -30,6 +30,9 @@ type Client struct {
 
 	ObserverFunc         HandlerFunc     // for handling observation messages from server
 	NotifySessionEndFunc func(err error) // if NotifySessionEndFunc is set it is called when TCP/UDP session was ended.
+
+	BlockWiseTransfer    *bool     // Use blockWise transfer for transfer payload (default for UDP it's enabled, for TCP it's disable)
+	BlockWiseTransferSzx *BlockSzx // Set maximal block size of payload that will be send in fragment
 }
 
 func (c *Client) readTimeout() time.Duration {
@@ -61,6 +64,8 @@ func (c *Client) Dial(address string) (clientConn *ClientConn, err error) {
 	var sessionUPDData *SessionUDPData
 
 	dialer := &net.Dialer{Timeout: c.DialTimeout}
+	BlockWiseTransfer := false
+	BlockWiseTransferSzx := BlockSzx1024
 
 	switch c.Net {
 	case "tcp-tls", "tcp4-tls", "tcp6-tls":
@@ -69,12 +74,14 @@ func (c *Client) Dial(address string) (clientConn *ClientConn, err error) {
 		if err != nil {
 			return nil, err
 		}
+		BlockWiseTransferSzx = BlockSzxBERT
 	case "tcp", "tcp4", "tcp6":
 		network = c.Net
 		conn, err = dialer.Dial(c.Net, address)
 		if err != nil {
 			return nil, err
 		}
+		BlockWiseTransferSzx = BlockSzxBERT
 	case "udp", "udp4", "udp6", "":
 		network = c.Net
 		if network == "" {
@@ -84,6 +91,7 @@ func (c *Client) Dial(address string) (clientConn *ClientConn, err error) {
 			return nil, err
 		}
 		sessionUPDData = &SessionUDPData{raddr: conn.(*net.UDPConn).RemoteAddr().(*net.UDPAddr)}
+		BlockWiseTransfer = true
 	case "udp-mcast", "udp4-mcast", "udp6-mcast":
 		network = strings.TrimSuffix(c.Net, "-mcast")
 		var a *net.UDPAddr
@@ -99,12 +107,29 @@ func (c *Client) Dial(address string) (clientConn *ClientConn, err error) {
 		}
 		sessionUPDData = &SessionUDPData{raddr: a}
 		conn = udpConn
+		BlockWiseTransfer = true
 	default:
 		return nil, ErrInvalidNetParameter
 	}
 
+	if c.BlockWiseTransfer != nil {
+		BlockWiseTransfer = *c.BlockWiseTransfer
+	}
+
+	if c.BlockWiseTransferSzx != nil {
+		BlockWiseTransferSzx = *c.BlockWiseTransferSzx
+	}
+
 	sync := make(chan bool)
-	clientConn = &ClientConn{srv: &Server{Net: network, TLSConfig: c.TLSConfig, Conn: conn, ReadTimeout: c.readTimeout(), WriteTimeout: c.writeTimeout(), MaxMessageSize: c.MaxMessageSize,
+	clientConn = &ClientConn{srv: &Server{
+		Net:                  network,
+		TLSConfig:            c.TLSConfig,
+		Conn:                 conn,
+		ReadTimeout:          c.readTimeout(),
+		WriteTimeout:         c.writeTimeout(),
+		MaxMessageSize:       c.MaxMessageSize,
+		BlockWiseTransfer:    &BlockWiseTransfer,
+		BlockWiseTransferSzx: &BlockWiseTransferSzx,
 		NotifyStartedFunc: func() {
 			timeout := c.syncTimeout()
 			select {
@@ -113,37 +138,61 @@ func (c *Client) Dial(address string) (clientConn *ClientConn, err error) {
 				log.Fatal("Client cannot send start: Timeout")
 			}
 		},
-		NotifySessionEndFunc: func(s Session, err error) {
+		NotifySessionEndFunc: func(s SessionNet, err error) {
 			if c.NotifySessionEndFunc != nil {
 				c.NotifySessionEndFunc(err)
 			}
 		},
-		createSessionTCPFunc: func(connection Conn, srv *Server) (Session, error) {
+		createSessionTCPFunc: func(connection Conn, srv *Server) (SessionNet, error) {
 			return clientConn.session, nil
 		},
-		createSessionUDPFunc: func(connection Conn, srv *Server, sessionUDPData *SessionUDPData) (Session, error) {
+		createSessionUDPFunc: func(connection Conn, srv *Server, sessionUDPData *SessionUDPData) (SessionNet, error) {
 			if sessionUDPData.RemoteAddr().String() == clientConn.session.RemoteAddr().String() {
-				clientConn.session.(*sessionUDP).sessionUDPData = sessionUDPData
+				if s, ok := clientConn.session.(*blockWiseSession); ok {
+					s.SessionNet.(*sessionUDP).sessionUDPData = sessionUDPData
+				} else {
+					clientConn.session.(*sessionUDP).sessionUDPData = sessionUDPData
+				}
 				return clientConn.session, nil
 			}
-			return newSessionUDP(connection, srv, sessionUDPData)
+			session, err := newSessionUDP(connection, srv, sessionUDPData)
+			if err != nil {
+				return nil, err
+			}
+			if session.blockWiseEnabled() {
+				return &blockWiseSession{SessionNet: session}, nil
+			}
+			return session, nil
 		}, Handler: c.ObserverFunc},
 		shutdownSync: make(chan error)}
 
 	switch clientConn.srv.Conn.(type) {
 	case *net.TCPConn, *tls.Conn:
-		clientConn.session, err = newSessionTCP(newConnectionTCP(clientConn.srv.Conn, clientConn.srv), clientConn.srv)
+		session, err := newSessionTCP(newConnectionTCP(clientConn.srv.Conn, clientConn.srv), clientConn.srv)
 		if err != nil {
 			return nil, err
+		}
+		if session.blockWiseEnabled() {
+			clientConn.session = &blockWiseSession{SessionNet: session}
+		} else {
+			clientConn.session = session
 		}
 	case *net.UDPConn:
 		// WriteMsgUDP returns error when addr is filled in SessionUDPData for connected socket
 		setUDPSocketOptions(clientConn.srv.Conn.(*net.UDPConn))
-		clientConn.session, err = newSessionUDP(newConnectionUDP(clientConn.srv.Conn.(*net.UDPConn), clientConn.srv), clientConn.srv, sessionUPDData)
+		session, err := newSessionUDP(newConnectionUDP(clientConn.srv.Conn.(*net.UDPConn), clientConn.srv), clientConn.srv, sessionUPDData)
 		if err != nil {
 			return nil, err
 		}
+		if session.blockWiseEnabled() {
+			clientConn.session = &blockWiseSession{SessionNet: session}
+		} else {
+			clientConn.session = session
+		}
 	}
+
+	clientConn.session.SetReadDeadline(c.readTimeout())
+	clientConn.session.SetWriteDeadline(c.writeTimeout())
 
 	go func() {
 		timeout := c.syncTimeout()
@@ -166,12 +215,12 @@ func (c *Client) Dial(address string) (clientConn *ClientConn, err error) {
 	return clientConn, nil
 }
 
-// LocalAddr implements the Session.LocalAddr method.
+// LocalAddr implements the SessionNet.LocalAddr method.
 func (co *ClientConn) LocalAddr() net.Addr {
 	return co.session.LocalAddr()
 }
 
-// RemoteAddr implements the Session.RemoteAddr method.
+// RemoteAddr implements the SessionNet.RemoteAddr method.
 func (co *ClientConn) RemoteAddr() net.Addr {
 	return co.session.RemoteAddr()
 }
@@ -183,8 +232,8 @@ func (co *ClientConn) RemoteAddr() net.Addr {
 // case of truncation.
 // To specify a local address or a timeout, the caller has to set the `Client.Dialer`
 // attribute appropriately
-func (co *ClientConn) Exchange(m Message, timeout time.Duration) (r Message, err error) {
-	return co.session.Exchange(m, timeout)
+func (co *ClientConn) Exchange(m Message) (Message, error) {
+	return co.session.Exchange(m)
 }
 
 // NewMessage Create message for request
@@ -193,12 +242,22 @@ func (co *ClientConn) NewMessage(p MessageParams) Message {
 }
 
 // WriteMsg sends a message through the connection co.
-func (co *ClientConn) WriteMsg(m Message, timeout time.Duration) (err error) {
-	return co.session.WriteMsg(m, timeout)
+func (co *ClientConn) Write(m Message) error {
+	return co.session.Write(m)
+}
+
+// SetReadDeadline set read deadline for timeout for Exchange
+func (co *ClientConn) SetReadDeadline(timeout time.Duration) {
+	co.session.SetReadDeadline(timeout)
+}
+
+// SetWriteDeadline set write deadline for timeout for Exchange and Write
+func (co *ClientConn) SetWriteDeadline(timeout time.Duration) {
+	co.session.SetWriteDeadline(timeout)
 }
 
 // Ping send a ping message and wait for a pong response
-func (co *ClientConn) Ping(timeout time.Duration) (err error) {
+func (co *ClientConn) Ping(timeout time.Duration) error {
 	return co.session.Ping(timeout)
 }
 
@@ -213,13 +272,13 @@ func (co *ClientConn) Close() {
 }
 
 // Dial connects to the address on the named network.
-func Dial(network, address string) (conn *ClientConn, err error) {
+func Dial(network, address string) (*ClientConn, error) {
 	client := Client{Net: network}
 	return client.Dial(address)
 }
 
 // DialTimeout acts like Dial but takes a timeout.
-func DialTimeout(network, address string, timeout time.Duration) (conn *ClientConn, err error) {
+func DialTimeout(network, address string, timeout time.Duration) (*ClientConn, error) {
 	client := Client{Net: network, DialTimeout: timeout}
 	return client.Dial(address)
 }

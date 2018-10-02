@@ -85,12 +85,12 @@ func (mux *ServeMux) DefaultHandle(handler Handler) {
 }
 
 // HandleFunc adds a handler function to the ServeMux for pattern.
-func (mux *ServeMux) HandleFunc(pattern string, handler func(Session, Message)) {
+func (mux *ServeMux) HandleFunc(pattern string, handler func(w ResponseWriter, r *Request)) {
 	mux.Handle(pattern, HandlerFunc(handler))
 }
 
 // DefaultHandleFunc set a default handler function to the ServeMux.
-func (mux *ServeMux) DefaultHandleFunc(handler func(Session, Message)) {
+func (mux *ServeMux) DefaultHandleFunc(handler func(w ResponseWriter, r *Request)) {
 	mux.DefaultHandle(HandlerFunc(handler))
 }
 
@@ -109,15 +109,15 @@ func (mux *ServeMux) HandleRemove(pattern string) {
 // is used the correct thing for DS queries is done: a possible parent
 // is sought.
 // If no handler is found a standard NotFound message is returned
-func (mux *ServeMux) ServeCOAP(w Session, request Message) {
-	h, _ := mux.match(request.PathString())
+func (mux *ServeMux) ServeCOAP(w ResponseWriter, r *Request) {
+	h, _ := mux.match(r.Msg.PathString())
 	if h == nil {
 		h = mux.defaultHandler
 		if h == nil {
 			h = failedHandler()
 		}
 	}
-	h.ServeCOAP(w, request)
+	h.ServeCOAP(w, r)
 }
 
 // Handle registers the handler with the given pattern
@@ -127,7 +127,7 @@ func Handle(pattern string, handler Handler) { DefaultServeMux.Handle(pattern, h
 
 // HandleFunc registers the handler function with the given pattern
 // in the DefaultServeMux.
-func HandleFunc(pattern string, handler func(Session, Message)) {
+func HandleFunc(pattern string, handler func(w ResponseWriter, r *Request)) {
 	DefaultServeMux.HandleFunc(pattern, handler)
 }
 
@@ -139,6 +139,6 @@ func HandleRemove(pattern string) { DefaultServeMux.HandleRemove(pattern) }
 func DefaultHandle(handler Handler) { DefaultServeMux.DefaultHandle(handler) }
 
 // DefaultHandleFunc set the default handler in the DefaultServeMux.
-func DefaultHandleFunc(handler func(Session, Message)) {
+func DefaultHandleFunc(handler func(w ResponseWriter, r *Request)) {
 	DefaultServeMux.DefaultHandleFunc(handler)
 }
