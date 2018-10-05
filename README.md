@@ -18,7 +18,7 @@ Fork of https://github.com/dustin/go-coap
 
 [coap]: http://tools.ietf.org/html/rfc7252
 [coap-tcp]: https://tools.ietf.org/html/rfc8323
-[coap-block-wise-transfers]https://tools.ietf.org/html/rfc7959
+[coap-block-wise-transfers]: https://tools.ietf.org/html/rfc7959
 
 ## Samples
 
