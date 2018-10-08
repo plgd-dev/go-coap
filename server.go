@@ -567,11 +567,20 @@ func (srv *Server) serveUDP(conn *net.UDPConn) error {
 }
 
 func (srv *Server) serve(r *Request) {
-	var w ResponseWriter
-	if r.SessionNet.blockWiseEnabled() {
-		w = &blockWiseResponseWriter{responseWriter{req: r}}
-	} else {
-		w = &responseWriter{req: r}
+	w := ResponseWriter(&responseWriter{req: r})
+	switch {
+	case r.Msg.Code() == GET:
+		switch {
+		// set blockwise notice writer for observe
+		case r.SessionNet.blockWiseEnabled() && r.Msg.Option(Observe) != nil:
+			w = &blockWiseNoticeWriter{responseWriter: w.(*responseWriter)}
+		// set blockwise if it is enabled
+		case r.SessionNet.blockWiseEnabled():
+			w = &blockWiseResponseWriter{responseWriter: w.(*responseWriter)}
+		}
+		w = &getResponseWriter{w}
+	case r.SessionNet.blockWiseEnabled():
+		w = &blockWiseResponseWriter{responseWriter: w.(*responseWriter)}
 	}
 
 	handlePairMsg(w, r, func(w ResponseWriter, r *Request) {

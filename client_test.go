@@ -2,7 +2,6 @@ package coap
 
 import (
 	"bytes"
-	"fmt"
 	"log"
 	"net"
 	"strings"
@@ -14,27 +13,31 @@ import (
 )
 
 func periodicTransmitter(w ResponseWriter, r *Request) {
-	subded := time.Now()
+	msg := r.SessionNet.NewMessage(MessageParams{
+		Type:      Acknowledgement,
+		Code:      Content,
+		MessageID: r.Msg.MessageID(),
+		Payload:   make([]byte, 15),
+		Token:     r.Msg.Token(),
+	})
 
-	for {
-		msg := r.SessionNet.NewMessage(MessageParams{
-			Type:      Acknowledgement,
-			Code:      Content,
-			MessageID: r.Msg.MessageID(),
-			Payload:   []byte(fmt.Sprintf("Been running for %v", time.Since(subded))),
-		})
+	//msg.SetOption(ContentFormat, TextPlain)
+	msg.SetOption(LocationPath, r.Msg.Path())
 
-		msg.SetOption(ContentFormat, TextPlain)
-		msg.SetOption(LocationPath, r.Msg.Path())
+	err := w.Write(msg)
+	if err != nil {
+		log.Printf("Error on transmitter, stopping: %v", err)
+		return
+	}
 
+	go func() {
+		time.Sleep(time.Second)
 		err := w.Write(msg)
 		if err != nil {
 			log.Printf("Error on transmitter, stopping: %v", err)
 			return
 		}
-
-		time.Sleep(time.Second)
-	}
+	}()
 }
 
 func testServingObservation(t *testing.T, net string, addrstr string, BlockWiseTransfer bool, BlockWiseTransferSzx BlockSzx) {
@@ -61,6 +64,7 @@ func testServingObservation(t *testing.T, net string, addrstr string, BlockWiseT
 		Type:      NonConfirmable,
 		Code:      GET,
 		MessageID: 12345,
+		Token:     []byte{123},
 	})
 
 	req.AddOption(Observe, 1)
@@ -177,4 +181,146 @@ func TestServingIPv6AllInterfacesMCastByClient(t *testing.T) {
 		t.Fatalf("unable to get interfaces: %v", err)
 	}
 	testServingMCastByClient(t, "udp6-mcast", "[ff03::158]:11111", false, BlockSzx16, ifis)
+}
+
+func setupServer(t *testing.T) (string, error) {
+	_, addr, _, err := RunLocalServerUDPWithHandler("udp", ":0", true, BlockSzx1024, func(w ResponseWriter, r *Request) {
+		msg := r.SessionNet.NewMessage(MessageParams{
+			Type:      Acknowledgement,
+			Code:      Content,
+			MessageID: r.Msg.MessageID(),
+			Payload:   make([]byte, 5000),
+			Token:     r.Msg.Token(),
+		})
+
+		msg.SetOption(ContentFormat, TextPlain)
+		msg.SetOption(LocationPath, r.Msg.Path())
+
+		err := w.Write(msg)
+		if err != nil {
+			t.Fatalf("Error on transmitter, stopping: %v", err)
+			return
+		}
+	})
+	return addr, err
+}
+
+func TestServingUDPGet(t *testing.T) {
+
+	addr, err := setupServer(t)
+	if err != nil {
+		t.Fatalf("Unexpected error '%v'", err)
+	}
+
+	BlockWiseTransfer := true
+	BlockWiseTransferSzx := BlockSzx16
+	c := Client{Net: "udp", BlockWiseTransfer: &BlockWiseTransfer, BlockWiseTransferSzx: &BlockWiseTransferSzx}
+	con, err := c.Dial(addr)
+	if err != nil {
+		t.Fatalf("Unexpected error '%v'", err)
+	}
+	_, err = con.Get("/tmp/test")
+	if err != nil {
+		t.Fatalf("Unexpected error '%v'", err)
+	}
+}
+
+func TestServingUDPPost(t *testing.T) {
+	addr, err := setupServer(t)
+	if err != nil {
+		t.Fatalf("Unexpected error '%v'", err)
+	}
+
+	BlockWiseTransfer := true
+	BlockWiseTransferSzx := BlockSzx1024
+	c := Client{Net: "udp", BlockWiseTransfer: &BlockWiseTransfer, BlockWiseTransferSzx: &BlockWiseTransferSzx}
+	con, err := c.Dial(addr)
+	if err != nil {
+		t.Fatalf("Unexpected error '%v'", err)
+	}
+	body := bytes.NewReader([]byte("Hello world"))
+	_, err = con.Post("/tmp/test", TextPlain, body)
+	if err != nil {
+		t.Fatalf("Unexpected error '%v'", err)
+	}
+}
+
+func TestServingUDPPut(t *testing.T) {
+	addr, err := setupServer(t)
+	if err != nil {
+		t.Fatalf("Unexpected error '%v'", err)
+	}
+
+	BlockWiseTransfer := true
+	BlockWiseTransferSzx := BlockSzx1024
+	c := Client{Net: "udp", BlockWiseTransfer: &BlockWiseTransfer, BlockWiseTransferSzx: &BlockWiseTransferSzx}
+	con, err := c.Dial(addr)
+	if err != nil {
+		t.Fatalf("Unexpected error '%v'", err)
+	}
+	body := bytes.NewReader([]byte("Hello world"))
+	_, err = con.Put("/tmp/test", TextPlain, body)
+	if err != nil {
+		t.Fatalf("Unexpected error '%v'", err)
+	}
+}
+
+func TestServingUDPDelete(t *testing.T) {
+	addr, err := setupServer(t)
+	if err != nil {
+		t.Fatalf("Unexpected error '%v'", err)
+	}
+
+	BlockWiseTransfer := true
+	BlockWiseTransferSzx := BlockSzx1024
+	c := Client{Net: "udp", BlockWiseTransfer: &BlockWiseTransfer, BlockWiseTransferSzx: &BlockWiseTransferSzx}
+	con, err := c.Dial(addr)
+	if err != nil {
+		t.Fatalf("Unexpected error '%v'", err)
+	}
+	_, err = con.Delete("/tmp/test")
+	if err != nil {
+		t.Fatalf("Unexpected error '%v'", err)
+	}
+}
+
+func TestServingUDPObserve(t *testing.T) {
+	_, addr, _, err := RunLocalServerUDPWithHandler("udp", ":0", true, BlockSzx16, func(w ResponseWriter, r *Request) {
+		msg := r.SessionNet.NewMessage(MessageParams{
+			Type:      Acknowledgement,
+			Code:      Content,
+			MessageID: r.Msg.MessageID(),
+			Payload:   make([]byte, 17),
+			Token:     r.Msg.Token(),
+		})
+
+		msg.SetOption(ContentFormat, TextPlain)
+		msg.SetOption(LocationPath, r.Msg.Path())
+		msg.SetOption(Observe, 2)
+
+		err := w.Write(msg)
+		if err != nil {
+			t.Fatalf("Error on transmitter, stopping: %v", err)
+			return
+		}
+	})
+	if err != nil {
+		t.Fatalf("Unexpected error '%v'", err)
+	}
+
+	BlockWiseTransfer := true
+	BlockWiseTransferSzx := BlockSzx1024
+	c := Client{Net: "udp", BlockWiseTransfer: &BlockWiseTransfer, BlockWiseTransferSzx: &BlockWiseTransferSzx}
+	con, err := c.Dial(addr)
+	if err != nil {
+		t.Fatalf("Unexpected error '%v'", err)
+	}
+	sync := make(chan bool)
+	_, err = con.Observe("/tmp/test", func(req Message) {
+		sync <- true
+	})
+	if err != nil {
+		t.Fatalf("Unexpected error '%v'", err)
+	}
+	<-sync
 }

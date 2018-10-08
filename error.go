@@ -82,3 +82,5 @@ const ErrInvalidBlockSzx = Error("invalid block-wise transfer szx")
 const ErrRequestEntityIncomplete = Error("payload comes in bad order")
 
 const ErrInvalidRequest = Error("invalid request")
+
+const ErrInvalidPayload = Error("invalid payload")
