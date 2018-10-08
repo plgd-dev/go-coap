@@ -272,7 +272,7 @@ func (s *sessionUDP) Ping(timeout time.Duration) error {
 }
 
 func (s *sessionTCP) Ping(timeout time.Duration) error {
-	token, err := GenerateToken(MaxTokenSize)
+	token, err := GenerateToken()
 	if err != nil {
 		return err
 	}
@@ -489,7 +489,7 @@ func (s *sessionUDP) handlePairMsg(w ResponseWriter, r *Request) bool {
 }
 
 func (s *sessionTCP) sendCSM() error {
-	token, err := GenerateToken(MaxTokenSize)
+	token, err := GenerateToken()
 	if err != nil {
 		return err
 	}

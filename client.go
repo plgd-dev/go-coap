@@ -3,7 +3,10 @@ package coap
 // A client implementation.
 
 import (
+	"bytes"
 	"crypto/tls"
+	"io"
+	"io/ioutil"
 	"log"
 	"net"
 	"strings"
@@ -259,6 +262,176 @@ func (co *ClientConn) SetWriteDeadline(timeout time.Duration) {
 // Ping send a ping message and wait for a pong response
 func (co *ClientConn) Ping(timeout time.Duration) error {
 	return co.session.Ping(timeout)
+}
+
+// Get retrieve the resource identified by the request path
+func (co *ClientConn) Get(path string) (Message, error) {
+	token, err := GenerateToken()
+	if err != nil {
+		return nil, err
+	}
+	req := co.session.NewMessage(MessageParams{
+		Type:      Confirmable,
+		Code:      GET,
+		MessageID: GenerateMessageID(),
+		Token:     token,
+	})
+	req.SetPathString(path)
+	return co.session.Exchange(req)
+}
+
+func (co *ClientConn) putPostHelper(code COAPCode, path string, contentType MediaType, body io.Reader) (Message, error) {
+	token, err := GenerateToken()
+	if err != nil {
+		return nil, err
+	}
+	req := co.session.NewMessage(MessageParams{
+		Type:      Confirmable,
+		Code:      POST,
+		MessageID: GenerateMessageID(),
+		Token:     token,
+	})
+	req.SetPathString(path)
+	req.SetOption(ContentFormat, contentType)
+	payload, err := ioutil.ReadAll(body)
+	if err != nil {
+		return nil, err
+	}
+	req.SetPayload(payload)
+	return co.session.Exchange(req)
+}
+
+// Post update the resource identified by the request path
+func (co *ClientConn) Post(path string, contentType MediaType, body io.Reader) (Message, error) {
+	return co.putPostHelper(POST, path, contentType, body)
+}
+
+// Put create the resource identified by the request path
+func (co *ClientConn) Put(path string, contentType MediaType, body io.Reader) (Message, error) {
+	return co.putPostHelper(PUT, path, contentType, body)
+}
+
+// Delete delete the resource identified by the request path
+func (co *ClientConn) Delete(path string) (Message, error) {
+	token, err := GenerateToken()
+	if err != nil {
+		return nil, err
+	}
+	req := co.session.NewMessage(MessageParams{
+		Type:      Confirmable,
+		Code:      DELETE,
+		MessageID: GenerateMessageID(),
+		Token:     token,
+	})
+	req.SetPathString(path)
+	return co.session.Exchange(req)
+}
+
+//Observation represents subscription to resource on the server
+type Observation struct {
+	token     []byte
+	path      string
+	obsSeqNum uint32
+	s         SessionNet
+}
+
+// Cancel remove observation from server. For recreate observation use Observe.
+func (o *Observation) Cancel() error {
+	req := o.s.NewMessage(MessageParams{
+		Type:      NonConfirmable,
+		Code:      GET,
+		MessageID: GenerateMessageID(),
+		Token:     o.token,
+	})
+	req.SetPathString(o.path)
+	req.SetOption(Observe, 1)
+	err1 := o.s.Write(req)
+	err2 := o.s.sessionHandler().remove(o.token)
+	if err1 != nil {
+		return err1
+	}
+	return err2
+}
+
+// Observe subscribe to severon path. After subscription and every change on path,
+// server sends immediately response
+func (co *ClientConn) Observe(path string, observeFunc func(req Message)) (*Observation, error) {
+	token, err := GenerateToken()
+	if err != nil {
+		return nil, err
+	}
+	req := co.session.NewMessage(MessageParams{
+		Type:      NonConfirmable,
+		Code:      GET,
+		MessageID: GenerateMessageID(),
+		Token:     token,
+	})
+	req.SetPathString(path)
+	req.SetOption(Observe, 0)
+	block, err := MarshalBlockOption(co.session.blockWiseSzx(), 0, false)
+	if err != nil {
+		return nil, err
+	}
+	req.SetOption(Block1, block)
+	o := &Observation{
+		token:     token,
+		path:      path,
+		obsSeqNum: 0,
+		s:         co.session,
+	}
+	co.session.sessionHandler().add(token, func(w ResponseWriter, r *Request, next HandlerFunc) {
+		if r.Msg.Option(Observe) != nil && (r.Msg.Code() == Content || r.Msg.Code() == Valid) {
+			obsSeqNum := r.Msg.Option(Observe).(uint32)
+			//obs starts with 0, after that check obsSeqNum
+			if obsSeqNum != 0 && o.obsSeqNum > obsSeqNum {
+				return
+			}
+			needGet := false
+			resp := r.Msg
+			if r.Msg.Option(Size2) != nil {
+				if len(r.Msg.Payload()) != int(r.Msg.Option(Size2).(uint32)) {
+					needGet = true
+				}
+			}
+			if !needGet {
+				if block, ok := r.Msg.Option(Block2).(uint32); ok {
+					_, _, more, err := UnmarshalBlockOption(block)
+					if err != nil {
+						return
+					}
+					needGet = more
+				}
+			}
+
+			if needGet {
+				resp, err = co.Get(path)
+				if err != nil {
+					return
+				}
+			}
+			switch {
+			case r.Msg.Option(ETag) != nil && resp.Option(ETag) != nil:
+				//during processing observation, check if notification is still valid
+				if bytes.Equal(resp.Option(ETag).([]byte), r.Msg.Option(ETag).([]byte)) {
+					o.obsSeqNum = r.Msg.Option(Observe).(uint32)
+					observeFunc(resp)
+				}
+			default:
+				o.obsSeqNum = r.Msg.Option(Observe).(uint32)
+				observeFunc(resp)
+			}
+			return
+		}
+		next(w, r)
+	})
+
+	err = co.session.Write(req)
+	if err != nil {
+		co.session.sessionHandler().remove(o.token)
+		return nil, err
+	}
+
+	return o, nil
 }
 
 // Close close connection

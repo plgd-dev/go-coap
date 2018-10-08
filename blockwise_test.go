@@ -3,8 +3,6 @@ package coap
 import (
 	"fmt"
 	"testing"
-
-	"github.com/ugorji/go/codec"
 )
 
 func testMarshal(t *testing.T, szx BlockSzx, blockNumber uint, moreBlocksFollowing bool, expectedBlock uint32) {
@@ -80,33 +78,6 @@ func TestBlockWiseBlockUnmarshal(t *testing.T) {
 	if err == nil {
 		t.Fatalf("expected error, szx %v, num %v, m %v", szx, num, m)
 	}
-}
-
-var path = "/allAttributeTypes"
-var server = "127.0.0.1:33643"
-
-func decodeMsg(resp Message) {
-	var m map[string]interface{}
-	fmt.Printf("--------------------------------------\n")
-	fmt.Printf("Path: %v\n", resp.PathString())
-	fmt.Printf("Payload: %x\n", resp.Payload())
-	err := codec.NewDecoderBytes(resp.Payload(), new(codec.CborHandle)).Decode(&m)
-	if err != nil {
-		fmt.Printf("cannot decode payload: %v!!!\n", err)
-
-	} else {
-		fmt.Printf("decoded type : %T\n", m)
-		fmt.Printf("decoded value: %v\n", m)
-
-		if val, ok := m["binaryAttribute"]; ok {
-			fmt.Printf("binaryAttribute: %x\n", val)
-		}
-	}
-}
-
-func observe(w ResponseWriter, req *Request) {
-	fmt.Printf("RemoteAddr : %v\n", req.SessionNet.RemoteAddr())
-	decodeMsg(req.Msg)
 }
 
 func TestServingUDPBlockSzx16(t *testing.T) {
@@ -196,18 +167,53 @@ func TestServingTCPBigMsgBlockSzxBERT(t *testing.T) {
 	testServingTCPWithMsg(t, "tcp", true, BlockSzxBERT, make([]byte, 10*1024*1024), simpleMsg)
 }
 
+/* test against IoTivity
+import (
+	"bytes"
+	"github.com/ugorji/go/codec"
+)
+*/
+
 /*
+var path = "/allAttributeTypes"
+var server = "127.0.0.1:43609"
+
+func decodeMsg(resp Message) {
+	var m map[string]interface{}
+	fmt.Printf("--------------------------------------\n")
+	fmt.Printf("Path: %v\n", resp.PathString())
+	fmt.Printf("Payload: %x\n", resp.Payload())
+	err := codec.NewDecoderBytes(resp.Payload(), new(codec.CborHandle)).Decode(&m)
+	if err != nil {
+		fmt.Printf("cannot decode payload: %v!!!\n", err)
+
+	} else {
+		fmt.Printf("decoded type : %T\n", m)
+		fmt.Printf("decoded value: %v\n", m)
+
+		if val, ok := m["binaryAttribute"]; ok {
+			fmt.Printf("binaryAttribute: %v\n", val)
+		}
+	}
+}
+
+func observe(w ResponseWriter, req *Request) {
+	fmt.Printf("RemoteAddr : %v\n", req.SessionNet.RemoteAddr())
+	decodeMsg(req.Msg)
+}
+
 func TestBlockWisePostBlock16(t *testing.T) {
-	client := &Client{Net: "udp", ObserverFunc: observe}
+	szx := BlockSzx16
+	client := &Client{Net: "udp", ObserverFunc: observe, BlockWiseTransferSzx: &szx}
 	co, err := client.Dial(server)
 	if err != nil {
 		t.Fatalf("Error dialing: %v", err)
 	}
 
-	fmt.Fprintf(os.Stdout, "conn: %v\n", co.LocalAddr())
+	fmt.Printf("conn: %v\n", co.LocalAddr())
 
 	payload := map[string]interface{}{
-		"binaryAttribute": make([]byte, 17),
+		"binaryAttribute": make([]byte, 33),
 	}
 	bw := new(bytes.Buffer)
 	h := new(codec.CborHandle)
@@ -217,20 +223,7 @@ func TestBlockWisePostBlock16(t *testing.T) {
 		t.Fatalf("Cannot encode: %v", err)
 	}
 
-	token, err := GenerateToken(8)
-
-	req := co.NewMessage(MessageParams{
-		Type:      Confirmable,
-		Code:      POST,
-		MessageID: GenerateMessageID(),
-		Token:     token,
-		Payload:   bw.Bytes(),
-	})
-
-	req.SetPathString(path)
-	req.SetOption(ContentFormat, AppCBOR)
-
-	resp, err := co.Exchange(req)
+	resp, err := co.Post(path, AppCBOR, bw)
 	if err != nil {
 		t.Fatalf("Cannot post exchange")
 	}
@@ -238,28 +231,36 @@ func TestBlockWisePostBlock16(t *testing.T) {
 }
 
 func TestBlockWiseGetBlock16(t *testing.T) {
-	client := &Client{Net: "udp", ObserverFunc: observe}
+	szx := BlockSzx16
+	client := &Client{Net: "udp", ObserverFunc: observe, BlockWiseTransferSzx: &szx}
 
 	co, err := client.Dial(server)
 	if err != nil {
 		t.Fatalf("Error dialing: %v", err)
 	}
-
-	token, err := GenerateToken(8)
-
-	req := co.NewMessage(MessageParams{
-		Type:      Confirmable,
-		Code:      GET,
-		MessageID: GenerateMessageID(),
-		Token:     token,
-	})
-
-	req.SetPathString(path)
-
-	resp, err := co.Exchange(req)
+	resp, err := co.Get(path)
 	if err != nil {
 		t.Fatalf("Cannot post exchange")
 	}
 	decodeMsg(resp)
+}
+
+func TestBlockWiseObserveBlock16(t *testing.T) {
+	szx := BlockSzx16
+	client := &Client{Net: "udp", ObserverFunc: observe, BlockWiseTransferSzx: &szx}
+
+	co, err := client.Dial(server)
+	if err != nil {
+		t.Fatalf("Error dialing: %v", err)
+	}
+	sync := make(chan bool)
+	_, err = co.Observe(path, func(req Message) {
+		decodeMsg(req)
+		sync <- true
+	})
+	if err != nil {
+		t.Fatalf("Unexpected error '%v'", err)
+	}
+	<-sync
 }
 */
