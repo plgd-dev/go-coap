@@ -2,39 +2,34 @@ package main
 
 import (
 	"log"
-	"time"
 
 	coap "github.com/go-ocf/go-coap"
 )
 
-func observe(s coap.SessionNet, m coap.Message) {
-	log.Printf("Got %s", m.Payload())
+func observe(w coap.ResponseWriter, req *coap.Request) {
+	log.Printf("Got %s", req.Msg.Payload())
 }
 
 func main() {
-	client := &coap.Client{ObserverFunc: observe}
+	sync := make(chan bool)
+	client := &coap.Client{}
 
-	conn, err := client.Dial("localhost:5688")
+	co, err := client.Dial("localhost:5688")
 	if err != nil {
 		log.Fatalf("Error dialing: %v", err)
 	}
-
-	req := conn.NewMessage(coap.MessageParams{
-		Type:      coap.NonConfirmable,
-		Code:      coap.GET,
-		MessageID: 12345,
+	num := 0
+	obs, err := co.Observe("/some/path", func(req coap.Message) {
+		log.Printf("Got %s", req.Payload())
+		num++
+		if num >= 10 {
+			sync <- true
+		}
 	})
-
-	req.AddOption(coap.Observe, 1)
-	req.SetPathString("/some/path")
-
-	err = conn.WriteMsg(req, time.Hour)
 	if err != nil {
-		log.Fatalf("Error sending request: %v", err)
+		log.Fatalf("Unexpected error '%v'", err)
 	}
-
-	// waiting for messages that arrives in 20seconds
-	time.Sleep(20 * time.Second)
-	log.Printf("Done...\n")
+	<-sync
+	obs.Cancel()
 
 }

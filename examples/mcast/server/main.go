@@ -2,23 +2,22 @@ package main
 
 import (
 	"log"
-	"time"
 
 	coap "github.com/go-ocf/go-coap"
 )
 
-func handleMcast(w coap.SessionNet, req coap.Message) {
-	log.Printf("Got message in handleA: path=%q: %#v from %v", req.Path(), req, w.RemoteAddr())
-	res := w.NewMessage(coap.MessageParams{
+func handleMcast(w coap.ResponseWriter, r *coap.Request) {
+	log.Printf("Got message in handleA: path=%q: %#v from %v", r.Msg.Path(), r.Msg, r.SessionNet.RemoteAddr())
+	res := r.SessionNet.NewMessage(coap.MessageParams{
 		Type:      coap.Acknowledgement,
 		Code:      coap.Content,
-		MessageID: req.MessageID(),
-		Token:     req.Token(),
+		MessageID: r.Msg.MessageID(),
+		Token:     r.Msg.Token(),
 		Payload:   []byte("hello to you!"),
 	})
 	res.SetOption(coap.ContentFormat, coap.TextPlain)
 
-	if err := w.WriteMsg(res, time.Hour); err != nil {
+	if err := w.Write(res); err != nil {
 		log.Printf("Cannot write resp %v", err)
 	}
 }

@@ -3,7 +3,7 @@
 package coap
 
 import (
-	"bytes"
+	"encoding/base64"
 	"net"
 
 	"golang.org/x/net/ipv4"
@@ -38,10 +38,8 @@ func (s *SessionUDPData) RemoteAddr() net.Addr { return s.raddr }
 
 // Key returns the key session for the map using
 func (s *SessionUDPData) Key() string {
-	var sessionKey bytes.Buffer
-	sessionKey.WriteString(s.RemoteAddr().String())
-	sessionKey.Write(s.context)
-	return sessionKey.String()
+	key := s.RemoteAddr().String() + "-" + base64.StdEncoding.EncodeToString(s.context)
+	return key
 }
 
 // ReadFromSessionUDP acts just like net.UDPConn.ReadFrom(), but returns a session object instead of a
@@ -113,7 +111,6 @@ func correctSource(oob []byte) []byte {
 func joinGroup(conn *net.UDPConn, ifi *net.Interface, gaddr *net.UDPAddr) error {
 	if ip4 := conn.LocalAddr().(*net.UDPAddr).IP.To4(); ip4 != nil {
 		return ipv4.NewPacketConn(conn).JoinGroup(ifi, gaddr)
-	} else {
-		return ipv6.NewPacketConn(conn).JoinGroup(ifi, gaddr)
 	}
+	return ipv6.NewPacketConn(conn).JoinGroup(ifi, gaddr)
 }

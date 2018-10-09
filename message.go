@@ -6,6 +6,7 @@ import (
 	"io"
 	"log"
 	"reflect"
+	"strconv"
 	"strings"
 )
 
@@ -259,6 +260,56 @@ const (
 	AppLwm2mTLV       MediaType = 11542 //application/vnd.oma.lwm2m+tlv
 	AppLwm2mJSON      MediaType = 11543 //application/vnd.oma.lwm2m+json
 )
+
+func (c MediaType) String() string {
+	switch c {
+	case TextPlain:
+		return "text/plain;charset=utf-8"
+	case AppCoseEncrypt0:
+		return "application/cose; cose-type=\"cose-encrypt0\" (RFC 8152)"
+	case AppCoseMac0:
+		return "application/cose; cose-type=\"cose-mac0\" (RFC 8152)"
+	case AppCoseSign1:
+		return "application/cose; cose-type=\"cose-sign1\" (RFC 8152)"
+	case AppLinkFormat:
+		return "application/link-format"
+	case AppXML:
+		return "application/xml"
+	case AppOctets:
+		return "application/octet-stream"
+	case AppExi:
+		return "application/exi"
+	case AppJSON:
+		return "application/json"
+	case AppJsonPatch:
+		return "application/json-patch+json (RFC6902)"
+	case AppJsonMergePatch:
+		return "application/merge-patch+json (RFC7396)"
+	case AppCBOR:
+		return "application/cbor (RFC 7049)"
+	case AppCWT:
+		return "application/cwt"
+	case AppCoseEncrypt:
+		return "application/cose; cose-type=\"cose-encrypt\" (RFC 8152)"
+	case AppCoseMac:
+		return "application/cose; cose-type=\"cose-mac\" (RFC 8152)"
+	case AppCoseSign:
+		return "application/cose; cose-type=\"cose-sign\" (RFC 8152)"
+	case AppCoseKey:
+		return "application/cose-key (RFC 8152)"
+	case AppCoseKeySet:
+		return "application/cose-key-set (RFC 8152)"
+	case AppCoapGroup:
+		return "coap-group+json (RFC 7390)"
+	case AppOcfCbor:
+		return "application/vnd.ocf+cbor"
+	case AppLwm2mTLV:
+		return "application/vnd.oma.lwm2m+tlv"
+	case AppLwm2mJSON:
+		return "application/vnd.oma.lwm2m+json"
+	}
+	return "Unknown media type: 0x" + strconv.FormatInt(int64(c), 16)
+}
 
 type option struct {
 	ID    OptionID
