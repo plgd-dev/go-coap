@@ -15,8 +15,8 @@ func main() {
 	}
 
 	sync := make(chan bool)
-	_, err = conn.Publish("/oic/res", func(req coap.Message) {
-		log.Printf("Got message: %#v from %v", req, req)
+	_, err = conn.Publish("/oic/res", func(req *coap.Request) {
+		log.Printf("Got message: %#v from %v", req.Msg, req.Client.RemoteAddr())
 		sync <- true
 	})
 	if err != nil {

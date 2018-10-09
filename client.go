@@ -3,10 +3,8 @@ package coap
 // A client implementation.
 
 import (
-	"bytes"
 	"crypto/tls"
 	"io"
-	"io/ioutil"
 	"log"
 	"net"
 	"strings"
@@ -17,7 +15,7 @@ import (
 type ClientConn struct {
 	srv          *Server
 	client       *Client
-	session      SessionNet
+	commander    *ClientCommander
 	shutdownSync chan error
 	multicast    bool
 }
@@ -145,29 +143,29 @@ func (c *Client) Dial(address string) (clientConn *ClientConn, err error) {
 					log.Fatal("Client cannot send start: Timeout")
 				}
 			},
-			NotifySessionEndFunc: func(s SessionNet, err error) {
+			NotifySessionEndFunc: func(s *ClientCommander, err error) {
 				if c.NotifySessionEndFunc != nil {
 					c.NotifySessionEndFunc(err)
 				}
 			},
-			createSessionTCPFunc: func(connection Conn, srv *Server) (SessionNet, error) {
-				return clientConn.session, nil
+			createSessionTCPFunc: func(connection Conn, srv *Server) (networkSession, error) {
+				return clientConn.commander.networkSession, nil
 			},
-			createSessionUDPFunc: func(connection Conn, srv *Server, sessionUDPData *SessionUDPData) (SessionNet, error) {
-				if sessionUDPData.RemoteAddr().String() == clientConn.session.RemoteAddr().String() {
-					if s, ok := clientConn.session.(*blockWiseSession); ok {
-						s.SessionNet.(*sessionUDP).sessionUDPData = sessionUDPData
+			createSessionUDPFunc: func(connection Conn, srv *Server, sessionUDPData *SessionUDPData) (networkSession, error) {
+				if sessionUDPData.RemoteAddr().String() == clientConn.commander.networkSession.RemoteAddr().String() {
+					if s, ok := clientConn.commander.networkSession.(*blockWiseSession); ok {
+						s.networkSession.(*sessionUDP).sessionUDPData = sessionUDPData
 					} else {
-						clientConn.session.(*sessionUDP).sessionUDPData = sessionUDPData
+						clientConn.commander.networkSession.(*sessionUDP).sessionUDPData = sessionUDPData
 					}
-					return clientConn.session, nil
+					return clientConn.commander.networkSession, nil
 				}
 				session, err := newSessionUDP(connection, srv, sessionUDPData)
 				if err != nil {
 					return nil, err
 				}
 				if session.blockWiseEnabled() {
-					return &blockWiseSession{SessionNet: session}, nil
+					return &blockWiseSession{networkSession: session}, nil
 				}
 				return session, nil
 			},
@@ -175,6 +173,7 @@ func (c *Client) Dial(address string) (clientConn *ClientConn, err error) {
 		},
 		shutdownSync: make(chan error),
 		multicast:    multicast,
+		commander:    &ClientCommander{},
 	}
 
 	switch clientConn.srv.Conn.(type) {
@@ -184,9 +183,9 @@ func (c *Client) Dial(address string) (clientConn *ClientConn, err error) {
 			return nil, err
 		}
 		if session.blockWiseEnabled() {
-			clientConn.session = &blockWiseSession{SessionNet: session}
+			clientConn.commander.networkSession = &blockWiseSession{networkSession: session}
 		} else {
-			clientConn.session = session
+			clientConn.commander.networkSession = session
 		}
 	case *net.UDPConn:
 		// WriteMsgUDP returns error when addr is filled in SessionUDPData for connected socket
@@ -196,14 +195,14 @@ func (c *Client) Dial(address string) (clientConn *ClientConn, err error) {
 			return nil, err
 		}
 		if session.blockWiseEnabled() {
-			clientConn.session = &blockWiseSession{SessionNet: session}
+			clientConn.commander.networkSession = &blockWiseSession{networkSession: session}
 		} else {
-			clientConn.session = session
+			clientConn.commander.networkSession = session
 		}
 	}
 
-	clientConn.session.SetReadDeadline(c.readTimeout())
-	clientConn.session.SetWriteDeadline(c.writeTimeout())
+	clientConn.commander.networkSession.SetReadDeadline(c.readTimeout())
+	clientConn.commander.networkSession.SetWriteDeadline(c.writeTimeout())
 
 	go func() {
 		timeout := c.syncTimeout()
@@ -226,14 +225,14 @@ func (c *Client) Dial(address string) (clientConn *ClientConn, err error) {
 	return clientConn, nil
 }
 
-// LocalAddr implements the SessionNet.LocalAddr method.
+// LocalAddr implements the networkSession.LocalAddr method.
 func (co *ClientConn) LocalAddr() net.Addr {
-	return co.session.LocalAddr()
+	return co.commander.LocalAddr()
 }
 
-// RemoteAddr implements the SessionNet.RemoteAddr method.
+// RemoteAddr implements the networkSession.RemoteAddr method.
 func (co *ClientConn) RemoteAddr() net.Addr {
-	return co.session.RemoteAddr()
+	return co.commander.RemoteAddr()
 }
 
 // Exchange performs a synchronous query. It sends the message m to the address
@@ -247,32 +246,32 @@ func (co *ClientConn) Exchange(m Message) (Message, error) {
 	if co.multicast {
 		return nil, ErrNotSupported
 	}
-	return co.session.Exchange(m)
+	return co.commander.Exchange(m)
 }
 
 // NewMessage Create message for request
 func (co *ClientConn) NewMessage(p MessageParams) Message {
-	return co.session.NewMessage(p)
+	return co.commander.NewMessage(p)
 }
 
-// WriteMsg sends a message through the connection co.
+// Write sends direct a message through the connection
 func (co *ClientConn) Write(m Message) error {
-	return co.session.Write(m)
+	return co.commander.Write(m)
 }
 
 // SetReadDeadline set read deadline for timeout for Exchange
 func (co *ClientConn) SetReadDeadline(timeout time.Duration) {
-	co.session.SetReadDeadline(timeout)
+	co.commander.networkSession.SetReadDeadline(timeout)
 }
 
 // SetWriteDeadline set write deadline for timeout for Exchange and Write
 func (co *ClientConn) SetWriteDeadline(timeout time.Duration) {
-	co.session.SetWriteDeadline(timeout)
+	co.commander.networkSession.SetWriteDeadline(timeout)
 }
 
 // Ping send a ping message and wait for a pong response
 func (co *ClientConn) Ping(timeout time.Duration) error {
-	return co.session.Ping(timeout)
+	return co.commander.Ping(timeout)
 }
 
 // Get retrieve the resource identified by the request path
@@ -280,52 +279,23 @@ func (co *ClientConn) Get(path string) (Message, error) {
 	if co.multicast {
 		return nil, ErrNotSupported
 	}
-	token, err := GenerateToken()
-	if err != nil {
-		return nil, err
-	}
-	req := co.session.NewMessage(MessageParams{
-		Type:      Confirmable,
-		Code:      GET,
-		MessageID: GenerateMessageID(),
-		Token:     token,
-	})
-	req.SetPathString(path)
-	return co.session.Exchange(req)
-}
-
-func (co *ClientConn) putPostHelper(code COAPCode, path string, contentType MediaType, body io.Reader) (Message, error) {
-	if co.multicast {
-		return nil, ErrNotSupported
-	}
-	token, err := GenerateToken()
-	if err != nil {
-		return nil, err
-	}
-	req := co.session.NewMessage(MessageParams{
-		Type:      Confirmable,
-		Code:      POST,
-		MessageID: GenerateMessageID(),
-		Token:     token,
-	})
-	req.SetPathString(path)
-	req.SetOption(ContentFormat, contentType)
-	payload, err := ioutil.ReadAll(body)
-	if err != nil {
-		return nil, err
-	}
-	req.SetPayload(payload)
-	return co.session.Exchange(req)
+	return co.commander.Get(path)
 }
 
 // Post update the resource identified by the request path
 func (co *ClientConn) Post(path string, contentType MediaType, body io.Reader) (Message, error) {
-	return co.putPostHelper(POST, path, contentType, body)
+	if co.multicast {
+		return nil, ErrNotSupported
+	}
+	return co.commander.Post(path, contentType, body)
 }
 
 // Put create the resource identified by the request path
 func (co *ClientConn) Put(path string, contentType MediaType, body io.Reader) (Message, error) {
-	return co.putPostHelper(PUT, path, contentType, body)
+	if co.multicast {
+		return nil, ErrNotSupported
+	}
+	return co.commander.Put(path, contentType, body)
 }
 
 // Delete delete the resource identified by the request path
@@ -333,146 +303,25 @@ func (co *ClientConn) Delete(path string) (Message, error) {
 	if co.multicast {
 		return nil, ErrNotSupported
 	}
-	token, err := GenerateToken()
-	if err != nil {
-		return nil, err
-	}
-	req := co.session.NewMessage(MessageParams{
-		Type:      Confirmable,
-		Code:      DELETE,
-		MessageID: GenerateMessageID(),
-		Token:     token,
-	})
-	req.SetPathString(path)
-	return co.session.Exchange(req)
+	return co.commander.Delete(path)
 }
 
-//Observation represents subscription to resource on the server
-type Observation struct {
-	token     []byte
-	path      string
-	obsSeqNum uint32
-	s         SessionNet
-}
-
-// Cancel remove observation from server. For recreate observation use Observe.
-func (o *Observation) Cancel() error {
-	req := o.s.NewMessage(MessageParams{
-		Type:      NonConfirmable,
-		Code:      GET,
-		MessageID: GenerateMessageID(),
-		Token:     o.token,
-	})
-	req.SetPathString(o.path)
-	req.SetOption(Observe, 1)
-	err1 := o.s.Write(req)
-	err2 := o.s.sessionHandler().remove(o.token)
-	if err1 != nil {
-		return err1
-	}
-	return err2
-}
-
-// Observe subscribe to severon path. After subscription and every change on path,
-// server sends immediately response
-func (co *ClientConn) Observe(path string, observeFunc func(req Message)) (*Observation, error) {
+func (co *ClientConn) Observe(path string, observeFunc func(req *Request)) (*Observation, error) {
 	if co.multicast {
 		return nil, ErrNotSupported
 	}
-	token, err := GenerateToken()
-	if err != nil {
-		return nil, err
-	}
-	req := co.session.NewMessage(MessageParams{
-		Type:      NonConfirmable,
-		Code:      GET,
-		MessageID: GenerateMessageID(),
-		Token:     token,
-	})
-	req.SetPathString(path)
-	req.SetOption(Observe, 0)
-	/*
-		IoTivity doesn't support Block2 in first request for GET
-		block, err := MarshalBlockOption(co.session.blockWiseSzx(), 0, false)
-		if err != nil {
-			return nil, err
-		}
-		req.SetOption(Block2, block)
-	*/
-	o := &Observation{
-		token:     token,
-		path:      path,
-		obsSeqNum: 0,
-		s:         co.session,
-	}
-	err = co.session.sessionHandler().add(token, func(w ResponseWriter, r *Request, next HandlerFunc) {
-		needGet := false
-		resp := r.Msg
-		if r.Msg.Option(Size2) != nil {
-			if len(r.Msg.Payload()) != int(r.Msg.Option(Size2).(uint32)) {
-				needGet = true
-			}
-		}
-		if !needGet {
-			if block, ok := r.Msg.Option(Block2).(uint32); ok {
-				_, _, more, err := UnmarshalBlockOption(block)
-				if err != nil {
-					return
-				}
-				needGet = more
-			}
-		}
-
-		if needGet {
-			resp, err = co.Get(path)
-			if err != nil {
-				return
-			}
-		}
-		setObsSeqNum := func() {
-			if r.Msg.Option(Observe) != nil {
-				obsSeqNum := r.Msg.Option(Observe).(uint32)
-				//obs starts with 0, after that check obsSeqNum
-				if obsSeqNum != 0 && o.obsSeqNum > obsSeqNum {
-					return
-				}
-				o.obsSeqNum = obsSeqNum
-			}
-		}
-
-		switch {
-		case r.Msg.Option(ETag) != nil && resp.Option(ETag) != nil:
-			//during processing observation, check if notification is still valid
-			if bytes.Equal(resp.Option(ETag).([]byte), r.Msg.Option(ETag).([]byte)) {
-				setObsSeqNum()
-				observeFunc(resp)
-			}
-		default:
-			setObsSeqNum()
-			observeFunc(resp)
-		}
-		return
-	})
-	if err != nil {
-		return nil, err
-	}
-	err = co.session.Write(req)
-	if err != nil {
-		co.session.sessionHandler().remove(o.token)
-		return nil, err
-	}
-
-	return o, nil
+	return co.commander.Observe(path, observeFunc)
 }
 
 // Close close connection
-func (co *ClientConn) Close() {
+func (co *ClientConn) Close() error {
 	co.srv.Shutdown()
 	select {
 	case <-co.shutdownSync:
 	case <-time.After(co.client.syncTimeout()):
 		log.Fatal("Client cannot recv shutdown: Timeout")
 	}
+	return nil
 }
 
 // Dial connects to the address on the named network.

@@ -49,7 +49,7 @@ func (f HandlerFunc) ServeCOAP(w ResponseWriter, r *Request) {
 
 // HandleFailed returns a HandlerFunc that returns NotFound for every request it gets.
 func HandleFailed(w ResponseWriter, req *Request) {
-	msg := req.SessionNet.NewMessage(MessageParams{
+	msg := req.Client.NewMessage(MessageParams{
 		Type:      Acknowledgement,
 		Code:      NotFound,
 		MessageID: req.Msg.MessageID(),
@@ -124,13 +124,13 @@ type Server struct {
 	// The maximum of time for synchronization go-routines, defaults to 30 seconds, if it occurs, then it call log.Fatal
 	SyncTimeout time.Duration
 	// If createSessionUDPFunc is set it is called when session UDP want to be created
-	createSessionUDPFunc func(connection Conn, srv *Server, sessionUDPData *SessionUDPData) (SessionNet, error)
+	createSessionUDPFunc func(connection Conn, srv *Server, sessionUDPData *SessionUDPData) (networkSession, error)
 	// If createSessionUDPFunc is set it is called when session TCP want to be created
-	createSessionTCPFunc func(connection Conn, srv *Server) (SessionNet, error)
+	createSessionTCPFunc func(connection Conn, srv *Server) (networkSession, error)
 	// If NotifyNewSession is set it is called when new TCP/UDP session was created.
-	NotifySessionNewFunc func(w SessionNet)
+	NotifySessionNewFunc func(w *ClientCommander)
 	// If NotifyNewSession is set it is called when TCP/UDP session was ended.
-	NotifySessionEndFunc func(w SessionNet, err error)
+	NotifySessionEndFunc func(w *ClientCommander, err error)
 	// The interfaces that will be used for udp-mcast (default uses the system assigned for multicast)
 	UDPMcastInterfaces []net.Interface
 	// Use blockWise transfer for transfer payload (default for UDP it's enabled, for TCP it's disable)
@@ -152,7 +152,7 @@ type Server struct {
 	started bool
 
 	sessionUDPMapLock sync.Mutex
-	sessionUDPMap     map[string]SessionNet
+	sessionUDPMap     map[string]networkSession
 }
 
 func (srv *Server) workerChannelHandler(inUse bool, timeout *time.Timer) bool {
@@ -307,43 +307,43 @@ func (srv *Server) ActivateAndServe() error {
 	pConn := srv.Conn
 	l := srv.Listener
 
-	srv.sessionUDPMap = make(map[string]SessionNet)
+	srv.sessionUDPMap = make(map[string]networkSession)
 
 	srv.queue = make(chan *Request)
 	defer close(srv.queue)
 
 	if srv.createSessionTCPFunc == nil {
-		srv.createSessionTCPFunc = func(connection Conn, srv *Server) (SessionNet, error) {
+		srv.createSessionTCPFunc = func(connection Conn, srv *Server) (networkSession, error) {
 			session, err := newSessionTCP(connection, srv)
 			if err != nil {
 				return nil, err
 			}
 			if session.blockWiseEnabled() {
-				return &blockWiseSession{SessionNet: session}, nil
+				return &blockWiseSession{networkSession: session}, nil
 			}
 			return session, nil
 		}
 	}
 
 	if srv.createSessionUDPFunc == nil {
-		srv.createSessionUDPFunc = func(connection Conn, srv *Server, sessionUDPData *SessionUDPData) (SessionNet, error) {
+		srv.createSessionUDPFunc = func(connection Conn, srv *Server, sessionUDPData *SessionUDPData) (networkSession, error) {
 			session, err := newSessionUDP(connection, srv, sessionUDPData)
 			if err != nil {
 				return nil, err
 			}
 			if session.blockWiseEnabled() {
-				return &blockWiseSession{SessionNet: session}, nil
+				return &blockWiseSession{networkSession: session}, nil
 			}
 			return session, nil
 		}
 	}
 
 	if srv.NotifySessionNewFunc == nil {
-		srv.NotifySessionNewFunc = func(w SessionNet) {}
+		srv.NotifySessionNewFunc = func(w *ClientCommander) {}
 	}
 
 	if srv.NotifySessionEndFunc == nil {
-		srv.NotifySessionEndFunc = func(w SessionNet, err error) {}
+		srv.NotifySessionEndFunc = func(w *ClientCommander, err error) {}
 	}
 
 	if pConn != nil {
@@ -414,7 +414,7 @@ func (srv *Server) serveTCPconnection(conn net.Conn) error {
 	if err != nil {
 		return err
 	}
-	srv.NotifySessionNewFunc(session)
+	srv.NotifySessionNewFunc(&ClientCommander{session})
 	br := srv.acquireReader(conn)
 	defer srv.releaseReader(br)
 	for {
@@ -439,7 +439,7 @@ func (srv *Server) serveTCPconnection(conn net.Conn) error {
 
 		// We will block poller wait loop when
 		// all pool workers are busy.
-		srv.spawnWorker(&Request{SessionNet: session, Msg: msg})
+		srv.spawnWorker(&Request{Client: &ClientCommander{session}, Msg: msg})
 	}
 }
 
@@ -498,10 +498,10 @@ func (srv *Server) serveTCP(l net.Listener) error {
 func (srv *Server) closeSessions(err error) {
 	srv.sessionUDPMapLock.Lock()
 	tmp := srv.sessionUDPMap
-	srv.sessionUDPMap = make(map[string]SessionNet)
+	srv.sessionUDPMap = make(map[string]networkSession)
 	srv.sessionUDPMapLock.Unlock()
 	for _, v := range tmp {
-		srv.NotifySessionEndFunc(v, err)
+		srv.NotifySessionEndFunc(&ClientCommander{v}, err)
 	}
 }
 
@@ -550,7 +550,7 @@ func (srv *Server) serveUDP(conn *net.UDPConn) error {
 			if err != nil {
 				return err
 			}
-			srv.NotifySessionNewFunc(session)
+			srv.NotifySessionNewFunc(&ClientCommander{session})
 			srv.sessionUDPMap[s.Key()] = session
 			srv.sessionUDPMapLock.Unlock()
 		} else {
@@ -561,7 +561,7 @@ func (srv *Server) serveUDP(conn *net.UDPConn) error {
 		if err != nil {
 			continue
 		}
-		srv.spawnWorker(&Request{Msg: msg, SessionNet: session})
+		srv.spawnWorker(&Request{Msg: msg, Client: &ClientCommander{session}})
 	}
 }
 
@@ -571,20 +571,20 @@ func (srv *Server) serve(r *Request) {
 	case r.Msg.Code() == GET:
 		switch {
 		// set blockwise notice writer for observe
-		case r.SessionNet.blockWiseEnabled() && r.Msg.Option(Observe) != nil:
+		case r.Client.networkSession.blockWiseEnabled() && r.Msg.Option(Observe) != nil:
 			w = &blockWiseNoticeWriter{responseWriter: w.(*responseWriter)}
 		// set blockwise if it is enabled
-		case r.SessionNet.blockWiseEnabled():
+		case r.Client.networkSession.blockWiseEnabled():
 			w = &blockWiseResponseWriter{responseWriter: w.(*responseWriter)}
 		}
 		w = &getResponseWriter{w}
-	case r.SessionNet.blockWiseEnabled():
+	case r.Client.networkSession.blockWiseEnabled():
 		w = &blockWiseResponseWriter{responseWriter: w.(*responseWriter)}
 	}
 
 	handlePairMsg(w, r, func(w ResponseWriter, r *Request) {
 		handleSignalMsg(w, r, func(w ResponseWriter, r *Request) {
-			handleBySessionHandler(w, r, func(w ResponseWriter, r *Request) {
+			handleBySessionTokenHandler(w, r, func(w ResponseWriter, r *Request) {
 				handleBlockWiseMsg(w, r, srv.serveCOAP)
 			})
 		})

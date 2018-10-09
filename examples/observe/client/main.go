@@ -19,8 +19,8 @@ func main() {
 		log.Fatalf("Error dialing: %v", err)
 	}
 	num := 0
-	obs, err := co.Observe("/some/path", func(req coap.Message) {
-		log.Printf("Got %s", req.Payload())
+	obs, err := co.Observe("/some/path", func(req *coap.Request) {
+		log.Printf("Got %s", req.Msg.Payload())
 		num++
 		if num >= 10 {
 			sync <- true

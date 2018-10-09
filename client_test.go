@@ -13,7 +13,7 @@ import (
 )
 
 func periodicTransmitter(w ResponseWriter, r *Request) {
-	msg := r.SessionNet.NewMessage(MessageParams{
+	msg := r.Client.NewMessage(MessageParams{
 		Type:      Acknowledgement,
 		Code:      Content,
 		MessageID: r.Msg.MessageID(),
@@ -112,10 +112,10 @@ func testServingMCastByClient(t *testing.T, lnet, laddr string, BlockWiseTransfe
 		Net: lnet,
 		Handler: func(w ResponseWriter, r *Request) {
 			if bytes.Equal(r.Msg.Payload(), payload) {
-				log.Printf("mcast %v -> %v", r.SessionNet.RemoteAddr(), r.SessionNet.LocalAddr())
+				log.Printf("mcast %v -> %v", r.Client.RemoteAddr(), r.Client.LocalAddr())
 				ansArrived <- true
 			} else {
-				t.Fatalf("unknown payload %v arrived from %v", r.Msg.Payload(), r.SessionNet.RemoteAddr())
+				t.Fatalf("unknown payload %v arrived from %v", r.Msg.Payload(), r.Client.RemoteAddr())
 			}
 		},
 		BlockWiseTransfer:    &BlockWiseTransfer,
@@ -185,7 +185,7 @@ func TestServingIPv6AllInterfacesMCastByClient(t *testing.T) {
 
 func setupServer(t *testing.T) (string, error) {
 	_, addr, _, err := RunLocalServerUDPWithHandler("udp", ":0", true, BlockSzx1024, func(w ResponseWriter, r *Request) {
-		msg := r.SessionNet.NewMessage(MessageParams{
+		msg := r.Client.NewMessage(MessageParams{
 			Type:      Acknowledgement,
 			Code:      Content,
 			MessageID: r.Msg.MessageID(),
@@ -286,7 +286,7 @@ func TestServingUDPDelete(t *testing.T) {
 
 func TestServingUDPObserve(t *testing.T) {
 	_, addr, _, err := RunLocalServerUDPWithHandler("udp", ":0", true, BlockSzx16, func(w ResponseWriter, r *Request) {
-		msg := r.SessionNet.NewMessage(MessageParams{
+		msg := r.Client.NewMessage(MessageParams{
 			Type:      Acknowledgement,
 			Code:      Content,
 			MessageID: r.Msg.MessageID(),
@@ -316,7 +316,7 @@ func TestServingUDPObserve(t *testing.T) {
 		t.Fatalf("Unexpected error '%v'", err)
 	}
 	sync := make(chan bool)
-	_, err = con.Observe("/tmp/test", func(req Message) {
+	_, err = con.Observe("/tmp/test", func(req *Request) {
 		sync <- true
 	})
 	if err != nil {
