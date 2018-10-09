@@ -9,7 +9,7 @@ import (
 )
 
 func sendResponse(w coap.ResponseWriter, req *coap.Request, subded time.Time) error {
-	resp := req.SessionNet.NewMessage(coap.MessageParams{
+	resp := req.Client.NewMessage(coap.MessageParams{
 		Type:      coap.Acknowledgement,
 		Code:      coap.Content,
 		MessageID: req.Msg.MessageID(),
@@ -36,7 +36,7 @@ func periodicTransmitter(w coap.ResponseWriter, req *coap.Request) {
 func main() {
 	log.Fatal(coap.ListenAndServe(":5688", "udp",
 		coap.HandlerFunc(func(w coap.ResponseWriter, req *coap.Request) {
-			log.Printf("Got message path=%q: %#v from %v", req.Msg.Path(), req.Msg, req.SessionNet.RemoteAddr())
+			log.Printf("Got message path=%q: %#v from %v", req.Msg.Path(), req.Msg, req.Client.RemoteAddr())
 			switch {
 			case req.Msg.Code() == coap.GET && req.Msg.Option(coap.Observe) != nil && req.Msg.Option(coap.Observe).(uint32) == 0:
 				go periodicTransmitter(w, req)

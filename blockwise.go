@@ -65,7 +65,7 @@ func UnmarshalBlockOption(blockVal uint32) (szx BlockSzx, blockNumber uint, more
 	return
 }
 
-func exchangeDrivedByPeer(session SessionNet, req Message, blockType OptionID) (Message, error) {
+func exchangeDrivedByPeer(session networkSession, req Message, blockType OptionID) (Message, error) {
 	if block, ok := req.Option(blockType).(uint32); ok {
 		_, _, more, err := UnmarshalBlockOption(block)
 		if err != nil {
@@ -82,14 +82,14 @@ func exchangeDrivedByPeer(session SessionNet, req Message, blockType OptionID) (
 	}
 
 	pair := make(chan *Request, 1)
-	session.sessionHandler().add(req.Token(), func(w ResponseWriter, r *Request, next HandlerFunc) {
+	session.TokenHandler().Add(req.Token(), func(w ResponseWriter, r *Request) {
 		select {
 		case pair <- r:
 		default:
-			next(w, r)
+			return
 		}
 	})
-	defer session.sessionHandler().remove(req.Token())
+	defer session.TokenHandler().Remove(req.Token())
 	err := session.Write(req)
 	if err != nil {
 		return nil, err
@@ -138,7 +138,7 @@ func newSender(peerDrive bool, blockType OptionID, suggestedSzx BlockSzx, expect
 }
 
 func (s *blockWiseSender) createReq(b *blockWiseSession) (Message, error) {
-	req := b.SessionNet.NewMessage(MessageParams{
+	req := b.networkSession.NewMessage(MessageParams{
 		Code:      s.origin.Code(),
 		Type:      s.coapType(),
 		MessageID: s.origin.MessageID(),
@@ -178,9 +178,9 @@ func (s *blockWiseSender) exchange(b *blockWiseSession, req Message) (Message, e
 		log.Printf("sendPayload %p req=%v\n", b, req)
 	}
 	if s.peerDrive {
-		resp, err = exchangeDrivedByPeer(b.SessionNet, req, s.blockType)
+		resp, err = exchangeDrivedByPeer(b.networkSession, req, s.blockType)
 	} else {
-		resp, err = b.SessionNet.Exchange(req)
+		resp, err = b.networkSession.Exchange(req)
 	}
 	if err != nil {
 		return nil, err
@@ -289,21 +289,21 @@ func (b *blockWiseSession) sendPayload(peerDrive bool, blockType OptionID, sugge
 }
 
 type blockWiseSession struct {
-	SessionNet
+	networkSession
 }
 
 func (b *blockWiseSession) Exchange(msg Message) (Message, error) {
 	switch msg.Code() {
 	//these methods doesn't need to be handled by blockwise
 	case CSM, Ping, Pong, Release, Abort, Empty:
-		return b.SessionNet.Exchange(msg)
+		return b.networkSession.Exchange(msg)
 	case GET, DELETE:
 		return b.receivePayload(false, msg, nil, Block2, msg.Code())
 	case POST, PUT:
-		return b.sendPayload(false, Block1, b.SessionNet.blockWiseSzx(), Continue, msg)
+		return b.sendPayload(false, Block1, b.networkSession.blockWiseSzx(), Continue, msg)
 	// for response code
 	default:
-		return b.sendPayload(true, Block2, b.SessionNet.blockWiseSzx(), Continue, msg)
+		return b.sendPayload(true, Block2, b.networkSession.blockWiseSzx(), Continue, msg)
 	}
 
 }
@@ -311,7 +311,7 @@ func (b *blockWiseSession) Exchange(msg Message) (Message, error) {
 func (b *blockWiseSession) Write(msg Message) error {
 	switch msg.Code() {
 	case CSM, Ping, Pong, Release, Abort, Empty, GET:
-		return b.SessionNet.Write(msg)
+		return b.networkSession.Write(msg)
 	default:
 		_, err := b.Exchange(msg)
 		return err
@@ -337,7 +337,7 @@ func (b *blockWiseSession) sendErrorMsg(code COAPCode, typ COAPType, token []byt
 		MessageID: MessageID,
 		Token:     token,
 	})
-	b.SessionNet.Write(req)
+	b.networkSession.Write(req)
 }
 
 type blockWiseReceiver struct {
@@ -370,7 +370,7 @@ func (r *blockWiseReceiver) coapType() COAPType {
 }
 
 func (r *blockWiseReceiver) createReq(b *blockWiseSession, resp Message) (Message, error) {
-	req := b.SessionNet.NewMessage(MessageParams{
+	req := b.networkSession.NewMessage(MessageParams{
 		Code:      r.code,
 		Type:      r.typ,
 		MessageID: r.origin.MessageID(),
@@ -405,7 +405,7 @@ func newReceiver(b *blockWiseSession, peerDrive bool, origin Message, resp Messa
 		code:       code,
 		origin:     origin,
 		blockType:  blockType,
-		currentSzx: b.SessionNet.blockWiseSzx(),
+		currentSzx: b.networkSession.blockWiseSzx(),
 		payload:    []byte{},
 	}
 
@@ -476,9 +476,9 @@ func (r *blockWiseReceiver) exchange(b *blockWiseSession, req Message) (Message,
 	var resp Message
 	var err error
 	if r.peerDrive {
-		resp, err = exchangeDrivedByPeer(b.SessionNet, req, r.blockType)
+		resp, err = exchangeDrivedByPeer(b.networkSession, req, r.blockType)
 	} else {
-		resp, err = b.SessionNet.Exchange(req)
+		resp, err = b.networkSession.Exchange(req)
 	}
 
 	if blockWiseDebug {
@@ -629,25 +629,25 @@ func handleBlockWiseMsg(w ResponseWriter, r *Request, next func(w ResponseWriter
 	if r.Msg.Token() != nil {
 		switch r.Msg.Code() {
 		case PUT, POST:
-			if b, ok := r.SessionNet.(*blockWiseSession); ok {
+			if b, ok := r.Client.networkSession.(*blockWiseSession); ok {
 				msg, err := b.receivePayload(true, r.Msg, nil, Block1, Continue)
 
 				if err != nil {
 					return
 				}
-				next(w, &Request{SessionNet: r.SessionNet, Msg: msg})
+				next(w, &Request{Client: r.Client, Msg: msg})
 				return
 			}
 			/*
 				//observe data
 				case Content, Valid:
 					if r.Msg.Option(Observe) != nil && r.Msg.Option(ETag) != nil {
-						if b, ok := r.SessionNet.(*blockWiseSession); ok {
+						if b, ok := r.networkSession.(*blockWiseSession); ok {
 							token, err := GenerateToken(8)
 							if err != nil {
 								return
 							}
-							req := r.SessionNet.NewMessage(MessageParams{
+							req := r.networkSession.NewMessage(MessageParams{
 								Code:      GET,
 								Type:      Confirmable,
 								MessageID: GenerateMessageID(),
@@ -660,7 +660,7 @@ func handleBlockWiseMsg(w ResponseWriter, r *Request, next func(w ResponseWriter
 							if err != nil {
 								return
 							}
-							next(w, &Request{SessionNet: r.SessionNet, Msg: msg})
+							next(w, &Request{networkSession: r.networkSession, Msg: msg})
 							return
 						}
 					}*/
@@ -675,14 +675,14 @@ type blockWiseResponseWriter struct {
 }
 
 func (w *blockWiseResponseWriter) Write(msg Message) error {
-	suggestedSzx := w.req.SessionNet.blockWiseSzx()
+	suggestedSzx := w.req.Client.networkSession.blockWiseSzx()
 	if respBlock2, ok := w.req.Msg.Option(Block2).(uint32); ok {
 		szx, _, _, err := UnmarshalBlockOption(respBlock2)
 		if err != nil {
 			return err
 		}
 		//BERT is supported only via TCP
-		if szx == BlockSzxBERT && !w.req.SessionNet.IsTCP() {
+		if szx == BlockSzxBERT && !w.req.Client.networkSession.IsTCP() {
 			return ErrInvalidBlockSzx
 		}
 		suggestedSzx = szx
@@ -693,7 +693,7 @@ func (w *blockWiseResponseWriter) Write(msg Message) error {
 		return w.responseWriter.Write(msg)
 	}
 
-	if b, ok := w.req.SessionNet.(*blockWiseSession); ok {
+	if b, ok := w.req.Client.networkSession.(*blockWiseSession); ok {
 		_, err := b.sendPayload(true, Block2, suggestedSzx, w.req.Msg.Code(), msg)
 		return err
 	}
@@ -706,14 +706,14 @@ type blockWiseNoticeWriter struct {
 }
 
 func (w *blockWiseNoticeWriter) Write(msg Message) error {
-	suggestedSzx := w.req.SessionNet.blockWiseSzx()
+	suggestedSzx := w.req.Client.networkSession.blockWiseSzx()
 	if respBlock2, ok := w.req.Msg.Option(Block2).(uint32); ok {
 		szx, _, _, err := UnmarshalBlockOption(respBlock2)
 		if err != nil {
 			return err
 		}
 		//BERT is supported only via TCP
-		if szx == BlockSzxBERT && !w.req.SessionNet.IsTCP() {
+		if szx == BlockSzxBERT && !w.req.Client.networkSession.IsTCP() {
 			return ErrInvalidBlockSzx
 		}
 		suggestedSzx = szx
@@ -724,13 +724,13 @@ func (w *blockWiseNoticeWriter) Write(msg Message) error {
 		return w.responseWriter.Write(msg)
 	}
 
-	if b, ok := w.req.SessionNet.(*blockWiseSession); ok {
+	if b, ok := w.req.Client.networkSession.(*blockWiseSession); ok {
 		s := newSender(false, Block2, suggestedSzx, w.req.Msg.Code(), msg)
 		req, err := s.createReq(b)
 		if err != nil {
 			return err
 		}
-		return b.SessionNet.Write(req)
+		return b.networkSession.Write(req)
 	}
 	return ErrNotSupported
 }

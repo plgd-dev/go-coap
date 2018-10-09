@@ -7,8 +7,8 @@ import (
 )
 
 func handleMcast(w coap.ResponseWriter, r *coap.Request) {
-	log.Printf("Got message in handleA: path=%q: %#v from %v", r.Msg.Path(), r.Msg, r.SessionNet.RemoteAddr())
-	res := r.SessionNet.NewMessage(coap.MessageParams{
+	log.Printf("Got message in handleA: path=%q: %#v from %v", r.Msg.Path(), r.Msg, r.Client.RemoteAddr())
+	res := r.Client.NewMessage(coap.MessageParams{
 		Type:      coap.Acknowledgement,
 		Code:      coap.Content,
 		MessageID: r.Msg.MessageID(),

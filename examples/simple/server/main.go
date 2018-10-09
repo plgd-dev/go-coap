@@ -7,9 +7,9 @@ import (
 )
 
 func handleA(w coap.ResponseWriter, req *coap.Request) {
-	log.Printf("Got message in handleA: path=%q: %#v from %v", req.Msg.Path(), req.Msg, req.SessionNet.RemoteAddr())
+	log.Printf("Got message in handleA: path=%q: %#v from %v", req.Msg.Path(), req.Msg, req.Client.RemoteAddr())
 	if req.Msg.IsConfirmable() {
-		res := req.SessionNet.NewMessage(coap.MessageParams{
+		res := req.Client.NewMessage(coap.MessageParams{
 			Type:      coap.Acknowledgement,
 			Code:      coap.Content,
 			MessageID: req.Msg.MessageID(),
@@ -24,9 +24,9 @@ func handleA(w coap.ResponseWriter, req *coap.Request) {
 }
 
 func handleB(w coap.ResponseWriter, req *coap.Request) {
-	log.Printf("Got message in handleB: path=%q: %#v from %v", req.Msg.Path(), req.Msg, req.SessionNet.RemoteAddr())
+	log.Printf("Got message in handleB: path=%q: %#v from %v", req.Msg.Path(), req.Msg, req.Client.RemoteAddr())
 	if req.Msg.IsConfirmable() {
-		res := req.SessionNet.NewMessage(coap.MessageParams{
+		res := req.Client.NewMessage(coap.MessageParams{
 			Type:      coap.Acknowledgement,
 			Code:      coap.Content,
 			MessageID: req.Msg.MessageID(),

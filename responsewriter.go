@@ -14,5 +14,5 @@ func (r *responseWriter) Write(msg Message) error {
 	case GET, POST, PUT, DELETE:
 		return ErrInvalidReponseCode
 	}
-	return r.req.SessionNet.Write(msg)
+	return r.req.Client.Write(msg)
 }

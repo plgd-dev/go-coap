@@ -1,6 +1,6 @@
 package coap
 
 type Request struct {
-	Msg        Message
-	SessionNet SessionNet
+	Msg    Message
+	Client *ClientCommander
 }

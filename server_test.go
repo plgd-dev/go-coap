@@ -44,7 +44,7 @@ func CreateRespMessageByReq(isTCP bool, code COAPCode, req Message) Message {
 
 func EchoServer(w ResponseWriter, r *Request) {
 	if r.Msg.IsConfirmable() {
-		err := w.Write(CreateRespMessageByReq(r.SessionNet.IsTCP(), Valid, r.Msg))
+		err := w.Write(CreateRespMessageByReq(r.Client.networkSession.IsTCP(), Valid, r.Msg))
 		if err != nil {
 			log.Printf("Cannot write echo %v", err)
 		}
@@ -53,7 +53,7 @@ func EchoServer(w ResponseWriter, r *Request) {
 
 func EchoServerBadID(w ResponseWriter, r *Request) {
 	if r.Msg.IsConfirmable() {
-		w.Write(CreateRespMessageByReq(r.SessionNet.IsTCP(), BadRequest, r.Msg))
+		w.Write(CreateRespMessageByReq(r.Client.networkSession.IsTCP(), BadRequest, r.Msg))
 	}
 }
 
@@ -74,11 +74,11 @@ func RunLocalServerUDPWithHandler(lnet, laddr string, BlockWiseTransfer bool, Bl
 		return nil, "", nil, err
 	}
 	server := &Server{Conn: pc, ReadTimeout: time.Hour, WriteTimeout: time.Hour,
-		NotifySessionNewFunc: func(s SessionNet) {
-			fmt.Printf("SessionNet start %v\n", s.RemoteAddr())
+		NotifySessionNewFunc: func(s *ClientCommander) {
+			fmt.Printf("networkSession start %v\n", s.RemoteAddr())
 		},
-		NotifySessionEndFunc: func(w SessionNet, err error) {
-			fmt.Printf("SessionNet end %v: %v\n", w.RemoteAddr(), err)
+		NotifySessionEndFunc: func(w *ClientCommander, err error) {
+			fmt.Printf("networkSession end %v: %v\n", w.RemoteAddr(), err)
 		},
 		Handler:              handler,
 		BlockWiseTransfer:    &BlockWiseTransfer,
@@ -114,10 +114,10 @@ func RunLocalServerTCPWithHandler(laddr string, BlockWiseTransfer bool, BlockWis
 	}
 
 	server := &Server{Listener: l, ReadTimeout: time.Second * 3600, WriteTimeout: time.Second * 3600,
-		NotifySessionNewFunc: func(s SessionNet) {
-			fmt.Printf("SessionNet start %v\n", s.RemoteAddr())
-		}, NotifySessionEndFunc: func(w SessionNet, err error) {
-			fmt.Printf("SessionNet end %v: %v\n", w.RemoteAddr(), err)
+		NotifySessionNewFunc: func(s *ClientCommander) {
+			fmt.Printf("networkSession start %v\n", s.RemoteAddr())
+		}, NotifySessionEndFunc: func(w *ClientCommander, err error) {
+			fmt.Printf("networkSession end %v: %v\n", w.RemoteAddr(), err)
 		}, Handler: handler,
 		BlockWiseTransfer:    &BlockWiseTransfer,
 		BlockWiseTransferSzx: &BlockWiseTransferSzx,
@@ -151,10 +151,10 @@ func RunLocalTLSServer(laddr string, config *tls.Config) (*Server, string, chan 
 	}
 
 	server := &Server{Listener: l, ReadTimeout: time.Hour, WriteTimeout: time.Hour,
-		NotifySessionNewFunc: func(s SessionNet) {
-			fmt.Printf("SessionNet start %v\n", s.RemoteAddr())
-		}, NotifySessionEndFunc: func(w SessionNet, err error) {
-			fmt.Printf("SessionNet end %v: %v\n", w.RemoteAddr(), err)
+		NotifySessionNewFunc: func(s *ClientCommander) {
+			fmt.Printf("networkSession start %v\n", s.RemoteAddr())
+		}, NotifySessionEndFunc: func(w *ClientCommander, err error) {
+			fmt.Printf("networkSession end %v: %v\n", w.RemoteAddr(), err)
 		}}
 
 	waitLock := sync.Mutex{}
@@ -240,7 +240,7 @@ func simpleMsg(t *testing.T, payload []byte, co *ClientConn) {
 	req.SetOption(ContentFormat, TextPlain)
 	req.SetPathString("/test")
 
-	res := CreateRespMessageByReq(co.session.IsTCP(), Valid, req)
+	res := CreateRespMessageByReq(co.commander.networkSession.IsTCP(), Valid, req)
 
 	m, err := co.Exchange(req)
 	if err != nil {
@@ -297,23 +297,23 @@ func TestServingTLSBigMsg(t *testing.T) {
 }
 
 func ChallegingServer(w ResponseWriter, r *Request) {
-	req := r.SessionNet.NewMessage(MessageParams{
+	req := r.Client.NewMessage(MessageParams{
 		Type:      Confirmable,
 		Code:      GET,
 		MessageID: 12345,
 		Payload:   []byte("hello, world!"),
 		Token:     []byte("abcd"),
 	})
-	_, err := r.SessionNet.Exchange(req)
+	_, err := r.Client.Exchange(req)
 	if err != nil {
 		panic(err.Error())
 	}
 
-	w.Write(CreateRespMessageByReq(r.SessionNet.IsTCP(), Valid, r.Msg))
+	w.Write(CreateRespMessageByReq(r.Client.networkSession.IsTCP(), Valid, r.Msg))
 }
 
 func ChallegingServerTimeout(w ResponseWriter, r *Request) {
-	req := r.SessionNet.NewMessage(MessageParams{
+	req := r.Client.NewMessage(MessageParams{
 		Type:      Confirmable,
 		Code:      GET,
 		MessageID: 12345,
@@ -321,12 +321,12 @@ func ChallegingServerTimeout(w ResponseWriter, r *Request) {
 		Token:     []byte("abcd"),
 	})
 	req.SetOption(ContentFormat, TextPlain)
-	_, err := r.SessionNet.exchangeTimeout(req, time.Second, time.Second)
+	_, err := r.Client.networkSession.exchangeTimeout(req, time.Second, time.Second)
 	if err == nil {
 		panic("Error: expected timeout")
 	}
 
-	w.Write(CreateRespMessageByReq(r.SessionNet.IsTCP(), Valid, r.Msg))
+	w.Write(CreateRespMessageByReq(r.Client.networkSession.IsTCP(), Valid, r.Msg))
 }
 
 func simpleChallengingMsg(t *testing.T, payload []byte, co *ClientConn) {
@@ -354,7 +354,7 @@ func simpleChallengingPathMsg(t *testing.T, payload []byte, co *ClientConn, path
 		t.Fatalf("unable to read msg from server: %v", err)
 	}
 
-	res := CreateRespMessageByReq(co.session.IsTCP(), Valid, req0)
+	res := CreateRespMessageByReq(co.commander.networkSession.IsTCP(), Valid, req0)
 	assertEqualMessages(t, res, resp0)
 }
 
@@ -414,7 +414,7 @@ func testServingMCast(t *testing.T, lnet, laddr string, BlockWiseTransfer bool, 
 		BlockWiseTransfer:    &BlockWiseTransfer,
 		BlockWiseTransferSzx: &BlockWiseTransferSzx,
 		Handler: func(w ResponseWriter, r *Request) {
-			resp := r.SessionNet.NewMessage(MessageParams{
+			resp := r.Client.NewMessage(MessageParams{
 				Type:      Acknowledgement,
 				Code:      Content,
 				MessageID: r.Msg.MessageID(),
@@ -429,14 +429,14 @@ func testServingMCast(t *testing.T, lnet, laddr string, BlockWiseTransfer bool, 
 	}
 
 	s, _, fin, err := RunLocalServerUDPWithHandler(lnet, addrMcast, BlockWiseTransfer, BlockWiseTransferSzx, func(w ResponseWriter, r *Request) {
-		resp := r.SessionNet.NewMessage(MessageParams{
+		resp := r.Client.NewMessage(MessageParams{
 			Type:      Acknowledgement,
 			Code:      Content,
 			MessageID: r.Msg.MessageID(),
 			Payload:   make([]byte, payloadLen),
 			Token:     r.Msg.Token(),
 		})
-		conn, err := responseServer.Dial(r.SessionNet.RemoteAddr().String())
+		conn, err := responseServer.Dial(r.Client.RemoteAddr().String())
 		if err != nil {
 			t.Fatalf("cannot create connection %v", err)
 		}
@@ -473,7 +473,7 @@ func testServingMCast(t *testing.T, lnet, laddr string, BlockWiseTransfer bool, 
 	}
 	defer co.Close()
 
-	rp, err := co.Publish("/test", func(Msg Message) {
+	rp, err := co.Publish("/test", func(req *Request) {
 		ansArrived <- true
 	})
 	if err != nil {

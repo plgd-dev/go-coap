@@ -8,9 +8,9 @@ import (
 	"time"
 )
 
-// A SessionNet interface is used by an COAP handler to
+// A networkSession interface is used by an COAP handler to
 // server data in session.
-type SessionNet interface {
+type networkSession interface {
 	// LocalAddr returns the net.Addr of the server
 	LocalAddr() net.Addr
 	// RemoteAddr returns the net.Addr of the client that sent the current request.
@@ -51,7 +51,7 @@ type SessionNet interface {
 
 	exchangeTimeout(req Message, writeDeadline, readDeadline time.Duration) (Message, error)
 
-	sessionHandler() *sessionHandler
+	TokenHandler() *TokenHandler
 
 	// BlockWiseTransferEnabled
 	blockWiseEnabled() bool
@@ -64,7 +64,7 @@ type SessionNet interface {
 }
 
 // NewSessionUDP create new session for UDP connection
-func newSessionUDP(connection Conn, srv *Server, sessionUDPData *SessionUDPData) (SessionNet, error) {
+func newSessionUDP(connection Conn, srv *Server, sessionUDPData *SessionUDPData) (networkSession, error) {
 
 	BlockWiseTransfer := true
 	BlockWiseTransferSzx := BlockSzx1024
@@ -85,7 +85,7 @@ func newSessionUDP(connection Conn, srv *Server, sessionUDPData *SessionUDPData)
 			connection:           connection,
 			readDeadline:         30 * time.Second,
 			writeDeadline:        30 * time.Second,
-			handler:              &sessionHandler{tokenHandlers: make(map[[MaxTokenSize]byte]func(w ResponseWriter, r *Request, next HandlerFunc))},
+			handler:              &TokenHandler{tokenHandlers: make(map[[MaxTokenSize]byte]HandlerFunc)},
 			blockWiseTransfer:    BlockWiseTransfer,
 			blockWiseTransferSzx: BlockWiseTransferSzx,
 		},
@@ -96,7 +96,7 @@ func newSessionUDP(connection Conn, srv *Server, sessionUDPData *SessionUDPData)
 }
 
 // newSessionTCP create new session for TCP connection
-func newSessionTCP(connection Conn, srv *Server) (SessionNet, error) {
+func newSessionTCP(connection Conn, srv *Server) (networkSession, error) {
 	BlockWiseTransfer := false
 	BlockWiseTransferSzx := BlockSzxBERT
 	if srv.BlockWiseTransfer != nil {
@@ -113,7 +113,7 @@ func newSessionTCP(connection Conn, srv *Server) (SessionNet, error) {
 			connection:           connection,
 			readDeadline:         30 * time.Second,
 			writeDeadline:        30 * time.Second,
-			handler:              &sessionHandler{tokenHandlers: make(map[[MaxTokenSize]byte]func(w ResponseWriter, r *Request, next HandlerFunc))},
+			handler:              &TokenHandler{tokenHandlers: make(map[[MaxTokenSize]byte]HandlerFunc)},
 			blockWiseTransfer:    BlockWiseTransfer,
 			blockWiseTransferSzx: BlockWiseTransferSzx,
 		},
@@ -136,7 +136,7 @@ type sessionBase struct {
 	connection    Conn
 	readDeadline  time.Duration
 	writeDeadline time.Duration
-	handler       *sessionHandler
+	handler       *TokenHandler
 
 	blockWiseTransfer    bool
 	blockWiseTransferSzx BlockSzx
@@ -159,22 +159,22 @@ type sessionTCP struct {
 	peerMaxMessageSize    uint32
 }
 
-// LocalAddr implements the SessionNet.LocalAddr method.
+// LocalAddr implements the networkSession.LocalAddr method.
 func (s *sessionUDP) LocalAddr() net.Addr {
 	return s.connection.LocalAddr()
 }
 
-// LocalAddr implements the SessionNet.LocalAddr method.
+// LocalAddr implements the networkSession.LocalAddr method.
 func (s *sessionTCP) LocalAddr() net.Addr {
 	return s.connection.LocalAddr()
 }
 
-// RemoteAddr implements the SessionNet.RemoteAddr method.
+// RemoteAddr implements the networkSession.RemoteAddr method.
 func (s *sessionUDP) RemoteAddr() net.Addr {
 	return s.sessionUDPData.RemoteAddr()
 }
 
-// RemoteAddr implements the SessionNet.RemoteAddr method.
+// RemoteAddr implements the networkSession.RemoteAddr method.
 func (s *sessionTCP) RemoteAddr() net.Addr {
 	return s.connection.RemoteAddr()
 }
@@ -235,7 +235,7 @@ func (s *sessionTCP) blockWiseIsValid(szx BlockSzx) bool {
 	return true
 }
 
-func (s *sessionBase) sessionHandler() *sessionHandler {
+func (s *sessionBase) TokenHandler() *TokenHandler {
 	return s.handler
 }
 
@@ -244,7 +244,7 @@ func (s *sessionUDP) closeWithError(err error) error {
 	delete(s.srv.sessionUDPMap, s.sessionUDPData.Key())
 	s.srv.sessionUDPMapLock.Unlock()
 
-	s.srv.NotifySessionEndFunc(s, err)
+	s.srv.NotifySessionEndFunc(&ClientCommander{s}, err)
 
 	return err
 }
@@ -291,14 +291,14 @@ func (s *sessionTCP) Ping(timeout time.Duration) error {
 	return ErrInvalidResponse
 }
 
-// Close implements the SessionNet.Close method
+// Close implements the networkSession.Close method
 func (s *sessionUDP) Close() error {
 	return s.closeWithError(nil)
 }
 
 func (s *sessionTCP) closeWithError(err error) error {
 	if s.connection != nil {
-		s.srv.NotifySessionEndFunc(s, err)
+		s.srv.NotifySessionEndFunc(&ClientCommander{s}, err)
 		e := s.connection.Close()
 		//s.connection = nil
 		if e == nil {
@@ -309,7 +309,7 @@ func (s *sessionTCP) closeWithError(err error) error {
 	return err
 }
 
-// Close implements the SessionNet.Close method
+// Close implements the networkSession.Close method
 func (s *sessionTCP) Close() error {
 	return s.closeWithError(nil)
 }
@@ -324,12 +324,12 @@ func (s *sessionTCP) NewMessage(p MessageParams) Message {
 	return NewTcpMessage(p)
 }
 
-// Close implements the SessionNet.Close method
+// Close implements the networkSession.Close method
 func (s *sessionUDP) IsTCP() bool {
 	return false
 }
 
-// Close implements the SessionNet.Close method
+// Close implements the networkSession.Close method
 func (s *sessionTCP) IsTCP() bool {
 	return true
 }
@@ -349,12 +349,12 @@ func (s *sessionBase) exchangeFunc(req Message, writeTimeout, readTimeout time.D
 	}
 }
 
-// Write implements the SessionNet.Write method.
+// Write implements the networkSession.Write method.
 func (s *sessionTCP) Exchange(m Message) (Message, error) {
 	return s.exchangeTimeout(m, s.writeDeadline, s.readDeadline)
 }
 
-// Write implements the SessionNet.Write method.
+// Write implements the networkSession.Write method.
 func (s *sessionUDP) Exchange(m Message) (Message, error) {
 	return s.exchangeTimeout(m, s.writeDeadline, s.readDeadline)
 }
@@ -415,7 +415,7 @@ func (s *sessionUDP) exchangeTimeout(req Message, writeDeadline, readDeadline ti
 	return s.exchangeFunc(req, writeDeadline, readDeadline, pairChan, s.writeTimeout)
 }
 
-// Write implements the SessionNet.Write method.
+// Write implements the networkSession.Write method.
 func (s *sessionTCP) Write(m Message) error {
 	return s.writeTimeout(m, s.writeDeadline)
 }
@@ -437,7 +437,7 @@ func (s *sessionTCP) writeTimeout(m Message, timeout time.Duration) error {
 	return s.connection.write(&writeReqTCP{writeReqBase{req: req, respChan: make(chan error, 1)}}, timeout)
 }
 
-// WriteMsg implements the SessionNet.WriteMsg method.
+// WriteMsg implements the networkSession.WriteMsg method.
 func (s *sessionUDP) writeTimeout(m Message, timeout time.Duration) error {
 	req, err := m.MarshalBinary()
 	if err != nil {
@@ -518,7 +518,7 @@ func (s *sessionTCP) setPeerBlockWiseTransfer(val bool) {
 }
 
 func (s *sessionUDP) sendPong(w ResponseWriter, r *Request) error {
-	resp := r.SessionNet.NewMessage(MessageParams{
+	resp := r.Client.NewMessage(MessageParams{
 		Type:      Reset,
 		Code:      Empty,
 		MessageID: r.Msg.MessageID(),
@@ -599,62 +599,13 @@ func (s *sessionUDP) handleSignals(w ResponseWriter, r *Request) bool {
 }
 
 func handleSignalMsg(w ResponseWriter, r *Request, next HandlerFunc) {
-	if !r.SessionNet.handleSignals(w, r) {
+	if !r.Client.networkSession.handleSignals(w, r) {
 		next(w, r)
 	}
 }
 
 func handlePairMsg(w ResponseWriter, r *Request, next HandlerFunc) {
-	if !r.SessionNet.handlePairMsg(w, r) {
+	if !r.Client.networkSession.handlePairMsg(w, r) {
 		next(w, r)
 	}
-}
-
-func handleBySessionHandler(w ResponseWriter, r *Request, next HandlerFunc) {
-	r.SessionNet.sessionHandler().handle(w, r, next)
-}
-
-type sessionHandler struct {
-	tokenHandlers     map[[MaxTokenSize]byte]func(w ResponseWriter, r *Request, next HandlerFunc)
-	tokenHandlersLock sync.Mutex
-}
-
-func (s *sessionHandler) handle(w ResponseWriter, r *Request, next HandlerFunc) {
-	//validate token
-	var token [MaxTokenSize]byte
-	copy(token[:], r.Msg.Token())
-	s.tokenHandlersLock.Lock()
-	h := s.tokenHandlers[token]
-	s.tokenHandlersLock.Unlock()
-	if h != nil {
-		h(w, r, next)
-		return
-	}
-	if next != nil {
-		next(w, r)
-	}
-}
-
-func (s *sessionHandler) add(t []byte, h func(w ResponseWriter, r *Request, next HandlerFunc)) error {
-	var token [MaxTokenSize]byte
-	copy(token[:], t)
-	s.tokenHandlersLock.Lock()
-	defer s.tokenHandlersLock.Unlock()
-	if s.tokenHandlers[token] != nil {
-		return ErrTokenAlreadyExist
-	}
-	s.tokenHandlers[token] = h
-	return nil
-}
-
-func (s *sessionHandler) remove(t []byte) error {
-	var token [MaxTokenSize]byte
-	copy(token[:], t)
-	s.tokenHandlersLock.Lock()
-	defer s.tokenHandlersLock.Unlock()
-	if s.tokenHandlers[token] == nil {
-		return ErrTokenNotExist
-	}
-	delete(s.tokenHandlers, token)
-	return nil
 }

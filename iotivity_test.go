@@ -1,6 +1,5 @@
 package coap
 
-/*
 import (
 	"bytes"
 	"fmt"
@@ -48,7 +47,7 @@ func decodeMsg(resp Message) {
 }
 
 func observe(w ResponseWriter, req *Request) {
-	fmt.Printf("OBSERVE : %v\n", req.SessionNet.RemoteAddr())
+	fmt.Printf("OBSERVE : %v\n", req.Client.RemoteAddr())
 	decodeMsg(req.Msg)
 }
 
@@ -108,8 +107,8 @@ func TestBlockWiseObserveBlock16(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Error dialing: %v", err)
 	}
-	_, err = co.Observe(path, func(req Message) {
-		decodeMsg(req)
+	_, err = co.Observe(path, func(req *Request) {
+		decodeMsg(req.Msg)
 		sync <- true
 	})
 	if err != nil {
@@ -128,8 +127,8 @@ func TestBlockWiseMulticastBlock16(t *testing.T) {
 		t.Fatalf("Error dialing: %v", err)
 	}
 	sync := make(chan bool)
-	_, err = co.Publish("/oic/res", func(req Message) {
-		decodeMsg(req)
+	_, err = co.Publish("/oic/res", func(req *Request) {
+		decodeMsg(req.Msg)
 		sync <- true
 	})
 	if err != nil {
@@ -153,4 +152,3 @@ func TestGetBlock16(t *testing.T) {
 	}
 	decodeMsg(resp)
 }
-*/

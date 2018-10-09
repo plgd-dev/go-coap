@@ -28,13 +28,13 @@ type MulticastClient struct {
 	BlockWiseTransfer    *bool     // Use blockWise transfer for transfer payload (default for UDP it's enabled, for TCP it's disable)
 	BlockWiseTransferSzx *BlockSzx // Set maximal block size of payload that will be send in fragment
 
-	multicastHandler *sessionHandler
+	multicastHandler *TokenHandler
 }
 
 // Dial connects to the address on the named network.
 func (c *MulticastClient) dialNet(net, address string) (*ClientConn, error) {
 	if c.multicastHandler == nil {
-		c.multicastHandler = &sessionHandler{tokenHandlers: make(map[[MaxTokenSize]byte]func(w ResponseWriter, r *Request, next HandlerFunc))}
+		c.multicastHandler = &TokenHandler{tokenHandlers: make(map[[MaxTokenSize]byte]HandlerFunc)}
 	}
 	client := &Client{
 		Net:            net,
@@ -48,7 +48,7 @@ func (c *MulticastClient) dialNet(net, address string) (*ClientConn, error) {
 			if handler == nil {
 				handler = HandleFailed
 			}
-			c.multicastHandler.handle(w, r, handler)
+			c.multicastHandler.Handle(w, r, handler)
 		},
 		NotifySessionEndFunc: c.NotifySessionEndFunc,
 		BlockWiseTransfer:    c.BlockWiseTransfer,
@@ -79,12 +79,12 @@ func (c *MulticastClient) Dial(address string) (*MulticastClientConn, error) {
 	}, nil
 }
 
-// LocalAddr implements the SessionNet.LocalAddr method.
+// LocalAddr implements the networkSession.LocalAddr method.
 func (mconn *MulticastClientConn) LocalAddr() net.Addr {
 	return mconn.conn.LocalAddr()
 }
 
-// RemoteAddr implements the SessionNet.RemoteAddr method.
+// RemoteAddr implements the networkSession.RemoteAddr method.
 func (mconn *MulticastClientConn) RemoteAddr() net.Addr {
 	return mconn.conn.RemoteAddr()
 }
@@ -122,7 +122,7 @@ type ResponseWaiter struct {
 
 // Cancel remove observation from server. For recreate observation use Observe.
 func (r *ResponseWaiter) Cancel() error {
-	return r.conn.client.multicastHandler.remove(r.token)
+	return r.conn.client.multicastHandler.Remove(r.token)
 }
 
 type messageNewer interface {
@@ -146,7 +146,7 @@ func createGetReq(m messageNewer, path string) (Message, error) {
 
 // Publish subscribe to sever on path. After subscription and every change on path,
 // server sends immediately response
-func (mconn *MulticastClientConn) Publish(path string, responseHandler func(resp Message)) (*ResponseWaiter, error) {
+func (mconn *MulticastClientConn) Publish(path string, responseHandler func(req *Request)) (*ResponseWaiter, error) {
 	req, err := createGetReq(mconn, path)
 	if err != nil {
 		return nil, err
@@ -156,7 +156,7 @@ func (mconn *MulticastClientConn) Publish(path string, responseHandler func(resp
 		path:  path,
 		conn:  mconn,
 	}
-	err = mconn.client.multicastHandler.add(req.Token(), func(w ResponseWriter, r *Request, next HandlerFunc) {
+	err = mconn.client.multicastHandler.Add(req.Token(), func(w ResponseWriter, r *Request) {
 		needGet := false
 		resp := r.Msg
 		if r.Msg.Option(Size2) != nil {
@@ -175,16 +175,12 @@ func (mconn *MulticastClientConn) Publish(path string, responseHandler func(resp
 		}
 
 		if needGet {
-			getReq, err := createGetReq(mconn, path)
-			if err != nil {
-				return
-			}
-			resp, err = r.SessionNet.Exchange(getReq)
+			resp, err = r.Client.Get(path)
 			if err != nil {
 				return
 			}
 		}
-		responseHandler(resp)
+		responseHandler(&Request{Msg: resp, Client: r.Client})
 	})
 	if err != nil {
 		return nil, err
@@ -192,7 +188,7 @@ func (mconn *MulticastClientConn) Publish(path string, responseHandler func(resp
 
 	err = mconn.Write(req)
 	if err != nil {
-		mconn.client.multicastHandler.remove(r.token)
+		mconn.client.multicastHandler.Remove(r.token)
 		return nil, err
 	}
 
