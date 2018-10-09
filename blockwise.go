@@ -65,7 +65,22 @@ func UnmarshalBlockOption(blockVal uint32) (szx BlockSzx, blockNumber uint, more
 	return
 }
 
-func exchangeDrivedByPeer(session SessionNet, req Message) (Message, error) {
+func exchangeDrivedByPeer(session SessionNet, req Message, blockType OptionID) (Message, error) {
+	if block, ok := req.Option(blockType).(uint32); ok {
+		_, _, more, err := UnmarshalBlockOption(block)
+		if err != nil {
+			return nil, err
+		}
+		if more == false {
+			// we send all datas to peer -> create empty response
+			err := session.Write(req)
+			if err != nil {
+				return nil, err
+			}
+			return session.NewMessage(MessageParams{}), nil
+		}
+	}
+
 	pair := make(chan *Request, 1)
 	session.sessionHandler().add(req.Token(), func(w ResponseWriter, r *Request, next HandlerFunc) {
 		select {
@@ -163,7 +178,7 @@ func (s *blockWiseSender) exchange(b *blockWiseSession, req Message) (Message, e
 		log.Printf("sendPayload %p req=%v\n", b, req)
 	}
 	if s.peerDrive {
-		resp, err = exchangeDrivedByPeer(b.SessionNet, req)
+		resp, err = exchangeDrivedByPeer(b.SessionNet, req, s.blockType)
 	} else {
 		resp, err = b.SessionNet.Exchange(req)
 	}
@@ -178,7 +193,7 @@ func (s *blockWiseSender) exchange(b *blockWiseSession, req Message) (Message, e
 
 func (s *blockWiseSender) processResp(b *blockWiseSession, req Message, resp Message) (Message, error) {
 	if s.currentMore == false {
-		if s.blockType == Block1 /*&& resp.Code() == Changed*/ {
+		if s.blockType == Block1 {
 			if respBlock2, ok := resp.Option(Block2).(uint32); ok {
 				szx, num, _, err := UnmarshalBlockOption(respBlock2)
 				if err != nil {
@@ -189,7 +204,7 @@ func (s *blockWiseSender) processResp(b *blockWiseSession, req Message, resp Mes
 				}
 				if num == 0 {
 					resp.RemoveOption(s.sizeType())
-					return b.receivePayload(s.peerDrive, s.origin, resp, Block2, s.origin.Code(), Changed)
+					return b.receivePayload(s.peerDrive, s.origin, resp, Block2, s.origin.Code())
 				}
 			}
 		}
@@ -279,12 +294,14 @@ type blockWiseSession struct {
 
 func (b *blockWiseSession) Exchange(msg Message) (Message, error) {
 	switch msg.Code() {
+	//these methods doesn't need to be handled by blockwise
 	case CSM, Ping, Pong, Release, Abort, Empty:
 		return b.SessionNet.Exchange(msg)
 	case GET, DELETE:
-		return b.receivePayload(false, msg, nil, Block2, msg.Code(), Content)
+		return b.receivePayload(false, msg, nil, Block2, msg.Code())
 	case POST, PUT:
 		return b.sendPayload(false, Block1, b.SessionNet.blockWiseSzx(), Continue, msg)
+	// for response code
 	default:
 		return b.sendPayload(true, Block2, b.SessionNet.blockWiseSzx(), Continue, msg)
 	}
@@ -382,15 +399,14 @@ func (r *blockWiseReceiver) createReq(b *blockWiseSession, resp Message) (Messag
 	return req, nil
 }
 
-func newReceiver(b *blockWiseSession, peerDrive bool, origin Message, resp Message, blockType OptionID, code COAPCode, expectedCode COAPCode) (r *blockWiseReceiver, res Message, err error) {
+func newReceiver(b *blockWiseSession, peerDrive bool, origin Message, resp Message, blockType OptionID, code COAPCode) (r *blockWiseReceiver, res Message, err error) {
 	r = &blockWiseReceiver{
-		peerDrive:    peerDrive,
-		code:         code,
-		expectedCode: expectedCode,
-		origin:       origin,
-		blockType:    blockType,
-		currentSzx:   b.SessionNet.blockWiseSzx(),
-		payload:      []byte{},
+		peerDrive:  peerDrive,
+		code:       code,
+		origin:     origin,
+		blockType:  blockType,
+		currentSzx: b.SessionNet.blockWiseSzx(),
+		payload:    []byte{},
 	}
 
 	if resp != nil {
@@ -460,7 +476,7 @@ func (r *blockWiseReceiver) exchange(b *blockWiseSession, req Message) (Message,
 	var resp Message
 	var err error
 	if r.peerDrive {
-		resp, err = exchangeDrivedByPeer(b.SessionNet, req)
+		resp, err = exchangeDrivedByPeer(b.SessionNet, req, r.blockType)
 	} else {
 		resp, err = b.SessionNet.Exchange(req)
 	}
@@ -473,12 +489,6 @@ func (r *blockWiseReceiver) exchange(b *blockWiseSession, req Message) (Message,
 }
 
 func (r *blockWiseReceiver) processResp(b *blockWiseSession, req Message, resp Message) (Message, error) {
-	/*
-		if resp.Code() != r.expectedCode {
-			return nil, ErrInvalidRequest
-		}
-	*/
-
 	if respBlock, ok := resp.Option(r.blockType).(uint32); ok {
 		szx, num, more, err := UnmarshalBlockOption(respBlock)
 		if err != nil {
@@ -516,7 +526,9 @@ func (r *blockWiseReceiver) processResp(b *blockWiseSession, req Message, resp M
 			if r.payloadSize != 0 && int(r.payloadSize) != len(r.payload) {
 				return nil, ErrInvalidPayloadSize
 			}
-			resp.SetPayload(r.payload)
+			if len(r.payload) > 0 {
+				resp.SetPayload(r.payload)
+			}
 			// remove block used by blockWise
 			resp.RemoveOption(r.sizeType())
 			resp.RemoveOption(r.blockType)
@@ -539,12 +551,11 @@ func (r *blockWiseReceiver) processResp(b *blockWiseSession, req Message, resp M
 		}
 		req.SetOption(r.blockType, block)
 	} else {
-		switch r.blockType {
-		case Block1:
-			return nil, ErrInvalidOptionBlock1
-		default:
-			return nil, ErrInvalidOptionBlock2
+		if r.payloadSize != 0 && int(r.payloadSize) != len(resp.Payload()) {
+			return nil, ErrInvalidPayloadSize
 		}
+		//response is whole doesn't need to use blockwise
+		return resp, nil
 	}
 	return nil, nil
 }
@@ -569,8 +580,8 @@ func (r *blockWiseReceiver) sendError(b *blockWiseSession, code COAPCode, resp M
 	b.sendErrorMsg(code, typ, token, MessageID)
 }
 
-func (b *blockWiseSession) receivePayload(peerDrive bool, msg Message, resp Message, blockType OptionID, code COAPCode, expectedCode COAPCode) (Message, error) {
-	r, resp, err := newReceiver(b, peerDrive, msg, resp, blockType, code, expectedCode)
+func (b *blockWiseSession) receivePayload(peerDrive bool, msg Message, resp Message, blockType OptionID, code COAPCode) (Message, error) {
+	r, resp, err := newReceiver(b, peerDrive, msg, resp, blockType, code)
 	if err != nil {
 		r.sendError(b, BadRequest, resp)
 		return nil, err
@@ -619,7 +630,7 @@ func handleBlockWiseMsg(w ResponseWriter, r *Request, next func(w ResponseWriter
 		switch r.Msg.Code() {
 		case PUT, POST:
 			if b, ok := r.SessionNet.(*blockWiseSession); ok {
-				msg, err := b.receivePayload(true, r.Msg, nil, Block1, Continue, r.Msg.Code())
+				msg, err := b.receivePayload(true, r.Msg, nil, Block1, Continue)
 
 				if err != nil {
 					return

@@ -44,7 +44,7 @@ func testServingObservation(t *testing.T, net string, addrstr string, BlockWiseT
 	sync := make(chan bool)
 
 	client := &Client{
-		ObserverFunc: func(w ResponseWriter, r *Request) {
+		Handler: func(w ResponseWriter, r *Request) {
 			log.Printf("Gotaaa %s", r.Msg.Payload())
 			sync <- true
 		},
@@ -110,7 +110,7 @@ func testServingMCastByClient(t *testing.T, lnet, laddr string, BlockWiseTransfe
 
 	c := Client{
 		Net: lnet,
-		ObserverFunc: func(w ResponseWriter, r *Request) {
+		Handler: func(w ResponseWriter, r *Request) {
 			if bytes.Equal(r.Msg.Payload(), payload) {
 				log.Printf("mcast %v -> %v", r.SessionNet.RemoteAddr(), r.SessionNet.LocalAddr())
 				ansArrived <- true

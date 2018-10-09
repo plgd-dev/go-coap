@@ -186,7 +186,7 @@ func testServingTCPWithMsgWithObserver(t *testing.T, net string, BlockWiseTransf
 	var err error
 	c := &Client{
 		Net:                  net,
-		ObserverFunc:         observeFunc,
+		Handler:              observeFunc,
 		BlockWiseTransfer:    &BlockWiseTransfer,
 		BlockWiseTransferSzx: &BlockWiseTransferSzx,
 	}
@@ -403,31 +403,65 @@ func TestServingChallengingTimeoutClientTLS(t *testing.T) {
 	})
 }
 
-func testServingMCast(t *testing.T, lnet, laddr string, BlockWiseTransfer bool, BlockWiseTransferSzx BlockSzx) {
-	payload := []byte("mcast payload")
+func testServingMCast(t *testing.T, lnet, laddr string, BlockWiseTransfer bool, BlockWiseTransferSzx BlockSzx, payloadLen int) {
 	addrMcast := laddr
 	ansArrived := make(chan bool)
 
-	HandleFunc("/test", func(w ResponseWriter, r *Request) {
-		if bytes.Equal(r.Msg.Payload(), payload) {
-			log.Printf("mcast %v -> %v", r.SessionNet.RemoteAddr(), r.SessionNet.LocalAddr())
-			ansArrived <- true
-		} else {
-			t.Fatalf("unknown payload %v arrived from %v", r.Msg.Payload(), r.SessionNet.RemoteAddr())
-		}
-	})
-	defer HandleRemove("/test")
+	responseServerConn := make([]*ClientConn, 0)
+	var lockResponseServerConn sync.Mutex
+	responseServer := Client{
+		Net:                  strings.Trim(lnet, "-mcast"),
+		BlockWiseTransfer:    &BlockWiseTransfer,
+		BlockWiseTransferSzx: &BlockWiseTransferSzx,
+		Handler: func(w ResponseWriter, r *Request) {
+			resp := r.SessionNet.NewMessage(MessageParams{
+				Type:      Acknowledgement,
+				Code:      Content,
+				MessageID: r.Msg.MessageID(),
+				Payload:   make([]byte, payloadLen),
+				Token:     r.Msg.Token(),
+			})
+			err := w.Write(resp)
+			if err != nil {
+				t.Fatalf("cannot send response %v", err)
+			}
+		},
+	}
 
-	s, _, fin, err := RunLocalUDPServer(lnet, addrMcast, BlockWiseTransfer, BlockWiseTransferSzx)
+	s, _, fin, err := RunLocalServerUDPWithHandler(lnet, addrMcast, BlockWiseTransfer, BlockWiseTransferSzx, func(w ResponseWriter, r *Request) {
+		resp := r.SessionNet.NewMessage(MessageParams{
+			Type:      Acknowledgement,
+			Code:      Content,
+			MessageID: r.Msg.MessageID(),
+			Payload:   make([]byte, payloadLen),
+			Token:     r.Msg.Token(),
+		})
+		conn, err := responseServer.Dial(r.SessionNet.RemoteAddr().String())
+		if err != nil {
+			t.Fatalf("cannot create connection %v", err)
+		}
+		err = conn.Write(resp)
+		if err != nil {
+			t.Fatalf("cannot send response %v", err)
+		}
+		lockResponseServerConn.Lock()
+		responseServerConn = append(responseServerConn, conn)
+		lockResponseServerConn.Unlock()
+	})
 	if err != nil {
 		t.Fatalf("unable to run test server: %v", err)
 	}
 	defer func() {
 		s.Shutdown()
+		lockResponseServerConn.Lock()
+		for _, conn := range responseServerConn {
+			conn.Close()
+		}
+		lockResponseServerConn.Unlock()
 		<-fin
 	}()
 
-	c := Client{
+	c := MulticastClient{
 		Net:                  strings.TrimSuffix(lnet, "-mcast"),
 		BlockWiseTransfer:    &BlockWiseTransfer,
 		BlockWiseTransferSzx: &BlockWiseTransferSzx,
@@ -439,27 +473,23 @@ func testServingMCast(t *testing.T, lnet, laddr string, BlockWiseTransfer bool, 
 	}
 	defer co.Close()
 
-	req := &DgramMessage{
-		MessageBase{
-			typ:       NonConfirmable,
-			code:      GET,
-			messageID: 1234,
-			payload:   payload,
-		}}
-	req.SetOption(ContentFormat, TextPlain)
-	req.SetPathString("/test")
-
-	co.Write(req)
+	rp, err := co.Publish("/test", func(Msg Message) {
+		ansArrived <- true
+	})
+	if err != nil {
+		t.Fatalf("unable to publishing: %v", err)
+	}
+	defer rp.Cancel()
 
 	<-ansArrived
 }
 
 func TestServingIPv4MCast(t *testing.T) {
-	testServingMCast(t, "udp4-mcast", "225.0.1.187:11111", false, BlockSzx16)
+	testServingMCast(t, "udp4-mcast", "225.0.1.187:11111", false, BlockSzx16, 16)
 }
 
 func TestServingIPv6MCast(t *testing.T) {
-	testServingMCast(t, "udp6-mcast", "[ff03::158]:11111", false, BlockSzx16)
+	testServingMCast(t, "udp6-mcast", "[ff03::158]:11111", false, BlockSzx16, 16)
 }
 
 func BenchmarkServe(b *testing.B) {

@@ -8,42 +8,43 @@ import (
 	coap "github.com/go-ocf/go-coap"
 )
 
-func periodicTransmitter(w coap.SessionNet, req coap.Message) {
+func sendResponse(w coap.ResponseWriter, req *coap.Request, subded time.Time) error {
+	resp := req.SessionNet.NewMessage(coap.MessageParams{
+		Type:      coap.Acknowledgement,
+		Code:      coap.Content,
+		MessageID: req.Msg.MessageID(),
+		Payload:   []byte(fmt.Sprintf("Been running for %v", time.Since(subded))),
+		Token:     req.Msg.Token(),
+	})
+
+	resp.SetOption(coap.ContentFormat, coap.TextPlain)
+	return w.Write(resp)
+}
+
+func periodicTransmitter(w coap.ResponseWriter, req *coap.Request) {
 	subded := time.Now()
-
 	for {
-		msg := w.NewMessage(coap.MessageParams{
-			Type:      coap.Acknowledgement,
-			Code:      coap.Content,
-			MessageID: req.MessageID(),
-			Payload:   []byte(fmt.Sprintf("Been running for %v", time.Since(subded))),
-			Token:     []byte("123"),
-		})
-
-		msg.SetOption(coap.ContentFormat, coap.TextPlain)
-		msg.SetOption(coap.LocationPath, req.Path())
-
-		log.Printf("Transmitting %v", msg)
-		err := w.WriteMsg(msg, time.Hour)
+		err := sendResponse(w, req, subded)
 		if err != nil {
 			log.Printf("Error on transmitter, stopping: %v", err)
 			return
 		}
-
 		time.Sleep(time.Second)
 	}
 }
 
 func main() {
 	log.Fatal(coap.ListenAndServe(":5688", "udp",
-		coap.HandlerFunc(func(w coap.SessionNet, req coap.Message) {
-			log.Printf("Got message path=%q: %#v from %v", req.Path(), req, w.RemoteAddr())
-			if req.Code() == coap.GET && req.Option(coap.Observe) != nil {
-				value := req.Option(coap.Observe)
-				if value.(uint32) > 0 {
-					go periodicTransmitter(w, req)
-				} else {
-					log.Printf("coap.Observe value=%v", value)
+		coap.HandlerFunc(func(w coap.ResponseWriter, req *coap.Request) {
+			log.Printf("Got message path=%q: %#v from %v", req.Msg.Path(), req.Msg, req.SessionNet.RemoteAddr())
+			switch {
+			case req.Msg.Code() == coap.GET && req.Msg.Option(coap.Observe) != nil && req.Msg.Option(coap.Observe).(uint32) == 0:
+				go periodicTransmitter(w, req)
+			case req.Msg.Code() == coap.GET:
+				subded := time.Now()
+				err := sendResponse(w, req, subded)
+				if err != nil {
+					log.Printf("Error on transmitter: %v", err)
 				}
 			}
 		})))

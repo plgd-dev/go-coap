@@ -1,0 +1,200 @@
+package coap
+
+// A client implementation.
+
+import (
+	"net"
+	"time"
+)
+
+// A ClientConn represents a connection to a COAP server.
+type MulticastClientConn struct {
+	conn   *ClientConn
+	client *MulticastClient
+}
+
+// A MulticastClient defines parameters for a COAP client.
+type MulticastClient struct {
+	Net            string        // "udp" / "udp4" / "udp6"
+	MaxMessageSize uint16        // Max message size that could be received from peer. If not set it defaults to 1152 B.
+	DialTimeout    time.Duration // set Timeout for dialer
+	ReadTimeout    time.Duration // net.ClientConn.SetReadTimeout value for connections, defaults to 1 hour - overridden by Timeout when that value is non-zero
+	WriteTimeout   time.Duration // net.ClientConn.SetWriteTimeout value for connections, defaults to 1 hour - overridden by Timeout when that value is non-zero
+	SyncTimeout    time.Duration // The maximum of time for synchronization go-routines, defaults to 30 seconds - overridden by Timeout when that value is non-zero if it occurs, then it call log.Fatal
+
+	Handler              HandlerFunc     // default handler for handling messages from server
+	NotifySessionEndFunc func(err error) // if NotifySessionEndFunc is set it is called when TCP/UDP session was ended.
+
+	BlockWiseTransfer    *bool     // Use blockWise transfer for transfer payload (default for UDP it's enabled, for TCP it's disable)
+	BlockWiseTransferSzx *BlockSzx // Set maximal block size of payload that will be send in fragment
+
+	multicastHandler *sessionHandler
+}
+
+// Dial connects to the address on the named network.
+func (c *MulticastClient) dialNet(net, address string) (*ClientConn, error) {
+	if c.multicastHandler == nil {
+		c.multicastHandler = &sessionHandler{tokenHandlers: make(map[[MaxTokenSize]byte]func(w ResponseWriter, r *Request, next HandlerFunc))}
+	}
+	client := &Client{
+		Net:            net,
+		MaxMessageSize: c.MaxMessageSize,
+		DialTimeout:    c.DialTimeout,
+		ReadTimeout:    c.ReadTimeout,
+		WriteTimeout:   c.WriteTimeout,
+		SyncTimeout:    c.SyncTimeout,
+		Handler: func(w ResponseWriter, r *Request) {
+			handler := c.Handler
+			if handler == nil {
+				handler = HandleFailed
+			}
+			c.multicastHandler.handle(w, r, handler)
+		},
+		NotifySessionEndFunc: c.NotifySessionEndFunc,
+		BlockWiseTransfer:    c.BlockWiseTransfer,
+		BlockWiseTransferSzx: c.BlockWiseTransferSzx,
+	}
+
+	return client.Dial(address)
+}
+
+// Dial connects to the address on the named network.
+func (c *MulticastClient) Dial(address string) (*MulticastClientConn, error) {
+	var net string
+	switch c.Net {
+	case "udp", "udp4", "udp6":
+		net = c.Net + "-mcast"
+	case "":
+		net = "udp-mcast"
+	default:
+		return nil, ErrInvalidNetParameter
+	}
+	conn, err := c.dialNet(net, address)
+	if err != nil {
+		return nil, err
+	}
+	return &MulticastClientConn{
+		conn:   conn,
+		client: c,
+	}, nil
+}
+
+// LocalAddr implements the SessionNet.LocalAddr method.
+func (mconn *MulticastClientConn) LocalAddr() net.Addr {
+	return mconn.conn.LocalAddr()
+}
+
+// RemoteAddr implements the SessionNet.RemoteAddr method.
+func (mconn *MulticastClientConn) RemoteAddr() net.Addr {
+	return mconn.conn.RemoteAddr()
+}
+
+// NewMessage Create message for request
+func (mconn *MulticastClientConn) NewMessage(p MessageParams) Message {
+	return mconn.conn.NewMessage(p)
+}
+
+// WriteMsg sends a message through the connection co.
+func (mconn *MulticastClientConn) Write(m Message) error {
+	return mconn.conn.Write(m)
+}
+
+// SetReadDeadline set read deadline for timeout for Exchange
+func (mconn *MulticastClientConn) SetReadDeadline(timeout time.Duration) {
+	mconn.conn.SetReadDeadline(timeout)
+}
+
+// SetWriteDeadline set write deadline for timeout for Exchange and Write
+func (mconn *MulticastClientConn) SetWriteDeadline(timeout time.Duration) {
+	mconn.conn.SetWriteDeadline(timeout)
+}
+
+func (mconn *MulticastClientConn) Close() {
+	mconn.conn.Close()
+}
+
+//Observation represents subscription to resource on the server
+type ResponseWaiter struct {
+	token []byte
+	path  string
+	conn  *MulticastClientConn
+}
+
+// Cancel remove observation from server. For recreate observation use Observe.
+func (r *ResponseWaiter) Cancel() error {
+	return r.conn.client.multicastHandler.remove(r.token)
+}
+
+type messageNewer interface {
+	NewMessage(MessageParams) Message
+}
+
+func createGetReq(m messageNewer, path string) (Message, error) {
+	token, err := GenerateToken()
+	if err != nil {
+		return nil, err
+	}
+	req := m.NewMessage(MessageParams{
+		Type:      NonConfirmable,
+		Code:      GET,
+		MessageID: GenerateMessageID(),
+		Token:     token,
+	})
+	req.SetPathString(path)
+	return req, nil
+}
+
+// Publish subscribe to sever on path. After subscription and every change on path,
+// server sends immediately response
+func (mconn *MulticastClientConn) Publish(path string, responseHandler func(resp Message)) (*ResponseWaiter, error) {
+	req, err := createGetReq(mconn, path)
+	if err != nil {
+		return nil, err
+	}
+	r := &ResponseWaiter{
+		token: req.Token(),
+		path:  path,
+		conn:  mconn,
+	}
+	err = mconn.client.multicastHandler.add(req.Token(), func(w ResponseWriter, r *Request, next HandlerFunc) {
+		needGet := false
+		resp := r.Msg
+		if r.Msg.Option(Size2) != nil {
+			if len(r.Msg.Payload()) != int(r.Msg.Option(Size2).(uint32)) {
+				needGet = true
+			}
+		}
+		if !needGet {
+			if block, ok := r.Msg.Option(Block2).(uint32); ok {
+				_, _, more, err := UnmarshalBlockOption(block)
+				if err != nil {
+					return
+				}
+				needGet = more
+			}
+		}
+
+		if needGet {
+			getReq, err := createGetReq(mconn, path)
+			if err != nil {
+				return
+			}
+			resp, err = r.SessionNet.Exchange(getReq)
+			if err != nil {
+				return
+			}
+		}
+		responseHandler(resp)
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	err = mconn.Write(req)
+	if err != nil {
+		mconn.client.multicastHandler.remove(r.token)
+		return nil, err
+	}
+
+	return r, nil
+}

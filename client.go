@@ -19,6 +19,7 @@ type ClientConn struct {
 	client       *Client
 	session      SessionNet
 	shutdownSync chan error
+	multicast    bool
 }
 
 // A Client defines parameters for a COAP client.
@@ -31,7 +32,7 @@ type Client struct {
 	WriteTimeout   time.Duration // net.ClientConn.SetWriteTimeout value for connections, defaults to 1 hour - overridden by Timeout when that value is non-zero
 	SyncTimeout    time.Duration // The maximum of time for synchronization go-routines, defaults to 30 seconds - overridden by Timeout when that value is non-zero if it occurs, then it call log.Fatal
 
-	ObserverFunc         HandlerFunc     // for handling observation messages from server
+	Handler              HandlerFunc     // default handler for handling messages from server
 	NotifySessionEndFunc func(err error) // if NotifySessionEndFunc is set it is called when TCP/UDP session was ended.
 
 	BlockWiseTransfer    *bool     // Use blockWise transfer for transfer payload (default for UDP it's enabled, for TCP it's disable)
@@ -69,6 +70,7 @@ func (c *Client) Dial(address string) (clientConn *ClientConn, err error) {
 	dialer := &net.Dialer{Timeout: c.DialTimeout}
 	BlockWiseTransfer := false
 	BlockWiseTransferSzx := BlockSzx1024
+	multicast := false
 
 	switch c.Net {
 	case "tcp-tls", "tcp4-tls", "tcp6-tls":
@@ -111,6 +113,7 @@ func (c *Client) Dial(address string) (clientConn *ClientConn, err error) {
 		sessionUPDData = &SessionUDPData{raddr: a}
 		conn = udpConn
 		BlockWiseTransfer = true
+		multicast = true
 	default:
 		return nil, ErrInvalidNetParameter
 	}
@@ -124,50 +127,55 @@ func (c *Client) Dial(address string) (clientConn *ClientConn, err error) {
 	}
 
 	sync := make(chan bool)
-	clientConn = &ClientConn{srv: &Server{
-		Net:                  network,
-		TLSConfig:            c.TLSConfig,
-		Conn:                 conn,
-		ReadTimeout:          c.readTimeout(),
-		WriteTimeout:         c.writeTimeout(),
-		MaxMessageSize:       c.MaxMessageSize,
-		BlockWiseTransfer:    &BlockWiseTransfer,
-		BlockWiseTransferSzx: &BlockWiseTransferSzx,
-		NotifyStartedFunc: func() {
-			timeout := c.syncTimeout()
-			select {
-			case sync <- true:
-			case <-time.After(timeout):
-				log.Fatal("Client cannot send start: Timeout")
-			}
-		},
-		NotifySessionEndFunc: func(s SessionNet, err error) {
-			if c.NotifySessionEndFunc != nil {
-				c.NotifySessionEndFunc(err)
-			}
-		},
-		createSessionTCPFunc: func(connection Conn, srv *Server) (SessionNet, error) {
-			return clientConn.session, nil
-		},
-		createSessionUDPFunc: func(connection Conn, srv *Server, sessionUDPData *SessionUDPData) (SessionNet, error) {
-			if sessionUDPData.RemoteAddr().String() == clientConn.session.RemoteAddr().String() {
-				if s, ok := clientConn.session.(*blockWiseSession); ok {
-					s.SessionNet.(*sessionUDP).sessionUDPData = sessionUDPData
-				} else {
-					clientConn.session.(*sessionUDP).sessionUDPData = sessionUDPData
+	clientConn = &ClientConn{
+		srv: &Server{
+			Net:                  network,
+			TLSConfig:            c.TLSConfig,
+			Conn:                 conn,
+			ReadTimeout:          c.readTimeout(),
+			WriteTimeout:         c.writeTimeout(),
+			MaxMessageSize:       c.MaxMessageSize,
+			BlockWiseTransfer:    &BlockWiseTransfer,
+			BlockWiseTransferSzx: &BlockWiseTransferSzx,
+			NotifyStartedFunc: func() {
+				timeout := c.syncTimeout()
+				select {
+				case sync <- true:
+				case <-time.After(timeout):
+					log.Fatal("Client cannot send start: Timeout")
 				}
+			},
+			NotifySessionEndFunc: func(s SessionNet, err error) {
+				if c.NotifySessionEndFunc != nil {
+					c.NotifySessionEndFunc(err)
+				}
+			},
+			createSessionTCPFunc: func(connection Conn, srv *Server) (SessionNet, error) {
 				return clientConn.session, nil
-			}
-			session, err := newSessionUDP(connection, srv, sessionUDPData)
-			if err != nil {
-				return nil, err
-			}
-			if session.blockWiseEnabled() {
-				return &blockWiseSession{SessionNet: session}, nil
-			}
-			return session, nil
-		}, Handler: c.ObserverFunc},
-		shutdownSync: make(chan error)}
+			},
+			createSessionUDPFunc: func(connection Conn, srv *Server, sessionUDPData *SessionUDPData) (SessionNet, error) {
+				if sessionUDPData.RemoteAddr().String() == clientConn.session.RemoteAddr().String() {
+					if s, ok := clientConn.session.(*blockWiseSession); ok {
+						s.SessionNet.(*sessionUDP).sessionUDPData = sessionUDPData
+					} else {
+						clientConn.session.(*sessionUDP).sessionUDPData = sessionUDPData
+					}
+					return clientConn.session, nil
+				}
+				session, err := newSessionUDP(connection, srv, sessionUDPData)
+				if err != nil {
+					return nil, err
+				}
+				if session.blockWiseEnabled() {
+					return &blockWiseSession{SessionNet: session}, nil
+				}
+				return session, nil
+			},
+			Handler: c.Handler,
+		},
+		shutdownSync: make(chan error),
+		multicast:    multicast,
+	}
 
 	switch clientConn.srv.Conn.(type) {
 	case *net.TCPConn, *tls.Conn:
@@ -236,6 +244,9 @@ func (co *ClientConn) RemoteAddr() net.Addr {
 // To specify a local address or a timeout, the caller has to set the `Client.Dialer`
 // attribute appropriately
 func (co *ClientConn) Exchange(m Message) (Message, error) {
+	if co.multicast {
+		return nil, ErrNotSupported
+	}
 	return co.session.Exchange(m)
 }
 
@@ -266,6 +277,9 @@ func (co *ClientConn) Ping(timeout time.Duration) error {
 
 // Get retrieve the resource identified by the request path
 func (co *ClientConn) Get(path string) (Message, error) {
+	if co.multicast {
+		return nil, ErrNotSupported
+	}
 	token, err := GenerateToken()
 	if err != nil {
 		return nil, err
@@ -281,6 +295,9 @@ func (co *ClientConn) Get(path string) (Message, error) {
 }
 
 func (co *ClientConn) putPostHelper(code COAPCode, path string, contentType MediaType, body io.Reader) (Message, error) {
+	if co.multicast {
+		return nil, ErrNotSupported
+	}
 	token, err := GenerateToken()
 	if err != nil {
 		return nil, err
@@ -313,6 +330,9 @@ func (co *ClientConn) Put(path string, contentType MediaType, body io.Reader) (M
 
 // Delete delete the resource identified by the request path
 func (co *ClientConn) Delete(path string) (Message, error) {
+	if co.multicast {
+		return nil, ErrNotSupported
+	}
 	token, err := GenerateToken()
 	if err != nil {
 		return nil, err
@@ -356,6 +376,9 @@ func (o *Observation) Cancel() error {
 // Observe subscribe to severon path. After subscription and every change on path,
 // server sends immediately response
 func (co *ClientConn) Observe(path string, observeFunc func(req Message)) (*Observation, error) {
+	if co.multicast {
+		return nil, ErrNotSupported
+	}
 	token, err := GenerateToken()
 	if err != nil {
 		return nil, err
@@ -368,63 +391,71 @@ func (co *ClientConn) Observe(path string, observeFunc func(req Message)) (*Obse
 	})
 	req.SetPathString(path)
 	req.SetOption(Observe, 0)
-	block, err := MarshalBlockOption(co.session.blockWiseSzx(), 0, false)
-	if err != nil {
-		return nil, err
-	}
-	req.SetOption(Block1, block)
+	/*
+		IoTivity doesn't support Block2 in first request for GET
+		block, err := MarshalBlockOption(co.session.blockWiseSzx(), 0, false)
+		if err != nil {
+			return nil, err
+		}
+		req.SetOption(Block2, block)
+	*/
 	o := &Observation{
 		token:     token,
 		path:      path,
 		obsSeqNum: 0,
 		s:         co.session,
 	}
-	co.session.sessionHandler().add(token, func(w ResponseWriter, r *Request, next HandlerFunc) {
-		if r.Msg.Option(Observe) != nil && (r.Msg.Code() == Content || r.Msg.Code() == Valid) {
-			obsSeqNum := r.Msg.Option(Observe).(uint32)
-			//obs starts with 0, after that check obsSeqNum
-			if obsSeqNum != 0 && o.obsSeqNum > obsSeqNum {
-				return
+	err = co.session.sessionHandler().add(token, func(w ResponseWriter, r *Request, next HandlerFunc) {
+		needGet := false
+		resp := r.Msg
+		if r.Msg.Option(Size2) != nil {
+			if len(r.Msg.Payload()) != int(r.Msg.Option(Size2).(uint32)) {
+				needGet = true
 			}
-			needGet := false
-			resp := r.Msg
-			if r.Msg.Option(Size2) != nil {
-				if len(r.Msg.Payload()) != int(r.Msg.Option(Size2).(uint32)) {
-					needGet = true
-				}
-			}
-			if !needGet {
-				if block, ok := r.Msg.Option(Block2).(uint32); ok {
-					_, _, more, err := UnmarshalBlockOption(block)
-					if err != nil {
-						return
-					}
-					needGet = more
-				}
-			}
-
-			if needGet {
-				resp, err = co.Get(path)
+		}
+		if !needGet {
+			if block, ok := r.Msg.Option(Block2).(uint32); ok {
+				_, _, more, err := UnmarshalBlockOption(block)
 				if err != nil {
 					return
 				}
+				needGet = more
 			}
-			switch {
-			case r.Msg.Option(ETag) != nil && resp.Option(ETag) != nil:
-				//during processing observation, check if notification is still valid
-				if bytes.Equal(resp.Option(ETag).([]byte), r.Msg.Option(ETag).([]byte)) {
-					o.obsSeqNum = r.Msg.Option(Observe).(uint32)
-					observeFunc(resp)
+		}
+
+		if needGet {
+			resp, err = co.Get(path)
+			if err != nil {
+				return
+			}
+		}
+		setObsSeqNum := func() {
+			if r.Msg.Option(Observe) != nil {
+				obsSeqNum := r.Msg.Option(Observe).(uint32)
+				//obs starts with 0, after that check obsSeqNum
+				if obsSeqNum != 0 && o.obsSeqNum > obsSeqNum {
+					return
 				}
-			default:
-				o.obsSeqNum = r.Msg.Option(Observe).(uint32)
+				o.obsSeqNum = obsSeqNum
+			}
+		}
+
+		switch {
+		case r.Msg.Option(ETag) != nil && resp.Option(ETag) != nil:
+			//during processing observation, check if notification is still valid
+			if bytes.Equal(resp.Option(ETag).([]byte), r.Msg.Option(ETag).([]byte)) {
+				setObsSeqNum()
 				observeFunc(resp)
 			}
-			return
+		default:
+			setObsSeqNum()
+			observeFunc(resp)
 		}
-		next(w, r)
+		return
 	})
-
+	if err != nil {
+		return nil, err
+	}
 	err = co.session.Write(req)
 	if err != nil {
 		co.session.sessionHandler().remove(o.token)

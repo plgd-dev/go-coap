@@ -2,42 +2,41 @@ package main
 
 import (
 	"log"
-	"time"
 
 	coap "github.com/go-ocf/go-coap"
 )
 
-func handleA(w coap.SessionNet, req coap.Message) {
-	log.Printf("Got message in handleA: path=%q: %#v from %v", req.Path(), req, w.RemoteAddr())
-	if req.IsConfirmable() {
-		res := w.NewMessage(coap.MessageParams{
+func handleA(w coap.ResponseWriter, req *coap.Request) {
+	log.Printf("Got message in handleA: path=%q: %#v from %v", req.Msg.Path(), req.Msg, req.SessionNet.RemoteAddr())
+	if req.Msg.IsConfirmable() {
+		res := req.SessionNet.NewMessage(coap.MessageParams{
 			Type:      coap.Acknowledgement,
 			Code:      coap.Content,
-			MessageID: req.MessageID(),
-			Token:     req.Token(),
+			MessageID: req.Msg.MessageID(),
+			Token:     req.Msg.Token(),
 			Payload:   []byte("hello to you!"),
 		})
 		res.SetOption(coap.ContentFormat, coap.TextPlain)
 
 		log.Printf("Transmitting from A %#v", res)
-		w.WriteMsg(res, time.Hour)
+		w.Write(res)
 	}
 }
 
-func handleB(w coap.SessionNet, req coap.Message) {
-	log.Printf("Got message in handleB: path=%q: %#v from %v", req.Path(), req, w.RemoteAddr())
-	if req.IsConfirmable() {
-		res := w.NewMessage(coap.MessageParams{
+func handleB(w coap.ResponseWriter, req *coap.Request) {
+	log.Printf("Got message in handleB: path=%q: %#v from %v", req.Msg.Path(), req.Msg, req.SessionNet.RemoteAddr())
+	if req.Msg.IsConfirmable() {
+		res := req.SessionNet.NewMessage(coap.MessageParams{
 			Type:      coap.Acknowledgement,
 			Code:      coap.Content,
-			MessageID: req.MessageID(),
-			Token:     req.Token(),
+			MessageID: req.Msg.MessageID(),
+			Token:     req.Msg.Token(),
 			Payload:   []byte("good bye!"),
 		})
 		res.SetOption(coap.ContentFormat, coap.TextPlain)
 
 		log.Printf("Transmitting from B %#v", res)
-		w.WriteMsg(res, time.Hour)
+		w.Write(res)
 	}
 }
 
