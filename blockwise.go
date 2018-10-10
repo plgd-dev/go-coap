@@ -1,6 +1,7 @@
 package coap
 
 import (
+	"bytes"
 	"fmt"
 	"log"
 	"time"
@@ -352,7 +353,7 @@ type blockWiseReceiver struct {
 	currentMore  bool
 	payloadSize  uint32
 
-	payload []byte
+	payload *bytes.Buffer
 }
 
 func (r *blockWiseReceiver) sizeType() OptionID {
@@ -389,7 +390,7 @@ func (r *blockWiseReceiver) createReq(b *blockWiseSession, resp Message) (Messag
 		}
 	}
 
-	if len(r.payload) > 0 {
+	if r.payload.Len() > 0 {
 		block, err := MarshalBlockOption(r.currentSzx, r.nextNum, r.currentMore)
 		if err != nil {
 			return nil, err
@@ -406,13 +407,14 @@ func newReceiver(b *blockWiseSession, peerDrive bool, origin Message, resp Messa
 		origin:     origin,
 		blockType:  blockType,
 		currentSzx: b.networkSession.blockWiseSzx(),
-		payload:    []byte{},
+		payload:    bytes.NewBuffer(make([]byte, 0)),
 	}
 
 	if resp != nil {
 		var ok bool
 		if r.payloadSize, ok = resp.Option(r.sizeType()).(uint32); ok {
 			//try to get Size
+			r.payload.Grow(int(r.payloadSize))
 		}
 		if respBlock, ok := resp.Option(blockType).(uint32); ok {
 			//contains block
@@ -441,7 +443,7 @@ func newReceiver(b *blockWiseSession, peerDrive bool, origin Message, resp Messa
 			return r, resp, nil
 		}
 		//append payload and set block
-		r.payload = append(r.payload, resp.Payload()...)
+		r.payload.Write(resp.Payload())
 	}
 
 	if peerDrive {
@@ -463,7 +465,7 @@ func newReceiver(b *blockWiseSession, peerDrive bool, origin Message, resp Messa
 			r.nextNum = num
 			r.currentMore = more
 		}
-		r.payload = append(r.payload, origin.Payload()...)
+		r.payload.Write(origin.Payload())
 	}
 
 	return r, nil, nil
@@ -498,7 +500,7 @@ func (r *blockWiseReceiver) processResp(b *blockWiseSession, req Message, resp M
 			return nil, ErrInvalidBlockSzx
 		}
 		startOffset := calcStartOffset(num, szx)
-		if len(r.payload) < startOffset {
+		if r.payload.Len() < startOffset {
 			return nil, ErrRequestEntityIncomplete
 		}
 		if more == true && len(resp.Payload())%SZXVal[szx] != 0 {
@@ -508,14 +510,15 @@ func (r *blockWiseReceiver) processResp(b *blockWiseSession, req Message, resp M
 			//reagain
 			r.nextNum = num
 		} else {
-			r.payload = append(r.payload[:startOffset], resp.Payload()...)
+			r.payload.Truncate(startOffset)
+			r.payload.Write(resp.Payload())
 			if r.peerDrive {
 				r.nextNum = num
 			} else {
 				if szx > b.blockWiseSzx() {
 					num = 0
 					szx = b.blockWiseSzx()
-					r.nextNum = calcNextNum(num, szx, len(r.payload))
+					r.nextNum = calcNextNum(num, szx, r.payload.Len())
 				} else {
 					r.nextNum = calcNextNum(num, szx, len(resp.Payload()))
 				}
@@ -523,11 +526,11 @@ func (r *blockWiseReceiver) processResp(b *blockWiseSession, req Message, resp M
 		}
 
 		if more == false {
-			if r.payloadSize != 0 && int(r.payloadSize) != len(r.payload) {
+			if r.payloadSize != 0 && int(r.payloadSize) != r.payload.Len() {
 				return nil, ErrInvalidPayloadSize
 			}
-			if len(r.payload) > 0 {
-				resp.SetPayload(r.payload)
+			if r.payload.Len() > 0 {
+				resp.SetPayload(r.payload.Bytes())
 			}
 			// remove block used by blockWise
 			resp.RemoveOption(r.sizeType())

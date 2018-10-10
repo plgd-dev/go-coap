@@ -8,36 +8,22 @@ import (
 
 func handleA(w coap.ResponseWriter, req *coap.Request) {
 	log.Printf("Got message in handleA: path=%q: %#v from %v", req.Msg.Path(), req.Msg, req.Client.RemoteAddr())
-	if req.Msg.IsConfirmable() {
-		res := req.Client.NewMessage(coap.MessageParams{
-			Type:      coap.Acknowledgement,
-			Code:      coap.Content,
-			MessageID: req.Msg.MessageID(),
-			Token:     req.Msg.Token(),
-			Payload:   []byte("hello to you!"),
-		})
-		res.SetOption(coap.ContentFormat, coap.TextPlain)
-
-		log.Printf("Transmitting from A %#v", res)
-		w.Write(res)
+	resp := w.NewResponse(coap.Content)
+	resp.SetOption(coap.ContentFormat, coap.TextPlain)
+	resp.SetPayload([]byte("hello world"))
+	log.Printf("Transmitting from A %#v", resp)
+	if err := w.Write(resp); err != nil {
+		log.Printf("Cannot send response: %v", err)
 	}
 }
 
 func handleB(w coap.ResponseWriter, req *coap.Request) {
 	log.Printf("Got message in handleB: path=%q: %#v from %v", req.Msg.Path(), req.Msg, req.Client.RemoteAddr())
-	if req.Msg.IsConfirmable() {
-		res := req.Client.NewMessage(coap.MessageParams{
-			Type:      coap.Acknowledgement,
-			Code:      coap.Content,
-			MessageID: req.Msg.MessageID(),
-			Token:     req.Msg.Token(),
-			Payload:   []byte("good bye!"),
-		})
-		res.SetOption(coap.ContentFormat, coap.TextPlain)
-
-		log.Printf("Transmitting from B %#v", res)
-		w.Write(res)
-	}
+	resp := w.NewResponse(coap.Content)
+	resp.SetOption(coap.ContentFormat, coap.TextPlain)
+	resp.SetPayload([]byte("good bye!"))
+	log.Printf("Transmitting from B %#v", resp)
+	w.Write(resp)
 }
 
 func main() {

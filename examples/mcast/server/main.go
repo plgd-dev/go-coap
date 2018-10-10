@@ -8,16 +8,10 @@ import (
 
 func handleMcast(w coap.ResponseWriter, r *coap.Request) {
 	log.Printf("Got message in handleA: path=%q: %#v from %v", r.Msg.Path(), r.Msg, r.Client.RemoteAddr())
-	res := r.Client.NewMessage(coap.MessageParams{
-		Type:      coap.Acknowledgement,
-		Code:      coap.Content,
-		MessageID: r.Msg.MessageID(),
-		Token:     r.Msg.Token(),
-		Payload:   []byte("hello to you!"),
-	})
-	res.SetOption(coap.ContentFormat, coap.TextPlain)
-
-	if err := w.Write(res); err != nil {
+	resp := w.NewResponse(coap.Content)
+	resp.SetOption(coap.ContentFormat, coap.TextPlain)
+	resp.SetPayload([]byte("hello to you!"))
+	if err := w.Write(resp); err != nil {
 		log.Printf("Cannot write resp %v", err)
 	}
 }

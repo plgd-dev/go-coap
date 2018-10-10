@@ -14,9 +14,65 @@ type ClientCommander struct {
 	networkSession networkSession
 }
 
-// NewMessage Create message for request
+// NewMessage creates message for request
 func (cc *ClientCommander) NewMessage(p MessageParams) Message {
 	return cc.networkSession.NewMessage(p)
+}
+
+func (cc *ClientCommander) newGetDeleteRequest(path string, code COAPCode) (Message, error) {
+	token, err := GenerateToken()
+	if err != nil {
+		return nil, err
+	}
+	req := cc.NewMessage(MessageParams{
+		Type:      NonConfirmable,
+		Code:      code,
+		MessageID: GenerateMessageID(),
+		Token:     token,
+	})
+	req.SetPathString(path)
+	return req, nil
+}
+
+func (cc *ClientCommander) newPostPutRequest(path string, contentType MediaType, body io.Reader, code COAPCode) (Message, error) {
+	token, err := GenerateToken()
+	if err != nil {
+		return nil, err
+	}
+	req := cc.networkSession.NewMessage(MessageParams{
+		Type:      Confirmable,
+		Code:      code,
+		MessageID: GenerateMessageID(),
+		Token:     token,
+	})
+	req.SetPathString(path)
+	req.SetOption(ContentFormat, contentType)
+	payload, err := ioutil.ReadAll(body)
+	if err != nil {
+		return nil, err
+	}
+	req.SetPayload(payload)
+	return req, nil
+}
+
+// NewGetRequest creates get request
+func (cc *ClientCommander) NewGetRequest(path string) (Message, error) {
+	return cc.newGetDeleteRequest(path, GET)
+}
+
+// NewPostRequest creates post request
+func (cc *ClientCommander) NewPostRequest(path string, contentType MediaType, body io.Reader) (Message, error) {
+	return cc.newPostPutRequest(path, contentType, body, POST)
+}
+
+// NewPutRequest creates put request
+func (cc *ClientCommander) NewPutRequest(path string, contentType MediaType, body io.Reader) (Message, error) {
+	return cc.newPostPutRequest(path, contentType, body, PUT)
+}
+
+// NewDeleteRequest creates delete request
+func (cc *ClientCommander) NewDeleteRequest(path string) (Message, error) {
+	return cc.newGetDeleteRequest(path, DELETE)
 }
 
 // LocalAddr implements the networkSession.LocalAddr method.
@@ -57,57 +113,37 @@ func (cc *ClientCommander) Ping(timeout time.Duration) error {
 
 // Get retrieve the resource identified by the request path
 func (cc *ClientCommander) Get(path string) (Message, error) {
-	req, err := createGetReq(cc, path)
+	req, err := cc.NewGetRequest(path)
 	if err != nil {
 		return nil, err
 	}
-	return cc.networkSession.Exchange(req)
-}
-
-func (cc *ClientCommander) putPostHelper(code COAPCode, path string, contentType MediaType, body io.Reader) (Message, error) {
-	token, err := GenerateToken()
-	if err != nil {
-		return nil, err
-	}
-	req := cc.networkSession.NewMessage(MessageParams{
-		Type:      Confirmable,
-		Code:      POST,
-		MessageID: GenerateMessageID(),
-		Token:     token,
-	})
-	req.SetPathString(path)
-	req.SetOption(ContentFormat, contentType)
-	payload, err := ioutil.ReadAll(body)
-	if err != nil {
-		return nil, err
-	}
-	req.SetPayload(payload)
 	return cc.networkSession.Exchange(req)
 }
 
 // Post update the resource identified by the request path
 func (cc *ClientCommander) Post(path string, contentType MediaType, body io.Reader) (Message, error) {
-	return cc.putPostHelper(POST, path, contentType, body)
+	req, err := cc.NewPostRequest(path, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	return cc.networkSession.Exchange(req)
 }
 
 // Put create the resource identified by the request path
 func (cc *ClientCommander) Put(path string, contentType MediaType, body io.Reader) (Message, error) {
-	return cc.putPostHelper(PUT, path, contentType, body)
+	req, err := cc.NewPutRequest(path, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	return cc.networkSession.Exchange(req)
 }
 
 // Delete delete the resource identified by the request path
 func (cc *ClientCommander) Delete(path string) (Message, error) {
-	token, err := GenerateToken()
+	req, err := cc.NewDeleteRequest(path)
 	if err != nil {
 		return nil, err
 	}
-	req := cc.networkSession.NewMessage(MessageParams{
-		Type:      Confirmable,
-		Code:      DELETE,
-		MessageID: GenerateMessageID(),
-		Token:     token,
-	})
-	req.SetPathString(path)
 	return cc.networkSession.Exchange(req)
 }
 
@@ -140,7 +176,7 @@ func (o *Observation) Cancel() error {
 // Observe subscribe to severon path. After subscription and every change on path,
 // server sends immediately response
 func (cc *ClientCommander) Observe(path string, observeFunc func(req *Request)) (*Observation, error) {
-	req, err := createGetReq(cc, path)
+	req, err := cc.NewGetRequest(path)
 	if err != nil {
 		return nil, err
 	}
@@ -227,4 +263,24 @@ func (cc *ClientCommander) Observe(path string, observeFunc func(req *Request)) 
 // Close close connection
 func (cc *ClientCommander) Close() error {
 	return cc.networkSession.Close()
+}
+
+// SetReadDeadline set read deadline for timeout for Exchange
+func (cc *ClientCommander) SetReadDeadline(timeout time.Duration) {
+	cc.networkSession.SetReadDeadline(timeout)
+}
+
+// SetWriteDeadline set write deadline for timeout for Exchange and Write
+func (cc *ClientCommander) SetWriteDeadline(timeout time.Duration) {
+	cc.networkSession.SetWriteDeadline(timeout)
+}
+
+// ReadDeadline get read deadline
+func (cc *ClientCommander) ReadDeadline() time.Duration {
+	return cc.networkSession.ReadDeadline()
+}
+
+// WriteDeadline get read writeline
+func (cc *ClientCommander) WriteDeadline() time.Duration {
+	return cc.networkSession.WriteDeadline()
 }
