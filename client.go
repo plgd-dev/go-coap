@@ -254,6 +254,26 @@ func (co *ClientConn) NewMessage(p MessageParams) Message {
 	return co.commander.NewMessage(p)
 }
 
+// NewGetRequest creates get request
+func (co *ClientConn) NewGetRequest(path string) (Message, error) {
+	return co.commander.NewGetRequest(path)
+}
+
+// NewPostRequest creates post request
+func (co *ClientConn) NewPostRequest(path string, contentType MediaType, body io.Reader) (Message, error) {
+	return co.commander.NewPostRequest(path, contentType, body)
+}
+
+// NewPutRequest creates put request
+func (co *ClientConn) NewPutRequest(path string, contentType MediaType, body io.Reader) (Message, error) {
+	return co.commander.NewPutRequest(path, contentType, body)
+}
+
+// NewDeleteRequest creates delete request
+func (co *ClientConn) NewDeleteRequest(path string) (Message, error) {
+	return co.commander.NewDeleteRequest(path)
+}
+
 // Write sends direct a message through the connection
 func (co *ClientConn) Write(m Message) error {
 	return co.commander.Write(m)

@@ -9,15 +9,9 @@ import (
 )
 
 func sendResponse(w coap.ResponseWriter, req *coap.Request, subded time.Time) error {
-	resp := req.Client.NewMessage(coap.MessageParams{
-		Type:      coap.Acknowledgement,
-		Code:      coap.Content,
-		MessageID: req.Msg.MessageID(),
-		Payload:   []byte(fmt.Sprintf("Been running for %v", time.Since(subded))),
-		Token:     req.Msg.Token(),
-	})
-
+	resp := w.NewResponse(coap.Content)
 	resp.SetOption(coap.ContentFormat, coap.TextPlain)
+	resp.SetPayload([]byte(fmt.Sprintf("Been running for %v", time.Since(subded))))
 	return w.Write(resp)
 }
 

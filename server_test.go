@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"encoding/binary"
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"strings"
@@ -121,6 +122,7 @@ func RunLocalServerTCPWithHandler(laddr string, BlockWiseTransfer bool, BlockWis
 		}, Handler: handler,
 		BlockWiseTransfer:    &BlockWiseTransfer,
 		BlockWiseTransferSzx: &BlockWiseTransferSzx,
+		MaxMessageSize:       ^uint16(0),
 	}
 
 	waitLock := sync.Mutex{}
@@ -229,16 +231,10 @@ func testServingTCPWithMsgWithObserver(t *testing.T, net string, BlockWiseTransf
 }
 
 func simpleMsg(t *testing.T, payload []byte, co *ClientConn) {
-	req := co.NewMessage(MessageParams{
-		Type:      Confirmable,
-		Code:      POST,
-		MessageID: 1234,
-		Payload:   payload,
-		Token:     []byte("abcd"),
-	},
-	)
-	req.SetOption(ContentFormat, TextPlain)
-	req.SetPathString("/test")
+	req, err := co.NewPostRequest("/test", TextPlain, bytes.NewBuffer(payload))
+	if err != nil {
+		t.Fatal("cannot create request", err)
+	}
 
 	res := CreateRespMessageByReq(co.commander.networkSession.IsTCP(), Valid, req)
 
@@ -297,14 +293,7 @@ func TestServingTLSBigMsg(t *testing.T) {
 }
 
 func ChallegingServer(w ResponseWriter, r *Request) {
-	req := r.Client.NewMessage(MessageParams{
-		Type:      Confirmable,
-		Code:      GET,
-		MessageID: 12345,
-		Payload:   []byte("hello, world!"),
-		Token:     []byte("abcd"),
-	})
-	_, err := r.Client.Exchange(req)
+	_, err := r.Client.Post("/test", TextPlain, bytes.NewBuffer([]byte("hello, world!")))
 	if err != nil {
 		panic(err.Error())
 	}
@@ -414,13 +403,8 @@ func testServingMCast(t *testing.T, lnet, laddr string, BlockWiseTransfer bool, 
 		BlockWiseTransfer:    &BlockWiseTransfer,
 		BlockWiseTransferSzx: &BlockWiseTransferSzx,
 		Handler: func(w ResponseWriter, r *Request) {
-			resp := r.Client.NewMessage(MessageParams{
-				Type:      Acknowledgement,
-				Code:      Content,
-				MessageID: r.Msg.MessageID(),
-				Payload:   make([]byte, payloadLen),
-				Token:     r.Msg.Token(),
-			})
+			resp := w.NewResponse(Content)
+			resp.SetPayload(make([]byte, payloadLen))
 			err := w.Write(resp)
 			if err != nil {
 				t.Fatalf("cannot send response %v", err)
@@ -429,13 +413,8 @@ func testServingMCast(t *testing.T, lnet, laddr string, BlockWiseTransfer bool, 
 	}
 
 	s, _, fin, err := RunLocalServerUDPWithHandler(lnet, addrMcast, BlockWiseTransfer, BlockWiseTransferSzx, func(w ResponseWriter, r *Request) {
-		resp := r.Client.NewMessage(MessageParams{
-			Type:      Acknowledgement,
-			Code:      Content,
-			MessageID: r.Msg.MessageID(),
-			Payload:   make([]byte, payloadLen),
-			Token:     r.Msg.Token(),
-		})
+		resp := w.NewResponse(Content)
+		resp.SetPayload(make([]byte, payloadLen))
 		conn, err := responseServer.Dial(r.Client.RemoteAddr().String())
 		if err != nil {
 			t.Fatalf("cannot create connection %v", err)
@@ -492,6 +471,25 @@ func TestServingIPv6MCast(t *testing.T) {
 	testServingMCast(t, "udp6-mcast", "[ff03::158]:11111", false, BlockSzx16, 16)
 }
 
+type dataReader struct {
+	data   []byte
+	offset int
+}
+
+func (r *dataReader) Read(p []byte) (n int, err error) {
+	l := len(p)
+	if (len(r.data) - r.offset) < l {
+		l = len(r.data) - r.offset
+	}
+	if l != 0 {
+		copy(p, r.data[r.offset:r.offset+l])
+		r.offset += l
+	} else {
+		return 0, io.EOF
+	}
+	return l, nil
+}
+
 func BenchmarkServe(b *testing.B) {
 	b.StopTimer()
 	HandleFunc("/test", EchoServer)
@@ -512,23 +510,40 @@ func BenchmarkServe(b *testing.B) {
 	}
 	defer co.Close()
 
-	req := &DgramMessage{
-		MessageBase{
-			typ:       Confirmable,
-			code:      POST,
-			messageID: 1234,
-			payload:   []byte("Content sent by client"),
-		}}
-	req.SetOption(ContentFormat, TextPlain)
-	req.SetPathString("/test")
-
+	data := []byte("Content sent by client")
 	b.StartTimer()
 	for i := uint32(0); i < uint32(b.N); i++ {
-		abc := *req
-		token := make([]byte, 8)
-		binary.LittleEndian.PutUint32(token, i)
-		abc.SetToken(token)
-		_, err = co.Exchange(&abc)
+		_, err := co.Post("/test", TextPlain, &dataReader{data: data})
+		if err != nil {
+			b.Fatalf("unable to read msg from server: %v", err)
+		}
+	}
+}
+
+func BenchmarkServeBlockWise(b *testing.B) {
+	b.StopTimer()
+	HandleFunc("/test", EchoServer)
+	defer HandleRemove("/test")
+
+	s, addrstr, fin, err := RunLocalUDPServer("udp", ":0", true, BlockSzx1024)
+	if err != nil {
+		b.Fatalf("unable to run test server: %v", err)
+	}
+	defer func() {
+		s.Shutdown()
+		<-fin
+	}()
+
+	co, err := Dial("udp", addrstr)
+	if err != nil {
+		b.Fatalf("unable to dialing: %v", err)
+	}
+	defer co.Close()
+
+	data := make([]byte, 65000)
+	b.StartTimer()
+	for i := uint32(0); i < uint32(b.N); i++ {
+		_, err := co.Post("/test", TextPlain, &dataReader{data: data})
 		if err != nil {
 			b.Fatalf("unable to read msg from server: %v", err)
 		}
@@ -555,23 +570,49 @@ func BenchmarkServeTCP(b *testing.B) {
 	}
 	defer co.Close()
 
-	req := &TcpMessage{
-		MessageBase{
-			typ:       Confirmable,
-			code:      POST,
-			messageID: 1234,
-			payload:   []byte("Content sent by client"),
-		}}
-	req.SetOption(ContentFormat, TextPlain)
-	req.SetPathString("/test")
-
+	data := make([]byte, 128)
 	b.StartTimer()
 	for i := uint32(0); i < uint32(b.N); i++ {
-		abc := *req
-		token := make([]byte, 8)
-		binary.LittleEndian.PutUint32(token, i)
-		abc.SetToken(token)
-		_, err = co.Exchange(&abc)
+		_, err := co.Post("/test", TextPlain, &dataReader{data: data})
+		if err != nil {
+			b.Fatalf("unable to read msg from server: %v", err)
+		}
+	}
+}
+
+func BenchmarkServeTCPBlockwise(b *testing.B) {
+	b.StopTimer()
+	HandleFunc("/test", EchoServer)
+	defer HandleRemove("/test")
+
+	BlockWiseTransfer := true
+	BlockWiseTransferSzx := BlockSzx1024
+
+	s, addrstr, fin, err := RunLocalTCPServer(":0", BlockWiseTransfer, BlockWiseTransferSzx)
+	if err != nil {
+		b.Fatalf("unable to run test server: %v", err)
+	}
+	defer func() {
+		s.Shutdown()
+		<-fin
+	}()
+
+	client := Client{
+		Net:                  "tcp",
+		BlockWiseTransfer:    &BlockWiseTransfer,
+		BlockWiseTransferSzx: &BlockWiseTransferSzx,
+		MaxMessageSize:       65000,
+	}
+	co, err := client.Dial(addrstr)
+	if err != nil {
+		b.Fatalf("unable dialing: %v", err)
+	}
+	defer co.Close()
+
+	data := make([]byte, 128)
+	b.StartTimer()
+	for i := uint32(0); i < uint32(b.N); i++ {
+		_, err := co.Post("/test", TextPlain, &dataReader{data: data})
 		if err != nil {
 			b.Fatalf("unable to read msg from server: %v", err)
 		}

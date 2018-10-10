@@ -94,6 +94,11 @@ func (mconn *MulticastClientConn) NewMessage(p MessageParams) Message {
 	return mconn.conn.NewMessage(p)
 }
 
+// NewGetRequest creates get request
+func (mconn *MulticastClientConn) NewGetRequest(path string) (Message, error) {
+	return mconn.conn.NewGetRequest(path)
+}
+
 // WriteMsg sends a message through the connection co.
 func (mconn *MulticastClientConn) Write(m Message) error {
 	return mconn.conn.Write(m)
@@ -109,11 +114,12 @@ func (mconn *MulticastClientConn) SetWriteDeadline(timeout time.Duration) {
 	mconn.conn.SetWriteDeadline(timeout)
 }
 
+// Close close connection
 func (mconn *MulticastClientConn) Close() {
 	mconn.conn.Close()
 }
 
-//Observation represents subscription to resource on the server
+//ResponseWaiter represents subscription to resource on the server
 type ResponseWaiter struct {
 	token []byte
 	path  string
@@ -125,29 +131,10 @@ func (r *ResponseWaiter) Cancel() error {
 	return r.conn.client.multicastHandler.Remove(r.token)
 }
 
-type messageNewer interface {
-	NewMessage(MessageParams) Message
-}
-
-func createGetReq(m messageNewer, path string) (Message, error) {
-	token, err := GenerateToken()
-	if err != nil {
-		return nil, err
-	}
-	req := m.NewMessage(MessageParams{
-		Type:      NonConfirmable,
-		Code:      GET,
-		MessageID: GenerateMessageID(),
-		Token:     token,
-	})
-	req.SetPathString(path)
-	return req, nil
-}
-
 // Publish subscribe to sever on path. After subscription and every change on path,
 // server sends immediately response
 func (mconn *MulticastClientConn) Publish(path string, responseHandler func(req *Request)) (*ResponseWaiter, error) {
-	req, err := createGetReq(mconn, path)
+	req, err := mconn.conn.NewGetRequest(path)
 	if err != nil {
 		return nil, err
 	}

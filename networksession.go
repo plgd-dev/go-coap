@@ -118,11 +118,10 @@ func newSessionTCP(connection Conn, srv *Server) (networkSession, error) {
 			blockWiseTransferSzx: BlockWiseTransferSzx,
 		},
 	}
-	/*
-		if err := s.sendCSM(); err != nil {
-			return nil, err
-		}
-	*/
+
+	if err := s.sendCSM(); err != nil {
+		return nil, err
+	}
 
 	return s, nil
 }
@@ -220,7 +219,7 @@ func (s *sessionTCP) blockWiseMaxPayloadSize(peer BlockSzx) int {
 	if s.blockWiseTransferSzx == BlockSzxBERT && peer == BlockSzxBERT {
 		m := atomic.LoadUint32(&s.peerMaxMessageSize)
 		if m == 0 {
-			m = maxMessageSize
+			m = uint32(s.srv.MaxMessageSize)
 		}
 		return int(m - (m % 1024))
 	}
@@ -500,7 +499,7 @@ func (s *sessionTCP) sendCSM() error {
 	})
 	req.AddOption(MaxMessageSize, uint32(s.srv.MaxMessageSize))
 	if s.blockWiseEnabled() {
-		req.AddOption(BlockWiseTransfer, nil)
+		req.AddOption(BlockWiseTransfer, []byte{})
 	}
 	return s.Write(req)
 }
@@ -549,13 +548,14 @@ func (s *sessionTCP) handleSignals(w ResponseWriter, r *Request) bool {
 			case BlockSzxBERT:
 				if SZXVal[BlockSzx1024] < int(maxmsgsize) {
 					s.sessionBase.blockWiseTransferSzx = BlockSzxBERT
-				}
-				for i := BlockSzx512; i > BlockSzx16; i-- {
-					if SZXVal[i] < int(maxmsgsize) {
-						s.sessionBase.blockWiseTransferSzx = i
+				} else {
+					for i := BlockSzx512; i > BlockSzx16; i-- {
+						if SZXVal[i] < int(maxmsgsize) {
+							s.sessionBase.blockWiseTransferSzx = i
+						}
 					}
+					s.sessionBase.blockWiseTransferSzx = BlockSzx16
 				}
-				s.sessionBase.blockWiseTransferSzx = BlockSzx16
 			default:
 				for i := s.blockWiseSzx(); i > BlockSzx16; i-- {
 					if SZXVal[i] < int(maxmsgsize) {
