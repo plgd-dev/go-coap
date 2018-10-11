@@ -1,6 +1,7 @@
 package coap
 
 import (
+	"bytes"
 	"log"
 	"net"
 	"sync/atomic"
@@ -10,11 +11,11 @@ import (
 type writeReq interface {
 	sendResp(err error, timeout time.Duration)
 	waitResp(timeout time.Duration) error
-	data() []byte
+	data() Message
 }
 
 type writeReqBase struct {
-	req      []byte
+	req      Message
 	respChan chan error // channel must have size 1 for non-blocking write to channel
 }
 
@@ -36,7 +37,7 @@ func (wreq *writeReqBase) waitResp(timeout time.Duration) error {
 	}
 }
 
-func (wreq *writeReqBase) data() []byte {
+func (wreq *writeReqBase) data() Message {
 	return wreq.req
 }
 
@@ -150,17 +151,11 @@ func (conn *connTCP) writeHandler(srv *Server) bool {
 		defer srv.releaseWriter(wr)
 		writeTimeout := srv.writeTimeout()
 		conn.connection.SetWriteDeadline(time.Now().Add(writeTimeout))
-		dataLen := len(data)
-		dataWritten := 0
-		for dataLen > 0 {
-			n, err := wr.Write(data[dataWritten : dataLen-dataWritten])
-			if err != nil {
-				return err
-			}
-			dataLen -= n
-			dataWritten += n
-			wr.Flush()
+		err := data.MarshalBinary(wr)
+		if err != nil {
+			return err
 		}
+		wr.Flush()
 		return nil
 	})
 }
@@ -196,18 +191,14 @@ func (conn *connUDP) writeHandler(srv *Server) bool {
 		data := wreq.data()
 		wreqUDP := wreq.(*writeReqUDP)
 		writeTimeout := srv.writeTimeout()
-		conn.connection.SetWriteDeadline(time.Now().Add(writeTimeout))
-		dataLen := len(data)
-		dataWritten := 0
-		for dataLen > 0 {
-			n, err := WriteToSessionUDP(conn.connection, data[dataWritten:dataLen-dataWritten], wreqUDP.sessionData)
-			if err != nil {
-				return err
-			}
-			dataLen -= n
-			dataWritten += n
+		buf := &bytes.Buffer{}
+		err := data.MarshalBinary(buf)
+		if err != nil {
+			return err
 		}
-		return nil
+		conn.connection.SetWriteDeadline(time.Now().Add(writeTimeout))
+		_, err = WriteToSessionUDP(conn.connection, buf.Bytes(), wreqUDP.sessionData)
+		return err
 	})
 }
 

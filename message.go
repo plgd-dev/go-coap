@@ -316,24 +316,36 @@ type option struct {
 	Value interface{}
 }
 
-func encodeInt(v uint32) []byte {
+func encodeInt(buf io.Writer, v uint32) error {
 	switch {
 	case v == 0:
-		return nil
 	case v < 256:
-		return []byte{byte(v)}
+		buf.Write([]byte{byte(v)})
 	case v < 65536:
-		rv := []byte{0, 0}
-		binary.BigEndian.PutUint16(rv, uint16(v))
-		return rv
+		return binary.Write(buf, binary.BigEndian, uint16(v))
 	case v < 16777216:
 		rv := []byte{0, 0, 0, 0}
 		binary.BigEndian.PutUint32(rv, uint32(v))
-		return rv[1:]
+		_, err := buf.Write(rv[1:])
+		return err
 	default:
-		rv := []byte{0, 0, 0, 0}
-		binary.BigEndian.PutUint32(rv, uint32(v))
-		return rv
+		return binary.Write(buf, binary.BigEndian, uint32(v))
+	}
+	return nil
+}
+
+func lengthInt(v uint32) int {
+	switch {
+	case v == 0:
+		return 0
+	case v < 256:
+		return 1
+	case v < 65536:
+		return 2
+	case v < 16777216:
+		return 3
+	default:
+		return 4
 	}
 }
 
@@ -343,14 +355,16 @@ func decodeInt(b []byte) uint32 {
 	return binary.BigEndian.Uint32(tmp)
 }
 
-func (o option) toBytes() ([]byte, error) {
+func (o option) writeData(buf io.Writer) error {
 	var v uint32
 
 	switch i := o.Value.(type) {
 	case string:
-		return []byte(i), nil
+		_, err := buf.Write([]byte(i))
+		return err
 	case []byte:
-		return i, nil
+		_, err := buf.Write(i)
+		return err
 	case MediaType:
 		v = uint32(i)
 	case int:
@@ -362,11 +376,37 @@ func (o option) toBytes() ([]byte, error) {
 	case uint32:
 		v = i
 	default:
-		return nil, fmt.Errorf("invalid type for option %x: %T (%v)",
+		return fmt.Errorf("invalid type for option %x: %T (%v)",
 			o.ID, o.Value, o.Value)
 	}
 
-	return encodeInt(v), nil
+	return encodeInt(buf, v)
+}
+
+func (o option) toBytesLength() (int, error) {
+	var v uint32
+
+	switch i := o.Value.(type) {
+	case string:
+		return len(i), nil
+	case []byte:
+		return len(i), nil
+	case MediaType:
+		v = uint32(i)
+	case int:
+		v = uint32(i)
+	case int32:
+		v = uint32(i)
+	case uint:
+		v = uint32(i)
+	case uint32:
+		v = i
+	default:
+		return 0, fmt.Errorf("invalid type for option %x: %T (%v)",
+			o.ID, o.Value, o.Value)
+	}
+
+	return lengthInt(v), nil
 }
 
 func parseOptionValue(optionDefs map[OptionID]optionDef, optionID OptionID, valueBuf []byte) interface{} {
@@ -413,14 +453,15 @@ func (o options) Swap(i, j int) {
 	o[i], o[j] = o[j], o[i]
 }
 
-func (o options) Minus(oid OptionID) options {
-	rv := options{}
-	for _, opt := range o {
-		if opt.ID != oid {
-			rv = append(rv, opt)
+func (o options) Remove(oid OptionID) options {
+	idx := 0
+	for i := 0; i < len(o); i++ {
+		if o[i].ID != oid {
+			o[idx] = o[i]
+			idx++
 		}
 	}
-	return rv
+	return o[:idx]
 }
 
 // Message represents the COAP message
@@ -446,7 +487,7 @@ type Message interface {
 	RemoveOption(opID OptionID)
 	AddOption(opID OptionID, val interface{})
 	SetOption(opID OptionID, val interface{})
-	MarshalBinary() ([]byte, error)
+	MarshalBinary(buf io.Writer) error
 	UnmarshalBinary(data []byte) error
 	SetToken(t []byte)
 	SetMessageID(messageID uint16)
@@ -577,7 +618,7 @@ func (m *MessageBase) SetToken(p []byte) {
 
 // RemoveOption removes all references to an option
 func (m *MessageBase) RemoveOption(opID OptionID) {
-	m.opts = m.opts.Minus(opID)
+	m.opts = m.opts.Remove(opID)
 }
 
 // AddOption adds an option.
@@ -654,16 +695,21 @@ func writeOpt(o option, buf io.Writer, delta int) {
 		d, dx := extendOpt(delta)
 		l, lx := extendOpt(length)
 
-		buf.Write([]byte{byte(d<<4) | byte(l)})
+		//buf.Write([]byte{byte(d<<4) | byte(l)})
+		var h [1]byte
+		h[0] = byte(d<<4) | byte(l)
 
-		tmp := []byte{0, 0}
+		buf.Write(h[:])
+
+		var tmp [2]byte
 		writeExt := func(opt, ext int) {
 			switch opt {
 			case extoptByteCode:
-				buf.Write([]byte{byte(ext)})
+				tmp[0] = byte(ext)
+				buf.Write(tmp[:1])
 			case extoptWordCode:
-				binary.BigEndian.PutUint16(tmp, uint16(ext))
-				buf.Write(tmp)
+				binary.BigEndian.PutUint16(tmp[:], uint16(ext))
+				buf.Write(tmp[:])
 			}
 		}
 
@@ -671,12 +717,12 @@ func writeOpt(o option, buf io.Writer, delta int) {
 		writeExt(l, lx)
 	}
 
-	b, err := o.toBytes()
+	len, err := o.toBytesLength()
 	if err != nil {
 		log.Fatal(err)
 	} else {
-		writeOptHeader(delta, len(b))
-		buf.Write(b)
+		writeOptHeader(delta, len)
+		o.writeData(buf)
 	}
 }
 
@@ -686,6 +732,94 @@ func writeOpts(buf io.Writer, opts options) {
 		writeOpt(o, buf, int(o.ID)-prev)
 		prev = int(o.ID)
 	}
+}
+
+func lengthOpt(o option, delta int) int {
+	/*
+	     0   1   2   3   4   5   6   7
+	   +---------------+---------------+
+	   |               |               |
+	   |  Option Delta | Option Length |   1 byte
+	   |               |               |
+	   +---------------+---------------+
+	   \                               \
+	   /         Option Delta          /   0-2 bytes
+	   \          (extended)           \
+	   +-------------------------------+
+	   \                               \
+	   /         Option Length         /   0-2 bytes
+	   \          (extended)           \
+	   +-------------------------------+
+	   \                               \
+	   /                               /
+	   \                               \
+	   /         Option Value          /   0 or more bytes
+	   \                               \
+	   /                               /
+	   \                               \
+	   +-------------------------------+
+
+	   See parseExtOption(), extendOption()
+	   and writeOptionHeader() below for implementation details
+	*/
+
+	extendOpt := func(opt int) (int, int) {
+		ext := 0
+		if opt >= extoptByteAddend {
+			if opt >= extoptWordAddend {
+				ext = opt - extoptWordAddend
+				opt = extoptWordCode
+			} else {
+				ext = opt - extoptByteAddend
+				opt = extoptByteCode
+			}
+		}
+		return opt, ext
+	}
+
+	lengthOptHeader := func(delta, length int) int {
+		d, dx := extendOpt(delta)
+		l, lx := extendOpt(length)
+
+		//buf.Write([]byte{byte(d<<4) | byte(l)})
+		res := 1
+
+		writeExt := func(opt, ext int) int {
+			switch opt {
+			case extoptByteCode:
+				//tmp[0] = byte(ext)
+				//buf.Write(tmp[:1])
+				return 1
+			case extoptWordCode:
+				//binary.BigEndian.PutUint16(tmp[:], uint16(ext))
+				//buf.Write(tmp[:])
+				return 2
+			}
+			return 0
+		}
+
+		res = res + writeExt(d, dx)
+		res = res + writeExt(l, lx)
+		return res
+	}
+
+	res, err := o.toBytesLength()
+	if err != nil {
+		log.Fatal(err)
+	} else {
+		res = res + lengthOptHeader(delta, res)
+	}
+	return res
+}
+
+func bytesLengthOpts(opts options) int {
+	length := 0
+	prev := 0
+	for _, o := range opts {
+		length = length + lengthOpt(o, int(o.ID)-prev)
+		prev = int(o.ID)
+	}
+	return length
 }
 
 // parseBody extracts the options and payload from a byte slice.  The supplied

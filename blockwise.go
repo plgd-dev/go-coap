@@ -12,31 +12,46 @@ const (
 	blockWiseDebug = false
 )
 
-type BlockSzx uint8
+// BlockWiseSzx enum representation for szx
+type BlockWiseSzx uint8
 
 const (
-	BlockSzx16   BlockSzx = 0
-	BlockSzx32   BlockSzx = 1
-	BlockSzx64   BlockSzx = 2
-	BlockSzx128  BlockSzx = 3
-	BlockSzx256  BlockSzx = 4
-	BlockSzx512  BlockSzx = 5
-	BlockSzx1024 BlockSzx = 6
-	BlockSzxBERT BlockSzx = 7
+	//BlockWiseSzx16 block of size 16bytes
+	BlockWiseSzx16 BlockWiseSzx = 0
+	//BlockWiseSzx32 block of size 32bytes
+	BlockWiseSzx32 BlockWiseSzx = 1
+	//BlockWiseSzx64 block of size 64bytes
+	BlockWiseSzx64 BlockWiseSzx = 2
+	//BlockWiseSzx128 block of size 128bytes
+	BlockWiseSzx128 BlockWiseSzx = 3
+	//BlockWiseSzx256 block of size 256bytes
+	BlockWiseSzx256 BlockWiseSzx = 4
+	//BlockWiseSzx512 block of size 512bytes
+	BlockWiseSzx512 BlockWiseSzx = 5
+	//BlockWiseSzx1024 block of size 1024bytes
+	BlockWiseSzx1024 BlockWiseSzx = 6
+	//BlockWiseSzxBERT block of size n*1024bytes
+	BlockWiseSzxBERT BlockWiseSzx = 7
+
+	//BlockWiseSzxCount count of block enums
+	BlockWiseSzxCount BlockWiseSzx = 8
 )
 
-var SZXVal = [8]int{
-	0: 16,
-	1: 32,
-	2: 64,
-	3: 128,
-	4: 256,
-	5: 512,
-	6: 1024,
-	7: 1024,
+var szxToBytes = [BlockWiseSzxCount]int{
+	BlockWiseSzx16:   16,
+	BlockWiseSzx32:   32,
+	BlockWiseSzx64:   64,
+	BlockWiseSzx128:  128,
+	BlockWiseSzx256:  256,
+	BlockWiseSzx512:  512,
+	BlockWiseSzx1024: 1024,
+	BlockWiseSzxBERT: 1024, //for calculate size of block
 }
 
-func MarshalBlockOption(szx BlockSzx, blockNumber uint, moreBlocksFollowing bool) (uint32, error) {
+func MarshalBlockOption(szx BlockWiseSzx, blockNumber uint, moreBlocksFollowing bool) (uint32, error) {
+	if szx >= BlockWiseSzxCount {
+		return 0, ErrInvalidBlockWiseSzx
+	}
 	if blockNumber > maxBlockNumber {
 		return 0, ErrBlockNumberExceedLimit
 	}
@@ -50,13 +65,13 @@ func MarshalBlockOption(szx BlockSzx, blockNumber uint, moreBlocksFollowing bool
 	return blockVal, nil
 }
 
-func UnmarshalBlockOption(blockVal uint32) (szx BlockSzx, blockNumber uint, moreBlocksFollowing bool, err error) {
+func UnmarshalBlockOption(blockVal uint32) (szx BlockWiseSzx, blockNumber uint, moreBlocksFollowing bool, err error) {
 	if blockVal > 0xffffff {
 		err = ErrBlockInvalidSize
 	}
 
-	szx = BlockSzx(blockVal & 0x7) //masking for the SZX
-	if (blockVal & 0x8) != 0 {     //masking for the "M"
+	szx = BlockWiseSzx(blockVal & 0x7) //masking for the SZX
+	if (blockVal & 0x8) != 0 {         //masking for the "M"
 		moreBlocksFollowing = true
 	}
 	blockNumber = uint(blockVal) >> 4 //shifting out the SZX and M vals. leaving the block number behind
@@ -110,7 +125,7 @@ type blockWiseSender struct {
 	origin       Message
 
 	currentNum  uint
-	currentSzx  BlockSzx
+	currentSzx  BlockWiseSzx
 	currentMore bool
 }
 
@@ -128,7 +143,7 @@ func (s *blockWiseSender) sizeType() OptionID {
 	return Size1
 }
 
-func newSender(peerDrive bool, blockType OptionID, suggestedSzx BlockSzx, expectedCode COAPCode, origin Message) *blockWiseSender {
+func newSender(peerDrive bool, blockType OptionID, suggestedSzx BlockWiseSzx, expectedCode COAPCode, origin Message) *blockWiseSender {
 	return &blockWiseSender{
 		peerDrive:    peerDrive,
 		blockType:    blockType,
@@ -155,9 +170,10 @@ func (s *blockWiseSender) createReq(b *blockWiseSession) (Message, error) {
 	}
 
 	req.SetOption(s.sizeType(), len(s.origin.Payload()))
-
-	if s.origin.Payload() != nil && len(s.origin.Payload()) > b.blockWiseMaxPayloadSize(s.currentSzx) {
-		req.SetPayload(s.origin.Payload()[:b.blockWiseMaxPayloadSize(s.currentSzx)])
+	var maxPayloadSize int
+	maxPayloadSize, s.currentSzx = b.blockWiseMaxPayloadSize(s.currentSzx)
+	if s.origin.Payload() != nil && len(s.origin.Payload()) > maxPayloadSize {
+		req.SetPayload(s.origin.Payload()[:maxPayloadSize])
 		s.currentMore = true
 	} else {
 		req.SetPayload(s.origin.Payload())
@@ -201,7 +217,7 @@ func (s *blockWiseSender) processResp(b *blockWiseSession, req Message, resp Mes
 					return nil, err
 				}
 				if !b.blockWiseIsValid(szx) {
-					return nil, ErrInvalidBlockSzx
+					return nil, ErrInvalidBlockWiseSzx
 				}
 				if num == 0 {
 					resp.RemoveOption(s.sizeType())
@@ -228,10 +244,11 @@ func (s *blockWiseSender) processResp(b *blockWiseSession, req Message, resp Mes
 			return nil, err
 		}
 		if !b.blockWiseIsValid(szx) {
-			return nil, ErrInvalidBlockSzx
+			return nil, ErrInvalidBlockWiseSzx
 		}
 
-		s.currentSzx = szx
+		var maxPayloadSize int
+		maxPayloadSize, s.currentSzx = b.blockWiseMaxPayloadSize(szx)
 		if s.peerDrive {
 			s.currentNum = num
 			req.SetMessageID(resp.MessageID())
@@ -240,12 +257,16 @@ func (s *blockWiseSender) processResp(b *blockWiseSession, req Message, resp Mes
 			req.SetMessageID(GenerateMessageID())
 		}
 		startOffset := calcStartOffset(s.currentNum, szx)
-		endOffset := startOffset + b.blockWiseMaxPayloadSize(szx)
-		if endOffset > len(s.origin.Payload()) {
+		endOffset := startOffset + maxPayloadSize
+		if endOffset >= len(s.origin.Payload()) {
 			endOffset = len(s.origin.Payload())
 			s.currentMore = false
 		}
+		if startOffset > len(s.origin.Payload()) {
+			return nil, ErrBlockInvalidSize
+		}
 		req.SetPayload(s.origin.Payload()[startOffset:endOffset])
+
 		//must be unique for evey msg via UDP
 		if blockWiseDebug {
 			log.Printf("sendPayload szx=%v num=%v more=%v\n", s.currentSzx, s.currentNum, s.currentMore)
@@ -266,7 +287,7 @@ func (s *blockWiseSender) processResp(b *blockWiseSession, req Message, resp Mes
 	return nil, nil
 }
 
-func (b *blockWiseSession) sendPayload(peerDrive bool, blockType OptionID, suggestedSzx BlockSzx, expectedCode COAPCode, msg Message) (Message, error) {
+func (b *blockWiseSession) sendPayload(peerDrive bool, blockType OptionID, suggestedSzx BlockWiseSzx, expectedCode COAPCode, msg Message) (Message, error) {
 	s := newSender(peerDrive, blockType, suggestedSzx, expectedCode, msg)
 	req, err := s.createReq(b)
 	if err != nil {
@@ -319,25 +340,29 @@ func (b *blockWiseSession) Write(msg Message) error {
 	}
 }
 
-func calcNextNum(num uint, szx BlockSzx, payloadSize int) uint {
-	val := uint(payloadSize / SZXVal[szx])
-	if val > 0 && (payloadSize%SZXVal[szx] == 0) {
+func calcNextNum(num uint, szx BlockWiseSzx, payloadSize int) uint {
+	val := uint(payloadSize / szxToBytes[szx])
+	if val > 0 && (payloadSize%szxToBytes[szx] == 0) {
 		val--
 	}
 	return num + val + 1
 }
 
-func calcStartOffset(num uint, szx BlockSzx) int {
-	return int(num) * SZXVal[szx]
+func calcStartOffset(num uint, szx BlockWiseSzx) int {
+	return int(num) * szxToBytes[szx]
 }
 
-func (b *blockWiseSession) sendErrorMsg(code COAPCode, typ COAPType, token []byte, MessageID uint16) {
+func (b *blockWiseSession) sendErrorMsg(code COAPCode, typ COAPType, token []byte, MessageID uint16, err error) {
 	req := b.NewMessage(MessageParams{
 		Code:      code,
 		Type:      typ,
 		MessageID: MessageID,
 		Token:     token,
 	})
+	if err != nil {
+		req.SetOption(ContentFormat, TextPlain)
+		req.SetPayload([]byte(err.Error()))
+	}
 	b.networkSession.Write(req)
 }
 
@@ -348,7 +373,7 @@ type blockWiseReceiver struct {
 	typ          COAPType
 	origin       Message
 	blockType    OptionID
-	currentSzx   BlockSzx
+	currentSzx   BlockWiseSzx
 	nextNum      uint
 	currentMore  bool
 	payloadSize  uint32
@@ -423,7 +448,7 @@ func newReceiver(b *blockWiseSession, peerDrive bool, origin Message, resp Messa
 				return r, nil, err
 			}
 			if !b.blockWiseIsValid(szx) {
-				return r, nil, ErrInvalidBlockSzx
+				return r, nil, ErrInvalidBlockWiseSzx
 			}
 			//do we need blockWise?
 			if more == false {
@@ -454,7 +479,7 @@ func newReceiver(b *blockWiseSession, peerDrive bool, origin Message, resp Messa
 				return r, nil, err
 			}
 			if !b.blockWiseIsValid(szx) {
-				return r, nil, ErrInvalidBlockSzx
+				return r, nil, ErrInvalidBlockWiseSzx
 			}
 			if more == false {
 				origin.RemoveOption(blockType)
@@ -497,13 +522,13 @@ func (r *blockWiseReceiver) processResp(b *blockWiseSession, req Message, resp M
 			return nil, err
 		}
 		if !b.blockWiseIsValid(szx) {
-			return nil, ErrInvalidBlockSzx
+			return nil, ErrInvalidBlockWiseSzx
 		}
 		startOffset := calcStartOffset(num, szx)
 		if r.payload.Len() < startOffset {
 			return nil, ErrRequestEntityIncomplete
 		}
-		if more == true && len(resp.Payload())%SZXVal[szx] != 0 {
+		if more == true && len(resp.Payload())%szxToBytes[szx] != 0 {
 			if r.peerDrive {
 				return nil, ErrInvalidRequest
 			}
@@ -563,7 +588,7 @@ func (r *blockWiseReceiver) processResp(b *blockWiseSession, req Message, resp M
 	return nil, nil
 }
 
-func (r *blockWiseReceiver) sendError(b *blockWiseSession, code COAPCode, resp Message) {
+func (r *blockWiseReceiver) sendError(b *blockWiseSession, code COAPCode, resp Message, err error) {
 	var MessageID uint16
 	var token []byte
 	var typ COAPType
@@ -580,13 +605,13 @@ func (r *blockWiseReceiver) sendError(b *blockWiseSession, code COAPCode, resp M
 			token = r.origin.Token()
 		}
 	}
-	b.sendErrorMsg(code, typ, token, MessageID)
+	b.sendErrorMsg(code, typ, token, MessageID, err)
 }
 
 func (b *blockWiseSession) receivePayload(peerDrive bool, msg Message, resp Message, blockType OptionID, code COAPCode) (Message, error) {
 	r, resp, err := newReceiver(b, peerDrive, msg, resp, blockType, code)
 	if err != nil {
-		r.sendError(b, BadRequest, resp)
+		r.sendError(b, BadRequest, resp, err)
 		return nil, err
 	}
 	if resp != nil {
@@ -595,7 +620,7 @@ func (b *blockWiseSession) receivePayload(peerDrive bool, msg Message, resp Mess
 
 	req, err := r.createReq(b, resp)
 	if err != nil {
-		r.sendError(b, BadRequest, resp)
+		r.sendError(b, BadRequest, resp, err)
 		return nil, err
 	}
 
@@ -603,7 +628,7 @@ func (b *blockWiseSession) receivePayload(peerDrive bool, msg Message, resp Mess
 		bwResp, err := r.exchange(b, req)
 
 		if err != nil {
-			r.sendError(b, BadRequest, resp)
+			r.sendError(b, BadRequest, resp, err)
 			return nil, err
 		}
 
@@ -615,7 +640,7 @@ func (b *blockWiseSession) receivePayload(peerDrive bool, msg Message, resp Mess
 			case ErrRequestEntityIncomplete:
 				errCode = RequestEntityIncomplete
 			}
-			r.sendError(b, errCode, resp)
+			r.sendError(b, errCode, resp, err)
 			return nil, err
 		}
 
@@ -685,14 +710,14 @@ func (w *blockWiseResponseWriter) Write(msg Message) error {
 			return err
 		}
 		//BERT is supported only via TCP
-		if szx == BlockSzxBERT && !w.req.Client.networkSession.IsTCP() {
-			return ErrInvalidBlockSzx
+		if szx == BlockWiseSzxBERT && !w.req.Client.networkSession.IsTCP() {
+			return ErrInvalidBlockWiseSzx
 		}
 		suggestedSzx = szx
 	}
 
 	//resp is less them szx then just write msg without blockWise
-	if len(msg.Payload()) < SZXVal[suggestedSzx] {
+	if len(msg.Payload()) < szxToBytes[suggestedSzx] {
 		return w.responseWriter.Write(msg)
 	}
 
@@ -716,14 +741,14 @@ func (w *blockWiseNoticeWriter) Write(msg Message) error {
 			return err
 		}
 		//BERT is supported only via TCP
-		if szx == BlockSzxBERT && !w.req.Client.networkSession.IsTCP() {
-			return ErrInvalidBlockSzx
+		if szx == BlockWiseSzxBERT && !w.req.Client.networkSession.IsTCP() {
+			return ErrInvalidBlockWiseSzx
 		}
 		suggestedSzx = szx
 	}
 
 	//resp is less them szx then just write msg without blockWise
-	if len(msg.Payload()) < SZXVal[suggestedSzx] {
+	if len(msg.Payload()) < szxToBytes[suggestedSzx] {
 		return w.responseWriter.Write(msg)
 	}
 

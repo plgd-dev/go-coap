@@ -1,8 +1,8 @@
 package coap
 
 import (
-	"bytes"
 	"encoding/binary"
+	"io"
 	"sort"
 )
 
@@ -29,7 +29,7 @@ func (m *DgramMessage) SetMessageID(messageID uint16) {
 }
 
 // MarshalBinary produces the binary form of this DgramMessage.
-func (m *DgramMessage) MarshalBinary() ([]byte, error) {
+func (m *DgramMessage) MarshalBinary(buf io.Writer) error {
 	tmpbuf := []byte{0, 0}
 	binary.BigEndian.PutUint16(tmpbuf, m.MessageID())
 
@@ -47,7 +47,6 @@ func (m *DgramMessage) MarshalBinary() ([]byte, error) {
 	   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
 	*/
 
-	buf := bytes.Buffer{}
 	buf.Write([]byte{
 		(1 << 6) | (uint8(m.Type()) << 4) | uint8(0xf&len(m.MessageBase.token)),
 		byte(m.MessageBase.code),
@@ -55,12 +54,12 @@ func (m *DgramMessage) MarshalBinary() ([]byte, error) {
 	})
 
 	if len(m.MessageBase.token) > MaxTokenSize {
-		return nil, ErrInvalidTokenLen
+		return ErrInvalidTokenLen
 	}
 	buf.Write(m.MessageBase.token)
 
 	sort.Stable(&m.MessageBase.opts)
-	writeOpts(&buf, m.MessageBase.opts)
+	writeOpts(buf, m.MessageBase.opts)
 
 	if len(m.MessageBase.payload) > 0 {
 		buf.Write([]byte{0xff})
@@ -68,7 +67,7 @@ func (m *DgramMessage) MarshalBinary() ([]byte, error) {
 
 	buf.Write(m.MessageBase.payload)
 
-	return buf.Bytes(), nil
+	return nil
 }
 
 // UnmarshalBinary parses the given binary slice as a DgramMessage.

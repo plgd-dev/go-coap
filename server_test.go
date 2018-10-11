@@ -58,7 +58,7 @@ func EchoServerBadID(w ResponseWriter, r *Request) {
 	}
 }
 
-func RunLocalServerUDPWithHandler(lnet, laddr string, BlockWiseTransfer bool, BlockWiseTransferSzx BlockSzx, handler HandlerFunc) (*Server, string, chan error, error) {
+func RunLocalServerUDPWithHandler(lnet, laddr string, BlockWiseTransfer bool, BlockWiseTransferSzx BlockWiseSzx, handler HandlerFunc) (*Server, string, chan error, error) {
 	network := strings.TrimSuffix(lnet, "-mcast")
 
 	a, err := net.ResolveUDPAddr(network, laddr)
@@ -104,11 +104,11 @@ func RunLocalServerUDPWithHandler(lnet, laddr string, BlockWiseTransfer bool, Bl
 	return server, pc.LocalAddr().String(), fin, nil
 }
 
-func RunLocalUDPServer(net, laddr string, BlockWiseTransfer bool, BlockWiseTransferSzx BlockSzx) (*Server, string, chan error, error) {
+func RunLocalUDPServer(net, laddr string, BlockWiseTransfer bool, BlockWiseTransferSzx BlockWiseSzx) (*Server, string, chan error, error) {
 	return RunLocalServerUDPWithHandler(net, laddr, BlockWiseTransfer, BlockWiseTransferSzx, nil)
 }
 
-func RunLocalServerTCPWithHandler(laddr string, BlockWiseTransfer bool, BlockWiseTransferSzx BlockSzx, handler HandlerFunc) (*Server, string, chan error, error) {
+func RunLocalServerTCPWithHandler(laddr string, BlockWiseTransfer bool, BlockWiseTransferSzx BlockWiseSzx, handler HandlerFunc) (*Server, string, chan error, error) {
 	l, err := net.Listen("tcp", laddr)
 	if err != nil {
 		return nil, "", nil, err
@@ -122,7 +122,7 @@ func RunLocalServerTCPWithHandler(laddr string, BlockWiseTransfer bool, BlockWis
 		}, Handler: handler,
 		BlockWiseTransfer:    &BlockWiseTransfer,
 		BlockWiseTransferSzx: &BlockWiseTransferSzx,
-		MaxMessageSize:       ^uint16(0),
+		MaxMessageSize:       ^uint32(0),
 	}
 
 	waitLock := sync.Mutex{}
@@ -142,7 +142,7 @@ func RunLocalServerTCPWithHandler(laddr string, BlockWiseTransfer bool, BlockWis
 	return server, l.Addr().String(), fin, nil
 }
 
-func RunLocalTCPServer(laddr string, BlockWiseTransfer bool, BlockWiseTransferSzx BlockSzx) (*Server, string, chan error, error) {
+func RunLocalTCPServer(laddr string, BlockWiseTransfer bool, BlockWiseTransferSzx BlockWiseSzx) (*Server, string, chan error, error) {
 	return RunLocalServerTCPWithHandler(laddr, BlockWiseTransfer, BlockWiseTransferSzx, nil)
 }
 
@@ -179,7 +179,7 @@ func RunLocalTLSServer(laddr string, config *tls.Config) (*Server, string, chan 
 
 type clientHandler func(t *testing.T, payload []byte, co *ClientConn)
 
-func testServingTCPWithMsgWithObserver(t *testing.T, net string, BlockWiseTransfer bool, BlockWiseTransferSzx BlockSzx, payload []byte, ch clientHandler, observeFunc HandlerFunc) {
+func testServingTCPWithMsgWithObserver(t *testing.T, net string, BlockWiseTransfer bool, BlockWiseTransferSzx BlockWiseSzx, payload []byte, ch clientHandler, observeFunc HandlerFunc) {
 	HandleFunc("/test", EchoServer)
 	defer HandleRemove("/test")
 
@@ -191,6 +191,7 @@ func testServingTCPWithMsgWithObserver(t *testing.T, net string, BlockWiseTransf
 		Handler:              observeFunc,
 		BlockWiseTransfer:    &BlockWiseTransfer,
 		BlockWiseTransferSzx: &BlockWiseTransferSzx,
+		MaxMessageSize:       ^uint32(0),
 	}
 	var fin chan error
 	switch net {
@@ -255,41 +256,41 @@ func pingMsg(t *testing.T, payload []byte, co *ClientConn) {
 	}
 }
 
-func testServingTCPWithMsg(t *testing.T, net string, BlockWiseTransfer bool, BlockWiseTransferSzx BlockSzx, payload []byte, ch clientHandler) {
+func testServingTCPWithMsg(t *testing.T, net string, BlockWiseTransfer bool, BlockWiseTransferSzx BlockWiseSzx, payload []byte, ch clientHandler) {
 	testServingTCPWithMsgWithObserver(t, net, BlockWiseTransfer, BlockWiseTransferSzx, payload, ch, nil)
 }
 
 func TestServingUDP(t *testing.T) {
-	testServingTCPWithMsg(t, "udp", false, BlockSzx16, make([]byte, 128), simpleMsg)
+	testServingTCPWithMsg(t, "udp", false, BlockWiseSzx16, make([]byte, 128), simpleMsg)
 }
 
 func TestServingUDPPing(t *testing.T) {
 
-	testServingTCPWithMsg(t, "udp", false, BlockSzx16, nil, pingMsg)
+	testServingTCPWithMsg(t, "udp", false, BlockWiseSzx16, nil, pingMsg)
 }
 
 func TestServingTCPPing(t *testing.T) {
-	testServingTCPWithMsg(t, "tcp", false, BlockSzx16, nil, pingMsg)
+	testServingTCPWithMsg(t, "tcp", false, BlockWiseSzx16, nil, pingMsg)
 }
 
 func TestServingUDPBigMsg(t *testing.T) {
-	testServingTCPWithMsg(t, "udp", false, BlockSzx16, make([]byte, 1024), simpleMsg)
+	testServingTCPWithMsg(t, "udp", false, BlockWiseSzx16, make([]byte, 1024), simpleMsg)
 }
 
 func TestServingTCP(t *testing.T) {
-	testServingTCPWithMsg(t, "tcp", false, BlockSzx16, make([]byte, 128), simpleMsg)
+	testServingTCPWithMsg(t, "tcp", false, BlockWiseSzx16, make([]byte, 128), simpleMsg)
 }
 
 func TestServingTCPBigMsg(t *testing.T) {
-	testServingTCPWithMsg(t, "tcp", false, BlockSzx16, make([]byte, 10*1024*1024), simpleMsg)
+	testServingTCPWithMsg(t, "tcp", false, BlockWiseSzx16, make([]byte, 10*1024*1024), simpleMsg)
 }
 
 func TestServingTLS(t *testing.T) {
-	testServingTCPWithMsg(t, "tcp-tls", false, BlockSzx16, make([]byte, 128), simpleMsg)
+	testServingTCPWithMsg(t, "tcp-tls", false, BlockWiseSzx16, make([]byte, 128), simpleMsg)
 }
 
 func TestServingTLSBigMsg(t *testing.T) {
-	testServingTCPWithMsg(t, "tcp-tls", false, BlockSzx16, make([]byte, 10*1024*1024), simpleMsg)
+	testServingTCPWithMsg(t, "tcp-tls", false, BlockWiseSzx16, make([]byte, 10*1024*1024), simpleMsg)
 }
 
 func ChallegingServer(w ResponseWriter, r *Request) {
@@ -350,25 +351,25 @@ func simpleChallengingPathMsg(t *testing.T, payload []byte, co *ClientConn, path
 func TestServingChallengingClient(t *testing.T) {
 	HandleFunc("/challenging", ChallegingServer)
 	defer HandleRemove("/challenging")
-	testServingTCPWithMsg(t, "udp", false, BlockSzx16, make([]byte, 128), simpleChallengingMsg)
+	testServingTCPWithMsg(t, "udp", false, BlockWiseSzx16, make([]byte, 128), simpleChallengingMsg)
 }
 
 func TestServingChallengingClientTCP(t *testing.T) {
 	HandleFunc("/challenging", ChallegingServer)
 	defer HandleRemove("/challenging")
-	testServingTCPWithMsg(t, "tcp", false, BlockSzx16, make([]byte, 128), simpleChallengingMsg)
+	testServingTCPWithMsg(t, "tcp", false, BlockWiseSzx16, make([]byte, 128), simpleChallengingMsg)
 }
 
 func TestServingChallengingClientTLS(t *testing.T) {
 	HandleFunc("/challenging", ChallegingServer)
 	defer HandleRemove("/challenging")
-	testServingTCPWithMsg(t, "tcp-tls", false, BlockSzx16, make([]byte, 128), simpleChallengingMsg)
+	testServingTCPWithMsg(t, "tcp-tls", false, BlockWiseSzx16, make([]byte, 128), simpleChallengingMsg)
 }
 
 func TestServingChallengingTimeoutClient(t *testing.T) {
 	HandleFunc("/challengingTimeout", ChallegingServerTimeout)
 	defer HandleRemove("/challengingTimeout")
-	testServingTCPWithMsgWithObserver(t, "udp", false, BlockSzx16, make([]byte, 128), simpleChallengingTimeoutMsg, func(w ResponseWriter, r *Request) {
+	testServingTCPWithMsgWithObserver(t, "udp", false, BlockWiseSzx16, make([]byte, 128), simpleChallengingTimeoutMsg, func(w ResponseWriter, r *Request) {
 		//for timeout
 		time.Sleep(2 * time.Second)
 	})
@@ -377,7 +378,7 @@ func TestServingChallengingTimeoutClient(t *testing.T) {
 func TestServingChallengingTimeoutClientTCP(t *testing.T) {
 	HandleFunc("/challengingTimeout", ChallegingServerTimeout)
 	defer HandleRemove("/challengingTimeout")
-	testServingTCPWithMsgWithObserver(t, "tcp", false, BlockSzx16, make([]byte, 128), simpleChallengingTimeoutMsg, func(w ResponseWriter, r *Request) {
+	testServingTCPWithMsgWithObserver(t, "tcp", false, BlockWiseSzx16, make([]byte, 128), simpleChallengingTimeoutMsg, func(w ResponseWriter, r *Request) {
 		//for timeout
 		time.Sleep(2 * time.Second)
 	})
@@ -386,13 +387,13 @@ func TestServingChallengingTimeoutClientTCP(t *testing.T) {
 func TestServingChallengingTimeoutClientTLS(t *testing.T) {
 	HandleFunc("/challengingTimeout", ChallegingServerTimeout)
 	defer HandleRemove("/challengingTimeout")
-	testServingTCPWithMsgWithObserver(t, "tcp-tls", false, BlockSzx16, make([]byte, 128), simpleChallengingTimeoutMsg, func(w ResponseWriter, r *Request) {
+	testServingTCPWithMsgWithObserver(t, "tcp-tls", false, BlockWiseSzx16, make([]byte, 128), simpleChallengingTimeoutMsg, func(w ResponseWriter, r *Request) {
 		//for timeout
 		time.Sleep(2 * time.Second)
 	})
 }
 
-func testServingMCast(t *testing.T, lnet, laddr string, BlockWiseTransfer bool, BlockWiseTransferSzx BlockSzx, payloadLen int) {
+func testServingMCast(t *testing.T, lnet, laddr string, BlockWiseTransfer bool, BlockWiseTransferSzx BlockWiseSzx, payloadLen int) {
 	addrMcast := laddr
 	ansArrived := make(chan bool)
 
@@ -464,11 +465,11 @@ func testServingMCast(t *testing.T, lnet, laddr string, BlockWiseTransfer bool, 
 }
 
 func TestServingIPv4MCast(t *testing.T) {
-	testServingMCast(t, "udp4-mcast", "225.0.1.187:11111", false, BlockSzx16, 16)
+	testServingMCast(t, "udp4-mcast", "225.0.1.187:11111", false, BlockWiseSzx16, 16)
 }
 
 func TestServingIPv6MCast(t *testing.T) {
-	testServingMCast(t, "udp6-mcast", "[ff03::158]:11111", false, BlockSzx16, 16)
+	testServingMCast(t, "udp6-mcast", "[ff03::158]:11111", false, BlockWiseSzx16, 16)
 }
 
 type dataReader struct {
@@ -495,7 +496,7 @@ func BenchmarkServe(b *testing.B) {
 	HandleFunc("/test", EchoServer)
 	defer HandleRemove("/test")
 
-	s, addrstr, fin, err := RunLocalUDPServer("udp", ":0", false, BlockSzx16)
+	s, addrstr, fin, err := RunLocalUDPServer("udp", ":0", false, BlockWiseSzx16)
 	if err != nil {
 		b.Fatalf("unable to run test server: %v", err)
 	}
@@ -525,7 +526,7 @@ func BenchmarkServeBlockWise(b *testing.B) {
 	HandleFunc("/test", EchoServer)
 	defer HandleRemove("/test")
 
-	s, addrstr, fin, err := RunLocalUDPServer("udp", ":0", true, BlockSzx1024)
+	s, addrstr, fin, err := RunLocalUDPServer("udp", ":0", true, BlockWiseSzx1024)
 	if err != nil {
 		b.Fatalf("unable to run test server: %v", err)
 	}
@@ -540,7 +541,7 @@ func BenchmarkServeBlockWise(b *testing.B) {
 	}
 	defer co.Close()
 
-	data := make([]byte, 65000)
+	data := make([]byte, ^uint16(0))
 	b.StartTimer()
 	for i := uint32(0); i < uint32(b.N); i++ {
 		_, err := co.Post("/test", TextPlain, &dataReader{data: data})
@@ -555,7 +556,7 @@ func BenchmarkServeTCP(b *testing.B) {
 	HandleFunc("/test", EchoServer)
 	defer HandleRemove("/test")
 
-	s, addrstr, fin, err := RunLocalTCPServer(":0", false, BlockSzx16)
+	s, addrstr, fin, err := RunLocalTCPServer(":0", false, BlockWiseSzx16)
 	if err != nil {
 		b.Fatalf("unable to run test server: %v", err)
 	}
@@ -570,7 +571,7 @@ func BenchmarkServeTCP(b *testing.B) {
 	}
 	defer co.Close()
 
-	data := make([]byte, 128)
+	data := make([]byte, ^uint16(0))
 	b.StartTimer()
 	for i := uint32(0); i < uint32(b.N); i++ {
 		_, err := co.Post("/test", TextPlain, &dataReader{data: data})
@@ -586,7 +587,7 @@ func BenchmarkServeTCPBlockwise(b *testing.B) {
 	defer HandleRemove("/test")
 
 	BlockWiseTransfer := true
-	BlockWiseTransferSzx := BlockSzx1024
+	BlockWiseTransferSzx := BlockWiseSzxBERT
 
 	s, addrstr, fin, err := RunLocalTCPServer(":0", BlockWiseTransfer, BlockWiseTransferSzx)
 	if err != nil {
@@ -601,7 +602,7 @@ func BenchmarkServeTCPBlockwise(b *testing.B) {
 		Net:                  "tcp",
 		BlockWiseTransfer:    &BlockWiseTransfer,
 		BlockWiseTransferSzx: &BlockWiseTransferSzx,
-		MaxMessageSize:       65000,
+		MaxMessageSize:       ^uint32(0),
 	}
 	co, err := client.Dial(addrstr)
 	if err != nil {
@@ -609,7 +610,7 @@ func BenchmarkServeTCPBlockwise(b *testing.B) {
 	}
 	defer co.Close()
 
-	data := make([]byte, 128)
+	data := make([]byte, ^uint16(0))
 	b.StartTimer()
 	for i := uint32(0); i < uint32(b.N); i++ {
 		_, err := co.Post("/test", TextPlain, &dataReader{data: data})
@@ -624,7 +625,7 @@ func benchmarkServeTCPStreamWithMsg(b *testing.B, req *TcpMessage) {
 	HandleFunc("/test", EchoServer)
 	defer HandleRemove("/test")
 
-	s, addrstr, fin, err := RunLocalTCPServer(":0", false, BlockSzx16)
+	s, addrstr, fin, err := RunLocalTCPServer(":0", false, BlockWiseSzx16)
 	if err != nil {
 		b.Fatalf("unable to run test server: %v", err)
 	}

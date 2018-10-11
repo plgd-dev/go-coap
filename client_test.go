@@ -40,7 +40,7 @@ func periodicTransmitter(w ResponseWriter, r *Request) {
 	}()
 }
 
-func testServingObservation(t *testing.T, net string, addrstr string, BlockWiseTransfer bool, BlockWiseTransferSzx BlockSzx) {
+func testServingObservation(t *testing.T, net string, addrstr string, BlockWiseTransfer bool, BlockWiseTransferSzx BlockWiseSzx) {
 	sync := make(chan bool)
 
 	client := &Client{
@@ -80,7 +80,7 @@ func testServingObservation(t *testing.T, net string, addrstr string, BlockWiseT
 }
 
 func TestServingUDPObservation(t *testing.T) {
-	s, addrstr, fin, err := RunLocalServerUDPWithHandler("udp", ":0", false, BlockSzx16, periodicTransmitter)
+	s, addrstr, fin, err := RunLocalServerUDPWithHandler("udp", ":0", false, BlockWiseSzx16, periodicTransmitter)
 	if err != nil {
 		t.Fatalf("unable to run test server: %v", err)
 	}
@@ -88,11 +88,11 @@ func TestServingUDPObservation(t *testing.T) {
 		s.Shutdown()
 		<-fin
 	}()
-	testServingObservation(t, "udp", addrstr, false, BlockSzx16)
+	testServingObservation(t, "udp", addrstr, false, BlockWiseSzx16)
 }
 
 func TestServingTCPObservation(t *testing.T) {
-	s, addrstr, fin, err := RunLocalServerTCPWithHandler(":0", false, BlockSzx16, periodicTransmitter)
+	s, addrstr, fin, err := RunLocalServerTCPWithHandler(":0", false, BlockWiseSzx16, periodicTransmitter)
 	if err != nil {
 		t.Fatalf("unable to run test server: %v", err)
 	}
@@ -100,10 +100,10 @@ func TestServingTCPObservation(t *testing.T) {
 		s.Shutdown()
 		<-fin
 	}()
-	testServingObservation(t, "tcp", addrstr, false, BlockSzx16)
+	testServingObservation(t, "tcp", addrstr, false, BlockWiseSzx16)
 }
 
-func testServingMCastByClient(t *testing.T, lnet, laddr string, BlockWiseTransfer bool, BlockWiseTransferSzx BlockSzx, ifis []net.Interface) {
+func testServingMCastByClient(t *testing.T, lnet, laddr string, BlockWiseTransfer bool, BlockWiseTransferSzx BlockWiseSzx, ifis []net.Interface) {
 	payload := []byte("mcast payload")
 	addrMcast := laddr
 	ansArrived := make(chan bool)
@@ -160,11 +160,11 @@ func testServingMCastByClient(t *testing.T, lnet, laddr string, BlockWiseTransfe
 }
 
 func TestServingIPv4MCastByClient(t *testing.T) {
-	testServingMCastByClient(t, "udp4-mcast", "225.0.1.187:11111", false, BlockSzx16, []net.Interface{})
+	testServingMCastByClient(t, "udp4-mcast", "225.0.1.187:11111", false, BlockWiseSzx16, []net.Interface{})
 }
 
 func TestServingIPv6MCastByClient(t *testing.T) {
-	testServingMCastByClient(t, "udp6-mcast", "[ff03::158]:11111", false, BlockSzx16, []net.Interface{})
+	testServingMCastByClient(t, "udp6-mcast", "[ff03::158]:11111", false, BlockWiseSzx16, []net.Interface{})
 }
 
 func TestServingIPv4AllInterfacesMCastByClient(t *testing.T) {
@@ -172,7 +172,7 @@ func TestServingIPv4AllInterfacesMCastByClient(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unable to get interfaces: %v", err)
 	}
-	testServingMCastByClient(t, "udp4-mcast", "225.0.1.187:11111", false, BlockSzx16, ifis)
+	testServingMCastByClient(t, "udp4-mcast", "225.0.1.187:11111", false, BlockWiseSzx16, ifis)
 }
 
 func TestServingIPv6AllInterfacesMCastByClient(t *testing.T) {
@@ -180,11 +180,11 @@ func TestServingIPv6AllInterfacesMCastByClient(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unable to get interfaces: %v", err)
 	}
-	testServingMCastByClient(t, "udp6-mcast", "[ff03::158]:11111", false, BlockSzx16, ifis)
+	testServingMCastByClient(t, "udp6-mcast", "[ff03::158]:11111", false, BlockWiseSzx16, ifis)
 }
 
 func setupServer(t *testing.T) (string, error) {
-	_, addr, _, err := RunLocalServerUDPWithHandler("udp", ":0", true, BlockSzx1024, func(w ResponseWriter, r *Request) {
+	_, addr, _, err := RunLocalServerUDPWithHandler("udp", ":0", true, BlockWiseSzx1024, func(w ResponseWriter, r *Request) {
 		msg := r.Client.NewMessage(MessageParams{
 			Type:      Acknowledgement,
 			Code:      Content,
@@ -213,7 +213,7 @@ func TestServingUDPGet(t *testing.T) {
 	}
 
 	BlockWiseTransfer := true
-	BlockWiseTransferSzx := BlockSzx16
+	BlockWiseTransferSzx := BlockWiseSzx16
 	c := Client{Net: "udp", BlockWiseTransfer: &BlockWiseTransfer, BlockWiseTransferSzx: &BlockWiseTransferSzx}
 	con, err := c.Dial(addr)
 	if err != nil {
@@ -232,7 +232,7 @@ func TestServingUDPPost(t *testing.T) {
 	}
 
 	BlockWiseTransfer := true
-	BlockWiseTransferSzx := BlockSzx1024
+	BlockWiseTransferSzx := BlockWiseSzx1024
 	c := Client{Net: "udp", BlockWiseTransfer: &BlockWiseTransfer, BlockWiseTransferSzx: &BlockWiseTransferSzx}
 	con, err := c.Dial(addr)
 	if err != nil {
@@ -252,7 +252,7 @@ func TestServingUDPPut(t *testing.T) {
 	}
 
 	BlockWiseTransfer := true
-	BlockWiseTransferSzx := BlockSzx1024
+	BlockWiseTransferSzx := BlockWiseSzx1024
 	c := Client{Net: "udp", BlockWiseTransfer: &BlockWiseTransfer, BlockWiseTransferSzx: &BlockWiseTransferSzx}
 	con, err := c.Dial(addr)
 	if err != nil {
@@ -272,7 +272,7 @@ func TestServingUDPDelete(t *testing.T) {
 	}
 
 	BlockWiseTransfer := true
-	BlockWiseTransferSzx := BlockSzx1024
+	BlockWiseTransferSzx := BlockWiseSzx1024
 	c := Client{Net: "udp", BlockWiseTransfer: &BlockWiseTransfer, BlockWiseTransferSzx: &BlockWiseTransferSzx}
 	con, err := c.Dial(addr)
 	if err != nil {
@@ -285,7 +285,7 @@ func TestServingUDPDelete(t *testing.T) {
 }
 
 func TestServingUDPObserve(t *testing.T) {
-	_, addr, _, err := RunLocalServerUDPWithHandler("udp", ":0", true, BlockSzx16, func(w ResponseWriter, r *Request) {
+	_, addr, _, err := RunLocalServerUDPWithHandler("udp", ":0", true, BlockWiseSzx16, func(w ResponseWriter, r *Request) {
 		msg := r.Client.NewMessage(MessageParams{
 			Type:      Acknowledgement,
 			Code:      Content,
@@ -309,7 +309,7 @@ func TestServingUDPObserve(t *testing.T) {
 	}
 
 	BlockWiseTransfer := true
-	BlockWiseTransferSzx := BlockSzx1024
+	BlockWiseTransferSzx := BlockWiseSzx1024
 	c := Client{Net: "udp", BlockWiseTransfer: &BlockWiseTransfer, BlockWiseTransferSzx: &BlockWiseTransferSzx}
 	con, err := c.Dial(addr)
 	if err != nil {

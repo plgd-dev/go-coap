@@ -16,7 +16,7 @@ type MulticastClientConn struct {
 // A MulticastClient defines parameters for a COAP client.
 type MulticastClient struct {
 	Net            string        // "udp" / "udp4" / "udp6"
-	MaxMessageSize uint16        // Max message size that could be received from peer. If not set it defaults to 1152 B.
+	MaxMessageSize uint32        // Max message size that could be received from peer. If not set it defaults to 1152 B.
 	DialTimeout    time.Duration // set Timeout for dialer
 	ReadTimeout    time.Duration // net.ClientConn.SetReadTimeout value for connections, defaults to 1 hour - overridden by Timeout when that value is non-zero
 	WriteTimeout   time.Duration // net.ClientConn.SetWriteTimeout value for connections, defaults to 1 hour - overridden by Timeout when that value is non-zero
@@ -25,8 +25,8 @@ type MulticastClient struct {
 	Handler              HandlerFunc     // default handler for handling messages from server
 	NotifySessionEndFunc func(err error) // if NotifySessionEndFunc is set it is called when TCP/UDP session was ended.
 
-	BlockWiseTransfer    *bool     // Use blockWise transfer for transfer payload (default for UDP it's enabled, for TCP it's disable)
-	BlockWiseTransferSzx *BlockSzx // Set maximal block size of payload that will be send in fragment
+	BlockWiseTransfer    *bool         // Use blockWise transfer for transfer payload (default for UDP it's enabled, for TCP it's disable)
+	BlockWiseTransferSzx *BlockWiseSzx // Set maximal block size of payload that will be send in fragment
 
 	multicastHandler *TokenHandler
 }

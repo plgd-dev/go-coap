@@ -112,9 +112,9 @@ type Server struct {
 	Conn net.Conn
 	// Handler to invoke, COAP.DefaultServeMux if nil.
 	Handler Handler
-	// Max message size that could be received from peer. If not set
+	// Max message size that could be received from peer. Min 16bytes. If not set
 	// it defaults to 1152 B.
-	MaxMessageSize uint16
+	MaxMessageSize uint32
 	// The net.Conn.SetReadTimeout value for new connections, defaults to 1hour.
 	ReadTimeout time.Duration
 	// The net.Conn.SetWriteTimeout value for new connections, defaults to 1hour.
@@ -136,7 +136,7 @@ type Server struct {
 	// Use blockWise transfer for transfer payload (default for UDP it's enabled, for TCP it's disable)
 	BlockWiseTransfer *bool
 	// Set maximal block size of payload that will be send in fragment
-	BlockWiseTransferSzx *BlockSzx
+	BlockWiseTransferSzx *BlockWiseSzx
 
 	TCPReadBufferSize  int
 	TCPWriteBufferSize int
@@ -275,9 +275,6 @@ func (srv *Server) ListenAndServe() error {
 }
 
 func (srv *Server) initServeUDP(conn *net.UDPConn) error {
-	if srv.MaxMessageSize == 0 {
-		srv.MaxMessageSize = maxMessageSize
-	}
 	srv.lock.Lock()
 	srv.started = true
 	srv.lock.Unlock()
@@ -306,6 +303,13 @@ func (srv *Server) ActivateAndServe() error {
 
 	pConn := srv.Conn
 	l := srv.Listener
+
+	if srv.MaxMessageSize == 0 {
+		srv.MaxMessageSize = maxMessageSize
+	}
+	if srv.MaxMessageSize < uint32(szxToBytes[BlockWiseSzx16]) {
+		return ErrInvalidMaxMesssageSizeParameter
+	}
 
 	srv.sessionUDPMap = make(map[string]networkSession)
 
@@ -517,8 +521,9 @@ func (srv *Server) serveUDP(conn *net.UDPConn) error {
 	// deadline is not used here
 
 	connUDP := newConnectionUDP(conn, srv).(*connUDP)
-	m := make([]byte, srv.MaxMessageSize)
+
 	for {
+		m := make([]byte, ^uint16(0))
 		srv.lock.RLock()
 		if !srv.started {
 			srv.lock.RUnlock()
