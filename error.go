@@ -44,8 +44,11 @@ const ErrMessageInvalidVersion = Error("invalid version of Message")
 // ErrServerAlreadyStarted server already started
 const ErrServerAlreadyStarted = Error("server already started")
 
-// ErrInvalidServerNetParameter invalid .Net parameter
+// ErrInvalidNetParameter invalid .Net parameter
 const ErrInvalidNetParameter = Error("invalid .Net parameter")
+
+// ErrInvalidMaxMesssageSizeParameter invalid .MaxMessageSize parameter
+const ErrInvalidMaxMesssageSizeParameter = Error("invalid .MaxMessageSize parameter")
 
 // ErrInvalidServerConnParameter invalid Server.Conn parameter
 const ErrInvalidServerConnParameter = Error("invalid Server.Conn parameter")
@@ -65,22 +68,29 @@ const ErrInvalidResponse = Error("invalid response")
 // ErrNotSupported invalid response received for certain token
 const ErrNotSupported = Error("not supported")
 
+// ErrBlockNumberExceedLimit block number exceed limit 1,048,576
 const ErrBlockNumberExceedLimit = Error("block number exceed limit 1,048,576")
 
+// ErrBlockInvalidSize block has invalid size
 const ErrBlockInvalidSize = Error("block has invalid size")
 
+// ErrInvalidOptionBlock2 message has invalid value of Block2
 const ErrInvalidOptionBlock2 = Error("message has invalid value of Block2")
 
+// ErrInvalidOptionBlock1 message has invalid value of Block1
 const ErrInvalidOptionBlock1 = Error("message has invalid value of Block1")
 
+// ErrInvalidReponseCode response code has invalid value
 const ErrInvalidReponseCode = Error("response code has invalid value")
 
+// ErrInvalidPayloadSize invalid payload size
 const ErrInvalidPayloadSize = Error("invalid payload size")
 
-const ErrInvalidBlockSzx = Error("invalid block-wise transfer szx")
+// ErrInvalidBlockWiseSzx invalid block-wise transfer szx
+const ErrInvalidBlockWiseSzx = Error("invalid block-wise transfer szx")
 
+// ErrRequestEntityIncomplete payload comes in bad order
 const ErrRequestEntityIncomplete = Error("payload comes in bad order")
 
+// ErrInvalidRequest invalid requests
 const ErrInvalidRequest = Error("invalid request")
-
-const ErrInvalidPayload = Error("invalid payload")

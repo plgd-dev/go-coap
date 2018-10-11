@@ -197,6 +197,7 @@ func (cc *ClientCommander) Observe(path string, observeFunc func(req *Request)) 
 		client:    cc,
 	}
 	err = cc.networkSession.TokenHandler().Add(req.Token(), func(w ResponseWriter, r *Request) {
+		var err error
 		needGet := false
 		resp := r.Msg
 		if r.Msg.Option(Size2) != nil {
@@ -216,7 +217,7 @@ func (cc *ClientCommander) Observe(path string, observeFunc func(req *Request)) 
 		}
 
 		if needGet {
-			resp, err = cc.Get(path)
+			resp, err = r.Client.Get(path)
 			if err != nil {
 				return
 			}
@@ -251,7 +252,7 @@ func (cc *ClientCommander) Observe(path string, observeFunc func(req *Request)) 
 	if err != nil {
 		return nil, err
 	}
-	err = cc.networkSession.Write(req)
+	err = cc.Write(req)
 	if err != nil {
 		cc.networkSession.TokenHandler().Remove(o.token)
 		return nil, err

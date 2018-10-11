@@ -56,18 +56,18 @@ type networkSession interface {
 	// BlockWiseTransferEnabled
 	blockWiseEnabled() bool
 	// BlockWiseTransferSzx
-	blockWiseSzx() BlockSzx
+	blockWiseSzx() BlockWiseSzx
 	// MaxPayloadSize
-	blockWiseMaxPayloadSize(peer BlockSzx) int
+	blockWiseMaxPayloadSize(peer BlockWiseSzx) (int, BlockWiseSzx)
 
-	blockWiseIsValid(szx BlockSzx) bool
+	blockWiseIsValid(szx BlockWiseSzx) bool
 }
 
 // NewSessionUDP create new session for UDP connection
 func newSessionUDP(connection Conn, srv *Server, sessionUDPData *SessionUDPData) (networkSession, error) {
 
 	BlockWiseTransfer := true
-	BlockWiseTransferSzx := BlockSzx1024
+	BlockWiseTransferSzx := BlockWiseSzx1024
 	if srv.BlockWiseTransfer != nil {
 		BlockWiseTransfer = *srv.BlockWiseTransfer
 	}
@@ -75,8 +75,8 @@ func newSessionUDP(connection Conn, srv *Server, sessionUDPData *SessionUDPData)
 		BlockWiseTransferSzx = *srv.BlockWiseTransferSzx
 	}
 
-	if BlockWiseTransfer && BlockWiseTransferSzx == BlockSzxBERT {
-		return nil, ErrInvalidBlockSzx
+	if BlockWiseTransfer && BlockWiseTransferSzx == BlockWiseSzxBERT {
+		return nil, ErrInvalidBlockWiseSzx
 	}
 
 	s := &sessionUDP{
@@ -87,7 +87,7 @@ func newSessionUDP(connection Conn, srv *Server, sessionUDPData *SessionUDPData)
 			writeDeadline:        30 * time.Second,
 			handler:              &TokenHandler{tokenHandlers: make(map[[MaxTokenSize]byte]HandlerFunc)},
 			blockWiseTransfer:    BlockWiseTransfer,
-			blockWiseTransferSzx: BlockWiseTransferSzx,
+			blockWiseTransferSzx: uint32(BlockWiseTransferSzx),
 		},
 		sessionUDPData: sessionUDPData,
 		mapPairs:       make(map[[MaxTokenSize]byte]map[uint16](*sessionResp)),
@@ -98,7 +98,7 @@ func newSessionUDP(connection Conn, srv *Server, sessionUDPData *SessionUDPData)
 // newSessionTCP create new session for TCP connection
 func newSessionTCP(connection Conn, srv *Server) (networkSession, error) {
 	BlockWiseTransfer := false
-	BlockWiseTransferSzx := BlockSzxBERT
+	BlockWiseTransferSzx := BlockWiseSzxBERT
 	if srv.BlockWiseTransfer != nil {
 		BlockWiseTransfer = *srv.BlockWiseTransfer
 	}
@@ -115,7 +115,7 @@ func newSessionTCP(connection Conn, srv *Server) (networkSession, error) {
 			writeDeadline:        30 * time.Second,
 			handler:              &TokenHandler{tokenHandlers: make(map[[MaxTokenSize]byte]HandlerFunc)},
 			blockWiseTransfer:    BlockWiseTransfer,
-			blockWiseTransferSzx: BlockWiseTransferSzx,
+			blockWiseTransferSzx: uint32(BlockWiseTransferSzx),
 		},
 	}
 
@@ -138,7 +138,7 @@ type sessionBase struct {
 	handler       *TokenHandler
 
 	blockWiseTransfer    bool
-	blockWiseTransferSzx BlockSzx
+	blockWiseTransferSzx uint32 //BlockWiseSzx
 }
 
 type sessionUDP struct {
@@ -204,33 +204,39 @@ func (s *sessionTCP) blockWiseEnabled() bool {
 	return s.blockWiseTransfer /*&& atomic.LoadUint32(&s.peerBlockWiseTransfer) != 0*/
 }
 
-func (s *sessionBase) blockWiseSzx() BlockSzx {
-	return s.blockWiseTransferSzx
+func (s *sessionBase) blockWiseSzx() BlockWiseSzx {
+	return BlockWiseSzx(atomic.LoadUint32(&s.blockWiseTransferSzx))
 }
 
-func (s *sessionBase) blockWiseMaxPayloadSize(peer BlockSzx) int {
-	if peer < s.blockWiseTransferSzx {
-		return SZXVal[peer]
+func (s *sessionBase) setBlockWiseSzx(szx BlockWiseSzx) {
+	atomic.StoreUint32(&s.blockWiseTransferSzx, uint32(szx))
+}
+
+func (s *sessionBase) blockWiseMaxPayloadSize(peer BlockWiseSzx) (int, BlockWiseSzx) {
+	szx := s.blockWiseSzx()
+	if peer < szx {
+		return szxToBytes[peer], peer
 	}
-	return SZXVal[s.blockWiseTransferSzx]
+	return szxToBytes[szx], szx
 }
 
-func (s *sessionTCP) blockWiseMaxPayloadSize(peer BlockSzx) int {
-	if s.blockWiseTransferSzx == BlockSzxBERT && peer == BlockSzxBERT {
+func (s *sessionTCP) blockWiseMaxPayloadSize(peer BlockWiseSzx) (int, BlockWiseSzx) {
+	szx := s.blockWiseSzx()
+	if szx == BlockWiseSzxBERT && peer == BlockWiseSzxBERT {
 		m := atomic.LoadUint32(&s.peerMaxMessageSize)
 		if m == 0 {
 			m = uint32(s.srv.MaxMessageSize)
 		}
-		return int(m - (m % 1024))
+		return int(m - (m % 1024)), BlockWiseSzxBERT
 	}
 	return s.sessionBase.blockWiseMaxPayloadSize(peer)
 }
 
-func (s *sessionUDP) blockWiseIsValid(szx BlockSzx) bool {
-	return szx <= BlockSzx1024
+func (s *sessionUDP) blockWiseIsValid(szx BlockWiseSzx) bool {
+	return szx <= BlockWiseSzx1024
 }
 
-func (s *sessionTCP) blockWiseIsValid(szx BlockSzx) bool {
+func (s *sessionTCP) blockWiseIsValid(szx BlockWiseSzx) bool {
 	return true
 }
 
@@ -424,30 +430,14 @@ func (s *sessionUDP) Write(m Message) error {
 }
 
 func (s *sessionTCP) writeTimeout(m Message, timeout time.Duration) error {
-	req, err := m.MarshalBinary()
-	if err != nil {
-		return err
-	}
-	peerMaxMessageSize := int(atomic.LoadUint32(&s.peerMaxMessageSize))
-	if peerMaxMessageSize != 0 && len(req) > peerMaxMessageSize {
-		//TODO blockWise transfer + BERT to device
-		return ErrMsgTooLarge
-	}
-	return s.connection.write(&writeReqTCP{writeReqBase{req: req, respChan: make(chan error, 1)}}, timeout)
+	//TODO check size of m
+	return s.connection.write(&writeReqTCP{writeReqBase{req: m, respChan: make(chan error, 1)}}, timeout)
 }
 
 // WriteMsg implements the networkSession.WriteMsg method.
 func (s *sessionUDP) writeTimeout(m Message, timeout time.Duration) error {
-	req, err := m.MarshalBinary()
-	if err != nil {
-		return err
-	}
-
-	//TODO blockWise transfer to device
-	if len(req) > int(s.srv.MaxMessageSize) {
-		return ErrMsgTooLarge
-	}
-	return s.connection.write(&writeReqUDP{writeReqBase{req: req, respChan: make(chan error, 1)}, s.sessionUDPData}, timeout)
+	//TODO check size of m
+	return s.connection.write(&writeReqUDP{writeReqBase{req: m, respChan: make(chan error, 1)}, s.sessionUDPData}, timeout)
 }
 
 func (s *sessionTCP) handlePairMsg(w ResponseWriter, r *Request) bool {
@@ -544,27 +534,23 @@ func (s *sessionTCP) handleSignals(w ResponseWriter, r *Request) bool {
 		}
 		if r.Msg.Option(BlockWiseTransfer) != nil {
 			s.setPeerBlockWiseTransfer(true)
-			switch s.blockWiseSzx() {
-			case BlockSzxBERT:
-				if SZXVal[BlockSzx1024] < int(maxmsgsize) {
-					s.sessionBase.blockWiseTransferSzx = BlockSzxBERT
-				} else {
-					for i := BlockSzx512; i > BlockSzx16; i-- {
-						if SZXVal[i] < int(maxmsgsize) {
-							s.sessionBase.blockWiseTransferSzx = i
-						}
-					}
-					s.sessionBase.blockWiseTransferSzx = BlockSzx16
+			startIter := s.blockWiseSzx()
+			if startIter == BlockWiseSzxBERT {
+				if szxToBytes[BlockWiseSzx1024] < int(maxmsgsize) {
+					s.setBlockWiseSzx(BlockWiseSzxBERT)
+					return true
 				}
-			default:
-				for i := s.blockWiseSzx(); i > BlockSzx16; i-- {
-					if SZXVal[i] < int(maxmsgsize) {
-						s.sessionBase.blockWiseTransferSzx = i
-					}
-				}
-				s.sessionBase.blockWiseTransferSzx = BlockSzx16
+				startIter = BlockWiseSzx512
 			}
+			for i := startIter; i > BlockWiseSzx16; i-- {
+				if szxToBytes[i] < int(maxmsgsize) {
+					s.setBlockWiseSzx(i)
+					return true
+				}
+			}
+			s.setBlockWiseSzx(BlockWiseSzx16)
 		}
+
 		return true
 	case Ping:
 		if r.Msg.Option(Custody) != nil {

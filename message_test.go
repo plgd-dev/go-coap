@@ -2,15 +2,9 @@ package coap
 
 import (
 	"bytes"
-	"encoding"
 	"fmt"
 	"reflect"
 	"testing"
-)
-
-var (
-	_ = encoding.BinaryMarshaler(&DgramMessage{})
-	_ = encoding.BinaryUnmarshaler(&DgramMessage{})
 )
 
 // assertEqualMessages compares the e(xptected) message to the a(ctual) message
@@ -33,11 +27,11 @@ func assertEqualMessages(t *testing.T, e, a Message) {
 	}
 
 	if len(e.AllOptions()) != len(a.AllOptions()) {
-		t.Errorf("Expected %v options, got %v", len(e.AllOptions()), len(a.AllOptions()))
+		t.Errorf("Expected %v options, got %v", e, a)
 	} else {
 		for i, _ := range e.AllOptions() {
 			if e.AllOptions()[i].ID != a.AllOptions()[i].ID {
-				t.Errorf("Expected option ID %v, got %v", e.AllOptions()[i].ID, a.AllOptions()[i].ID)
+				t.Errorf("\nExpected option %v\n got %v", e.AllOptions()[i].ID, a.AllOptions()[i].ID)
 				continue
 			}
 			switch e.AllOptions()[i].Value.(type) {
@@ -85,7 +79,9 @@ func TestOptionToBytes(t *testing.T) {
 
 	for _, test := range tests {
 		op := option{Value: test.in}
-		got, err := op.toBytes()
+		buf := &bytes.Buffer{}
+		err := op.writeData(buf)
+		got := buf.Bytes()
 		if err != nil {
 			t.Error(err)
 		} else if !bytes.Equal(test.exp, got) {
@@ -120,7 +116,8 @@ func TestMissingOption(t *testing.T) {
 }
 
 func TestOptionToBytesError(t *testing.T) {
-	_, err := option{Value: 3.1415926535897}.toBytes()
+	buf := &bytes.Buffer{}
+	err := option{Value: 3.1415926535897}.writeData(buf)
 	if err == nil {
 		t.Error("Expected panic. Didn't")
 	} else {
@@ -169,15 +166,16 @@ func TestEncodeMessageWithoutOptionsAndPayload(t *testing.T) {
 		},
 	}
 
-	data, err := req.MarshalBinary()
+	buf := &bytes.Buffer{}
+	err := req.MarshalBinary(buf)
 	if err != nil {
 		t.Fatalf("Error encoding request: %v", err)
 	}
 
 	// Inspected by hand.
 	exp := []byte{0x40, 0x1, 0x30, 0x39}
-	if !bytes.Equal(exp, data) {
-		t.Fatalf("Expected\n%#v\ngot\n%#v", exp, data)
+	if !bytes.Equal(exp, buf.Bytes()) {
+		t.Fatalf("Expected\n%#v\ngot\n%#v", exp, buf.Bytes())
 	}
 }
 
@@ -193,7 +191,8 @@ func TestEncodeMessageSmall(t *testing.T) {
 	req.AddOption(ETag, []byte("weetag"))
 	req.AddOption(MaxAge, 3)
 
-	data, err := req.MarshalBinary()
+	buf := &bytes.Buffer{}
+	err := req.MarshalBinary(buf)
 	if err != nil {
 		t.Fatalf("Error encoding request: %v", err)
 	}
@@ -203,8 +202,8 @@ func TestEncodeMessageSmall(t *testing.T) {
 		0x40, 0x1, 0x30, 0x39, 0x46, 0x77,
 		0x65, 0x65, 0x74, 0x61, 0x67, 0xa1, 0x3,
 	}
-	if !reflect.DeepEqual(exp, data) {
-		t.Fatalf("Expected\n%#v\ngot\n%#v", exp, data)
+	if !reflect.DeepEqual(exp, buf.Bytes()) {
+		t.Fatalf("Expected\n%#v\ngot\n%#v", exp, buf.Bytes())
 	}
 }
 
@@ -221,7 +220,8 @@ func TestEncodeMessageSmallWithPayload(t *testing.T) {
 	req.AddOption(ETag, []byte("weetag"))
 	req.AddOption(MaxAge, 3)
 
-	data, err := req.MarshalBinary()
+	buf := &bytes.Buffer{}
+	err := req.MarshalBinary(buf)
 	if err != nil {
 		t.Fatalf("Error encoding request: %v", err)
 	}
@@ -232,8 +232,8 @@ func TestEncodeMessageSmallWithPayload(t *testing.T) {
 		0x65, 0x65, 0x74, 0x61, 0x67, 0xa1, 0x3,
 		0xff, 'h', 'i',
 	}
-	if !reflect.DeepEqual(exp, data) {
-		t.Fatalf("Expected\n%#v\ngot\n%#v", exp, data)
+	if !reflect.DeepEqual(exp, buf.Bytes()) {
+		t.Fatalf("Expected\n%#v\ngot\n%#v", exp, buf.Bytes())
 	}
 }
 
@@ -349,7 +349,8 @@ func TestEncodeMessageVerySmall(t *testing.T) {
 	}
 	req.SetPathString("x")
 
-	data, err := req.MarshalBinary()
+	buf := &bytes.Buffer{}
+	err := req.MarshalBinary(buf)
 	if err != nil {
 		t.Fatalf("Error encoding request: %v", err)
 	}
@@ -358,8 +359,8 @@ func TestEncodeMessageVerySmall(t *testing.T) {
 	exp := []byte{
 		0x40, 0x1, 0x30, 0x39, 0xb1, 0x78,
 	}
-	if !reflect.DeepEqual(exp, data) {
-		t.Fatalf("Expected\n%#v\ngot\n%#v", exp, data)
+	if !reflect.DeepEqual(exp, buf.Bytes()) {
+		t.Fatalf("Expected\n%#v\ngot\n%#v", exp, buf.Bytes())
 	}
 }
 
@@ -374,7 +375,8 @@ func TestEncodeMessageVerySmall2(t *testing.T) {
 	}
 	req.SetPathString("/x")
 
-	data, err := req.MarshalBinary()
+	buf := &bytes.Buffer{}
+	err := req.MarshalBinary(buf)
 	if err != nil {
 		t.Fatalf("Error encoding request: %v", err)
 	}
@@ -383,8 +385,8 @@ func TestEncodeMessageVerySmall2(t *testing.T) {
 	exp := []byte{
 		0x40, 0x1, 0x30, 0x39, 0xb1, 0x78,
 	}
-	if !reflect.DeepEqual(exp, data) {
-		t.Fatalf("Expected\n%#v\ngot\n%#v", exp, data)
+	if !reflect.DeepEqual(exp, buf.Bytes()) {
+		t.Fatalf("Expected\n%#v\ngot\n%#v", exp, buf.Bytes())
 	}
 }
 
@@ -404,13 +406,14 @@ func TestEncodeSeveral(t *testing.T) {
 			},
 		}
 		m.SetPathString(p)
-		b, err := m.MarshalBinary()
+		buf := &bytes.Buffer{}
+		err := m.MarshalBinary(buf)
 		if err != nil {
 			t.Errorf("Error encoding %#v", p)
 			t.Fail()
 			continue
 		}
-		m2, err := ParseDgramMessage(b)
+		m2, err := ParseDgramMessage(buf.Bytes())
 		if err != nil {
 			t.Fatalf("Can't parse my own message at %#v: %v", p, err)
 		}
@@ -431,13 +434,14 @@ func TestPathAsOption(t *testing.T) {
 		},
 	}
 	m.SetOption(LocationPath, []string{"a", "b"})
-	got, err := m.MarshalBinary()
+	buf := &bytes.Buffer{}
+	err := m.MarshalBinary(buf)
 	if err != nil {
 		t.Fatalf("Error marshaling: %v", err)
 	}
 	exp := []byte{0x40, 0x1, 0x30, 0x39, 0x81, 0x61, 0x1, 0x62}
-	if !bytes.Equal(got, exp) {
-		t.Errorf("Got %#v, wanted %#v", got, exp)
+	if !bytes.Equal(buf.Bytes(), exp) {
+		t.Errorf("Got %#v, wanted %#v", buf.Bytes(), exp)
 	}
 }
 
@@ -451,7 +455,8 @@ func TestEncodePath14(t *testing.T) {
 	}
 	req.SetPathString("123456789ABCDE")
 
-	data, err := req.MarshalBinary()
+	buf := &bytes.Buffer{}
+	err := req.MarshalBinary(buf)
 	if err != nil {
 		t.Fatalf("Error encoding request: %v", err)
 	}
@@ -462,8 +467,8 @@ func TestEncodePath14(t *testing.T) {
 		'1', '2', '3', '4', '5', '6', '7', '8',
 		'9', 'A', 'B', 'C', 'D', 'E',
 	}
-	if !reflect.DeepEqual(exp, data) {
-		t.Fatalf("Expected\n%#v\ngot\n%#v", exp, data)
+	if !reflect.DeepEqual(exp, buf.Bytes()) {
+		t.Fatalf("Expected\n%#v\ngot\n%#v", exp, buf.Bytes())
 	}
 }
 
@@ -477,7 +482,8 @@ func TestEncodePath15(t *testing.T) {
 	}
 	req.SetPathString("123456789ABCDEF")
 
-	data, err := req.MarshalBinary()
+	buf := &bytes.Buffer{}
+	err := req.MarshalBinary(buf)
 	if err != nil {
 		t.Fatalf("Error encoding request: %v", err)
 	}
@@ -488,8 +494,8 @@ func TestEncodePath15(t *testing.T) {
 		'1', '2', '3', '4', '5', '6', '7', '8',
 		'9', 'A', 'B', 'C', 'D', 'E', 'F',
 	}
-	if !reflect.DeepEqual(exp, data) {
-		t.Fatalf("Expected\n%#v\ngot\n%#v", exp, data)
+	if !reflect.DeepEqual(exp, buf.Bytes()) {
+		t.Fatalf("Expected\n%#v\ngot\n%#v", exp, buf.Bytes())
 	}
 }
 
@@ -508,7 +514,8 @@ func TestEncodeLargePath(t *testing.T) {
 			req.PathString())
 	}
 
-	data, err := req.MarshalBinary()
+	buf := &bytes.Buffer{}
+	err := req.MarshalBinary(buf)
 	if err != nil {
 		t.Fatalf("Error encoding request: %v", err)
 	}
@@ -522,8 +529,8 @@ func TestEncodeLargePath(t *testing.T) {
 		0x68, 0x61, 0x6e, 0x5f, 0x66, 0x69, 0x66, 0x74, 0x65,
 		0x65, 0x6e, 0x5f, 0x62, 0x79, 0x74, 0x65, 0x73,
 	}
-	if !reflect.DeepEqual(exp, data) {
-		t.Fatalf("Expected\n%#v\ngot\n%#v", exp, data)
+	if !reflect.DeepEqual(exp, buf.Bytes()) {
+		t.Fatalf("Expected\n%#v\ngot\n%#v", exp, buf.Bytes())
 	}
 }
 
@@ -555,8 +562,9 @@ func TestDecodeLargePath(t *testing.T) {
 	exp.SetOption(URIPath, path)
 
 	if fmt.Sprintf("%#v", exp) != fmt.Sprintf("%#v", req) {
-		b, _ := exp.MarshalBinary()
-		t.Fatalf("Expected\n%#v\ngot\n%#v\nfor %#v", exp, req, b)
+		buf := &bytes.Buffer{}
+		exp.MarshalBinary(buf)
+		t.Fatalf("Expected\n%#v\ngot\n%#v\nfor %#v", exp, req, buf.Bytes())
 	}
 }
 
@@ -601,7 +609,12 @@ func TestByteEncoding(t *testing.T) {
 	}
 
 	for _, v := range tests {
-		got := encodeInt(v.Value)
+		buf := &bytes.Buffer{}
+		err := encodeInt(buf, v.Value)
+		if err != nil {
+			t.Error(err)
+		}
+		got := buf.Bytes()
 		if !reflect.DeepEqual(got, v.Expected) {
 			t.Fatalf("Expected %#v, got %#v for %v",
 				v.Expected, got, v.Value)
@@ -801,13 +814,17 @@ func TestEncodeMessageWithAllOptions(t *testing.T) {
 	req.AddOption(ProxyURI, "PROXYURI")
 	req.AddOption(ProxyScheme, "PROXYSCHEME")
 	req.AddOption(Size1, uint32(9999))
+	req.AddOption(Block1, uint32(66560))
+	req.AddOption(Size2, uint32(9999))
+	req.AddOption(Block2, uint32(66560))
 
-	data, err := req.MarshalBinary()
+	buf := &bytes.Buffer{}
+	err := req.MarshalBinary(buf)
 	if err != nil {
 		t.Fatalf("Error encoding request: %v", err)
 	}
 
-	parsedMsg, err := ParseDgramMessage(data)
+	parsedMsg, err := ParseDgramMessage(buf.Bytes())
 	if err != nil {
 		t.Fatalf("Error parsing binary packet: %v", err)
 	}

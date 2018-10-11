@@ -23,7 +23,7 @@ type ClientConn struct {
 // A Client defines parameters for a COAP client.
 type Client struct {
 	Net            string        // if "tcp" or "tcp-tls" (COAP over TLS) a TCP query will be initiated, otherwise an UDP one (default is "" for UDP) or "udp-mcast" for multicast
-	MaxMessageSize uint16        // Max message size that could be received from peer. If not set it defaults to 1152 B.
+	MaxMessageSize uint32        // Max message size that could be received from peer. If not set it defaults to 1152 B.
 	TLSConfig      *tls.Config   // TLS connection configuration
 	DialTimeout    time.Duration // set Timeout for dialer
 	ReadTimeout    time.Duration // net.ClientConn.SetReadTimeout value for connections, defaults to 1 hour - overridden by Timeout when that value is non-zero
@@ -33,8 +33,8 @@ type Client struct {
 	Handler              HandlerFunc     // default handler for handling messages from server
 	NotifySessionEndFunc func(err error) // if NotifySessionEndFunc is set it is called when TCP/UDP session was ended.
 
-	BlockWiseTransfer    *bool     // Use blockWise transfer for transfer payload (default for UDP it's enabled, for TCP it's disable)
-	BlockWiseTransferSzx *BlockSzx // Set maximal block size of payload that will be send in fragment
+	BlockWiseTransfer    *bool         // Use blockWise transfer for transfer payload (default for UDP it's enabled, for TCP it's disable)
+	BlockWiseTransferSzx *BlockWiseSzx // Set maximal block size of payload that will be send in fragment
 }
 
 func (c *Client) readTimeout() time.Duration {
@@ -67,7 +67,7 @@ func (c *Client) Dial(address string) (clientConn *ClientConn, err error) {
 
 	dialer := &net.Dialer{Timeout: c.DialTimeout}
 	BlockWiseTransfer := false
-	BlockWiseTransferSzx := BlockSzx1024
+	BlockWiseTransferSzx := BlockWiseSzx1024
 	multicast := false
 
 	switch c.Net {
@@ -77,14 +77,14 @@ func (c *Client) Dial(address string) (clientConn *ClientConn, err error) {
 		if err != nil {
 			return nil, err
 		}
-		BlockWiseTransferSzx = BlockSzxBERT
+		BlockWiseTransferSzx = BlockWiseSzxBERT
 	case "tcp", "tcp4", "tcp6":
 		network = c.Net
 		conn, err = dialer.Dial(c.Net, address)
 		if err != nil {
 			return nil, err
 		}
-		BlockWiseTransferSzx = BlockSzxBERT
+		BlockWiseTransferSzx = BlockWiseSzxBERT
 	case "udp", "udp4", "udp6", "":
 		network = c.Net
 		if network == "" {

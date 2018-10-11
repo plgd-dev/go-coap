@@ -114,7 +114,7 @@ func (m *TcpMessage) SetMessageID(messageID uint16) {
 	//not used by COAP over TCP
 }
 
-func (m *TcpMessage) MarshalBinary() ([]byte, error) {
+func (m *TcpMessage) MarshalBinary(buf io.Writer) error {
 	/*
 	   A CoAP TCP message looks like:
 
@@ -142,41 +142,41 @@ func (m *TcpMessage) MarshalBinary() ([]byte, error) {
 	*/
 
 	if len(m.MessageBase.token) > MaxTokenSize {
-		return nil, ErrInvalidTokenLen
+		return ErrInvalidTokenLen
 	}
-
-	buf := bytes.Buffer{}
 
 	sort.Stable(&m.MessageBase.opts)
-	writeOpts(&buf, m.MessageBase.opts)
-
-	if len(m.MessageBase.payload) > 0 {
-		buf.Write([]byte{0xff})
-		buf.Write(m.MessageBase.payload)
+	payloadLen := len(m.MessageBase.payload)
+	if payloadLen > 0 {
+		//for separator 0xff
+		payloadLen++
 	}
-
+	optionsLen := bytesLengthOpts(m.MessageBase.opts)
+	bufLen := payloadLen + optionsLen
 	var lenNib uint8
 	var extLenBytes []byte
 
-	if buf.Len() < TCP_MESSAGE_LEN13_BASE {
-		lenNib = uint8(buf.Len())
-	} else if buf.Len() < TCP_MESSAGE_LEN14_BASE {
+	if bufLen < TCP_MESSAGE_LEN13_BASE {
+		lenNib = uint8(bufLen)
+	} else if bufLen < TCP_MESSAGE_LEN14_BASE {
 		lenNib = 13
-		extLen := buf.Len() - TCP_MESSAGE_LEN13_BASE
+		extLen := bufLen - TCP_MESSAGE_LEN13_BASE
 		extLenBytes = []byte{uint8(extLen)}
-	} else if buf.Len() < TCP_MESSAGE_LEN15_BASE {
+	} else if bufLen < TCP_MESSAGE_LEN15_BASE {
 		lenNib = 14
-		extLen := buf.Len() - TCP_MESSAGE_LEN14_BASE
+		extLen := bufLen - TCP_MESSAGE_LEN14_BASE
 		extLenBytes = make([]byte, 2)
 		binary.BigEndian.PutUint16(extLenBytes, uint16(extLen))
-	} else if buf.Len() < TCP_MESSAGE_MAX_LEN {
+	} else if bufLen < TCP_MESSAGE_MAX_LEN {
 		lenNib = 15
-		extLen := buf.Len() - TCP_MESSAGE_LEN15_BASE
+		extLen := bufLen - TCP_MESSAGE_LEN15_BASE
 		extLenBytes = make([]byte, 4)
 		binary.BigEndian.PutUint32(extLenBytes, uint32(extLen))
 	}
 
-	hdr := make([]byte, 1+len(extLenBytes)+len(m.MessageBase.token)+1)
+	//hdr := make([]byte, 1+len(extLenBytes)+len(m.MessageBase.token)+1)
+	var hdr [1 + 4 + MaxTokenSize + 1]byte
+	hdrLen := 1 + len(extLenBytes) + len(m.MessageBase.token) + 1
 	hdrOff := 0
 
 	// Length and TKL nibbles.
@@ -199,7 +199,15 @@ func (m *TcpMessage) MarshalBinary() ([]byte, error) {
 		hdrOff += len(m.MessageBase.token)
 	}
 
-	return append(hdr, buf.Bytes()...), nil
+	bufLen = bufLen + len(hdr)
+	buf.Write(hdr[:hdrLen])
+	writeOpts(buf, m.MessageBase.opts)
+	if len(m.MessageBase.payload) > 0 {
+		buf.Write([]byte{0xff})
+		buf.Write(m.MessageBase.payload)
+	}
+
+	return nil
 }
 
 // msgTcpInfo describes a single TCP CoAP message.  Used during reassembly.
