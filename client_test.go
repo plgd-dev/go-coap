@@ -21,10 +21,10 @@ func periodicTransmitter(w ResponseWriter, r *Request) {
 		Token:     r.Msg.Token(),
 	})
 
-	//msg.SetOption(ContentFormat, TextPlain)
+	msg.SetOption(ContentFormat, TextPlain)
 	msg.SetOption(LocationPath, r.Msg.Path())
 
-	err := w.Write(msg)
+	err := w.WriteMsg(msg)
 	if err != nil {
 		log.Printf("Error on transmitter, stopping: %v", err)
 		return
@@ -32,7 +32,7 @@ func periodicTransmitter(w ResponseWriter, r *Request) {
 
 	go func() {
 		time.Sleep(time.Second)
-		err := w.Write(msg)
+		err := w.WriteMsg(msg)
 		if err != nil {
 			log.Printf("Error on transmitter, stopping: %v", err)
 			return
@@ -70,7 +70,7 @@ func testServingObservation(t *testing.T, net string, addrstr string, BlockWiseT
 	req.AddOption(Observe, 1)
 	req.SetPathString("/some/path")
 
-	err = conn.Write(req)
+	err = conn.WriteMsg(req)
 	if err != nil {
 		t.Fatalf("Error sending request: %v", err)
 	}
@@ -154,7 +154,7 @@ func testServingMCastByClient(t *testing.T, lnet, laddr string, BlockWiseTransfe
 	req.SetOption(ContentFormat, TextPlain)
 	req.SetPathString("/test")
 
-	co.Write(req)
+	co.WriteMsg(req)
 
 	<-ansArrived
 }
@@ -196,7 +196,7 @@ func setupServer(t *testing.T) (string, error) {
 		msg.SetOption(ContentFormat, TextPlain)
 		msg.SetOption(LocationPath, r.Msg.Path())
 
-		err := w.Write(msg)
+		err := w.WriteMsg(msg)
 		if err != nil {
 			t.Fatalf("Error on transmitter, stopping: %v", err)
 			return
@@ -298,7 +298,7 @@ func TestServingUDPObserve(t *testing.T) {
 		msg.SetOption(LocationPath, r.Msg.Path())
 		msg.SetOption(Observe, 2)
 
-		err := w.Write(msg)
+		err := w.WriteMsg(msg)
 		if err != nil {
 			t.Fatalf("Error on transmitter, stopping: %v", err)
 			return

@@ -12,7 +12,7 @@ func sendResponse(w coap.ResponseWriter, req *coap.Request, subded time.Time) er
 	resp := w.NewResponse(coap.Content)
 	resp.SetOption(coap.ContentFormat, coap.TextPlain)
 	resp.SetPayload([]byte(fmt.Sprintf("Been running for %v", time.Since(subded))))
-	return w.Write(resp)
+	return w.WriteMsg(resp)
 }
 
 func periodicTransmitter(w coap.ResponseWriter, req *coap.Request) {

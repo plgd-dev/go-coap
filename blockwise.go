@@ -89,7 +89,7 @@ func exchangeDrivedByPeer(session networkSession, req Message, blockType OptionI
 		}
 		if more == false {
 			// we send all datas to peer -> create empty response
-			err := session.Write(req)
+			err := session.WriteMsg(req)
 			if err != nil {
 				return nil, err
 			}
@@ -106,7 +106,7 @@ func exchangeDrivedByPeer(session networkSession, req Message, blockType OptionI
 		}
 	})
 	defer session.TokenHandler().Remove(req.Token())
-	err := session.Write(req)
+	err := session.WriteMsg(req)
 	if err != nil {
 		return nil, err
 	}
@@ -330,10 +330,10 @@ func (b *blockWiseSession) Exchange(msg Message) (Message, error) {
 
 }
 
-func (b *blockWiseSession) Write(msg Message) error {
+func (b *blockWiseSession) WriteMsg(msg Message) error {
 	switch msg.Code() {
 	case CSM, Ping, Pong, Release, Abort, Empty, GET:
-		return b.networkSession.Write(msg)
+		return b.networkSession.WriteMsg(msg)
 	default:
 		_, err := b.Exchange(msg)
 		return err
@@ -363,7 +363,7 @@ func (b *blockWiseSession) sendErrorMsg(code COAPCode, typ COAPType, token []byt
 		req.SetOption(ContentFormat, TextPlain)
 		req.SetPayload([]byte(err.Error()))
 	}
-	b.networkSession.Write(req)
+	b.networkSession.WriteMsg(req)
 }
 
 type blockWiseReceiver struct {
@@ -404,7 +404,10 @@ func (r *blockWiseReceiver) createReq(b *blockWiseSession, resp Message) (Messag
 	})
 	if !r.peerDrive {
 		for _, option := range r.origin.AllOptions() {
-			req.AddOption(option.ID, option.Value)
+			//dont send content format when we receiving payload
+			if option.ID != ContentFormat {
+				req.AddOption(option.ID, option.Value)
+			}
 		}
 		req.SetMessageID(GenerateMessageID())
 	} else if resp == nil {
@@ -702,7 +705,9 @@ type blockWiseResponseWriter struct {
 	*responseWriter
 }
 
-func (w *blockWiseResponseWriter) Write(msg Message) error {
+//Write send whole message if size of payload is less then block szx otherwise
+//send message via blockwise.
+func (w *blockWiseResponseWriter) WriteMsg(msg Message) error {
 	suggestedSzx := w.req.Client.networkSession.blockWiseSzx()
 	if respBlock2, ok := w.req.Msg.Option(Block2).(uint32); ok {
 		szx, _, _, err := UnmarshalBlockOption(respBlock2)
@@ -718,7 +723,7 @@ func (w *blockWiseResponseWriter) Write(msg Message) error {
 
 	//resp is less them szx then just write msg without blockWise
 	if len(msg.Payload()) < szxToBytes[suggestedSzx] {
-		return w.responseWriter.Write(msg)
+		return w.responseWriter.WriteMsg(msg)
 	}
 
 	if b, ok := w.req.Client.networkSession.(*blockWiseSession); ok {
@@ -733,7 +738,10 @@ type blockWiseNoticeWriter struct {
 	*responseWriter
 }
 
-func (w *blockWiseNoticeWriter) Write(msg Message) error {
+//Write send whole message if size of payload is less then block szx otherwise
+//send only first block. For Get whole msg client must call Get to
+//resource.
+func (w *blockWiseNoticeWriter) WriteMsg(msg Message) error {
 	suggestedSzx := w.req.Client.networkSession.blockWiseSzx()
 	if respBlock2, ok := w.req.Msg.Option(Block2).(uint32); ok {
 		szx, _, _, err := UnmarshalBlockOption(respBlock2)
@@ -749,7 +757,7 @@ func (w *blockWiseNoticeWriter) Write(msg Message) error {
 
 	//resp is less them szx then just write msg without blockWise
 	if len(msg.Payload()) < szxToBytes[suggestedSzx] {
-		return w.responseWriter.Write(msg)
+		return w.responseWriter.WriteMsg(msg)
 	}
 
 	if b, ok := w.req.Client.networkSession.(*blockWiseSession); ok {
@@ -758,7 +766,7 @@ func (w *blockWiseNoticeWriter) Write(msg Message) error {
 		if err != nil {
 			return err
 		}
-		return b.networkSession.Write(req)
+		return b.networkSession.WriteMsg(req)
 	}
 	return ErrNotSupported
 }

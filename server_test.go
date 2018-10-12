@@ -45,7 +45,7 @@ func CreateRespMessageByReq(isTCP bool, code COAPCode, req Message) Message {
 
 func EchoServer(w ResponseWriter, r *Request) {
 	if r.Msg.IsConfirmable() {
-		err := w.Write(CreateRespMessageByReq(r.Client.networkSession.IsTCP(), Valid, r.Msg))
+		err := w.WriteMsg(CreateRespMessageByReq(r.Client.networkSession.IsTCP(), Valid, r.Msg))
 		if err != nil {
 			log.Printf("Cannot write echo %v", err)
 		}
@@ -54,7 +54,7 @@ func EchoServer(w ResponseWriter, r *Request) {
 
 func EchoServerBadID(w ResponseWriter, r *Request) {
 	if r.Msg.IsConfirmable() {
-		w.Write(CreateRespMessageByReq(r.Client.networkSession.IsTCP(), BadRequest, r.Msg))
+		w.WriteMsg(CreateRespMessageByReq(r.Client.networkSession.IsTCP(), BadRequest, r.Msg))
 	}
 }
 
@@ -299,7 +299,7 @@ func ChallegingServer(w ResponseWriter, r *Request) {
 		panic(err.Error())
 	}
 
-	w.Write(CreateRespMessageByReq(r.Client.networkSession.IsTCP(), Valid, r.Msg))
+	w.WriteMsg(CreateRespMessageByReq(r.Client.networkSession.IsTCP(), Valid, r.Msg))
 }
 
 func ChallegingServerTimeout(w ResponseWriter, r *Request) {
@@ -316,7 +316,7 @@ func ChallegingServerTimeout(w ResponseWriter, r *Request) {
 		panic("Error: expected timeout")
 	}
 
-	w.Write(CreateRespMessageByReq(r.Client.networkSession.IsTCP(), Valid, r.Msg))
+	w.WriteMsg(CreateRespMessageByReq(r.Client.networkSession.IsTCP(), Valid, r.Msg))
 }
 
 func simpleChallengingMsg(t *testing.T, payload []byte, co *ClientConn) {
@@ -406,7 +406,7 @@ func testServingMCast(t *testing.T, lnet, laddr string, BlockWiseTransfer bool, 
 		Handler: func(w ResponseWriter, r *Request) {
 			resp := w.NewResponse(Content)
 			resp.SetPayload(make([]byte, payloadLen))
-			err := w.Write(resp)
+			err := w.WriteMsg(resp)
 			if err != nil {
 				t.Fatalf("cannot send response %v", err)
 			}
@@ -416,11 +416,12 @@ func testServingMCast(t *testing.T, lnet, laddr string, BlockWiseTransfer bool, 
 	s, _, fin, err := RunLocalServerUDPWithHandler(lnet, addrMcast, BlockWiseTransfer, BlockWiseTransferSzx, func(w ResponseWriter, r *Request) {
 		resp := w.NewResponse(Content)
 		resp.SetPayload(make([]byte, payloadLen))
+		resp.SetOption(ContentFormat, TextPlain)
 		conn, err := responseServer.Dial(r.Client.RemoteAddr().String())
 		if err != nil {
 			t.Fatalf("cannot create connection %v", err)
 		}
-		err = conn.Write(resp)
+		err = conn.WriteMsg(resp)
 		if err != nil {
 			t.Fatalf("cannot send response %v", err)
 		}
@@ -496,7 +497,10 @@ func BenchmarkServe(b *testing.B) {
 	HandleFunc("/test", EchoServer)
 	defer HandleRemove("/test")
 
-	s, addrstr, fin, err := RunLocalUDPServer("udp", ":0", false, BlockWiseSzx16)
+	BlockWiseTransfer := false
+	BlockWiseTransferSzx := BlockWiseSzx1024
+
+	s, addrstr, fin, err := RunLocalUDPServer("udp", ":0", BlockWiseTransfer, BlockWiseTransferSzx)
 	if err != nil {
 		b.Fatalf("unable to run test server: %v", err)
 	}
@@ -505,7 +509,13 @@ func BenchmarkServe(b *testing.B) {
 		<-fin
 	}()
 
-	co, err := Dial("udp", addrstr)
+	client := Client{
+		Net:                  "udp",
+		BlockWiseTransfer:    &BlockWiseTransfer,
+		BlockWiseTransferSzx: &BlockWiseTransferSzx,
+		MaxMessageSize:       ^uint32(0),
+	}
+	co, err := client.Dial(addrstr)
 	if err != nil {
 		b.Fatalf("unable to dialing: %v", err)
 	}
@@ -526,7 +536,10 @@ func BenchmarkServeBlockWise(b *testing.B) {
 	HandleFunc("/test", EchoServer)
 	defer HandleRemove("/test")
 
-	s, addrstr, fin, err := RunLocalUDPServer("udp", ":0", true, BlockWiseSzx1024)
+	BlockWiseTransfer := true
+	BlockWiseTransferSzx := BlockWiseSzx16
+
+	s, addrstr, fin, err := RunLocalUDPServer("udp", ":0", BlockWiseTransfer, BlockWiseSzx1024)
 	if err != nil {
 		b.Fatalf("unable to run test server: %v", err)
 	}
@@ -535,13 +548,19 @@ func BenchmarkServeBlockWise(b *testing.B) {
 		<-fin
 	}()
 
-	co, err := Dial("udp", addrstr)
+	client := Client{
+		Net:                  "udp",
+		BlockWiseTransfer:    &BlockWiseTransfer,
+		BlockWiseTransferSzx: &BlockWiseTransferSzx,
+		MaxMessageSize:       ^uint32(0),
+	}
+	co, err := client.Dial(addrstr)
 	if err != nil {
 		b.Fatalf("unable to dialing: %v", err)
 	}
 	defer co.Close()
 
-	data := make([]byte, ^uint16(0))
+	data := make([]byte, 128)
 	b.StartTimer()
 	for i := uint32(0); i < uint32(b.N); i++ {
 		_, err := co.Post("/test", TextPlain, &dataReader{data: data})

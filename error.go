@@ -94,3 +94,9 @@ const ErrRequestEntityIncomplete = Error("payload comes in bad order")
 
 // ErrInvalidRequest invalid requests
 const ErrInvalidRequest = Error("invalid request")
+
+// ErrContentFormatNotSet content format is not set
+const ErrContentFormatNotSet = Error("content format is not set")
+
+//ErrInvalidPayload invalid payload
+const ErrInvalidPayload = Error("invalid payload")

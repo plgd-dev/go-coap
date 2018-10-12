@@ -260,13 +260,13 @@ func (co *ClientConn) NewGetRequest(path string) (Message, error) {
 }
 
 // NewPostRequest creates post request
-func (co *ClientConn) NewPostRequest(path string, contentType MediaType, body io.Reader) (Message, error) {
-	return co.commander.NewPostRequest(path, contentType, body)
+func (co *ClientConn) NewPostRequest(path string, contentFormat MediaType, body io.Reader) (Message, error) {
+	return co.commander.NewPostRequest(path, contentFormat, body)
 }
 
 // NewPutRequest creates put request
-func (co *ClientConn) NewPutRequest(path string, contentType MediaType, body io.Reader) (Message, error) {
-	return co.commander.NewPutRequest(path, contentType, body)
+func (co *ClientConn) NewPutRequest(path string, contentFormat MediaType, body io.Reader) (Message, error) {
+	return co.commander.NewPutRequest(path, contentFormat, body)
 }
 
 // NewDeleteRequest creates delete request
@@ -275,8 +275,8 @@ func (co *ClientConn) NewDeleteRequest(path string) (Message, error) {
 }
 
 // Write sends direct a message through the connection
-func (co *ClientConn) Write(m Message) error {
-	return co.commander.Write(m)
+func (co *ClientConn) WriteMsg(m Message) error {
+	return co.commander.WriteMsg(m)
 }
 
 // SetReadDeadline set read deadline for timeout for Exchange
@@ -303,19 +303,19 @@ func (co *ClientConn) Get(path string) (Message, error) {
 }
 
 // Post update the resource identified by the request path
-func (co *ClientConn) Post(path string, contentType MediaType, body io.Reader) (Message, error) {
+func (co *ClientConn) Post(path string, contentFormat MediaType, body io.Reader) (Message, error) {
 	if co.multicast {
 		return nil, ErrNotSupported
 	}
-	return co.commander.Post(path, contentType, body)
+	return co.commander.Post(path, contentFormat, body)
 }
 
 // Put create the resource identified by the request path
-func (co *ClientConn) Put(path string, contentType MediaType, body io.Reader) (Message, error) {
+func (co *ClientConn) Put(path string, contentFormat MediaType, body io.Reader) (Message, error) {
 	if co.multicast {
 		return nil, ErrNotSupported
 	}
-	return co.commander.Put(path, contentType, body)
+	return co.commander.Put(path, contentFormat, body)
 }
 
 // Delete delete the resource identified by the request path

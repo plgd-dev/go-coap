@@ -34,6 +34,12 @@ var typeNames = [256]string{
 	Reset:           "Reset",
 }
 
+const (
+	max1ByteNumber = uint32(^uint8(0))
+	max2ByteNumber = uint32(^uint16(0))
+	max3ByteNumber = uint32(0xffffff)
+)
+
 func init() {
 	for i := range typeNames {
 		if typeNames[i] == "" {
@@ -232,10 +238,10 @@ var coapOptionDefs = map[OptionID]optionDef{
 	Size1:         optionDef{valueFormat: valueUint, minLen: 0, maxLen: 4},
 }
 
-// MediaType specifies the content type of a message.
+// MediaType specifies the content format of a message.
 type MediaType uint16
 
-// Content types.
+// Content formats.
 const (
 	TextPlain         MediaType = 0     // text/plain;charset=utf-8
 	AppCoseEncrypt0   MediaType = 16    // application/cose; cose-type="cose-encrypt0" (RFC 8152)
@@ -319,11 +325,11 @@ type option struct {
 func encodeInt(buf io.Writer, v uint32) error {
 	switch {
 	case v == 0:
-	case v < 256:
+	case v <= max1ByteNumber:
 		buf.Write([]byte{byte(v)})
-	case v < 65536:
+	case v <= max2ByteNumber:
 		return binary.Write(buf, binary.BigEndian, uint16(v))
-	case v < 16777216:
+	case v <= max3ByteNumber:
 		rv := []byte{0, 0, 0, 0}
 		binary.BigEndian.PutUint32(rv, uint32(v))
 		_, err := buf.Write(rv[1:])
@@ -338,11 +344,11 @@ func lengthInt(v uint32) int {
 	switch {
 	case v == 0:
 		return 0
-	case v < 256:
+	case v <= max1ByteNumber:
 		return 1
-	case v < 65536:
+	case v <= max2ByteNumber:
 		return 2
-	case v < 16777216:
+	case v <= max3ByteNumber:
 		return 3
 	default:
 		return 4
@@ -677,39 +683,18 @@ func writeOpt(o option, buf io.Writer, delta int) {
 	   and writeOptionHeader() below for implementation details
 	*/
 
-	extendOpt := func(opt int) (int, int) {
-		ext := 0
-		if opt >= extoptByteAddend {
-			if opt >= extoptWordAddend {
-				ext = opt - extoptWordAddend
-				opt = extoptWordCode
-			} else {
-				ext = opt - extoptByteAddend
-				opt = extoptByteCode
-			}
-		}
-		return opt, ext
-	}
-
 	writeOptHeader := func(delta, length int) {
 		d, dx := extendOpt(delta)
 		l, lx := extendOpt(length)
 
-		//buf.Write([]byte{byte(d<<4) | byte(l)})
-		var h [1]byte
-		h[0] = byte(d<<4) | byte(l)
+		buf.Write([]byte{byte(d<<4) | byte(l)})
 
-		buf.Write(h[:])
-
-		var tmp [2]byte
 		writeExt := func(opt, ext int) {
 			switch opt {
 			case extoptByteCode:
-				tmp[0] = byte(ext)
-				buf.Write(tmp[:1])
+				buf.Write([]byte{byte(ext)})
 			case extoptWordCode:
-				binary.BigEndian.PutUint16(tmp[:], uint16(ext))
-				buf.Write(tmp[:])
+				binary.Write(buf, binary.BigEndian, uint16(ext))
 			}
 		}
 
@@ -732,6 +717,42 @@ func writeOpts(buf io.Writer, opts options) {
 		writeOpt(o, buf, int(o.ID)-prev)
 		prev = int(o.ID)
 	}
+}
+
+func extendOpt(opt int) (int, int) {
+	ext := 0
+	if opt >= extoptByteAddend {
+		if opt >= extoptWordAddend {
+			ext = opt - extoptWordAddend
+			opt = extoptWordCode
+		} else {
+			ext = opt - extoptByteAddend
+			opt = extoptByteCode
+		}
+	}
+	return opt, ext
+}
+
+func lengthOptHeaderExt(opt, ext int) int {
+	switch opt {
+	case extoptByteCode:
+		return 1
+	case extoptWordCode:
+		return 2
+	}
+	return 0
+}
+
+func lengthOptHeader(delta, length int) int {
+	d, dx := extendOpt(delta)
+	l, lx := extendOpt(length)
+
+	//buf.Write([]byte{byte(d<<4) | byte(l)})
+	res := 1
+
+	res = res + lengthOptHeaderExt(d, dx)
+	res = res + lengthOptHeaderExt(l, lx)
+	return res
 }
 
 func lengthOpt(o option, delta int) int {
@@ -762,46 +783,6 @@ func lengthOpt(o option, delta int) int {
 	   See parseExtOption(), extendOption()
 	   and writeOptionHeader() below for implementation details
 	*/
-
-	extendOpt := func(opt int) (int, int) {
-		ext := 0
-		if opt >= extoptByteAddend {
-			if opt >= extoptWordAddend {
-				ext = opt - extoptWordAddend
-				opt = extoptWordCode
-			} else {
-				ext = opt - extoptByteAddend
-				opt = extoptByteCode
-			}
-		}
-		return opt, ext
-	}
-
-	lengthOptHeader := func(delta, length int) int {
-		d, dx := extendOpt(delta)
-		l, lx := extendOpt(length)
-
-		//buf.Write([]byte{byte(d<<4) | byte(l)})
-		res := 1
-
-		writeExt := func(opt, ext int) int {
-			switch opt {
-			case extoptByteCode:
-				//tmp[0] = byte(ext)
-				//buf.Write(tmp[:1])
-				return 1
-			case extoptWordCode:
-				//binary.BigEndian.PutUint16(tmp[:], uint16(ext))
-				//buf.Write(tmp[:])
-				return 2
-			}
-			return 0
-		}
-
-		res = res + writeExt(d, dx)
-		res = res + writeExt(l, lx)
-		return res
-	}
 
 	res, err := o.toBytesLength()
 	if err != nil {
