@@ -130,10 +130,10 @@ type Server struct {
 	NotifyStartedFunc func()
 	// The maximum of time for synchronization go-routines, defaults to 30 seconds, if it occurs, then it call log.Fatal
 	SyncTimeout time.Duration
-	// If createSessionUDPFunc is set it is called when session UDP want to be created
-	createSessionUDPFunc func(connection Conn, srv *Server, sessionUDPData *SessionUDPData) (networkSession, error)
-	// If createSessionUDPFunc is set it is called when session TCP want to be created
-	createSessionTCPFunc func(connection Conn, srv *Server) (networkSession, error)
+	// If newSessionUDPFunc is set it is called when session UDP want to be created
+	newSessionUDPFunc func(connection Conn, srv *Server, sessionUDPData *SessionUDPData) (networkSession, error)
+	// If newSessionUDPFunc is set it is called when session TCP want to be created
+	newSessionTCPFunc func(connection Conn, srv *Server) (networkSession, error)
 	// If NotifyNewSession is set it is called when new TCP/UDP session was created.
 	NotifySessionNewFunc func(w *ClientCommander)
 	// If NotifyNewSession is set it is called when TCP/UDP session was ended.
@@ -328,8 +328,8 @@ func (srv *Server) ActivateAndServe() error {
 	srv.queue = make(chan *Request)
 	defer close(srv.queue)
 
-	if srv.createSessionTCPFunc == nil {
-		srv.createSessionTCPFunc = func(connection Conn, srv *Server) (networkSession, error) {
+	if srv.newSessionTCPFunc == nil {
+		srv.newSessionTCPFunc = func(connection Conn, srv *Server) (networkSession, error) {
 			session, err := newSessionTCP(connection, srv)
 			if err != nil {
 				return nil, err
@@ -341,8 +341,8 @@ func (srv *Server) ActivateAndServe() error {
 		}
 	}
 
-	if srv.createSessionUDPFunc == nil {
-		srv.createSessionUDPFunc = func(connection Conn, srv *Server, sessionUDPData *SessionUDPData) (networkSession, error) {
+	if srv.newSessionUDPFunc == nil {
+		srv.newSessionUDPFunc = func(connection Conn, srv *Server, sessionUDPData *SessionUDPData) (networkSession, error) {
 			session, err := newSessionUDP(connection, srv, sessionUDPData)
 			if err != nil {
 				return nil, err
@@ -426,7 +426,7 @@ func (srv *Server) syncTimeout() time.Duration {
 
 func (srv *Server) serveTCPconnection(conn net.Conn) error {
 	conn.SetReadDeadline(time.Now().Add(srv.readTimeout()))
-	session, err := srv.createSessionTCPFunc(newConnectionTCP(conn, srv), srv)
+	session, err := srv.newSessionTCPFunc(newConnectionTCP(conn, srv), srv)
 	if err != nil {
 		return err
 	}
@@ -563,7 +563,7 @@ func (srv *Server) serveUDP(conn *net.UDPConn) error {
 		srv.sessionUDPMapLock.Lock()
 		session := srv.sessionUDPMap[s.Key()]
 		if session == nil {
-			session, err = srv.createSessionUDPFunc(connUDP, srv, s)
+			session, err = srv.newSessionUDPFunc(connUDP, srv, s)
 			if err != nil {
 				return err
 			}

@@ -148,10 +148,10 @@ func (c *Client) Dial(address string) (clientConn *ClientConn, err error) {
 					c.NotifySessionEndFunc(err)
 				}
 			},
-			createSessionTCPFunc: func(connection Conn, srv *Server) (networkSession, error) {
+			newSessionTCPFunc: func(connection Conn, srv *Server) (networkSession, error) {
 				return clientConn.commander.networkSession, nil
 			},
-			createSessionUDPFunc: func(connection Conn, srv *Server, sessionUDPData *SessionUDPData) (networkSession, error) {
+			newSessionUDPFunc: func(connection Conn, srv *Server, sessionUDPData *SessionUDPData) (networkSession, error) {
 				if sessionUDPData.RemoteAddr().String() == clientConn.commander.networkSession.RemoteAddr().String() {
 					if s, ok := clientConn.commander.networkSession.(*blockWiseSession); ok {
 						s.networkSession.(*sessionUDP).sessionUDPData = sessionUDPData
