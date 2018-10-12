@@ -6,6 +6,7 @@ import (
 	"crypto/tls"
 	"net"
 	"reflect"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -28,6 +29,12 @@ const (
 	defaultReadBufferSize  = 4096
 	defaultWriteBufferSize = 4096
 )
+
+//DefaultPort default unsecure port for COAP server
+const DefaultPort = 5683
+
+//DefaultSecurePort default secure port for COAP server
+const DefaultSecurePort = 5684
 
 //const tcpIdleTimeout time.Duration = 8 * time.Second
 
@@ -207,7 +214,12 @@ func (srv *Server) spawnWorker(w *Request) {
 func (srv *Server) ListenAndServe() error {
 	addr := srv.Addr
 	if addr == "" {
-		addr = ":domain"
+		switch {
+		case strings.Contains(srv.Net, "-tls"):
+			addr = ":" + strconv.Itoa(DefaultSecurePort)
+		default:
+			addr = ":" + strconv.Itoa(DefaultPort)
+		}
 	}
 
 	switch srv.Net {

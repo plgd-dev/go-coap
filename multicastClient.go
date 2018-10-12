@@ -144,6 +144,7 @@ func (mconn *MulticastClientConn) Publish(path string, responseHandler func(req 
 		conn:  mconn,
 	}
 	err = mconn.client.multicastHandler.Add(req.Token(), func(w ResponseWriter, r *Request) {
+		var err error
 		switch r.Msg.Code() {
 		case GET, POST, PUT, DELETE:
 			//dont serve commands by multicast handler (filter own request)

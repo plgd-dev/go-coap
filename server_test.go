@@ -406,6 +406,7 @@ func testServingMCast(t *testing.T, lnet, laddr string, BlockWiseTransfer bool, 
 		Handler: func(w ResponseWriter, r *Request) {
 			resp := w.NewResponse(Content)
 			resp.SetPayload(make([]byte, payloadLen))
+			resp.SetOption(ContentFormat, TextPlain)
 			err := w.WriteMsg(resp)
 			if err != nil {
 				t.Fatalf("cannot send response %v", err)
