@@ -153,7 +153,7 @@ func newSender(peerDrive bool, blockType OptionID, suggestedSzx BlockWiseSzx, ex
 	}
 }
 
-func (s *blockWiseSender) createReq(b *blockWiseSession) (Message, error) {
+func (s *blockWiseSender) newReq(b *blockWiseSession) (Message, error) {
 	req := b.networkSession.NewMessage(MessageParams{
 		Code:      s.origin.Code(),
 		Type:      s.coapType(),
@@ -289,7 +289,7 @@ func (s *blockWiseSender) processResp(b *blockWiseSession, req Message, resp Mes
 
 func (b *blockWiseSession) sendPayload(peerDrive bool, blockType OptionID, suggestedSzx BlockWiseSzx, expectedCode COAPCode, msg Message) (Message, error) {
 	s := newSender(peerDrive, blockType, suggestedSzx, expectedCode, msg)
-	req, err := s.createReq(b)
+	req, err := s.newReq(b)
 	if err != nil {
 		return nil, err
 	}
@@ -395,7 +395,7 @@ func (r *blockWiseReceiver) coapType() COAPType {
 	return Confirmable
 }
 
-func (r *blockWiseReceiver) createReq(b *blockWiseSession, resp Message) (Message, error) {
+func (r *blockWiseReceiver) newReq(b *blockWiseSession, resp Message) (Message, error) {
 	req := b.networkSession.NewMessage(MessageParams{
 		Code:      r.code,
 		Type:      r.typ,
@@ -621,7 +621,7 @@ func (b *blockWiseSession) receivePayload(peerDrive bool, msg Message, resp Mess
 		return resp, nil
 	}
 
-	req, err := r.createReq(b, resp)
+	req, err := r.newReq(b, resp)
 	if err != nil {
 		r.sendError(b, BadRequest, resp, err)
 		return nil, err
@@ -762,7 +762,7 @@ func (w *blockWiseNoticeWriter) WriteMsg(msg Message) error {
 
 	if b, ok := w.req.Client.networkSession.(*blockWiseSession); ok {
 		s := newSender(false, Block2, suggestedSzx, w.req.Msg.Code(), msg)
-		req, err := s.createReq(b)
+		req, err := s.newReq(b)
 		if err != nil {
 			return err
 		}
