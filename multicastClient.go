@@ -100,8 +100,8 @@ func (mconn *MulticastClientConn) NewGetRequest(path string) (Message, error) {
 }
 
 // WriteMsg sends a message through the connection co.
-func (mconn *MulticastClientConn) Write(m Message) error {
-	return mconn.conn.Write(m)
+func (mconn *MulticastClientConn) WriteMsg(m Message) error {
+	return mconn.conn.WriteMsg(m)
 }
 
 // SetReadDeadline set read deadline for timeout for Exchange
@@ -144,6 +144,11 @@ func (mconn *MulticastClientConn) Publish(path string, responseHandler func(req 
 		conn:  mconn,
 	}
 	err = mconn.client.multicastHandler.Add(req.Token(), func(w ResponseWriter, r *Request) {
+		switch r.Msg.Code() {
+		case GET, POST, PUT, DELETE:
+			//dont serve commands by multicast handler (filter own request)
+			return
+		}
 		needGet := false
 		resp := r.Msg
 		if r.Msg.Option(Size2) != nil {
@@ -173,7 +178,7 @@ func (mconn *MulticastClientConn) Publish(path string, responseHandler func(req 
 		return nil, err
 	}
 
-	err = mconn.Write(req)
+	err = mconn.WriteMsg(req)
 	if err != nil {
 		mconn.client.multicastHandler.Remove(r.token)
 		return nil, err

@@ -55,7 +55,7 @@ func HandleFailed(w ResponseWriter, req *Request) {
 		MessageID: req.Msg.MessageID(),
 		Token:     req.Msg.Token(),
 	})
-	w.Write(msg)
+	w.WriteMsg(msg)
 }
 
 func failedHandler() Handler { return HandlerFunc(HandleFailed) }

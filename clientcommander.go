@@ -25,7 +25,7 @@ func (cc *ClientCommander) newGetDeleteRequest(path string, code COAPCode) (Mess
 		return nil, err
 	}
 	req := cc.NewMessage(MessageParams{
-		Type:      NonConfirmable,
+		Type:      Confirmable,
 		Code:      code,
 		MessageID: GenerateMessageID(),
 		Token:     token,
@@ -34,7 +34,7 @@ func (cc *ClientCommander) newGetDeleteRequest(path string, code COAPCode) (Mess
 	return req, nil
 }
 
-func (cc *ClientCommander) newPostPutRequest(path string, contentType MediaType, body io.Reader, code COAPCode) (Message, error) {
+func (cc *ClientCommander) newPostPutRequest(path string, contentFormat MediaType, body io.Reader, code COAPCode) (Message, error) {
 	token, err := GenerateToken()
 	if err != nil {
 		return nil, err
@@ -46,7 +46,7 @@ func (cc *ClientCommander) newPostPutRequest(path string, contentType MediaType,
 		Token:     token,
 	})
 	req.SetPathString(path)
-	req.SetOption(ContentFormat, contentType)
+	req.SetOption(ContentFormat, contentFormat)
 	payload, err := ioutil.ReadAll(body)
 	if err != nil {
 		return nil, err
@@ -61,13 +61,13 @@ func (cc *ClientCommander) NewGetRequest(path string) (Message, error) {
 }
 
 // NewPostRequest creates post request
-func (cc *ClientCommander) NewPostRequest(path string, contentType MediaType, body io.Reader) (Message, error) {
-	return cc.newPostPutRequest(path, contentType, body, POST)
+func (cc *ClientCommander) NewPostRequest(path string, contentFormat MediaType, body io.Reader) (Message, error) {
+	return cc.newPostPutRequest(path, contentFormat, body, POST)
 }
 
 // NewPutRequest creates put request
-func (cc *ClientCommander) NewPutRequest(path string, contentType MediaType, body io.Reader) (Message, error) {
-	return cc.newPostPutRequest(path, contentType, body, PUT)
+func (cc *ClientCommander) NewPutRequest(path string, contentFormat MediaType, body io.Reader) (Message, error) {
+	return cc.newPostPutRequest(path, contentFormat, body, PUT)
 }
 
 // NewDeleteRequest creates delete request
@@ -101,9 +101,9 @@ func (cc *ClientCommander) Exchange(m Message) (Message, error) {
 	return cc.networkSession.Exchange(m)
 }
 
-// Write sends direct a message through the connection
-func (cc *ClientCommander) Write(m Message) error {
-	return cc.networkSession.Write(m)
+// WriteMsg sends direct a message through the connection
+func (cc *ClientCommander) WriteMsg(m Message) error {
+	return cc.networkSession.WriteMsg(m)
 }
 
 // Ping send a ping message and wait for a pong response
@@ -121,8 +121,8 @@ func (cc *ClientCommander) Get(path string) (Message, error) {
 }
 
 // Post update the resource identified by the request path
-func (cc *ClientCommander) Post(path string, contentType MediaType, body io.Reader) (Message, error) {
-	req, err := cc.NewPostRequest(path, contentType, body)
+func (cc *ClientCommander) Post(path string, contentFormat MediaType, body io.Reader) (Message, error) {
+	req, err := cc.NewPostRequest(path, contentFormat, body)
 	if err != nil {
 		return nil, err
 	}
@@ -130,8 +130,8 @@ func (cc *ClientCommander) Post(path string, contentType MediaType, body io.Read
 }
 
 // Put create the resource identified by the request path
-func (cc *ClientCommander) Put(path string, contentType MediaType, body io.Reader) (Message, error) {
-	req, err := cc.NewPutRequest(path, contentType, body)
+func (cc *ClientCommander) Put(path string, contentFormat MediaType, body io.Reader) (Message, error) {
+	req, err := cc.NewPutRequest(path, contentFormat, body)
 	if err != nil {
 		return nil, err
 	}
@@ -165,7 +165,7 @@ func (o *Observation) Cancel() error {
 	})
 	req.SetPathString(o.path)
 	req.SetOption(Observe, 1)
-	err1 := o.client.Write(req)
+	err1 := o.client.WriteMsg(req)
 	err2 := o.client.networkSession.TokenHandler().Remove(o.token)
 	if err1 != nil {
 		return err1
@@ -212,7 +212,6 @@ func (cc *ClientCommander) Observe(path string, observeFunc func(req *Request)) 
 					return
 				}
 				needGet = more
-
 			}
 		}
 
@@ -252,7 +251,7 @@ func (cc *ClientCommander) Observe(path string, observeFunc func(req *Request)) 
 	if err != nil {
 		return nil, err
 	}
-	err = cc.Write(req)
+	err = cc.WriteMsg(req)
 	if err != nil {
 		cc.networkSession.TokenHandler().Remove(o.token)
 		return nil, err

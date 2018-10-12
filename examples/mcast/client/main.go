@@ -9,7 +9,7 @@ import (
 func main() {
 	client := &coap.MulticastClient{}
 
-	conn, err := client.Dial("224.0.1.187:5683")
+	conn, err := client.Dial("224.0.1.187:5688")
 	if err != nil {
 		log.Fatalf("Error dialing: %v", err)
 	}

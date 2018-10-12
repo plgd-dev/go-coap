@@ -1,17 +1,9 @@
 package coap
 
 /*
-import (
-	"bytes"
-	"fmt"
-	"testing"
-
-	"github.com/ugorji/go/codec"
-)
-
 var path = "/oic/d"
-var udpServer = "127.0.0.1:49629"
-var tcpServer = "127.0.0.1:42635"
+var udpServer = "127.0.0.1:52593"
+var tcpServer = "127.0.0.1:40993"
 
 func decodeMsg(resp Message) {
 	var m interface{}
@@ -88,7 +80,17 @@ func TestBlockWiseGetBlock16(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Error dialing: %v", err)
 	}
-	resp, err := co.Get(path)
+	req, err := co.NewGetRequest(path)
+	if err != nil {
+		t.Fatalf("Cannot create %v", err)
+	}
+	block2, err := MarshalBlockOption(BlockWiseSzx16, 0, false)
+	if err != nil {
+		t.Fatalf("Cannot marshal block %v", err)
+	}
+	req.SetOption(Block2, block2)
+	decodeMsg(req)
+	resp, err := co.Exchange(req)
 	if err != nil {
 		t.Fatalf("Cannot post exchange")
 	}
@@ -153,5 +155,4 @@ func TestGetBlock16(t *testing.T) {
 	}
 	decodeMsg(resp)
 }
-
 */

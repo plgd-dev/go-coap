@@ -16,7 +16,7 @@ type networkSession interface {
 	// RemoteAddr returns the net.Addr of the client that sent the current request.
 	RemoteAddr() net.Addr
 	// WriteMsg writes a reply back to the client.
-	Write(resp Message) error
+	WriteMsg(resp Message) error
 	// Close closes the connection.
 	Close() error
 	// Return type of network
@@ -421,22 +421,37 @@ func (s *sessionUDP) exchangeTimeout(req Message, writeDeadline, readDeadline ti
 }
 
 // Write implements the networkSession.Write method.
-func (s *sessionTCP) Write(m Message) error {
+func (s *sessionTCP) WriteMsg(m Message) error {
 	return s.writeTimeout(m, s.writeDeadline)
 }
 
-func (s *sessionUDP) Write(m Message) error {
+func (s *sessionUDP) WriteMsg(m Message) error {
 	return s.writeTimeout(m, s.writeDeadline)
+}
+
+func validateMsg(msg Message) error {
+	if msg.Payload() != nil && msg.Option(ContentFormat) == nil {
+		return ErrContentFormatNotSet
+	}
+	if msg.Payload() == nil && msg.Option(ContentFormat) != nil {
+		return ErrInvalidPayload
+	}
+	//TODO check size of m
+	return nil
 }
 
 func (s *sessionTCP) writeTimeout(m Message, timeout time.Duration) error {
-	//TODO check size of m
+	if err := validateMsg(m); err != nil {
+		return err
+	}
 	return s.connection.write(&writeReqTCP{writeReqBase{req: m, respChan: make(chan error, 1)}}, timeout)
 }
 
 // WriteMsg implements the networkSession.WriteMsg method.
 func (s *sessionUDP) writeTimeout(m Message, timeout time.Duration) error {
-	//TODO check size of m
+	if err := validateMsg(m); err != nil {
+		return err
+	}
 	return s.connection.write(&writeReqUDP{writeReqBase{req: m, respChan: make(chan error, 1)}, s.sessionUDPData}, timeout)
 }
 
@@ -491,7 +506,7 @@ func (s *sessionTCP) sendCSM() error {
 	if s.blockWiseEnabled() {
 		req.AddOption(BlockWiseTransfer, []byte{})
 	}
-	return s.Write(req)
+	return s.WriteMsg(req)
 }
 
 func (s *sessionTCP) setPeerMaxMessageSize(val uint32) {
@@ -512,7 +527,7 @@ func (s *sessionUDP) sendPong(w ResponseWriter, r *Request) error {
 		Code:      Empty,
 		MessageID: r.Msg.MessageID(),
 	})
-	return w.Write(resp)
+	return w.WriteMsg(resp)
 }
 
 func (s *sessionTCP) sendPong(w ResponseWriter, r *Request) error {
@@ -521,7 +536,7 @@ func (s *sessionTCP) sendPong(w ResponseWriter, r *Request) error {
 		Code:  Pong,
 		Token: r.Msg.Token(),
 	})
-	return w.Write(req)
+	return w.WriteMsg(req)
 }
 
 func (s *sessionTCP) handleSignals(w ResponseWriter, r *Request) bool {

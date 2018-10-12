@@ -32,14 +32,12 @@ Fork of https://github.com/dustin/go-coap
 	// See /examples/simple/server/main.go
 	func handleA(w coap.ResponseWriter, req *coap.Request) {
 		log.Printf("Got message in handleA: path=%q: %#v from %v", req.Msg.Path(), req.Msg, req.Client.RemoteAddr())
-		resp := w.NewResponse(coap.Content)
-		resp.SetOption(coap.ContentFormat, coap.TextPlain)
-		resp.SetPayload([]byte("hello world"))
-		log.Printf("Transmitting from A %#v", resp)
-		if err := w.Write(resp); err != nil {
+		w.SetContentFormat(coap.TextPlain)
+		log.Printf("Transmitting from A")
+		if _, err := w.Write([]byte("hello world")); err != nil {
 			log.Printf("Cannot send response: %v", err)
 		}
-	}	
+	}
 
 	func main() {
 		mux := coap.NewServeMux()
