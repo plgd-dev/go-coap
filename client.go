@@ -103,6 +103,10 @@ func (c *Client) Dial(address string) (clientConn *ClientConn, err error) {
 		}
 		BlockWiseTransferSzx = BlockWiseSzxBERT
 	case "udp", "udp4", "udp6", "":
+		network = c.Net
+		if network == "" {
+			network = "udp"
+		}
 		if runtime.GOOS == "windows" {
 			a, udpConn, err := listenUDP(network, address)
 			if err != nil {
@@ -111,10 +115,6 @@ func (c *Client) Dial(address string) (clientConn *ClientConn, err error) {
 			sessionUPDData = &SessionUDPData{raddr: a}
 			conn = udpConn
 		} else {
-			network = c.Net
-			if network == "" {
-				network = "udp"
-			}
 			if conn, err = dialer.Dial(network, address); err != nil {
 				return nil, err
 			}
