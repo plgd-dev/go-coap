@@ -100,3 +100,6 @@ const ErrContentFormatNotSet = Error("content format is not set")
 
 //ErrInvalidPayload invalid payload
 const ErrInvalidPayload = Error("invalid payload")
+
+//ErrUnexpectedReponseCode unexpected response code occurs
+const ErrUnexpectedReponseCode = Error("unexpected response code")
