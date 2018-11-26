@@ -235,7 +235,7 @@ func (s *blockWiseSender) processResp(b *blockWiseSession, req Message, resp Mes
 	}
 
 	if resp.Code() != s.expectedCode {
-		return resp, nil
+		return resp, ErrUnexpectedReponseCode
 	}
 
 	if respBlock, ok := resp.Option(s.blockType).(uint32); ok {
@@ -734,6 +734,13 @@ func (w *blockWiseResponseWriter) WriteMsg(msg Message) error {
 	return ErrNotSupported
 }
 
+// Write send response to peer
+func (w *blockWiseResponseWriter) Write(p []byte) (n int, err error) {
+	l, resp := prepareReponse(w, w.responseWriter.req.Msg.Code(), w.responseWriter.code, w.responseWriter.contentFormat, p)
+	err = w.WriteMsg(resp)
+	return l, err
+}
+
 type blockWiseNoticeWriter struct {
 	*responseWriter
 }
@@ -769,4 +776,11 @@ func (w *blockWiseNoticeWriter) WriteMsg(msg Message) error {
 		return b.networkSession.WriteMsg(req)
 	}
 	return ErrNotSupported
+}
+
+// Write send response to peer
+func (w *blockWiseNoticeWriter) Write(p []byte) (n int, err error) {
+	l, resp := prepareReponse(w, w.responseWriter.req.Msg.Code(), w.responseWriter.code, w.responseWriter.contentFormat, p)
+	err = w.WriteMsg(resp)
+	return l, err
 }

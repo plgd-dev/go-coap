@@ -26,6 +26,10 @@ type ResponseWriter interface {
 	//If Option ContentFormat is set and Payload is not set then call will failed.
 	//If Option ContentFormat is not set and Payload is set then call will failed.
 	WriteMsg(Message) error
+
+	getCode() *COAPCode
+	getReq() *Request
+	getContentFormat() *MediaType
 }
 
 type responseWriter struct {
@@ -58,30 +62,37 @@ func (r *responseWriter) WriteMsg(msg Message) error {
 	return r.req.Client.WriteMsg(msg)
 }
 
-// Write send response to peer
-func (r *responseWriter) Write(p []byte) (n int, err error) {
-	code := Content
-	if r.code != nil {
-		code = *r.code
+func prepareReponse(w ResponseWriter, reqCode COAPCode, code *COAPCode, contentFormat *MediaType, payload []byte) (int, Message) {
+	respCode := Content
+	if code != nil {
+		respCode = *code
 	} else {
-		switch r.req.Msg.Code() {
+		switch reqCode {
 		case POST:
-			code = Changed
+			respCode = Changed
 		case PUT:
-			code = Created
+			respCode = Created
 		case DELETE:
-			code = Deleted
+			respCode = Deleted
 		}
 	}
-	resp := r.NewResponse(code)
-	if r.contentFormat != nil {
-		resp.SetOption(ContentFormat, *r.contentFormat)
+	resp := w.NewResponse(respCode)
+	if contentFormat != nil {
+		resp.SetOption(ContentFormat, *contentFormat)
 	}
-	if p != nil {
-		resp.SetPayload(p)
+	var l int
+	if payload != nil {
+		resp.SetPayload(payload)
+		l = len(payload)
 	}
+	return l, resp
+}
+
+// Write send response to peer
+func (r *responseWriter) Write(p []byte) (n int, err error) {
+	l, resp := prepareReponse(r, r.req.Msg.Code(), r.code, r.contentFormat, p)
 	err = r.WriteMsg(resp)
-	return len(p), err
+	return l, err
 }
 
 func (r *responseWriter) SetCode(code COAPCode) {
@@ -90,4 +101,16 @@ func (r *responseWriter) SetCode(code COAPCode) {
 
 func (r *responseWriter) SetContentFormat(contentFormat MediaType) {
 	r.contentFormat = &contentFormat
+}
+
+func (r *responseWriter) getCode() *COAPCode {
+	return r.code
+}
+
+func (r *responseWriter) getReq() *Request {
+	return r.req
+}
+
+func (r *responseWriter) getContentFormat() *MediaType {
+	return r.contentFormat
 }
