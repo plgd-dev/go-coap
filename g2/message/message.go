@@ -1,4 +1,4 @@
-package tcpcoap
+package message
 
 import "fmt"
 

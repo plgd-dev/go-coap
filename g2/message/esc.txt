@@ -1,0 +1,650 @@
+# github.com/go-ocf/go-coap/g2/message [github.com/go-ocf/go-coap/g2/message.test]
+./message.go:103:6: cannot inline init.0: unhandled op RANGE
+./message.go:111:6: can inline COAPCode.String as: method(COAPCode) func() string { return codeNames[c] }
+./option.go:144:6: cannot inline MediaType.String: function too complex: cost 178 exceeds budget 80
+./option.go:194:6: can inline extendOpt as: func(int) (int, int) { ext := 0; if opt >= ExtendOptionByteAddend { if opt >= ExtendOptionWordAddend { ext = opt - ExtendOptionWordAddend; opt = ExtendOptionWordCode } else { ext = opt - ExtendOptionByteAddend; opt = ExtendOptionByteCode } }; return opt, ext }
+./option.go:208:6: can inline marshalOptionHeaderExt as: func([]byte, int, int) (int, ErrorCode) { switch statement; return 0, OK }
+./option.go:218:30: inlining call to binary.bigEndian.PutUint16 method(binary.bigEndian) func([]byte, uint16) { _ = binary.b[int(1)]; binary.b[int(0)] = byte(binary.v >> uint(8)); binary.b[int(1)] = byte(binary.v) }
+./option.go:226:6: cannot inline marshalOptionHeader: function too complex: cost 494 exceeds budget 80
+./option.go:229:20: inlining call to extendOpt func(int) (int, int) { ext := 0; if opt >= ExtendOptionByteAddend { if opt >= ExtendOptionWordAddend { ext = opt - ExtendOptionWordAddend; opt = ExtendOptionWordCode } else { ext = opt - ExtendOptionByteAddend; opt = ExtendOptionByteCode } }; return opt, ext }
+./option.go:230:20: inlining call to extendOpt func(int) (int, int) { ext := 0; if opt >= ExtendOptionByteAddend { if opt >= ExtendOptionWordAddend { ext = opt - ExtendOptionWordAddend; opt = ExtendOptionWordCode } else { ext = opt - ExtendOptionByteAddend; opt = ExtendOptionByteCode } }; return opt, ext }
+./option.go:244:39: inlining call to marshalOptionHeaderExt func([]byte, int, int) (int, ErrorCode) { switch statement; return 0, OK }
+./option.go:244:39: inlining call to binary.bigEndian.PutUint16 method(binary.bigEndian) func([]byte, uint16) { _ = binary.b[int(1)]; binary.b[int(0)] = byte(binary.v >> uint(8)); binary.b[int(1)] = byte(binary.v) }
+./option.go:242:39: inlining call to marshalOptionHeaderExt func([]byte, int, int) (int, ErrorCode) { switch statement; return 0, OK }
+./option.go:242:39: inlining call to binary.bigEndian.PutUint16 method(binary.bigEndian) func([]byte, uint16) { _ = binary.b[int(1)]; binary.b[int(0)] = byte(binary.v >> uint(8)); binary.b[int(1)] = byte(binary.v) }
+./option.go:259:39: inlining call to marshalOptionHeaderExt func([]byte, int, int) (int, ErrorCode) { switch statement; return 0, OK }
+./option.go:259:39: inlining call to binary.bigEndian.PutUint16 method(binary.bigEndian) func([]byte, uint16) { _ = binary.b[int(1)]; binary.b[int(0)] = byte(binary.v >> uint(8)); binary.b[int(1)] = byte(binary.v) }
+./option.go:257:39: inlining call to marshalOptionHeaderExt func([]byte, int, int) (int, ErrorCode) { switch statement; return 0, OK }
+./option.go:257:39: inlining call to binary.bigEndian.PutUint16 method(binary.bigEndian) func([]byte, uint16) { _ = binary.b[int(1)]; binary.b[int(0)] = byte(binary.v >> uint(8)); binary.b[int(1)] = byte(binary.v) }
+./option.go:280:6: can inline Option.MarshalValue as: method(Option) func([]byte) (int, ErrorCode) { if len(buf) < len(o.Value) { return len(o.Value), ErrorCodeTooSmall }; copy(buf, o.Value); return len(o.Value), OK }
+./option.go:288:6: can inline (*Option).UnmarshalValue as: method(*Option) func([]byte) (int, ErrorCode) { o.Value = buf; return len(buf), OK }
+./option.go:293:6: cannot inline Option.Marshal: function too complex: cost 248 exceeds budget 80
+./option.go:320:31: inlining call to Option.MarshalValue method(Option) func([]byte) (int, ErrorCode) { if len(buf) < len(o.Value) { return len(o.Value), ErrorCodeTooSmall }; copy(buf, o.Value); return len(o.Value), OK }
+./option.go:341:31: inlining call to Option.MarshalValue method(Option) func([]byte) (int, ErrorCode) { if len(buf) < len(o.Value) { return len(o.Value), ErrorCodeTooSmall }; copy(buf, o.Value); return len(o.Value), OK }
+./option.go:339:31: inlining call to Option.MarshalValue method(Option) func([]byte) (int, ErrorCode) { if len(buf) < len(o.Value) { return len(o.Value), ErrorCodeTooSmall }; copy(buf, o.Value); return len(o.Value), OK }
+./option.go:359:6: can inline parseExtOpt as: func([]byte, int) (int, int, ErrorCode) { processed := 0; switch statement; return processed, opt, OK }
+./option.go:372:36: inlining call to binary.bigEndian.Uint16 method(binary.bigEndian) func([]byte) uint16 { _ = binary.b[int(1)]; return uint16(binary.b[int(1)]) | uint16(binary.b[int(0)]) << uint(8) }
+./option.go:378:6: can inline (*Option).Unmarshal as: method(*Option) func([]byte, map[OptionID]OptionDef, OptionID) (int, ErrorCode) { if ok { if def.ValueFormat == ValueUnknown { return 0, OK }; if len(data) < def.MinLen || len(data) > def.MaxLen { return 0, OK }; o.ID = OptionID; proc, err = o.UnmarshalValue(data); if err != OK { return -1, err }; return proc, err }; return 0, OK }
+./option.go:389:32: inlining call to (*Option).UnmarshalValue method(*Option) func([]byte) (int, ErrorCode) { o.Value = buf; return len(buf), OK }
+./optionValueEncodeDecode.go:8:6: cannot inline EncodeRunes: unhandled op RANGE
+./optionValueEncodeDecode.go:16:19: inlining call to utf8.RuneLen func(rune) int { switch statement; return int(-1) }
+./optionValueEncodeDecode.go:30:6: cannot inline DecodeRunes: unhandled op FOR
+./optionValueEncodeDecode.go:51:6: cannot inline EncodeUint32: function too complex: cost 190 exceeds budget 80
+./optionValueEncodeDecode.go:65:29: inlining call to binary.bigEndian.PutUint16 method(binary.bigEndian) func([]byte, uint16) { _ = binary.b[int(1)]; binary.b[int(0)] = byte(binary.v >> uint(8)); binary.b[int(1)] = byte(binary.v) }
+./optionValueEncodeDecode.go:72:29: inlining call to binary.bigEndian.PutUint32 method(binary.bigEndian) func([]byte, uint32) { _ = binary.b[int(3)]; binary.b[int(0)] = byte(binary.v >> uint(24)); binary.b[int(1)] = byte(binary.v >> uint(16)); binary.b[int(2)] = byte(binary.v >> uint(8)); binary.b[int(3)] = byte(binary.v) }
+./optionValueEncodeDecode.go:79:29: inlining call to binary.bigEndian.PutUint32 method(binary.bigEndian) func([]byte, uint32) { _ = binary.b[int(3)]; binary.b[int(0)] = byte(binary.v >> uint(24)); binary.b[int(1)] = byte(binary.v >> uint(16)); binary.b[int(2)] = byte(binary.v >> uint(8)); binary.b[int(3)] = byte(binary.v) }
+./optionValueEncodeDecode.go:84:6: can inline DecodeUint32 as: func([]byte) (uint32, int, ErrorCode) { if len(buf) > 4 { buf = buf[:4] }; tmp := []byte literal; copy(tmp[4 - len(buf):], buf); value := binary.BigEndian.Uint32(tmp); return value, len(buf), OK }
+./optionValueEncodeDecode.go:90:34: inlining call to binary.bigEndian.Uint32 method(binary.bigEndian) func([]byte) uint32 { _ = binary.b[int(3)]; return uint32(binary.b[int(3)]) | uint32(binary.b[int(2)]) << uint(8) | uint32(binary.b[int(1)]) << uint(16) | uint32(binary.b[int(0)]) << uint(24) }
+./options.go:93:6: cannot inline Options.findPositon: unhandled op FOR
+./options.go:200:6: cannot inline Options.Remove: unhandled op FOR
+./options.go:187:6: cannot inline Options.Add: unhandled op FOR
+./options.go:7:6: cannot inline Options.SetPath: unhandled op FOR
+./options.go:81:6: cannot inline Options.Find: function too complex: cost 203 exceeds budget 80
+./options.go:46:6: cannot inline Options.Path: unhandled op FOR
+./options.go:155:6: cannot inline Options.Set: unhandled op FOR
+./options.go:69:6: cannot inline Options.SetContentFormat: function too complex: cost 210 exceeds budget 80
+./options.go:218:6: cannot inline Options.Marshal: unhandled op RANGE
+./options.go:254:6: cannot inline (*Options).Unmarshal: unhandled op FOR
+./options.go:273:34: inlining call to parseExtOpt func([]byte, int) (int, int, ErrorCode) { processed := 0; switch statement; return processed, opt, OK }
+./options.go:273:34: inlining call to binary.bigEndian.Uint16 method(binary.bigEndian) func([]byte) uint16 { _ = binary.b[int(1)]; return uint16(binary.b[int(1)]) | uint16(binary.b[int(0)]) << uint(8) }
+./options.go:279:34: inlining call to parseExtOpt func([]byte, int) (int, int, ErrorCode) { processed := 0; switch statement; return processed, opt, OK }
+./options.go:279:34: inlining call to binary.bigEndian.Uint16 method(binary.bigEndian) func([]byte) uint16 { _ = binary.b[int(1)]; return uint16(binary.b[int(1)]) | uint16(binary.b[int(0)]) << uint(8) }
+./options.go:292:31: inlining call to (*Option).Unmarshal method(*Option) func([]byte, map[OptionID]OptionDef, OptionID) (int, ErrorCode) { if ok { if def.ValueFormat == ValueUnknown { return 0, OK }; if len(data) < def.MinLen || len(data) > def.MaxLen { return 0, OK }; o.ID = OptionID; proc, err := int(~r1), ~r2; if err != OK { return -1, err }; return proc, err }; return 0, OK }
+./options.go:292:31: inlining call to (*Option).UnmarshalValue method(*Option) func([]byte) (int, ErrorCode) { o.Value = buf; return len(buf), OK }
+./options_test.go:8:6: cannot inline testFindPositionBytesOption: function too complex: cost 185 exceeds budget 80
+./options_test.go:16:6: cannot inline TestFindPositonBytesOption: function too complex: cost 954 exceeds budget 80
+./options_test.go:37:6: cannot inline TestSetBytesOption: function too complex: cost 1779 exceeds budget 80
+./options_test.go:95:6: cannot inline testAddBytesOption: function too complex: cost 487 exceeds budget 80
+./options_test.go:111:6: cannot inline TestAddBytesOption: function too complex: cost 482 exceeds budget 80
+./options_test.go:120:6: cannot inline testRemoveBytesOption: unhandled op RANGE
+./options_test.go:134:6: cannot inline TestRemoveBytesOption: function too complex: cost 841 exceeds budget 80
+./options_test.go:148:6: cannot inline TestPathOption: function too complex: cost 675 exceeds budget 80
+./options_test.go:175:6: cannot inline BenchmarkPathOption: unhandled op FOR
+./message.go:106:31: i escapes to heap
+./message.go:106:31: 	from ... argument (arg to ...) at ./message.go:106:30
+./message.go:106:31: 	from *(... argument) (indirection) at ./message.go:106:30
+./message.go:106:31: 	from ... argument (passed to call[argument content escapes]) at ./message.go:106:30
+./message.go:106:30: init.0 ... argument does not escape
+./option.go:191:34: "Unknown media type: 0x" + strconv.FormatInt(int64(c), 16) escapes to heap
+./option.go:191:34: 	from ~r0 (return) at ./option.go:191:2
+./option.go:208:29: marshalOptionHeaderExt buf does not escape
+./option.go:226:26: marshalOptionHeader buf does not escape
+./option.go:280:7: Option.MarshalValue o does not escape
+./option.go:280:30: Option.MarshalValue buf does not escape
+./option.go:288:33: leaking param: buf
+./option.go:288:33: 	from o.Value (star-dot-equals) at ./option.go:289:10
+./option.go:288:7: (*Option).UnmarshalValue o does not escape
+./option.go:293:7: Option.Marshal o does not escape
+./option.go:293:25: Option.Marshal buf does not escape
+./option.go:359:18: parseExtOpt data does not escape
+./option.go:378:28: leaking param: data
+./option.go:378:28: 	from buf (assign-pair) at ./option.go:389:32
+./option.go:378:28: 	from o.Value (star-dot-equals) at ./option.go:389:32
+./option.go:378:7: (*Option).Unmarshal o does not escape
+./option.go:378:41: (*Option).Unmarshal optionDefs does not escape
+./optionValueEncodeDecode.go:8:18: EncodeRunes p does not escape
+./optionValueEncodeDecode.go:8:28: EncodeRunes value does not escape
+./optionValueEncodeDecode.go:10:16: EncodeRunes make([]byte, 8) does not escape
+./optionValueEncodeDecode.go:30:18: DecodeRunes buf does not escape
+./optionValueEncodeDecode.go:30:30: DecodeRunes p does not escape
+./optionValueEncodeDecode.go:51:19: EncodeUint32 buf does not escape
+./optionValueEncodeDecode.go:71:13: EncodeUint32 make([]byte, 4) does not escape
+./optionValueEncodeDecode.go:84:19: DecodeUint32 buf does not escape
+./optionValueEncodeDecode.go:88:15: DecodeUint32 []byte literal does not escape
+./options.go:93:7: Options.findPositon options does not escape
+./options.go:200:7: leaking param: options to result ~r1 level=0
+./options.go:200:7: 	from ~r1 (return) at ./options.go:204:3
+./options.go:200:7: leaking param: options to result ~r1 level=0
+./options.go:200:7: 	from ~r1 (return) at ./options.go:215:2
+./options.go:200:7: leaking param content: options
+./options.go:200:7: 	from options[i] (dot of pointer) at ./options.go:209:31
+./options.go:200:7: 	from options[updateIdx] (slice-element-equals) at ./options.go:209:22
+./options.go:187:7: leaking param: options to result ~r1 level=0
+./options.go:187:7: 	from ~r1 (return) at ./options.go:189:3
+./options.go:187:7: leaking param: options to result ~r1 level=0
+./options.go:187:7: 	from ~r1 (return) at ./options.go:197:2
+./options.go:187:7: leaking param content: options
+./options.go:187:7: 	from options[i - 1] (dot of pointer) at ./options.go:194:23
+./options.go:187:7: 	from options[i] (slice-element-equals) at ./options.go:194:14
+./options.go:187:28: leaking param: opt
+./options.go:187:28: 	from options[idx] (slice-element-equals) at ./options.go:196:15
+./options.go:7:7: leaking param: options to result ~r2 level=0
+./options.go:7:7: 	from ~r2 (return) at ./options.go:9:3
+./options.go:7:7: leaking param: options to result ~r2 level=0
+./options.go:7:7: 	from ~r2 (return) at ./options.go:31:4
+./options.go:7:7: leaking param: options to result ~r2 level=0
+./options.go:7:7: 	from ~r2 (return) at ./options.go:34:4
+./options.go:7:7: leaking param: options to result ~r2 level=0
+./options.go:7:7: 	from ~r2 (return) at ./options.go:39:4
+./options.go:7:7: leaking param: options to result ~r2 level=0
+./options.go:7:7: 	from .out0 (passed-to-and-returned-from-call) at ./options.go:11:21
+./options.go:7:7: 	from o (assigned) at ./options.go:11:2
+./options.go:7:7: 	from ~r2 (return) at ./options.go:43:2
+./options.go:7:7: leaking param content: options
+./options.go:7:7: 	from *options (indirection) at ./options.go:7:7
+./options.go:7:7: 	from options (passed to call[argument content escapes]) at ./options.go:11:21
+./options.go:7:32: leaking param: buf
+./options.go:7:32: 	from data (assigned) at ./options.go:28:8
+./options.go:7:32: 	from Option literal (struct literal element) at ./options.go:37:24
+./options.go:7:32: 	from Option literal (passed to call[argument escapes]) at ./options.go:37:17
+./options.go:7:44: Options.SetPath path does not escape
+./options.go:18:18: Options.SetPath ([]rune)(path) does not escape
+./options.go:81:7: Options.Find options does not escape
+./options.go:46:7: Options.Path options does not escape
+./options.go:46:29: Options.Path buf does not escape
+./options.go:155:7: leaking param: options to result ~r1 level=0
+./options.go:155:7: 	from ~r1 (return) at ./options.go:162:4
+./options.go:155:7: leaking param: options to result ~r1 level=0
+./options.go:155:7: 	from ~r1 (return) at ./options.go:166:3
+./options.go:155:7: leaking param: options to result ~r1 level=0
+./options.go:155:7: 	from ~r1 (return) at ./options.go:171:3
+./options.go:155:7: leaking param: options to result ~r1 level=0
+./options.go:155:7: 	from ~r1 (return) at ./options.go:184:2
+./options.go:155:28: leaking param: opt
+./options.go:155:28: 	from options[len(options) - 1] (slice-element-equals) at ./options.go:165:27
+./options.go:155:7: leaking param content: options
+./options.go:155:7: 	from options[i] (dot of pointer) at ./options.go:178:31
+./options.go:155:7: 	from options[updateIdx] (slice-element-equals) at ./options.go:178:22
+./options.go:69:7: leaking param: options to result ~r2 level=0
+./options.go:69:7: 	from ~r2 (return) at ./options.go:72:3
+./options.go:69:7: leaking param: options to result ~r2 level=0
+./options.go:69:7: 	from .out0 (passed-to-and-returned-from-call) at ./options.go:74:23
+./options.go:69:7: 	from o (assign-pair-func-call) at ./options.go:74:2
+./options.go:69:7: 	from ~r2 (return) at ./options.go:76:3
+./options.go:69:7: leaking param: options to result ~r2 level=0
+./options.go:69:7: 	from .out0 (passed-to-and-returned-from-call) at ./options.go:74:23
+./options.go:69:7: 	from o (assign-pair-func-call) at ./options.go:74:2
+./options.go:69:7: 	from ~r2 (return) at ./options.go:78:2
+./options.go:69:7: leaking param content: options
+./options.go:69:7: 	from *options (indirection) at ./options.go:69:7
+./options.go:69:7: 	from options (passed to call[argument content escapes]) at ./options.go:74:23
+./options.go:69:41: leaking param: buf
+./options.go:69:41: 	from Option literal (struct literal element) at ./options.go:74:30
+./options.go:69:41: 	from Option literal (passed to call[argument escapes]) at ./options.go:74:23
+./options.go:218:7: Options.Marshal m does not escape
+./options.go:218:26: Options.Marshal buf does not escape
+./options.go:254:29: leaking param: data
+./options.go:254:29: 	from data (assign-pair) at ./options.go:292:31
+./options.go:254:29: 	from buf (assign-pair) at ./options.go:292:31
+./options.go:254:29: 	from o.Value (star-dot-equals) at ./options.go:292:31
+./options.go:254:7: leaking param content: m
+./options.go:254:7: 	from *m (indirection) at ./options.go:300:17
+./options.go:254:7: 	from * (*m) (indirection) at ./options.go:300:17
+./options.go:254:7: 	from append(*m, []Option literal...) (appendee slice) at ./options.go:300:16
+./options.go:254:42: (*Options).Unmarshal optionDefs does not escape
+./options.go:292:21: (*Options).Unmarshal option does not escape
+./options.go:300:29: (*Options).Unmarshal []Option literal does not escape
+./options_test.go:11:4: t.common escapes to heap
+./options_test.go:11:4: 	from t.common (passed to call[argument escapes]) at ./options_test.go:11:11
+./options_test.go:8:34: leaking param: t
+./options_test.go:8:34: 	from t.common (dot of pointer) at ./options_test.go:11:4
+./options_test.go:8:34: 	from t.common (address-of) at ./options_test.go:11:4
+./options_test.go:8:34: 	from t.common (passed to call[argument escapes]) at ./options_test.go:11:11
+./options_test.go:11:12: idx escapes to heap
+./options_test.go:11:12: 	from ... argument (arg to ...) at ./options_test.go:11:11
+./options_test.go:11:12: 	from *(... argument) (indirection) at ./options_test.go:11:11
+./options_test.go:11:12: 	from ... argument (passed to call[argument content escapes]) at ./options_test.go:11:11
+./options_test.go:11:12: expectedIdx escapes to heap
+./options_test.go:11:12: 	from ... argument (arg to ...) at ./options_test.go:11:11
+./options_test.go:11:12: 	from *(... argument) (indirection) at ./options_test.go:11:11
+./options_test.go:11:12: 	from ... argument (passed to call[argument content escapes]) at ./options_test.go:11:11
+./options_test.go:8:48: testFindPositionBytesOption options does not escape
+./options_test.go:11:11: testFindPositionBytesOption ... argument does not escape
+./options_test.go:16:33: leaking param: t
+./options_test.go:16:33: 	from t (passed to call[argument escapes]) at ./options_test.go:18:29
+./options_test.go:17:17: TestFindPositonBytesOption make(Options, 0, 10) does not escape
+./options_test.go:20:35: TestFindPositonBytesOption Options literal does not escape
+./options_test.go:23:35: TestFindPositonBytesOption Options literal does not escape
+./options_test.go:24:35: TestFindPositonBytesOption Options literal does not escape
+./options_test.go:25:35: TestFindPositonBytesOption Options literal does not escape
+./options_test.go:26:35: TestFindPositonBytesOption Options literal does not escape
+./options_test.go:29:35: TestFindPositonBytesOption Options literal does not escape
+./options_test.go:32:35: TestFindPositonBytesOption Options literal does not escape
+./options_test.go:39:57: ([]byte)("0") escapes to heap
+./options_test.go:39:57: 	from Option literal (struct literal element) at ./options_test.go:39:36
+./options_test.go:39:57: 	from Option literal (passed to call[argument escapes]) at ./options_test.go:39:29
+./options_test.go:41:4: t.common escapes to heap
+./options_test.go:41:4: 	from t.common (passed to call[argument escapes]) at ./options_test.go:41:11
+./options_test.go:37:25: leaking param: t
+./options_test.go:37:25: 	from t.common (dot of pointer) at ./options_test.go:41:4
+./options_test.go:37:25: 	from t.common (address-of) at ./options_test.go:41:4
+./options_test.go:37:25: 	from t.common (passed to call[argument escapes]) at ./options_test.go:41:11
+./options_test.go:41:12: err escapes to heap
+./options_test.go:41:12: 	from ... argument (arg to ...) at ./options_test.go:41:11
+./options_test.go:41:12: 	from *(... argument) (indirection) at ./options_test.go:41:11
+./options_test.go:41:12: 	from ... argument (passed to call[argument content escapes]) at ./options_test.go:41:11
+./options_test.go:44:4: t.common escapes to heap
+./options_test.go:44:4: 	from t.common (passed to call[argument escapes]) at ./options_test.go:44:11
+./options_test.go:44:40: len(options) escapes to heap
+./options_test.go:44:40: 	from ... argument (arg to ...) at ./options_test.go:44:11
+./options_test.go:44:40: 	from *(... argument) (indirection) at ./options_test.go:44:11
+./options_test.go:44:40: 	from ... argument (passed to call[argument content escapes]) at ./options_test.go:44:11
+./options_test.go:47:57: ([]byte)("1") escapes to heap
+./options_test.go:47:57: 	from composite literal (struct literal element) at ./options_test.go:47:36
+./options_test.go:47:57: 	from Options literal (slice-literal-element) at ./options_test.go:47:35
+./options_test.go:47:57: 	from Options literal (converted) at ./options_test.go:47:18
+./options_test.go:47:57: 	from *([]Option)(Options literal) (indirection) at ./options_test.go:47:18
+./options_test.go:47:57: 	from append(options, Options literal...) (appended slice...) at ./options_test.go:47:18
+./options_test.go:48:57: ([]byte)("2") escapes to heap
+./options_test.go:48:57: 	from composite literal (struct literal element) at ./options_test.go:48:36
+./options_test.go:48:57: 	from Options literal (slice-literal-element) at ./options_test.go:48:35
+./options_test.go:48:57: 	from Options literal (converted) at ./options_test.go:48:18
+./options_test.go:48:57: 	from *([]Option)(Options literal) (indirection) at ./options_test.go:48:18
+./options_test.go:48:57: 	from append(options, Options literal...) (appended slice...) at ./options_test.go:48:18
+./options_test.go:49:57: ([]byte)("3") escapes to heap
+./options_test.go:49:57: 	from composite literal (struct literal element) at ./options_test.go:49:36
+./options_test.go:49:57: 	from Options literal (slice-literal-element) at ./options_test.go:49:35
+./options_test.go:49:57: 	from Options literal (converted) at ./options_test.go:49:18
+./options_test.go:49:57: 	from *([]Option)(Options literal) (indirection) at ./options_test.go:49:18
+./options_test.go:49:57: 	from append(options, Options literal...) (appended slice...) at ./options_test.go:49:18
+./options_test.go:50:56: ([]byte)("4") escapes to heap
+./options_test.go:50:56: 	from Option literal (struct literal element) at ./options_test.go:50:35
+./options_test.go:50:56: 	from Option literal (passed to call[argument escapes]) at ./options_test.go:50:28
+./options_test.go:52:4: t.common escapes to heap
+./options_test.go:52:4: 	from t.common (passed to call[argument escapes]) at ./options_test.go:52:11
+./options_test.go:52:12: err escapes to heap
+./options_test.go:52:12: 	from ... argument (arg to ...) at ./options_test.go:52:11
+./options_test.go:52:12: 	from *(... argument) (indirection) at ./options_test.go:52:11
+./options_test.go:52:12: 	from ... argument (passed to call[argument content escapes]) at ./options_test.go:52:11
+./options_test.go:55:4: t.common escapes to heap
+./options_test.go:55:4: 	from t.common (passed to call[argument escapes]) at ./options_test.go:55:11
+./options_test.go:55:40: len(options) escapes to heap
+./options_test.go:55:40: 	from ... argument (arg to ...) at ./options_test.go:55:11
+./options_test.go:55:40: 	from *(... argument) (indirection) at ./options_test.go:55:11
+./options_test.go:55:40: 	from ... argument (passed to call[argument content escapes]) at ./options_test.go:55:11
+./options_test.go:58:57: ([]byte)("5") escapes to heap
+./options_test.go:58:57: 	from composite literal (struct literal element) at ./options_test.go:58:36
+./options_test.go:58:57: 	from Options literal (slice-literal-element) at ./options_test.go:58:35
+./options_test.go:58:57: 	from Options literal (converted) at ./options_test.go:58:18
+./options_test.go:58:57: 	from *([]Option)(Options literal) (indirection) at ./options_test.go:58:18
+./options_test.go:58:57: 	from append(options, Options literal...) (appended slice...) at ./options_test.go:58:18
+./options_test.go:59:56: ([]byte)("6") escapes to heap
+./options_test.go:59:56: 	from Option literal (struct literal element) at ./options_test.go:59:35
+./options_test.go:59:56: 	from Option literal (passed to call[argument escapes]) at ./options_test.go:59:28
+./options_test.go:61:4: t.common escapes to heap
+./options_test.go:61:4: 	from t.common (passed to call[argument escapes]) at ./options_test.go:61:11
+./options_test.go:61:12: err escapes to heap
+./options_test.go:61:12: 	from ... argument (arg to ...) at ./options_test.go:61:11
+./options_test.go:61:12: 	from *(... argument) (indirection) at ./options_test.go:61:11
+./options_test.go:61:12: 	from ... argument (passed to call[argument content escapes]) at ./options_test.go:61:11
+./options_test.go:64:4: t.common escapes to heap
+./options_test.go:64:4: 	from t.common (passed to call[argument escapes]) at ./options_test.go:64:11
+./options_test.go:64:40: len(options) escapes to heap
+./options_test.go:64:40: 	from ... argument (arg to ...) at ./options_test.go:64:11
+./options_test.go:64:40: 	from *(... argument) (indirection) at ./options_test.go:64:11
+./options_test.go:64:40: 	from ... argument (passed to call[argument content escapes]) at ./options_test.go:64:11
+./options_test.go:67:57: ([]byte)("7") escapes to heap
+./options_test.go:67:57: 	from composite literal (struct literal element) at ./options_test.go:67:36
+./options_test.go:67:57: 	from Options literal (slice-literal-element) at ./options_test.go:67:35
+./options_test.go:67:57: 	from Options literal (converted) at ./options_test.go:67:18
+./options_test.go:67:57: 	from *([]Option)(Options literal) (indirection) at ./options_test.go:67:18
+./options_test.go:67:57: 	from append(options, Options literal...) (appended slice...) at ./options_test.go:67:18
+./options_test.go:68:57: ([]byte)("8") escapes to heap
+./options_test.go:68:57: 	from composite literal (struct literal element) at ./options_test.go:68:36
+./options_test.go:68:57: 	from Options literal (slice-literal-element) at ./options_test.go:68:35
+./options_test.go:68:57: 	from Options literal (converted) at ./options_test.go:68:18
+./options_test.go:68:57: 	from *([]Option)(Options literal) (indirection) at ./options_test.go:68:18
+./options_test.go:68:57: 	from append(options, Options literal...) (appended slice...) at ./options_test.go:68:18
+./options_test.go:69:56: ([]byte)("9") escapes to heap
+./options_test.go:69:56: 	from Option literal (struct literal element) at ./options_test.go:69:35
+./options_test.go:69:56: 	from Option literal (passed to call[argument escapes]) at ./options_test.go:69:28
+./options_test.go:71:4: t.common escapes to heap
+./options_test.go:71:4: 	from t.common (passed to call[argument escapes]) at ./options_test.go:71:11
+./options_test.go:71:12: err escapes to heap
+./options_test.go:71:12: 	from ... argument (arg to ...) at ./options_test.go:71:11
+./options_test.go:71:12: 	from *(... argument) (indirection) at ./options_test.go:71:11
+./options_test.go:71:12: 	from ... argument (passed to call[argument content escapes]) at ./options_test.go:71:11
+./options_test.go:74:4: t.common escapes to heap
+./options_test.go:74:4: 	from t.common (passed to call[argument escapes]) at ./options_test.go:74:11
+./options_test.go:74:40: len(options) escapes to heap
+./options_test.go:74:40: 	from ... argument (arg to ...) at ./options_test.go:74:11
+./options_test.go:74:40: 	from *(... argument) (indirection) at ./options_test.go:74:11
+./options_test.go:74:40: 	from ... argument (passed to call[argument content escapes]) at ./options_test.go:74:11
+./options_test.go:77:56: ([]byte)("10") escapes to heap
+./options_test.go:77:56: 	from Option literal (struct literal element) at ./options_test.go:77:35
+./options_test.go:77:56: 	from Option literal (passed to call[argument escapes]) at ./options_test.go:77:28
+./options_test.go:79:4: t.common escapes to heap
+./options_test.go:79:4: 	from t.common (passed to call[argument escapes]) at ./options_test.go:79:11
+./options_test.go:79:12: err escapes to heap
+./options_test.go:79:12: 	from ... argument (arg to ...) at ./options_test.go:79:11
+./options_test.go:79:12: 	from *(... argument) (indirection) at ./options_test.go:79:11
+./options_test.go:79:12: 	from ... argument (passed to call[argument content escapes]) at ./options_test.go:79:11
+./options_test.go:82:4: t.common escapes to heap
+./options_test.go:82:4: 	from t.common (passed to call[argument escapes]) at ./options_test.go:82:11
+./options_test.go:82:40: len(options) escapes to heap
+./options_test.go:82:40: 	from ... argument (arg to ...) at ./options_test.go:82:11
+./options_test.go:82:40: 	from *(... argument) (indirection) at ./options_test.go:82:11
+./options_test.go:82:40: 	from ... argument (passed to call[argument content escapes]) at ./options_test.go:82:11
+./options_test.go:85:56: ([]byte)("11") escapes to heap
+./options_test.go:85:56: 	from Option literal (struct literal element) at ./options_test.go:85:35
+./options_test.go:85:56: 	from Option literal (passed to call[argument escapes]) at ./options_test.go:85:28
+./options_test.go:87:4: t.common escapes to heap
+./options_test.go:87:4: 	from t.common (passed to call[argument escapes]) at ./options_test.go:87:11
+./options_test.go:87:12: err escapes to heap
+./options_test.go:87:12: 	from ... argument (arg to ...) at ./options_test.go:87:11
+./options_test.go:87:12: 	from *(... argument) (indirection) at ./options_test.go:87:11
+./options_test.go:87:12: 	from ... argument (passed to call[argument content escapes]) at ./options_test.go:87:11
+./options_test.go:90:4: t.common escapes to heap
+./options_test.go:90:4: 	from t.common (passed to call[argument escapes]) at ./options_test.go:90:11
+./options_test.go:90:40: len(options) escapes to heap
+./options_test.go:90:40: 	from ... argument (arg to ...) at ./options_test.go:90:11
+./options_test.go:90:40: 	from *(... argument) (indirection) at ./options_test.go:90:11
+./options_test.go:90:40: 	from ... argument (passed to call[argument content escapes]) at ./options_test.go:90:11
+./options_test.go:38:17: TestSetBytesOption make(Options, 0, 10) does not escape
+./options_test.go:41:11: TestSetBytesOption ... argument does not escape
+./options_test.go:44:11: TestSetBytesOption ... argument does not escape
+./options_test.go:47:35: TestSetBytesOption Options literal does not escape
+./options_test.go:48:35: TestSetBytesOption Options literal does not escape
+./options_test.go:49:35: TestSetBytesOption Options literal does not escape
+./options_test.go:52:11: TestSetBytesOption ... argument does not escape
+./options_test.go:55:11: TestSetBytesOption ... argument does not escape
+./options_test.go:58:35: TestSetBytesOption Options literal does not escape
+./options_test.go:61:11: TestSetBytesOption ... argument does not escape
+./options_test.go:64:11: TestSetBytesOption ... argument does not escape
+./options_test.go:67:35: TestSetBytesOption Options literal does not escape
+./options_test.go:68:35: TestSetBytesOption Options literal does not escape
+./options_test.go:71:11: TestSetBytesOption ... argument does not escape
+./options_test.go:74:11: TestSetBytesOption ... argument does not escape
+./options_test.go:79:11: TestSetBytesOption ... argument does not escape
+./options_test.go:82:11: TestSetBytesOption ... argument does not escape
+./options_test.go:87:11: TestSetBytesOption ... argument does not escape
+./options_test.go:90:11: TestSetBytesOption ... argument does not escape
+./options_test.go:95:39: leaking param content: options
+./options_test.go:95:39: 	from *options (indirection) at ./options_test.go:95:39
+./options_test.go:95:39: 	from options (passed to call[argument content escapes]) at ./options_test.go:97:29
+./options_test.go:95:56: leaking param: option
+./options_test.go:95:56: 	from option (passed to call[argument escapes]) at ./options_test.go:97:29
+./options_test.go:99:4: t.common escapes to heap
+./options_test.go:99:4: 	from t.common (passed to call[argument escapes]) at ./options_test.go:99:11
+./options_test.go:95:25: leaking param: t
+./options_test.go:95:25: 	from t.common (dot of pointer) at ./options_test.go:99:4
+./options_test.go:95:25: 	from t.common (address-of) at ./options_test.go:99:4
+./options_test.go:95:25: 	from t.common (passed to call[argument escapes]) at ./options_test.go:99:11
+./options_test.go:99:12: err escapes to heap
+./options_test.go:99:12: 	from ... argument (arg to ...) at ./options_test.go:99:11
+./options_test.go:99:12: 	from *(... argument) (indirection) at ./options_test.go:99:11
+./options_test.go:99:12: 	from ... argument (passed to call[argument content escapes]) at ./options_test.go:99:11
+./options_test.go:102:4: t.common escapes to heap
+./options_test.go:102:4: 	from t.common (passed to call[argument escapes]) at ./options_test.go:102:11
+./options_test.go:102:53: len(options) escapes to heap
+./options_test.go:102:53: 	from ... argument (arg to ...) at ./options_test.go:102:11
+./options_test.go:102:53: 	from *(... argument) (indirection) at ./options_test.go:102:11
+./options_test.go:102:53: 	from ... argument (passed to call[argument content escapes]) at ./options_test.go:102:11
+./options_test.go:102:53: expectedLen escapes to heap
+./options_test.go:102:53: 	from ... argument (arg to ...) at ./options_test.go:102:11
+./options_test.go:102:53: 	from *(... argument) (indirection) at ./options_test.go:102:11
+./options_test.go:102:53: 	from ... argument (passed to call[argument content escapes]) at ./options_test.go:102:11
+./options_test.go:106:4: t.common escapes to heap
+./options_test.go:106:4: 	from t.common (passed to call[argument escapes]) at ./options_test.go:106:11
+./options_test.go:106:68: options[expectedIdx].ID escapes to heap
+./options_test.go:106:68: 	from ... argument (arg to ...) at ./options_test.go:106:11
+./options_test.go:106:68: 	from *(... argument) (indirection) at ./options_test.go:106:11
+./options_test.go:106:68: 	from ... argument (passed to call[argument content escapes]) at ./options_test.go:106:11
+./options_test.go:106:93: options[expectedIdx].Value escapes to heap
+./options_test.go:106:93: 	from ... argument (arg to ...) at ./options_test.go:106:11
+./options_test.go:106:93: 	from *(... argument) (indirection) at ./options_test.go:106:11
+./options_test.go:106:93: 	from ... argument (passed to call[argument content escapes]) at ./options_test.go:106:11
+./options_test.go:106:107: option.ID escapes to heap
+./options_test.go:106:107: 	from ... argument (arg to ...) at ./options_test.go:106:11
+./options_test.go:106:107: 	from *(... argument) (indirection) at ./options_test.go:106:11
+./options_test.go:106:107: 	from ... argument (passed to call[argument content escapes]) at ./options_test.go:106:11
+./options_test.go:106:118: option.Value escapes to heap
+./options_test.go:106:118: 	from ... argument (arg to ...) at ./options_test.go:106:11
+./options_test.go:106:118: 	from *(... argument) (indirection) at ./options_test.go:106:11
+./options_test.go:106:118: 	from ... argument (passed to call[argument content escapes]) at ./options_test.go:106:11
+./options_test.go:95:39: leaking param: options to result ~r4 level=0
+./options_test.go:95:39: 	from ~r4 (return) at ./options_test.go:108:2
+./options_test.go:99:11: testAddBytesOption ... argument does not escape
+./options_test.go:102:11: testAddBytesOption ... argument does not escape
+./options_test.go:106:11: testAddBytesOption ... argument does not escape
+./options_test.go:111:25: leaking param: t
+./options_test.go:111:25: 	from t (passed to call[argument escapes]) at ./options_test.go:113:30
+./options_test.go:113:70: ([]byte)("0") escapes to heap
+./options_test.go:113:70: 	from Option literal (struct literal element) at ./options_test.go:113:49
+./options_test.go:113:70: 	from Option literal (passed to call[argument escapes]) at ./options_test.go:113:30
+./options_test.go:114:70: ([]byte)("1") escapes to heap
+./options_test.go:114:70: 	from Option literal (struct literal element) at ./options_test.go:114:49
+./options_test.go:114:70: 	from Option literal (passed to call[argument escapes]) at ./options_test.go:114:30
+./options_test.go:115:70: ([]byte)("2") escapes to heap
+./options_test.go:115:70: 	from Option literal (struct literal element) at ./options_test.go:115:49
+./options_test.go:115:70: 	from Option literal (passed to call[argument escapes]) at ./options_test.go:115:30
+./options_test.go:116:70: ([]byte)("3") escapes to heap
+./options_test.go:116:70: 	from Option literal (struct literal element) at ./options_test.go:116:49
+./options_test.go:116:70: 	from Option literal (passed to call[argument escapes]) at ./options_test.go:116:30
+./options_test.go:117:70: ([]byte)("4") escapes to heap
+./options_test.go:117:70: 	from Option literal (struct literal element) at ./options_test.go:117:49
+./options_test.go:117:70: 	from Option literal (passed to call[argument escapes]) at ./options_test.go:117:30
+./options_test.go:112:17: TestAddBytesOption make(Options, 0, 10) does not escape
+./options_test.go:120:42: leaking param content: options
+./options_test.go:120:42: 	from *options (indirection) at ./options_test.go:120:42
+./options_test.go:120:42: 	from options (passed to call[argument content escapes]) at ./options_test.go:121:26
+./options_test.go:123:4: t.common escapes to heap
+./options_test.go:123:4: 	from t.common (passed to call[argument escapes]) at ./options_test.go:123:11
+./options_test.go:120:28: leaking param: t
+./options_test.go:120:28: 	from t.common (dot of pointer) at ./options_test.go:123:4
+./options_test.go:120:28: 	from t.common (address-of) at ./options_test.go:123:4
+./options_test.go:120:28: 	from t.common (passed to call[argument escapes]) at ./options_test.go:123:11
+./options_test.go:123:54: len(options) escapes to heap
+./options_test.go:123:54: 	from ... argument (arg to ...) at ./options_test.go:123:11
+./options_test.go:123:54: 	from *(... argument) (indirection) at ./options_test.go:123:11
+./options_test.go:123:54: 	from ... argument (passed to call[argument content escapes]) at ./options_test.go:123:11
+./options_test.go:123:54: expectedLen escapes to heap
+./options_test.go:123:54: 	from ... argument (arg to ...) at ./options_test.go:123:11
+./options_test.go:123:54: 	from *(... argument) (indirection) at ./options_test.go:123:11
+./options_test.go:123:54: 	from ... argument (passed to call[argument content escapes]) at ./options_test.go:123:11
+./options_test.go:128:5: t.common escapes to heap
+./options_test.go:128:5: 	from t.common (passed to call[argument escapes]) at ./options_test.go:128:12
+./options_test.go:128:13: option escapes to heap
+./options_test.go:128:13: 	from ... argument (arg to ...) at ./options_test.go:128:12
+./options_test.go:128:13: 	from *(... argument) (indirection) at ./options_test.go:128:12
+./options_test.go:128:13: 	from ... argument (passed to call[argument content escapes]) at ./options_test.go:128:12
+./options_test.go:120:42: leaking param: options to result ~r4 level=0
+./options_test.go:120:42: 	from ~r4 (return) at ./options_test.go:131:2
+./options_test.go:123:11: testRemoveBytesOption ... argument does not escape
+./options_test.go:128:12: testRemoveBytesOption ... argument does not escape
+./options_test.go:134:28: leaking param: t
+./options_test.go:134:28: 	from t (passed to call[argument escapes]) at ./options_test.go:136:30
+./options_test.go:136:70: ([]byte)("0") escapes to heap
+./options_test.go:136:70: 	from Option literal (struct literal element) at ./options_test.go:136:49
+./options_test.go:136:70: 	from Option literal (passed to call[argument escapes]) at ./options_test.go:136:30
+./options_test.go:137:70: ([]byte)("1") escapes to heap
+./options_test.go:137:70: 	from Option literal (struct literal element) at ./options_test.go:137:49
+./options_test.go:137:70: 	from Option literal (passed to call[argument escapes]) at ./options_test.go:137:30
+./options_test.go:138:70: ([]byte)("2") escapes to heap
+./options_test.go:138:70: 	from Option literal (struct literal element) at ./options_test.go:138:49
+./options_test.go:138:70: 	from Option literal (passed to call[argument escapes]) at ./options_test.go:138:30
+./options_test.go:139:70: ([]byte)("3") escapes to heap
+./options_test.go:139:70: 	from Option literal (struct literal element) at ./options_test.go:139:49
+./options_test.go:139:70: 	from Option literal (passed to call[argument escapes]) at ./options_test.go:139:30
+./options_test.go:140:70: ([]byte)("4") escapes to heap
+./options_test.go:140:70: 	from Option literal (struct literal element) at ./options_test.go:140:49
+./options_test.go:140:70: 	from Option literal (passed to call[argument escapes]) at ./options_test.go:140:30
+./options_test.go:144:70: ([]byte)("5") escapes to heap
+./options_test.go:144:70: 	from Option literal (struct literal element) at ./options_test.go:144:49
+./options_test.go:144:70: 	from Option literal (passed to call[argument escapes]) at ./options_test.go:144:30
+./options_test.go:135:17: TestRemoveBytesOption make(Options, 0, 10) does not escape
+./options_test.go:151:13: make([]byte, 256) escapes to heap
+./options_test.go:151:13: 	from buf (assigned) at ./options_test.go:151:6
+./options_test.go:151:13: 	from buf (passed to call[argument escapes]) at ./options_test.go:152:41
+./options_test.go:154:4: t.common escapes to heap
+./options_test.go:154:4: 	from t.common (passed to call[argument escapes]) at ./options_test.go:154:11
+./options_test.go:148:21: leaking param: t
+./options_test.go:148:21: 	from t.common (dot of pointer) at ./options_test.go:154:4
+./options_test.go:148:21: 	from t.common (address-of) at ./options_test.go:154:4
+./options_test.go:148:21: 	from t.common (passed to call[argument escapes]) at ./options_test.go:154:11
+./options_test.go:154:12: err escapes to heap
+./options_test.go:154:12: 	from ... argument (arg to ...) at ./options_test.go:154:11
+./options_test.go:154:12: 	from *(... argument) (indirection) at ./options_test.go:154:11
+./options_test.go:154:12: 	from ... argument (passed to call[argument content escapes]) at ./options_test.go:154:11
+./options_test.go:157:4: t.common escapes to heap
+./options_test.go:157:4: 	from t.common (passed to call[argument escapes]) at ./options_test.go:157:11
+./options_test.go:157:12: bufLen escapes to heap
+./options_test.go:157:12: 	from ... argument (arg to ...) at ./options_test.go:157:11
+./options_test.go:157:12: 	from *(... argument) (indirection) at ./options_test.go:157:11
+./options_test.go:157:12: 	from ... argument (passed to call[argument content escapes]) at ./options_test.go:157:11
+./options_test.go:163:4: t.common escapes to heap
+./options_test.go:163:4: 	from t.common (passed to call[argument escapes]) at ./options_test.go:163:11
+./options_test.go:163:12: err escapes to heap
+./options_test.go:163:12: 	from ... argument (arg to ...) at ./options_test.go:163:11
+./options_test.go:163:12: 	from *(... argument) (indirection) at ./options_test.go:163:11
+./options_test.go:163:12: 	from ... argument (passed to call[argument content escapes]) at ./options_test.go:163:11
+./options_test.go:166:4: t.common escapes to heap
+./options_test.go:166:4: 	from t.common (passed to call[argument escapes]) at ./options_test.go:166:11
+./options_test.go:166:12: bufLen escapes to heap
+./options_test.go:166:12: 	from ... argument (arg to ...) at ./options_test.go:166:11
+./options_test.go:166:12: 	from *(... argument) (indirection) at ./options_test.go:166:11
+./options_test.go:166:12: 	from ... argument (passed to call[argument content escapes]) at ./options_test.go:166:11
+./options_test.go:170:4: t.common escapes to heap
+./options_test.go:170:4: 	from t.common (passed to call[argument escapes]) at ./options_test.go:170:11
+./options_test.go:170:12: newPath escapes to heap
+./options_test.go:170:12: 	from ... argument (arg to ...) at ./options_test.go:170:11
+./options_test.go:170:12: 	from *(... argument) (indirection) at ./options_test.go:170:11
+./options_test.go:170:12: 	from ... argument (passed to call[argument content escapes]) at ./options_test.go:170:11
+./options_test.go:168:19: string(runes[:bufLen]) escapes to heap
+./options_test.go:168:19: 	from newPath (assigned) at ./options_test.go:168:10
+./options_test.go:168:19: 	from newPath (interface-converted) at ./options_test.go:170:12
+./options_test.go:168:19: 	from ... argument (arg to ...) at ./options_test.go:170:11
+./options_test.go:168:19: 	from *(... argument) (indirection) at ./options_test.go:170:11
+./options_test.go:168:19: 	from ... argument (passed to call[argument content escapes]) at ./options_test.go:170:11
+./options_test.go:170:12: path escapes to heap
+./options_test.go:170:12: 	from ... argument (arg to ...) at ./options_test.go:170:11
+./options_test.go:170:12: 	from *(... argument) (indirection) at ./options_test.go:170:11
+./options_test.go:170:12: 	from ... argument (passed to call[argument content escapes]) at ./options_test.go:170:11
+./options_test.go:149:17: TestPathOption make(Options, 0, 10) does not escape
+./options_test.go:154:11: TestPathOption ... argument does not escape
+./options_test.go:157:11: TestPathOption ... argument does not escape
+./options_test.go:160:15: TestPathOption make([]rune, 32) does not escape
+./options_test.go:163:11: TestPathOption ... argument does not escape
+./options_test.go:166:11: TestPathOption ... argument does not escape
+./options_test.go:170:11: TestPathOption ... argument does not escape
+./options_test.go:183:14: make([]byte, 256) escapes to heap
+./options_test.go:183:14: 	from buf (assigned) at ./options_test.go:183:7
+./options_test.go:183:14: 	from buf (passed to call[argument escapes]) at ./options_test.go:184:42
+./options_test.go:186:5: b.common escapes to heap
+./options_test.go:186:5: 	from b.common (passed to call[argument escapes]) at ./options_test.go:186:12
+./options_test.go:175:26: leaking param: b
+./options_test.go:175:26: 	from b.common (dot of pointer) at ./options_test.go:186:5
+./options_test.go:175:26: 	from b.common (address-of) at ./options_test.go:186:5
+./options_test.go:175:26: 	from b.common (passed to call[argument escapes]) at ./options_test.go:186:12
+./options_test.go:186:13: err escapes to heap
+./options_test.go:186:13: 	from ... argument (arg to ...) at ./options_test.go:186:12
+./options_test.go:186:13: 	from *(... argument) (indirection) at ./options_test.go:186:12
+./options_test.go:186:13: 	from ... argument (passed to call[argument content escapes]) at ./options_test.go:186:12
+./options_test.go:189:5: b.common escapes to heap
+./options_test.go:189:5: 	from b.common (passed to call[argument escapes]) at ./options_test.go:189:12
+./options_test.go:189:13: bufLen escapes to heap
+./options_test.go:189:13: 	from ... argument (arg to ...) at ./options_test.go:189:12
+./options_test.go:189:13: 	from *(... argument) (indirection) at ./options_test.go:189:12
+./options_test.go:189:13: 	from ... argument (passed to call[argument content escapes]) at ./options_test.go:189:12
+./options_test.go:194:5: b.common escapes to heap
+./options_test.go:194:5: 	from b.common (passed to call[argument escapes]) at ./options_test.go:194:12
+./options_test.go:194:13: err escapes to heap
+./options_test.go:194:13: 	from ... argument (arg to ...) at ./options_test.go:194:12
+./options_test.go:194:13: 	from *(... argument) (indirection) at ./options_test.go:194:12
+./options_test.go:194:13: 	from ... argument (passed to call[argument content escapes]) at ./options_test.go:194:12
+./options_test.go:197:5: b.common escapes to heap
+./options_test.go:197:5: 	from b.common (passed to call[argument escapes]) at ./options_test.go:197:12
+./options_test.go:197:13: bufLen escapes to heap
+./options_test.go:197:13: 	from ... argument (arg to ...) at ./options_test.go:197:12
+./options_test.go:197:13: 	from *(... argument) (indirection) at ./options_test.go:197:12
+./options_test.go:197:13: 	from ... argument (passed to call[argument content escapes]) at ./options_test.go:197:12
+./options_test.go:201:5: b.common escapes to heap
+./options_test.go:201:5: 	from b.common (passed to call[argument escapes]) at ./options_test.go:201:12
+./options_test.go:201:13: newPath escapes to heap
+./options_test.go:201:13: 	from ... argument (arg to ...) at ./options_test.go:201:12
+./options_test.go:201:13: 	from *(... argument) (indirection) at ./options_test.go:201:12
+./options_test.go:201:13: 	from ... argument (passed to call[argument content escapes]) at ./options_test.go:201:12
+./options_test.go:199:20: string(runes[:bufLen]) escapes to heap
+./options_test.go:199:20: 	from newPath (assigned) at ./options_test.go:199:11
+./options_test.go:199:20: 	from newPath (interface-converted) at ./options_test.go:201:13
+./options_test.go:199:20: 	from ... argument (arg to ...) at ./options_test.go:201:12
+./options_test.go:199:20: 	from *(... argument) (indirection) at ./options_test.go:201:12
+./options_test.go:199:20: 	from ... argument (passed to call[argument content escapes]) at ./options_test.go:201:12
+./options_test.go:201:13: path escapes to heap
+./options_test.go:201:13: 	from ... argument (arg to ...) at ./options_test.go:201:12
+./options_test.go:201:13: 	from *(... argument) (indirection) at ./options_test.go:201:12
+./options_test.go:201:13: 	from ... argument (passed to call[argument content escapes]) at ./options_test.go:201:12
+./options_test.go:176:17: BenchmarkPathOption make(Options, 0, 10) does not escape
+./options_test.go:177:15: BenchmarkPathOption make([]rune, 32) does not escape
+./options_test.go:186:12: BenchmarkPathOption ... argument does not escape
+./options_test.go:189:12: BenchmarkPathOption ... argument does not escape
+./options_test.go:194:12: BenchmarkPathOption ... argument does not escape
+./options_test.go:197:12: BenchmarkPathOption ... argument does not escape
+./options_test.go:201:12: BenchmarkPathOption ... argument does not escape
+<autogenerated>:1: (*COAPCode).String .this does not escape
+./message.go:112:18: index bounds check elided
+<autogenerated>:1: (*MediaType).String .this does not escape
+<autogenerated>:1: (*Option).Marshal .this does not escape
+./option.go:293:25: (*Option).Marshal buf does not escape
+<autogenerated>:1: (*Option).MarshalValue .this does not escape
+./option.go:280:30: (*Option).MarshalValue buf does not escape
+<autogenerated>:1: leaking param content: .this
+<autogenerated>:1: 	from .this (indirection) at <autogenerated>:1
+<autogenerated>:1: 	from * .this (indirection) at <autogenerated>:1
+<autogenerated>:1: 	from .this (passed to call[argument content escapes]) at <autogenerated>:1
+./options.go:187:28: leaking param: opt
+./options.go:187:28: 	from opt (passed to call[argument escapes]) at <autogenerated>:1
+<autogenerated>:1: leaking param: .this to result ~r1 level=1
+<autogenerated>:1: 	from .this (indirection) at <autogenerated>:1
+<autogenerated>:1: 	from .out0 (passed-to-and-returned-from-call) at <autogenerated>:1
+<autogenerated>:1: 	from ~r1 (return) at <autogenerated>:1
+<autogenerated>:1: (*Options).Find .this does not escape
+<autogenerated>:1: (*Options).Marshal .this does not escape
+./options.go:218:26: (*Options).Marshal buf does not escape
+<autogenerated>:1: (*Options).Path .this does not escape
+./options.go:46:29: (*Options).Path buf does not escape
+<autogenerated>:1: leaking param content: .this
+<autogenerated>:1: 	from .this (indirection) at <autogenerated>:1
+<autogenerated>:1: 	from * .this (indirection) at <autogenerated>:1
+<autogenerated>:1: 	from .this (passed to call[argument content escapes]) at <autogenerated>:1
+<autogenerated>:1: leaking param: .this to result ~r1 level=1
+<autogenerated>:1: 	from .this (indirection) at <autogenerated>:1
+<autogenerated>:1: 	from .out0 (passed-to-and-returned-from-call) at <autogenerated>:1
+<autogenerated>:1: 	from ~r1 (assigned) at ./options.go:200:44
+<autogenerated>:1: leaking param content: .this
+<autogenerated>:1: 	from .this (indirection) at <autogenerated>:1
+<autogenerated>:1: 	from * .this (indirection) at <autogenerated>:1
+<autogenerated>:1: 	from .this (passed to call[argument content escapes]) at <autogenerated>:1
+./options.go:155:28: leaking param: opt
+./options.go:155:28: 	from opt (passed to call[argument escapes]) at <autogenerated>:1
+<autogenerated>:1: leaking param: .this to result ~r1 level=1
+<autogenerated>:1: 	from .this (indirection) at <autogenerated>:1
+<autogenerated>:1: 	from .out0 (passed-to-and-returned-from-call) at <autogenerated>:1
+<autogenerated>:1: 	from ~r1 (return) at <autogenerated>:1
+<autogenerated>:1: leaking param content: .this
+<autogenerated>:1: 	from .this (indirection) at <autogenerated>:1
+<autogenerated>:1: 	from * .this (indirection) at <autogenerated>:1
+<autogenerated>:1: 	from .this (passed to call[argument content escapes]) at <autogenerated>:1
+./options.go:69:41: leaking param: buf
+./options.go:69:41: 	from buf (passed to call[argument escapes]) at <autogenerated>:1
+<autogenerated>:1: leaking param: .this to result ~r2 level=1
+<autogenerated>:1: 	from .this (indirection) at <autogenerated>:1
+<autogenerated>:1: 	from .out0 (passed-to-and-returned-from-call) at <autogenerated>:1
+<autogenerated>:1: 	from ~r2 (return) at <autogenerated>:1
+<autogenerated>:1: leaking param content: .this
+<autogenerated>:1: 	from .this (indirection) at <autogenerated>:1
+<autogenerated>:1: 	from * .this (indirection) at <autogenerated>:1
+<autogenerated>:1: 	from .this (passed to call[argument content escapes]) at <autogenerated>:1
+./options.go:7:32: leaking param: buf
+./options.go:7:32: 	from buf (passed to call[argument escapes]) at <autogenerated>:1
+<autogenerated>:1: leaking param: .this to result ~r2 level=1
+<autogenerated>:1: 	from .this (indirection) at <autogenerated>:1
+<autogenerated>:1: 	from .out0 (passed-to-and-returned-from-call) at <autogenerated>:1
+<autogenerated>:1: 	from ~r2 (return) at <autogenerated>:1
+./options.go:7:44: (*Options).SetPath path does not escape
+<autogenerated>:1: (*Options).findPositon .this does not escape
+# github.com/go-ocf/go-coap/g2/message.test
+/tmp/go-build328401788/b001/_testmain.go:42:6: can inline init.0 as: func() { testdeps.ImportPath = "github.com/go-ocf/go-coap/g2/message" }
+/tmp/go-build328401788/b001/_testmain.go:48:6: cannot inline main: function too complex: cost 191 exceeds budget 80
+/tmp/go-build328401788/b001/_testmain.go:50:24: inlining call to testing.MainStart func(testing.testDeps, []testing.InternalTest, []testing.InternalBenchmark, []testing.InternalExample) *testing.M { return &testing.M literal }
+/tmp/go-build328401788/b001/_testmain.go:50:24: &testing.M literal escapes to heap
+/tmp/go-build328401788/b001/_testmain.go:50:24: 	from ~R0 (assign-pair) at $WORK/b001/_testmain.go:50:24
+/tmp/go-build328401788/b001/_testmain.go:50:24: 	from m (assigned) at $WORK/b001/_testmain.go:50:4
+/tmp/go-build328401788/b001/_testmain.go:50:24: 	from m (passed to call[argument escapes]) at $WORK/b001/_testmain.go:52:15
+/tmp/go-build328401788/b001/_testmain.go:50:42: testdeps.TestDeps literal escapes to heap
+/tmp/go-build328401788/b001/_testmain.go:50:42: 	from testing.deps (assign-pair) at $WORK/b001/_testmain.go:50:24
+/tmp/go-build328401788/b001/_testmain.go:50:42: 	from &testing.M literal (struct literal element) at $WORK/b001/_testmain.go:50:24
+/tmp/go-build328401788/b001/_testmain.go:50:42: 	from &testing.M literal (pointer literal) at $WORK/b001/_testmain.go:50:24
+/tmp/go-build328401788/b001/_testmain.go:50:42: 	from ~R0 (assign-pair) at $WORK/b001/_testmain.go:50:24
+/tmp/go-build328401788/b001/_testmain.go:50:42: 	from m (assigned) at $WORK/b001/_testmain.go:50:4
+/tmp/go-build328401788/b001/_testmain.go:50:42: 	from m (passed to call[argument escapes]) at $WORK/b001/_testmain.go:52:15

@@ -1,4 +1,4 @@
-package tcpcoap
+package message
 
 import (
 	"encoding/binary"
@@ -12,11 +12,11 @@ const (
 )
 
 const (
-	extoptByteCode   = 13
-	extoptByteAddend = 13
-	extoptWordCode   = 14
-	extoptWordAddend = 269
-	extoptError      = 15
+	ExtendOptionByteCode   = 13
+	ExtendOptionByteAddend = 13
+	ExtendOptionWordCode   = 14
+	ExtendOptionWordAddend = 269
+	ExtendOptionError      = 15
 )
 
 // OptionID identifies an option in a message.
@@ -74,42 +74,42 @@ const (
 )
 
 // Option value format (RFC7252 section 3.2)
-type valueFormat uint8
+type ValueFormat uint8
 
 const (
-	valueUnknown valueFormat = iota
-	valueEmpty
-	valueOpaque
-	valueUint
-	valueString
+	ValueUnknown ValueFormat = iota
+	ValueEmpty
+	ValueOpaque
+	ValueUint
+	ValueString
 )
 
-type optionDef struct {
-	valueFormat valueFormat
-	minLen      int
-	maxLen      int
+type OptionDef struct {
+	ValueFormat ValueFormat
+	MinLen      int
+	MaxLen      int
 }
 
-var coapOptionDefs = map[OptionID]optionDef{
-	IfMatch:       optionDef{valueFormat: valueOpaque, minLen: 0, maxLen: 8},
-	URIHost:       optionDef{valueFormat: valueString, minLen: 1, maxLen: 255},
-	ETag:          optionDef{valueFormat: valueOpaque, minLen: 1, maxLen: 8},
-	IfNoneMatch:   optionDef{valueFormat: valueEmpty, minLen: 0, maxLen: 0},
-	Observe:       optionDef{valueFormat: valueUint, minLen: 0, maxLen: 3},
-	URIPort:       optionDef{valueFormat: valueUint, minLen: 0, maxLen: 2},
-	LocationPath:  optionDef{valueFormat: valueString, minLen: 0, maxLen: 255},
-	URIPath:       optionDef{valueFormat: valueString, minLen: 0, maxLen: 255},
-	ContentFormat: optionDef{valueFormat: valueUint, minLen: 0, maxLen: 2},
-	MaxAge:        optionDef{valueFormat: valueUint, minLen: 0, maxLen: 4},
-	URIQuery:      optionDef{valueFormat: valueString, minLen: 0, maxLen: 255},
-	Accept:        optionDef{valueFormat: valueUint, minLen: 0, maxLen: 2},
-	LocationQuery: optionDef{valueFormat: valueString, minLen: 0, maxLen: 255},
-	Block2:        optionDef{valueFormat: valueUint, minLen: 0, maxLen: 3},
-	Block1:        optionDef{valueFormat: valueUint, minLen: 0, maxLen: 3},
-	Size2:         optionDef{valueFormat: valueUint, minLen: 0, maxLen: 4},
-	ProxyURI:      optionDef{valueFormat: valueString, minLen: 1, maxLen: 1034},
-	ProxyScheme:   optionDef{valueFormat: valueString, minLen: 1, maxLen: 255},
-	Size1:         optionDef{valueFormat: valueUint, minLen: 0, maxLen: 4},
+var CoapOptionDefs = map[OptionID]OptionDef{
+	IfMatch:       OptionDef{ValueFormat: ValueOpaque, MinLen: 0, MaxLen: 8},
+	URIHost:       OptionDef{ValueFormat: ValueString, MinLen: 1, MaxLen: 255},
+	ETag:          OptionDef{ValueFormat: ValueOpaque, MinLen: 1, MaxLen: 8},
+	IfNoneMatch:   OptionDef{ValueFormat: ValueEmpty, MinLen: 0, MaxLen: 0},
+	Observe:       OptionDef{ValueFormat: ValueUint, MinLen: 0, MaxLen: 3},
+	URIPort:       OptionDef{ValueFormat: ValueUint, MinLen: 0, MaxLen: 2},
+	LocationPath:  OptionDef{ValueFormat: ValueString, MinLen: 0, MaxLen: 255},
+	URIPath:       OptionDef{ValueFormat: ValueString, MinLen: 0, MaxLen: 255},
+	ContentFormat: OptionDef{ValueFormat: ValueUint, MinLen: 0, MaxLen: 2},
+	MaxAge:        OptionDef{ValueFormat: ValueUint, MinLen: 0, MaxLen: 4},
+	URIQuery:      OptionDef{ValueFormat: ValueString, MinLen: 0, MaxLen: 255},
+	Accept:        OptionDef{ValueFormat: ValueUint, MinLen: 0, MaxLen: 2},
+	LocationQuery: OptionDef{ValueFormat: ValueString, MinLen: 0, MaxLen: 255},
+	Block2:        OptionDef{ValueFormat: ValueUint, MinLen: 0, MaxLen: 3},
+	Block1:        OptionDef{ValueFormat: ValueUint, MinLen: 0, MaxLen: 3},
+	Size2:         OptionDef{ValueFormat: ValueUint, MinLen: 0, MaxLen: 4},
+	ProxyURI:      OptionDef{ValueFormat: ValueString, MinLen: 1, MaxLen: 1034},
+	ProxyScheme:   OptionDef{ValueFormat: ValueString, MinLen: 1, MaxLen: 255},
+	Size1:         OptionDef{ValueFormat: ValueUint, MinLen: 0, MaxLen: 4},
 }
 
 // MediaType specifies the content format of a message.
@@ -193,13 +193,13 @@ func (c MediaType) String() string {
 
 func extendOpt(opt int) (int, int) {
 	ext := 0
-	if opt >= extoptByteAddend {
-		if opt >= extoptWordAddend {
-			ext = opt - extoptWordAddend
-			opt = extoptWordCode
+	if opt >= ExtendOptionByteAddend {
+		if opt >= ExtendOptionWordAddend {
+			ext = opt - ExtendOptionWordAddend
+			opt = ExtendOptionWordCode
 		} else {
-			ext = opt - extoptByteAddend
-			opt = extoptByteCode
+			ext = opt - ExtendOptionByteAddend
+			opt = ExtendOptionByteCode
 		}
 	}
 	return opt, ext
@@ -207,13 +207,13 @@ func extendOpt(opt int) (int, int) {
 
 func marshalOptionHeaderExt(buf []byte, opt, ext int) (int, ErrorCode) {
 	switch opt {
-	case extoptByteCode:
+	case ExtendOptionByteCode:
 		if buf != nil && len(buf) > 0 {
 			buf[0] = byte(ext)
 			return 1, OK
 		}
 		return 1, ErrorCodeTooSmall
-	case extoptWordCode:
+	case ExtendOptionWordCode:
 		if buf != nil && len(buf) > 1 {
 			binary.BigEndian.PutUint16(buf, uint16(ext))
 			return 2, OK
@@ -270,4 +270,128 @@ func marshalOptionHeader(buf []byte, delta, length int) (int, ErrorCode) {
 		return size, ErrorCodeTooSmall
 	}
 	return size, OK
+}
+
+type Option struct {
+	ID    OptionID
+	Value []byte
+}
+
+func (o Option) MarshalValue(buf []byte) (int, ErrorCode) {
+	if len(buf) < len(o.Value) {
+		return len(o.Value), ErrorCodeTooSmall
+	}
+	copy(buf, o.Value)
+	return len(o.Value), OK
+}
+
+func (o *Option) UnmarshalValue(buf []byte) (int, ErrorCode) {
+	o.Value = buf
+	return len(buf), OK
+}
+
+func (o Option) Marshal(buf []byte, previousID OptionID) (int, ErrorCode) {
+	/*
+	     0   1   2   3   4   5   6   7
+	   +---------------+---------------+
+	   |               |               |
+	   |  Option Delta | Option Length |   1 byte
+	   |               |               |
+	   +---------------+---------------+
+	   \                               \
+	   /         Option Delta          /   0-2 bytes
+	   \          (extended)           \
+	   +-------------------------------+
+	   \                               \
+	   /         Option Length         /   0-2 bytes
+	   \          (extended)           \
+	   +-------------------------------+
+	   \                               \
+	   /                               /
+	   \                               \
+	   /         Option Value          /   0 or more bytes
+	   \                               \
+	   /                               /
+	   \                               \
+	   +-------------------------------+
+	*/
+	delta := int(o.ID) - int(previousID)
+
+	lenBuf, err := o.MarshalValue(nil)
+	switch err {
+	case ErrorCodeTooSmall, OK:
+	default:
+		return -1, err
+	}
+
+	//header marshal
+	lenBuf, err = marshalOptionHeader(buf, delta, lenBuf)
+	switch err {
+	case OK:
+	case ErrorCodeTooSmall:
+		buf = nil
+	default:
+		return -1, err
+	}
+	length := lenBuf
+
+	if buf == nil {
+		lenBuf, err = o.MarshalValue(nil)
+	} else {
+		lenBuf, err = o.MarshalValue(buf[length:])
+	}
+
+	switch err {
+	case OK:
+	case ErrorCodeTooSmall:
+		buf = nil
+	default:
+		return -1, err
+	}
+	length = length + lenBuf
+
+	if buf == nil {
+		return length, ErrorCodeTooSmall
+	}
+	return length, OK
+}
+
+func parseExtOpt(data []byte, opt int) (int, int, ErrorCode) {
+	processed := 0
+	switch opt {
+	case ExtendOptionByteCode:
+		if len(data) < 1 {
+			return 0, -1, ErrorCodeOptionTruncated
+		}
+		opt = int(data[0]) + ExtendOptionByteAddend
+		processed = 1
+	case ExtendOptionWordCode:
+		if len(data) < 2 {
+			return 0, -1, ErrorCodeOptionTruncated
+		}
+		opt = int(binary.BigEndian.Uint16(data[:2])) + ExtendOptionWordAddend
+		processed = 2
+	}
+	return processed, opt, OK
+}
+
+func (o *Option) Unmarshal(data []byte, optionDefs map[OptionID]OptionDef, OptionID OptionID) (int, ErrorCode) {
+	if def, ok := optionDefs[OptionID]; ok {
+		if def.ValueFormat == ValueUnknown {
+			// Skip unrecognized options (RFC7252 section 5.4.1)
+			return 0, OK
+		}
+		if len(data) < def.MinLen || len(data) > def.MaxLen {
+			// Skip options with illegal value length (RFC7252 section 5.4.3)
+			return 0, OK
+		}
+		o.ID = OptionID
+		proc, err := o.UnmarshalValue(data)
+		if err != OK {
+			return -1, err
+		}
+		return proc, err
+	}
+	// Skip unrecognized options (should never be reached)
+	return 0, OK
 }

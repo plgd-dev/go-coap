@@ -1,4 +1,4 @@
-package tcpcoap
+package message
 
 // Error errors type of coap
 type ErrorCode int
@@ -12,7 +12,8 @@ const (
 	ErrorCodeShortRead                    = ErrorCode(-5)
 	ErrorCodeOptionTruncated              = ErrorCode(-6)
 	ErrorCodeOptionUnexpectedExtendMarker = ErrorCode(-7)
-	ErrorCodeUint32OptionsTooSmall        = ErrorCode(-8)
-	ErrorCodeStringOptionsTooSmall        = ErrorCode(-9)
 	ErrorCodeBytesOptionsTooSmall         = ErrorCode(-10)
+	ErrorCodeInvalidEncoding              = ErrorCode(-11)
+	ErrorCodeOptionNotFound               = ErrorCode(-12)
+	ErrorCodeOptionDuplicate              = ErrorCode(-13)
 )
