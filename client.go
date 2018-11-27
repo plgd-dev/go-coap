@@ -79,7 +79,7 @@ func (c *Client) Dial(address string) (clientConn *ClientConn, err error) {
 
 	var conn net.Conn
 	var network string
-	var sessionUPDData *SessionUDPData
+	var sessionUDPData *SessionUDPData
 
 	dialer := &net.Dialer{Timeout: c.DialTimeout}
 	BlockWiseTransfer := false
@@ -109,7 +109,7 @@ func (c *Client) Dial(address string) (clientConn *ClientConn, err error) {
 		if conn, err = dialer.Dial(network, address); err != nil {
 			return nil, err
 		}
-		sessionUPDData = &SessionUDPData{raddr: conn.(*net.UDPConn).RemoteAddr().(*net.UDPAddr)}
+		sessionUDPData = &SessionUDPData{raddr: conn.(*net.UDPConn).RemoteAddr().(*net.UDPAddr)}
 		BlockWiseTransfer = true
 	case "udp-mcast", "udp4-mcast", "udp6-mcast":
 		network = strings.TrimSuffix(c.Net, "-mcast")
@@ -117,7 +117,7 @@ func (c *Client) Dial(address string) (clientConn *ClientConn, err error) {
 		if err != nil {
 			return nil, err
 		}
-		sessionUPDData = &SessionUDPData{raddr: a}
+		sessionUDPData = &SessionUDPData{raddr: a}
 		conn = udpConn
 		BlockWiseTransfer = true
 		multicast = true
@@ -160,7 +160,7 @@ func (c *Client) Dial(address string) (clientConn *ClientConn, err error) {
 			newSessionTCPFunc: func(connection Conn, srv *Server) (networkSession, error) {
 				return clientConn.commander.networkSession, nil
 			},
-			newSessionUDPFunc: func(connection Conn, srv *Server, sessionUDPData *SessionUDPData) (networkSession, error) {
+			newSessionUDPFunc: func(connection Conn, srv *Server, sessionUDPData *SessionUDPData, initiator bool) (networkSession, error) {
 				if sessionUDPData.RemoteAddr().String() == clientConn.commander.networkSession.RemoteAddr().String() {
 					if s, ok := clientConn.commander.networkSession.(*blockWiseSession); ok {
 						s.networkSession.(*sessionUDP).sessionUDPData = sessionUDPData
@@ -169,10 +169,11 @@ func (c *Client) Dial(address string) (clientConn *ClientConn, err error) {
 					}
 					return clientConn.commander.networkSession, nil
 				}
-				session, err := newSessionUDP(connection, srv, sessionUDPData)
+				session, err := newSessionUDP(connection, srv, sessionUDPData, initiator)
 				if err != nil {
 					return nil, err
 				}
+				connection.SetNoiseState(session.GetNoiseState())
 				if session.blockWiseEnabled() {
 					return &blockWiseSession{networkSession: session}, nil
 				}
@@ -199,10 +200,15 @@ func (c *Client) Dial(address string) (clientConn *ClientConn, err error) {
 	case *net.UDPConn:
 		// WriteMsgUDP returns error when addr is filled in SessionUDPData for connected socket
 		setUDPSocketOptions(clientConn.srv.Conn.(*net.UDPConn))
-		session, err := newSessionUDP(newConnectionUDP(clientConn.srv.Conn.(*net.UDPConn), clientConn.srv), clientConn.srv, sessionUPDData)
+		conn := newConnectionUDP(clientConn.srv.Conn.(*net.UDPConn), clientConn.srv, true)
+		session, err := newSessionUDP(conn, clientConn.srv, sessionUDPData, true)
 		if err != nil {
 			return nil, err
 		}
+
+		// we have to explicitly set the right conn to the HS of the session we just created
+		conn.SetNoiseState(session.GetNoiseState())
+
 		if session.blockWiseEnabled() {
 			clientConn.commander.networkSession = &blockWiseSession{networkSession: session}
 		} else {
@@ -216,6 +222,7 @@ func (c *Client) Dial(address string) (clientConn *ClientConn, err error) {
 	go func() {
 		timeout := c.syncTimeout()
 		err := clientConn.srv.ActivateAndServe()
+
 		select {
 		case clientConn.shutdownSync <- err:
 		case <-time.After(timeout):

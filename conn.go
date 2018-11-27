@@ -6,6 +6,8 @@ import (
 	"net"
 	"sync/atomic"
 	"time"
+	"github.com/flynn/noise"
+	// "runtime/debug"
 )
 
 type writeReq interface {
@@ -59,6 +61,8 @@ type Conn interface {
 	// Close close the connection
 	Close() error
 
+	SetNoiseState(ns *NoiseState)
+
 	write(w writeReq, timeout time.Duration) error
 }
 
@@ -75,6 +79,12 @@ type connBase struct {
 	closeChan chan bool
 	finChan   chan bool
 	closed    int32
+	ns		  *NoiseState
+}
+
+func (conn *connBase) SetNoiseState(ns *NoiseState) {
+	// log.Printf("Setting ns %p on conn %p", ns.Hs, conn)
+	conn.ns = ns
 }
 
 func (conn *connBase) finishWrite() {
@@ -196,8 +206,39 @@ func (conn *connUDP) writeHandler(srv *Server) bool {
 		if err != nil {
 			return err
 		}
+
+		var msg []byte
+		ns := conn.ns
+		if ns.Handshakes < 2 {
+			//log.Printf("handshake encrypting %d bytes with %p: %v", len(buf.Bytes()), ns.Hs, buf.Bytes())
+			res, cs0, cs1, err := ns.Hs.WriteMessage(nil, buf.Bytes())
+			if err != nil {
+				return err
+			}
+
+			ns.Cs0 = cs0
+			ns.Cs1 = cs1
+
+			msg = res
+			//log.Printf("handshake encrypted %d bytes with %p: %v", len(msg), ns.Hs, msg)
+			//log.Printf("handshake encrypted %d->%d bytes with %p", len(buf.Bytes()), len(msg), ns.Hs)
+			ns.Handshakes++
+		} else {
+			//log.Printf("encrypting %d bytes with %p: %v", len(buf.Bytes()), ns.Hs, buf.Bytes())
+			var cs *noise.CipherState
+			if (conn.ns.Initiator) {
+				cs = ns.Cs0
+			} else {
+				cs = ns.Cs1
+			}
+			res := cs.Encrypt(nil, nil, buf.Bytes())
+			msg = res
+			//log.Printf("encrypted %d bytes with %p: %v", len(msg), ns.Hs, msg)
+			//log.Printf("encrypted %d->%d bytes with %p", len(buf.Bytes()), len(msg), ns.Hs)
+		}
+
 		conn.connection.SetWriteDeadline(time.Now().Add(writeTimeout))
-		_, err = WriteToSessionUDP(conn.connection, buf.Bytes(), wreqUDP.sessionData)
+		_, err = WriteToSessionUDP(conn.connection, msg, wreqUDP.sessionData)
 		return err
 	})
 }
@@ -208,8 +249,27 @@ func newConnectionTCP(c net.Conn, srv *Server) Conn {
 	return connection
 }
 
-func newConnectionUDP(c *net.UDPConn, srv *Server) Conn {
+type RandomInc byte
+
+// FIXME: we probably need a better RNG than this... :P
+func (r *RandomInc) Read(p []byte) (int, error) {
+	for i := range p {
+		p[i] = byte(*r)
+		*r = (*r) + 1
+	}
+	return len(p), nil
+}
+
+func setupNoise(c *net.UDPConn, initiator bool) {
+}
+
+func newConnectionUDP(c *net.UDPConn, srv *Server, initiator bool) Conn {
+
 	connection := &connUDP{connBase: connBase{writeChan: make(chan writeReq, 10000), closeChan: make(chan bool), finChan: make(chan bool), closed: 0}, connection: c}
+
+	// log.Printf("newConnectionUDP called with initiator=%v and conn=%p", initiator, connection)
+	// debug.PrintStack()
+
 	go writeToConnection(connection, srv)
 	return connection
 }

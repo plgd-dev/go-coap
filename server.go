@@ -11,6 +11,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/flynn/noise"
 )
 
 // Interval for stop worker if no load
@@ -131,7 +133,7 @@ type Server struct {
 	// The maximum of time for synchronization go-routines, defaults to 30 seconds, if it occurs, then it call log.Fatal
 	SyncTimeout time.Duration
 	// If newSessionUDPFunc is set it is called when session UDP want to be created
-	newSessionUDPFunc func(connection Conn, srv *Server, sessionUDPData *SessionUDPData) (networkSession, error)
+	newSessionUDPFunc func(connection Conn, srv *Server, sessionUDPData *SessionUDPData, initiator bool) (networkSession, error)
 	// If newSessionUDPFunc is set it is called when session TCP want to be created
 	newSessionTCPFunc func(connection Conn, srv *Server) (networkSession, error)
 	// If NotifyNewSession is set it is called when new TCP/UDP session was created.
@@ -342,8 +344,8 @@ func (srv *Server) ActivateAndServe() error {
 	}
 
 	if srv.newSessionUDPFunc == nil {
-		srv.newSessionUDPFunc = func(connection Conn, srv *Server, sessionUDPData *SessionUDPData) (networkSession, error) {
-			session, err := newSessionUDP(connection, srv, sessionUDPData)
+		srv.newSessionUDPFunc = func(connection Conn, srv *Server, sessionUDPData *SessionUDPData, initiator bool) (networkSession, error) {
+			session, err := newSessionUDP(connection, srv, sessionUDPData, initiator)
 			if err != nil {
 				return nil, err
 			}
@@ -532,7 +534,7 @@ func (srv *Server) serveUDP(conn *net.UDPConn) error {
 	rtimeout := srv.readTimeout()
 	// deadline is not used here
 
-	connUDP := newConnectionUDP(conn, srv).(*connUDP)
+	connUDP := newConnectionUDP(conn, srv, false).(*connUDP)
 
 	for {
 		m := make([]byte, ^uint16(0))
@@ -559,11 +561,12 @@ func (srv *Server) serveUDP(conn *net.UDPConn) error {
 			return err
 		}
 		m = m[:n]
+		//log.Printf("Received %d bytes into %v", n, m)
 
 		srv.sessionUDPMapLock.Lock()
 		session := srv.sessionUDPMap[s.Key()]
 		if session == nil {
-			session, err = srv.newSessionUDPFunc(connUDP, srv, s)
+			session, err = srv.newSessionUDPFunc(connUDP, srv, s, false)
 			if err != nil {
 				return err
 			}
@@ -572,6 +575,39 @@ func (srv *Server) serveUDP(conn *net.UDPConn) error {
 			srv.sessionUDPMapLock.Unlock()
 		} else {
 			srv.sessionUDPMapLock.Unlock()
+		}
+
+		ns := session.GetNoiseState()
+		connUDP.SetNoiseState(ns)
+
+		// XXX: ideally we'd decrypt in connUDP.ReadFromSessionUDP, but we don't
+		// know which session we're part of at that point. So instead we decrypt here.
+		// We might want to call through to Conn for this?
+
+		hs := ns.Hs
+		if ns.Handshakes < 2 {
+			//log.Printf("handshake decrypting %d bytes with %p: %v", n, hs, m)
+			m, ns.Cs0, ns.Cs1, err = hs.ReadMessage(nil, m)
+			if err != nil {
+				return err
+			}
+			//log.Printf("handshake decrypted %d bytes with %p: %v", len(m), hs, m)
+			//log.Printf("handshake decrypted %d->%d bytes with %p", n, len(m), hs)
+			ns.Handshakes++
+		} else {
+			//log.Printf("decrypting %d bytes with %p: %v", n, hs, m)
+			var cs *noise.CipherState
+			if (ns.Initiator) {
+				cs = ns.Cs1
+			} else {
+				cs = ns.Cs0
+			}
+			m, err = cs.Decrypt(nil, nil, m)
+			if err != nil {
+				return err
+			}
+			//log.Printf("decrypted %d bytes with %p: %v", len(m), hs, m)
+			//log.Printf("decrypted %d->%d bytes with %p", n, len(m), hs)
 		}
 
 		msg, err := ParseDgramMessage(m)

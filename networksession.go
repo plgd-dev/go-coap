@@ -6,6 +6,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"github.com/flynn/noise"
+//	"runtime/debug"
 )
 
 // A networkSession interface is used by an COAP handler to
@@ -37,6 +39,8 @@ type networkSession interface {
 	// WriteDeadline get read writeline
 	WriteDeadline() time.Duration
 
+	GetNoiseState() *NoiseState
+
 	// handlePairMsg Message was handled by pair
 	handlePairMsg(w ResponseWriter, r *Request) bool
 
@@ -64,7 +68,7 @@ type networkSession interface {
 }
 
 // NewSessionUDP create new session for UDP connection
-func newSessionUDP(connection Conn, srv *Server, sessionUDPData *SessionUDPData) (networkSession, error) {
+func newSessionUDP(connection Conn, srv *Server, sessionUDPData *SessionUDPData, initiator bool) (networkSession, error) {
 
 	BlockWiseTransfer := true
 	BlockWiseTransferSzx := BlockWiseSzx1024
@@ -92,6 +96,29 @@ func newSessionUDP(connection Conn, srv *Server, sessionUDPData *SessionUDPData)
 		sessionUDPData: sessionUDPData,
 		mapPairs:       make(map[[MaxTokenSize]byte]map[uint16](*sessionResp)),
 	}
+
+	// set up noise initiator or receiver
+	cs := noise.NewCipherSuite(noise.DH25519, noise.CipherAESGCM, noise.HashSHA512)
+	rng := new(RandomInc)
+
+	hs, _ := noise.NewHandshakeState(noise.Config{
+		CipherSuite: cs,
+		Random:      rng,
+		Pattern:     noise.HandshakeNN,
+		Initiator:   initiator,
+	})
+
+	//log.Printf("newSessionUDP %p with HS %p", s, hs)
+	//debug.PrintStack()
+
+	s.ns = &NoiseState{
+		Hs:			hs,
+		Handshakes: 0,
+		Cs0:		nil,
+		Cs1:		nil,
+		Initiator:  initiator,
+	}
+
 	return s, nil
 }
 
@@ -130,6 +157,14 @@ type sessionResp struct {
 	ch chan *Request // channel must have size 1 for non-blocking write to channel
 }
 
+type NoiseState struct {
+	Hs            *noise.HandshakeState
+	Handshakes    int
+	Cs0		      *noise.CipherState // for encrypting
+	Cs1		      *noise.CipherState // for decrypting
+	Initiator     bool
+}
+
 type sessionBase struct {
 	srv           *Server
 	connection    Conn
@@ -139,13 +174,19 @@ type sessionBase struct {
 
 	blockWiseTransfer    bool
 	blockWiseTransferSzx uint32 //BlockWiseSzx
+
+	ns            *NoiseState
+}
+
+func  (s *sessionBase) GetNoiseState() *NoiseState {
+	return s.ns
 }
 
 type sessionUDP struct {
 	sessionBase
 	sessionUDPData *SessionUDPData                                // oob data to get egress interface right
-	mapPairs       map[[MaxTokenSize]byte]map[uint16]*sessionResp //storage of channel Message
-	mapPairsLock   sync.Mutex                                     //to sync add remove token
+	mapPairs       map[[MaxTokenSize]byte]map[uint16]*sessionResp // storage of channel Message
+	mapPairsLock   sync.Mutex                                     // to sync add remove token
 }
 
 type sessionTCP struct {
@@ -449,6 +490,9 @@ func (s *sessionTCP) writeTimeout(m Message, timeout time.Duration) error {
 
 // WriteMsg implements the networkSession.WriteMsg method.
 func (s *sessionUDP) writeTimeout(m Message, timeout time.Duration) error {
+
+	// log.Printf("writing message with sessionUDP %p", s)
+
 	if err := validateMsg(m); err != nil {
 		return err
 	}
