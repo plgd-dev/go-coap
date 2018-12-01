@@ -7,7 +7,7 @@ import (
 	"time"
 
 	coap "github.com/go-ocf/go-coap/g2/message"
-	coapMsg "github.com/go-ocf/go-coap/g2/message/tcp"
+	coapTCP "github.com/go-ocf/go-coap/g2/message/tcp"
 )
 
 const (
@@ -84,20 +84,20 @@ func UnmarshalBlockOption(blockVal uint32) (szx BlockWiseSzx, blockNumber uint, 
 	return
 }
 
-func exchangeDrivedByPeer(session *sessionTCP, req coapMsg.TCPMessage, blockType coap.OptionID) (coapMsg.TCPMessage, error) {
+func exchangeDrivedByPeer(session *sessionTCP, req coapTCP.Message, blockType coap.OptionID) (coapTCP.Message, error) {
 	req.Options.OptionUint32(blockType)
-	if block, errCode := req.Options.OptionUint32(blockType); errCode == OK {
+	if block, errCode := req.Options.OptionUint32(blockType); errCode == coap.OK {
 		_, _, more, err := UnmarshalBlockOption(block)
 		if err != nil {
-			return coapMsg.TCPMessage{}, err
+			return coapTCP.Message{}, err
 		}
 		if more == false {
 			// we send all datas to peer -> create empty response
 			err := session.WriteMsg(req)
 			if err != nil {
-				return coapMsg.TCPMessage{}, err
+				return coapTCP.Message{}, err
 			}
-			return coapMsg.TCPMessage{}, nil
+			return coapTCP.Message{}, nil
 		}
 	}
 
@@ -112,13 +112,13 @@ func exchangeDrivedByPeer(session *sessionTCP, req coapMsg.TCPMessage, blockType
 	defer session.TokenHandler().Remove(req.Token)
 	err := session.WriteMsg(req)
 	if err != nil {
-		return coapMsg.TCPMessage{}, err
+		return coapTCP.Message{}, err
 	}
 	select {
 	case resp := <-pair:
 		return resp.Msg, nil
 	case <-time.After(session.ReadDeadline()):
-		return coapMsg.TCPMessage{}, ErrTimeout
+		return coapTCP.Message{}, ErrTimeout
 	}
 }
 
@@ -126,7 +126,7 @@ type blockWiseSender struct {
 	peerDrive    bool
 	blockType    coap.OptionID
 	expectedCode coap.COAPCode
-	origin       coapMsg.TCPMessage
+	origin       coapTCP.Message
 
 	currentNum  uint
 	currentSzx  BlockWiseSzx
@@ -147,7 +147,7 @@ func (s *blockWiseSender) sizeType() coap.OptionID {
 	return coap.Size1
 }
 
-func newSender(peerDrive bool, blockType coap.OptionID, suggestedSzx BlockWiseSzx, expectedCode coap.COAPCode, origin coapMsg.TCPMessage) blockWiseSender {
+func newSender(peerDrive bool, blockType coap.OptionID, suggestedSzx BlockWiseSzx, expectedCode coap.COAPCode, origin coapTCP.Message) blockWiseSender {
 	return blockWiseSender{
 		peerDrive:    peerDrive,
 		blockType:    blockType,
@@ -157,16 +157,11 @@ func newSender(peerDrive bool, blockType coap.OptionID, suggestedSzx BlockWiseSz
 	}
 }
 
-func (s *blockWiseSender) newReq(b *blockWiseSession) (coapMsg.TCPMessage, error) {
-	req := b.networkSession.NewMessage(MessageParams{
-		Code:      s.origin.Code(),
-		Type:      s.coapType(),
-		MessageID: s.origin.MessageID(),
-		Token:     s.origin.Token(),
-	})
+func (s *blockWiseSender) newReq(b *blockWiseSession) (coapTCP.Message, error) {
 
-	if !s.peerDrive {
-		req.SetMessageID(GenerateMessageID())
+	req := coapTCP.Message{
+		Code:  s.origin.Code,
+		Token: s.origin.Token,
 	}
 
 	for _, option := range s.origin.AllOptions() {
@@ -192,8 +187,8 @@ func (s *blockWiseSender) newReq(b *blockWiseSession) (coapMsg.TCPMessage, error
 	return req, nil
 }
 
-func (s *blockWiseSender) exchange(b *blockWiseSession, req coapMsg.TCPMessage) (coapMsg.TCPMessage, error) {
-	var resp coapMsg.TCPMessage
+func (s *blockWiseSender) exchange(b *blockWiseSession, req coapTCP.Message) (coapTCP.Message, error) {
+	var resp coapTCP.Message
 	var err error
 	if blockWiseDebug {
 		log.Printf("sendPayload %p req=%v\n", b, req)
@@ -212,7 +207,7 @@ func (s *blockWiseSender) exchange(b *blockWiseSession, req coapMsg.TCPMessage) 
 	return resp, nil
 }
 
-func (s *blockWiseSender) processResp(b *blockWiseSession, req coapMsg.TCPMessage, resp coapMsg.TCPMessage) (coapMsg.TCPMessage, error) {
+func (s *blockWiseSender) processResp(b *blockWiseSession, req coapTCP.Message, resp coapTCP.Message) (coapTCP.Message, error) {
 	if s.currentMore == false {
 		if s.blockType == Block1 {
 			if respBlock2, ok := resp.Option(Block2).(uint32); ok {
@@ -291,7 +286,7 @@ func (s *blockWiseSender) processResp(b *blockWiseSession, req coapMsg.TCPMessag
 	return nil, nil
 }
 
-func (b *blockWiseSession) sendPayload(peerDrive bool, blockType coap.OptionID, suggestedSzx BlockWiseSzx, expectedCode coap.COAPCode, msg coapMsg.TCPMessage) (coapMsg.TCPMessage, error) {
+func (b *blockWiseSession) sendPayload(peerDrive bool, blockType coap.OptionID, suggestedSzx BlockWiseSzx, expectedCode coap.COAPCode, msg coapTCP.Message) (coapTCP.Message, error) {
 	s := newSender(peerDrive, blockType, suggestedSzx, expectedCode, msg)
 	req, err := s.newReq(b)
 	if err != nil {
@@ -318,7 +313,7 @@ type blockWiseSession struct {
 	sessionTCP
 }
 
-func (b *blockWiseSession) Exchange(msg coapMsg.TCPMessage) (coapMsg.TCPMessage, error) {
+func (b *blockWiseSession) Exchange(msg coapTCP.Message) (coapTCP.Message, error) {
 	switch msg.Code() {
 	//these methods doesn't need to be handled by blockwise
 	case coap.CSM, coap.Ping, coap.Pong, coap.Release, coap.Abort, coap.Empty:
@@ -334,7 +329,7 @@ func (b *blockWiseSession) Exchange(msg coapMsg.TCPMessage) (coapMsg.TCPMessage,
 
 }
 
-func (b *blockWiseSession) WriteMsg(msg coapMsg.TCPMessage) error {
+func (b *blockWiseSession) WriteMsg(msg coapTCP.Message) error {
 	switch msg.Code() {
 	case coap.CSM, coap.Ping, coap.Pong, coap.Release, coap.Abort, coap.Empty, coap.GET:
 		return b.networkSession.WriteMsg(msg)
@@ -375,7 +370,7 @@ type blockWiseReceiver struct {
 	code         coap.COAPCode
 	expectedCode coap.COAPCode
 	typ          coap.COAPType
-	origin       coapMsg.TCPMessage
+	origin       coapTCP.Message
 	blockType    coap.OptionID
 	currentSzx   BlockWiseSzx
 	nextNum      uint
@@ -399,7 +394,7 @@ func (r *blockWiseReceiver) coapType() coap.COAPType {
 	return Confirmable
 }
 
-func (r *blockWiseReceiver) newReq(b *blockWiseSession, resp coapMsg.TCPMessage) (coapMsg.TCPMessage, error) {
+func (r *blockWiseReceiver) newReq(b *blockWiseSession, resp coapTCP.Message) (coapTCP.Message, error) {
 	req := b.networkSession.NewMessage(MessageParams{
 		Code:      r.code,
 		Type:      r.typ,
@@ -432,7 +427,7 @@ func (r *blockWiseReceiver) newReq(b *blockWiseSession, resp coapMsg.TCPMessage)
 	return req, nil
 }
 
-func newReceiver(b *blockWiseSession, peerDrive bool, origin coapMsg.TCPMessage, resp coapMsg.TCPMessage, blockType coap.OptionID, code coap.COAPCode) (r *blockWiseReceiver, res coapMsg.TCPMessage, err error) {
+func newReceiver(b *blockWiseSession, peerDrive bool, origin coapTCP.Message, resp coapTCP.Message, blockType coap.OptionID, code coap.COAPCode) (r *blockWiseReceiver, res coapTCP.Message, err error) {
 	r = &blockWiseReceiver{
 		peerDrive:  peerDrive,
 		code:       code,
@@ -503,11 +498,11 @@ func newReceiver(b *blockWiseSession, peerDrive bool, origin coapMsg.TCPMessage,
 	return r, nil, nil
 }
 
-func (r *blockWiseReceiver) exchange(b *blockWiseSession, req coapMsg.TCPMessage) (coapMsg.TCPMessage, error) {
+func (r *blockWiseReceiver) exchange(b *blockWiseSession, req coapTCP.Message) (coapTCP.Message, error) {
 	if blockWiseDebug {
 		log.Printf("receivePayload %p req=%v\n", b, req)
 	}
-	var resp coapMsg.TCPMessage
+	var resp coapTCP.Message
 	var err error
 	if r.peerDrive {
 		resp, err = exchangeDrivedByPeer(b.networkSession, req, r.blockType)
@@ -522,7 +517,7 @@ func (r *blockWiseReceiver) exchange(b *blockWiseSession, req coapMsg.TCPMessage
 	return resp, err
 }
 
-func (r *blockWiseReceiver) processResp(b *blockWiseSession, req coapMsg.TCPMessage, resp coapMsg.TCPMessage) (coapMsg.TCPMessage, error) {
+func (r *blockWiseReceiver) processResp(b *blockWiseSession, req coapTCP.Message, resp coapTCP.Message) (coapTCP.Message, error) {
 	if respBlock, ok := resp.Option(r.blockType).(uint32); ok {
 		szx, num, more, err := UnmarshalBlockOption(respBlock)
 		if err != nil {
@@ -595,7 +590,7 @@ func (r *blockWiseReceiver) processResp(b *blockWiseSession, req coapMsg.TCPMess
 	return nil, nil
 }
 
-func (r *blockWiseReceiver) sendError(b *blockWiseSession, code coap.COAPCode, resp coapMsg.TCPMessage, err error) {
+func (r *blockWiseReceiver) sendError(b *blockWiseSession, code coap.COAPCode, resp coapTCP.Message, err error) {
 	var MessageID uint16
 	var token []byte
 	var typ COAPType
@@ -615,7 +610,7 @@ func (r *blockWiseReceiver) sendError(b *blockWiseSession, code coap.COAPCode, r
 	b.sendErrorMsg(code, typ, token, MessageID, err)
 }
 
-func (b *blockWiseSession) receivePayload(peerDrive bool, msg coapMsg.TCPMessage, resp coapMsg.TCPMessage, blockType coap.OptionID, code coap.COAPCode) (coapMsg.TCPMessage, error) {
+func (b *blockWiseSession) receivePayload(peerDrive bool, msg coapTCP.Message, resp coapTCP.Message, blockType coap.OptionID, code coap.COAPCode) (coapTCP.Message, error) {
 	r, resp, err := newReceiver(b, peerDrive, msg, resp, blockType, code)
 	if err != nil {
 		r.sendError(b, BadRequest, resp, err)
@@ -711,14 +706,14 @@ type blockWiseResponseWriter struct {
 
 //Write send whole message if size of payload is less then block szx otherwise
 //send message via blockwise.
-func (w *blockWiseResponseWriter) WriteMsg(msg coapMsg.TCPMessage) error {
+func (w *blockWiseResponseWriter) WriteMsg(msg coapTCP.Message) error {
 	suggestedSzx := w.req.Client.networkSession.blockWiseSzx()
 	if respBlock2, ok := w.req.Msg.Option(Block2).(uint32); ok {
 		szx, _, _, err := UnmarshalBlockOption(respBlock2)
 		if err != nil {
 			return err
 		}
-		//BERT is supported only via TCP
+		//BERT is supported only via Message
 		if szx == BlockWiseSzxBERT && !w.req.Client.networkSession.IsTCP() {
 			return ErrInvalidBlockWiseSzx
 		}
@@ -745,14 +740,14 @@ type blockWiseNoticeWriter struct {
 //Write send whole message if size of payload is less then block szx otherwise
 //send only first block. For Get whole msg client must call Get to
 //resource.
-func (w *blockWiseNoticeWriter) WriteMsg(msg coapMsg.TCPMessage) error {
+func (w *blockWiseNoticeWriter) WriteMsg(msg coapTCP.Message) error {
 	suggestedSzx := w.req.Client.networkSession.blockWiseSzx()
 	if respBlock2, ok := w.req.Msg.Option(Block2).(uint32); ok {
 		szx, _, _, err := UnmarshalBlockOption(respBlock2)
 		if err != nil {
 			return err
 		}
-		//BERT is supported only via TCP
+		//BERT is supported only via Message
 		if szx == BlockWiseSzxBERT && !w.req.Client.networkSession.IsTCP() {
 			return ErrInvalidBlockWiseSzx
 		}

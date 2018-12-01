@@ -6,7 +6,7 @@
 
 Features supported:
 * CoAP over UDP [RFC 7252][coap].
-* CoAP over TCP/TLS [RFC 8232][coap-tcp]
+* CoAP over Message/TLS [RFC 8232][coap-tcp]
 * Observe resources in CoAP [RFC 7641][coap-observe]
 * Block-wise transfers in COAP [RFC 7959][coap-block-wise-transfers]
 * request multiplexer
@@ -26,7 +26,7 @@ Fork of https://github.com/dustin/go-coap
 
 ### Simple
 
-#### Server UDP/TCP
+#### Server UDP/Message
 ```go
 	// Server
 	// See /examples/simple/server/main.go

@@ -36,10 +36,8 @@ func TestFindPositonBytesOption(t *testing.T) {
 
 func TestSetBytesOption(t *testing.T) {
 	options := make(Options, 0, 10)
-	options, err := options.Set(Option{ID: 0, Value: []byte("0")})
-	if err != OK {
-		t.Fatalf("cannot set option %d", err)
-	}
+	options = options.Set(Option{ID: 0, Value: []byte("0")})
+
 	if len(options) != 1 {
 		t.Fatalf("bad size of option %d", len(options))
 	}
@@ -47,45 +45,31 @@ func TestSetBytesOption(t *testing.T) {
 	options = append(options, Options{{ID: 0, Value: []byte("1")}}...)
 	options = append(options, Options{{ID: 0, Value: []byte("2")}}...)
 	options = append(options, Options{{ID: 0, Value: []byte("3")}}...)
-	options, err = options.Set(Option{ID: 0, Value: []byte("4")})
-	if err != OK {
-		t.Fatalf("cannot set option %d", err)
-	}
+	options = options.Set(Option{ID: 0, Value: []byte("4")})
 	if len(options) != 1 {
 		t.Fatalf("bad size of option %d", len(options))
 	}
 	// options = options[:len]
 	options = append(options, Options{{ID: 1, Value: []byte("5")}}...)
-	options, err = options.Set(Option{ID: 1, Value: []byte("6")})
-	if err != OK {
-		t.Fatalf("cannot set option %d", err)
-	}
+	options = options.Set(Option{ID: 1, Value: []byte("6")})
 	if len(options) != 2 {
 		t.Fatalf("bad size of option %d", len(options))
 	}
 	// options = options[:len]
 	options = append(options, Options{{ID: 1, Value: []byte("7")}}...)
 	options = append(options, Options{{ID: 1, Value: []byte("8")}}...)
-	options, err = options.Set(Option{ID: 1, Value: []byte("9")})
-	if err != OK {
-		t.Fatalf("cannot set option %d", err)
-	}
+	options = options.Set(Option{ID: 1, Value: []byte("9")})
+
 	if len(options) != 2 {
 		t.Fatalf("bad size of option %d", len(options))
 	}
 	// options = options[:len]
-	options, err = options.Set(Option{ID: 2, Value: []byte("10")})
-	if err != OK {
-		t.Fatalf("cannot set option %d", err)
-	}
+	options = options.Set(Option{ID: 2, Value: []byte("10")})
 	if len(options) != 3 {
 		t.Fatalf("bad size of option %d", len(options))
 	}
 	// options = options[:len]
-	options, err = options.Set(Option{ID: 1, Value: []byte("11")})
-	if err != OK {
-		t.Fatalf("cannot set option %d", err)
-	}
+	options = options.Set(Option{ID: 1, Value: []byte("11")})
 	if len(options) != 3 {
 		t.Fatalf("bad size of option %d", len(options))
 	}
@@ -94,10 +78,7 @@ func TestSetBytesOption(t *testing.T) {
 
 func testAddBytesOption(t *testing.T, options Options, option Option, expectedIdx int) Options {
 	expectedLen := len(options) + 1
-	options, err := options.Add(option)
-	if err != OK {
-		t.Fatalf("cannot set option %d", err)
-	}
+	options = options.Add(option)
 	if len(options) != expectedLen {
 		t.Fatalf("bad size of option %d, expected %d", len(options), expectedLen)
 	}

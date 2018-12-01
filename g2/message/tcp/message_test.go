@@ -8,8 +8,8 @@ import (
 	coap "github.com/go-ocf/go-coap/g2/message"
 )
 
-func testMarshalTCP(t *testing.T, msg TCP, buf []byte, expectedOut []byte) {
-	length, err := msg.Marshal(buf)
+func testMarshalMessage(t *testing.T, msg Message, buf []byte, expectedOut []byte) {
+	length, err := msg.MarshalTo(buf)
 	if err != coap.OK {
 		t.Fatalf("Unexpected error: %d", err)
 	}
@@ -19,7 +19,7 @@ func testMarshalTCP(t *testing.T, msg TCP, buf []byte, expectedOut []byte) {
 	}
 }
 
-func testUnmarshalTCP(t *testing.T, msg TCP, buf []byte, expectedOut TCP) {
+func testUnmarshalMessage(t *testing.T, msg Message, buf []byte, expectedOut Message) {
 	length, err := msg.Unmarshal(buf)
 	if err != coap.OK {
 		t.Fatalf("Unexpected error: %d", err)
@@ -43,12 +43,12 @@ func testUnmarshalTCP(t *testing.T, msg TCP, buf []byte, expectedOut TCP) {
 	}
 }
 
-func TestMarshalTCP(t *testing.T) {
+func TestMarshalMessage(t *testing.T) {
 	buf := make([]byte, 1024)
-	testMarshalTCP(t, TCP{}, buf, []byte{0, 0})
-	testMarshalTCP(t, TCP{Code: coap.GET}, buf, []byte{0, byte(coap.GET)})
-	testMarshalTCP(t, TCP{Code: coap.GET, Payload: []byte{0x1}}, buf, []byte{32, byte(coap.GET), 0xff, 0x1})
-	testMarshalTCP(t, TCP{Code: coap.GET, Payload: []byte{0x1}, Token: []byte{0x1, 0x2, 0x3}}, buf, []byte{35, byte(coap.GET), 0x1, 0x2, 0x3, 0xff, 0x1})
+	testMarshalMessage(t, Message{}, buf, []byte{0, 0})
+	testMarshalMessage(t, Message{Code: coap.GET}, buf, []byte{0, byte(coap.GET)})
+	testMarshalMessage(t, Message{Code: coap.GET, Payload: []byte{0x1}}, buf, []byte{32, byte(coap.GET), 0xff, 0x1})
+	testMarshalMessage(t, Message{Code: coap.GET, Payload: []byte{0x1}, Token: []byte{0x1, 0x2, 0x3}}, buf, []byte{35, byte(coap.GET), 0x1, 0x2, 0x3, 0xff, 0x1})
 	bufOptions := make([]byte, 1024)
 	bufOptionsUsed := bufOptions
 	options := make(coap.Options, 0, 32)
@@ -64,7 +64,7 @@ func TestMarshalTCP(t *testing.T) {
 	}
 	bufOptionsUsed = bufOptionsUsed[enc:]
 
-	testMarshalTCP(t, TCP{
+	testMarshalMessage(t, Message{
 		Code:    coap.GET,
 		Payload: []byte{0x1},
 		Token:   []byte{0x1, 0x2, 0x3},
@@ -80,7 +80,7 @@ func TestMarshalTCP(t *testing.T) {
 		t.Fatalf("Cannot marshal old tcpmessage %v", errOld)
 	}
 
-	testMarshalTCP(t, TCP{
+	testMarshalMessage(t, Message{
 		Code:    coap.GET,
 		Payload: []byte{0x1},
 		Token:   []byte{0x1, 0x2, 0x3},
@@ -89,12 +89,12 @@ func TestMarshalTCP(t *testing.T) {
 
 }
 
-func TestUnmarshalTCP(t *testing.T) {
-	testUnmarshalTCP(t, TCP{}, []byte{0, 0}, TCP{})
-	testUnmarshalTCP(t, TCP{}, []byte{0, byte(coap.GET)}, TCP{Code: coap.GET})
-	testUnmarshalTCP(t, TCP{}, []byte{32, byte(coap.GET), 0xff, 0x1}, TCP{Code: coap.GET, Payload: []byte{0x1}})
-	testUnmarshalTCP(t, TCP{}, []byte{35, byte(coap.GET), 0x1, 0x2, 0x3, 0xff, 0x1}, TCP{Code: coap.GET, Payload: []byte{0x1}, Token: []byte{0x1, 0x2, 0x3}})
-	testUnmarshalTCP(t, TCP{Options: make(coap.Options, 0, 32)}, []byte{211, 0, 1, 1, 2, 3, 177, 97, 1, 98, 1, 99, 1, 100, 1, 101, 16, 255, 1}, TCP{
+func TestUnmarshalMessage(t *testing.T) {
+	testUnmarshalMessage(t, Message{}, []byte{0, 0}, Message{})
+	testUnmarshalMessage(t, Message{}, []byte{0, byte(coap.GET)}, Message{Code: coap.GET})
+	testUnmarshalMessage(t, Message{}, []byte{32, byte(coap.GET), 0xff, 0x1}, Message{Code: coap.GET, Payload: []byte{0x1}})
+	testUnmarshalMessage(t, Message{}, []byte{35, byte(coap.GET), 0x1, 0x2, 0x3, 0xff, 0x1}, Message{Code: coap.GET, Payload: []byte{0x1}, Token: []byte{0x1, 0x2, 0x3}})
+	testUnmarshalMessage(t, Message{Options: make(coap.Options, 0, 32)}, []byte{211, 0, 1, 1, 2, 3, 177, 97, 1, 98, 1, 99, 1, 100, 1, 101, 16, 255, 1}, Message{
 		Code:    coap.GET,
 		Payload: []byte{0x1},
 		Token:   []byte{0x1, 0x2, 0x3},
@@ -102,7 +102,7 @@ func TestUnmarshalTCP(t *testing.T) {
 	})
 }
 
-func BenchmarkMarshalOldTCP(b *testing.B) {
+func BenchmarkMarshalOldMessage(b *testing.B) {
 	buffer := bytes.NewBuffer(make([]byte, 0, 1024))
 	msg := oldcoap.NewTcpMessage(oldcoap.MessageParams{Code: oldcoap.GET, Payload: []byte{0x1}, Token: []byte{0x1, 0x2, 0x3}})
 	msg.SetPathString("/a/b/c/d/e")
@@ -117,7 +117,7 @@ func BenchmarkMarshalOldTCP(b *testing.B) {
 	}
 }
 
-func BenchmarkUnmarshalOldTCP(b *testing.B) {
+func BenchmarkUnmarshalOldMessage(b *testing.B) {
 	buffer := []byte{211, 0, 1, 1, 2, 3, 177, 97, 1, 98, 1, 99, 1, 100, 1, 101, 16, 255, 1}
 	msg := oldcoap.TcpMessage{}
 
@@ -130,7 +130,7 @@ func BenchmarkUnmarshalOldTCP(b *testing.B) {
 	}
 }
 
-func BenchmarkMarshalTCP(b *testing.B) {
+func BenchmarkMarshalMessage(b *testing.B) {
 	options := make(coap.Options, 0, 32)
 	bufOptions := make([]byte, 1024)
 	bufOptionsUsed := bufOptions
@@ -142,7 +142,7 @@ func BenchmarkMarshalTCP(b *testing.B) {
 
 	options, enc, _ = options.SetContentFormat(bufOptionsUsed, coap.TextPlain)
 	bufOptionsUsed = bufOptionsUsed[enc:]
-	msg := TCP{
+	msg := Message{
 		Code:    coap.GET,
 		Payload: []byte{0x1},
 		Token:   []byte{0x1, 0x2, 0x3},
@@ -153,17 +153,17 @@ func BenchmarkMarshalTCP(b *testing.B) {
 	b.ResetTimer()
 	for i := uint32(0); i < uint32(b.N); i++ {
 
-		_, err := msg.Marshal(buffer)
+		_, err := msg.MarshalTo(buffer)
 		if err != coap.OK {
 			b.Fatalf("cannot marshal")
 		}
 	}
 }
 
-func BenchmarkUnmarshalTCP(b *testing.B) {
+func BenchmarkUnmarshalMessage(b *testing.B) {
 	buffer := []byte{211, 0, 1, 1, 2, 3, 177, 97, 1, 98, 1, 99, 1, 100, 1, 101, 16, 255, 1}
 	options := make(coap.Options, 0, 32)
-	msg := TCP{
+	msg := Message{
 		Options: options,
 	}
 

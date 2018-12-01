@@ -18,9 +18,9 @@ func CreateRespMessageByReq(isTCP bool, code COAPCode, req Message) Message {
 	if isTCP {
 		resp := &TcpMessage{
 			MessageBase{
-				//typ:       Acknowledgement, not used by COAP over TCP
+				//typ:       Acknowledgement, not used by COAP over Message
 				code: Valid,
-				//messageID: req.MessageID(), , not used by COAP over TCP
+				//messageID: req.MessageID(), , not used by COAP over Message
 				payload: req.Payload(),
 				token:   req.Token(),
 			},

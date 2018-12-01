@@ -10,12 +10,12 @@ type getResponseWriter struct {
 }
 
 // NewResponse creates reponse for request
-func (r *getResponseWriter) NewResponse(code coap.COAPCode) coaptcp.TCPMessage {
+func (r *getResponseWriter) NewResponse(code coap.COAPCode) coaptcp.Message {
 	return r.ResponseWriter.NewResponse(code)
 }
 
 // Write send response to peer
-func (r *getResponseWriter) WriteMsg(msg coaptcp.TCPMessage) error {
+func (r *getResponseWriter) WriteMsg(msg coaptcp.Message) error {
 	if msg.Payload() != nil && msg.Option(ETag) == nil {
 		msg.SetOption(ETag, CalcETag(msg.Payload()))
 	}

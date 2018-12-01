@@ -1,7 +1,7 @@
 package coapservertcp
 
 import coap "github.com/go-ocf/go-coap/g2/message"
-import coapMsg "github.com/go-ocf/go-coap/g2/message/tcp"
+import coapTCP "github.com/go-ocf/go-coap/g2/message/tcp"
 
 // A ResponseWriter interface is used by an CAOP handler to construct an COAP response.
 // For Obsevation (GET+option observe) it can be stored and used in another go-routine
@@ -24,11 +24,11 @@ type ResponseWriter interface {
 	SetContentFormat(contentFormat coap.MediaType)
 
 	//NewResponse create response with code and token, messageid against request
-	NewResponse(code coap.COAPCode) coapMsg.TCPMessage
+	NewResponse(code coap.COAPCode) coapTCP.Message
 	//WriteMsg to client.
 	//If Option ContentFormat is set and Payload is not set then call will failed.
 	//If Option ContentFormat is not set and Payload is set then call will failed.
-	WriteMsg(coapMsg.TCPMessage) error
+	WriteMsg(coapTCP.Message) error
 }
 
 type responseWriter struct {
@@ -38,7 +38,7 @@ type responseWriter struct {
 }
 
 // NewResponse creates reponse for request
-func (r *responseWriter) NewResponse(code coap.COAPCode) coapMsg.TCPMessage {
+func (r *responseWriter) NewResponse(code coap.COAPCode) coapTCP.Message {
 	typ := coap.NonConfirmable
 	if r.req.Msg.Type == coap.Confirmable {
 		typ = Acknowledgement
@@ -53,7 +53,7 @@ func (r *responseWriter) NewResponse(code coap.COAPCode) coapMsg.TCPMessage {
 }
 
 // Write send response to peer
-func (r *responseWriter) WriteMsg(msg coapMsg.TCPMessage) error {
+func (r *responseWriter) WriteMsg(msg coapTCP.Message) error {
 	switch msg.Code() {
 	case GET, POST, PUT, DELETE:
 		return ErrInvalidReponseCode

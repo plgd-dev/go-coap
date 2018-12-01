@@ -7,10 +7,10 @@ import (
 )
 
 const (
-	TCP_MESSAGE_LEN13_BASE = 13
-	TCP_MESSAGE_LEN14_BASE = 269
-	TCP_MESSAGE_LEN15_BASE = 65805
-	TCP_MESSAGE_MAX_LEN    = 0x7fff0000 // Large number that works in 32-bit builds.
+	Message_MESSAGE_LEN13_BASE = 13
+	Message_MESSAGE_LEN14_BASE = 269
+	Message_MESSAGE_LEN15_BASE = 65805
+	Message_MESSAGE_MAX_LEN    = 0x7fff0000 // Large number that works in 32-bit builds.
 )
 
 // Signal CSM Option IDs
@@ -90,9 +90,9 @@ var signalAbortOptionDefs = map[coap.OptionID]coap.OptionDef{
 	BadCSMOption: coap.OptionDef{ValueFormat: coap.ValueUint, MinLen: 0, MaxLen: 2},
 }
 
-// TcpMessage is a CoAP MessageBase that can encode itself for TCP
+// TcpMessage is a CoAP MessageBase that can encode itself for Message
 // transport.
-type TCP struct {
+type Message struct {
 	Code coap.COAPCode
 
 	Token   []byte
@@ -101,9 +101,24 @@ type TCP struct {
 	Options coap.Options //Options must be sorted by ID
 }
 
-func (m TCP) Marshal(buf []byte) (int, coap.ErrorCode) {
+func (m Message) Size() int {
+	size, _ := m.MarshalTo(nil)
+	return size
+}
+
+func (m Message) Marshal() ([]byte, coap.ErrorCode) {
+	b := make([]byte, 1024)
+	l, err := m.MarshalTo(b)
+	if err == coap.ErrorCodeTooSmall {
+		b = append(b[:0], make([]byte, l)...)
+		l, err = m.MarshalTo(b)
+	}
+	return b[:l], err
+}
+
+func (m Message) MarshalTo(buf []byte) (int, coap.ErrorCode) {
 	/*
-	   A CoAP TCP message locoap.OKs like:
+	   A CoAP Message message locoap.OKs like:
 
 	        0                   1                   2                   3
 	       0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
@@ -145,20 +160,20 @@ func (m TCP) Marshal(buf []byte) (int, coap.ErrorCode) {
 	var lenNib uint8
 	var extLenBytes []byte
 
-	if bufLen < TCP_MESSAGE_LEN13_BASE {
+	if bufLen < Message_MESSAGE_LEN13_BASE {
 		lenNib = uint8(bufLen)
-	} else if bufLen < TCP_MESSAGE_LEN14_BASE {
+	} else if bufLen < Message_MESSAGE_LEN14_BASE {
 		lenNib = 13
-		extLen := bufLen - TCP_MESSAGE_LEN13_BASE
+		extLen := bufLen - Message_MESSAGE_LEN13_BASE
 		extLenBytes = []byte{uint8(extLen)}
-	} else if bufLen < TCP_MESSAGE_LEN15_BASE {
+	} else if bufLen < Message_MESSAGE_LEN15_BASE {
 		lenNib = 14
-		extLen := bufLen - TCP_MESSAGE_LEN14_BASE
+		extLen := bufLen - Message_MESSAGE_LEN14_BASE
 		extLenBytes = make([]byte, 2)
 		binary.BigEndian.PutUint16(extLenBytes, uint16(extLen))
-	} else if bufLen < TCP_MESSAGE_MAX_LEN {
+	} else if bufLen < Message_MESSAGE_MAX_LEN {
 		lenNib = 15
-		extLen := bufLen - TCP_MESSAGE_LEN15_BASE
+		extLen := bufLen - Message_MESSAGE_LEN15_BASE
 		extLenBytes = make([]byte, 4)
 		binary.BigEndian.PutUint32(extLenBytes, uint32(extLen))
 	}
@@ -209,16 +224,16 @@ func (m TCP) Marshal(buf []byte) (int, coap.ErrorCode) {
 	return bufLen, coap.OK
 }
 
-type TCPHeader struct {
+type MessageHeader struct {
 	Token  []byte
 	code   coap.COAPCode
 	hdrLen int
 	totLen int
 }
 
-// Unmarshal infers information about a TCP CoAP message from the first
+// Unmarshal infers information about a Message CoAP message from the first
 // fragment.
-func (i *TCPHeader) Unmarshal(data []byte) (int, coap.ErrorCode) {
+func (i *MessageHeader) Unmarshal(data []byte) (int, coap.ErrorCode) {
 	hdrOff := 0
 	if len(data) == 0 {
 		return 0, coap.ErrorCodeShortRead
@@ -233,7 +248,7 @@ func (i *TCPHeader) Unmarshal(data []byte) (int, coap.ErrorCode) {
 
 	var opLen int
 	switch {
-	case lenNib < TCP_MESSAGE_LEN13_BASE:
+	case lenNib < Message_MESSAGE_LEN13_BASE:
 		opLen = int(lenNib)
 	case lenNib == 13:
 		if len(data) < 1 {
@@ -242,7 +257,7 @@ func (i *TCPHeader) Unmarshal(data []byte) (int, coap.ErrorCode) {
 		extLen := data[0]
 		data = data[1:]
 		hdrOff++
-		opLen = TCP_MESSAGE_LEN13_BASE + int(extLen)
+		opLen = Message_MESSAGE_LEN13_BASE + int(extLen)
 	case lenNib == 14:
 		if len(data) < 2 {
 			return 0, coap.ErrorCodeShortRead
@@ -250,7 +265,7 @@ func (i *TCPHeader) Unmarshal(data []byte) (int, coap.ErrorCode) {
 		extLen := binary.BigEndian.Uint16(data)
 		data = data[2:]
 		hdrOff += 2
-		opLen = TCP_MESSAGE_LEN14_BASE + int(extLen)
+		opLen = Message_MESSAGE_LEN14_BASE + int(extLen)
 	case lenNib == 15:
 		if len(data) < 4 {
 			return 0, coap.ErrorCodeShortRead
@@ -258,7 +273,7 @@ func (i *TCPHeader) Unmarshal(data []byte) (int, coap.ErrorCode) {
 		extLen := binary.BigEndian.Uint32(data)
 		data = data[4:]
 		hdrOff += 4
-		opLen = TCP_MESSAGE_LEN15_BASE + int(extLen)
+		opLen = Message_MESSAGE_LEN15_BASE + int(extLen)
 	}
 
 	i.totLen = hdrOff + 1 + int(tkl) + opLen
@@ -279,8 +294,8 @@ func (i *TCPHeader) Unmarshal(data []byte) (int, coap.ErrorCode) {
 	return i.hdrLen, coap.OK
 }
 
-func (m *TCP) Unmarshal(data []byte) (int, coap.ErrorCode) {
-	header := TCPHeader{Token: m.Token}
+func (m *Message) Unmarshal(data []byte) (int, coap.ErrorCode) {
+	header := MessageHeader{Token: m.Token}
 	processed, err := header.Unmarshal(data)
 	if err != coap.OK {
 		return -1, err

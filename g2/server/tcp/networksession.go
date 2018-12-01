@@ -8,10 +8,10 @@ import (
 	"time"
 
 	coap "github.com/go-ocf/go-coap/g2/message"
-	coapMsg "github.com/go-ocf/go-coap/g2/message/tcp"
+	coapTCP "github.com/go-ocf/go-coap/g2/message/tcp"
 )
 
-// newSessionTCP create new session for TCP connection
+// newSessionTCP create new session for Message connection
 func newSessionTCP(connection *connTCP, srv *Server) (*sessionTCP, error) {
 	BlockWiseTransfer := false
 	BlockWiseTransferSzx := BlockWiseSzxBERT
@@ -60,7 +60,7 @@ type sessionBase struct {
 type sessionTCP struct {
 	sessionBase
 
-	mapPairs     map[[coap.MaxTokenSize]byte]*sessionResp //storage of channel coapMsg.TCPMessage
+	mapPairs     map[[coap.MaxTokenSize]byte]*sessionResp //storage of channel coapTCP.Message
 	mapPairsLock sync.Mutex                               //to sync add remove token
 
 	peerBlockWiseTransfer uint32
@@ -172,7 +172,7 @@ func (s *sessionTCP) Close() error {
 	return s.closeWithError(nil)
 }
 
-func (s *sessionBase) exchangeFunc(req coapMsg.TCPMessage, writeTimeout, readTimeout time.Duration, pairChan *sessionResp) (coapMsg.TCPMessage, error) {
+func (s *sessionBase) exchangeFunc(req coapTCP.Message, writeTimeout, readTimeout time.Duration, pairChan *sessionResp) (coapTCP.Message, error) {
 
 	err := s.writeTimeout(req, writeTimeout)
 	if err != nil {
@@ -188,11 +188,11 @@ func (s *sessionBase) exchangeFunc(req coapMsg.TCPMessage, writeTimeout, readTim
 }
 
 // Write implements the networkSession.Write method.
-func (s *sessionTCP) Exchange(m coapMsg.TCPMessage) (coapMsg.TCPMessage, error) {
+func (s *sessionTCP) Exchange(m coapTCP.Message) (coapTCP.Message, error) {
 	return s.exchangeTimeout(m, s.writeDeadline, s.readDeadline)
 }
 
-func (s *sessionTCP) exchangeTimeout(req coapMsg.TCPMessage, writeDeadline, readDeadline time.Duration) (coapMsg.TCPMessage, error) {
+func (s *sessionTCP) exchangeTimeout(req coapTCP.Message, writeDeadline, readDeadline time.Duration) (coapTCP.Message, error) {
 	if req.Token() == nil {
 		return nil, ErrTokenNotExist
 	}
@@ -221,11 +221,11 @@ func (s *sessionTCP) exchangeTimeout(req coapMsg.TCPMessage, writeDeadline, read
 }
 
 // Write implements the networkSession.Write method.
-func (s *sessionTCP) WriteMsg(m coapMsg.TCPMessage) error {
+func (s *sessionTCP) WriteMsg(m coapTCP.Message) error {
 	return s.writeTimeout(m, s.writeDeadline)
 }
 
-func validateMsg(msg coapMsg.TCPMessage) error {
+func validateMsg(msg coapTCP.Message) error {
 	if msg.Payload() != nil && msg.Option(ContentFormat) == nil {
 		return ErrContentFormatNotSet
 	}
@@ -236,7 +236,7 @@ func validateMsg(msg coapMsg.TCPMessage) error {
 	return nil
 }
 
-func (s *sessionTCP) writeTimeout(m coapMsg.TCPMessage, timeout time.Duration) error {
+func (s *sessionTCP) writeTimeout(m coapTCP.Message, timeout time.Duration) error {
 	if err := validateMsg(m); err != nil {
 		return err
 	}

@@ -109,13 +109,13 @@ func ActivateAndServe(l net.Listener, p net.Conn, handler Handler) error {
 type Server struct {
 	// Address to listen on, ":COAP" if empty.
 	Addr string
-	// if "tcp" or "tcp-tls" (COAP over TLS) it will invoke a TCP listener, otherwise an UDP one
+	// if "tcp" or "tcp-tls" (COAP over TLS) it will invoke a Message listener, otherwise an UDP one
 	Net string
-	// TCP Listener to use, this is to aid in systemd's socket activation.
+	// Message Listener to use, this is to aid in systemd's socket activation.
 	Listener net.Listener
 	// TLS connection configuration
 	TLSConfig *tls.Config
-	// UDP/TCP "Listener/Connection" to use, this is to aid in systemd's socket activation.
+	// UDP/Message "Listener/Connection" to use, this is to aid in systemd's socket activation.
 	Conn net.Conn
 	// Handler to invoke, COAP.DefaultServeMux if nil.
 	Handler Handler
@@ -130,13 +130,13 @@ type Server struct {
 	NotifyStartedFunc func()
 	// The maximum of time for synchronization go-routines, defaults to 30 seconds, if it occurs, then it call log.Fatal
 	SyncTimeout time.Duration
-	// If newSessionUDPFunc is set it is called when session TCP want to be created
+	// If newSessionUDPFunc is set it is called when session Message want to be created
 	newSessionTCPFunc func(connection *connTCP, srv *Server) (*sessionTCP, error)
-	// If NotifyNewSession is set it is called when new TCP/UDP session was created.
+	// If NotifyNewSession is set it is called when new Message/UDP session was created.
 	NotifySessionNewFunc func(w *ClientCommander)
-	// If NotifyNewSession is set it is called when TCP/UDP session was ended.
+	// If NotifyNewSession is set it is called when Message/UDP session was ended.
 	NotifySessionEndFunc func(w *ClientCommander, err error)
-	// Use blockWise transfer for transfer payload (default for UDP it's enabled, for TCP it's disable)
+	// Use blockWise transfer for transfer payload (default for UDP it's enabled, for Message it's disable)
 	BlockWiseTransfer *bool
 	// Set maximal block size of payload that will be send in fragment
 	BlockWiseTransferSzx *BlockWiseSzx
@@ -146,7 +146,7 @@ type Server struct {
 
 	readerPool sync.Pool
 	writerPool sync.Pool
-	// UDP packet or TCP connection queue
+	// UDP packet or Message connection queue
 	queue chan *Request
 	// Workers count
 	workersCount int32
@@ -452,7 +452,7 @@ func (srv *Server) serveTCPconnection(conn net.Conn) error {
 	}
 }
 
-// serveTCP starts a TCP listener for the server.
+// serveTCP starts a Message listener for the server.
 func (srv *Server) serveTCP(l net.Listener) error {
 	defer l.Close()
 

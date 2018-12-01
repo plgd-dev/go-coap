@@ -10,7 +10,7 @@ import (
 )
 
 type writeReqBase struct {
-	req      coaptcp.TCPMessage
+	req      coaptcp.Message
 	respChan chan error // channel must have size 1 for non-blocking write to channel
 }
 
@@ -32,7 +32,7 @@ func (wreq writeReqBase) waitResp(timeout time.Duration) error {
 	}
 }
 
-func (wreq writeReqBase) data() coaptcp.TCPMessage {
+func (wreq writeReqBase) data() coaptcp.Message {
 	return wreq.req
 }
 
@@ -97,7 +97,7 @@ func (conn *connBase) write(w writeReqTCP, timeout time.Duration) error {
 
 type connTCP struct {
 	connBase
-	connection net.Conn // i/o connection if TCP was used
+	connection net.Conn // i/o connection if Message was used
 	num        int32
 }
 

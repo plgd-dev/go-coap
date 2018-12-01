@@ -1,10 +1,10 @@
 package coapservertcp
 
 import (
-	coapMsg "github.com/go-ocf/go-coap/g2/message/tcp"
+	coapTCP "github.com/go-ocf/go-coap/g2/message/tcp"
 )
 
 type Request struct {
-	Msg    coapMsg.TCPMessage
+	Msg    coapTCP.Message
 	Client *ClientCommander
 }

@@ -8,7 +8,7 @@ import (
 	"time"
 
 	coap "github.com/go-ocf/go-coap/g2/message"
-	coapMsg "github.com/go-ocf/go-coap/g2/message/tcp"
+	coapTCP "github.com/go-ocf/go-coap/g2/message/tcp"
 )
 
 // ClientCommander provides commands Get,Post,Put,Delete,Observe
@@ -17,7 +17,7 @@ type ClientCommander struct {
 	networkSession *sessionTCP
 }
 
-func (cc *ClientCommander) newGetDeleteRequest(path string, code coap.COAPCode) (coapMsg.TCPMessage, error) {
+func (cc *ClientCommander) newGetDeleteRequest(path string, code coap.COAPCode) (coapTCP.Message, error) {
 	token, err := GenerateToken()
 	if err != nil {
 		return nil, err
@@ -32,7 +32,7 @@ func (cc *ClientCommander) newGetDeleteRequest(path string, code coap.COAPCode) 
 	return req, nil
 }
 
-func (cc *ClientCommander) newPostPutRequest(path string, contentFormat coap.MediaType, body io.Reader, code coap.COAPCode) (coapMsg.TCPMessage, error) {
+func (cc *ClientCommander) newPostPutRequest(path string, contentFormat coap.MediaType, body io.Reader, code coap.COAPCode) (coapTCP.Message, error) {
 	token, err := GenerateToken()
 	if err != nil {
 		return nil, err
@@ -54,22 +54,22 @@ func (cc *ClientCommander) newPostPutRequest(path string, contentFormat coap.Med
 }
 
 // NewGetRequest creates get request
-func (cc *ClientCommander) NewGetRequest(path string) (coapMsg.TCPMessage, error) {
+func (cc *ClientCommander) NewGetRequest(path string) (coapTCP.Message, error) {
 	return cc.newGetDeleteRequest(path, GET)
 }
 
 // NewPostRequest creates post request
-func (cc *ClientCommander) NewPostRequest(path string, contentFormat coap.MediaType, body io.Reader) (coapMsg.TCPMessage, error) {
+func (cc *ClientCommander) NewPostRequest(path string, contentFormat coap.MediaType, body io.Reader) (coapTCP.Message, error) {
 	return cc.newPostPutRequest(path, contentFormat, body, POST)
 }
 
 // NewPutRequest creates put request
-func (cc *ClientCommander) NewPutRequest(path string, contentFormat coap.MediaType, body io.Reader) (coapMsg.TCPMessage, error) {
+func (cc *ClientCommander) NewPutRequest(path string, contentFormat coap.MediaType, body io.Reader) (coapTCP.Message, error) {
 	return cc.newPostPutRequest(path, contentFormat, body, PUT)
 }
 
 // NewDeleteRequest creates delete request
-func (cc *ClientCommander) NewDeleteRequest(path string) (coapMsg.TCPMessage, error) {
+func (cc *ClientCommander) NewDeleteRequest(path string) (coapTCP.Message, error) {
 	return cc.newGetDeleteRequest(path, DELETE)
 }
 
@@ -91,16 +91,16 @@ func (cc *ClientCommander) Equal(cc1 *ClientCommander) bool {
 // Exchange performs a synchronous query. It sends the message m to the address
 // contained in a and waits for a reply.
 //
-// Exchange does not retry a failed query, nor will it fall back to TCP in
+// Exchange does not retry a failed query, nor will it fall back to Message in
 // case of truncation.
 // To specify a local address or a timeout, the caller has to set the `Client.Dialer`
 // attribute appropriately
-func (cc *ClientCommander) Exchange(m coapMsg.TCPMessage) (coapMsg.TCPMessage, error) {
+func (cc *ClientCommander) Exchange(m coapTCP.Message) (coapTCP.Message, error) {
 	return cc.networkSession.Exchange(m)
 }
 
 // WriteMsg sends direct a message through the connection
-func (cc *ClientCommander) WriteMsg(m coapMsg.TCPMessage) error {
+func (cc *ClientCommander) WriteMsg(m coapTCP.Message) error {
 	return cc.networkSession.WriteMsg(m)
 }
 
@@ -110,7 +110,7 @@ func (cc *ClientCommander) Ping(timeout time.Duration) error {
 }
 
 // Get retrieve the resource identified by the request path
-func (cc *ClientCommander) Get(path string) (coapMsg.TCPMessage, error) {
+func (cc *ClientCommander) Get(path string) (coapTCP.Message, error) {
 	req, err := cc.NewGetRequest(path)
 	if err != nil {
 		return nil, err
@@ -119,7 +119,7 @@ func (cc *ClientCommander) Get(path string) (coapMsg.TCPMessage, error) {
 }
 
 // Post update the resource identified by the request path
-func (cc *ClientCommander) Post(path string, contentFormat coap.MediaType, body io.Reader) (coapMsg.TCPMessage, error) {
+func (cc *ClientCommander) Post(path string, contentFormat coap.MediaType, body io.Reader) (coapTCP.Message, error) {
 	req, err := cc.NewPostRequest(path, contentFormat, body)
 	if err != nil {
 		return nil, err
@@ -128,7 +128,7 @@ func (cc *ClientCommander) Post(path string, contentFormat coap.MediaType, body 
 }
 
 // Put create the resource identified by the request path
-func (cc *ClientCommander) Put(path string, contentFormat coap.MediaType, body io.Reader) (coapMsg.TCPMessage, error) {
+func (cc *ClientCommander) Put(path string, contentFormat coap.MediaType, body io.Reader) (coapTCP.Message, error) {
 	req, err := cc.NewPutRequest(path, contentFormat, body)
 	if err != nil {
 		return nil, err
@@ -137,7 +137,7 @@ func (cc *ClientCommander) Put(path string, contentFormat coap.MediaType, body i
 }
 
 // Delete delete the resource identified by the request path
-func (cc *ClientCommander) Delete(path string) (coapMsg.TCPMessage, error) {
+func (cc *ClientCommander) Delete(path string) (coapTCP.Message, error) {
 	req, err := cc.NewDeleteRequest(path)
 	if err != nil {
 		return nil, err

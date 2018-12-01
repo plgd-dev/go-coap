@@ -22,6 +22,8 @@ func (options Options) SetPath(buf []byte, path string) (Options, int, ErrorCode
 			end = len(subPath)
 		}
 		data := buf[encoded:]
+		o, enc, err := o.AddOptionString(data, URIPath, subPath[:end])
+		if err 
 		enc, err := EncodeRunes(data, []rune(subPath[:end]))
 		if err != OK {
 			return options, -1, err
@@ -30,10 +32,7 @@ func (options Options) SetPath(buf []byte, path string) (Options, int, ErrorCode
 			return options, -1, ErrorCodeInvalidValueLength
 		}
 		encoded += enc
-		o, err = o.Add(Option{ID: URIPath, Value: data[:enc]})
-		if err != OK {
-			return options, -1, err
-		}
+		o = o.Add(Option{ID: URIPath, Value: data[:enc]})
 		start = start + end + 1
 	}
 	return o, encoded, OK
@@ -74,15 +73,23 @@ func (options Options) OptionUint32(id OptionID) (uint32, ErrorCode) {
 	return val, err
 }
 
+func (options Options) AddOptionString(buf []byte, id OptionID, str string) (Options, int, ErrorCode) {
+	enc, err := EncodeRunes(buf, []rune(str))
+	if err != OK {
+		return options, -1, err
+	}
+	if id == URIPath && enc > maxPathValue {
+		return options, -1, ErrorCodeInvalidValueLength
+	}
+	return options.Add(Option{ID: URIPath, Value: buf[:enc]}), enc, OK
+}
+
 func (options Options) SetOptionUint32(buf []byte, id OptionID, value uint32) (Options, int, ErrorCode) {
 	enc, err := EncodeUint32(buf, uint32(value))
 	if err != OK {
 		return options, -1, err
 	}
-	o, err := options.Set(Option{ID: id, Value: buf[:enc]})
-	if err != OK {
-		return o, -1, err
-	}
+	o := options.Set(Option{ID: id, Value: buf[:enc]})
 	return o, enc, err
 }
 
@@ -164,23 +171,20 @@ func (options Options) findPositon(ID OptionID, prepend bool) int {
 	}
 }
 
-func (options Options) Set(opt Option) (Options, ErrorCode) {
+func (options Options) Set(opt Option) Options {
 	idxPre := options.findPositon(opt.ID, true)
 	idxPost := options.findPositon(opt.ID, false)
 
 	//append
 	if idxPre == idxPost {
-		if len(options) == cap(options) {
-			return options, ErrorCodeTooSmall
-		}
-		options = options[:len(options)+1]
+		options = append(options, Option{})
 		options[len(options)-1] = opt
-		return options, OK
+		return options
 	}
 	//replace
 	if idxPre+1 == idxPost {
 		options[idxPre] = opt
-		return options, OK
+		return options
 	}
 
 	//replace + move
@@ -193,20 +197,20 @@ func (options Options) Set(opt Option) (Options, ErrorCode) {
 	length := len(options) - (idxPost - 1 - idxPre)
 	options = options[:length]
 
-	return options, OK
+	return options
 }
 
-func (options Options) Add(opt Option) (Options, ErrorCode) {
-	if len(options) == cap(options) {
-		return options, ErrorCodeTooSmall
-	}
+func (options Options) Add(opt Option) Options {
 	idx := options.findPositon(opt.ID, false)
+	if len(options) == cap(options) {
+		options = append(options, Option{})
+	}
 	options = options[:len(options)+1]
 	for i := len(options) - 1; i > idx; i-- {
 		options[i] = options[i-1]
 	}
 	options[idx] = opt
-	return options, OK
+	return options
 }
 
 func (options Options) Remove(ID OptionID) Options {
