@@ -377,7 +377,7 @@ func (srv *Server) ActivateAndServe() error {
 		srv.lock.Unlock()
 		return srv.serveTCP(l)
 	}
-	srv.lock.Unlock()
+
 	return ErrInvalidServerListenerParameter
 }
 
