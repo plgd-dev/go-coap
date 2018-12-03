@@ -1,7 +1,9 @@
 package coap
 
 import (
+	"bytes"
 	"fmt"
+	"log"
 	"testing"
 )
 
@@ -165,4 +167,70 @@ func TestServingTCPBigMsgBlockWiseSzx1024(t *testing.T) {
 
 func TestServingTCPBigMsgBlockWiseSzxBERT(t *testing.T) {
 	testServingTCPWithMsg(t, "tcp", true, BlockWiseSzxBERT, make([]byte, 10*1024*1024), simpleMsg)
+}
+
+// EchoServerUsingWrite echoes request payloads using ResponseWriter.Write
+func EchoServerUsingWrite(w ResponseWriter, r *Request) {
+	if r.Msg.IsConfirmable() {
+		w.SetCode(Content)
+		w.SetContentFormat(r.Msg.Option(ContentFormat).(MediaType))
+		_, err := w.Write(r.Msg.Payload())
+		if err != nil {
+			log.Printf("Cannot write echo %v", err)
+		}
+	}
+}
+
+func TestServingUDPBlockWiseUsingWrite(t *testing.T) {
+	// Test that responding to blockwise requests using ResponseWrite.write
+	// works correctly (as opposed to using WriteMsg directly)
+
+	HandleFunc("/test-with-write", EchoServerUsingWrite)
+	defer HandleRemove("/test-with-write")
+
+	payload := make([]byte, 512)
+
+	_, addr, _, err := RunLocalUDPServer("udp", ":0", true, BlockWiseSzx1024)
+	if err != nil {
+		t.Fatalf("Unexpected error '%v'", err)
+	}
+
+	BlockWiseTransfer := true
+	BlockWiseTransferSzx := BlockWiseSzx128
+	c := &Client{
+		Net:                  "udp",
+		BlockWiseTransfer:    &BlockWiseTransfer,
+		BlockWiseTransferSzx: &BlockWiseTransferSzx,
+		MaxMessageSize:       ^uint32(0),
+	}
+	co, err := c.Dial(addr)
+	if err != nil {
+		t.Fatal("cannot dial", err)
+	}
+
+	req, err := co.NewPostRequest("/test-with-write", TextPlain, bytes.NewBuffer(payload))
+	if err != nil {
+		t.Fatal("cannot create request", err)
+	}
+
+	m, err := co.Exchange(req)
+	if err != nil {
+		t.Fatal("failed to exchange", err)
+	}
+	if m == nil {
+		t.Fatalf("Didn't receive CoAP response")
+	}
+
+	expectedMsg := &DgramMessage{
+		MessageBase{
+			typ:       Acknowledgement,
+			code:      Content,
+			messageID: req.MessageID(),
+			payload:   req.Payload(),
+			token:     req.Token(),
+		},
+	}
+	expectedMsg.SetOption(ContentFormat, req.Option(ContentFormat))
+
+	assertEqualMessages(t, expectedMsg, m)
 }

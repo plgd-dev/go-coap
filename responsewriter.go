@@ -38,6 +38,26 @@ type responseWriter struct {
 	contentFormat *MediaType
 }
 
+func responseWriterFromRequest(r *Request) ResponseWriter {
+	w := ResponseWriter(&responseWriter{req: r})
+	switch {
+	case r.Msg.Code() == GET:
+		switch {
+		// set blockwise notice writer for observe
+		case r.Client.networkSession.blockWiseEnabled() && r.Msg.Option(Observe) != nil:
+			w = &blockWiseNoticeWriter{responseWriter: w.(*responseWriter)}
+		// set blockwise if it is enabled
+		case r.Client.networkSession.blockWiseEnabled():
+			w = &blockWiseResponseWriter{responseWriter: w.(*responseWriter)}
+		}
+		w = &getResponseWriter{w}
+	case r.Client.networkSession.blockWiseEnabled():
+		w = &blockWiseResponseWriter{responseWriter: w.(*responseWriter)}
+	}
+
+	return w
+}
+
 // NewResponse creates reponse for request
 func (r *responseWriter) NewResponse(code COAPCode) Message {
 	typ := NonConfirmable
