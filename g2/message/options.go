@@ -22,17 +22,13 @@ func (options Options) SetPath(buf []byte, path string) (Options, int, ErrorCode
 			end = len(subPath)
 		}
 		data := buf[encoded:]
-		o, enc, err := o.AddOptionString(data, URIPath, subPath[:end])
-		if err 
-		enc, err := EncodeRunes(data, []rune(subPath[:end]))
+		var enc int
+		var err ErrorCode
+		o, enc, err = o.AddOptionString(data, URIPath, subPath[:end])
 		if err != OK {
-			return options, -1, err
-		}
-		if enc > maxPathValue {
-			return options, -1, ErrorCodeInvalidValueLength
+			return o, -1, err
 		}
 		encoded += enc
-		o = o.Add(Option{ID: URIPath, Value: data[:enc]})
 		start = start + end + 1
 	}
 	return o, encoded, OK
@@ -61,6 +57,28 @@ func (options Options) Path(buf []rune) (int, ErrorCode) {
 	return used, OK
 }
 
+func (options Options) SetOptionString(buf []byte, id OptionID, str string) (Options, int, ErrorCode) {
+	enc, err := EncodeRunes(buf, []rune(str))
+	if err != OK {
+		return options, -1, err
+	}
+	if id == URIPath && enc > maxPathValue {
+		return options, -1, ErrorCodeInvalidValueLength
+	}
+	return options.Set(Option{ID: URIPath, Value: buf[:enc]}), enc, OK
+}
+
+func (options Options) AddOptionString(buf []byte, id OptionID, str string) (Options, int, ErrorCode) {
+	enc, err := EncodeRunes(buf, []rune(str))
+	if err != OK {
+		return options, -1, err
+	}
+	if id == URIPath && enc > maxPathValue {
+		return options, -1, ErrorCodeInvalidValueLength
+	}
+	return options.Add(Option{ID: URIPath, Value: buf[:enc]}), enc, OK
+}
+
 func (options Options) OptionUint32(id OptionID) (uint32, ErrorCode) {
 	firstIdx, lastIdx, err := options.Find(Block1)
 	if err != OK {
@@ -73,15 +91,13 @@ func (options Options) OptionUint32(id OptionID) (uint32, ErrorCode) {
 	return val, err
 }
 
-func (options Options) AddOptionString(buf []byte, id OptionID, str string) (Options, int, ErrorCode) {
-	enc, err := EncodeRunes(buf, []rune(str))
+func (options Options) AddOptionUint32(buf []byte, id OptionID, value uint32) (Options, int, ErrorCode) {
+	enc, err := EncodeUint32(buf, uint32(value))
 	if err != OK {
 		return options, -1, err
 	}
-	if id == URIPath && enc > maxPathValue {
-		return options, -1, ErrorCodeInvalidValueLength
-	}
-	return options.Add(Option{ID: URIPath, Value: buf[:enc]}), enc, OK
+	o := options.Add(Option{ID: id, Value: buf[:enc]})
+	return o, enc, err
 }
 
 func (options Options) SetOptionUint32(buf []byte, id OptionID, value uint32) (Options, int, ErrorCode) {

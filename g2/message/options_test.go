@@ -154,12 +154,11 @@ func TestPathOption(t *testing.T) {
 }
 
 func BenchmarkPathOption(b *testing.B) {
-	options := make(Options, 0, 10)
 	runes := make([]rune, 32)
 	buf := make([]byte, 256)
 	b.ResetTimer()
 	for i := uint32(0); i < uint32(b.N); i++ {
-		options := options[:0]
+		options := make(Options, 0, 10)
 		path := "a/b/c"
 
 		options, bufLen, err := options.SetPath(buf, path)
