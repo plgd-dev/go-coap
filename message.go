@@ -591,10 +591,16 @@ func (m *MessageBase) PathString() string {
 
 // SetPathString sets a path by a / separated string.
 func (m *MessageBase) SetPathString(s string) {
-	for s[0] == '/' {
-		s = s[1:]
+	switch s {
+	case "", "/":
+		//root path is not set as option
+		return
+	default:
+		if s[0] == '/' {
+			s = s[1:]
+		}
+		m.SetPath(strings.Split(s, "/"))
 	}
-	m.SetPath(strings.Split(s, "/"))
 }
 
 // SetPath updates or adds a URIPath attribute on this message.
