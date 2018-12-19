@@ -1,7 +1,10 @@
 // Package coap provides a CoAP client and server.
 package coap
 
-import "sync"
+import (
+	"errors"
+	"sync"
+)
 
 // ServeMux is an COAP request multiplexer. It matches the
 // path name of each incoming request against a list of
@@ -65,9 +68,10 @@ func (mux *ServeMux) match(path string) (h Handler, pattern string) {
 }
 
 // Handle adds a handler to the ServeMux for pattern.
-func (mux *ServeMux) Handle(pattern string, handler Handler) {
+func (mux *ServeMux) Handle(pattern string, handler Handler) error {
 	switch pattern {
 	case "", "/":
+     pattern = "/"
 	default:
 		if pattern[0] == '/' {
 			pattern = pattern[1:]
@@ -75,12 +79,13 @@ func (mux *ServeMux) Handle(pattern string, handler Handler) {
 	}
 
 	if handler == nil {
-		panic("COAP: nil handler")
+		return errors.New("nil handler")
 	}
 
 	mux.m.Lock()
 	mux.z[pattern] = muxEntry{h: handler, pattern: pattern}
 	mux.m.Unlock()
+	return nil
 }
 
 // DefaultHandle set default handler to the ServeMux
@@ -101,10 +106,18 @@ func (mux *ServeMux) DefaultHandleFunc(handler func(w ResponseWriter, r *Request
 }
 
 // HandleRemove deregistrars the handler specific for pattern from the ServeMux.
-func (mux *ServeMux) HandleRemove(pattern string) {
+func (mux *ServeMux) HandleRemove(pattern string) error {
+  switch pattern {
+    case "", "/":
+     pattern = "/"
+  }
 	mux.m.Lock()
-	delete(mux.z, pattern)
-	mux.m.Unlock()
+  defer mux.m.Unlock()
+  if _, ok := mux.z[pattern]; ok {
+    delete(mux.z, pattern)
+    return nil
+  }
+	return errors.New("pattern is not registered in")
 }
 
 // ServeCOAP dispatches the request to the handler whose
