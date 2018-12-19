@@ -32,15 +32,20 @@ var DefaultServeMux = NewServeMux()
 
 // Does path match pattern?
 func pathMatch(pattern, path string) bool {
-	if len(pattern) == 0 {
-		// should not happen
+	switch pattern {
+	case "", "/":
+		switch path {
+		case "", "/":
+			return true
+		}
 		return false
+	default:
+		n := len(pattern)
+		if pattern[n-1] != '/' {
+			return pattern == path
+		}
+		return len(path) >= n && path[0:n] == pattern
 	}
-	n := len(pattern)
-	if pattern[n-1] != '/' {
-		return pattern == path
-	}
-	return len(path) >= n && path[0:n] == pattern
 }
 
 // Find a handler on a handler map given a path string
@@ -64,13 +69,15 @@ func (mux *ServeMux) match(path string) (h Handler, pattern string) {
 
 // Handle adds a handler to the ServeMux for pattern.
 func (mux *ServeMux) Handle(pattern string, handler Handler) error {
-	for pattern != "" && pattern[0] == '/' {
-		pattern = pattern[1:]
+	switch pattern {
+	case "", "/":
+     pattern = "/"
+	default:
+		if pattern[0] == '/' {
+			pattern = pattern[1:]
+		}
 	}
 
-	if pattern == "" {
-		return errors.New("invalid pattern")
-	}
 	if handler == nil {
 		return errors.New("nil handler")
 	}
@@ -100,13 +107,17 @@ func (mux *ServeMux) DefaultHandleFunc(handler func(w ResponseWriter, r *Request
 
 // HandleRemove deregistrars the handler specific for pattern from the ServeMux.
 func (mux *ServeMux) HandleRemove(pattern string) error {
-	if pattern == "" {
-		return errors.New("invalid pattern")
-	}
+  switch pattern {
+    case "", "/":
+     pattern = "/"
+  }
 	mux.m.Lock()
-	delete(mux.z, pattern)
-	mux.m.Unlock()
-	return nil
+  defer mux.m.Unlock()
+  if _, ok := mux.z[pattern]; ok {
+    delete(mux.z, pattern)
+    return nil
+  }
+	return errors.New("pattern is not registered in")
 }
 
 // ServeCOAP dispatches the request to the handler whose

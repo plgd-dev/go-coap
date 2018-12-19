@@ -231,8 +231,8 @@ func testServingTCPWithMsgWithObserver(t *testing.T, net string, BlockWiseTransf
 	ch(t, payload, co)
 }
 
-func simpleMsg(t *testing.T, payload []byte, co *ClientConn) {
-	req, err := co.NewPostRequest("/test", TextPlain, bytes.NewBuffer(payload))
+func simpleMsgToPath(t *testing.T, payload []byte, co *ClientConn, path string) {
+	req, err := co.NewPostRequest(path, TextPlain, bytes.NewBuffer(payload))
 	if err != nil {
 		t.Fatal("cannot create request", err)
 	}
@@ -247,6 +247,10 @@ func simpleMsg(t *testing.T, payload []byte, co *ClientConn) {
 		t.Fatalf("Didn't receive CoAP response")
 	}
 	assertEqualMessages(t, res, m)
+}
+
+func simpleMsg(t *testing.T, payload []byte, co *ClientConn) {
+	simpleMsgToPath(t, payload, co, "/test")
 }
 
 func pingMsg(t *testing.T, payload []byte, co *ClientConn) {
@@ -472,6 +476,28 @@ func TestServingIPv4MCast(t *testing.T) {
 
 func TestServingIPv6MCast(t *testing.T) {
 	testServingMCast(t, "udp6-mcast", "[ff03::158]:11111", false, BlockWiseSzx16, 16)
+}
+
+func TestServingRootPath(t *testing.T) {
+	HandleFunc("/", EchoServer)
+	defer HandleRemove("/")
+	testServingTCPWithMsg(t, "udp", false, BlockWiseSzx16, make([]byte, 128), func(t *testing.T, payload []byte, co *ClientConn) {
+		simpleMsgToPath(t, payload, co, "/")
+	})
+	testServingTCPWithMsg(t, "udp", false, BlockWiseSzx16, make([]byte, 128), func(t *testing.T, payload []byte, co *ClientConn) {
+		simpleMsgToPath(t, payload, co, "")
+	})
+}
+
+func TestServingEmptyRootPath(t *testing.T) {
+	HandleFunc("", EchoServer)
+	defer HandleRemove("")
+	testServingTCPWithMsg(t, "udp", false, BlockWiseSzx16, make([]byte, 128), func(t *testing.T, payload []byte, co *ClientConn) {
+		simpleMsgToPath(t, payload, co, "/")
+	})
+	testServingTCPWithMsg(t, "udp", false, BlockWiseSzx16, make([]byte, 128), func(t *testing.T, payload []byte, co *ClientConn) {
+		simpleMsgToPath(t, payload, co, "")
+	})
 }
 
 type dataReader struct {
