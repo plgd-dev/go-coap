@@ -134,16 +134,28 @@ func (r *ResponseWaiter) Cancel() error {
 // Publish subscribe to sever on path. After subscription and every change on path,
 // server sends immediately response
 func (mconn *MulticastClientConn) Publish(path string, responseHandler func(req *Request)) (*ResponseWaiter, error) {
-	req, err := mconn.conn.NewGetRequest(path)
+	req, err := mconn.NewGetRequest(path)
 	if err != nil {
 		return nil, err
 	}
+	return mconn.PublishMsg(req, responseHandler)
+}
+
+// PublishMsg subscribe to sever with GET message. After subscription and every change on path,
+// server sends immediately response
+func (mconn *MulticastClientConn) PublishMsg(req Message, responseHandler func(req *Request)) (*ResponseWaiter, error) {
+	if req.Code() != GET || req.PathString() == "" {
+		return nil, ErrInvalidRequest
+	}
+
+	path := req.PathString()
+
 	r := &ResponseWaiter{
 		token: req.Token(),
 		path:  path,
 		conn:  mconn,
 	}
-	err = mconn.client.multicastHandler.Add(req.Token(), func(w ResponseWriter, r *Request) {
+	err := mconn.client.multicastHandler.Add(req.Token(), func(w ResponseWriter, r *Request) {
 		var err error
 		switch r.Msg.Code() {
 		case GET, POST, PUT, DELETE:
