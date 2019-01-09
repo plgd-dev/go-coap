@@ -11,19 +11,31 @@ import (
 
 func decodeMsgToDebug(resp coap.Message, tag string) {
 	var m interface{}
-	err := codec.NewDecoderBytes(resp.Payload(), new(codec.CborHandle)).Decode(&m)
-	out := fmt.Sprintf("RAW:\n%v\n", resp.Payload())
-	if err == nil {
-		bw := new(bytes.Buffer)
-		h := new(codec.JsonHandle)
-		h.BasicHandle.Canonical = true
-		enc := codec.NewEncoder(bw, h)
-		err = enc.Encode(m)
-		if err != nil {
-			log.Printf("Cannot encode %v to JSON: %v", m, err)
-		} else {
-			out = fmt.Sprintf("JSON:\n%v\n", bw.String())
+
+	var out string
+	if cf := resp.Option(coap.ContentFormat); cf != nil {
+		switch cf.(coap.MediaType) {
+		case coap.TextPlain:
+			out = fmt.Sprintf("%v:\n%v\n", cf, string(resp.Payload()))
+		case coap.AppCBOR, coap.AppOcfCbor:
+			err := codec.NewDecoderBytes(resp.Payload(), new(codec.CborHandle)).Decode(&m)
+			if err == nil {
+				bw := new(bytes.Buffer)
+				h := new(codec.JsonHandle)
+				h.BasicHandle.Canonical = true
+				enc := codec.NewEncoder(bw, h)
+				err = enc.Encode(m)
+				if err != nil {
+					log.Printf("Cannot encode %v to JSON: %v", m, err)
+				} else {
+					out = fmt.Sprintf("JSON:\n%v\n", bw.String())
+				}
+			}
+		default:
+			out = fmt.Sprintf("RAW-unknown:\n%v\n", resp.Payload())
 		}
+	} else {
+		out = fmt.Sprintf("RAW:\n%v\n", resp.Payload())
 	}
 
 	log.Print(
@@ -32,7 +44,7 @@ func decodeMsgToDebug(resp coap.Message, tag string) {
 		"Code: ", resp.Code(), "\n",
 		"Type: ", resp.Type(), "\n",
 		"Query: ", resp.Options(coap.URIQuery), "\n",
-		"ContentFormat: ", resp.Options(coap.ContentFormat), "\n",
+		"ContentFormat: ", resp.Option(coap.ContentFormat), "\n",
 		out,
 	)
 }
@@ -53,6 +65,11 @@ func main() {
 	req.SetOption(coap.URIQuery, "rt=oic.wk.d")
 	_, err = conn.PublishMsg(req, func(req *coap.Request) {
 		decodeMsgToDebug(req.Msg, "MCAST")
+		resp, err := req.Client.Get("/tmp")
+		if err != nil {
+			log.Fatalf("Error receive response: %v", err)
+		}
+		decodeMsgToDebug(resp, "DIRECT MSG")
 		sync <- true
 	})
 	if err != nil {
