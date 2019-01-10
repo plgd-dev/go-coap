@@ -169,12 +169,20 @@ func TestServingTCPBigMsgBlockWiseSzxBERT(t *testing.T) {
 	testServingTCPWithMsg(t, "tcp", true, BlockWiseSzxBERT, make([]byte, 10*1024*1024), simpleMsg)
 }
 
+var helloWorld = []byte("Hello world")
+
 // EchoServerUsingWrite echoes request payloads using ResponseWriter.Write
 func EchoServerUsingWrite(w ResponseWriter, r *Request) {
-	if r.Msg.IsConfirmable() {
-		w.SetCode(Content)
-		w.SetContentFormat(r.Msg.Option(ContentFormat).(MediaType))
+	w.SetCode(Content)
+	if mt, ok := r.Msg.Option(ContentFormat).(MediaType); ok {
+		w.SetContentFormat(mt)
 		_, err := w.Write(r.Msg.Payload())
+		if err != nil {
+			log.Printf("Cannot write echo %v", err)
+		}
+	} else {
+		w.SetContentFormat(TextPlain)
+		_, err := w.Write(helloWorld)
 		if err != nil {
 			log.Printf("Cannot write echo %v", err)
 		}
@@ -233,4 +241,87 @@ func TestServingUDPBlockWiseUsingWrite(t *testing.T) {
 	expectedMsg.SetOption(ContentFormat, req.Option(ContentFormat))
 
 	assertEqualMessages(t, expectedMsg, m)
+}
+
+func TestServingUDPBlockWiseWithClientWithoutBlockWise(t *testing.T) {
+	HandleFunc("/test-with-write", EchoServerUsingWrite)
+	defer HandleRemove("/test-with-write")
+
+	payload := make([]byte, 8)
+
+	_, addr, _, err := RunLocalUDPServer("udp", ":0", true, BlockWiseSzx16)
+	if err != nil {
+		t.Fatalf("Unexpected error '%v'", err)
+	}
+
+	BlockWiseTransfer := false
+	BlockWiseTransferSzx := BlockWiseSzx128
+	c := &Client{
+		Net:                  "udp",
+		BlockWiseTransfer:    &BlockWiseTransfer,
+		BlockWiseTransferSzx: &BlockWiseTransferSzx,
+		MaxMessageSize:       ^uint32(0),
+	}
+	co, err := c.Dial(addr)
+	if err != nil {
+		t.Fatal("cannot dial", err)
+	}
+
+	req, err := co.NewPostRequest("/test-with-write", TextPlain, bytes.NewBuffer(payload))
+	if err != nil {
+		t.Fatal("cannot create request", err)
+	}
+
+	m, err := co.Exchange(req)
+	if err != nil {
+		t.Fatal("failed to exchange", err)
+	}
+	if m == nil {
+		t.Fatalf("Didn't receive CoAP response")
+	}
+
+	expectedMsg := &DgramMessage{
+		MessageBase{
+			typ:       Acknowledgement,
+			code:      Content,
+			messageID: req.MessageID(),
+			payload:   req.Payload(),
+			token:     req.Token(),
+		},
+	}
+
+	expectedMsg.SetOption(ContentFormat, TextPlain)
+	expectedMsg.SetOption(Block2, uint32(0))
+	expectedMsg.SetOption(Size2, uint32(len(req.Payload())))
+
+	assertEqualMessages(t, expectedMsg, m)
+
+	getReq, err := co.NewGetRequest("/test-with-write")
+	if err != nil {
+		t.Fatal("cannot create request", err)
+	}
+
+	getResp, err := co.Exchange(getReq)
+	if err != nil {
+		t.Fatal("failed to exchange", err)
+	}
+	expectedGetMsg := DgramMessage{
+		MessageBase{
+			typ:       Acknowledgement,
+			code:      Content,
+			messageID: getReq.MessageID(),
+			payload:   helloWorld,
+			token:     getReq.Token(),
+		},
+	}
+
+	if etag, ok := getResp.Option(ETag).([]byte); ok {
+		expectedGetMsg.SetOption(ETag, etag)
+	}
+
+	expectedGetMsg.SetOption(ContentFormat, TextPlain)
+	expectedGetMsg.SetOption(Block2, uint32(0))
+	expectedGetMsg.SetOption(Size2, uint32(len(helloWorld)))
+
+	assertEqualMessages(t, &expectedGetMsg, getResp)
 }
