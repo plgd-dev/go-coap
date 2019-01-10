@@ -492,8 +492,11 @@ func newReceiver(b *blockWiseSession, peerDrive bool, origin Message, resp Messa
 			r.currentSzx = szx
 			r.nextNum = num
 			r.currentMore = more
+			r.payload.Write(origin.Payload())
+		} else {
+			//peerdrive doesn't inform us that it wants to use blockwise - return original message
+			return r, origin, nil
 		}
-		r.payload.Write(origin.Payload())
 	}
 
 	return r, nil, nil
