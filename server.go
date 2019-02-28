@@ -4,6 +4,7 @@ package coap
 import (
 	"bufio"
 	"crypto/tls"
+	"fmt"
 	"net"
 	"reflect"
 	"strconv"
@@ -144,6 +145,8 @@ type Server struct {
 	BlockWiseTransfer *bool
 	// Set maximal block size of payload that will be send in fragment
 	BlockWiseTransferSzx *BlockWiseSzx
+	// Disable tcp signal messages
+	DisableTCPSignalMessages bool
 
 	TCPReadBufferSize  int
 	TCPWriteBufferSize int
@@ -425,7 +428,6 @@ func (srv *Server) syncTimeout() time.Duration {
 }
 
 func (srv *Server) serveTCPconnection(conn net.Conn) error {
-	conn.SetReadDeadline(time.Now().Add(srv.readTimeout()))
 	session, err := srv.newSessionTCPFunc(newConnectionTCP(conn, srv), srv)
 	if err != nil {
 		return err
@@ -440,6 +442,10 @@ func (srv *Server) serveTCPconnection(conn net.Conn) error {
 			return session.Close()
 		}
 		srv.lock.RUnlock()
+		err = conn.SetReadDeadline(time.Now().Add(srv.readTimeout()))
+		if err != nil {
+			return session.closeWithError(fmt.Errorf("cannot serve tcp connection: %v", err))
+		}
 		mti, err := readTcpMsgInfo(br)
 		if err != nil {
 			return session.closeWithError(err)

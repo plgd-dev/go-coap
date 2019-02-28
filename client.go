@@ -35,6 +35,8 @@ type Client struct {
 
 	BlockWiseTransfer    *bool         // Use blockWise transfer for transfer payload (default for UDP it's enabled, for TCP it's disable)
 	BlockWiseTransferSzx *BlockWiseSzx // Set maximal block size of payload that will be send in fragment
+
+	DisableTCPSignalMessages bool // Disable tcp signal messages
 }
 
 func (c *Client) readTimeout() time.Duration {
@@ -136,14 +138,15 @@ func (c *Client) Dial(address string) (clientConn *ClientConn, err error) {
 	sync := make(chan bool)
 	clientConn = &ClientConn{
 		srv: &Server{
-			Net:                  network,
-			TLSConfig:            c.TLSConfig,
-			Conn:                 conn,
-			ReadTimeout:          c.readTimeout(),
-			WriteTimeout:         c.writeTimeout(),
-			MaxMessageSize:       c.MaxMessageSize,
-			BlockWiseTransfer:    &BlockWiseTransfer,
-			BlockWiseTransferSzx: &BlockWiseTransferSzx,
+			Net:                      network,
+			TLSConfig:                c.TLSConfig,
+			Conn:                     conn,
+			ReadTimeout:              c.readTimeout(),
+			WriteTimeout:             c.writeTimeout(),
+			MaxMessageSize:           c.MaxMessageSize,
+			BlockWiseTransfer:        &BlockWiseTransfer,
+			BlockWiseTransferSzx:     &BlockWiseTransferSzx,
+			DisableTCPSignalMessages: c.DisableTCPSignalMessages,
 			NotifyStartedFunc: func() {
 				timeout := c.syncTimeout()
 				select {
