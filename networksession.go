@@ -1,6 +1,7 @@
 package coap
 
 import (
+	"fmt"
 	"log"
 	"net"
 	"sync"
@@ -119,8 +120,10 @@ func newSessionTCP(connection Conn, srv *Server) (networkSession, error) {
 		},
 	}
 
-	if err := s.sendCSM(); err != nil {
-		return nil, err
+	if !s.srv.DisableTCPSignalMessages {
+		if err := s.sendCSM(); err != nil {
+			return nil, err
+		}
 	}
 
 	return s, nil
@@ -277,6 +280,9 @@ func (s *sessionUDP) Ping(timeout time.Duration) error {
 }
 
 func (s *sessionTCP) Ping(timeout time.Duration) error {
+	if s.srv.DisableTCPSignalMessages {
+		return fmt.Errorf("cannot send ping: TCP Signal messages are disabled")
+	}
 	token, err := GenerateToken()
 	if err != nil {
 		return err
