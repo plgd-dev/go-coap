@@ -3,6 +3,7 @@ package coap
 // A client implementation.
 
 import (
+	"context"
 	"net"
 	"time"
 )
@@ -32,7 +33,7 @@ type MulticastClient struct {
 }
 
 // Dial connects to the address on the named network.
-func (c *MulticastClient) dialNet(net, address string) (*ClientConn, error) {
+func (c *MulticastClient) dialNet(ctx context.Context, net, address string) (*ClientConn, error) {
 	if c.multicastHandler == nil {
 		c.multicastHandler = &TokenHandler{tokenHandlers: make(map[[MaxTokenSize]byte]HandlerFunc)}
 	}
@@ -55,11 +56,11 @@ func (c *MulticastClient) dialNet(net, address string) (*ClientConn, error) {
 		BlockWiseTransferSzx: c.BlockWiseTransferSzx,
 	}
 
-	return client.Dial(address)
+	return client.DialContext(ctx, address)
 }
 
 // Dial connects to the address on the named network.
-func (c *MulticastClient) Dial(address string) (*MulticastClientConn, error) {
+func (c *MulticastClient) DialContext(ctx context.Context, address string) (*MulticastClientConn, error) {
 	var net string
 	switch c.Net {
 	case "udp", "udp4", "udp6":
@@ -69,7 +70,7 @@ func (c *MulticastClient) Dial(address string) (*MulticastClientConn, error) {
 	default:
 		return nil, ErrInvalidNetParameter
 	}
-	conn, err := c.dialNet(net, address)
+	conn, err := c.dialNet(ctx, net, address)
 	if err != nil {
 		return nil, err
 	}
@@ -99,19 +100,9 @@ func (mconn *MulticastClientConn) NewGetRequest(path string) (Message, error) {
 	return mconn.conn.NewGetRequest(path)
 }
 
-// WriteMsg sends a message through the connection co.
-func (mconn *MulticastClientConn) WriteMsg(m Message) error {
-	return mconn.conn.WriteMsg(m)
-}
-
-// SetReadDeadline set read deadline for timeout for Exchange
-func (mconn *MulticastClientConn) SetReadDeadline(timeout time.Duration) {
-	mconn.conn.SetReadDeadline(timeout)
-}
-
-// SetWriteDeadline set write deadline for timeout for Exchange and Write
-func (mconn *MulticastClientConn) SetWriteDeadline(timeout time.Duration) {
-	mconn.conn.SetWriteDeadline(timeout)
+// WriteContextMsg sends a message through the connection co.
+func (mconn *MulticastClientConn) WriteContextMsg(ctx context.Context, m Message) error {
+	return mconn.conn.WriteContextMsg(ctx, m)
 }
 
 // Close close connection
@@ -133,17 +124,17 @@ func (r *ResponseWaiter) Cancel() error {
 
 // Publish subscribe to sever on path. After subscription and every change on path,
 // server sends immediately response
-func (mconn *MulticastClientConn) Publish(path string, responseHandler func(req *Request)) (*ResponseWaiter, error) {
+func (mconn *MulticastClientConn) PublishContext(ctx context.Context, path string, responseHandler func(req *Request)) (*ResponseWaiter, error) {
 	req, err := mconn.NewGetRequest(path)
 	if err != nil {
 		return nil, err
 	}
-	return mconn.PublishMsg(req, responseHandler)
+	return mconn.PublishContextMsg(ctx, req, responseHandler)
 }
 
 // PublishMsg subscribe to sever with GET message. After subscription and every change on path,
 // server sends immediately response
-func (mconn *MulticastClientConn) PublishMsg(req Message, responseHandler func(req *Request)) (*ResponseWaiter, error) {
+func (mconn *MulticastClientConn) PublishContextMsg(ctx context.Context, req Message, responseHandler func(req *Request)) (*ResponseWaiter, error) {
 	if req.Code() != GET || req.PathString() == "" {
 		return nil, ErrInvalidRequest
 	}
@@ -180,18 +171,18 @@ func (mconn *MulticastClientConn) PublishMsg(req Message, responseHandler func(r
 		}
 
 		if needGet {
-			resp, err = r.Client.Get(path)
+			resp, err = r.Client.GetContext(ctx, path)
 			if err != nil {
 				return
 			}
 		}
-		responseHandler(&Request{Msg: resp, Client: r.Client})
+		responseHandler(&Request{Msg: resp, Client: r.Client, Ctx: ctx})
 	})
 	if err != nil {
 		return nil, err
 	}
 
-	err = mconn.WriteMsg(req)
+	err = mconn.WriteContextMsg(ctx, req)
 	if err != nil {
 		mconn.client.multicastHandler.Remove(r.token)
 		return nil, err

@@ -219,6 +219,10 @@ type msgTcpInfo struct {
 	totLen int
 }
 
+func (m msgTcpInfo) BodyLen() int {
+	return m.totLen - m.hdrLen
+}
+
 func normalizeErrors(e error) error {
 	if e == io.EOF || e == io.ErrUnexpectedEOF {
 		return io.ErrUnexpectedEOF
@@ -287,12 +291,7 @@ func readTcpMsgInfo(r io.Reader) (msgTcpInfo, error) {
 	return mti, nil
 }
 
-func readTcpMsgBody(mti msgTcpInfo, r io.Reader) (options, []byte, error) {
-	bodyLen := mti.totLen - mti.hdrLen
-	b := make([]byte, bodyLen)
-	if _, err := io.ReadFull(r, b); err != nil {
-		return nil, nil, err
-	}
+func parseTcpOptionsPayload(mti msgTcpInfo, b []byte) (options, []byte, error) {
 	optionDefs := coapOptionDefs
 	switch COAPCode(mti.code) {
 	case CSM:
@@ -334,7 +333,13 @@ func (m *TcpMessage) UnmarshalBinary(data []byte) error {
 			mti.totLen, len(data))
 	}
 
-	o, p, err := readTcpMsgBody(mti, r)
+	b := make([]byte, mti.BodyLen())
+	_, err = io.ReadFull(r, b)
+	if err != nil {
+		return fmt.Errorf("cannot read TCP CoAP body: %v", err)
+	}
+
+	o, p, err := parseTcpOptionsPayload(mti, b)
 	if err != nil {
 		return err
 	}
@@ -386,7 +391,13 @@ func Decode(r io.Reader) (*TcpMessage, error) {
 		return nil, err
 	}
 
-	o, p, err := readTcpMsgBody(mti, r)
+	b := make([]byte, mti.BodyLen())
+	_, err = io.ReadFull(r, b)
+	if err != nil {
+		return nil, fmt.Errorf("cannot read TCP CoAP body: %v", err)
+	}
+
+	o, p, err := parseTcpOptionsPayload(mti, b)
 	if err != nil {
 		return nil, err
 	}

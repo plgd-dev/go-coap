@@ -1,223 +1,136 @@
 package coap
 
 import (
-	"bytes"
-	"log"
+	"context"
+	"fmt"
 	"net"
-	"sync/atomic"
+	"sync"
 	"time"
 )
 
-type writeReq interface {
-	sendResp(err error, timeout time.Duration)
-	waitResp(timeout time.Duration) error
-	data() Message
-}
+/*
 
-type writeReqBase struct {
-	req      Message
-	respChan chan error // channel must have size 1 for non-blocking write to channel
-}
+ */
 
-func (wreq *writeReqBase) sendResp(err error, timeout time.Duration) {
-	select {
-	case wreq.respChan <- err:
-		return
-	default:
-		log.Fatal("Exactly one error can be send as resp. This is err.")
-	}
-}
-
-func (wreq *writeReqBase) waitResp(timeout time.Duration) error {
-	select {
-	case err := <-wreq.respChan:
-		return err
-	case <-time.After(timeout):
-		return ErrTimeout
-	}
-}
-
-func (wreq *writeReqBase) data() Message {
-	return wreq.req
-}
-
-type writeReqTCP struct {
-	writeReqBase
-}
-
-type writeReqUDP struct {
-	writeReqBase
-	sessionData *SessionUDPData
-}
-
-// Conn represents the connection
-type Conn interface {
-	// LocalAddr get local address of the connection
-	LocalAddr() net.Addr
-	// RemoteAddr get peer address of the connection
-	RemoteAddr() net.Addr
-	// Close close the connection
-	Close() error
-
-	write(w writeReq, timeout time.Duration) error
-}
-
-type connWriter interface {
-	writeHandler(srv *Server) bool
-	writeEndHandler(timeout time.Duration) bool
-	sendFinish(timeout time.Duration)
-
-	writeHandlerWithFunc(srv *Server, writeFunc func(srv *Server, wreq writeReq) error) bool
-}
-
-type connBase struct {
-	writeChan chan writeReq
-	closeChan chan bool
-	finChan   chan bool
-	closed    int32
-}
-
-func (conn *connBase) finishWrite() {
-	if !atomic.CompareAndSwapInt32(&conn.closed, conn.closed, 1) {
-		return
-	}
-	conn.closeChan <- true
-	<-conn.finChan
-}
-
-func (conn *connBase) writeHandlerWithFunc(srv *Server, writeFunc func(srv *Server, wreq writeReq) error) bool {
-	select {
-	case wreq := <-conn.writeChan:
-		wreq.sendResp(writeFunc(srv, wreq), srv.syncTimeout())
-		return true
-	case <-conn.closeChan:
-		return false
-	}
-}
-
-func (conn *connBase) sendFinish(timeout time.Duration) {
-	select {
-	case conn.finChan <- true:
-	case <-time.After(timeout):
-		log.Fatal("Client cannot recv start: Timeout")
-	}
-}
-
-func (conn *connBase) writeEndHandler(timeout time.Duration) bool {
-	select {
-	case wreq := <-conn.writeChan:
-		wreq.sendResp(ErrConnectionClosed, timeout)
-		return true
-	default:
-		return false
-	}
-}
-
-func (conn *connBase) write(w writeReq, timeout time.Duration) error {
-	if atomic.LoadInt32(&conn.closed) > 0 {
-		return ErrConnectionClosed
-	}
-	select {
-	case conn.writeChan <- w:
-		return w.waitResp(timeout)
-	case <-time.After(timeout):
-		return ErrTimeout
-	}
-}
-
-type connTCP struct {
-	connBase
+type ConnTCP struct {
 	connection net.Conn // i/o connection if TCP was used
-	num        int32
+	lock       sync.Mutex
 }
 
-func (conn *connTCP) LocalAddr() net.Addr {
-	return conn.connection.LocalAddr()
-}
-
-func (conn *connTCP) RemoteAddr() net.Addr {
-	return conn.connection.RemoteAddr()
-}
-
-func (conn *connTCP) Close() error {
-	conn.finishWrite()
-	return conn.connection.Close()
-}
-
-func (conn *connTCP) writeHandler(srv *Server) bool {
-	return conn.writeHandlerWithFunc(srv, func(srv *Server, wreq writeReq) error {
-		data := wreq.data()
-		wr := srv.acquireWriter(conn.connection)
-		defer srv.releaseWriter(wr)
-		writeTimeout := srv.writeTimeout()
-		conn.connection.SetWriteDeadline(time.Now().Add(writeTimeout))
-		err := data.MarshalBinary(wr)
-		if err != nil {
-			return err
+func (c *ConnTCP) WriteContext(ctx context.Context, buffer []byte) error {
+	written := 0
+	c.lock.Lock()
+	defer c.lock.Unlock()
+	for written < len(buffer) {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
 		}
-		wr.Flush()
-		return nil
-	})
+		err := c.connection.SetWriteDeadline(time.Now().Add(waitTimer))
+		if err != nil {
+			return fmt.Errorf("cannot set write deadline for tcp connection: %v", err)
+		}
+		n, err := c.connection.Write(buffer[written:])
+		if err != nil {
+			if passError(err) {
+				continue
+			}
+			return fmt.Errorf("cannot write to tcp connection")
+		}
+		written += n
+	}
+	return nil
 }
 
-type connUDP struct {
-	connBase
+func (c *ConnTCP) LocalAddr() net.Addr {
+	return c.connection.LocalAddr()
+}
+
+func (c *ConnTCP) RemoteAddr() net.Addr {
+	return c.connection.RemoteAddr()
+}
+
+func (c *ConnTCP) Close() error {
+	return c.connection.Close()
+}
+
+type ConnUDP struct {
 	connection *net.UDPConn // i/o connection if UDP was used
+	lock       sync.Mutex
 }
 
-func (conn *connUDP) LocalAddr() net.Addr {
-	return conn.connection.LocalAddr()
+func (c *ConnUDP) LocalAddr() net.Addr {
+	return c.connection.LocalAddr()
 }
 
-func (conn *connUDP) RemoteAddr() net.Addr {
-	return conn.connection.RemoteAddr()
+func (c *ConnUDP) RemoteAddr() net.Addr {
+	return c.connection.RemoteAddr()
 }
 
-func (conn *connUDP) SetReadDeadline(timeout time.Time) error {
-	return conn.connection.SetReadDeadline(timeout)
+func (c *ConnUDP) Close() error {
+	return c.connection.Close()
 }
 
-func (conn *connUDP) ReadFromSessionUDP(m []byte) (int, *SessionUDPData, error) {
-	return ReadFromSessionUDP(conn.connection, m)
-}
-
-func (conn *connUDP) Close() error {
-	conn.finishWrite()
-	return conn.connection.Close()
-}
-
-func (conn *connUDP) writeHandler(srv *Server) bool {
-	return conn.writeHandlerWithFunc(srv, func(srv *Server, wreq writeReq) error {
-		data := wreq.data()
-		wreqUDP := wreq.(*writeReqUDP)
-		writeTimeout := srv.writeTimeout()
-		buf := &bytes.Buffer{}
-		err := data.MarshalBinary(buf)
-		if err != nil {
-			return err
+func (c *ConnUDP) WriteContext(ctx context.Context, sessionUDPData *SessionUDPData, buffer []byte) error {
+	written := 0
+	c.lock.Lock()
+	defer c.lock.Unlock()
+	for written < len(buffer) {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
 		}
-		conn.connection.SetWriteDeadline(time.Now().Add(writeTimeout))
-		_, err = WriteToSessionUDP(conn.connection, buf.Bytes(), wreqUDP.sessionData)
-		return err
-	})
-}
-
-func newConnectionTCP(c net.Conn, srv *Server) Conn {
-	connection := &connTCP{connBase: connBase{writeChan: make(chan writeReq, 10000), closeChan: make(chan bool), finChan: make(chan bool), closed: 0}, connection: c}
-	go writeToConnection(connection, srv)
-	return connection
-}
-
-func newConnectionUDP(c *net.UDPConn, srv *Server) Conn {
-	connection := &connUDP{connBase: connBase{writeChan: make(chan writeReq, 10000), closeChan: make(chan bool), finChan: make(chan bool), closed: 0}, connection: c}
-	go writeToConnection(connection, srv)
-	return connection
-}
-
-func writeToConnection(conn connWriter, srv *Server) {
-	for conn.writeHandler(srv) {
+		err := c.connection.SetWriteDeadline(time.Now().Add(waitTimer))
+		if err != nil {
+			return fmt.Errorf("cannot set write deadline for tcp connection: %v", err)
+		}
+		n, err := WriteToSessionUDP(c.connection, sessionUDPData, buffer[written:])
+		if err != nil {
+			if passError(err) {
+				continue
+			}
+			return fmt.Errorf("cannot write to tcp connection")
+		}
+		written += n
 	}
-	for conn.writeEndHandler(srv.syncTimeout()) {
+
+	return nil
+}
+
+func (c *ConnUDP) ReadContext(ctx context.Context, buffer []byte) (int, *SessionUDPData, error) {
+	for {
+		select {
+		case <-ctx.Done():
+			if ctx.Err() != nil {
+				return -1, nil, fmt.Errorf("cannot read from tcp connection: %v", ctx.Err())
+			}
+			return -1, nil, fmt.Errorf("cannot read from tcp connection")
+		default:
+		}
+
+		err := c.connection.SetReadDeadline(time.Now().Add(waitTimer))
+		if err != nil {
+			return -1, nil, fmt.Errorf("cannot set read deadline for tcp connection: %v", err)
+		}
+		n, s, err := ReadFromSessionUDP(c.connection, buffer)
+		if err != nil {
+			if passError(err) {
+				continue
+			}
+			return -1, nil, fmt.Errorf("cannot read from tcp connection: %v", ctx.Err())
+		}
+		return n, s, err
 	}
-	conn.sendFinish(srv.syncTimeout())
+}
+
+func NewConnTCP(c net.Conn) *ConnTCP {
+	connection := ConnTCP{connection: c}
+	return &connection
+}
+
+func NewConnUDP(c *net.UDPConn) *ConnUDP {
+	connection := ConnUDP{connection: c}
+	return &connection
 }

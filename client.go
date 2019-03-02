@@ -3,6 +3,7 @@ package coap
 // A client implementation.
 
 import (
+	"context"
 	"crypto/tls"
 	"io"
 	"log"
@@ -77,7 +78,7 @@ func listenUDP(network, address string) (*net.UDPAddr, *net.UDPConn, error) {
 }
 
 // Dial connects to the address on the named network.
-func (c *Client) Dial(address string) (clientConn *ClientConn, err error) {
+func (c *Client) DialContext(ctx context.Context, address string) (clientConn *ClientConn, err error) {
 
 	var conn net.Conn
 	var network string
@@ -160,10 +161,10 @@ func (c *Client) Dial(address string) (clientConn *ClientConn, err error) {
 					c.NotifySessionEndFunc(err)
 				}
 			},
-			newSessionTCPFunc: func(connection Conn, srv *Server) (networkSession, error) {
+			newSessionTCPFunc: func(ctx context.Context, connection *ConnTCP, srv *Server) (networkSession, error) {
 				return clientConn.commander.networkSession, nil
 			},
-			newSessionUDPFunc: func(connection Conn, srv *Server, sessionUDPData *SessionUDPData) (networkSession, error) {
+			newSessionUDPFunc: func(ctx context.Context, connection *ConnUDP, srv *Server, sessionUDPData *SessionUDPData) (networkSession, error) {
 				if sessionUDPData.RemoteAddr().String() == clientConn.commander.networkSession.RemoteAddr().String() {
 					if s, ok := clientConn.commander.networkSession.(*blockWiseSession); ok {
 						s.networkSession.(*sessionUDP).sessionUDPData = sessionUDPData
@@ -172,7 +173,7 @@ func (c *Client) Dial(address string) (clientConn *ClientConn, err error) {
 					}
 					return clientConn.commander.networkSession, nil
 				}
-				session, err := newSessionUDP(connection, srv, sessionUDPData)
+				session, err := newSessionUDP(ctx, connection, srv, sessionUDPData)
 				if err != nil {
 					return nil, err
 				}
@@ -183,14 +184,14 @@ func (c *Client) Dial(address string) (clientConn *ClientConn, err error) {
 			},
 			Handler: c.Handler,
 		},
-		shutdownSync: make(chan error),
+		shutdownSync: make(chan error, 1),
 		multicast:    multicast,
 		commander:    &ClientCommander{},
 	}
 
 	switch clientConn.srv.Conn.(type) {
 	case *net.TCPConn, *tls.Conn:
-		session, err := newSessionTCP(newConnectionTCP(clientConn.srv.Conn, clientConn.srv), clientConn.srv)
+		session, err := newSessionTCP(ctx, NewConnTCP(clientConn.srv.Conn), clientConn.srv)
 		if err != nil {
 			return nil, err
 		}
@@ -200,9 +201,9 @@ func (c *Client) Dial(address string) (clientConn *ClientConn, err error) {
 			clientConn.commander.networkSession = session
 		}
 	case *net.UDPConn:
-		// WriteMsgUDP returns error when addr is filled in SessionUDPData for connected socket
+		// WriteContextMsgUDP returns error when addr is filled in SessionUDPData for connected socket
 		setUDPSocketOptions(clientConn.srv.Conn.(*net.UDPConn))
-		session, err := newSessionUDP(newConnectionUDP(clientConn.srv.Conn.(*net.UDPConn), clientConn.srv), clientConn.srv, sessionUPDData)
+		session, err := newSessionUDP(ctx, NewConnUDP(clientConn.srv.Conn.(*net.UDPConn)), clientConn.srv, sessionUPDData)
 		if err != nil {
 			return nil, err
 		}
@@ -212,9 +213,6 @@ func (c *Client) Dial(address string) (clientConn *ClientConn, err error) {
 			clientConn.commander.networkSession = session
 		}
 	}
-
-	clientConn.commander.networkSession.SetReadDeadline(c.readTimeout())
-	clientConn.commander.networkSession.SetWriteDeadline(c.writeTimeout())
 
 	go func() {
 		timeout := c.syncTimeout()
@@ -247,18 +245,18 @@ func (co *ClientConn) RemoteAddr() net.Addr {
 	return co.commander.RemoteAddr()
 }
 
-// Exchange performs a synchronous query. It sends the message m to the address
+// ExchangeContext performs a synchronous query. It sends the message m to the address
 // contained in a and waits for a reply.
 //
-// Exchange does not retry a failed query, nor will it fall back to TCP in
+// ExchangeContext does not retry a failed query, nor will it fall back to TCP in
 // case of truncation.
 // To specify a local address or a timeout, the caller has to set the `Client.Dialer`
 // attribute appropriately
-func (co *ClientConn) Exchange(m Message) (Message, error) {
+func (co *ClientConn) ExchangeContext(ctx context.Context, m Message) (Message, error) {
 	if co.multicast {
 		return nil, ErrNotSupported
 	}
-	return co.commander.Exchange(m)
+	return co.commander.ExchangeContext(ctx, m)
 }
 
 // NewMessage Create message for request
@@ -287,62 +285,52 @@ func (co *ClientConn) NewDeleteRequest(path string) (Message, error) {
 }
 
 // Write sends direct a message through the connection
-func (co *ClientConn) WriteMsg(m Message) error {
-	return co.commander.WriteMsg(m)
-}
-
-// SetReadDeadline set read deadline for timeout for Exchange
-func (co *ClientConn) SetReadDeadline(timeout time.Duration) {
-	co.commander.networkSession.SetReadDeadline(timeout)
-}
-
-// SetWriteDeadline set write deadline for timeout for Exchange and Write
-func (co *ClientConn) SetWriteDeadline(timeout time.Duration) {
-	co.commander.networkSession.SetWriteDeadline(timeout)
+func (co *ClientConn) WriteContextMsg(ctx context.Context, m Message) error {
+	return co.commander.WriteContextMsg(ctx, m)
 }
 
 // Ping send a ping message and wait for a pong response
-func (co *ClientConn) Ping(timeout time.Duration) error {
-	return co.commander.Ping(timeout)
+func (co *ClientConn) PingContext(ctx context.Context) error {
+	return co.commander.PingContext(ctx)
 }
 
 // Get retrieve the resource identified by the request path
-func (co *ClientConn) Get(path string) (Message, error) {
+func (co *ClientConn) GetContext(ctx context.Context, path string) (Message, error) {
 	if co.multicast {
 		return nil, ErrNotSupported
 	}
-	return co.commander.Get(path)
+	return co.commander.GetContext(ctx, path)
 }
 
 // Post update the resource identified by the request path
-func (co *ClientConn) Post(path string, contentFormat MediaType, body io.Reader) (Message, error) {
+func (co *ClientConn) PostContext(ctx context.Context, path string, contentFormat MediaType, body io.Reader) (Message, error) {
 	if co.multicast {
 		return nil, ErrNotSupported
 	}
-	return co.commander.Post(path, contentFormat, body)
+	return co.commander.PostContext(ctx, path, contentFormat, body)
 }
 
 // Put create the resource identified by the request path
-func (co *ClientConn) Put(path string, contentFormat MediaType, body io.Reader) (Message, error) {
+func (co *ClientConn) PutContext(ctx context.Context, path string, contentFormat MediaType, body io.Reader) (Message, error) {
 	if co.multicast {
 		return nil, ErrNotSupported
 	}
-	return co.commander.Put(path, contentFormat, body)
+	return co.commander.PutContext(ctx, path, contentFormat, body)
 }
 
 // Delete delete the resource identified by the request path
-func (co *ClientConn) Delete(path string) (Message, error) {
+func (co *ClientConn) DeleteContext(ctx context.Context, path string) (Message, error) {
 	if co.multicast {
 		return nil, ErrNotSupported
 	}
-	return co.commander.Delete(path)
+	return co.commander.DeleteContext(ctx, path)
 }
 
-func (co *ClientConn) Observe(path string, observeFunc func(req *Request)) (*Observation, error) {
+func (co *ClientConn) ObserveContext(ctx context.Context, path string, observeFunc func(req *Request)) (*Observation, error) {
 	if co.multicast {
 		return nil, ErrNotSupported
 	}
-	return co.commander.Observe(path, observeFunc)
+	return co.commander.ObserveContext(ctx, path, observeFunc)
 }
 
 // Close close connection
@@ -359,13 +347,13 @@ func (co *ClientConn) Close() error {
 // Dial connects to the address on the named network.
 func Dial(network, address string) (*ClientConn, error) {
 	client := Client{Net: network}
-	return client.Dial(address)
+	return client.DialContext(context.Background(), address)
 }
 
 // DialTimeout acts like Dial but takes a timeout.
 func DialTimeout(network, address string, timeout time.Duration) (*ClientConn, error) {
 	client := Client{Net: network, DialTimeout: timeout}
-	return client.Dial(address)
+	return client.DialContext(context.Background(), address)
 }
 
 func fixNetTLS(network string) string {
@@ -378,11 +366,11 @@ func fixNetTLS(network string) string {
 // DialWithTLS connects to the address on the named network with TLS.
 func DialWithTLS(network, address string, tlsConfig *tls.Config) (conn *ClientConn, err error) {
 	client := Client{Net: fixNetTLS(network), TLSConfig: tlsConfig}
-	return client.Dial(address)
+	return client.DialContext(context.Background(), address)
 }
 
 // DialTimeoutWithTLS acts like DialWithTLS but takes a timeout.
 func DialTimeoutWithTLS(network, address string, tlsConfig *tls.Config, timeout time.Duration) (conn *ClientConn, err error) {
 	client := Client{Net: fixNetTLS(network), DialTimeout: timeout, TLSConfig: tlsConfig}
-	return client.Dial(address)
+	return client.DialContext(context.Background(), address)
 }

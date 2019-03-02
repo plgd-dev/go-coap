@@ -90,7 +90,7 @@ func TestBlockWiseGetBlock16(t *testing.T) {
 	}
 	req.SetOption(Block2, block2)
 	decodeMsg(req)
-	resp, err := co.Exchange(req)
+	resp, err := co.ExchangeContext(req)
 	if err != nil {
 		t.Fatalf("Cannot post exchange")
 	}

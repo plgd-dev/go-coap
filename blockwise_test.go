@@ -176,13 +176,13 @@ func EchoServerUsingWrite(w ResponseWriter, r *Request) {
 	w.SetCode(Content)
 	if mt, ok := r.Msg.Option(ContentFormat).(MediaType); ok {
 		w.SetContentFormat(mt)
-		_, err := w.Write(r.Msg.Payload())
+		_, err := w.WriteContext(r.Msg.Payload())
 		if err != nil {
 			log.Printf("Cannot write echo %v", err)
 		}
 	} else {
 		w.SetContentFormat(TextPlain)
-		_, err := w.Write(helloWorld)
+		_, err := w.WriteContext(helloWorld)
 		if err != nil {
 			log.Printf("Cannot write echo %v", err)
 		}
@@ -191,7 +191,7 @@ func EchoServerUsingWrite(w ResponseWriter, r *Request) {
 
 func TestServingUDPBlockWiseUsingWrite(t *testing.T) {
 	// Test that responding to blockwise requests using ResponseWrite.write
-	// works correctly (as opposed to using WriteMsg directly)
+	// works correctly (as opposed to using WriteContextMsg directly)
 
 	HandleFunc("/test-with-write", EchoServerUsingWrite)
 	defer HandleRemove("/test-with-write")
@@ -221,7 +221,7 @@ func TestServingUDPBlockWiseUsingWrite(t *testing.T) {
 		t.Fatal("cannot create request", err)
 	}
 
-	m, err := co.Exchange(req)
+	m, err := co.ExchangeContext(req)
 	if err != nil {
 		t.Fatal("failed to exchange", err)
 	}
@@ -272,7 +272,7 @@ func TestServingUDPBlockWiseWithClientWithoutBlockWise(t *testing.T) {
 		t.Fatal("cannot create request", err)
 	}
 
-	m, err := co.Exchange(req)
+	m, err := co.ExchangeContext(req)
 	if err != nil {
 		t.Fatal("failed to exchange", err)
 	}
@@ -301,7 +301,7 @@ func TestServingUDPBlockWiseWithClientWithoutBlockWise(t *testing.T) {
 		t.Fatal("cannot create request", err)
 	}
 
-	getResp, err := co.Exchange(getReq)
+	getResp, err := co.ExchangeContext(getReq)
 	if err != nil {
 		t.Fatal("failed to exchange", err)
 	}

@@ -53,7 +53,7 @@ func ReadFromSessionUDP(conn *net.UDPConn, b []byte) (int, *SessionUDPData, erro
 }
 
 // WriteToSessionUDP acts just like net.UDPConn.WriteTo(), but uses a *SessionUDP instead of a net.Addr.
-func WriteToSessionUDP(conn *net.UDPConn, b []byte, session *SessionUDPData) (int, error) {
+func WriteToSessionUDP(conn *net.UDPConn, session *SessionUDPData, b []byte) (int, error) {
 	//check if socket is connected via Dial
 	if conn.RemoteAddr() == nil {
 		return conn.WriteToUDP(b, session.raddr)

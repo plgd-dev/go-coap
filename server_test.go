@@ -45,7 +45,7 @@ func CreateRespMessageByReq(isTCP bool, code COAPCode, req Message) Message {
 
 func EchoServer(w ResponseWriter, r *Request) {
 	if r.Msg.IsConfirmable() {
-		err := w.WriteMsg(CreateRespMessageByReq(r.Client.networkSession.IsTCP(), Valid, r.Msg))
+		err := w.WriteContextMsg(CreateRespMessageByReq(r.Client.networkSession.IsTCP(), Valid, r.Msg))
 		if err != nil {
 			log.Printf("Cannot write echo %v", err)
 		}
@@ -54,7 +54,7 @@ func EchoServer(w ResponseWriter, r *Request) {
 
 func EchoServerBadID(w ResponseWriter, r *Request) {
 	if r.Msg.IsConfirmable() {
-		w.WriteMsg(CreateRespMessageByReq(r.Client.networkSession.IsTCP(), BadRequest, r.Msg))
+		w.WriteContextMsg(CreateRespMessageByReq(r.Client.networkSession.IsTCP(), BadRequest, r.Msg))
 	}
 }
 
@@ -109,9 +109,10 @@ func RunLocalUDPServer(net, laddr string, BlockWiseTransfer bool, BlockWiseTrans
 }
 
 func RunLocalServerTCPWithHandler(laddr string, BlockWiseTransfer bool, BlockWiseTransferSzx BlockWiseSzx, handler HandlerFunc) (*Server, string, chan error, error) {
-	l, err := net.Listen("tcp", laddr)
+	network := "tcp"
+	l, err := NewTCPListen(network, laddr)
 	if err != nil {
-		return nil, "", nil, err
+		return nil, "", nil, fmt.Errorf("cannot create new tls listener: %v", err)
 	}
 
 	server := &Server{Listener: l, ReadTimeout: time.Second * 3600, WriteTimeout: time.Second * 3600,
@@ -147,7 +148,7 @@ func RunLocalTCPServer(laddr string, BlockWiseTransfer bool, BlockWiseTransferSz
 }
 
 func RunLocalTLSServer(laddr string, config *tls.Config) (*Server, string, chan error, error) {
-	l, err := tls.Listen("tcp", laddr, config)
+	l, err := NewTLSListen("tcp", laddr, config)
 	if err != nil {
 		return nil, "", nil, err
 	}
@@ -159,10 +160,6 @@ func RunLocalTLSServer(laddr string, config *tls.Config) (*Server, string, chan 
 			fmt.Printf("networkSession end %v: %v\n", w.RemoteAddr(), err)
 		}}
 
-	waitLock := sync.Mutex{}
-	waitLock.Lock()
-	server.NotifyStartedFunc = waitLock.Unlock
-
 	// fin must be buffered so the goroutine below won't block
 	// forever if fin is never read from. This always happens
 	// in RunLocalUDPServer and can happen in TestShutdownUDP.
@@ -173,7 +170,6 @@ func RunLocalTLSServer(laddr string, config *tls.Config) (*Server, string, chan 
 		l.Close()
 	}()
 
-	waitLock.Lock()
 	return server, l.Addr().String(), fin, nil
 }
 
@@ -239,7 +235,7 @@ func simpleMsgToPath(t *testing.T, payload []byte, co *ClientConn, path string) 
 
 	res := CreateRespMessageByReq(co.commander.networkSession.IsTCP(), Valid, req)
 
-	m, err := co.Exchange(req)
+	m, err := co.ExchangeContext(req)
 	if err != nil {
 		t.Fatal("failed to exchange", err)
 	}
@@ -303,7 +299,7 @@ func ChallegingServer(w ResponseWriter, r *Request) {
 		panic(err.Error())
 	}
 
-	w.WriteMsg(CreateRespMessageByReq(r.Client.networkSession.IsTCP(), Valid, r.Msg))
+	w.WriteContextMsg(CreateRespMessageByReq(r.Client.networkSession.IsTCP(), Valid, r.Msg))
 }
 
 func ChallegingServerTimeout(w ResponseWriter, r *Request) {
@@ -320,7 +316,7 @@ func ChallegingServerTimeout(w ResponseWriter, r *Request) {
 		panic("Error: expected timeout")
 	}
 
-	w.WriteMsg(CreateRespMessageByReq(r.Client.networkSession.IsTCP(), Valid, r.Msg))
+	w.WriteContextMsg(CreateRespMessageByReq(r.Client.networkSession.IsTCP(), Valid, r.Msg))
 }
 
 func simpleChallengingMsg(t *testing.T, payload []byte, co *ClientConn) {
@@ -343,7 +339,7 @@ func simpleChallengingPathMsg(t *testing.T, payload []byte, co *ClientConn, path
 	req0.SetOption(ContentFormat, TextPlain)
 	req0.SetPathString(path)
 
-	resp0, err := co.Exchange(req0)
+	resp0, err := co.ExchangeContext(req0)
 	if err != nil {
 		t.Fatalf("unable to read msg from server: %v", err)
 	}
@@ -411,7 +407,7 @@ func testServingMCast(t *testing.T, lnet, laddr string, BlockWiseTransfer bool, 
 			resp := w.NewResponse(Content)
 			resp.SetPayload(make([]byte, payloadLen))
 			resp.SetOption(ContentFormat, TextPlain)
-			err := w.WriteMsg(resp)
+			err := w.WriteContextMsg(resp)
 			if err != nil {
 				t.Fatalf("cannot send response %v", err)
 			}
@@ -426,7 +422,7 @@ func testServingMCast(t *testing.T, lnet, laddr string, BlockWiseTransfer bool, 
 		if err != nil {
 			t.Fatalf("cannot create connection %v", err)
 		}
-		err = conn.WriteMsg(resp)
+		err = conn.WriteContextMsg(resp)
 		if err != nil {
 			t.Fatalf("cannot send response %v", err)
 		}
@@ -696,7 +692,7 @@ func benchmarkServeTCPStreamWithMsg(b *testing.B, req *TcpMessage) {
 			token := make([]byte, 8)
 			binary.LittleEndian.PutUint32(token, t)
 			abc.SetToken(token)
-			resp, err := co.Exchange(&abc)
+			resp, err := co.ExchangeContext(&abc)
 			if err != nil {
 				b.Fatalf("unable to read msg from server: %v", err)
 			}

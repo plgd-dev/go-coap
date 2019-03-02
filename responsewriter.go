@@ -1,13 +1,15 @@
 package coap
 
+import "context"
+
 // A ResponseWriter interface is used by an CAOP handler to construct an COAP response.
 // For Obsevation (GET+option observe) it can be stored and used in another go-routine
-// with using calls NewResponse, WriteMsg
+// with using calls NewResponse, WriteContextMsg
 type ResponseWriter interface {
 	// Write response with payload.
 	// If p is nil it writes response without payload.
 	// If p is non-nil then SetContentFormat must be called before Write otherwise Write fails.
-	Write(p []byte) (n int, err error)
+	WriteContext(ctx context.Context, p []byte) (n int, err error)
 	// SetCode for response that is send via Write call.
 	//
 	// If SetCode is not called explicitly, the first call to Write
@@ -22,10 +24,10 @@ type ResponseWriter interface {
 
 	//NewResponse create response with code and token, messageid against request
 	NewResponse(code COAPCode) Message
-	//WriteMsg to client.
+	//WriteContextMsg to client.
 	//If Option ContentFormat is set and Payload is not set then call will failed.
 	//If Option ContentFormat is not set and Payload is set then call will failed.
-	WriteMsg(Message) error
+	WriteContextMsg(ctx context.Context, msg Message) error
 
 	getCode() *COAPCode
 	getReq() *Request
@@ -74,12 +76,12 @@ func (r *responseWriter) NewResponse(code COAPCode) Message {
 }
 
 // Write send response to peer
-func (r *responseWriter) WriteMsg(msg Message) error {
+func (r *responseWriter) WriteContextMsg(ctx context.Context, msg Message) error {
 	switch msg.Code() {
 	case GET, POST, PUT, DELETE:
 		return ErrInvalidReponseCode
 	}
-	return r.req.Client.WriteMsg(msg)
+	return r.req.Client.WriteContextMsg(ctx, msg)
 }
 
 func prepareReponse(w ResponseWriter, reqCode COAPCode, code *COAPCode, contentFormat *MediaType, payload []byte) (int, Message) {
@@ -109,9 +111,9 @@ func prepareReponse(w ResponseWriter, reqCode COAPCode, code *COAPCode, contentF
 }
 
 // Write send response to peer
-func (r *responseWriter) Write(p []byte) (n int, err error) {
+func (r *responseWriter) WriteContext(ctx context.Context, p []byte) (n int, err error) {
 	l, resp := prepareReponse(r, r.req.Msg.Code(), r.code, r.contentFormat, p)
-	err = r.WriteMsg(resp)
+	err = r.WriteContextMsg(ctx, resp)
 	return l, err
 }
 

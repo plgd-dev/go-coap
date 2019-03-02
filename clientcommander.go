@@ -2,10 +2,10 @@ package coap
 
 import (
 	"bytes"
+	"context"
 	"io"
 	"io/ioutil"
 	"net"
-	"time"
 )
 
 // ClientCommander provides commands Get,Post,Put,Delete,Observe
@@ -90,61 +90,61 @@ func (cc *ClientCommander) Equal(cc1 *ClientCommander) bool {
 	return cc.RemoteAddr().String() == cc1.RemoteAddr().String() && cc.LocalAddr().String() == cc1.LocalAddr().String()
 }
 
-// Exchange performs a synchronous query. It sends the message m to the address
+// ExchangeContext performs a synchronous query. It sends the message m to the address
 // contained in a and waits for a reply.
 //
-// Exchange does not retry a failed query, nor will it fall back to TCP in
+// ExchangeContext does not retry a failed query, nor will it fall back to TCP in
 // case of truncation.
 // To specify a local address or a timeout, the caller has to set the `Client.Dialer`
 // attribute appropriately
-func (cc *ClientCommander) Exchange(m Message) (Message, error) {
-	return cc.networkSession.Exchange(m)
+func (cc *ClientCommander) ExchangeContext(ctx context.Context, m Message) (Message, error) {
+	return cc.networkSession.ExchangeContext(ctx, m)
 }
 
-// WriteMsg sends direct a message through the connection
-func (cc *ClientCommander) WriteMsg(m Message) error {
-	return cc.networkSession.WriteMsg(m)
+// WriteContextMsg sends direct a message through the connection
+func (cc *ClientCommander) WriteContextMsg(ctx context.Context, m Message) error {
+	return cc.networkSession.WriteContextMsg(ctx, m)
 }
 
 // Ping send a ping message and wait for a pong response
-func (cc *ClientCommander) Ping(timeout time.Duration) error {
-	return cc.networkSession.Ping(timeout)
+func (cc *ClientCommander) PingContext(ctx context.Context) error {
+	return cc.networkSession.PingContext(ctx)
 }
 
 // Get retrieve the resource identified by the request path
-func (cc *ClientCommander) Get(path string) (Message, error) {
+func (cc *ClientCommander) GetContext(ctx context.Context, path string) (Message, error) {
 	req, err := cc.NewGetRequest(path)
 	if err != nil {
 		return nil, err
 	}
-	return cc.networkSession.Exchange(req)
+	return cc.networkSession.ExchangeContext(ctx, req)
 }
 
 // Post update the resource identified by the request path
-func (cc *ClientCommander) Post(path string, contentFormat MediaType, body io.Reader) (Message, error) {
+func (cc *ClientCommander) PostContext(ctx context.Context, path string, contentFormat MediaType, body io.Reader) (Message, error) {
 	req, err := cc.NewPostRequest(path, contentFormat, body)
 	if err != nil {
 		return nil, err
 	}
-	return cc.networkSession.Exchange(req)
+	return cc.networkSession.ExchangeContext(ctx, req)
 }
 
 // Put create the resource identified by the request path
-func (cc *ClientCommander) Put(path string, contentFormat MediaType, body io.Reader) (Message, error) {
+func (cc *ClientCommander) PutContext(ctx context.Context, path string, contentFormat MediaType, body io.Reader) (Message, error) {
 	req, err := cc.NewPutRequest(path, contentFormat, body)
 	if err != nil {
 		return nil, err
 	}
-	return cc.networkSession.Exchange(req)
+	return cc.networkSession.ExchangeContext(ctx, req)
 }
 
 // Delete delete the resource identified by the request path
-func (cc *ClientCommander) Delete(path string) (Message, error) {
+func (cc *ClientCommander) DeleteContext(ctx context.Context, path string) (Message, error) {
 	req, err := cc.NewDeleteRequest(path)
 	if err != nil {
 		return nil, err
 	}
-	return cc.networkSession.Exchange(req)
+	return cc.networkSession.ExchangeContext(ctx, req)
 }
 
 //Observation represents subscription to resource on the server
@@ -156,7 +156,7 @@ type Observation struct {
 }
 
 // Cancel remove observation from server. For recreate observation use Observe.
-func (o *Observation) Cancel() error {
+func (o *Observation) CancelContext(ctx context.Context) error {
 	req := o.client.NewMessage(MessageParams{
 		Type:      NonConfirmable,
 		Code:      GET,
@@ -165,7 +165,7 @@ func (o *Observation) Cancel() error {
 	})
 	req.SetPathString(o.path)
 	req.SetOption(Observe, 1)
-	err1 := o.client.WriteMsg(req)
+	err1 := o.client.WriteContextMsg(ctx, req)
 	err2 := o.client.networkSession.TokenHandler().Remove(o.token)
 	if err1 != nil {
 		return err1
@@ -175,7 +175,7 @@ func (o *Observation) Cancel() error {
 
 // Observe subscribe to severon path. After subscription and every change on path,
 // server sends immediately response
-func (cc *ClientCommander) Observe(path string, observeFunc func(req *Request)) (*Observation, error) {
+func (cc *ClientCommander) ObserveContext(ctx context.Context, path string, observeFunc func(req *Request)) (*Observation, error) {
 	req, err := cc.NewGetRequest(path)
 	if err != nil {
 		return nil, err
@@ -216,7 +216,7 @@ func (cc *ClientCommander) Observe(path string, observeFunc func(req *Request)) 
 		}
 
 		if needGet {
-			resp, err = r.Client.Get(path)
+			resp, err = r.Client.GetContext(ctx, path)
 			if err != nil {
 				return
 			}
@@ -251,7 +251,7 @@ func (cc *ClientCommander) Observe(path string, observeFunc func(req *Request)) 
 	if err != nil {
 		return nil, err
 	}
-	err = cc.WriteMsg(req)
+	err = cc.WriteContextMsg(ctx, req)
 	if err != nil {
 		cc.networkSession.TokenHandler().Remove(o.token)
 		return nil, err
@@ -263,24 +263,4 @@ func (cc *ClientCommander) Observe(path string, observeFunc func(req *Request)) 
 // Close close connection
 func (cc *ClientCommander) Close() error {
 	return cc.networkSession.Close()
-}
-
-// SetReadDeadline set read deadline for timeout for Exchange
-func (cc *ClientCommander) SetReadDeadline(timeout time.Duration) {
-	cc.networkSession.SetReadDeadline(timeout)
-}
-
-// SetWriteDeadline set write deadline for timeout for Exchange and Write
-func (cc *ClientCommander) SetWriteDeadline(timeout time.Duration) {
-	cc.networkSession.SetWriteDeadline(timeout)
-}
-
-// ReadDeadline get read deadline
-func (cc *ClientCommander) ReadDeadline() time.Duration {
-	return cc.networkSession.ReadDeadline()
-}
-
-// WriteDeadline get read writeline
-func (cc *ClientCommander) WriteDeadline() time.Duration {
-	return cc.networkSession.WriteDeadline()
 }
