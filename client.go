@@ -6,7 +6,6 @@ import (
 	"context"
 	"crypto/tls"
 	"io"
-	"log"
 	"net"
 	"strings"
 	"time"
@@ -29,7 +28,7 @@ type Client struct {
 	DialTimeout    time.Duration // set Timeout for dialer
 	ReadTimeout    time.Duration // net.ClientConn.SetReadTimeout value for connections, defaults to 1 hour - overridden by Timeout when that value is non-zero
 	WriteTimeout   time.Duration // net.ClientConn.SetWriteTimeout value for connections, defaults to 1 hour - overridden by Timeout when that value is non-zero
-	SyncTimeout    time.Duration // The maximum of time for synchronization go-routines, defaults to 30 seconds - overridden by Timeout when that value is non-zero if it occurs, then it call log.Fatal
+	HeartBeat      time.Duration // Defines wake up interval from operations Read, Write over connection. defaults is 100ms.
 
 	Handler              HandlerFunc     // default handler for handling messages from server
 	NotifySessionEndFunc func(err error) // if NotifySessionEndFunc is set it is called when TCP/UDP session was ended.
@@ -54,13 +53,6 @@ func (c *Client) writeTimeout() time.Duration {
 	return coapTimeout
 }
 
-func (c *Client) syncTimeout() time.Duration {
-	if c.SyncTimeout != 0 {
-		return c.SyncTimeout
-	}
-	return syncTimeout
-}
-
 func listenUDP(network, address string) (*net.UDPAddr, *net.UDPConn, error) {
 	var a *net.UDPAddr
 	var err error
@@ -77,7 +69,11 @@ func listenUDP(network, address string) (*net.UDPAddr, *net.UDPConn, error) {
 	return a, udpConn, nil
 }
 
-// Dial connects to the address on the named network.
+func (c *Client) Dial(address string) (clientConn *ClientConn, err error) {
+	return c.DialContext(context.Background(), address)
+}
+
+// DialContext connects to the address on the named network.
 func (c *Client) DialContext(ctx context.Context, address string) (clientConn *ClientConn, err error) {
 
 	var conn net.Conn
@@ -136,7 +132,7 @@ func (c *Client) DialContext(ctx context.Context, address string) (clientConn *C
 		BlockWiseTransferSzx = *c.BlockWiseTransferSzx
 	}
 
-	sync := make(chan bool)
+	//sync := make(chan bool)
 	clientConn = &ClientConn{
 		srv: &Server{
 			Net:                      network,
@@ -149,12 +145,14 @@ func (c *Client) DialContext(ctx context.Context, address string) (clientConn *C
 			BlockWiseTransferSzx:     &BlockWiseTransferSzx,
 			DisableTCPSignalMessages: c.DisableTCPSignalMessages,
 			NotifyStartedFunc: func() {
-				timeout := c.syncTimeout()
-				select {
-				case sync <- true:
-				case <-time.After(timeout):
-					log.Fatal("Client cannot send start: Timeout")
-				}
+				/*
+					timeout := c.syncTimeout()
+					select {
+					case sync <- true:
+					case <-time.After(timeout):
+						log.Fatal("Client cannot send start: Timeout")
+					}
+				*/
 			},
 			NotifySessionEndFunc: func(s *ClientCommander, err error) {
 				if c.NotifySessionEndFunc != nil {
@@ -191,7 +189,7 @@ func (c *Client) DialContext(ctx context.Context, address string) (clientConn *C
 
 	switch clientConn.srv.Conn.(type) {
 	case *net.TCPConn, *tls.Conn:
-		session, err := newSessionTCP(ctx, NewConnTCP(clientConn.srv.Conn), clientConn.srv)
+		session, err := newSessionTCP(ctx, NewConnTCP(clientConn.srv.Conn, clientConn.srv.heartBeat()), clientConn.srv)
 		if err != nil {
 			return nil, err
 		}
@@ -203,7 +201,7 @@ func (c *Client) DialContext(ctx context.Context, address string) (clientConn *C
 	case *net.UDPConn:
 		// WriteContextMsgUDP returns error when addr is filled in SessionUDPData for connected socket
 		setUDPSocketOptions(clientConn.srv.Conn.(*net.UDPConn))
-		session, err := newSessionUDP(ctx, NewConnUDP(clientConn.srv.Conn.(*net.UDPConn)), clientConn.srv, sessionUPDData)
+		session, err := newSessionUDP(ctx, NewConnUDP(clientConn.srv.Conn.(*net.UDPConn), clientConn.srv.heartBeat()), clientConn.srv, sessionUPDData)
 		if err != nil {
 			return nil, err
 		}
@@ -215,21 +213,24 @@ func (c *Client) DialContext(ctx context.Context, address string) (clientConn *C
 	}
 
 	go func() {
-		timeout := c.syncTimeout()
+		//timeout := c.syncTimeout()
 		err := clientConn.srv.ActivateAndServe()
 		select {
 		case clientConn.shutdownSync <- err:
-		case <-time.After(timeout):
-			log.Fatal("Client cannot send shutdown: Timeout")
+			/*
+				case <-time.After(timeout):
+					log.Fatal("Client cannot send shutdown: Timeout")
+			*/
 		}
+
 	}()
-
-	select {
-	case <-sync:
-	case <-time.After(c.syncTimeout()):
-		log.Fatal("Client cannot recv start: Timeout")
-	}
-
+	/*
+		select {
+		case <-sync:
+		case <-time.After(c.syncTimeout()):
+			log.Fatal("Client cannot recv start: Timeout")
+		}
+	*/
 	clientConn.client = c
 
 	return clientConn, nil
@@ -243,6 +244,10 @@ func (co *ClientConn) LocalAddr() net.Addr {
 // RemoteAddr implements the networkSession.RemoteAddr method.
 func (co *ClientConn) RemoteAddr() net.Addr {
 	return co.commander.RemoteAddr()
+}
+
+func (co *ClientConn) Exchange(m Message) (Message, error) {
+	return co.commander.ExchangeContext(context.Background(), m)
 }
 
 // ExchangeContext performs a synchronous query. It sends the message m to the address
@@ -284,9 +289,20 @@ func (co *ClientConn) NewDeleteRequest(path string) (Message, error) {
 	return co.commander.NewDeleteRequest(path)
 }
 
-// Write sends direct a message through the connection
+func (co *ClientConn) WriteMsg(m Message) error {
+	return co.commander.WriteContextMsg(context.Background(), m)
+}
+
+// WriteContextMsg sends direct a message through the connection
 func (co *ClientConn) WriteContextMsg(ctx context.Context, m Message) error {
 	return co.commander.WriteContextMsg(ctx, m)
+}
+
+// Ping send a ping message and wait for a pong response
+func (co *ClientConn) Ping(timeout time.Duration) error {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	return co.PingContext(ctx)
 }
 
 // Ping send a ping message and wait for a pong response
@@ -294,12 +310,20 @@ func (co *ClientConn) PingContext(ctx context.Context) error {
 	return co.commander.PingContext(ctx)
 }
 
-// Get retrieve the resource identified by the request path
+// GetContext retrieve the resource identified by the request path
+func (co *ClientConn) Get(path string) (Message, error) {
+	return co.GetContext(context.Background(), path)
+}
+
 func (co *ClientConn) GetContext(ctx context.Context, path string) (Message, error) {
 	if co.multicast {
 		return nil, ErrNotSupported
 	}
 	return co.commander.GetContext(ctx, path)
+}
+
+func (co *ClientConn) Post(path string, contentFormat MediaType, body io.Reader) (Message, error) {
+	return co.PostContext(context.Background(), path, contentFormat, body)
 }
 
 // Post update the resource identified by the request path
@@ -310,12 +334,20 @@ func (co *ClientConn) PostContext(ctx context.Context, path string, contentForma
 	return co.commander.PostContext(ctx, path, contentFormat, body)
 }
 
-// Put create the resource identified by the request path
+func (co *ClientConn) Put(path string, contentFormat MediaType, body io.Reader) (Message, error) {
+	return co.PutContext(context.Background(), path, contentFormat, body)
+}
+
+// PutContext create the resource identified by the request path
 func (co *ClientConn) PutContext(ctx context.Context, path string, contentFormat MediaType, body io.Reader) (Message, error) {
 	if co.multicast {
 		return nil, ErrNotSupported
 	}
 	return co.commander.PutContext(ctx, path, contentFormat, body)
+}
+
+func (co *ClientConn) Delete(path string) (Message, error) {
+	return co.DeleteContext(context.Background(), path)
 }
 
 // Delete delete the resource identified by the request path
@@ -324,6 +356,10 @@ func (co *ClientConn) DeleteContext(ctx context.Context, path string) (Message, 
 		return nil, ErrNotSupported
 	}
 	return co.commander.DeleteContext(ctx, path)
+}
+
+func (co *ClientConn) Observe(path string, observeFunc func(req *Request)) (*Observation, error) {
+	return co.ObserveContext(context.Background(), path, observeFunc)
 }
 
 func (co *ClientConn) ObserveContext(ctx context.Context, path string, observeFunc func(req *Request)) (*Observation, error) {
@@ -338,8 +374,10 @@ func (co *ClientConn) Close() error {
 	co.srv.Shutdown()
 	select {
 	case <-co.shutdownSync:
-	case <-time.After(co.client.syncTimeout()):
-		log.Fatal("Client cannot recv shutdown: Timeout")
+		/*
+			case <-time.After(co.client.syncTimeout()):
+				log.Fatal("Client cannot recv shutdown: Timeout")
+		*/
 	}
 	return nil
 }

@@ -6,6 +6,7 @@ import (
 	"io"
 	"io/ioutil"
 	"net"
+	"time"
 )
 
 // ClientCommander provides commands Get,Post,Put,Delete,Observe
@@ -90,28 +91,48 @@ func (cc *ClientCommander) Equal(cc1 *ClientCommander) bool {
 	return cc.RemoteAddr().String() == cc1.RemoteAddr().String() && cc.LocalAddr().String() == cc1.LocalAddr().String()
 }
 
-// ExchangeContext performs a synchronous query. It sends the message m to the address
+// Exchange same as ExchangeContext without context
+func (cc *ClientCommander) Exchange(m Message) (Message, error) {
+	return cc.ExchangeContext(context.Background(), m)
+}
+
+// ExchangeContext performs a synchronous query with context. It sends the message m to the address
 // contained in a and waits for a reply.
 //
 // ExchangeContext does not retry a failed query, nor will it fall back to TCP in
 // case of truncation.
-// To specify a local address or a timeout, the caller has to set the `Client.Dialer`
-// attribute appropriately
 func (cc *ClientCommander) ExchangeContext(ctx context.Context, m Message) (Message, error) {
 	return cc.networkSession.ExchangeContext(ctx, m)
 }
 
-// WriteContextMsg sends direct a message through the connection
+// WriteMsg sends  direct a message through the connection
+func (cc *ClientCommander) WriteMsg(m Message) error {
+	return cc.WriteContextMsg(context.Background(), m)
+}
+
+// WriteContextMsg sends with context direct a message through the connection
 func (cc *ClientCommander) WriteContextMsg(ctx context.Context, m Message) error {
 	return cc.networkSession.WriteContextMsg(ctx, m)
 }
 
 // Ping send a ping message and wait for a pong response
+func (cc *ClientCommander) Ping(timeout time.Duration) error {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	return cc.networkSession.PingContext(ctx)
+}
+
+// PingContext send with context a ping message and wait for a pong response
 func (cc *ClientCommander) PingContext(ctx context.Context) error {
 	return cc.networkSession.PingContext(ctx)
 }
 
-// Get retrieve the resource identified by the request path
+// Get retrieves the resource identified by the request path
+func (cc *ClientCommander) Get(path string) (Message, error) {
+	return cc.GetContext(context.Background(), path)
+}
+
+// GetContext retrieves with context the resource identified by the request path
 func (cc *ClientCommander) GetContext(ctx context.Context, path string) (Message, error) {
 	req, err := cc.NewGetRequest(path)
 	if err != nil {
@@ -120,7 +141,12 @@ func (cc *ClientCommander) GetContext(ctx context.Context, path string) (Message
 	return cc.networkSession.ExchangeContext(ctx, req)
 }
 
-// Post update the resource identified by the request path
+// Post updates the resource identified by the request path
+func (cc *ClientCommander) Post(path string, contentFormat MediaType, body io.Reader) (Message, error) {
+	return cc.PostContext(context.Background(), path, contentFormat, body)
+}
+
+// PostContext updates with context the resource identified by the request path
 func (cc *ClientCommander) PostContext(ctx context.Context, path string, contentFormat MediaType, body io.Reader) (Message, error) {
 	req, err := cc.NewPostRequest(path, contentFormat, body)
 	if err != nil {
@@ -129,7 +155,12 @@ func (cc *ClientCommander) PostContext(ctx context.Context, path string, content
 	return cc.networkSession.ExchangeContext(ctx, req)
 }
 
-// Put create the resource identified by the request path
+// Put creates the resource identified by the request path
+func (cc *ClientCommander) Put(path string, contentFormat MediaType, body io.Reader) (Message, error) {
+	return cc.PutContext(context.Background(), path, contentFormat, body)
+}
+
+// PutContext creates with context the resource identified by the request path
 func (cc *ClientCommander) PutContext(ctx context.Context, path string, contentFormat MediaType, body io.Reader) (Message, error) {
 	req, err := cc.NewPutRequest(path, contentFormat, body)
 	if err != nil {
@@ -138,7 +169,12 @@ func (cc *ClientCommander) PutContext(ctx context.Context, path string, contentF
 	return cc.networkSession.ExchangeContext(ctx, req)
 }
 
-// Delete delete the resource identified by the request path
+// Delete deletes the resource identified by the request path
+func (cc *ClientCommander) Delete(path string) (Message, error) {
+	return cc.DeleteContext(context.Background(), path)
+}
+
+// DeleteContext deletes with context the resource identified by the request path
 func (cc *ClientCommander) DeleteContext(ctx context.Context, path string) (Message, error) {
 	req, err := cc.NewDeleteRequest(path)
 	if err != nil {
@@ -155,7 +191,11 @@ type Observation struct {
 	client    *ClientCommander
 }
 
-// Cancel remove observation from server. For recreate observation use Observe.
+func (o *Observation) Cancel() error {
+	return o.CancelContext(context.Background())
+}
+
+// CancelContext remove observation from server. For recreate observation use Observe.
 func (o *Observation) CancelContext(ctx context.Context) error {
 	req := o.client.NewMessage(MessageParams{
 		Type:      NonConfirmable,
@@ -173,7 +213,11 @@ func (o *Observation) CancelContext(ctx context.Context) error {
 	return err2
 }
 
-// Observe subscribe to severon path. After subscription and every change on path,
+func (cc *ClientCommander) Observe(path string, observeFunc func(req *Request)) (*Observation, error) {
+	return cc.ObserveContext(context.Background(), path, observeFunc)
+}
+
+// ObserveContext subscribe to severon path. After subscription and every change on path,
 // server sends immediately response
 func (cc *ClientCommander) ObserveContext(ctx context.Context, path string, observeFunc func(req *Request)) (*Observation, error) {
 	req, err := cc.NewGetRequest(path)
@@ -238,12 +282,12 @@ func (cc *ClientCommander) ObserveContext(ctx context.Context, path string, obse
 			//during processing observation, check if notification is still valid
 			if bytes.Equal(resp.Option(ETag).([]byte), r.Msg.Option(ETag).([]byte)) {
 				if setObsSeqNum() {
-					observeFunc(&Request{Msg: resp, Client: r.Client})
+					observeFunc(&Request{Msg: resp, Client: r.Client, Ctx: r.Ctx})
 				}
 			}
 		default:
 			if setObsSeqNum() {
-				observeFunc(&Request{Msg: resp, Client: r.Client})
+				observeFunc(&Request{Msg: resp, Client: r.Client, Ctx: r.Ctx})
 			}
 		}
 		return

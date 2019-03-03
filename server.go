@@ -138,8 +138,8 @@ type Server struct {
 	WriteTimeout time.Duration
 	// If NotifyStartedFunc is set it is called once the server has started listening.
 	NotifyStartedFunc func()
-	// The maximum of time for synchronization go-routines, defaults to 30 seconds, if it occurs, then it call log.Fatal
-	SyncTimeout time.Duration
+	// Defines wake up interval from operations Read, Write over connection. defaults is 100ms.
+	HeartBeat time.Duration
 	// If newSessionUDPFunc is set it is called when session UDP want to be created
 	newSessionUDPFunc func(ctx context.Context, connection *ConnUDP, srv *Server, sessionUDPData *SessionUDPData) (networkSession, error)
 	// If newSessionUDPFunc is set it is called when session TCP want to be created
@@ -461,15 +461,16 @@ func (srv *Server) writeTimeout() time.Duration {
 	return coapTimeout
 }
 
-func (srv *Server) syncTimeout() time.Duration {
-	if srv.SyncTimeout != 0 {
-		return srv.SyncTimeout
+// readTimeout is a helper func to use system timeout if server did not intend to change it.
+func (srv *Server) heartBeat() time.Duration {
+	if srv.HeartBeat != 0 {
+		return srv.HeartBeat
 	}
-	return syncTimeout
+	return time.Millisecond * 100
 }
 
 func (srv *Server) serveTCPconnection(conn net.Conn) error {
-	session, err := srv.newSessionTCPFunc(srv.ctx, NewConnTCP(conn), srv)
+	session, err := srv.newSessionTCPFunc(srv.ctx, NewConnTCP(conn, srv.heartBeat()), srv)
 	if err != nil {
 		return err
 	}
@@ -536,7 +537,7 @@ func (srv *Server) serveTCPconnection(conn net.Conn) error {
 
 		// We will block poller wait loop when
 		// all pool workers are busy.
-		srv.spawnWorker(&Request{Client: &ClientCommander{session}, Msg: msg})
+		srv.spawnWorker(&Request{Client: &ClientCommander{session}, Msg: msg, Ctx: session.Context()})
 	}
 }
 
@@ -602,7 +603,7 @@ func (srv *Server) serveUDP(conn *net.UDPConn) error {
 		srv.NotifyStartedFunc()
 	}
 
-	connUDP := NewConnUDP(conn)
+	connUDP := NewConnUDP(conn, srv.heartBeat())
 
 	for {
 		m := make([]byte, ^uint16(0))
@@ -632,13 +633,12 @@ func (srv *Server) serveUDP(conn *net.UDPConn) error {
 		if err != nil {
 			continue
 		}
-		srv.spawnWorker(&Request{Msg: msg, Client: &ClientCommander{session}})
+		srv.spawnWorker(&Request{Msg: msg, Client: &ClientCommander{session}, Ctx: session.Context()})
 	}
 }
 
 func (srv *Server) serve(r *Request) {
 	w := responseWriterFromRequest(r)
-
 	handlePairMsg(w, r, func(w ResponseWriter, r *Request) {
 		handleSignalMsg(w, r, func(w ResponseWriter, r *Request) {
 			handleBySessionTokenHandler(w, r, func(w ResponseWriter, r *Request) {

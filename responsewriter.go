@@ -6,7 +6,8 @@ import "context"
 // For Obsevation (GET+option observe) it can be stored and used in another go-routine
 // with using calls NewResponse, WriteContextMsg
 type ResponseWriter interface {
-	// Write response with payload.
+	Write(p []byte) (n int, err error)
+	// WriteContext response with payload.
 	// If p is nil it writes response without payload.
 	// If p is non-nil then SetContentFormat must be called before Write otherwise Write fails.
 	WriteContext(ctx context.Context, p []byte) (n int, err error)
@@ -24,6 +25,8 @@ type ResponseWriter interface {
 
 	//NewResponse create response with code and token, messageid against request
 	NewResponse(code COAPCode) Message
+
+	WriteMsg(msg Message) error
 	//WriteContextMsg to client.
 	//If Option ContentFormat is set and Payload is not set then call will failed.
 	//If Option ContentFormat is not set and Payload is set then call will failed.
@@ -75,7 +78,12 @@ func (r *responseWriter) NewResponse(code COAPCode) Message {
 	return resp
 }
 
-// Write send response to peer
+// Write send response without to peer
+func (r *responseWriter) WriteMsg(msg Message) error {
+	return r.WriteContextMsg(context.Background(), msg)
+}
+
+// Write send response with context to peer
 func (r *responseWriter) WriteContextMsg(ctx context.Context, msg Message) error {
 	switch msg.Code() {
 	case GET, POST, PUT, DELETE:
@@ -108,6 +116,10 @@ func prepareReponse(w ResponseWriter, reqCode COAPCode, code *COAPCode, contentF
 		l = len(payload)
 	}
 	return l, resp
+}
+
+func (r *responseWriter) Write(p []byte) (n int, err error) {
+	return r.WriteContext(context.Background(), p)
 }
 
 // Write send response to peer

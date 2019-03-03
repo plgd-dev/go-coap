@@ -9,8 +9,6 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
-
-	"github.com/LK4D4/joincontext"
 )
 
 // A networkSession interface is used by an COAP handler to
@@ -33,6 +31,8 @@ type networkSession interface {
 	ExchangeContext(ctx context.Context, req Message) (Message, error)
 	// Send ping to peer and wait for pong
 	PingContext(ctx context.Context) error
+	// Returns context session
+	Context() context.Context
 
 	// handlePairMsg Message was handled by pair
 	handlePairMsg(w ResponseWriter, r *Request) bool
@@ -56,6 +56,8 @@ type networkSession interface {
 	blockWiseMaxPayloadSize(peer BlockWiseSzx) (int, BlockWiseSzx)
 
 	blockWiseIsValid(szx BlockWiseSzx) bool
+
+	exchangeReqNetContext(ctx *reqNetContext, req Message) (Message, error)
 }
 
 // NewSessionUDP create new session for UDP connection
@@ -184,6 +186,10 @@ func (s *sessionUDP) blockWiseEnabled() bool {
 
 func (s *sessionTCP) blockWiseEnabled() bool {
 	return s.blockWiseTransfer /*&& atomic.LoadUint32(&s.peerBlockWiseTransfer) != 0*/
+}
+
+func (s *sessionBase) Context() context.Context {
+	return s.ctx
 }
 
 func (s *sessionBase) blockWiseSzx() BlockWiseSzx {
@@ -341,13 +347,13 @@ func (s *sessionBase) exchangeFunc(req Message, writeTimeout, readTimeout time.D
 }
 
 func (s *sessionTCP) ExchangeContext(ctx context.Context, req Message) (Message, error) {
-	ctx, cancel := joincontext.Join(s.ctx, ctx)
+	reqCtx, cancel := newReqNetContext(ctx, s.ctx)
 	defer cancel()
-	return s.exchangeJoinedContext(ctx, req)
+	return s.exchangeReqNetContext(reqCtx, req)
 }
 
 // Write implements the networkSession.Write method.
-func (s *sessionTCP) exchangeJoinedContext(ctx context.Context, req Message) (Message, error) {
+func (s *sessionTCP) exchangeReqNetContext(ctx *reqNetContext, req Message) (Message, error) {
 	if err := validateMsg(req); err != nil {
 		return nil, fmt.Errorf("cannot exchange: %v", err)
 	}
@@ -374,7 +380,7 @@ func (s *sessionTCP) exchangeJoinedContext(ctx context.Context, req Message) (Me
 		}
 	}()
 
-	err := s.writeJoinedContextMsg(ctx, req)
+	err := s.writeReqNetContextMsg(ctx, req)
 	if err != nil {
 		return nil, fmt.Errorf("cannot exchange: %v", err)
 	}
@@ -390,18 +396,16 @@ func (s *sessionTCP) exchangeJoinedContext(ctx context.Context, req Message) (Me
 }
 
 func (s *sessionUDP) ExchangeContext(ctx context.Context, req Message) (Message, error) {
-	ctx, cancel := joincontext.Join(s.ctx, ctx)
+	reqCtx, cancel := newReqNetContext(ctx, s.ctx)
 	defer cancel()
-	return s.exchangeJoinedContext(ctx, req)
+	return s.exchangeReqNetContext(reqCtx, req)
 }
 
 // Write implements the networkSession.Write method.
-func (s *sessionUDP) exchangeJoinedContext(ctx context.Context, req Message) (Message, error) {
+func (s *sessionUDP) exchangeReqNetContext(ctx *reqNetContext, req Message) (Message, error) {
 	if err := validateMsg(req); err != nil {
 		return nil, fmt.Errorf("cannot exchange: %v", err)
 	}
-	ctx, cancel := joincontext.Join(s.ctx, ctx)
-	defer cancel()
 	//register msgid to token
 	pairChan := &sessionResp{make(chan *Request, 1)}
 	var pairToken [MaxTokenSize]byte
@@ -426,7 +430,7 @@ func (s *sessionUDP) exchangeJoinedContext(ctx context.Context, req Message) (Me
 		s.mapPairsLock.Unlock()
 	}()
 
-	err := s.writeJoinedContextMsg(ctx, req)
+	err := s.writeReqNetContextMsg(ctx, req)
 	if err != nil {
 		return nil, fmt.Errorf("cannot exchange: %v", err)
 	}
@@ -443,12 +447,12 @@ func (s *sessionUDP) exchangeJoinedContext(ctx context.Context, req Message) (Me
 
 // Write implements the networkSession.Write method.
 func (s *sessionTCP) WriteContextMsg(ctx context.Context, req Message) error {
-	ctx, cancel := joincontext.Join(s.ctx, ctx)
+	reqCtx, cancel := newReqNetContext(ctx, s.ctx)
 	defer cancel()
-	return s.writeJoinedContextMsg(ctx, req)
+	return s.writeReqNetContextMsg(reqCtx, req)
 }
 
-func (s *sessionTCP) writeJoinedContextMsg(ctx context.Context, req Message) error {
+func (s *sessionTCP) writeReqNetContextMsg(ctx *reqNetContext, req Message) error {
 	buffer := bytes.NewBuffer(make([]byte, 0, 1500))
 	err := req.MarshalBinary(buffer)
 	if err != nil {
@@ -458,12 +462,12 @@ func (s *sessionTCP) writeJoinedContextMsg(ctx context.Context, req Message) err
 }
 
 func (s *sessionUDP) WriteContextMsg(ctx context.Context, req Message) error {
-	ctx, cancel := joincontext.Join(s.ctx, ctx)
+	reqCtx, cancel := newReqNetContext(ctx, s.ctx)
 	defer cancel()
-	return s.writeJoinedContextMsg(ctx, req)
+	return s.writeReqNetContextMsg(reqCtx, req)
 }
 
-func (s *sessionUDP) writeJoinedContextMsg(ctx context.Context, req Message) error {
+func (s *sessionUDP) writeReqNetContextMsg(ctx *reqNetContext, req Message) error {
 	buffer := bytes.NewBuffer(make([]byte, 0, 1500))
 	err := req.MarshalBinary(buffer)
 	if err != nil {
@@ -534,7 +538,7 @@ func (s *sessionTCP) sendCSM() error {
 	if s.blockWiseEnabled() {
 		req.AddOption(BlockWiseTransfer, []byte{})
 	}
-	return s.writeJoinedContextMsg(s.ctx, req)
+	return s.WriteContextMsg(context.Background(), req)
 }
 
 func (s *sessionTCP) setPeerMaxMessageSize(val uint32) {

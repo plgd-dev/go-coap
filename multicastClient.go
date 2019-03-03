@@ -21,7 +21,7 @@ type MulticastClient struct {
 	DialTimeout    time.Duration // set Timeout for dialer
 	ReadTimeout    time.Duration // net.ClientConn.SetReadTimeout value for connections, defaults to 1 hour - overridden by Timeout when that value is non-zero
 	WriteTimeout   time.Duration // net.ClientConn.SetWriteTimeout value for connections, defaults to 1 hour - overridden by Timeout when that value is non-zero
-	SyncTimeout    time.Duration // The maximum of time for synchronization go-routines, defaults to 30 seconds - overridden by Timeout when that value is non-zero if it occurs, then it call log.Fatal
+	HeartBeat      time.Duration // The maximum of time for synchronization go-routines, defaults to 30 seconds - overridden by Timeout when that value is non-zero if it occurs, then it call log.Fatal
 
 	Handler              HandlerFunc     // default handler for handling messages from server
 	NotifySessionEndFunc func(err error) // if NotifySessionEndFunc is set it is called when TCP/UDP session was ended.
@@ -43,7 +43,7 @@ func (c *MulticastClient) dialNet(ctx context.Context, net, address string) (*Cl
 		DialTimeout:    c.DialTimeout,
 		ReadTimeout:    c.ReadTimeout,
 		WriteTimeout:   c.WriteTimeout,
-		SyncTimeout:    c.SyncTimeout,
+		HeartBeat:      c.HeartBeat,
 		Handler: func(w ResponseWriter, r *Request) {
 			handler := c.Handler
 			if handler == nil {
@@ -59,7 +59,11 @@ func (c *MulticastClient) dialNet(ctx context.Context, net, address string) (*Cl
 	return client.DialContext(ctx, address)
 }
 
-// Dial connects to the address on the named network.
+func (c *MulticastClient) Dial(address string) (*MulticastClientConn, error) {
+	return c.DialContext(context.Background(), address)
+}
+
+// DialContext connects with context to the address on the named network.
 func (c *MulticastClient) DialContext(ctx context.Context, address string) (*MulticastClientConn, error) {
 	var net string
 	switch c.Net {
@@ -100,7 +104,12 @@ func (mconn *MulticastClientConn) NewGetRequest(path string) (Message, error) {
 	return mconn.conn.NewGetRequest(path)
 }
 
-// WriteContextMsg sends a message through the connection co.
+// WriteMsg sends a message through the connection co.
+func (mconn *MulticastClientConn) WriteMsg(m Message) error {
+	return mconn.WriteContextMsg(context.Background(), m)
+}
+
+// WriteContextMsg sends a message with context through the connection co.
 func (mconn *MulticastClientConn) WriteContextMsg(ctx context.Context, m Message) error {
 	return mconn.conn.WriteContextMsg(ctx, m)
 }
@@ -122,7 +131,13 @@ func (r *ResponseWaiter) Cancel() error {
 	return r.conn.client.multicastHandler.Remove(r.token)
 }
 
-// Publish subscribe to sever on path. After subscription and every change on path,
+// Publish subscribes to sever on path. After subscription and every change on path,
+// server sends immediately response
+func (mconn *MulticastClientConn) Publish(path string, responseHandler func(req *Request)) (*ResponseWaiter, error) {
+	return mconn.PublishContext(context.Background(), path, responseHandler)
+}
+
+// PublishContext subscribes with context to sever on path. After subscription and every change on path,
 // server sends immediately response
 func (mconn *MulticastClientConn) PublishContext(ctx context.Context, path string, responseHandler func(req *Request)) (*ResponseWaiter, error) {
 	req, err := mconn.NewGetRequest(path)
@@ -132,7 +147,13 @@ func (mconn *MulticastClientConn) PublishContext(ctx context.Context, path strin
 	return mconn.PublishContextMsg(ctx, req, responseHandler)
 }
 
-// PublishMsg subscribe to sever with GET message. After subscription and every change on path,
+// PublishMsg subscribes to sever with GET message. After subscription and every change on path,
+// server sends immediately response
+func (mconn *MulticastClientConn) PublishMsg(req Message, responseHandler func(req *Request)) (*ResponseWaiter, error) {
+	return mconn.PublishContextMsg(context.Background(), req, responseHandler)
+}
+
+// PublishContextMsg subscribes with context to sever with GET message. After subscription and every change on path,
 // server sends immediately response
 func (mconn *MulticastClientConn) PublishContextMsg(ctx context.Context, req Message, responseHandler func(req *Request)) (*ResponseWaiter, error) {
 	if req.Code() != GET || req.PathString() == "" {

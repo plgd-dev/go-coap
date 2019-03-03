@@ -753,7 +753,7 @@ func lengthOptHeader(delta, length int) int {
 	d, dx := extendOpt(delta)
 	l, lx := extendOpt(length)
 
-	//buf.WriteContext([]byte{byte(d<<4) | byte(l)})
+	//buf.Write([]byte{byte(d<<4) | byte(l)})
 	res := 1
 
 	res = res + lengthOptHeaderExt(d, dx)

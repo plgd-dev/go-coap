@@ -13,6 +13,7 @@ import (
  */
 
 type ConnTCP struct {
+	heartBeat  time.Duration
 	connection net.Conn // i/o connection if TCP was used
 	lock       sync.Mutex
 }
@@ -56,6 +57,7 @@ func (c *ConnTCP) Close() error {
 }
 
 type ConnUDP struct {
+	heartBeat  time.Duration
 	connection *net.UDPConn // i/o connection if UDP was used
 	lock       sync.Mutex
 }
@@ -82,7 +84,7 @@ func (c *ConnUDP) WriteContext(ctx context.Context, sessionUDPData *SessionUDPDa
 			return ctx.Err()
 		default:
 		}
-		err := c.connection.SetWriteDeadline(time.Now().Add(waitTimer))
+		err := c.connection.SetWriteDeadline(time.Now().Add(c.heartBeat))
 		if err != nil {
 			return fmt.Errorf("cannot set write deadline for tcp connection: %v", err)
 		}
@@ -104,33 +106,33 @@ func (c *ConnUDP) ReadContext(ctx context.Context, buffer []byte) (int, *Session
 		select {
 		case <-ctx.Done():
 			if ctx.Err() != nil {
-				return -1, nil, fmt.Errorf("cannot read from tcp connection: %v", ctx.Err())
+				return -1, nil, fmt.Errorf("cannot read from udp connection: %v", ctx.Err())
 			}
-			return -1, nil, fmt.Errorf("cannot read from tcp connection")
+			return -1, nil, fmt.Errorf("cannot read from udp connection")
 		default:
 		}
 
-		err := c.connection.SetReadDeadline(time.Now().Add(waitTimer))
+		err := c.connection.SetReadDeadline(time.Now().Add(c.heartBeat))
 		if err != nil {
-			return -1, nil, fmt.Errorf("cannot set read deadline for tcp connection: %v", err)
+			return -1, nil, fmt.Errorf("cannot set read deadline for udp connection: %v", err)
 		}
 		n, s, err := ReadFromSessionUDP(c.connection, buffer)
 		if err != nil {
 			if passError(err) {
 				continue
 			}
-			return -1, nil, fmt.Errorf("cannot read from tcp connection: %v", ctx.Err())
+			return -1, nil, fmt.Errorf("cannot read from udp connection: %v", ctx.Err())
 		}
 		return n, s, err
 	}
 }
 
-func NewConnTCP(c net.Conn) *ConnTCP {
-	connection := ConnTCP{connection: c}
+func NewConnTCP(c net.Conn, heartBeat time.Duration) *ConnTCP {
+	connection := ConnTCP{connection: c, heartBeat: heartBeat}
 	return &connection
 }
 
-func NewConnUDP(c *net.UDPConn) *ConnUDP {
-	connection := ConnUDP{connection: c}
+func NewConnUDP(c *net.UDPConn, heartBeat time.Duration) *ConnUDP {
+	connection := ConnUDP{connection: c, heartBeat: heartBeat}
 	return &connection
 }

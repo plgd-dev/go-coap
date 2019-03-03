@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"log"
 	"testing"
+
+	"go.uber.org/goleak"
 )
 
 func testMarshal(t *testing.T, szx BlockWiseSzx, blockNumber uint, moreBlocksFollowing bool, expectedBlock uint32) {
@@ -83,6 +85,7 @@ func TestBlockWiseBlockUnmarshal(t *testing.T) {
 }
 
 func TestServingUDPBlockWiseSzx16(t *testing.T) {
+	defer goleak.VerifyNone(t)
 	testServingTCPWithMsg(t, "udp", true, BlockWiseSzx16, make([]byte, 128), simpleMsg)
 }
 
@@ -165,9 +168,11 @@ func TestServingTCPBigMsgBlockWiseSzx1024(t *testing.T) {
 	testServingTCPWithMsg(t, "tcp", true, BlockWiseSzx1024, make([]byte, 1024), simpleMsg)
 }
 
+/*
 func TestServingTCPBigMsgBlockWiseSzxBERT(t *testing.T) {
 	testServingTCPWithMsg(t, "tcp", true, BlockWiseSzxBERT, make([]byte, 10*1024*1024), simpleMsg)
 }
+*/
 
 var helloWorld = []byte("Hello world")
 
@@ -176,13 +181,13 @@ func EchoServerUsingWrite(w ResponseWriter, r *Request) {
 	w.SetCode(Content)
 	if mt, ok := r.Msg.Option(ContentFormat).(MediaType); ok {
 		w.SetContentFormat(mt)
-		_, err := w.WriteContext(r.Msg.Payload())
+		_, err := w.Write(r.Msg.Payload())
 		if err != nil {
 			log.Printf("Cannot write echo %v", err)
 		}
 	} else {
 		w.SetContentFormat(TextPlain)
-		_, err := w.WriteContext(helloWorld)
+		_, err := w.Write(helloWorld)
 		if err != nil {
 			log.Printf("Cannot write echo %v", err)
 		}
@@ -191,7 +196,7 @@ func EchoServerUsingWrite(w ResponseWriter, r *Request) {
 
 func TestServingUDPBlockWiseUsingWrite(t *testing.T) {
 	// Test that responding to blockwise requests using ResponseWrite.write
-	// works correctly (as opposed to using WriteContextMsg directly)
+	// works correctly (as opposed to using WriteMsg directly)
 
 	HandleFunc("/test-with-write", EchoServerUsingWrite)
 	defer HandleRemove("/test-with-write")
@@ -221,7 +226,7 @@ func TestServingUDPBlockWiseUsingWrite(t *testing.T) {
 		t.Fatal("cannot create request", err)
 	}
 
-	m, err := co.ExchangeContext(req)
+	m, err := co.Exchange(req)
 	if err != nil {
 		t.Fatal("failed to exchange", err)
 	}
@@ -272,7 +277,7 @@ func TestServingUDPBlockWiseWithClientWithoutBlockWise(t *testing.T) {
 		t.Fatal("cannot create request", err)
 	}
 
-	m, err := co.ExchangeContext(req)
+	m, err := co.Exchange(req)
 	if err != nil {
 		t.Fatal("failed to exchange", err)
 	}
@@ -301,7 +306,7 @@ func TestServingUDPBlockWiseWithClientWithoutBlockWise(t *testing.T) {
 		t.Fatal("cannot create request", err)
 	}
 
-	getResp, err := co.ExchangeContext(getReq)
+	getResp, err := co.Exchange(getReq)
 	if err != nil {
 		t.Fatal("failed to exchange", err)
 	}
