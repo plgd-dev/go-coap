@@ -142,9 +142,9 @@ type Server struct {
 	// Defines wake up interval from operations Read, Write over connection. defaults is 100ms.
 	HeartBeat time.Duration
 	// If newSessionUDPFunc is set it is called when session UDP want to be created
-	newSessionUDPFunc func(ctx context.Context, connection *kitNet.ConnUDP, srv *Server, sessionUDPData *kitNet.ConnUDPContext) (networkSession, error)
+	newSessionUDPFunc func(connection *kitNet.ConnUDP, srv *Server, sessionUDPData *kitNet.ConnUDPContext) (networkSession, error)
 	// If newSessionUDPFunc is set it is called when session TCP want to be created
-	newSessionTCPFunc func(ctx context.Context, connection *kitNet.ConnTCP, srv *Server) (networkSession, error)
+	newSessionTCPFunc func(connection *kitNet.ConnTCP, srv *Server) (networkSession, error)
 	// If NotifyNewSession is set it is called when new TCP/UDP session was created.
 	NotifySessionNewFunc func(w *ClientCommander)
 	// If NotifyNewSession is set it is called when TCP/UDP session was ended.
@@ -169,8 +169,8 @@ type Server struct {
 	sessionUDPMapLock sync.Mutex
 	sessionUDPMap     map[string]networkSession
 
-	ctx    context.Context
-	cancel context.CancelFunc
+	done     int32
+	doneChan chan struct{}
 }
 
 func (srv *Server) workerChannelHandler(inUse bool, timeout *time.Timer) bool {
@@ -298,25 +298,20 @@ func (srv *Server) ListenAndServe() error {
 }
 
 func (srv *Server) initServeUDP(conn *net.UDPConn) error {
-	return srv.serveUDP(conn)
+	return srv.serveUDP(newShutdownContext(srv.doneChan), conn)
 }
 
 func (srv *Server) initServeTCP(conn net.Conn) error {
 	if srv.NotifyStartedFunc != nil {
 		srv.NotifyStartedFunc()
 	}
-	return srv.serveTCPconnection(conn)
+	return srv.serveTCPconnection(newShutdownContext(srv.doneChan), conn)
 }
 
 // ActivateAndServe starts a coapserver with the PacketConn or Listener
 // configured in *Server. Its main use is to start a server from systemd.
 func (srv *Server) ActivateAndServe() error {
-	return srv.ActivateAndServeContext(context.Background())
-}
-
-func (srv *Server) ActivateAndServeContext(ctx context.Context) error {
-	srv.ctx, srv.cancel = context.WithCancel(ctx)
-	defer srv.cancel()
+	srv.doneChan = make(chan struct{})
 
 	pConn := srv.Conn
 	l := srv.Listener
@@ -334,8 +329,8 @@ func (srv *Server) ActivateAndServeContext(ctx context.Context) error {
 	defer close(srv.queue)
 
 	if srv.newSessionTCPFunc == nil {
-		srv.newSessionTCPFunc = func(ctx context.Context, connection *kitNet.ConnTCP, srv *Server) (networkSession, error) {
-			session, err := newSessionTCP(ctx, connection, srv)
+		srv.newSessionTCPFunc = func(connection *kitNet.ConnTCP, srv *Server) (networkSession, error) {
+			session, err := newSessionTCP(connection, srv)
 			if err != nil {
 				return nil, err
 			}
@@ -347,8 +342,8 @@ func (srv *Server) ActivateAndServeContext(ctx context.Context) error {
 	}
 
 	if srv.newSessionUDPFunc == nil {
-		srv.newSessionUDPFunc = func(ctx context.Context, connection *kitNet.ConnUDP, srv *Server, sessionUDPData *kitNet.ConnUDPContext) (networkSession, error) {
-			session, err := newSessionUDP(ctx, connection, srv, sessionUDPData)
+		srv.newSessionUDPFunc = func(connection *kitNet.ConnUDP, srv *Server, sessionUDPData *kitNet.ConnUDPContext) (networkSession, error) {
+			session, err := newSessionUDP(connection, srv, sessionUDPData)
 			if err != nil {
 				return nil, err
 			}
@@ -386,7 +381,10 @@ func (srv *Server) ActivateAndServeContext(ctx context.Context) error {
 // Shutdown shuts down a server. After a call to Shutdown, ListenAndServe and
 // ActivateAndServe will return.
 func (srv *Server) Shutdown() error {
-	srv.cancel()
+	if !atomic.CompareAndSwapInt32(&srv.done, 0, 1) {
+		return fmt.Errorf("already shutdown")
+	}
+	close(srv.doneChan)
 	return nil
 }
 
@@ -414,22 +412,27 @@ func (srv *Server) heartBeat() time.Duration {
 	return time.Millisecond * 100
 }
 
-func (srv *Server) serveTCPconnection(conn net.Conn) error {
+func (srv *Server) serveTCPconnection(ctx *shutdownContext, conn net.Conn) error {
 	connTCP := kitNet.NewConnTCP(conn, srv.heartBeat())
-	session, err := srv.newSessionTCPFunc(srv.ctx, connTCP, srv)
+
+	session, err := srv.newSessionTCPFunc(connTCP, srv)
 	if err != nil {
 		return err
 	}
 	srv.NotifySessionNewFunc(&ClientCommander{session})
+
+	sessCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
 	for {
-		mti, err := readTcpMsgInfo(srv.ctx, connTCP)
+		mti, err := readTcpMsgInfo(ctx, connTCP)
 		if err != nil {
 			return session.closeWithError(fmt.Errorf("cannot serve tcp connection: %v", err))
 		}
 
 		body := make([]byte, mti.BodyLen())
 		//ctx, cancel := context.WithTimeout(srv.ctx, srv.readTimeout())
-		err = connTCP.ReadFullContext(srv.ctx, body)
+		err = connTCP.ReadFullContext(ctx, body)
 		if err != nil {
 			return session.closeWithError(fmt.Errorf("cannot serve tcp connection: %v", err))
 		}
@@ -447,7 +450,7 @@ func (srv *Server) serveTCPconnection(conn net.Conn) error {
 
 		// We will block poller wait loop when
 		// all pool workers are busy.
-		srv.spawnWorker(&Request{Client: &ClientCommander{session}, Msg: msg, Ctx: session.Context()})
+		srv.spawnWorker(&Request{Client: &ClientCommander{session}, Msg: msg, Ctx: sessCtx})
 	}
 }
 
@@ -458,18 +461,21 @@ func (srv *Server) serveTCP(l Listener) error {
 	}
 
 	var wg sync.WaitGroup
+	ctx := newShutdownContext(srv.doneChan)
 
 	for {
-		rw, err := l.AcceptContext(srv.ctx)
+		rw, err := l.AcceptContext(ctx)
 		if err != nil {
 			wg.Wait()
 			return fmt.Errorf("cannot serve tcp: %v", err)
 		}
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			srv.serveTCPconnection(rw)
-		}()
+		if rw != nil {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				srv.serveTCPconnection(ctx, rw)
+			}()
+		}
 	}
 }
 
@@ -484,7 +490,7 @@ func (srv *Server) closeSessions(err error) {
 }
 
 // serveUDP starts a UDP listener for the server.
-func (srv *Server) serveUDP(conn *net.UDPConn) error {
+func (srv *Server) serveUDP(ctx *shutdownContext, conn *net.UDPConn) error {
 	defer conn.Close()
 
 	if srv.NotifyStartedFunc != nil {
@@ -492,10 +498,12 @@ func (srv *Server) serveUDP(conn *net.UDPConn) error {
 	}
 
 	connUDP := kitNet.NewConnUDP(conn, srv.heartBeat())
+	sessCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 
 	for {
 		m := make([]byte, ^uint16(0))
-		n, s, err := connUDP.ReadContext(srv.ctx, m)
+		n, s, err := connUDP.ReadContext(ctx, m)
 		if err != nil {
 			err := fmt.Errorf("cannot serve UDP connection %v", err)
 			srv.closeSessions(err)
@@ -506,7 +514,7 @@ func (srv *Server) serveUDP(conn *net.UDPConn) error {
 		srv.sessionUDPMapLock.Lock()
 		session := srv.sessionUDPMap[s.Key()]
 		if session == nil {
-			session, err = srv.newSessionUDPFunc(srv.ctx, connUDP, srv, s)
+			session, err = srv.newSessionUDPFunc(connUDP, srv, s)
 			if err != nil {
 				return err
 			}
@@ -521,7 +529,7 @@ func (srv *Server) serveUDP(conn *net.UDPConn) error {
 		if err != nil {
 			continue
 		}
-		srv.spawnWorker(&Request{Msg: msg, Client: &ClientCommander{session}, Ctx: session.Context()})
+		srv.spawnWorker(&Request{Msg: msg, Client: &ClientCommander{session}, Ctx: sessCtx})
 	}
 }
 

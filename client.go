@@ -97,7 +97,7 @@ func (c *Client) DialContext(ctx context.Context, address string) (clientConn *C
 		BlockWiseTransferSzx = BlockWiseSzxBERT
 	case "tcp", "tcp4", "tcp6":
 		network = c.Net
-		conn, err = dialer.Dial(c.Net, address)
+		conn, err = dialer.DialContext(ctx, c.Net, address)
 		if err != nil {
 			return nil, err
 		}
@@ -107,7 +107,7 @@ func (c *Client) DialContext(ctx context.Context, address string) (clientConn *C
 		if network == "" {
 			network = "udp"
 		}
-		if conn, err = dialer.Dial(network, address); err != nil {
+		if conn, err = dialer.DialContext(ctx, network, address); err != nil {
 			return nil, err
 		}
 		sessionUPDData = kitNet.NewConnUDPContext(conn.(*net.UDPConn).RemoteAddr().(*net.UDPAddr), nil)
@@ -151,10 +151,10 @@ func (c *Client) DialContext(ctx context.Context, address string) (clientConn *C
 					c.NotifySessionEndFunc(err)
 				}
 			},
-			newSessionTCPFunc: func(ctx context.Context, connection *kitNet.ConnTCP, srv *Server) (networkSession, error) {
+			newSessionTCPFunc: func(connection *kitNet.ConnTCP, srv *Server) (networkSession, error) {
 				return clientConn.commander.networkSession, nil
 			},
-			newSessionUDPFunc: func(ctx context.Context, connection *kitNet.ConnUDP, srv *Server, sessionUDPData *kitNet.ConnUDPContext) (networkSession, error) {
+			newSessionUDPFunc: func(connection *kitNet.ConnUDP, srv *Server, sessionUDPData *kitNet.ConnUDPContext) (networkSession, error) {
 				if sessionUDPData.RemoteAddr().String() == clientConn.commander.networkSession.RemoteAddr().String() {
 					if s, ok := clientConn.commander.networkSession.(*blockWiseSession); ok {
 						s.networkSession.(*sessionUDP).sessionUDPData = sessionUDPData
@@ -163,7 +163,7 @@ func (c *Client) DialContext(ctx context.Context, address string) (clientConn *C
 					}
 					return clientConn.commander.networkSession, nil
 				}
-				session, err := newSessionUDP(ctx, connection, srv, sessionUDPData)
+				session, err := newSessionUDP(connection, srv, sessionUDPData)
 				if err != nil {
 					return nil, err
 				}
@@ -181,7 +181,7 @@ func (c *Client) DialContext(ctx context.Context, address string) (clientConn *C
 
 	switch clientConn.srv.Conn.(type) {
 	case *net.TCPConn, *tls.Conn:
-		session, err := newSessionTCP(ctx, kitNet.NewConnTCP(clientConn.srv.Conn, clientConn.srv.heartBeat()), clientConn.srv)
+		session, err := newSessionTCP(kitNet.NewConnTCP(clientConn.srv.Conn, clientConn.srv.heartBeat()), clientConn.srv)
 		if err != nil {
 			return nil, err
 		}
@@ -193,7 +193,7 @@ func (c *Client) DialContext(ctx context.Context, address string) (clientConn *C
 	case *net.UDPConn:
 		// WriteContextMsgUDP returns error when addr is filled in SessionUDPData for connected socket
 		kitNet.SetUDPSocketOptions(clientConn.srv.Conn.(*net.UDPConn))
-		session, err := newSessionUDP(ctx, kitNet.NewConnUDP(clientConn.srv.Conn.(*net.UDPConn), clientConn.srv.heartBeat()), clientConn.srv, sessionUPDData)
+		session, err := newSessionUDP(kitNet.NewConnUDP(clientConn.srv.Conn.(*net.UDPConn), clientConn.srv.heartBeat()), clientConn.srv, sessionUPDData)
 		if err != nil {
 			return nil, err
 		}

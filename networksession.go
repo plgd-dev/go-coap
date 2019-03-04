@@ -33,8 +33,6 @@ type networkSession interface {
 	ExchangeContext(ctx context.Context, req Message) (Message, error)
 	// Send ping to peer and wait for pong
 	PingContext(ctx context.Context) error
-	// Returns context session
-	Context() context.Context
 
 	// handlePairMsg Message was handled by pair
 	handlePairMsg(w ResponseWriter, r *Request) bool
@@ -58,14 +56,10 @@ type networkSession interface {
 	blockWiseMaxPayloadSize(peer BlockWiseSzx) (int, BlockWiseSzx)
 
 	blockWiseIsValid(szx BlockWiseSzx) bool
-
-	exchangeReqNetContext(ctx *reqNetContext, req Message) (Message, error)
 }
 
 // NewSessionUDP create new session for UDP connection
-func newSessionUDP(ctx context.Context, connection *kitNet.ConnUDP, srv *Server, sessionUDPData *kitNet.ConnUDPContext) (networkSession, error) {
-	ctx, cancel := context.WithCancel(ctx)
-
+func newSessionUDP(connection *kitNet.ConnUDP, srv *Server, sessionUDPData *kitNet.ConnUDPContext) (networkSession, error) {
 	BlockWiseTransfer := true
 	BlockWiseTransferSzx := BlockWiseSzx1024
 	if srv.BlockWiseTransfer != nil {
@@ -81,8 +75,6 @@ func newSessionUDP(ctx context.Context, connection *kitNet.ConnUDP, srv *Server,
 
 	s := &sessionUDP{
 		sessionBase: sessionBase{
-			ctx:                  ctx,
-			cancel:               cancel,
 			srv:                  srv,
 			handler:              &TokenHandler{tokenHandlers: make(map[[MaxTokenSize]byte]HandlerFunc)},
 			blockWiseTransfer:    BlockWiseTransfer,
@@ -96,8 +88,7 @@ func newSessionUDP(ctx context.Context, connection *kitNet.ConnUDP, srv *Server,
 }
 
 // newSessionTCP create new session for TCP connection
-func newSessionTCP(ctx context.Context, connection *kitNet.ConnTCP, srv *Server) (networkSession, error) {
-	ctx, cancel := context.WithCancel(ctx)
+func newSessionTCP(connection *kitNet.ConnTCP, srv *Server) (networkSession, error) {
 	BlockWiseTransfer := false
 	BlockWiseTransferSzx := BlockWiseSzxBERT
 	if srv.BlockWiseTransfer != nil {
@@ -111,8 +102,6 @@ func newSessionTCP(ctx context.Context, connection *kitNet.ConnTCP, srv *Server)
 		peerMaxMessageSize: uint32(srv.MaxMessageSize),
 		connection:         connection,
 		sessionBase: sessionBase{
-			ctx:                  ctx,
-			cancel:               cancel,
 			srv:                  srv,
 			handler:              &TokenHandler{tokenHandlers: make(map[[MaxTokenSize]byte]HandlerFunc)},
 			blockWiseTransfer:    BlockWiseTransfer,
@@ -134,8 +123,6 @@ type sessionResp struct {
 }
 
 type sessionBase struct {
-	ctx     context.Context
-	cancel  context.CancelFunc
 	srv     *Server
 	handler *TokenHandler
 
@@ -190,10 +177,6 @@ func (s *sessionTCP) blockWiseEnabled() bool {
 	return s.blockWiseTransfer /*&& atomic.LoadUint32(&s.peerBlockWiseTransfer) != 0*/
 }
 
-func (s *sessionBase) Context() context.Context {
-	return s.ctx
-}
-
 func (s *sessionBase) blockWiseSzx() BlockWiseSzx {
 	return BlockWiseSzx(atomic.LoadUint32(&s.blockWiseTransferSzx))
 }
@@ -238,7 +221,6 @@ func (s *sessionUDP) closeWithError(err error) error {
 	s.srv.sessionUDPMapLock.Lock()
 	delete(s.srv.sessionUDPMap, s.sessionUDPData.Key())
 	s.srv.sessionUDPMapLock.Unlock()
-	s.cancel()
 	s.srv.NotifySessionEndFunc(&ClientCommander{s}, err)
 
 	return err
@@ -295,7 +277,6 @@ func (s *sessionUDP) Close() error {
 }
 
 func (s *sessionTCP) closeWithError(err error) error {
-	s.cancel()
 	if s.connection != nil {
 		s.srv.NotifySessionEndFunc(&ClientCommander{s}, err)
 		e := s.connection.Close()
@@ -349,13 +330,6 @@ func (s *sessionBase) exchangeFunc(req Message, writeTimeout, readTimeout time.D
 }
 
 func (s *sessionTCP) ExchangeContext(ctx context.Context, req Message) (Message, error) {
-	reqCtx, cancel := newReqNetContext(ctx, s.ctx)
-	defer cancel()
-	return s.exchangeReqNetContext(reqCtx, req)
-}
-
-// Write implements the networkSession.Write method.
-func (s *sessionTCP) exchangeReqNetContext(ctx *reqNetContext, req Message) (Message, error) {
 	if err := validateMsg(req); err != nil {
 		return nil, fmt.Errorf("cannot exchange: %v", err)
 	}
@@ -382,7 +356,7 @@ func (s *sessionTCP) exchangeReqNetContext(ctx *reqNetContext, req Message) (Mes
 		}
 	}()
 
-	err := s.writeReqNetContextMsg(ctx, req)
+	err := s.WriteContextMsg(ctx, req)
 	if err != nil {
 		return nil, fmt.Errorf("cannot exchange: %v", err)
 	}
@@ -398,13 +372,6 @@ func (s *sessionTCP) exchangeReqNetContext(ctx *reqNetContext, req Message) (Mes
 }
 
 func (s *sessionUDP) ExchangeContext(ctx context.Context, req Message) (Message, error) {
-	reqCtx, cancel := newReqNetContext(ctx, s.ctx)
-	defer cancel()
-	return s.exchangeReqNetContext(reqCtx, req)
-}
-
-// Write implements the networkSession.Write method.
-func (s *sessionUDP) exchangeReqNetContext(ctx *reqNetContext, req Message) (Message, error) {
 	if err := validateMsg(req); err != nil {
 		return nil, fmt.Errorf("cannot exchange: %v", err)
 	}
@@ -432,7 +399,7 @@ func (s *sessionUDP) exchangeReqNetContext(ctx *reqNetContext, req Message) (Mes
 		s.mapPairsLock.Unlock()
 	}()
 
-	err := s.writeReqNetContextMsg(ctx, req)
+	err := s.WriteContextMsg(ctx, req)
 	if err != nil {
 		return nil, fmt.Errorf("cannot exchange: %v", err)
 	}
@@ -449,12 +416,6 @@ func (s *sessionUDP) exchangeReqNetContext(ctx *reqNetContext, req Message) (Mes
 
 // Write implements the networkSession.Write method.
 func (s *sessionTCP) WriteContextMsg(ctx context.Context, req Message) error {
-	reqCtx, cancel := newReqNetContext(ctx, s.ctx)
-	defer cancel()
-	return s.writeReqNetContextMsg(reqCtx, req)
-}
-
-func (s *sessionTCP) writeReqNetContextMsg(ctx *reqNetContext, req Message) error {
 	buffer := bytes.NewBuffer(make([]byte, 0, 1500))
 	err := req.MarshalBinary(buffer)
 	if err != nil {
@@ -464,12 +425,6 @@ func (s *sessionTCP) writeReqNetContextMsg(ctx *reqNetContext, req Message) erro
 }
 
 func (s *sessionUDP) WriteContextMsg(ctx context.Context, req Message) error {
-	reqCtx, cancel := newReqNetContext(ctx, s.ctx)
-	defer cancel()
-	return s.writeReqNetContextMsg(reqCtx, req)
-}
-
-func (s *sessionUDP) writeReqNetContextMsg(ctx *reqNetContext, req Message) error {
 	buffer := bytes.NewBuffer(make([]byte, 0, 1500))
 	err := req.MarshalBinary(buffer)
 	if err != nil {

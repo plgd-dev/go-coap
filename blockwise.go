@@ -81,7 +81,7 @@ func UnmarshalBlockOption(blockVal uint32) (szx BlockWiseSzx, blockNumber uint, 
 	return
 }
 
-func exchangeDrivedByPeer(ctx *reqNetContext, session networkSession, req Message, blockType OptionID) (Message, error) {
+func exchangeDrivedByPeer(ctx context.Context, session networkSession, req Message, blockType OptionID) (Message, error) {
 	if block, ok := req.Option(blockType).(uint32); ok {
 		_, _, more, err := UnmarshalBlockOption(block)
 		if err != nil {
@@ -191,7 +191,7 @@ func (s *blockWiseSender) newReq(b *blockWiseSession) (Message, error) {
 	return req, nil
 }
 
-func (s *blockWiseSender) exchange(ctx *reqNetContext, b *blockWiseSession, req Message) (Message, error) {
+func (s *blockWiseSender) exchange(ctx context.Context, b *blockWiseSession, req Message) (Message, error) {
 	var resp Message
 	var err error
 	if blockWiseDebug {
@@ -200,7 +200,7 @@ func (s *blockWiseSender) exchange(ctx *reqNetContext, b *blockWiseSession, req 
 	if s.peerDrive {
 		resp, err = exchangeDrivedByPeer(ctx, b.networkSession, req, s.blockType)
 	} else {
-		resp, err = b.networkSession.exchangeReqNetContext(ctx, req)
+		resp, err = b.networkSession.ExchangeContext(ctx, req)
 	}
 	if err != nil {
 		return nil, err
@@ -211,7 +211,7 @@ func (s *blockWiseSender) exchange(ctx *reqNetContext, b *blockWiseSession, req 
 	return resp, nil
 }
 
-func (s *blockWiseSender) processResp(ctx *reqNetContext, b *blockWiseSession, req Message, resp Message) (Message, error) {
+func (s *blockWiseSender) processResp(ctx context.Context, b *blockWiseSession, req Message, resp Message) (Message, error) {
 	if s.currentMore == false {
 		if s.blockType == Block1 {
 			if respBlock2, ok := resp.Option(Block2).(uint32); ok {
@@ -290,7 +290,7 @@ func (s *blockWiseSender) processResp(ctx *reqNetContext, b *blockWiseSession, r
 	return nil, nil
 }
 
-func (b *blockWiseSession) sendPayload(ctx *reqNetContext, peerDrive bool, blockType OptionID, suggestedSzx BlockWiseSzx, expectedCode COAPCode, msg Message) (Message, error) {
+func (b *blockWiseSession) sendPayload(ctx context.Context, peerDrive bool, blockType OptionID, suggestedSzx BlockWiseSzx, expectedCode COAPCode, msg Message) (Message, error) {
 	s := newSender(peerDrive, blockType, suggestedSzx, expectedCode, msg)
 	req, err := s.newReq(b)
 	if err != nil {
@@ -322,19 +322,17 @@ func (b *blockWiseSession) Exchange(msg Message) (Message, error) {
 }
 
 func (b *blockWiseSession) ExchangeContext(ctx context.Context, msg Message) (Message, error) {
-	reqCtx, cancel := newReqNetContext(ctx, b.networkSession.Context())
-	defer cancel()
 	switch msg.Code() {
 	//these methods doesn't need to be handled by blockwise
 	case CSM, Ping, Pong, Release, Abort, Empty:
-		return b.networkSession.exchangeReqNetContext(reqCtx, msg)
+		return b.networkSession.ExchangeContext(ctx, msg)
 	case GET, DELETE:
-		return b.receivePayload(reqCtx, false, msg, nil, Block2, msg.Code())
+		return b.receivePayload(ctx, false, msg, nil, Block2, msg.Code())
 	case POST, PUT:
-		return b.sendPayload(reqCtx, false, Block1, b.networkSession.blockWiseSzx(), Continue, msg)
+		return b.sendPayload(ctx, false, Block1, b.networkSession.blockWiseSzx(), Continue, msg)
 	// for response code
 	default:
-		return b.sendPayload(reqCtx, true, Block2, b.networkSession.blockWiseSzx(), Continue, msg)
+		return b.sendPayload(ctx, true, Block2, b.networkSession.blockWiseSzx(), Continue, msg)
 	}
 
 }
@@ -365,7 +363,7 @@ func calcStartOffset(num uint, szx BlockWiseSzx) int {
 	return int(num) * szxToBytes[szx]
 }
 
-func (b *blockWiseSession) sendErrorMsg(ctx *reqNetContext, code COAPCode, typ COAPType, token []byte, MessageID uint16, err error) {
+func (b *blockWiseSession) sendErrorMsg(ctx context.Context, code COAPCode, typ COAPType, token []byte, MessageID uint16, err error) {
 	req := b.NewMessage(MessageParams{
 		Code:      code,
 		Type:      typ,
@@ -515,7 +513,7 @@ func newReceiver(b *blockWiseSession, peerDrive bool, origin Message, resp Messa
 	return r, nil, nil
 }
 
-func (r *blockWiseReceiver) exchange(ctx *reqNetContext, b *blockWiseSession, req Message) (Message, error) {
+func (r *blockWiseReceiver) exchange(ctx context.Context, b *blockWiseSession, req Message) (Message, error) {
 	if blockWiseDebug {
 		log.Printf("receivePayload %p req=%v\n", b, req)
 	}
@@ -607,7 +605,7 @@ func (r *blockWiseReceiver) processResp(b *blockWiseSession, req Message, resp M
 	return nil, nil
 }
 
-func (r *blockWiseReceiver) sendError(ctx *reqNetContext, b *blockWiseSession, code COAPCode, resp Message, err error) {
+func (r *blockWiseReceiver) sendError(ctx context.Context, b *blockWiseSession, code COAPCode, resp Message, err error) {
 	var MessageID uint16
 	var token []byte
 	var typ COAPType
@@ -627,7 +625,7 @@ func (r *blockWiseReceiver) sendError(ctx *reqNetContext, b *blockWiseSession, c
 	b.sendErrorMsg(ctx, code, typ, token, MessageID, err)
 }
 
-func (b *blockWiseSession) receivePayload(ctx *reqNetContext, peerDrive bool, msg Message, resp Message, blockType OptionID, code COAPCode) (Message, error) {
+func (b *blockWiseSession) receivePayload(ctx context.Context, peerDrive bool, msg Message, resp Message, blockType OptionID, code COAPCode) (Message, error) {
 	r, resp, err := newReceiver(b, peerDrive, msg, resp, blockType, code)
 	if err != nil {
 		r.sendError(ctx, b, BadRequest, resp, err)
@@ -670,9 +668,6 @@ func (b *blockWiseSession) receivePayload(ctx *reqNetContext, peerDrive bool, ms
 }
 
 func handleBlockWiseMsg(w ResponseWriter, r *Request, next func(w ResponseWriter, r *Request)) {
-	reqCtx, cancel := newReqNetContext(context.Background(), r.Ctx)
-	defer cancel()
-
 	if blockWiseDebug {
 		fmt.Printf("handleBlockWiseMsg r.msg=%v\n", r.Msg)
 	}
@@ -680,7 +675,7 @@ func handleBlockWiseMsg(w ResponseWriter, r *Request, next func(w ResponseWriter
 		switch r.Msg.Code() {
 		case PUT, POST:
 			if b, ok := r.Client.networkSession.(*blockWiseSession); ok {
-				msg, err := b.receivePayload(reqCtx, true, r.Msg, nil, Block1, Continue)
+				msg, err := b.receivePayload(r.Ctx, true, r.Msg, nil, Block1, Continue)
 
 				if err != nil {
 					return
@@ -781,11 +776,8 @@ func (w *blockWiseResponseWriter) WriteContextMsg(ctx context.Context, msg Messa
 		return w.responseWriter.WriteContextMsg(ctx, msg)
 	}
 
-	reqCtx, cancel := newReqNetContext(ctx, w.getReq().Ctx)
-	defer cancel()
-
 	if b, ok := w.responseWriter.req.Client.networkSession.(*blockWiseSession); ok {
-		_, err := b.sendPayload(reqCtx, true, Block2, suggestedSzx, w.responseWriter.req.Msg.Code(), msg)
+		_, err := b.sendPayload(ctx, true, Block2, suggestedSzx, w.responseWriter.req.Msg.Code(), msg)
 		return err
 	}
 
