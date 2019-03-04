@@ -282,11 +282,9 @@ func TestServingTCP(t *testing.T) {
 	testServingTCPWithMsg(t, "tcp", false, BlockWiseSzx16, make([]byte, 128), simpleMsg)
 }
 
-/*
 func TestServingTCPBigMsg(t *testing.T) {
 	testServingTCPWithMsg(t, "tcp", false, BlockWiseSzx16, make([]byte, 10*1024*1024), simpleMsg)
 }
-*/
 
 func TestServingTLS(t *testing.T) {
 	testServingTCPWithMsg(t, "tcp-tls", false, BlockWiseSzx16, make([]byte, 128), simpleMsg)

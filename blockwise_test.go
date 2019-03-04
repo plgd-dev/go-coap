@@ -168,11 +168,9 @@ func TestServingTCPBigMsgBlockWiseSzx1024(t *testing.T) {
 	testServingTCPWithMsg(t, "tcp", true, BlockWiseSzx1024, make([]byte, 1024), simpleMsg)
 }
 
-/*
 func TestServingTCPBigMsgBlockWiseSzxBERT(t *testing.T) {
 	testServingTCPWithMsg(t, "tcp", true, BlockWiseSzxBERT, make([]byte, 10*1024*1024), simpleMsg)
 }
-*/
 
 var helloWorld = []byte("Hello world")
 

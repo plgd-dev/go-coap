@@ -29,7 +29,7 @@ func (c *reqNetContext) Value(key interface{}) interface{} {
 
 func newReqNetContext(reqCtx context.Context, netCtx context.Context) (*reqNetContext, context.CancelFunc) {
 	if reqCtx == nil || netCtx == nil {
-		panic("bad context")
+		panic("contexts cannot be nil")
 	}
 	ctx, cancel := joincontext.Join(reqCtx, netCtx)
 	return &reqNetContext{ctx}, cancel
