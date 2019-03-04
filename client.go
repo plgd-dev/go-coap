@@ -9,6 +9,8 @@ import (
 	"net"
 	"strings"
 	"time"
+
+	kitNet "github.com/go-ocf/kit/net"
 )
 
 // A ClientConn represents a connection to a COAP server.
@@ -63,7 +65,7 @@ func listenUDP(network, address string) (*net.UDPAddr, *net.UDPConn, error) {
 	if udpConn, err = net.ListenUDP(network, a); err != nil {
 		return nil, nil, err
 	}
-	if err := setUDPSocketOptions(udpConn); err != nil {
+	if err := kitNet.SetUDPSocketOptions(udpConn); err != nil {
 		return nil, nil, err
 	}
 	return a, udpConn, nil
@@ -78,7 +80,7 @@ func (c *Client) DialContext(ctx context.Context, address string) (clientConn *C
 
 	var conn net.Conn
 	var network string
-	var sessionUPDData *SessionUDPData
+	var sessionUPDData *kitNet.ConnUDPContext
 
 	dialer := &net.Dialer{Timeout: c.DialTimeout}
 	BlockWiseTransfer := false
@@ -108,7 +110,7 @@ func (c *Client) DialContext(ctx context.Context, address string) (clientConn *C
 		if conn, err = dialer.Dial(network, address); err != nil {
 			return nil, err
 		}
-		sessionUPDData = &SessionUDPData{raddr: conn.(*net.UDPConn).RemoteAddr().(*net.UDPAddr)}
+		sessionUPDData = kitNet.NewConnUDPContext(conn.(*net.UDPConn).RemoteAddr().(*net.UDPAddr), nil)
 		BlockWiseTransfer = true
 	case "udp-mcast", "udp4-mcast", "udp6-mcast":
 		network = strings.TrimSuffix(c.Net, "-mcast")
@@ -116,7 +118,7 @@ func (c *Client) DialContext(ctx context.Context, address string) (clientConn *C
 		if err != nil {
 			return nil, err
 		}
-		sessionUPDData = &SessionUDPData{raddr: a}
+		sessionUPDData = kitNet.NewConnUDPContext(a, nil)
 		conn = udpConn
 		BlockWiseTransfer = true
 		multicast = true
@@ -144,25 +146,15 @@ func (c *Client) DialContext(ctx context.Context, address string) (clientConn *C
 			BlockWiseTransfer:        &BlockWiseTransfer,
 			BlockWiseTransferSzx:     &BlockWiseTransferSzx,
 			DisableTCPSignalMessages: c.DisableTCPSignalMessages,
-			NotifyStartedFunc: func() {
-				/*
-					timeout := c.syncTimeout()
-					select {
-					case sync <- true:
-					case <-time.After(timeout):
-						log.Fatal("Client cannot send start: Timeout")
-					}
-				*/
-			},
 			NotifySessionEndFunc: func(s *ClientCommander, err error) {
 				if c.NotifySessionEndFunc != nil {
 					c.NotifySessionEndFunc(err)
 				}
 			},
-			newSessionTCPFunc: func(ctx context.Context, connection *ConnTCP, srv *Server) (networkSession, error) {
+			newSessionTCPFunc: func(ctx context.Context, connection *kitNet.ConnTCP, srv *Server) (networkSession, error) {
 				return clientConn.commander.networkSession, nil
 			},
-			newSessionUDPFunc: func(ctx context.Context, connection *ConnUDP, srv *Server, sessionUDPData *SessionUDPData) (networkSession, error) {
+			newSessionUDPFunc: func(ctx context.Context, connection *kitNet.ConnUDP, srv *Server, sessionUDPData *kitNet.ConnUDPContext) (networkSession, error) {
 				if sessionUDPData.RemoteAddr().String() == clientConn.commander.networkSession.RemoteAddr().String() {
 					if s, ok := clientConn.commander.networkSession.(*blockWiseSession); ok {
 						s.networkSession.(*sessionUDP).sessionUDPData = sessionUDPData
@@ -189,7 +181,7 @@ func (c *Client) DialContext(ctx context.Context, address string) (clientConn *C
 
 	switch clientConn.srv.Conn.(type) {
 	case *net.TCPConn, *tls.Conn:
-		session, err := newSessionTCP(ctx, NewConnTCP(clientConn.srv.Conn, clientConn.srv.heartBeat()), clientConn.srv)
+		session, err := newSessionTCP(ctx, kitNet.NewConnTCP(clientConn.srv.Conn, clientConn.srv.heartBeat()), clientConn.srv)
 		if err != nil {
 			return nil, err
 		}
@@ -200,8 +192,8 @@ func (c *Client) DialContext(ctx context.Context, address string) (clientConn *C
 		}
 	case *net.UDPConn:
 		// WriteContextMsgUDP returns error when addr is filled in SessionUDPData for connected socket
-		setUDPSocketOptions(clientConn.srv.Conn.(*net.UDPConn))
-		session, err := newSessionUDP(ctx, NewConnUDP(clientConn.srv.Conn.(*net.UDPConn), clientConn.srv.heartBeat()), clientConn.srv, sessionUPDData)
+		kitNet.SetUDPSocketOptions(clientConn.srv.Conn.(*net.UDPConn))
+		session, err := newSessionUDP(ctx, kitNet.NewConnUDP(clientConn.srv.Conn.(*net.UDPConn), clientConn.srv.heartBeat()), clientConn.srv, sessionUPDData)
 		if err != nil {
 			return nil, err
 		}
@@ -213,24 +205,11 @@ func (c *Client) DialContext(ctx context.Context, address string) (clientConn *C
 	}
 
 	go func() {
-		//timeout := c.syncTimeout()
 		err := clientConn.srv.ActivateAndServe()
 		select {
 		case clientConn.shutdownSync <- err:
-			/*
-				case <-time.After(timeout):
-					log.Fatal("Client cannot send shutdown: Timeout")
-			*/
 		}
-
 	}()
-	/*
-		select {
-		case <-sync:
-		case <-time.After(c.syncTimeout()):
-			log.Fatal("Client cannot recv start: Timeout")
-		}
-	*/
 	clientConn.client = c
 
 	return clientConn, nil

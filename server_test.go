@@ -13,6 +13,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	kitNet "github.com/go-ocf/kit/net"
 )
 
 func CreateRespMessageByReq(isTCP bool, code COAPCode, req Message) Message {
@@ -111,7 +113,7 @@ func RunLocalUDPServer(net, laddr string, BlockWiseTransfer bool, BlockWiseTrans
 
 func RunLocalServerTCPWithHandler(laddr string, BlockWiseTransfer bool, BlockWiseTransferSzx BlockWiseSzx, handler HandlerFunc) (*Server, string, chan error, error) {
 	network := "tcp"
-	l, err := NewTCPListen(network, laddr)
+	l, err := kitNet.NewTCPListen(network, laddr, time.Millisecond*100)
 	if err != nil {
 		return nil, "", nil, fmt.Errorf("cannot create new tls listener: %v", err)
 	}
@@ -149,7 +151,7 @@ func RunLocalTCPServer(laddr string, BlockWiseTransfer bool, BlockWiseTransferSz
 }
 
 func RunLocalTLSServer(laddr string, config *tls.Config) (*Server, string, chan error, error) {
-	l, err := NewTLSListen("tcp", laddr, config)
+	l, err := kitNet.NewTLSListen("tcp", laddr, config, time.Millisecond*100)
 	if err != nil {
 		return nil, "", nil, err
 	}

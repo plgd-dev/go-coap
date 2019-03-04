@@ -9,6 +9,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	kitNet "github.com/go-ocf/kit/net"
 )
 
 // A networkSession interface is used by an COAP handler to
@@ -61,7 +63,7 @@ type networkSession interface {
 }
 
 // NewSessionUDP create new session for UDP connection
-func newSessionUDP(ctx context.Context, connection *ConnUDP, srv *Server, sessionUDPData *SessionUDPData) (networkSession, error) {
+func newSessionUDP(ctx context.Context, connection *kitNet.ConnUDP, srv *Server, sessionUDPData *kitNet.ConnUDPContext) (networkSession, error) {
 	ctx, cancel := context.WithCancel(ctx)
 
 	BlockWiseTransfer := true
@@ -94,7 +96,7 @@ func newSessionUDP(ctx context.Context, connection *ConnUDP, srv *Server, sessio
 }
 
 // newSessionTCP create new session for TCP connection
-func newSessionTCP(ctx context.Context, connection *ConnTCP, srv *Server) (networkSession, error) {
+func newSessionTCP(ctx context.Context, connection *kitNet.ConnTCP, srv *Server) (networkSession, error) {
 	ctx, cancel := context.WithCancel(ctx)
 	BlockWiseTransfer := false
 	BlockWiseTransferSzx := BlockWiseSzxBERT
@@ -143,15 +145,15 @@ type sessionBase struct {
 
 type sessionUDP struct {
 	sessionBase
-	connection     *ConnUDP
-	sessionUDPData *SessionUDPData                                // oob data to get egress interface right
+	connection     *kitNet.ConnUDP
+	sessionUDPData *kitNet.ConnUDPContext                         // oob data to get egress interface right
 	mapPairs       map[[MaxTokenSize]byte]map[uint16]*sessionResp //storage of channel Message
 	mapPairsLock   sync.Mutex                                     //to sync add remove token
 }
 
 type sessionTCP struct {
 	sessionBase
-	connection   *ConnTCP
+	connection   *kitNet.ConnTCP
 	mapPairs     map[[MaxTokenSize]byte]*sessionResp //storage of channel Message
 	mapPairsLock sync.Mutex                          //to sync add remove token
 

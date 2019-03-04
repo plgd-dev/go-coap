@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	kitNet "github.com/go-ocf/kit/net"
 	"golang.org/x/net/ipv4"
 	"golang.org/x/net/ipv6"
 )
@@ -131,7 +132,7 @@ func testServingMCastByClient(t *testing.T, lnet, laddr string, BlockWiseTransfe
 		t.Fatalf("cannot dial addr: %v", err)
 	}
 
-	if err := joinGroup(co.srv.Conn.(*net.UDPConn), nil, a); err != nil {
+	if err := kitNet.JoinGroup(co.srv.Conn.(*net.UDPConn), nil, a); err != nil {
 		t.Fatalf("cannot join self to multicast group: %v", err)
 	}
 	if ip4 := co.srv.Conn.(*net.UDPConn).LocalAddr().(*net.UDPAddr).IP.To4(); ip4 != nil {

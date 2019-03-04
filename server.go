@@ -2,7 +2,6 @@
 package coap
 
 import (
-	"bufio"
 	"context"
 	"crypto/tls"
 	"fmt"
@@ -13,6 +12,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	kitNet "github.com/go-ocf/kit/net"
 )
 
 // Interval for stop worker if no load
@@ -36,8 +37,8 @@ const (
 
 // Listener defined used by coap
 type Listener interface {
-	net.Listener
-	SetDeadline(t time.Time) error
+	Close() error
+	AcceptContext(ctx context.Context) (net.Conn, error)
 }
 
 //DefaultPort default unsecure port for COAP server
@@ -141,9 +142,9 @@ type Server struct {
 	// Defines wake up interval from operations Read, Write over connection. defaults is 100ms.
 	HeartBeat time.Duration
 	// If newSessionUDPFunc is set it is called when session UDP want to be created
-	newSessionUDPFunc func(ctx context.Context, connection *ConnUDP, srv *Server, sessionUDPData *SessionUDPData) (networkSession, error)
+	newSessionUDPFunc func(ctx context.Context, connection *kitNet.ConnUDP, srv *Server, sessionUDPData *kitNet.ConnUDPContext) (networkSession, error)
 	// If newSessionUDPFunc is set it is called when session TCP want to be created
-	newSessionTCPFunc func(ctx context.Context, connection *ConnTCP, srv *Server) (networkSession, error)
+	newSessionTCPFunc func(ctx context.Context, connection *kitNet.ConnTCP, srv *Server) (networkSession, error)
 	// If NotifyNewSession is set it is called when new TCP/UDP session was created.
 	NotifySessionNewFunc func(w *ClientCommander)
 	// If NotifyNewSession is set it is called when TCP/UDP session was ended.
@@ -157,11 +158,6 @@ type Server struct {
 	// Disable tcp signal messages
 	DisableTCPSignalMessages bool
 
-	TCPReadBufferSize  int
-	TCPWriteBufferSize int
-
-	readerPool sync.Pool
-	writerPool sync.Pool
 	// UDP packet or TCP connection queue
 	queue chan *Request
 	// Workers count
@@ -225,55 +221,10 @@ func (srv *Server) spawnWorker(w *Request) {
 	}
 }
 
-type TLSListener struct {
-	tcp *net.TCPListener
-	tls net.Listener
-}
-
-func NewTCPListen(network string, addr string) (*net.TCPListener, error) {
-	a, err := net.ResolveTCPAddr(network, addr)
-	if err != nil {
-		return nil, fmt.Errorf("cannot create new tcp listener: %v", err)
-	}
-
-	tcp, err := net.ListenTCP(network, a)
-	if err != nil {
-		return nil, fmt.Errorf("cannot create new tcp listener: %v", err)
-	}
-	return tcp, nil
-}
-
-func NewTLSListen(network string, addr string, cfg *tls.Config) (*TLSListener, error) {
-	tcp, err := NewTCPListen(network, addr)
-	if err != nil {
-		return nil, fmt.Errorf("cannot create new tls listener: %v", err)
-	}
-	tls := tls.NewListener(tcp, cfg)
-	return &TLSListener{
-		tcp: tcp,
-		tls: tls,
-	}, nil
-}
-
-func (l *TLSListener) SetDeadline(t time.Time) error {
-	return l.tcp.SetDeadline(t)
-}
-
-func (l *TLSListener) Accept() (net.Conn, error) {
-	return l.tls.Accept()
-}
-
-func (l *TLSListener) Close() error {
-	return l.tls.Close()
-}
-
-func (l *TLSListener) Addr() net.Addr {
-	return l.tls.Addr()
-}
-
 // ListenAndServe starts a coapserver on the configured address in *Server.
 func (srv *Server) ListenAndServe() error {
 	addr := srv.Addr
+	var err error
 	if addr == "" {
 		switch {
 		case strings.Contains(srv.Net, "-tls"):
@@ -285,22 +236,16 @@ func (srv *Server) ListenAndServe() error {
 
 	switch srv.Net {
 	case "tcp", "tcp4", "tcp6":
-		a, err := net.ResolveTCPAddr(srv.Net, addr)
+		srv.Listener, err = kitNet.NewTCPListen(srv.Net, addr, srv.heartBeat())
 		if err != nil {
-			return err
+			return fmt.Errorf("cannot listen and serve: %v", err)
 		}
-		l, err := net.ListenTCP(srv.Net, a)
-		if err != nil {
-			return err
-		}
-		srv.Listener = l
 	case "tcp-tls", "tcp4-tls", "tcp6-tls":
 		network := strings.TrimSuffix(srv.Net, "-tls")
-		l, err := NewTLSListen(network, addr, srv.TLSConfig)
+		srv.Listener, err = kitNet.NewTLSListen(network, addr, srv.TLSConfig, srv.heartBeat())
 		if err != nil {
-			return err
+			return fmt.Errorf("cannot listen and serve: %v", err)
 		}
-		srv.Listener = l
 	case "udp", "udp4", "udp6":
 		a, err := net.ResolveUDPAddr(srv.Net, addr)
 		if err != nil {
@@ -310,7 +255,7 @@ func (srv *Server) ListenAndServe() error {
 		if err != nil {
 			return err
 		}
-		if err := setUDPSocketOptions(l); err != nil {
+		if err := kitNet.SetUDPSocketOptions(l); err != nil {
 			return err
 		}
 		srv.Conn = l
@@ -325,17 +270,17 @@ func (srv *Server) ListenAndServe() error {
 		if err != nil {
 			return err
 		}
-		if err := setUDPSocketOptions(l); err != nil {
+		if err := kitNet.SetUDPSocketOptions(l); err != nil {
 			return err
 		}
 		if len(srv.UDPMcastInterfaces) > 0 {
 			for _, ifi := range srv.UDPMcastInterfaces {
-				if err := joinGroup(l, &ifi, &net.UDPAddr{IP: a.IP, Zone: a.Zone}); err != nil {
+				if err := kitNet.JoinGroup(l, &ifi, &net.UDPAddr{IP: a.IP, Zone: a.Zone}); err != nil {
 					return err
 				}
 			}
 		} else {
-			if err := joinGroup(l, nil, &net.UDPAddr{IP: a.IP, Zone: a.Zone}); err != nil {
+			if err := kitNet.JoinGroup(l, nil, &net.UDPAddr{IP: a.IP, Zone: a.Zone}); err != nil {
 				return err
 			}
 		}
@@ -389,7 +334,7 @@ func (srv *Server) ActivateAndServeContext(ctx context.Context) error {
 	defer close(srv.queue)
 
 	if srv.newSessionTCPFunc == nil {
-		srv.newSessionTCPFunc = func(ctx context.Context, connection *ConnTCP, srv *Server) (networkSession, error) {
+		srv.newSessionTCPFunc = func(ctx context.Context, connection *kitNet.ConnTCP, srv *Server) (networkSession, error) {
 			session, err := newSessionTCP(ctx, connection, srv)
 			if err != nil {
 				return nil, err
@@ -402,7 +347,7 @@ func (srv *Server) ActivateAndServeContext(ctx context.Context) error {
 	}
 
 	if srv.newSessionUDPFunc == nil {
-		srv.newSessionUDPFunc = func(ctx context.Context, connection *ConnUDP, srv *Server, sessionUDPData *SessionUDPData) (networkSession, error) {
+		srv.newSessionUDPFunc = func(ctx context.Context, connection *kitNet.ConnUDP, srv *Server, sessionUDPData *kitNet.ConnUDPContext) (networkSession, error) {
 			session, err := newSessionUDP(ctx, connection, srv, sessionUDPData)
 			if err != nil {
 				return nil, err
@@ -470,64 +415,29 @@ func (srv *Server) heartBeat() time.Duration {
 }
 
 func (srv *Server) serveTCPconnection(conn net.Conn) error {
-	session, err := srv.newSessionTCPFunc(srv.ctx, NewConnTCP(conn, srv.heartBeat()), srv)
+	connTCP := kitNet.NewConnTCP(conn, srv.heartBeat())
+	session, err := srv.newSessionTCPFunc(srv.ctx, connTCP, srv)
 	if err != nil {
 		return err
 	}
 	srv.NotifySessionNewFunc(&ClientCommander{session})
-	br := srv.acquireReader(conn)
-	defer srv.releaseReader(br)
 	for {
-		select {
-		case <-srv.ctx.Done():
-			return session.Close()
-		default:
-		}
-		err = conn.SetReadDeadline(time.Now().Add(waitTimer))
+		mti, err := readTcpMsgInfo(srv.ctx, connTCP)
 		if err != nil {
 			return session.closeWithError(fmt.Errorf("cannot serve tcp connection: %v", err))
 		}
-		mti, err := readTcpMsgInfo(br)
-		if err != nil {
-			if passError(err) {
-				continue
-			}
-			return session.closeWithError(err)
-		}
 
-		body := make([]byte, 0, mti.BodyLen())
-		readTimeLimit := time.Now().Add(srv.readTimeout())
-		for len(body) < cap(body) {
-			select {
-			case <-srv.ctx.Done():
-				return session.Close()
-			default:
-			}
-			if readTimeLimit.Sub(time.Now()) < 0 {
-				return session.closeWithError(fmt.Errorf("read timeout"))
-			}
-			err = conn.SetReadDeadline(time.Now().Add(waitTimer))
-			if err != nil {
-				return session.closeWithError(fmt.Errorf("cannot serve tcp connection: %v", err))
-			}
-			b := make([]byte, 2048)
-			toRead := cap(body) - len(body)
-			if toRead > len(b) {
-				toRead = len(b)
-			}
-			n, err := br.Read(b[:toRead])
-			if err != nil {
-				if passError(err) {
-					continue
-				}
-				return session.closeWithError(err)
-			}
-			body = append(body, b[:n]...)
+		body := make([]byte, mti.BodyLen())
+		//ctx, cancel := context.WithTimeout(srv.ctx, srv.readTimeout())
+		err = connTCP.ReadFullContext(srv.ctx, body)
+		if err != nil {
+			return session.closeWithError(fmt.Errorf("cannot serve tcp connection: %v", err))
 		}
+		//cancel()
 
 		o, p, err := parseTcpOptionsPayload(mti, body)
 		if err != nil {
-			return err
+			return session.closeWithError(fmt.Errorf("cannot serve tcp connection: %v", err))
 		}
 
 		msg := new(TcpMessage)
@@ -550,22 +460,10 @@ func (srv *Server) serveTCP(l Listener) error {
 	var wg sync.WaitGroup
 
 	for {
-		select {
-		case <-srv.ctx.Done():
+		rw, err := l.AcceptContext(srv.ctx)
+		if err != nil {
 			wg.Wait()
-			return nil
-		default:
-		}
-		err := l.SetDeadline(time.Now().Add(waitTimer))
-		if err != nil {
-			return fmt.Errorf("cannot accept connections: %v", err)
-		}
-		rw, err := l.Accept()
-		if err != nil {
-			if passError(err) {
-				continue
-			}
-			return err
+			return fmt.Errorf("cannot serve tcp: %v", err)
 		}
 		wg.Add(1)
 		go func() {
@@ -573,16 +471,6 @@ func (srv *Server) serveTCP(l Listener) error {
 			srv.serveTCPconnection(rw)
 		}()
 	}
-}
-
-func passError(err error) bool {
-	if netErr, ok := err.(net.Error); ok && (netErr.Temporary() || netErr.Timeout()) {
-		return true
-	}
-	if strings.Contains(err.Error(), "i/o timeout") {
-		return true
-	}
-	return false
 }
 
 func (srv *Server) closeSessions(err error) {
@@ -603,7 +491,7 @@ func (srv *Server) serveUDP(conn *net.UDPConn) error {
 		srv.NotifyStartedFunc()
 	}
 
-	connUDP := NewConnUDP(conn, srv.heartBeat())
+	connUDP := kitNet.NewConnUDP(conn, srv.heartBeat())
 
 	for {
 		m := make([]byte, ^uint16(0))
@@ -654,40 +542,4 @@ func (srv *Server) serveCOAP(w ResponseWriter, r *Request) {
 		handler = DefaultServeMux
 	}
 	handler.ServeCOAP(w, r) // Writes back to the client
-}
-
-func (srv *Server) acquireReader(tcp net.Conn) *bufio.Reader {
-	v := srv.readerPool.Get()
-	if v == nil {
-		n := srv.TCPReadBufferSize
-		if n <= 0 {
-			n = defaultReadBufferSize
-		}
-		return bufio.NewReaderSize(tcp, n)
-	}
-	r := v.(*bufio.Reader)
-	r.Reset(tcp)
-	return r
-}
-
-func (srv *Server) releaseReader(r *bufio.Reader) {
-	srv.readerPool.Put(r)
-}
-
-func (srv *Server) acquireWriter(tcp net.Conn) *bufio.Writer {
-	v := srv.writerPool.Get()
-	if v == nil {
-		n := srv.TCPWriteBufferSize
-		if n <= 0 {
-			n = defaultWriteBufferSize
-		}
-		return bufio.NewWriterSize(tcp, n)
-	}
-	wr := v.(*bufio.Writer)
-	wr.Reset(tcp)
-	return wr
-}
-
-func (srv *Server) releaseWriter(wr *bufio.Writer) {
-	srv.writerPool.Put(wr)
 }
