@@ -817,6 +817,7 @@ func TestEncodeMessageWithAllOptions(t *testing.T) {
 	req.AddOption(Block1, uint32(66560))
 	req.AddOption(Size2, uint32(9999))
 	req.AddOption(Block2, uint32(66560))
+	req.AddOption(NoResponse, uint32(26))
 
 	buf := &bytes.Buffer{}
 	err := req.MarshalBinary(buf)
@@ -828,6 +829,7 @@ func TestEncodeMessageWithAllOptions(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Error parsing binary packet: %v", err)
 	}
+
 	assertEqualMessages(t, req, parsedMsg)
 }
 
@@ -1076,5 +1078,22 @@ func TestBlockWiseTransfer(t *testing.T) {
 
 	if peer1_1Msg.Option(Block2).(uint32) != 22 {
 		t.Fatalf("peer1_1Msg.Option(Block2): %v", peer1_1Msg.Option(Block2).(uint32))
+	}
+}
+
+func TestDecodeMessageWithNoResponseOption(t *testing.T) {
+	data := []byte{
+		0x45, 0x1, 0x30, 0x39, 0x54, 0x4f, 0x4b, 0x45,
+		0x4e, 0xd1, 0xf5, 0x1a, 0xff, 0x50, 0x41, 0x59,
+		0x4c, 0x4f, 0x41, 0x44,
+	}
+
+	parsedMsg, err := ParseDgramMessage(data)
+	if err != nil {
+		t.Fatalf("Error parsing binary packet: %v", err)
+	}
+
+	if parsedMsg.Option(NoResponse).(uint32) != 26 {
+		t.Fatalf("parsedMsg.Option(NoResponse): %v", parsedMsg.Option(NoResponse).(uint32))
 	}
 }
