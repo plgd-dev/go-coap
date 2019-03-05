@@ -419,10 +419,10 @@ func (srv *Server) heartBeat() time.Duration {
 	return time.Millisecond * 100
 }
 
-func (srv *Server) serveTCPconnection(ctx *shutdownContext, conn net.Conn) error {
-	Conn := kitNet.NewConn(conn, srv.heartBeat())
+func (srv *Server) serveTCPconnection(ctx *shutdownContext, netConn net.Conn) error {
+	conn := kitNet.NewConn(netConn, srv.heartBeat())
 
-	session, err := srv.newSessionTCPFunc(Conn, srv)
+	session, err := srv.newSessionTCPFunc(conn, srv)
 	if err != nil {
 		return err
 	}
@@ -432,14 +432,14 @@ func (srv *Server) serveTCPconnection(ctx *shutdownContext, conn net.Conn) error
 	defer cancel()
 
 	for {
-		mti, err := readTcpMsgInfo(ctx, Conn)
+		mti, err := readTcpMsgInfo(ctx, conn)
 		if err != nil {
 			return session.closeWithError(fmt.Errorf("cannot serve tcp connection: %v", err))
 		}
 
 		body := make([]byte, mti.BodyLen())
 		//ctx, cancel := context.WithTimeout(srv.ctx, srv.readTimeout())
-		err = Conn.ReadFullContext(ctx, body)
+		err = conn.ReadFullContext(ctx, body)
 		if err != nil {
 			return session.closeWithError(fmt.Errorf("cannot serve tcp connection: %v", err))
 		}
