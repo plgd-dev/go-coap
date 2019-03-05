@@ -238,13 +238,13 @@ type contextReader interface {
 	ReadFullContext(context.Context, []byte) error
 }
 
-func readTcpMsgInfo(ctx context.Context, connTCP contextReader) (msgTcpInfo, error) {
+func readTcpMsgInfo(ctx context.Context, Conn contextReader) (msgTcpInfo, error) {
 	mti := msgTcpInfo{}
 
 	hdrOff := 0
 
 	firstByte := make([]byte, 1)
-	err := connTCP.ReadFullContext(ctx, firstByte)
+	err := Conn.ReadFullContext(ctx, firstByte)
 	if err != nil {
 		return mti, fmt.Errorf("cannot read coap header: %v", err)
 	}
@@ -259,7 +259,7 @@ func readTcpMsgInfo(ctx context.Context, connTCP contextReader) (msgTcpInfo, err
 		opLen = int(lenNib)
 	case lenNib == 13:
 		extLen := make([]byte, 1)
-		err := connTCP.ReadFullContext(ctx, extLen)
+		err := Conn.ReadFullContext(ctx, extLen)
 		if err != nil {
 			return mti, fmt.Errorf("cannot read coap header: %v", err)
 		}
@@ -267,7 +267,7 @@ func readTcpMsgInfo(ctx context.Context, connTCP contextReader) (msgTcpInfo, err
 		opLen = TCP_MESSAGE_LEN13_BASE + int(extLen[0])
 	case lenNib == 14:
 		extLen := make([]byte, 2)
-		err := connTCP.ReadFullContext(ctx, extLen)
+		err := Conn.ReadFullContext(ctx, extLen)
 		if err != nil {
 			return mti, fmt.Errorf("cannot read coap header: %v", err)
 		}
@@ -275,7 +275,7 @@ func readTcpMsgInfo(ctx context.Context, connTCP contextReader) (msgTcpInfo, err
 		opLen = TCP_MESSAGE_LEN14_BASE + int(binary.BigEndian.Uint16(extLen))
 	case lenNib == 15:
 		extLen := make([]byte, 4)
-		err := connTCP.ReadFullContext(ctx, extLen)
+		err := Conn.ReadFullContext(ctx, extLen)
 		if err != nil {
 			return mti, fmt.Errorf("cannot read coap header: %v", err)
 		}
@@ -285,7 +285,7 @@ func readTcpMsgInfo(ctx context.Context, connTCP contextReader) (msgTcpInfo, err
 
 	mti.totLen = hdrOff + 1 + int(tkl) + opLen
 	code := make([]byte, 1)
-	err = connTCP.ReadFullContext(ctx, code)
+	err = Conn.ReadFullContext(ctx, code)
 	if err != nil {
 		return mti, fmt.Errorf("cannot read coap header: %v", err)
 	}
@@ -293,7 +293,7 @@ func readTcpMsgInfo(ctx context.Context, connTCP contextReader) (msgTcpInfo, err
 	hdrOff++
 
 	mti.token = make([]byte, tkl)
-	if err := connTCP.ReadFullContext(ctx, mti.token); err != nil {
+	if err := Conn.ReadFullContext(ctx, mti.token); err != nil {
 		return mti, err
 	}
 	hdrOff += int(tkl)

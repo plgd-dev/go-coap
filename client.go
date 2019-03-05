@@ -151,7 +151,7 @@ func (c *Client) DialContext(ctx context.Context, address string) (clientConn *C
 					c.NotifySessionEndFunc(err)
 				}
 			},
-			newSessionTCPFunc: func(connection *kitNet.ConnTCP, srv *Server) (networkSession, error) {
+			newSessionTCPFunc: func(connection *kitNet.Conn, srv *Server) (networkSession, error) {
 				return clientConn.commander.networkSession, nil
 			},
 			newSessionUDPFunc: func(connection *kitNet.ConnUDP, srv *Server, sessionUDPData *kitNet.ConnUDPContext) (networkSession, error) {
@@ -181,7 +181,7 @@ func (c *Client) DialContext(ctx context.Context, address string) (clientConn *C
 
 	switch clientConn.srv.Conn.(type) {
 	case *net.TCPConn, *tls.Conn:
-		session, err := newSessionTCP(kitNet.NewConnTCP(clientConn.srv.Conn, clientConn.srv.heartBeat()), clientConn.srv)
+		session, err := newSessionTCP(kitNet.NewConn(clientConn.srv.Conn, clientConn.srv.heartBeat()), clientConn.srv)
 		if err != nil {
 			return nil, err
 		}

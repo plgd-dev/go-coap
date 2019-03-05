@@ -1,6 +1,8 @@
 package coap
 
-import "context"
+import (
+	"context"
+)
 
 // A ResponseWriter interface is used by an CAOP handler to construct an COAP response.
 // For Obsevation (GET+option observe) it can be stored and used in another go-routine

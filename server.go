@@ -144,7 +144,7 @@ type Server struct {
 	// If newSessionUDPFunc is set it is called when session UDP want to be created
 	newSessionUDPFunc func(connection *kitNet.ConnUDP, srv *Server, sessionUDPData *kitNet.ConnUDPContext) (networkSession, error)
 	// If newSessionUDPFunc is set it is called when session TCP want to be created
-	newSessionTCPFunc func(connection *kitNet.ConnTCP, srv *Server) (networkSession, error)
+	newSessionTCPFunc func(connection *kitNet.Conn, srv *Server) (networkSession, error)
 	// If NotifyNewSession is set it is called when new TCP/UDP session was created.
 	NotifySessionNewFunc func(w *ClientCommander)
 	// If NotifyNewSession is set it is called when TCP/UDP session was ended.
@@ -313,6 +313,7 @@ func (srv *Server) initServeTCP(conn net.Conn) error {
 // configured in *Server. Its main use is to start a server from systemd.
 func (srv *Server) ActivateAndServe() error {
 	srv.doneLock.Lock()
+	srv.done = false
 	srv.doneChan = make(chan struct{})
 	srv.doneLock.Unlock()
 
@@ -332,7 +333,7 @@ func (srv *Server) ActivateAndServe() error {
 	defer close(srv.queue)
 
 	if srv.newSessionTCPFunc == nil {
-		srv.newSessionTCPFunc = func(connection *kitNet.ConnTCP, srv *Server) (networkSession, error) {
+		srv.newSessionTCPFunc = func(connection *kitNet.Conn, srv *Server) (networkSession, error) {
 			session, err := newSessionTCP(connection, srv)
 			if err != nil {
 				return nil, err
@@ -389,6 +390,7 @@ func (srv *Server) Shutdown() error {
 	if srv.done {
 		return fmt.Errorf("already shutdowned")
 	}
+	srv.done = true
 	close(srv.doneChan)
 	return nil
 }
@@ -418,9 +420,9 @@ func (srv *Server) heartBeat() time.Duration {
 }
 
 func (srv *Server) serveTCPconnection(ctx *shutdownContext, conn net.Conn) error {
-	connTCP := kitNet.NewConnTCP(conn, srv.heartBeat())
+	Conn := kitNet.NewConn(conn, srv.heartBeat())
 
-	session, err := srv.newSessionTCPFunc(connTCP, srv)
+	session, err := srv.newSessionTCPFunc(Conn, srv)
 	if err != nil {
 		return err
 	}
@@ -430,14 +432,14 @@ func (srv *Server) serveTCPconnection(ctx *shutdownContext, conn net.Conn) error
 	defer cancel()
 
 	for {
-		mti, err := readTcpMsgInfo(ctx, connTCP)
+		mti, err := readTcpMsgInfo(ctx, Conn)
 		if err != nil {
 			return session.closeWithError(fmt.Errorf("cannot serve tcp connection: %v", err))
 		}
 
 		body := make([]byte, mti.BodyLen())
 		//ctx, cancel := context.WithTimeout(srv.ctx, srv.readTimeout())
-		err = connTCP.ReadFullContext(ctx, body)
+		err = Conn.ReadFullContext(ctx, body)
 		if err != nil {
 			return session.closeWithError(fmt.Errorf("cannot serve tcp connection: %v", err))
 		}

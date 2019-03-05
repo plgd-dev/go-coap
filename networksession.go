@@ -88,7 +88,7 @@ func newSessionUDP(connection *kitNet.ConnUDP, srv *Server, sessionUDPData *kitN
 }
 
 // newSessionTCP create new session for TCP connection
-func newSessionTCP(connection *kitNet.ConnTCP, srv *Server) (networkSession, error) {
+func newSessionTCP(connection *kitNet.Conn, srv *Server) (networkSession, error) {
 	BlockWiseTransfer := false
 	BlockWiseTransferSzx := BlockWiseSzxBERT
 	if srv.BlockWiseTransfer != nil {
@@ -140,7 +140,7 @@ type sessionUDP struct {
 
 type sessionTCP struct {
 	sessionBase
-	connection   *kitNet.ConnTCP
+	connection   *kitNet.Conn
 	mapPairs     map[[MaxTokenSize]byte]*sessionResp //storage of channel Message
 	mapPairsLock sync.Mutex                          //to sync add remove token
 
