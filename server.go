@@ -169,7 +169,8 @@ type Server struct {
 	sessionUDPMapLock sync.Mutex
 	sessionUDPMap     map[string]networkSession
 
-	done     int32
+	doneLock sync.Mutex
+	done     bool
 	doneChan chan struct{}
 }
 
@@ -311,7 +312,9 @@ func (srv *Server) initServeTCP(conn net.Conn) error {
 // ActivateAndServe starts a coapserver with the PacketConn or Listener
 // configured in *Server. Its main use is to start a server from systemd.
 func (srv *Server) ActivateAndServe() error {
+	srv.doneLock.Lock()
 	srv.doneChan = make(chan struct{})
+	srv.doneLock.Unlock()
 
 	pConn := srv.Conn
 	l := srv.Listener
@@ -381,8 +384,10 @@ func (srv *Server) ActivateAndServe() error {
 // Shutdown shuts down a server. After a call to Shutdown, ListenAndServe and
 // ActivateAndServe will return.
 func (srv *Server) Shutdown() error {
-	if !atomic.CompareAndSwapInt32(&srv.done, 0, 1) {
-		return fmt.Errorf("already shutdown")
+	srv.doneLock.Lock()
+	defer srv.doneLock.Unlock()
+	if srv.done {
+		return fmt.Errorf("already shutdowned")
 	}
 	close(srv.doneChan)
 	return nil
