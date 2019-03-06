@@ -103,3 +103,6 @@ const ErrInvalidPayload = Error("invalid payload")
 
 //ErrUnexpectedReponseCode unexpected response code occurs
 const ErrUnexpectedReponseCode = Error("unexpected response code")
+
+// ErrMessageNotInterested message is not of interest to the client
+const ErrMessageNotInterested = Error("message not to be sent due to disinterest")
