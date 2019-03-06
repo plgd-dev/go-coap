@@ -21,7 +21,7 @@ type networkSession interface {
 	// RemoteAddr returns the net.Addr of the client that sent the current request.
 	RemoteAddr() net.Addr
 	// WriteContextMsg writes a reply back to the client.
-	WriteContextMsg(ctx context.Context, resp Message) error
+	WriteMsgWithContext(ctx context.Context, resp Message) error
 	// Close closes the connection.
 	Close() error
 	// Return type of network
@@ -30,9 +30,9 @@ type networkSession interface {
 	NewMessage(params MessageParams) Message
 	// ExchangeContext writes message and wait for response - paired by token and msgid
 	// it is safe to use in goroutines
-	ExchangeContext(ctx context.Context, req Message) (Message, error)
+	ExchangeWithContext(ctx context.Context, req Message) (Message, error)
 	// Send ping to peer and wait for pong
-	PingContext(ctx context.Context) error
+	PingWithContext(ctx context.Context) error
 
 	// handlePairMsg Message was handled by pair
 	handlePairMsg(w ResponseWriter, r *Request) bool
@@ -227,7 +227,7 @@ func (s *sessionUDP) closeWithError(err error) error {
 }
 
 // Ping send ping over udp(unicast) and wait for response.
-func (s *sessionUDP) PingContext(ctx context.Context) error {
+func (s *sessionUDP) PingWithContext(ctx context.Context) error {
 	//provoking to get a reset message - "CoAP ping" in RFC-7252
 	//https://tools.ietf.org/html/rfc7252#section-4.2
 	//https://tools.ietf.org/html/rfc7252#section-4.3
@@ -238,7 +238,7 @@ func (s *sessionUDP) PingContext(ctx context.Context) error {
 		Code:      Empty,
 		MessageID: GenerateMessageID(),
 	})
-	resp, err := s.ExchangeContext(ctx, req)
+	resp, err := s.ExchangeWithContext(ctx, req)
 	if err != nil {
 		return err
 	}
@@ -248,7 +248,7 @@ func (s *sessionUDP) PingContext(ctx context.Context) error {
 	return ErrInvalidResponse
 }
 
-func (s *sessionTCP) PingContext(ctx context.Context) error {
+func (s *sessionTCP) PingWithContext(ctx context.Context) error {
 	if s.srv.DisableTCPSignalMessages {
 		return fmt.Errorf("cannot send ping: TCP Signal messages are disabled")
 	}
@@ -261,7 +261,7 @@ func (s *sessionTCP) PingContext(ctx context.Context) error {
 		Code:  Ping,
 		Token: []byte(token),
 	})
-	resp, err := s.ExchangeContext(ctx, req)
+	resp, err := s.ExchangeWithContext(ctx, req)
 	if err != nil {
 		return err
 	}
@@ -329,7 +329,7 @@ func (s *sessionBase) exchangeFunc(req Message, writeTimeout, readTimeout time.D
 	}
 }
 
-func (s *sessionTCP) ExchangeContext(ctx context.Context, req Message) (Message, error) {
+func (s *sessionTCP) ExchangeWithContext(ctx context.Context, req Message) (Message, error) {
 	if err := validateMsg(req); err != nil {
 		return nil, fmt.Errorf("cannot exchange: %v", err)
 	}
@@ -356,7 +356,7 @@ func (s *sessionTCP) ExchangeContext(ctx context.Context, req Message) (Message,
 		}
 	}()
 
-	err := s.WriteContextMsg(ctx, req)
+	err := s.WriteMsgWithContext(ctx, req)
 	if err != nil {
 		return nil, fmt.Errorf("cannot exchange: %v", err)
 	}
@@ -371,7 +371,7 @@ func (s *sessionTCP) ExchangeContext(ctx context.Context, req Message) (Message,
 	}
 }
 
-func (s *sessionUDP) ExchangeContext(ctx context.Context, req Message) (Message, error) {
+func (s *sessionUDP) ExchangeWithContext(ctx context.Context, req Message) (Message, error) {
 	if err := validateMsg(req); err != nil {
 		return nil, fmt.Errorf("cannot exchange: %v", err)
 	}
@@ -399,7 +399,7 @@ func (s *sessionUDP) ExchangeContext(ctx context.Context, req Message) (Message,
 		s.mapPairsLock.Unlock()
 	}()
 
-	err := s.WriteContextMsg(ctx, req)
+	err := s.WriteMsgWithContext(ctx, req)
 	if err != nil {
 		return nil, fmt.Errorf("cannot exchange: %v", err)
 	}
@@ -415,22 +415,22 @@ func (s *sessionUDP) ExchangeContext(ctx context.Context, req Message) (Message,
 }
 
 // Write implements the networkSession.Write method.
-func (s *sessionTCP) WriteContextMsg(ctx context.Context, req Message) error {
+func (s *sessionTCP) WriteMsgWithContext(ctx context.Context, req Message) error {
 	buffer := bytes.NewBuffer(make([]byte, 0, 1500))
 	err := req.MarshalBinary(buffer)
 	if err != nil {
 		return fmt.Errorf("cannot write msg to tcp connection %v", err)
 	}
-	return s.connection.WriteContext(ctx, buffer.Bytes())
+	return s.connection.WriteWithContext(ctx, buffer.Bytes())
 }
 
-func (s *sessionUDP) WriteContextMsg(ctx context.Context, req Message) error {
+func (s *sessionUDP) WriteMsgWithContext(ctx context.Context, req Message) error {
 	buffer := bytes.NewBuffer(make([]byte, 0, 1500))
 	err := req.MarshalBinary(buffer)
 	if err != nil {
 		return fmt.Errorf("cannot write msg to udp connection %v", err)
 	}
-	return s.connection.WriteContext(ctx, s.sessionUDPData, buffer.Bytes())
+	return s.connection.WriteWithContext(ctx, s.sessionUDPData, buffer.Bytes())
 }
 
 func validateMsg(msg Message) error {
@@ -495,7 +495,7 @@ func (s *sessionTCP) sendCSM() error {
 	if s.blockWiseEnabled() {
 		req.AddOption(BlockWiseTransfer, []byte{})
 	}
-	return s.WriteContextMsg(context.Background(), req)
+	return s.WriteMsgWithContext(context.Background(), req)
 }
 
 func (s *sessionTCP) setPeerMaxMessageSize(val uint32) {
@@ -516,7 +516,7 @@ func (s *sessionUDP) sendPong(w ResponseWriter, r *Request) error {
 		Code:      Empty,
 		MessageID: r.Msg.MessageID(),
 	})
-	return w.WriteContextMsg(r.Ctx, resp)
+	return w.WriteMsgWithContext(r.Ctx, resp)
 }
 
 func (s *sessionTCP) sendPong(w ResponseWriter, r *Request) error {
@@ -525,7 +525,7 @@ func (s *sessionTCP) sendPong(w ResponseWriter, r *Request) error {
 		Code:  Pong,
 		Token: r.Msg.Token(),
 	})
-	return w.WriteContextMsg(r.Ctx, req)
+	return w.WriteMsgWithContext(r.Ctx, req)
 }
 
 func (s *sessionTCP) handleSignals(w ResponseWriter, r *Request) bool {

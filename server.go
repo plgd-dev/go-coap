@@ -38,7 +38,7 @@ const (
 // Listener defined used by coap
 type Listener interface {
 	Close() error
-	AcceptContext(ctx context.Context) (net.Conn, error)
+	AcceptWithContext(ctx context.Context) (net.Conn, error)
 }
 
 //DefaultPort default unsecure port for COAP server
@@ -73,7 +73,7 @@ func HandleFailed(w ResponseWriter, req *Request) {
 		MessageID: req.Msg.MessageID(),
 		Token:     req.Msg.Token(),
 	})
-	w.WriteContextMsg(req.Ctx, msg)
+	w.WriteMsgWithContext(req.Ctx, msg)
 }
 
 func failedHandler() Handler { return HandlerFunc(HandleFailed) }
@@ -237,13 +237,13 @@ func (srv *Server) ListenAndServe() error {
 
 	switch srv.Net {
 	case "tcp", "tcp4", "tcp6":
-		srv.Listener, err = kitNet.NewTCPListen(srv.Net, addr, srv.heartBeat())
+		srv.Listener, err = kitNet.NewTCPListener(srv.Net, addr, srv.heartBeat())
 		if err != nil {
 			return fmt.Errorf("cannot listen and serve: %v", err)
 		}
 	case "tcp-tls", "tcp4-tls", "tcp6-tls":
 		network := strings.TrimSuffix(srv.Net, "-tls")
-		srv.Listener, err = kitNet.NewTLSListen(network, addr, srv.TLSConfig, srv.heartBeat())
+		srv.Listener, err = kitNet.NewTLSListener(network, addr, srv.TLSConfig, srv.heartBeat())
 		if err != nil {
 			return fmt.Errorf("cannot listen and serve: %v", err)
 		}
@@ -299,14 +299,14 @@ func (srv *Server) ListenAndServe() error {
 }
 
 func (srv *Server) initServeUDP(conn *net.UDPConn) error {
-	return srv.serveUDP(newShutdownContext(srv.doneChan), conn)
+	return srv.serveUDP(newShutdownWithContext(srv.doneChan), conn)
 }
 
 func (srv *Server) initServeTCP(conn net.Conn) error {
 	if srv.NotifyStartedFunc != nil {
 		srv.NotifyStartedFunc()
 	}
-	return srv.serveTCPconnection(newShutdownContext(srv.doneChan), conn)
+	return srv.serveTCPconnection(newShutdownWithContext(srv.doneChan), conn)
 }
 
 // ActivateAndServe starts a coapserver with the PacketConn or Listener
@@ -439,7 +439,7 @@ func (srv *Server) serveTCPconnection(ctx *shutdownContext, netConn net.Conn) er
 
 		body := make([]byte, mti.BodyLen())
 		//ctx, cancel := context.WithTimeout(srv.ctx, srv.readTimeout())
-		err = conn.ReadFullContext(ctx, body)
+		err = conn.ReadFullWithContext(ctx, body)
 		if err != nil {
 			return session.closeWithError(fmt.Errorf("cannot serve tcp connection: %v", err))
 		}
@@ -468,10 +468,10 @@ func (srv *Server) serveTCP(l Listener) error {
 	}
 
 	var wg sync.WaitGroup
-	ctx := newShutdownContext(srv.doneChan)
+	ctx := newShutdownWithContext(srv.doneChan)
 
 	for {
-		rw, err := l.AcceptContext(ctx)
+		rw, err := l.AcceptWithContext(ctx)
 		if err != nil {
 			wg.Wait()
 			return fmt.Errorf("cannot serve tcp: %v", err)
@@ -510,7 +510,7 @@ func (srv *Server) serveUDP(ctx *shutdownContext, conn *net.UDPConn) error {
 
 	for {
 		m := make([]byte, ^uint16(0))
-		n, s, err := connUDP.ReadContext(ctx, m)
+		n, s, err := connUDP.ReadWithContext(ctx, m)
 		if err != nil {
 			err := fmt.Errorf("cannot serve UDP connection %v", err)
 			srv.closeSessions(err)

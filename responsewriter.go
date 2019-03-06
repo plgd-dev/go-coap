@@ -12,7 +12,7 @@ type ResponseWriter interface {
 	// WriteContext response with payload.
 	// If p is nil it writes response without payload.
 	// If p is non-nil then SetContentFormat must be called before Write otherwise Write fails.
-	WriteContext(ctx context.Context, p []byte) (n int, err error)
+	WriteWithContext(ctx context.Context, p []byte) (n int, err error)
 	// SetCode for response that is send via Write call.
 	//
 	// If SetCode is not called explicitly, the first call to Write
@@ -32,7 +32,7 @@ type ResponseWriter interface {
 	//WriteContextMsg to client.
 	//If Option ContentFormat is set and Payload is not set then call will failed.
 	//If Option ContentFormat is not set and Payload is set then call will failed.
-	WriteContextMsg(ctx context.Context, msg Message) error
+	WriteMsgWithContext(ctx context.Context, msg Message) error
 
 	getCode() *COAPCode
 	getReq() *Request
@@ -82,16 +82,16 @@ func (r *responseWriter) NewResponse(code COAPCode) Message {
 
 // Write send response without to peer
 func (r *responseWriter) WriteMsg(msg Message) error {
-	return r.WriteContextMsg(context.Background(), msg)
+	return r.WriteMsgWithContext(context.Background(), msg)
 }
 
 // Write send response with context to peer
-func (r *responseWriter) WriteContextMsg(ctx context.Context, msg Message) error {
+func (r *responseWriter) WriteMsgWithContext(ctx context.Context, msg Message) error {
 	switch msg.Code() {
 	case GET, POST, PUT, DELETE:
 		return ErrInvalidReponseCode
 	}
-	return r.req.Client.WriteContextMsg(ctx, msg)
+	return r.req.Client.WriteMsgWithContext(ctx, msg)
 }
 
 func prepareReponse(w ResponseWriter, reqCode COAPCode, code *COAPCode, contentFormat *MediaType, payload []byte) (int, Message) {
@@ -121,13 +121,13 @@ func prepareReponse(w ResponseWriter, reqCode COAPCode, code *COAPCode, contentF
 }
 
 func (r *responseWriter) Write(p []byte) (n int, err error) {
-	return r.WriteContext(context.Background(), p)
+	return r.WriteWithContext(context.Background(), p)
 }
 
 // Write send response to peer
-func (r *responseWriter) WriteContext(ctx context.Context, p []byte) (n int, err error) {
+func (r *responseWriter) WriteWithContext(ctx context.Context, p []byte) (n int, err error) {
 	l, resp := prepareReponse(r, r.req.Msg.Code(), r.code, r.contentFormat, p)
-	err = r.WriteContextMsg(ctx, resp)
+	err = r.WriteMsgWithContext(ctx, resp)
 	return l, err
 }
 

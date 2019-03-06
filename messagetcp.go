@@ -235,7 +235,7 @@ func normalizeErrors(e error) error {
 // fragment.
 
 type contextReader interface {
-	ReadFullContext(context.Context, []byte) error
+	ReadFullWithContext(context.Context, []byte) error
 }
 
 func readTcpMsgInfo(ctx context.Context, conn contextReader) (msgTcpInfo, error) {
@@ -244,7 +244,7 @@ func readTcpMsgInfo(ctx context.Context, conn contextReader) (msgTcpInfo, error)
 	hdrOff := 0
 
 	firstByte := make([]byte, 1)
-	err := conn.ReadFullContext(ctx, firstByte)
+	err := conn.ReadFullWithContext(ctx, firstByte)
 	if err != nil {
 		return mti, fmt.Errorf("cannot read coap header: %v", err)
 	}
@@ -259,7 +259,7 @@ func readTcpMsgInfo(ctx context.Context, conn contextReader) (msgTcpInfo, error)
 		opLen = int(lenNib)
 	case lenNib == 13:
 		extLen := make([]byte, 1)
-		err := conn.ReadFullContext(ctx, extLen)
+		err := conn.ReadFullWithContext(ctx, extLen)
 		if err != nil {
 			return mti, fmt.Errorf("cannot read coap header: %v", err)
 		}
@@ -267,7 +267,7 @@ func readTcpMsgInfo(ctx context.Context, conn contextReader) (msgTcpInfo, error)
 		opLen = TCP_MESSAGE_LEN13_BASE + int(extLen[0])
 	case lenNib == 14:
 		extLen := make([]byte, 2)
-		err := conn.ReadFullContext(ctx, extLen)
+		err := conn.ReadFullWithContext(ctx, extLen)
 		if err != nil {
 			return mti, fmt.Errorf("cannot read coap header: %v", err)
 		}
@@ -275,7 +275,7 @@ func readTcpMsgInfo(ctx context.Context, conn contextReader) (msgTcpInfo, error)
 		opLen = TCP_MESSAGE_LEN14_BASE + int(binary.BigEndian.Uint16(extLen))
 	case lenNib == 15:
 		extLen := make([]byte, 4)
-		err := conn.ReadFullContext(ctx, extLen)
+		err := conn.ReadFullWithContext(ctx, extLen)
 		if err != nil {
 			return mti, fmt.Errorf("cannot read coap header: %v", err)
 		}
@@ -285,7 +285,7 @@ func readTcpMsgInfo(ctx context.Context, conn contextReader) (msgTcpInfo, error)
 
 	mti.totLen = hdrOff + 1 + int(tkl) + opLen
 	code := make([]byte, 1)
-	err = conn.ReadFullContext(ctx, code)
+	err = conn.ReadFullWithContext(ctx, code)
 	if err != nil {
 		return mti, fmt.Errorf("cannot read coap header: %v", err)
 	}
@@ -293,7 +293,7 @@ func readTcpMsgInfo(ctx context.Context, conn contextReader) (msgTcpInfo, error)
 	hdrOff++
 
 	mti.token = make([]byte, tkl)
-	if err := conn.ReadFullContext(ctx, mti.token); err != nil {
+	if err := conn.ReadFullWithContext(ctx, mti.token); err != nil {
 		return mti, err
 	}
 	hdrOff += int(tkl)
@@ -336,7 +336,7 @@ type contextBytesReader struct {
 	reader io.Reader
 }
 
-func (r *contextBytesReader) ReadFullContext(ctx context.Context, b []byte) error {
+func (r *contextBytesReader) ReadFullWithContext(ctx context.Context, b []byte) error {
 	_, err := io.ReadFull(r.reader, b)
 	return err
 }
@@ -356,7 +356,7 @@ func (m *TcpMessage) UnmarshalBinary(data []byte) error {
 	}
 
 	b := make([]byte, mti.BodyLen())
-	err = r.ReadFullContext(context.Background(), b)
+	err = r.ReadFullWithContext(context.Background(), b)
 	if err != nil {
 		return fmt.Errorf("cannot read TCP CoAP body: %v", err)
 	}
@@ -415,7 +415,7 @@ func Decode(reader io.Reader) (*TcpMessage, error) {
 	}
 
 	b := make([]byte, mti.BodyLen())
-	err = r.ReadFullContext(context.Background(), b)
+	err = r.ReadFullWithContext(context.Background(), b)
 	if err != nil {
 		return nil, fmt.Errorf("cannot read TCP CoAP body: %v", err)
 	}

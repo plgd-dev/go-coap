@@ -9,7 +9,7 @@ type shutdownContext struct {
 	doneChan <-chan struct{}
 }
 
-func newShutdownContext(doneChan <-chan struct{}) *shutdownContext {
+func newShutdownWithContext(doneChan <-chan struct{}) *shutdownContext {
 	return &shutdownContext{doneChan: doneChan}
 }
 

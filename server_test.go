@@ -113,7 +113,7 @@ func RunLocalUDPServer(net, laddr string, BlockWiseTransfer bool, BlockWiseTrans
 
 func RunLocalServerTCPWithHandler(laddr string, BlockWiseTransfer bool, BlockWiseTransferSzx BlockWiseSzx, handler HandlerFunc) (*Server, string, chan error, error) {
 	network := "tcp"
-	l, err := kitNet.NewTCPListen(network, laddr, time.Millisecond*100)
+	l, err := kitNet.NewTCPListener(network, laddr, time.Millisecond*100)
 	if err != nil {
 		return nil, "", nil, fmt.Errorf("cannot create new tls listener: %v", err)
 	}
@@ -151,7 +151,7 @@ func RunLocalTCPServer(laddr string, BlockWiseTransfer bool, BlockWiseTransferSz
 }
 
 func RunLocalTLSServer(laddr string, config *tls.Config) (*Server, string, chan error, error) {
-	l, err := kitNet.NewTLSListen("tcp", laddr, config, time.Millisecond*100)
+	l, err := kitNet.NewTLSListener("tcp", laddr, config, time.Millisecond*100)
 	if err != nil {
 		return nil, "", nil, err
 	}
@@ -316,7 +316,7 @@ func ChallegingServerTimeout(w ResponseWriter, r *Request) {
 	req.SetOption(ContentFormat, TextPlain)
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	_, err := r.Client.networkSession.ExchangeContext(ctx, req)
+	_, err := r.Client.networkSession.ExchangeWithContext(ctx, req)
 	if err == nil {
 		panic("Error: expected timeout")
 	}

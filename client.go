@@ -72,11 +72,11 @@ func listenUDP(network, address string) (*net.UDPAddr, *net.UDPConn, error) {
 }
 
 func (c *Client) Dial(address string) (clientConn *ClientConn, err error) {
-	return c.DialContext(context.Background(), address)
+	return c.DialWithContext(context.Background(), address)
 }
 
 // DialContext connects to the address on the named network.
-func (c *Client) DialContext(ctx context.Context, address string) (clientConn *ClientConn, err error) {
+func (c *Client) DialWithContext(ctx context.Context, address string) (clientConn *ClientConn, err error) {
 
 	var conn net.Conn
 	var network string
@@ -110,7 +110,7 @@ func (c *Client) DialContext(ctx context.Context, address string) (clientConn *C
 		if conn, err = dialer.DialContext(ctx, network, address); err != nil {
 			return nil, err
 		}
-		sessionUPDData = kitNet.NewConnUDPContext(conn.(*net.UDPConn).RemoteAddr().(*net.UDPAddr), nil)
+		sessionUPDData = kitNet.NewConnUDPWithContext(conn.(*net.UDPConn).RemoteAddr().(*net.UDPAddr), nil)
 		BlockWiseTransfer = true
 	case "udp-mcast", "udp4-mcast", "udp6-mcast":
 		network = strings.TrimSuffix(c.Net, "-mcast")
@@ -118,7 +118,7 @@ func (c *Client) DialContext(ctx context.Context, address string) (clientConn *C
 		if err != nil {
 			return nil, err
 		}
-		sessionUPDData = kitNet.NewConnUDPContext(a, nil)
+		sessionUPDData = kitNet.NewConnUDPWithContext(a, nil)
 		conn = udpConn
 		BlockWiseTransfer = true
 		multicast = true
@@ -226,7 +226,7 @@ func (co *ClientConn) RemoteAddr() net.Addr {
 }
 
 func (co *ClientConn) Exchange(m Message) (Message, error) {
-	return co.commander.ExchangeContext(context.Background(), m)
+	return co.commander.ExchangeWithContext(context.Background(), m)
 }
 
 // ExchangeContext performs a synchronous query. It sends the message m to the address
@@ -236,11 +236,11 @@ func (co *ClientConn) Exchange(m Message) (Message, error) {
 // case of truncation.
 // To specify a local address or a timeout, the caller has to set the `Client.Dialer`
 // attribute appropriately
-func (co *ClientConn) ExchangeContext(ctx context.Context, m Message) (Message, error) {
+func (co *ClientConn) ExchangeWithContext(ctx context.Context, m Message) (Message, error) {
 	if co.multicast {
 		return nil, ErrNotSupported
 	}
-	return co.commander.ExchangeContext(ctx, m)
+	return co.commander.ExchangeWithContext(ctx, m)
 }
 
 // NewMessage Create message for request
@@ -269,83 +269,83 @@ func (co *ClientConn) NewDeleteRequest(path string) (Message, error) {
 }
 
 func (co *ClientConn) WriteMsg(m Message) error {
-	return co.commander.WriteContextMsg(context.Background(), m)
+	return co.commander.WriteMsgWithContext(context.Background(), m)
 }
 
 // WriteContextMsg sends direct a message through the connection
-func (co *ClientConn) WriteContextMsg(ctx context.Context, m Message) error {
-	return co.commander.WriteContextMsg(ctx, m)
+func (co *ClientConn) WriteMsgWithContext(ctx context.Context, m Message) error {
+	return co.commander.WriteMsgWithContext(ctx, m)
 }
 
 // Ping send a ping message and wait for a pong response
 func (co *ClientConn) Ping(timeout time.Duration) error {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
-	return co.PingContext(ctx)
+	return co.PingWithContext(ctx)
 }
 
 // Ping send a ping message and wait for a pong response
-func (co *ClientConn) PingContext(ctx context.Context) error {
-	return co.commander.PingContext(ctx)
+func (co *ClientConn) PingWithContext(ctx context.Context) error {
+	return co.commander.PingWithContext(ctx)
 }
 
 // GetContext retrieve the resource identified by the request path
 func (co *ClientConn) Get(path string) (Message, error) {
-	return co.GetContext(context.Background(), path)
+	return co.GetWithContext(context.Background(), path)
 }
 
-func (co *ClientConn) GetContext(ctx context.Context, path string) (Message, error) {
+func (co *ClientConn) GetWithContext(ctx context.Context, path string) (Message, error) {
 	if co.multicast {
 		return nil, ErrNotSupported
 	}
-	return co.commander.GetContext(ctx, path)
+	return co.commander.GetWithContext(ctx, path)
 }
 
 func (co *ClientConn) Post(path string, contentFormat MediaType, body io.Reader) (Message, error) {
-	return co.PostContext(context.Background(), path, contentFormat, body)
+	return co.PostWithContext(context.Background(), path, contentFormat, body)
 }
 
 // Post update the resource identified by the request path
-func (co *ClientConn) PostContext(ctx context.Context, path string, contentFormat MediaType, body io.Reader) (Message, error) {
+func (co *ClientConn) PostWithContext(ctx context.Context, path string, contentFormat MediaType, body io.Reader) (Message, error) {
 	if co.multicast {
 		return nil, ErrNotSupported
 	}
-	return co.commander.PostContext(ctx, path, contentFormat, body)
+	return co.commander.PostWithContext(ctx, path, contentFormat, body)
 }
 
 func (co *ClientConn) Put(path string, contentFormat MediaType, body io.Reader) (Message, error) {
-	return co.PutContext(context.Background(), path, contentFormat, body)
+	return co.PutWithContext(context.Background(), path, contentFormat, body)
 }
 
 // PutContext create the resource identified by the request path
-func (co *ClientConn) PutContext(ctx context.Context, path string, contentFormat MediaType, body io.Reader) (Message, error) {
+func (co *ClientConn) PutWithContext(ctx context.Context, path string, contentFormat MediaType, body io.Reader) (Message, error) {
 	if co.multicast {
 		return nil, ErrNotSupported
 	}
-	return co.commander.PutContext(ctx, path, contentFormat, body)
+	return co.commander.PutWithContext(ctx, path, contentFormat, body)
 }
 
 func (co *ClientConn) Delete(path string) (Message, error) {
-	return co.DeleteContext(context.Background(), path)
+	return co.DeleteWithContext(context.Background(), path)
 }
 
 // Delete delete the resource identified by the request path
-func (co *ClientConn) DeleteContext(ctx context.Context, path string) (Message, error) {
+func (co *ClientConn) DeleteWithContext(ctx context.Context, path string) (Message, error) {
 	if co.multicast {
 		return nil, ErrNotSupported
 	}
-	return co.commander.DeleteContext(ctx, path)
+	return co.commander.DeleteWithContext(ctx, path)
 }
 
 func (co *ClientConn) Observe(path string, observeFunc func(req *Request)) (*Observation, error) {
-	return co.ObserveContext(context.Background(), path, observeFunc)
+	return co.ObserveWithContext(context.Background(), path, observeFunc)
 }
 
-func (co *ClientConn) ObserveContext(ctx context.Context, path string, observeFunc func(req *Request)) (*Observation, error) {
+func (co *ClientConn) ObserveWithContext(ctx context.Context, path string, observeFunc func(req *Request)) (*Observation, error) {
 	if co.multicast {
 		return nil, ErrNotSupported
 	}
-	return co.commander.ObserveContext(ctx, path, observeFunc)
+	return co.commander.ObserveWithContext(ctx, path, observeFunc)
 }
 
 // Close close connection
@@ -364,13 +364,13 @@ func (co *ClientConn) Close() error {
 // Dial connects to the address on the named network.
 func Dial(network, address string) (*ClientConn, error) {
 	client := Client{Net: network}
-	return client.DialContext(context.Background(), address)
+	return client.DialWithContext(context.Background(), address)
 }
 
 // DialTimeout acts like Dial but takes a timeout.
 func DialTimeout(network, address string, timeout time.Duration) (*ClientConn, error) {
 	client := Client{Net: network, DialTimeout: timeout}
-	return client.DialContext(context.Background(), address)
+	return client.DialWithContext(context.Background(), address)
 }
 
 func fixNetTLS(network string) string {
@@ -383,11 +383,11 @@ func fixNetTLS(network string) string {
 // DialWithTLS connects to the address on the named network with TLS.
 func DialWithTLS(network, address string, tlsConfig *tls.Config) (conn *ClientConn, err error) {
 	client := Client{Net: fixNetTLS(network), TLSConfig: tlsConfig}
-	return client.DialContext(context.Background(), address)
+	return client.DialWithContext(context.Background(), address)
 }
 
 // DialTimeoutWithTLS acts like DialWithTLS but takes a timeout.
 func DialTimeoutWithTLS(network, address string, tlsConfig *tls.Config, timeout time.Duration) (conn *ClientConn, err error) {
 	client := Client{Net: fixNetTLS(network), DialTimeout: timeout, TLSConfig: tlsConfig}
-	return client.DialContext(context.Background(), address)
+	return client.DialWithContext(context.Background(), address)
 }

@@ -93,7 +93,7 @@ func (cc *ClientCommander) Equal(cc1 *ClientCommander) bool {
 
 // Exchange same as ExchangeContext without context
 func (cc *ClientCommander) Exchange(m Message) (Message, error) {
-	return cc.ExchangeContext(context.Background(), m)
+	return cc.ExchangeWithContext(context.Background(), m)
 }
 
 // ExchangeContext performs a synchronous query with context. It sends the message m to the address
@@ -101,86 +101,86 @@ func (cc *ClientCommander) Exchange(m Message) (Message, error) {
 //
 // ExchangeContext does not retry a failed query, nor will it fall back to TCP in
 // case of truncation.
-func (cc *ClientCommander) ExchangeContext(ctx context.Context, m Message) (Message, error) {
-	return cc.networkSession.ExchangeContext(ctx, m)
+func (cc *ClientCommander) ExchangeWithContext(ctx context.Context, m Message) (Message, error) {
+	return cc.networkSession.ExchangeWithContext(ctx, m)
 }
 
 // WriteMsg sends  direct a message through the connection
 func (cc *ClientCommander) WriteMsg(m Message) error {
-	return cc.WriteContextMsg(context.Background(), m)
+	return cc.WriteMsgWithContext(context.Background(), m)
 }
 
 // WriteContextMsg sends with context direct a message through the connection
-func (cc *ClientCommander) WriteContextMsg(ctx context.Context, m Message) error {
-	return cc.networkSession.WriteContextMsg(ctx, m)
+func (cc *ClientCommander) WriteMsgWithContext(ctx context.Context, m Message) error {
+	return cc.networkSession.WriteMsgWithContext(ctx, m)
 }
 
 // Ping send a ping message and wait for a pong response
 func (cc *ClientCommander) Ping(timeout time.Duration) error {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
-	return cc.networkSession.PingContext(ctx)
+	return cc.networkSession.PingWithContext(ctx)
 }
 
 // PingContext send with context a ping message and wait for a pong response
-func (cc *ClientCommander) PingContext(ctx context.Context) error {
-	return cc.networkSession.PingContext(ctx)
+func (cc *ClientCommander) PingWithContext(ctx context.Context) error {
+	return cc.networkSession.PingWithContext(ctx)
 }
 
 // Get retrieves the resource identified by the request path
 func (cc *ClientCommander) Get(path string) (Message, error) {
-	return cc.GetContext(context.Background(), path)
+	return cc.GetWithContext(context.Background(), path)
 }
 
 // GetContext retrieves with context the resource identified by the request path
-func (cc *ClientCommander) GetContext(ctx context.Context, path string) (Message, error) {
+func (cc *ClientCommander) GetWithContext(ctx context.Context, path string) (Message, error) {
 	req, err := cc.NewGetRequest(path)
 	if err != nil {
 		return nil, err
 	}
-	return cc.networkSession.ExchangeContext(ctx, req)
+	return cc.networkSession.ExchangeWithContext(ctx, req)
 }
 
 // Post updates the resource identified by the request path
 func (cc *ClientCommander) Post(path string, contentFormat MediaType, body io.Reader) (Message, error) {
-	return cc.PostContext(context.Background(), path, contentFormat, body)
+	return cc.PostWithContext(context.Background(), path, contentFormat, body)
 }
 
 // PostContext updates with context the resource identified by the request path
-func (cc *ClientCommander) PostContext(ctx context.Context, path string, contentFormat MediaType, body io.Reader) (Message, error) {
+func (cc *ClientCommander) PostWithContext(ctx context.Context, path string, contentFormat MediaType, body io.Reader) (Message, error) {
 	req, err := cc.NewPostRequest(path, contentFormat, body)
 	if err != nil {
 		return nil, err
 	}
-	return cc.networkSession.ExchangeContext(ctx, req)
+	return cc.networkSession.ExchangeWithContext(ctx, req)
 }
 
 // Put creates the resource identified by the request path
 func (cc *ClientCommander) Put(path string, contentFormat MediaType, body io.Reader) (Message, error) {
-	return cc.PutContext(context.Background(), path, contentFormat, body)
+	return cc.PutWithContext(context.Background(), path, contentFormat, body)
 }
 
 // PutContext creates with context the resource identified by the request path
-func (cc *ClientCommander) PutContext(ctx context.Context, path string, contentFormat MediaType, body io.Reader) (Message, error) {
+func (cc *ClientCommander) PutWithContext(ctx context.Context, path string, contentFormat MediaType, body io.Reader) (Message, error) {
 	req, err := cc.NewPutRequest(path, contentFormat, body)
 	if err != nil {
 		return nil, err
 	}
-	return cc.networkSession.ExchangeContext(ctx, req)
+	return cc.networkSession.ExchangeWithContext(ctx, req)
 }
 
 // Delete deletes the resource identified by the request path
 func (cc *ClientCommander) Delete(path string) (Message, error) {
-	return cc.DeleteContext(context.Background(), path)
+	return cc.DeleteWithContext(context.Background(), path)
 }
 
 // DeleteContext deletes with context the resource identified by the request path
-func (cc *ClientCommander) DeleteContext(ctx context.Context, path string) (Message, error) {
+func (cc *ClientCommander) DeleteWithContext(ctx context.Context, path string) (Message, error) {
 	req, err := cc.NewDeleteRequest(path)
 	if err != nil {
 		return nil, err
 	}
-	return cc.networkSession.ExchangeContext(ctx, req)
+	return cc.networkSession.ExchangeWithContext(ctx, req)
 }
 
 //Observation represents subscription to resource on the server
@@ -192,11 +192,11 @@ type Observation struct {
 }
 
 func (o *Observation) Cancel() error {
-	return o.CancelContext(context.Background())
+	return o.CancelWithContext(context.Background())
 }
 
 // CancelContext remove observation from server. For recreate observation use Observe.
-func (o *Observation) CancelContext(ctx context.Context) error {
+func (o *Observation) CancelWithContext(ctx context.Context) error {
 	req := o.client.NewMessage(MessageParams{
 		Type:      NonConfirmable,
 		Code:      GET,
@@ -205,7 +205,7 @@ func (o *Observation) CancelContext(ctx context.Context) error {
 	})
 	req.SetPathString(o.path)
 	req.SetOption(Observe, 1)
-	err1 := o.client.WriteContextMsg(ctx, req)
+	err1 := o.client.WriteMsgWithContext(ctx, req)
 	err2 := o.client.networkSession.TokenHandler().Remove(o.token)
 	if err1 != nil {
 		return err1
@@ -214,12 +214,12 @@ func (o *Observation) CancelContext(ctx context.Context) error {
 }
 
 func (cc *ClientCommander) Observe(path string, observeFunc func(req *Request)) (*Observation, error) {
-	return cc.ObserveContext(context.Background(), path, observeFunc)
+	return cc.ObserveWithContext(context.Background(), path, observeFunc)
 }
 
 // ObserveContext subscribe to severon path. After subscription and every change on path,
 // server sends immediately response
-func (cc *ClientCommander) ObserveContext(ctx context.Context, path string, observeFunc func(req *Request)) (*Observation, error) {
+func (cc *ClientCommander) ObserveWithContext(ctx context.Context, path string, observeFunc func(req *Request)) (*Observation, error) {
 	req, err := cc.NewGetRequest(path)
 	if err != nil {
 		return nil, err
@@ -260,7 +260,7 @@ func (cc *ClientCommander) ObserveContext(ctx context.Context, path string, obse
 		}
 
 		if needGet {
-			resp, err = r.Client.GetContext(ctx, path)
+			resp, err = r.Client.GetWithContext(ctx, path)
 			if err != nil {
 				return
 			}
@@ -295,7 +295,7 @@ func (cc *ClientCommander) ObserveContext(ctx context.Context, path string, obse
 	if err != nil {
 		return nil, err
 	}
-	err = cc.WriteContextMsg(ctx, req)
+	err = cc.WriteMsgWithContext(ctx, req)
 	if err != nil {
 		cc.networkSession.TokenHandler().Remove(o.token)
 		return nil, err
