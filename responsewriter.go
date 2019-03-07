@@ -61,6 +61,9 @@ func responseWriterFromRequest(r *Request) ResponseWriter {
 	case r.Client.networkSession().blockWiseEnabled():
 		w = &blockWiseResponseWriter{responseWriter: w}
 	}
+	if r.Msg.Option(NoResponse) != nil {
+		w = newNoResponseWriter(w)
+	}
 
 	return w
 }
