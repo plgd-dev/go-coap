@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	kitNet "github.com/go-ocf/kit/net"
 	"golang.org/x/net/ipv4"
 	"golang.org/x/net/ipv6"
 )
@@ -131,7 +132,7 @@ func testServingMCastByClient(t *testing.T, lnet, laddr string, BlockWiseTransfe
 		t.Fatalf("cannot dial addr: %v", err)
 	}
 
-	if err := joinGroup(co.srv.Conn.(*net.UDPConn), nil, a); err != nil {
+	if err := kitNet.JoinGroup(co.srv.Conn.(*net.UDPConn), nil, a); err != nil {
 		t.Fatalf("cannot join self to multicast group: %v", err)
 	}
 	if ip4 := co.srv.Conn.(*net.UDPConn).LocalAddr().(*net.UDPAddr).IP.To4(); ip4 != nil {
@@ -187,8 +188,8 @@ func TestServingIPv6AllInterfacesMCastByClient(t *testing.T) {
 	testServingMCastByClient(t, "udp6-mcast", "[ff03::158]:11111", false, BlockWiseSzx16, ifis)
 }
 
-func setupServer(t *testing.T) (string, error) {
-	_, addr, _, err := RunLocalServerUDPWithHandler("udp", ":0", true, BlockWiseSzx1024, func(w ResponseWriter, r *Request) {
+func setupServer(t *testing.T) (*Server, string, chan error, error) {
+	return RunLocalServerUDPWithHandler("udp", ":0", true, BlockWiseSzx1024, func(w ResponseWriter, r *Request) {
 		msg := r.Client.NewMessage(MessageParams{
 			Type:      Acknowledgement,
 			Code:      Content,
@@ -206,15 +207,18 @@ func setupServer(t *testing.T) (string, error) {
 			return
 		}
 	})
-	return addr, err
 }
 
 func TestServingUDPGet(t *testing.T) {
 
-	addr, err := setupServer(t)
+	s, addr, fin, err := setupServer(t)
 	if err != nil {
 		t.Fatalf("Unexpected error '%v'", err)
 	}
+	defer func() {
+		s.Shutdown()
+		<-fin
+	}()
 
 	BlockWiseTransfer := true
 	BlockWiseTransferSzx := BlockWiseSzx16
@@ -230,10 +234,14 @@ func TestServingUDPGet(t *testing.T) {
 }
 
 func TestServingUDPPost(t *testing.T) {
-	addr, err := setupServer(t)
+	s, addr, fin, err := setupServer(t)
 	if err != nil {
 		t.Fatalf("Unexpected error '%v'", err)
 	}
+	defer func() {
+		s.Shutdown()
+		<-fin
+	}()
 
 	BlockWiseTransfer := true
 	BlockWiseTransferSzx := BlockWiseSzx1024
@@ -250,10 +258,14 @@ func TestServingUDPPost(t *testing.T) {
 }
 
 func TestServingUDPPut(t *testing.T) {
-	addr, err := setupServer(t)
+	s, addr, fin, err := setupServer(t)
 	if err != nil {
 		t.Fatalf("Unexpected error '%v'", err)
 	}
+	defer func() {
+		s.Shutdown()
+		<-fin
+	}()
 
 	BlockWiseTransfer := true
 	BlockWiseTransferSzx := BlockWiseSzx1024
@@ -270,10 +282,14 @@ func TestServingUDPPut(t *testing.T) {
 }
 
 func TestServingUDPDelete(t *testing.T) {
-	addr, err := setupServer(t)
+	s, addr, fin, err := setupServer(t)
 	if err != nil {
 		t.Fatalf("Unexpected error '%v'", err)
 	}
+	defer func() {
+		s.Shutdown()
+		<-fin
+	}()
 
 	BlockWiseTransfer := true
 	BlockWiseTransferSzx := BlockWiseSzx1024
@@ -289,7 +305,7 @@ func TestServingUDPDelete(t *testing.T) {
 }
 
 func TestServingUDPObserve(t *testing.T) {
-	_, addr, _, err := RunLocalServerUDPWithHandler("udp", ":0", true, BlockWiseSzx16, func(w ResponseWriter, r *Request) {
+	s, addr, fin, err := RunLocalServerUDPWithHandler("udp", ":0", true, BlockWiseSzx16, func(w ResponseWriter, r *Request) {
 		msg := r.Client.NewMessage(MessageParams{
 			Type:      Acknowledgement,
 			Code:      Content,
@@ -308,6 +324,10 @@ func TestServingUDPObserve(t *testing.T) {
 			return
 		}
 	})
+	defer func() {
+		s.Shutdown()
+		<-fin
+	}()
 	if err != nil {
 		t.Fatalf("Unexpected error '%v'", err)
 	}

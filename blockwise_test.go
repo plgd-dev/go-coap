@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"log"
 	"testing"
+
+	"go.uber.org/goleak"
 )
 
 func testMarshal(t *testing.T, szx BlockWiseSzx, blockNumber uint, moreBlocksFollowing bool, expectedBlock uint32) {
@@ -83,6 +85,7 @@ func TestBlockWiseBlockUnmarshal(t *testing.T) {
 }
 
 func TestServingUDPBlockWiseSzx16(t *testing.T) {
+	defer goleak.VerifyNone(t)
 	testServingTCPWithMsg(t, "udp", true, BlockWiseSzx16, make([]byte, 128), simpleMsg)
 }
 

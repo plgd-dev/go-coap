@@ -2,6 +2,7 @@ package coap
 
 import (
 	"bytes"
+	"context"
 	"crypto/tls"
 	"encoding/binary"
 	"fmt"
@@ -12,6 +13,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	kitNet "github.com/go-ocf/kit/net"
 )
 
 func CreateRespMessageByReq(isTCP bool, code COAPCode, req Message) Message {
@@ -19,7 +22,7 @@ func CreateRespMessageByReq(isTCP bool, code COAPCode, req Message) Message {
 		resp := &TcpMessage{
 			MessageBase{
 				//typ:       Acknowledgement, not used by COAP over TCP
-				code: Valid,
+				code: code,
 				//messageID: req.MessageID(), , not used by COAP over TCP
 				payload: req.Payload(),
 				token:   req.Token(),
@@ -32,7 +35,7 @@ func CreateRespMessageByReq(isTCP bool, code COAPCode, req Message) Message {
 	resp := &DgramMessage{
 		MessageBase{
 			typ:       Acknowledgement,
-			code:      Valid,
+			code:      code,
 			messageID: req.MessageID(),
 			payload:   req.Payload(),
 			token:     req.Token(),
@@ -109,9 +112,10 @@ func RunLocalUDPServer(net, laddr string, BlockWiseTransfer bool, BlockWiseTrans
 }
 
 func RunLocalServerTCPWithHandler(laddr string, BlockWiseTransfer bool, BlockWiseTransferSzx BlockWiseSzx, handler HandlerFunc) (*Server, string, chan error, error) {
-	l, err := net.Listen("tcp", laddr)
+	network := "tcp"
+	l, err := kitNet.NewTCPListener(network, laddr, time.Millisecond*100)
 	if err != nil {
-		return nil, "", nil, err
+		return nil, "", nil, fmt.Errorf("cannot create new tls listener: %v", err)
 	}
 
 	server := &Server{Listener: l, ReadTimeout: time.Second * 3600, WriteTimeout: time.Second * 3600,
@@ -147,7 +151,7 @@ func RunLocalTCPServer(laddr string, BlockWiseTransfer bool, BlockWiseTransferSz
 }
 
 func RunLocalTLSServer(laddr string, config *tls.Config) (*Server, string, chan error, error) {
-	l, err := tls.Listen("tcp", laddr, config)
+	l, err := kitNet.NewTLSListener("tcp", laddr, config, time.Millisecond*100)
 	if err != nil {
 		return nil, "", nil, err
 	}
@@ -159,10 +163,6 @@ func RunLocalTLSServer(laddr string, config *tls.Config) (*Server, string, chan 
 			fmt.Printf("networkSession end %v: %v\n", w.RemoteAddr(), err)
 		}}
 
-	waitLock := sync.Mutex{}
-	waitLock.Lock()
-	server.NotifyStartedFunc = waitLock.Unlock
-
 	// fin must be buffered so the goroutine below won't block
 	// forever if fin is never read from. This always happens
 	// in RunLocalUDPServer and can happen in TestShutdownUDP.
@@ -173,7 +173,6 @@ func RunLocalTLSServer(laddr string, config *tls.Config) (*Server, string, chan 
 		l.Close()
 	}()
 
-	waitLock.Lock()
 	return server, l.Addr().String(), fin, nil
 }
 
@@ -315,7 +314,9 @@ func ChallegingServerTimeout(w ResponseWriter, r *Request) {
 		Token:     []byte("abcd"),
 	})
 	req.SetOption(ContentFormat, TextPlain)
-	_, err := r.Client.networkSession.exchangeTimeout(req, time.Second, time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	_, err := r.Client.networkSession.ExchangeWithContext(ctx, req)
 	if err == nil {
 		panic("Error: expected timeout")
 	}

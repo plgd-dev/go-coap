@@ -9,6 +9,7 @@ server
 !server/
 client
 !client/
+vendor/
 
 # Test binary, build with `go test -c`
 *.test

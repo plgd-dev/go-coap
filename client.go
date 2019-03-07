@@ -3,12 +3,14 @@ package coap
 // A client implementation.
 
 import (
+	"context"
 	"crypto/tls"
 	"io"
-	"log"
 	"net"
 	"strings"
 	"time"
+
+	kitNet "github.com/go-ocf/kit/net"
 )
 
 // A ClientConn represents a connection to a COAP server.
@@ -28,7 +30,7 @@ type Client struct {
 	DialTimeout    time.Duration // set Timeout for dialer
 	ReadTimeout    time.Duration // net.ClientConn.SetReadTimeout value for connections, defaults to 1 hour - overridden by Timeout when that value is non-zero
 	WriteTimeout   time.Duration // net.ClientConn.SetWriteTimeout value for connections, defaults to 1 hour - overridden by Timeout when that value is non-zero
-	SyncTimeout    time.Duration // The maximum of time for synchronization go-routines, defaults to 30 seconds - overridden by Timeout when that value is non-zero if it occurs, then it call log.Fatal
+	HeartBeat      time.Duration // Defines wake up interval from operations Read, Write over connection. defaults is 100ms.
 
 	Handler              HandlerFunc     // default handler for handling messages from server
 	NotifySessionEndFunc func(err error) // if NotifySessionEndFunc is set it is called when TCP/UDP session was ended.
@@ -53,13 +55,6 @@ func (c *Client) writeTimeout() time.Duration {
 	return coapTimeout
 }
 
-func (c *Client) syncTimeout() time.Duration {
-	if c.SyncTimeout != 0 {
-		return c.SyncTimeout
-	}
-	return syncTimeout
-}
-
 func listenUDP(network, address string) (*net.UDPAddr, *net.UDPConn, error) {
 	var a *net.UDPAddr
 	var err error
@@ -70,18 +65,22 @@ func listenUDP(network, address string) (*net.UDPAddr, *net.UDPConn, error) {
 	if udpConn, err = net.ListenUDP(network, a); err != nil {
 		return nil, nil, err
 	}
-	if err := setUDPSocketOptions(udpConn); err != nil {
+	if err := kitNet.SetUDPSocketOptions(udpConn); err != nil {
 		return nil, nil, err
 	}
 	return a, udpConn, nil
 }
 
-// Dial connects to the address on the named network.
 func (c *Client) Dial(address string) (clientConn *ClientConn, err error) {
+	return c.DialWithContext(context.Background(), address)
+}
+
+// DialContext connects to the address on the named network.
+func (c *Client) DialWithContext(ctx context.Context, address string) (clientConn *ClientConn, err error) {
 
 	var conn net.Conn
 	var network string
-	var sessionUPDData *SessionUDPData
+	var sessionUPDData *kitNet.ConnUDPContext
 
 	dialer := &net.Dialer{Timeout: c.DialTimeout}
 	BlockWiseTransfer := false
@@ -98,7 +97,7 @@ func (c *Client) Dial(address string) (clientConn *ClientConn, err error) {
 		BlockWiseTransferSzx = BlockWiseSzxBERT
 	case "tcp", "tcp4", "tcp6":
 		network = c.Net
-		conn, err = dialer.Dial(c.Net, address)
+		conn, err = dialer.DialContext(ctx, c.Net, address)
 		if err != nil {
 			return nil, err
 		}
@@ -108,10 +107,10 @@ func (c *Client) Dial(address string) (clientConn *ClientConn, err error) {
 		if network == "" {
 			network = "udp"
 		}
-		if conn, err = dialer.Dial(network, address); err != nil {
+		if conn, err = dialer.DialContext(ctx, network, address); err != nil {
 			return nil, err
 		}
-		sessionUPDData = &SessionUDPData{raddr: conn.(*net.UDPConn).RemoteAddr().(*net.UDPAddr)}
+		sessionUPDData = kitNet.NewConnUDPWithContext(conn.(*net.UDPConn).RemoteAddr().(*net.UDPAddr), nil)
 		BlockWiseTransfer = true
 	case "udp-mcast", "udp4-mcast", "udp6-mcast":
 		network = strings.TrimSuffix(c.Net, "-mcast")
@@ -119,7 +118,7 @@ func (c *Client) Dial(address string) (clientConn *ClientConn, err error) {
 		if err != nil {
 			return nil, err
 		}
-		sessionUPDData = &SessionUDPData{raddr: a}
+		sessionUPDData = kitNet.NewConnUDPWithContext(a, nil)
 		conn = udpConn
 		BlockWiseTransfer = true
 		multicast = true
@@ -135,7 +134,7 @@ func (c *Client) Dial(address string) (clientConn *ClientConn, err error) {
 		BlockWiseTransferSzx = *c.BlockWiseTransferSzx
 	}
 
-	sync := make(chan bool)
+	//sync := make(chan bool)
 	clientConn = &ClientConn{
 		srv: &Server{
 			Net:                      network,
@@ -147,23 +146,15 @@ func (c *Client) Dial(address string) (clientConn *ClientConn, err error) {
 			BlockWiseTransfer:        &BlockWiseTransfer,
 			BlockWiseTransferSzx:     &BlockWiseTransferSzx,
 			DisableTCPSignalMessages: c.DisableTCPSignalMessages,
-			NotifyStartedFunc: func() {
-				timeout := c.syncTimeout()
-				select {
-				case sync <- true:
-				case <-time.After(timeout):
-					log.Fatal("Client cannot send start: Timeout")
-				}
-			},
 			NotifySessionEndFunc: func(s *ClientCommander, err error) {
 				if c.NotifySessionEndFunc != nil {
 					c.NotifySessionEndFunc(err)
 				}
 			},
-			newSessionTCPFunc: func(connection Conn, srv *Server) (networkSession, error) {
+			newSessionTCPFunc: func(connection *kitNet.Conn, srv *Server) (networkSession, error) {
 				return clientConn.commander.networkSession, nil
 			},
-			newSessionUDPFunc: func(connection Conn, srv *Server, sessionUDPData *SessionUDPData) (networkSession, error) {
+			newSessionUDPFunc: func(connection *kitNet.ConnUDP, srv *Server, sessionUDPData *kitNet.ConnUDPContext) (networkSession, error) {
 				if sessionUDPData.RemoteAddr().String() == clientConn.commander.networkSession.RemoteAddr().String() {
 					if s, ok := clientConn.commander.networkSession.(*blockWiseSession); ok {
 						s.networkSession.(*sessionUDP).sessionUDPData = sessionUDPData
@@ -183,14 +174,14 @@ func (c *Client) Dial(address string) (clientConn *ClientConn, err error) {
 			},
 			Handler: c.Handler,
 		},
-		shutdownSync: make(chan error),
+		shutdownSync: make(chan error, 1),
 		multicast:    multicast,
 		commander:    &ClientCommander{},
 	}
 
 	switch clientConn.srv.Conn.(type) {
 	case *net.TCPConn, *tls.Conn:
-		session, err := newSessionTCP(newConnectionTCP(clientConn.srv.Conn, clientConn.srv), clientConn.srv)
+		session, err := newSessionTCP(kitNet.NewConn(clientConn.srv.Conn, clientConn.srv.heartBeat()), clientConn.srv)
 		if err != nil {
 			return nil, err
 		}
@@ -200,9 +191,9 @@ func (c *Client) Dial(address string) (clientConn *ClientConn, err error) {
 			clientConn.commander.networkSession = session
 		}
 	case *net.UDPConn:
-		// WriteMsgUDP returns error when addr is filled in SessionUDPData for connected socket
-		setUDPSocketOptions(clientConn.srv.Conn.(*net.UDPConn))
-		session, err := newSessionUDP(newConnectionUDP(clientConn.srv.Conn.(*net.UDPConn), clientConn.srv), clientConn.srv, sessionUPDData)
+		// WriteContextMsgUDP returns error when addr is filled in SessionUDPData for connected socket
+		kitNet.SetUDPSocketOptions(clientConn.srv.Conn.(*net.UDPConn))
+		session, err := newSessionUDP(kitNet.NewConnUDP(clientConn.srv.Conn.(*net.UDPConn), clientConn.srv.heartBeat()), clientConn.srv, sessionUPDData)
 		if err != nil {
 			return nil, err
 		}
@@ -213,25 +204,12 @@ func (c *Client) Dial(address string) (clientConn *ClientConn, err error) {
 		}
 	}
 
-	clientConn.commander.networkSession.SetReadDeadline(c.readTimeout())
-	clientConn.commander.networkSession.SetWriteDeadline(c.writeTimeout())
-
 	go func() {
-		timeout := c.syncTimeout()
 		err := clientConn.srv.ActivateAndServe()
 		select {
 		case clientConn.shutdownSync <- err:
-		case <-time.After(timeout):
-			log.Fatal("Client cannot send shutdown: Timeout")
 		}
 	}()
-
-	select {
-	case <-sync:
-	case <-time.After(c.syncTimeout()):
-		log.Fatal("Client cannot recv start: Timeout")
-	}
-
 	clientConn.client = c
 
 	return clientConn, nil
@@ -247,18 +225,22 @@ func (co *ClientConn) RemoteAddr() net.Addr {
 	return co.commander.RemoteAddr()
 }
 
-// Exchange performs a synchronous query. It sends the message m to the address
+func (co *ClientConn) Exchange(m Message) (Message, error) {
+	return co.commander.ExchangeWithContext(context.Background(), m)
+}
+
+// ExchangeContext performs a synchronous query. It sends the message m to the address
 // contained in a and waits for a reply.
 //
-// Exchange does not retry a failed query, nor will it fall back to TCP in
+// ExchangeContext does not retry a failed query, nor will it fall back to TCP in
 // case of truncation.
 // To specify a local address or a timeout, the caller has to set the `Client.Dialer`
 // attribute appropriately
-func (co *ClientConn) Exchange(m Message) (Message, error) {
+func (co *ClientConn) ExchangeWithContext(ctx context.Context, m Message) (Message, error) {
 	if co.multicast {
 		return nil, ErrNotSupported
 	}
-	return co.commander.Exchange(m)
+	return co.commander.ExchangeWithContext(ctx, m)
 }
 
 // NewMessage Create message for request
@@ -286,86 +268,103 @@ func (co *ClientConn) NewDeleteRequest(path string) (Message, error) {
 	return co.commander.NewDeleteRequest(path)
 }
 
-// Write sends direct a message through the connection
 func (co *ClientConn) WriteMsg(m Message) error {
-	return co.commander.WriteMsg(m)
+	return co.commander.WriteMsgWithContext(context.Background(), m)
 }
 
-// SetReadDeadline set read deadline for timeout for Exchange
-func (co *ClientConn) SetReadDeadline(timeout time.Duration) {
-	co.commander.networkSession.SetReadDeadline(timeout)
-}
-
-// SetWriteDeadline set write deadline for timeout for Exchange and Write
-func (co *ClientConn) SetWriteDeadline(timeout time.Duration) {
-	co.commander.networkSession.SetWriteDeadline(timeout)
+// WriteContextMsg sends direct a message through the connection
+func (co *ClientConn) WriteMsgWithContext(ctx context.Context, m Message) error {
+	return co.commander.WriteMsgWithContext(ctx, m)
 }
 
 // Ping send a ping message and wait for a pong response
 func (co *ClientConn) Ping(timeout time.Duration) error {
-	return co.commander.Ping(timeout)
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	return co.PingWithContext(ctx)
 }
 
-// Get retrieve the resource identified by the request path
+// Ping send a ping message and wait for a pong response
+func (co *ClientConn) PingWithContext(ctx context.Context) error {
+	return co.commander.PingWithContext(ctx)
+}
+
+// GetContext retrieve the resource identified by the request path
 func (co *ClientConn) Get(path string) (Message, error) {
+	return co.GetWithContext(context.Background(), path)
+}
+
+func (co *ClientConn) GetWithContext(ctx context.Context, path string) (Message, error) {
 	if co.multicast {
 		return nil, ErrNotSupported
 	}
-	return co.commander.Get(path)
+	return co.commander.GetWithContext(ctx, path)
+}
+
+func (co *ClientConn) Post(path string, contentFormat MediaType, body io.Reader) (Message, error) {
+	return co.PostWithContext(context.Background(), path, contentFormat, body)
 }
 
 // Post update the resource identified by the request path
-func (co *ClientConn) Post(path string, contentFormat MediaType, body io.Reader) (Message, error) {
+func (co *ClientConn) PostWithContext(ctx context.Context, path string, contentFormat MediaType, body io.Reader) (Message, error) {
 	if co.multicast {
 		return nil, ErrNotSupported
 	}
-	return co.commander.Post(path, contentFormat, body)
+	return co.commander.PostWithContext(ctx, path, contentFormat, body)
 }
 
-// Put create the resource identified by the request path
 func (co *ClientConn) Put(path string, contentFormat MediaType, body io.Reader) (Message, error) {
+	return co.PutWithContext(context.Background(), path, contentFormat, body)
+}
+
+// PutContext create the resource identified by the request path
+func (co *ClientConn) PutWithContext(ctx context.Context, path string, contentFormat MediaType, body io.Reader) (Message, error) {
 	if co.multicast {
 		return nil, ErrNotSupported
 	}
-	return co.commander.Put(path, contentFormat, body)
+	return co.commander.PutWithContext(ctx, path, contentFormat, body)
+}
+
+func (co *ClientConn) Delete(path string) (Message, error) {
+	return co.DeleteWithContext(context.Background(), path)
 }
 
 // Delete delete the resource identified by the request path
-func (co *ClientConn) Delete(path string) (Message, error) {
+func (co *ClientConn) DeleteWithContext(ctx context.Context, path string) (Message, error) {
 	if co.multicast {
 		return nil, ErrNotSupported
 	}
-	return co.commander.Delete(path)
+	return co.commander.DeleteWithContext(ctx, path)
 }
 
 func (co *ClientConn) Observe(path string, observeFunc func(req *Request)) (*Observation, error) {
+	return co.ObserveWithContext(context.Background(), path, observeFunc)
+}
+
+func (co *ClientConn) ObserveWithContext(ctx context.Context, path string, observeFunc func(req *Request)) (*Observation, error) {
 	if co.multicast {
 		return nil, ErrNotSupported
 	}
-	return co.commander.Observe(path, observeFunc)
+	return co.commander.ObserveWithContext(ctx, path, observeFunc)
 }
 
 // Close close connection
 func (co *ClientConn) Close() error {
 	co.srv.Shutdown()
-	select {
-	case <-co.shutdownSync:
-	case <-time.After(co.client.syncTimeout()):
-		log.Fatal("Client cannot recv shutdown: Timeout")
-	}
+	<-co.shutdownSync
 	return nil
 }
 
 // Dial connects to the address on the named network.
 func Dial(network, address string) (*ClientConn, error) {
 	client := Client{Net: network}
-	return client.Dial(address)
+	return client.DialWithContext(context.Background(), address)
 }
 
 // DialTimeout acts like Dial but takes a timeout.
 func DialTimeout(network, address string, timeout time.Duration) (*ClientConn, error) {
 	client := Client{Net: network, DialTimeout: timeout}
-	return client.Dial(address)
+	return client.DialWithContext(context.Background(), address)
 }
 
 func fixNetTLS(network string) string {
@@ -378,11 +377,11 @@ func fixNetTLS(network string) string {
 // DialWithTLS connects to the address on the named network with TLS.
 func DialWithTLS(network, address string, tlsConfig *tls.Config) (conn *ClientConn, err error) {
 	client := Client{Net: fixNetTLS(network), TLSConfig: tlsConfig}
-	return client.Dial(address)
+	return client.DialWithContext(context.Background(), address)
 }
 
 // DialTimeoutWithTLS acts like DialWithTLS but takes a timeout.
 func DialTimeoutWithTLS(network, address string, tlsConfig *tls.Config, timeout time.Duration) (conn *ClientConn, err error) {
 	client := Client{Net: fixNetTLS(network), DialTimeout: timeout, TLSConfig: tlsConfig}
-	return client.Dial(address)
+	return client.DialWithContext(context.Background(), address)
 }

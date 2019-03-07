@@ -1,12 +1,16 @@
 package coap
 
 import (
+	"bytes"
+	"context"
 	"fmt"
 	"log"
 	"net"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	kitNet "github.com/go-ocf/kit/net"
 )
 
 // A networkSession interface is used by an COAP handler to
@@ -16,27 +20,19 @@ type networkSession interface {
 	LocalAddr() net.Addr
 	// RemoteAddr returns the net.Addr of the client that sent the current request.
 	RemoteAddr() net.Addr
-	// WriteMsg writes a reply back to the client.
-	WriteMsg(resp Message) error
+	// WriteContextMsg writes a reply back to the client.
+	WriteMsgWithContext(ctx context.Context, resp Message) error
 	// Close closes the connection.
 	Close() error
 	// Return type of network
 	IsTCP() bool
 	// Create message for response via writter
 	NewMessage(params MessageParams) Message
-	// Exchange writes message and wait for response - paired by token and msgid
+	// ExchangeContext writes message and wait for response - paired by token and msgid
 	// it is safe to use in goroutines
-	Exchange(req Message) (Message, error)
+	ExchangeWithContext(ctx context.Context, req Message) (Message, error)
 	// Send ping to peer and wait for pong
-	Ping(timeout time.Duration) error
-	// SetReadDeadline set read deadline for timeout for Exchange
-	SetReadDeadline(timeout time.Duration)
-	// SetWriteDeadline set write deadline for timeout for Exchange and Write
-	SetWriteDeadline(timeout time.Duration)
-	// ReadDeadline get read deadline
-	ReadDeadline() time.Duration
-	// WriteDeadline get read writeline
-	WriteDeadline() time.Duration
+	PingWithContext(ctx context.Context) error
 
 	// handlePairMsg Message was handled by pair
 	handlePairMsg(w ResponseWriter, r *Request) bool
@@ -49,8 +45,6 @@ type networkSession interface {
 
 	// close session with error
 	closeWithError(err error) error
-
-	exchangeTimeout(req Message, writeDeadline, readDeadline time.Duration) (Message, error)
 
 	TokenHandler() *TokenHandler
 
@@ -65,8 +59,7 @@ type networkSession interface {
 }
 
 // NewSessionUDP create new session for UDP connection
-func newSessionUDP(connection Conn, srv *Server, sessionUDPData *SessionUDPData) (networkSession, error) {
-
+func newSessionUDP(connection *kitNet.ConnUDP, srv *Server, sessionUDPData *kitNet.ConnUDPContext) (networkSession, error) {
 	BlockWiseTransfer := true
 	BlockWiseTransferSzx := BlockWiseSzx1024
 	if srv.BlockWiseTransfer != nil {
@@ -83,13 +76,11 @@ func newSessionUDP(connection Conn, srv *Server, sessionUDPData *SessionUDPData)
 	s := &sessionUDP{
 		sessionBase: sessionBase{
 			srv:                  srv,
-			connection:           connection,
-			readDeadline:         30 * time.Second,
-			writeDeadline:        30 * time.Second,
 			handler:              &TokenHandler{tokenHandlers: make(map[[MaxTokenSize]byte]HandlerFunc)},
 			blockWiseTransfer:    BlockWiseTransfer,
 			blockWiseTransferSzx: uint32(BlockWiseTransferSzx),
 		},
+		connection:     connection,
 		sessionUDPData: sessionUDPData,
 		mapPairs:       make(map[[MaxTokenSize]byte]map[uint16](*sessionResp)),
 	}
@@ -97,7 +88,7 @@ func newSessionUDP(connection Conn, srv *Server, sessionUDPData *SessionUDPData)
 }
 
 // newSessionTCP create new session for TCP connection
-func newSessionTCP(connection Conn, srv *Server) (networkSession, error) {
+func newSessionTCP(connection *kitNet.Conn, srv *Server) (networkSession, error) {
 	BlockWiseTransfer := false
 	BlockWiseTransferSzx := BlockWiseSzxBERT
 	if srv.BlockWiseTransfer != nil {
@@ -109,11 +100,9 @@ func newSessionTCP(connection Conn, srv *Server) (networkSession, error) {
 	s := &sessionTCP{
 		mapPairs:           make(map[[MaxTokenSize]byte](*sessionResp)),
 		peerMaxMessageSize: uint32(srv.MaxMessageSize),
+		connection:         connection,
 		sessionBase: sessionBase{
 			srv:                  srv,
-			connection:           connection,
-			readDeadline:         30 * time.Second,
-			writeDeadline:        30 * time.Second,
 			handler:              &TokenHandler{tokenHandlers: make(map[[MaxTokenSize]byte]HandlerFunc)},
 			blockWiseTransfer:    BlockWiseTransfer,
 			blockWiseTransferSzx: uint32(BlockWiseTransferSzx),
@@ -134,11 +123,8 @@ type sessionResp struct {
 }
 
 type sessionBase struct {
-	srv           *Server
-	connection    Conn
-	readDeadline  time.Duration
-	writeDeadline time.Duration
-	handler       *TokenHandler
+	srv     *Server
+	handler *TokenHandler
 
 	blockWiseTransfer    bool
 	blockWiseTransferSzx uint32 //BlockWiseSzx
@@ -146,14 +132,15 @@ type sessionBase struct {
 
 type sessionUDP struct {
 	sessionBase
-	sessionUDPData *SessionUDPData                                // oob data to get egress interface right
+	connection     *kitNet.ConnUDP
+	sessionUDPData *kitNet.ConnUDPContext                         // oob data to get egress interface right
 	mapPairs       map[[MaxTokenSize]byte]map[uint16]*sessionResp //storage of channel Message
 	mapPairsLock   sync.Mutex                                     //to sync add remove token
 }
 
 type sessionTCP struct {
 	sessionBase
-
+	connection   *kitNet.Conn
 	mapPairs     map[[MaxTokenSize]byte]*sessionResp //storage of channel Message
 	mapPairsLock sync.Mutex                          //to sync add remove token
 
@@ -179,23 +166,6 @@ func (s *sessionUDP) RemoteAddr() net.Addr {
 // RemoteAddr implements the networkSession.RemoteAddr method.
 func (s *sessionTCP) RemoteAddr() net.Addr {
 	return s.connection.RemoteAddr()
-}
-
-func (s *sessionBase) SetReadDeadline(timeout time.Duration) {
-	s.readDeadline = timeout
-}
-
-func (s *sessionBase) SetWriteDeadline(timeout time.Duration) {
-	s.writeDeadline = timeout
-}
-
-func (s *sessionBase) ReadDeadline() time.Duration {
-	return s.readDeadline
-}
-
-// WriteDeadline get read writeline
-func (s *sessionBase) WriteDeadline() time.Duration {
-	return s.writeDeadline
 }
 
 // BlockWiseTransferEnabled
@@ -251,14 +221,13 @@ func (s *sessionUDP) closeWithError(err error) error {
 	s.srv.sessionUDPMapLock.Lock()
 	delete(s.srv.sessionUDPMap, s.sessionUDPData.Key())
 	s.srv.sessionUDPMapLock.Unlock()
-
 	s.srv.NotifySessionEndFunc(&ClientCommander{s}, err)
 
 	return err
 }
 
 // Ping send ping over udp(unicast) and wait for response.
-func (s *sessionUDP) Ping(timeout time.Duration) error {
+func (s *sessionUDP) PingWithContext(ctx context.Context) error {
 	//provoking to get a reset message - "CoAP ping" in RFC-7252
 	//https://tools.ietf.org/html/rfc7252#section-4.2
 	//https://tools.ietf.org/html/rfc7252#section-4.3
@@ -269,7 +238,7 @@ func (s *sessionUDP) Ping(timeout time.Duration) error {
 		Code:      Empty,
 		MessageID: GenerateMessageID(),
 	})
-	resp, err := s.exchangeTimeout(req, timeout, timeout)
+	resp, err := s.ExchangeWithContext(ctx, req)
 	if err != nil {
 		return err
 	}
@@ -279,7 +248,7 @@ func (s *sessionUDP) Ping(timeout time.Duration) error {
 	return ErrInvalidResponse
 }
 
-func (s *sessionTCP) Ping(timeout time.Duration) error {
+func (s *sessionTCP) PingWithContext(ctx context.Context) error {
 	if s.srv.DisableTCPSignalMessages {
 		return fmt.Errorf("cannot send ping: TCP Signal messages are disabled")
 	}
@@ -292,7 +261,7 @@ func (s *sessionTCP) Ping(timeout time.Duration) error {
 		Code:  Ping,
 		Token: []byte(token),
 	})
-	resp, err := s.exchangeTimeout(req, timeout, timeout)
+	resp, err := s.ExchangeWithContext(ctx, req)
 	if err != nil {
 		return err
 	}
@@ -360,21 +329,13 @@ func (s *sessionBase) exchangeFunc(req Message, writeTimeout, readTimeout time.D
 	}
 }
 
-// Write implements the networkSession.Write method.
-func (s *sessionTCP) Exchange(m Message) (Message, error) {
-	return s.exchangeTimeout(m, s.writeDeadline, s.readDeadline)
-}
-
-// Write implements the networkSession.Write method.
-func (s *sessionUDP) Exchange(m Message) (Message, error) {
-	return s.exchangeTimeout(m, s.writeDeadline, s.readDeadline)
-}
-
-func (s *sessionTCP) exchangeTimeout(req Message, writeDeadline, readDeadline time.Duration) (Message, error) {
+func (s *sessionTCP) ExchangeWithContext(ctx context.Context, req Message) (Message, error) {
+	if err := validateMsg(req); err != nil {
+		return nil, fmt.Errorf("cannot exchange: %v", err)
+	}
 	if req.Token() == nil {
 		return nil, ErrTokenNotExist
 	}
-
 	pairChan := &sessionResp{make(chan *Request, 1)}
 
 	var pairToken [MaxTokenSize]byte
@@ -395,10 +356,25 @@ func (s *sessionTCP) exchangeTimeout(req Message, writeDeadline, readDeadline ti
 		}
 	}()
 
-	return s.exchangeFunc(req, writeDeadline, readDeadline, pairChan, s.writeTimeout)
+	err := s.WriteMsgWithContext(ctx, req)
+	if err != nil {
+		return nil, fmt.Errorf("cannot exchange: %v", err)
+	}
+	select {
+	case request := <-pairChan.ch:
+		return request.Msg, nil
+	case <-ctx.Done():
+		if ctx.Err() != nil {
+			return nil, fmt.Errorf("cannot exchange: %v", err)
+		}
+		return nil, fmt.Errorf("cannot exchange: cancelled")
+	}
 }
 
-func (s *sessionUDP) exchangeTimeout(req Message, writeDeadline, readDeadline time.Duration) (Message, error) {
+func (s *sessionUDP) ExchangeWithContext(ctx context.Context, req Message) (Message, error) {
+	if err := validateMsg(req); err != nil {
+		return nil, fmt.Errorf("cannot exchange: %v", err)
+	}
 	//register msgid to token
 	pairChan := &sessionResp{make(chan *Request, 1)}
 	var pairToken [MaxTokenSize]byte
@@ -423,16 +399,38 @@ func (s *sessionUDP) exchangeTimeout(req Message, writeDeadline, readDeadline ti
 		s.mapPairsLock.Unlock()
 	}()
 
-	return s.exchangeFunc(req, writeDeadline, readDeadline, pairChan, s.writeTimeout)
+	err := s.WriteMsgWithContext(ctx, req)
+	if err != nil {
+		return nil, fmt.Errorf("cannot exchange: %v", err)
+	}
+	select {
+	case request := <-pairChan.ch:
+		return request.Msg, nil
+	case <-ctx.Done():
+		if ctx.Err() != nil {
+			return nil, fmt.Errorf("cannot exchange: %v", err)
+		}
+		return nil, fmt.Errorf("cannot exchange: cancelled")
+	}
 }
 
 // Write implements the networkSession.Write method.
-func (s *sessionTCP) WriteMsg(m Message) error {
-	return s.writeTimeout(m, s.writeDeadline)
+func (s *sessionTCP) WriteMsgWithContext(ctx context.Context, req Message) error {
+	buffer := bytes.NewBuffer(make([]byte, 0, 1500))
+	err := req.MarshalBinary(buffer)
+	if err != nil {
+		return fmt.Errorf("cannot write msg to tcp connection %v", err)
+	}
+	return s.connection.WriteWithContext(ctx, buffer.Bytes())
 }
 
-func (s *sessionUDP) WriteMsg(m Message) error {
-	return s.writeTimeout(m, s.writeDeadline)
+func (s *sessionUDP) WriteMsgWithContext(ctx context.Context, req Message) error {
+	buffer := bytes.NewBuffer(make([]byte, 0, 1500))
+	err := req.MarshalBinary(buffer)
+	if err != nil {
+		return fmt.Errorf("cannot write msg to udp connection %v", err)
+	}
+	return s.connection.WriteWithContext(ctx, s.sessionUDPData, buffer.Bytes())
 }
 
 func validateMsg(msg Message) error {
@@ -444,21 +442,6 @@ func validateMsg(msg Message) error {
 	}
 	//TODO check size of m
 	return nil
-}
-
-func (s *sessionTCP) writeTimeout(m Message, timeout time.Duration) error {
-	if err := validateMsg(m); err != nil {
-		return err
-	}
-	return s.connection.write(&writeReqTCP{writeReqBase{req: m, respChan: make(chan error, 1)}}, timeout)
-}
-
-// WriteMsg implements the networkSession.WriteMsg method.
-func (s *sessionUDP) writeTimeout(m Message, timeout time.Duration) error {
-	if err := validateMsg(m); err != nil {
-		return err
-	}
-	return s.connection.write(&writeReqUDP{writeReqBase{req: m, respChan: make(chan error, 1)}, s.sessionUDPData}, timeout)
 }
 
 func (s *sessionTCP) handlePairMsg(w ResponseWriter, r *Request) bool {
@@ -512,7 +495,7 @@ func (s *sessionTCP) sendCSM() error {
 	if s.blockWiseEnabled() {
 		req.AddOption(BlockWiseTransfer, []byte{})
 	}
-	return s.WriteMsg(req)
+	return s.WriteMsgWithContext(context.Background(), req)
 }
 
 func (s *sessionTCP) setPeerMaxMessageSize(val uint32) {
@@ -533,7 +516,7 @@ func (s *sessionUDP) sendPong(w ResponseWriter, r *Request) error {
 		Code:      Empty,
 		MessageID: r.Msg.MessageID(),
 	})
-	return w.WriteMsg(resp)
+	return w.WriteMsgWithContext(r.Ctx, resp)
 }
 
 func (s *sessionTCP) sendPong(w ResponseWriter, r *Request) error {
@@ -542,7 +525,7 @@ func (s *sessionTCP) sendPong(w ResponseWriter, r *Request) error {
 		Code:  Pong,
 		Token: r.Msg.Token(),
 	})
-	return w.WriteMsg(req)
+	return w.WriteMsgWithContext(r.Ctx, req)
 }
 
 func (s *sessionTCP) handleSignals(w ResponseWriter, r *Request) bool {
