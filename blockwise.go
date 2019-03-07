@@ -722,7 +722,7 @@ func handleBlockWiseMsg(w ResponseWriter, r *Request, next func(w ResponseWriter
 }
 
 type blockWiseResponseWriter struct {
-	responseWriter *responseWriter
+	responseWriter ResponseWriter
 }
 
 func (w *blockWiseResponseWriter) NewResponse(code COAPCode) Message {
@@ -758,14 +758,14 @@ func (w *blockWiseResponseWriter) WriteMsg(msg Message) error {
 //Write send whole message with context if size of payload is less then block szx otherwise
 //send message via blockwise.
 func (w *blockWiseResponseWriter) WriteMsgWithContext(ctx context.Context, msg Message) error {
-	suggestedSzx := w.responseWriter.req.Client.networkSession.blockWiseSzx()
-	if respBlock2, ok := w.responseWriter.req.Msg.Option(Block2).(uint32); ok {
+	suggestedSzx := w.responseWriter.getReq().Client.networkSession.blockWiseSzx()
+	if respBlock2, ok := w.responseWriter.getReq().Msg.Option(Block2).(uint32); ok {
 		szx, _, _, err := UnmarshalBlockOption(respBlock2)
 		if err != nil {
 			return err
 		}
 		//BERT is supported only via TCP
-		if szx == BlockWiseSzxBERT && !w.responseWriter.req.Client.networkSession.IsTCP() {
+		if szx == BlockWiseSzxBERT && !w.responseWriter.getReq().Client.networkSession.IsTCP() {
 			return ErrInvalidBlockWiseSzx
 		}
 		suggestedSzx = szx
@@ -776,8 +776,8 @@ func (w *blockWiseResponseWriter) WriteMsgWithContext(ctx context.Context, msg M
 		return w.responseWriter.WriteMsgWithContext(ctx, msg)
 	}
 
-	if b, ok := w.responseWriter.req.Client.networkSession.(*blockWiseSession); ok {
-		_, err := b.sendPayload(ctx, true, Block2, suggestedSzx, w.responseWriter.req.Msg.Code(), msg)
+	if b, ok := w.responseWriter.getReq().Client.networkSession.(*blockWiseSession); ok {
+		_, err := b.sendPayload(ctx, true, Block2, suggestedSzx, w.responseWriter.getReq().Msg.Code(), msg)
 		return err
 	}
 
@@ -791,13 +791,13 @@ func (w *blockWiseResponseWriter) Write(p []byte) (n int, err error) {
 
 // WriteContext send response with context to peer
 func (w *blockWiseResponseWriter) WriteWithContext(ctx context.Context, p []byte) (n int, err error) {
-	l, resp := prepareReponse(w, w.responseWriter.req.Msg.Code(), w.responseWriter.code, w.responseWriter.contentFormat, p)
+	l, resp := prepareReponse(w, w.responseWriter.getReq().Msg.Code(), w.responseWriter.getCode(), w.responseWriter.getContentFormat(), p)
 	err = w.WriteMsgWithContext(ctx, resp)
 	return l, err
 }
 
 type blockWiseNoticeWriter struct {
-	responseWriter *responseWriter
+	responseWriter ResponseWriter
 }
 
 func (w *blockWiseNoticeWriter) NewResponse(code COAPCode) Message {
@@ -832,14 +832,14 @@ func (w *blockWiseNoticeWriter) WriteMsg(msg Message) error {
 //send only first block. For Get whole msg client must call Get to
 //resource.
 func (w *blockWiseNoticeWriter) WriteMsgWithContext(ctx context.Context, msg Message) error {
-	suggestedSzx := w.responseWriter.req.Client.networkSession.blockWiseSzx()
-	if respBlock2, ok := w.responseWriter.req.Msg.Option(Block2).(uint32); ok {
+	suggestedSzx := w.responseWriter.getReq().Client.networkSession.blockWiseSzx()
+	if respBlock2, ok := w.responseWriter.getReq().Msg.Option(Block2).(uint32); ok {
 		szx, _, _, err := UnmarshalBlockOption(respBlock2)
 		if err != nil {
 			return err
 		}
 		//BERT is supported only via TCP
-		if szx == BlockWiseSzxBERT && !w.responseWriter.req.Client.networkSession.IsTCP() {
+		if szx == BlockWiseSzxBERT && !w.responseWriter.getReq().Client.networkSession.IsTCP() {
 			return ErrInvalidBlockWiseSzx
 		}
 		suggestedSzx = szx
@@ -850,8 +850,8 @@ func (w *blockWiseNoticeWriter) WriteMsgWithContext(ctx context.Context, msg Mes
 		return w.responseWriter.WriteMsgWithContext(ctx, msg)
 	}
 
-	if b, ok := w.responseWriter.req.Client.networkSession.(*blockWiseSession); ok {
-		s := newSender(false, Block2, suggestedSzx, w.responseWriter.req.Msg.Code(), msg)
+	if b, ok := w.responseWriter.getReq().Client.networkSession.(*blockWiseSession); ok {
+		s := newSender(false, Block2, suggestedSzx, w.responseWriter.getReq().Msg.Code(), msg)
 		req, err := s.newReq(b)
 		if err != nil {
 			return err
@@ -868,7 +868,7 @@ func (w *blockWiseNoticeWriter) Write(p []byte) (n int, err error) {
 
 // Write send response with context to peer
 func (w *blockWiseNoticeWriter) WriteWithContext(ctx context.Context, p []byte) (n int, err error) {
-	l, resp := prepareReponse(w, w.responseWriter.req.Msg.Code(), w.responseWriter.code, w.responseWriter.contentFormat, p)
+	l, resp := prepareReponse(w, w.responseWriter.getReq().Msg.Code(), w.responseWriter.getCode(), w.responseWriter.getContentFormat(), p)
 	err = w.WriteMsgWithContext(ctx, resp)
 	return l, err
 }

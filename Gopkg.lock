@@ -2,15 +2,15 @@
 
 
 [[projects]]
-  branch = "introduce-net"
-  digest = "1:14cf1b6ecefc16e6f58724c7a34aa16437edd3251b29880562e99d60550a61ad"
+  branch = "master"
+  digest = "1:25c92b5a7b89547608053ea7048469c173ede8d976cdfc861b8b39ca9852cad9"
   name = "github.com/go-ocf/kit"
   packages = [
     "log",
     "net",
   ]
   pruneopts = "UT"
-  revision = "730bcfd6d13cab4b954e62c2477b71c2cce41e14"
+  revision = "8560f72fc720c9710c19cb6814495ab67271da5c"
 
 [[projects]]
   digest = "1:4887e9e89c80299aa520d718239809fdd2a47a9aa394909b169959bfbc424ddf"

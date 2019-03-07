@@ -351,13 +351,7 @@ func (co *ClientConn) ObserveWithContext(ctx context.Context, path string, obser
 // Close close connection
 func (co *ClientConn) Close() error {
 	co.srv.Shutdown()
-	select {
-	case <-co.shutdownSync:
-		/*
-			case <-time.After(co.client.syncTimeout()):
-				log.Fatal("Client cannot recv shutdown: Timeout")
-		*/
-	}
+	<-co.shutdownSync
 	return nil
 }
 
