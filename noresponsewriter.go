@@ -1,5 +1,11 @@
 package coap
 
+var (
+	resp2XXCodes = []COAPCode{Created, Deleted, Valid, Changed, Content}
+	resp4XXCodes = []COAPCode{BadRequest, Unauthorized, BadOption, Forbidden, NotFound, MethodNotAllowed, NotAcceptable, PreconditionFailed, RequestEntityTooLarge, UnsupportedMediaType}
+	resp5XXCodes = []COAPCode{InternalServerError, NotImplemented, BadGateway, ServiceUnavailable, GatewayTimeout, ProxyingNotSupported}
+)
+
 func isSet(n uint32, pos uint32) bool {
 	val := n & (1 << pos)
 	return (val > 0)
@@ -20,7 +26,7 @@ func (w *noResponseWriter) decodeNoResponseOption(v uint32) []COAPCode {
 	}
 
 	var i uint32
-	// Max possible value:16; ref:table_2_rfc7967
+	// Max bit value:4; ref:table_2_rfc7967
 	for i = 0; i <= 4; i++ {
 		if isSet(v, i) {
 			index := powerOfTwo(i)
@@ -31,23 +37,23 @@ func (w *noResponseWriter) decodeNoResponseOption(v uint32) []COAPCode {
 }
 
 type noResponseWriter struct {
-	*responseWriter
+	ResponseWriter
 	noResponseValueMap map[uint32][]COAPCode
 }
 
 func newNoResponseWriter(w ResponseWriter) *noResponseWriter {
 	return &noResponseWriter{
-		responseWriter: w.(*responseWriter),
+		ResponseWriter: w,
 		noResponseValueMap: map[uint32][]COAPCode{
-			2:  []COAPCode{Created, Deleted, Valid, Changed, Content},
-			8:  []COAPCode{BadRequest, Unauthorized, BadOption, Forbidden, NotFound, MethodNotAllowed, NotAcceptable, PreconditionFailed, RequestEntityTooLarge, UnsupportedMediaType},
-			16: []COAPCode{InternalServerError, NotImplemented, BadGateway, ServiceUnavailable, GatewayTimeout, ProxyingNotSupported},
+			2:  resp2XXCodes,
+			8:  resp4XXCodes,
+			16: resp5XXCodes,
 		},
 	}
 }
 
 func (w *noResponseWriter) WriteMsg(msg Message) error {
-	noRespValue, ok := w.req.Msg.Option(NoResponse).(uint32)
+	noRespValue, ok := w.getReq().Msg.Option(NoResponse).(uint32)
 	if !ok {
 		return ErrNotSupported
 	}
@@ -58,19 +64,19 @@ func (w *noResponseWriter) WriteMsg(msg Message) error {
 			return ErrMessageNotInterested
 		}
 	}
-	return w.req.Client.WriteMsg(msg)
+	return w.getReq().Client.WriteMsg(msg)
 }
 
 func (w *noResponseWriter) Write(p []byte) (n int, err error) {
-	l, resp := prepareReponse(w, w.responseWriter.req.Msg.Code(), w.responseWriter.code, w.responseWriter.contentFormat, p)
+	l, resp := prepareReponse(w, w.ResponseWriter.getReq().Msg.Code(), w.ResponseWriter.getCode(), w.ResponseWriter.getContentFormat(), p)
 	err = w.WriteMsg(resp)
 	return l, err
 }
 
 func (w *noResponseWriter) SetCode(code COAPCode) {
-	w.code = &code
+	w.ResponseWriter.SetCode(code)
 }
 
 func (w *noResponseWriter) SetContentFormat(contentFormat MediaType) {
-	w.contentFormat = &contentFormat
+	w.ResponseWriter.SetContentFormat(contentFormat)
 }
