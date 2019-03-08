@@ -1,5 +1,7 @@
 package coap
 
+import "context"
+
 var (
 	resp2XXCodes = []COAPCode{Created, Deleted, Valid, Changed, Content}
 	resp4XXCodes = []COAPCode{BadRequest, Unauthorized, BadOption, Forbidden, NotFound, MethodNotAllowed, NotAcceptable, PreconditionFailed, RequestEntityTooLarge, UnsupportedMediaType}
@@ -52,8 +54,34 @@ func newNoResponseWriter(w ResponseWriter) *noResponseWriter {
 	}
 }
 
+func (w *noResponseWriter) Write(p []byte) (n int, err error) {
+	return w.WriteWithContext(context.Background(), p)
+}
+
+func (w *noResponseWriter) WriteWithContext(ctx context.Context, p []byte) (n int, err error) {
+	l, resp := prepareReponse(w, w.ResponseWriter.getReq().Msg.Code(), w.ResponseWriter.getCode(), w.ResponseWriter.getContentFormat(), p)
+	err = w.WriteMsgWithContext(ctx, resp)
+	return l, err
+}
+
+func (w *noResponseWriter) SetCode(code COAPCode) {
+	w.ResponseWriter.SetCode(code)
+}
+
+func (w *noResponseWriter) SetContentFormat(contentFormat MediaType) {
+	w.ResponseWriter.SetContentFormat(contentFormat)
+}
+
+func (w *noResponseWriter) NewResponse(code COAPCode) Message {
+	return w.ResponseWriter.NewResponse(code)
+}
+
 func (w *noResponseWriter) WriteMsg(msg Message) error {
-	noRespValue, ok := w.getReq().Msg.Option(NoResponse).(uint32)
+	return w.WriteMsgWithContext(context.Background(), msg)
+}
+
+func (w *noResponseWriter) WriteMsgWithContext(ctx context.Context, msg Message) error {
+	noRespValue, ok := w.ResponseWriter.getReq().Msg.Option(NoResponse).(uint32)
 	if !ok {
 		return ErrNotSupported
 	}
@@ -64,19 +92,5 @@ func (w *noResponseWriter) WriteMsg(msg Message) error {
 			return ErrMessageNotInterested
 		}
 	}
-	return w.getReq().Client.WriteMsg(msg)
-}
-
-func (w *noResponseWriter) Write(p []byte) (n int, err error) {
-	l, resp := prepareReponse(w, w.ResponseWriter.getReq().Msg.Code(), w.ResponseWriter.getCode(), w.ResponseWriter.getContentFormat(), p)
-	err = w.WriteMsg(resp)
-	return l, err
-}
-
-func (w *noResponseWriter) SetCode(code COAPCode) {
-	w.ResponseWriter.SetCode(code)
-}
-
-func (w *noResponseWriter) SetContentFormat(contentFormat MediaType) {
-	w.ResponseWriter.SetContentFormat(contentFormat)
+	return w.ResponseWriter.getReq().Client.WriteMsgWithContext(ctx, msg)
 }
