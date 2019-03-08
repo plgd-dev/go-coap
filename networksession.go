@@ -589,13 +589,13 @@ func (s *sessionUDP) handleSignals(w ResponseWriter, r *Request) bool {
 }
 
 func handleSignalMsg(w ResponseWriter, r *Request, next HandlerFunc) {
-	if !r.Client.networkSession.handleSignals(w, r) {
+	if !r.Client.networkSession().handleSignals(w, r) {
 		next(w, r)
 	}
 }
 
 func handlePairMsg(w ResponseWriter, r *Request, next HandlerFunc) {
-	if !r.Client.networkSession.handlePairMsg(w, r) {
+	if !r.Client.networkSession().handlePairMsg(w, r) {
 		next(w, r)
 	}
 }

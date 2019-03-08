@@ -48,7 +48,7 @@ func CreateRespMessageByReq(isTCP bool, code COAPCode, req Message) Message {
 
 func EchoServer(w ResponseWriter, r *Request) {
 	if r.Msg.IsConfirmable() {
-		err := w.WriteMsg(CreateRespMessageByReq(r.Client.networkSession.IsTCP(), Valid, r.Msg))
+		err := w.WriteMsg(CreateRespMessageByReq(r.Client.networkSession().IsTCP(), Valid, r.Msg))
 		if err != nil {
 			log.Printf("Cannot write echo %v", err)
 		}
@@ -57,7 +57,7 @@ func EchoServer(w ResponseWriter, r *Request) {
 
 func EchoServerBadID(w ResponseWriter, r *Request) {
 	if r.Msg.IsConfirmable() {
-		w.WriteMsg(CreateRespMessageByReq(r.Client.networkSession.IsTCP(), BadRequest, r.Msg))
+		w.WriteMsg(CreateRespMessageByReq(r.Client.networkSession().IsTCP(), BadRequest, r.Msg))
 	}
 }
 
@@ -302,7 +302,7 @@ func ChallegingServer(w ResponseWriter, r *Request) {
 		panic(err.Error())
 	}
 
-	w.WriteMsg(CreateRespMessageByReq(r.Client.networkSession.IsTCP(), Valid, r.Msg))
+	w.WriteMsg(CreateRespMessageByReq(r.Client.networkSession().IsTCP(), Valid, r.Msg))
 }
 
 func ChallegingServerTimeout(w ResponseWriter, r *Request) {
@@ -316,12 +316,12 @@ func ChallegingServerTimeout(w ResponseWriter, r *Request) {
 	req.SetOption(ContentFormat, TextPlain)
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	_, err := r.Client.networkSession.ExchangeWithContext(ctx, req)
+	_, err := r.Client.networkSession().ExchangeWithContext(ctx, req)
 	if err == nil {
 		panic("Error: expected timeout")
 	}
 
-	w.WriteMsg(CreateRespMessageByReq(r.Client.networkSession.IsTCP(), Valid, r.Msg))
+	w.WriteMsg(CreateRespMessageByReq(r.Client.networkSession().IsTCP(), Valid, r.Msg))
 }
 
 func simpleChallengingMsg(t *testing.T, payload []byte, co *ClientConn) {

@@ -51,14 +51,14 @@ func responseWriterFromRequest(r *Request) ResponseWriter {
 	case r.Msg.Code() == GET:
 		switch {
 		// set blockwise notice writer for observe
-		case r.Client.networkSession.blockWiseEnabled() && r.Msg.Option(Observe) != nil:
+		case r.Client.networkSession().blockWiseEnabled() && r.Msg.Option(Observe) != nil:
 			w = &blockWiseNoticeWriter{responseWriter: w}
 		// set blockwise if it is enabled
-		case r.Client.networkSession.blockWiseEnabled():
+		case r.Client.networkSession().blockWiseEnabled():
 			w = &blockWiseResponseWriter{responseWriter: w}
 		}
 		w = &getResponseWriter{w}
-	case r.Client.networkSession.blockWiseEnabled():
+	case r.Client.networkSession().blockWiseEnabled():
 		w = &blockWiseResponseWriter{responseWriter: w}
 	}
 

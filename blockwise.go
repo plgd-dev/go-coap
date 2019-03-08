@@ -674,7 +674,7 @@ func handleBlockWiseMsg(w ResponseWriter, r *Request, next func(w ResponseWriter
 	if r.Msg.Token() != nil {
 		switch r.Msg.Code() {
 		case PUT, POST:
-			if b, ok := r.Client.networkSession.(*blockWiseSession); ok {
+			if b, ok := r.Client.networkSession().(*blockWiseSession); ok {
 				msg, err := b.receivePayload(r.Ctx, true, r.Msg, nil, Block1, Continue)
 
 				if err != nil {
@@ -758,14 +758,14 @@ func (w *blockWiseResponseWriter) WriteMsg(msg Message) error {
 //Write send whole message with context if size of payload is less then block szx otherwise
 //send message via blockwise.
 func (w *blockWiseResponseWriter) WriteMsgWithContext(ctx context.Context, msg Message) error {
-	suggestedSzx := w.responseWriter.getReq().Client.networkSession.blockWiseSzx()
+	suggestedSzx := w.responseWriter.getReq().Client.networkSession().blockWiseSzx()
 	if respBlock2, ok := w.responseWriter.getReq().Msg.Option(Block2).(uint32); ok {
 		szx, _, _, err := UnmarshalBlockOption(respBlock2)
 		if err != nil {
 			return err
 		}
 		//BERT is supported only via TCP
-		if szx == BlockWiseSzxBERT && !w.responseWriter.getReq().Client.networkSession.IsTCP() {
+		if szx == BlockWiseSzxBERT && !w.responseWriter.getReq().Client.networkSession().IsTCP() {
 			return ErrInvalidBlockWiseSzx
 		}
 		suggestedSzx = szx
@@ -776,7 +776,7 @@ func (w *blockWiseResponseWriter) WriteMsgWithContext(ctx context.Context, msg M
 		return w.responseWriter.WriteMsgWithContext(ctx, msg)
 	}
 
-	if b, ok := w.responseWriter.getReq().Client.networkSession.(*blockWiseSession); ok {
+	if b, ok := w.responseWriter.getReq().Client.networkSession().(*blockWiseSession); ok {
 		_, err := b.sendPayload(ctx, true, Block2, suggestedSzx, w.responseWriter.getReq().Msg.Code(), msg)
 		return err
 	}
@@ -832,14 +832,14 @@ func (w *blockWiseNoticeWriter) WriteMsg(msg Message) error {
 //send only first block. For Get whole msg client must call Get to
 //resource.
 func (w *blockWiseNoticeWriter) WriteMsgWithContext(ctx context.Context, msg Message) error {
-	suggestedSzx := w.responseWriter.getReq().Client.networkSession.blockWiseSzx()
+	suggestedSzx := w.responseWriter.getReq().Client.networkSession().blockWiseSzx()
 	if respBlock2, ok := w.responseWriter.getReq().Msg.Option(Block2).(uint32); ok {
 		szx, _, _, err := UnmarshalBlockOption(respBlock2)
 		if err != nil {
 			return err
 		}
 		//BERT is supported only via TCP
-		if szx == BlockWiseSzxBERT && !w.responseWriter.getReq().Client.networkSession.IsTCP() {
+		if szx == BlockWiseSzxBERT && !w.responseWriter.getReq().Client.networkSession().IsTCP() {
 			return ErrInvalidBlockWiseSzx
 		}
 		suggestedSzx = szx
@@ -850,7 +850,7 @@ func (w *blockWiseNoticeWriter) WriteMsgWithContext(ctx context.Context, msg Mes
 		return w.responseWriter.WriteMsgWithContext(ctx, msg)
 	}
 
-	if b, ok := w.responseWriter.getReq().Client.networkSession.(*blockWiseSession); ok {
+	if b, ok := w.responseWriter.getReq().Client.networkSession().(*blockWiseSession); ok {
 		s := newSender(false, Block2, suggestedSzx, w.responseWriter.getReq().Msg.Code(), msg)
 		req, err := s.newReq(b)
 		if err != nil {

@@ -457,7 +457,8 @@ func (srv *Server) serveTCPconnection(ctx *shutdownContext, netConn net.Conn) er
 
 		// We will block poller wait loop when
 		// all pool workers are busy.
-		srv.spawnWorker(&Request{Client: &ClientCommander{session}, Msg: msg, Ctx: sessCtx})
+		c := ClientConn{commander: &ClientCommander{session}}
+		srv.spawnWorker(&Request{Client: &c, Msg: msg, Ctx: sessCtx})
 	}
 }
 
@@ -536,7 +537,8 @@ func (srv *Server) serveUDP(ctx *shutdownContext, conn *net.UDPConn) error {
 		if err != nil {
 			continue
 		}
-		srv.spawnWorker(&Request{Msg: msg, Client: &ClientCommander{session}, Ctx: sessCtx})
+		c := ClientConn{commander: &ClientCommander{session}}
+		srv.spawnWorker(&Request{Msg: msg, Client: &c, Ctx: sessCtx})
 	}
 }
 

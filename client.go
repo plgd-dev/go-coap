@@ -215,6 +215,10 @@ func (c *Client) DialWithContext(ctx context.Context, address string) (clientCon
 	return clientConn, nil
 }
 
+func (co *ClientConn) networkSession() networkSession {
+	return co.commander.networkSession
+}
+
 // LocalAddr implements the networkSession.LocalAddr method.
 func (co *ClientConn) LocalAddr() net.Addr {
 	return co.commander.LocalAddr()
@@ -350,8 +354,12 @@ func (co *ClientConn) ObserveWithContext(ctx context.Context, path string, obser
 
 // Close close connection
 func (co *ClientConn) Close() error {
-	co.srv.Shutdown()
-	<-co.shutdownSync
+	if co.srv != nil {
+		co.srv.Shutdown()
+	}
+	if co.shutdownSync != nil {
+		<-co.shutdownSync
+	}
 	return nil
 }
 

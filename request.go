@@ -4,6 +4,6 @@ import "context"
 
 type Request struct {
 	Msg    Message
-	Client *ClientCommander
+	Client *ClientConn
 	Ctx    context.Context
 }

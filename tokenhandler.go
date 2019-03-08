@@ -3,7 +3,7 @@ package coap
 import "sync"
 
 func handleBySessionTokenHandler(w ResponseWriter, r *Request, next HandlerFunc) {
-	r.Client.networkSession.TokenHandler().Handle(w, r, next)
+	r.Client.networkSession().TokenHandler().Handle(w, r, next)
 }
 
 //TokenHandler container for regirstration handlers by token
