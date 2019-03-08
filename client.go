@@ -360,8 +360,11 @@ func (co *ClientConn) Close() error {
 	} else {
 		err = co.commander.Close()
 	}
+	if err != nil {
+		return err
+	}
 	if co.shutdownSync != nil {
-		<-co.shutdownSync
+		err = <-co.shutdownSync
 	}
 	return err
 }
