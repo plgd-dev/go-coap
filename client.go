@@ -354,15 +354,16 @@ func (co *ClientConn) ObserveWithContext(ctx context.Context, path string, obser
 
 // Close close connection
 func (co *ClientConn) Close() error {
+	var err error
 	if co.srv != nil {
-		co.srv.Shutdown()
+		err = co.srv.Shutdown()
 	} else {
-		co.commander.Close()
+		err = co.commander.Close()
 	}
 	if co.shutdownSync != nil {
 		<-co.shutdownSync
 	}
-	return nil
+	return err
 }
 
 // Dial connects to the address on the named network.
