@@ -8,9 +8,10 @@ Features supported:
 * CoAP over UDP [RFC 7252][coap].
 * CoAP over TCP/TLS [RFC 8232][coap-tcp]
 * Observe resources in CoAP [RFC 7641][coap-observe]
-* Block-wise transfers in COAP [RFC 7959][coap-block-wise-transfers]
+* Block-wise transfers in CoAP [RFC 7959][coap-block-wise-transfers]
 * request multiplexer
 * multicast
+* CoAP NoResponse option in CoAP [RFC 7967][coap-noresponse]
 
 Not yet implemented:
 * CoAP over DTLS
@@ -19,6 +20,7 @@ Not yet implemented:
 [coap-tcp]: https://tools.ietf.org/html/rfc8323
 [coap-block-wise-transfers]: https://tools.ietf.org/html/rfc7959
 [coap-observe]: https://tools.ietf.org/html/rfc7641
+[coap-noresponse]: https://tools.ietf.org/html/rfc7967
 
 ## Samples
 
