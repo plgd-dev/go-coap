@@ -356,6 +356,8 @@ func (co *ClientConn) ObserveWithContext(ctx context.Context, path string, obser
 func (co *ClientConn) Close() error {
 	if co.srv != nil {
 		co.srv.Shutdown()
+	} else {
+		co.commander.Close()
 	}
 	if co.shutdownSync != nil {
 		<-co.shutdownSync
