@@ -146,7 +146,7 @@ func (c *Client) DialWithContext(ctx context.Context, address string) (clientCon
 			BlockWiseTransfer:        &BlockWiseTransfer,
 			BlockWiseTransferSzx:     &BlockWiseTransferSzx,
 			DisableTCPSignalMessages: c.DisableTCPSignalMessages,
-			NotifySessionEndFunc: func(s *ClientCommander, err error) {
+			NotifySessionEndFunc: func(s *ClientConn, err error) {
 				if c.NotifySessionEndFunc != nil {
 					c.NotifySessionEndFunc(err)
 				}

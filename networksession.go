@@ -221,7 +221,8 @@ func (s *sessionUDP) closeWithError(err error) error {
 	s.srv.sessionUDPMapLock.Lock()
 	delete(s.srv.sessionUDPMap, s.sessionUDPData.Key())
 	s.srv.sessionUDPMapLock.Unlock()
-	s.srv.NotifySessionEndFunc(&ClientCommander{s}, err)
+	c := ClientConn{commander: &ClientCommander{s}}
+	s.srv.NotifySessionEndFunc(&c, err)
 
 	return err
 }
@@ -278,7 +279,8 @@ func (s *sessionUDP) Close() error {
 
 func (s *sessionTCP) closeWithError(err error) error {
 	if s.connection != nil {
-		s.srv.NotifySessionEndFunc(&ClientCommander{s}, err)
+		c := ClientConn{commander: &ClientCommander{s}}
+		s.srv.NotifySessionEndFunc(&c, err)
 		e := s.connection.Close()
 		//s.connection = nil
 		if e == nil {

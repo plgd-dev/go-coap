@@ -78,10 +78,10 @@ func RunLocalServerUDPWithHandler(lnet, laddr string, BlockWiseTransfer bool, Bl
 		return nil, "", nil, err
 	}
 	server := &Server{Conn: pc, ReadTimeout: time.Hour, WriteTimeout: time.Hour,
-		NotifySessionNewFunc: func(s *ClientCommander) {
+		NotifySessionNewFunc: func(s *ClientConn) {
 			fmt.Printf("networkSession start %v\n", s.RemoteAddr())
 		},
-		NotifySessionEndFunc: func(w *ClientCommander, err error) {
+		NotifySessionEndFunc: func(w *ClientConn, err error) {
 			fmt.Printf("networkSession end %v: %v\n", w.RemoteAddr(), err)
 		},
 		Handler:              handler,
@@ -119,9 +119,9 @@ func RunLocalServerTCPWithHandler(laddr string, BlockWiseTransfer bool, BlockWis
 	}
 
 	server := &Server{Listener: l, ReadTimeout: time.Second * 3600, WriteTimeout: time.Second * 3600,
-		NotifySessionNewFunc: func(s *ClientCommander) {
+		NotifySessionNewFunc: func(s *ClientConn) {
 			fmt.Printf("networkSession start %v\n", s.RemoteAddr())
-		}, NotifySessionEndFunc: func(w *ClientCommander, err error) {
+		}, NotifySessionEndFunc: func(w *ClientConn, err error) {
 			fmt.Printf("networkSession end %v: %v\n", w.RemoteAddr(), err)
 		}, Handler: handler,
 		BlockWiseTransfer:    &BlockWiseTransfer,
@@ -157,9 +157,9 @@ func RunLocalTLSServer(laddr string, config *tls.Config) (*Server, string, chan 
 	}
 
 	server := &Server{Listener: l, ReadTimeout: time.Hour, WriteTimeout: time.Hour,
-		NotifySessionNewFunc: func(s *ClientCommander) {
+		NotifySessionNewFunc: func(s *ClientConn) {
 			fmt.Printf("networkSession start %v\n", s.RemoteAddr())
-		}, NotifySessionEndFunc: func(w *ClientCommander, err error) {
+		}, NotifySessionEndFunc: func(w *ClientConn, err error) {
 			fmt.Printf("networkSession end %v: %v\n", w.RemoteAddr(), err)
 		}}
 

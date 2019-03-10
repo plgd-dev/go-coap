@@ -146,9 +146,9 @@ type Server struct {
 	// If newSessionUDPFunc is set it is called when session TCP want to be created
 	newSessionTCPFunc func(connection *kitNet.Conn, srv *Server) (networkSession, error)
 	// If NotifyNewSession is set it is called when new TCP/UDP session was created.
-	NotifySessionNewFunc func(w *ClientCommander)
+	NotifySessionNewFunc func(w *ClientConn)
 	// If NotifyNewSession is set it is called when TCP/UDP session was ended.
-	NotifySessionEndFunc func(w *ClientCommander, err error)
+	NotifySessionEndFunc func(w *ClientConn, err error)
 	// The interfaces that will be used for udp-mcast (default uses the system assigned for multicast)
 	UDPMcastInterfaces []net.Interface
 	// Use blockWise transfer for transfer payload (default for UDP it's enabled, for TCP it's disable)
@@ -359,11 +359,11 @@ func (srv *Server) ActivateAndServe() error {
 	}
 
 	if srv.NotifySessionNewFunc == nil {
-		srv.NotifySessionNewFunc = func(w *ClientCommander) {}
+		srv.NotifySessionNewFunc = func(w *ClientConn) {}
 	}
 
 	if srv.NotifySessionEndFunc == nil {
-		srv.NotifySessionEndFunc = func(w *ClientCommander, err error) {}
+		srv.NotifySessionEndFunc = func(w *ClientConn, err error) {}
 	}
 
 	if pConn != nil {
@@ -426,7 +426,8 @@ func (srv *Server) serveTCPconnection(ctx *shutdownContext, netConn net.Conn) er
 	if err != nil {
 		return err
 	}
-	srv.NotifySessionNewFunc(&ClientCommander{session})
+	c := ClientConn{commander: &ClientCommander{session}}
+	srv.NotifySessionNewFunc(&c)
 
 	sessCtx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -493,7 +494,8 @@ func (srv *Server) closeSessions(err error) {
 	srv.sessionUDPMap = make(map[string]networkSession)
 	srv.sessionUDPMapLock.Unlock()
 	for _, v := range tmp {
-		srv.NotifySessionEndFunc(&ClientCommander{v}, err)
+		c := ClientConn{commander: &ClientCommander{v}}
+		srv.NotifySessionEndFunc(&c, err)
 	}
 }
 
@@ -526,7 +528,8 @@ func (srv *Server) serveUDP(ctx *shutdownContext, conn *net.UDPConn) error {
 			if err != nil {
 				return err
 			}
-			srv.NotifySessionNewFunc(&ClientCommander{session})
+			c := ClientConn{commander: &ClientCommander{session}}
+			srv.NotifySessionNewFunc(&c)
 			srv.sessionUDPMap[s.Key()] = session
 			srv.sessionUDPMapLock.Unlock()
 		} else {
