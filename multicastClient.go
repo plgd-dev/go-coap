@@ -144,18 +144,18 @@ func (mconn *MulticastClientConn) PublishWithContext(ctx context.Context, path s
 	if err != nil {
 		return nil, err
 	}
-	return mconn.PublishContextMsg(ctx, req, responseHandler)
+	return mconn.PublishMsgWithContext(ctx, req, responseHandler)
 }
 
 // PublishMsg subscribes to sever with GET message. After subscription and every change on path,
 // server sends immediately response
 func (mconn *MulticastClientConn) PublishMsg(req Message, responseHandler func(req *Request)) (*ResponseWaiter, error) {
-	return mconn.PublishContextMsg(context.Background(), req, responseHandler)
+	return mconn.PublishMsgWithContext(context.Background(), req, responseHandler)
 }
 
-// PublishContextMsg subscribes with context to sever with GET message. After subscription and every change on path,
+// PublishMsgWithContext subscribes with context to sever with GET message. After subscription and every change on path,
 // server sends immediately response
-func (mconn *MulticastClientConn) PublishContextMsg(ctx context.Context, req Message, responseHandler func(req *Request)) (*ResponseWaiter, error) {
+func (mconn *MulticastClientConn) PublishMsgWithContext(ctx context.Context, req Message, responseHandler func(req *Request)) (*ResponseWaiter, error) {
 	if req.Code() != GET || req.PathString() == "" {
 		return nil, ErrInvalidRequest
 	}
