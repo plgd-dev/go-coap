@@ -146,7 +146,7 @@ func (c COAPCode) String() string {
 }
 
 // OptionID identifies an option in a message.
-type OptionID uint8
+type OptionID uint16
 
 /*
    +-----+----+---+---+---+----------------+--------+--------+---------+
@@ -197,6 +197,7 @@ const (
 	ProxyURI      OptionID = 35
 	ProxyScheme   OptionID = 39
 	Size1         OptionID = 60
+	NoResponse    OptionID = 258
 )
 
 // Option value format (RFC7252 section 3.2)
@@ -236,6 +237,7 @@ var coapOptionDefs = map[OptionID]optionDef{
 	ProxyURI:      optionDef{valueFormat: valueString, minLen: 1, maxLen: 1034},
 	ProxyScheme:   optionDef{valueFormat: valueString, minLen: 1, maxLen: 255},
 	Size1:         optionDef{valueFormat: valueUint, minLen: 0, maxLen: 4},
+	NoResponse:    optionDef{valueFormat: valueUint, minLen: 0, maxLen: 1},
 }
 
 // MediaType specifies the content format of a message.
