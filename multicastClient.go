@@ -197,7 +197,7 @@ func (mconn *MulticastClientConn) PublishMsgWithContext(ctx context.Context, req
 				return
 			}
 		}
-		responseHandler(&Request{Msg: resp, Client: r.Client, Ctx: ctx})
+		responseHandler(&Request{Msg: resp, Client: r.Client, Ctx: ctx, SeqNum: r.SeqNum})
 	})
 	if err != nil {
 		return nil, err

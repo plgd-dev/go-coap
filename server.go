@@ -431,6 +431,7 @@ func (srv *Server) serveTCPconnection(ctx *shutdownContext, netConn net.Conn) er
 
 	sessCtx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+	seqNum := uint64(0)
 
 	for {
 		mti, err := readTcpMsgInfo(ctx, conn)
@@ -459,7 +460,8 @@ func (srv *Server) serveTCPconnection(ctx *shutdownContext, netConn net.Conn) er
 		// We will block poller wait loop when
 		// all pool workers are busy.
 		c := ClientConn{commander: &ClientCommander{session}}
-		srv.spawnWorker(&Request{Client: &c, Msg: msg, Ctx: sessCtx})
+		srv.spawnWorker(&Request{Client: &c, Msg: msg, Ctx: sessCtx, SeqNum: seqNum})
+		seqNum++
 	}
 }
 
@@ -510,6 +512,7 @@ func (srv *Server) serveUDP(ctx *shutdownContext, conn *net.UDPConn) error {
 	connUDP := kitNet.NewConnUDP(conn, srv.heartBeat())
 	sessCtx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+	seqNum := uint64(0)
 
 	for {
 		m := make([]byte, ^uint16(0))
@@ -541,7 +544,8 @@ func (srv *Server) serveUDP(ctx *shutdownContext, conn *net.UDPConn) error {
 			continue
 		}
 		c := ClientConn{commander: &ClientCommander{session}}
-		srv.spawnWorker(&Request{Msg: msg, Client: &c, Ctx: sessCtx})
+		srv.spawnWorker(&Request{Msg: msg, Client: &c, Ctx: sessCtx, SeqNum: seqNum})
+		seqNum++
 	}
 }
 

@@ -282,12 +282,12 @@ func (cc *ClientCommander) ObserveWithContext(ctx context.Context, path string, 
 			//during processing observation, check if notification is still valid
 			if bytes.Equal(resp.Option(ETag).([]byte), r.Msg.Option(ETag).([]byte)) {
 				if setObsSeqNum() {
-					observeFunc(&Request{Msg: resp, Client: r.Client, Ctx: r.Ctx})
+					observeFunc(&Request{Msg: resp, Client: r.Client, Ctx: r.Ctx, SeqNum: r.SeqNum})
 				}
 			}
 		default:
 			if setObsSeqNum() {
-				observeFunc(&Request{Msg: resp, Client: r.Client, Ctx: r.Ctx})
+				observeFunc(&Request{Msg: resp, Client: r.Client, Ctx: r.Ctx, SeqNum: r.SeqNum})
 			}
 		}
 		return
