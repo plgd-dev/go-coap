@@ -33,6 +33,8 @@ type networkSession interface {
 	ExchangeWithContext(ctx context.Context, req Message) (Message, error)
 	// Send ping to peer and wait for pong
 	PingWithContext(ctx context.Context) error
+	// Sequence discontinuously unique growing number for connection.
+	Sequence() uint64
 
 	// handlePairMsg Message was handled by pair
 	handlePairMsg(w ResponseWriter, r *Request) bool
@@ -123,8 +125,9 @@ type sessionResp struct {
 }
 
 type sessionBase struct {
-	srv     *Server
-	handler *TokenHandler
+	srv      *Server
+	handler  *TokenHandler
+	sequence uint64
 
 	blockWiseTransfer    bool
 	blockWiseTransferSzx uint32 //BlockWiseSzx
@@ -183,6 +186,10 @@ func (s *sessionBase) blockWiseSzx() BlockWiseSzx {
 
 func (s *sessionBase) setBlockWiseSzx(szx BlockWiseSzx) {
 	atomic.StoreUint32(&s.blockWiseTransferSzx, uint32(szx))
+}
+
+func (s *sessionBase) Sequence() uint64 {
+	return atomic.AddUint64(&s.sequence, 1)
 }
 
 func (s *sessionBase) blockWiseMaxPayloadSize(peer BlockWiseSzx) (int, BlockWiseSzx) {

@@ -684,7 +684,7 @@ func handleBlockWiseMsg(w ResponseWriter, r *Request, next func(w ResponseWriter
 				// We need to be careful to create a new response writer for the
 				// new request, otherwise the server may attempt to respond to
 				// the wrong request.
-				newReq := &Request{Client: r.Client, Msg: msg, Ctx: r.Ctx, SeqNum: r.SeqNum}
+				newReq := &Request{Client: r.Client, Msg: msg, Ctx: r.Ctx, Sequence: r.Client.Sequence()}
 				newWriter := responseWriterFromRequest(newReq)
 				next(newWriter, newReq)
 				return

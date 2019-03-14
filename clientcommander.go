@@ -187,7 +187,7 @@ func (cc *ClientCommander) DeleteWithContext(ctx context.Context, path string) (
 type Observation struct {
 	token     []byte
 	path      string
-	obsSeqNum uint32
+	obsSequence uint32
 	client    *ClientCommander
 }
 
@@ -237,7 +237,7 @@ func (cc *ClientCommander) ObserveWithContext(ctx context.Context, path string, 
 	o := &Observation{
 		token:     req.Token(),
 		path:      path,
-		obsSeqNum: 0,
+		obsSequence: 0,
 		client:    cc,
 	}
 	err = cc.networkSession.TokenHandler().Add(req.Token(), func(w ResponseWriter, r *Request) {
@@ -265,14 +265,14 @@ func (cc *ClientCommander) ObserveWithContext(ctx context.Context, path string, 
 				return
 			}
 		}
-		setObsSeqNum := func() bool {
+		setObsSequence := func() bool {
 			if r.Msg.Option(Observe) != nil {
-				obsSeqNum := r.Msg.Option(Observe).(uint32)
-				//obs starts with 0, after that check obsSeqNum
-				if obsSeqNum != 0 && o.obsSeqNum > obsSeqNum {
+				obsSequence := r.Msg.Option(Observe).(uint32)
+				//obs starts with 0, after that check obsSequence
+				if obsSequence != 0 && o.obsSequence > obsSequence {
 					return false
 				}
-				o.obsSeqNum = obsSeqNum
+				o.obsSequence = obsSequence
 			}
 			return true
 		}
@@ -281,13 +281,13 @@ func (cc *ClientCommander) ObserveWithContext(ctx context.Context, path string, 
 		case r.Msg.Option(ETag) != nil && resp.Option(ETag) != nil:
 			//during processing observation, check if notification is still valid
 			if bytes.Equal(resp.Option(ETag).([]byte), r.Msg.Option(ETag).([]byte)) {
-				if setObsSeqNum() {
-					observeFunc(&Request{Msg: resp, Client: r.Client, Ctx: r.Ctx, SeqNum: r.SeqNum})
+				if setObsSequence() {
+					observeFunc(&Request{Msg: resp, Client: r.Client, Ctx: r.Ctx, Sequence: r.Sequence})
 				}
 			}
 		default:
-			if setObsSeqNum() {
-				observeFunc(&Request{Msg: resp, Client: r.Client, Ctx: r.Ctx, SeqNum: r.SeqNum})
+			if setObsSequence() {
+				observeFunc(&Request{Msg: resp, Client: r.Client, Ctx: r.Ctx, Sequence: r.Sequence})
 			}
 		}
 		return
@@ -307,4 +307,9 @@ func (cc *ClientCommander) ObserveWithContext(ctx context.Context, path string, 
 // Close close connection
 func (cc *ClientCommander) Close() error {
 	return cc.networkSession.Close()
+}
+
+// Sequence discontinuously unique growing number for connection.
+func (cc *ClientCommander) Sequence() uint64 {
+	return cc.networkSession.Sequence()
 }

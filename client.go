@@ -369,6 +369,11 @@ func (co *ClientConn) Close() error {
 	return err
 }
 
+// Sequence discontinuously unique growing number for connection.
+func (co *ClientConn) Sequence() uint64 {
+	return co.commander.Sequence()
+}
+
 // Dial connects to the address on the named network.
 func Dial(network, address string) (*ClientConn, error) {
 	client := Client{Net: network}
