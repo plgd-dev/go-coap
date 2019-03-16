@@ -489,6 +489,10 @@ type Message interface {
 	PathString() string
 	SetPathString(s string)
 	SetPath(s []string)
+	Query() []string
+	QueryString() string
+	SetQueryString(string)
+	SetQuery([]string)
 	SetURIQuery(s string)
 	SetObserve(b uint32)
 	SetPayload(p []byte)
@@ -608,6 +612,26 @@ func (m *MessageBase) SetPathString(s string) {
 // SetPath updates or adds a URIPath attribute on this message.
 func (m *MessageBase) SetPath(s []string) {
 	m.SetOption(URIPath, s)
+}
+
+// Query gets the Query set on this message if any.
+func (m *MessageBase) Query() []string {
+	return m.optionStrings(URIQuery)
+}
+
+// QueryString gets a path as an ampersand separated string.
+func (m *MessageBase) QueryString() string {
+	return strings.Join(m.Query(), "&")
+}
+
+// SetQueryString sets a query by an ampersand separated string.
+func (m *MessageBase) SetQueryString(s string) {
+	m.SetQuery(strings.Split(s, "&"))
+}
+
+// SetQuery updates or adds a URIQuery attribute on this message.
+func (m *MessageBase) SetQuery(s []string) {
+	m.SetOption(URIQuery, s)
 }
 
 // Set URIQuery attibute to the message

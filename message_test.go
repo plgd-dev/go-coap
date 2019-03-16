@@ -390,6 +390,41 @@ func TestEncodeMessageVerySmall2(t *testing.T) {
 	}
 }
 
+func TestEncodeManyQueries(t *testing.T) {
+	tests := map[string][]string{
+		"a":   []string{"a"},
+		"axe": []string{"axe"},
+		"a&b&c&d&e&f&h&g&i&j": []string{"a", "b", "c", "d", "e",
+			"f", "h", "g", "i", "j"},
+	}
+	for p, a := range tests {
+		m := &DgramMessage{
+			MessageBase{
+				typ:       Confirmable,
+				code:      GET,
+				messageID: 12345,
+			},
+		}
+		m.SetQueryString(p)
+		buf := &bytes.Buffer{}
+		err := m.MarshalBinary(buf)
+		if err != nil {
+			t.Errorf("Error encoding %#v", p)
+			t.Fail()
+			continue
+		}
+		m2, err := ParseDgramMessage(buf.Bytes())
+		if err != nil {
+			t.Fatalf("Can't parse my own message at %#v: %v", p, err)
+		}
+
+		if !reflect.DeepEqual(m2.Query(), a) {
+			t.Errorf("Expected %#v, got %#v", a, m2.Path())
+			t.Fail()
+		}
+	}
+}
+
 func TestEncodeSeveral(t *testing.T) {
 	tests := map[string][]string{
 		"a":   []string{"a"},
