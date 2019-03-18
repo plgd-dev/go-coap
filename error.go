@@ -106,3 +106,6 @@ const ErrUnexpectedReponseCode = Error("unexpected response code")
 
 // ErrMessageNotInterested message is not of interest to the client
 const ErrMessageNotInterested = Error("message not to be sent due to disinterest")
+
+// ErrMaxMessageSizeLimitExceeded message size bigger thab maximum message size limit
+const ErrMaxMessageSizeLimitExceeded = Error("maximum message size limit exceeded")

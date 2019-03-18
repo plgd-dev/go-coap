@@ -1132,3 +1132,24 @@ func TestDecodeMessageWithNoResponseOption(t *testing.T) {
 		t.Fatalf("parsedMsg.Option(NoResponse): %v", parsedMsg.Option(NoResponse).(uint32))
 	}
 }
+
+func TestToBytesLength(t *testing.T) {
+	data := []byte{
+		0x40, 0x1, 0x30, 0x39, 0x46, 0x77,
+		0x65, 0x65, 0x74, 0x61, 0x67, 0xa1, 0x3,
+	}
+
+	msg, err := ParseDgramMessage(data)
+	if err != nil {
+		t.Fatalf("Error parsing request: %v", err)
+	}
+
+	bytesLength, err := msg.ToBytesLength()
+	if err != nil {
+		t.Fatalf("Error parsing request: %v", err)
+	}
+
+	if len(data) != bytesLength {
+		t.Errorf("Expected Length = %d, got %d", len(data), bytesLength)
+	}
+}

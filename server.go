@@ -456,6 +456,15 @@ func (srv *Server) serveTCPconnection(ctx *shutdownContext, netConn net.Conn) er
 
 		msg.fill(mti, o, p)
 
+		size, err := msg.ToBytesLength()
+		if err != nil {
+			return session.closeWithError(fmt.Errorf("cannot serve tcp connection: %v", err))
+		}
+
+		if uint32(size) > srv.MaxMessageSize {
+			return session.closeWithError(fmt.Errorf("cannot serve tcp connection: %v", ErrMaxMessageSizeLimitExceeded))
+		}
+
 		// We will block poller wait loop when
 		// all pool workers are busy.
 		c := ClientConn{commander: &ClientCommander{session}}
