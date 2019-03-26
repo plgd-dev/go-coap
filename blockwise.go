@@ -352,7 +352,8 @@ func (b *blockWiseSession) validateMessageSize(msg Message) error {
 		return nil
 	}
 
-	if uint32(size) > session.peerMaxMessageSize {
+	if session.peerMaxMessageSize != 0 &&
+		uint32(size) > session.peerMaxMessageSize {
 		return ErrMaxMessageSizeLimitExceeded
 	}
 
@@ -561,7 +562,8 @@ func (r *blockWiseReceiver) validateMessageSize(msg Message, b *blockWiseSession
 
 	session, ok := b.networkSession.(*sessionTCP)
 	if ok {
-		if uint32(size) > session.srv.MaxMessageSize {
+		if session.srv.MaxMessageSize != 0 &&
+			uint32(size) > session.srv.MaxMessageSize {
 			return ErrMaxMessageSizeLimitExceeded
 		}
 	}

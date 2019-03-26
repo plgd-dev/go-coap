@@ -333,7 +333,7 @@ func (m *TcpMessage) fill(mti msgTcpInfo, o options, p []byte) {
 }
 
 func (m *TcpMessage) ToBytesLength() (int, error) {
-	buf := &bytes.Buffer{}
+	buf := bytes.NewBuffer(make([]byte, 0, 1024))
 	if err := m.MarshalBinary(buf); err != nil {
 		return 0, err
 	}

@@ -1,6 +1,7 @@
 package coap
 
 import (
+	"bytes"
 	"encoding/binary"
 	"io"
 	"sort"
@@ -113,4 +114,14 @@ func (m *DgramMessage) UnmarshalBinary(data []byte) error {
 func ParseDgramMessage(data []byte) (*DgramMessage, error) {
 	rv := &DgramMessage{}
 	return rv, rv.UnmarshalBinary(data)
+}
+
+// ToBytesLength gets the length of the message
+func (m *DgramMessage) ToBytesLength() (int, error) {
+	buf := bytes.NewBuffer(make([]byte, 0, 1024))
+	if err := m.MarshalBinary(buf); err != nil {
+		return 0, err
+	}
+
+	return len(buf.Bytes()), nil
 }

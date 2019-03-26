@@ -438,6 +438,11 @@ func (srv *Server) serveTCPconnection(ctx *shutdownContext, netConn net.Conn) er
 			return session.closeWithError(fmt.Errorf("cannot serve tcp connection: %v", err))
 		}
 
+		if srv.MaxMessageSize != 0 &&
+			uint32(mti.totLen) > srv.MaxMessageSize {
+			return session.closeWithError(fmt.Errorf("cannot serve tcp connection: %v", ErrMaxMessageSizeLimitExceeded))
+		}
+
 		body := make([]byte, mti.BodyLen())
 		//ctx, cancel := context.WithTimeout(srv.ctx, srv.readTimeout())
 		err = conn.ReadFullWithContext(ctx, body)
@@ -455,15 +460,6 @@ func (srv *Server) serveTCPconnection(ctx *shutdownContext, netConn net.Conn) er
 		//msg := TcpMessage{MessageBase{}}
 
 		msg.fill(mti, o, p)
-
-		size, err := msg.ToBytesLength()
-		if err != nil {
-			return session.closeWithError(fmt.Errorf("cannot serve tcp connection: %v", err))
-		}
-
-		if uint32(size) > srv.MaxMessageSize {
-			return session.closeWithError(fmt.Errorf("cannot serve tcp connection: %v", ErrMaxMessageSizeLimitExceeded))
-		}
 
 		// We will block poller wait loop when
 		// all pool workers are busy.

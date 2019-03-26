@@ -1,13 +1,11 @@
 package coap
 
 import (
-	"bytes"
 	"encoding/binary"
 	"fmt"
 	"io"
 	"log"
 	"reflect"
-	"sort"
 	"strconv"
 	"strings"
 )
@@ -679,43 +677,6 @@ func (m *MessageBase) AddOption(opID OptionID, val interface{}) {
 func (m *MessageBase) SetOption(opID OptionID, val interface{}) {
 	m.RemoveOption(opID)
 	m.AddOption(opID, val)
-}
-
-// ToBytesLength gets the length of the message
-func (m *MessageBase) ToBytesLength() (int, error) {
-	buf := &bytes.Buffer{}
-	if err := m.MarshalBinary(buf); err != nil {
-		return 0, err
-	}
-
-	return len(buf.Bytes()), nil
-}
-
-// MarshalBinary marshalls the message into byte array
-func (m *MessageBase) MarshalBinary(buf io.Writer) error {
-	tmpbuf := []byte{0, 0}
-	binary.BigEndian.PutUint16(tmpbuf, m.MessageID())
-
-	buf.Write([]byte{
-		(1 << 6) | (uint8(m.Type()) << 4) | uint8(0xf&len(m.token)),
-		byte(m.code),
-		tmpbuf[0], tmpbuf[1],
-	})
-
-	if len(m.token) > MaxTokenSize {
-		return ErrInvalidTokenLen
-	}
-	buf.Write(m.token)
-
-	sort.Stable(&m.opts)
-	writeOpts(buf, m.opts)
-
-	if len(m.payload) > 0 {
-		buf.Write([]byte{0xff})
-	}
-
-	buf.Write(m.payload)
-	return nil
 }
 
 const (
