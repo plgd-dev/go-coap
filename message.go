@@ -503,6 +503,7 @@ type Message interface {
 	UnmarshalBinary(data []byte) error
 	SetToken(t []byte)
 	SetMessageID(messageID uint16)
+	ToBytesLength() (int, error)
 }
 
 // MessageParams params to create COAP message

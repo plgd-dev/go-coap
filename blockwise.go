@@ -341,7 +341,29 @@ func (b *blockWiseSession) WriteMsg(msg Message) error {
 	return b.WriteMsgWithContext(context.Background(), msg)
 }
 
+func (b *blockWiseSession) validateMessageSize(msg Message) error {
+	size, err := msg.ToBytesLength()
+	if err != nil {
+		return err
+	}
+	session, ok := b.networkSession.(*sessionTCP)
+	if !ok {
+		// Not supported for UDP session
+		return nil
+	}
+
+	if session.peerMaxMessageSize != 0 &&
+		uint32(size) > session.peerMaxMessageSize {
+		return ErrMaxMessageSizeLimitExceeded
+	}
+
+	return nil
+}
+
 func (b *blockWiseSession) WriteMsgWithContext(ctx context.Context, msg Message) error {
+	if err := b.validateMessageSize(msg); err != nil {
+		return err
+	}
 	switch msg.Code() {
 	case CSM, Ping, Pong, Release, Abort, Empty, GET:
 		return b.networkSession.WriteMsgWithContext(ctx, msg)
@@ -532,7 +554,26 @@ func (r *blockWiseReceiver) exchange(ctx context.Context, b *blockWiseSession, r
 	return resp, err
 }
 
+func (r *blockWiseReceiver) validateMessageSize(msg Message, b *blockWiseSession) error {
+	size, err := msg.ToBytesLength()
+	if err != nil {
+		return err
+	}
+
+	session, ok := b.networkSession.(*sessionTCP)
+	if ok {
+		if session.srv.MaxMessageSize != 0 &&
+			uint32(size) > session.srv.MaxMessageSize {
+			return ErrMaxMessageSizeLimitExceeded
+		}
+	}
+	return nil
+}
+
 func (r *blockWiseReceiver) processResp(b *blockWiseSession, req Message, resp Message) (Message, error) {
+	if err := r.validateMessageSize(req, b); err != nil {
+		return nil, err
+	}
 	if respBlock, ok := resp.Option(r.blockType).(uint32); ok {
 		szx, num, more, err := UnmarshalBlockOption(respBlock)
 		if err != nil {

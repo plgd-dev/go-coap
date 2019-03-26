@@ -31,4 +31,37 @@ func TestTCPDecodeMessageSmallWithPayload(t *testing.T) {
 	if !bytes.Equal(msg.Payload(), []byte("hi")) {
 		t.Errorf("Incorrect payload: %q", msg.Payload())
 	}
+
+}
+
+func TestMessageTCPToBytesLength(t *testing.T) {
+	msgParams := MessageParams{
+		Code:    COAPCode(02),
+		Token:   []byte{0xab},
+		Payload: []byte("hi"),
+	}
+
+	msg := NewTcpMessage(msgParams)
+	msg.AddOption(MaxMessageSize, maxMessageSize)
+
+	buf := &bytes.Buffer{}
+	err := msg.MarshalBinary(buf)
+	if err != nil {
+		t.Fatalf("Error encoding request: %v", err)
+	}
+
+	bytesLength, err := msg.ToBytesLength()
+	if err != nil {
+		t.Fatalf("Error parsing request: %v", err)
+	}
+
+	lenTkl := 1
+	lenCode := 1
+	maxMessageSizeOptionLength := 3
+	payloadMarker := []byte{0xff}
+
+	expectedLength := lenTkl + lenCode + len(msgParams.Token) + maxMessageSizeOptionLength + len(payloadMarker) + len(msgParams.Payload)
+	if expectedLength != bytesLength {
+		t.Errorf("Expected Length  = %d, got %d", expectedLength, bytesLength)
+	}
 }

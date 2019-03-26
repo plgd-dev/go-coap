@@ -161,7 +161,9 @@ func RunLocalTLSServer(laddr string, config *tls.Config) (*Server, string, chan 
 			fmt.Printf("networkSession start %v\n", s.RemoteAddr())
 		}, NotifySessionEndFunc: func(w *ClientConn, err error) {
 			fmt.Printf("networkSession end %v: %v\n", w.RemoteAddr(), err)
-		}}
+		},
+		MaxMessageSize: ^uint32(0),
+	}
 
 	// fin must be buffered so the goroutine below won't block
 	// forever if fin is never read from. This always happens

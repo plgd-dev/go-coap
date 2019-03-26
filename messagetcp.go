@@ -332,6 +332,15 @@ func (m *TcpMessage) fill(mti msgTcpInfo, o options, p []byte) {
 	m.MessageBase.payload = p
 }
 
+func (m *TcpMessage) ToBytesLength() (int, error) {
+	buf := bytes.NewBuffer(make([]byte, 0, 1024))
+	if err := m.MarshalBinary(buf); err != nil {
+		return 0, err
+	}
+
+	return len(buf.Bytes()), nil
+}
+
 type contextBytesReader struct {
 	reader io.Reader
 }

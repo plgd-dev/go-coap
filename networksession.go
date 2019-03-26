@@ -423,8 +423,24 @@ func (s *sessionUDP) ExchangeWithContext(ctx context.Context, req Message) (Mess
 	}
 }
 
+func (s *sessionTCP) validateMessageSize(msg Message) error {
+	size, err := msg.ToBytesLength()
+	if err != nil {
+		return err
+	}
+
+	if uint32(size) > s.peerMaxMessageSize {
+		return ErrMaxMessageSizeLimitExceeded
+	}
+
+	return nil
+}
+
 // Write implements the networkSession.Write method.
 func (s *sessionTCP) WriteMsgWithContext(ctx context.Context, req Message) error {
+	if err := s.validateMessageSize(req); err != nil {
+		return err
+	}
 	buffer := bytes.NewBuffer(make([]byte, 0, 1500))
 	err := req.MarshalBinary(buffer)
 	if err != nil {

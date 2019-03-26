@@ -52,6 +52,7 @@ func testServingObservation(t *testing.T, net string, addrstr string, BlockWiseT
 		Net:                  net,
 		BlockWiseTransfer:    &BlockWiseTransfer,
 		BlockWiseTransferSzx: &BlockWiseTransferSzx,
+		MaxMessageSize:       ^uint32(0),
 	}
 
 	conn, err := client.Dial(addrstr)
