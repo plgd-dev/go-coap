@@ -429,7 +429,7 @@ func (s *sessionTCP) validateMessageSize(msg Message) error {
 		return err
 	}
 
-	if uint32(size) > s.peerMaxMessageSize {
+	if s.peerMaxMessageSize != 0 && uint32(size) > s.peerMaxMessageSize {
 		return ErrMaxMessageSizeLimitExceeded
 	}
 
