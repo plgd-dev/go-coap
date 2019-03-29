@@ -131,7 +131,7 @@ type Server struct {
 	// Handler to invoke, COAP.DefaultServeMux if nil.
 	Handler Handler
 	// Max message size that could be received from peer. Min 16bytes. If not set
-	// it defaults to 1152 B.
+	// it defaults is unlimited.
 	MaxMessageSize uint32
 	// The net.Conn.SetReadTimeout value for new connections, defaults to 1hour.
 	ReadTimeout time.Duration
@@ -320,10 +320,7 @@ func (srv *Server) ActivateAndServe() error {
 	pConn := srv.Conn
 	l := srv.Listener
 
-	if srv.MaxMessageSize == 0 {
-		srv.MaxMessageSize = maxMessageSize
-	}
-	if srv.MaxMessageSize < uint32(szxToBytes[BlockWiseSzx16]) {
+	if srv.MaxMessageSize > 0 && srv.MaxMessageSize < uint32(szxToBytes[BlockWiseSzx16]) {
 		return ErrInvalidMaxMesssageSizeParameter
 	}
 

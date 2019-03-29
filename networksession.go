@@ -516,7 +516,9 @@ func (s *sessionTCP) sendCSM() error {
 		Code:  CSM,
 		Token: []byte(token),
 	})
-	req.AddOption(MaxMessageSize, uint32(s.srv.MaxMessageSize))
+	if s.srv.MaxMessageSize != 0 {
+		req.AddOption(MaxMessageSize, uint32(s.srv.MaxMessageSize))
+	}
 	if s.blockWiseEnabled() {
 		req.AddOption(BlockWiseTransfer, []byte{})
 	}
