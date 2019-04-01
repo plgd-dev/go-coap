@@ -224,6 +224,8 @@ func (srv *Server) spawnWorker(w *Request) {
 
 // ListenAndServe starts a coapserver on the configured address in *Server.
 func (srv *Server) ListenAndServe() error {
+	var listener Listener
+	var connUDP *kitNet.ConnUDP
 	addr := srv.Addr
 	var err error
 	if addr == "" {
@@ -237,16 +239,18 @@ func (srv *Server) ListenAndServe() error {
 
 	switch srv.Net {
 	case "tcp", "tcp4", "tcp6":
-		srv.Listener, err = kitNet.NewTCPListener(srv.Net, addr, srv.heartBeat())
+		listener, err = kitNet.NewTCPListener(srv.Net, addr, srv.heartBeat())
 		if err != nil {
 			return fmt.Errorf("cannot listen and serve: %v", err)
 		}
+		defer listener.Close()
 	case "tcp-tls", "tcp4-tls", "tcp6-tls":
 		network := strings.TrimSuffix(srv.Net, "-tls")
-		srv.Listener, err = kitNet.NewTLSListener(network, addr, srv.TLSConfig, srv.heartBeat())
+		listener, err = kitNet.NewTLSListener(network, addr, srv.TLSConfig, srv.heartBeat())
 		if err != nil {
 			return fmt.Errorf("cannot listen and serve: %v", err)
 		}
+		defer listener.Close()
 	case "udp", "udp4", "udp6":
 		a, err := net.ResolveUDPAddr(srv.Net, addr)
 		if err != nil {
@@ -259,7 +263,8 @@ func (srv *Server) ListenAndServe() error {
 		if err := kitNet.SetUDPSocketOptions(l); err != nil {
 			return err
 		}
-		srv.Conn = l
+		connUDP = kitNet.NewConnUDP(l, srv.heartBeat(), 2)
+		defer connUDP.Close()
 	case "udp-mcast", "udp4-mcast", "udp6-mcast":
 		network := strings.TrimSuffix(srv.Net, "-mcast")
 
@@ -274,35 +279,34 @@ func (srv *Server) ListenAndServe() error {
 		if err := kitNet.SetUDPSocketOptions(l); err != nil {
 			return err
 		}
+		connUDP = kitNet.NewConnUDP(l, srv.heartBeat(), 2)
+		defer connUDP.Close()
 		if len(srv.UDPMcastInterfaces) > 0 {
 			for _, ifi := range srv.UDPMcastInterfaces {
-				if err := kitNet.JoinGroup(l, &ifi, &net.UDPAddr{IP: a.IP, Zone: a.Zone}); err != nil {
+				if err := connUDP.JoinGroup(&ifi, a); err != nil {
 					return err
 				}
 			}
 		} else {
-			if err := kitNet.JoinGroup(l, nil, &net.UDPAddr{IP: a.IP, Zone: a.Zone}); err != nil {
+			if err := connUDP.JoinGroup(nil, a); err != nil {
 				return err
 			}
 		}
-		srv.Conn = l
+		if err := connUDP.SetMulticastLoopback(true); err != nil {
+			return err
+		}
 	default:
 		return ErrInvalidNetParameter
 	}
-	if srv.Conn != nil {
-		defer srv.Conn.Close()
-	} else if srv.Listener != nil {
-		defer srv.Listener.Close()
-	}
 
-	return srv.ActivateAndServe()
+	return srv.activateAndServe(listener, nil, connUDP)
 }
 
-func (srv *Server) initServeUDP(conn *net.UDPConn) error {
-	return srv.serveUDP(newShutdownWithContext(srv.doneChan), conn)
+func (srv *Server) initServeUDP(connUDP *kitNet.ConnUDP) error {
+	return srv.serveUDP(newShutdownWithContext(srv.doneChan), connUDP)
 }
 
-func (srv *Server) initServeTCP(conn net.Conn) error {
+func (srv *Server) initServeTCP(conn *kitNet.Conn) error {
 	if srv.NotifyStartedFunc != nil {
 		srv.NotifyStartedFunc()
 	}
@@ -312,13 +316,27 @@ func (srv *Server) initServeTCP(conn net.Conn) error {
 // ActivateAndServe starts a coapserver with the PacketConn or Listener
 // configured in *Server. Its main use is to start a server from systemd.
 func (srv *Server) ActivateAndServe() error {
+	if srv.Conn != nil {
+		switch c := srv.Conn.(type) {
+		case *net.TCPConn, *tls.Conn:
+			return srv.activateAndServe(nil, kitNet.NewConn(c, srv.heartBeat()), nil)
+		case *net.UDPConn:
+			return srv.activateAndServe(nil, nil, kitNet.NewConnUDP(c, srv.heartBeat(), 2))
+		}
+		return ErrInvalidServerConnParameter
+	}
+	if srv.Listener != nil {
+		return srv.activateAndServe(srv.Listener, nil, nil)
+	}
+
+	return ErrInvalidServerListenerParameter
+}
+
+func (srv *Server) activateAndServe(listener Listener, conn *kitNet.Conn, connUDP *kitNet.ConnUDP) error {
 	srv.doneLock.Lock()
 	srv.done = false
 	srv.doneChan = make(chan struct{})
 	srv.doneLock.Unlock()
-
-	pConn := srv.Conn
-	l := srv.Listener
 
 	if srv.MaxMessageSize > 0 && srv.MaxMessageSize < uint32(szxToBytes[BlockWiseSzx16]) {
 		return ErrInvalidMaxMesssageSizeParameter
@@ -363,17 +381,13 @@ func (srv *Server) ActivateAndServe() error {
 		srv.NotifySessionEndFunc = func(w *ClientConn, err error) {}
 	}
 
-	if pConn != nil {
-		switch pConn.(type) {
-		case *net.TCPConn, *tls.Conn:
-			return srv.initServeTCP(pConn)
-		case *net.UDPConn:
-			return srv.initServeUDP(pConn.(*net.UDPConn))
-		}
-		return ErrInvalidServerConnParameter
-	}
-	if l != nil {
-		return srv.serveTCP(l)
+	switch {
+	case listener != nil:
+		return srv.serveTCP(listener)
+	case conn != nil:
+		return srv.initServeTCP(conn)
+	case connUDP != nil:
+		return srv.initServeUDP(connUDP)
 	}
 
 	return ErrInvalidServerListenerParameter
@@ -416,9 +430,7 @@ func (srv *Server) heartBeat() time.Duration {
 	return time.Millisecond * 100
 }
 
-func (srv *Server) serveTCPconnection(ctx *shutdownContext, netConn net.Conn) error {
-	conn := kitNet.NewConn(netConn, srv.heartBeat())
-
+func (srv *Server) serveTCPconnection(ctx *shutdownContext, conn *kitNet.Conn) error {
 	session, err := srv.newSessionTCPFunc(conn, srv)
 	if err != nil {
 		return err
@@ -484,7 +496,7 @@ func (srv *Server) serveTCP(l Listener) error {
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
-				srv.serveTCPconnection(ctx, rw)
+				srv.serveTCPconnection(ctx, kitNet.NewConn(rw, srv.heartBeat()))
 			}()
 		}
 	}
@@ -502,14 +514,12 @@ func (srv *Server) closeSessions(err error) {
 }
 
 // serveUDP starts a UDP listener for the server.
-func (srv *Server) serveUDP(ctx *shutdownContext, conn *net.UDPConn) error {
-	defer conn.Close()
-
+func (srv *Server) serveUDP(ctx *shutdownContext, connUDP *kitNet.ConnUDP) error {
 	if srv.NotifyStartedFunc != nil {
 		srv.NotifyStartedFunc()
 	}
 
-	connUDP := kitNet.NewConnUDP(conn, srv.heartBeat())
+	//	connUDP := kitNet.NewConnUDP(conn, srv.heartBeat(), 2)
 	sessCtx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 

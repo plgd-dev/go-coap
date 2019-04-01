@@ -29,6 +29,8 @@ type MulticastClient struct {
 	BlockWiseTransfer    *bool         // Use blockWise transfer for transfer payload (default for UDP it's enabled, for TCP it's disable)
 	BlockWiseTransferSzx *BlockWiseSzx // Set maximal block size of payload that will be send in fragment
 
+	MulticastHopLimit int //sets the hop limit field value for future outgoing multicast packets. default is 2.
+
 	multicastHandler *TokenHandler
 }
 

@@ -60,8 +60,16 @@ type networkSession interface {
 	blockWiseIsValid(szx BlockWiseSzx) bool
 }
 
+type connUDP interface {
+	LocalAddr() net.Addr
+	RemoteAddr() net.Addr
+	Close() error
+	ReadWithContext(ctx context.Context, buffer []byte) (int, *kitNet.ConnUDPContext, error)
+	WriteWithContext(ctx context.Context, udpCtx *kitNet.ConnUDPContext, buffer []byte) error
+}
+
 // NewSessionUDP create new session for UDP connection
-func newSessionUDP(connection *kitNet.ConnUDP, srv *Server, sessionUDPData *kitNet.ConnUDPContext) (networkSession, error) {
+func newSessionUDP(connection connUDP, srv *Server, sessionUDPData *kitNet.ConnUDPContext) (networkSession, error) {
 	BlockWiseTransfer := true
 	BlockWiseTransferSzx := BlockWiseSzx1024
 	if srv.BlockWiseTransfer != nil {
@@ -135,7 +143,7 @@ type sessionBase struct {
 
 type sessionUDP struct {
 	sessionBase
-	connection     *kitNet.ConnUDP
+	connection     connUDP
 	sessionUDPData *kitNet.ConnUDPContext                         // oob data to get egress interface right
 	mapPairs       map[[MaxTokenSize]byte]map[uint16]*sessionResp //storage of channel Message
 	mapPairsLock   sync.Mutex                                     //to sync add remove token
