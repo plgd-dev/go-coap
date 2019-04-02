@@ -162,9 +162,6 @@ type Server struct {
 	queue chan *Request
 	// Workers count
 	workersCount int32
-	// Shutdown handling
-	//lock    sync.RWMutex
-	//started bool
 
 	sessionUDPMapLock sync.Mutex
 	sessionUDPMap     map[string]networkSession
@@ -453,12 +450,10 @@ func (srv *Server) serveTCPconnection(ctx *shutdownContext, conn *kitNet.Conn) e
 		}
 
 		body := make([]byte, mti.BodyLen())
-		//ctx, cancel := context.WithTimeout(srv.ctx, srv.readTimeout())
 		err = conn.ReadFullWithContext(ctx, body)
 		if err != nil {
 			return session.closeWithError(fmt.Errorf("cannot serve tcp connection: %v", err))
 		}
-		//cancel()
 
 		o, p, err := parseTcpOptionsPayload(mti, body)
 		if err != nil {
@@ -466,7 +461,6 @@ func (srv *Server) serveTCPconnection(ctx *shutdownContext, conn *kitNet.Conn) e
 		}
 
 		msg := new(TcpMessage)
-		//msg := TcpMessage{MessageBase{}}
 
 		msg.fill(mti, o, p)
 
@@ -519,7 +513,6 @@ func (srv *Server) serveUDP(ctx *shutdownContext, connUDP *kitNet.ConnUDP) error
 		srv.NotifyStartedFunc()
 	}
 
-	//	connUDP := kitNet.NewConnUDP(conn, srv.heartBeat(), 2)
 	sessCtx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
