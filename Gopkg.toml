@@ -26,7 +26,7 @@
 
 
 [[constraint]]
-  branch = "master"
+  branch = "fixWindowsMulticast"
   name = "github.com/go-ocf/kit"
 
 [[constraint]]
@@ -34,12 +34,8 @@
   version = "1.1.2"
 
 [[constraint]]
-  branch = "master"
   name = "go.uber.org/goleak"
-
-[[constraint]]
-  branch = "master"
-  name = "golang.org/x/net"
+  version = "0.10.0"
 
 [prune]
   go-tests = true
