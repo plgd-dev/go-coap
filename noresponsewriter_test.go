@@ -70,13 +70,13 @@ func testNoResponseHandler(t *testing.T, w ResponseWriter, r *Request) {
 func TestNoResponseBehaviour(t *testing.T) {
 	// server creation
 	s, addr, fin, err := RunLocalServerUDPWithHandler("udp", ":", false, BlockWiseSzx16, func(w ResponseWriter, r *Request) { testNoResponseHandler(t, w, r) })
+	if err != nil {
+		t.Fatalf("Unexpected error '%v'", err)
+	}
 	defer func() {
 		s.Shutdown()
 		<-fin
 	}()
-	if err != nil {
-		t.Fatalf("Unexpected error '%v'", err)
-	}
 
 	// connect client
 	c := Client{Net: "udp"}
