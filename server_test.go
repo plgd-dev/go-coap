@@ -80,16 +80,17 @@ func RunLocalServerUDPWithHandlerIfaces(lnet, laddr string, BlockWiseTransfer bo
 	connUDP := kitNet.NewConnUDP(pc, time.Millisecond*100, 2)
 	if strings.Contains(lnet, "-mcast") {
 		if ifaces == nil {
-			if err := connUDP.JoinGroup(nil, a); err != nil {
+			ifaces, err = net.Interfaces()
+			if err != nil {
 				return nil, "", nil, err
 			}
-		} else {
-			for _, iface := range ifaces {
-				if err := connUDP.JoinGroup(&iface, a); err != nil {
-					return nil, "", nil, err
-				}
+		}
+		for _, iface := range ifaces {
+			if err := connUDP.JoinGroup(&iface, a); err != nil {
+				return nil, "", nil, err
 			}
 		}
+
 		if err := connUDP.SetMulticastLoopback(true); err != nil {
 			return nil, "", nil, err
 		}
@@ -106,6 +107,10 @@ func RunLocalServerUDPWithHandlerIfaces(lnet, laddr string, BlockWiseTransfer bo
 		BlockWiseTransfer:    &BlockWiseTransfer,
 		BlockWiseTransferSzx: &BlockWiseTransferSzx,
 	}
+
+	waitLock := sync.Mutex{}
+	waitLock.Lock()
+	server.NotifyStartedFunc = waitLock.Unlock
 
 	// fin must be buffered so the goroutine below won't block
 	// forever if fin is never read from. This always happens

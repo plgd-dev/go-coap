@@ -278,14 +278,15 @@ func (srv *Server) ListenAndServe() error {
 		}
 		connUDP = kitNet.NewConnUDP(l, srv.heartBeat(), 2)
 		defer connUDP.Close()
-		if len(srv.UDPMcastInterfaces) > 0 {
-			for _, ifi := range srv.UDPMcastInterfaces {
-				if err := connUDP.JoinGroup(&ifi, a); err != nil {
-					return err
-				}
+		ifaces := srv.UDPMcastInterfaces
+		if len(ifaces) == 0 {
+			ifaces, err = net.Interfaces()
+			if err != nil {
+				return err
 			}
-		} else {
-			if err := connUDP.JoinGroup(nil, a); err != nil {
+		}
+		for _, iface := range ifaces {
+			if err := connUDP.JoinGroup(&iface, a); err != nil {
 				return err
 			}
 		}
