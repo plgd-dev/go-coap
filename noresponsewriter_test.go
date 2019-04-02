@@ -2,6 +2,7 @@ package coap
 
 import (
 	"reflect"
+	"sync"
 	"testing"
 )
 
@@ -69,7 +70,12 @@ func testNoResponseHandler(t *testing.T, w ResponseWriter, r *Request) {
 
 func TestNoResponseBehaviour(t *testing.T) {
 	// server creation
-	s, addr, fin, err := RunLocalServerUDPWithHandler("udp", ":", false, BlockWiseSzx16, func(w ResponseWriter, r *Request) { testNoResponseHandler(t, w, r) })
+	var wg sync.WaitGroup
+	wg.Add(1)
+	s, addr, fin, err := RunLocalServerUDPWithHandler("udp", ":", false, BlockWiseSzx16, func(w ResponseWriter, r *Request) {
+		testNoResponseHandler(t, w, r)
+		wg.Done()
+	})
 	if err != nil {
 		t.Fatalf("Unexpected error '%v'", err)
 	}
@@ -79,7 +85,7 @@ func TestNoResponseBehaviour(t *testing.T) {
 	}()
 
 	// connect client
-	c := Client{Net: "udp"}
+	c := Client{Net: "udp", Handler: func(w ResponseWriter, r *Request) {}}
 	con, err := c.Dial(addr)
 	if err != nil {
 		t.Fatalf("Unexpected error '%v'", err)
@@ -99,4 +105,5 @@ func TestNoResponseBehaviour(t *testing.T) {
 	if err != nil {
 		t.Fatalf("client unable to write message: %v", err)
 	}
+	wg.Wait()
 }
