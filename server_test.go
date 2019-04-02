@@ -62,22 +62,41 @@ func EchoServerBadID(w ResponseWriter, r *Request) {
 }
 
 func RunLocalServerUDPWithHandler(lnet, laddr string, BlockWiseTransfer bool, BlockWiseTransferSzx BlockWiseSzx, handler HandlerFunc) (*Server, string, chan error, error) {
+	return RunLocalServerUDPWithHandlerIfaces(lnet, laddr, BlockWiseTransfer, BlockWiseTransferSzx, handler, nil)
+}
+
+func RunLocalServerUDPWithHandlerIfaces(lnet, laddr string, BlockWiseTransfer bool, BlockWiseTransferSzx BlockWiseSzx, handler HandlerFunc, ifaces []net.Interface) (*Server, string, chan error, error) {
 	network := strings.TrimSuffix(lnet, "-mcast")
 
 	a, err := net.ResolveUDPAddr(network, laddr)
 	if err != nil {
 		return nil, "", nil, err
 	}
-	var pc *net.UDPConn
-	if strings.Contains(lnet, "-mcast") {
-		pc, err = net.ListenMulticastUDP(network, nil, a)
-	} else {
-		pc, err = net.ListenUDP(network, a)
-	}
+	pc, err := net.ListenUDP(network, a)
 	if err != nil {
 		return nil, "", nil, err
 	}
-	server := &Server{Conn: pc, ReadTimeout: time.Hour, WriteTimeout: time.Hour,
+
+	connUDP := kitNet.NewConnUDP(pc, time.Millisecond*100, 2)
+	if strings.Contains(lnet, "-mcast") {
+		if ifaces == nil {
+			ifaces, err = net.Interfaces()
+			if err != nil {
+				return nil, "", nil, err
+			}
+		}
+		for _, iface := range ifaces {
+			if err := connUDP.JoinGroup(&iface, a); err != nil {
+				return nil, "", nil, err
+			}
+		}
+
+		if err := connUDP.SetMulticastLoopback(true); err != nil {
+			return nil, "", nil, err
+		}
+	}
+
+	server := &Server{ReadTimeout: time.Hour, WriteTimeout: time.Hour,
 		NotifySessionNewFunc: func(s *ClientConn) {
 			fmt.Printf("networkSession start %v\n", s.RemoteAddr())
 		},
@@ -99,11 +118,11 @@ func RunLocalServerUDPWithHandler(lnet, laddr string, BlockWiseTransfer bool, Bl
 	fin := make(chan error, 1)
 
 	go func() {
-		fin <- server.ActivateAndServe()
-		pc.Close()
+		err = server.activateAndServe(nil, nil, connUDP)
+		connUDP.Close()
+		fin <- err
 	}()
 
-	waitLock.Lock()
 	return server, pc.LocalAddr().String(), fin, nil
 }
 
@@ -401,16 +420,23 @@ func TestServingChallengingTimeoutClientTLS(t *testing.T) {
 }
 
 func testServingMCast(t *testing.T, lnet, laddr string, BlockWiseTransfer bool, BlockWiseTransferSzx BlockWiseSzx, payloadLen int) {
+	testServingMCastWithIfaces(t, lnet, laddr, BlockWiseTransfer, BlockWiseTransferSzx, payloadLen, nil)
+}
+
+func testServingMCastWithIfaces(t *testing.T, lnet, laddr string, BlockWiseTransfer bool, BlockWiseTransferSzx BlockWiseSzx, payloadLen int, ifaces []net.Interface) {
 	addrMcast := laddr
 	ansArrived := make(chan bool)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second*5)
+	defer cancel()
 
 	responseServerConn := make([]*ClientConn, 0)
 	var lockResponseServerConn sync.Mutex
 	responseServer := Client{
-		Net:                  strings.Trim(lnet, "-mcast"),
+		Net:                  strings.TrimSuffix(lnet, "-mcast"),
 		BlockWiseTransfer:    &BlockWiseTransfer,
 		BlockWiseTransferSzx: &BlockWiseTransferSzx,
 		Handler: func(w ResponseWriter, r *Request) {
+			t.Log("responseServer.Handler")
 			resp := w.NewResponse(Content)
 			resp.SetPayload(make([]byte, payloadLen))
 			resp.SetOption(ContentFormat, TextPlain)
@@ -421,7 +447,8 @@ func testServingMCast(t *testing.T, lnet, laddr string, BlockWiseTransfer bool, 
 		},
 	}
 
-	s, _, fin, err := RunLocalServerUDPWithHandler(lnet, addrMcast, BlockWiseTransfer, BlockWiseTransferSzx, func(w ResponseWriter, r *Request) {
+	s, _, fin, err := RunLocalServerUDPWithHandlerIfaces(lnet, addrMcast, BlockWiseTransfer, BlockWiseTransferSzx, func(w ResponseWriter, r *Request) {
+		t.Log("RunLocalServerUDPWithHandler.Handler")
 		resp := w.NewResponse(Content)
 		resp.SetPayload(make([]byte, payloadLen))
 		resp.SetOption(ContentFormat, TextPlain)
@@ -436,7 +463,7 @@ func testServingMCast(t *testing.T, lnet, laddr string, BlockWiseTransfer bool, 
 		lockResponseServerConn.Lock()
 		responseServerConn = append(responseServerConn, conn)
 		lockResponseServerConn.Unlock()
-	})
+	}, ifaces)
 	if err != nil {
 		t.Fatalf("unable to run test server: %v", err)
 	}
@@ -470,7 +497,11 @@ func testServingMCast(t *testing.T, lnet, laddr string, BlockWiseTransfer bool, 
 	}
 	defer rp.Cancel()
 
-	<-ansArrived
+	select {
+	case <-ansArrived:
+	case <-ctx.Done():
+		t.Fatalf("timeout: %v", ctx.Err())
+	}
 }
 
 func TestServingIPv4MCast(t *testing.T) {

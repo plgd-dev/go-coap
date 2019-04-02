@@ -3,14 +3,14 @@
 
 [[projects]]
   branch = "master"
-  digest = "1:25c92b5a7b89547608053ea7048469c173ede8d976cdfc861b8b39ca9852cad9"
+  digest = "1:23c4482f7db54097030431eb88c87af95d0e072582cea3f6fdbc81ae22cd11f5"
   name = "github.com/go-ocf/kit"
   packages = [
     "log",
     "net",
   ]
   pruneopts = "UT"
-  revision = "8560f72fc720c9710c19cb6814495ab67271da5c"
+  revision = "6cb557ba9da5f1103d2807dfc6803d202952e8d7"
 
 [[projects]]
   digest = "1:4887e9e89c80299aa520d718239809fdd2a47a9aa394909b169959bfbc424ddf"
@@ -27,17 +27,6 @@
   pruneopts = "UT"
   revision = "1ea20fb1cbb1cc08cbd0d913a96dead89aa18289"
   version = "v1.3.2"
-
-[[projects]]
-  branch = "master"
-  digest = "1:915aa54691f6897cc74afa0da29eaf6e93202831b4e980c56645d99c708bc5b1"
-  name = "go.uber.org/goleak"
-  packages = [
-    ".",
-    "internal/stack",
-  ]
-  pruneopts = "UT"
-  revision = "c82e52b9ed06070186646c19bdceeae9dc18ec5d"
 
 [[projects]]
   digest = "1:60bf2a5e347af463c42ed31a493d817f8a72f102543060ed992754e689805d1a"
@@ -64,7 +53,7 @@
 
 [[projects]]
   branch = "master"
-  digest = "1:425d81a8ef644b5cd324106e8d6e355581a47c2222b20b938822470a3c96a5e1"
+  digest = "1:433ecd67c12cd2ebf2aaadfa9ff7ebadf400d3a31351078d902c12f1e0f6c2e5"
   name = "golang.org/x/net"
   packages = [
     "bpf",
@@ -74,7 +63,7 @@
     "ipv6",
   ]
   pruneopts = "UT"
-  revision = "16b79f2e4e95ea23b2bf9903c9809ff7b013ce85"
+  revision = "74de082e2cca95839e88aa0aeee5aadf6ce7710f"
 
 [solve-meta]
   analyzer-name = "dep"
@@ -82,9 +71,6 @@
   input-imports = [
     "github.com/go-ocf/kit/net",
     "github.com/ugorji/go/codec",
-    "go.uber.org/goleak",
-    "golang.org/x/net/ipv4",
-    "golang.org/x/net/ipv6",
   ]
   solver-name = "gps-cdcl"
   solver-version = 1

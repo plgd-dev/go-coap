@@ -5,6 +5,7 @@ package coap
 import (
 	"context"
 	"crypto/tls"
+	"fmt"
 	"io"
 	"net"
 	"strings"
@@ -39,6 +40,7 @@ type Client struct {
 	BlockWiseTransferSzx *BlockWiseSzx // Set maximal block size of payload that will be send in fragment
 
 	DisableTCPSignalMessages bool // Disable tcp signal messages
+	MulticastHopLimit        int  //sets the hop limit field value for future outgoing multicast packets. default is 2.
 }
 
 func (c *Client) readTimeout() time.Duration {
@@ -86,6 +88,9 @@ func (c *Client) DialWithContext(ctx context.Context, address string) (clientCon
 	BlockWiseTransfer := false
 	BlockWiseTransferSzx := BlockWiseSzx1024
 	multicast := false
+	if c.MulticastHopLimit == 0 {
+		c.MulticastHopLimit = 2
+	}
 
 	switch c.Net {
 	case "tcp-tls", "tcp4-tls", "tcp6-tls":
@@ -110,15 +115,27 @@ func (c *Client) DialWithContext(ctx context.Context, address string) (clientCon
 		if conn, err = dialer.DialContext(ctx, network, address); err != nil {
 			return nil, err
 		}
-		sessionUPDData = kitNet.NewConnUDPWithContext(conn.(*net.UDPConn).RemoteAddr().(*net.UDPAddr), nil)
+		sessionUPDData = kitNet.NewConnUDPContext(conn.(*net.UDPConn).RemoteAddr().(*net.UDPAddr), nil)
 		BlockWiseTransfer = true
 	case "udp-mcast", "udp4-mcast", "udp6-mcast":
+		var err error
 		network = strings.TrimSuffix(c.Net, "-mcast")
-		a, udpConn, err := listenUDP(network, address)
+		multicastAddress, err := net.ResolveUDPAddr(network, address)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("cannot resolve multicast address: %v", err)
 		}
-		sessionUPDData = kitNet.NewConnUDPWithContext(a, nil)
+		listenAddress, err := net.ResolveUDPAddr(network, "")
+		if err != nil {
+			return nil, fmt.Errorf("cannot resolve multicast listen address: %v", err)
+		}
+		udpConn, err := net.ListenUDP(network, listenAddress)
+		if err != nil {
+			return nil, fmt.Errorf("cannot listen address: %v", err)
+		}
+		if err = kitNet.SetUDPSocketOptions(udpConn); err != nil {
+			return nil, fmt.Errorf("cannot set upd socket options: %v", err)
+		}
+		sessionUPDData = kitNet.NewConnUDPContext(multicastAddress, nil)
 		conn = udpConn
 		BlockWiseTransfer = true
 		multicast = true
@@ -193,7 +210,7 @@ func (c *Client) DialWithContext(ctx context.Context, address string) (clientCon
 	case *net.UDPConn:
 		// WriteContextMsgUDP returns error when addr is filled in SessionUDPData for connected socket
 		kitNet.SetUDPSocketOptions(clientConn.srv.Conn.(*net.UDPConn))
-		session, err := newSessionUDP(kitNet.NewConnUDP(clientConn.srv.Conn.(*net.UDPConn), clientConn.srv.heartBeat()), clientConn.srv, sessionUPDData)
+		session, err := newSessionUDP(kitNet.NewConnUDP(clientConn.srv.Conn.(*net.UDPConn), clientConn.srv.heartBeat(), c.MulticastHopLimit), clientConn.srv, sessionUPDData)
 		if err != nil {
 			return nil, err
 		}

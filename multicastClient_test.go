@@ -1,6 +1,7 @@
 package coap
 
 import (
+	"net"
 	"testing"
 )
 
@@ -30,4 +31,24 @@ func TestServingIPv4MCastBlockWiseSzx512(t *testing.T) {
 
 func TestServingIPv4MCastBlockWiseSzx1024(t *testing.T) {
 	testServingMCast(t, "udp4-mcast", "225.0.1.187:11111", true, BlockWiseSzx1024, 1033)
+}
+
+func TestServingIPv6MCastByClient(t *testing.T) {
+	testServingMCast(t, "udp6-mcast", "[ff03::158]:11111", false, BlockWiseSzx16, 1033)
+}
+
+func TestServingIPv4AllInterfacesMCastByClient(t *testing.T) {
+	ifis, err := net.Interfaces()
+	if err != nil {
+		t.Fatalf("unable to get interfaces: %v", err)
+	}
+	testServingMCastWithIfaces(t, "udp4-mcast", "225.0.1.187:11111", false, BlockWiseSzx16, 1033, ifis)
+}
+
+func TestServingIPv6AllInterfacesMCastByClient(t *testing.T) {
+	ifis, err := net.Interfaces()
+	if err != nil {
+		t.Fatalf("unable to get interfaces: %v", err)
+	}
+	testServingMCastWithIfaces(t, "udp6-mcast", "[ff03::158]:11111", false, BlockWiseSzx16, 1033, ifis)
 }
