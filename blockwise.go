@@ -132,13 +132,6 @@ type blockWiseSender struct {
 	currentMore bool
 }
 
-func (s *blockWiseSender) coapType() COAPType {
-	if s.peerDrive {
-		return Acknowledgement
-	}
-	return Confirmable
-}
-
 func (s *blockWiseSender) sizeType() OptionID {
 	if s.blockType == Block2 {
 		return Size2
@@ -159,7 +152,7 @@ func newSender(peerDrive bool, blockType OptionID, suggestedSzx BlockWiseSzx, ex
 func (s *blockWiseSender) newReq(b *blockWiseSession) (Message, error) {
 	req := b.networkSession.NewMessage(MessageParams{
 		Code:      s.origin.Code(),
-		Type:      s.coapType(),
+		Type:      determineCoapType(s.peerDrive, s.origin),
 		MessageID: s.origin.MessageID(),
 		Token:     s.origin.Token(),
 	})
@@ -279,6 +272,7 @@ func (s *blockWiseSender) processResp(ctx context.Context, b *blockWiseSession, 
 			return nil, err
 		}
 		req.SetOption(s.blockType, block)
+		req.SetType(determineCoapType(s.peerDrive, resp))
 	} else {
 		switch s.blockType {
 		case Block1:
@@ -421,9 +415,12 @@ func (r *blockWiseReceiver) sizeType() OptionID {
 	return Size2
 }
 
-func (r *blockWiseReceiver) coapType() COAPType {
-	if r.peerDrive {
-		return Acknowledgement
+func determineCoapType(peerDrive bool, req Message) COAPType {
+	if peerDrive {
+		if req.Type() == Confirmable {
+			return Acknowledgement
+		}
+		return req.Type()
 	}
 	return Confirmable
 }
@@ -466,6 +463,7 @@ func newReceiver(b *blockWiseSession, peerDrive bool, origin Message, resp Messa
 		peerDrive:  peerDrive,
 		code:       code,
 		origin:     origin,
+		typ:        determineCoapType(peerDrive, origin),
 		blockType:  blockType,
 		currentSzx: b.networkSession.blockWiseSzx(),
 		payload:    bytes.NewBuffer(make([]byte, 0)),
@@ -636,6 +634,7 @@ func (r *blockWiseReceiver) processResp(b *blockWiseSession, req Message, resp M
 			return nil, err
 		}
 		req.SetOption(r.blockType, block)
+		req.SetType(determineCoapType(r.peerDrive, resp))
 	} else {
 		if r.payloadSize != 0 && int(r.payloadSize) != len(resp.Payload()) {
 			return nil, ErrInvalidPayloadSize

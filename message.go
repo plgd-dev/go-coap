@@ -489,6 +489,7 @@ type Message interface {
 	PathString() string
 	SetPathString(s string)
 	SetPath(s []string)
+	SetType(typ COAPType)
 	Query() []string
 	QueryString() string
 	SetQueryString(string)
@@ -528,6 +529,10 @@ type MessageBase struct {
 
 func (m *MessageBase) Type() COAPType {
 	return m.typ
+}
+
+func (m *MessageBase) SetType(typ COAPType) {
+	m.typ = typ
 }
 
 func (m *MessageBase) Code() COAPCode {
