@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"sync/atomic"
 )
 
 const (
@@ -346,8 +347,8 @@ func (b *blockWiseSession) validateMessageSize(msg Message) error {
 		return nil
 	}
 
-	if session.peerMaxMessageSize != 0 &&
-		uint32(size) > session.peerMaxMessageSize {
+	max := atomic.LoadUint32(&session.peerMaxMessageSize)
+	if max != 0 && uint32(size) > max {
 		return ErrMaxMessageSizeLimitExceeded
 	}
 

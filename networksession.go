@@ -437,7 +437,8 @@ func (s *sessionTCP) validateMessageSize(msg Message) error {
 		return err
 	}
 
-	if s.peerMaxMessageSize != 0 && uint32(size) > s.peerMaxMessageSize {
+	max := atomic.LoadUint32(&s.peerMaxMessageSize)
+	if max != 0 && uint32(size) > max {
 		return ErrMaxMessageSizeLimitExceeded
 	}
 
