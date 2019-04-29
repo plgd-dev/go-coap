@@ -1153,3 +1153,21 @@ func TestToBytesLength(t *testing.T) {
 		t.Errorf("Expected Length = %d, got %d", len(data), bytesLength)
 	}
 }
+
+func TestSetCode(t *testing.T) {
+	req := DgramMessage{MessageBase{}}
+
+	req.SetType(Confirmable)
+	req.SetCode(GET)
+	buf := &bytes.Buffer{}
+	err := req.MarshalBinary(buf)
+	if err != nil {
+		t.Fatalf("Error encoding request: %v", err)
+	}
+
+	// Inspected by hand.
+	exp := []byte{0x40, 0x1, 0x00, 0x00}
+	if !bytes.Equal(exp, buf.Bytes()) {
+		t.Fatalf("Expected\n%#v\ngot\n%#v", exp, buf.Bytes())
+	}
+}

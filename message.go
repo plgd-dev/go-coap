@@ -505,6 +505,7 @@ type Message interface {
 	SetToken(t []byte)
 	SetMessageID(messageID uint16)
 	ToBytesLength() (int, error)
+	SetCode(code COAPCode)
 }
 
 // MessageParams params to create COAP message
@@ -682,6 +683,11 @@ func (m *MessageBase) AddOption(opID OptionID, val interface{}) {
 func (m *MessageBase) SetOption(opID OptionID, val interface{}) {
 	m.RemoveOption(opID)
 	m.AddOption(opID, val)
+}
+
+// SetCode sets the coap code on the message
+func (m *MessageBase) SetCode(code COAPCode) {
+	m.code = code
 }
 
 const (
