@@ -481,6 +481,9 @@ func testServingMCastWithIfaces(t *testing.T, lnet, laddr string, BlockWiseTrans
 		Net:                  strings.TrimSuffix(lnet, "-mcast"),
 		BlockWiseTransfer:    &BlockWiseTransfer,
 		BlockWiseTransferSzx: &BlockWiseTransferSzx,
+		Handler: func(w ResponseWriter, r *Request) {
+			t.Log("MulticastClient default handler")
+		},
 	}
 
 	co, err := c.Dial(addrMcast)
