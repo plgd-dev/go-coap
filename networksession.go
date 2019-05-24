@@ -382,7 +382,7 @@ func (s *sessionTCP) ExchangeWithContext(ctx context.Context, req Message) (Mess
 		return request.Msg, nil
 	case <-ctx.Done():
 		if ctx.Err() != nil {
-			return nil, fmt.Errorf("cannot exchange: %v", err)
+			return nil, fmt.Errorf("cannot exchange: %v", ctx.Err())
 		}
 		return nil, fmt.Errorf("cannot exchange: cancelled")
 	}
@@ -425,7 +425,7 @@ func (s *sessionUDP) ExchangeWithContext(ctx context.Context, req Message) (Mess
 		return request.Msg, nil
 	case <-ctx.Done():
 		if ctx.Err() != nil {
-			return nil, fmt.Errorf("cannot exchange: %v", err)
+			return nil, fmt.Errorf("cannot exchange: %v", ctx.Err())
 		}
 		return nil, fmt.Errorf("cannot exchange: cancelled")
 	}
