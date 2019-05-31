@@ -362,11 +362,16 @@ func (co *ClientConn) Observe(path string, observeFunc func(req *Request)) (*Obs
 	return co.ObserveWithContext(context.Background(), path, observeFunc)
 }
 
-func (co *ClientConn) ObserveWithContext(ctx context.Context, path string, observeFunc func(req *Request)) (*Observation, error) {
+func (co *ClientConn) ObserveWithContext(
+	ctx context.Context,
+	path string,
+	observeFunc func(req *Request),
+	options ...func(Message),
+) (*Observation, error) {
 	if co.multicast {
 		return nil, ErrNotSupported
 	}
-	return co.commander.ObserveWithContext(ctx, path, observeFunc)
+	return co.commander.ObserveWithContext(ctx, path, observeFunc, options...)
 }
 
 // Close close connection
