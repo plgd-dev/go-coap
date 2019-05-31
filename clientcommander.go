@@ -185,10 +185,10 @@ func (cc *ClientCommander) DeleteWithContext(ctx context.Context, path string) (
 
 //Observation represents subscription to resource on the server
 type Observation struct {
-	token     []byte
-	path      string
+	token       []byte
+	path        string
 	obsSequence uint32
-	client    *ClientCommander
+	client      *ClientCommander
 }
 
 func (o *Observation) Cancel() error {
@@ -219,10 +219,18 @@ func (cc *ClientCommander) Observe(path string, observeFunc func(req *Request)) 
 
 // ObserveContext subscribe to severon path. After subscription and every change on path,
 // server sends immediately response
-func (cc *ClientCommander) ObserveWithContext(ctx context.Context, path string, observeFunc func(req *Request)) (*Observation, error) {
+func (cc *ClientCommander) ObserveWithContext(
+	ctx context.Context,
+	path string,
+	observeFunc func(req *Request),
+	options ...func(Message),
+) (*Observation, error) {
 	req, err := cc.NewGetRequest(path)
 	if err != nil {
 		return nil, err
+	}
+	for _, option := range options {
+		option(req)
 	}
 
 	req.SetOption(Observe, 0)
@@ -235,10 +243,10 @@ func (cc *ClientCommander) ObserveWithContext(ctx context.Context, path string, 
 		req.SetOption(Block2, block)
 	*/
 	o := &Observation{
-		token:     req.Token(),
-		path:      path,
+		token:       req.Token(),
+		path:        path,
 		obsSequence: 0,
-		client:    cc,
+		client:      cc,
 	}
 	err = cc.networkSession.TokenHandler().Add(req.Token(), func(w ResponseWriter, r *Request) {
 		var err error
