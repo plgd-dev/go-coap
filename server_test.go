@@ -14,7 +14,7 @@ import (
 	"testing"
 	"time"
 
-	kitNet "github.com/go-ocf/kit/net"
+	coapNet "github.com/go-ocf/go-coap/net"
 )
 
 func CreateRespMessageByReq(isTCP bool, code COAPCode, req Message) Message {
@@ -77,7 +77,7 @@ func RunLocalServerUDPWithHandlerIfaces(lnet, laddr string, BlockWiseTransfer bo
 		return nil, "", nil, err
 	}
 
-	connUDP := kitNet.NewConnUDP(pc, time.Millisecond*100, 2)
+	connUDP := coapNet.NewConnUDP(pc, time.Millisecond*100, 2)
 	if strings.Contains(lnet, "-mcast") {
 		if ifaces == nil {
 			ifaces, err = net.Interfaces()
@@ -132,7 +132,7 @@ func RunLocalUDPServer(net, laddr string, BlockWiseTransfer bool, BlockWiseTrans
 
 func RunLocalServerTCPWithHandler(laddr string, BlockWiseTransfer bool, BlockWiseTransferSzx BlockWiseSzx, handler HandlerFunc) (*Server, string, chan error, error) {
 	network := "tcp"
-	l, err := kitNet.NewTCPListener(network, laddr, time.Millisecond*100)
+	l, err := coapNet.NewTCPListener(network, laddr, time.Millisecond*100)
 	if err != nil {
 		return nil, "", nil, fmt.Errorf("cannot create new tls listener: %v", err)
 	}
@@ -170,7 +170,7 @@ func RunLocalTCPServer(laddr string, BlockWiseTransfer bool, BlockWiseTransferSz
 }
 
 func RunLocalTLSServer(laddr string, config *tls.Config) (*Server, string, chan error, error) {
-	l, err := kitNet.NewTLSListener("tcp", laddr, config, time.Millisecond*100)
+	l, err := coapNet.NewTLSListener("tcp", laddr, config, time.Millisecond*100)
 	if err != nil {
 		return nil, "", nil, err
 	}
