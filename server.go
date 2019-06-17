@@ -13,7 +13,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	kitNet "github.com/go-ocf/kit/net"
+	coapNet "github.com/go-ocf/go-coap/net"
 )
 
 // Interval for stop worker if no load
@@ -142,9 +142,9 @@ type Server struct {
 	// Defines wake up interval from operations Read, Write over connection. defaults is 100ms.
 	HeartBeat time.Duration
 	// If newSessionUDPFunc is set it is called when session UDP want to be created
-	newSessionUDPFunc func(connection *kitNet.ConnUDP, srv *Server, sessionUDPData *kitNet.ConnUDPContext) (networkSession, error)
+	newSessionUDPFunc func(connection *coapNet.ConnUDP, srv *Server, sessionUDPData *coapNet.ConnUDPContext) (networkSession, error)
 	// If newSessionUDPFunc is set it is called when session TCP want to be created
-	newSessionTCPFunc func(connection *kitNet.Conn, srv *Server) (networkSession, error)
+	newSessionTCPFunc func(connection *coapNet.Conn, srv *Server) (networkSession, error)
 	// If NotifyNewSession is set it is called when new TCP/UDP session was created.
 	NotifySessionNewFunc func(w *ClientConn)
 	// If NotifyNewSession is set it is called when TCP/UDP session was ended.
@@ -222,7 +222,7 @@ func (srv *Server) spawnWorker(w *Request) {
 // ListenAndServe starts a coapserver on the configured address in *Server.
 func (srv *Server) ListenAndServe() error {
 	var listener Listener
-	var connUDP *kitNet.ConnUDP
+	var connUDP *coapNet.ConnUDP
 	addr := srv.Addr
 	var err error
 	if addr == "" {
@@ -236,14 +236,14 @@ func (srv *Server) ListenAndServe() error {
 
 	switch srv.Net {
 	case "tcp", "tcp4", "tcp6":
-		listener, err = kitNet.NewTCPListener(srv.Net, addr, srv.heartBeat())
+		listener, err = coapNet.NewTCPListener(srv.Net, addr, srv.heartBeat())
 		if err != nil {
 			return fmt.Errorf("cannot listen and serve: %v", err)
 		}
 		defer listener.Close()
 	case "tcp-tls", "tcp4-tls", "tcp6-tls":
 		network := strings.TrimSuffix(srv.Net, "-tls")
-		listener, err = kitNet.NewTLSListener(network, addr, srv.TLSConfig, srv.heartBeat())
+		listener, err = coapNet.NewTLSListener(network, addr, srv.TLSConfig, srv.heartBeat())
 		if err != nil {
 			return fmt.Errorf("cannot listen and serve: %v", err)
 		}
@@ -257,10 +257,10 @@ func (srv *Server) ListenAndServe() error {
 		if err != nil {
 			return err
 		}
-		if err := kitNet.SetUDPSocketOptions(l); err != nil {
+		if err := coapNet.SetUDPSocketOptions(l); err != nil {
 			return err
 		}
-		connUDP = kitNet.NewConnUDP(l, srv.heartBeat(), 2)
+		connUDP = coapNet.NewConnUDP(l, srv.heartBeat(), 2)
 		defer connUDP.Close()
 	case "udp-mcast", "udp4-mcast", "udp6-mcast":
 		network := strings.TrimSuffix(srv.Net, "-mcast")
@@ -273,10 +273,10 @@ func (srv *Server) ListenAndServe() error {
 		if err != nil {
 			return err
 		}
-		if err := kitNet.SetUDPSocketOptions(l); err != nil {
+		if err := coapNet.SetUDPSocketOptions(l); err != nil {
 			return err
 		}
-		connUDP = kitNet.NewConnUDP(l, srv.heartBeat(), 2)
+		connUDP = coapNet.NewConnUDP(l, srv.heartBeat(), 2)
 		defer connUDP.Close()
 		ifaces := srv.UDPMcastInterfaces
 		if len(ifaces) == 0 {
@@ -300,11 +300,11 @@ func (srv *Server) ListenAndServe() error {
 	return srv.activateAndServe(listener, nil, connUDP)
 }
 
-func (srv *Server) initServeUDP(connUDP *kitNet.ConnUDP) error {
+func (srv *Server) initServeUDP(connUDP *coapNet.ConnUDP) error {
 	return srv.serveUDP(newShutdownWithContext(srv.doneChan), connUDP)
 }
 
-func (srv *Server) initServeTCP(conn *kitNet.Conn) error {
+func (srv *Server) initServeTCP(conn *coapNet.Conn) error {
 	if srv.NotifyStartedFunc != nil {
 		srv.NotifyStartedFunc()
 	}
@@ -317,9 +317,9 @@ func (srv *Server) ActivateAndServe() error {
 	if srv.Conn != nil {
 		switch c := srv.Conn.(type) {
 		case *net.TCPConn, *tls.Conn:
-			return srv.activateAndServe(nil, kitNet.NewConn(c, srv.heartBeat()), nil)
+			return srv.activateAndServe(nil, coapNet.NewConn(c, srv.heartBeat()), nil)
 		case *net.UDPConn:
-			return srv.activateAndServe(nil, nil, kitNet.NewConnUDP(c, srv.heartBeat(), 2))
+			return srv.activateAndServe(nil, nil, coapNet.NewConnUDP(c, srv.heartBeat(), 2))
 		}
 		return ErrInvalidServerConnParameter
 	}
@@ -330,7 +330,7 @@ func (srv *Server) ActivateAndServe() error {
 	return ErrInvalidServerListenerParameter
 }
 
-func (srv *Server) activateAndServe(listener Listener, conn *kitNet.Conn, connUDP *kitNet.ConnUDP) error {
+func (srv *Server) activateAndServe(listener Listener, conn *coapNet.Conn, connUDP *coapNet.ConnUDP) error {
 	srv.doneLock.Lock()
 	srv.done = false
 	srv.doneChan = make(chan struct{})
@@ -346,7 +346,7 @@ func (srv *Server) activateAndServe(listener Listener, conn *kitNet.Conn, connUD
 	defer close(srv.queue)
 
 	if srv.newSessionTCPFunc == nil {
-		srv.newSessionTCPFunc = func(connection *kitNet.Conn, srv *Server) (networkSession, error) {
+		srv.newSessionTCPFunc = func(connection *coapNet.Conn, srv *Server) (networkSession, error) {
 			session, err := newSessionTCP(connection, srv)
 			if err != nil {
 				return nil, err
@@ -359,7 +359,7 @@ func (srv *Server) activateAndServe(listener Listener, conn *kitNet.Conn, connUD
 	}
 
 	if srv.newSessionUDPFunc == nil {
-		srv.newSessionUDPFunc = func(connection *kitNet.ConnUDP, srv *Server, sessionUDPData *kitNet.ConnUDPContext) (networkSession, error) {
+		srv.newSessionUDPFunc = func(connection *coapNet.ConnUDP, srv *Server, sessionUDPData *coapNet.ConnUDPContext) (networkSession, error) {
 			session, err := newSessionUDP(connection, srv, sessionUDPData)
 			if err != nil {
 				return nil, err
@@ -428,7 +428,7 @@ func (srv *Server) heartBeat() time.Duration {
 	return time.Millisecond * 100
 }
 
-func (srv *Server) serveTCPconnection(ctx *shutdownContext, conn *kitNet.Conn) error {
+func (srv *Server) serveTCPconnection(ctx *shutdownContext, conn *coapNet.Conn) error {
 	session, err := srv.newSessionTCPFunc(conn, srv)
 	if err != nil {
 		return err
@@ -491,7 +491,7 @@ func (srv *Server) serveTCP(l Listener) error {
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
-				srv.serveTCPconnection(ctx, kitNet.NewConn(rw, srv.heartBeat()))
+				srv.serveTCPconnection(ctx, coapNet.NewConn(rw, srv.heartBeat()))
 			}()
 		}
 	}
@@ -509,7 +509,7 @@ func (srv *Server) closeSessions(err error) {
 }
 
 // serveUDP starts a UDP listener for the server.
-func (srv *Server) serveUDP(ctx *shutdownContext, connUDP *kitNet.ConnUDP) error {
+func (srv *Server) serveUDP(ctx *shutdownContext, connUDP *coapNet.ConnUDP) error {
 	if srv.NotifyStartedFunc != nil {
 		srv.NotifyStartedFunc()
 	}

@@ -10,7 +10,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	kitNet "github.com/go-ocf/kit/net"
+	coapNet "github.com/go-ocf/go-coap/net"
 )
 
 // A networkSession interface is used by an COAP handler to
@@ -64,12 +64,12 @@ type connUDP interface {
 	LocalAddr() net.Addr
 	RemoteAddr() net.Addr
 	Close() error
-	ReadWithContext(ctx context.Context, buffer []byte) (int, *kitNet.ConnUDPContext, error)
-	WriteWithContext(ctx context.Context, udpCtx *kitNet.ConnUDPContext, buffer []byte) error
+	ReadWithContext(ctx context.Context, buffer []byte) (int, *coapNet.ConnUDPContext, error)
+	WriteWithContext(ctx context.Context, udpCtx *coapNet.ConnUDPContext, buffer []byte) error
 }
 
 // NewSessionUDP create new session for UDP connection
-func newSessionUDP(connection connUDP, srv *Server, sessionUDPData *kitNet.ConnUDPContext) (networkSession, error) {
+func newSessionUDP(connection connUDP, srv *Server, sessionUDPData *coapNet.ConnUDPContext) (networkSession, error) {
 	BlockWiseTransfer := true
 	BlockWiseTransferSzx := BlockWiseSzx1024
 	if srv.BlockWiseTransfer != nil {
@@ -98,7 +98,7 @@ func newSessionUDP(connection connUDP, srv *Server, sessionUDPData *kitNet.ConnU
 }
 
 // newSessionTCP create new session for TCP connection
-func newSessionTCP(connection *kitNet.Conn, srv *Server) (networkSession, error) {
+func newSessionTCP(connection *coapNet.Conn, srv *Server) (networkSession, error) {
 	BlockWiseTransfer := false
 	BlockWiseTransferSzx := BlockWiseSzxBERT
 	if srv.BlockWiseTransfer != nil {
@@ -144,14 +144,14 @@ type sessionBase struct {
 type sessionUDP struct {
 	sessionBase
 	connection     connUDP
-	sessionUDPData *kitNet.ConnUDPContext                         // oob data to get egress interface right
+	sessionUDPData *coapNet.ConnUDPContext                        // oob data to get egress interface right
 	mapPairs       map[[MaxTokenSize]byte]map[uint16]*sessionResp //storage of channel Message
 	mapPairsLock   sync.Mutex                                     //to sync add remove token
 }
 
 type sessionTCP struct {
 	sessionBase
-	connection   *kitNet.Conn
+	connection   *coapNet.Conn
 	mapPairs     map[[MaxTokenSize]byte]*sessionResp //storage of channel Message
 	mapPairsLock sync.Mutex                          //to sync add remove token
 

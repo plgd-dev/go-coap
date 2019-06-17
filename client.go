@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	kitNet "github.com/go-ocf/kit/net"
+	coapNet "github.com/go-ocf/go-coap/net"
 )
 
 // A ClientConn represents a connection to a COAP server.
@@ -67,7 +67,7 @@ func listenUDP(network, address string) (*net.UDPAddr, *net.UDPConn, error) {
 	if udpConn, err = net.ListenUDP(network, a); err != nil {
 		return nil, nil, err
 	}
-	if err := kitNet.SetUDPSocketOptions(udpConn); err != nil {
+	if err := coapNet.SetUDPSocketOptions(udpConn); err != nil {
 		return nil, nil, err
 	}
 	return a, udpConn, nil
@@ -82,7 +82,7 @@ func (c *Client) DialWithContext(ctx context.Context, address string) (clientCon
 
 	var conn net.Conn
 	var network string
-	var sessionUPDData *kitNet.ConnUDPContext
+	var sessionUPDData *coapNet.ConnUDPContext
 
 	dialer := &net.Dialer{Timeout: c.DialTimeout}
 	BlockWiseTransfer := false
@@ -115,7 +115,7 @@ func (c *Client) DialWithContext(ctx context.Context, address string) (clientCon
 		if conn, err = dialer.DialContext(ctx, network, address); err != nil {
 			return nil, err
 		}
-		sessionUPDData = kitNet.NewConnUDPContext(conn.(*net.UDPConn).RemoteAddr().(*net.UDPAddr), nil)
+		sessionUPDData = coapNet.NewConnUDPContext(conn.(*net.UDPConn).RemoteAddr().(*net.UDPAddr), nil)
 		BlockWiseTransfer = true
 	case "udp-mcast", "udp4-mcast", "udp6-mcast":
 		var err error
@@ -132,10 +132,10 @@ func (c *Client) DialWithContext(ctx context.Context, address string) (clientCon
 		if err != nil {
 			return nil, fmt.Errorf("cannot listen address: %v", err)
 		}
-		if err = kitNet.SetUDPSocketOptions(udpConn); err != nil {
+		if err = coapNet.SetUDPSocketOptions(udpConn); err != nil {
 			return nil, fmt.Errorf("cannot set upd socket options: %v", err)
 		}
-		sessionUPDData = kitNet.NewConnUDPContext(multicastAddress, nil)
+		sessionUPDData = coapNet.NewConnUDPContext(multicastAddress, nil)
 		conn = udpConn
 		BlockWiseTransfer = true
 		multicast = true
@@ -168,10 +168,10 @@ func (c *Client) DialWithContext(ctx context.Context, address string) (clientCon
 					c.NotifySessionEndFunc(err)
 				}
 			},
-			newSessionTCPFunc: func(connection *kitNet.Conn, srv *Server) (networkSession, error) {
+			newSessionTCPFunc: func(connection *coapNet.Conn, srv *Server) (networkSession, error) {
 				return clientConn.commander.networkSession, nil
 			},
-			newSessionUDPFunc: func(connection *kitNet.ConnUDP, srv *Server, sessionUDPData *kitNet.ConnUDPContext) (networkSession, error) {
+			newSessionUDPFunc: func(connection *coapNet.ConnUDP, srv *Server, sessionUDPData *coapNet.ConnUDPContext) (networkSession, error) {
 				if sessionUDPData.RemoteAddr().String() == clientConn.commander.networkSession.RemoteAddr().String() {
 					if s, ok := clientConn.commander.networkSession.(*blockWiseSession); ok {
 						s.networkSession.(*sessionUDP).sessionUDPData = sessionUDPData
@@ -198,7 +198,7 @@ func (c *Client) DialWithContext(ctx context.Context, address string) (clientCon
 
 	switch clientConn.srv.Conn.(type) {
 	case *net.TCPConn, *tls.Conn:
-		session, err := newSessionTCP(kitNet.NewConn(clientConn.srv.Conn, clientConn.srv.heartBeat()), clientConn.srv)
+		session, err := newSessionTCP(coapNet.NewConn(clientConn.srv.Conn, clientConn.srv.heartBeat()), clientConn.srv)
 		if err != nil {
 			return nil, err
 		}
@@ -209,8 +209,8 @@ func (c *Client) DialWithContext(ctx context.Context, address string) (clientCon
 		}
 	case *net.UDPConn:
 		// WriteContextMsgUDP returns error when addr is filled in SessionUDPData for connected socket
-		kitNet.SetUDPSocketOptions(clientConn.srv.Conn.(*net.UDPConn))
-		session, err := newSessionUDP(kitNet.NewConnUDP(clientConn.srv.Conn.(*net.UDPConn), clientConn.srv.heartBeat(), c.MulticastHopLimit), clientConn.srv, sessionUPDData)
+		coapNet.SetUDPSocketOptions(clientConn.srv.Conn.(*net.UDPConn))
+		session, err := newSessionUDP(coapNet.NewConnUDP(clientConn.srv.Conn.(*net.UDPConn), clientConn.srv.heartBeat(), c.MulticastHopLimit), clientConn.srv, sessionUPDData)
 		if err != nil {
 			return nil, err
 		}
