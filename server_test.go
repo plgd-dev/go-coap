@@ -21,9 +21,7 @@ func CreateRespMessageByReq(isTCP bool, code COAPCode, req Message) Message {
 	if isTCP {
 		resp := &TcpMessage{
 			MessageBase{
-				//typ:       Acknowledgement, not used by COAP over TCP
-				code: code,
-				//messageID: req.MessageID(), , not used by COAP over TCP
+				code:    code,
 				payload: req.Payload(),
 				token:   req.Token(),
 			},
@@ -33,13 +31,14 @@ func CreateRespMessageByReq(isTCP bool, code COAPCode, req Message) Message {
 		return resp
 	}
 	resp := &DgramMessage{
-		MessageBase{
-			typ:       Acknowledgement,
-			code:      code,
-			messageID: req.MessageID(),
-			payload:   req.Payload(),
-			token:     req.Token(),
+		MessageBase: MessageBase{
+			typ:  Acknowledgement,
+			code: code,
+
+			payload: req.Payload(),
+			token:   req.Token(),
 		},
+		messageID: req.MessageID(),
 	}
 	resp.SetPath(req.Path())
 	resp.SetOption(ContentFormat, req.Option(ContentFormat))
@@ -754,10 +753,9 @@ func benchmarkServeTCPStreamWithMsg(b *testing.B, req *TcpMessage) {
 func BenchmarkServeTCPStream(b *testing.B) {
 	req := &TcpMessage{
 		MessageBase{
-			typ:       Confirmable,
-			code:      POST,
-			messageID: 1234,
-			payload:   []byte("Content sent by client"),
+			typ:     Confirmable,
+			code:    POST,
+			payload: []byte("Content sent by client"),
 		},
 	}
 	req.SetOption(ContentFormat, TextPlain)
@@ -767,11 +765,10 @@ func BenchmarkServeTCPStream(b *testing.B) {
 
 func BenchmarkServeTCPStreamBigMsg(b *testing.B) {
 	req := &TcpMessage{
-		MessageBase{
-			typ:       Confirmable,
-			code:      POST,
-			messageID: 1234,
-			payload:   make([]byte, 1024*1024*10),
+		MessageBase: MessageBase{
+			typ:     Confirmable,
+			code:    POST,
+			payload: make([]byte, 1024*1024*10),
 		},
 	}
 	req.SetOption(ContentFormat, TextPlain)

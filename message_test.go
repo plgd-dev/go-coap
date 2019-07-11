@@ -96,8 +96,9 @@ func TestMessageConfirmable(t *testing.T) {
 		m   Message
 		exp bool
 	}{
-		{&DgramMessage{MessageBase{typ: Confirmable}}, true},
-		{&DgramMessage{MessageBase{typ: NonConfirmable}}, false},
+		{&DgramMessage{
+			MessageBase{typ: Confirmable}, 0}, true},
+		{&DgramMessage{MessageBase{typ: NonConfirmable}, 0}, false},
 	}
 
 	for _, test := range tests {
@@ -159,11 +160,11 @@ func TestCodeString(t *testing.T) {
 
 func TestEncodeMessageWithoutOptionsAndPayload(t *testing.T) {
 	req := DgramMessage{
-		MessageBase{
-			typ:       Confirmable,
-			code:      GET,
-			messageID: 12345,
+		MessageBase: MessageBase{
+			typ:  Confirmable,
+			code: GET,
 		},
+		messageID: 12345,
 	}
 
 	buf := &bytes.Buffer{}
@@ -181,11 +182,11 @@ func TestEncodeMessageWithoutOptionsAndPayload(t *testing.T) {
 
 func TestEncodeMessageSmall(t *testing.T) {
 	req := DgramMessage{
-		MessageBase{
-			typ:       Confirmable,
-			code:      GET,
-			messageID: 12345,
+		MessageBase: MessageBase{
+			typ:  Confirmable,
+			code: GET,
 		},
+		messageID: 12345,
 	}
 
 	req.AddOption(ETag, []byte("weetag"))
@@ -209,12 +210,12 @@ func TestEncodeMessageSmall(t *testing.T) {
 
 func TestEncodeMessageSmallWithPayload(t *testing.T) {
 	req := DgramMessage{
-		MessageBase{
-			typ:       Confirmable,
-			code:      GET,
-			messageID: 12345,
-			payload:   []byte("hi"),
+		MessageBase: MessageBase{
+			typ:     Confirmable,
+			code:    GET,
+			payload: []byte("hi"),
 		},
+		messageID: 12345,
 	}
 
 	req.AddOption(ETag, []byte("weetag"))
@@ -260,12 +261,12 @@ func TestInvalidMessageParsing(t *testing.T) {
 
 func TestOptionsWithIllegalLengthAreIgnoredDuringParsing(t *testing.T) {
 	exp := &DgramMessage{
-		MessageBase{
-			typ:       Confirmable,
-			code:      GET,
-			messageID: 0xabcd,
-			payload:   []byte{},
+		MessageBase: MessageBase{
+			typ:     Confirmable,
+			code:    GET,
+			payload: []byte{},
 		},
+		messageID: 0xabcd,
 	}
 	msg, err := ParseDgramMessage([]byte{0x40, 0x01, 0xab, 0xcd,
 		0x73, // URI-Port option (uint) with length 3 (valid lengths are 0-2)
@@ -341,11 +342,11 @@ func TestDecodeMessageSmallWithPayload(t *testing.T) {
 
 func TestEncodeMessageVerySmall(t *testing.T) {
 	req := &DgramMessage{
-		MessageBase{
-			typ:       Confirmable,
-			code:      GET,
-			messageID: 12345,
+		MessageBase: MessageBase{
+			typ:  Confirmable,
+			code: GET,
 		},
+		messageID: 12345,
 	}
 	req.SetPathString("x")
 
@@ -367,11 +368,11 @@ func TestEncodeMessageVerySmall(t *testing.T) {
 // Same as above, but with a leading slash
 func TestEncodeMessageVerySmall2(t *testing.T) {
 	req := &DgramMessage{
-		MessageBase{
-			typ:       Confirmable,
-			code:      GET,
-			messageID: 12345,
+		MessageBase: MessageBase{
+			typ:  Confirmable,
+			code: GET,
 		},
+		messageID: 12345,
 	}
 	req.SetPathString("/x")
 
@@ -399,11 +400,11 @@ func TestEncodeManyQueries(t *testing.T) {
 	}
 	for p, a := range tests {
 		m := &DgramMessage{
-			MessageBase{
-				typ:       Confirmable,
-				code:      GET,
-				messageID: 12345,
+			MessageBase: MessageBase{
+				typ:  Confirmable,
+				code: GET,
 			},
+			messageID: 12345,
 		}
 		m.SetQueryString(p)
 		buf := &bytes.Buffer{}
@@ -434,11 +435,11 @@ func TestEncodeSeveral(t *testing.T) {
 	}
 	for p, a := range tests {
 		m := &DgramMessage{
-			MessageBase{
-				typ:       Confirmable,
-				code:      GET,
-				messageID: 12345,
+			MessageBase: MessageBase{
+				typ:  Confirmable,
+				code: GET,
 			},
+			messageID: 12345,
 		}
 		m.SetPathString(p)
 		buf := &bytes.Buffer{}
@@ -462,11 +463,11 @@ func TestEncodeSeveral(t *testing.T) {
 
 func TestPathAsOption(t *testing.T) {
 	m := &DgramMessage{
-		MessageBase{
-			typ:       Confirmable,
-			code:      GET,
-			messageID: 12345,
+		MessageBase: MessageBase{
+			typ:  Confirmable,
+			code: GET,
 		},
+		messageID: 12345,
 	}
 	m.SetOption(LocationPath, []string{"a", "b"})
 	buf := &bytes.Buffer{}
@@ -482,11 +483,11 @@ func TestPathAsOption(t *testing.T) {
 
 func TestEncodePath14(t *testing.T) {
 	req := DgramMessage{
-		MessageBase{
-			typ:       Confirmable,
-			code:      GET,
-			messageID: 12345,
+		MessageBase: MessageBase{
+			typ:  Confirmable,
+			code: GET,
 		},
+		messageID: 12345,
 	}
 	req.SetPathString("123456789ABCDE")
 
@@ -509,11 +510,11 @@ func TestEncodePath14(t *testing.T) {
 
 func TestEncodePath15(t *testing.T) {
 	req := DgramMessage{
-		MessageBase{
-			typ:       Confirmable,
-			code:      GET,
-			messageID: 12345,
+		MessageBase: MessageBase{
+			typ:  Confirmable,
+			code: GET,
 		},
+		messageID: 12345,
 	}
 	req.SetPathString("123456789ABCDEF")
 
@@ -536,11 +537,11 @@ func TestEncodePath15(t *testing.T) {
 
 func TestEncodeLargePath(t *testing.T) {
 	req := DgramMessage{
-		MessageBase{
-			typ:       Confirmable,
-			code:      GET,
-			messageID: 12345,
+		MessageBase: MessageBase{
+			typ:  Confirmable,
+			code: GET,
 		},
+		messageID: 12345,
 	}
 	req.SetPathString("this_path_is_longer_than_fifteen_bytes")
 
@@ -586,12 +587,12 @@ func TestDecodeLargePath(t *testing.T) {
 	path := "this_path_is_longer_than_fifteen_bytes"
 
 	exp := &DgramMessage{
-		MessageBase{
-			typ:       Confirmable,
-			code:      GET,
-			messageID: 12345,
-			payload:   []byte{},
+		MessageBase: MessageBase{
+			typ:     Confirmable,
+			code:    GET,
+			payload: []byte{},
 		},
+		messageID: 12345,
 	}
 
 	exp.SetOption(URIPath, path)
@@ -615,12 +616,12 @@ func TestDecodeMessageSmaller(t *testing.T) {
 	}
 
 	exp := &DgramMessage{
-		MessageBase{
-			typ:       Confirmable,
-			code:      GET,
-			messageID: 12345,
-			payload:   []byte{},
+		MessageBase: MessageBase{
+			typ:     Confirmable,
+			code:    GET,
+			payload: []byte{},
 		},
+		messageID: 12345,
 	}
 
 	exp.SetOption(ETag, []byte("weetag"))
@@ -824,13 +825,13 @@ func TestDecodeContentFormatOptionToMediaType(t *testing.T) {
 
 func TestEncodeMessageWithAllOptions(t *testing.T) {
 	req := &DgramMessage{
-		MessageBase{
-			typ:       Confirmable,
-			code:      GET,
-			messageID: 12345,
-			token:     []byte("TOKEN"),
-			payload:   []byte("PAYLOAD"),
+		MessageBase: MessageBase{
+			typ:     Confirmable,
+			code:    GET,
+			token:   []byte("TOKEN"),
+			payload: []byte("PAYLOAD"),
 		},
+		messageID: 12345,
 	}
 
 	req.AddOption(IfMatch, []byte("IFMATCH"))
@@ -1155,7 +1156,7 @@ func TestToBytesLength(t *testing.T) {
 }
 
 func TestSetCode(t *testing.T) {
-	req := DgramMessage{MessageBase{}}
+	req := DgramMessage{MessageBase{}, 0}
 
 	req.SetType(Confirmable)
 	req.SetCode(GET)

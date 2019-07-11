@@ -12,6 +12,7 @@ import (
 	"time"
 
 	coapNet "github.com/go-ocf/go-coap/net"
+	"github.com/pion/dtls"
 )
 
 // A ClientConn represents a connection to a COAP server.
@@ -28,6 +29,7 @@ type Client struct {
 	Net            string        // if "tcp" or "tcp-tls" (COAP over TLS) a TCP query will be initiated, otherwise an UDP one (default is "" for UDP) or "udp-mcast" for multicast
 	MaxMessageSize uint32        // Max message size that could be received from peer. If not set it defaults to 1152 B.
 	TLSConfig      *tls.Config   // TLS connection configuration
+	DTLSConfig     *dtls.Config  // TLS connection configuration
 	DialTimeout    time.Duration // set Timeout for dialer
 	ReadTimeout    time.Duration // net.ClientConn.SetReadTimeout value for connections, defaults to 1 hour - overridden by Timeout when that value is non-zero
 	WriteTimeout   time.Duration // net.ClientConn.SetWriteTimeout value for connections, defaults to 1 hour - overridden by Timeout when that value is non-zero
@@ -117,6 +119,16 @@ func (c *Client) DialWithContext(ctx context.Context, address string) (clientCon
 		}
 		sessionUPDData = coapNet.NewConnUDPContext(conn.(*net.UDPConn).RemoteAddr().(*net.UDPAddr), nil)
 		BlockWiseTransfer = true
+	case "udp-dtls", "udp4-dtls", "udp6-dtls":
+		network = strings.TrimSuffix(c.Net, "-dtls")
+		addr, err := net.ResolveUDPAddr(network, address)
+		if err != nil {
+			return nil, fmt.Errorf("cannot resolve multicast listen address: %v", err)
+		}
+		if conn, err = dtls.Dial(network, addr, c.DTLSConfig); err != nil {
+			return nil, err
+		}
+		BlockWiseTransfer = true
 	case "udp-mcast", "udp4-mcast", "udp6-mcast":
 		var err error
 		network = strings.TrimSuffix(c.Net, "-mcast")
@@ -171,6 +183,9 @@ func (c *Client) DialWithContext(ctx context.Context, address string) (clientCon
 			newSessionTCPFunc: func(connection *coapNet.Conn, srv *Server) (networkSession, error) {
 				return clientConn.commander.networkSession, nil
 			},
+			newSessionDTLSFunc: func(connection *coapNet.Conn, srv *Server) (networkSession, error) {
+				return clientConn.commander.networkSession, nil
+			},
 			newSessionUDPFunc: func(connection *coapNet.ConnUDP, srv *Server, sessionUDPData *coapNet.ConnUDPContext) (networkSession, error) {
 				if sessionUDPData.RemoteAddr().String() == clientConn.commander.networkSession.RemoteAddr().String() {
 					if s, ok := clientConn.commander.networkSession.(*blockWiseSession); ok {
@@ -199,6 +214,16 @@ func (c *Client) DialWithContext(ctx context.Context, address string) (clientCon
 	switch clientConn.srv.Conn.(type) {
 	case *net.TCPConn, *tls.Conn:
 		session, err := newSessionTCP(coapNet.NewConn(clientConn.srv.Conn, clientConn.srv.heartBeat()), clientConn.srv)
+		if err != nil {
+			return nil, err
+		}
+		if session.blockWiseEnabled() {
+			clientConn.commander.networkSession = &blockWiseSession{networkSession: session}
+		} else {
+			clientConn.commander.networkSession = session
+		}
+	case *dtls.Conn:
+		session, err := newSessionDTLS(coapNet.NewConn(clientConn.srv.Conn, clientConn.srv.heartBeat()), clientConn.srv)
 		if err != nil {
 			return nil, err
 		}

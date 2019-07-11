@@ -93,11 +93,11 @@ func TestNoResponseBehaviour(t *testing.T) {
 
 	// send client request
 	req := &DgramMessage{
-		MessageBase{
-			typ:       NonConfirmable,
-			code:      GET,
-			messageID: 1234,
-		}}
+		MessageBase: MessageBase{
+			typ:  NonConfirmable,
+			code: GET,
+		},
+		messageID: 1234}
 
 	// supressing 2XX code: example Content; No error when server sends 4XX response
 	req.SetOption(NoResponse, 2)
