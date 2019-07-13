@@ -48,10 +48,10 @@ Features supported:
 		// log.Fatal(coap.ListenAndServe("tcp", ":5688",  mux))
 
 		// fot tcp-tls
-		// log.Fatal(coap.ListenAndServeTLS("tcp-tls", ":5688", CertPEMBlock, KeyPEMBlock, mux))
+		// log.Fatal(coap.ListenAndServeTLS("tcp-tls", ":5688", &tls.Config{...}, mux))
 
 		// fot udp-dtls
-		// log.Fatal(coap.ListenAndServeDTLS("tcp-dtls", ":5688", &dtls.Config{...}, mux))
+		// log.Fatal(coap.ListenAndServeDTLS("udp-dtls", ":5688", &dtls.Config{...}, mux))
 	}
 ```
 #### Client
@@ -68,7 +68,7 @@ Features supported:
 		// co, err := coap.DialWithTLS("tcp-tls", localhost:5688", &tls.Config{...})
 
 		// fot udp-dtls
-		// co, err := coap.DialWithDTLS("tcp-dtls", "localhost:5688", &dtls.Config{...}, mux))
+		// co, err := coap.DialWithDTLS("udp-dtls", "localhost:5688", &dtls.Config{...}, mux))
 
 		if err != nil {
 			log.Fatalf("Error dialing: %v", err)
