@@ -28,7 +28,7 @@ func periodicTransmitter(w coap.ResponseWriter, req *coap.Request) {
 }
 
 func main() {
-	log.Fatal(coap.ListenAndServe(":5688", "udp",
+	log.Fatal(coap.ListenAndServe("udp", ":5688",
 		coap.HandlerFunc(func(w coap.ResponseWriter, req *coap.Request) {
 			log.Printf("Got message path=%q: %#v from %v", req.Msg.Path(), req.Msg, req.Client.RemoteAddr())
 			switch {

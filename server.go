@@ -81,39 +81,30 @@ func failedHandler() Handler { return HandlerFunc(HandleFailed) }
 
 // ListenAndServe Starts a server on address and network specified Invoke handler
 // for incoming queries.
-func ListenAndServe(addr string, network string, handler Handler) error {
+func ListenAndServe(network string, addr string, handler Handler) error {
 	server := &Server{Addr: addr, Net: network, Handler: handler}
 	return server.ListenAndServe()
 }
 
 // ListenAndServeTLS acts like http.ListenAndServeTLS, more information in
 // http://golang.org/pkg/net/http/#ListenAndServeTLS
-func ListenAndServeTLS(addr, certFile, keyFile string, handler Handler) error {
-	cert, err := tls.LoadX509KeyPair(certFile, keyFile)
-	if err != nil {
-		return err
-	}
-
-	config := tls.Config{
-		Certificates: []tls.Certificate{cert},
-	}
-
+func ListenAndServeTLS(network, addr string, config *tls.Config, handler Handler) error {
 	server := &Server{
 		Addr:      addr,
-		Net:       "tcp-tls",
-		TLSConfig: &config,
+		Net:       fixNetTLS(network),
+		TLSConfig: config,
 		Handler:   handler,
 	}
 
 	return server.ListenAndServe()
 }
 
-// ListenAndServeDTLS acts like http.ListenAndServeDTLS, more information in
+// ListenAndServeDTLS acts like ListenAndServeTLS, more information in
 // http://golang.org/pkg/net/http/#ListenAndServeTLS
-func ListenAndServeDTLS(addr string, config *dtls.Config, handler Handler) error {
+func ListenAndServeDTLS(network string, addr string, config *dtls.Config, handler Handler) error {
 	server := &Server{
 		Addr:       addr,
-		Net:        "udp-dtls",
+		Net:        fixNetDTLS(network),
 		DTLSConfig: config,
 		Handler:    handler,
 	}
