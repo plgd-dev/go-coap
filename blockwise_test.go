@@ -312,7 +312,7 @@ func TestServingUDPBlockWiseWithClientWithoutBlockWise(t *testing.T) {
 			payload: helloWorld,
 			token:   getReq.Token(),
 		},
-		messageID: req.MessageID(),
+		messageID: getReq.MessageID(),
 	}
 
 	if etag, ok := getResp.Option(ETag).([]byte); ok {

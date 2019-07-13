@@ -120,14 +120,16 @@ func (c *Client) DialWithContext(ctx context.Context, address string) (clientCon
 		sessionUPDData = coapNet.NewConnUDPContext(conn.(*net.UDPConn).RemoteAddr().(*net.UDPAddr), nil)
 		BlockWiseTransfer = true
 	case "udp-dtls", "udp4-dtls", "udp6-dtls":
-		network = strings.TrimSuffix(c.Net, "-dtls")
-		addr, err := net.ResolveUDPAddr(network, address)
+		network = c.Net
+		Net := strings.TrimSuffix(c.Net, "-dtls")
+		addr, err := net.ResolveUDPAddr(Net, address)
 		if err != nil {
-			return nil, fmt.Errorf("cannot resolve multicast listen address: %v", err)
+			return nil, fmt.Errorf("cannot resolve udp address: %v", err)
 		}
-		if conn, err = dtls.Dial(network, addr, c.DTLSConfig); err != nil {
+		if conn, err = dtls.Dial(Net, addr, c.DTLSConfig); err != nil {
 			return nil, err
 		}
+		conn = coapNet.NewConnDTLS(conn)
 		BlockWiseTransfer = true
 	case "udp-mcast", "udp4-mcast", "udp6-mcast":
 		var err error
@@ -163,6 +165,8 @@ func (c *Client) DialWithContext(ctx context.Context, address string) (clientCon
 		BlockWiseTransferSzx = *c.BlockWiseTransferSzx
 	}
 
+	started := make(chan struct{})
+
 	//sync := make(chan bool)
 	clientConn = &ClientConn{
 		srv: &Server{
@@ -175,6 +179,9 @@ func (c *Client) DialWithContext(ctx context.Context, address string) (clientCon
 			BlockWiseTransfer:        &BlockWiseTransfer,
 			BlockWiseTransferSzx:     &BlockWiseTransferSzx,
 			DisableTCPSignalMessages: c.DisableTCPSignalMessages,
+			NotifyStartedFunc: func() {
+				close(started)
+			},
 			NotifySessionEndFunc: func(s *ClientConn, err error) {
 				if c.NotifySessionEndFunc != nil {
 					c.NotifySessionEndFunc(err)
@@ -215,6 +222,7 @@ func (c *Client) DialWithContext(ctx context.Context, address string) (clientCon
 	case *net.TCPConn, *tls.Conn:
 		session, err := newSessionTCP(coapNet.NewConn(clientConn.srv.Conn, clientConn.srv.heartBeat()), clientConn.srv)
 		if err != nil {
+			clientConn.srv.Conn.Close()
 			return nil, err
 		}
 		if session.blockWiseEnabled() {
@@ -222,9 +230,10 @@ func (c *Client) DialWithContext(ctx context.Context, address string) (clientCon
 		} else {
 			clientConn.commander.networkSession = session
 		}
-	case *dtls.Conn:
+	case *coapNet.ConnDTLS:
 		session, err := newSessionDTLS(coapNet.NewConn(clientConn.srv.Conn, clientConn.srv.heartBeat()), clientConn.srv)
 		if err != nil {
+			clientConn.srv.Conn.Close()
 			return nil, err
 		}
 		if session.blockWiseEnabled() {
@@ -237,6 +246,7 @@ func (c *Client) DialWithContext(ctx context.Context, address string) (clientCon
 		coapNet.SetUDPSocketOptions(clientConn.srv.Conn.(*net.UDPConn))
 		session, err := newSessionUDP(coapNet.NewConnUDP(clientConn.srv.Conn.(*net.UDPConn), clientConn.srv.heartBeat(), c.MulticastHopLimit), clientConn.srv, sessionUPDData)
 		if err != nil {
+			clientConn.srv.Conn.Close()
 			return nil, err
 		}
 		if session.blockWiseEnabled() {
@@ -244,6 +254,9 @@ func (c *Client) DialWithContext(ctx context.Context, address string) (clientCon
 		} else {
 			clientConn.commander.networkSession = session
 		}
+	default:
+		clientConn.srv.Conn.Close()
+		return nil, fmt.Errorf("unknown connection type %T", clientConn.srv.Conn)
 	}
 
 	go func() {
@@ -253,6 +266,13 @@ func (c *Client) DialWithContext(ctx context.Context, address string) (clientCon
 		}
 	}()
 	clientConn.client = c
+
+	select {
+	case <-started:
+	case err := <-clientConn.shutdownSync:
+		clientConn.srv.Conn.Close()
+		return nil, err
+	}
 
 	return clientConn, nil
 }

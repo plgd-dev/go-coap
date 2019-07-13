@@ -81,7 +81,7 @@ func (l *DTLSListener) AcceptWithContext(ctx context.Context) (net.Conn, error) 
 		if err != nil {
 			return nil, fmt.Errorf("cannot accept connections: %v", err)
 		}
-		rw, err := l.listener.Accept()
+		rw, err := l.Accept()
 		if err != nil {
 			if isTemporary(err) {
 				continue

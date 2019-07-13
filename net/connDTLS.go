@@ -27,7 +27,7 @@ func (c *ConnDTLS) readLoop() {
 	defer c.wg.Done()
 	buf := make([]byte, 8192)
 	for {
-		n, err := c.Read(buf)
+		n, err := c.conn.Read(buf)
 		d := connDTLSData{err: err}
 		if err == nil && n > 0 {
 			d.data = append(d.data, buf[:n]...)
@@ -76,18 +76,18 @@ func (c *ConnDTLS) Read(b []byte) (n int, err error) {
 	select {
 	case d := <-c.readDataCh:
 		if d.err != nil {
-			return -1, errS{
+			return 0, errS{
 				error: d.err,
 			}
 		}
 		if len(b) < len(d.data) {
-			return -1, errS{
+			return 0, errS{
 				error: fmt.Errorf("buffer is too small"),
 			}
 		}
 		return copy(b, d.data), nil
 	case <-time.After(time.Now().Sub(deadline)):
-		return -1, errS{
+		return 0, errS{
 			error:     fmt.Errorf(ioTimeout),
 			temporary: true,
 			timeout:   true,

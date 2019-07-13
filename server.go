@@ -108,6 +108,19 @@ func ListenAndServeTLS(addr, certFile, keyFile string, handler Handler) error {
 	return server.ListenAndServe()
 }
 
+// ListenAndServeDTLS acts like http.ListenAndServeDTLS, more information in
+// http://golang.org/pkg/net/http/#ListenAndServeTLS
+func ListenAndServeDTLS(addr string, config *dtls.Config, handler Handler) error {
+	server := &Server{
+		Addr:       addr,
+		Net:        "udp-dtls",
+		DTLSConfig: config,
+		Handler:    handler,
+	}
+
+	return server.ListenAndServe()
+}
+
 // ActivateAndServe activates a server with a listener from systemd,
 // l and p should not both be non-nil.
 // If both l and p are not nil only p will be used.
@@ -339,6 +352,7 @@ func (srv *Server) ActivateAndServe() error {
 			if srv.Net == "" {
 				srv.Net = "tcp"
 			}
+			return srv.activateAndServe(nil, coapNet.NewConn(c, srv.heartBeat()), nil)
 		case *tls.Conn:
 			if srv.Net == "" {
 				srv.Net = "tcp-tls"
@@ -428,7 +442,7 @@ func (srv *Server) activateAndServe(listener Listener, conn *coapNet.Conn, connU
 
 	switch {
 	case listener != nil:
-		if strings.HasSuffix(srv.Net, "-dtls") {
+		if _, ok := listener.(*coapNet.DTLSListener); ok {
 			return srv.serveDTLSListener(listener)
 		}
 		return srv.serveTCPListener(listener)

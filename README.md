@@ -12,15 +12,14 @@ Features supported:
 * request multiplexer
 * multicast
 * CoAP NoResponse option in CoAP [RFC 7967][coap-noresponse]
-
-Not yet implemented:
-* CoAP over DTLS
+* CoAP over DTLS [pion/dtls][pion-dtls]
 
 [coap]: http://tools.ietf.org/html/rfc7252
 [coap-tcp]: https://tools.ietf.org/html/rfc8323
 [coap-block-wise-transfers]: https://tools.ietf.org/html/rfc7959
 [coap-observe]: https://tools.ietf.org/html/rfc7641
 [coap-noresponse]: https://tools.ietf.org/html/rfc7967
+[pion-dtls]: https://github.com/pion/dtls
 
 ## Samples
 

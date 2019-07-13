@@ -10,7 +10,7 @@ import (
 
 const (
 	maxBlockNumber = uint(1048575)
-	blockWiseDebug = true
+	blockWiseDebug = false
 )
 
 // BlockWiseSzx enum representation for szx
