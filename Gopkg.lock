@@ -10,7 +10,6 @@
   version = "v1.1.1"
 
 [[projects]]
-  branch = "master"
   digest = "1:00ba9fb5c14095829a3c738c8998b2e3d6019002291e41443ecb775f191e8ba2"
   name = "github.com/pion/dtls"
   packages = [
@@ -20,6 +19,7 @@
   ]
   pruneopts = "UT"
   revision = "bcc3927a53a8f925a2d30ee83cb319270a7bd667"
+  version = "v1.4.0"
 
 [[projects]]
   digest = "1:92d9305a35d7130172f46e095505cc56af49d073907ae52088c15e8c8ae3f519"
