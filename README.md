@@ -65,10 +65,10 @@ Features supported:
 		// co, err := coap.Dial("tcp", "localhost:5688")
 		
 		// for tcp-tls
-		// co, err := coap.DialWithTLS("tcp-tls", localhost:5688", &tls.Config{...})
+		// co, err := coap.DialTLS("tcp-tls", localhost:5688", &tls.Config{...})
 
 		// fot udp-dtls
-		// co, err := coap.DialWithDTLS("udp-dtls", "localhost:5688", &dtls.Config{...}, mux))
+		// co, err := coap.DialDTLS("udp-dtls", "localhost:5688", &dtls.Config{...}, mux))
 
 		if err != nil {
 			log.Fatalf("Error dialing: %v", err)

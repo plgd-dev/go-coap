@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/pion/dtls"
@@ -23,8 +24,7 @@ type DTLSListener struct {
 	doneCh    chan struct{}
 	connCh    chan connData
 
-	deadline time.Time
-	lock     sync.Mutex
+	deadline atomic.Value
 }
 
 func (l *DTLSListener) acceptLoop() {
@@ -66,7 +66,7 @@ func NewDTLSListener(network string, addr string, cfg *dtls.Config, heartBeat ti
 	return &l, nil
 }
 
-// AcceptContext waits with context for a generic Conn.
+// AcceptWithContext waits with context for a generic Conn.
 func (l *DTLSListener) AcceptWithContext(ctx context.Context) (net.Conn, error) {
 	for {
 		select {
@@ -94,17 +94,24 @@ func (l *DTLSListener) AcceptWithContext(ctx context.Context) (net.Conn, error) 
 
 // SetDeadline sets deadline for accept operation.
 func (l *DTLSListener) SetDeadline(t time.Time) error {
-	l.lock.Lock()
-	defer l.lock.Unlock()
-	l.deadline = t
+	l.deadline.Store(t)
 	return nil
 }
 
 // Accept waits for a generic Conn.
 func (l *DTLSListener) Accept() (net.Conn, error) {
-	l.lock.Lock()
-	deadline := l.deadline
-	l.lock.Unlock()
+	var deadline time.Time
+	v := l.deadline.Load()
+	if v != nil {
+		deadline = v.(time.Time)
+	}
+
+	if deadline.IsZero() {
+		select {
+		case d := <-l.connCh:
+			return NewConnDTLS(d.conn), d.err
+		}
+	}
 
 	select {
 	case d := <-l.connCh:

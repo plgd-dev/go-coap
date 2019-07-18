@@ -63,35 +63,63 @@ func (s *sessionBase) exchangeFunc(req Message, writeTimeout, readTimeout time.D
 	}
 }
 
+func (s *sessionBase) newSessionResp(token []byte, messageID uint16) (*sessionResp, error) {
+	var pairToken [MaxTokenSize]byte
+	copy(pairToken[:], token)
+
+	//register msgid to token
+	pairChan := &sessionResp{make(chan *Request, 1)}
+	s.mapPairsLock.Lock()
+	defer s.mapPairsLock.Unlock()
+	if s.mapPairs[pairToken] == nil {
+		s.mapPairs[pairToken] = make(map[uint16]*sessionResp)
+	}
+	if s.mapPairs[pairToken][messageID] != nil {
+		return nil, ErrTokenAlreadyExist
+	}
+	s.mapPairs[pairToken][messageID] = pairChan
+	return pairChan, nil
+}
+
+func (s *sessionBase) getSessionResp(token []byte, messageID uint16) *sessionResp {
+	var pairToken [MaxTokenSize]byte
+	copy(pairToken[:], token)
+
+	s.mapPairsLock.Lock()
+	defer s.mapPairsLock.Unlock()
+	if m, ok := s.mapPairs[pairToken]; ok {
+		if p, ok := m[messageID]; ok {
+			return p
+		}
+	}
+	return nil
+}
+
+func (s *sessionBase) removeSessionResp(token []byte, messageID uint16) {
+	var pairToken [MaxTokenSize]byte
+	copy(pairToken[:], token)
+
+	s.mapPairsLock.Lock()
+	defer s.mapPairsLock.Unlock()
+	delete(s.mapPairs[pairToken], messageID)
+	if len(s.mapPairs[pairToken]) == 0 {
+		delete(s.mapPairs, pairToken)
+	}
+}
+
 func (s *sessionBase) exchangeWithContext(ctx context.Context, req Message, writeMsgWithContext func(context.Context, Message) error) (Message, error) {
 	if err := validateMsg(req); err != nil {
 		return nil, fmt.Errorf("cannot exchange: %v", err)
 	}
 	//register msgid to token
-	pairChan := &sessionResp{make(chan *Request, 1)}
-	var pairToken [MaxTokenSize]byte
-	copy(pairToken[:], req.Token())
-	s.mapPairsLock.Lock()
-	if s.mapPairs[pairToken] == nil {
-		s.mapPairs[pairToken] = make(map[uint16]*sessionResp)
+	pairChan, err := s.newSessionResp(req.Token(), req.MessageID())
+	if err != nil {
+		return nil, err
 	}
-	if s.mapPairs[pairToken][req.MessageID()] != nil {
-		s.mapPairsLock.Unlock()
-		return nil, ErrTokenAlreadyExist
-	}
-	s.mapPairs[pairToken][req.MessageID()] = pairChan
-	s.mapPairsLock.Unlock()
 
-	defer func() {
-		s.mapPairsLock.Lock()
-		delete(s.mapPairs[pairToken], req.MessageID())
-		if len(s.mapPairs[pairToken]) == 0 {
-			delete(s.mapPairs, pairToken)
-		}
-		s.mapPairsLock.Unlock()
-	}()
+	defer s.removeSessionResp(req.Token(), req.MessageID())
 
-	err := writeMsgWithContext(ctx, req)
+	err = writeMsgWithContext(ctx, req)
 	if err != nil {
 		return nil, fmt.Errorf("cannot exchange: %v", err)
 	}
@@ -113,18 +141,12 @@ func validateMsg(msg Message) error {
 	if msg.Payload() == nil && msg.Option(ContentFormat) != nil {
 		return ErrInvalidPayload
 	}
-	//TODO check size of m
 	return nil
 }
 
 func (s *sessionBase) handlePairMsg(w ResponseWriter, r *Request) bool {
-	var token [MaxTokenSize]byte
-	copy(token[:], r.Msg.Token())
 	//validate token
-
-	s.mapPairsLock.Lock()
-	pair := s.mapPairs[token][r.Msg.MessageID()]
-	s.mapPairsLock.Unlock()
+	pair := s.getSessionResp(r.Msg.Token(), r.Msg.MessageID())
 	if pair != nil {
 		select {
 		case pair.ch <- r:

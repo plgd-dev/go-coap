@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -18,9 +19,7 @@ type ConnDTLS struct {
 	doneCh     chan struct{}
 	wg         sync.WaitGroup
 
-	readDeadline  time.Time
-	writeDeadline time.Time
-	lock          sync.Mutex
+	readDeadline atomic.Value
 }
 
 func (c *ConnDTLS) readLoop() {
@@ -68,24 +67,36 @@ func (e errS) Temporary() bool {
 	return e.temporary
 }
 
+func (c *ConnDTLS) processData(b []byte, d connDTLSData) (n int, err error) {
+	if d.err != nil {
+		return 0, errS{
+			error: d.err,
+		}
+	}
+	if len(b) < len(d.data) {
+		return 0, errS{
+			error: fmt.Errorf("buffer is too small"),
+		}
+	}
+	return copy(b, d.data), nil
+}
+
 func (c *ConnDTLS) Read(b []byte) (n int, err error) {
-	c.lock.Lock()
-	deadline := c.readDeadline
-	c.lock.Unlock()
+	var deadline time.Time
+	v := c.readDeadline.Load()
+	if v != nil {
+		deadline = v.(time.Time)
+	}
+	if deadline.IsZero() {
+		select {
+		case d := <-c.readDataCh:
+			return c.processData(b, d)
+		}
+	}
 
 	select {
 	case d := <-c.readDataCh:
-		if d.err != nil {
-			return 0, errS{
-				error: d.err,
-			}
-		}
-		if len(b) < len(d.data) {
-			return 0, errS{
-				error: fmt.Errorf("buffer is too small"),
-			}
-		}
-		return copy(b, d.data), nil
+		return c.processData(b, d)
 	case <-time.After(time.Now().Sub(deadline)):
 		return 0, errS{
 			error:     fmt.Errorf(ioTimeout),
@@ -123,9 +134,7 @@ func (c *ConnDTLS) SetDeadline(t time.Time) error {
 }
 
 func (c *ConnDTLS) SetReadDeadline(t time.Time) error {
-	c.lock.Lock()
-	defer c.lock.Unlock()
-	c.readDeadline = t
+	c.readDeadline.Store(t)
 	return nil
 }
 

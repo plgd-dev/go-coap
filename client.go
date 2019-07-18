@@ -467,26 +467,26 @@ func fixNetDTLS(network string) string {
 	return network
 }
 
-// DialWithTLS connects to the address on the named network with TLS.
-func DialWithTLS(network, address string, tlsConfig *tls.Config) (conn *ClientConn, err error) {
+// DialTLS connects to the address on the named network with TLS.
+func DialTLS(network, address string, tlsConfig *tls.Config) (conn *ClientConn, err error) {
 	client := Client{Net: fixNetTLS(network), TLSConfig: tlsConfig}
 	return client.DialWithContext(context.Background(), address)
 }
 
-// DialWithDTLS connects to the address on the named network with DTLS.
-func DialWithDTLS(network, address string, config *dtls.Config) (conn *ClientConn, err error) {
+// DialDTLS connects to the address on the named network with DTLS.
+func DialDTLS(network, address string, config *dtls.Config) (conn *ClientConn, err error) {
 	client := Client{Net: fixNetDTLS(network), DTLSConfig: config}
 	return client.DialWithContext(context.Background(), address)
 }
 
-// DialTimeoutWithTLS acts like DialWithTLS but takes a timeout.
-func DialTimeoutWithTLS(network, address string, tlsConfig *tls.Config, timeout time.Duration) (conn *ClientConn, err error) {
+// DialTLSWithTimeout acts like DialTLS but takes a timeout.
+func DialTLSWithTimeout(network, address string, tlsConfig *tls.Config, timeout time.Duration) (conn *ClientConn, err error) {
 	client := Client{Net: fixNetTLS(network), DialTimeout: timeout, TLSConfig: tlsConfig}
 	return client.DialWithContext(context.Background(), address)
 }
 
-// DialTimeoutWithTLS acts like DialWithDTLS but takes a timeout.
-func DialTimeoutWithDTLS(network, address string, config *dtls.Config, timeout time.Duration) (conn *ClientConn, err error) {
+// DialDTLSWithTimeout acts like DialwriteDeadlineDTLS but takes a timeout.
+func DialDTLSWithTimeout(network, address string, config *dtls.Config, timeout time.Duration) (conn *ClientConn, err error) {
 	client := Client{Net: fixNetDTLS(network), DialTimeout: timeout, DTLSConfig: config}
 	return client.DialWithContext(context.Background(), address)
 }

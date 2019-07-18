@@ -10,7 +10,7 @@ import (
 )
 
 func main() {
-	co, err := coap.DialWithDTLS("udp", "localhost:5688", &dtls.Config{
+	co, err := coap.DialDTLS("udp", "localhost:5688", &dtls.Config{
 		PSK: func(hint []byte) ([]byte, error) {
 			fmt.Printf("Server's hint: %s \n", hint)
 			return []byte{0xAB, 0xC1, 0x23}, nil
