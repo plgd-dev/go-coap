@@ -205,7 +205,7 @@ func (c *ConnUDP) WriteWithContext(ctx context.Context, udpCtx *ConnUDPContext, 
 			if isTemporary(err) {
 				continue
 			}
-			return fmt.Errorf("cannot write to udp connection")
+			return fmt.Errorf("cannot write to udp connection: %v", err)
 		}
 		written += n
 	}

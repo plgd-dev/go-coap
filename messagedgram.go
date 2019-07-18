@@ -10,18 +10,23 @@ import (
 // DgramMessage implements Message interface.
 type DgramMessage struct {
 	MessageBase
+	messageID uint16
 }
 
 func NewDgramMessage(p MessageParams) *DgramMessage {
 	return &DgramMessage{
-		MessageBase{
-			typ:       p.Type,
-			code:      p.Code,
-			messageID: p.MessageID,
-			token:     p.Token,
-			payload:   p.Payload,
+		MessageBase: MessageBase{
+			typ:     p.Type,
+			code:    p.Code,
+			token:   p.Token,
+			payload: p.Payload,
 		},
+		messageID: p.MessageID,
 	}
+}
+
+func (m *DgramMessage) MessageID() uint16 {
+	return m.messageID
 }
 
 // SetMessageID
@@ -88,7 +93,7 @@ func (m *DgramMessage) UnmarshalBinary(data []byte) error {
 	}
 
 	m.MessageBase.code = COAPCode(data[1])
-	m.MessageBase.messageID = binary.BigEndian.Uint16(data[2:4])
+	m.messageID = binary.BigEndian.Uint16(data[2:4])
 
 	if tokenLen > 0 {
 		m.MessageBase.token = make([]byte, tokenLen)

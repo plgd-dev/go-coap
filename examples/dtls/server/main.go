@@ -1,9 +1,11 @@
 package main
 
 import (
+	"fmt"
 	"log"
 
 	coap "github.com/go-ocf/go-coap"
+	"github.com/pion/dtls"
 )
 
 func handleA(w coap.ResponseWriter, req *coap.Request) {
@@ -31,5 +33,12 @@ func main() {
 	mux.Handle("/a", coap.HandlerFunc(handleA))
 	mux.Handle("/b", coap.HandlerFunc(handleB))
 
-	log.Fatal(coap.ListenAndServe("udp", ":5688", mux))
+	log.Fatal(coap.ListenAndServeDTLS("udp", ":5688", &dtls.Config{
+		PSK: func(hint []byte) ([]byte, error) {
+			fmt.Printf("Client's hint: %s \n", hint)
+			return []byte{0xAB, 0xC1, 0x23}, nil
+		},
+		PSKIdentityHint: []byte("Pion DTLS Client"),
+		CipherSuites:    []dtls.CipherSuiteID{dtls.TLS_PSK_WITH_AES_128_CCM_8},
+	}, mux))
 }

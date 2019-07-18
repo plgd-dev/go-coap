@@ -61,5 +61,5 @@ func main() {
 	mux := coap.NewServeMux()
 	mux.Handle("/oic/res", coap.HandlerFunc(handleMcast))
 
-	log.Fatal(coap.ListenAndServe("224.0.1.187:5688", "udp-mcast", mux))
+	log.Fatal(coap.ListenAndServe("udp-mcast", "224.0.1.187:5688", mux))
 }

@@ -110,6 +110,10 @@ func NewTcpMessage(p MessageParams) *TcpMessage {
 	}
 }
 
+func (m *TcpMessage) MessageID() uint16 {
+	return 0
+}
+
 // SetMessageID
 func (m *TcpMessage) SetMessageID(messageID uint16) {
 	//not used by COAP over TCP

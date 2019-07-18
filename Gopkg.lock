@@ -10,6 +10,26 @@
   version = "v1.1.1"
 
 [[projects]]
+  digest = "1:00ba9fb5c14095829a3c738c8998b2e3d6019002291e41443ecb775f191e8ba2"
+  name = "github.com/pion/dtls"
+  packages = [
+    ".",
+    "internal/crypto/ccm",
+    "internal/udp",
+  ]
+  pruneopts = "UT"
+  revision = "bcc3927a53a8f925a2d30ee83cb319270a7bd667"
+  version = "v1.4.0"
+
+[[projects]]
+  digest = "1:92d9305a35d7130172f46e095505cc56af49d073907ae52088c15e8c8ae3f519"
+  name = "github.com/pion/logging"
+  packages = ["."]
+  pruneopts = "UT"
+  revision = "0387f8acdeb20faf48e539e74906dd633851f3a8"
+  version = "v0.2.2"
+
+[[projects]]
   digest = "1:0028cb19b2e4c3112225cd871870f2d9cf49b9b4276531f03438a88e94be86fe"
   name = "github.com/pmezard/go-difflib"
   packages = ["difflib"]
@@ -29,16 +49,24 @@
   version = "v1.3.0"
 
 [[projects]]
-  digest = "1:d0072748c62defde1ad99dde77f6ffce492a0e5aea9204077e497c7edfb86653"
+  digest = "1:5a1cf4e370bc86137b58da2ae065e76526d32b11f62a7665f36dbd5f41fa95ff"
   name = "github.com/ugorji/go"
   packages = ["codec"]
   pruneopts = "UT"
-  revision = "2adff0894ba3bc2eeb9f9aea45fefd49802e1a13"
-  version = "v1.1.4"
+  revision = "23ab95ef5dc3b70286760af84ce2327a2b64ed62"
+  version = "v1.1.7"
 
 [[projects]]
   branch = "master"
-  digest = "1:34d3139bb084e2883e9823772afb88a3e9fd5812bade1e5ba455cbdffb15732a"
+  digest = "1:c79dab329e903f5f7793c3f541645f5e4fdaeb222ccd804b0913ea796d0f0213"
+  name = "golang.org/x/crypto"
+  packages = ["curve25519"]
+  pruneopts = "UT"
+  revision = "4def268fd1a49955bfb3dda92fe3db4f924f2285"
+
+[[projects]]
+  branch = "master"
+  digest = "1:9896e6185a5f9a8c93b4c641c96bfab46677abf2be0a332a2affde2f575c0aad"
   name = "golang.org/x/net"
   packages = [
     "bpf",
@@ -48,23 +76,24 @@
     "ipv6",
   ]
   pruneopts = "UT"
-  revision = "d28f0bde5980168871434b95cfc858db9f2a7a99"
+  revision = "da137c7871d730100384dbcf36e6f8fa493aef5b"
 
 [[projects]]
   branch = "master"
-  digest = "1:3398992b8f4b00ce4a6a5f9770008cf66dcff8f128b51eeab8c1f657096cac8f"
+  digest = "1:31d44814b45607afa77c6e8ef20ea8bacc1d1053fe084440c874f311732e7ec3"
   name = "golang.org/x/sys"
   packages = [
     "unix",
     "windows",
   ]
   pruneopts = "UT"
-  revision = "15dcb6c0061f497a3f66e3ea034b629c6dd4d99e"
+  revision = "fae7ac547cb717d141c433a2a173315e216b64c4"
 
 [solve-meta]
   analyzer-name = "dep"
   analyzer-version = 1
   input-imports = [
+    "github.com/pion/dtls",
     "github.com/stretchr/testify/assert",
     "github.com/stretchr/testify/require",
     "github.com/ugorji/go/codec",

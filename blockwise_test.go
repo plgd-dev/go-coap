@@ -230,13 +230,13 @@ func TestServingUDPBlockWiseUsingWrite(t *testing.T) {
 	}
 
 	expectedMsg := &DgramMessage{
-		MessageBase{
-			typ:       Acknowledgement,
-			code:      Content,
-			messageID: req.MessageID(),
-			payload:   req.Payload(),
-			token:     req.Token(),
+		MessageBase: MessageBase{
+			typ:     Acknowledgement,
+			code:    Content,
+			payload: req.Payload(),
+			token:   req.Token(),
 		},
+		messageID: req.MessageID(),
 	}
 	expectedMsg.SetOption(ContentFormat, req.Option(ContentFormat))
 
@@ -281,13 +281,13 @@ func TestServingUDPBlockWiseWithClientWithoutBlockWise(t *testing.T) {
 	}
 
 	expectedMsg := &DgramMessage{
-		MessageBase{
-			typ:       Acknowledgement,
-			code:      Content,
-			messageID: req.MessageID(),
-			payload:   req.Payload(),
-			token:     req.Token(),
+		MessageBase: MessageBase{
+			typ:     Acknowledgement,
+			code:    Content,
+			payload: req.Payload(),
+			token:   req.Token(),
 		},
+		messageID: req.MessageID(),
 	}
 
 	expectedMsg.SetOption(ContentFormat, TextPlain)
@@ -306,13 +306,13 @@ func TestServingUDPBlockWiseWithClientWithoutBlockWise(t *testing.T) {
 		t.Fatal("failed to exchange", err)
 	}
 	expectedGetMsg := DgramMessage{
-		MessageBase{
-			typ:       Acknowledgement,
-			code:      Content,
-			messageID: getReq.MessageID(),
-			payload:   helloWorld,
-			token:     getReq.Token(),
+		MessageBase: MessageBase{
+			typ:     Acknowledgement,
+			code:    Content,
+			payload: helloWorld,
+			token:   getReq.Token(),
 		},
+		messageID: getReq.MessageID(),
 	}
 
 	if etag, ok := getResp.Option(ETag).([]byte); ok {

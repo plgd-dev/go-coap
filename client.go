@@ -12,6 +12,7 @@ import (
 	"time"
 
 	coapNet "github.com/go-ocf/go-coap/net"
+	"github.com/pion/dtls"
 )
 
 // A ClientConn represents a connection to a COAP server.
@@ -28,6 +29,7 @@ type Client struct {
 	Net            string        // if "tcp" or "tcp-tls" (COAP over TLS) a TCP query will be initiated, otherwise an UDP one (default is "" for UDP) or "udp-mcast" for multicast
 	MaxMessageSize uint32        // Max message size that could be received from peer. If not set it defaults to 1152 B.
 	TLSConfig      *tls.Config   // TLS connection configuration
+	DTLSConfig     *dtls.Config  // TLS connection configuration
 	DialTimeout    time.Duration // set Timeout for dialer
 	ReadTimeout    time.Duration // net.ClientConn.SetReadTimeout value for connections, defaults to 1 hour - overridden by Timeout when that value is non-zero
 	WriteTimeout   time.Duration // net.ClientConn.SetWriteTimeout value for connections, defaults to 1 hour - overridden by Timeout when that value is non-zero
@@ -117,6 +119,18 @@ func (c *Client) DialWithContext(ctx context.Context, address string) (clientCon
 		}
 		sessionUPDData = coapNet.NewConnUDPContext(conn.(*net.UDPConn).RemoteAddr().(*net.UDPAddr), nil)
 		BlockWiseTransfer = true
+	case "udp-dtls", "udp4-dtls", "udp6-dtls":
+		network = c.Net
+		Net := strings.TrimSuffix(c.Net, "-dtls")
+		addr, err := net.ResolveUDPAddr(Net, address)
+		if err != nil {
+			return nil, fmt.Errorf("cannot resolve udp address: %v", err)
+		}
+		if conn, err = dtls.Dial(Net, addr, c.DTLSConfig); err != nil {
+			return nil, err
+		}
+		conn = coapNet.NewConnDTLS(conn)
+		BlockWiseTransfer = true
 	case "udp-mcast", "udp4-mcast", "udp6-mcast":
 		var err error
 		network = strings.TrimSuffix(c.Net, "-mcast")
@@ -151,6 +165,8 @@ func (c *Client) DialWithContext(ctx context.Context, address string) (clientCon
 		BlockWiseTransferSzx = *c.BlockWiseTransferSzx
 	}
 
+	started := make(chan struct{})
+
 	//sync := make(chan bool)
 	clientConn = &ClientConn{
 		srv: &Server{
@@ -163,12 +179,18 @@ func (c *Client) DialWithContext(ctx context.Context, address string) (clientCon
 			BlockWiseTransfer:        &BlockWiseTransfer,
 			BlockWiseTransferSzx:     &BlockWiseTransferSzx,
 			DisableTCPSignalMessages: c.DisableTCPSignalMessages,
+			NotifyStartedFunc: func() {
+				close(started)
+			},
 			NotifySessionEndFunc: func(s *ClientConn, err error) {
 				if c.NotifySessionEndFunc != nil {
 					c.NotifySessionEndFunc(err)
 				}
 			},
 			newSessionTCPFunc: func(connection *coapNet.Conn, srv *Server) (networkSession, error) {
+				return clientConn.commander.networkSession, nil
+			},
+			newSessionDTLSFunc: func(connection *coapNet.Conn, srv *Server) (networkSession, error) {
 				return clientConn.commander.networkSession, nil
 			},
 			newSessionUDPFunc: func(connection *coapNet.ConnUDP, srv *Server, sessionUDPData *coapNet.ConnUDPContext) (networkSession, error) {
@@ -200,6 +222,18 @@ func (c *Client) DialWithContext(ctx context.Context, address string) (clientCon
 	case *net.TCPConn, *tls.Conn:
 		session, err := newSessionTCP(coapNet.NewConn(clientConn.srv.Conn, clientConn.srv.heartBeat()), clientConn.srv)
 		if err != nil {
+			clientConn.srv.Conn.Close()
+			return nil, err
+		}
+		if session.blockWiseEnabled() {
+			clientConn.commander.networkSession = &blockWiseSession{networkSession: session}
+		} else {
+			clientConn.commander.networkSession = session
+		}
+	case *coapNet.ConnDTLS:
+		session, err := newSessionDTLS(coapNet.NewConn(clientConn.srv.Conn, clientConn.srv.heartBeat()), clientConn.srv)
+		if err != nil {
+			clientConn.srv.Conn.Close()
 			return nil, err
 		}
 		if session.blockWiseEnabled() {
@@ -212,6 +246,7 @@ func (c *Client) DialWithContext(ctx context.Context, address string) (clientCon
 		coapNet.SetUDPSocketOptions(clientConn.srv.Conn.(*net.UDPConn))
 		session, err := newSessionUDP(coapNet.NewConnUDP(clientConn.srv.Conn.(*net.UDPConn), clientConn.srv.heartBeat(), c.MulticastHopLimit), clientConn.srv, sessionUPDData)
 		if err != nil {
+			clientConn.srv.Conn.Close()
 			return nil, err
 		}
 		if session.blockWiseEnabled() {
@@ -219,6 +254,9 @@ func (c *Client) DialWithContext(ctx context.Context, address string) (clientCon
 		} else {
 			clientConn.commander.networkSession = session
 		}
+	default:
+		clientConn.srv.Conn.Close()
+		return nil, fmt.Errorf("unknown connection type %T", clientConn.srv.Conn)
 	}
 
 	go func() {
@@ -228,6 +266,13 @@ func (c *Client) DialWithContext(ctx context.Context, address string) (clientCon
 		}
 	}()
 	clientConn.client = c
+
+	select {
+	case <-started:
+	case err := <-clientConn.shutdownSync:
+		clientConn.srv.Conn.Close()
+		return nil, err
+	}
 
 	return clientConn, nil
 }
@@ -415,14 +460,33 @@ func fixNetTLS(network string) string {
 	return network
 }
 
-// DialWithTLS connects to the address on the named network with TLS.
-func DialWithTLS(network, address string, tlsConfig *tls.Config) (conn *ClientConn, err error) {
+func fixNetDTLS(network string) string {
+	if !strings.HasSuffix(network, "-dtls") {
+		network += "-dtls"
+	}
+	return network
+}
+
+// DialTLS connects to the address on the named network with TLS.
+func DialTLS(network, address string, tlsConfig *tls.Config) (conn *ClientConn, err error) {
 	client := Client{Net: fixNetTLS(network), TLSConfig: tlsConfig}
 	return client.DialWithContext(context.Background(), address)
 }
 
-// DialTimeoutWithTLS acts like DialWithTLS but takes a timeout.
-func DialTimeoutWithTLS(network, address string, tlsConfig *tls.Config, timeout time.Duration) (conn *ClientConn, err error) {
+// DialDTLS connects to the address on the named network with DTLS.
+func DialDTLS(network, address string, config *dtls.Config) (conn *ClientConn, err error) {
+	client := Client{Net: fixNetDTLS(network), DTLSConfig: config}
+	return client.DialWithContext(context.Background(), address)
+}
+
+// DialTLSWithTimeout acts like DialTLS but takes a timeout.
+func DialTLSWithTimeout(network, address string, tlsConfig *tls.Config, timeout time.Duration) (conn *ClientConn, err error) {
 	client := Client{Net: fixNetTLS(network), DialTimeout: timeout, TLSConfig: tlsConfig}
+	return client.DialWithContext(context.Background(), address)
+}
+
+// DialDTLSWithTimeout acts like DialwriteDeadlineDTLS but takes a timeout.
+func DialDTLSWithTimeout(network, address string, config *dtls.Config, timeout time.Duration) (conn *ClientConn, err error) {
+	client := Client{Net: fixNetDTLS(network), DialTimeout: timeout, DTLSConfig: config}
 	return client.DialWithContext(context.Background(), address)
 }

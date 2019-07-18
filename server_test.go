@@ -7,7 +7,6 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
-	"log"
 	"net"
 	"strings"
 	"sync"
@@ -15,15 +14,14 @@ import (
 	"time"
 
 	coapNet "github.com/go-ocf/go-coap/net"
+	"github.com/pion/dtls"
 )
 
 func CreateRespMessageByReq(isTCP bool, code COAPCode, req Message) Message {
 	if isTCP {
 		resp := &TcpMessage{
 			MessageBase{
-				//typ:       Acknowledgement, not used by COAP over TCP
-				code: code,
-				//messageID: req.MessageID(), , not used by COAP over TCP
+				code:    code,
 				payload: req.Payload(),
 				token:   req.Token(),
 			},
@@ -33,13 +31,14 @@ func CreateRespMessageByReq(isTCP bool, code COAPCode, req Message) Message {
 		return resp
 	}
 	resp := &DgramMessage{
-		MessageBase{
-			typ:       Acknowledgement,
-			code:      code,
-			messageID: req.MessageID(),
-			payload:   req.Payload(),
-			token:     req.Token(),
+		MessageBase: MessageBase{
+			typ:  Acknowledgement,
+			code: code,
+
+			payload: req.Payload(),
+			token:   req.Token(),
 		},
+		messageID: req.MessageID(),
 	}
 	resp.SetPath(req.Path())
 	resp.SetOption(ContentFormat, req.Option(ContentFormat))
@@ -50,7 +49,7 @@ func EchoServer(w ResponseWriter, r *Request) {
 	if r.Msg.IsConfirmable() {
 		err := w.WriteMsg(CreateRespMessageByReq(r.Client.networkSession().IsTCP(), Valid, r.Msg))
 		if err != nil {
-			log.Printf("Cannot write echo %v", err)
+			fmt.Printf("Cannot write echo %v", err)
 		}
 	}
 }
@@ -197,6 +196,36 @@ func RunLocalTLSServer(laddr string, config *tls.Config) (*Server, string, chan 
 	return server, l.Addr().String(), fin, nil
 }
 
+func RunLocalDTLSServer(laddr string, config *dtls.Config, BlockWiseTransfer bool, BlockWiseTransferSzx BlockWiseSzx) (*Server, string, chan error, error) {
+	l, err := coapNet.NewDTLSListener("udp", laddr, config, time.Millisecond*100)
+	if err != nil {
+		return nil, "", nil, err
+	}
+
+	server := &Server{Listener: l, ReadTimeout: time.Hour, WriteTimeout: time.Hour,
+		BlockWiseTransfer:    &BlockWiseTransfer,
+		BlockWiseTransferSzx: &BlockWiseTransferSzx,
+		NotifySessionNewFunc: func(s *ClientConn) {
+			fmt.Printf("networkSession start %v\n", s.RemoteAddr())
+		}, NotifySessionEndFunc: func(w *ClientConn, err error) {
+			fmt.Printf("networkSession end %v: %v\n", w.RemoteAddr(), err)
+		},
+		MaxMessageSize: ^uint32(0),
+	}
+
+	// fin must be buffered so the goroutine below won't block
+	// forever if fin is never read from. This always happens
+	// in RunLocalUDPServer and can happen in TestShutdownUDP.
+	fin := make(chan error, 1)
+
+	go func() {
+		fin <- server.ActivateAndServe()
+		l.Close()
+	}()
+
+	return server, l.Addr().String(), fin, nil
+}
+
 type clientHandler func(t *testing.T, payload []byte, co *ClientConn)
 
 func testServingTCPWithMsgWithObserver(t *testing.T, net string, BlockWiseTransfer bool, BlockWiseTransferSzx BlockWiseSzx, payload []byte, ch clientHandler, observeFunc HandlerFunc) {
@@ -219,6 +248,24 @@ func testServingTCPWithMsgWithObserver(t *testing.T, net string, BlockWiseTransf
 		s, addrstr, fin, err = RunLocalTCPServer(":0", BlockWiseTransfer, BlockWiseTransferSzx)
 	case "udp", "udp4", "udp6":
 		s, addrstr, fin, err = RunLocalUDPServer(net, ":0", BlockWiseTransfer, BlockWiseTransferSzx)
+	case "udp-dtls", "udp4-dtls", "udp6-dtls":
+		config := &dtls.Config{
+			PSK: func(hint []byte) ([]byte, error) {
+				fmt.Printf("Client's hint: %s \n", hint)
+				return []byte{0xAB, 0xC1, 0x23}, nil
+			},
+			PSKIdentityHint: []byte("Pion DTLS Client"),
+			CipherSuites:    []dtls.CipherSuiteID{dtls.TLS_PSK_WITH_AES_128_CCM_8},
+		}
+		c.DTLSConfig = &dtls.Config{
+			PSK: func(hint []byte) ([]byte, error) {
+				fmt.Printf("Server's hint: %s \n", hint)
+				return []byte{0xAB, 0xC1, 0x23}, nil
+			},
+			PSKIdentityHint: []byte("Pion DTLS Server"),
+			CipherSuites:    []dtls.CipherSuiteID{dtls.TLS_PSK_WITH_AES_128_CCM_8},
+		}
+		s, addrstr, fin, err = RunLocalDTLSServer(":0", config, BlockWiseTransfer, BlockWiseTransferSzx)
 	case "tcp-tls", "tcp4-tls", "tcp6-tls":
 		cert, err := tls.X509KeyPair(CertPEMBlock, KeyPEMBlock)
 		if err != nil {
@@ -754,10 +801,9 @@ func benchmarkServeTCPStreamWithMsg(b *testing.B, req *TcpMessage) {
 func BenchmarkServeTCPStream(b *testing.B) {
 	req := &TcpMessage{
 		MessageBase{
-			typ:       Confirmable,
-			code:      POST,
-			messageID: 1234,
-			payload:   []byte("Content sent by client"),
+			typ:     Confirmable,
+			code:    POST,
+			payload: []byte("Content sent by client"),
 		},
 	}
 	req.SetOption(ContentFormat, TextPlain)
@@ -767,11 +813,10 @@ func BenchmarkServeTCPStream(b *testing.B) {
 
 func BenchmarkServeTCPStreamBigMsg(b *testing.B) {
 	req := &TcpMessage{
-		MessageBase{
-			typ:       Confirmable,
-			code:      POST,
-			messageID: 1234,
-			payload:   make([]byte, 1024*1024*10),
+		MessageBase: MessageBase{
+			typ:     Confirmable,
+			code:    POST,
+			payload: make([]byte, 1024*1024*10),
 		},
 	}
 	req.SetOption(ContentFormat, TextPlain)

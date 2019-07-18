@@ -14,6 +14,7 @@ import (
 	"time"
 
 	coapNet "github.com/go-ocf/go-coap/net"
+	"github.com/pion/dtls"
 )
 
 // Interval for stop worker if no load
@@ -80,28 +81,32 @@ func failedHandler() Handler { return HandlerFunc(HandleFailed) }
 
 // ListenAndServe Starts a server on address and network specified Invoke handler
 // for incoming queries.
-func ListenAndServe(addr string, network string, handler Handler) error {
+func ListenAndServe(network string, addr string, handler Handler) error {
 	server := &Server{Addr: addr, Net: network, Handler: handler}
 	return server.ListenAndServe()
 }
 
 // ListenAndServeTLS acts like http.ListenAndServeTLS, more information in
 // http://golang.org/pkg/net/http/#ListenAndServeTLS
-func ListenAndServeTLS(addr, certFile, keyFile string, handler Handler) error {
-	cert, err := tls.LoadX509KeyPair(certFile, keyFile)
-	if err != nil {
-		return err
-	}
-
-	config := tls.Config{
-		Certificates: []tls.Certificate{cert},
-	}
-
+func ListenAndServeTLS(network, addr string, config *tls.Config, handler Handler) error {
 	server := &Server{
 		Addr:      addr,
-		Net:       "tcp-tls",
-		TLSConfig: &config,
+		Net:       fixNetTLS(network),
+		TLSConfig: config,
 		Handler:   handler,
+	}
+
+	return server.ListenAndServe()
+}
+
+// ListenAndServeDTLS acts like ListenAndServeTLS, more information in
+// http://golang.org/pkg/net/http/#ListenAndServeTLS
+func ListenAndServeDTLS(network string, addr string, config *dtls.Config, handler Handler) error {
+	server := &Server{
+		Addr:       addr,
+		Net:        fixNetDTLS(network),
+		DTLSConfig: config,
+		Handler:    handler,
 	}
 
 	return server.ListenAndServe()
@@ -126,6 +131,8 @@ type Server struct {
 	Listener Listener
 	// TLS connection configuration
 	TLSConfig *tls.Config
+	// DTLSConfig connection configuration
+	DTLSConfig *dtls.Config
 	// UDP/TCP "Listener/Connection" to use, this is to aid in systemd's socket activation.
 	Conn net.Conn
 	// Handler to invoke, COAP.DefaultServeMux if nil.
@@ -145,6 +152,8 @@ type Server struct {
 	newSessionUDPFunc func(connection *coapNet.ConnUDP, srv *Server, sessionUDPData *coapNet.ConnUDPContext) (networkSession, error)
 	// If newSessionUDPFunc is set it is called when session TCP want to be created
 	newSessionTCPFunc func(connection *coapNet.Conn, srv *Server) (networkSession, error)
+	// If newSessionUDPFunc is set it is called when session DTLS want to be created
+	newSessionDTLSFunc func(connection *coapNet.Conn, srv *Server) (networkSession, error)
 	// If NotifyNewSession is set it is called when new TCP/UDP session was created.
 	NotifySessionNewFunc func(w *ClientConn)
 	// If NotifyNewSession is set it is called when TCP/UDP session was ended.
@@ -293,6 +302,13 @@ func (srv *Server) ListenAndServe() error {
 		if err := connUDP.SetMulticastLoopback(true); err != nil {
 			return err
 		}
+	case "udp-dtls", "udp4-dtls", "udp6-dtls":
+		network := strings.TrimSuffix(srv.Net, "-dtls")
+		listener, err = coapNet.NewDTLSListener(network, addr, srv.DTLSConfig, srv.heartBeat())
+		if err != nil {
+			return fmt.Errorf("cannot listen and serve: %v", err)
+		}
+		defer listener.Close()
 	default:
 		return ErrInvalidNetParameter
 	}
@@ -308,7 +324,14 @@ func (srv *Server) initServeTCP(conn *coapNet.Conn) error {
 	if srv.NotifyStartedFunc != nil {
 		srv.NotifyStartedFunc()
 	}
-	return srv.serveTCPconnection(newShutdownWithContext(srv.doneChan), conn)
+	return srv.serveTCPConnection(newShutdownWithContext(srv.doneChan), conn)
+}
+
+func (srv *Server) initServeDTLS(conn *coapNet.Conn) error {
+	if srv.NotifyStartedFunc != nil {
+		srv.NotifyStartedFunc()
+	}
+	return srv.serveDTLSConnection(newShutdownWithContext(srv.doneChan), conn)
 }
 
 // ActivateAndServe starts a coapserver with the PacketConn or Listener
@@ -316,9 +339,25 @@ func (srv *Server) initServeTCP(conn *coapNet.Conn) error {
 func (srv *Server) ActivateAndServe() error {
 	if srv.Conn != nil {
 		switch c := srv.Conn.(type) {
-		case *net.TCPConn, *tls.Conn:
+		case *net.TCPConn:
+			if srv.Net == "" {
+				srv.Net = "tcp"
+			}
+			return srv.activateAndServe(nil, coapNet.NewConn(c, srv.heartBeat()), nil)
+		case *tls.Conn:
+			if srv.Net == "" {
+				srv.Net = "tcp-tls"
+			}
+			return srv.activateAndServe(nil, coapNet.NewConn(c, srv.heartBeat()), nil)
+		case *coapNet.ConnDTLS:
+			if srv.Net == "" {
+				srv.Net = "udp-dtls"
+			}
 			return srv.activateAndServe(nil, coapNet.NewConn(c, srv.heartBeat()), nil)
 		case *net.UDPConn:
+			if srv.Net == "" {
+				srv.Net = "udp"
+			}
 			return srv.activateAndServe(nil, nil, coapNet.NewConnUDP(c, srv.heartBeat(), 2))
 		}
 		return ErrInvalidServerConnParameter
@@ -358,6 +397,19 @@ func (srv *Server) activateAndServe(listener Listener, conn *coapNet.Conn, connU
 		}
 	}
 
+	if srv.newSessionDTLSFunc == nil {
+		srv.newSessionDTLSFunc = func(connection *coapNet.Conn, srv *Server) (networkSession, error) {
+			session, err := newSessionDTLS(connection, srv)
+			if err != nil {
+				return nil, err
+			}
+			if session.blockWiseEnabled() {
+				return &blockWiseSession{networkSession: session}, nil
+			}
+			return session, nil
+		}
+	}
+
 	if srv.newSessionUDPFunc == nil {
 		srv.newSessionUDPFunc = func(connection *coapNet.ConnUDP, srv *Server, sessionUDPData *coapNet.ConnUDPContext) (networkSession, error) {
 			session, err := newSessionUDP(connection, srv, sessionUDPData)
@@ -381,8 +433,14 @@ func (srv *Server) activateAndServe(listener Listener, conn *coapNet.Conn, connU
 
 	switch {
 	case listener != nil:
-		return srv.serveTCP(listener)
+		if _, ok := listener.(*coapNet.DTLSListener); ok {
+			return srv.serveDTLSListener(listener)
+		}
+		return srv.serveTCPListener(listener)
 	case conn != nil:
+		if strings.HasSuffix(srv.Net, "-dtls") {
+			return srv.initServeDTLS(conn)
+		}
 		return srv.initServeTCP(conn)
 	case connUDP != nil:
 		return srv.initServeUDP(connUDP)
@@ -428,7 +486,63 @@ func (srv *Server) heartBeat() time.Duration {
 	return time.Millisecond * 100
 }
 
-func (srv *Server) serveTCPconnection(ctx *shutdownContext, conn *coapNet.Conn) error {
+func (srv *Server) serveDTLSConnection(ctx *shutdownContext, conn *coapNet.Conn) error {
+	session, err := srv.newSessionDTLSFunc(conn, srv)
+	if err != nil {
+		return err
+	}
+	c := ClientConn{commander: &ClientCommander{session}}
+	srv.NotifySessionNewFunc(&c)
+
+	sessCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	for {
+		m := make([]byte, ^uint16(0))
+		n, err := conn.ReadWithContext(ctx, m)
+		if err != nil {
+			err := fmt.Errorf("cannot serve UDP connection %v", err)
+			srv.closeSessions(err)
+			return err
+		}
+		msg, err := ParseDgramMessage(m[:n])
+		if err != nil {
+			continue
+		}
+
+		// We will block poller wait loop when
+		// all pool workers are busy.
+		c := ClientConn{commander: &ClientCommander{session}}
+		srv.spawnWorker(&Request{Client: &c, Msg: msg, Ctx: sessCtx, Sequence: c.Sequence()})
+	}
+}
+
+// serveListener starts a DTLS listener for the server.
+func (srv *Server) serveDTLSListener(l Listener) error {
+	if srv.NotifyStartedFunc != nil {
+		srv.NotifyStartedFunc()
+	}
+
+	var wg sync.WaitGroup
+	ctx := newShutdownWithContext(srv.doneChan)
+
+	for {
+		rw, err := l.AcceptWithContext(ctx)
+		if err != nil {
+			wg.Wait()
+			return fmt.Errorf("cannot serve tcp: %v", err)
+		}
+		if rw != nil {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				srv.serveDTLSConnection(ctx, coapNet.NewConn(rw, srv.heartBeat()))
+			}()
+		}
+	}
+}
+
+func (srv *Server) serveTCPConnection(ctx *shutdownContext, conn *coapNet.Conn) error {
 	session, err := srv.newSessionTCPFunc(conn, srv)
 	if err != nil {
 		return err
@@ -472,8 +586,8 @@ func (srv *Server) serveTCPconnection(ctx *shutdownContext, conn *coapNet.Conn) 
 	}
 }
 
-// serveTCP starts a TCP listener for the server.
-func (srv *Server) serveTCP(l Listener) error {
+// serveListener starts a TCP listener for the server.
+func (srv *Server) serveTCPListener(l Listener) error {
 	if srv.NotifyStartedFunc != nil {
 		srv.NotifyStartedFunc()
 	}
@@ -491,7 +605,7 @@ func (srv *Server) serveTCP(l Listener) error {
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
-				srv.serveTCPconnection(ctx, coapNet.NewConn(rw, srv.heartBeat()))
+				srv.serveTCPConnection(ctx, coapNet.NewConn(rw, srv.heartBeat()))
 			}()
 		}
 	}

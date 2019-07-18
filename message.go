@@ -519,9 +519,8 @@ type MessageParams struct {
 
 // MessageBase is a CoAP message.
 type MessageBase struct {
-	typ       COAPType
-	code      COAPCode
-	messageID uint16
+	typ  COAPType
+	code COAPCode
 
 	token, payload []byte
 
@@ -538,10 +537,6 @@ func (m *MessageBase) SetType(typ COAPType) {
 
 func (m *MessageBase) Code() COAPCode {
 	return m.code
-}
-
-func (m *MessageBase) MessageID() uint16 {
-	return m.messageID
 }
 
 func (m *MessageBase) Token() []byte {

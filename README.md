@@ -12,15 +12,14 @@ Features supported:
 * request multiplexer
 * multicast
 * CoAP NoResponse option in CoAP [RFC 7967][coap-noresponse]
-
-Not yet implemented:
-* CoAP over DTLS
+* CoAP over DTLS [pion/dtls][pion-dtls]
 
 [coap]: http://tools.ietf.org/html/rfc7252
 [coap-tcp]: https://tools.ietf.org/html/rfc8323
 [coap-block-wise-transfers]: https://tools.ietf.org/html/rfc7959
 [coap-observe]: https://tools.ietf.org/html/rfc7641
 [coap-noresponse]: https://tools.ietf.org/html/rfc7967
+[pion-dtls]: https://github.com/pion/dtls
 
 ## Samples
 
@@ -43,13 +42,16 @@ Not yet implemented:
 		mux := coap.NewServeMux()
 		mux.Handle("/a", coap.HandlerFunc(handleA))
 
-		log.Fatal(coap.ListenAndServe(":5688", "udp", mux))
+		log.Fatal(coap.ListenAndServe("udp", ":5688", mux))
 		
 		// for tcp
-		// log.Fatal(coap.ListenAndServe(":5688", "tcp", mux))
+		// log.Fatal(coap.ListenAndServe("tcp", ":5688",  mux))
 
 		// fot tcp-tls
-		// log.Fatal(coap.ListenAndServeTLS(":5688", CertPEMBlock, KeyPEMBlock, mux))
+		// log.Fatal(coap.ListenAndServeTLS("tcp-tls", ":5688", &tls.Config{...}, mux))
+
+		// fot udp-dtls
+		// log.Fatal(coap.ListenAndServeDTLS("udp-dtls", ":5688", &dtls.Config{...}, mux))
 	}
 ```
 #### Client
@@ -63,7 +65,10 @@ Not yet implemented:
 		// co, err := coap.Dial("tcp", "localhost:5688")
 		
 		// for tcp-tls
-		// co, err := coap.DialWithTLS("localhost:5688", &tls.Config{InsecureSkipVerify: true})
+		// co, err := coap.DialTLS("tcp-tls", localhost:5688", &tls.Config{...})
+
+		// fot udp-dtls
+		// co, err := coap.DialDTLS("udp-dtls", "localhost:5688", &dtls.Config{...}, mux))
 
 		if err != nil {
 			log.Fatalf("Error dialing: %v", err)
