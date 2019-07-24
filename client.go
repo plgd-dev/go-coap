@@ -41,9 +41,9 @@ type Client struct {
 	BlockWiseTransfer    *bool         // Use blockWise transfer for transfer payload (default for UDP it's enabled, for TCP it's disable)
 	BlockWiseTransferSzx *BlockWiseSzx // Set maximal block size of payload that will be send in fragment
 
-	DisableTCPSignalMessages     bool // Disable tcp signal messages
-	DisablePeerTCPSignalMessages bool // Disable processes CSM message from client - iotivity sends max message size without blockwise.
-	MulticastHopLimit            int  //sets the hop limit field value for future outgoing multicast packets. default is 2.
+	DisableTCPSignalMessages        bool // Disable tcp signal messages
+	DisablePeerTCPSignalMessageCSMs bool // Disable processes Capabilities and Settings Messages from client - iotivity sends max message size without blockwise.
+	MulticastHopLimit               int  //sets the hop limit field value for future outgoing multicast packets. default is 2.
 }
 
 func (c *Client) readTimeout() time.Duration {
@@ -171,16 +171,16 @@ func (c *Client) DialWithContext(ctx context.Context, address string) (clientCon
 	//sync := make(chan bool)
 	clientConn = &ClientConn{
 		srv: &Server{
-			Net:                          network,
-			TLSConfig:                    c.TLSConfig,
-			Conn:                         conn,
-			ReadTimeout:                  c.readTimeout(),
-			WriteTimeout:                 c.writeTimeout(),
-			MaxMessageSize:               c.MaxMessageSize,
-			BlockWiseTransfer:            &BlockWiseTransfer,
-			BlockWiseTransferSzx:         &BlockWiseTransferSzx,
-			DisableTCPSignalMessages:     c.DisableTCPSignalMessages,
-			DisablePeerTCPSignalMessages: c.DisablePeerTCPSignalMessages,
+			Net:                              network,
+			TLSConfig:                        c.TLSConfig,
+			Conn:                             conn,
+			ReadTimeout:                      c.readTimeout(),
+			WriteTimeout:                     c.writeTimeout(),
+			MaxMessageSize:                   c.MaxMessageSize,
+			BlockWiseTransfer:                &BlockWiseTransfer,
+			BlockWiseTransferSzx:             &BlockWiseTransferSzx,
+			DisableTCPSignalMessages:         c.DisableTCPSignalMessages,
+			DisablePeerTCPSignalMessageCSMs: c.DisablePeerTCPSignalMessageCSMs,
 			NotifyStartedFunc: func() {
 				close(started)
 			},

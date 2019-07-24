@@ -166,8 +166,8 @@ type Server struct {
 	BlockWiseTransferSzx *BlockWiseSzx
 	// Disable send tcp signal messages
 	DisableTCPSignalMessages bool
-	// Disable processes CSM message from client - iotivity sends max message size without blockwise
-	DisablePeerTCPSignalMessages bool
+	// Disable processes Capabilities and Settings Messages from client - iotivity sends max message size without blockwise.
+	DisablePeerTCPSignalMessageCSMs bool
 
 	// UDP packet or TCP connection queue
 	queue chan *Request

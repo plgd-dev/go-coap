@@ -14,9 +14,9 @@ type sessionTCP struct {
 	sessionBase
 	connection *coapNet.Conn
 
-	peerBlockWiseTransfer        uint32
-	peerMaxMessageSize           uint32
-	DisablePeerTCPSignalMessages bool
+	peerBlockWiseTransfer           uint32
+	peerMaxMessageSize              uint32
+	disablePeerTCPSignalMessageCSMs bool
 }
 
 // newSessionTCP create new session for TCP connection
@@ -30,9 +30,9 @@ func newSessionTCP(connection *coapNet.Conn, srv *Server) (networkSession, error
 		BlockWiseTransferSzx = *srv.BlockWiseTransferSzx
 	}
 	s := &sessionTCP{
-		peerMaxMessageSize:           uint32(srv.MaxMessageSize),
-		DisablePeerTCPSignalMessages: srv.DisablePeerTCPSignalMessages,
-		connection:                   connection,
+		peerMaxMessageSize:              uint32(srv.MaxMessageSize),
+		disablePeerTCPSignalMessageCSMs: srv.DisablePeerTCPSignalMessageCSMs,
+		connection:                      connection,
 		sessionBase: sessionBase{
 			srv:                  srv,
 			handler:              &TokenHandler{tokenHandlers: make(map[[MaxTokenSize]byte]HandlerFunc)},
@@ -210,7 +210,7 @@ func (s *sessionTCP) sendPong(w ResponseWriter, r *Request) error {
 func (s *sessionTCP) handleSignals(w ResponseWriter, r *Request) bool {
 	switch r.Msg.Code() {
 	case CSM:
-		if s.DisablePeerTCPSignalMessages {
+		if s.disablePeerTCPSignalMessageCSMs {
 			return true
 		}
 		maxmsgsize := uint32(maxMessageSize)
