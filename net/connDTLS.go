@@ -97,7 +97,7 @@ func (c *ConnDTLS) Read(b []byte) (n int, err error) {
 	select {
 	case d := <-c.readDataCh:
 		return c.processData(b, d)
-	case <-time.After(time.Now().Sub(deadline)):
+	case <-time.After(deadline.Sub(time.Now())):
 		return 0, errS{
 			error:     fmt.Errorf(ioTimeout),
 			temporary: true,
