@@ -10,7 +10,7 @@
   version = "v1.1.1"
 
 [[projects]]
-  digest = "1:00ba9fb5c14095829a3c738c8998b2e3d6019002291e41443ecb775f191e8ba2"
+  digest = "1:67a2ee7fd6b0baa4f10f48bcc9db2bfabf0d564e61c434b999d8034de0c748ae"
   name = "github.com/pion/dtls"
   packages = [
     ".",
@@ -18,8 +18,8 @@
     "internal/udp",
   ]
   pruneopts = "UT"
-  revision = "bcc3927a53a8f925a2d30ee83cb319270a7bd667"
-  version = "v1.4.0"
+  revision = "7388ccad5a5f2e77a7ff8a7731fc7954b001adc0"
+  version = "v1.5.0"
 
 [[projects]]
   digest = "1:92d9305a35d7130172f46e095505cc56af49d073907ae52088c15e8c8ae3f519"
@@ -76,18 +76,18 @@
     "ipv6",
   ]
   pruneopts = "UT"
-  revision = "da137c7871d730100384dbcf36e6f8fa493aef5b"
+  revision = "74dc4d7220e7acc4e100824340f3e66577424772"
 
 [[projects]]
   branch = "master"
-  digest = "1:31d44814b45607afa77c6e8ef20ea8bacc1d1053fe084440c874f311732e7ec3"
+  digest = "1:d52ccbb025caf0a2166e0204ed934567b8d0dfdd23a09d947f1f040708888a0a"
   name = "golang.org/x/sys"
   packages = [
     "unix",
     "windows",
   ]
   pruneopts = "UT"
-  revision = "fae7ac547cb717d141c433a2a173315e216b64c4"
+  revision = "fde4db37ae7ad8191b03d30d27f258b5291ae4e3"
 
 [solve-meta]
   analyzer-name = "dep"
