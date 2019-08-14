@@ -116,7 +116,7 @@ func (l *DTLSListener) Accept() (net.Conn, error) {
 	select {
 	case d := <-l.connCh:
 		return NewConnDTLS(d.conn), d.err
-	case <-time.After(time.Now().Sub(deadline)):
+	case <-time.After(deadline.Sub(time.Now())):
 		return nil, fmt.Errorf(ioTimeout)
 	}
 }
