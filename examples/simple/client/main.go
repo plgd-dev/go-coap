@@ -1,8 +1,10 @@
 package main
 
 import (
+	"context"
 	"log"
 	"os"
+	"time"
 
 	coap "github.com/go-ocf/go-coap"
 )
@@ -16,7 +18,9 @@ func main() {
 	if len(os.Args) > 1 {
 		path = os.Args[1]
 	}
-	resp, err := co.Get(path)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	resp, err := co.GetWithContext(ctx, path)
 
 	if err != nil {
 		log.Fatalf("Error sending request: %v", err)

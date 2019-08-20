@@ -33,7 +33,9 @@ Features supported:
 		log.Printf("Got message in handleA: path=%q: %#v from %v", req.Msg.Path(), req.Msg, req.Client.RemoteAddr())
 		w.SetContentFormat(coap.TextPlain)
 		log.Printf("Transmitting from A")
-		if _, err := w.Write([]byte("hello world")); err != nil {
+		ctx, cancel := context.WithTimeout(req.Ctx, time.Second)
+		defer cancel()
+		if _, err := w.WriteWithContext(ctx, []byte("hello world")); err != nil {
 			log.Printf("Cannot send response: %v", err)
 		}
 	}
@@ -74,7 +76,10 @@ Features supported:
 			log.Fatalf("Error dialing: %v", err)
 		}
 
-		resp, err := co.Get(path)
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		resp, err := co.GetWithContext(ctx, path)
+
 
 		if err != nil {
 			log.Fatalf("Error sending request: %v", err)
