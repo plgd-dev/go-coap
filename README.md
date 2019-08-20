@@ -49,10 +49,10 @@ Features supported:
 		// for tcp
 		// log.Fatal(coap.ListenAndServe("tcp", ":5688",  mux))
 
-		// fot tcp-tls
+		// for tcp-tls
 		// log.Fatal(coap.ListenAndServeTLS("tcp-tls", ":5688", &tls.Config{...}, mux))
 
-		// fot udp-dtls
+		// for udp-dtls
 		// log.Fatal(coap.ListenAndServeDTLS("udp-dtls", ":5688", &dtls.Config{...}, mux))
 	}
 ```
@@ -69,7 +69,7 @@ Features supported:
 		// for tcp-tls
 		// co, err := coap.DialTLS("tcp-tls", localhost:5688", &tls.Config{...})
 
-		// fot udp-dtls
+		// for udp-dtls
 		// co, err := coap.DialDTLS("udp-dtls", "localhost:5688", &dtls.Config{...}, mux))
 
 		if err != nil {
