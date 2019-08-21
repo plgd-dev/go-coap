@@ -178,7 +178,6 @@ type Server struct {
 	sessionUDPMap     map[string]networkSession
 
 	doneLock sync.Mutex
-	done     bool
 	doneChan chan struct{}
 }
 
@@ -373,7 +372,9 @@ func (srv *Server) ActivateAndServe() error {
 
 func (srv *Server) activateAndServe(listener Listener, conn *coapNet.Conn, connUDP *coapNet.ConnUDP) error {
 	srv.doneLock.Lock()
-	srv.done = false
+	if srv.doneChan != nil {
+		return fmt.Errorf("server already serve connections")
+	}
 	srv.doneChan = make(chan struct{})
 	srv.doneLock.Unlock()
 
@@ -456,11 +457,11 @@ func (srv *Server) activateAndServe(listener Listener, conn *coapNet.Conn, connU
 func (srv *Server) Shutdown() error {
 	srv.doneLock.Lock()
 	defer srv.doneLock.Unlock()
-	if srv.done {
+	if srv.doneChan == nil {
 		return fmt.Errorf("already shutdowned")
 	}
-	srv.done = true
 	close(srv.doneChan)
+	srv.doneChan = nil
 	return nil
 }
 
