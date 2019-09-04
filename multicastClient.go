@@ -56,6 +56,7 @@ func (c *MulticastClient) dialNet(ctx context.Context, net, address string) (*Cl
 		NotifySessionEndFunc: c.NotifySessionEndFunc,
 		BlockWiseTransfer:    c.BlockWiseTransfer,
 		BlockWiseTransferSzx: c.BlockWiseTransferSzx,
+		MulticastHopLimit:    c.MulticastHopLimit,
 	}
 
 	return client.DialWithContext(ctx, address)
