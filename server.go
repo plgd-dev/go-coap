@@ -629,8 +629,9 @@ func (srv *Server) getOrCreateUDPSession(connUDP *coapNet.ConnUDP, s *coapNet.Co
 	srv.sessionUDPMapLock.Lock()
 	defer srv.sessionUDPMapLock.Unlock()
 	session := srv.sessionUDPMap[s.Key()]
+	var err error
 	if session == nil {
-		session, err := srv.newSessionUDPFunc(connUDP, srv, s)
+		session, err = srv.newSessionUDPFunc(connUDP, srv, s)
 		if err != nil {
 			return nil, err
 		}
