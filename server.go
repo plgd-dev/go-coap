@@ -625,6 +625,23 @@ func (srv *Server) closeSessions(err error) {
 	}
 }
 
+func (srv *Server) getOrCreateUDPSession(connUDP *coapNet.ConnUDP, s *coapNet.ConnUDPContext) (networkSession, error) {
+	srv.sessionUDPMapLock.Lock()
+	defer srv.sessionUDPMapLock.Unlock()
+	session := srv.sessionUDPMap[s.Key()]
+	var err error
+	if session == nil {
+		session, err = srv.newSessionUDPFunc(connUDP, srv, s)
+		if err != nil {
+			return nil, err
+		}
+		c := ClientConn{commander: &ClientCommander{session}}
+		srv.NotifySessionNewFunc(&c)
+		srv.sessionUDPMap[s.Key()] = session
+	}
+	return session, nil
+}
+
 // serveUDP starts a UDP listener for the server.
 func (srv *Server) serveUDP(ctx *shutdownContext, connUDP *coapNet.ConnUDP) error {
 	if srv.NotifyStartedFunc != nil {
@@ -644,19 +661,9 @@ func (srv *Server) serveUDP(ctx *shutdownContext, connUDP *coapNet.ConnUDP) erro
 		}
 		m = m[:n]
 
-		srv.sessionUDPMapLock.Lock()
-		session := srv.sessionUDPMap[s.Key()]
-		if session == nil {
-			session, err = srv.newSessionUDPFunc(connUDP, srv, s)
-			if err != nil {
-				return err
-			}
-			c := ClientConn{commander: &ClientCommander{session}}
-			srv.NotifySessionNewFunc(&c)
-			srv.sessionUDPMap[s.Key()] = session
-			srv.sessionUDPMapLock.Unlock()
-		} else {
-			srv.sessionUDPMapLock.Unlock()
+		session, err := srv.getOrCreateUDPSession(connUDP, s)
+		if err != nil {
+			return err
 		}
 
 		msg, err := ParseDgramMessage(m)
