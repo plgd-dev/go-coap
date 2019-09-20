@@ -10,7 +10,7 @@
   version = "v1.1.1"
 
 [[projects]]
-  digest = "1:67a2ee7fd6b0baa4f10f48bcc9db2bfabf0d564e61c434b999d8034de0c748ae"
+  digest = "1:f2e48504ac446aae46160fbcab65053eb4edaba0890cca991b73c68b171e216c"
   name = "github.com/pion/dtls"
   packages = [
     ".",
@@ -18,8 +18,8 @@
     "internal/udp",
   ]
   pruneopts = "UT"
-  revision = "7388ccad5a5f2e77a7ff8a7731fc7954b001adc0"
-  version = "v1.5.0"
+  revision = "91d652d3f91d6c08c193e4d297067f8f653775f9"
+  version = "v1.5.1"
 
 [[projects]]
   digest = "1:92d9305a35d7130172f46e095505cc56af49d073907ae52088c15e8c8ae3f519"
@@ -38,15 +38,15 @@
   version = "v1.0.0"
 
 [[projects]]
-  digest = "1:5da8ce674952566deae4dbc23d07c85caafc6cfa815b0b3e03e41979cedb8750"
+  digest = "1:99d32780e5238c2621fff621123997c3e3cca96db8be13179013aea77dfab551"
   name = "github.com/stretchr/testify"
   packages = [
     "assert",
     "require",
   ]
   pruneopts = "UT"
-  revision = "ffdc059bfe9ce6a4e144ba849dbedead332c6053"
-  version = "v1.3.0"
+  revision = "221dbe5ed46703ee255b1da0dec05086f5035f62"
+  version = "v1.4.0"
 
 [[projects]]
   digest = "1:5a1cf4e370bc86137b58da2ae065e76526d32b11f62a7665f36dbd5f41fa95ff"
@@ -62,11 +62,11 @@
   name = "golang.org/x/crypto"
   packages = ["curve25519"]
   pruneopts = "UT"
-  revision = "4def268fd1a49955bfb3dda92fe3db4f924f2285"
+  revision = "227b76d455e791cb042b03e633e2f7fbcfdf74a5"
 
 [[projects]]
   branch = "master"
-  digest = "1:9896e6185a5f9a8c93b4c641c96bfab46677abf2be0a332a2affde2f575c0aad"
+  digest = "1:b0e1ce911b2601a33669968975069f6b93846a013e2171ba8f8b772f93dd232a"
   name = "golang.org/x/net"
   packages = [
     "bpf",
@@ -76,18 +76,26 @@
     "ipv6",
   ]
   pruneopts = "UT"
-  revision = "74dc4d7220e7acc4e100824340f3e66577424772"
+  revision = "a8b05e9114ab0cb08faec337c959aed24b68bf50"
 
 [[projects]]
   branch = "master"
-  digest = "1:d52ccbb025caf0a2166e0204ed934567b8d0dfdd23a09d947f1f040708888a0a"
+  digest = "1:a5b091dde0eb21c5b964dd2495ef63d739874b8bc646ebaa590f6ab4f5b76dc3"
   name = "golang.org/x/sys"
   packages = [
     "unix",
     "windows",
   ]
   pruneopts = "UT"
-  revision = "fde4db37ae7ad8191b03d30d27f258b5291ae4e3"
+  revision = "0c1ff786ef13daa914a3351c5e6b0321aed5960e"
+
+[[projects]]
+  digest = "1:4d2e5a73dc1500038e504a8d78b986630e3626dc027bc030ba5c75da257cdb96"
+  name = "gopkg.in/yaml.v2"
+  packages = ["."]
+  pruneopts = "UT"
+  revision = "51d6538a90f86fe93ac480b35f37b2be17fef232"
+  version = "v2.2.2"
 
 [solve-meta]
   analyzer-name = "dep"
