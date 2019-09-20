@@ -108,4 +108,4 @@ Look to examples/mcast/server/main.go
 Look to examples/mcast/client/main.go
 
 ## License
-MIT
+Apache 2.0
