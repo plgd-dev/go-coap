@@ -123,7 +123,7 @@ func (l *DTLSListener) Accept() (net.Conn, error) {
 
 // Close closes the connection.
 func (l *DTLSListener) Close() error {
-	err := l.listener.Close()
+	err := l.listener.Close(time.Millisecond * 100)
 	close(l.doneCh)
 	l.wg.Wait()
 	return err
