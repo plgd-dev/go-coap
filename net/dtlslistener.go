@@ -109,13 +109,19 @@ func (l *DTLSListener) Accept() (net.Conn, error) {
 	if deadline.IsZero() {
 		select {
 		case d := <-l.connCh:
-			return NewConnDTLS(d.conn), d.err
+			if d.err != nil {
+				return nil, d.err
+			}
+			return NewConnDTLS(d.conn), nil
 		}
 	}
 
 	select {
 	case d := <-l.connCh:
-		return NewConnDTLS(d.conn), d.err
+		if d.err != nil {
+			return nil, d.err
+		}
+		return NewConnDTLS(d.conn), nil
 	case <-time.After(deadline.Sub(time.Now())):
 		return nil, fmt.Errorf(ioTimeout)
 	}

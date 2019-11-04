@@ -77,7 +77,14 @@ func listenUDP(network, address string) (*net.UDPAddr, *net.UDPConn, error) {
 }
 
 func (c *Client) Dial(address string) (clientConn *ClientConn, err error) {
-	return c.DialWithContext(context.Background(), address)
+	ctx := context.Background()
+	if c.DialTimeout > 0 {
+		ctxTimeout, cancel := context.WithTimeout(context.Background(), c.DialTimeout)
+		defer cancel()
+		ctx = ctxTimeout
+	}
+
+	return c.DialWithContext(ctx, address)
 }
 
 // DialContext connects to the address on the named network.
@@ -171,15 +178,15 @@ func (c *Client) DialWithContext(ctx context.Context, address string) (clientCon
 	//sync := make(chan bool)
 	clientConn = &ClientConn{
 		srv: &Server{
-			Net:                              network,
-			TLSConfig:                        c.TLSConfig,
-			Conn:                             conn,
-			ReadTimeout:                      c.readTimeout(),
-			WriteTimeout:                     c.writeTimeout(),
-			MaxMessageSize:                   c.MaxMessageSize,
-			BlockWiseTransfer:                &BlockWiseTransfer,
-			BlockWiseTransferSzx:             &BlockWiseTransferSzx,
-			DisableTCPSignalMessages:         c.DisableTCPSignalMessages,
+			Net:                             network,
+			TLSConfig:                       c.TLSConfig,
+			Conn:                            conn,
+			ReadTimeout:                     c.readTimeout(),
+			WriteTimeout:                    c.writeTimeout(),
+			MaxMessageSize:                  c.MaxMessageSize,
+			BlockWiseTransfer:               &BlockWiseTransfer,
+			BlockWiseTransferSzx:            &BlockWiseTransferSzx,
+			DisableTCPSignalMessages:        c.DisableTCPSignalMessages,
 			DisablePeerTCPSignalMessageCSMs: c.DisablePeerTCPSignalMessageCSMs,
 			NotifyStartedFunc: func() {
 				close(started)
@@ -484,11 +491,15 @@ func DialDTLS(network, address string, config *dtls.Config) (conn *ClientConn, e
 // DialTLSWithTimeout acts like DialTLS but takes a timeout.
 func DialTLSWithTimeout(network, address string, tlsConfig *tls.Config, timeout time.Duration) (conn *ClientConn, err error) {
 	client := Client{Net: fixNetTLS(network), DialTimeout: timeout, TLSConfig: tlsConfig}
-	return client.DialWithContext(context.Background(), address)
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	return client.DialWithContext(ctx, address)
 }
 
 // DialDTLSWithTimeout acts like DialwriteDeadlineDTLS but takes a timeout.
 func DialDTLSWithTimeout(network, address string, config *dtls.Config, timeout time.Duration) (conn *ClientConn, err error) {
 	client := Client{Net: fixNetDTLS(network), DialTimeout: timeout, DTLSConfig: config}
-	return client.DialWithContext(context.Background(), address)
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	return client.DialWithContext(ctx, address)
 }
