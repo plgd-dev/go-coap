@@ -533,7 +533,7 @@ func (srv *Server) serveDTLSListener(l Listener) error {
 		rw, err := l.AcceptWithContext(ctx)
 		if err != nil {
 			wg.Wait()
-			return fmt.Errorf("cannot serve tcp: %v", err)
+			return fmt.Errorf("cannot serve dtls: %v", err)
 		}
 		if rw != nil {
 			wg.Add(1)
