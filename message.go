@@ -440,8 +440,8 @@ func parseOptionValue(optionDefs map[OptionID]optionDef, optionID OptionID, valu
 			return valueBuf
 		}
 	}
-	// Skip unrecognized options (should never be reached)
-	return nil
+	// unKnown options
+	return valueBuf
 }
 
 type options []option
