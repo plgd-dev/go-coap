@@ -289,6 +289,52 @@ func TestOptionsWithIllegalLengthAreIgnoredDuringParsing(t *testing.T) {
 	}
 }
 
+func TestDecodeMessageWithUnknownOption(t *testing.T) {
+	// OptionID=2049 optionValue= [0x00, 0x01]
+	input := []byte{0x40, 0x1, 0x30, 0x39, 0xe2, 0x06, 0xf4}
+	msg, err := ParseDgramMessage(input)
+	if err != nil {
+		t.Fatalf("Error parsing message: %v", err)
+	}
+
+	optionValue := msg.Option(2049)
+	if optionValue == nil {
+		t.Errorf("Expected message has option whose OptionID is 2049, got nil")
+	}
+	option, ok := optionValue.([]byte)
+
+	if !ok {
+		t.Errorf("Expected message option 2049 is a byte slice， type assertion failed")
+	}
+
+	if !bytes.Equal(option, []byte{0x00, 0x01}) {
+		t.Errorf("option value is incorrect. get %q", option)
+	}
+}
+
+func TestDecodeMessageWithUnknownZeroLenOption(t *testing.T) {
+	// OptionID=2049 Option Length=0
+	input := []byte{0x40, 0x1, 0x30, 0x39, 0xe0, 0x06, 0xf4}
+	msg, err := ParseDgramMessage(input)
+	if err != nil {
+		t.Fatalf("Error parsing message: %v", err)
+	}
+
+	optionValue := msg.Option(2049)
+	if optionValue == nil {
+		t.Errorf("Expected message has option whose OptionID is 2049, got nil")
+	}
+	option, ok := optionValue.([]byte)
+
+	if !ok {
+		t.Errorf("Expected message option 2049 is a byte slice， type assertion failed")
+	}
+
+	if len(option) != 0 {
+		t.Errorf("option value is incorrect. get %q", option)
+	}
+}
+
 func TestDecodeMessageWithoutOptionsAndPayload(t *testing.T) {
 	input := []byte{0x40, 0x1, 0x30, 0x39}
 	msg, err := ParseDgramMessage(input)
