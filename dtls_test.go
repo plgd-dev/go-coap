@@ -11,7 +11,6 @@ import (
 	"fmt"
 	"math/big"
 	"os"
-	"sync"
 	"testing"
 	"time"
 
@@ -117,43 +116,12 @@ func TestRSACerts(t *testing.T) {
 		ClientAuth:           dtls.RequireAnyClientCert,
 	}
 
-	listenStarts := make(chan struct{})
-	mux := NewServeMux()
-	err = mux.Handle("/test", HandlerFunc(EchoServer))
-	require.NoError(t, err)
-
 	s := &Server{
 		Net:        "udp-dtls",
 		Addr:       ":5688",
 		DTLSConfig: config,
-		Handler:    mux,
-		NotifyStartedFunc: func() {
-			close(listenStarts)
-		},
+		Handler: HandlerFunc(EchoServer),
 	}
-
-	var wg sync.WaitGroup
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		err := s.ListenAndServe()
-		require.Error(t, err)
-	}()
-
-	<-listenStarts
-
-	connectTimeout := time.Second
-
-	clientCfg := &dtls.Config{
-		PSK: func(hint []byte) ([]byte, error) {
-			fmt.Printf("Client's hint: %s \n", hint)
-			return []byte{0xAB, 0xC1, 0x23}, nil
-		},
-		PSKIdentityHint: []byte("Pion DTLS Client"),
-		CipherSuites:    []dtls.CipherSuiteID{dtls.TLS_PSK_WITH_AES_128_CCM_8},
-		ConnectTimeout:  &connectTimeout,
-	}
-
-	_, err = DialDTLS("udp-dtls", "localhost:5688", clientCfg)
+	err = s.ListenAndServe()
 	require.Error(t, err)
 }
