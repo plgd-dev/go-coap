@@ -291,7 +291,7 @@ func TestOptionsWithIllegalLengthAreIgnoredDuringParsing(t *testing.T) {
 
 func TestDecodeMessageWithUnknownOption(t *testing.T) {
 	// OptionID=2049 optionValue= [0x00, 0x01]
-	input := []byte{0x40, 0x1, 0x30, 0x39, 0xe2, 0x06, 0xf4}
+	input := []byte{0x40, 0x1, 0x30, 0x39, 0xe2, 0x06, 0xf4, 0x0, 0x1}
 	msg, err := ParseDgramMessage(input)
 	if err != nil {
 		t.Fatalf("Error parsing message: %v", err)
