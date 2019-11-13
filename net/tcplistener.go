@@ -42,7 +42,7 @@ func (l *TCPListener) AcceptWithContext(ctx context.Context) (net.Conn, error) {
 		select {
 		case <-ctx.Done():
 			if ctx.Err() != nil {
-				return nil, fmt.Errorf("cannot accept connections: %v", ctx.Err())
+				return nil, ErrServerClosed
 			}
 			return nil, nil
 		default:
