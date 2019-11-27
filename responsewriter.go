@@ -2,6 +2,8 @@ package coap
 
 import (
 	"context"
+
+	"github.com/go-ocf/go-coap/codes"
 )
 
 // A ResponseWriter interface is used by an CAOP handler to construct an COAP response.
@@ -18,7 +20,7 @@ type ResponseWriter interface {
 	// If SetCode is not called explicitly, the first call to Write
 	// will trigger an implicit SetCode(Content/Changed/Deleted/Created - depends on request).
 	// Thus explicit calls to SetCode are mainly used to send error codes.
-	SetCode(code COAPCode)
+	SetCode(code codes.Code)
 	// SetContentFormat of payload for response that is send via Write call.
 	//
 	// If SetContentFormat is not called and Write is called with non-nil argumet
@@ -26,7 +28,7 @@ type ResponseWriter interface {
 	SetContentFormat(contentFormat MediaType)
 
 	//NewResponse create response with code and token, messageid against request
-	NewResponse(code COAPCode) Message
+	NewResponse(code codes.Code) Message
 
 	WriteMsg(msg Message) error
 	//WriteContextMsg to client.
@@ -34,21 +36,21 @@ type ResponseWriter interface {
 	//If Option ContentFormat is not set and Payload is set then call will failed.
 	WriteMsgWithContext(ctx context.Context, msg Message) error
 
-	getCode() *COAPCode
+	getCode() *codes.Code
 	getReq() *Request
 	getContentFormat() *MediaType
 }
 
 type responseWriter struct {
 	req           *Request
-	code          *COAPCode
+	code          *codes.Code
 	contentFormat *MediaType
 }
 
 func responseWriterFromRequest(r *Request) ResponseWriter {
 	w := ResponseWriter(&responseWriter{req: r})
 	switch {
-	case r.Msg.Code() == GET:
+	case r.Msg.Code() == codes.GET:
 		switch {
 		// set blockwise notice writer for observe
 		case r.Client.networkSession().blockWiseEnabled() && r.Msg.Option(Observe) != nil:
@@ -69,7 +71,7 @@ func responseWriterFromRequest(r *Request) ResponseWriter {
 }
 
 // NewResponse creates reponse for request
-func (r *responseWriter) NewResponse(code COAPCode) Message {
+func (r *responseWriter) NewResponse(code codes.Code) Message {
 	typ := NonConfirmable
 	if r.req.Msg.Type() == Confirmable {
 		typ = Acknowledgement
@@ -91,24 +93,24 @@ func (r *responseWriter) WriteMsg(msg Message) error {
 // Write send response with context to peer
 func (r *responseWriter) WriteMsgWithContext(ctx context.Context, msg Message) error {
 	switch msg.Code() {
-	case GET, POST, PUT, DELETE:
+	case codes.GET, codes.POST, codes.PUT, codes.DELETE:
 		return ErrInvalidReponseCode
 	}
 	return r.req.Client.WriteMsgWithContext(ctx, msg)
 }
 
-func prepareReponse(w ResponseWriter, reqCode COAPCode, code *COAPCode, contentFormat *MediaType, payload []byte) (int, Message) {
-	respCode := Content
+func prepareReponse(w ResponseWriter, reqCode codes.Code, code *codes.Code, contentFormat *MediaType, payload []byte) (int, Message) {
+	respCode := codes.Content
 	if code != nil {
 		respCode = *code
 	} else {
 		switch reqCode {
-		case POST:
-			respCode = Changed
-		case PUT:
-			respCode = Created
-		case DELETE:
-			respCode = Deleted
+		case codes.POST:
+			respCode = codes.Changed
+		case codes.PUT:
+			respCode = codes.Created
+		case codes.DELETE:
+			respCode = codes.Deleted
 		}
 	}
 	resp := w.NewResponse(respCode)
@@ -134,7 +136,7 @@ func (r *responseWriter) WriteWithContext(ctx context.Context, p []byte) (n int,
 	return l, err
 }
 
-func (r *responseWriter) SetCode(code COAPCode) {
+func (r *responseWriter) SetCode(code codes.Code) {
 	r.code = &code
 }
 
@@ -142,7 +144,7 @@ func (r *responseWriter) SetContentFormat(contentFormat MediaType) {
 	r.contentFormat = &contentFormat
 }
 
-func (r *responseWriter) getCode() *COAPCode {
+func (r *responseWriter) getCode() *codes.Code {
 	return r.code
 }
 

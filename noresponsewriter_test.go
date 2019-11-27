@@ -4,6 +4,8 @@ import (
 	"reflect"
 	"sync"
 	"testing"
+
+	"github.com/go-ocf/go-coap/codes"
 )
 
 func TestNoResponse2XXCodes(t *testing.T) {
@@ -44,17 +46,17 @@ func TestNoResponseCombinationXXCodes(t *testing.T) {
 
 func TestNoResponseAllCodes(t *testing.T) {
 	nr := newNoResponseWriter(ResponseWriter(&responseWriter{req: &Request{}}))
-	codes := nr.decodeNoResponseOption(0)
-	exp := []COAPCode(nil)
-	if !reflect.DeepEqual(exp, codes) {
-		t.Fatalf("Expected\n%#v\ngot\n%#v", exp, codes)
+	allCodes := nr.decodeNoResponseOption(0)
+	exp := []codes.Code(nil)
+	if !reflect.DeepEqual(exp, allCodes) {
+		t.Fatalf("Expected\n%#v\ngot\n%#v", exp, allCodes)
 	}
 }
 
 func testNoResponseHandler(t *testing.T, w ResponseWriter, r *Request) {
 	msg := r.Client.NewMessage(MessageParams{
 		Type:      Acknowledgement,
-		Code:      NotFound,
+		Code:      codes.NotFound,
 		MessageID: r.Msg.MessageID(),
 		Token:     r.Msg.Token(),
 	})
@@ -95,7 +97,7 @@ func TestNoResponseBehaviour(t *testing.T) {
 	req := &DgramMessage{
 		MessageBase: MessageBase{
 			typ:  NonConfirmable,
-			code: GET,
+			code: codes.GET,
 		},
 		messageID: 1234}
 

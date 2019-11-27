@@ -5,12 +5,14 @@ import (
 	"log"
 	"testing"
 	"time"
+
+	"github.com/go-ocf/go-coap/codes"
 )
 
 func periodicTransmitter(w ResponseWriter, r *Request) {
 	msg := r.Client.NewMessage(MessageParams{
 		Type:      Acknowledgement,
-		Code:      Content,
+		Code:      codes.Content,
 		MessageID: r.Msg.MessageID(),
 		Payload:   make([]byte, 15),
 		Token:     r.Msg.Token(),
@@ -58,7 +60,7 @@ func testServingObservation(t *testing.T, net string, addrstr string, BlockWiseT
 
 	req := conn.NewMessage(MessageParams{
 		Type:      NonConfirmable,
-		Code:      GET,
+		Code:      codes.GET,
 		MessageID: 12345,
 		Token:     []byte{123},
 	})
@@ -103,7 +105,7 @@ func setupServer(t *testing.T) (*Server, string, chan error, error) {
 	return RunLocalServerUDPWithHandler("udp", ":0", true, BlockWiseSzx1024, func(w ResponseWriter, r *Request) {
 		msg := r.Client.NewMessage(MessageParams{
 			Type:      Acknowledgement,
-			Code:      Content,
+			Code:      codes.Content,
 			MessageID: r.Msg.MessageID(),
 			Payload:   make([]byte, 5000),
 			Token:     r.Msg.Token(),
@@ -219,7 +221,7 @@ func TestServingUDPObserve(t *testing.T) {
 	s, addr, fin, err := RunLocalServerUDPWithHandler("udp", ":0", true, BlockWiseSzx16, func(w ResponseWriter, r *Request) {
 		msg := r.Client.NewMessage(MessageParams{
 			Type:      Acknowledgement,
-			Code:      Content,
+			Code:      codes.Content,
 			MessageID: r.Msg.MessageID(),
 			Payload:   make([]byte, 17),
 			Token:     r.Msg.Token(),

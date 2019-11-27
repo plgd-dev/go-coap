@@ -7,6 +7,7 @@ import (
 	"net"
 	"sync/atomic"
 
+	"github.com/go-ocf/go-coap/codes"
 	coapNet "github.com/go-ocf/go-coap/net"
 )
 
@@ -41,13 +42,13 @@ func newSessionTCP(connection *coapNet.Conn, srv *Server) (networkSession, error
 			mapPairs:             make(map[[MaxTokenSize]byte]map[uint16](*sessionResp)),
 		},
 	}
-
-	if !s.srv.DisableTCPSignalMessages {
-		if err := s.sendCSM(); err != nil {
-			return nil, err
+	/*
+		if !s.srv.DisableTCPSignalMessages {
+			if err := s.sendCSM(); err != nil {
+				return nil, err
+			}
 		}
-	}
-
+	*/
 	return s, nil
 }
 
@@ -91,14 +92,14 @@ func (s *sessionTCP) PingWithContext(ctx context.Context) error {
 	}
 	req := s.NewMessage(MessageParams{
 		Type:  NonConfirmable,
-		Code:  Ping,
+		Code:  codes.Ping,
 		Token: []byte(token),
 	})
 	resp, err := s.ExchangeWithContext(ctx, req)
 	if err != nil {
 		return err
 	}
-	if resp.Code() == Pong {
+	if resp.Code() == codes.Pong {
 		return nil
 	}
 	return ErrInvalidResponse
@@ -174,7 +175,7 @@ func (s *sessionTCP) sendCSM() error {
 	}
 	req := s.NewMessage(MessageParams{
 		Type:  NonConfirmable,
-		Code:  CSM,
+		Code:  codes.CSM,
 		Token: []byte(token),
 	})
 	if s.srv.MaxMessageSize != 0 {
@@ -201,7 +202,7 @@ func (s *sessionTCP) setPeerBlockWiseTransfer(val bool) {
 func (s *sessionTCP) sendPong(w ResponseWriter, r *Request) error {
 	req := s.NewMessage(MessageParams{
 		Type:  NonConfirmable,
-		Code:  Pong,
+		Code:  codes.Pong,
 		Token: r.Msg.Token(),
 	})
 	return w.WriteMsgWithContext(r.Ctx, req)
@@ -209,7 +210,7 @@ func (s *sessionTCP) sendPong(w ResponseWriter, r *Request) error {
 
 func (s *sessionTCP) handleSignals(w ResponseWriter, r *Request) bool {
 	switch r.Msg.Code() {
-	case CSM:
+	case codes.CSM:
 		if s.disablePeerTCPSignalMessageCSMs {
 			return true
 		}
@@ -238,18 +239,18 @@ func (s *sessionTCP) handleSignals(w ResponseWriter, r *Request) bool {
 		}
 
 		return true
-	case Ping:
+	case codes.Ping:
 		if r.Msg.Option(Custody) != nil {
 			//TODO
 		}
 		s.sendPong(w, r)
 		return true
-	case Release:
+	case codes.Release:
 		if _, ok := r.Msg.Option(AlternativeAddress).(string); ok {
 			//TODO
 		}
 		return true
-	case Abort:
+	case codes.Abort:
 		if _, ok := r.Msg.Option(BadCSMOption).(uint32); ok {
 			//TODO
 		}

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 
+	"github.com/go-ocf/go-coap/codes"
 	coapNet "github.com/go-ocf/go-coap/net"
 )
 
@@ -71,7 +72,7 @@ func (s *sessionDTLS) PingWithContext(ctx context.Context) error {
 	// BUG of iotivity: https://jira.iotivity.org/browse/IOT-3149
 	req := s.NewMessage(MessageParams{
 		Type:      Confirmable,
-		Code:      Empty,
+		Code:      codes.Empty,
 		MessageID: GenerateMessageID(),
 	})
 	resp, err := s.ExchangeWithContext(ctx, req)
@@ -130,7 +131,7 @@ func (s *sessionDTLS) WriteMsgWithContext(ctx context.Context, req Message) erro
 func (s *sessionDTLS) sendPong(w ResponseWriter, r *Request) error {
 	resp := r.Client.NewMessage(MessageParams{
 		Type:      Reset,
-		Code:      Empty,
+		Code:      codes.Empty,
 		MessageID: r.Msg.MessageID(),
 	})
 	return w.WriteMsgWithContext(r.Ctx, resp)
@@ -139,7 +140,7 @@ func (s *sessionDTLS) sendPong(w ResponseWriter, r *Request) error {
 func (s *sessionDTLS) handleSignals(w ResponseWriter, r *Request) bool {
 	switch r.Msg.Code() {
 	// handle of udp ping
-	case Empty:
+	case codes.Empty:
 		if r.Msg.Type() == Confirmable && r.Msg.AllOptions().Len() == 0 && (r.Msg.Payload() == nil || len(r.Msg.Payload()) == 0) {
 			s.sendPong(w, r)
 			return true

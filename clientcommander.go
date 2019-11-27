@@ -7,6 +7,8 @@ import (
 	"io/ioutil"
 	"net"
 	"time"
+
+	"github.com/go-ocf/go-coap/codes"
 )
 
 // ClientCommander provides commands Get,Post,Put,Delete,Observe
@@ -20,7 +22,7 @@ func (cc *ClientCommander) NewMessage(p MessageParams) Message {
 	return cc.networkSession.NewMessage(p)
 }
 
-func (cc *ClientCommander) newGetDeleteRequest(path string, code COAPCode) (Message, error) {
+func (cc *ClientCommander) newGetDeleteRequest(path string, code codes.Code) (Message, error) {
 	token, err := GenerateToken()
 	if err != nil {
 		return nil, err
@@ -35,7 +37,7 @@ func (cc *ClientCommander) newGetDeleteRequest(path string, code COAPCode) (Mess
 	return req, nil
 }
 
-func (cc *ClientCommander) newPostPutRequest(path string, contentFormat MediaType, body io.Reader, code COAPCode) (Message, error) {
+func (cc *ClientCommander) newPostPutRequest(path string, contentFormat MediaType, body io.Reader, code codes.Code) (Message, error) {
 	token, err := GenerateToken()
 	if err != nil {
 		return nil, err
@@ -58,22 +60,22 @@ func (cc *ClientCommander) newPostPutRequest(path string, contentFormat MediaTyp
 
 // NewGetRequest creates get request
 func (cc *ClientCommander) NewGetRequest(path string) (Message, error) {
-	return cc.newGetDeleteRequest(path, GET)
+	return cc.newGetDeleteRequest(path, codes.GET)
 }
 
 // NewPostRequest creates post request
 func (cc *ClientCommander) NewPostRequest(path string, contentFormat MediaType, body io.Reader) (Message, error) {
-	return cc.newPostPutRequest(path, contentFormat, body, POST)
+	return cc.newPostPutRequest(path, contentFormat, body, codes.POST)
 }
 
 // NewPutRequest creates put request
 func (cc *ClientCommander) NewPutRequest(path string, contentFormat MediaType, body io.Reader) (Message, error) {
-	return cc.newPostPutRequest(path, contentFormat, body, PUT)
+	return cc.newPostPutRequest(path, contentFormat, body, codes.PUT)
 }
 
 // NewDeleteRequest creates delete request
 func (cc *ClientCommander) NewDeleteRequest(path string) (Message, error) {
-	return cc.newGetDeleteRequest(path, DELETE)
+	return cc.newGetDeleteRequest(path, codes.DELETE)
 }
 
 // LocalAddr implements the networkSession.LocalAddr method.
@@ -199,7 +201,7 @@ func (o *Observation) Cancel() error {
 func (o *Observation) CancelWithContext(ctx context.Context) error {
 	req := o.client.NewMessage(MessageParams{
 		Type:      NonConfirmable,
-		Code:      GET,
+		Code:      codes.GET,
 		MessageID: GenerateMessageID(),
 		Token:     o.token,
 	})

@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"reflect"
 	"testing"
+
+	"github.com/go-ocf/go-coap/codes"
 )
 
 // assertEqualMessages compares the e(xptected) message to the a(ctual) message
@@ -142,12 +144,12 @@ func TestTypeString(t *testing.T) {
 }
 
 func TestCodeString(t *testing.T) {
-	tests := map[COAPCode]string{
-		0:             "Unknown (0x0)",
-		GET:           "GET",
-		POST:          "POST",
-		NotAcceptable: "NotAcceptable",
-		255:           "Unknown (0xff)",
+	tests := map[codes.Code]string{
+		codes.Empty:         "Unknown (0x0)",
+		codes.GET:           "GET",
+		codes.POST:          "POST",
+		codes.NotAcceptable: "NotAcceptable",
+		255:                 "Unknown (0xff)",
 	}
 
 	for code, exp := range tests {
@@ -162,7 +164,7 @@ func TestEncodeMessageWithoutOptionsAndPayload(t *testing.T) {
 	req := DgramMessage{
 		MessageBase: MessageBase{
 			typ:  Confirmable,
-			code: GET,
+			code: codes.GET,
 		},
 		messageID: 12345,
 	}
@@ -184,7 +186,7 @@ func TestEncodeMessageSmall(t *testing.T) {
 	req := DgramMessage{
 		MessageBase: MessageBase{
 			typ:  Confirmable,
-			code: GET,
+			code: codes.GET,
 		},
 		messageID: 12345,
 	}
@@ -212,7 +214,7 @@ func TestEncodeMessageSmallWithPayload(t *testing.T) {
 	req := DgramMessage{
 		MessageBase: MessageBase{
 			typ:     Confirmable,
-			code:    GET,
+			code:    codes.GET,
 			payload: []byte("hi"),
 		},
 		messageID: 12345,
@@ -263,7 +265,7 @@ func TestOptionsWithIllegalLengthAreIgnoredDuringParsing(t *testing.T) {
 	exp := &DgramMessage{
 		MessageBase: MessageBase{
 			typ:     Confirmable,
-			code:    GET,
+			code:    codes.GET,
 			payload: []byte{},
 		},
 		messageID: 0xabcd,
@@ -345,8 +347,8 @@ func TestDecodeMessageWithoutOptionsAndPayload(t *testing.T) {
 	if msg.Type() != Confirmable {
 		t.Errorf("Expected message type confirmable, got %v", msg.Type())
 	}
-	if msg.Code() != GET {
-		t.Errorf("Expected message code GET, got %v", msg.Code())
+	if msg.Code() != codes.GET {
+		t.Errorf("Expected message code codes.GET, got %v", msg.Code())
 	}
 	if msg.MessageID() != 12345 {
 		t.Errorf("Expected message ID 12345, got %v", msg.MessageID())
@@ -374,8 +376,8 @@ func TestDecodeMessageSmallWithPayload(t *testing.T) {
 	if msg.Type() != Confirmable {
 		t.Errorf("Expected message type confirmable, got %v", msg.Type())
 	}
-	if msg.Code() != GET {
-		t.Errorf("Expected message code GET, got %v", msg.Code())
+	if msg.Code() != codes.GET {
+		t.Errorf("Expected message code codes.GET, got %v", msg.Code())
 	}
 	if msg.MessageID() != 12345 {
 		t.Errorf("Expected message ID 12345, got %v", msg.MessageID())
@@ -390,7 +392,7 @@ func TestEncodeMessageVerySmall(t *testing.T) {
 	req := &DgramMessage{
 		MessageBase: MessageBase{
 			typ:  Confirmable,
-			code: GET,
+			code: codes.GET,
 		},
 		messageID: 12345,
 	}
@@ -416,7 +418,7 @@ func TestEncodeMessageVerySmall2(t *testing.T) {
 	req := &DgramMessage{
 		MessageBase: MessageBase{
 			typ:  Confirmable,
-			code: GET,
+			code: codes.GET,
 		},
 		messageID: 12345,
 	}
@@ -448,7 +450,7 @@ func TestEncodeManyQueries(t *testing.T) {
 		m := &DgramMessage{
 			MessageBase: MessageBase{
 				typ:  Confirmable,
-				code: GET,
+				code: codes.GET,
 			},
 			messageID: 12345,
 		}
@@ -483,7 +485,7 @@ func TestEncodeSeveral(t *testing.T) {
 		m := &DgramMessage{
 			MessageBase: MessageBase{
 				typ:  Confirmable,
-				code: GET,
+				code: codes.GET,
 			},
 			messageID: 12345,
 		}
@@ -511,7 +513,7 @@ func TestPathAsOption(t *testing.T) {
 	m := &DgramMessage{
 		MessageBase: MessageBase{
 			typ:  Confirmable,
-			code: GET,
+			code: codes.GET,
 		},
 		messageID: 12345,
 	}
@@ -531,7 +533,7 @@ func TestEncodePath14(t *testing.T) {
 	req := DgramMessage{
 		MessageBase: MessageBase{
 			typ:  Confirmable,
-			code: GET,
+			code: codes.GET,
 		},
 		messageID: 12345,
 	}
@@ -558,7 +560,7 @@ func TestEncodePath15(t *testing.T) {
 	req := DgramMessage{
 		MessageBase: MessageBase{
 			typ:  Confirmable,
-			code: GET,
+			code: codes.GET,
 		},
 		messageID: 12345,
 	}
@@ -585,7 +587,7 @@ func TestEncodeLargePath(t *testing.T) {
 	req := DgramMessage{
 		MessageBase: MessageBase{
 			typ:  Confirmable,
-			code: GET,
+			code: codes.GET,
 		},
 		messageID: 12345,
 	}
@@ -635,7 +637,7 @@ func TestDecodeLargePath(t *testing.T) {
 	exp := &DgramMessage{
 		MessageBase: MessageBase{
 			typ:     Confirmable,
-			code:    GET,
+			code:    codes.GET,
 			payload: []byte{},
 		},
 		messageID: 12345,
@@ -664,7 +666,7 @@ func TestDecodeMessageSmaller(t *testing.T) {
 	exp := &DgramMessage{
 		MessageBase: MessageBase{
 			typ:     Confirmable,
-			code:    GET,
+			code:    codes.GET,
 			payload: []byte{},
 		},
 		messageID: 12345,
@@ -740,7 +742,7 @@ func TestByteDecoding(t *testing.T) {
     0                   1                   2                   3
     0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
    +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-   | 1 | 0 |   0   |     GET=1     |          MID=0x7d34           |
+   | 1 | 0 |   0   |     codes.GET=1     |          MID=0x7d34           |
    +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
    |  11   |  11   |      "temperature" (11 B) ...                 |
    +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
@@ -757,8 +759,8 @@ func TestExample1(t *testing.T) {
 	if msg.Type() != Confirmable {
 		t.Errorf("Expected message type confirmable, got %v", msg.Type())
 	}
-	if msg.Code() != GET {
-		t.Errorf("Expected message code GET, got %v", msg.Code())
+	if msg.Code() != codes.GET {
+		t.Errorf("Expected message code codes.GET, got %v", msg.Code())
 	}
 	if msg.MessageID() != 0x7d34 {
 		t.Errorf("Expected message ID 0x7d34, got 0x%x", msg.MessageID())
@@ -797,7 +799,7 @@ func TestExample1Res(t *testing.T) {
 	if msg.Type() != Acknowledgement {
 		t.Errorf("Expected message type confirmable, got %v", msg.Type())
 	}
-	if msg.Code() != Content {
+	if msg.Code() != codes.Content {
 		t.Errorf("Expected message code Content, got %v", msg.Code())
 	}
 	if msg.MessageID() != 0x7d34 {
@@ -873,7 +875,7 @@ func TestEncodeMessageWithAllOptions(t *testing.T) {
 	req := &DgramMessage{
 		MessageBase: MessageBase{
 			typ:     Confirmable,
-			code:    GET,
+			code:    codes.GET,
 			token:   []byte("TOKEN"),
 			payload: []byte("PAYLOAD"),
 		},
@@ -1205,7 +1207,7 @@ func TestSetCode(t *testing.T) {
 	req := DgramMessage{MessageBase{}, 0}
 
 	req.SetType(Confirmable)
-	req.SetCode(GET)
+	req.SetCode(codes.GET)
 	buf := &bytes.Buffer{}
 	err := req.MarshalBinary(buf)
 	if err != nil {

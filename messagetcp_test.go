@@ -3,6 +3,8 @@ package coap
 import (
 	"bytes"
 	"testing"
+
+	"github.com/go-ocf/go-coap/codes"
 )
 
 func TestTCPDecodeMessageSmallWithPayload(t *testing.T) {
@@ -24,7 +26,7 @@ func TestTCPDecodeMessageSmallWithPayload(t *testing.T) {
 	if msg.Type() != Confirmable {
 		t.Errorf("Expected message type confirmable, got %v", msg.Type())
 	}
-	if msg.Code() != GET {
+	if msg.Code() != codes.GET {
 		t.Errorf("Expected message code GET, got %v", msg.Code())
 	}
 
@@ -36,7 +38,7 @@ func TestTCPDecodeMessageSmallWithPayload(t *testing.T) {
 
 func TestMessageTCPToBytesLength(t *testing.T) {
 	msgParams := MessageParams{
-		Code:    COAPCode(02),
+		Code:    codes.Code(02),
 		Token:   []byte{0xab},
 		Payload: []byte("hi"),
 	}

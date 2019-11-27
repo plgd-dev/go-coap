@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"log"
 	"testing"
+
+	"github.com/go-ocf/go-coap/codes"
 )
 
 func testMarshal(t *testing.T, szx BlockWiseSzx, blockNumber uint, moreBlocksFollowing bool, expectedBlock uint32) {
@@ -173,7 +175,7 @@ var helloWorld = []byte("Hello world")
 
 // EchoServerUsingWrite echoes request payloads using ResponseWriter.Write
 func EchoServerUsingWrite(w ResponseWriter, r *Request) {
-	w.SetCode(Content)
+	w.SetCode(codes.Content)
 	if mt, ok := r.Msg.Option(ContentFormat).(MediaType); ok {
 		w.SetContentFormat(mt)
 		_, err := w.Write(r.Msg.Payload())
@@ -232,7 +234,7 @@ func TestServingUDPBlockWiseUsingWrite(t *testing.T) {
 	expectedMsg := &DgramMessage{
 		MessageBase: MessageBase{
 			typ:     Acknowledgement,
-			code:    Content,
+			code:    codes.Content,
 			payload: req.Payload(),
 			token:   req.Token(),
 		},
@@ -283,7 +285,7 @@ func TestServingUDPBlockWiseWithClientWithoutBlockWise(t *testing.T) {
 	expectedMsg := &DgramMessage{
 		MessageBase: MessageBase{
 			typ:     Acknowledgement,
-			code:    Content,
+			code:    codes.Content,
 			payload: req.Payload(),
 			token:   req.Token(),
 		},
@@ -308,7 +310,7 @@ func TestServingUDPBlockWiseWithClientWithoutBlockWise(t *testing.T) {
 	expectedGetMsg := DgramMessage{
 		MessageBase: MessageBase{
 			typ:     Acknowledgement,
-			code:    Content,
+			code:    codes.Content,
 			payload: helloWorld,
 			token:   getReq.Token(),
 		},
