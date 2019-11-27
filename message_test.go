@@ -145,11 +145,11 @@ func TestTypeString(t *testing.T) {
 
 func TestCodeString(t *testing.T) {
 	tests := map[codes.Code]string{
-		codes.Empty:         "Unknown (0x0)",
+		codes.Empty:         "Empty",
 		codes.GET:           "GET",
 		codes.POST:          "POST",
 		codes.NotAcceptable: "NotAcceptable",
-		255:                 "Unknown (0xff)",
+		255:                 "Code(255)",
 	}
 
 	for code, exp := range tests {
