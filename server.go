@@ -13,6 +13,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/go-ocf/go-coap/codes"
 	coapNet "github.com/go-ocf/go-coap/net"
 	"github.com/pion/dtls"
 )
@@ -70,7 +71,7 @@ func (f HandlerFunc) ServeCOAP(w ResponseWriter, r *Request) {
 func HandleFailed(w ResponseWriter, req *Request) {
 	msg := req.Client.NewMessage(MessageParams{
 		Type:      Acknowledgement,
-		Code:      NotFound,
+		Code:      codes.NotFound,
 		MessageID: req.Msg.MessageID(),
 		Token:     req.Msg.Token(),
 	})
@@ -564,22 +565,26 @@ func (srv *Server) serveTCPConnection(ctx *shutdownContext, conn *coapNet.Conn) 
 	for {
 		mti, err := readTcpMsgInfo(ctx, conn)
 		if err != nil {
+			fmt.Printf("go-coap: cannot readTcpMsgInfo tcp: %v", err)
 			return session.closeWithError(fmt.Errorf("cannot serve tcp connection: %v", err))
 		}
 
 		if srv.MaxMessageSize != 0 &&
 			uint32(mti.totLen) > srv.MaxMessageSize {
+			fmt.Printf("go-coap: error uint32(mti.totLen) > srv.MaxMessageSize  tcp: %v", err)
 			return session.closeWithError(fmt.Errorf("cannot serve tcp connection: %v", ErrMaxMessageSizeLimitExceeded))
 		}
 
 		body := make([]byte, mti.BodyLen())
 		err = conn.ReadFullWithContext(ctx, body)
 		if err != nil {
+			fmt.Printf("go-coap: error cannot ReadFullWithContext tcp: %v", err)
 			return session.closeWithError(fmt.Errorf("cannot serve tcp connection: %v", err))
 		}
 
 		o, p, err := parseTcpOptionsPayload(mti, body)
 		if err != nil {
+			fmt.Printf("go-coap: error cannot parseTcpOptionsPayload tcp: %v", err)
 			return session.closeWithError(fmt.Errorf("cannot serve tcp connection: %v", err))
 		}
 
@@ -614,6 +619,7 @@ func (srv *Server) serveTCPListener(l Listener) error {
 				continue
 			}
 		}
+		fmt.Printf("go-coap: accept %v", rw.RemoteAddr())
 		if rw != nil {
 			wg.Add(1)
 			go func() {

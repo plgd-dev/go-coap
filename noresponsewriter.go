@@ -1,11 +1,15 @@
 package coap
 
-import "context"
+import (
+	"context"
+
+	"github.com/go-ocf/go-coap/codes"
+)
 
 var (
-	resp2XXCodes = []COAPCode{Created, Deleted, Valid, Changed, Content}
-	resp4XXCodes = []COAPCode{BadRequest, Unauthorized, BadOption, Forbidden, NotFound, MethodNotAllowed, NotAcceptable, PreconditionFailed, RequestEntityTooLarge, UnsupportedMediaType}
-	resp5XXCodes = []COAPCode{InternalServerError, NotImplemented, BadGateway, ServiceUnavailable, GatewayTimeout, ProxyingNotSupported}
+	resp2XXCodes = []codes.Code{codes.Created, codes.Deleted, codes.Valid, codes.Changed, codes.Content}
+	resp4XXCodes = []codes.Code{codes.BadRequest, codes.Unauthorized, codes.BadOption, codes.Forbidden, codes.NotFound, codes.MethodNotAllowed, codes.NotAcceptable, codes.PreconditionFailed, codes.RequestEntityTooLarge, codes.UnsupportedMediaType}
+	resp5XXCodes = []codes.Code{codes.InternalServerError, codes.NotImplemented, codes.BadGateway, codes.ServiceUnavailable, codes.GatewayTimeout, codes.ProxyingNotSupported}
 )
 
 func isSet(n uint32, pos uint32) bool {
@@ -20,8 +24,8 @@ func powerOfTwo(exponent uint32) uint32 {
 	return 1
 }
 
-func (w *noResponseWriter) decodeNoResponseOption(v uint32) []COAPCode {
-	var codes []COAPCode
+func (w *noResponseWriter) decodeNoResponseOption(v uint32) []codes.Code {
+	var codes []codes.Code
 	if v == 0 {
 		// No suppresed code
 		return codes
@@ -40,13 +44,13 @@ func (w *noResponseWriter) decodeNoResponseOption(v uint32) []COAPCode {
 
 type noResponseWriter struct {
 	ResponseWriter
-	noResponseValueMap map[uint32][]COAPCode
+	noResponseValueMap map[uint32][]codes.Code
 }
 
 func newNoResponseWriter(w ResponseWriter) *noResponseWriter {
 	return &noResponseWriter{
 		ResponseWriter: w,
-		noResponseValueMap: map[uint32][]COAPCode{
+		noResponseValueMap: map[uint32][]codes.Code{
 			2:  resp2XXCodes,
 			8:  resp4XXCodes,
 			16: resp5XXCodes,
@@ -64,7 +68,7 @@ func (w *noResponseWriter) WriteWithContext(ctx context.Context, p []byte) (n in
 	return l, err
 }
 
-func (w *noResponseWriter) SetCode(code COAPCode) {
+func (w *noResponseWriter) SetCode(code codes.Code) {
 	w.ResponseWriter.SetCode(code)
 }
 
@@ -72,7 +76,7 @@ func (w *noResponseWriter) SetContentFormat(contentFormat MediaType) {
 	w.ResponseWriter.SetContentFormat(contentFormat)
 }
 
-func (w *noResponseWriter) NewResponse(code COAPCode) Message {
+func (w *noResponseWriter) NewResponse(code codes.Code) Message {
 	return w.ResponseWriter.NewResponse(code)
 }
 

@@ -5,6 +5,8 @@ import (
 	"encoding/binary"
 	"io"
 	"sort"
+
+	"github.com/go-ocf/go-coap/codes"
 )
 
 // DgramMessage implements Message interface.
@@ -92,7 +94,7 @@ func (m *DgramMessage) UnmarshalBinary(data []byte) error {
 		return ErrInvalidTokenLen
 	}
 
-	m.MessageBase.code = COAPCode(data[1])
+	m.MessageBase.code = codes.Code(data[1])
 	m.messageID = binary.BigEndian.Uint16(data[2:4])
 
 	if tokenLen > 0 {

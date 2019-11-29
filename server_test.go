@@ -13,11 +13,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/go-ocf/go-coap/codes"
 	coapNet "github.com/go-ocf/go-coap/net"
 	"github.com/pion/dtls"
 )
 
-func CreateRespMessageByReq(isTCP bool, code COAPCode, req Message) Message {
+func CreateRespMessageByReq(isTCP bool, code codes.Code, req Message) Message {
 	if isTCP {
 		resp := &TcpMessage{
 			MessageBase{
@@ -47,7 +48,7 @@ func CreateRespMessageByReq(isTCP bool, code COAPCode, req Message) Message {
 
 func EchoServer(w ResponseWriter, r *Request) {
 	if r.Msg.IsConfirmable() {
-		err := w.WriteMsg(CreateRespMessageByReq(r.Client.networkSession().IsTCP(), Valid, r.Msg))
+		err := w.WriteMsg(CreateRespMessageByReq(r.Client.networkSession().IsTCP(), codes.Valid, r.Msg))
 		if err != nil {
 			fmt.Printf("Cannot write echo %v", err)
 		}
@@ -56,7 +57,7 @@ func EchoServer(w ResponseWriter, r *Request) {
 
 func EchoServerBadID(w ResponseWriter, r *Request) {
 	if r.Msg.IsConfirmable() {
-		w.WriteMsg(CreateRespMessageByReq(r.Client.networkSession().IsTCP(), BadRequest, r.Msg))
+		w.WriteMsg(CreateRespMessageByReq(r.Client.networkSession().IsTCP(), codes.BadRequest, r.Msg))
 	}
 }
 
@@ -304,7 +305,7 @@ func simpleMsgToPath(t *testing.T, payload []byte, co *ClientConn, path string) 
 		t.Fatal("cannot create request", err)
 	}
 
-	res := CreateRespMessageByReq(co.commander.networkSession.IsTCP(), Valid, req)
+	res := CreateRespMessageByReq(co.commander.networkSession.IsTCP(), codes.Valid, req)
 
 	m, err := co.Exchange(req)
 	if err != nil {
@@ -370,13 +371,13 @@ func ChallegingServer(w ResponseWriter, r *Request) {
 		panic(err.Error())
 	}
 
-	w.WriteMsg(CreateRespMessageByReq(r.Client.networkSession().IsTCP(), Valid, r.Msg))
+	w.WriteMsg(CreateRespMessageByReq(r.Client.networkSession().IsTCP(), codes.Valid, r.Msg))
 }
 
 func ChallegingServerTimeout(w ResponseWriter, r *Request) {
 	req := r.Client.NewMessage(MessageParams{
 		Type:      Confirmable,
-		Code:      GET,
+		Code:      codes.GET,
 		MessageID: 12345,
 		Payload:   []byte("hello, world!"),
 		Token:     []byte("abcd"),
@@ -389,7 +390,7 @@ func ChallegingServerTimeout(w ResponseWriter, r *Request) {
 		panic("Error: expected timeout")
 	}
 
-	w.WriteMsg(CreateRespMessageByReq(r.Client.networkSession().IsTCP(), Valid, r.Msg))
+	w.WriteMsg(CreateRespMessageByReq(r.Client.networkSession().IsTCP(), codes.Valid, r.Msg))
 }
 
 func simpleChallengingMsg(t *testing.T, payload []byte, co *ClientConn) {
@@ -403,7 +404,7 @@ func simpleChallengingTimeoutMsg(t *testing.T, payload []byte, co *ClientConn) {
 func simpleChallengingPathMsg(t *testing.T, payload []byte, co *ClientConn, path string, testTimeout bool) {
 	req0 := co.NewMessage(MessageParams{
 		Type:      Confirmable,
-		Code:      POST,
+		Code:      codes.POST,
 		MessageID: 1234,
 		Payload:   payload,
 		Token:     []byte("chall"),
@@ -417,7 +418,7 @@ func simpleChallengingPathMsg(t *testing.T, payload []byte, co *ClientConn, path
 		t.Fatalf("unable to read msg from server: %v", err)
 	}
 
-	res := CreateRespMessageByReq(co.commander.networkSession.IsTCP(), Valid, req0)
+	res := CreateRespMessageByReq(co.commander.networkSession.IsTCP(), codes.Valid, req0)
 	assertEqualMessages(t, res, resp0)
 }
 
@@ -484,7 +485,7 @@ func testServingMCastWithIfaces(t *testing.T, lnet, laddr string, BlockWiseTrans
 		BlockWiseTransferSzx: &BlockWiseTransferSzx,
 		Handler: func(w ResponseWriter, r *Request) {
 			t.Log("responseServer.Handler")
-			resp := w.NewResponse(Content)
+			resp := w.NewResponse(codes.Content)
 			resp.SetPayload(make([]byte, payloadLen))
 			resp.SetOption(ContentFormat, TextPlain)
 			err := w.WriteMsg(resp)
@@ -496,7 +497,7 @@ func testServingMCastWithIfaces(t *testing.T, lnet, laddr string, BlockWiseTrans
 
 	s, _, fin, err := RunLocalServerUDPWithHandlerIfaces(lnet, addrMcast, BlockWiseTransfer, BlockWiseTransferSzx, func(w ResponseWriter, r *Request) {
 		t.Log("RunLocalServerUDPWithHandler.Handler")
-		resp := w.NewResponse(Content)
+		resp := w.NewResponse(codes.Content)
 		resp.SetPayload(make([]byte, payloadLen))
 		resp.SetOption(ContentFormat, TextPlain)
 		conn, err := responseServer.Dial(r.Client.RemoteAddr().String())
@@ -769,7 +770,7 @@ func benchmarkServeTCPStreamWithMsg(b *testing.B, req *TcpMessage) {
 		b.Fatalf("unable dialing: %v", err)
 	}
 	defer co.Close()
-	res := CreateRespMessageByReq(true, Valid, req)
+	res := CreateRespMessageByReq(true, codes.Valid, req)
 
 	b.StartTimer()
 	sync := make(chan bool)
@@ -802,7 +803,7 @@ func BenchmarkServeTCPStream(b *testing.B) {
 	req := &TcpMessage{
 		MessageBase{
 			typ:     Confirmable,
-			code:    POST,
+			code:    codes.POST,
 			payload: []byte("Content sent by client"),
 		},
 	}
@@ -815,7 +816,7 @@ func BenchmarkServeTCPStreamBigMsg(b *testing.B) {
 	req := &TcpMessage{
 		MessageBase: MessageBase{
 			typ:     Confirmable,
-			code:    POST,
+			code:    codes.POST,
 			payload: make([]byte, 1024*1024*10),
 		},
 	}

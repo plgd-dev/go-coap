@@ -5,6 +5,7 @@ import (
 	"sync"
 
 	coap "github.com/go-ocf/go-coap"
+	"github.com/go-ocf/go-coap/codes"
 )
 
 var responseClientConn = make(map[string]*coap.ClientConn, 0)
@@ -25,7 +26,7 @@ func handleMcast(w coap.ResponseWriter, r *coap.Request) {
 	log.Printf("Got mcast message: path=%q: from %v", r.Msg.Path(), r.Client.RemoteAddr())
 
 	remoteAddress := r.Client.RemoteAddr().String()
-	resp := w.NewResponse(coap.Content)
+	resp := w.NewResponse(codes.Content)
 	resp.SetOption(coap.ContentFormat, coap.TextPlain)
 	resp.SetPayload([]byte("mcast response"))
 

@@ -6,6 +6,8 @@ import (
 	"context"
 	"net"
 	"time"
+
+	"github.com/go-ocf/go-coap/codes"
 )
 
 // A ClientConn represents a connection to a COAP server.
@@ -159,7 +161,7 @@ func (mconn *MulticastClientConn) PublishMsg(req Message, responseHandler func(r
 // PublishMsgWithContext subscribes with context to sever with GET message. After subscription and every change on path,
 // server sends immediately response
 func (mconn *MulticastClientConn) PublishMsgWithContext(ctx context.Context, req Message, responseHandler func(req *Request)) (*ResponseWaiter, error) {
-	if req.Code() != GET || req.PathString() == "" {
+	if req.Code() != codes.GET || req.PathString() == "" {
 		return nil, ErrInvalidRequest
 	}
 
@@ -173,7 +175,7 @@ func (mconn *MulticastClientConn) PublishMsgWithContext(ctx context.Context, req
 	err := mconn.client.multicastHandler.Add(req.Token(), func(w ResponseWriter, r *Request) {
 		var err error
 		switch r.Msg.Code() {
-		case GET, POST, PUT, DELETE:
+		case codes.GET, codes.POST, codes.PUT, codes.DELETE:
 			//dont serve commands by multicast handler (filter own request)
 			return
 		}

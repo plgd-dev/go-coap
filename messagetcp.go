@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"io"
 	"sort"
+
+	"github.com/go-ocf/go-coap/codes"
 )
 
 const (
@@ -309,14 +311,14 @@ func readTcpMsgInfo(ctx context.Context, conn contextReader) (msgTcpInfo, error)
 
 func parseTcpOptionsPayload(mti msgTcpInfo, b []byte) (options, []byte, error) {
 	optionDefs := coapOptionDefs
-	switch COAPCode(mti.code) {
-	case CSM:
+	switch codes.Code(mti.code) {
+	case codes.CSM:
 		optionDefs = signalCSMOptionDefs
-	case Ping, Pong:
+	case codes.Ping, codes.Pong:
 		optionDefs = signalPingPongOptionDefs
-	case Release:
+	case codes.Release:
 		optionDefs = signalReleaseOptionDefs
-	case Abort:
+	case codes.Abort:
 		optionDefs = signalAbortOptionDefs
 	}
 
@@ -330,7 +332,7 @@ func parseTcpOptionsPayload(mti msgTcpInfo, b []byte) (options, []byte, error) {
 
 func (m *TcpMessage) fill(mti msgTcpInfo, o options, p []byte) {
 	m.MessageBase.typ = COAPType(mti.typ)
-	m.MessageBase.code = COAPCode(mti.code)
+	m.MessageBase.code = codes.Code(mti.code)
 	m.MessageBase.token = mti.token
 	m.MessageBase.opts = o
 	m.MessageBase.payload = p
