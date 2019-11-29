@@ -17,10 +17,8 @@ github.com/golang/protobuf v1.3.2/go.mod h1:6lQm79b+lXiMfvg/cZm0SGofjICqVBUtrP5y
 github.com/google/go-cmp v0.2.0/go.mod h1:oXzfMopK8JAjlY9xF4vHSVASa0yLyX7SntLO5aqRK0M=
 github.com/kisielk/errcheck v1.2.0/go.mod h1:/BMXB+zMLi60iA8Vv6Ksmxu/1UDYcXs4uQLJ+jE2L00=
 github.com/kisielk/gotool v1.0.0/go.mod h1:XhKaO+MFFWcvkIS/tQcRk01m1F5IRFswLeQ+oQHNcck=
-github.com/pion/dtls v1.5.2 h1:cIVSR1GPGfUAnRS1nl7jSdpoB63WOLANSu4ewpwRHzg=
-github.com/pion/dtls v1.5.2/go.mod h1:v4ULmyyV65geAZQBBckCjgMhmngTqz7HQVsQVYnfkGo=
-github.com/pion/dtls v1.5.4 h1:q8pXFMF7T+EAVO4auQU/ds+5yh5yOK6NiTN/4NQ0dB0=
-github.com/pion/dtls v1.5.4/go.mod h1:eVHevf4AM8R9+Pxa29q4aiI2iIbfMWOW1WgEcSCGpHU=
+github.com/pion/dtls/v2 v2.0.0-rc.3 h1:u9utI+EDJOjOWfrkGQsD8WNssPcTwfYIanFB6oI8K+4=
+github.com/pion/dtls/v2 v2.0.0-rc.3/go.mod h1:x0XH+cN5z+l/+/4nYL8r4sB8g6+0d1Zp2Pfkcoz8BKY=
 github.com/pion/logging v0.2.2 h1:M9+AIj/+pxNsDfAT64+MAVgJO0rsyLnoJKCqf//DoeY=
 github.com/pion/logging v0.2.2/go.mod h1:k0/tDVsRCX2Mb2ZEmTqNa7CWsQPc+YYCB7Q+5pahoms=
 github.com/pion/transport v0.8.9 h1:3PUZULb0WZd/QNfXKKMwcUHzLR+XfNem6lF2M9UrxSU=

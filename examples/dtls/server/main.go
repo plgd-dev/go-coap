@@ -6,7 +6,7 @@ import (
 
 	coap "github.com/go-ocf/go-coap"
 	"github.com/go-ocf/go-coap/codes"
-	"github.com/pion/dtls"
+	dtls "github.com/pion/dtls/v2"
 )
 
 func handleA(w coap.ResponseWriter, req *coap.Request) {

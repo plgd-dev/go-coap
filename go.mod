@@ -2,7 +2,7 @@ module github.com/go-ocf/go-coap
 
 require (
 	github.com/davecgh/go-spew v1.1.1 // indirect
-	github.com/pion/dtls v1.5.4
+	github.com/pion/dtls/v2 v2.0.0-rc.3
 	github.com/stretchr/testify v1.4.0
 	github.com/ugorji/go/codec v1.1.7
 	golang.org/x/net v0.0.0-20191014212845-da9a3fd4c582
