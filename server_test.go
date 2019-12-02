@@ -15,7 +15,7 @@ import (
 
 	"github.com/go-ocf/go-coap/codes"
 	coapNet "github.com/go-ocf/go-coap/net"
-	"github.com/pion/dtls"
+	dtls "github.com/pion/dtls/v2"
 )
 
 func CreateRespMessageByReq(isTCP bool, code codes.Code, req Message) Message {

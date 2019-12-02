@@ -12,7 +12,7 @@ import (
 	"time"
 
 	coapNet "github.com/go-ocf/go-coap/net"
-	"github.com/pion/dtls"
+	dtls "github.com/pion/dtls/v2"
 )
 
 // A ClientConn represents a connection to a COAP server.

@@ -6,7 +6,7 @@ import (
 	"os"
 
 	coap "github.com/go-ocf/go-coap"
-	"github.com/pion/dtls"
+	dtls "github.com/pion/dtls/v2"
 )
 
 func main() {

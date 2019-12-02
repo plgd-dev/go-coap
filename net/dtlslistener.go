@@ -8,7 +8,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/pion/dtls"
+	dtls "github.com/pion/dtls/v2"
 )
 
 type connData struct {
