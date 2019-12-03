@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"sync/atomic"
 	"time"
 )
 
@@ -11,6 +12,7 @@ import (
 type TCPListener struct {
 	listener  *net.TCPListener
 	heartBeat time.Duration
+	closed    uint32
 }
 
 func newNetTCPListen(network string, addr string) (*net.TCPListener, error) {
@@ -39,12 +41,12 @@ func NewTCPListener(network string, addr string, heartBeat time.Duration) (*TCPL
 // AcceptContext waits with context for a generic Conn.
 func (l *TCPListener) AcceptWithContext(ctx context.Context) (net.Conn, error) {
 	for {
+		if atomic.LoadUint32(&l.closed) == 1 {
+			return nil, ErrServerClosed
+		}
 		select {
 		case <-ctx.Done():
-			if ctx.Err() != nil {
-				return nil, ErrServerClosed
-			}
-			return nil, nil
+			return nil, ctx.Err()
 		default:
 		}
 		err := l.SetDeadline(time.Now().Add(l.heartBeat))
@@ -74,6 +76,9 @@ func (l *TCPListener) Accept() (net.Conn, error) {
 
 // Close closes the connection.
 func (l *TCPListener) Close() error {
+	if !atomic.CompareAndSwapUint32(&l.closed, 0, 1) {
+		return nil
+	}
 	return l.listener.Close()
 }
 
