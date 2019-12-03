@@ -1,7 +1,6 @@
 package coap
 
 import (
-	"fmt"
 	"time"
 )
 
@@ -22,7 +21,7 @@ func (ctx *shutdownContext) Done() <-chan struct{} {
 }
 
 func (ctx *shutdownContext) Err() error {
-	return fmt.Errorf("shutdown")
+	return ErrServerClosed
 }
 
 func (ctx *shutdownContext) Value(key interface{}) interface{} {

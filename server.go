@@ -534,7 +534,7 @@ func (srv *Server) serveDTLSListener(l Listener) error {
 		rw, err := l.AcceptWithContext(ctx)
 		if err != nil {
 			switch err {
-			case ErrServerClosed:
+			case ErrServerClosed, context.DeadlineExceeded, context.Canceled:
 				wg.Wait()
 				return fmt.Errorf("cannot serve dtls: %v", err)
 			default:
@@ -612,7 +612,7 @@ func (srv *Server) serveTCPListener(l Listener) error {
 		rw, err := l.AcceptWithContext(ctx)
 		if err != nil {
 			switch err {
-			case ErrServerClosed:
+			case ErrServerClosed, context.DeadlineExceeded, context.Canceled:
 				wg.Wait()
 				return fmt.Errorf("cannot serve tcp: %v", err)
 			default:

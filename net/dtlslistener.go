@@ -24,6 +24,7 @@ type DTLSListener struct {
 	doneCh    chan struct{}
 	connCh    chan connData
 
+	closed   uint32
 	deadline atomic.Value
 }
 
@@ -69,12 +70,12 @@ func NewDTLSListener(network string, addr string, cfg *dtls.Config, heartBeat ti
 // AcceptWithContext waits with context for a generic Conn.
 func (l *DTLSListener) AcceptWithContext(ctx context.Context) (net.Conn, error) {
 	for {
+		if atomic.LoadUint32(&l.closed) == 1 {
+			return nil, ErrServerClosed
+		}
 		select {
 		case <-ctx.Done():
-			if ctx.Err() != nil {
-				return nil, ErrServerClosed
-			}
-			return nil, nil
+			return nil, ctx.Err()
 		default:
 		}
 		err := l.SetDeadline(time.Now().Add(l.heartBeat))
@@ -129,6 +130,9 @@ func (l *DTLSListener) Accept() (net.Conn, error) {
 
 // Close closes the connection.
 func (l *DTLSListener) Close() error {
+	if !atomic.CompareAndSwapUint32(&l.closed, 0, 1) {
+		return nil
+	}
 	err := l.listener.Close(time.Millisecond * 100)
 	close(l.doneCh)
 	l.wg.Wait()
