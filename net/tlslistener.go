@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"fmt"
 	"net"
+	"sync/atomic"
 	"time"
 )
 
@@ -13,6 +14,7 @@ type TLSListener struct {
 	tcp       *net.TCPListener
 	listener  net.Listener
 	heartBeat time.Duration
+	closed    uint32
 }
 
 // NewTLSListener creates tcp listener.
@@ -33,12 +35,12 @@ func NewTLSListener(network string, addr string, cfg *tls.Config, heartBeat time
 // AcceptContext waits with context for a generic Conn.
 func (l *TLSListener) AcceptWithContext(ctx context.Context) (net.Conn, error) {
 	for {
+		if atomic.LoadUint32(&l.closed) == 1 {
+			return nil, ErrServerClosed
+		}
 		select {
 		case <-ctx.Done():
-			if ctx.Err() != nil {
-				return nil, ErrServerClosed
-			}
-			return nil, nil
+			return nil, ctx.Err()
 		default:
 		}
 		err := l.SetDeadline(time.Now().Add(l.heartBeat))
@@ -68,6 +70,9 @@ func (l *TLSListener) Accept() (net.Conn, error) {
 
 // Close closes the connection.
 func (l *TLSListener) Close() error {
+	if !atomic.CompareAndSwapUint32(&l.closed, 0, 1) {
+		return nil
+	}
 	return l.listener.Close()
 }
 

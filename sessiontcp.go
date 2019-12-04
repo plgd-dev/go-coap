@@ -42,13 +42,12 @@ func newSessionTCP(connection *coapNet.Conn, srv *Server) (networkSession, error
 			mapPairs:             make(map[[MaxTokenSize]byte]map[uint16](*sessionResp)),
 		},
 	}
-	/*
-		if !s.srv.DisableTCPSignalMessages {
-			if err := s.sendCSM(); err != nil {
-				return nil, err
-			}
+
+	if !s.srv.DisableTCPSignalMessages {
+		if err := s.sendCSM(); err != nil {
+			return nil, err
 		}
-	*/
+	}
 	return s, nil
 }
 
