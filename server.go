@@ -565,26 +565,22 @@ func (srv *Server) serveTCPConnection(ctx *shutdownContext, conn *coapNet.Conn) 
 	for {
 		mti, err := readTcpMsgInfo(ctx, conn)
 		if err != nil {
-			fmt.Printf("go-coap: cannot readTcpMsgInfo tcp: %v", err)
 			return session.closeWithError(fmt.Errorf("cannot serve tcp connection: %v", err))
 		}
 
 		if srv.MaxMessageSize != 0 &&
 			uint32(mti.totLen) > srv.MaxMessageSize {
-			fmt.Printf("go-coap: error uint32(mti.totLen) > srv.MaxMessageSize  tcp: %v", err)
 			return session.closeWithError(fmt.Errorf("cannot serve tcp connection: %v", ErrMaxMessageSizeLimitExceeded))
 		}
 
 		body := make([]byte, mti.BodyLen())
 		err = conn.ReadFullWithContext(ctx, body)
 		if err != nil {
-			fmt.Printf("go-coap: error cannot ReadFullWithContext tcp: %v", err)
 			return session.closeWithError(fmt.Errorf("cannot serve tcp connection: %v", err))
 		}
 
 		o, p, err := parseTcpOptionsPayload(mti, body)
 		if err != nil {
-			fmt.Printf("go-coap: error cannot parseTcpOptionsPayload tcp: %v", err)
 			return session.closeWithError(fmt.Errorf("cannot serve tcp connection: %v", err))
 		}
 
@@ -619,7 +615,6 @@ func (srv *Server) serveTCPListener(l Listener) error {
 				continue
 			}
 		}
-		fmt.Printf("go-coap: accept %v", rw.RemoteAddr())
 		if rw != nil {
 			wg.Add(1)
 			go func() {
