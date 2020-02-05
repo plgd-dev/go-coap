@@ -191,6 +191,7 @@ func (c *Client) DialWithContext(ctx context.Context, address string) (clientCon
 			BlockWiseTransferSzx:            &BlockWiseTransferSzx,
 			DisableTCPSignalMessages:        c.DisableTCPSignalMessages,
 			DisablePeerTCPSignalMessageCSMs: c.DisablePeerTCPSignalMessageCSMs,
+			KeepAlive: c.KeepAlive,
 			NotifyStartedFunc: func() {
 				close(started)
 			},
