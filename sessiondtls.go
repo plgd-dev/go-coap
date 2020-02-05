@@ -11,7 +11,7 @@ import (
 )
 
 type sessionDTLS struct {
-	sessionBase
+	*sessionBase
 	connection *coapNet.Conn
 }
 
@@ -32,13 +32,7 @@ func newSessionDTLS(connection *coapNet.Conn, srv *Server) (networkSession, erro
 
 	s := sessionDTLS{
 		connection: connection,
-		sessionBase: sessionBase{
-			srv:                  srv,
-			handler:              &TokenHandler{tokenHandlers: make(map[[MaxTokenSize]byte]HandlerFunc)},
-			blockWiseTransfer:    BlockWiseTransfer,
-			blockWiseTransferSzx: uint32(BlockWiseTransferSzx),
-			mapPairs:             make(map[[MaxTokenSize]byte]map[uint16](*sessionResp)),
-		},
+		sessionBase: NewBaseSession(BlockWiseTransfer, BlockWiseTransferSzx, srv),
 	}
 
 	return &s, nil
@@ -87,6 +81,7 @@ func (s *sessionDTLS) PingWithContext(ctx context.Context) error {
 
 func (s *sessionDTLS) closeWithError(err error) error {
 	if s.connection != nil {
+		s.sessionBase.Close()
 		c := ClientConn{commander: &ClientCommander{s}}
 		s.srv.NotifySessionEndFunc(&c, err)
 		e := s.connection.Close()

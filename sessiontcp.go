@@ -12,7 +12,7 @@ import (
 )
 
 type sessionTCP struct {
-	sessionBase
+	*sessionBase
 	connection *coapNet.Conn
 
 	peerBlockWiseTransfer           uint32
@@ -34,13 +34,7 @@ func newSessionTCP(connection *coapNet.Conn, srv *Server) (networkSession, error
 		peerMaxMessageSize:              uint32(srv.MaxMessageSize),
 		disablePeerTCPSignalMessageCSMs: srv.DisablePeerTCPSignalMessageCSMs,
 		connection:                      connection,
-		sessionBase: sessionBase{
-			srv:                  srv,
-			handler:              &TokenHandler{tokenHandlers: make(map[[MaxTokenSize]byte]HandlerFunc)},
-			blockWiseTransfer:    BlockWiseTransfer,
-			blockWiseTransferSzx: uint32(BlockWiseTransferSzx),
-			mapPairs:             make(map[[MaxTokenSize]byte]map[uint16](*sessionResp)),
-		},
+		sessionBase:                     NewBaseSession(BlockWiseTransfer, BlockWiseTransferSzx, srv),
 	}
 
 	if !s.srv.DisableTCPSignalMessages {
@@ -106,6 +100,7 @@ func (s *sessionTCP) PingWithContext(ctx context.Context) error {
 
 func (s *sessionTCP) closeWithError(err error) error {
 	if s.connection != nil {
+		s.sessionBase.Close()
 		c := ClientConn{commander: &ClientCommander{s}}
 		s.srv.NotifySessionEndFunc(&c, err)
 		e := s.connection.Close()

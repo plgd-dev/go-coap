@@ -122,6 +122,17 @@ func ActivateAndServe(l Listener, p net.Conn, handler Handler) error {
 	return server.ActivateAndServe()
 }
 
+type KeepAlive struct {
+	// Enable watch connection
+	Enable bool
+	// Interval between two success pings
+	Interval time.Duration
+	// WaitForPong how long it will waits for pong response.
+	WaitForPong time.Duration
+	// NewRetryPolicy creates retry policy for the connection when ping fails.
+	NewRetryPolicy func() BackOff
+}
+
 // A Server defines parameters for running an COAP server.
 type Server struct {
 	// Address to listen on, ":COAP" if empty.
@@ -169,6 +180,8 @@ type Server struct {
 	DisableTCPSignalMessages bool
 	// Disable processes Capabilities and Settings Messages from client - iotivity sends max message size without blockwise.
 	DisablePeerTCPSignalMessageCSMs bool
+	// Keepalive setup
+	KeepAlive KeepAlive
 
 	// UDP packet or TCP connection queue
 	queue chan *Request
@@ -394,6 +407,9 @@ func (srv *Server) activateAndServe(listener Listener, conn *coapNet.Conn, connU
 			if err != nil {
 				return nil, err
 			}
+			if srv.KeepAlive.Enable {
+				session = newKeepAliveSession(session, srv)
+			}
 			if session.blockWiseEnabled() {
 				return &blockWiseSession{networkSession: session}, nil
 			}
@@ -407,6 +423,9 @@ func (srv *Server) activateAndServe(listener Listener, conn *coapNet.Conn, connU
 			if err != nil {
 				return nil, err
 			}
+			if srv.KeepAlive.Enable {
+				session = newKeepAliveSession(session, srv)
+			}
 			if session.blockWiseEnabled() {
 				return &blockWiseSession{networkSession: session}, nil
 			}
@@ -419,6 +438,9 @@ func (srv *Server) activateAndServe(listener Listener, conn *coapNet.Conn, connU
 			session, err := newSessionUDP(connection, srv, sessionUDPData)
 			if err != nil {
 				return nil, err
+			}
+			if srv.KeepAlive.Enable {
+				session = newKeepAliveSession(session, srv)
 			}
 			if session.blockWiseEnabled() {
 				return &blockWiseSession{networkSession: session}, nil

@@ -22,6 +22,20 @@ type sessionBase struct {
 	blockWiseTransferSzx uint32                                         //BlockWiseSzx
 	mapPairs             map[[MaxTokenSize]byte]map[uint16]*sessionResp //storage of channel Message
 	mapPairsLock         sync.Mutex                                     //to sync add remove token
+	done                 chan struct{}
+	doneMutex            sync.Mutex
+}
+
+func NewBaseSession(blockWiseTransfer bool, blockWiseTransferSzx BlockWiseSzx, srv *Server) *sessionBase {
+	return &sessionBase{
+		srv:                  srv,
+		handler:              &TokenHandler{tokenHandlers: make(map[[MaxTokenSize]byte]HandlerFunc)},
+		blockWiseTransfer:    blockWiseTransfer,
+		blockWiseTransferSzx: uint32(blockWiseTransferSzx),
+		mapPairs:             make(map[[MaxTokenSize]byte]map[uint16](*sessionResp)),
+
+		done: make(chan struct{}),
+	}
 }
 
 func (s *sessionBase) blockWiseSzx() BlockWiseSzx {
@@ -58,6 +72,8 @@ func (s *sessionBase) exchangeFunc(req Message, writeTimeout, readTimeout time.D
 	select {
 	case resp := <-pairChan.ch:
 		return resp.Msg, nil
+	case <-s.done:
+		return nil, ErrConnectionClosed
 	case <-time.After(readTimeout):
 		return nil, ErrTimeout
 	}
@@ -126,6 +142,8 @@ func (s *sessionBase) exchangeWithContext(ctx context.Context, req Message, writ
 	select {
 	case request := <-pairChan.ch:
 		return request.Msg, nil
+	case <-s.done:
+		return nil, ErrConnectionClosed
 	case <-ctx.Done():
 		if ctx.Err() != nil {
 			return nil, fmt.Errorf("cannot exchange: %v", ctx.Err())
@@ -156,4 +174,17 @@ func (s *sessionBase) handlePairMsg(w ResponseWriter, r *Request) bool {
 		return true
 	}
 	return false
+}
+
+func (s *sessionBase) Done() <-chan struct{} {
+	return s.done
+}
+
+func (s *sessionBase) Close() {
+	s.doneMutex.Lock()
+	defer s.doneMutex.Unlock()
+	if s.done != nil {
+		close(s.done)
+		s.done = nil
+	}
 }

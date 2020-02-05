@@ -19,7 +19,7 @@ type connUDP interface {
 }
 
 type sessionUDP struct {
-	sessionBase
+	*sessionBase
 	connection     connUDP
 	sessionUDPData *coapNet.ConnUDPContext // oob data to get egress interface right
 }
@@ -40,13 +40,7 @@ func newSessionUDP(connection connUDP, srv *Server, sessionUDPData *coapNet.Conn
 	}
 
 	s := &sessionUDP{
-		sessionBase: sessionBase{
-			srv:                  srv,
-			handler:              &TokenHandler{tokenHandlers: make(map[[MaxTokenSize]byte]HandlerFunc)},
-			blockWiseTransfer:    BlockWiseTransfer,
-			blockWiseTransferSzx: uint32(BlockWiseTransferSzx),
-			mapPairs:             make(map[[MaxTokenSize]byte]map[uint16](*sessionResp)),
-		},
+		sessionBase:    NewBaseSession(BlockWiseTransfer, BlockWiseTransferSzx, srv),
 		connection:     connection,
 		sessionUDPData: sessionUDPData,
 	}
@@ -73,6 +67,7 @@ func (s *sessionUDP) blockWiseIsValid(szx BlockWiseSzx) bool {
 }
 
 func (s *sessionUDP) closeWithError(err error) error {
+	s.sessionBase.Close()
 	s.srv.sessionUDPMapLock.Lock()
 	delete(s.srv.sessionUDPMap, s.sessionUDPData.Key())
 	s.srv.sessionUDPMapLock.Unlock()

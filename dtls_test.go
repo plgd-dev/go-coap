@@ -116,7 +116,7 @@ func TestRSACerts(t *testing.T) {
 		Net:        "udp-dtls",
 		Addr:       ":5688",
 		DTLSConfig: config,
-		Handler: HandlerFunc(EchoServer),
+		Handler:    HandlerFunc(EchoServer),
 	}
 	err = s.ListenAndServe()
 	require.Error(t, err)

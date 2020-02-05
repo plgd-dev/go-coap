@@ -44,6 +44,9 @@ type Client struct {
 	DisableTCPSignalMessages        bool // Disable tcp signal messages
 	DisablePeerTCPSignalMessageCSMs bool // Disable processes Capabilities and Settings Messages from client - iotivity sends max message size without blockwise.
 	MulticastHopLimit               int  //sets the hop limit field value for future outgoing multicast packets. default is 2.
+
+	// Keepalive setup
+	KeepAlive KeepAlive
 }
 
 func (c *Client) readTimeout() time.Duration {
@@ -215,6 +218,9 @@ func (c *Client) DialWithContext(ctx context.Context, address string) (clientCon
 				if err != nil {
 					return nil, err
 				}
+				if srv.KeepAlive.Enable {
+					session = newKeepAliveSession(session, srv)
+				}
 				if session.blockWiseEnabled() {
 					return &blockWiseSession{networkSession: session}, nil
 				}
@@ -234,6 +240,9 @@ func (c *Client) DialWithContext(ctx context.Context, address string) (clientCon
 			clientConn.srv.Conn.Close()
 			return nil, err
 		}
+		if clientConn.srv.KeepAlive.Enable {
+			session = newKeepAliveSession(session, clientConn.srv)
+		}
 		if session.blockWiseEnabled() {
 			clientConn.commander.networkSession = &blockWiseSession{networkSession: session}
 		} else {
@@ -244,6 +253,9 @@ func (c *Client) DialWithContext(ctx context.Context, address string) (clientCon
 		if err != nil {
 			clientConn.srv.Conn.Close()
 			return nil, err
+		}
+		if clientConn.srv.KeepAlive.Enable {
+			session = newKeepAliveSession(session, clientConn.srv)
 		}
 		if session.blockWiseEnabled() {
 			clientConn.commander.networkSession = &blockWiseSession{networkSession: session}
@@ -257,6 +269,9 @@ func (c *Client) DialWithContext(ctx context.Context, address string) (clientCon
 		if err != nil {
 			clientConn.srv.Conn.Close()
 			return nil, err
+		}
+		if clientConn.srv.KeepAlive.Enable {
+			session = newKeepAliveSession(session, clientConn.srv)
 		}
 		if session.blockWiseEnabled() {
 			clientConn.commander.networkSession = &blockWiseSession{networkSession: session}
