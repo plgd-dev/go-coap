@@ -1,6 +1,7 @@
 module github.com/go-ocf/go-coap
 
 require (
+	github.com/cenkalti/backoff/v4 v4.0.0
 	github.com/davecgh/go-spew v1.1.1 // indirect
 	github.com/pion/dtls/v2 v2.0.0-rc.5
 	github.com/stretchr/testify v1.4.0

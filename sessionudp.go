@@ -93,7 +93,7 @@ func (s *sessionUDP) PingWithContext(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	if resp.Type() == Reset {
+	if resp.Type() == Reset || resp.Type() == Acknowledgement {
 		return nil
 	}
 	return ErrInvalidResponse
@@ -129,7 +129,7 @@ func (s *sessionUDP) WriteMsgWithContext(ctx context.Context, req Message) error
 
 func (s *sessionUDP) sendPong(w ResponseWriter, r *Request) error {
 	resp := r.Client.NewMessage(MessageParams{
-		Type:      Reset,
+		Type:      Acknowledgement,
 		Code:      codes.Empty,
 		MessageID: r.Msg.MessageID(),
 	})

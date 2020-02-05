@@ -1,12 +1,41 @@
 package coap
 
 import (
-	"time"
 	"context"
+	"fmt"
+	"time"
 )
 
 type keepAliveSession struct {
 	networkSession
+}
+
+// KeepAlive config
+type KeepAlive struct {
+	// Enable watch connection
+	Enable bool
+	// Interval between two success pings
+	Interval time.Duration
+	// WaitForPong how long it will waits for pong response.
+	WaitForPong time.Duration
+	// NewRetryPolicy creates retry policy for the connection when ping fails.
+	NewRetryPolicy func() BackOff
+}
+
+func validateKeepAlive(cfg KeepAlive) error {
+	if !cfg.Enable {
+		return nil
+	}
+	if cfg.Interval <= 0 {
+		return fmt.Errorf("invalid Interval")
+	}
+	if cfg.WaitForPong <= 0 {
+		return fmt.Errorf("invalid WaitForPong")
+	}
+	if cfg.NewRetryPolicy == nil {
+		return fmt.Errorf("invalid NewRetryPolicy")
+	}
+	return nil
 }
 
 func newKeepAliveSession(s networkSession, srv *Server) *keepAliveSession {
@@ -48,6 +77,7 @@ func newKeepAliveSession(s networkSession, srv *Server) *keepAliveSession {
 								continue
 							}
 							if err == nil {
+								retryPolicy.Reset()
 								goto PING_LOOP
 							}
 							s.closeWithError(err)

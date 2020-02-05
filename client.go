@@ -105,6 +105,11 @@ func (c *Client) DialWithContext(ctx context.Context, address string) (clientCon
 		c.MulticastHopLimit = 2
 	}
 
+	err = validateKeepAlive(c.KeepAlive)
+	if err != nil {
+		return nil, fmt.Errorf("keepalive: %w", err)
+	}
+
 	switch c.Net {
 	case "tcp-tls", "tcp4-tls", "tcp6-tls":
 		network = strings.TrimSuffix(c.Net, "-tls")
@@ -191,7 +196,7 @@ func (c *Client) DialWithContext(ctx context.Context, address string) (clientCon
 			BlockWiseTransferSzx:            &BlockWiseTransferSzx,
 			DisableTCPSignalMessages:        c.DisableTCPSignalMessages,
 			DisablePeerTCPSignalMessageCSMs: c.DisablePeerTCPSignalMessageCSMs,
-			KeepAlive: c.KeepAlive,
+			KeepAlive:                       c.KeepAlive,
 			NotifyStartedFunc: func() {
 				close(started)
 			},

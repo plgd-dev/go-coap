@@ -122,17 +122,6 @@ func ActivateAndServe(l Listener, p net.Conn, handler Handler) error {
 	return server.ActivateAndServe()
 }
 
-type KeepAlive struct {
-	// Enable watch connection
-	Enable bool
-	// Interval between two success pings
-	Interval time.Duration
-	// WaitForPong how long it will waits for pong response.
-	WaitForPong time.Duration
-	// NewRetryPolicy creates retry policy for the connection when ping fails.
-	NewRetryPolicy func() BackOff
-}
-
 // A Server defines parameters for running an COAP server.
 type Server struct {
 	// Address to listen on, ":COAP" if empty.
@@ -389,12 +378,18 @@ func (srv *Server) activateAndServe(listener Listener, conn *coapNet.Conn, connU
 	if srv.doneChan != nil {
 		return fmt.Errorf("server already serve connections")
 	}
-	srv.doneChan = make(chan struct{})
-	srv.doneLock.Unlock()
 
 	if srv.MaxMessageSize > 0 && srv.MaxMessageSize < uint32(szxToBytes[BlockWiseSzx16]) {
 		return ErrInvalidMaxMesssageSizeParameter
 	}
+
+	err := validateKeepAlive(srv.KeepAlive)
+	if err != nil {
+		return fmt.Errorf("keepalive: %w", err)
+	}
+
+	srv.doneChan = make(chan struct{})
+	srv.doneLock.Unlock()
 
 	srv.sessionUDPMap = make(map[string]networkSession)
 
