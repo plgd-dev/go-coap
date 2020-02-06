@@ -31,7 +31,7 @@ const minDuration = time.Millisecond * 50
 func MakeKeepAlive(connTimeout time.Duration) (KeepAlive, error) {
 	duration := connTimeout / 4
 	if duration < minDuration {
-		return KeepAlive{}, fmt.Errorf("connTimeout %v it too small. (must be greater then %v)", duration, minDuration*4)
+		return KeepAlive{}, fmt.Errorf("connTimeout %v it too small: must be greater than %v", connTimeout, minDuration*4)
 	}
 	return KeepAlive{
 		Enable:      true,
