@@ -65,7 +65,7 @@ func newKeepAliveSession(s networkSession, srv *Server) *keepAliveSession {
 					for {
 						nextCall := retryPolicy.NextBackOff()
 						if nextCall == Stop {
-							s.closeWithError(err)
+							s.closeWithError(ErrKeepAliveDeadlineExceeded)
 							return
 						}
 						select {

@@ -6,7 +6,6 @@ import (
 	"log"
 	"sync"
 	"sync/atomic"
-	"time"
 )
 
 type sessionResp struct {
@@ -62,23 +61,6 @@ func (s *sessionBase) TokenHandler() *TokenHandler {
 	return s.handler
 }
 
-func (s *sessionBase) exchangeFunc(req Message, writeTimeout, readTimeout time.Duration, pairChan *sessionResp, write func(msg Message, timeout time.Duration) error) (Message, error) {
-
-	err := write(req, writeTimeout)
-	if err != nil {
-		return nil, err
-	}
-
-	select {
-	case resp := <-pairChan.ch:
-		return resp.Msg, nil
-	case <-s.done:
-		return nil, ErrConnectionClosed
-	case <-time.After(readTimeout):
-		return nil, ErrTimeout
-	}
-}
-
 func (s *sessionBase) newSessionResp(token []byte, messageID uint16) (*sessionResp, error) {
 	var pairToken [MaxTokenSize]byte
 	copy(pairToken[:], token)
@@ -125,7 +107,7 @@ func (s *sessionBase) removeSessionResp(token []byte, messageID uint16) {
 
 func (s *sessionBase) exchangeWithContext(ctx context.Context, req Message, writeMsgWithContext func(context.Context, Message) error) (Message, error) {
 	if err := validateMsg(req); err != nil {
-		return nil, fmt.Errorf("cannot exchange: %v", err)
+		return nil, err
 	}
 	//register msgid to token
 	pairChan, err := s.newSessionResp(req.Token(), req.MessageID())
@@ -137,7 +119,7 @@ func (s *sessionBase) exchangeWithContext(ctx context.Context, req Message, writ
 
 	err = writeMsgWithContext(ctx, req)
 	if err != nil {
-		return nil, fmt.Errorf("cannot exchange: %v", err)
+		return nil, err
 	}
 	select {
 	case request := <-pairChan.ch:
@@ -145,10 +127,7 @@ func (s *sessionBase) exchangeWithContext(ctx context.Context, req Message, writ
 	case <-s.done:
 		return nil, ErrConnectionClosed
 	case <-ctx.Done():
-		if ctx.Err() != nil {
-			return nil, fmt.Errorf("cannot exchange: %v", ctx.Err())
-		}
-		return nil, fmt.Errorf("cannot exchange: cancelled")
+		return nil, ctx.Err()
 	}
 }
 
@@ -180,11 +159,13 @@ func (s *sessionBase) Done() <-chan struct{} {
 	return s.done
 }
 
-func (s *sessionBase) Close() {
+func (s *sessionBase) Close() error {
 	s.doneMutex.Lock()
 	defer s.doneMutex.Unlock()
 	if s.done != nil {
 		close(s.done)
 		s.done = nil
+		return nil
 	}
+	return fmt.Errorf("already closed")
 }

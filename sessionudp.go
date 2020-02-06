@@ -67,14 +67,15 @@ func (s *sessionUDP) blockWiseIsValid(szx BlockWiseSzx) bool {
 }
 
 func (s *sessionUDP) closeWithError(err error) error {
-	s.sessionBase.Close()
-	s.srv.sessionUDPMapLock.Lock()
-	delete(s.srv.sessionUDPMap, s.sessionUDPData.Key())
-	s.srv.sessionUDPMapLock.Unlock()
-	c := ClientConn{commander: &ClientCommander{s}}
-	s.srv.NotifySessionEndFunc(&c, err)
+	if s.sessionBase.Close() == nil {
+		s.srv.sessionUDPMapLock.Lock()
+		delete(s.srv.sessionUDPMap, s.sessionUDPData.Key())
+		s.srv.sessionUDPMapLock.Unlock()
+		c := ClientConn{commander: &ClientCommander{s}}
+		s.srv.NotifySessionEndFunc(&c, err)
+	}
 
-	return err
+	return nil
 }
 
 // Ping send ping over udp(unicast) and wait for response.

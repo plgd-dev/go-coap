@@ -1,6 +1,11 @@
 package coap
 
-import "github.com/go-ocf/go-coap/net"
+import (
+	"context"
+	"fmt"
+
+	"github.com/go-ocf/go-coap/net"
+)
 
 // Error errors type of coap
 type Error string
@@ -9,9 +14,6 @@ func (e Error) Error() string { return string(e) }
 
 // ErrShortRead To construct Message we need to read more data from connection
 const ErrShortRead = Error("short read")
-
-// ErrTimeout Timeout occurs during waiting for response Message
-const ErrTimeout = Error("timeout")
 
 // ErrConnectionClosed Connection closed
 const ErrConnectionClosed = Error("connection closed")
@@ -111,6 +113,9 @@ const ErrMessageNotInterested = Error("message not to be sent due to disinterest
 
 // ErrMaxMessageSizeLimitExceeded message size is bigger than maximum message size limit
 const ErrMaxMessageSizeLimitExceeded = Error("maximum message size limit exceeded")
+
+// ErrKeepAliveDeadlineExceeded occurs during waiting for pong response
+var ErrKeepAliveDeadlineExceeded = fmt.Errorf("keepalive: %w", context.DeadlineExceeded)
 
 // ErrServerClosed Server closed
 const ErrServerClosed = net.ErrServerClosed

@@ -31,7 +31,7 @@ func newSessionDTLS(connection *coapNet.Conn, srv *Server) (networkSession, erro
 	}
 
 	s := sessionDTLS{
-		connection: connection,
+		connection:  connection,
 		sessionBase: NewBaseSession(BlockWiseTransfer, BlockWiseTransferSzx, srv),
 	}
 
@@ -80,18 +80,16 @@ func (s *sessionDTLS) PingWithContext(ctx context.Context) error {
 }
 
 func (s *sessionDTLS) closeWithError(err error) error {
-	if s.connection != nil {
-		s.sessionBase.Close()
+	if s.sessionBase.Close() == nil {
 		c := ClientConn{commander: &ClientCommander{s}}
 		s.srv.NotifySessionEndFunc(&c, err)
 		e := s.connection.Close()
-		//s.connection = nil
 		if e == nil {
 			e = err
 		}
 		return e
 	}
-	return err
+	return nil
 }
 
 // Close implements the networkSession.Close method

@@ -90,9 +90,8 @@ func (c *Client) Dial(address string) (clientConn *ClientConn, err error) {
 	return c.DialWithContext(ctx, address)
 }
 
-// DialContext connects to the address on the named network.
+// DialWithContext connects to the address on the named network.
 func (c *Client) DialWithContext(ctx context.Context, address string) (clientConn *ClientConn, err error) {
-
 	var conn net.Conn
 	var network string
 	var sessionUPDData *coapNet.ConnUDPContext
@@ -101,8 +100,9 @@ func (c *Client) DialWithContext(ctx context.Context, address string) (clientCon
 	BlockWiseTransfer := false
 	BlockWiseTransferSzx := BlockWiseSzx1024
 	multicast := false
+	multicastHop := 0
 	if c.MulticastHopLimit == 0 {
-		c.MulticastHopLimit = 2
+		multicastHop = 2
 	}
 
 	err = validateKeepAlive(c.KeepAlive)
@@ -271,7 +271,7 @@ func (c *Client) DialWithContext(ctx context.Context, address string) (clientCon
 	case *net.UDPConn:
 		// WriteContextMsgUDP returns error when addr is filled in SessionUDPData for connected socket
 		coapNet.SetUDPSocketOptions(clientConn.srv.Conn.(*net.UDPConn))
-		session, err := newSessionUDP(coapNet.NewConnUDP(clientConn.srv.Conn.(*net.UDPConn), clientConn.srv.heartBeat(), c.MulticastHopLimit), clientConn.srv, sessionUPDData)
+		session, err := newSessionUDP(coapNet.NewConnUDP(clientConn.srv.Conn.(*net.UDPConn), clientConn.srv.heartBeat(), multicastHop), clientConn.srv, sessionUPDData)
 		if err != nil {
 			clientConn.srv.Conn.Close()
 			return nil, err

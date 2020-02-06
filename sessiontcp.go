@@ -99,18 +99,16 @@ func (s *sessionTCP) PingWithContext(ctx context.Context) error {
 }
 
 func (s *sessionTCP) closeWithError(err error) error {
-	if s.connection != nil {
-		s.sessionBase.Close()
+	if s.sessionBase.Close() == nil {
 		c := ClientConn{commander: &ClientCommander{s}}
 		s.srv.NotifySessionEndFunc(&c, err)
 		e := s.connection.Close()
-		//s.connection = nil
 		if e == nil {
 			e = err
 		}
 		return e
 	}
-	return err
+	return nil
 }
 
 // Close implements the networkSession.Close method

@@ -321,21 +321,45 @@ func (srv *Server) ListenAndServe() error {
 }
 
 func (srv *Server) initServeUDP(connUDP *coapNet.ConnUDP) error {
-	return srv.serveUDP(newShutdownWithContext(srv.doneChan), connUDP)
+	srv.doneLock.Lock()
+	if srv.doneChan != nil {
+		return fmt.Errorf("server already serve connections")
+	}
+	doneChan := make(chan struct{})
+	srv.doneChan = doneChan
+	srv.doneLock.Unlock()
+
+	return srv.serveUDP(newShutdownWithContext(doneChan), connUDP)
 }
 
 func (srv *Server) initServeTCP(conn *coapNet.Conn) error {
+	srv.doneLock.Lock()
+	if srv.doneChan != nil {
+		return fmt.Errorf("server already serve connections")
+	}
+	doneChan := make(chan struct{})
+	srv.doneChan = doneChan
+	srv.doneLock.Unlock()
+
 	if srv.NotifyStartedFunc != nil {
 		srv.NotifyStartedFunc()
 	}
-	return srv.serveTCPConnection(newShutdownWithContext(srv.doneChan), conn)
+	return srv.serveTCPConnection(newShutdownWithContext(doneChan), conn)
 }
 
 func (srv *Server) initServeDTLS(conn *coapNet.Conn) error {
+	srv.doneLock.Lock()
+	if srv.doneChan != nil {
+		return fmt.Errorf("server already serve connections")
+	}
+	doneChan := make(chan struct{})
+	srv.doneChan = doneChan
+	srv.doneLock.Unlock()
+
 	if srv.NotifyStartedFunc != nil {
 		srv.NotifyStartedFunc()
 	}
-	return srv.serveDTLSConnection(newShutdownWithContext(srv.doneChan), conn)
+	return srv.serveDTLSConnection(newShutdownWithContext(doneChan), conn)
 }
 
 // ActivateAndServe starts a coapserver with the PacketConn or Listener
@@ -374,11 +398,6 @@ func (srv *Server) ActivateAndServe() error {
 }
 
 func (srv *Server) activateAndServe(listener Listener, conn *coapNet.Conn, connUDP *coapNet.ConnUDP) error {
-	srv.doneLock.Lock()
-	if srv.doneChan != nil {
-		return fmt.Errorf("server already serve connections")
-	}
-
 	if srv.MaxMessageSize > 0 && srv.MaxMessageSize < uint32(szxToBytes[BlockWiseSzx16]) {
 		return ErrInvalidMaxMesssageSizeParameter
 	}
@@ -388,10 +407,9 @@ func (srv *Server) activateAndServe(listener Listener, conn *coapNet.Conn, connU
 		return fmt.Errorf("keepalive: %w", err)
 	}
 
-	srv.doneChan = make(chan struct{})
-	srv.doneLock.Unlock()
-
+	srv.sessionUDPMapLock.Lock()
 	srv.sessionUDPMap = make(map[string]networkSession)
+	srv.sessionUDPMapLock.Unlock()
 
 	srv.queue = make(chan *Request)
 	defer close(srv.queue)
@@ -540,12 +558,20 @@ func (srv *Server) serveDTLSConnection(ctx *shutdownContext, conn *coapNet.Conn)
 
 // serveListener starts a DTLS listener for the server.
 func (srv *Server) serveDTLSListener(l Listener) error {
+	srv.doneLock.Lock()
+	if srv.doneChan != nil {
+		return fmt.Errorf("server already serve connections")
+	}
+	doneChan := make(chan struct{})
+	srv.doneChan = doneChan
+	srv.doneLock.Unlock()
+
 	if srv.NotifyStartedFunc != nil {
 		srv.NotifyStartedFunc()
 	}
 
 	var wg sync.WaitGroup
-	ctx := newShutdownWithContext(srv.doneChan)
+	ctx := newShutdownWithContext(doneChan)
 
 	for {
 		rw, err := l.AcceptWithContext(ctx)
@@ -614,12 +640,20 @@ func (srv *Server) serveTCPConnection(ctx *shutdownContext, conn *coapNet.Conn) 
 
 // serveListener starts a TCP listener for the server.
 func (srv *Server) serveTCPListener(l Listener) error {
+	srv.doneLock.Lock()
+	if srv.doneChan != nil {
+		return fmt.Errorf("server already serve connections")
+	}
+	doneChan := make(chan struct{})
+	srv.doneChan = doneChan
+	srv.doneLock.Unlock()
+
 	if srv.NotifyStartedFunc != nil {
 		srv.NotifyStartedFunc()
 	}
 
 	var wg sync.WaitGroup
-	ctx := newShutdownWithContext(srv.doneChan)
+	ctx := newShutdownWithContext(doneChan)
 
 	for {
 		rw, err := l.AcceptWithContext(ctx)
