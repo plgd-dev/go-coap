@@ -321,25 +321,19 @@ func (srv *Server) ListenAndServe() error {
 }
 
 func (srv *Server) initServeUDP(connUDP *coapNet.ConnUDP) error {
-	srv.doneLock.Lock()
-	if srv.doneChan != nil {
-		return fmt.Errorf("server already serve connections")
+	doneChan, err := srv.initDone()
+	if err != nil {
+		return err
 	}
-	doneChan := make(chan struct{})
-	srv.doneChan = doneChan
-	srv.doneLock.Unlock()
 
 	return srv.serveUDP(newShutdownWithContext(doneChan), connUDP)
 }
 
 func (srv *Server) initServeTCP(conn *coapNet.Conn) error {
-	srv.doneLock.Lock()
-	if srv.doneChan != nil {
-		return fmt.Errorf("server already serve connections")
+	doneChan, err := srv.initDone()
+	if err != nil {
+		return err
 	}
-	doneChan := make(chan struct{})
-	srv.doneChan = doneChan
-	srv.doneLock.Unlock()
 
 	if srv.NotifyStartedFunc != nil {
 		srv.NotifyStartedFunc()
@@ -347,15 +341,22 @@ func (srv *Server) initServeTCP(conn *coapNet.Conn) error {
 	return srv.serveTCPConnection(newShutdownWithContext(doneChan), conn)
 }
 
-func (srv *Server) initServeDTLS(conn *coapNet.Conn) error {
+func (srv *Server) initDone() (<-chan struct{}, error) {
 	srv.doneLock.Lock()
+	defer srv.doneLock.Unlock()
 	if srv.doneChan != nil {
-		return fmt.Errorf("server already serve connections")
+		return nil, fmt.Errorf("server already serve connections")
 	}
 	doneChan := make(chan struct{})
 	srv.doneChan = doneChan
-	srv.doneLock.Unlock()
+	return doneChan, nil
+}
 
+func (srv *Server) initServeDTLS(conn *coapNet.Conn) error {
+	doneChan, err := srv.initDone()
+	if err != nil {
+		return err
+	}
 	if srv.NotifyStartedFunc != nil {
 		srv.NotifyStartedFunc()
 	}
@@ -558,13 +559,10 @@ func (srv *Server) serveDTLSConnection(ctx *shutdownContext, conn *coapNet.Conn)
 
 // serveListener starts a DTLS listener for the server.
 func (srv *Server) serveDTLSListener(l Listener) error {
-	srv.doneLock.Lock()
-	if srv.doneChan != nil {
-		return fmt.Errorf("server already serve connections")
+	doneChan, err := srv.initDone()
+	if err != nil {
+		return err
 	}
-	doneChan := make(chan struct{})
-	srv.doneChan = doneChan
-	srv.doneLock.Unlock()
 
 	if srv.NotifyStartedFunc != nil {
 		srv.NotifyStartedFunc()
@@ -640,13 +638,10 @@ func (srv *Server) serveTCPConnection(ctx *shutdownContext, conn *coapNet.Conn) 
 
 // serveListener starts a TCP listener for the server.
 func (srv *Server) serveTCPListener(l Listener) error {
-	srv.doneLock.Lock()
-	if srv.doneChan != nil {
-		return fmt.Errorf("server already serve connections")
+	doneChan, err := srv.initDone()
+	if err != nil {
+		return err
 	}
-	doneChan := make(chan struct{})
-	srv.doneChan = doneChan
-	srv.doneLock.Unlock()
 
 	if srv.NotifyStartedFunc != nil {
 		srv.NotifyStartedFunc()

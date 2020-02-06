@@ -114,8 +114,8 @@ const ErrMessageNotInterested = Error("message not to be sent due to disinterest
 // ErrMaxMessageSizeLimitExceeded message size is bigger than maximum message size limit
 const ErrMaxMessageSizeLimitExceeded = Error("maximum message size limit exceeded")
 
-// ErrKeepAliveDeadlineExceeded occurs during waiting for pong response
-var ErrKeepAliveDeadlineExceeded = fmt.Errorf("keepalive: %w", context.DeadlineExceeded)
-
 // ErrServerClosed Server closed
 const ErrServerClosed = net.ErrServerClosed
+
+// ErrKeepAliveDeadlineExceeded occurs during waiting for pong response
+var ErrKeepAliveDeadlineExceeded = fmt.Errorf("keepalive: %w", context.DeadlineExceeded)

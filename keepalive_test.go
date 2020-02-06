@@ -8,7 +8,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/cenkalti/backoff/v4"
 	coapNet "github.com/go-ocf/go-coap/net"
 	dtls "github.com/pion/dtls/v2"
 	"github.com/stretchr/testify/require"
@@ -29,12 +28,15 @@ func TestKeepAliveTCP_Client(t *testing.T) {
 			Enable:      true,
 			WaitForPong: time.Microsecond,
 			Interval:    time.Millisecond * 100,
-			NewRetryPolicy: func() BackOff {
-				bo := backoff.NewExponentialBackOff()
-				bo.InitialInterval = 200 * time.Millisecond
-				bo.MaxInterval = 1 * time.Second
-				bo.MaxElapsedTime = 2 * time.Second
-				return bo
+			NewRetryPolicy: func() RetryFunc {
+				now := time.Now()
+				return func() (time.Time, error) {
+					c := time.Now()
+					if c.Before(now.Add(time.Second * 2)) {
+						return c.Add(time.Millisecond * 200), nil
+					}
+					return time.Time{}, ErrKeepAliveDeadlineExceeded
+				}
 			},
 		},
 		NotifySessionEndFunc: func(err error) {
@@ -70,12 +72,15 @@ func TestKeepAliveTCPTLS_Client(t *testing.T) {
 			Enable:      true,
 			WaitForPong: time.Microsecond,
 			Interval:    time.Millisecond * 100,
-			NewRetryPolicy: func() BackOff {
-				bo := backoff.NewExponentialBackOff()
-				bo.InitialInterval = 200 * time.Millisecond
-				bo.MaxInterval = 1 * time.Second
-				bo.MaxElapsedTime = 2 * time.Second
-				return bo
+			NewRetryPolicy: func() RetryFunc {
+				now := time.Now()
+				return func() (time.Time, error) {
+					c := time.Now()
+					if c.Before(now.Add(time.Second * 2)) {
+						return c.Add(time.Millisecond * 200), nil
+					}
+					return time.Time{}, ErrKeepAliveDeadlineExceeded
+				}
 			},
 		},
 		NotifySessionEndFunc: func(err error) {
@@ -112,12 +117,15 @@ func TestKeepAliveTCP_Server(t *testing.T) {
 			Enable:      true,
 			WaitForPong: time.Microsecond,
 			Interval:    time.Millisecond * 100,
-			NewRetryPolicy: func() BackOff {
-				bo := backoff.NewExponentialBackOff()
-				bo.InitialInterval = 200 * time.Millisecond
-				bo.MaxInterval = 1 * time.Second
-				bo.MaxElapsedTime = 2 * time.Second
-				return bo
+			NewRetryPolicy: func() RetryFunc {
+				now := time.Now()
+				return func() (time.Time, error) {
+					c := time.Now()
+					if c.Before(now.Add(time.Second * 2)) {
+						return c.Add(time.Millisecond * 200), nil
+					}
+					return time.Time{}, ErrKeepAliveDeadlineExceeded
+				}
 			},
 		},
 	}
@@ -163,12 +171,15 @@ func TestKeepAliveTCPTLS_Server(t *testing.T) {
 			Enable:      true,
 			WaitForPong: time.Microsecond,
 			Interval:    time.Millisecond * 100,
-			NewRetryPolicy: func() BackOff {
-				bo := backoff.NewExponentialBackOff()
-				bo.InitialInterval = 200 * time.Millisecond
-				bo.MaxInterval = 1 * time.Second
-				bo.MaxElapsedTime = 2 * time.Second
-				return bo
+			NewRetryPolicy: func() RetryFunc {
+				now := time.Now()
+				return func() (time.Time, error) {
+					c := time.Now()
+					if c.Before(now.Add(time.Second * 2)) {
+						return c.Add(time.Millisecond * 200), nil
+					}
+					return time.Time{}, ErrKeepAliveDeadlineExceeded
+				}
 			},
 		},
 	}
@@ -213,12 +224,15 @@ func TestKeepAliveUDP_Server(t *testing.T) {
 			Enable:      true,
 			WaitForPong: time.Microsecond,
 			Interval:    time.Millisecond * 100,
-			NewRetryPolicy: func() BackOff {
-				bo := backoff.NewExponentialBackOff()
-				bo.InitialInterval = 200 * time.Millisecond
-				bo.MaxInterval = 1 * time.Second
-				bo.MaxElapsedTime = 2 * time.Second
-				return bo
+			NewRetryPolicy: func() RetryFunc {
+				now := time.Now()
+				return func() (time.Time, error) {
+					c := time.Now()
+					if c.Before(now.Add(time.Second * 2)) {
+						return c.Add(time.Millisecond * 200), nil
+					}
+					return time.Time{}, ErrKeepAliveDeadlineExceeded
+				}
 			},
 		},
 	}
@@ -270,12 +284,15 @@ func TestKeepAliveDTLS_Server(t *testing.T) {
 			Enable:      true,
 			WaitForPong: time.Microsecond,
 			Interval:    time.Millisecond * 100,
-			NewRetryPolicy: func() BackOff {
-				bo := backoff.NewExponentialBackOff()
-				bo.InitialInterval = 200 * time.Millisecond
-				bo.MaxInterval = 1 * time.Second
-				bo.MaxElapsedTime = 2 * time.Second
-				return bo
+			NewRetryPolicy: func() RetryFunc {
+				now := time.Now()
+				return func() (time.Time, error) {
+					c := time.Now()
+					if c.Before(now.Add(time.Second * 2)) {
+						return c.Add(time.Millisecond * 200), nil
+					}
+					return time.Time{}, ErrKeepAliveDeadlineExceeded
+				}
 			},
 		},
 	}
@@ -312,12 +329,15 @@ func TestKeepAliveUDP_Client(t *testing.T) {
 			Enable:      true,
 			WaitForPong: time.Microsecond,
 			Interval:    time.Millisecond * 100,
-			NewRetryPolicy: func() BackOff {
-				bo := backoff.NewExponentialBackOff()
-				bo.InitialInterval = 200 * time.Millisecond
-				bo.MaxInterval = 1 * time.Second
-				bo.MaxElapsedTime = 2 * time.Second
-				return bo
+			NewRetryPolicy: func() RetryFunc {
+				now := time.Now()
+				return func() (time.Time, error) {
+					c := time.Now()
+					if c.Before(now.Add(time.Second * 2)) {
+						return c.Add(time.Millisecond * 200), nil
+					}
+					return time.Time{}, ErrKeepAliveDeadlineExceeded
+				}
 			},
 		},
 		NotifySessionEndFunc: func(err error) {
@@ -369,12 +389,15 @@ func TestKeepAliveDTLS_Client(t *testing.T) {
 			Enable:      true,
 			WaitForPong: time.Microsecond,
 			Interval:    time.Millisecond * 100,
-			NewRetryPolicy: func() BackOff {
-				bo := backoff.NewExponentialBackOff()
-				bo.InitialInterval = 200 * time.Millisecond
-				bo.MaxInterval = 1 * time.Second
-				bo.MaxElapsedTime = 2 * time.Second
-				return bo
+			NewRetryPolicy: func() RetryFunc {
+				now := time.Now()
+				return func() (time.Time, error) {
+					c := time.Now()
+					if c.Before(now.Add(time.Second * 2)) {
+						return c.Add(time.Millisecond * 200), nil
+					}
+					return time.Time{}, ErrKeepAliveDeadlineExceeded
+				}
 			},
 		},
 		NotifySessionEndFunc: func(err error) {
@@ -387,6 +410,33 @@ func TestKeepAliveDTLS_Client(t *testing.T) {
 	co, err := c.Dial(l.Addr().String())
 	require.NoError(t, err)
 	defer co.Close()
+
+	wg.Wait()
+}
+
+func TestKeepAliveUDP_Client_NoResponse(t *testing.T) {
+	a, err := net.ResolveUDPAddr("udp", ":0")
+	require.NoError(t, err)
+	pc, err := net.ListenUDP("udp", a)
+	require.NoError(t, err)
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+	c := &Client{
+		Net:       "udp",
+		KeepAlive: MustMakeKeepAlive(time.Second * 1),
+		NotifySessionEndFunc: func(err error) {
+			if err == ErrKeepAliveDeadlineExceeded {
+				defer wg.Done()
+			}
+		},
+	}
+
+	co, err := c.Dial(pc.LocalAddr().String())
+	require.NoError(t, err)
+	defer co.Close()
+	err = co.WriteMsg(co.NewMessage(MessageParams{}))
+	require.NoError(t, err)
 
 	wg.Wait()
 }

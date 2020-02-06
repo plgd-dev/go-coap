@@ -10,6 +10,9 @@ type keepAliveSession struct {
 	networkSession
 }
 
+type RetryFunc = func() (when time.Time, err error)
+type RetryFuncFactory = func() RetryFunc
+
 // KeepAlive config
 type KeepAlive struct {
 	// Enable watch connection
@@ -19,7 +22,42 @@ type KeepAlive struct {
 	// WaitForPong how long it will waits for pong response.
 	WaitForPong time.Duration
 	// NewRetryPolicy creates retry policy for the connection when ping fails.
-	NewRetryPolicy func() BackOff
+	NewRetryPolicy RetryFuncFactory
+}
+
+const minDuration = time.Millisecond * 50
+
+// MakeKeepAlive creates a policy that detects dropped connections within the connTimeout limit
+func MakeKeepAlive(connTimeout time.Duration) (KeepAlive, error) {
+	duration := connTimeout / 4
+	if duration < minDuration {
+		return KeepAlive{}, fmt.Errorf("connTimeout %v it too small. (must be greater then %v)", duration, minDuration*4)
+	}
+	return KeepAlive{
+		Enable:      true,
+		Interval:    duration,
+		WaitForPong: duration,
+		NewRetryPolicy: func() RetryFunc {
+			now := time.Now()
+			// try 2 times to send ping after fails
+			return func() (time.Time, error) {
+				c := time.Now()
+				if c.Before(now.Add(duration * 2)) {
+					return c.Add(duration), nil
+				}
+				return time.Time{}, ErrKeepAliveDeadlineExceeded
+			}
+		},
+	}, nil
+}
+
+// MustMakeKeepAlive must creates a keepalive policy.
+func MustMakeKeepAlive(connTimeout time.Duration) KeepAlive {
+	k, err := MakeKeepAlive(connTimeout)
+	if err != nil {
+		panic(err)
+	}
+	return k
 }
 
 func validateKeepAlive(cfg KeepAlive) error {
@@ -43,7 +81,6 @@ func newKeepAliveSession(s networkSession, srv *Server) *keepAliveSession {
 		networkSession: s,
 	}
 
-	retryPolicy := srv.KeepAlive.NewRetryPolicy()
 	ping := func() error {
 		ctx, cancel := context.WithTimeout(context.Background(), srv.KeepAlive.WaitForPong)
 		defer cancel()
@@ -62,22 +99,22 @@ func newKeepAliveSession(s networkSession, srv *Server) *keepAliveSession {
 						s.closeWithError(err)
 						return
 					}
+					retryPolicy := srv.KeepAlive.NewRetryPolicy()
 					for {
-						nextCall := retryPolicy.NextBackOff()
-						if nextCall == Stop {
-							s.closeWithError(ErrKeepAliveDeadlineExceeded)
+						when, err := retryPolicy()
+						if err != nil {
+							s.closeWithError(err)
 							return
 						}
 						select {
 						case <-s.Done():
 							return
-						case <-time.After(nextCall):
+						case <-time.After(time.Until(when)):
 							err := ping()
 							if err == context.DeadlineExceeded {
 								continue
 							}
 							if err == nil {
-								retryPolicy.Reset()
 								goto PING_LOOP
 							}
 							s.closeWithError(err)
