@@ -42,12 +42,13 @@ func MakeKeepAlive(connTimeout time.Duration) (KeepAlive, error) {
 		NewRetryPolicy: func() RetryFunc {
 			// The first failure is detected after 2*duration:
 			// 1 since the previous ping, plus 1 for the next ping-pong to timeout
-			now := time.Now()
+			start := time.Now()
+			attempt := time.Duration(1)
 			return func() (time.Time, error) {
-				c := time.Now()
+				attempt++
 				// Try to send ping and wait for pong 2 more times
-				if c.Before(now.Add(duration * 4)) {
-					return c.Add(duration), nil
+				if time.Since(start) <= 2 * 2 * duration {
+					return start.Add(attempt * duration), nil
 				}
 				return time.Time{}, ErrKeepAliveDeadlineExceeded
 			}
