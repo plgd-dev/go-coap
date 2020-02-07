@@ -41,7 +41,7 @@ type Client struct {
 	BlockWiseTransfer    *bool         // Use blockWise transfer for transfer payload (default for UDP it's enabled, for TCP it's disable)
 	BlockWiseTransferSzx *BlockWiseSzx // Set maximal block size of payload that will be send in fragment
 
-	DisableTCPSignalMessages        bool // Disable tcp signal messages
+	DisableTCPSignalMessageCSM      bool // Disable send tcp signal CSM message
 	DisablePeerTCPSignalMessageCSMs bool // Disable processes Capabilities and Settings Messages from client - iotivity sends max message size without blockwise.
 	MulticastHopLimit               int  //sets the hop limit field value for future outgoing multicast packets. default is 2.
 
@@ -194,7 +194,7 @@ func (c *Client) DialWithContext(ctx context.Context, address string) (clientCon
 			MaxMessageSize:                  c.MaxMessageSize,
 			BlockWiseTransfer:               &BlockWiseTransfer,
 			BlockWiseTransferSzx:            &BlockWiseTransferSzx,
-			DisableTCPSignalMessages:        c.DisableTCPSignalMessages,
+			DisableTCPSignalMessageCSM:      c.DisableTCPSignalMessageCSM,
 			DisablePeerTCPSignalMessageCSMs: c.DisablePeerTCPSignalMessageCSMs,
 			KeepAlive:                       c.KeepAlive,
 			NotifyStartedFunc: func() {

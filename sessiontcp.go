@@ -37,7 +37,7 @@ func newSessionTCP(connection *coapNet.Conn, srv *Server) (networkSession, error
 		sessionBase:                     newBaseSession(BlockWiseTransfer, BlockWiseTransferSzx, srv),
 	}
 
-	if !s.srv.DisableTCPSignalMessages {
+	if !s.srv.DisableTCPSignalMessageCSM {
 		if err := s.sendCSM(); err != nil {
 			return nil, err
 		}

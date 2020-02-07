@@ -165,8 +165,8 @@ type Server struct {
 	BlockWiseTransfer *bool
 	// Set maximal block size of payload that will be send in fragment
 	BlockWiseTransferSzx *BlockWiseSzx
-	// Disable send tcp signal messages
-	DisableTCPSignalMessages bool
+	// Disable send tcp signal CSM message
+	DisableTCPSignalMessageCSM bool
 	// Disable processes Capabilities and Settings Messages from client - iotivity sends max message size without blockwise.
 	DisablePeerTCPSignalMessageCSMs bool
 	// Keepalive setup
