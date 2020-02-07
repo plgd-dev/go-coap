@@ -25,7 +25,7 @@ type sessionBase struct {
 	doneMutex            sync.Mutex
 }
 
-func NewBaseSession(blockWiseTransfer bool, blockWiseTransferSzx BlockWiseSzx, srv *Server) *sessionBase {
+func newBaseSession(blockWiseTransfer bool, blockWiseTransferSzx BlockWiseSzx, srv *Server) *sessionBase {
 	return &sessionBase{
 		srv:                  srv,
 		handler:              &TokenHandler{tokenHandlers: make(map[[MaxTokenSize]byte]HandlerFunc)},

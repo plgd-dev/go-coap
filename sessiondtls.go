@@ -32,7 +32,7 @@ func newSessionDTLS(connection *coapNet.Conn, srv *Server) (networkSession, erro
 
 	s := sessionDTLS{
 		connection:  connection,
-		sessionBase: NewBaseSession(BlockWiseTransfer, BlockWiseTransferSzx, srv),
+		sessionBase: newBaseSession(BlockWiseTransfer, BlockWiseTransferSzx, srv),
 	}
 
 	return &s, nil

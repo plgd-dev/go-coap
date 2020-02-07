@@ -40,7 +40,7 @@ func newSessionUDP(connection connUDP, srv *Server, sessionUDPData *coapNet.Conn
 	}
 
 	s := &sessionUDP{
-		sessionBase:    NewBaseSession(BlockWiseTransfer, BlockWiseTransferSzx, srv),
+		sessionBase:    newBaseSession(BlockWiseTransfer, BlockWiseTransferSzx, srv),
 		connection:     connection,
 		sessionUDPData: sessionUDPData,
 	}

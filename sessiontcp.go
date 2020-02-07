@@ -34,7 +34,7 @@ func newSessionTCP(connection *coapNet.Conn, srv *Server) (networkSession, error
 		peerMaxMessageSize:              uint32(srv.MaxMessageSize),
 		disablePeerTCPSignalMessageCSMs: srv.DisablePeerTCPSignalMessageCSMs,
 		connection:                      connection,
-		sessionBase:                     NewBaseSession(BlockWiseTransfer, BlockWiseTransferSzx, srv),
+		sessionBase:                     newBaseSession(BlockWiseTransfer, BlockWiseTransferSzx, srv),
 	}
 
 	if !s.srv.DisableTCPSignalMessages {
