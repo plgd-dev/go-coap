@@ -76,9 +76,6 @@ func (s *sessionTCP) blockWiseIsValid(szx BlockWiseSzx) bool {
 }
 
 func (s *sessionTCP) PingWithContext(ctx context.Context) error {
-	if s.srv.DisableTCPSignalMessages {
-		return fmt.Errorf("cannot send ping: TCP Signal messages are disabled")
-	}
 	token, err := GenerateToken()
 	if err != nil {
 		return err
