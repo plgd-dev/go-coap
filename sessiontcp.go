@@ -12,7 +12,7 @@ import (
 )
 
 type sessionTCP struct {
-	sessionBase
+	*sessionBase
 	connection *coapNet.Conn
 
 	peerBlockWiseTransfer           uint32
@@ -34,16 +34,10 @@ func newSessionTCP(connection *coapNet.Conn, srv *Server) (networkSession, error
 		peerMaxMessageSize:              uint32(srv.MaxMessageSize),
 		disablePeerTCPSignalMessageCSMs: srv.DisablePeerTCPSignalMessageCSMs,
 		connection:                      connection,
-		sessionBase: sessionBase{
-			srv:                  srv,
-			handler:              &TokenHandler{tokenHandlers: make(map[[MaxTokenSize]byte]HandlerFunc)},
-			blockWiseTransfer:    BlockWiseTransfer,
-			blockWiseTransferSzx: uint32(BlockWiseTransferSzx),
-			mapPairs:             make(map[[MaxTokenSize]byte]map[uint16](*sessionResp)),
-		},
+		sessionBase:                     newBaseSession(BlockWiseTransfer, BlockWiseTransferSzx, srv),
 	}
 
-	if !s.srv.DisableTCPSignalMessages {
+	if !s.srv.DisableTCPSignalMessageCSM {
 		if err := s.sendCSM(); err != nil {
 			return nil, err
 		}
@@ -82,9 +76,6 @@ func (s *sessionTCP) blockWiseIsValid(szx BlockWiseSzx) bool {
 }
 
 func (s *sessionTCP) PingWithContext(ctx context.Context) error {
-	if s.srv.DisableTCPSignalMessages {
-		return fmt.Errorf("cannot send ping: TCP Signal messages are disabled")
-	}
 	token, err := GenerateToken()
 	if err != nil {
 		return err
@@ -105,17 +96,16 @@ func (s *sessionTCP) PingWithContext(ctx context.Context) error {
 }
 
 func (s *sessionTCP) closeWithError(err error) error {
-	if s.connection != nil {
+	if s.sessionBase.Close() == nil {
 		c := ClientConn{commander: &ClientCommander{s}}
 		s.srv.NotifySessionEndFunc(&c, err)
 		e := s.connection.Close()
-		//s.connection = nil
 		if e == nil {
 			e = err
 		}
 		return e
 	}
-	return err
+	return nil
 }
 
 // Close implements the networkSession.Close method

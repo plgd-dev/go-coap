@@ -117,10 +117,7 @@ func exchangeDrivedByPeer(ctx context.Context, session networkSession, req Messa
 	case resp := <-pair:
 		return resp.Msg, nil
 	case <-ctx.Done():
-		if ctx.Err() != nil {
-			return nil, fmt.Errorf("cannot exchange drived by peer: %v", err)
-		}
-		return nil, ErrTimeout
+		return nil, ctx.Err()
 	}
 }
 

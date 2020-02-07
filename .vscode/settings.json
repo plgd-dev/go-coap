@@ -1,0 +1,6 @@
+{
+    "go.testEnvVars": {
+     //   "GOFLAGS":"-mod=vendor",
+    },
+    "go.testTimeout": "40s"
+}

@@ -27,6 +27,8 @@ type networkSession interface {
 	PingWithContext(ctx context.Context) error
 	// Sequence discontinuously unique growing number for connection.
 	Sequence() uint64
+	// Session notifies via close all goroutines depends on session
+	Done() <-chan struct{}
 
 	// handlePairMsg Message was handled by pair
 	handlePairMsg(w ResponseWriter, r *Request) bool

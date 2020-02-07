@@ -19,7 +19,7 @@ type connUDP interface {
 }
 
 type sessionUDP struct {
-	sessionBase
+	*sessionBase
 	connection     connUDP
 	sessionUDPData *coapNet.ConnUDPContext // oob data to get egress interface right
 }
@@ -40,13 +40,7 @@ func newSessionUDP(connection connUDP, srv *Server, sessionUDPData *coapNet.Conn
 	}
 
 	s := &sessionUDP{
-		sessionBase: sessionBase{
-			srv:                  srv,
-			handler:              &TokenHandler{tokenHandlers: make(map[[MaxTokenSize]byte]HandlerFunc)},
-			blockWiseTransfer:    BlockWiseTransfer,
-			blockWiseTransferSzx: uint32(BlockWiseTransferSzx),
-			mapPairs:             make(map[[MaxTokenSize]byte]map[uint16](*sessionResp)),
-		},
+		sessionBase:    newBaseSession(BlockWiseTransfer, BlockWiseTransferSzx, srv),
 		connection:     connection,
 		sessionUDPData: sessionUDPData,
 	}
@@ -73,13 +67,15 @@ func (s *sessionUDP) blockWiseIsValid(szx BlockWiseSzx) bool {
 }
 
 func (s *sessionUDP) closeWithError(err error) error {
-	s.srv.sessionUDPMapLock.Lock()
-	delete(s.srv.sessionUDPMap, s.sessionUDPData.Key())
-	s.srv.sessionUDPMapLock.Unlock()
-	c := ClientConn{commander: &ClientCommander{s}}
-	s.srv.NotifySessionEndFunc(&c, err)
+	if s.sessionBase.Close() == nil {
+		s.srv.sessionUDPMapLock.Lock()
+		delete(s.srv.sessionUDPMap, s.sessionUDPData.Key())
+		s.srv.sessionUDPMapLock.Unlock()
+		c := ClientConn{commander: &ClientCommander{s}}
+		s.srv.NotifySessionEndFunc(&c, err)
+	}
 
-	return err
+	return nil
 }
 
 // Ping send ping over udp(unicast) and wait for response.
@@ -98,7 +94,7 @@ func (s *sessionUDP) PingWithContext(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	if resp.Type() == Reset {
+	if resp.Type() == Reset || resp.Type() == Acknowledgement {
 		return nil
 	}
 	return ErrInvalidResponse
@@ -134,7 +130,7 @@ func (s *sessionUDP) WriteMsgWithContext(ctx context.Context, req Message) error
 
 func (s *sessionUDP) sendPong(w ResponseWriter, r *Request) error {
 	resp := r.Client.NewMessage(MessageParams{
-		Type:      Reset,
+		Type:      Acknowledgement,
 		Code:      codes.Empty,
 		MessageID: r.Msg.MessageID(),
 	})
