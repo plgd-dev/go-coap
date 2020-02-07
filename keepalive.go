@@ -27,8 +27,10 @@ type KeepAlive struct {
 
 const minDuration = time.Millisecond * 50
 
-// MakeKeepAlive creates a policy that detects dropped connections within the connTimeout limit (3 pings in a row failed)
+// MakeKeepAlive creates a policy that detects dropped connections within the connTimeout limit
+// while attempting to make 3 pings during that period.
 func MakeKeepAlive(connTimeout time.Duration) (KeepAlive, error) {
+	// 3 times ping-pong
 	duration := connTimeout / 6
 	if duration < minDuration {
 		return KeepAlive{}, fmt.Errorf("connTimeout %v it too small: must be greater than %v", connTimeout, minDuration*6)
@@ -38,10 +40,12 @@ func MakeKeepAlive(connTimeout time.Duration) (KeepAlive, error) {
 		Interval:    duration,
 		WaitForPong: duration,
 		NewRetryPolicy: func() RetryFunc {
+			// The first failure is detected after 2*duration:
+			// 1 since the previous ping, plus 1 for the next ping-pong to timeout
 			now := time.Now()
-			// try 2 times to send ping after fails (wait, pong, wait, pong)
 			return func() (time.Time, error) {
 				c := time.Now()
+				// Try to send ping and wait for pong 2 more times
 				if c.Before(now.Add(duration * 4)) {
 					return c.Add(duration), nil
 				}
