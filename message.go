@@ -172,6 +172,8 @@ const (
 	AppCoseSign       MediaType = 98    //application/cose; cose-type="cose-sign" (RFC 8152)
 	AppCoseKey        MediaType = 101   //application/cose-key (RFC 8152)
 	AppCoseKeySet     MediaType = 102   //application/cose-key-set (RFC 8152)
+	AppSenmlJSON      MediaType = 110   //application/senml+json
+	AppSenmlCbor      MediaType = 112   //application/senml+cbor
 	AppCoapGroup      MediaType = 256   //coap-group+json (RFC 7390)
 	AppOcfCbor        MediaType = 10000 //application/vnd.ocf+cbor
 	AppLwm2mTLV       MediaType = 11542 //application/vnd.oma.lwm2m+tlv
@@ -218,6 +220,10 @@ func (c MediaType) String() string {
 		return "application/cose-key-set" // (RFC 8152)
 	case AppCoapGroup:
 		return "coap-group+json" // (RFC 7390)
+	case AppSenmlJSON:
+		return "application/senml+json"
+	case AppSenmlCbor:
+		return "application/senml+cbor"
 	case AppOcfCbor:
 		return "application/vnd.ocf+cbor"
 	case AppLwm2mTLV:
