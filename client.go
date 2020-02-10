@@ -90,6 +90,17 @@ func (c *Client) Dial(address string) (clientConn *ClientConn, err error) {
 	return c.DialWithContext(ctx, address)
 }
 
+func setSessionUDPDataToClient(s networkSession, sessionUDPData *coapNet.ConnUDPContext) {
+	switch u := s.(type) {
+	case *sessionUDP:
+		u.sessionUDPData = sessionUDPData
+	case *keepAliveSession:
+		setSessionUDPDataToClient(u.networkSession, sessionUDPData)
+	case *blockWiseSession:
+		setSessionUDPDataToClient(u.networkSession, sessionUDPData)
+	}
+}
+
 // DialWithContext connects to the address on the named network.
 func (c *Client) DialWithContext(ctx context.Context, address string) (clientConn *ClientConn, err error) {
 	var conn net.Conn
@@ -213,11 +224,7 @@ func (c *Client) DialWithContext(ctx context.Context, address string) (clientCon
 			},
 			newSessionUDPFunc: func(connection *coapNet.ConnUDP, srv *Server, sessionUDPData *coapNet.ConnUDPContext) (networkSession, error) {
 				if sessionUDPData.RemoteAddr().String() == clientConn.commander.networkSession.RemoteAddr().String() {
-					if s, ok := clientConn.commander.networkSession.(*blockWiseSession); ok {
-						s.networkSession.(*sessionUDP).sessionUDPData = sessionUDPData
-					} else {
-						clientConn.commander.networkSession.(*sessionUDP).sessionUDPData = sessionUDPData
-					}
+					setSessionUDPDataToClient(clientConn.commander.networkSession, sessionUDPData)
 					return clientConn.commander.networkSession, nil
 				}
 				session, err := newSessionUDP(connection, srv, sessionUDPData)
