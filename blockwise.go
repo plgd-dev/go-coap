@@ -646,6 +646,11 @@ func (r *blockWiseReceiver) processResp(b *blockWiseSession, req Message, resp M
 }
 
 func (r *blockWiseReceiver) sendError(ctx context.Context, b *blockWiseSession, code codes.Code, resp Message, err error) {
+	if err == ErrConnectionClosed {
+		// don't send error when connection was closed
+		return
+	}
+
 	var MessageID uint16
 	var token []byte
 	var typ COAPType
