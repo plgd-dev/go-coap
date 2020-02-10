@@ -490,7 +490,7 @@ func testServingMCastWithIfaces(t *testing.T, lnet, laddr string, BlockWiseTrans
 			resp.SetOption(ContentFormat, TextPlain)
 			err := w.WriteMsg(resp)
 			if err != nil {
-				t.Fatalf("cannot send response %v", err)
+				t.Fatalf("cannot send response: %v", err)
 			}
 		},
 	}

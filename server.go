@@ -541,7 +541,7 @@ func (srv *Server) serveDTLSConnection(ctx *shutdownContext, conn *coapNet.Conn)
 		m := make([]byte, ^uint16(0))
 		n, err := conn.ReadWithContext(ctx, m)
 		if err != nil {
-			err := fmt.Errorf("cannot serve UDP connection %v", err)
+			err := fmt.Errorf("cannot serve DTLS connection %v", err)
 			srv.closeSessions(err)
 			return err
 		}
@@ -577,7 +577,7 @@ func (srv *Server) serveDTLSListener(l Listener) error {
 			switch err {
 			case ErrServerClosed, context.DeadlineExceeded, context.Canceled:
 				wg.Wait()
-				return fmt.Errorf("cannot serve dtls: %v", err)
+				return fmt.Errorf("cannot accept DTLS: %v", err)
 			default:
 				continue
 			}
@@ -606,23 +606,23 @@ func (srv *Server) serveTCPConnection(ctx *shutdownContext, conn *coapNet.Conn) 
 	for {
 		mti, err := readTcpMsgInfo(ctx, conn)
 		if err != nil {
-			return session.closeWithError(fmt.Errorf("cannot serve tcp connection: %v", err))
+			return session.closeWithError(fmt.Errorf("cannot serve TCP connection: %v", err))
 		}
 
 		if srv.MaxMessageSize != 0 &&
 			uint32(mti.totLen) > srv.MaxMessageSize {
-			return session.closeWithError(fmt.Errorf("cannot serve tcp connection: %v", ErrMaxMessageSizeLimitExceeded))
+			return session.closeWithError(fmt.Errorf("cannot serve TCP connection: %v", ErrMaxMessageSizeLimitExceeded))
 		}
 
 		body := make([]byte, mti.BodyLen())
 		err = conn.ReadFullWithContext(ctx, body)
 		if err != nil {
-			return session.closeWithError(fmt.Errorf("cannot serve tcp connection: %v", err))
+			return session.closeWithError(fmt.Errorf("cannot serve TCP connection: %v", err))
 		}
 
 		o, p, err := parseTcpOptionsPayload(mti, body)
 		if err != nil {
-			return session.closeWithError(fmt.Errorf("cannot serve tcp connection: %v", err))
+			return session.closeWithError(fmt.Errorf("cannot serve TCP connection: %v", err))
 		}
 
 		msg := new(TcpMessage)
@@ -656,7 +656,7 @@ func (srv *Server) serveTCPListener(l Listener) error {
 			switch err {
 			case ErrServerClosed, context.DeadlineExceeded, context.Canceled:
 				wg.Wait()
-				return fmt.Errorf("cannot serve tcp: %v", err)
+				return fmt.Errorf("cannot accept TCP: %v", err)
 			default:
 				continue
 			}
@@ -677,8 +677,7 @@ func (srv *Server) closeSessions(err error) {
 	srv.sessionUDPMap = make(map[string]networkSession)
 	srv.sessionUDPMapLock.Unlock()
 	for _, v := range tmp {
-		c := ClientConn{commander: &ClientCommander{v}}
-		srv.NotifySessionEndFunc(&c, err)
+		v.closeWithError(err)
 	}
 }
 
