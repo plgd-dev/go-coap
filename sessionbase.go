@@ -162,10 +162,11 @@ func (s *sessionBase) Done() <-chan struct{} {
 func (s *sessionBase) Close() error {
 	s.doneMutex.Lock()
 	defer s.doneMutex.Unlock()
-	if s.done != nil {
-		close(s.done)
-		s.done = nil
-		return nil
+	select {
+	case <-s.done:
+		return fmt.Errorf("already closed")
+	default:
 	}
-	return fmt.Errorf("already closed")
+	close(s.done)
+	return nil
 }
