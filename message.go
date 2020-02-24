@@ -149,6 +149,53 @@ var coapOptionDefs = map[OptionID]optionDef{
 	NoResponse:    optionDef{valueFormat: valueUint, minLen: 0, maxLen: 1},
 }
 
+func (o OptionID) String() string {
+	switch o {
+	case IfMatch:
+		return "IfMatch"
+	case URIHost:
+		return "URIHost"
+	case ETag:
+		return "ETag"
+	case IfNoneMatch:
+		return "IfNoneMatch"
+	case Observe:
+		return "Observe"
+	case URIPort:
+		return "URIPort"
+	case LocationPath:
+		return "LocationPath"
+	case URIPath:
+		return "URIPath"
+	case ContentFormat:
+		return "ContentFormat"
+	case MaxAge:
+		return "MaxAge"
+	case URIQuery:
+		return "URIQuery"
+	case Accept:
+		return "Accept"
+	case LocationQuery:
+		return "LocationQuery"
+	case Block2:
+		return "Block2"
+	case Block1:
+		return "Block1"
+	case Size2:
+		return "Size2"
+	case ProxyURI:
+		return "ProxyURI"
+	case ProxyScheme:
+		return "ProxyScheme"
+	case Size1:
+		return "Size1"
+	case NoResponse:
+		return "NoResponse"
+	default:
+		return "Option(" + strconv.FormatInt(int64(o), 10) + ")"
+	}
+}
+
 // MediaType specifies the content format of a message.
 type MediaType uint16
 
