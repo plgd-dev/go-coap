@@ -111,8 +111,8 @@ func (c *Client) DialWithContext(ctx context.Context, address string) (clientCon
 	BlockWiseTransfer := false
 	BlockWiseTransferSzx := BlockWiseSzx1024
 	multicast := false
-	multicastHop := 0
-	if c.MulticastHopLimit == 0 {
+	multicastHop := c.MulticastHopLimit
+	if multicastHop == 0 {
 		multicastHop = 2
 	}
 
