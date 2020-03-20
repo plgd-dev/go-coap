@@ -113,7 +113,7 @@ func (l *DTLSListener) Accept() (net.Conn, error) {
 			if d.err != nil {
 				return nil, d.err
 			}
-			return NewConnDTLS(d.conn), nil
+			return d.conn, nil
 		}
 	}
 
@@ -122,7 +122,7 @@ func (l *DTLSListener) Accept() (net.Conn, error) {
 		if d.err != nil {
 			return nil, d.err
 		}
-		return NewConnDTLS(d.conn), nil
+		return d.conn, nil
 	case <-time.After(deadline.Sub(time.Now())):
 		return nil, fmt.Errorf(ioTimeout)
 	}

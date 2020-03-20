@@ -378,7 +378,7 @@ func (srv *Server) ActivateAndServe() error {
 				srv.Net = "tcp-tls"
 			}
 			return srv.activateAndServe(nil, coapNet.NewConn(c, srv.heartBeat()), nil)
-		case *coapNet.ConnDTLS:
+		case *dtls.Conn:
 			if srv.Net == "" {
 				srv.Net = "udp-dtls"
 			}

@@ -107,7 +107,6 @@ func TestRSACerts(t *testing.T) {
 	config := &dtls.Config{
 		Certificates:         []tls.Certificate{c},
 		ExtendedMasterSecret: dtls.RequireExtendedMasterSecret,
-		ConnectTimeout:       dtls.ConnectTimeoutOption(30 * time.Second),
 		InsecureSkipVerify:   true,
 		ClientAuth:           dtls.RequireAnyClientCert,
 	}
