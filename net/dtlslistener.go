@@ -18,7 +18,7 @@ type connData struct {
 
 // DTLSListener is a DTLS listener that provides accept with context.
 type DTLSListener struct {
-	listener  *dtls.Listener
+	listener  net.Listener
 	heartBeat time.Duration
 	wg        sync.WaitGroup
 	doneCh    chan struct{}
@@ -113,7 +113,7 @@ func (l *DTLSListener) Accept() (net.Conn, error) {
 			if d.err != nil {
 				return nil, d.err
 			}
-			return NewConnDTLS(d.conn), nil
+			return d.conn, nil
 		}
 	}
 
@@ -122,7 +122,7 @@ func (l *DTLSListener) Accept() (net.Conn, error) {
 		if d.err != nil {
 			return nil, d.err
 		}
-		return NewConnDTLS(d.conn), nil
+		return d.conn, nil
 	case <-time.After(deadline.Sub(time.Now())):
 		return nil, fmt.Errorf(ioTimeout)
 	}
@@ -133,7 +133,7 @@ func (l *DTLSListener) Close() error {
 	if !atomic.CompareAndSwapUint32(&l.closed, 0, 1) {
 		return nil
 	}
-	err := l.listener.Close(time.Millisecond * 100)
+	err := l.listener.Close()
 	close(l.doneCh)
 	l.wg.Wait()
 	return err

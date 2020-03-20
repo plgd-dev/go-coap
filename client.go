@@ -156,7 +156,6 @@ func (c *Client) DialWithContext(ctx context.Context, address string) (clientCon
 		if conn, err = dtls.Dial(Net, addr, c.DTLSConfig); err != nil {
 			return nil, err
 		}
-		conn = coapNet.NewConnDTLS(conn)
 		BlockWiseTransfer = true
 	case "udp-mcast", "udp4-mcast", "udp6-mcast":
 		var err error
@@ -261,7 +260,7 @@ func (c *Client) DialWithContext(ctx context.Context, address string) (clientCon
 		} else {
 			clientConn.commander.networkSession = session
 		}
-	case *coapNet.ConnDTLS:
+	case *dtls.Conn:
 		session, err := newSessionDTLS(coapNet.NewConn(clientConn.srv.Conn, clientConn.srv.heartBeat()), clientConn.srv)
 		if err != nil {
 			clientConn.srv.Conn.Close()
