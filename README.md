@@ -107,5 +107,14 @@ Look to examples/mcast/server/main.go
 #### Client
 Look to examples/mcast/client/main.go
 
+## Contributing
+
+In order to run the tests that the CI will run locally, the following two commands can be used to build the Docker image and run the tests. When making changes, these are the tests that the CI will run, so please make sure that the tests work locally before committing.
+
+```shell
+$ docker build . --network=host -t go-coap:build --target build
+$ docker run --mount type=bind,source="$(pwd)",target=/shared,readonly --network=host go-coap:build go test './...'
+```
+
 ## License
 Apache 2.0
