@@ -34,6 +34,11 @@ func (c *Conn) LocalAddr() net.Addr {
 	return c.connection.LocalAddr()
 }
 
+// Connection returns the network connection. The Conn returned is shared by all invocations of Connection, so do not modify it.
+func (c *Conn) Connection() net.Conn {
+	return c.connection
+}
+
 // RemoteAddr returns the remote network address. The Addr returned is shared by all invocations of RemoteAddr, so do not modify it.
 func (c *Conn) RemoteAddr() net.Addr {
 	return c.connection.RemoteAddr()
