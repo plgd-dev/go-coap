@@ -2,6 +2,7 @@ package coap
 
 import (
 	"context"
+	"crypto/x509"
 	"net"
 )
 
@@ -12,6 +13,9 @@ type networkSession interface {
 	LocalAddr() net.Addr
 	// RemoteAddr returns the net.Addr of the client that sent the current request.
 	RemoteAddr() net.Addr
+	// PeerCertificates returns the certificate chain presented by the remote
+	// peer of the current request.
+	PeerCertificates() []*x509.Certificate
 	// WriteContextMsg writes a reply back to the client.
 	WriteMsgWithContext(ctx context.Context, resp Message) error
 	// Close closes the connection.

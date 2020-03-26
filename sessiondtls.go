@@ -3,16 +3,19 @@ package coap
 import (
 	"bytes"
 	"context"
+	"crypto/x509"
 	"fmt"
 	"net"
 
 	"github.com/go-ocf/go-coap/codes"
 	coapNet "github.com/go-ocf/go-coap/net"
+	dtls "github.com/pion/dtls/v2"
 )
 
 type sessionDTLS struct {
 	*sessionBase
-	connection *coapNet.Conn
+	connection       *coapNet.Conn
+	peerCertificates []*x509.Certificate
 }
 
 // newSessionDTLS create new session for DTLS connection
@@ -30,9 +33,18 @@ func newSessionDTLS(connection *coapNet.Conn, srv *Server) (networkSession, erro
 		return nil, ErrInvalidBlockWiseSzx
 	}
 
+	dtlsConn := connection.Connection().(*dtls.Conn)
+	cert := dtlsConn.RemoteCertificate()
+	flatCerts := bytes.Join(cert, nil)
+	peerCertificates, err := x509.ParseCertificates(flatCerts)
+	if err != nil {
+		return nil, err
+	}
+
 	s := sessionDTLS{
-		connection:  connection,
-		sessionBase: newBaseSession(BlockWiseTransfer, BlockWiseTransferSzx, srv),
+		sessionBase:      newBaseSession(BlockWiseTransfer, BlockWiseTransferSzx, srv),
+		connection:       connection,
+		peerCertificates: peerCertificates,
 	}
 
 	return &s, nil
@@ -46,6 +58,11 @@ func (s *sessionDTLS) LocalAddr() net.Addr {
 // RemoteAddr implements the networkSession.RemoteAddr method.
 func (s *sessionDTLS) RemoteAddr() net.Addr {
 	return s.connection.RemoteAddr()
+}
+
+// PeerCertificates implements the networkSession.PeerCertificates method.
+func (s *sessionDTLS) PeerCertificates() []*x509.Certificate {
+	return s.peerCertificates
 }
 
 // BlockWiseTransferEnabled

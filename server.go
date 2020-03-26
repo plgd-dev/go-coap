@@ -2,10 +2,8 @@
 package coap
 
 import (
-	"bytes"
 	"context"
 	"crypto/tls"
-	"crypto/x509"
 	"fmt"
 	"net"
 	"reflect"
@@ -551,15 +549,7 @@ func (srv *Server) serveDTLSConnection(ctx *shutdownContext, conn *coapNet.Conn)
 		// We will block poller wait loop when
 		// all pool workers are busy.
 		c := ClientConn{commander: &ClientCommander{session}}
-
-		// Try to set the peer certificates, but don't error if it fails as there
-		// might not be any peer certificates.
-		dtlsConn := conn.Connection().(*dtls.Conn)
-		cert := dtlsConn.RemoteCertificate()
-		flatCerts := bytes.Join(cert, nil)
-		certs, _ := x509.ParseCertificates(flatCerts)
-
-		srv.spawnWorker(&Request{Client: &c, PeerCertificates: certs, Msg: msg, Ctx: sessCtx, Sequence: c.Sequence()})
+		srv.spawnWorker(&Request{Client: &c, Msg: msg, Ctx: sessCtx, Sequence: c.Sequence()})
 	}
 }
 
