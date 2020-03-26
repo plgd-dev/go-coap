@@ -5,6 +5,7 @@ package coap
 import (
 	"context"
 	"crypto/tls"
+	"crypto/x509"
 	"fmt"
 	"io"
 	"net"
@@ -325,6 +326,11 @@ func (co *ClientConn) LocalAddr() net.Addr {
 // RemoteAddr implements the networkSession.RemoteAddr method.
 func (co *ClientConn) RemoteAddr() net.Addr {
 	return co.commander.RemoteAddr()
+}
+
+// PeerCertificates implements the networkSession.PeerCertificates method.
+func (co *ClientConn) PeerCertificates() []*x509.Certificate {
+	return co.commander.PeerCertificates()
 }
 
 func (co *ClientConn) Exchange(m Message) (Message, error) {

@@ -3,6 +3,7 @@ package coap
 import (
 	"bytes"
 	"context"
+	"crypto/x509"
 	"fmt"
 	"net"
 
@@ -55,6 +56,11 @@ func (s *sessionUDP) LocalAddr() net.Addr {
 // RemoteAddr implements the networkSession.RemoteAddr method.
 func (s *sessionUDP) RemoteAddr() net.Addr {
 	return s.sessionUDPData.RemoteAddr()
+}
+
+// PeerCertificates implements the networkSession.PeerCertificates method.
+func (s *sessionUDP) PeerCertificates() []*x509.Certificate {
+	return nil
 }
 
 // BlockWiseTransferEnabled
