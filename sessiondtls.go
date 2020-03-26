@@ -33,18 +33,21 @@ func newSessionDTLS(connection *coapNet.Conn, srv *Server) (networkSession, erro
 		return nil, ErrInvalidBlockWiseSzx
 	}
 
-	dtlsConn := connection.Connection().(*dtls.Conn)
-	cert := dtlsConn.RemoteCertificate()
-	flatCerts := bytes.Join(cert, nil)
-	peerCertificates, err := x509.ParseCertificates(flatCerts)
-	if err != nil {
-		return nil, err
+	s := sessionDTLS{
+		sessionBase: newBaseSession(BlockWiseTransfer, BlockWiseTransferSzx, srv),
+		connection:  connection,
 	}
 
-	s := sessionDTLS{
-		sessionBase:      newBaseSession(BlockWiseTransfer, BlockWiseTransferSzx, srv),
-		connection:       connection,
-		peerCertificates: peerCertificates,
+	dtlsConn := connection.Connection().(*dtls.Conn)
+	cert := dtlsConn.RemoteCertificate()
+	if len(cert) > 0 {
+		flatCerts := bytes.Join(cert, nil)
+		peerCertificates, err := x509.ParseCertificates(flatCerts)
+		if err != nil {
+			return nil, err
+		}
+
+		s.peerCertificates = peerCertificates
 	}
 
 	return &s, nil
