@@ -3,6 +3,7 @@ package coap
 import (
 	"bytes"
 	"context"
+	"crypto/x509"
 	"io"
 	"io/ioutil"
 	"net"
@@ -86,6 +87,11 @@ func (cc *ClientCommander) LocalAddr() net.Addr {
 // RemoteAddr implements the networkSession.RemoteAddr method.
 func (cc *ClientCommander) RemoteAddr() net.Addr {
 	return cc.networkSession.RemoteAddr()
+}
+
+// PeerCertificates implements the networkSession.PeerCertificates method.
+func (cc *ClientCommander) PeerCertificates() []*x509.Certificate {
+	return cc.networkSession.PeerCertificates()
 }
 
 // Equal compare two ClientCommanders
