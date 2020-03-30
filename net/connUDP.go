@@ -167,7 +167,6 @@ func writeToAddr(ctx context.Context, heartBeat time.Duration, multicastHopLimit
 	if strings.Contains(addr, ":") {
 		addr = "[" + addr + "%" + iface.Name + "]"
 	}
-	fmt.Printf("iface %v addr: %v\n", iface.Name, addr)
 
 	config := &net.ListenConfig{Control: reusePort}
 
@@ -185,8 +184,6 @@ func writeToAddr(ctx context.Context, heartBeat time.Duration, multicastHopLimit
 	if err := c.SetMulticastInterface(&iface); err != nil {
 		return err
 	}
-	c.JoinGroup(&iface, udpCtx.raddr)
-	defer c.LeaveGroup(&iface, udpCtx.raddr)
 	c.SetMulticastHopLimit(multicastHopLimit)
 	c.SetWriteDeadline(time.Now().Add(heartBeat))
 	if err != nil {
@@ -209,8 +206,6 @@ func (c *ConnUDP) writeMulticastWithContext(ctx context.Context, udpCtx *ConnUDP
 		return fmt.Errorf("cannot write multicast with context: cannot get interfaces for multicast connection: %v", err)
 	}
 
-	c.lock.Lock()
-	defer c.lock.Unlock()
 LOOP:
 	for _, iface := range ifaces {
 		ifaceAddrs, err := iface.Addrs()
@@ -231,7 +226,6 @@ LOOP:
 
 		for _, ifaceAddr := range ifaceAddrs {
 			err = writeToAddr(ctx, c.heartBeat, c.multicastHopLimit, iface, ifaceAddr, port, udpCtx, buffer)
-			fmt.Printf("writeToAddr %v: %v\n", iface.Name, err)
 			if err != nil {
 				if isTemporary(err) {
 					continue LOOP
