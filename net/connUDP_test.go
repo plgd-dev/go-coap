@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestConnUDP_WriteWithContext(t *testing.T) {
@@ -33,7 +34,7 @@ func TestConnUDP_WriteWithContext(t *testing.T) {
 			name: "valid",
 			args: args{
 				ctx:    context.Background(),
-				udpCtx: NewConnUDPContext(b, nil),
+				udpCtx: NewConnUDPContext(b),
 				buffer: []byte("hello world"),
 			},
 		},
@@ -66,11 +67,10 @@ func TestConnUDP_WriteWithContext(t *testing.T) {
 
 	go func() {
 		b := make([]byte, 1024)
-		_, udpCtx, err := c2.ReadWithContext(ctx, b)
+		_, _, err := c2.ReadWithContext(ctx, b)
 		if err != nil {
 			return
 		}
-		correctSource(udpCtx.context)
 	}()
 
 	for _, tt := range tests {
@@ -112,7 +112,7 @@ func TestConnUDP_writeMulticastWithContext(t *testing.T) {
 			name: "valid",
 			args: args{
 				ctx:    context.Background(),
-				udpCtx: NewConnUDPContext(b, nil),
+				udpCtx: NewConnUDPContext(b),
 				buffer: payload,
 			},
 		},
@@ -120,7 +120,7 @@ func TestConnUDP_writeMulticastWithContext(t *testing.T) {
 			name: "cancelled",
 			args: args{
 				ctx:    ctxCanceled,
-				udpCtx: NewConnUDPContext(b, nil),
+				udpCtx: NewConnUDPContext(b),
 				buffer: payload,
 			},
 			wantErr: true,
@@ -134,12 +134,18 @@ func TestConnUDP_writeMulticastWithContext(t *testing.T) {
 	assert.NoError(t, err)
 	err = SetUDPSocketOptions(l2)
 	assert.NoError(t, err)
-	desc, err := l2.SyscallConn()
-	assert.NoError(t, err)
-	desc.Control(SocketReuseAddr)
 	c2 := NewConnUDP(l2, time.Millisecond*100, 2)
 	defer c2.Close()
-	err = c2.JoinGroup(nil, b)
+	ifaces, err := net.Interfaces()
+	require.NoError(t, err)
+	for _, iface := range ifaces {
+		ifa := iface
+		err = c2.JoinGroup(&ifa, b)
+		if err != nil {
+			t.Logf("fmt cannot join group %v: %v", ifa.Name, err)
+		}
+	}
+
 	assert.NoError(t, err)
 	err = c2.SetMulticastLoopback(true)
 	assert.NoError(t, err)

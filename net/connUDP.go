@@ -6,7 +6,6 @@ import (
 	"net"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 
 	"golang.org/x/net/ipv4"
@@ -25,9 +24,14 @@ type ConnUDP struct {
 	lock sync.Mutex
 }
 
+type ControlMessage struct {
+	Src     net.IP // source address, specifying only
+	IfIndex int    // interface index, must be 1 <= value when specifying
+}
+
 type packetConn interface {
 	SetWriteDeadline(t time.Time) error
-	WriteTo(b []byte, dst net.Addr) (n int, err error)
+	WriteTo(b []byte, cm *ControlMessage, dst net.Addr) (n int, err error)
 	SetMulticastInterface(ifi *net.Interface) error
 	SetMulticastHopLimit(hoplim int) error
 	SetMulticastLoopback(on bool) error
@@ -51,8 +55,15 @@ func (p *packetConnIPv4) SetWriteDeadline(t time.Time) error {
 	return p.packetConnIPv4.SetWriteDeadline(t)
 }
 
-func (p *packetConnIPv4) WriteTo(b []byte, dst net.Addr) (n int, err error) {
-	return p.packetConnIPv4.WriteTo(b, nil, dst)
+func (p *packetConnIPv4) WriteTo(b []byte, cm *ControlMessage, dst net.Addr) (n int, err error) {
+	var c *ipv4.ControlMessage
+	if cm != nil {
+		c = &ipv4.ControlMessage{
+			Src:     cm.Src,
+			IfIndex: cm.IfIndex,
+		}
+	}
+	return p.packetConnIPv4.WriteTo(b, c, dst)
 }
 
 func (p *packetConnIPv4) SetMulticastHopLimit(hoplim int) error {
@@ -87,8 +98,15 @@ func (p *packetConnIPv6) SetWriteDeadline(t time.Time) error {
 	return p.packetConnIPv6.SetWriteDeadline(t)
 }
 
-func (p *packetConnIPv6) WriteTo(b []byte, dst net.Addr) (n int, err error) {
-	return p.packetConnIPv6.WriteTo(b, nil, dst)
+func (p *packetConnIPv6) WriteTo(b []byte, cm *ControlMessage, dst net.Addr) (n int, err error) {
+	var c *ipv6.ControlMessage
+	if cm != nil {
+		c = &ipv6.ControlMessage{
+			Src:     cm.Src,
+			IfIndex: cm.IfIndex,
+		}
+	}
+	return p.packetConnIPv6.WriteTo(b, c, dst)
 }
 
 func (p *packetConnIPv6) SetMulticastHopLimit(hoplim int) error {
@@ -147,11 +165,7 @@ func (c *ConnUDP) Close() error {
 	return c.connection.Close()
 }
 
-func reusePort(network, address string, conn syscall.RawConn) error {
-	return conn.Control(SocketReuseAddr)
-}
-
-func writeToAddr(ctx context.Context, heartBeat time.Duration, multicastHopLimit int, iface net.Interface, srcAddr net.Addr, port string, udpCtx *ConnUDPContext, buffer []byte) error {
+func (c *ConnUDP) writeToAddr(ctx context.Context, heartBeat time.Duration, multicastHopLimit int, iface net.Interface, srcAddr net.Addr, port string, udpCtx *ConnUDPContext, buffer []byte) error {
 	netType := "udp4"
 	if isIPv6(udpCtx.raddr.IP) {
 		netType = "udp6"
@@ -164,32 +178,29 @@ func writeToAddr(ctx context.Context, heartBeat time.Duration, multicastHopLimit
 	if !strings.Contains(addr, ":") && netType == "udp6" {
 		return nil
 	}
-	if strings.Contains(addr, ":") {
-		addr = "[" + addr + "%" + iface.Name + "]"
-	}
-
-	config := &net.ListenConfig{Control: reusePort}
-
-	conn, err := config.ListenPacket(ctx, netType, addr+":"+port)
-	if err != nil {
-		return err
-	}
-	defer conn.Close()
-	var c packetConn
+	var p packetConn
 	if netType == "udp4" {
-		c = newPacketConnIPv4(ipv4.NewPacketConn(conn))
+		p = newPacketConnIPv4(ipv4.NewPacketConn(c.connection))
 	} else {
-		c = newPacketConnIPv6(ipv6.NewPacketConn(conn))
+		p = newPacketConnIPv6(ipv6.NewPacketConn(c.connection))
 	}
-	if err := c.SetMulticastInterface(&iface); err != nil {
+
+	if err := p.SetMulticastInterface(&iface); err != nil {
 		return err
 	}
-	c.SetMulticastHopLimit(multicastHopLimit)
-	c.SetWriteDeadline(time.Now().Add(heartBeat))
+	p.SetMulticastHopLimit(multicastHopLimit)
+	err := p.SetWriteDeadline(time.Now().Add(heartBeat))
 	if err != nil {
 		return fmt.Errorf("cannot write multicast with context: cannot set write deadline for connection: %v", err)
 	}
-	_, err = c.WriteTo(buffer, udpCtx.raddr)
+	ip := net.ParseIP(addr)
+	if ip == nil {
+		return fmt.Errorf("cannot parse ip (%v) for iface %v", ip, iface.Name)
+	}
+	_, err = p.WriteTo(buffer, &ControlMessage{
+		Src:     ip,
+		IfIndex: iface.Index,
+	}, udpCtx.raddr)
 	return err
 }
 
@@ -225,7 +236,7 @@ LOOP:
 		port := addr[len(addr)-1]
 
 		for _, ifaceAddr := range ifaceAddrs {
-			err = writeToAddr(ctx, c.heartBeat, c.multicastHopLimit, iface, ifaceAddr, port, udpCtx, buffer)
+			err = c.writeToAddr(ctx, c.heartBeat, c.multicastHopLimit, iface, ifaceAddr, port, udpCtx, buffer)
 			if err != nil {
 				if isTemporary(err) {
 					continue LOOP

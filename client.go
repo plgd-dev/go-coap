@@ -144,7 +144,7 @@ func (c *Client) DialWithContext(ctx context.Context, address string) (clientCon
 		if conn, err = dialer.DialContext(ctx, network, address); err != nil {
 			return nil, err
 		}
-		sessionUPDData = coapNet.NewConnUDPContext(conn.(*net.UDPConn).RemoteAddr().(*net.UDPAddr), nil)
+		sessionUPDData = coapNet.NewConnUDPContext(conn.(*net.UDPConn).RemoteAddr().(*net.UDPAddr))
 		BlockWiseTransfer = true
 	case "udp-dtls", "udp4-dtls", "udp6-dtls":
 		network = c.Net
@@ -172,17 +172,10 @@ func (c *Client) DialWithContext(ctx context.Context, address string) (clientCon
 		if err != nil {
 			return nil, fmt.Errorf("cannot listen address: %v", err)
 		}
-
-		desc, err := udpConn.SyscallConn()
-		if err != nil {
-			return nil, fmt.Errorf("cannot get listen socket descriptor: %v", err)
-		}
-		desc.Control(coapNet.SocketReuseAddr)
-
 		if err = coapNet.SetUDPSocketOptions(udpConn); err != nil {
 			return nil, fmt.Errorf("cannot set upd socket options: %v", err)
 		}
-		sessionUPDData = coapNet.NewConnUDPContext(multicastAddress, nil)
+		sessionUPDData = coapNet.NewConnUDPContext(multicastAddress)
 		conn = udpConn
 		BlockWiseTransfer = true
 		multicast = true
