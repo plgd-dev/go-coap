@@ -73,9 +73,6 @@ func listenUDP(network, address string) (*net.UDPAddr, *net.UDPConn, error) {
 	if udpConn, err = net.ListenUDP(network, a); err != nil {
 		return nil, nil, err
 	}
-	if err := coapNet.SetUDPSocketOptions(udpConn); err != nil {
-		return nil, nil, err
-	}
 	return a, udpConn, nil
 }
 
@@ -171,9 +168,6 @@ func (c *Client) DialWithContext(ctx context.Context, address string) (clientCon
 		udpConn, err := net.ListenUDP(network, listenAddress)
 		if err != nil {
 			return nil, fmt.Errorf("cannot listen address: %v", err)
-		}
-		if err = coapNet.SetUDPSocketOptions(udpConn); err != nil {
-			return nil, fmt.Errorf("cannot set upd socket options: %v", err)
 		}
 		sessionUPDData = coapNet.NewConnUDPContext(multicastAddress)
 		conn = udpConn
@@ -275,8 +269,6 @@ func (c *Client) DialWithContext(ctx context.Context, address string) (clientCon
 			clientConn.commander.networkSession = session
 		}
 	case *net.UDPConn:
-		// WriteContextMsgUDP returns error when addr is filled in SessionUDPData for connected socket
-		coapNet.SetUDPSocketOptions(clientConn.srv.Conn.(*net.UDPConn))
 		session, err := newSessionUDP(coapNet.NewConnUDP(clientConn.srv.Conn.(*net.UDPConn), clientConn.srv.heartBeat(), multicastHop), clientConn.srv, sessionUPDData)
 		if err != nil {
 			clientConn.srv.Conn.Close()

@@ -171,6 +171,8 @@ type Server struct {
 	DisablePeerTCPSignalMessageCSMs bool
 	// Keepalive setup
 	KeepAlive KeepAlive
+	// Report errors
+	Errors func(err error)
 
 	// UDP packet or TCP connection queue
 	queue chan *Request
@@ -270,9 +272,6 @@ func (srv *Server) ListenAndServe() error {
 		if err != nil {
 			return err
 		}
-		if err := coapNet.SetUDPSocketOptions(l); err != nil {
-			return err
-		}
 		connUDP = coapNet.NewConnUDP(l, srv.heartBeat(), 2)
 		defer connUDP.Close()
 	case "udp-mcast", "udp4-mcast", "udp6-mcast":
@@ -286,9 +285,6 @@ func (srv *Server) ListenAndServe() error {
 		if err != nil {
 			return err
 		}
-		if err := coapNet.SetUDPSocketOptions(l); err != nil {
-			return err
-		}
 		connUDP = coapNet.NewConnUDP(l, srv.heartBeat(), 2)
 		defer connUDP.Close()
 		ifaces := srv.UDPMcastInterfaces
@@ -299,8 +295,8 @@ func (srv *Server) ListenAndServe() error {
 			}
 		}
 		for _, iface := range ifaces {
-			if err := connUDP.JoinGroup(&iface, a); err != nil {
-				return err
+			if err := connUDP.JoinGroup(&iface, a); err != nil && srv.Errors != nil {
+				srv.Errors(fmt.Errorf("cannot JoinGroup(%v, %v): %w", iface, a, err))
 			}
 		}
 		if err := connUDP.SetMulticastLoopback(true); err != nil {
