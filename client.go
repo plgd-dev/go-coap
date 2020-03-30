@@ -9,7 +9,6 @@ import (
 	"io"
 	"net"
 	"strings"
-	"syscall"
 	"time"
 
 	coapNet "github.com/go-ocf/go-coap/net"
@@ -178,9 +177,7 @@ func (c *Client) DialWithContext(ctx context.Context, address string) (clientCon
 		if err != nil {
 			return nil, fmt.Errorf("cannot get listen socket descriptor: %v", err)
 		}
-		desc.Control(func(descriptor uintptr) {
-			syscall.SetsockoptInt(int(descriptor), syscall.SOL_SOCKET, syscall.SO_REUSEADDR, 1)
-		})
+		desc.Control(coapNet.SocketReuseAddr)
 
 		if err = coapNet.SetUDPSocketOptions(udpConn); err != nil {
 			return nil, fmt.Errorf("cannot set upd socket options: %v", err)

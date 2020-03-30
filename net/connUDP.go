@@ -148,9 +148,7 @@ func (c *ConnUDP) Close() error {
 }
 
 func reusePort(network, address string, conn syscall.RawConn) error {
-	return conn.Control(func(descriptor uintptr) {
-		syscall.SetsockoptInt(int(descriptor), syscall.SOL_SOCKET, syscall.SO_REUSEADDR, 1)
-	})
+	return conn.Control(SocketReuseAddr)
 }
 
 func writeToAddr(ctx context.Context, heartBeat time.Duration, multicastHopLimit int, iface net.Interface, srcAddr net.Addr, port string, udpCtx *ConnUDPContext, buffer []byte) error {
