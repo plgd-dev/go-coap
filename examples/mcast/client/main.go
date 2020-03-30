@@ -52,7 +52,7 @@ func decodeMsgToDebug(resp coap.Message, tag string) {
 func main() {
 	client := &coap.MulticastClient{}
 
-	conn, err := client.Dial("224.0.1.187:5688")
+	conn, err := client.Dial("224.0.1.187:5683")
 	if err != nil {
 		log.Fatalf("Error dialing: %v", err)
 	}
@@ -62,10 +62,10 @@ func main() {
 	if err != nil {
 		log.Fatalf("Error sending request: %v", err)
 	}
-	req.SetOption(coap.URIQuery, "rt=oic.wk.d")
+	//req.SetOption(coap.URIQuery, "rt=oic.wk.d")
 	_, err = conn.PublishMsg(req, func(req *coap.Request) {
 		decodeMsgToDebug(req.Msg, "MCAST")
-		resp, err := req.Client.Get("/tmp")
+		resp, err := req.Client.GetWithContext(req.Ctx, "/oic/d")
 		if err != nil {
 			log.Fatalf("Error receive response: %v", err)
 		}

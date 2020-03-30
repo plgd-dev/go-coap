@@ -50,5 +50,5 @@ func TestServingIPv6AllInterfacesMCastByClient(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unable to get interfaces: %v", err)
 	}
-	testServingMCastWithIfaces(t, "udp6-mcast", "[ff03::158]:11111", false, BlockWiseSzx16, 1033, ifis)
+	testServingMCastWithIfaces(t, "udp6-mcast", "[ff03::158]:5683", false, BlockWiseSzx16, 1033, ifis)
 }
