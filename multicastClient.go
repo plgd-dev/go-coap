@@ -33,6 +33,8 @@ type MulticastClient struct {
 
 	MulticastHopLimit int //sets the hop limit field value for future outgoing multicast packets. default is 2.
 
+	Errors func(err error) // Report errors
+
 	multicastHandler *TokenHandler
 }
 
@@ -59,6 +61,7 @@ func (c *MulticastClient) dialNet(ctx context.Context, net, address string) (*Cl
 		BlockWiseTransfer:    c.BlockWiseTransfer,
 		BlockWiseTransferSzx: c.BlockWiseTransferSzx,
 		MulticastHopLimit:    c.MulticastHopLimit,
+		Errors:               c.Errors,
 	}
 
 	return client.DialWithContext(ctx, address)

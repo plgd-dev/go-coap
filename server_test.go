@@ -77,7 +77,7 @@ func RunLocalServerUDPWithHandlerIfaces(lnet, laddr string, BlockWiseTransfer bo
 		return nil, "", nil, err
 	}
 
-	connUDP := coapNet.NewConnUDP(pc, time.Millisecond*100, 2)
+	connUDP := coapNet.NewConnUDP(pc, time.Millisecond*100, 2, func(err error) { fmt.Println(err) })
 	if strings.Contains(lnet, "-mcast") {
 		if ifaces == nil {
 			ifaces, err = net.Interfaces()

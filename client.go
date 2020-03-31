@@ -45,6 +45,8 @@ type Client struct {
 	DisablePeerTCPSignalMessageCSMs bool // Disable processes Capabilities and Settings Messages from client - iotivity sends max message size without blockwise.
 	MulticastHopLimit               int  //sets the hop limit field value for future outgoing multicast packets. default is 2.
 
+	Errors func(err error) // Report errors
+
 	// Keepalive setup
 	KeepAlive KeepAlive
 }
@@ -201,6 +203,7 @@ func (c *Client) DialWithContext(ctx context.Context, address string) (clientCon
 			DisableTCPSignalMessageCSM:      c.DisableTCPSignalMessageCSM,
 			DisablePeerTCPSignalMessageCSMs: c.DisablePeerTCPSignalMessageCSMs,
 			KeepAlive:                       c.KeepAlive,
+			Errors:                          c.Errors,
 			NotifyStartedFunc: func() {
 				close(started)
 			},
@@ -269,7 +272,7 @@ func (c *Client) DialWithContext(ctx context.Context, address string) (clientCon
 			clientConn.commander.networkSession = session
 		}
 	case *net.UDPConn:
-		session, err := newSessionUDP(coapNet.NewConnUDP(clientConn.srv.Conn.(*net.UDPConn), clientConn.srv.heartBeat(), multicastHop), clientConn.srv, sessionUPDData)
+		session, err := newSessionUDP(coapNet.NewConnUDP(clientConn.srv.Conn.(*net.UDPConn), clientConn.srv.heartBeat(), multicastHop, clientConn.srv.Errors), clientConn.srv, sessionUPDData)
 		if err != nil {
 			clientConn.srv.Conn.Close()
 			return nil, err

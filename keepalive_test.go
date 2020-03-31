@@ -210,7 +210,7 @@ func TestKeepAliveUDP_Server(t *testing.T) {
 	require.NoError(t, err)
 	l, err := net.ListenUDP("udp", a)
 	require.NoError(t, err)
-	connUDP := coapNet.NewConnUDP(l, time.Millisecond*100, 2)
+	connUDP := coapNet.NewConnUDP(l, time.Millisecond*100, 2, func(err error) { t.Log(err) })
 
 	var wg sync.WaitGroup
 	wg.Add(1)
@@ -317,7 +317,7 @@ func TestKeepAliveUDP_Client(t *testing.T) {
 	require.NoError(t, err)
 	pc, err := net.ListenUDP("udp", a)
 	require.NoError(t, err)
-	l := coapNet.NewConnUDP(pc, time.Millisecond*100, 2)
+	l := coapNet.NewConnUDP(pc, time.Millisecond*100, 2, func(err error) { t.Log(err) })
 
 	defer l.Close()
 

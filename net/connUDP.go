@@ -20,6 +20,7 @@ type ConnUDP struct {
 	connection        *net.UDPConn
 	packetConn        packetConn
 	multicastHopLimit int
+	errors            func(err error)
 
 	lock sync.Mutex
 }
@@ -137,7 +138,7 @@ func isIPv6(addr net.IP) bool {
 }
 
 // NewConnUDP creates connection over net.UDPConn.
-func NewConnUDP(c *net.UDPConn, heartBeat time.Duration, multicastHopLimit int) *ConnUDP {
+func NewConnUDP(c *net.UDPConn, heartBeat time.Duration, multicastHopLimit int, errors func(err error)) *ConnUDP {
 	var packetConn packetConn
 
 	if isIPv6(c.LocalAddr().(*net.UDPAddr).IP) {
@@ -146,7 +147,7 @@ func NewConnUDP(c *net.UDPConn, heartBeat time.Duration, multicastHopLimit int) 
 		packetConn = newPacketConnIPv4(ipv4.NewPacketConn(c))
 	}
 
-	connection := ConnUDP{connection: c, heartBeat: heartBeat, packetConn: packetConn, multicastHopLimit: multicastHopLimit}
+	connection := ConnUDP{connection: c, heartBeat: heartBeat, packetConn: packetConn, multicastHopLimit: multicastHopLimit, errors: errors}
 	return &connection
 }
 
@@ -216,7 +217,8 @@ func (c *ConnUDP) writeMulticastWithContext(ctx context.Context, udpCtx *ConnUDP
 	if err != nil {
 		return fmt.Errorf("cannot write multicast with context: cannot get interfaces for multicast connection: %v", err)
 	}
-
+	c.lock.Lock()
+	defer c.lock.Unlock()
 LOOP:
 	for _, iface := range ifaces {
 		ifaceAddrs, err := iface.Addrs()
@@ -241,7 +243,9 @@ LOOP:
 				if isTemporary(err) {
 					continue LOOP
 				}
-				//return fmt.Errorf("cannot write multicast with context: cannot set write deadline for connection: %v", err)
+				if c.errors != nil {
+					c.errors(fmt.Errorf("cannot write multicast to %v: %w", iface.Name, err))
+				}
 			}
 		}
 	}

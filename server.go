@@ -272,7 +272,7 @@ func (srv *Server) ListenAndServe() error {
 		if err != nil {
 			return err
 		}
-		connUDP = coapNet.NewConnUDP(l, srv.heartBeat(), 2)
+		connUDP = coapNet.NewConnUDP(l, srv.heartBeat(), 2, srv.Errors)
 		defer connUDP.Close()
 	case "udp-mcast", "udp4-mcast", "udp6-mcast":
 		network := strings.TrimSuffix(srv.Net, "-mcast")
@@ -285,7 +285,7 @@ func (srv *Server) ListenAndServe() error {
 		if err != nil {
 			return err
 		}
-		connUDP = coapNet.NewConnUDP(l, srv.heartBeat(), 2)
+		connUDP = coapNet.NewConnUDP(l, srv.heartBeat(), 2, srv.Errors)
 		defer connUDP.Close()
 		ifaces := srv.UDPMcastInterfaces
 		if len(ifaces) == 0 {
@@ -383,7 +383,7 @@ func (srv *Server) ActivateAndServe() error {
 			if srv.Net == "" {
 				srv.Net = "udp"
 			}
-			return srv.activateAndServe(nil, nil, coapNet.NewConnUDP(c, srv.heartBeat(), 2))
+			return srv.activateAndServe(nil, nil, coapNet.NewConnUDP(c, srv.heartBeat(), 2, srv.Errors))
 		}
 		return ErrInvalidServerConnParameter
 	}
