@@ -5,6 +5,7 @@ package coap
 import (
 	"context"
 	"net"
+	"strings"
 	"time"
 
 	"github.com/go-ocf/go-coap/codes"
@@ -18,7 +19,7 @@ type MulticastClientConn struct {
 
 // A MulticastClient defines parameters for a COAP client.
 type MulticastClient struct {
-	Net            string        // "udp" / "udp4" / "udp6"
+	Net            string        // udp4" / "udp6" / "udp" - don't use udp on apple, because multicast ipv6->ipv4 is not supported.
 	MaxMessageSize uint32        // Max message size that could be received from peer. If not set it defaults to 1152 B.
 	DialTimeout    time.Duration // set Timeout for dialer
 	ReadTimeout    time.Duration // net.ClientConn.SetReadTimeout value for connections, defaults to 1 hour - overridden by Timeout when that value is non-zero
@@ -71,14 +72,19 @@ func (c *MulticastClient) Dial(address string) (*MulticastClientConn, error) {
 	return c.DialWithContext(context.Background(), address)
 }
 
-// DialContext connects with context to the address on the named network.
+// DialWithContext connects with context to the address on the named network.
 func (c *MulticastClient) DialWithContext(ctx context.Context, address string) (*MulticastClientConn, error) {
 	var net string
 	switch c.Net {
 	case "udp", "udp4", "udp6":
 		net = c.Net + "-mcast"
 	case "":
-		net = "udp-mcast"
+		if strings.Contains(address, "[") {
+			net = "udp6-mcast"
+		} else {
+			net = "udp4-mcast"
+		}
+
 	default:
 		return nil, ErrInvalidNetParameter
 	}
