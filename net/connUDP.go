@@ -332,3 +332,9 @@ func (c *ConnUDP) SetMulticastLoopback(on bool) error {
 func (c *ConnUDP) JoinGroup(ifi *net.Interface, group net.Addr) error {
 	return c.packetConn.JoinGroup(ifi, group)
 }
+
+// LeaveGroup leaves the group address group on the interface ifi
+// regardless of whether the group is any-source group or source-specific group.
+func (c *ConnUDP) LeaveGroup(ifi *net.Interface, group net.Addr) error {
+	return c.packetConn.LeaveGroup(ifi, group)
+}
