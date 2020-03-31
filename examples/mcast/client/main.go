@@ -52,7 +52,7 @@ func decodeMsgToDebug(resp coap.Message, tag string) {
 func main() {
 	client := &coap.MulticastClient{}
 
-	conn, err := client.Dial("[ff02::158]:5683")
+	conn, err := client.Dial("224.0.1.187:5688")
 	if err != nil {
 		log.Fatalf("Error dialing: %v", err)
 	}
