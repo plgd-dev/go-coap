@@ -1,7 +1,10 @@
 package coap
 
 import (
+	"context"
+	"crypto"
 	"crypto/ecdsa"
+	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/tls"
@@ -11,9 +14,11 @@ import (
 	"fmt"
 	"math/big"
 	"os"
+	"sync"
 	"testing"
 	"time"
 
+	coapNet "github.com/go-ocf/go-coap/net"
 	dtls "github.com/pion/dtls/v2"
 	"github.com/stretchr/testify/require"
 )
@@ -77,8 +82,8 @@ func pemBlockForKey(priv interface{}) *pem.Block {
 	}
 }
 
-func generateRSACertsPEM(t *testing.T) ([]byte, []byte) {
-	priv, err := rsa.GenerateKey(rand.Reader, 2048)
+func generateCertsPEM(t *testing.T, generateKeyFunc func() (crypto.PrivateKey, error)) ([]byte, []byte) {
+	priv, err := generateKeyFunc()
 	if err != nil {
 		require.NoError(t, err)
 	}
@@ -97,6 +102,18 @@ func generateRSACertsPEM(t *testing.T) ([]byte, []byte) {
 	derBytes, err := x509.CreateCertificate(rand.Reader, &template, &template, publicKey(priv), priv)
 	require.NoError(t, err)
 	return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: derBytes}), pem.EncodeToMemory(pemBlockForKey(priv))
+}
+
+func generateRSACertsPEM(t *testing.T) ([]byte, []byte) {
+	return generateCertsPEM(t, func() (crypto.PrivateKey, error) {
+		return rsa.GenerateKey(rand.Reader, 2048)
+	})
+}
+
+func generateECDSACertsPEM(t *testing.T) ([]byte, []byte) {
+	return generateCertsPEM(t, func() (crypto.PrivateKey, error) {
+		return ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	})
 }
 
 func TestRSACerts(t *testing.T) {
@@ -119,4 +136,51 @@ func TestRSACerts(t *testing.T) {
 	}
 	err = s.ListenAndServe()
 	require.Error(t, err)
+}
+
+func TestECDSACerts_PeerCertificate(t *testing.T) {
+	cert, key := generateECDSACertsPEM(t)
+	c, err := tls.X509KeyPair(cert, key)
+	require.NoError(t, err)
+
+	config := dtls.Config{
+		Certificates:       []tls.Certificate{c},
+		CipherSuites:       []dtls.CipherSuiteID{dtls.TLS_ECDHE_ECDSA_WITH_AES_128_CCM_8},
+		InsecureSkipVerify: true,
+		ClientAuth:         dtls.RequireAnyClientCert,
+		VerifyPeerCertificate: func(rawCerts [][]byte, verifiedChains [][]*x509.Certificate) error {
+			return nil
+		},
+	}
+	l, err := coapNet.NewDTLSListener("udp", ":", &config, time.Millisecond*100)
+	require.NoError(t, err)
+
+	s := &Server{
+		Net:       "udp-dtls",
+		Listener:  l,
+		KeepAlive: MustMakeKeepAlive(time.Second),
+	}
+	s.Handler = HandlerFunc(func(w ResponseWriter, r *Request) {
+		certs := r.Client.PeerCertificates()
+		require.NotEmpty(t, certs)
+		err := s.Shutdown()
+		require.NoError(t, err)
+	})
+	var wg sync.WaitGroup
+	wg.Add(1)
+	defer wg.Wait()
+	go func() {
+		defer wg.Done()
+		s.ActivateAndServe()
+	}()
+
+	conn, err := DialDTLS("udp-dtls", l.Addr().String(), &config)
+	require.NoError(t, err)
+	certs := conn.PeerCertificates()
+	require.NotEmpty(t, certs)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond*100)
+	defer cancel()
+	_, err = conn.GetWithContext(ctx, "/")
+	require.Error(t, err)
+	conn.Close()
 }
