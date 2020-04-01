@@ -77,7 +77,7 @@ func RunLocalServerUDPWithHandlerIfaces(lnet, laddr string, BlockWiseTransfer bo
 		return nil, "", nil, err
 	}
 
-	connUDP := coapNet.NewConnUDP(pc, time.Millisecond*100, 2)
+	connUDP := coapNet.NewConnUDP(pc, time.Millisecond*100, 2, func(err error) { fmt.Println(err) })
 	if strings.Contains(lnet, "-mcast") {
 		if ifaces == nil {
 			ifaces, err = net.Interfaces()
@@ -87,12 +87,12 @@ func RunLocalServerUDPWithHandlerIfaces(lnet, laddr string, BlockWiseTransfer bo
 		}
 		for _, iface := range ifaces {
 			if err := connUDP.JoinGroup(&iface, a); err != nil {
-				return nil, "", nil, err
+				fmt.Printf("JoinGroup(%v, %v) %v", iface.Name, a, err)
 			}
 		}
 
 		if err := connUDP.SetMulticastLoopback(true); err != nil {
-			return nil, "", nil, err
+			return nil, "", nil, fmt.Errorf("SetMulticastLoopback %w", err)
 		}
 	}
 

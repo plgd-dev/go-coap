@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"strings"
 	"sync"
 	"time"
 
@@ -19,17 +20,24 @@ type ConnUDP struct {
 	connection        *net.UDPConn
 	packetConn        packetConn
 	multicastHopLimit int
+	errors            func(err error)
 
 	lock sync.Mutex
 }
 
+type ControlMessage struct {
+	Src     net.IP // source address, specifying only
+	IfIndex int    // interface index, must be 1 <= value when specifying
+}
+
 type packetConn interface {
 	SetWriteDeadline(t time.Time) error
-	WriteTo(b []byte, dst net.Addr) (n int, err error)
+	WriteTo(b []byte, cm *ControlMessage, dst net.Addr) (n int, err error)
 	SetMulticastInterface(ifi *net.Interface) error
 	SetMulticastHopLimit(hoplim int) error
 	SetMulticastLoopback(on bool) error
 	JoinGroup(ifi *net.Interface, group net.Addr) error
+	LeaveGroup(ifi *net.Interface, group net.Addr) error
 }
 
 type packetConnIPv4 struct {
@@ -48,8 +56,15 @@ func (p *packetConnIPv4) SetWriteDeadline(t time.Time) error {
 	return p.packetConnIPv4.SetWriteDeadline(t)
 }
 
-func (p *packetConnIPv4) WriteTo(b []byte, dst net.Addr) (n int, err error) {
-	return p.packetConnIPv4.WriteTo(b, nil, dst)
+func (p *packetConnIPv4) WriteTo(b []byte, cm *ControlMessage, dst net.Addr) (n int, err error) {
+	var c *ipv4.ControlMessage
+	if cm != nil {
+		c = &ipv4.ControlMessage{
+			Src:     cm.Src,
+			IfIndex: cm.IfIndex,
+		}
+	}
+	return p.packetConnIPv4.WriteTo(b, c, dst)
 }
 
 func (p *packetConnIPv4) SetMulticastHopLimit(hoplim int) error {
@@ -62,6 +77,10 @@ func (p *packetConnIPv4) SetMulticastLoopback(on bool) error {
 
 func (p *packetConnIPv4) JoinGroup(ifi *net.Interface, group net.Addr) error {
 	return p.packetConnIPv4.JoinGroup(ifi, group)
+}
+
+func (p *packetConnIPv4) LeaveGroup(ifi *net.Interface, group net.Addr) error {
+	return p.packetConnIPv4.LeaveGroup(ifi, group)
 }
 
 type packetConnIPv6 struct {
@@ -80,8 +99,15 @@ func (p *packetConnIPv6) SetWriteDeadline(t time.Time) error {
 	return p.packetConnIPv6.SetWriteDeadline(t)
 }
 
-func (p *packetConnIPv6) WriteTo(b []byte, dst net.Addr) (n int, err error) {
-	return p.packetConnIPv6.WriteTo(b, nil, dst)
+func (p *packetConnIPv6) WriteTo(b []byte, cm *ControlMessage, dst net.Addr) (n int, err error) {
+	var c *ipv6.ControlMessage
+	if cm != nil {
+		c = &ipv6.ControlMessage{
+			Src:     cm.Src,
+			IfIndex: cm.IfIndex,
+		}
+	}
+	return p.packetConnIPv6.WriteTo(b, c, dst)
 }
 
 func (p *packetConnIPv6) SetMulticastHopLimit(hoplim int) error {
@@ -96,6 +122,14 @@ func (p *packetConnIPv6) JoinGroup(ifi *net.Interface, group net.Addr) error {
 	return p.packetConnIPv6.JoinGroup(ifi, group)
 }
 
+func (p *packetConnIPv6) LeaveGroup(ifi *net.Interface, group net.Addr) error {
+	return p.packetConnIPv6.LeaveGroup(ifi, group)
+}
+
+func (p *packetConnIPv6) SetControlMessage(on bool) error {
+	return p.packetConnIPv6.SetMulticastLoopback(on)
+}
+
 func isIPv6(addr net.IP) bool {
 	if ip := addr.To16(); ip != nil && ip.To4() == nil {
 		return true
@@ -104,7 +138,7 @@ func isIPv6(addr net.IP) bool {
 }
 
 // NewConnUDP creates connection over net.UDPConn.
-func NewConnUDP(c *net.UDPConn, heartBeat time.Duration, multicastHopLimit int) *ConnUDP {
+func NewConnUDP(c *net.UDPConn, heartBeat time.Duration, multicastHopLimit int, errors func(err error)) *ConnUDP {
 	var packetConn packetConn
 
 	if isIPv6(c.LocalAddr().(*net.UDPAddr).IP) {
@@ -113,7 +147,7 @@ func NewConnUDP(c *net.UDPConn, heartBeat time.Duration, multicastHopLimit int) 
 		packetConn = newPacketConnIPv4(ipv4.NewPacketConn(c))
 	}
 
-	connection := ConnUDP{connection: c, heartBeat: heartBeat, packetConn: packetConn, multicastHopLimit: multicastHopLimit}
+	connection := ConnUDP{connection: c, heartBeat: heartBeat, packetConn: packetConn, multicastHopLimit: multicastHopLimit, errors: errors}
 	return &connection
 }
 
@@ -132,6 +166,45 @@ func (c *ConnUDP) Close() error {
 	return c.connection.Close()
 }
 
+func (c *ConnUDP) writeToAddr(ctx context.Context, heartBeat time.Duration, multicastHopLimit int, iface net.Interface, srcAddr net.Addr, port string, udpCtx *ConnUDPContext, buffer []byte) error {
+	netType := "udp4"
+	if isIPv6(udpCtx.raddr.IP) {
+		netType = "udp6"
+	}
+	addrMask := srcAddr.String()
+	addr := strings.Split(addrMask, "/")[0]
+	if strings.Contains(addr, ":") && netType == "udp4" {
+		return nil
+	}
+	if !strings.Contains(addr, ":") && netType == "udp6" {
+		return nil
+	}
+	var p packetConn
+	if netType == "udp4" {
+		p = newPacketConnIPv4(ipv4.NewPacketConn(c.connection))
+	} else {
+		p = newPacketConnIPv6(ipv6.NewPacketConn(c.connection))
+	}
+
+	if err := p.SetMulticastInterface(&iface); err != nil {
+		return err
+	}
+	p.SetMulticastHopLimit(multicastHopLimit)
+	err := p.SetWriteDeadline(time.Now().Add(heartBeat))
+	if err != nil {
+		return fmt.Errorf("cannot write multicast with context: cannot set write deadline for connection: %v", err)
+	}
+	ip := net.ParseIP(addr)
+	if ip == nil {
+		return fmt.Errorf("cannot parse ip (%v) for iface %v", ip, iface.Name)
+	}
+	_, err = p.WriteTo(buffer, &ControlMessage{
+		Src:     ip,
+		IfIndex: iface.Index,
+	}, udpCtx.raddr)
+	return err
+}
+
 func (c *ConnUDP) writeMulticastWithContext(ctx context.Context, udpCtx *ConnUDPContext, buffer []byte) error {
 	if udpCtx == nil {
 		return fmt.Errorf("cannot write multicast with context: invalid udpCtx")
@@ -144,35 +217,36 @@ func (c *ConnUDP) writeMulticastWithContext(ctx context.Context, udpCtx *ConnUDP
 	if err != nil {
 		return fmt.Errorf("cannot write multicast with context: cannot get interfaces for multicast connection: %v", err)
 	}
-
 	c.lock.Lock()
 	defer c.lock.Unlock()
+LOOP:
 	for _, iface := range ifaces {
-		written := 0
-		for written < len(buffer) {
-			select {
-			case <-ctx.Done():
-				return ctx.Err()
-			default:
-			}
+		ifaceAddrs, err := iface.Addrs()
+		if err != nil {
+			continue
+		}
+		if len(ifaceAddrs) == 0 {
+			continue
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
 
-			if err := c.packetConn.SetMulticastInterface(&iface); err != nil {
-				break
-			}
+		addr := strings.Split(c.connection.LocalAddr().String(), ":")
+		port := addr[len(addr)-1]
 
-			c.packetConn.SetMulticastHopLimit(c.multicastHopLimit)
-			err := c.packetConn.SetWriteDeadline(time.Now().Add(c.heartBeat))
-			if err != nil {
-				return fmt.Errorf("cannot write multicast with context: cannot set write deadline for connection: %v", err)
-			}
-			n, err := c.packetConn.WriteTo(buffer, udpCtx.raddr)
+		for _, ifaceAddr := range ifaceAddrs {
+			err = c.writeToAddr(ctx, c.heartBeat, c.multicastHopLimit, iface, ifaceAddr, port, udpCtx, buffer)
 			if err != nil {
 				if isTemporary(err) {
-					continue
+					continue LOOP
 				}
-				break
+				if c.errors != nil {
+					c.errors(fmt.Errorf("cannot write multicast to %v: %w", iface.Name, err))
+				}
 			}
-			written += n
 		}
 	}
 	return nil
@@ -257,4 +331,10 @@ func (c *ConnUDP) SetMulticastLoopback(on bool) error {
 // configuration.
 func (c *ConnUDP) JoinGroup(ifi *net.Interface, group net.Addr) error {
 	return c.packetConn.JoinGroup(ifi, group)
+}
+
+// LeaveGroup leaves the group address group on the interface ifi
+// regardless of whether the group is any-source group or source-specific group.
+func (c *ConnUDP) LeaveGroup(ifi *net.Interface, group net.Addr) error {
+	return c.packetConn.LeaveGroup(ifi, group)
 }

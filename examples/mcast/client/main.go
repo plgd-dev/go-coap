@@ -62,10 +62,10 @@ func main() {
 	if err != nil {
 		log.Fatalf("Error sending request: %v", err)
 	}
-	req.SetOption(coap.URIQuery, "rt=oic.wk.d")
+	//req.SetOption(coap.URIQuery, "rt=oic.wk.d")
 	_, err = conn.PublishMsg(req, func(req *coap.Request) {
 		decodeMsgToDebug(req.Msg, "MCAST")
-		resp, err := req.Client.Get("/tmp")
+		resp, err := req.Client.GetWithContext(req.Ctx, "/oic/d")
 		if err != nil {
 			log.Fatalf("Error receive response: %v", err)
 		}

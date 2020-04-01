@@ -14,11 +14,9 @@ import (
 )
 
 func TestKeepAliveTCP_Client(t *testing.T) {
-	BlockWiseTransfer := false
-	BlockWiseTransferSzx := BlockWiseSzx128
-	s, addr, _, err := RunLocalTCPServer(":0", BlockWiseTransfer, BlockWiseTransferSzx)
+	s, err := coapNet.NewTCPListener("tcp", ":0", time.Millisecond*100)
 	require.NoError(t, err)
-	defer s.Shutdown()
+	defer s.Close()
 
 	var wg sync.WaitGroup
 	wg.Add(1)
@@ -40,13 +38,14 @@ func TestKeepAliveTCP_Client(t *testing.T) {
 			},
 		},
 		NotifySessionEndFunc: func(err error) {
+			fmt.Printf("NotifySessionEndFunc %v\n", err)
 			if err == ErrKeepAliveDeadlineExceeded {
 				defer wg.Done()
 			}
 		},
 	}
 
-	co, err := c.Dial(addr)
+	co, err := c.Dial(s.Addr().String())
 	require.NoError(t, err)
 	defer co.Close()
 
@@ -59,9 +58,23 @@ func TestKeepAliveTCPTLS_Client(t *testing.T) {
 	config := tls.Config{
 		Certificates: []tls.Certificate{cert},
 	}
-	s, addr, _, err := RunLocalTLSServer(":0", &config)
+	s, err := coapNet.NewTLSListener("tcp", ":0", &config, time.Millisecond*100)
 	require.NoError(t, err)
-	defer s.Shutdown()
+	defer s.Close()
+	go func() {
+		a, err := s.Accept()
+		if err != nil {
+			return
+		}
+		defer a.Close()
+		buf := make([]byte, 1024)
+		for {
+			_, err := a.Read(buf)
+			if err != nil {
+				return
+			}
+		}
+	}()
 
 	var wg sync.WaitGroup
 	wg.Add(1)
@@ -90,7 +103,7 @@ func TestKeepAliveTCPTLS_Client(t *testing.T) {
 		},
 	}
 
-	co, err := c.Dial(addr)
+	co, err := c.Dial(s.Addr().String())
 	require.NoError(t, err)
 	defer co.Close()
 
@@ -135,11 +148,7 @@ func TestKeepAliveTCP_Server(t *testing.T) {
 		s.ActivateAndServe()
 	}()
 
-	c := &Client{
-		Net: "tcp",
-	}
-
-	co, err := c.Dial(l.Addr().String())
+	co, err := net.Dial("tcp", l.Addr().String())
 	require.NoError(t, err)
 	defer co.Close()
 
@@ -189,12 +198,7 @@ func TestKeepAliveTCPTLS_Server(t *testing.T) {
 		s.ActivateAndServe()
 	}()
 
-	c := &Client{
-		Net:       "tcp-tls",
-		TLSConfig: &tls.Config{InsecureSkipVerify: true},
-	}
-
-	co, err := c.Dial(l.Addr().String())
+	co, err := tls.Dial("tcp", l.Addr().String(), &tls.Config{InsecureSkipVerify: true})
 	require.NoError(t, err)
 	defer co.Close()
 
@@ -204,9 +208,9 @@ func TestKeepAliveTCPTLS_Server(t *testing.T) {
 func TestKeepAliveUDP_Server(t *testing.T) {
 	a, err := net.ResolveUDPAddr("udp", ":0")
 	require.NoError(t, err)
-	pc, err := net.ListenUDP("udp", a)
+	l, err := net.ListenUDP("udp", a)
 	require.NoError(t, err)
-	connUDP := coapNet.NewConnUDP(pc, time.Millisecond*100, 2)
+	connUDP := coapNet.NewConnUDP(l, time.Millisecond*100, 2, func(err error) { t.Log(err) })
 
 	var wg sync.WaitGroup
 	wg.Add(1)
@@ -242,14 +246,11 @@ func TestKeepAliveUDP_Server(t *testing.T) {
 		s.activateAndServe(nil, nil, connUDP)
 	}()
 
-	c := &Client{
-		Net: "udp",
-	}
-
-	co, err := c.Dial(pc.LocalAddr().String())
+	co, err := net.Dial("udp", l.LocalAddr().String())
 	require.NoError(t, err)
 	defer co.Close()
-	_, err = co.Get("/")
+
+	_, err = co.Write([]byte{0x40, 0x1, 0x30, 0x39})
 	require.NoError(t, err)
 
 	wg.Wait()
@@ -302,12 +303,9 @@ func TestKeepAliveDTLS_Server(t *testing.T) {
 		s.ActivateAndServe()
 	}()
 
-	c := &Client{
-		Net:        "udp-dtls",
-		DTLSConfig: config,
-	}
-
-	co, err := c.Dial(l.Addr().String())
+	a, err := net.ResolveUDPAddr("udp", l.Addr().String())
+	require.NoError(t, err)
+	co, err := dtls.Dial("udp", a, config)
 	require.NoError(t, err)
 	defer co.Close()
 
@@ -315,11 +313,13 @@ func TestKeepAliveDTLS_Server(t *testing.T) {
 }
 
 func TestKeepAliveUDP_Client(t *testing.T) {
-	BlockWiseTransfer := false
-	BlockWiseTransferSzx := BlockWiseSzx128
-	s, addr, _, err := RunLocalUDPServer("udp", ":0", BlockWiseTransfer, BlockWiseTransferSzx)
+	a, err := net.ResolveUDPAddr("udp", ":0")
 	require.NoError(t, err)
-	defer s.Shutdown()
+	pc, err := net.ListenUDP("udp", a)
+	require.NoError(t, err)
+	l := coapNet.NewConnUDP(pc, time.Millisecond*100, 2, func(err error) { t.Log(err) })
+
+	defer l.Close()
 
 	var wg sync.WaitGroup
 	wg.Add(1)
@@ -347,7 +347,7 @@ func TestKeepAliveUDP_Client(t *testing.T) {
 		},
 	}
 
-	co, err := c.Dial(addr)
+	co, err := c.Dial(l.LocalAddr().String())
 	require.NoError(t, err)
 	defer co.Close()
 
@@ -366,19 +366,7 @@ func TestKeepAliveDTLS_Client(t *testing.T) {
 
 	l, err := coapNet.NewDTLSListener("udp", ":0", config, time.Millisecond*100)
 	require.NoError(t, err)
-
-	s := &Server{Listener: l, ReadTimeout: time.Second * 3600, WriteTimeout: time.Second * 3600,
-		NotifySessionNewFunc: func(s *ClientConn) {
-			fmt.Printf("networkSession start %v\n", s.RemoteAddr())
-		}, NotifySessionEndFunc: func(w *ClientConn, err error) {
-			fmt.Printf("networkSession end %v: %v\n", w.RemoteAddr(), err)
-		},
-	}
-	defer s.Shutdown()
-
-	go func() {
-		s.ActivateAndServe()
-	}()
+	defer l.Close()
 
 	var wg sync.WaitGroup
 	wg.Add(1)

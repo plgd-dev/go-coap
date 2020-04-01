@@ -73,7 +73,7 @@ func (s *sessionDTLS) PingWithContext(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	if resp.Type() == Reset {
+	if resp.Type() == Reset || resp.Type() == Acknowledgement {
 		return nil
 	}
 	return ErrInvalidResponse
