@@ -120,5 +120,4 @@ $ docker run --mount type=bind,source="$(pwd)",target=/shared,readonly --network
 ## License
 Apache 2.0
 
-
 [![FOSSA Status](https://app.fossa.io/api/projects/git%2Bgithub.com%2Fgo-ocf%2Fgo-coap.svg?type=large)](https://app.fossa.io/projects/git%2Bgithub.com%2Fgo-ocf%2Fgo-coap?ref=badge_large)
