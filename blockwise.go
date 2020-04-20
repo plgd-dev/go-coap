@@ -416,13 +416,10 @@ func (r *blockWiseReceiver) sizeType() OptionID {
 }
 
 func determineCoapType(startedByClient bool, req Message) COAPType {
-	if startedByClient {
-		if req.Type() == Confirmable {
-			return Acknowledgement
-		}
-		return req.Type()
+	if startedByClient && req.Type() == Confirmable {
+		return Acknowledgement
 	}
-	return Confirmable
+	return req.Type()
 }
 
 func (r *blockWiseReceiver) newReq(b *blockWiseSession, resp Message) (Message, error) {
@@ -660,7 +657,7 @@ func (r *blockWiseReceiver) sendError(ctx context.Context, b *blockWiseSession, 
 		typ = NonConfirmable
 	} else {
 		MessageID = r.origin.MessageID()
-		typ = Acknowledgement
+		typ = determineCoapType(r.startedByClient, r.origin)
 		if resp != nil {
 			token = resp.Token()
 		} else {

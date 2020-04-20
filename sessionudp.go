@@ -135,8 +135,12 @@ func (s *sessionUDP) WriteMsgWithContext(ctx context.Context, req Message) error
 }
 
 func (s *sessionUDP) sendPong(w ResponseWriter, r *Request) error {
+	typ := NonConfirmable
+	if r.Msg.Type() == Confirmable {
+		typ = Acknowledgement
+	}
 	resp := r.Client.NewMessage(MessageParams{
-		Type:      Acknowledgement,
+		Type:      typ,
 		Code:      codes.Empty,
 		MessageID: r.Msg.MessageID(),
 	})

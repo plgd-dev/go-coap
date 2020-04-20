@@ -29,7 +29,7 @@ func (cc *ClientCommander) newGetDeleteRequest(path string, code codes.Code) (Me
 		return nil, err
 	}
 	req := cc.NewMessage(MessageParams{
-		Type:      Confirmable,
+		Type:      NonConfirmable,
 		Code:      code,
 		MessageID: GenerateMessageID(),
 		Token:     token,
@@ -44,7 +44,7 @@ func (cc *ClientCommander) newPostPutRequest(path string, contentFormat MediaTyp
 		return nil, err
 	}
 	req := cc.networkSession.NewMessage(MessageParams{
-		Type:      Confirmable,
+		Type:      NonConfirmable,
 		Code:      code,
 		MessageID: GenerateMessageID(),
 		Token:     token,

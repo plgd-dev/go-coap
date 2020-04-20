@@ -16,6 +16,7 @@ import (
 	"github.com/go-ocf/go-coap/codes"
 	coapNet "github.com/go-ocf/go-coap/net"
 	dtls "github.com/pion/dtls/v2"
+	"github.com/stretchr/testify/require"
 )
 
 func CreateRespMessageByReq(isTCP bool, code codes.Code, req Message) Message {
@@ -31,9 +32,13 @@ func CreateRespMessageByReq(isTCP bool, code codes.Code, req Message) Message {
 		resp.SetOption(ContentFormat, req.Option(ContentFormat))
 		return resp
 	}
+	typ := NonConfirmable
+	if req.Type() == Confirmable {
+		typ = Acknowledgement
+	}
 	resp := &DgramMessage{
 		MessageBase: MessageBase{
-			typ:  Acknowledgement,
+			typ:  typ,
 			code: code,
 
 			payload: req.Payload(),
@@ -47,18 +52,14 @@ func CreateRespMessageByReq(isTCP bool, code codes.Code, req Message) Message {
 }
 
 func EchoServer(w ResponseWriter, r *Request) {
-	if r.Msg.IsConfirmable() {
-		err := w.WriteMsg(CreateRespMessageByReq(r.Client.networkSession().IsTCP(), codes.Valid, r.Msg))
-		if err != nil {
-			fmt.Printf("Cannot write echo %v", err)
-		}
+	err := w.WriteMsg(CreateRespMessageByReq(r.Client.networkSession().IsTCP(), codes.Valid, r.Msg))
+	if err != nil {
+		fmt.Printf("Cannot write echo %v", err)
 	}
 }
 
 func EchoServerBadID(w ResponseWriter, r *Request) {
-	if r.Msg.IsConfirmable() {
-		w.WriteMsg(CreateRespMessageByReq(r.Client.networkSession().IsTCP(), codes.BadRequest, r.Msg))
-	}
+	w.WriteMsg(CreateRespMessageByReq(r.Client.networkSession().IsTCP(), codes.BadRequest, r.Msg))
 }
 
 func RunLocalServerUDPWithHandler(lnet, laddr string, BlockWiseTransfer bool, BlockWiseTransferSzx BlockWiseSzx, handler HandlerFunc) (*Server, string, chan error, error) {
@@ -269,31 +270,23 @@ func testServingTCPWithMsgWithObserver(t *testing.T, net string, BlockWiseTransf
 		s, addrstr, fin, err = RunLocalDTLSServer(":0", config, BlockWiseTransfer, BlockWiseTransferSzx)
 	case "tcp-tls", "tcp4-tls", "tcp6-tls":
 		cert, err := tls.X509KeyPair(CertPEMBlock, KeyPEMBlock)
-		if err != nil {
-			t.Fatalf("unable to build certificate: %v", err)
-		}
+		require.NoError(t, err)
 		config := tls.Config{
 			Certificates: []tls.Certificate{cert},
 		}
 		s, addrstr, fin, err = RunLocalTLSServer(":0", &config)
-		if err != nil {
-			t.Fatalf("unable to run test server: %v", err)
-		}
+		require.NoError(t, err)
 		c.TLSConfig = &tls.Config{InsecureSkipVerify: true}
 	}
 
-	if err != nil {
-		t.Fatalf("unable to run test server: %v", err)
-	}
+	require.NoError(t, err)
 	defer func() {
 		s.Shutdown()
 		<-fin
 	}()
 
 	co, err := c.Dial(addrstr)
-	if err != nil {
-		t.Fatalf("unable to dialing: %v", err)
-	}
+	require.NoError(t, err)
 	defer co.Close()
 
 	ch(t, payload, co)
@@ -301,20 +294,13 @@ func testServingTCPWithMsgWithObserver(t *testing.T, net string, BlockWiseTransf
 
 func simpleMsgToPath(t *testing.T, payload []byte, co *ClientConn, path string) {
 	req, err := co.NewPostRequest(path, TextPlain, bytes.NewBuffer(payload))
-	if err != nil {
-		t.Fatal("cannot create request", err)
-	}
+	require.NoError(t, err)
 
 	res := CreateRespMessageByReq(co.commander.networkSession.IsTCP(), codes.Valid, req)
 
 	m, err := co.Exchange(req)
-	if err != nil {
-		t.Fatal("failed to exchange", err)
-	}
-	if m == nil {
-		t.Fatalf("Didn't receive CoAP response")
-	}
-	assertEqualMessages(t, res, m)
+	require.NoError(t, err)
+	require.Equal(t, res, m)
 }
 
 func simpleMsg(t *testing.T, payload []byte, co *ClientConn) {
@@ -414,9 +400,7 @@ func simpleChallengingPathMsg(t *testing.T, payload []byte, co *ClientConn, path
 	req0.SetPathString(path)
 
 	resp0, err := co.Exchange(req0)
-	if err != nil {
-		t.Fatalf("unable to read msg from server: %v", err)
-	}
+	require.NoError(t, err)
 
 	res := CreateRespMessageByReq(co.commander.networkSession.IsTCP(), codes.Valid, req0)
 	assertEqualMessages(t, res, resp0)
@@ -489,9 +473,7 @@ func testServingMCastWithIfaces(t *testing.T, lnet, laddr string, BlockWiseTrans
 			resp.SetPayload(make([]byte, payloadLen))
 			resp.SetOption(ContentFormat, TextPlain)
 			err := w.WriteMsg(resp)
-			if err != nil {
-				t.Fatalf("cannot send response: %v", err)
-			}
+			require.NoError(t, err)
 		},
 	}
 
@@ -501,20 +483,14 @@ func testServingMCastWithIfaces(t *testing.T, lnet, laddr string, BlockWiseTrans
 		resp.SetPayload(make([]byte, payloadLen))
 		resp.SetOption(ContentFormat, TextPlain)
 		conn, err := responseServer.Dial(r.Client.RemoteAddr().String())
-		if err != nil {
-			t.Fatalf("cannot create connection %v", err)
-		}
+		require.NoError(t, err)
 		err = conn.WriteMsg(resp)
-		if err != nil {
-			t.Fatalf("cannot send response %v", err)
-		}
+		require.NoError(t, err)
 		lockResponseServerConn.Lock()
 		responseServerConn = append(responseServerConn, conn)
 		lockResponseServerConn.Unlock()
 	}, ifaces)
-	if err != nil {
-		t.Fatalf("unable to run test server: %v", err)
-	}
+	require.NoError(t, err)
 	defer func() {
 		s.Shutdown()
 		lockResponseServerConn.Lock()
@@ -535,23 +511,19 @@ func testServingMCastWithIfaces(t *testing.T, lnet, laddr string, BlockWiseTrans
 	}
 
 	co, err := c.Dial(addrMcast)
-	if err != nil {
-		t.Fatalf("unable to dialing: %v", err)
-	}
+	require.NoError(t, err)
 	defer co.Close()
 
 	rp, err := co.Publish("/test", func(req *Request) {
 		ansArrived <- true
 	})
-	if err != nil {
-		t.Fatalf("unable to publishing: %v", err)
-	}
+	require.NoError(t, err)
 	defer rp.Cancel()
 
 	select {
 	case <-ansArrived:
 	case <-ctx.Done():
-		t.Fatalf("timeout: %v", ctx.Err())
+		require.NoError(t, fmt.Errorf("timeout: %v", ctx.Err()))
 	}
 }
 

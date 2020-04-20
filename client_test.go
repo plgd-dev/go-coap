@@ -7,11 +7,16 @@ import (
 	"time"
 
 	"github.com/go-ocf/go-coap/codes"
+	"github.com/stretchr/testify/require"
 )
 
 func periodicTransmitter(w ResponseWriter, r *Request) {
+	typ := NonConfirmable
+	if r.Msg.Type() == Confirmable {
+		typ = Acknowledgement
+	}
 	msg := r.Client.NewMessage(MessageParams{
-		Type:      Acknowledgement,
+		Type:      typ,
 		Code:      codes.Content,
 		MessageID: r.Msg.MessageID(),
 		Payload:   make([]byte, 15),
@@ -52,9 +57,7 @@ func testServingObservation(t *testing.T, net string, addrstr string, BlockWiseT
 	}
 
 	conn, err := client.Dial(addrstr)
-	if err != nil {
-		t.Fatalf("Error dialing: %v", err)
-	}
+	require.NoError(t, err)
 
 	defer conn.Close()
 
@@ -69,9 +72,7 @@ func testServingObservation(t *testing.T, net string, addrstr string, BlockWiseT
 	req.SetPathString("/some/path")
 
 	err = conn.WriteMsg(req)
-	if err != nil {
-		t.Fatalf("Error sending request: %v", err)
-	}
+	require.NoError(t, err)
 
 	<-sync
 	log.Printf("Done...\n")
@@ -79,9 +80,7 @@ func testServingObservation(t *testing.T, net string, addrstr string, BlockWiseT
 
 func TestServingUDPObservation(t *testing.T) {
 	s, addrstr, fin, err := RunLocalServerUDPWithHandler("udp", ":0", false, BlockWiseSzx16, periodicTransmitter)
-	if err != nil {
-		t.Fatalf("unable to run test server: %v", err)
-	}
+	require.NoError(t, err)
 	defer func() {
 		s.Shutdown()
 		<-fin
@@ -91,9 +90,7 @@ func TestServingUDPObservation(t *testing.T) {
 
 func TestServingTCPObservation(t *testing.T) {
 	s, addrstr, fin, err := RunLocalServerTCPWithHandler(":0", false, BlockWiseSzx16, periodicTransmitter)
-	if err != nil {
-		t.Fatalf("unable to run test server: %v", err)
-	}
+	require.NoError(t, err)
 	defer func() {
 		s.Shutdown()
 		<-fin
@@ -103,8 +100,12 @@ func TestServingTCPObservation(t *testing.T) {
 
 func setupServer(t *testing.T) (*Server, string, chan error, error) {
 	return RunLocalServerUDPWithHandler("udp", ":0", true, BlockWiseSzx1024, func(w ResponseWriter, r *Request) {
+		typ := NonConfirmable
+		if r.Msg.Type() == Confirmable {
+			typ = Acknowledgement
+		}
 		msg := r.Client.NewMessage(MessageParams{
-			Type:      Acknowledgement,
+			Type:      typ,
 			Code:      codes.Content,
 			MessageID: r.Msg.MessageID(),
 			Payload:   make([]byte, 5000),
@@ -115,19 +116,14 @@ func setupServer(t *testing.T) (*Server, string, chan error, error) {
 		msg.SetOption(LocationPath, r.Msg.Path())
 
 		err := w.WriteMsg(msg)
-		if err != nil {
-			t.Fatalf("Error on transmitter, stopping: %v", err)
-			return
-		}
+		require.NoError(t, err)
 	})
 }
 
 func TestServingUDPGet(t *testing.T) {
 
 	s, addr, fin, err := setupServer(t)
-	if err != nil {
-		t.Fatalf("Unexpected error '%v'", err)
-	}
+	require.NoError(t, err)
 	defer func() {
 		s.Shutdown()
 		<-fin
@@ -137,20 +133,14 @@ func TestServingUDPGet(t *testing.T) {
 	BlockWiseTransferSzx := BlockWiseSzx16
 	c := Client{Net: "udp", BlockWiseTransfer: &BlockWiseTransfer, BlockWiseTransferSzx: &BlockWiseTransferSzx}
 	con, err := c.Dial(addr)
-	if err != nil {
-		t.Fatalf("Unexpected error '%v'", err)
-	}
+	require.NoError(t, err)
 	_, err = con.Get("/tmp/test")
-	if err != nil {
-		t.Fatalf("Unexpected error '%v'", err)
-	}
+	require.NoError(t, err)
 }
 
 func TestServingUDPPost(t *testing.T) {
 	s, addr, fin, err := setupServer(t)
-	if err != nil {
-		t.Fatalf("Unexpected error '%v'", err)
-	}
+	require.NoError(t, err)
 	defer func() {
 		s.Shutdown()
 		<-fin
@@ -160,21 +150,15 @@ func TestServingUDPPost(t *testing.T) {
 	BlockWiseTransferSzx := BlockWiseSzx1024
 	c := Client{Net: "udp", BlockWiseTransfer: &BlockWiseTransfer, BlockWiseTransferSzx: &BlockWiseTransferSzx}
 	con, err := c.Dial(addr)
-	if err != nil {
-		t.Fatalf("Unexpected error '%v'", err)
-	}
+	require.NoError(t, err)
 	body := bytes.NewReader([]byte("Hello world"))
 	_, err = con.Post("/tmp/test", TextPlain, body)
-	if err != nil {
-		t.Fatalf("Unexpected error '%v'", err)
-	}
+	require.NoError(t, err)
 }
 
 func TestServingUDPPut(t *testing.T) {
 	s, addr, fin, err := setupServer(t)
-	if err != nil {
-		t.Fatalf("Unexpected error '%v'", err)
-	}
+	require.NoError(t, err)
 	defer func() {
 		s.Shutdown()
 		<-fin
@@ -184,21 +168,15 @@ func TestServingUDPPut(t *testing.T) {
 	BlockWiseTransferSzx := BlockWiseSzx1024
 	c := Client{Net: "udp", BlockWiseTransfer: &BlockWiseTransfer, BlockWiseTransferSzx: &BlockWiseTransferSzx}
 	con, err := c.Dial(addr)
-	if err != nil {
-		t.Fatalf("Unexpected error '%v'", err)
-	}
+	require.NoError(t, err)
 	body := bytes.NewReader([]byte("Hello world"))
 	_, err = con.Put("/tmp/test", TextPlain, body)
-	if err != nil {
-		t.Fatalf("Unexpected error '%v'", err)
-	}
+	require.NoError(t, err)
 }
 
 func TestServingUDPDelete(t *testing.T) {
 	s, addr, fin, err := setupServer(t)
-	if err != nil {
-		t.Fatalf("Unexpected error '%v'", err)
-	}
+	require.NoError(t, err)
 	defer func() {
 		s.Shutdown()
 		<-fin
@@ -208,19 +186,19 @@ func TestServingUDPDelete(t *testing.T) {
 	BlockWiseTransferSzx := BlockWiseSzx1024
 	c := Client{Net: "udp", BlockWiseTransfer: &BlockWiseTransfer, BlockWiseTransferSzx: &BlockWiseTransferSzx}
 	con, err := c.Dial(addr)
-	if err != nil {
-		t.Fatalf("Unexpected error '%v'", err)
-	}
+	require.NoError(t, err)
 	_, err = con.Delete("/tmp/test")
-	if err != nil {
-		t.Fatalf("Unexpected error '%v'", err)
-	}
+	require.NoError(t, err)
 }
 
 func TestServingUDPObserve(t *testing.T) {
 	s, addr, fin, err := RunLocalServerUDPWithHandler("udp", ":0", true, BlockWiseSzx16, func(w ResponseWriter, r *Request) {
+		typ := NonConfirmable
+		if r.Msg.Type() == Confirmable {
+			typ = Acknowledgement
+		}
 		msg := r.Client.NewMessage(MessageParams{
-			Type:      Acknowledgement,
+			Type:      typ,
 			Code:      codes.Content,
 			MessageID: r.Msg.MessageID(),
 			Payload:   make([]byte, 17),
@@ -232,32 +210,23 @@ func TestServingUDPObserve(t *testing.T) {
 		msg.SetOption(Observe, 2)
 
 		err := w.WriteMsg(msg)
-		if err != nil {
-			t.Fatalf("Error on transmitter, stopping: %v", err)
-			return
-		}
+		require.NoError(t, err)
 	})
 	defer func() {
 		s.Shutdown()
 		<-fin
 	}()
-	if err != nil {
-		t.Fatalf("Unexpected error '%v'", err)
-	}
+	require.NoError(t, err)
 
 	BlockWiseTransfer := true
 	BlockWiseTransferSzx := BlockWiseSzx1024
 	c := Client{Net: "udp", BlockWiseTransfer: &BlockWiseTransfer, BlockWiseTransferSzx: &BlockWiseTransferSzx}
 	con, err := c.Dial(addr)
-	if err != nil {
-		t.Fatalf("Unexpected error '%v'", err)
-	}
+	require.NoError(t, err)
 	sync := make(chan bool)
 	_, err = con.Observe("/tmp/test", func(req *Request) {
 		sync <- true
 	})
-	if err != nil {
-		t.Fatalf("Unexpected error '%v'", err)
-	}
+	require.NoError(t, err)
 	<-sync
 }

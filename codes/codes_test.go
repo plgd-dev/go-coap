@@ -2,8 +2,9 @@ package codes
 
 import (
 	"encoding/json"
-	"reflect"
 	"testing"
+
+	"github.com/stretchr/testify/require"
 )
 
 func TestJSONUnmarshal(t *testing.T) {
@@ -11,25 +12,22 @@ func TestJSONUnmarshal(t *testing.T) {
 	want := []Code{GET, NotFound, InternalServerError, Abort}
 	in := `["GET", "NotFound", "InternalServerError", "Abort"]`
 	err := json.Unmarshal([]byte(in), &got)
-	if err != nil || !reflect.DeepEqual(got, want) {
-		t.Fatalf("json.Unmarshal(%q, &got) = %v; want <nil>.  got=%v; want %v", in, err, got, want)
-	}
+	require.NoError(t, err)
+	require.Equal(t, want, got)
 }
 
 func TestUnmarshalJSON_NilReceiver(t *testing.T) {
 	var got *Code
 	in := GET.String()
-	if err := got.UnmarshalJSON([]byte(in)); err == nil {
-		t.Errorf("got.UnmarshalJSON(%q) = nil; want <non-nil>.  got=%v", in, got)
-	}
+	err := got.UnmarshalJSON([]byte(in))
+	require.Error(t, err)
 }
 
 func TestUnmarshalJSON_UnknownInput(t *testing.T) {
 	var got Code
 	for _, in := range [][]byte{[]byte(""), []byte("xxx"), []byte("Code(17)"), nil} {
-		if err := got.UnmarshalJSON([]byte(in)); err == nil {
-			t.Errorf("got.UnmarshalJSON(%q) = nil; want <non-nil>.  got=%v", in, got)
-		}
+		err := got.UnmarshalJSON([]byte(in))
+		require.Error(t, err)
 	}
 }
 
@@ -39,16 +37,11 @@ func TestUnmarshalJSON_MarshalUnmarshal(t *testing.T) {
 		c := Code(i)
 
 		cJSON, err := json.Marshal(c)
-		if err != nil {
-			t.Errorf("marshalling %q failed: %v", c, err)
-		}
+		require.NoError(t, err)
 
-		if err := json.Unmarshal(cJSON, &cUnMarshaled); err != nil {
-			t.Errorf("unmarshalling code failed: %s", err)
-		}
+		err = json.Unmarshal(cJSON, &cUnMarshaled)
+		require.NoError(t, err)
 
-		if c != cUnMarshaled {
-			t.Errorf("code is %q after marshalling/unmarshalling, expected %q", cUnMarshaled, c)
-		}
+		require.Equal(t, c, cUnMarshaled)
 	}
 }

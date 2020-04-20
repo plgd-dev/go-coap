@@ -69,8 +69,12 @@ func (f HandlerFunc) ServeCOAP(w ResponseWriter, r *Request) {
 
 // HandleFailed returns a HandlerFunc that returns NotFound for every request it gets.
 func HandleFailed(w ResponseWriter, req *Request) {
+	typ := NonConfirmable
+	if req.Msg.Type() == Confirmable {
+		typ = Acknowledgement
+	}
 	msg := req.Client.NewMessage(MessageParams{
-		Type:      Acknowledgement,
+		Type:      typ,
 		Code:      codes.NotFound,
 		MessageID: req.Msg.MessageID(),
 		Token:     req.Msg.Token(),

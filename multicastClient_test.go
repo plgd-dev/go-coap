@@ -3,6 +3,8 @@ package coap
 import (
 	"net"
 	"testing"
+
+	"github.com/stretchr/testify/require"
 )
 
 func TestServingIPv4MCastBlockWiseSzx16(t *testing.T) {
@@ -39,16 +41,12 @@ func TestServingIPv6MCastByClient(t *testing.T) {
 
 func TestServingIPv4AllInterfacesMCastByClient(t *testing.T) {
 	ifis, err := net.Interfaces()
-	if err != nil {
-		t.Fatalf("unable to get interfaces: %v", err)
-	}
+	require.NoError(t, err)
 	testServingMCastWithIfaces(t, "udp4-mcast", "225.0.1.187:11111", false, BlockWiseSzx16, 1033, ifis)
 }
 
 func TestServingIPv6AllInterfacesMCastByClient(t *testing.T) {
 	ifis, err := net.Interfaces()
-	if err != nil {
-		t.Fatalf("unable to get interfaces: %v", err)
-	}
+	require.NoError(t, err)
 	testServingMCastWithIfaces(t, "udp6-mcast", "[ff03::158]:5683", false, BlockWiseSzx16, 1033, ifis)
 }

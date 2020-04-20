@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/go-ocf/go-coap/codes"
+	"github.com/stretchr/testify/require"
 )
 
 func TestTCPDecodeMessageSmallWithPayload(t *testing.T) {
@@ -19,9 +20,7 @@ func TestTCPDecodeMessageSmallWithPayload(t *testing.T) {
 	}
 
 	msg, err := Decode(bytes.NewReader(input))
-	if err != nil {
-		t.Fatalf("Error parsing message: %v", err)
-	}
+	require.NoError(t, err)
 
 	if msg.Type() != Confirmable {
 		t.Errorf("Expected message type confirmable, got %v", msg.Type())
@@ -48,14 +47,10 @@ func TestMessageTCPToBytesLength(t *testing.T) {
 
 	buf := &bytes.Buffer{}
 	err := msg.MarshalBinary(buf)
-	if err != nil {
-		t.Fatalf("Error encoding request: %v", err)
-	}
+	require.NoError(t, err)
 
 	bytesLength, err := msg.ToBytesLength()
-	if err != nil {
-		t.Fatalf("Error parsing request: %v", err)
-	}
+	require.NoError(t, err)
 
 	lenTkl := 1
 	lenCode := 1
@@ -63,7 +58,5 @@ func TestMessageTCPToBytesLength(t *testing.T) {
 	payloadMarker := []byte{0xff}
 
 	expectedLength := lenTkl + lenCode + len(msgParams.Token) + maxMessageSizeOptionLength + len(payloadMarker) + len(msgParams.Payload)
-	if expectedLength != bytesLength {
-		t.Errorf("Expected Length  = %d, got %d", expectedLength, bytesLength)
-	}
+	require.Equal(t, expectedLength, bytesLength)
 }

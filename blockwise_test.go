@@ -6,35 +6,25 @@ import (
 	"log"
 	"testing"
 
+	"github.com/stretchr/testify/require"
+
 	"github.com/go-ocf/go-coap/codes"
 )
 
 func testMarshal(t *testing.T, szx BlockWiseSzx, blockNumber uint, moreBlocksFollowing bool, expectedBlock uint32) {
 	fmt.Printf("testMarshal szx=%v, num=%v more=%v\n", szx, blockNumber, moreBlocksFollowing)
 	block, err := MarshalBlockOption(szx, blockNumber, moreBlocksFollowing)
-	if err != nil {
-		t.Fatalf("unexpected error %v", err)
-	}
-	if block != expectedBlock {
-		t.Fatalf("unexpected value of block %v, expected %v", block, expectedBlock)
-	}
+	require.NoError(t, err)
+	require.Equal(t, expectedBlock, block)
 }
 
 func testUnmarshal(t *testing.T, block uint32, expectedSzx BlockWiseSzx, expectedNum uint, expectedMoreBlocksFollowing bool) {
 	fmt.Printf("testUnmarshal %v\n", block)
 	szx, num, more, err := UnmarshalBlockOption(block)
-	if err != nil {
-		t.Fatalf("unexpected error %v", err)
-	}
-	if szx != expectedSzx {
-		t.Fatalf("unexpected szx of block %v, expected %v", szx, expectedSzx)
-	}
-	if num != expectedNum {
-		t.Fatalf("unexpected num of block %v, expected %v", num, expectedNum)
-	}
-	if more != expectedMoreBlocksFollowing {
-		t.Fatalf("unexpected more of block %v, expected %v", more, expectedMoreBlocksFollowing)
-	}
+	require.NoError(t, err)
+	require.Equal(t, expectedSzx, szx)
+	require.Equal(t, expectedNum, num)
+	require.Equal(t, expectedMoreBlocksFollowing, more)
 }
 
 func TestBlockWiseBlockMarshal(t *testing.T) {
@@ -55,10 +45,8 @@ func TestBlockWiseBlockMarshal(t *testing.T) {
 	testMarshal(t, BlockWiseSzxBERT, 0, false, uint32(7))
 	testMarshal(t, BlockWiseSzxBERT, 0, true, uint32(15))
 
-	val, err := MarshalBlockOption(BlockWiseSzx16, maxBlockNumber+1, false)
-	if err == nil {
-		t.Fatalf("expected error, block %v", val)
-	}
+	_, err := MarshalBlockOption(BlockWiseSzx16, maxBlockNumber+1, false)
+	require.Error(t, err)
 }
 
 func TestBlockWiseBlockUnmarshal(t *testing.T) {
@@ -78,10 +66,8 @@ func TestBlockWiseBlockUnmarshal(t *testing.T) {
 	testUnmarshal(t, uint32(14), BlockWiseSzx1024, 0, true)
 	testUnmarshal(t, uint32(7), BlockWiseSzxBERT, 0, false)
 	testUnmarshal(t, uint32(15), BlockWiseSzxBERT, 0, true)
-	szx, num, m, err := UnmarshalBlockOption(0x1000000)
-	if err == nil {
-		t.Fatalf("expected error, szx %v, num %v, m %v", szx, num, m)
-	}
+	_, _, _, err := UnmarshalBlockOption(0x1000000)
+	require.Error(t, err)
 }
 
 func TestServingUDPBlockWiseSzx16(t *testing.T) {
@@ -114,9 +100,7 @@ func TestServingUDPBlockWiseSzx1024(t *testing.T) {
 
 func TestServingUDPBlockWiseSzxBERT(t *testing.T) {
 	_, addr, _, err := RunLocalUDPServer("udp", ":0", true, BlockWiseSzx1024)
-	if err != nil {
-		t.Fatalf("Unexpected error '%v'", err)
-	}
+	require.NoError(t, err)
 
 	BlockWiseTransfer := true
 	BlockWiseTransferSzx := BlockWiseSzxBERT
@@ -124,10 +108,10 @@ func TestServingUDPBlockWiseSzxBERT(t *testing.T) {
 	_, err = c.Dial(addr)
 	if err != nil {
 		if err.Error() != ErrInvalidBlockWiseSzx.Error() {
-			t.Fatalf("Expected error '%v', got '%v'", err, ErrInvalidBlockWiseSzx)
+			require.NoError(t, err)
 		}
 	} else {
-		t.Fatalf("Expected error '%v'", ErrInvalidBlockWiseSzx)
+		require.Error(t, err, "Expected error '%v'", ErrInvalidBlockWiseSzx)
 	}
 }
 
@@ -201,9 +185,7 @@ func TestServingUDPBlockWiseUsingWrite(t *testing.T) {
 	payload := make([]byte, 512)
 
 	_, addr, _, err := RunLocalUDPServer("udp", ":0", true, BlockWiseSzx1024)
-	if err != nil {
-		t.Fatalf("Unexpected error '%v'", err)
-	}
+	require.NoError(t, err)
 
 	BlockWiseTransfer := true
 	BlockWiseTransferSzx := BlockWiseSzx128
@@ -214,26 +196,18 @@ func TestServingUDPBlockWiseUsingWrite(t *testing.T) {
 		MaxMessageSize:       ^uint32(0),
 	}
 	co, err := c.Dial(addr)
-	if err != nil {
-		t.Fatal("cannot dial", err)
-	}
+	require.NoError(t, err)
 
 	req, err := co.NewPostRequest("/test-with-write", TextPlain, bytes.NewBuffer(payload))
-	if err != nil {
-		t.Fatal("cannot create request", err)
-	}
+	require.NoError(t, err)
 
 	m, err := co.Exchange(req)
-	if err != nil {
-		t.Fatal("failed to exchange", err)
-	}
-	if m == nil {
-		t.Fatalf("Didn't receive CoAP response")
-	}
+	require.NoError(t, err)
+	require.NotEmpty(t, m)
 
 	expectedMsg := &DgramMessage{
 		MessageBase: MessageBase{
-			typ:     Acknowledgement,
+			typ:     NonConfirmable,
 			code:    codes.Content,
 			payload: req.Payload(),
 			token:   req.Token(),
@@ -241,8 +215,7 @@ func TestServingUDPBlockWiseUsingWrite(t *testing.T) {
 		messageID: req.MessageID(),
 	}
 	expectedMsg.SetOption(ContentFormat, req.Option(ContentFormat))
-
-	assertEqualMessages(t, expectedMsg, m)
+	require.Equal(t, expectedMsg, m)
 }
 
 func TestServingUDPBlockWiseWithClientWithoutBlockWise(t *testing.T) {
@@ -252,9 +225,7 @@ func TestServingUDPBlockWiseWithClientWithoutBlockWise(t *testing.T) {
 	payload := make([]byte, 8)
 
 	_, addr, _, err := RunLocalUDPServer("udp", ":0", true, BlockWiseSzx16)
-	if err != nil {
-		t.Fatalf("Unexpected error '%v'", err)
-	}
+	require.NoError(t, err)
 
 	BlockWiseTransfer := false
 	BlockWiseTransferSzx := BlockWiseSzx128
@@ -265,26 +236,18 @@ func TestServingUDPBlockWiseWithClientWithoutBlockWise(t *testing.T) {
 		MaxMessageSize:       ^uint32(0),
 	}
 	co, err := c.Dial(addr)
-	if err != nil {
-		t.Fatal("cannot dial", err)
-	}
+	require.NoError(t, err)
 
 	req, err := co.NewPostRequest("/test-with-write", TextPlain, bytes.NewBuffer(payload))
-	if err != nil {
-		t.Fatal("cannot create request", err)
-	}
+	require.NoError(t, err)
 
 	m, err := co.Exchange(req)
-	if err != nil {
-		t.Fatal("failed to exchange", err)
-	}
-	if m == nil {
-		t.Fatalf("Didn't receive CoAP response")
-	}
+	require.NoError(t, err)
+	require.NotEmpty(t, m)
 
 	expectedMsg := &DgramMessage{
 		MessageBase: MessageBase{
-			typ:     Acknowledgement,
+			typ:     NonConfirmable,
 			code:    codes.Content,
 			payload: req.Payload(),
 			token:   req.Token(),
@@ -296,20 +259,16 @@ func TestServingUDPBlockWiseWithClientWithoutBlockWise(t *testing.T) {
 	expectedMsg.SetOption(Block2, uint32(0))
 	expectedMsg.SetOption(Size2, uint32(len(req.Payload())))
 
-	assertEqualMessages(t, expectedMsg, m)
+	require.Equal(t, expectedMsg, m)
 
 	getReq, err := co.NewGetRequest("/test-with-write")
-	if err != nil {
-		t.Fatal("cannot create request", err)
-	}
+	require.NoError(t, err)
 
 	getResp, err := co.Exchange(getReq)
-	if err != nil {
-		t.Fatal("failed to exchange", err)
-	}
+	require.NoError(t, err)
 	expectedGetMsg := DgramMessage{
 		MessageBase: MessageBase{
-			typ:     Acknowledgement,
+			typ:     NonConfirmable,
 			code:    codes.Content,
 			payload: helloWorld,
 			token:   getReq.Token(),
@@ -325,5 +284,5 @@ func TestServingUDPBlockWiseWithClientWithoutBlockWise(t *testing.T) {
 	expectedGetMsg.SetOption(Block2, uint32(0))
 	expectedGetMsg.SetOption(Size2, uint32(len(helloWorld)))
 
-	assertEqualMessages(t, &expectedGetMsg, getResp)
+	require.Equal(t, &expectedGetMsg, getResp)
 }
