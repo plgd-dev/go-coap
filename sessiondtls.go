@@ -39,7 +39,7 @@ func newSessionDTLS(connection *coapNet.Conn, srv *Server) (networkSession, erro
 	}
 
 	dtlsConn := connection.Connection().(*dtls.Conn)
-	cert := dtlsConn.RemoteCertificate()
+	cert := dtlsConn.ConnectionState().PeerCertificates
 	if len(cert) > 0 {
 		flatCerts := bytes.Join(cert, nil)
 		peerCertificates, err := x509.ParseCertificates(flatCerts)
