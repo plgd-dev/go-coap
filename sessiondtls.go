@@ -87,7 +87,7 @@ func (s *sessionDTLS) PingWithContext(ctx context.Context) error {
 	req := s.NewMessage(MessageParams{
 		Type:      Confirmable,
 		Code:      codes.Empty,
-		MessageID: GenerateMessageID(),
+		MessageID: GetMID(),
 	})
 	resp, err := s.ExchangeWithContext(ctx, req)
 	if err != nil {

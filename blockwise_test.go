@@ -214,7 +214,7 @@ func TestServingUDPBlockWiseUsingWrite(t *testing.T) {
 			payload: req.Payload(),
 			token:   req.Token(),
 		},
-		messageID: req.MessageID(),
+		messageID: m.MessageID(),
 	}
 	expectedMsg.SetOption(ContentFormat, req.Option(ContentFormat))
 	require.Equal(t, expectedMsg, m)
@@ -275,7 +275,6 @@ func TestServingUDPBlockWiseWithClientWithoutBlockWise(t *testing.T) {
 			payload: helloWorld,
 			token:   getReq.Token(),
 		},
-		messageID: getReq.MessageID(),
 	}
 
 	if etag, ok := getResp.Option(ETag).([]byte); ok {

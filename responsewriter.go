@@ -2,6 +2,7 @@ package coap
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/go-ocf/go-coap/codes"
 )
@@ -72,16 +73,19 @@ func responseWriterFromRequest(r *Request) ResponseWriter {
 
 // NewResponse creates reponse for request
 func (r *responseWriter) NewResponse(code codes.Code) Message {
-	typ := NonConfirmable
-	if r.req.Msg.Type() == Confirmable {
-		typ = Acknowledgement
+	typ := Acknowledgement
+	messageID := r.req.Msg.MessageID()
+	if r.req.Msg.Type() != Confirmable {
+		messageID = GetMID()
+		typ = NonConfirmable
 	}
 	resp := r.req.Client.NewMessage(MessageParams{
 		Type:      typ,
 		Code:      code,
-		MessageID: r.req.Msg.MessageID(),
+		MessageID: messageID,
 		Token:     r.req.Msg.Token(),
 	})
+	fmt.Printf("NewResponse %+v\n", resp)
 	return resp
 }
 

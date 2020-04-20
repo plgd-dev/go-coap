@@ -31,7 +31,7 @@ func (cc *ClientCommander) newGetDeleteRequest(path string, code codes.Code) (Me
 	req := cc.NewMessage(MessageParams{
 		Type:      NonConfirmable,
 		Code:      code,
-		MessageID: GenerateMessageID(),
+		MessageID: GetMID(),
 		Token:     token,
 	})
 	req.SetPathString(path)
@@ -46,7 +46,7 @@ func (cc *ClientCommander) newPostPutRequest(path string, contentFormat MediaTyp
 	req := cc.networkSession.NewMessage(MessageParams{
 		Type:      NonConfirmable,
 		Code:      code,
-		MessageID: GenerateMessageID(),
+		MessageID: GetMID(),
 		Token:     token,
 	})
 	req.SetPathString(path)
@@ -208,7 +208,7 @@ func (o *Observation) CancelWithContext(ctx context.Context) error {
 	req := o.client.NewMessage(MessageParams{
 		Type:      NonConfirmable,
 		Code:      codes.GET,
-		MessageID: GenerateMessageID(),
+		MessageID: GetMID(),
 		Token:     o.token,
 	})
 	req.SetPathString(o.path)

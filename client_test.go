@@ -11,14 +11,16 @@ import (
 )
 
 func periodicTransmitter(w ResponseWriter, r *Request) {
-	typ := NonConfirmable
-	if r.Msg.Type() == Confirmable {
-		typ = Acknowledgement
+	typ := Acknowledgement
+	messageID := r.Msg.MessageID()
+	if r.Msg.Type() != Confirmable {
+		typ = NonConfirmable
+		messageID = GetMID()
 	}
 	msg := r.Client.NewMessage(MessageParams{
 		Type:      typ,
 		Code:      codes.Content,
-		MessageID: r.Msg.MessageID(),
+		MessageID: messageID,
 		Payload:   make([]byte, 15),
 		Token:     r.Msg.Token(),
 	})
@@ -100,14 +102,16 @@ func TestServingTCPObservation(t *testing.T) {
 
 func setupServer(t *testing.T) (*Server, string, chan error, error) {
 	return RunLocalServerUDPWithHandler("udp", ":0", true, BlockWiseSzx1024, func(w ResponseWriter, r *Request) {
-		typ := NonConfirmable
-		if r.Msg.Type() == Confirmable {
-			typ = Acknowledgement
+		typ := Acknowledgement
+		messageID := r.Msg.MessageID()
+		if r.Msg.Type() != Confirmable {
+			typ = NonConfirmable
+			messageID = GetMID()
 		}
 		msg := r.Client.NewMessage(MessageParams{
 			Type:      typ,
 			Code:      codes.Content,
-			MessageID: r.Msg.MessageID(),
+			MessageID: messageID,
 			Payload:   make([]byte, 5000),
 			Token:     r.Msg.Token(),
 		})
@@ -193,14 +197,16 @@ func TestServingUDPDelete(t *testing.T) {
 
 func TestServingUDPObserve(t *testing.T) {
 	s, addr, fin, err := RunLocalServerUDPWithHandler("udp", ":0", true, BlockWiseSzx16, func(w ResponseWriter, r *Request) {
-		typ := NonConfirmable
-		if r.Msg.Type() == Confirmable {
-			typ = Acknowledgement
+		typ := Acknowledgement
+		messageID := r.Msg.MessageID()
+		if r.Msg.Type() != Confirmable {
+			typ = NonConfirmable
+			messageID = GetMID()
 		}
 		msg := r.Client.NewMessage(MessageParams{
 			Type:      typ,
 			Code:      codes.Content,
-			MessageID: r.Msg.MessageID(),
+			MessageID: messageID,
 			Payload:   make([]byte, 17),
 			Token:     r.Msg.Token(),
 		})

@@ -94,7 +94,7 @@ func (s *sessionUDP) PingWithContext(ctx context.Context) error {
 	req := s.NewMessage(MessageParams{
 		Type:      Confirmable,
 		Code:      codes.Empty,
-		MessageID: GenerateMessageID(),
+		MessageID: GetMID(),
 	})
 	resp, err := s.ExchangeWithContext(ctx, req)
 	if err != nil {
@@ -135,14 +135,16 @@ func (s *sessionUDP) WriteMsgWithContext(ctx context.Context, req Message) error
 }
 
 func (s *sessionUDP) sendPong(w ResponseWriter, r *Request) error {
-	typ := NonConfirmable
-	if r.Msg.Type() == Confirmable {
-		typ = Acknowledgement
+	typ := Acknowledgement
+	messageID := r.Msg.MessageID()
+	if r.Msg.Type() != Confirmable {
+		typ = NonConfirmable
+		messageID = GetMID()
 	}
 	resp := r.Client.NewMessage(MessageParams{
 		Type:      typ,
 		Code:      codes.Empty,
-		MessageID: r.Msg.MessageID(),
+		MessageID: messageID,
 	})
 	return w.WriteMsgWithContext(r.Ctx, resp)
 }

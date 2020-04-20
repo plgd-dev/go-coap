@@ -7,6 +7,16 @@ import (
 	"sync/atomic"
 )
 
+var msgIDIter uint32
+
+func init() {
+	b := make([]byte, 4)
+	n, err := rand.Read(b)
+	if err == nil && n == len(b) {
+		msgIDIter = binary.BigEndian.Uint32(b)
+	}
+}
+
 // GenerateToken generates a random token by a given length
 func GenerateToken() ([]byte, error) {
 	b := make([]byte, MaxTokenSize)
@@ -19,11 +29,9 @@ func GenerateToken() ([]byte, error) {
 	return b, nil
 }
 
-var msgIdIter = uint32(0)
-
-// GenerateMessageID generates a message id for UDP-coap
-func GenerateMessageID() uint16 {
-	return uint16(atomic.AddUint32(&msgIdIter, 1) % 0xffff)
+// GetMID generates a message id for UDP-coap
+func GetMID() uint16 {
+	return uint16(atomic.AddUint32(&msgIDIter, 1) % 0xffff)
 }
 
 // Calculate ETag from payload via CRC64

@@ -4,6 +4,7 @@ package coap
 
 import (
 	"context"
+	"fmt"
 	"net"
 	"strings"
 	"time"
@@ -208,6 +209,7 @@ func (mconn *MulticastClientConn) PublishMsgWithContext(ctx context.Context, req
 		if needGet {
 			resp, err = r.Client.GetWithContext(ctx, path)
 			if err != nil {
+				fmt.Printf("mcast err: %v\n", err)
 				return
 			}
 		}

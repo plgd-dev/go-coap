@@ -12,7 +12,7 @@ import (
 
 const (
 	maxBlockNumber = uint(1048575)
-	blockWiseDebug = false
+	blockWiseDebug = true
 )
 
 // BlockWiseSzx enum representation for szx
@@ -151,14 +151,20 @@ func newSender(startedByClient bool, blockType OptionID, suggestedSzx BlockWiseS
 
 func (s *blockWiseSender) newReq(b *blockWiseSession) (Message, error) {
 	req := b.networkSession.NewMessage(MessageParams{
-		Code:      s.origin.Code(),
-		Type:      determineCoapType(s.startedByClient, s.origin),
-		MessageID: s.origin.MessageID(),
-		Token:     s.origin.Token(),
+		Code:  s.origin.Code(),
+		Token: s.origin.Token(),
 	})
-
-	if !s.startedByClient {
-		req.SetMessageID(GenerateMessageID())
+	if s.origin.Code() == codes.PUT || s.origin.Code() == codes.POST {
+		req.SetMessageID(s.origin.MessageID())
+		req.SetType(s.origin.Type())
+	} else {
+		if s.origin.Type() == Confirmable {
+			req.SetMessageID(s.origin.MessageID())
+			req.SetType(Acknowledgement)
+		} else {
+			req.SetMessageID(GetMID())
+			req.SetType(NonConfirmable)
+		}
 	}
 
 	for _, option := range s.origin.AllOptions() {
@@ -221,10 +227,6 @@ func (s *blockWiseSender) processResp(ctx context.Context, b *blockWiseSession, 
 				}
 			}
 		}
-		// clean response from blockWise staff
-		if !s.startedByClient {
-			resp.SetMessageID(s.origin.MessageID())
-		}
 		resp.RemoveOption(s.sizeType())
 		resp.RemoveOption(s.blockType)
 		return resp, nil
@@ -247,10 +249,8 @@ func (s *blockWiseSender) processResp(ctx context.Context, b *blockWiseSession, 
 		maxPayloadSize, s.currentSzx = b.blockWiseMaxPayloadSize(szx)
 		if s.startedByClient {
 			s.currentNum = num
-			req.SetMessageID(resp.MessageID())
 		} else {
 			s.currentNum = calcNextNum(num, szx, len(req.Payload()))
-			req.SetMessageID(GenerateMessageID())
 		}
 		startOffset := calcStartOffset(s.currentNum, szx)
 		endOffset := startOffset + maxPayloadSize
@@ -272,10 +272,17 @@ func (s *blockWiseSender) processResp(ctx context.Context, b *blockWiseSession, 
 			return nil, err
 		}
 		req.SetOption(s.blockType, block)
-		if !s.startedByClient {
+		if s.origin.Code() == codes.PUT || s.origin.Code() == codes.POST {
+			req.SetMessageID(s.origin.MessageID())
 			req.SetType(s.origin.Type())
 		} else {
-			req.SetType(determineCoapType(s.startedByClient, resp))
+			if s.origin.Type() == Confirmable {
+				req.SetMessageID(s.origin.MessageID())
+				req.SetType(Acknowledgement)
+			} else {
+				req.SetMessageID(GetMID())
+				req.SetType(NonConfirmable)
+			}
 		}
 	} else {
 		switch s.blockType {
@@ -401,7 +408,6 @@ type blockWiseReceiver struct {
 	startedByClient bool
 	code            codes.Code
 	expectedCode    codes.Code
-	typ             COAPType
 	origin          Message
 	blockType       OptionID
 	currentSzx      BlockWiseSzx
@@ -428,10 +434,8 @@ func determineCoapType(startedByClient bool, req Message) COAPType {
 
 func (r *blockWiseReceiver) newReq(b *blockWiseSession, resp Message) (Message, error) {
 	req := b.networkSession.NewMessage(MessageParams{
-		Code:      r.code,
-		Type:      r.typ,
-		MessageID: r.origin.MessageID(),
-		Token:     r.origin.Token(),
+		Code:  r.code,
+		Token: r.origin.Token(),
 	})
 	if !r.startedByClient {
 		for _, option := range r.origin.AllOptions() {
@@ -440,13 +444,25 @@ func (r *blockWiseReceiver) newReq(b *blockWiseSession, resp Message) (Message, 
 				req.AddOption(option.ID, option.Value)
 			}
 		}
-		req.SetMessageID(GenerateMessageID())
 	} else if resp == nil {
 		// set blocktype as peer wants
 		block := r.origin.Option(r.blockType)
 		if block != nil {
 			req.SetOption(r.blockType, block)
 		}
+	}
+
+	msg := resp
+	if resp == nil {
+		msg = r.origin
+	}
+
+	if msg.Type() == Confirmable {
+		req.SetMessageID(msg.MessageID())
+		req.SetType(Acknowledgement)
+	} else {
+		req.SetMessageID(GetMID())
+		req.SetType(NonConfirmable)
 	}
 
 	if r.payload.Len() > 0 {
@@ -464,7 +480,6 @@ func newReceiver(b *blockWiseSession, startedByClient bool, origin Message, resp
 		startedByClient: startedByClient,
 		code:            code,
 		origin:          origin,
-		typ:             determineCoapType(startedByClient, origin),
 		blockType:       blockType,
 		currentSzx:      b.networkSession.blockWiseSzx(),
 		payload:         bytes.NewBuffer(make([]byte, 0)),
@@ -489,9 +504,6 @@ func newReceiver(b *blockWiseSession, startedByClient bool, origin Message, resp
 			if more == false {
 				resp.RemoveOption(r.sizeType())
 				resp.RemoveOption(blockType)
-				if !startedByClient {
-					resp.SetMessageID(origin.MessageID())
-				}
 				return r, resp, nil
 			}
 			//set szx and num by response
@@ -617,15 +629,7 @@ func (r *blockWiseReceiver) processResp(b *blockWiseSession, req Message, resp M
 			// remove block used by blockWise
 			resp.RemoveOption(r.sizeType())
 			resp.RemoveOption(r.blockType)
-			if !r.startedByClient {
-				resp.SetMessageID(r.origin.MessageID())
-			}
 			return resp, nil
-		}
-		if r.startedByClient {
-			req.SetMessageID(resp.MessageID())
-		} else {
-			req.SetMessageID(GenerateMessageID())
 		}
 		if blockWiseDebug {
 			log.Printf("receivePayload szx=%v num=%v more=%v\n", szx, r.nextNum, more)
@@ -635,7 +639,17 @@ func (r *blockWiseReceiver) processResp(b *blockWiseSession, req Message, resp M
 			return nil, err
 		}
 		req.SetOption(r.blockType, block)
-		req.SetType(determineCoapType(r.startedByClient, resp))
+		if resp.Type() == Confirmable {
+			req.SetMessageID(resp.MessageID())
+			req.SetType(Acknowledgement)
+		} else {
+			req.SetMessageID(GetMID())
+			typ := NonConfirmable
+			if r.origin.Type() == Confirmable {
+				typ = Confirmable
+			}
+			req.SetType(typ)
+		}
 	} else {
 		if r.payloadSize != 0 && int(r.payloadSize) != len(resp.Payload()) {
 			return nil, ErrInvalidPayloadSize
@@ -655,13 +669,16 @@ func (r *blockWiseReceiver) sendError(ctx context.Context, b *blockWiseSession, 
 	var MessageID uint16
 	var token []byte
 	var typ COAPType
-	if !r.startedByClient {
-		MessageID = GenerateMessageID()
-		token = r.origin.Token()
-		typ = NonConfirmable
+	if resp.Type() == Confirmable {
+		MessageID = resp.MessageID()
+		typ = Acknowledgement
 	} else {
-		MessageID = r.origin.MessageID()
-		typ = determineCoapType(r.startedByClient, r.origin)
+		MessageID = GetMID()
+		typ = NonConfirmable
+	}
+	if !r.startedByClient {
+		token = r.origin.Token()
+	} else {
 		if resp != nil {
 			token = resp.Token()
 		} else {
@@ -747,7 +764,7 @@ func handleBlockWiseMsg(w ResponseWriter, r *Request, next func(w ResponseWriter
 							req := r.networkSession.NewMessage(MessageParams{
 								Code:      GET,
 								Type:      Confirmable,
-								MessageID: GenerateMessageID(),
+								MessageID: GetMID(),
 								Token:     token,
 							})
 							req.AddOption(Block2, r.Msg.Option(Block2))

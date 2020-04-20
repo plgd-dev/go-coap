@@ -87,7 +87,6 @@ func (s *sessionTCP) PingWithContext(ctx context.Context) error {
 		return err
 	}
 	req := s.NewMessage(MessageParams{
-		Type:  NonConfirmable,
 		Code:  codes.Ping,
 		Token: []byte(token),
 	})
@@ -169,7 +168,6 @@ func (s *sessionTCP) sendCSM() error {
 		return err
 	}
 	req := s.NewMessage(MessageParams{
-		Type:  NonConfirmable,
 		Code:  codes.CSM,
 		Token: []byte(token),
 	})
@@ -196,7 +194,6 @@ func (s *sessionTCP) setPeerBlockWiseTransfer(val bool) {
 
 func (s *sessionTCP) sendPong(w ResponseWriter, r *Request) error {
 	req := s.NewMessage(MessageParams{
-		Type:  NonConfirmable,
 		Code:  codes.Pong,
 		Token: r.Msg.Token(),
 	})

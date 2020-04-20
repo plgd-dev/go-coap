@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"log"
+	"time"
 
 	coap "github.com/go-ocf/go-coap"
 	"github.com/ugorji/go/codec"
@@ -52,7 +53,7 @@ func decodeMsgToDebug(resp coap.Message, tag string) {
 func main() {
 	client := &coap.MulticastClient{}
 
-	conn, err := client.Dial("224.0.1.187:5688")
+	conn, err := client.Dial("224.0.1.187:5683")
 	if err != nil {
 		log.Fatalf("Error dialing: %v", err)
 	}
@@ -76,4 +77,5 @@ func main() {
 		log.Fatalf("Error sending request: %v", err)
 	}
 	<-sync
+	time.Sleep(time.Second * 5)
 }

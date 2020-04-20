@@ -18,9 +18,9 @@ type sessionBase struct {
 	sequence uint64
 
 	blockWiseTransfer    bool
-	blockWiseTransferSzx uint32                                         //BlockWiseSzx
-	mapPairs             map[[MaxTokenSize]byte]map[uint16]*sessionResp //storage of channel Message
-	mapPairsLock         sync.Mutex                                     //to sync add remove token
+	blockWiseTransferSzx uint32                              //BlockWiseSzx
+	mapPairs             map[[MaxTokenSize]byte]*sessionResp //storage of channel Message
+	mapPairsLock         sync.Mutex                          //to sync add remove token
 	done                 chan struct{}
 	doneMutex            sync.Mutex
 }
@@ -31,7 +31,7 @@ func newBaseSession(blockWiseTransfer bool, blockWiseTransferSzx BlockWiseSzx, s
 		handler:              &TokenHandler{tokenHandlers: make(map[[MaxTokenSize]byte]HandlerFunc)},
 		blockWiseTransfer:    blockWiseTransfer,
 		blockWiseTransferSzx: uint32(blockWiseTransferSzx),
-		mapPairs:             make(map[[MaxTokenSize]byte]map[uint16](*sessionResp)),
+		mapPairs:             make(map[[MaxTokenSize]byte](*sessionResp)),
 
 		done: make(chan struct{}),
 	}
@@ -61,7 +61,7 @@ func (s *sessionBase) TokenHandler() *TokenHandler {
 	return s.handler
 }
 
-func (s *sessionBase) newSessionResp(token []byte, messageID uint16) (*sessionResp, error) {
+func (s *sessionBase) newSessionResp(token []byte) (*sessionResp, error) {
 	var pairToken [MaxTokenSize]byte
 	copy(pairToken[:], token)
 
@@ -69,40 +69,32 @@ func (s *sessionBase) newSessionResp(token []byte, messageID uint16) (*sessionRe
 	pairChan := &sessionResp{make(chan *Request, 1)}
 	s.mapPairsLock.Lock()
 	defer s.mapPairsLock.Unlock()
-	if s.mapPairs[pairToken] == nil {
-		s.mapPairs[pairToken] = make(map[uint16]*sessionResp)
-	}
-	if s.mapPairs[pairToken][messageID] != nil {
+	if s.mapPairs[pairToken] != nil {
 		return nil, ErrTokenAlreadyExist
 	}
-	s.mapPairs[pairToken][messageID] = pairChan
+	s.mapPairs[pairToken] = pairChan
 	return pairChan, nil
 }
 
-func (s *sessionBase) getSessionResp(token []byte, messageID uint16) *sessionResp {
+func (s *sessionBase) getSessionResp(token []byte) *sessionResp {
 	var pairToken [MaxTokenSize]byte
 	copy(pairToken[:], token)
 
 	s.mapPairsLock.Lock()
 	defer s.mapPairsLock.Unlock()
 	if m, ok := s.mapPairs[pairToken]; ok {
-		if p, ok := m[messageID]; ok {
-			return p
-		}
+		return m
 	}
 	return nil
 }
 
-func (s *sessionBase) removeSessionResp(token []byte, messageID uint16) {
+func (s *sessionBase) removeSessionResp(token []byte) {
 	var pairToken [MaxTokenSize]byte
 	copy(pairToken[:], token)
 
 	s.mapPairsLock.Lock()
 	defer s.mapPairsLock.Unlock()
-	delete(s.mapPairs[pairToken], messageID)
-	if len(s.mapPairs[pairToken]) == 0 {
-		delete(s.mapPairs, pairToken)
-	}
+	delete(s.mapPairs, pairToken)
 }
 
 func (s *sessionBase) exchangeWithContext(ctx context.Context, req Message, writeMsgWithContext func(context.Context, Message) error) (Message, error) {
@@ -110,12 +102,12 @@ func (s *sessionBase) exchangeWithContext(ctx context.Context, req Message, writ
 		return nil, err
 	}
 	//register msgid to token
-	pairChan, err := s.newSessionResp(req.Token(), req.MessageID())
+	pairChan, err := s.newSessionResp(req.Token())
 	if err != nil {
 		return nil, err
 	}
 
-	defer s.removeSessionResp(req.Token(), req.MessageID())
+	defer s.removeSessionResp(req.Token())
 
 	err = writeMsgWithContext(ctx, req)
 	if err != nil {
@@ -143,7 +135,7 @@ func validateMsg(msg Message) error {
 
 func (s *sessionBase) handlePairMsg(w ResponseWriter, r *Request) bool {
 	//validate token
-	pair := s.getSessionResp(r.Msg.Token(), r.Msg.MessageID())
+	pair := s.getSessionResp(r.Msg.Token())
 	if pair != nil {
 		select {
 		case pair.ch <- r:
