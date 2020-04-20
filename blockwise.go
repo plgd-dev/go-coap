@@ -188,7 +188,7 @@ func (s *blockWiseSender) exchange(ctx context.Context, b *blockWiseSession, req
 	var resp Message
 	var err error
 	if blockWiseDebug {
-		log.Printf("sendPayload %p req=%v\n", b, req)
+		log.Printf("sendPayload %p req=%+v\n", b, req)
 	}
 	if s.startedByClient {
 		resp, err = exchangeDrivedByPeer(ctx, b.networkSession, req, s.blockType)
@@ -199,7 +199,7 @@ func (s *blockWiseSender) exchange(ctx context.Context, b *blockWiseSession, req
 		return nil, err
 	}
 	if blockWiseDebug {
-		log.Printf("sendPayload %p resp=%v\n", b, resp)
+		log.Printf("sendPayload %p resp=%+v\n", b, resp)
 	}
 	return resp, nil
 }
@@ -272,7 +272,11 @@ func (s *blockWiseSender) processResp(ctx context.Context, b *blockWiseSession, 
 			return nil, err
 		}
 		req.SetOption(s.blockType, block)
-		req.SetType(determineCoapType(s.startedByClient, resp))
+		if !s.startedByClient {
+			req.SetType(s.origin.Type())
+		} else {
+			req.SetType(determineCoapType(s.startedByClient, resp))
+		}
 	} else {
 		switch s.blockType {
 		case Block1:
@@ -532,7 +536,7 @@ func newReceiver(b *blockWiseSession, startedByClient bool, origin Message, resp
 
 func (r *blockWiseReceiver) exchange(ctx context.Context, b *blockWiseSession, req Message) (Message, error) {
 	if blockWiseDebug {
-		log.Printf("receivePayload %p req=%v\n", b, req)
+		log.Printf("receivePayload %p req=%+v\n", b, req)
 	}
 	var resp Message
 	var err error
@@ -543,7 +547,7 @@ func (r *blockWiseReceiver) exchange(ctx context.Context, b *blockWiseSession, r
 	}
 
 	if blockWiseDebug {
-		log.Printf("receivePayload %p resp=%v\n", b, resp)
+		log.Printf("receivePayload %p resp=%+v\n", b, resp)
 	}
 
 	return resp, err

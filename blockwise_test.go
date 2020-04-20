@@ -159,6 +159,7 @@ var helloWorld = []byte("Hello world")
 
 // EchoServerUsingWrite echoes request payloads using ResponseWriter.Write
 func EchoServerUsingWrite(w ResponseWriter, r *Request) {
+	fmt.Printf("EchoServerUsingWrite %+v\n", r.Msg)
 	w.SetCode(codes.Content)
 	if mt, ok := r.Msg.Option(ContentFormat).(MediaType); ok {
 		w.SetContentFormat(mt)
@@ -199,6 +200,7 @@ func TestServingUDPBlockWiseUsingWrite(t *testing.T) {
 	require.NoError(t, err)
 
 	req, err := co.NewPostRequest("/test-with-write", TextPlain, bytes.NewBuffer(payload))
+	req.SetType(Confirmable)
 	require.NoError(t, err)
 
 	m, err := co.Exchange(req)
@@ -207,7 +209,7 @@ func TestServingUDPBlockWiseUsingWrite(t *testing.T) {
 
 	expectedMsg := &DgramMessage{
 		MessageBase: MessageBase{
-			typ:     NonConfirmable,
+			typ:     Acknowledgement,
 			code:    codes.Content,
 			payload: req.Payload(),
 			token:   req.Token(),
