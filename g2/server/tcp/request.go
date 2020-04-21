@@ -116,6 +116,8 @@ func (r *Request) Copy(src *Request) {
 	r.msg.Payload = append(r.msg.Payload[:0], r.msg.Payload)
 }
 
+func (r *Request) Unmarshal(data []byte)
+
 // AcquireRequestMsg returns an empty Request instance from Request pool.
 //
 // The returned Request instance may be passed to ReleaseRequest when it is

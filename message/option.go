@@ -188,7 +188,7 @@ func (c MediaType) String() string {
 	case AppLwm2mJSON:
 		return "application/vnd.oma.lwm2m+json"
 	}
-	return "Unknown media type: 0x" + strconv.FormatInt(int64(c), 16)
+	return "MediaType(" + strconv.FormatInt(int64(c), 10) + ")"
 }
 
 func extendOpt(opt int) (int, int) {

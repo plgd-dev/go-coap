@@ -1,6 +1,8 @@
 package message
 
-import "strings"
+import (
+	"strings"
+)
 
 type Options []Option
 
@@ -34,27 +36,29 @@ func (options Options) SetPath(buf []byte, path string) (Options, int, ErrorCode
 	return o, encoded, OK
 }
 
-func (options Options) Path(buf []rune) (int, ErrorCode) {
+func (options Options) Path(buf []byte) (int, ErrorCode) {
 	firstIdx, lastIdx, err := options.Find(URIPath)
 	if err != OK {
 		return -1, err
 	}
-	used := 0
+	var needed int
+	for i := firstIdx; i < lastIdx; i++ {
+		needed += len(options[i].Value)
+		needed++
+	}
+	needed--
+	if len(buf) < needed {
+		return needed, ErrorCodeTooSmall
+	}
 	for i := firstIdx; i < lastIdx; i++ {
 		if i != firstIdx {
-			if len(buf) <= used {
-				return -1, ErrorCodeTooSmall
-			}
-			buf[used] = '/'
-			used++
+			buf[0] = '/'
+			buf = buf[1:]
 		}
-		len, err := DecodeRunes(buf[used:], options[i].Value)
-		if err != OK {
-			return -1, err
-		}
-		used += len
+		copy(buf, options[i].Value)
+		buf = buf[len(options[i].Value):]
 	}
-	return used, OK
+	return needed, OK
 }
 
 func (options Options) SetOptionString(buf []byte, id OptionID, str string) (Options, int, ErrorCode) {
@@ -69,26 +73,99 @@ func (options Options) SetOptionString(buf []byte, id OptionID, str string) (Opt
 }
 
 func (options Options) AddOptionString(buf []byte, id OptionID, str string) (Options, int, ErrorCode) {
-	enc, err := EncodeRunes(buf, []rune(str))
-	if err != OK {
-		return options, -1, err
+	data := []byte(str)
+	if len(buf) < len(data) {
+		return options, len(data), ErrorCodeTooSmall
 	}
-	if id == URIPath && enc > maxPathValue {
+	if id == URIPath && len(data) > maxPathValue {
 		return options, -1, ErrorCodeInvalidValueLength
 	}
-	return options.Add(Option{ID: URIPath, Value: buf[:enc]}), enc, OK
+	copy(buf, data)
+	return options.Add(Option{ID: URIPath, Value: buf[:len(data)]}), len(data), OK
 }
 
-func (options Options) OptionUint32(id OptionID) (uint32, ErrorCode) {
-	firstIdx, lastIdx, err := options.Find(Block1)
+func (options Options) HasOption(id OptionID) bool {
+	_, _, err := options.Find(id)
+	return err == OK
+}
+
+func (options Options) ReadUint32(id OptionID, r []uint32) (int, ErrorCode) {
+	firstIdx, lastIdx, err := options.Find(id)
 	if err != OK {
 		return 0, err
 	}
-	if firstIdx != lastIdx {
-		return 0, ErrorCodeOptionDuplicate
+	if len(r) < lastIdx-firstIdx {
+		return lastIdx - firstIdx, ErrorCodeShortRead
+	}
+	var idx int
+	for i := firstIdx; i <= lastIdx; i++ {
+		val, _, err := DecodeUint32(options[i].Value)
+		if err == OK {
+			r[idx] = val
+			idx++
+		}
+	}
+
+	return idx, OK
+}
+
+func (options Options) GetUint32(id OptionID) (uint32, ErrorCode) {
+	firstIdx, _, err := options.Find(id)
+	if err != OK {
+		return 0, err
 	}
 	val, _, err := DecodeUint32(options[firstIdx].Value)
 	return val, err
+}
+
+func (options Options) GetString(id OptionID) (string, ErrorCode) {
+	firstIdx, _, err := options.Find(id)
+	if err != OK {
+		return "", err
+	}
+	return string(options[firstIdx].Value), OK
+}
+
+func (options Options) GetBytes(id OptionID) ([]byte, ErrorCode) {
+	firstIdx, _, err := options.Find(id)
+	if err != OK {
+		return nil, err
+	}
+	return options[firstIdx].Value, OK
+}
+
+func (options Options) ReadStrings(id OptionID, r []string) (int, ErrorCode) {
+	firstIdx, lastIdx, err := options.Find(id)
+	if err != OK {
+		return 0, err
+	}
+	if len(r) < lastIdx-firstIdx {
+		return lastIdx - firstIdx, ErrorCodeShortRead
+	}
+	var idx int
+	for i := firstIdx; i < lastIdx; i++ {
+		r[idx] = string(options[i].Value)
+		idx++
+	}
+
+	return idx, OK
+}
+
+func (options Options) ReadBytes(id OptionID, r [][]byte) (int, ErrorCode) {
+	firstIdx, lastIdx, err := options.Find(id)
+	if err != OK {
+		return 0, err
+	}
+	if len(r) < lastIdx-firstIdx {
+		return lastIdx - firstIdx, ErrorCodeShortRead
+	}
+	var idx int
+	for i := firstIdx; i < lastIdx; i++ {
+		r[idx] = options[i].Value
+		idx++
+	}
+
+	return idx, OK
 }
 
 func (options Options) AddOptionUint32(buf []byte, id OptionID, value uint32) (Options, int, ErrorCode) {

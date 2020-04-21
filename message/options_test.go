@@ -3,6 +3,8 @@ package message
 import (
 	"bytes"
 	"testing"
+
+	"github.com/stretchr/testify/require"
 )
 
 func testFindPositionBytesOption(t *testing.T, options Options, id OptionID, prepend bool, expectedIdx int) int {
@@ -73,6 +75,13 @@ func TestSetBytesOption(t *testing.T) {
 	if len(options) != 3 {
 		t.Fatalf("bad size of option %d", len(options))
 	}
+
+	v := make([]string, 1)
+	n, errCode := options.ReadStrings(1, v)
+	require.Equal(t, OK, errCode)
+	require.Equal(t, 1, n)
+	require.Equal(t, []string{"11"}, v)
+
 	// options = options[:len]
 }
 
@@ -96,6 +105,11 @@ func TestAddBytesOption(t *testing.T) {
 	options = testAddBytesOption(t, options, Option{ID: 3, Value: []byte("2")}, 2)
 	options = testAddBytesOption(t, options, Option{ID: 3, Value: []byte("3")}, 3)
 	options = testAddBytesOption(t, options, Option{ID: 1, Value: []byte("4")}, 2)
+	v := make([][]byte, 2)
+	n, errCode := options.ReadBytes(0, v)
+	require.Equal(t, OK, errCode)
+	require.Equal(t, 2, n)
+	require.Equal(t, [][]byte{[]byte{0x30}, []byte{0x31}}, v)
 }
 
 func testRemoveBytesOption(t *testing.T, options Options, option OptionID, expectedLen int) Options {
@@ -150,7 +164,6 @@ func TestPathOption(t *testing.T) {
 	if newPath != path {
 		t.Fatalf("unexpected value %v, expected %v", newPath, path)
 	}
-
 }
 
 func BenchmarkPathOption(b *testing.B) {
@@ -180,6 +193,15 @@ func BenchmarkPathOption(b *testing.B) {
 		newPath := string(runes[:bufLen])
 		if newPath != path {
 			b.Fatalf("unexpected path")
+		}
+
+		v := make([]string, 3)
+		n, errCode := options.ReadStrings(URIPath, v)
+		if n != 3 {
+			b.Fatalf("bad length")
+		}
+		if errCode != OK {
+			b.Fatalf("unexpected code")
 		}
 	}
 }

@@ -1,16 +1,17 @@
-package messagetcp
+package tcp
 
 import (
 	"encoding/binary"
 
-	coap "github.com/go-ocf/go-coap/g2/message"
+	"github.com/go-ocf/go-coap/v2/message"
+	"github.com/go-ocf/go-coap/v2/message/codes"
 )
 
 const (
-	Message_MESSAGE_LEN13_BASE = 13
-	Message_MESSAGE_LEN14_BASE = 269
-	Message_MESSAGE_LEN15_BASE = 65805
-	Message_MESSAGE_MAX_LEN    = 0x7fff0000 // Large number that works in 32-bit builds.
+	MESSAGE_LEN13_BASE = 13
+	MESSAGE_LEN14_BASE = 269
+	MESSAGE_LEN15_BASE = 65805
+	MESSAGE_MAX_LEN    = 0x7fff0000 // Large number that works in 32-bit builds.
 )
 
 // Signal CSM Option IDs
@@ -25,8 +26,8 @@ const (
 */
 
 const (
-	MaxMessageSize    coap.OptionID = 2
-	BlockWiseTransfer coap.OptionID = 4
+	MaxMessageSize    message.OptionID = 2
+	BlockWiseTransfer message.OptionID = 4
 )
 
 // Signal Ping/Pong Option IDs
@@ -40,7 +41,7 @@ const (
 */
 
 const (
-	Custody coap.OptionID = 2
+	Custody message.OptionID = 2
 )
 
 // Signal Release Option IDs
@@ -55,8 +56,8 @@ const (
 */
 
 const (
-	AlternativeAddress coap.OptionID = 2
-	HoldOff            coap.OptionID = 4
+	AlternativeAddress message.OptionID = 2
+	HoldOff            message.OptionID = 4
 )
 
 // Signal Abort Option IDs
@@ -69,36 +70,36 @@ const (
    C=Critical, R=Repeatable
 */
 const (
-	BadCSMOption coap.OptionID = 2
+	BadCSMOption message.OptionID = 2
 )
 
-var signalCSMOptionDefs = map[coap.OptionID]coap.OptionDef{
-	MaxMessageSize:    coap.OptionDef{ValueFormat: coap.ValueUint, MinLen: 0, MaxLen: 4},
-	BlockWiseTransfer: coap.OptionDef{ValueFormat: coap.ValueEmpty, MinLen: 0, MaxLen: 0},
+var signalCSMOptionDefs = map[message.OptionID]message.OptionDef{
+	MaxMessageSize:    message.OptionDef{ValueFormat: message.ValueUint, MinLen: 0, MaxLen: 4},
+	BlockWiseTransfer: message.OptionDef{ValueFormat: message.ValueEmpty, MinLen: 0, MaxLen: 0},
 }
 
-var signalPingPongOptionDefs = map[coap.OptionID]coap.OptionDef{
-	Custody: coap.OptionDef{ValueFormat: coap.ValueEmpty, MinLen: 0, MaxLen: 0},
+var signalPingPongOptionDefs = map[message.OptionID]message.OptionDef{
+	Custody: message.OptionDef{ValueFormat: message.ValueEmpty, MinLen: 0, MaxLen: 0},
 }
 
-var signalReleaseOptionDefs = map[coap.OptionID]coap.OptionDef{
-	AlternativeAddress: coap.OptionDef{ValueFormat: coap.ValueString, MinLen: 1, MaxLen: 255},
-	HoldOff:            coap.OptionDef{ValueFormat: coap.ValueUint, MinLen: 0, MaxLen: 3},
+var signalReleaseOptionDefs = map[message.OptionID]message.OptionDef{
+	AlternativeAddress: message.OptionDef{ValueFormat: message.ValueString, MinLen: 1, MaxLen: 255},
+	HoldOff:            message.OptionDef{ValueFormat: message.ValueUint, MinLen: 0, MaxLen: 3},
 }
 
-var signalAbortOptionDefs = map[coap.OptionID]coap.OptionDef{
-	BadCSMOption: coap.OptionDef{ValueFormat: coap.ValueUint, MinLen: 0, MaxLen: 2},
+var signalAbortOptionDefs = map[message.OptionID]message.OptionDef{
+	BadCSMOption: message.OptionDef{ValueFormat: message.ValueUint, MinLen: 0, MaxLen: 2},
 }
 
 // TcpMessage is a CoAP MessageBase that can encode itself for Message
 // transport.
 type Message struct {
-	Code coap.COAPCode
+	Code codes.Code
 
 	Token   []byte
 	Payload []byte
 
-	Options coap.Options //Options must be sorted by ID
+	Options message.Options //Options must be sorted by ID
 }
 
 func (m Message) Size() int {
@@ -106,19 +107,19 @@ func (m Message) Size() int {
 	return size
 }
 
-func (m Message) Marshal() ([]byte, coap.ErrorCode) {
+func (m Message) Marshal() ([]byte, message.ErrorCode) {
 	b := make([]byte, 1024)
 	l, err := m.MarshalTo(b)
-	if err == coap.ErrorCodeTooSmall {
+	if err == message.ErrorCodeTooSmall {
 		b = append(b[:0], make([]byte, l)...)
 		l, err = m.MarshalTo(b)
 	}
 	return b[:l], err
 }
 
-func (m Message) MarshalTo(buf []byte) (int, coap.ErrorCode) {
+func (m Message) MarshalTo(buf []byte) (int, message.ErrorCode) {
 	/*
-	   A CoAP Message message locoap.OKs like:
+	   A CoAP Message message lomessage.OKs like:
 
 	        0                   1                   2                   3
 	       0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
@@ -143,8 +144,8 @@ func (m Message) MarshalTo(buf []byte) (int, coap.ErrorCode) {
 	   | 15         | 4                     | Extended Length + 65805   |
 	*/
 
-	if len(m.Token) > coap.MaxTokenSize {
-		return -1, coap.ErrorCodeInvalidTokenLen
+	if len(m.Token) > message.MaxTokenSize {
+		return -1, message.ErrorCodeInvalidTokenLen
 	}
 
 	payloadLen := len(m.Payload)
@@ -153,32 +154,32 @@ func (m Message) MarshalTo(buf []byte) (int, coap.ErrorCode) {
 		payloadLen++
 	}
 	optionsLen, err := m.Options.Marshal(nil)
-	if err != coap.ErrorCodeTooSmall {
+	if err != message.ErrorCodeTooSmall {
 		return -1, err
 	}
 	bufLen := payloadLen + optionsLen
 	var lenNib uint8
 	var extLenBytes []byte
 
-	if bufLen < Message_MESSAGE_LEN13_BASE {
+	if bufLen < MESSAGE_LEN13_BASE {
 		lenNib = uint8(bufLen)
-	} else if bufLen < Message_MESSAGE_LEN14_BASE {
+	} else if bufLen < MESSAGE_LEN14_BASE {
 		lenNib = 13
-		extLen := bufLen - Message_MESSAGE_LEN13_BASE
+		extLen := bufLen - MESSAGE_LEN13_BASE
 		extLenBytes = []byte{uint8(extLen)}
-	} else if bufLen < Message_MESSAGE_LEN15_BASE {
+	} else if bufLen < MESSAGE_LEN15_BASE {
 		lenNib = 14
-		extLen := bufLen - Message_MESSAGE_LEN14_BASE
+		extLen := bufLen - MESSAGE_LEN14_BASE
 		extLenBytes = make([]byte, 2)
 		binary.BigEndian.PutUint16(extLenBytes, uint16(extLen))
-	} else if bufLen < Message_MESSAGE_MAX_LEN {
+	} else if bufLen < MESSAGE_MAX_LEN {
 		lenNib = 15
-		extLen := bufLen - Message_MESSAGE_LEN15_BASE
+		extLen := bufLen - MESSAGE_LEN15_BASE
 		extLenBytes = make([]byte, 4)
 		binary.BigEndian.PutUint32(extLenBytes, uint32(extLen))
 	}
 
-	var hdr [1 + 4 + coap.MaxTokenSize + 1]byte
+	var hdr [1 + 4 + message.MaxTokenSize + 1]byte
 	hdrLen := 1 + len(extLenBytes) + len(m.Token) + 1
 	hdrOff := 0
 
@@ -204,14 +205,14 @@ func (m Message) MarshalTo(buf []byte) (int, coap.ErrorCode) {
 
 	bufLen = bufLen + hdrLen
 	if len(buf) < bufLen {
-		return bufLen, coap.ErrorCodeTooSmall
+		return bufLen, message.ErrorCodeTooSmall
 	}
 
 	copy(buf, hdr[:hdrLen])
 	optionsLen, err = m.Options.Marshal(buf[hdrLen:])
 	switch err {
-	case coap.OK:
-	case coap.ErrorCodeTooSmall:
+	case message.OK:
+	case message.ErrorCodeTooSmall:
 		return bufLen, err
 	default:
 		return -1, err
@@ -221,22 +222,22 @@ func (m Message) MarshalTo(buf []byte) (int, coap.ErrorCode) {
 		copy(buf[hdrLen+optionsLen+1:], m.Payload)
 	}
 
-	return bufLen, coap.OK
+	return bufLen, message.OK
 }
 
 type MessageHeader struct {
-	Token  []byte
-	code   coap.COAPCode
-	hdrLen int
-	totLen int
+	Token     []byte
+	Code      codes.Code
+	HeaderLen int
+	TotalLen  int
 }
 
 // Unmarshal infers information about a Message CoAP message from the first
 // fragment.
-func (i *MessageHeader) Unmarshal(data []byte) (int, coap.ErrorCode) {
+func (i *MessageHeader) Unmarshal(data []byte) message.ErrorCode {
 	hdrOff := 0
 	if len(data) == 0 {
-		return 0, coap.ErrorCodeShortRead
+		return message.ErrorCodeShortRead
 	}
 
 	firstByte := data[0]
@@ -248,77 +249,68 @@ func (i *MessageHeader) Unmarshal(data []byte) (int, coap.ErrorCode) {
 
 	var opLen int
 	switch {
-	case lenNib < Message_MESSAGE_LEN13_BASE:
+	case lenNib < MESSAGE_LEN13_BASE:
 		opLen = int(lenNib)
 	case lenNib == 13:
 		if len(data) < 1 {
-			return 0, coap.ErrorCodeShortRead
+			return message.ErrorCodeShortRead
 		}
 		extLen := data[0]
 		data = data[1:]
 		hdrOff++
-		opLen = Message_MESSAGE_LEN13_BASE + int(extLen)
+		opLen = MESSAGE_LEN13_BASE + int(extLen)
 	case lenNib == 14:
 		if len(data) < 2 {
-			return 0, coap.ErrorCodeShortRead
+			return message.ErrorCodeShortRead
 		}
 		extLen := binary.BigEndian.Uint16(data)
 		data = data[2:]
 		hdrOff += 2
-		opLen = Message_MESSAGE_LEN14_BASE + int(extLen)
+		opLen = MESSAGE_LEN14_BASE + int(extLen)
 	case lenNib == 15:
 		if len(data) < 4 {
-			return 0, coap.ErrorCodeShortRead
+			return message.ErrorCodeShortRead
 		}
 		extLen := binary.BigEndian.Uint32(data)
 		data = data[4:]
 		hdrOff += 4
-		opLen = Message_MESSAGE_LEN15_BASE + int(extLen)
+		opLen = MESSAGE_LEN15_BASE + int(extLen)
 	}
 
-	i.totLen = hdrOff + 1 + int(tkl) + opLen
+	i.TotalLen = hdrOff + 1 + int(tkl) + opLen
 	if len(data) < 1 {
-		return 0, coap.ErrorCodeShortRead
+		return message.ErrorCodeShortRead
 	}
-	i.code = coap.COAPCode(data[0])
+	i.Code = codes.Code(data[0])
 	data = data[1:]
 	hdrOff++
 	if len(data) < int(tkl) {
-		return 0, coap.ErrorCodeShortRead
+		return message.ErrorCodeShortRead
 	}
 	i.Token = data[:tkl]
 	hdrOff += int(tkl)
 
-	i.hdrLen = hdrOff
+	i.HeaderLen = hdrOff
 
-	return i.hdrLen, coap.OK
+	return message.OK
 }
 
-func (m *Message) Unmarshal(data []byte) (int, coap.ErrorCode) {
-	header := MessageHeader{Token: m.Token}
-	processed, err := header.Unmarshal(data)
-	if err != coap.OK {
-		return -1, err
-	}
-	if len(data) < header.totLen {
-		return -1, coap.ErrorCodeShortRead
-	}
-	data = data[processed:]
-
-	optionDefs := coap.CoapOptionDefs
-	switch coap.COAPCode(header.code) {
-	case coap.CSM:
+func (m *Message) UnmarshalWithHeader(header MessageHeader, data []byte) (int, message.ErrorCode) {
+	optionDefs := message.CoapOptionDefs
+	processed := header.HeaderLen
+	switch codes.Code(header.Code) {
+	case codes.CSM:
 		optionDefs = signalCSMOptionDefs
-	case coap.Ping, coap.Pong:
+	case codes.Ping, codes.Pong:
 		optionDefs = signalPingPongOptionDefs
-	case coap.Release:
+	case codes.Release:
 		optionDefs = signalReleaseOptionDefs
-	case coap.Abort:
+	case codes.Abort:
 		optionDefs = signalAbortOptionDefs
 	}
 
 	proc, err := m.Options.Unmarshal(data, optionDefs)
-	if err != coap.OK {
+	if err != message.OK {
 		return -1, err
 	}
 	data = data[proc:]
@@ -326,8 +318,20 @@ func (m *Message) Unmarshal(data []byte) (int, coap.ErrorCode) {
 
 	m.Payload = data
 	processed = processed + len(data)
-	m.Code = header.code
+	m.Code = header.Code
 	m.Token = header.Token
 
-	return processed, coap.OK
+	return processed, message.OK
+}
+
+func (m *Message) Unmarshal(data []byte) (int, message.ErrorCode) {
+	header := MessageHeader{Token: m.Token}
+	err := header.Unmarshal(data)
+	if err != message.OK {
+		return -1, err
+	}
+	if len(data) < header.TotalLen {
+		return -1, message.ErrorCodeShortRead
+	}
+	return m.UnmarshalWithHeader(header, data[header.HeaderLen:])
 }
