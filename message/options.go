@@ -8,9 +8,9 @@ type Options []Option
 
 const maxPathValue = 255
 
-func (options Options) SetPath(buf []byte, path string) (Options, int, ErrorCode) {
+func (options Options) SetPath(buf []byte, path string) (Options, int, error) {
 	if len(path) == 0 {
-		return options, 0, OK
+		return options, 0, nil
 	}
 	o := options.Remove(URIPath)
 	if path[0] == '/' {
@@ -25,20 +25,20 @@ func (options Options) SetPath(buf []byte, path string) (Options, int, ErrorCode
 		}
 		data := buf[encoded:]
 		var enc int
-		var err ErrorCode
+		var err error
 		o, enc, err = o.AddOptionString(data, URIPath, subPath[:end])
-		if err != OK {
+		if err != nil {
 			return o, -1, err
 		}
 		encoded += enc
 		start = start + end + 1
 	}
-	return o, encoded, OK
+	return o, encoded, nil
 }
 
-func (options Options) Path(buf []byte) (int, ErrorCode) {
+func (options Options) Path(buf []byte) (int, error) {
 	firstIdx, lastIdx, err := options.Find(URIPath)
-	if err != OK {
+	if err != nil {
 		return -1, err
 	}
 	var needed int
@@ -48,7 +48,7 @@ func (options Options) Path(buf []byte) (int, ErrorCode) {
 	}
 	needed--
 	if len(buf) < needed {
-		return needed, ErrorCodeTooSmall
+		return needed, ErrTooSmall
 	}
 	for i := firstIdx; i < lastIdx; i++ {
 		if i != firstIdx {
@@ -58,89 +58,89 @@ func (options Options) Path(buf []byte) (int, ErrorCode) {
 		copy(buf, options[i].Value)
 		buf = buf[len(options[i].Value):]
 	}
-	return needed, OK
+	return needed, nil
 }
 
-func (options Options) SetOptionString(buf []byte, id OptionID, str string) (Options, int, ErrorCode) {
+func (options Options) SetOptionString(buf []byte, id OptionID, str string) (Options, int, error) {
 	enc, err := EncodeRunes(buf, []rune(str))
-	if err != OK {
+	if err != nil {
 		return options, -1, err
 	}
 	if id == URIPath && enc > maxPathValue {
-		return options, -1, ErrorCodeInvalidValueLength
+		return options, -1, ErrInvalidValueLength
 	}
-	return options.Set(Option{ID: URIPath, Value: buf[:enc]}), enc, OK
+	return options.Set(Option{ID: URIPath, Value: buf[:enc]}), enc, nil
 }
 
-func (options Options) AddOptionString(buf []byte, id OptionID, str string) (Options, int, ErrorCode) {
+func (options Options) AddOptionString(buf []byte, id OptionID, str string) (Options, int, error) {
 	data := []byte(str)
 	if len(buf) < len(data) {
-		return options, len(data), ErrorCodeTooSmall
+		return options, len(data), ErrTooSmall
 	}
 	if id == URIPath && len(data) > maxPathValue {
-		return options, -1, ErrorCodeInvalidValueLength
+		return options, -1, ErrInvalidValueLength
 	}
 	copy(buf, data)
-	return options.Add(Option{ID: URIPath, Value: buf[:len(data)]}), len(data), OK
+	return options.Add(Option{ID: URIPath, Value: buf[:len(data)]}), len(data), nil
 }
 
 func (options Options) HasOption(id OptionID) bool {
 	_, _, err := options.Find(id)
-	return err == OK
+	return err == nil
 }
 
-func (options Options) ReadUint32(id OptionID, r []uint32) (int, ErrorCode) {
+func (options Options) ReadUint32(id OptionID, r []uint32) (int, error) {
 	firstIdx, lastIdx, err := options.Find(id)
-	if err != OK {
+	if err != nil {
 		return 0, err
 	}
 	if len(r) < lastIdx-firstIdx {
-		return lastIdx - firstIdx, ErrorCodeShortRead
+		return lastIdx - firstIdx, ErrShortRead
 	}
 	var idx int
 	for i := firstIdx; i <= lastIdx; i++ {
 		val, _, err := DecodeUint32(options[i].Value)
-		if err == OK {
+		if err == nil {
 			r[idx] = val
 			idx++
 		}
 	}
 
-	return idx, OK
+	return idx, nil
 }
 
-func (options Options) GetUint32(id OptionID) (uint32, ErrorCode) {
+func (options Options) GetUint32(id OptionID) (uint32, error) {
 	firstIdx, _, err := options.Find(id)
-	if err != OK {
+	if err != nil {
 		return 0, err
 	}
 	val, _, err := DecodeUint32(options[firstIdx].Value)
 	return val, err
 }
 
-func (options Options) GetString(id OptionID) (string, ErrorCode) {
+func (options Options) GetString(id OptionID) (string, error) {
 	firstIdx, _, err := options.Find(id)
-	if err != OK {
+	if err != nil {
 		return "", err
 	}
-	return string(options[firstIdx].Value), OK
+	return string(options[firstIdx].Value), nil
 }
 
-func (options Options) GetBytes(id OptionID) ([]byte, ErrorCode) {
+func (options Options) GetBytes(id OptionID) ([]byte, error) {
 	firstIdx, _, err := options.Find(id)
-	if err != OK {
+	if err != nil {
 		return nil, err
 	}
-	return options[firstIdx].Value, OK
+	return options[firstIdx].Value, nil
 }
 
-func (options Options) ReadStrings(id OptionID, r []string) (int, ErrorCode) {
+func (options Options) ReadStrings(id OptionID, r []string) (int, error) {
 	firstIdx, lastIdx, err := options.Find(id)
-	if err != OK {
+	if err != nil {
 		return 0, err
 	}
 	if len(r) < lastIdx-firstIdx {
-		return lastIdx - firstIdx, ErrorCodeShortRead
+		return lastIdx - firstIdx, ErrShortRead
 	}
 	var idx int
 	for i := firstIdx; i < lastIdx; i++ {
@@ -148,16 +148,16 @@ func (options Options) ReadStrings(id OptionID, r []string) (int, ErrorCode) {
 		idx++
 	}
 
-	return idx, OK
+	return idx, nil
 }
 
-func (options Options) ReadBytes(id OptionID, r [][]byte) (int, ErrorCode) {
+func (options Options) ReadBytes(id OptionID, r [][]byte) (int, error) {
 	firstIdx, lastIdx, err := options.Find(id)
-	if err != OK {
+	if err != nil {
 		return 0, err
 	}
 	if len(r) < lastIdx-firstIdx {
-		return lastIdx - firstIdx, ErrorCodeShortRead
+		return lastIdx - firstIdx, ErrShortRead
 	}
 	var idx int
 	for i := firstIdx; i < lastIdx; i++ {
@@ -165,41 +165,41 @@ func (options Options) ReadBytes(id OptionID, r [][]byte) (int, ErrorCode) {
 		idx++
 	}
 
-	return idx, OK
+	return idx, nil
 }
 
-func (options Options) AddOptionUint32(buf []byte, id OptionID, value uint32) (Options, int, ErrorCode) {
+func (options Options) AddOptionUint32(buf []byte, id OptionID, value uint32) (Options, int, error) {
 	enc, err := EncodeUint32(buf, uint32(value))
-	if err != OK {
+	if err != nil {
 		return options, -1, err
 	}
 	o := options.Add(Option{ID: id, Value: buf[:enc]})
 	return o, enc, err
 }
 
-func (options Options) SetOptionUint32(buf []byte, id OptionID, value uint32) (Options, int, ErrorCode) {
+func (options Options) SetOptionUint32(buf []byte, id OptionID, value uint32) (Options, int, error) {
 	enc, err := EncodeUint32(buf, uint32(value))
-	if err != OK {
+	if err != nil {
 		return options, -1, err
 	}
 	o := options.Set(Option{ID: id, Value: buf[:enc]})
 	return o, enc, err
 }
 
-func (options Options) SetContentFormat(buf []byte, contentFormat MediaType) (Options, int, ErrorCode) {
+func (options Options) SetContentFormat(buf []byte, contentFormat MediaType) (Options, int, error) {
 	return options.SetOptionUint32(buf, ContentFormat, uint32(contentFormat))
 }
 
-func (options Options) Find(ID OptionID) (int, int, ErrorCode) {
+func (options Options) Find(ID OptionID) (int, int, error) {
 	idxPre := options.findPositon(ID, true)
 	idxPost := options.findPositon(ID, false)
 	if idxPre == idxPost {
-		return -1, -1, ErrorCodeOptionNotFound
+		return -1, -1, ErrOptionNotFound
 	}
 	if ID == options[idxPre].ID {
-		return idxPre, idxPost, OK
+		return idxPre, idxPost, nil
 	}
-	return idxPre + 1, idxPost, OK
+	return idxPre + 1, idxPost, nil
 }
 
 func (options Options) findPositon(ID OptionID, prepend bool) int {
@@ -324,19 +324,19 @@ func (options Options) Remove(ID OptionID) Options {
 	return options
 }
 
-func (m Options) Marshal(buf []byte) (int, ErrorCode) {
+func (m Options) Marshal(buf []byte) (int, error) {
 	previousID := OptionID(0)
 	length := 0
 
 	for _, o := range m {
 
-		//return coap.ErrorCode but calculate length
+		//return coap.error but calculate length
 		if length > len(buf) {
 			buf = nil
 		}
 
 		var optionLength int
-		var err ErrorCode
+		var err error
 
 		if buf != nil {
 			optionLength, err = o.Marshal(buf[length:], previousID)
@@ -346,8 +346,8 @@ func (m Options) Marshal(buf []byte) (int, ErrorCode) {
 		previousID = o.ID
 
 		switch err {
-		case OK:
-		case ErrorCodeTooSmall:
+		case nil:
+		case ErrTooSmall:
 			buf = nil
 		default:
 			return -1, err
@@ -355,12 +355,12 @@ func (m Options) Marshal(buf []byte) (int, ErrorCode) {
 		length = length + optionLength
 	}
 	if buf == nil {
-		return length, ErrorCodeTooSmall
+		return length, ErrTooSmall
 	}
-	return length, OK
+	return length, nil
 }
 
-func (m *Options) Unmarshal(data []byte, optionDefs map[OptionID]OptionDef) (int, ErrorCode) {
+func (m *Options) Unmarshal(data []byte, optionDefs map[OptionID]OptionDef) (int, error) {
 	prev := 0
 	processed := 0
 	for len(data) > 0 {
@@ -373,38 +373,38 @@ func (m *Options) Unmarshal(data []byte, optionDefs map[OptionID]OptionDef) (int
 		length := int(data[0] & 0x0f)
 
 		if delta == ExtendOptionError || length == ExtendOptionError {
-			return -1, ErrorCodeOptionUnexpectedExtendMarker
+			return -1, ErrOptionUnexpectedExtendMarker
 		}
 
 		data = data[1:]
 		processed++
 
 		proc, delta, err := parseExtOpt(data, delta)
-		if err != OK {
+		if err != nil {
 			return -1, err
 		}
 		processed += proc
 		data = data[proc:]
 		proc, length, err = parseExtOpt(data, length)
-		if err != OK {
+		if err != nil {
 			return -1, err
 		}
 		processed += proc
 		data = data[proc:]
 
 		if len(data) < length {
-			return -1, ErrorCodeOptionTruncated
+			return -1, ErrOptionTruncated
 		}
 
 		option := Option{}
 		oid := OptionID(prev + delta)
 		proc, err = option.Unmarshal(data[:length], optionDefs, oid)
-		if err != OK {
+		if err != nil {
 			return -1, err
 		}
 
 		if cap(*m) == len(*m) {
-			return -1, ErrorCodeBytesOptionsTooSmall
+			return -1, ErrBytesOptionsTooSmall
 		}
 		(*m) = append(*m, []Option{option}...)
 
@@ -413,5 +413,5 @@ func (m *Options) Unmarshal(data []byte, optionDefs map[OptionID]OptionDef) (int
 		prev = int(oid)
 	}
 
-	return processed, OK
+	return processed, nil
 }

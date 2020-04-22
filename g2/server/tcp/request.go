@@ -50,13 +50,13 @@ func (r *Request) SetCode(code coap.COAPCode) {
 	r.msg.Code = code
 }
 
-func (r *Request) OptionUint32(id coap.OptionID) (uint32, coap.ErrorCode) {
+func (r *Request) OptionUint32(id coap.OptionID) (uint32, coap.Err) {
 	return r.msg.Options.OptionUint32(id)
 }
 
 func (r *Request) SetOptionString(opt coap.OptionID, value string) {
 	r.msg.Options, used, err = r.msg.Options.SetOptionSting(r.valueBuffer, opt, value)
-	if err == coap.ErrorCodeTooSmall {
+	if err == coap.ErrTooSmall {
 		r.valueBuffer = append(r.valueBuffer, used)
 		r.msg.Options, used, err = r.msg.Options.SetOptionSting(r.valueBuffer, opt, value)
 	}
@@ -65,7 +65,7 @@ func (r *Request) SetOptionString(opt coap.OptionID, value string) {
 
 func (r *Request) AddOptionString(opt coap.OptionID, value string) {
 	r.msg.Options, used, err = r.msg.Options.AddOptionSting(r.valueBuffer, opt, value)
-	if err == coap.ErrorCodeTooSmall {
+	if err == coap.ErrTooSmall {
 		r.valueBuffer = append(r.valueBuffer, used)
 		r.msg.Options, used, err = r.msg.Options.AddOptionSting(r.valueBuffer, opt, value)
 	}
@@ -82,7 +82,7 @@ func (r *Request) SetOptionBytes(opt coap.OptionID, value []byte) {
 
 func (r *Request) SetOptionUint32(opt coap.OptionID, value uint32) {
 	r.msg.Options, used, err = r.msg.Options.SetOptionUint32(r.valueBuffer, opt, value)
-	if err == coap.ErrorCodeTooSmall {
+	if err == coap.ErrTooSmall {
 		r.valueBuffer = append(r.valueBuffer, used)
 		r.msg.Options, used, err = r.msg.Options.SetOptionUint32(r.valueBuffer, opt, value)
 	}
@@ -91,14 +91,14 @@ func (r *Request) SetOptionUint32(opt coap.OptionID, value uint32) {
 
 func (r *Request) AddOptionUint32(opt coap.OptionID, value uint32) {
 	r.msg.Options, used, err = r.msg.Options.AddOptionUint32(r.valueBuffer, opt, value)
-	if err == coap.ErrorCodeTooSmall {
+	if err == coap.ErrTooSmall {
 		r.valueBuffer = append(r.valueBuffer, used)
 		r.msg.Options, used, err = r.msg.Options.AddOptionUint32(r.valueBuffer, opt, value)
 	}
 	r.valueBuffer = r.valueBuffer[used:]
 }
 
-func (r *Request) ContentFormat() (coap.MediaType, coap.ErrorCode) {
+func (r *Request) ContentFormat() (coap.MediaType, coap.Err) {
 	v, err := r.OptionUint32(coap.MediaType)
 	return coap.MediaType(v), err
 }

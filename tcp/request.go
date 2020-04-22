@@ -48,7 +48,7 @@ func (r *Request) Token() []byte {
 func (r *Request) SetPath(p string) {
 	opts, used, err := r.msg.Options.SetPath(r.valueBuffer, p)
 	r.msg.Options = opts
-	if err == message.ErrorCodeTooSmall {
+	if err == message.ErrTooSmall {
 		r.valueBuffer = r.valueBuffer[:len(r.valueBuffer)+used]
 		r.msg.Options, used, err = r.msg.Options.SetPath(r.valueBuffer, p)
 	}
@@ -71,14 +71,14 @@ func (r *Request) AddQuery(query string) {
 	r.AddOptionString(message.URIQuery, query)
 }
 
-func (r *Request) GetUint32(id message.OptionID) (uint32, message.ErrorCode) {
+func (r *Request) GetUint32(id message.OptionID) (uint32, error) {
 	return r.msg.Options.GetUint32(id)
 }
 
 func (r *Request) SetOptionString(opt message.OptionID, value string) {
 	opts, used, err := r.msg.Options.SetOptionString(r.valueBuffer, opt, value)
 	r.msg.Options = opts
-	if err == message.ErrorCodeTooSmall {
+	if err == message.ErrTooSmall {
 		r.valueBuffer = r.valueBuffer[:len(r.valueBuffer)+used]
 		r.msg.Options, used, err = r.msg.Options.SetOptionString(r.valueBuffer, opt, value)
 	}
@@ -88,7 +88,7 @@ func (r *Request) SetOptionString(opt message.OptionID, value string) {
 func (r *Request) AddOptionString(opt message.OptionID, value string) {
 	opts, used, err := r.msg.Options.AddOptionString(r.valueBuffer, opt, value)
 	r.msg.Options = opts
-	if err == message.ErrorCodeTooSmall {
+	if err == message.ErrTooSmall {
 		r.valueBuffer = r.valueBuffer[:len(r.valueBuffer)+used]
 		r.msg.Options, used, err = r.msg.Options.AddOptionString(r.valueBuffer, opt, value)
 	}
@@ -106,7 +106,7 @@ func (r *Request) SetOptionBytes(opt message.OptionID, value []byte) {
 func (r *Request) SetOptionUint32(opt message.OptionID, value uint32) {
 	opts, used, err := r.msg.Options.SetOptionUint32(r.valueBuffer, opt, value)
 	r.msg.Options = opts
-	if err == message.ErrorCodeTooSmall {
+	if err == message.ErrTooSmall {
 		r.valueBuffer = r.valueBuffer[:len(r.valueBuffer)+used]
 		r.msg.Options, used, err = r.msg.Options.SetOptionUint32(r.valueBuffer, opt, value)
 	}
@@ -116,14 +116,14 @@ func (r *Request) SetOptionUint32(opt message.OptionID, value uint32) {
 func (r *Request) AddOptionUint32(opt message.OptionID, value uint32) {
 	opts, used, err := r.msg.Options.AddOptionUint32(r.valueBuffer, opt, value)
 	r.msg.Options = opts
-	if err == message.ErrorCodeTooSmall {
+	if err == message.ErrTooSmall {
 		r.valueBuffer = r.valueBuffer[:len(r.valueBuffer)+used]
 		r.msg.Options, used, err = r.msg.Options.AddOptionUint32(r.valueBuffer, opt, value)
 	}
 	r.valueBuffer = r.valueBuffer[used:]
 }
 
-func (r *Request) ContentFormat() (message.MediaType, message.ErrorCode) {
+func (r *Request) ContentFormat() (message.MediaType, error) {
 	v, err := r.GetUint32(message.ContentFormat)
 	return message.MediaType(v), err
 }
@@ -189,7 +189,7 @@ func (r *Request) Copy(src *Request) {
 	r.msg.Payload = append(r.msg.Payload[:0], r.msg.Payload...)
 }
 
-func (r *Request) UnmarshalWithHeader(hdr coapTCP.MessageHeader, data []byte) (int, message.ErrorCode) {
+func (r *Request) UnmarshalWithHeader(hdr coapTCP.MessageHeader, data []byte) (int, error) {
 	r.Reset()
 	if len(r.rawData) < len(data) {
 		r.rawData = make([]byte, len(data))
@@ -199,7 +199,7 @@ func (r *Request) UnmarshalWithHeader(hdr coapTCP.MessageHeader, data []byte) (i
 	return r.msg.UnmarshalWithHeader(hdr, data)
 }
 
-func (r *Request) Unmarshal(data []byte) (int, message.ErrorCode) {
+func (r *Request) Unmarshal(data []byte) (int, error) {
 	r.Reset()
 	if len(r.rawData) < len(data) {
 		r.rawData = r.rawMarshalData[:len(data)]
@@ -209,17 +209,17 @@ func (r *Request) Unmarshal(data []byte) (int, message.ErrorCode) {
 	return r.msg.Unmarshal(data)
 }
 
-func (r *Request) Marshal() ([]byte, message.ErrorCode) {
+func (r *Request) Marshal() ([]byte, error) {
 	size := r.msg.Size()
 	if len(r.rawMarshalData) < size {
 		r.rawMarshalData = r.rawMarshalData[:size]
 	}
-	n, errCode := r.msg.MarshalTo(r.rawMarshalData)
-	if errCode != message.OK {
-		return nil, errCode
+	n, err := r.msg.MarshalTo(r.rawMarshalData)
+	if err != nil {
+		return nil, err
 	}
 	r.rawMarshalData = r.rawMarshalData[:n]
-	return r.rawMarshalData, message.OK
+	return r.rawMarshalData, nil
 }
 
 func (r *Request) Context() context.Context {

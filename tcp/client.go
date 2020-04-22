@@ -144,3 +144,22 @@ func (cc *ClientConn) Get(ctx context.Context, path string, queries ...string) (
 	defer ReleaseRequest(req)
 	return cc.Do(req)
 }
+
+func (cc *ClientConn) Ping(ctx context.Context) error {
+	token, err := message.GetToken()
+	if err != nil {
+		return fmt.Errorf("cannot get token: %w", err)
+	}
+	req := AcquireRequest(ctx)
+	req.SetToken(token)
+	req.SetCode(codes.Ping)
+	defer ReleaseRequest(req)
+	resp, err := cc.Do(req)
+	if err != nil {
+		return err
+	}
+	if resp.Code() == codes.Pong {
+		return nil
+	}
+	return fmt.Errorf("unexpected code(%v)", resp.Code())
+}

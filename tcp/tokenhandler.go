@@ -27,6 +27,7 @@ func (s *TokenHandler) Handle(w *ResponseWriter, r *Request, next HandlerFunc) {
 	s.handlersLock.Lock()
 	h := s.handlers[t]
 	s.handlersLock.Unlock()
+
 	if h != nil {
 		h(w, r)
 		return

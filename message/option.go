@@ -205,25 +205,25 @@ func extendOpt(opt int) (int, int) {
 	return opt, ext
 }
 
-func marshalOptionHeaderExt(buf []byte, opt, ext int) (int, ErrorCode) {
+func marshalOptionHeaderExt(buf []byte, opt, ext int) (int, error) {
 	switch opt {
 	case ExtendOptionByteCode:
 		if buf != nil && len(buf) > 0 {
 			buf[0] = byte(ext)
-			return 1, OK
+			return 1, nil
 		}
-		return 1, ErrorCodeTooSmall
+		return 1, ErrTooSmall
 	case ExtendOptionWordCode:
 		if buf != nil && len(buf) > 1 {
 			binary.BigEndian.PutUint16(buf, uint16(ext))
-			return 2, OK
+			return 2, nil
 		}
-		return 2, ErrorCodeTooSmall
+		return 2, ErrTooSmall
 	}
-	return 0, OK
+	return 0, nil
 }
 
-func marshalOptionHeader(buf []byte, delta, length int) (int, ErrorCode) {
+func marshalOptionHeader(buf []byte, delta, length int) (int, error) {
 	size := 0
 
 	d, dx := extendOpt(delta)
@@ -237,7 +237,7 @@ func marshalOptionHeader(buf []byte, delta, length int) (int, ErrorCode) {
 		size++
 	}
 	var lenBuf int
-	var err ErrorCode
+	var err error
 	if buf == nil {
 		lenBuf, err = marshalOptionHeaderExt(nil, d, dx)
 	} else {
@@ -245,8 +245,8 @@ func marshalOptionHeader(buf []byte, delta, length int) (int, ErrorCode) {
 	}
 
 	switch err {
-	case OK:
-	case ErrorCodeTooSmall:
+	case nil:
+	case ErrTooSmall:
 		buf = nil
 	default:
 		return -1, err
@@ -259,17 +259,17 @@ func marshalOptionHeader(buf []byte, delta, length int) (int, ErrorCode) {
 		lenBuf, err = marshalOptionHeaderExt(buf[size:], l, lx)
 	}
 	switch err {
-	case OK:
-	case ErrorCodeTooSmall:
+	case nil:
+	case ErrTooSmall:
 		buf = nil
 	default:
 		return -1, err
 	}
 	size += lenBuf
 	if buf == nil {
-		return size, ErrorCodeTooSmall
+		return size, ErrTooSmall
 	}
-	return size, OK
+	return size, nil
 }
 
 type Option struct {
@@ -277,20 +277,20 @@ type Option struct {
 	Value []byte
 }
 
-func (o Option) MarshalValue(buf []byte) (int, ErrorCode) {
+func (o Option) MarshalValue(buf []byte) (int, error) {
 	if len(buf) < len(o.Value) {
-		return len(o.Value), ErrorCodeTooSmall
+		return len(o.Value), ErrTooSmall
 	}
 	copy(buf, o.Value)
-	return len(o.Value), OK
+	return len(o.Value), nil
 }
 
-func (o *Option) UnmarshalValue(buf []byte) (int, ErrorCode) {
+func (o *Option) UnmarshalValue(buf []byte) (int, error) {
 	o.Value = buf
-	return len(buf), OK
+	return len(buf), nil
 }
 
-func (o Option) Marshal(buf []byte, previousID OptionID) (int, ErrorCode) {
+func (o Option) Marshal(buf []byte, previousID OptionID) (int, error) {
 	/*
 	     0   1   2   3   4   5   6   7
 	   +---------------+---------------+
@@ -319,7 +319,7 @@ func (o Option) Marshal(buf []byte, previousID OptionID) (int, ErrorCode) {
 
 	lenBuf, err := o.MarshalValue(nil)
 	switch err {
-	case ErrorCodeTooSmall, OK:
+	case ErrTooSmall, nil:
 	default:
 		return -1, err
 	}
@@ -327,8 +327,8 @@ func (o Option) Marshal(buf []byte, previousID OptionID) (int, ErrorCode) {
 	//header marshal
 	lenBuf, err = marshalOptionHeader(buf, delta, lenBuf)
 	switch err {
-	case OK:
-	case ErrorCodeTooSmall:
+	case nil:
+	case ErrTooSmall:
 		buf = nil
 	default:
 		return -1, err
@@ -342,8 +342,8 @@ func (o Option) Marshal(buf []byte, previousID OptionID) (int, ErrorCode) {
 	}
 
 	switch err {
-	case OK:
-	case ErrorCodeTooSmall:
+	case nil:
+	case ErrTooSmall:
 		buf = nil
 	default:
 		return -1, err
@@ -351,47 +351,47 @@ func (o Option) Marshal(buf []byte, previousID OptionID) (int, ErrorCode) {
 	length = length + lenBuf
 
 	if buf == nil {
-		return length, ErrorCodeTooSmall
+		return length, ErrTooSmall
 	}
-	return length, OK
+	return length, nil
 }
 
-func parseExtOpt(data []byte, opt int) (int, int, ErrorCode) {
+func parseExtOpt(data []byte, opt int) (int, int, error) {
 	processed := 0
 	switch opt {
 	case ExtendOptionByteCode:
 		if len(data) < 1 {
-			return 0, -1, ErrorCodeOptionTruncated
+			return 0, -1, ErrOptionTruncated
 		}
 		opt = int(data[0]) + ExtendOptionByteAddend
 		processed = 1
 	case ExtendOptionWordCode:
 		if len(data) < 2 {
-			return 0, -1, ErrorCodeOptionTruncated
+			return 0, -1, ErrOptionTruncated
 		}
 		opt = int(binary.BigEndian.Uint16(data[:2])) + ExtendOptionWordAddend
 		processed = 2
 	}
-	return processed, opt, OK
+	return processed, opt, nil
 }
 
-func (o *Option) Unmarshal(data []byte, optionDefs map[OptionID]OptionDef, OptionID OptionID) (int, ErrorCode) {
+func (o *Option) Unmarshal(data []byte, optionDefs map[OptionID]OptionDef, OptionID OptionID) (int, error) {
 	if def, ok := optionDefs[OptionID]; ok {
 		if def.ValueFormat == ValueUnknown {
 			// Skip unrecognized options (RFC7252 section 5.4.1)
-			return 0, OK
+			return 0, nil
 		}
 		if len(data) < def.MinLen || len(data) > def.MaxLen {
 			// Skip options with illegal value length (RFC7252 section 5.4.3)
-			return 0, OK
+			return 0, nil
 		}
 		o.ID = OptionID
 		proc, err := o.UnmarshalValue(data)
-		if err != OK {
+		if err != nil {
 			return -1, err
 		}
 		return proc, err
 	}
 	// Skip unrecognized options (should never be reached)
-	return 0, OK
+	return 0, nil
 }

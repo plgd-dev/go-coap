@@ -110,7 +110,7 @@ func (s *Session) handleSignals(w *ResponseWriter, r *Request) {
 		if s.disablePeerTCPSignalMessageCSMs {
 			return
 		}
-		if size, errCode := r.GetUint32(coapTCP.MaxMessageSize); errCode == message.OK {
+		if size, err := r.GetUint32(coapTCP.MaxMessageSize); err == nil {
 			atomic.StoreUint32(&s.peerMaxMessageSize, size)
 		}
 		if r.hasBlockWiseOption() {
@@ -140,8 +140,8 @@ func (s *Session) handleSignals(w *ResponseWriter, r *Request) {
 func (s *Session) processBuffer(buffer *bytes.Buffer) error {
 	for buffer.Len() > 0 {
 		var hdr coapTCP.MessageHeader
-		errCode := hdr.Unmarshal(buffer.Bytes())
-		if errCode == message.ErrorCodeShortRead {
+		err := hdr.Unmarshal(buffer.Bytes())
+		if err == message.ErrShortRead {
 			return nil
 		}
 		if s.maxMessageSize >= 0 && hdr.TotalLen > s.maxMessageSize {
@@ -159,15 +159,16 @@ func (s *Session) processBuffer(buffer *bytes.Buffer) error {
 			return fmt.Errorf("invalid data: %v", err)
 		}
 		req := AcquireRequest(s.ctx)
-		_, errCode = req.UnmarshalWithHeader(hdr, msgRaw[hdr.HeaderLen:])
-		if errCode != message.OK {
+		_, err = req.UnmarshalWithHeader(hdr, msgRaw[hdr.HeaderLen:])
+		if err != nil {
 			ReleaseRequest(req)
-			return fmt.Errorf("cannot unmarshal with header: %v", errCode)
+			return fmt.Errorf("cannot unmarshal with header: %v", err)
 		}
 		req.sequence = s.Sequence()
 		s.goPool(func() error {
 			resp := AcquireRequest(s.ctx)
 			defer ReleaseRequest(resp)
+			resp.SetToken(req.Token())
 			w := NewResponseWriter(resp)
 			s.Handle(w, req)
 			if !req.IsHijacked() {
@@ -188,7 +189,7 @@ func (s *Session) processBuffer(buffer *bytes.Buffer) error {
 
 func (s *Session) WriteRequest(req *Request) error {
 	data, err := req.Marshal()
-	if err != message.OK {
+	if err != nil {
 		return fmt.Errorf("cannot marshal: %v", err)
 	}
 	return s.connection.WriteWithContext(req.Context(), data)
@@ -242,6 +243,8 @@ func (s *Session) Run() (err error) {
 		if err != nil {
 			return err
 		}
-		buffer.Write(readBuf[:readLen])
+		if readLen > 0 {
+			buffer.Write(readBuf[:readLen])
+		}
 	}
 }

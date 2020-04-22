@@ -68,9 +68,8 @@ type Server struct {
 	disablePeerTCPSignalMessageCSMs bool
 	disableTCPSignalMessageCSM      bool
 
-	serveWG sync.WaitGroup
-	ctx     context.Context
-	cancel  context.CancelFunc
+	ctx    context.Context
+	cancel context.CancelFunc
 }
 
 // Listener defined used by coap
@@ -86,11 +85,22 @@ func NewServer(handler HandlerFunc, opt ...ServerOption) *Server {
 	}
 
 	ctx, cancel := context.WithCancel(opts.ctx)
+	if handler == nil {
+		handler = func(w *ResponseWriter, r *Request) {
+			w.SetCode(codes.BadRequest)
+		}
+	}
 
 	return &Server{
-		ctx:     ctx,
-		cancel:  cancel,
-		handler: handler,
+		ctx:                             ctx,
+		cancel:                          cancel,
+		handler:                         handler,
+		maxMessageSize:                  opts.maxMessageSize,
+		heartBeat:                       opts.heartBeat,
+		errors:                          opts.errors,
+		goPool:                          opts.goPool,
+		disablePeerTCPSignalMessageCSMs: opts.disablePeerTCPSignalMessageCSMs,
+		disableTCPSignalMessageCSM:      opts.disableTCPSignalMessageCSM,
 	}
 }
 
@@ -128,5 +138,4 @@ func (s *Server) Serve(l Listener) error {
 }
 func (s *Server) Stop() {
 	s.cancel()
-	defer s.serveWG.Wait()
 }

@@ -107,17 +107,17 @@ func (m Message) Size() int {
 	return size
 }
 
-func (m Message) Marshal() ([]byte, message.ErrorCode) {
+func (m Message) Marshal() ([]byte, error) {
 	b := make([]byte, 1024)
 	l, err := m.MarshalTo(b)
-	if err == message.ErrorCodeTooSmall {
+	if err == message.ErrTooSmall {
 		b = append(b[:0], make([]byte, l)...)
 		l, err = m.MarshalTo(b)
 	}
 	return b[:l], err
 }
 
-func (m Message) MarshalTo(buf []byte) (int, message.ErrorCode) {
+func (m Message) MarshalTo(buf []byte) (int, error) {
 	/*
 	   A CoAP Message message lomessage.OKs like:
 
@@ -145,7 +145,7 @@ func (m Message) MarshalTo(buf []byte) (int, message.ErrorCode) {
 	*/
 
 	if len(m.Token) > message.MaxTokenSize {
-		return -1, message.ErrorCodeInvalidTokenLen
+		return -1, message.ErrInvalidTokenLen
 	}
 
 	payloadLen := len(m.Payload)
@@ -154,7 +154,7 @@ func (m Message) MarshalTo(buf []byte) (int, message.ErrorCode) {
 		payloadLen++
 	}
 	optionsLen, err := m.Options.Marshal(nil)
-	if err != message.ErrorCodeTooSmall {
+	if err != message.ErrTooSmall {
 		return -1, err
 	}
 	bufLen := payloadLen + optionsLen
@@ -205,14 +205,14 @@ func (m Message) MarshalTo(buf []byte) (int, message.ErrorCode) {
 
 	bufLen = bufLen + hdrLen
 	if len(buf) < bufLen {
-		return bufLen, message.ErrorCodeTooSmall
+		return bufLen, message.ErrTooSmall
 	}
 
 	copy(buf, hdr[:hdrLen])
 	optionsLen, err = m.Options.Marshal(buf[hdrLen:])
 	switch err {
-	case message.OK:
-	case message.ErrorCodeTooSmall:
+	case nil:
+	case message.ErrTooSmall:
 		return bufLen, err
 	default:
 		return -1, err
@@ -222,7 +222,7 @@ func (m Message) MarshalTo(buf []byte) (int, message.ErrorCode) {
 		copy(buf[hdrLen+optionsLen+1:], m.Payload)
 	}
 
-	return bufLen, message.OK
+	return bufLen, nil
 }
 
 type MessageHeader struct {
@@ -234,10 +234,10 @@ type MessageHeader struct {
 
 // Unmarshal infers information about a Message CoAP message from the first
 // fragment.
-func (i *MessageHeader) Unmarshal(data []byte) message.ErrorCode {
+func (i *MessageHeader) Unmarshal(data []byte) error {
 	hdrOff := 0
 	if len(data) == 0 {
-		return message.ErrorCodeShortRead
+		return message.ErrShortRead
 	}
 
 	firstByte := data[0]
@@ -253,7 +253,7 @@ func (i *MessageHeader) Unmarshal(data []byte) message.ErrorCode {
 		opLen = int(lenNib)
 	case lenNib == 13:
 		if len(data) < 1 {
-			return message.ErrorCodeShortRead
+			return message.ErrShortRead
 		}
 		extLen := data[0]
 		data = data[1:]
@@ -261,7 +261,7 @@ func (i *MessageHeader) Unmarshal(data []byte) message.ErrorCode {
 		opLen = MESSAGE_LEN13_BASE + int(extLen)
 	case lenNib == 14:
 		if len(data) < 2 {
-			return message.ErrorCodeShortRead
+			return message.ErrShortRead
 		}
 		extLen := binary.BigEndian.Uint16(data)
 		data = data[2:]
@@ -269,7 +269,7 @@ func (i *MessageHeader) Unmarshal(data []byte) message.ErrorCode {
 		opLen = MESSAGE_LEN14_BASE + int(extLen)
 	case lenNib == 15:
 		if len(data) < 4 {
-			return message.ErrorCodeShortRead
+			return message.ErrShortRead
 		}
 		extLen := binary.BigEndian.Uint32(data)
 		data = data[4:]
@@ -279,23 +279,23 @@ func (i *MessageHeader) Unmarshal(data []byte) message.ErrorCode {
 
 	i.TotalLen = hdrOff + 1 + int(tkl) + opLen
 	if len(data) < 1 {
-		return message.ErrorCodeShortRead
+		return message.ErrShortRead
 	}
 	i.Code = codes.Code(data[0])
 	data = data[1:]
 	hdrOff++
 	if len(data) < int(tkl) {
-		return message.ErrorCodeShortRead
+		return message.ErrShortRead
 	}
 	i.Token = data[:tkl]
 	hdrOff += int(tkl)
 
 	i.HeaderLen = hdrOff
 
-	return message.OK
+	return nil
 }
 
-func (m *Message) UnmarshalWithHeader(header MessageHeader, data []byte) (int, message.ErrorCode) {
+func (m *Message) UnmarshalWithHeader(header MessageHeader, data []byte) (int, error) {
 	optionDefs := message.CoapOptionDefs
 	processed := header.HeaderLen
 	switch codes.Code(header.Code) {
@@ -310,7 +310,7 @@ func (m *Message) UnmarshalWithHeader(header MessageHeader, data []byte) (int, m
 	}
 
 	proc, err := m.Options.Unmarshal(data, optionDefs)
-	if err != message.OK {
+	if err != nil {
 		return -1, err
 	}
 	data = data[proc:]
@@ -321,17 +321,17 @@ func (m *Message) UnmarshalWithHeader(header MessageHeader, data []byte) (int, m
 	m.Code = header.Code
 	m.Token = header.Token
 
-	return processed, message.OK
+	return processed, nil
 }
 
-func (m *Message) Unmarshal(data []byte) (int, message.ErrorCode) {
+func (m *Message) Unmarshal(data []byte) (int, error) {
 	header := MessageHeader{Token: m.Token}
 	err := header.Unmarshal(data)
-	if err != message.OK {
+	if err != nil {
 		return -1, err
 	}
 	if len(data) < header.TotalLen {
-		return -1, message.ErrorCodeShortRead
+		return -1, message.ErrShortRead
 	}
 	return m.UnmarshalWithHeader(header, data[header.HeaderLen:])
 }
