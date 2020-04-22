@@ -4,21 +4,21 @@ import (
 	"strconv"
 )
 
-// COAPType represents the message type.
-type COAPType uint8
+// Type represents the message type.
+type Type uint8
 
 const (
 	// Confirmable messages require acknowledgements.
-	Confirmable COAPType = 0
+	Confirmable Type = 0
 	// NonConfirmable messages do not require acknowledgements.
-	NonConfirmable COAPType = 1
+	NonConfirmable Type = 1
 	// Acknowledgement is a message indicating a response to confirmable message.
-	Acknowledgement COAPType = 2
+	Acknowledgement Type = 2
 	// Reset indicates a permanent negative acknowledgement.
-	Reset COAPType = 3
+	Reset Type = 3
 )
 
-func (t COAPType) String() string {
+func (t Type) String() string {
 	switch t {
 	case Confirmable:
 		return "Confirmable"

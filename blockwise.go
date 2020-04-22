@@ -715,12 +715,12 @@ func (b *blockWiseSession) receivePayload(ctx context.Context, startedByClient b
 		resp, err := r.processResp(b, req, bwResp)
 
 		if err != nil {
-			errCode := codes.BadRequest
+			err := codes.BadRequest
 			switch err {
 			case ErrRequestEntityIncomplete:
-				errCode = codes.RequestEntityIncomplete
+				err = codes.RequestEntityIncomplete
 			}
-			r.sendError(ctx, b, errCode, resp, err)
+			r.sendError(ctx, b, err, resp, err)
 			return nil, err
 		}
 

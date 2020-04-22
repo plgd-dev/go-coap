@@ -117,5 +117,4 @@ const ErrMaxMessageSizeLimitExceeded = Error("maximum message size limit exceede
 // ErrServerClosed Server closed
 const ErrServerClosed = net.ErrServerClosed
 
-// ErrKeepAliveDeadlineExceeded occurs during waiting for pong response
-var ErrKeepAliveDeadlineExceeded = fmt.Errorf("keepalive: %w", context.DeadlineExceeded)
+

@@ -77,8 +77,8 @@ func TestSetBytesOption(t *testing.T) {
 	}
 
 	v := make([]string, 1)
-	n, errCode := options.ReadStrings(1, v)
-	require.Equal(t, OK, errCode)
+	n, err := options.ReadStrings(1, v)
+	require.Equal(t, OK, err)
 	require.Equal(t, 1, n)
 	require.Equal(t, []string{"11"}, v)
 
@@ -106,8 +106,8 @@ func TestAddBytesOption(t *testing.T) {
 	options = testAddBytesOption(t, options, Option{ID: 3, Value: []byte("3")}, 3)
 	options = testAddBytesOption(t, options, Option{ID: 1, Value: []byte("4")}, 2)
 	v := make([][]byte, 2)
-	n, errCode := options.ReadBytes(0, v)
-	require.Equal(t, OK, errCode)
+	n, err := options.ReadBytes(0, v)
+	require.Equal(t, OK, err)
 	require.Equal(t, 2, n)
 	require.Equal(t, [][]byte{[]byte{0x30}, []byte{0x31}}, v)
 }
@@ -196,11 +196,11 @@ func BenchmarkPathOption(b *testing.B) {
 		}
 
 		v := make([]string, 3)
-		n, errCode := options.ReadStrings(URIPath, v)
+		n, err := options.ReadStrings(URIPath, v)
 		if n != 3 {
 			b.Fatalf("bad length")
 		}
-		if errCode != OK {
+		if err != OK {
 			b.Fatalf("unexpected code")
 		}
 	}

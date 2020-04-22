@@ -6,6 +6,7 @@ import (
 	"net"
 	"time"
 
+	"github.com/go-ocf/go-coap/v2/keepalive"
 	"github.com/go-ocf/go-coap/v2/message"
 
 	"github.com/go-ocf/go-coap/v2/message/codes"
@@ -31,7 +32,8 @@ var defaultDialOptions = dialOptions{
 		}()
 		return nil
 	},
-	dialer: &net.Dialer{Timeout: time.Second * 3},
+	dialer:    &net.Dialer{Timeout: time.Second * 3},
+	keepalive: keepalive.New(),
 }
 
 type dialOptions struct {
@@ -44,6 +46,7 @@ type dialOptions struct {
 	disablePeerTCPSignalMessageCSMs bool
 	disableTCPSignalMessageCSM      bool
 	dialer                          *net.Dialer
+	keepalive                       *keepalive.KeepAlive
 }
 
 // A DialOption sets options such as credentials, keepalive parameters, etc.
@@ -78,8 +81,17 @@ func Dial(target string, opts ...DialOption) (*ClientConn, error) {
 			cfg.errors(err)
 		}
 	}()
+	cc := NewClientConn(session)
+	if cfg.keepalive != nil {
+		go func() {
+			err := cfg.keepalive.Run(cc)
+			if err != nil {
+				cfg.errors(err)
+			}
+		}()
+	}
 
-	return NewClientConn(session), nil
+	return cc, nil
 }
 
 func NewClientConn(session *Session) *ClientConn {
@@ -143,6 +155,10 @@ func (cc *ClientConn) Get(ctx context.Context, path string, queries ...string) (
 	}
 	defer ReleaseRequest(req)
 	return cc.Do(req)
+}
+
+func (cc *ClientConn) Context() context.Context {
+	return cc.session.Context()
 }
 
 func (cc *ClientConn) Ping(ctx context.Context) error {

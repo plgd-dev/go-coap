@@ -3,7 +3,6 @@ package tcp
 import (
 	"bytes"
 	"context"
-	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -23,7 +22,7 @@ func TestClientConn_Get(t *testing.T) {
 		name              string
 		args              args
 		wantCode          codes.Code
-		wantContentFormat message.MediaType
+		wantContentFormat *message.MediaType
 		wantPayload       interface{}
 		wantErr           bool
 	}{
@@ -32,8 +31,7 @@ func TestClientConn_Get(t *testing.T) {
 			args: args{
 				path: "/oic/sec/session",
 			},
-			wantCode:          codes.BadRequest,
-			wantContentFormat: message.TextPlain,
+			wantCode: codes.BadRequest,
 		},
 	}
 
@@ -44,7 +42,6 @@ func TestClientConn_Get(t *testing.T) {
 	defer wg.Done()
 
 	s := NewServer(func(w *ResponseWriter, r *Request) {
-		fmt.Printf("TEST\n")
 		w.SetCode(codes.BadRequest)
 	})
 	defer s.Stop()
@@ -70,13 +67,48 @@ func TestClientConn_Get(t *testing.T) {
 			}
 			require.NoError(t, err)
 			require.Equal(t, tt.wantCode, got.Code())
-			ct, err := got.ContentFormat()
-			require.NoError(t, err)
-			require.Equal(t, tt.wantContentFormat, ct)
-			buf := bytes.NewBuffer(nil)
-			err = got.GetPayload(buf)
-			require.NoError(t, err)
-			require.Equal(t, tt.wantPayload, string(buf.Bytes()))
+			if tt.wantContentFormat != nil {
+				ct, err := got.ContentFormat()
+				require.NoError(t, err)
+				require.Equal(t, *tt.wantContentFormat, ct)
+				buf := bytes.NewBuffer(nil)
+				err = got.GetPayload(buf)
+				require.NoError(t, err)
+				require.Equal(t, tt.wantPayload, string(buf.Bytes()))
+			}
 		})
 	}
+}
+
+func TestClientConn_Ping(t *testing.T) {
+	l, err := coapNet.NewTCPListener("tcp", ":", time.Millisecond*100)
+	require.NoError(t, err)
+	defer l.Close()
+	var wg sync.WaitGroup
+	defer wg.Done()
+
+	s := NewServer(func(w *ResponseWriter, r *Request) {
+		w.SetCode(codes.BadRequest)
+	})
+	defer s.Stop()
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		err := s.Serve(l)
+		require.NoError(t, err)
+	}()
+
+	cc, err := Dial(l.Addr().String())
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond*200)
+	defer cancel()
+	err = cc.Ping(ctx)
+	require.NoError(t, err)
+
+	ctx, cancel = context.WithTimeout(context.Background(), time.Millisecond*4)
+	defer cancel()
+	err = cc.Ping(ctx)
+	require.NoError(t, err)
 }

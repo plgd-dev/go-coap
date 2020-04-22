@@ -86,7 +86,7 @@ func UnmarshalBlockOption(blockVal uint32) (szx BlockWiseSzx, blockNumber uint, 
 
 func exchangeDrivedByPeer(session *sessionTCP, req coapTCP.Message, blockType coap.OptionID) (coapTCP.Message, error) {
 	req.Options.OptionUint32(blockType)
-	if block, errCode := req.Options.OptionUint32(blockType); errCode == coap.OK {
+	if block, err := req.Options.OptionUint32(blockType); err == coap.OK {
 		_, _, more, err := UnmarshalBlockOption(block)
 		if err != nil {
 			return coapTCP.Message{}, err
@@ -637,12 +637,12 @@ func (b *blockWiseSession) receivePayload(peerDrive bool, msg coapTCP.Message, r
 		resp, err := r.processResp(b, req, bwResp)
 
 		if err != nil {
-			errCode := BadRequest
+			err := BadRequest
 			switch err {
 			case ErrRequestEntityIncomplete:
-				errCode = RequestEntityIncomplete
+				err = RequestEntityIncomplete
 			}
-			r.sendError(b, errCode, resp, err)
+			r.sendError(b, err, resp, err)
 			return nil, err
 		}
 

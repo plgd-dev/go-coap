@@ -1,4 +1,4 @@
-package tcp
+package udp
 
 import (
 	"bytes"
@@ -6,7 +6,6 @@ import (
 
 	coap "github.com/go-ocf/go-coap/v2/message"
 	"github.com/go-ocf/go-coap/v2/message/codes"
-	"github.com/stretchr/testify/require"
 )
 
 func testMarshalMessage(t *testing.T, msg Message, buf []byte, expectedOut []byte) {
@@ -44,19 +43,12 @@ func testUnmarshalMessage(t *testing.T, msg Message, buf []byte, expectedOut Mes
 	}
 }
 
-func TestSizeMessage(t *testing.T) {
-	var msg Message
-	require.Equal(t, 2, msg.Size())
-	msg = Message{Code: codes.GET, Payload: []byte{0x1}, Token: []byte{0x1, 0x2, 0x3}}
-	require.Equal(t, 2, msg.Size())
-}
-
 func TestMarshalMessage(t *testing.T) {
 	buf := make([]byte, 1024)
-	testMarshalMessage(t, Message{}, buf, []byte{0, 0})
-	testMarshalMessage(t, Message{Code: codes.GET}, buf, []byte{0, byte(codes.GET)})
-	testMarshalMessage(t, Message{Code: codes.GET, Payload: []byte{0x1}}, buf, []byte{32, byte(codes.GET), 0xff, 0x1})
-	testMarshalMessage(t, Message{Code: codes.GET, Payload: []byte{0x1}, Token: []byte{0x1, 0x2, 0x3}}, buf, []byte{35, byte(codes.GET), 0x1, 0x2, 0x3, 0xff, 0x1})
+	testMarshalMessage(t, Message{}, buf, []byte{64, 0, 0, 0})
+	testMarshalMessage(t, Message{Code: codes.GET}, buf, []byte{64, byte(codes.GET), 0, 0})
+	testMarshalMessage(t, Message{Code: codes.GET, Payload: []byte{0x1}}, buf, []byte{64, byte(codes.GET), 0, 0, 0xff, 0x1})
+	testMarshalMessage(t, Message{Code: codes.GET, Payload: []byte{0x1}, Token: []byte{0x1, 0x2, 0x3}}, buf, []byte{67, byte(codes.GET), 0, 0, 0x1, 0x2, 0x3, 0xff, 0x1})
 	bufOptions := make([]byte, 1024)
 	bufOptionsUsed := bufOptions
 	options := make(coap.Options, 0, 32)
@@ -77,20 +69,21 @@ func TestMarshalMessage(t *testing.T) {
 		Payload: []byte{0x1},
 		Token:   []byte{0x1, 0x2, 0x3},
 		Options: options,
-	}, buf, []byte{211, 0, 1, 1, 2, 3, 177, 97, 1, 98, 1, 99, 1, 100, 1, 101, 16, 255, 1})
+	}, buf, []byte{67, 1, 0, 0, 1, 2, 3, 177, 97, 1, 98, 1, 99, 1, 100, 1, 101, 16, 255, 1})
 }
 
 func TestUnmarshalMessage(t *testing.T) {
-	testUnmarshalMessage(t, Message{}, []byte{0, 0}, Message{})
-	testUnmarshalMessage(t, Message{}, []byte{0, byte(codes.GET)}, Message{Code: codes.GET})
-	testUnmarshalMessage(t, Message{}, []byte{32, byte(codes.GET), 0xff, 0x1}, Message{Code: codes.GET, Payload: []byte{0x1}})
-	testUnmarshalMessage(t, Message{}, []byte{35, byte(codes.GET), 0x1, 0x2, 0x3, 0xff, 0x1}, Message{Code: codes.GET, Payload: []byte{0x1}, Token: []byte{0x1, 0x2, 0x3}})
-	testUnmarshalMessage(t, Message{Options: make(coap.Options, 0, 32)}, []byte{211, 0, 1, 1, 2, 3, 177, 97, 1, 98, 1, 99, 1, 100, 1, 101, 16, 255, 1}, Message{
+	testUnmarshalMessage(t, Message{}, []byte{64, 0, 0, 0}, Message{})
+	testUnmarshalMessage(t, Message{}, []byte{64, byte(codes.GET), 0, 0}, Message{Code: codes.GET})
+	testUnmarshalMessage(t, Message{}, []byte{64, byte(codes.GET), 0, 0, 0xff, 0x1}, Message{Code: codes.GET, Payload: []byte{0x1}})
+	testUnmarshalMessage(t, Message{}, []byte{67, byte(codes.GET), 0, 0, 0x1, 0x2, 0x3, 0xff, 0x1}, Message{Code: codes.GET, Payload: []byte{0x1}, Token: []byte{0x1, 0x2, 0x3}})
+	testUnmarshalMessage(t, Message{Options: make(coap.Options, 0, 32)}, []byte{67, 1, 0, 0, 1, 2, 3, 177, 97, 1, 98, 1, 99, 1, 100, 1, 101, 16, 255, 1}, Message{
 		Code:    codes.GET,
 		Payload: []byte{0x1},
 		Token:   []byte{0x1, 0x2, 0x3},
 		Options: []coap.Option{{11, []byte{97}}, {11, []byte{98}}, {11, []byte{99}}, {11, []byte{100}}, {11, []byte{101}}, {12, []byte{}}},
 	})
+
 }
 
 func BenchmarkMarshalMessage(b *testing.B) {
@@ -124,7 +117,11 @@ func BenchmarkMarshalMessage(b *testing.B) {
 }
 
 func BenchmarkUnmarshalMessage(b *testing.B) {
-	buffer := []byte{211, 0, 1, 1, 2, 3, 177, 97, 1, 98, 1, 99, 1, 100, 1, 101, 16, 255, 1}
+	buffer := []byte{
+		0x40, 0x1, 0x30, 0x39, 0x46, 0x77,
+		0x65, 0x65, 0x74, 0x61, 0x67, 0xa1, 0x3,
+		0xff, 'h', 'i',
+	}
 	options := make(coap.Options, 0, 32)
 	msg := Message{
 		Options: options,

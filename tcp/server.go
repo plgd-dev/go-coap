@@ -7,6 +7,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/go-ocf/go-coap/v2/keepalive"
+
 	"github.com/go-ocf/go-coap/v2/message/codes"
 
 	coapNet "github.com/go-ocf/go-coap/v2/net"
@@ -46,6 +48,7 @@ var defaultServerOptions = serverOptions{
 		}()
 		return nil
 	},
+	keepalive: keepalive.New(),
 }
 
 type serverOptions struct {
@@ -57,6 +60,7 @@ type serverOptions struct {
 	goPool                          GoPoolFunc
 	disablePeerTCPSignalMessageCSMs bool
 	disableTCPSignalMessageCSM      bool
+	keepalive                       *keepalive.KeepAlive
 }
 
 type Server struct {
@@ -67,6 +71,7 @@ type Server struct {
 	goPool                          GoPoolFunc
 	disablePeerTCPSignalMessageCSMs bool
 	disableTCPSignalMessageCSM      bool
+	keepalive                       *keepalive.KeepAlive
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -119,20 +124,32 @@ func (s *Server) Serve(l Listener) error {
 		}
 		if rw != nil {
 			wg.Add(1)
+			session := NewSession(s.ctx,
+				coapNet.NewConn(rw, s.heartBeat),
+				s.handler,
+				s.maxMessageSize,
+				s.disablePeerTCPSignalMessageCSMs,
+				s.disableTCPSignalMessageCSM,
+				s.goPool)
 			go func() {
 				defer wg.Done()
-				session := NewSession(s.ctx,
-					coapNet.NewConn(rw, s.heartBeat),
-					s.handler,
-					s.maxMessageSize,
-					s.disablePeerTCPSignalMessageCSMs,
-					s.disableTCPSignalMessageCSM,
-					s.goPool)
+
 				err := session.Run()
 				if err != nil {
 					s.errors(err)
 				}
 			}()
+			if s.keepalive != nil {
+				wg.Add(1)
+				go func() {
+					defer wg.Done()
+					conn := NewClientConn(session)
+					err := s.keepalive.Run(conn)
+					if err != nil {
+						s.errors(err)
+					}
+				}()
+			}
 		}
 	}
 }

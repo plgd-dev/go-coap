@@ -102,9 +102,8 @@ type Message struct {
 	Options message.Options //Options must be sorted by ID
 }
 
-func (m Message) Size() int {
-	size, _ := m.MarshalTo(nil)
-	return size
+func (m Message) Size() (int, error) {
+	return m.MarshalTo(nil)
 }
 
 func (m Message) Marshal() ([]byte, error) {
