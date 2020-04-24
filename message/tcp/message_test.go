@@ -1,7 +1,6 @@
 package tcp
 
 import (
-	"bytes"
 	"testing"
 
 	coap "github.com/go-ocf/go-coap/v2/message"
@@ -11,44 +10,15 @@ import (
 
 func testMarshalMessage(t *testing.T, msg Message, buf []byte, expectedOut []byte) {
 	length, err := msg.MarshalTo(buf)
-	if err != nil {
-		t.Fatalf("Unexpected error: %d", err)
-	}
+	require.NoError(t, err)
 	buf = buf[:length]
-	if !bytes.Equal(buf, expectedOut) {
-		t.Fatalf("Unexpected output %v, expeced %d", buf, expectedOut)
-	}
+	require.Equal(t, expectedOut, buf)
 }
 
 func testUnmarshalMessage(t *testing.T, msg Message, buf []byte, expectedOut Message) {
-	length, err := msg.Unmarshal(buf)
-	if err != nil {
-		t.Fatalf("Unexpected error: %d", err)
-	}
-	if length != len(buf) {
-		t.Fatalf("Unexpected length decoded %d, expected %d", length, len(buf))
-	}
-
-	if msg.Code != expectedOut.Code ||
-		!bytes.Equal(msg.Payload, expectedOut.Payload) ||
-		!bytes.Equal(msg.Token, expectedOut.Token) ||
-		len(msg.Options) != len(expectedOut.Options) {
-		t.Fatalf("Unexpected output %v, expeced %v", msg, expectedOut)
-	}
-
-	for i := range msg.Options {
-		if msg.Options[i].ID != expectedOut.Options[i].ID ||
-			!bytes.Equal(msg.Options[i].Value, expectedOut.Options[i].Value) {
-			t.Fatalf("Unexpected output %v, expeced %v", msg, expectedOut)
-		}
-	}
-}
-
-func TestSizeMessage(t *testing.T) {
-	var msg Message
-	require.Equal(t, 2, msg.Size())
-	msg = Message{Code: codes.GET, Payload: []byte{0x1}, Token: []byte{0x1, 0x2, 0x3}}
-	require.Equal(t, 2, msg.Size())
+	_, err := msg.Unmarshal(buf)
+	require.NoError(t, err)
+	require.Equal(t, expectedOut, msg)
 }
 
 func TestMarshalMessage(t *testing.T) {

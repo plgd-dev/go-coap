@@ -43,20 +43,38 @@ func (l *DTLSListener) acceptLoop() {
 	}
 }
 
+var defaultDTLSListenerOptions = dtlsListenerOptions{
+	heartBeat: time.Millisecond * 200,
+}
+
+type dtlsListenerOptions struct {
+	heartBeat time.Duration
+}
+
+// A DTLSListenerOption sets options such as heartBeat parameters, etc.
+type DTLSListenerOption interface {
+	applyDTLSListener(*dtlsListenerOptions)
+}
+
 // NewDTLSListener creates dtls listener.
 // Known networks are "udp", "udp4" (IPv4-only), "udp6" (IPv6-only).
-func NewDTLSListener(network string, addr string, cfg *dtls.Config, heartBeat time.Duration) (*DTLSListener, error) {
+func NewDTLSListener(network string, addr string, dtlsCfg *dtls.Config, opts ...DTLSListenerOption) (*DTLSListener, error) {
+	cfg := defaultDTLSListenerOptions
+	for _, o := range opts {
+		o.applyDTLSListener(&cfg)
+	}
+
 	a, err := net.ResolveUDPAddr(network, addr)
 	if err != nil {
 		return nil, fmt.Errorf("cannot resolve address: %v", err)
 	}
-	listener, err := dtls.Listen(network, a, cfg)
+	listener, err := dtls.Listen(network, a, dtlsCfg)
 	if err != nil {
 		return nil, fmt.Errorf("cannot create new dtls listener: %v", err)
 	}
 	l := DTLSListener{
 		listener:  listener,
-		heartBeat: heartBeat,
+		heartBeat: cfg.heartBeat,
 		doneCh:    make(chan struct{}),
 		connCh:    make(chan connData),
 	}

@@ -1,8 +1,9 @@
-package tcp
+package udp
 
 import (
 	"bytes"
 	"context"
+	"net"
 	"sync"
 	"testing"
 	"time"
@@ -35,7 +36,11 @@ func TestClientConn_Get(t *testing.T) {
 		},
 	}
 
-	l, err := coapNet.NewTCPListener("tcp", ":")
+	listenAddress, err := net.ResolveUDPAddr("udp", "")
+	require.NoError(t, err)
+	conn, err := net.ListenUDP("udp", listenAddress)
+	require.NoError(t, err)
+	l := coapNet.NewUDPConn(conn)
 	require.NoError(t, err)
 	defer l.Close()
 	var wg sync.WaitGroup
@@ -52,7 +57,7 @@ func TestClientConn_Get(t *testing.T) {
 		s.Serve(l)
 	}()
 
-	cc, err := Dial(l.Addr().String())
+	cc, err := Dial(l.LocalAddr().String())
 	require.NoError(t, err)
 	defer cc.Close()
 
@@ -78,10 +83,15 @@ func TestClientConn_Get(t *testing.T) {
 			}
 		})
 	}
+
 }
 
 func TestClientConn_Ping(t *testing.T) {
-	l, err := coapNet.NewTCPListener("tcp", ":")
+	listenAddress, err := net.ResolveUDPAddr("udp", "")
+	require.NoError(t, err)
+	conn, err := net.ListenUDP("udp", listenAddress)
+	require.NoError(t, err)
+	l := coapNet.NewUDPConn(conn)
 	require.NoError(t, err)
 	defer l.Close()
 	var wg sync.WaitGroup
@@ -98,7 +108,7 @@ func TestClientConn_Ping(t *testing.T) {
 		s.Serve(l)
 	}()
 
-	cc, err := Dial(l.Addr().String())
+	cc, err := Dial(l.LocalAddr().String())
 	require.NoError(t, err)
 	defer cc.Close()
 

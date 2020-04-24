@@ -1,4 +1,4 @@
-package tcp
+package udp
 
 import (
 	"context"
@@ -9,7 +9,7 @@ import (
 
 	"github.com/go-ocf/go-coap/v2/message"
 	"github.com/go-ocf/go-coap/v2/message/codes"
-	coapTCP "github.com/go-ocf/go-coap/v2/message/tcp"
+	coapUDP "github.com/go-ocf/go-coap/v2/message/udp"
 )
 
 var (
@@ -20,7 +20,7 @@ type Request struct {
 	noCopy
 
 	//local vars
-	msg             coapTCP.Message
+	msg             coapUDP.Message
 	rawData         []byte
 	valueBuffer     []byte
 	origValueBuffer []byte
@@ -42,7 +42,16 @@ func (r *Request) RemoveOption(opt message.OptionID) {
 }
 
 func (r *Request) Token() []byte {
-	return r.msg.Token
+	if r.msg.Token == nil {
+		return nil
+	}
+	token := make([]byte, 0, 8)
+	token = append(token, r.msg.Token...)
+	return token
+}
+
+func (r *Request) SetToken(token []byte) {
+	r.msg.Token = token
 }
 
 func (r *Request) SetPath(p string) {
@@ -55,8 +64,20 @@ func (r *Request) SetPath(p string) {
 	r.valueBuffer = r.valueBuffer[used:]
 }
 
-func (r *Request) SetToken(token []byte) {
-	r.msg.Token = token
+func (r *Request) SetMessageID(mid uint16) {
+	r.msg.MessageID = mid
+}
+
+func (r *Request) MessageID() uint16 {
+	return r.msg.MessageID
+}
+
+func (r *Request) SetType(typ coapUDP.Type) {
+	r.msg.Type = typ
+}
+
+func (r *Request) Type() coapUDP.Type {
+	return r.msg.Type
 }
 
 func (r *Request) Code() codes.Code {
@@ -132,12 +153,12 @@ func (r *Request) HasOption(id message.OptionID) bool {
 	return r.msg.Options.HasOption(id)
 }
 
-func (r *Request) hasBlockWiseOption() bool {
-	return r.msg.Options.HasOption(coapTCP.BlockWiseTransfer)
-}
-
 func (r *Request) SetContentFormat(contentFormat message.MediaType) {
 	r.SetOptionUint32(message.ContentFormat, uint32(contentFormat))
+}
+
+func (r *Request) PayloadSize() int {
+	return len(r.msg.Payload)
 }
 
 func (r *Request) SetPayload(s io.ReadSeeker) error {
@@ -187,16 +208,6 @@ func (r *Request) Copy(src *Request) {
 	}
 	r.msg.Options = append(r.msg.Options[:0], src.msg.Options...)
 	r.msg.Payload = append(r.msg.Payload[:0], r.msg.Payload...)
-}
-
-func (r *Request) UnmarshalWithHeader(hdr coapTCP.MessageHeader, data []byte) (int, error) {
-	r.Reset()
-	if len(r.rawData) < len(data) {
-		r.rawData = make([]byte, len(data))
-	}
-	copy(r.rawData, data)
-	r.rawData = r.rawData[:len(data)]
-	return r.msg.UnmarshalWithHeader(hdr, data)
 }
 
 func (r *Request) Unmarshal(data []byte) (int, error) {
@@ -251,7 +262,7 @@ func AcquireRequest(ctx context.Context) *Request {
 	if v == nil {
 		valueBuffer := make([]byte, 256)
 		return &Request{
-			msg: coapTCP.Message{
+			msg: coapUDP.Message{
 				Options: make(message.Options, 0, 16),
 			},
 			rawData:         make([]byte, 256),

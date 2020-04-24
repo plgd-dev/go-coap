@@ -154,7 +154,7 @@ type Server struct {
 	// Defines wake up interval from operations Read, Write over connection. defaults is 100ms.
 	HeartBeat time.Duration
 	// If newSessionUDPFunc is set it is called when session UDP want to be created
-	newSessionUDPFunc func(connection *coapNet.ConnUDP, srv *Server, sessionUDPData *coapNet.ConnUDPContext) (networkSession, error)
+	newSessionUDPFunc func(connection *coapNet.ConnUDP, srv *Server, sessionUDPData *coapNet.net.UDPAddr) (networkSession, error)
 	// If newSessionUDPFunc is set it is called when session TCP want to be created
 	newSessionTCPFunc func(connection *coapNet.Conn, srv *Server) (networkSession, error)
 	// If newSessionUDPFunc is set it is called when session DTLS want to be created
@@ -448,7 +448,7 @@ func (srv *Server) activateAndServe(listener Listener, conn *coapNet.Conn, connU
 	}
 
 	if srv.newSessionUDPFunc == nil {
-		srv.newSessionUDPFunc = func(connection *coapNet.ConnUDP, srv *Server, sessionUDPData *coapNet.ConnUDPContext) (networkSession, error) {
+		srv.newSessionUDPFunc = func(connection *coapNet.ConnUDP, srv *Server, sessionUDPData *coapNet.net.UDPAddr) (networkSession, error) {
 			session, err := newSessionUDP(connection, srv, sessionUDPData)
 			if err != nil {
 				return nil, err
@@ -681,7 +681,7 @@ func (srv *Server) closeSessions(err error) {
 	}
 }
 
-func (srv *Server) getOrCreateUDPSession(connUDP *coapNet.ConnUDP, s *coapNet.ConnUDPContext) (networkSession, error) {
+func (srv *Server) getOrCreateUDPSession(connUDP *coapNet.ConnUDP, s *coapNet.net.UDPAddr) (networkSession, error) {
 	srv.sessionUDPMapLock.Lock()
 	defer srv.sessionUDPMapLock.Unlock()
 	session := srv.sessionUDPMap[s.Key()]

@@ -543,7 +543,7 @@ func (srv *Server) serveUDP(conn *net.UDPConn) error {
 			return err
 		}
 		m = m[:cap(m)]
-		n, s, err := connUDP.ReadFromSessionUDP(m)
+		n, s, err := connUDP.ReadFromUDP(m)
 		if err != nil {
 			if netErr, ok := err.(net.Error); ok && netErr.Temporary() {
 				continue

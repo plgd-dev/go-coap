@@ -17,18 +17,35 @@ type TLSListener struct {
 	closed    uint32
 }
 
+var defaultTLSListenerOptions = tlsListenerOptions{
+	heartBeat: time.Millisecond * 200,
+}
+
+type tlsListenerOptions struct {
+	heartBeat time.Duration
+}
+
+// A TLSListenerOption sets options such as heartBeat parameters, etc.
+type TLSListenerOption interface {
+	applyTLSListener(*tlsListenerOptions)
+}
+
 // NewTLSListener creates tcp listener.
 // Known networks are "tcp", "tcp4" (IPv4-only), "tcp6" (IPv6-only).
-func NewTLSListener(network string, addr string, cfg *tls.Config, heartBeat time.Duration) (*TLSListener, error) {
+func NewTLSListener(network string, addr string, tlsCfg *tls.Config, opts ...TLSListenerOption) (*TLSListener, error) {
+	cfg := defaultTLSListenerOptions
+	for _, o := range opts {
+		o.applyTLSListener(&cfg)
+	}
 	tcp, err := newNetTCPListen(network, addr)
 	if err != nil {
 		return nil, fmt.Errorf("cannot create new tls listener: %v", err)
 	}
-	tls := tls.NewListener(tcp, cfg)
+	tls := tls.NewListener(tcp, tlsCfg)
 	return &TLSListener{
 		tcp:       tcp,
 		listener:  tls,
-		heartBeat: heartBeat,
+		heartBeat: cfg.heartBeat,
 	}, nil
 }
 

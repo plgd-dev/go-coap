@@ -79,7 +79,7 @@ func TestTLSListener_AcceptWithContext(t *testing.T) {
 	defer os.RemoveAll(dir)
 	config := SetTLSConfig(t)
 
-	listener, err := NewTLSListener("tcp", "127.0.0.1:", config, time.Millisecond*100)
+	listener, err := NewTLSListener("tcp", "127.0.0.1:", config, WithHeartBeat(time.Millisecond*100))
 	assert.NoError(t, err)
 	defer listener.Close()
 

@@ -3,6 +3,7 @@ module github.com/go-ocf/go-coap/v2
 require (
 	github.com/davecgh/go-spew v1.1.1 // indirect
 	github.com/go-ocf/go-coap v0.0.0-20200420092245-1fa077b7846f
+	github.com/patrickmn/go-cache v2.1.0+incompatible
 	github.com/pion/dtls/v2 v2.0.0-rc.10
 	github.com/stretchr/testify v1.5.1
 	github.com/ugorji/go/codec v1.1.7

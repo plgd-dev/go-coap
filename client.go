@@ -90,7 +90,7 @@ func (c *Client) Dial(address string) (clientConn *ClientConn, err error) {
 	return c.DialWithContext(ctx, address)
 }
 
-func setSessionUDPDataToClient(s networkSession, sessionUDPData *coapNet.ConnUDPContext) {
+func setSessionUDPDataToClient(s networkSession, sessionUDPData *coapNet.net.UDPAddr) {
 	switch u := s.(type) {
 	case *sessionUDP:
 		u.sessionUDPData = sessionUDPData
@@ -105,7 +105,7 @@ func setSessionUDPDataToClient(s networkSession, sessionUDPData *coapNet.ConnUDP
 func (c *Client) DialWithContext(ctx context.Context, address string) (clientConn *ClientConn, err error) {
 	var conn net.Conn
 	var network string
-	var sessionUPDData *coapNet.ConnUDPContext
+	var sessionUPDData *coapNet.net.UDPAddr
 
 	dialer := &net.Dialer{Timeout: c.DialTimeout}
 	BlockWiseTransfer := false
@@ -144,7 +144,7 @@ func (c *Client) DialWithContext(ctx context.Context, address string) (clientCon
 		if conn, err = dialer.DialContext(ctx, network, address); err != nil {
 			return nil, err
 		}
-		sessionUPDData = coapNet.NewConnUDPContext(conn.(*net.UDPConn).RemoteAddr().(*net.UDPAddr))
+		sessionUPDData = coapNet.Newnet.UDPAddr(conn.(*net.UDPConn).RemoteAddr().(*net.UDPAddr))
 		BlockWiseTransfer = true
 	case "udp-dtls", "udp4-dtls", "udp6-dtls":
 		network = c.Net
@@ -172,7 +172,7 @@ func (c *Client) DialWithContext(ctx context.Context, address string) (clientCon
 		if err != nil {
 			return nil, fmt.Errorf("cannot listen address: %v", err)
 		}
-		sessionUPDData = coapNet.NewConnUDPContext(multicastAddress)
+		sessionUPDData = coapNet.Newnet.UDPAddr(multicastAddress)
 		conn = udpConn
 		BlockWiseTransfer = true
 		multicast = true
@@ -219,7 +219,7 @@ func (c *Client) DialWithContext(ctx context.Context, address string) (clientCon
 			newSessionDTLSFunc: func(connection *coapNet.Conn, srv *Server) (networkSession, error) {
 				return clientConn.commander.networkSession, nil
 			},
-			newSessionUDPFunc: func(connection *coapNet.ConnUDP, srv *Server, sessionUDPData *coapNet.ConnUDPContext) (networkSession, error) {
+			newSessionUDPFunc: func(connection *coapNet.ConnUDP, srv *Server, sessionUDPData *coapNet.net.UDPAddr) (networkSession, error) {
 				if sessionUDPData.RemoteAddr().String() == clientConn.commander.networkSession.RemoteAddr().String() {
 					setSessionUDPDataToClient(clientConn.commander.networkSession, sessionUDPData)
 					return clientConn.commander.networkSession, nil

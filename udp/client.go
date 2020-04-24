@@ -1,4 +1,4 @@
-package tcp
+package udp
 
 import (
 	"context"
@@ -10,6 +10,7 @@ import (
 	"github.com/go-ocf/go-coap/v2/message"
 
 	"github.com/go-ocf/go-coap/v2/message/codes"
+	coapUDP "github.com/go-ocf/go-coap/v2/message/udp"
 	coapNet "github.com/go-ocf/go-coap/v2/net"
 )
 
@@ -34,21 +35,19 @@ var defaultDialOptions = dialOptions{
 	},
 	dialer:    &net.Dialer{Timeout: time.Second * 3},
 	keepalive: keepalive.New(),
-	net:       "tcp",
+	net:       "udp",
 }
 
 type dialOptions struct {
-	ctx                             context.Context
-	maxMessageSize                  int
-	heartBeat                       time.Duration
-	handler                         HandlerFunc
-	errors                          ErrorFunc
-	goPool                          GoPoolFunc
-	disablePeerTCPSignalMessageCSMs bool
-	disableTCPSignalMessageCSM      bool
-	dialer                          *net.Dialer
-	keepalive                       *keepalive.KeepAlive
-	net                             string
+	ctx            context.Context
+	maxMessageSize int
+	heartBeat      time.Duration
+	handler        HandlerFunc
+	errors         ErrorFunc
+	goPool         GoPoolFunc
+	dialer         *net.Dialer
+	keepalive      *keepalive.KeepAlive
+	net            string
 }
 
 // A DialOption sets options such as credentials, keepalive parameters, etc.
@@ -65,25 +64,36 @@ func Dial(target string, opts ...DialOption) (*ClientConn, error) {
 	for _, o := range opts {
 		o.applyDial(&cfg)
 	}
-	conn, err := cfg.dialer.DialContext(cfg.ctx, cfg.net, target)
+
+	c, err := cfg.dialer.DialContext(cfg.ctx, cfg.net, target)
 	if err != nil {
 		return nil, err
 	}
-	session := NewSession(cfg.ctx,
-		coapNet.NewConn(conn, coapNet.WithHeartBeat(cfg.heartBeat)),
+	conn, ok := c.(*net.UDPConn)
+	if !ok {
+		return nil, fmt.Errorf("unsupported connection type: %T", c)
+	}
+
+	addr, ok := conn.RemoteAddr().(*net.UDPAddr)
+	if !ok {
+		return nil, fmt.Errorf("cannot get target upd address")
+	}
+
+	l := coapNet.NewUDPConn(conn, coapNet.WithHeartBeat(cfg.heartBeat), coapNet.WithErrors(cfg.errors))
+	cc := NewClientConn(NewSession(cfg.ctx,
+		l,
+		addr,
 		cfg.handler,
 		cfg.maxMessageSize,
-		cfg.disablePeerTCPSignalMessageCSMs,
-		cfg.disableTCPSignalMessageCSM,
 		cfg.goPool,
-	)
+	))
+
 	go func() {
-		err = session.Run()
+		err := cc.run()
 		if err != nil {
 			cfg.errors(err)
 		}
 	}()
-	cc := NewClientConn(session)
 	if cfg.keepalive != nil {
 		go func() {
 			err := cfg.keepalive.Run(cc)
@@ -112,14 +122,39 @@ func (cc *ClientConn) Do(req *Request) (*Request, error) {
 		return nil, fmt.Errorf("invalid token")
 	}
 	respChan := make(chan *Request, 1)
-	err := cc.session.TokenHandler().Add(token, func(w *ResponseWriter, r *Request) {
+	err := cc.session.TokenHandler().Insert(token, func(w *ResponseWriter, r *Request) {
 		r.Hijack()
 		respChan <- r
 	})
 	if err != nil {
 		return nil, fmt.Errorf("cannot add token handler: %w", err)
 	}
-	defer cc.session.TokenHandler().Remove(token)
+	defer cc.session.TokenHandler().Pop(token)
+	err = cc.session.WriteRequest(req)
+	if err != nil {
+		return nil, fmt.Errorf("cannot write request: %w", err)
+	}
+
+	select {
+	case <-req.ctx.Done():
+		return nil, req.ctx.Err()
+	case <-cc.session.Context().Done():
+		return nil, fmt.Errorf("connection was closed: %w", req.ctx.Err())
+	case resp := <-respChan:
+		return resp, nil
+	}
+}
+
+func (cc *ClientConn) doWithMID(req *Request) (*Request, error) {
+	respChan := make(chan *Request, 1)
+	err := cc.session.midHandlerContainer.Insert(req.MessageID(), func(w *ResponseWriter, r *Request) {
+		r.Hijack()
+		respChan <- r
+	})
+	if err != nil {
+		return nil, fmt.Errorf("cannot insert mid handler: %w", err)
+	}
+	defer cc.session.midHandlerContainer.Pop(req.MessageID())
 	err = cc.session.WriteRequest(req)
 	if err != nil {
 		return nil, fmt.Errorf("cannot write request: %w", err)
@@ -164,21 +199,35 @@ func (cc *ClientConn) Context() context.Context {
 }
 
 func (cc *ClientConn) Ping(ctx context.Context) error {
-	token, err := message.GetToken()
-	if err != nil {
-		return fmt.Errorf("cannot get token: %w", err)
-	}
 	req := AcquireRequest(ctx)
-	req.SetToken(token)
-	req.SetCode(codes.Ping)
 	defer ReleaseRequest(req)
-	resp, err := cc.Do(req)
+	req.SetType(coapUDP.Confirmable)
+	req.SetCode(codes.Empty)
+	req.SetMessageID(cc.session.getMID())
+	resp, err := cc.doWithMID(req)
 	if err != nil {
 		return err
 	}
 	defer ReleaseRequest(resp)
-	if resp.Code() == codes.Pong {
+	if resp.Type() == coapUDP.Reset || resp.Type() == coapUDP.Acknowledgement {
 		return nil
 	}
-	return fmt.Errorf("unexpected code(%v)", resp.Code())
+	return fmt.Errorf("unexpected response(%v)", resp)
+}
+
+func (cc *ClientConn) run() error {
+	m := make([]byte, ^uint16(0))
+	for {
+		n, _, err := cc.session.connection.ReadWithContext(cc.session.ctx, m)
+		if err != nil {
+			cc.session.Close()
+			return err
+		}
+		m = m[:n]
+		err = cc.session.processBuffer(m)
+		if err != nil {
+			cc.session.Close()
+			return err
+		}
+	}
 }

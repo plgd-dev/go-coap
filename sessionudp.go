@@ -15,18 +15,18 @@ type connUDP interface {
 	LocalAddr() net.Addr
 	RemoteAddr() net.Addr
 	Close() error
-	ReadWithContext(ctx context.Context, buffer []byte) (int, *coapNet.ConnUDPContext, error)
-	WriteWithContext(ctx context.Context, udpCtx *coapNet.ConnUDPContext, buffer []byte) error
+	ReadWithContext(ctx context.Context, buffer []byte) (int, *coapNet.net.UDPAddr, error)
+	WriteWithContext(ctx context.Context, udpCtx *coapNet.net.UDPAddr, buffer []byte) error
 }
 
 type sessionUDP struct {
 	*sessionBase
 	connection     connUDP
-	sessionUDPData *coapNet.ConnUDPContext // oob data to get egress interface right
+	sessionUDPData *coapNet.net.UDPAddr // oob data to get egress interface right
 }
 
 // NewSessionUDP create new session for UDP connection
-func newSessionUDP(connection connUDP, srv *Server, sessionUDPData *coapNet.ConnUDPContext) (networkSession, error) {
+func newSessionUDP(connection connUDP, srv *Server, sessionUDPData *coapNet.net.UDPAddr) (networkSession, error) {
 	BlockWiseTransfer := true
 	BlockWiseTransferSzx := BlockWiseSzx1024
 	if srv.BlockWiseTransfer != nil {

@@ -103,7 +103,11 @@ type Message struct {
 }
 
 func (m Message) Size() (int, error) {
-	return m.MarshalTo(nil)
+	size, err := m.MarshalTo(nil)
+	if err == message.ErrTooSmall {
+		err = nil
+	}
+	return size, err
 }
 
 func (m Message) Marshal() ([]byte, error) {
@@ -286,7 +290,9 @@ func (i *MessageHeader) Unmarshal(data []byte) error {
 	if len(data) < int(tkl) {
 		return message.ErrShortRead
 	}
-	i.Token = data[:tkl]
+	if tkl > 0 {
+		i.Token = data[:tkl]
+	}
 	hdrOff += int(tkl)
 
 	i.HeaderLen = hdrOff
@@ -315,7 +321,9 @@ func (m *Message) UnmarshalWithHeader(header MessageHeader, data []byte) (int, e
 	data = data[proc:]
 	processed += proc
 
-	m.Payload = data
+	if len(data) > 0 {
+		m.Payload = data
+	}
 	processed = processed + len(data)
 	m.Code = header.Code
 	m.Token = header.Token

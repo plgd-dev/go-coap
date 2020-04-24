@@ -19,11 +19,28 @@ type Conn struct {
 	lock       sync.Mutex
 }
 
+var defaultConnOptions = connOptions{
+	heartBeat: time.Millisecond * 200,
+}
+
+type connOptions struct {
+	heartBeat time.Duration
+}
+
+// A ConnOption sets options such as heartBeat, errors parameters, etc.
+type ConnOption interface {
+	applyConn(*connOptions)
+}
+
 // NewConn creates connection over net.Conn.
-func NewConn(c net.Conn, heartBeat time.Duration) *Conn {
+func NewConn(c net.Conn, opts ...ConnOption) *Conn {
+	cfg := defaultConnOptions
+	for _, o := range opts {
+		o.applyConn(&cfg)
+	}
 	connection := Conn{
 		connection: c,
-		heartBeat:  heartBeat,
+		heartBeat:  cfg.heartBeat,
 		readBuffer: bufio.NewReaderSize(c, 2048),
 	}
 	return &connection

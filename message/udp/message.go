@@ -129,12 +129,14 @@ func (m *Message) Unmarshal(data []byte) (int, error) {
 
 	code := codes.Code(data[1])
 	messageID := binary.BigEndian.Uint16(data[2:4])
-	token := make([]byte, 0, 8)
 	data = data[4:]
 	if len(data) < tokenLen {
 		return -1, ErrMessageTruncated
 	}
-	m.Token = append(m.Token, data[:tokenLen]...)
+	token := data[:tokenLen]
+	if len(token) == 0 {
+		token = nil
+	}
 	data = data[tokenLen:]
 
 	optionDefs := message.CoapOptionDefs
@@ -143,6 +145,9 @@ func (m *Message) Unmarshal(data []byte) (int, error) {
 		return -1, err
 	}
 	data = data[proc:]
+	if len(data) == 0 {
+		data = nil
+	}
 
 	m.Payload = data
 	m.Code = code

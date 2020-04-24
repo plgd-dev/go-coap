@@ -28,14 +28,31 @@ func newNetTCPListen(network string, addr string) (*net.TCPListener, error) {
 	return tcp, nil
 }
 
+var defaultTCPListenerOptions = tcpListenerOptions{
+	heartBeat: time.Millisecond * 200,
+}
+
+type tcpListenerOptions struct {
+	heartBeat time.Duration
+}
+
+// A TCPListenerOption sets options such as heartBeat parameters, etc.
+type TCPListenerOption interface {
+	applyTCPListener(*tcpListenerOptions)
+}
+
 // NewTCPListener creates tcp listener.
 // Known networks are "tcp", "tcp4" (IPv4-only), "tcp6" (IPv6-only).
-func NewTCPListener(network string, addr string, heartBeat time.Duration) (*TCPListener, error) {
+func NewTCPListener(network string, addr string, opts ...TCPListenerOption) (*TCPListener, error) {
+	cfg := defaultTCPListenerOptions
+	for _, o := range opts {
+		o.applyTCPListener(&cfg)
+	}
 	tcp, err := newNetTCPListen(network, addr)
 	if err != nil {
 		return nil, fmt.Errorf("cannot create new tcp listener: %v", err)
 	}
-	return &TCPListener{listener: tcp, heartBeat: heartBeat}, nil
+	return &TCPListener{listener: tcp, heartBeat: cfg.heartBeat}, nil
 }
 
 // AcceptContext waits with context for a generic Conn.

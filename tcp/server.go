@@ -106,6 +106,7 @@ func NewServer(handler HandlerFunc, opt ...ServerOption) *Server {
 		goPool:                          opts.goPool,
 		disablePeerTCPSignalMessageCSMs: opts.disablePeerTCPSignalMessageCSMs,
 		disableTCPSignalMessageCSM:      opts.disableTCPSignalMessageCSM,
+		keepalive:                       opts.keepalive,
 	}
 }
 
@@ -125,7 +126,7 @@ func (s *Server) Serve(l Listener) error {
 		if rw != nil {
 			wg.Add(1)
 			session := NewSession(s.ctx,
-				coapNet.NewConn(rw, s.heartBeat),
+				coapNet.NewConn(rw, coapNet.WithHeartBeat(s.heartBeat)),
 				s.handler,
 				s.maxMessageSize,
 				s.disablePeerTCPSignalMessageCSMs,
@@ -133,7 +134,6 @@ func (s *Server) Serve(l Listener) error {
 				s.goPool)
 			go func() {
 				defer wg.Done()
-
 				err := session.Run()
 				if err != nil {
 					s.errors(err)

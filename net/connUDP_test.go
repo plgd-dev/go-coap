@@ -12,7 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestConnUDP_WriteWithContext(t *testing.T) {
+func TestUDPConn_WriteWithContext(t *testing.T) {
 	peerAddr := "127.0.0.1:2154"
 	b, err := net.ResolveUDPAddr("udp", peerAddr)
 	assert.NoError(t, err)
@@ -22,7 +22,7 @@ func TestConnUDP_WriteWithContext(t *testing.T) {
 
 	type args struct {
 		ctx    context.Context
-		udpCtx *ConnUDPContext
+		udpCtx *net.UDPAddr
 		buffer []byte
 	}
 	tests := []struct {
@@ -34,7 +34,7 @@ func TestConnUDP_WriteWithContext(t *testing.T) {
 			name: "valid",
 			args: args{
 				ctx:    context.Background(),
-				udpCtx: NewConnUDPContext(b),
+				udpCtx: b,
 				buffer: []byte("hello world"),
 			},
 		},
@@ -52,14 +52,14 @@ func TestConnUDP_WriteWithContext(t *testing.T) {
 	assert.NoError(t, err)
 	l1, err := net.ListenUDP("udp", a)
 	assert.NoError(t, err)
-	c1 := NewConnUDP(l1, time.Millisecond*100, 0, func(err error) { t.Log(err) })
+	c1 := NewUDPConn(l1, WithHeartBeat(time.Millisecond*100), WithErrors(func(err error) { t.Log(err) }))
 	defer c1.Close()
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
 	l2, err := net.ListenUDP("udp", b)
 	assert.NoError(t, err)
-	c2 := NewConnUDP(l2, time.Millisecond*100, 0, func(err error) { t.Log(err) })
+	c2 := NewUDPConn(l2, WithHeartBeat(time.Millisecond*100), WithErrors(func(err error) { t.Log(err) }))
 	defer c2.Close()
 
 	go func() {
@@ -86,7 +86,7 @@ func TestConnUDP_WriteWithContext(t *testing.T) {
 	}
 }
 
-func TestConnUDP_writeMulticastWithContext(t *testing.T) {
+func TestUDPConn_writeMulticastWithContext(t *testing.T) {
 	peerAddr := "224.0.1.187:5683"
 	b, err := net.ResolveUDPAddr("udp4", peerAddr)
 	assert.NoError(t, err)
@@ -97,7 +97,7 @@ func TestConnUDP_writeMulticastWithContext(t *testing.T) {
 
 	type args struct {
 		ctx    context.Context
-		udpCtx *ConnUDPContext
+		udpCtx *net.UDPAddr
 		buffer []byte
 	}
 	tests := []struct {
@@ -109,7 +109,7 @@ func TestConnUDP_writeMulticastWithContext(t *testing.T) {
 			name: "valid",
 			args: args{
 				ctx:    context.Background(),
-				udpCtx: NewConnUDPContext(b),
+				udpCtx: b,
 				buffer: payload,
 			},
 		},
@@ -117,7 +117,7 @@ func TestConnUDP_writeMulticastWithContext(t *testing.T) {
 			name: "cancelled",
 			args: args{
 				ctx:    ctxCanceled,
-				udpCtx: NewConnUDPContext(b),
+				udpCtx: b,
 				buffer: payload,
 			},
 			wantErr: true,
@@ -129,7 +129,7 @@ func TestConnUDP_writeMulticastWithContext(t *testing.T) {
 	assert.NoError(t, err)
 	l2, err := net.ListenUDP("udp4", c)
 	assert.NoError(t, err)
-	c2 := NewConnUDP(l2, time.Millisecond*100, 2, func(err error) { t.Log(err) })
+	c2 := NewUDPConn(l2, WithHeartBeat(time.Millisecond*100), WithErrors(func(err error) { t.Log(err) }))
 	defer c2.Close()
 	ifaces, err := net.Interfaces()
 	require.NoError(t, err)
@@ -149,7 +149,7 @@ func TestConnUDP_writeMulticastWithContext(t *testing.T) {
 	assert.NoError(t, err)
 	l1, err := net.ListenUDP("udp4", a)
 	assert.NoError(t, err)
-	c1 := NewConnUDP(l1, time.Millisecond*100, 2, func(err error) { t.Log(err) })
+	c1 := NewUDPConn(l1, WithHeartBeat(time.Millisecond*100), WithErrors(func(err error) { t.Log(err) }))
 	defer c1.Close()
 	assert.NoError(t, err)
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*3)
@@ -171,7 +171,7 @@ func TestConnUDP_writeMulticastWithContext(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err = c1.WriteWithContext(tt.args.ctx, tt.args.udpCtx, tt.args.buffer)
+			err = c1.WriteMulticast(tt.args.ctx, tt.args.udpCtx, 2, tt.args.buffer)
 
 			c1.LocalAddr()
 			c1.RemoteAddr()
