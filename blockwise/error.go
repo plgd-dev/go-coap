@@ -21,6 +21,6 @@ var (
 	// ErrInvalidPayloadSize invalid payload size
 	ErrInvalidPayloadSize = errors.New("invalid payload size")
 
-	// ErrInvalidBlockWiseSzx invalid block-wise transfer szx
-	ErrInvalidBlockWiseSzx = errors.New("invalid block-wise transfer szx")
+	// ErrInvalidSZX invalid block-wise transfer szx
+	ErrInvalidSZX = errors.New("invalid block-wise transfer szx")
 )

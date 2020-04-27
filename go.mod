@@ -2,6 +2,7 @@ module github.com/go-ocf/go-coap/v2
 
 require (
 	github.com/davecgh/go-spew v1.1.1 // indirect
+	github.com/dsnet/golib/memfile v0.0.0-20190531212259-571cdbcff553
 	github.com/go-ocf/go-coap v0.0.0-20200420092245-1fa077b7846f
 	github.com/patrickmn/go-cache v2.1.0+incompatible
 	github.com/pion/dtls/v2 v2.0.0-rc.10
