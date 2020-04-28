@@ -103,7 +103,7 @@ func (cc *ClientConn) Observe(ctx context.Context, path string, observeFunc func
 	case <-req.ctx.Done():
 		o.cc.observationTokenHandler.Pop(req.Token())
 		return nil, req.ctx.Err()
-	case <-cc.session.Context().Done():
+	case <-cc.Context().Done():
 		o.cc.observationTokenHandler.Pop(req.Token())
 		return nil, fmt.Errorf("connection was closed: %w", req.ctx.Err())
 	case resp := <-respChan:

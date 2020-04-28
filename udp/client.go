@@ -3,6 +3,7 @@ package udp
 import (
 	"context"
 	"fmt"
+	"io"
 	"net"
 	"time"
 
@@ -69,6 +70,7 @@ type DialOption interface {
 }
 
 type ClientConn struct {
+	noCopy
 	session                 *Session
 	observationTokenHandler *HandlerContainer
 }
@@ -219,14 +221,13 @@ func (cc *ClientConn) doWithMID(req *Message) (*Message, error) {
 	}
 }
 
-// NewGetRequest creates get request.
-func NewGetRequest(ctx context.Context, path string, queries ...string) (*Message, error) {
+func newCommonRequest(ctx context.Context, code codes.Code, path string, queries ...string) (*Message, error) {
 	token, err := message.GetToken()
 	if err != nil {
 		return nil, fmt.Errorf("cannot get token: %w", err)
 	}
 	req := AcquireRequest(ctx)
-	req.SetCode(codes.GET)
+	req.SetCode(code)
 	req.SetToken(token)
 	req.SetPath(path)
 	for _, q := range queries {
@@ -235,11 +236,72 @@ func NewGetRequest(ctx context.Context, path string, queries ...string) (*Messag
 	return req, nil
 }
 
+// NewGetRequest creates get request.
+func NewGetRequest(ctx context.Context, path string, queries ...string) (*Message, error) {
+	return newCommonRequest(ctx, codes.GET, path, queries...)
+}
+
 // Get issues a GET to the specified path.
 func (cc *ClientConn) Get(ctx context.Context, path string, queries ...string) (*Message, error) {
 	req, err := NewGetRequest(ctx, path, queries...)
 	if err != nil {
 		return nil, fmt.Errorf("cannot create get request: %w", err)
+	}
+	defer ReleaseRequest(req)
+	return cc.Do(req)
+}
+
+// NewPostRequest creates post request.
+func NewPostRequest(ctx context.Context, path string, contentFormat message.MediaType, payload io.ReadSeeker, queries ...string) (*Message, error) {
+	req, err := newCommonRequest(ctx, codes.POST, path, queries...)
+	if err != nil {
+		return nil, err
+	}
+	if payload != nil {
+		req.SetContentFormat(contentFormat)
+		req.SetPayload(payload)
+	}
+	return req, nil
+}
+
+// Post issues a POST to the specified path.
+func (cc *ClientConn) Post(ctx context.Context, path string, contentFormat message.MediaType, payload io.ReadSeeker, queries ...string) (*Message, error) {
+	req, err := NewPostRequest(ctx, path, contentFormat, payload, queries...)
+	if err != nil {
+		return nil, fmt.Errorf("cannot create post request: %w", err)
+	}
+	defer ReleaseRequest(req)
+	return cc.Do(req)
+}
+
+// NewPutRequest creates put request.
+func NewPutRequest(ctx context.Context, path string, contentFormat message.MediaType, payload io.ReadSeeker, queries ...string) (*Message, error) {
+	req, err := newCommonRequest(ctx, codes.PUT, path, queries...)
+	if err != nil {
+		return nil, err
+	}
+	if payload != nil {
+		req.SetContentFormat(contentFormat)
+		req.SetPayload(payload)
+	}
+	return req, nil
+}
+
+// Put issues a POST to the specified path.
+func (cc *ClientConn) Put(ctx context.Context, path string, contentFormat message.MediaType, payload io.ReadSeeker, queries ...string) (*Message, error) {
+	req, err := NewPutRequest(ctx, path, contentFormat, payload, queries...)
+	if err != nil {
+		return nil, fmt.Errorf("cannot create put request: %w", err)
+	}
+	defer ReleaseRequest(req)
+	return cc.Do(req)
+}
+
+// Delete deletes the resource identified by the request path.
+func (cc *ClientConn) Delete(ctx context.Context, path string) (*Message, error) {
+	req, err := newCommonRequest(ctx, codes.DELETE, path)
+	if err != nil {
+		return nil, fmt.Errorf("cannot create delete request: %w", err)
 	}
 	defer ReleaseRequest(req)
 	return cc.Do(req)
@@ -286,6 +348,7 @@ func (cc *ClientConn) Run() error {
 	}
 }
 
+// AddOnClose calls function on close connection event.
 func (cc *ClientConn) AddOnClose(f EventFunc) {
 	cc.session.AddOnClose(f)
 }
