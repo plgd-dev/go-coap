@@ -116,7 +116,7 @@ var CoapOptionDefs = map[OptionID]OptionDef{
 type MediaType uint16
 
 // Content formats.
-const (
+var (
 	TextPlain         MediaType = 0     // text/plain;charset=utf-8
 	AppCoseEncrypt0   MediaType = 16    // application/cose; cose-type="cose-encrypt0" (RFC 8152)
 	AppCoseMac0       MediaType = 17    // application/cose; cose-type="cose-mac0" (RFC 8152)

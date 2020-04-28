@@ -7,6 +7,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/go-ocf/go-coap/v2/blockwise"
+
 	"github.com/go-ocf/go-coap/v2/keepalive"
 
 	"github.com/go-ocf/go-coap/v2/message/codes"
@@ -23,17 +25,19 @@ type ServerOption interface {
 // ordinary functions as COAP handlers.  If f is a function
 // with the appropriate signature, HandlerFunc(f) is a
 // Handler object that calls f.
-type HandlerFunc func(*ResponseWriter, *Request)
+type HandlerFunc func(*ResponseWriter, *Message)
 
 type ErrorFunc = func(error)
 
 type GoPoolFunc = func(func() error) error
 
+type BlockwiseFactoryFunc = func() *blockwise.BlockWise
+
 var defaultServerOptions = serverOptions{
 	ctx:            context.Background(),
 	maxMessageSize: 64 * 1024,
 	heartBeat:      time.Millisecond * 100,
-	handler: func(w *ResponseWriter, r *Request) {
+	handler: func(w *ResponseWriter, r *Message) {
 		w.SetCode(codes.NotFound)
 	},
 	errors: func(err error) {
@@ -48,31 +52,45 @@ var defaultServerOptions = serverOptions{
 		}()
 		return nil
 	},
-	keepalive: keepalive.New(),
-	net:       "udp",
+	keepalive:    keepalive.New(),
+	net:          "udp",
+	blockwiseSZX: blockwise.SZX1024,
+	blockWiseFactory: func() *blockwise.BlockWise {
+		return blockwise.NewBlockWise(func(ctx context.Context) blockwise.Message {
+			return AcquireRequest(ctx)
+		}, func(m blockwise.Message) {
+			ReleaseRequest(m.(*Message))
+		}, time.Second*3, func(err error) {
+			fmt.Println(err)
+		}, false)
+	},
 }
 
 type serverOptions struct {
-	ctx            context.Context
-	maxMessageSize int
-	heartBeat      time.Duration
-	handler        HandlerFunc
-	errors         ErrorFunc
-	goPool         GoPoolFunc
-	keepalive      *keepalive.KeepAlive
-	net            string
+	ctx              context.Context
+	maxMessageSize   int
+	heartBeat        time.Duration
+	handler          HandlerFunc
+	errors           ErrorFunc
+	goPool           GoPoolFunc
+	keepalive        *keepalive.KeepAlive
+	net              string
+	blockwiseSZX     blockwise.SZX
+	blockWiseFactory BlockwiseFactoryFunc
 }
 
 type Server struct {
-	maxMessageSize int
-	heartBeat      time.Duration
-	handler        HandlerFunc
-	errors         ErrorFunc
-	goPool         GoPoolFunc
-	keepalive      *keepalive.KeepAlive
-	net            string
+	maxMessageSize   int
+	heartBeat        time.Duration
+	handler          HandlerFunc
+	errors           ErrorFunc
+	goPool           GoPoolFunc
+	keepalive        *keepalive.KeepAlive
+	blockwiseSZX     blockwise.SZX
+	blockWiseFactory BlockwiseFactoryFunc
+	net              string
 
-	sessions      map[string]*Session
+	conns         map[string]*ClientConn
 	sessionsMutex sync.Mutex
 	ctx           context.Context
 	cancel        context.CancelFunc
@@ -95,28 +113,34 @@ func NewServer(handler HandlerFunc, opt ...ServerOption) *Server {
 
 	ctx, cancel := context.WithCancel(opts.ctx)
 	if handler == nil {
-		handler = func(w *ResponseWriter, r *Request) {
+		handler = func(w *ResponseWriter, r *Message) {
 			w.SetCode(codes.BadRequest)
 		}
 	}
 
 	return &Server{
-		ctx:            ctx,
-		cancel:         cancel,
-		handler:        handler,
-		maxMessageSize: opts.maxMessageSize,
-		heartBeat:      opts.heartBeat,
-		errors:         opts.errors,
-		goPool:         opts.goPool,
-		net:            opts.net,
-		keepalive:      opts.keepalive,
+		ctx:              ctx,
+		cancel:           cancel,
+		handler:          handler,
+		maxMessageSize:   opts.maxMessageSize,
+		heartBeat:        opts.heartBeat,
+		errors:           opts.errors,
+		goPool:           opts.goPool,
+		net:              opts.net,
+		keepalive:        opts.keepalive,
+		blockwiseSZX:     opts.blockwiseSZX,
+		blockWiseFactory: opts.blockWiseFactory,
 
-		sessions: make(map[string]*Session),
+		conns: make(map[string]*ClientConn),
 	}
 }
 
 func (s *Server) Serve(l *coapNet.UDPConn) error {
-	m := make([]byte, ^uint16(0))
+	if s.blockwiseSZX > blockwise.SZX1024 {
+		return fmt.Errorf("invalid blockwiseSZX")
+	}
+
+	m := make([]byte, s.maxMessageSize)
 	s.listenMutex.Lock()
 	if s.listen != nil {
 		s.listenMutex.Unlock()
@@ -133,30 +157,29 @@ func (s *Server) Serve(l *coapNet.UDPConn) error {
 
 	var wg sync.WaitGroup
 	for {
-		n, raddr, err := l.ReadWithContext(s.ctx, m)
+		buf := m
+		n, raddr, err := l.ReadWithContext(s.ctx, buf)
 		if err != nil {
 			wg.Wait()
 			return err
 		}
-		m = m[:n]
-
-		session, created := s.getOrCreateSession(l, raddr)
+		buf = buf[:n]
+		cc, created := s.getOrCreateClientConn(l, raddr)
 		if created {
 			if s.keepalive != nil {
 				wg.Add(1)
 				go func() {
 					defer wg.Done()
-					conn := NewClientConn(session)
-					err := s.keepalive.Run(conn)
+					err := s.keepalive.Run(cc)
 					if err != nil {
 						s.errors(err)
 					}
 				}()
 			}
 		}
-		err = session.processBuffer(m)
+		err = cc.processBuffer(buf)
 		if err != nil {
-			session.Close()
+			cc.Close()
 			s.errors(err)
 		}
 	}
@@ -169,8 +192,8 @@ func (s *Server) Stop() {
 
 func (s *Server) closeSessions() {
 	s.sessionsMutex.Lock()
-	tmp := s.sessions
-	s.sessions = make(map[string]*Session)
+	tmp := s.conns
+	s.conns = make(map[string]*ClientConn)
 	s.sessionsMutex.Unlock()
 	for _, v := range tmp {
 		v.Close()
@@ -183,23 +206,31 @@ func (s *Server) conn() *coapNet.UDPConn {
 	return s.listen
 }
 
-func (s *Server) getOrCreateSession(UDPConn *coapNet.UDPConn, raddr *net.UDPAddr) (*Session, bool) {
+func (s *Server) getOrCreateClientConn(UDPConn *coapNet.UDPConn, raddr *net.UDPAddr) (*ClientConn, bool) {
 	s.sessionsMutex.Lock()
 	defer s.sessionsMutex.Unlock()
 	key := raddr.String()
-	session := s.sessions[key]
+	cc := s.conns[key]
 	created := false
-	if session == nil {
+	if cc == nil {
 		created = true
-		session = NewSession(s.ctx, UDPConn, raddr, s.handler, s.maxMessageSize, s.goPool)
-		session.AddOnClose(func() {
+		var blockWise *blockwise.BlockWise
+		if s.blockWiseFactory != nil {
+			blockWise = s.blockWiseFactory()
+		}
+		obsHandler := NewHandlerContainer()
+		cc = NewClientConn(
+			NewSession(s.ctx, UDPConn, raddr, NewObservatiomHandler(obsHandler, s.handler), s.maxMessageSize, s.goPool, s.blockwiseSZX, blockWise),
+			obsHandler,
+		)
+		cc.AddOnClose(func() {
 			s.sessionsMutex.Lock()
 			defer s.sessionsMutex.Unlock()
-			delete(s.sessions, key)
+			delete(s.conns, key)
 		})
-		s.sessions[key] = session
+		s.conns[key] = cc
 	}
-	return session, created
+	return cc, created
 }
 
 var defaultMulticastOptions = multicastOptions{
@@ -215,7 +246,7 @@ type MulticastOption interface {
 	apply(*multicastOptions)
 }
 
-func (s *Server) WriteMulticastReq(req *Request, target string, opts ...MulticastOption) error {
+func (s *Server) WriteMulticastReq(req *Message, target string, opts ...MulticastOption) error {
 	cfg := defaultMulticastOptions
 	for _, o := range opts {
 		o.apply(&cfg)

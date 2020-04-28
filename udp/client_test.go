@@ -32,7 +32,9 @@ func TestClientConn_Get(t *testing.T) {
 			args: args{
 				path: "/oic/sec/session",
 			},
-			wantCode: codes.BadRequest,
+			wantCode:          codes.BadRequest,
+			wantContentFormat: &message.TextPlain,
+			wantPayload:       make([]byte, 5330),
 		},
 	}
 
@@ -46,15 +48,17 @@ func TestClientConn_Get(t *testing.T) {
 	var wg sync.WaitGroup
 	defer wg.Wait()
 
-	s := NewServer(func(w *ResponseWriter, r *Request) {
+	s := NewServer(func(w *ResponseWriter, r *Message) {
 		w.SetCode(codes.BadRequest)
+		w.WriteFrom(message.TextPlain, bytes.NewReader(make([]byte, 5330)))
 	})
 	defer s.Stop()
 
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		s.Serve(l)
+		err := s.Serve(l)
+		t.Log(err)
 	}()
 
 	cc, err := Dial(l.LocalAddr().String())
@@ -63,7 +67,7 @@ func TestClientConn_Get(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second*20)
 			defer cancel()
 			got, err := cc.Get(ctx, tt.args.path, tt.args.queries...)
 			if tt.wantErr {
@@ -77,9 +81,9 @@ func TestClientConn_Get(t *testing.T) {
 				require.NoError(t, err)
 				require.Equal(t, *tt.wantContentFormat, ct)
 				buf := bytes.NewBuffer(nil)
-				err = got.GetPayload(buf)
+				_, err = buf.ReadFrom(got.Payload())
 				require.NoError(t, err)
-				require.Equal(t, tt.wantPayload, string(buf.Bytes()))
+				require.Equal(t, tt.wantPayload, buf.Bytes())
 			}
 		})
 	}
@@ -97,7 +101,7 @@ func TestClientConn_Ping(t *testing.T) {
 	var wg sync.WaitGroup
 	defer wg.Wait()
 
-	s := NewServer(func(w *ResponseWriter, r *Request) {
+	s := NewServer(func(w *ResponseWriter, r *Message) {
 		w.SetCode(codes.BadRequest)
 	})
 	defer s.Stop()

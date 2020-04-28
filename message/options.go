@@ -191,128 +191,120 @@ func (options Options) SetContentFormat(buf []byte, contentFormat MediaType) (Op
 }
 
 func (options Options) Find(ID OptionID) (int, int, error) {
-	idxPre := options.findPositon(ID, true)
-	idxPost := options.findPositon(ID, false)
-	if idxPre == idxPost {
+	idxPre, idxPost := options.findPositon(ID)
+	if idxPre == -1 && idxPost == 0 {
 		return -1, -1, ErrOptionNotFound
 	}
-	if ID == options[idxPre].ID {
-		return idxPre, idxPost, nil
+	if idxPre == len(options)-1 && idxPost == -1 {
+		return -1, -1, ErrOptionNotFound
 	}
-	return idxPre + 1, idxPost, nil
+	idxPre = idxPre + 1
+	if idxPost < 0 {
+		idxPost = len(options)
+	}
+	return idxPre, idxPost, nil
 }
 
-func (options Options) findPositon(ID OptionID, prepend bool) int {
+// findPositon returns opened interval, -1 at means minIdx insert at 0, -1 maxIdx at maxIdx means append.
+func (options Options) findPositon(ID OptionID) (minIdx int, maxIdx int) {
 	if len(options) == 0 {
-		return 0
+		return -1, 0
 	}
 	pivot := 0
-	maxIdx := len(options)
-	minIdx := 0
+	maxIdx = len(options)
+	minIdx = 0
 	for {
-		move := (maxIdx - minIdx) / 2
 		switch {
+		case ID == options[pivot].ID || (maxIdx-minIdx)/2 == 0:
+			for maxIdx = pivot; maxIdx < len(options) && options[maxIdx].ID <= ID; maxIdx++ {
+			}
+			if maxIdx == len(options) {
+				maxIdx = -1
+			}
+			for minIdx = pivot; minIdx >= 0 && options[minIdx].ID >= ID; minIdx-- {
+			}
+			return minIdx, maxIdx
 		case ID < options[pivot].ID:
-			if pivot == 0 {
-				return 0
-			}
 			maxIdx = pivot
-			if move == 0 {
-				return pivot
-			}
-			if pivot-move < 0 {
-				pivot = 0
-			} else {
-				pivot = pivot - move
-			}
-		case ID == options[pivot].ID:
-			if move == 0 {
-				if prepend {
-					return pivot
-				}
-				return pivot + 1
-			}
-			if prepend {
-				maxIdx = pivot
-				if pivot-move < 0 {
-					pivot = 0
-				} else {
-					pivot = pivot - move
-				}
-			} else {
-				minIdx = pivot
-				if pivot+move >= len(options) {
-					pivot = len(options) - 1
-				} else {
-					pivot = pivot + move
-				}
-			}
+			pivot = maxIdx - (maxIdx-minIdx)/2
 		case ID > options[pivot].ID:
-			if pivot == len(options)-1 {
-				return pivot + 1
-			}
 			minIdx = pivot
-			if move == 0 {
-				return pivot + 1
-			}
-			if pivot+move >= len(options) {
-				pivot = len(options) - 1
-			} else {
-				pivot = pivot + move
-			}
+			pivot = minIdx + (maxIdx-minIdx)/2
 		}
 	}
 }
 
 func (options Options) Set(opt Option) Options {
-	idxPre := options.findPositon(opt.ID, true)
-	idxPost := options.findPositon(opt.ID, false)
-
-	//append
-	if idxPre == idxPost {
+	idxPre, idxPost := options.findPositon(opt.ID)
+	if idxPre == -1 && idxPost == -1 {
+		//append
+		options = append(options[:0], opt)
+		return options
+	}
+	var insertPosition int
+	var updateTo int
+	var updateFrom int
+	optsLength := len(options)
+	switch {
+	case idxPre == -1 && idxPost >= 0:
+		insertPosition = 0
+		updateTo = 1
+		updateFrom = idxPost
+	case idxPre == idxPost:
+		insertPosition = idxPre
+		updateFrom = idxPre
+		updateTo = idxPre + 1
+	case idxPre >= 0:
+		insertPosition = idxPre + 1
+		updateTo = idxPre + 2
+		updateFrom = idxPost
+		if updateFrom < 0 {
+			updateFrom = len(options)
+		}
+		if updateTo == updateFrom {
+			options[insertPosition] = opt
+			return options
+		}
+	}
+	if len(options) == cap(options) {
 		options = append(options, Option{})
-		options[len(options)-1] = opt
-		return options
+	} else {
+		options = options[:len(options)+1]
 	}
-	//replace
-	if idxPre+1 == idxPost {
-		options[idxPre] = opt
-		return options
-	}
-
 	//replace + move
-	options[idxPre] = opt
-	updateIdx := idxPre + 1
-	for i := idxPost; i < len(options); i++ {
+	updateIdx := updateTo
+	for i := updateFrom; i < optsLength; i++ {
 		options[updateIdx] = options[i]
 		updateIdx++
 	}
-	length := len(options) - (idxPost - 1 - idxPre)
-	options = options[:length]
+	options[insertPosition] = opt
+	options = options[:updateIdx]
 
 	return options
 }
 
 func (options Options) Add(opt Option) Options {
-	idx := options.findPositon(opt.ID, false)
+	_, idxPost := options.findPositon(opt.ID)
+	if idxPost == -1 {
+		idxPost = len(options)
+	}
 	if len(options) == cap(options) {
 		options = append(options, Option{})
+	} else {
+		options = options[:len(options)+1]
 	}
-	options = options[:len(options)+1]
-	for i := len(options) - 1; i > idx; i-- {
+	for i := len(options) - 1; i > idxPost; i-- {
 		options[i] = options[i-1]
 	}
-	options[idx] = opt
+	options[idxPost] = opt
 	return options
 }
 
 func (options Options) Remove(ID OptionID) Options {
-	idxPre := options.findPositon(ID, true)
-	idxPost := options.findPositon(ID, false)
-	if idxPre == idxPost {
+	idxPre, idxPost, err := options.Find(ID)
+	if err != nil {
 		return options
 	}
-
 	updateIdx := idxPre
 	for i := idxPost; i < len(options); i++ {
 		options[updateIdx] = options[i]

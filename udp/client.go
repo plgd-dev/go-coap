@@ -6,6 +6,7 @@ import (
 	"net"
 	"time"
 
+	"github.com/go-ocf/go-coap/v2/blockwise"
 	"github.com/go-ocf/go-coap/v2/keepalive"
 	"github.com/go-ocf/go-coap/v2/message"
 
@@ -18,7 +19,7 @@ var defaultDialOptions = dialOptions{
 	ctx:            context.Background(),
 	maxMessageSize: 64 * 1024,
 	heartBeat:      time.Millisecond * 100,
-	handler: func(w *ResponseWriter, r *Request) {
+	handler: func(w *ResponseWriter, r *Message) {
 		w.SetCode(codes.NotFound)
 	},
 	errors: func(err error) {
@@ -33,21 +34,33 @@ var defaultDialOptions = dialOptions{
 		}()
 		return nil
 	},
-	dialer:    &net.Dialer{Timeout: time.Second * 3},
-	keepalive: keepalive.New(),
-	net:       "udp",
+	dialer:       &net.Dialer{Timeout: time.Second * 3},
+	keepalive:    keepalive.New(),
+	net:          "udp",
+	blockwiseSZX: blockwise.SZX16,
+	blockWiseFactory: func() *blockwise.BlockWise {
+		return blockwise.NewBlockWise(func(ctx context.Context) blockwise.Message {
+			return AcquireRequest(ctx)
+		}, func(m blockwise.Message) {
+			ReleaseRequest(m.(*Message))
+		}, time.Second*3, func(err error) {
+			fmt.Println(err)
+		}, false)
+	},
 }
 
 type dialOptions struct {
-	ctx            context.Context
-	maxMessageSize int
-	heartBeat      time.Duration
-	handler        HandlerFunc
-	errors         ErrorFunc
-	goPool         GoPoolFunc
-	dialer         *net.Dialer
-	keepalive      *keepalive.KeepAlive
-	net            string
+	ctx              context.Context
+	maxMessageSize   int
+	heartBeat        time.Duration
+	handler          HandlerFunc
+	errors           ErrorFunc
+	goPool           GoPoolFunc
+	dialer           *net.Dialer
+	keepalive        *keepalive.KeepAlive
+	net              string
+	blockwiseSZX     blockwise.SZX
+	blockWiseFactory BlockwiseFactoryFunc
 }
 
 // A DialOption sets options such as credentials, keepalive parameters, etc.
@@ -56,7 +69,8 @@ type DialOption interface {
 }
 
 type ClientConn struct {
-	session *Session
+	session                 *Session
+	observationTokenHandler *HandlerContainer
 }
 
 func Dial(target string, opts ...DialOption) (*ClientConn, error) {
@@ -78,18 +92,26 @@ func Dial(target string, opts ...DialOption) (*ClientConn, error) {
 	if !ok {
 		return nil, fmt.Errorf("cannot get target upd address")
 	}
+	var blockWise *blockwise.BlockWise
+	if cfg.blockWiseFactory != nil {
+		blockWise = cfg.blockWiseFactory()
+	}
+
+	observationTokenHandler := NewHandlerContainer()
 
 	l := coapNet.NewUDPConn(conn, coapNet.WithHeartBeat(cfg.heartBeat), coapNet.WithErrors(cfg.errors))
 	cc := NewClientConn(NewSession(cfg.ctx,
 		l,
 		addr,
-		cfg.handler,
+		NewObservatiomHandler(observationTokenHandler, cfg.handler),
 		cfg.maxMessageSize,
 		cfg.goPool,
-	))
+		cfg.blockwiseSZX,
+		blockWise,
+	), observationTokenHandler)
 
 	go func() {
-		err := cc.run()
+		err := cc.Run()
 		if err != nil {
 			cfg.errors(err)
 		}
@@ -106,9 +128,10 @@ func Dial(target string, opts ...DialOption) (*ClientConn, error) {
 	return cc, nil
 }
 
-func NewClientConn(session *Session) *ClientConn {
+func NewClientConn(session *Session, observationTokenHandler *HandlerContainer) *ClientConn {
 	return &ClientConn{
-		session: session,
+		session:                 session,
+		observationTokenHandler: observationTokenHandler,
 	}
 }
 
@@ -116,13 +139,13 @@ func (cc *ClientConn) Close() error {
 	return cc.session.Close()
 }
 
-func (cc *ClientConn) Do(req *Request) (*Request, error) {
+func (cc *ClientConn) do(req *Message) (*Message, error) {
 	token := req.Token()
 	if token == nil {
 		return nil, fmt.Errorf("invalid token")
 	}
-	respChan := make(chan *Request, 1)
-	err := cc.session.TokenHandler().Insert(token, func(w *ResponseWriter, r *Request) {
+	respChan := make(chan *Message, 1)
+	err := cc.session.TokenHandler().Insert(token, func(w *ResponseWriter, r *Message) {
 		r.Hijack()
 		respChan <- r
 	})
@@ -145,9 +168,19 @@ func (cc *ClientConn) Do(req *Request) (*Request, error) {
 	}
 }
 
-func (cc *ClientConn) doWithMID(req *Request) (*Request, error) {
-	respChan := make(chan *Request, 1)
-	err := cc.session.midHandlerContainer.Insert(req.MessageID(), func(w *ResponseWriter, r *Request) {
+func (cc *ClientConn) Do(req *Message) (*Message, error) {
+	if cc.session.blockWise == nil {
+		return cc.do(req)
+	}
+	bwresp, err := cc.session.blockWise.Do(req, cc.session.blockwiseSZX, cc.session.maxMessageSize, func(bwreq blockwise.Message) (blockwise.Message, error) {
+		return cc.do(bwreq.(*Message))
+	})
+	return bwresp.(*Message), err
+}
+
+func (cc *ClientConn) doWithMID(req *Message) (*Message, error) {
+	respChan := make(chan *Message, 1)
+	err := cc.session.midHandlerContainer.Insert(req.MessageID(), func(w *ResponseWriter, r *Message) {
 		r.Hijack()
 		respChan <- r
 	})
@@ -170,7 +203,7 @@ func (cc *ClientConn) doWithMID(req *Request) (*Request, error) {
 	}
 }
 
-func NewGetRequest(ctx context.Context, path string, queries ...string) (*Request, error) {
+func NewGetRequest(ctx context.Context, path string, queries ...string) (*Message, error) {
 	token, err := message.GetToken()
 	if err != nil {
 		return nil, fmt.Errorf("cannot get token: %w", err)
@@ -185,7 +218,7 @@ func NewGetRequest(ctx context.Context, path string, queries ...string) (*Reques
 	return req, nil
 }
 
-func (cc *ClientConn) Get(ctx context.Context, path string, queries ...string) (*Request, error) {
+func (cc *ClientConn) Get(ctx context.Context, path string, queries ...string) (*Message, error) {
 	req, err := NewGetRequest(ctx, path, queries...)
 	if err != nil {
 		return nil, fmt.Errorf("cannot create get request: %w", err)
@@ -215,19 +248,28 @@ func (cc *ClientConn) Ping(ctx context.Context) error {
 	return fmt.Errorf("unexpected response(%v)", resp)
 }
 
-func (cc *ClientConn) run() error {
-	m := make([]byte, ^uint16(0))
+func (cc *ClientConn) Run() error {
+	m := make([]byte, cc.session.maxMessageSize)
 	for {
-		n, _, err := cc.session.connection.ReadWithContext(cc.session.ctx, m)
+		buf := m
+		n, _, err := cc.session.connection.ReadWithContext(cc.session.ctx, buf)
 		if err != nil {
 			cc.session.Close()
 			return err
 		}
-		m = m[:n]
-		err = cc.session.processBuffer(m)
+		buf = buf[:n]
+		err = cc.session.processBuffer(buf)
 		if err != nil {
 			cc.session.Close()
 			return err
 		}
 	}
+}
+
+func (cc *ClientConn) AddOnClose(f EventFunc) {
+	cc.session.AddOnClose(f)
+}
+
+func (cc *ClientConn) processBuffer(buffer []byte) error {
+	return cc.session.processBuffer(buffer)
 }

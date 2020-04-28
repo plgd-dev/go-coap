@@ -64,7 +64,7 @@ const (
 // ResponseWriter defines response interface for blockwise transfer.
 type ResponseWriter interface {
 	Message() Message
-	SetRequest(Message)
+	SetMessage(Message)
 }
 
 // Message defines message interface for blockwise transfer.
@@ -77,10 +77,11 @@ type Message interface {
 	SetUint32(id message.OptionID, value uint32)
 	GetUint32(id message.OptionID) (uint32, error)
 	Remove(id message.OptionID)
-	CopyOptions(interface{})
-	Options() interface{}
+	CopyOptions(message.Options)
+	Options() message.Options
 	SetPayload(r io.ReadSeeker)
 	Payload() io.ReadSeeker
+	PayloadSize() (int64, error)
 }
 
 // EncodeBlockOption encodes block values to coap option.
@@ -176,7 +177,7 @@ func (b *BlockWise) Do(r Message, maxSzx SZX, maxMessageSize int, do func(req Me
 	if r.Payload() == nil {
 		return do(r)
 	}
-	payloadSize, err := SeekToSize(r.Payload())
+	payloadSize, err := r.PayloadSize()
 	if err != nil {
 		return nil, fmt.Errorf("cannot get size of payload: %w", err)
 	}
@@ -282,7 +283,7 @@ func (b *BlockWise) handleSendingResponse(w ResponseWriter, respToSend Message, 
 	w.Message().SetCode(respToSend.Code())
 	w.Message().CopyOptions(respToSend.Options())
 	w.Message().SetToken(token)
-	payloadSize, err := SeekToSize(respToSend.Payload())
+	payloadSize, err := respToSend.PayloadSize()
 	if err != nil {
 		return false, fmt.Errorf("cannot get size of payload: %w", err)
 	}
@@ -352,6 +353,7 @@ func (b *BlockWise) Handle(w ResponseWriter, r Message, maxSZX SZX, maxMessageSi
 	fmt.Printf("%p Handle.responseCache %v %v\n", b, v, ok)
 	if !ok {
 		err := b.handleReceivingRequest(w, r, maxSZX, maxMessageSize, next)
+		fmt.Printf("%p Handle.handleReceivingRequest %v\n", b, err)
 		if err != nil {
 			w.Message().SetCode(codes.Empty)
 			b.errors(fmt.Errorf("handleReceivingRequest: %w", err))
@@ -410,7 +412,7 @@ func (b *BlockWise) continueSendingResponse(w ResponseWriter, r Message, maxSZX 
 func (b *BlockWise) startSendingResponse(w ResponseWriter, maxSZX SZX, maxMessageSize int) error {
 	fmt.Printf("%p startSendingResponse: %v\n", b, w.Message())
 
-	payloadSize, err := SeekToSize(w.Message().Payload())
+	payloadSize, err := w.Message().PayloadSize()
 	if err != nil {
 		return fmt.Errorf("cannot get size of payload: %w", err)
 	}
@@ -418,9 +420,12 @@ func (b *BlockWise) startSendingResponse(w ResponseWriter, maxSZX SZX, maxMessag
 	if payloadSize < int64(maxSZX.Size()) {
 		return nil
 	}
+	respToSend := b.acquireRequest(w.Message().Context())
+	respToSend.CopyOptions(w.Message().Options())
+	respToSend.SetPayload(w.Message().Payload())
+	respToSend.SetCode(w.Message().Code())
+	respToSend.SetToken(w.Message().Token())
 
-	respToSend := w.Message()
-	w.SetRequest(b.acquireRequest(respToSend.Context()))
 	block2, err := EncodeBlockOption(maxSZX, 0, true)
 	if err != nil {
 		w.Message().SetCode(codes.InternalServerError)
@@ -448,6 +453,7 @@ func (b *BlockWise) processReceivingRequest(w ResponseWriter, r Message, maxSzx 
 	tokenStr := TokenToStr(token)
 	block, err := r.GetUint32(blockType)
 	if err != nil {
+		fmt.Printf("%p Handle.processReceivingRequest.GetUint32(blockType) %v %v\n", b, r, err)
 		next(w, r)
 		return nil
 	}
@@ -489,7 +495,7 @@ func (b *BlockWise) processReceivingRequest(w ResponseWriter, r Message, maxSzx 
 
 	payloadFile := cachedReq.Payload().(*memfile.File)
 	off := num * szx.Size()
-	payloadSize, err := SeekToSize(payloadFile)
+	payloadSize, err := cachedReq.PayloadSize()
 	if err != nil {
 		return fmt.Errorf("cannot get size of payload: %w", err)
 	}
