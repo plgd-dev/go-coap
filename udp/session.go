@@ -149,7 +149,7 @@ func (s *Session) TokenHandler() *HandlerContainer {
 	return s.tokenHandlerContainer
 }
 
-func (s *Session) processBuffer(buffer []byte) error {
+func (s *Session) processBuffer(buffer []byte, cc *ClientConn) error {
 	if s.maxMessageSize >= 0 && len(buffer) > s.maxMessageSize {
 		return fmt.Errorf("max message size(%v) was exceeded %v", s.maxMessageSize, len(buffer))
 	}
@@ -163,7 +163,7 @@ func (s *Session) processBuffer(buffer []byte) error {
 	s.goPool(func() error {
 		origResp := AcquireRequest(s.ctx)
 		origResp.SetToken(req.Token())
-		w := NewResponseWriter(origResp)
+		w := NewResponseWriter(origResp, cc)
 		typ := req.Type()
 		mid := req.MessageID()
 		s.Handle(w, req)

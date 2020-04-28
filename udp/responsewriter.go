@@ -11,11 +11,13 @@ import (
 type ResponseWriter struct {
 	want     bool
 	response *Message
+	cc       *ClientConn
 }
 
-func NewResponseWriter(response *Message) *ResponseWriter {
+func NewResponseWriter(response *Message, cc *ClientConn) *ResponseWriter {
 	return &ResponseWriter{
 		response: response,
+		cc:       cc,
 	}
 }
 
@@ -28,6 +30,10 @@ func (r *ResponseWriter) WriteFrom(contentFormat message.MediaType, d io.ReadSee
 func (r *ResponseWriter) SetCode(code codes.Code) {
 	r.want = true
 	r.response.SetCode(code)
+}
+
+func (r *ResponseWriter) ClientConn() *ClientConn {
+	return r.cc
 }
 
 func (r *ResponseWriter) wantWrite() bool {

@@ -51,6 +51,7 @@ func TestClientConn_Get(t *testing.T) {
 	s := NewServer(func(w *ResponseWriter, r *Message) {
 		w.SetCode(codes.BadRequest)
 		w.WriteFrom(message.TextPlain, bytes.NewReader(make([]byte, 5330)))
+		require.NotEmpty(t, w.ClientConn())
 	})
 	defer s.Stop()
 
@@ -103,6 +104,7 @@ func TestClientConn_Ping(t *testing.T) {
 
 	s := NewServer(func(w *ResponseWriter, r *Message) {
 		w.SetCode(codes.BadRequest)
+		require.NotEmpty(t, w.ClientConn())
 	})
 	defer s.Stop()
 

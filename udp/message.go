@@ -62,7 +62,8 @@ func (r *Message) SetToken(token []byte) {
 	r.msg.Token = token
 }
 
-func (r *Message) CopyOptions(in message.Options) {
+func (r *Message) SetOptions(in message.Options) {
+	r.msg.Options = r.msg.Options[:0]
 	for _, o := range in {
 		if len(r.valueBuffer) < len(o.Value) {
 			r.valueBuffer = append(r.valueBuffer, make([]byte, len(o.Value))...)

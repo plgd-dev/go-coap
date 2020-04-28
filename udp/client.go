@@ -135,6 +135,7 @@ func NewClientConn(session *Session, observationTokenHandler *HandlerContainer) 
 	}
 }
 
+// Close closes client immediately.
 func (cc *ClientConn) Close() error {
 	return cc.session.Close()
 }
@@ -168,6 +169,7 @@ func (cc *ClientConn) do(req *Message) (*Message, error) {
 	}
 }
 
+// Do sends an coap request and returns an coap response.
 func (cc *ClientConn) Do(req *Message) (*Message, error) {
 	if cc.session.blockWise == nil {
 		return cc.do(req)
@@ -176,6 +178,20 @@ func (cc *ClientConn) Do(req *Message) (*Message, error) {
 		return cc.do(bwreq.(*Message))
 	})
 	return bwresp.(*Message), err
+}
+
+func (cc *ClientConn) writeRequest(req *Message) error {
+	return cc.session.WriteRequest(req)
+}
+
+// WriteRequest sends an coap request.
+func (cc *ClientConn) WriteRequest(req *Message) error {
+	if cc.session.blockWise == nil {
+		return cc.writeRequest(req)
+	}
+	return cc.session.blockWise.WriteRequest(req, cc.session.blockwiseSZX, cc.session.maxMessageSize, func(bwreq blockwise.Message) error {
+		return cc.writeRequest(bwreq.(*Message))
+	})
 }
 
 func (cc *ClientConn) doWithMID(req *Message) (*Message, error) {
@@ -203,6 +219,7 @@ func (cc *ClientConn) doWithMID(req *Message) (*Message, error) {
 	}
 }
 
+// NewGetRequest creates get request.
 func NewGetRequest(ctx context.Context, path string, queries ...string) (*Message, error) {
 	token, err := message.GetToken()
 	if err != nil {
@@ -218,6 +235,7 @@ func NewGetRequest(ctx context.Context, path string, queries ...string) (*Messag
 	return req, nil
 }
 
+// Get issues a GET to the specified path.
 func (cc *ClientConn) Get(ctx context.Context, path string, queries ...string) (*Message, error) {
 	req, err := NewGetRequest(ctx, path, queries...)
 	if err != nil {
@@ -227,10 +245,12 @@ func (cc *ClientConn) Get(ctx context.Context, path string, queries ...string) (
 	return cc.Do(req)
 }
 
+// Context returns the client's context.
 func (cc *ClientConn) Context() context.Context {
 	return cc.session.Context()
 }
 
+// Ping issues a PING to the client.
 func (cc *ClientConn) Ping(ctx context.Context) error {
 	req := AcquireRequest(ctx)
 	defer ReleaseRequest(req)
@@ -258,7 +278,7 @@ func (cc *ClientConn) Run() error {
 			return err
 		}
 		buf = buf[:n]
-		err = cc.session.processBuffer(buf)
+		err = cc.session.processBuffer(buf, cc)
 		if err != nil {
 			cc.session.Close()
 			return err
@@ -271,5 +291,5 @@ func (cc *ClientConn) AddOnClose(f EventFunc) {
 }
 
 func (cc *ClientConn) processBuffer(buffer []byte) error {
-	return cc.session.processBuffer(buffer)
+	return cc.session.processBuffer(buffer, cc)
 }

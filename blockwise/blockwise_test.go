@@ -79,7 +79,8 @@ func (r *request) Remove(id message.OptionID) {
 	}
 }
 
-func (r *request) CopyOptions(in message.Options) {
+func (r *request) SetOptions(in message.Options) {
+	r.options = r.options[:0]
 	for _, o := range in {
 		v := make([]byte, len(o.Value))
 		copy(v, o.Value)
@@ -387,6 +388,129 @@ func TestDecodeBlockOption(t *testing.T) {
 			assert.Equal(t, tt.wantSzx, gotSzx)
 			assert.Equal(t, tt.wantBlockNumber, gotBlockNumber)
 			assert.Equal(t, tt.wantMoreBlocksFollowing, gotMoreBlocksFollowing)
+		})
+	}
+}
+
+func makeWriteReq(t *testing.T, sender, receiver *BlockWise, senderMaxSZX SZX, senderMaxMessageSize int, receiverMaxSZX SZX, receiverMaxMessageSize int, next func(ResponseWriter, Message)) func(Message) error {
+	return func(req Message) error {
+		c := make(chan bool, 1)
+		go func() {
+			for {
+				receiverResp := newResponseWriter(acquireRequest(req.Context()))
+				receiver.Handle(receiverResp, req, senderMaxSZX, senderMaxMessageSize, func(w ResponseWriter, r Message) {
+					defer close(c)
+					next(w, r)
+				})
+				senderResp := newResponseWriter(acquireRequest(req.Context()))
+				sender.Handle(senderResp, receiverResp.Message(), receiverMaxSZX, receiverMaxMessageSize, func(w ResponseWriter, r Message) {
+				})
+				select {
+				case <-c:
+					return
+				default:
+				}
+				req = senderResp.Message()
+			}
+		}()
+		select {
+		case <-c:
+			return nil
+		}
+	}
+}
+
+func TestBlockWise_WriteRequest(t *testing.T) {
+	sender := NewBlockWise(acquireRequest, releaseRequest, time.Second*10, func(err error) { t.Log(err) }, true)
+	receiver := NewBlockWise(acquireRequest, releaseRequest, time.Second*10, func(err error) { t.Log(err) }, true)
+	type args struct {
+		r              Message
+		szx            SZX
+		maxMessageSize int
+		writeRequest   func(req Message) error
+	}
+	tests := []struct {
+		name    string
+		args    args
+		wantErr bool
+	}{
+
+		{
+			name: "SZX16-SZX16",
+			args: args{
+				r: &request{
+					ctx:     context.Background(),
+					token:   []byte{1},
+					options: message.Options{message.Option{ID: message.URIPath, Value: []byte("abc")}},
+					code:    codes.Content,
+					payload: bytes.NewReader(make([]byte, 128)),
+				},
+				szx:            SZX16,
+				maxMessageSize: SZX16.Size(),
+				writeRequest: makeWriteReq(t, sender, receiver, SZX16, SZX16.Size(), SZX16, SZX16.Size(), func(w ResponseWriter, r Message) {
+					require.Equal(t, &request{
+						ctx:     context.Background(),
+						token:   []byte{1},
+						options: message.Options{message.Option{ID: message.URIPath, Value: []byte("abc")}},
+						code:    codes.Content,
+						payload: memfile.New(make([]byte, 128))}, r)
+				}),
+			},
+		},
+		{
+			name: "SZX16-SZX1024",
+			args: args{
+				r: &request{
+					ctx:     context.Background(),
+					token:   []byte{2},
+					options: message.Options{message.Option{ID: message.URIPath, Value: []byte("abc")}},
+					code:    codes.POST,
+					payload: bytes.NewReader(make([]byte, 128)),
+				},
+				szx:            SZX16,
+				maxMessageSize: SZX16.Size(),
+				writeRequest: makeWriteReq(t, sender, receiver, SZX16, SZX16.Size(), SZX1024, SZX1024.Size(), func(w ResponseWriter, r Message) {
+					require.Equal(t, &request{
+						ctx:     context.Background(),
+						token:   []byte{2},
+						options: message.Options{message.Option{ID: message.URIPath, Value: []byte("abc")}},
+						code:    codes.POST,
+						payload: memfile.New(make([]byte, 128))}, r)
+				}),
+			},
+		},
+		{
+			name: "SZXBERT-SZXBERT",
+			args: args{
+				r: &request{
+					ctx:     context.Background(),
+					token:   []byte{'B', 'E', 'R', 'T'},
+					options: message.Options{message.Option{ID: message.URIPath, Value: []byte("abc")}},
+					code:    codes.POST,
+					payload: bytes.NewReader(make([]byte, 11111)),
+				},
+				szx:            SZXBERT,
+				maxMessageSize: SZXBERT.Size() * 2,
+				writeRequest: makeWriteReq(t, sender, receiver, SZXBERT, SZXBERT.Size()*2, SZXBERT, SZXBERT.Size()*5, func(w ResponseWriter, r Message) {
+					require.Equal(t, &request{
+						ctx:     context.Background(),
+						token:   []byte{'B', 'E', 'R', 'T'},
+						options: message.Options{message.Option{ID: message.URIPath, Value: []byte("abc")}},
+						code:    codes.POST,
+						payload: memfile.New(make([]byte, 11111))}, r)
+				}),
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := sender.WriteRequest(tt.args.r, tt.args.szx, tt.args.maxMessageSize, tt.args.writeRequest)
+			if tt.wantErr {
+				assert.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
 		})
 	}
 }
