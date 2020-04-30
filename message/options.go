@@ -62,26 +62,13 @@ func (options Options) Path(buf []byte) (int, error) {
 }
 
 func (options Options) SetOptionString(buf []byte, id OptionID, str string) (Options, int, error) {
-	enc, err := EncodeRunes(buf, []rune(str))
-	if err != nil {
-		return options, -1, err
-	}
-	if id == URIPath && enc > maxPathValue {
-		return options, -1, ErrInvalidValueLength
-	}
-	return options.Set(Option{ID: URIPath, Value: buf[:enc]}), enc, nil
+	data := []byte(str)
+	return options.SetOptionBytes(buf, id, data)
 }
 
 func (options Options) AddOptionString(buf []byte, id OptionID, str string) (Options, int, error) {
 	data := []byte(str)
-	if len(buf) < len(data) {
-		return options, len(data), ErrTooSmall
-	}
-	if id == URIPath && len(data) > maxPathValue {
-		return options, -1, ErrInvalidValueLength
-	}
-	copy(buf, data)
-	return options.Add(Option{ID: URIPath, Value: buf[:len(data)]}), len(data), nil
+	return options.AddOptionBytes(buf, id, data)
 }
 
 func (options Options) HasOption(id OptionID) bool {
@@ -109,7 +96,7 @@ func (options Options) ReadUint32(id OptionID, r []uint32) (int, error) {
 	return idx, nil
 }
 
-func (options Options) GetUint32(id OptionID) (uint32, error) {
+func (options Options) GetOptionUint32(id OptionID) (uint32, error) {
 	firstIdx, _, err := options.Find(id)
 	if err != nil {
 		return 0, err
@@ -126,7 +113,29 @@ func (options Options) GetString(id OptionID) (string, error) {
 	return string(options[firstIdx].Value), nil
 }
 
-func (options Options) GetBytes(id OptionID) ([]byte, error) {
+func (options Options) SetOptionBytes(buf []byte, id OptionID, data []byte) (Options, int, error) {
+	if len(buf) < len(data) {
+		return options, len(data), ErrTooSmall
+	}
+	if id == URIPath && len(data) > maxPathValue {
+		return options, -1, ErrInvalidValueLength
+	}
+	copy(buf, data)
+	return options.Set(Option{ID: URIPath, Value: buf[:len(data)]}), len(data), nil
+}
+
+func (options Options) AddOptionBytes(buf []byte, id OptionID, data []byte) (Options, int, error) {
+	if len(buf) < len(data) {
+		return options, len(data), ErrTooSmall
+	}
+	if id == URIPath && len(data) > maxPathValue {
+		return options, -1, ErrInvalidValueLength
+	}
+	copy(buf, data)
+	return options.Add(Option{ID: URIPath, Value: buf[:len(data)]}), len(data), nil
+}
+
+func (options Options) GetOptionBytes(id OptionID) ([]byte, error) {
 	firstIdx, _, err := options.Find(id)
 	if err != nil {
 		return nil, err
@@ -196,6 +205,9 @@ func (options Options) Find(ID OptionID) (int, int, error) {
 		return -1, -1, ErrOptionNotFound
 	}
 	if idxPre == len(options)-1 && idxPost == -1 {
+		return -1, -1, ErrOptionNotFound
+	}
+	if idxPre < idxPost && idxPost-idxPre == 1 {
 		return -1, -1, ErrOptionNotFound
 	}
 	idxPre = idxPre + 1
@@ -273,9 +285,16 @@ func (options Options) Set(opt Option) Options {
 	}
 	//replace + move
 	updateIdx := updateTo
-	for i := updateFrom; i < optsLength; i++ {
-		options[updateIdx] = options[i]
-		updateIdx++
+	if updateFrom < updateTo {
+		for i := optsLength; i > updateFrom; i-- {
+			options[i] = options[i-1]
+			updateIdx++
+		}
+	} else {
+		for i := updateFrom; i < optsLength; i++ {
+			options[updateIdx] = options[i]
+			updateIdx++
+		}
 	}
 	options[insertPosition] = opt
 	options = options[:updateIdx]
@@ -398,7 +417,9 @@ func (m *Options) Unmarshal(data []byte, optionDefs map[OptionID]OptionDef) (int
 		if cap(*m) == len(*m) {
 			return -1, ErrBytesOptionsTooSmall
 		}
-		(*m) = append(*m, []Option{option}...)
+		if option.ID != 0 {
+			(*m) = append(*m, option)
+		}
 
 		processed += proc
 		data = data[proc:]

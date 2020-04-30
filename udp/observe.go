@@ -1,17 +1,18 @@
 package udp
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"sync"
+	"sync/atomic"
 
+	"github.com/go-ocf/go-coap/v2/message"
 	"github.com/go-ocf/go-coap/v2/message/codes"
 )
 
 //Observation represents subscription to resource on the server
 type Observation struct {
-	token       []byte
+	token       message.Token
 	path        string
 	obsSequence uint32
 	etag        []byte
@@ -41,7 +42,12 @@ func (o *Observation) Cancel(ctx context.Context) error {
 	req.SetObserve(1)
 	req.SetToken(o.token)
 	o.cc.observationTokenHandler.Pop(o.token)
-	return o.cc.session.WriteRequest(req)
+	registeredRequest, ok := o.cc.observationRequests.Load(o.token.String())
+	if ok {
+		o.cc.observationRequests.Delete(o.token.String())
+		ReleaseRequest(registeredRequest.(*Message))
+	}
+	return o.cc.WriteRequest(req)
 }
 
 func (o *Observation) wantBeNotified(r *Message) bool {
@@ -58,59 +64,63 @@ func (o *Observation) wantBeNotified(r *Message) bool {
 	}
 	o.obsSequence = obsSequence
 
-	etag, err := r.ETag()
-	if err == nil {
-		if bytes.Equal(o.etag, etag) {
-			return false
-		}
-		o.etag = make([]byte, len(etag))
-		copy(o.etag, etag)
-	}
 	return true
 }
 
 // Observe subscribes for every change of resource on path.
-func (cc *ClientConn) Observe(ctx context.Context, path string, observeFunc func(req *Message)) (*Observation, error) {
+func (cc *ClientConn) Observe(ctx context.Context, path string, observeFunc func(cc *ClientConn, req *Message)) (*Observation, error) {
 	req, err := NewGetRequest(ctx, path)
 	if err != nil {
 		return nil, fmt.Errorf("cannot create observe request: %w", err)
 	}
-	defer ReleaseRequest(req)
+	token := req.Token()
 	req.SetObserve(0)
 	o := &Observation{
-		token:       req.Token(),
+		token:       token,
 		path:        path,
 		obsSequence: 0,
 		cc:          cc,
 	}
-	respChan := make(chan *Message, 1)
-	err = o.cc.observationTokenHandler.Insert(req.Token(), func(w *ResponseWriter, r *Message) {
+	respCodeChan := make(chan codes.Code, 1)
+	waitForReponse := uint32(1)
+	cc.observationRequests.Store(token.String(), req)
+	err = o.cc.observationTokenHandler.Insert(token.String(), func(w *ResponseWriter, r *Message) {
 		if o.wantBeNotified(r) {
-			observeFunc(req)
+			observeFunc(w.ClientConn(), r)
 		}
-		select {
-		case respChan <- r:
-			r.Hijack()
-		default:
+		if atomic.CompareAndSwapUint32(&waitForReponse, 1, 0) {
+			select {
+			case respCodeChan <- r.Code():
+			default:
+			}
 		}
 	})
+	defer func(err *error) {
+		if *err != nil {
+			cc.observationTokenHandler.Pop(token)
+			cc.observationRequests.Delete(token.String())
+			ReleaseRequest(req)
+		}
+	}(&err)
 	if err != nil {
 		return nil, err
 	}
 
-	err = cc.session.WriteRequest(req)
+	err = cc.WriteRequest(req)
+	if err != nil {
+		return nil, err
+	}
 	select {
 	case <-req.ctx.Done():
-		o.cc.observationTokenHandler.Pop(req.Token())
-		return nil, req.ctx.Err()
+		err = req.ctx.Err()
+		return nil, err
 	case <-cc.Context().Done():
-		o.cc.observationTokenHandler.Pop(req.Token())
-		return nil, fmt.Errorf("connection was closed: %w", req.ctx.Err())
-	case resp := <-respChan:
-		defer ReleaseRequest(resp)
-		if resp.Code() != codes.Content {
-			o.cc.observationTokenHandler.Pop(req.Token())
-			return nil, fmt.Errorf("unexected return code(%v)", resp.Code())
+		err = fmt.Errorf("connection was closed: %w", req.ctx.Err())
+		return nil, err
+	case respCode := <-respCodeChan:
+		if respCode != codes.Content {
+			err = fmt.Errorf("unexected return code(%v)", respCode)
+			return nil, err
 		}
 		return o, nil
 	}

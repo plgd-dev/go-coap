@@ -71,8 +71,8 @@ func (r *Request) AddQuery(query string) {
 	r.AddOptionString(message.URIQuery, query)
 }
 
-func (r *Request) GetUint32(id message.OptionID) (uint32, error) {
-	return r.msg.Options.GetUint32(id)
+func (r *Request) GetOptionUint32(id message.OptionID) (uint32, error) {
+	return r.msg.Options.GetOptionUint32(id)
 }
 
 func (r *Request) SetOptionString(opt message.OptionID, value string) {
@@ -124,7 +124,7 @@ func (r *Request) AddOptionUint32(opt message.OptionID, value uint32) {
 }
 
 func (r *Request) ContentFormat() (message.MediaType, error) {
-	v, err := r.GetUint32(message.ContentFormat)
+	v, err := r.GetOptionUint32(message.ContentFormat)
 	return message.MediaType(v), err
 }
 

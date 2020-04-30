@@ -49,17 +49,21 @@ func (r *Message) Remove(opt message.OptionID) {
 	r.msg.Options = r.msg.Options.Remove(opt)
 }
 
-func (r *Message) Token() []byte {
+func (r *Message) Token() message.Token {
 	if r.msg.Token == nil {
 		return nil
 	}
-	token := make([]byte, 0, 8)
+	token := make(message.Token, 0, 8)
 	token = append(token, r.msg.Token...)
 	return token
 }
 
-func (r *Message) SetToken(token []byte) {
-	r.msg.Token = token
+func (r *Message) SetToken(token message.Token) {
+	if token == nil {
+		r.msg.Token = nil
+		return
+	}
+	r.msg.Token = append(r.msg.Token[:0], token...)
 }
 
 func (r *Message) SetOptions(in message.Options) {
@@ -118,12 +122,20 @@ func (r *Message) SetCode(code codes.Code) {
 	r.wantSend = true
 }
 
+func (r *Message) SetETag(value []byte) {
+	r.SetOptionBytes(message.ETag, value)
+}
+
+func (r *Message) GetETag() ([]byte, error) {
+	return r.GetOptionBytes(message.ETag)
+}
+
 func (r *Message) AddQuery(query string) {
 	r.AddOptionString(message.URIQuery, query)
 }
 
-func (r *Message) GetUint32(id message.OptionID) (uint32, error) {
-	return r.msg.Options.GetUint32(id)
+func (r *Message) GetOptionUint32(id message.OptionID) (uint32, error) {
+	return r.msg.Options.GetOptionUint32(id)
 }
 
 func (r *Message) SetOptionString(opt message.OptionID, value string) {
@@ -158,11 +170,11 @@ func (r *Message) SetOptionBytes(opt message.OptionID, value []byte) {
 	r.wantSend = true
 }
 
-func (r *Message) GetBytes(id message.OptionID) ([]byte, error) {
-	return r.msg.Options.GetBytes(id)
+func (r *Message) GetOptionBytes(id message.OptionID) ([]byte, error) {
+	return r.msg.Options.GetOptionBytes(id)
 }
 
-func (r *Message) SetUint32(opt message.OptionID, value uint32) {
+func (r *Message) SetOptionUint32(opt message.OptionID, value uint32) {
 	opts, used, err := r.msg.Options.SetOptionUint32(r.valueBuffer, opt, value)
 	r.msg.Options = opts
 	if err == message.ErrTooSmall {
@@ -185,7 +197,7 @@ func (r *Message) AddOptionUint32(opt message.OptionID, value uint32) {
 }
 
 func (r *Message) ContentFormat() (message.MediaType, error) {
-	v, err := r.GetUint32(message.ContentFormat)
+	v, err := r.GetOptionUint32(message.ContentFormat)
 	return message.MediaType(v), err
 }
 
@@ -194,19 +206,19 @@ func (r *Message) HasOption(id message.OptionID) bool {
 }
 
 func (r *Message) SetContentFormat(contentFormat message.MediaType) {
-	r.SetUint32(message.ContentFormat, uint32(contentFormat))
+	r.SetOptionUint32(message.ContentFormat, uint32(contentFormat))
 }
 
 func (r *Message) SetObserve(observe uint32) {
-	r.SetUint32(message.Observe, observe)
+	r.SetOptionUint32(message.Observe, observe)
 }
 
 func (r *Message) Observe() (uint32, error) {
-	return r.GetUint32(message.Observe)
+	return r.GetOptionUint32(message.Observe)
 }
 
 func (r *Message) ETag() ([]byte, error) {
-	return r.GetBytes(message.ETag)
+	return r.GetOptionBytes(message.ETag)
 }
 
 func (r *Message) PayloadSize() (int64, error) {

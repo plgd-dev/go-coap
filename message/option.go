@@ -20,7 +20,7 @@ const (
 )
 
 // OptionID identifies an option in a message.
-type OptionID uint8
+type OptionID uint16
 
 /*
    +-----+----+---+---+---+----------------+--------+--------+---------+
@@ -71,7 +71,55 @@ const (
 	ProxyURI      OptionID = 35
 	ProxyScheme   OptionID = 39
 	Size1         OptionID = 60
+	NoResponse    OptionID = 258
 )
+
+func (o OptionID) String() string {
+	switch o {
+	case IfMatch:
+		return "IfMatch"
+	case URIHost:
+		return "URIHost"
+	case ETag:
+		return "ETag"
+	case IfNoneMatch:
+		return "IfNoneMatch"
+	case Observe:
+		return "Observe"
+	case URIPort:
+		return "URIPort"
+	case LocationPath:
+		return "LocationPath"
+	case URIPath:
+		return "URIPath"
+	case ContentFormat:
+		return "ContentFormat"
+	case MaxAge:
+		return "MaxAge"
+	case URIQuery:
+		return "URIQuery"
+	case Accept:
+		return "Accept"
+	case LocationQuery:
+		return "LocationQuery"
+	case Block2:
+		return "Block2"
+	case Block1:
+		return "Block1"
+	case Size2:
+		return "Size2"
+	case ProxyURI:
+		return "ProxyURI"
+	case ProxyScheme:
+		return "ProxyScheme"
+	case Size1:
+		return "Size1"
+	case NoResponse:
+		return "NoResponse"
+	default:
+		return "Option(" + strconv.FormatInt(int64(o), 10) + ")"
+	}
+}
 
 // Option value format (RFC7252 section 3.2)
 type ValueFormat uint8
@@ -110,6 +158,7 @@ var CoapOptionDefs = map[OptionID]OptionDef{
 	ProxyURI:      OptionDef{ValueFormat: ValueString, MinLen: 1, MaxLen: 1034},
 	ProxyScheme:   OptionDef{ValueFormat: ValueString, MinLen: 1, MaxLen: 255},
 	Size1:         OptionDef{ValueFormat: ValueUint, MinLen: 0, MaxLen: 4},
+	NoResponse:    OptionDef{ValueFormat: ValueUint, MinLen: 0, MaxLen: 1},
 }
 
 // MediaType specifies the content format of a message.
@@ -379,19 +428,17 @@ func (o *Option) Unmarshal(data []byte, optionDefs map[OptionID]OptionDef, Optio
 	if def, ok := optionDefs[OptionID]; ok {
 		if def.ValueFormat == ValueUnknown {
 			// Skip unrecognized options (RFC7252 section 5.4.1)
-			return 0, nil
+			return len(data), nil
 		}
 		if len(data) < def.MinLen || len(data) > def.MaxLen {
 			// Skip options with illegal value length (RFC7252 section 5.4.3)
-			return 0, nil
+			return len(data), nil
 		}
-		o.ID = OptionID
-		proc, err := o.UnmarshalValue(data)
-		if err != nil {
-			return -1, err
-		}
-		return proc, err
 	}
-	// Skip unrecognized options (should never be reached)
-	return 0, nil
+	o.ID = OptionID
+	proc, err := o.UnmarshalValue(data)
+	if err != nil {
+		return -1, err
+	}
+	return proc, err
 }

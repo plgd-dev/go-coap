@@ -107,6 +107,7 @@ func (b *bwResponseWriter) Message() blockwise.Message {
 }
 
 func (b *bwResponseWriter) SetMessage(m blockwise.Message) {
+	ReleaseRequest(b.w.response)
 	b.w.response = m.(*Message)
 	b.w.want = true
 }

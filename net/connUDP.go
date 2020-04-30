@@ -197,6 +197,18 @@ func WithErrors(v func(err error)) errors {
 	}
 }
 
+func ListenUDP(network, addr string, opts ...UDPOption) (*UDPConn, error) {
+	listenAddress, err := net.ResolveUDPAddr(network, addr)
+	if err != nil {
+		return nil, err
+	}
+	conn, err := net.ListenUDP(network, listenAddress)
+	if err != nil {
+		return nil, err
+	}
+	return NewUDPConn(conn, opts...), nil
+}
+
 // NewUDPConn creates connection over net.UDPConn.
 func NewUDPConn(c *net.UDPConn, opts ...UDPOption) *UDPConn {
 	cfg := defaultUDPConnOptions

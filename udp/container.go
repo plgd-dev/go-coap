@@ -22,10 +22,8 @@ func NewHandlerContainer() *HandlerContainer {
 
 // Insert handler for key.
 func (s *HandlerContainer) Insert(key interface{}, handler HandlerFunc) error {
-	var t [message.MaxTokenSize]byte
-	if v, ok := key.([]byte); ok {
-		copy(t[:], v)
-		key = t
+	if v, ok := key.(message.Token); ok {
+		key = v.String()
 	}
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
@@ -38,10 +36,8 @@ func (s *HandlerContainer) Insert(key interface{}, handler HandlerFunc) error {
 
 // Get returns handler for key
 func (s *HandlerContainer) Get(key interface{}) (HandlerFunc, error) {
-	var t [message.MaxTokenSize]byte
-	if v, ok := key.([]byte); ok {
-		copy(t[:], v)
-		key = t
+	if v, ok := key.(message.Token); ok {
+		key = v.String()
 	}
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
@@ -54,10 +50,8 @@ func (s *HandlerContainer) Get(key interface{}) (HandlerFunc, error) {
 
 // Pop pops handler for key
 func (s *HandlerContainer) Pop(key interface{}) (HandlerFunc, error) {
-	var t [message.MaxTokenSize]byte
-	if v, ok := key.([]byte); ok {
-		copy(t[:], v)
-		key = t
+	if v, ok := key.(message.Token); ok {
+		key = v.String()
 	}
 	s.mutex.Lock()
 	defer s.mutex.Unlock()

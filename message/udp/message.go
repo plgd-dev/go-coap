@@ -19,7 +19,7 @@ const (
 type Message struct {
 	Code codes.Code
 
-	Token   []byte
+	Token   message.Token
 	Payload []byte
 
 	MessageID uint16

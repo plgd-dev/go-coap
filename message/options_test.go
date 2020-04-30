@@ -27,6 +27,38 @@ func TestFindPositonBytesOption1(t *testing.T) {
 	require.NoError(t, err)
 }
 
+func TestFindObserve(t *testing.T) {
+	options := make(Options, 0, 10)
+	options = append(options, Options{
+		{ID: ETag, Value: []byte{96, 136, 190, 171, 5, 166, 238, 88}},
+		{ID: ContentFormat, Value: []byte{}},
+		{ID: Block2, Value: []byte{4, 8}},
+		{ID: Size2, Value: []byte{19, 136}},
+	}...)
+	_, _, err := options.Find(Observe)
+	require.Error(t, err)
+}
+
+func TestSetPath(t *testing.T) {
+	options := make(Options, 0, 10)
+	options, _, err := options.SetPath(make([]byte, 32), "/light/2")
+	require.NoError(t, err)
+	require.Equal(t, Options{
+		{ID: URIPath, Value: []byte("light")},
+		{ID: URIPath, Value: []byte("2")},
+	}, options)
+
+	marshaled := make([]byte, 128)
+	n, err := options.Marshal(marshaled)
+	require.NoError(t, err)
+	marshaled = marshaled[:n]
+	uoptions := make(Options, 0, 10)
+	un, err := uoptions.Unmarshal(marshaled, CoapOptionDefs)
+	require.NoError(t, err)
+	require.Equal(t, n, un)
+	require.Equal(t, options, uoptions)
+}
+
 func TestFindPositonBytesOption(t *testing.T) {
 	options := make(Options, 0, 10)
 	testFindPositionBytesOption(t, options, 3, true, -1)

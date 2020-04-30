@@ -2,13 +2,20 @@ package message
 
 import (
 	"crypto/rand"
+	"encoding/base64"
 	"encoding/binary"
 	"hash/crc64"
 )
 
+type Token []byte
+
+func (t Token) String() string {
+	return base64.StdEncoding.EncodeToString(t)
+}
+
 // GetToken generates a random token by a given length
-func GetToken() ([]byte, error) {
-	b := make([]byte, 8)
+func GetToken() (Token, error) {
+	b := make(Token, 8)
 	_, err := rand.Read(b)
 	// Note that err == nil only if we read len(b) bytes.
 	if err != nil {

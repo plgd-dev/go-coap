@@ -110,7 +110,7 @@ func (s *Session) handleSignals(w *ResponseWriter, r *Request) {
 		if s.disablePeerTCPSignalMessageCSMs {
 			return
 		}
-		if size, err := r.GetUint32(coapTCP.MaxMessageSize); err == nil {
+		if size, err := r.GetOptionUint32(coapTCP.MaxMessageSize); err == nil {
 			atomic.StoreUint32(&s.peerMaxMessageSize, size)
 		}
 		if r.hasBlockWiseOption() {

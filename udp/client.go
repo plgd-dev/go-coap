@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"sync"
 	"time"
 
 	"github.com/go-ocf/go-coap/v2/blockwise"
@@ -21,7 +22,10 @@ var defaultDialOptions = dialOptions{
 	maxMessageSize: 64 * 1024,
 	heartBeat:      time.Millisecond * 100,
 	handler: func(w *ResponseWriter, r *Message) {
-		w.SetCode(codes.NotFound)
+		switch r.Code() {
+		case codes.POST, codes.PUT, codes.GET, codes.DELETE:
+			w.SetCode(codes.NotFound)
+		}
 	},
 	errors: func(err error) {
 		fmt.Println(err)
@@ -38,15 +42,15 @@ var defaultDialOptions = dialOptions{
 	dialer:       &net.Dialer{Timeout: time.Second * 3},
 	keepalive:    keepalive.New(),
 	net:          "udp",
-	blockwiseSZX: blockwise.SZX16,
-	blockWiseFactory: func() *blockwise.BlockWise {
+	blockwiseSZX: blockwise.SZX1024,
+	blockWiseFactory: func(getSendedRequestFromOutside func(token message.Token) (blockwise.Message, bool)) *blockwise.BlockWise {
 		return blockwise.NewBlockWise(func(ctx context.Context) blockwise.Message {
 			return AcquireRequest(ctx)
 		}, func(m blockwise.Message) {
 			ReleaseRequest(m.(*Message))
 		}, time.Second*3, func(err error) {
 			fmt.Println(err)
-		}, false)
+		}, false, getSendedRequestFromOutside)
 	},
 }
 
@@ -69,12 +73,15 @@ type DialOption interface {
 	applyDial(*dialOptions)
 }
 
+// ClientConn represents a virtual connection to a conceptual endpoint, to perform COAPs commands.
 type ClientConn struct {
 	noCopy
 	session                 *Session
 	observationTokenHandler *HandlerContainer
+	observationRequests     *sync.Map
 }
 
+// Dial creates a client connection to the given target.
 func Dial(target string, opts ...DialOption) (*ClientConn, error) {
 	cfg := defaultDialOptions
 	for _, o := range opts {
@@ -94,9 +101,18 @@ func Dial(target string, opts ...DialOption) (*ClientConn, error) {
 	if !ok {
 		return nil, fmt.Errorf("cannot get target upd address")
 	}
+	observatioRequests := &sync.Map{}
 	var blockWise *blockwise.BlockWise
 	if cfg.blockWiseFactory != nil {
-		blockWise = cfg.blockWiseFactory()
+		blockWise = cfg.blockWiseFactory(
+			func(token message.Token) (blockwise.Message, bool) {
+				msg, ok := observatioRequests.Load(token.String())
+				if !ok {
+					return nil, ok
+				}
+				return msg.(blockwise.Message), ok
+			},
+		)
 	}
 
 	observationTokenHandler := NewHandlerContainer()
@@ -110,7 +126,7 @@ func Dial(target string, opts ...DialOption) (*ClientConn, error) {
 		cfg.goPool,
 		cfg.blockwiseSZX,
 		blockWise,
-	), observationTokenHandler)
+	), observationTokenHandler, observatioRequests)
 
 	go func() {
 		err := cc.Run()
@@ -130,14 +146,16 @@ func Dial(target string, opts ...DialOption) (*ClientConn, error) {
 	return cc, nil
 }
 
-func NewClientConn(session *Session, observationTokenHandler *HandlerContainer) *ClientConn {
+// NewClientConn creates connection over session and observation.
+func NewClientConn(session *Session, observationTokenHandler *HandlerContainer, observationRequests *sync.Map) *ClientConn {
 	return &ClientConn{
 		session:                 session,
 		observationTokenHandler: observationTokenHandler,
+		observationRequests:     observationRequests,
 	}
 }
 
-// Close closes client immediately.
+// Close closes connection without wait of ends Run function.
 func (cc *ClientConn) Close() error {
 	return cc.session.Close()
 }
@@ -230,6 +248,7 @@ func newCommonRequest(ctx context.Context, code codes.Code, path string, queries
 	req.SetCode(code)
 	req.SetToken(token)
 	req.SetPath(path)
+	req.SetType(coapUDP.NonConfirmable)
 	for _, q := range queries {
 		req.AddQuery(q)
 	}
@@ -287,7 +306,7 @@ func NewPutRequest(ctx context.Context, path string, contentFormat message.Media
 	return req, nil
 }
 
-// Put issues a POST to the specified path.
+// Put issues a PUT to the specified path.
 func (cc *ClientConn) Put(ctx context.Context, path string, contentFormat message.MediaType, payload io.ReadSeeker, queries ...string) (*Message, error) {
 	req, err := NewPutRequest(ctx, path, contentFormat, payload, queries...)
 	if err != nil {
@@ -330,6 +349,7 @@ func (cc *ClientConn) Ping(ctx context.Context) error {
 	return fmt.Errorf("unexpected response(%v)", resp)
 }
 
+// Run reads and process requests from a connection, until the connection is not closed.
 func (cc *ClientConn) Run() error {
 	m := make([]byte, cc.session.maxMessageSize)
 	for {

@@ -38,11 +38,7 @@ func TestClientConn_Get(t *testing.T) {
 		},
 	}
 
-	listenAddress, err := net.ResolveUDPAddr("udp", "")
-	require.NoError(t, err)
-	conn, err := net.ListenUDP("udp", listenAddress)
-	require.NoError(t, err)
-	l := coapNet.NewUDPConn(conn)
+	l, err := coapNet.ListenUDP("udp", "")
 	require.NoError(t, err)
 	defer l.Close()
 	var wg sync.WaitGroup
