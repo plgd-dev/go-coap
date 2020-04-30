@@ -603,6 +603,11 @@ func (b *BlockWise) processReceivedMessage(w ResponseWriter, r Message, maxSzx S
 		if err != nil {
 			return fmt.Errorf("cannot get token for create GET request: %w", err)
 		}
+		bwSendedRequest := b.acquireMessage(sendedRequest.Context())
+		bwSendedRequest.SetCode(sendedRequest.Code())
+		bwSendedRequest.SetToken(token)
+		bwSendedRequest.SetOptions(sendedRequest.Options())
+		b.bwSendedRequest.Store(token.String(), bwSendedRequest)
 	}
 
 	fmt.Printf("%p processReceivedMessage: DecodeBlockOption: %v %v %v\n", b, szx, num, more)
@@ -680,6 +685,9 @@ func (b *BlockWise) processReceivedMessage(w ResponseWriter, r Message, maxSzx S
 		cachedReceivedMessage.Remove(blockType)
 		cachedReceivedMessage.Remove(sizeType)
 		cachedReceivedMessage.SetCode(r.Code())
+		if !bytes.Equal(cachedReceivedMessage.Token(), token) {
+			b.bwSendedRequest.Delete(tokenStr)
+		}
 		_, err := cachedReceivedMessage.Payload().Seek(0, io.SeekStart)
 		if err != nil {
 			return fmt.Errorf("cannot seek to start of cachedReceivedMessage request: %w", err)

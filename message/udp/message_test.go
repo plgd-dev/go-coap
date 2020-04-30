@@ -49,6 +49,11 @@ func TestMarshalMessage(t *testing.T) {
 		Token:   []byte{0x1, 0x2, 0x3},
 		Options: options,
 	}, buf, []byte{67, 1, 0, 0, 1, 2, 3, 177, 97, 1, 98, 1, 99, 1, 100, 1, 101, 16, 255, 1})
+
+	var m Message
+	buf, err = m.Marshal()
+	require.NoError(t, err)
+	require.Equal(t, []byte{0x40, 0x0, 0x0, 0x0}, buf)
 }
 
 func TestUnmarshalMessage(t *testing.T) {
@@ -91,7 +96,25 @@ func TestUnmarshalMessage(t *testing.T) {
 			},
 		},
 	})
-	testUnmarshalMessage(t, Message{Options: make(message.Options, 0, 32)}, []byte{0x48, 0x01, 0x00, 0x00, 0xB0, 0x35, 0x4C, 0xF5, 0xD9, 0x72, 0x24, 0x0D, 0x60, 0x55, 0x6C, 0x69, 0x67, 0x68, 0x74, 0x05, 0x6C, 0x69, 0x67, 0x68, 0x74}, Message{})
+	testUnmarshalMessage(t, Message{Options: make(message.Options, 0, 32)}, []byte{0x48, 0x01, 0x00, 0x00, 0xB0, 0x35, 0x4C, 0xF5, 0xD9, 0x72, 0x24, 0x0D, 0x60, 0x55, 0x6C, 0x69, 0x67, 0x68, 0x74, 0x05, 0x6C, 0x69, 0x67, 0x68, 0x74}, Message{
+		Code:  codes.GET,
+		Token: []byte{0xb0, 0x35, 0x4c, 0xf5, 0xd9, 0x72, 0x24, 0x0d},
+		Type:  Confirmable,
+		Options: message.Options{
+			{
+				ID:    message.Observe,
+				Value: []byte{},
+			},
+			{
+				ID:    message.URIPath,
+				Value: []byte{0x6c, 0x69, 0x67, 0x68, 0x74},
+			},
+			{
+				ID:    message.URIPath,
+				Value: []byte{0x6c, 0x69, 0x67, 0x68, 0x74},
+			},
+		},
+	})
 	testUnmarshalMessage(t, Message{}, []byte{64, 0, 0, 0}, Message{})
 	testUnmarshalMessage(t, Message{}, []byte{64, byte(codes.GET), 0, 0}, Message{Code: codes.GET})
 	testUnmarshalMessage(t, Message{}, []byte{64, byte(codes.GET), 0, 0, 0xff, 0x1}, Message{Code: codes.GET, Payload: []byte{0x1}})

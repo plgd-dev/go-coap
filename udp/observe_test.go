@@ -134,7 +134,7 @@ func TestClientConn_Observe(t *testing.T) {
 }
 
 func TestClientConn_ObserveIotivityLite(t *testing.T) {
-	cc, err := Dial("10.112.112.10:42611")
+	cc, err := Dial("10.112.112.10:60956")
 	require.NoError(t, err)
 	defer cc.Close()
 

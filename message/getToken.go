@@ -3,8 +3,6 @@ package message
 import (
 	"crypto/rand"
 	"encoding/base64"
-	"encoding/binary"
-	"hash/crc64"
 )
 
 type Token []byte
@@ -23,14 +21,4 @@ func GetToken() (Token, error) {
 	}
 
 	return b, nil
-}
-
-// Calculate ETag from payload via CRC64
-func CalcETag(payload []byte) []byte {
-	if payload != nil {
-		b := make([]byte, 8)
-		binary.LittleEndian.PutUint64(b, crc64.Checksum(payload, crc64.MakeTable(crc64.ISO)))
-		return b
-	}
-	return nil
 }

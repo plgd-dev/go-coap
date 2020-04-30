@@ -2,51 +2,7 @@ package message
 
 import (
 	"encoding/binary"
-	"unicode/utf8"
 )
-
-func EncodeRunes(p []byte, value []rune) (int, error) {
-	encoded := 0
-	tmpBuf := make([]byte, 8)
-	useTmpBuf := false
-	for _, r := range value {
-		if useTmpBuf {
-			encoded += utf8.EncodeRune(tmpBuf, r)
-		} else {
-			if utf8.RuneLen(r) > len(p[encoded:]) {
-				useTmpBuf = true
-				encoded += utf8.EncodeRune(tmpBuf, r)
-			} else {
-				encoded += utf8.EncodeRune(p, r)
-			}
-		}
-	}
-	if useTmpBuf {
-		return encoded, ErrTooSmall
-	}
-	return encoded, nil
-}
-
-func DecodeRunes(buf []rune, p []byte) (decoded int, err error) {
-	idx := 0
-	err = nil
-	for {
-		r, size := utf8.DecodeRune(p[decoded:])
-		if r == utf8.RuneError && size == 0 {
-			return
-		}
-		if r == utf8.RuneError && size == 1 {
-			return -1, ErrInvalidEncoding
-		}
-		decoded += size
-		if idx < len(buf) {
-			buf[idx] = r
-			idx++
-		} else {
-			err = ErrTooSmall
-		}
-	}
-}
 
 func EncodeUint32(buf []byte, value uint32) (int, error) {
 	switch {
