@@ -190,6 +190,11 @@ func (cc *ClientConn) do(req *Message) (*Message, error) {
 }
 
 // Do sends an coap request and returns an coap response.
+//
+// An error is returned if by failure to speak COAP (such as a network connectivity problem).
+// Any status code doesn't cause an error.
+//
+// Caller is responsible to release request and response.
 func (cc *ClientConn) Do(req *Message) (*Message, error) {
 	if cc.session.blockWise == nil {
 		return cc.do(req)
@@ -239,7 +244,7 @@ func (cc *ClientConn) doWithMID(req *Message) (*Message, error) {
 	}
 }
 
-func newCommonRequest(ctx context.Context, code codes.Code, path string, queries ...string) (*Message, error) {
+func newCommonRequest(ctx context.Context, code codes.Code, path string, opts ...message.Option) (*Message, error) {
 	token, err := message.GetToken()
 	if err != nil {
 		return nil, fmt.Errorf("cannot get token: %w", err)
@@ -247,22 +252,27 @@ func newCommonRequest(ctx context.Context, code codes.Code, path string, queries
 	req := AcquireRequest(ctx)
 	req.SetCode(code)
 	req.SetToken(token)
+	req.SetOptions(opts)
 	req.SetPath(path)
 	req.SetType(coapUDP.NonConfirmable)
-	for _, q := range queries {
-		req.AddQuery(q)
-	}
 	return req, nil
 }
 
 // NewGetRequest creates get request.
-func NewGetRequest(ctx context.Context, path string, queries ...string) (*Message, error) {
-	return newCommonRequest(ctx, codes.GET, path, queries...)
+//
+// Use ctx to set timeout.
+func NewGetRequest(ctx context.Context, path string, opts ...message.Option) (*Message, error) {
+	return newCommonRequest(ctx, codes.GET, path, opts...)
 }
 
 // Get issues a GET to the specified path.
-func (cc *ClientConn) Get(ctx context.Context, path string, queries ...string) (*Message, error) {
-	req, err := NewGetRequest(ctx, path, queries...)
+//
+// Use ctx to set timeout.
+//
+// An error is returned if by failure to speak COAP (such as a network connectivity problem).
+// Any status code doesn't cause an error.
+func (cc *ClientConn) Get(ctx context.Context, path string, opts ...message.Option) (*Message, error) {
+	req, err := NewGetRequest(ctx, path, opts...)
 	if err != nil {
 		return nil, fmt.Errorf("cannot create get request: %w", err)
 	}
@@ -271,8 +281,15 @@ func (cc *ClientConn) Get(ctx context.Context, path string, queries ...string) (
 }
 
 // NewPostRequest creates post request.
-func NewPostRequest(ctx context.Context, path string, contentFormat message.MediaType, payload io.ReadSeeker, queries ...string) (*Message, error) {
-	req, err := newCommonRequest(ctx, codes.POST, path, queries...)
+//
+// Use ctx to set timeout.
+//
+// An error is returned if by failure to speak COAP (such as a network connectivity problem).
+// Any status code doesn't cause an error.
+//
+// If payload is nil then content format is not used.
+func NewPostRequest(ctx context.Context, path string, contentFormat message.MediaType, payload io.ReadSeeker, opts ...message.Option) (*Message, error) {
+	req, err := newCommonRequest(ctx, codes.POST, path, opts...)
 	if err != nil {
 		return nil, err
 	}
@@ -284,7 +301,14 @@ func NewPostRequest(ctx context.Context, path string, contentFormat message.Medi
 }
 
 // Post issues a POST to the specified path.
-func (cc *ClientConn) Post(ctx context.Context, path string, contentFormat message.MediaType, payload io.ReadSeeker, queries ...string) (*Message, error) {
+//
+// Use ctx to set timeout.
+//
+// An error is returned if by failure to speak COAP (such as a network connectivity problem).
+// Any status code doesn't cause an error.
+//
+// If payload is nil then content format is not used.
+func (cc *ClientConn) Post(ctx context.Context, path string, contentFormat message.MediaType, payload io.ReadSeeker, opts ...message.Option) (*Message, error) {
 	req, err := NewPostRequest(ctx, path, contentFormat, payload, queries...)
 	if err != nil {
 		return nil, fmt.Errorf("cannot create post request: %w", err)
@@ -294,8 +318,12 @@ func (cc *ClientConn) Post(ctx context.Context, path string, contentFormat messa
 }
 
 // NewPutRequest creates put request.
-func NewPutRequest(ctx context.Context, path string, contentFormat message.MediaType, payload io.ReadSeeker, queries ...string) (*Message, error) {
-	req, err := newCommonRequest(ctx, codes.PUT, path, queries...)
+//
+// Use ctx to set timeout.
+//
+// If payload is nil then content format is not used.
+func NewPutRequest(ctx context.Context, path string, contentFormat message.MediaType, payload io.ReadSeeker, opts ...message.Option) (*Message, error) {
+	req, err := newCommonRequest(ctx, codes.PUT, path, opts...)
 	if err != nil {
 		return nil, err
 	}
@@ -307,8 +335,15 @@ func NewPutRequest(ctx context.Context, path string, contentFormat message.Media
 }
 
 // Put issues a PUT to the specified path.
-func (cc *ClientConn) Put(ctx context.Context, path string, contentFormat message.MediaType, payload io.ReadSeeker, queries ...string) (*Message, error) {
-	req, err := NewPutRequest(ctx, path, contentFormat, payload, queries...)
+//
+// Use ctx to set timeout.
+//
+// An error is returned if by failure to speak COAP (such as a network connectivity problem).
+// Any status code doesn't cause an error.
+//
+// If payload is nil then content format is not used.
+func (cc *ClientConn) Put(ctx context.Context, path string, contentFormat message.MediaType, payload io.ReadSeeker, opts ...message.Option) (*Message, error) {
+	req, err := NewPutRequest(ctx, path, contentFormat, payload, opts...)
 	if err != nil {
 		return nil, fmt.Errorf("cannot create put request: %w", err)
 	}
@@ -317,6 +352,8 @@ func (cc *ClientConn) Put(ctx context.Context, path string, contentFormat messag
 }
 
 // Delete deletes the resource identified by the request path.
+//
+// Use ctx to set timeout.
 func (cc *ClientConn) Delete(ctx context.Context, path string) (*Message, error) {
 	req, err := newCommonRequest(ctx, codes.DELETE, path)
 	if err != nil {
@@ -327,11 +364,15 @@ func (cc *ClientConn) Delete(ctx context.Context, path string) (*Message, error)
 }
 
 // Context returns the client's context.
+//
+// If connections was closed context is cancelled.
 func (cc *ClientConn) Context() context.Context {
 	return cc.session.Context()
 }
 
-// Ping issues a PING to the client.
+// Ping issues a PING to the client and waits for PONG reponse.
+//
+// Use ctx to set timeout.
 func (cc *ClientConn) Ping(ctx context.Context) error {
 	req := AcquireRequest(ctx)
 	defer ReleaseRequest(req)
