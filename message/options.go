@@ -8,6 +8,9 @@ type Options []Option
 
 const maxPathValue = 255
 
+// SetPath splits path by '/' to URIPath options and copy it to buffer.
+//
+// Return's modified options, number of used buf bytes and error if occurs.
 func (options Options) SetPath(buf []byte, path string) (Options, int, error) {
 	if len(path) == 0 {
 		return options, 0, nil
@@ -36,6 +39,9 @@ func (options Options) SetPath(buf []byte, path string) (Options, int, error) {
 	return o, encoded, nil
 }
 
+// Path joins URIPath options by '/' to the buf.
+//
+// Return's number of used buf bytes or error when occurs.
 func (options Options) Path(buf []byte) (int, error) {
 	firstIdx, lastIdx, err := options.Find(URIPath)
 	if err != nil {
@@ -61,16 +67,23 @@ func (options Options) Path(buf []byte) (int, error) {
 	return needed, nil
 }
 
+// SetOptionString replace's/store's string option to options.
+//
+// Return's modified options, number of used buf bytes and error if occurs.
 func (options Options) SetOptionString(buf []byte, id OptionID, str string) (Options, int, error) {
 	data := []byte(str)
 	return options.SetOptionBytes(buf, id, data)
 }
 
+// AddOptionString append's string option to options.
+//
+// Return's modified options, number of used buf bytes and error if occurs.
 func (options Options) AddOptionString(buf []byte, id OptionID, str string) (Options, int, error) {
 	data := []byte(str)
 	return options.AddOptionBytes(buf, id, data)
 }
 
+// HasOption return's true is option exist in options.
 func (options Options) HasOption(id OptionID) bool {
 	_, _, err := options.Find(id)
 	return err == nil
@@ -96,6 +109,7 @@ func (options Options) ReadUint32(id OptionID, r []uint32) (int, error) {
 	return idx, nil
 }
 
+// GetOptionUint32 get's first option with id of type uint32.
 func (options Options) GetOptionUint32(id OptionID) (uint32, error) {
 	firstIdx, _, err := options.Find(id)
 	if err != nil {
@@ -105,6 +119,8 @@ func (options Options) GetOptionUint32(id OptionID) (uint32, error) {
 	return val, err
 }
 
+
+// GetOptionUint32 get's first option with id of type string.
 func (options Options) GetString(id OptionID) (string, error) {
 	firstIdx, _, err := options.Find(id)
 	if err != nil {
@@ -113,6 +129,9 @@ func (options Options) GetString(id OptionID) (string, error) {
 	return string(options[firstIdx].Value), nil
 }
 
+// SetOptionBytes replace's/store's byte's option to options.
+//
+// Return's modified options, number of used buf bytes and error if occurs.
 func (options Options) SetOptionBytes(buf []byte, id OptionID, data []byte) (Options, int, error) {
 	if len(buf) < len(data) {
 		return options, len(data), ErrTooSmall
@@ -124,6 +143,9 @@ func (options Options) SetOptionBytes(buf []byte, id OptionID, data []byte) (Opt
 	return options.Set(Option{ID: URIPath, Value: buf[:len(data)]}), len(data), nil
 }
 
+// AddOptionBytes append's byte's option to options.
+//
+// Return's modified options, number of used buf bytes and error if occurs.
 func (options Options) AddOptionBytes(buf []byte, id OptionID, data []byte) (Options, int, error) {
 	if len(buf) < len(data) {
 		return options, len(data), ErrTooSmall
@@ -135,6 +157,7 @@ func (options Options) AddOptionBytes(buf []byte, id OptionID, data []byte) (Opt
 	return options.Add(Option{ID: URIPath, Value: buf[:len(data)]}), len(data), nil
 }
 
+// GetOptionBytes get's first option with id of type byte's.
 func (options Options) GetOptionBytes(id OptionID) ([]byte, error) {
 	firstIdx, _, err := options.Find(id)
 	if err != nil {
@@ -177,6 +200,10 @@ func (options Options) ReadBytes(id OptionID, r [][]byte) (int, error) {
 	return idx, nil
 }
 
+
+// AddOptionUint32 append's uint32 option to options.
+//
+// Return's modified options, number of used buf bytes and error if occurs.
 func (options Options) AddOptionUint32(buf []byte, id OptionID, value uint32) (Options, int, error) {
 	enc, err := EncodeUint32(buf, uint32(value))
 	if err != nil {
@@ -186,6 +213,9 @@ func (options Options) AddOptionUint32(buf []byte, id OptionID, value uint32) (O
 	return o, enc, err
 }
 
+// SetOptionUint32  replace's/store's uint32 option to options.
+//
+// Return's modified options, number of used buf bytes and error if occurs.
 func (options Options) SetOptionUint32(buf []byte, id OptionID, value uint32) (Options, int, error) {
 	enc, err := EncodeUint32(buf, uint32(value))
 	if err != nil {
@@ -195,10 +225,12 @@ func (options Options) SetOptionUint32(buf []byte, id OptionID, value uint32) (O
 	return o, enc, err
 }
 
+// SetContentFormat set's ContentFormat option.
 func (options Options) SetContentFormat(buf []byte, contentFormat MediaType) (Options, int, error) {
 	return options.SetOptionUint32(buf, ContentFormat, uint32(contentFormat))
 }
 
+// Find return's range of type options. First
 func (options Options) Find(ID OptionID) (int, int, error) {
 	idxPre, idxPost := options.findPositon(ID)
 	if idxPre == -1 && idxPost == 0 {
