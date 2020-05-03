@@ -429,7 +429,7 @@ func (m *Options) Unmarshal(data []byte, optionDefs map[OptionID]OptionDef) (int
 	return processed, nil
 }
 
-func (m Options) SetOptions(buf []byte, in Options) (int, Options, error) {
+func (m Options) SetOptions(buf []byte, in Options) (Options, int, error) {
 	opts := m[:0]
 	used := 0
 	for idx, o := range in {
@@ -437,7 +437,7 @@ func (m Options) SetOptions(buf []byte, in Options) (int, Options, error) {
 			for i := idx; i < len(in); i++ {
 				used += len(in[idx].Value)
 			}
-			return used, m, ErrTooSmall
+			return m, used, ErrTooSmall
 		}
 		copy(buf, o.Value)
 		used += len(o.Value)
@@ -447,5 +447,5 @@ func (m Options) SetOptions(buf []byte, in Options) (int, Options, error) {
 		})
 		buf = buf[len(o.Value):]
 	}
-	return used, opts, nil
+	return opts, used, nil
 }
