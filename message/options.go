@@ -4,6 +4,7 @@ import (
 	"strings"
 )
 
+// Options Container of COAP Options, It must be always sort'ed after modification.
 type Options []Option
 
 const maxPathValue = 255
@@ -140,7 +141,7 @@ func (options Options) SetOptionBytes(buf []byte, id OptionID, data []byte) (Opt
 		return options, -1, ErrInvalidValueLength
 	}
 	copy(buf, data)
-	return options.Set(Option{ID: URIPath, Value: buf[:len(data)]}), len(data), nil
+	return options.SetOption(Option{ID: URIPath, Value: buf[:len(data)]}), len(data), nil
 }
 
 // AddOptionBytes append's byte's option to options.
@@ -221,7 +222,7 @@ func (options Options) SetOptionUint32(buf []byte, id OptionID, value uint32) (O
 	if err != nil {
 		return options, -1, err
 	}
-	o := options.Set(Option{ID: id, Value: buf[:enc]})
+	o := options.SetOption(Option{ID: id, Value: buf[:enc]})
 	return o, enc, err
 }
 
@@ -230,7 +231,7 @@ func (options Options) SetContentFormat(buf []byte, contentFormat MediaType) (Op
 	return options.SetOptionUint32(buf, ContentFormat, uint32(contentFormat))
 }
 
-// Find return's range of type options. First
+// Find return's range of type options. First number is index and second number is index of next option type.
 func (options Options) Find(ID OptionID) (int, int, error) {
 	idxPre, idxPost := options.findPositon(ID)
 	if idxPre == -1 && idxPost == 0 {
@@ -278,7 +279,10 @@ func (options Options) findPositon(ID OptionID) (minIdx int, maxIdx int) {
 	}
 }
 
-func (options Options) Set(opt Option) Options {
+// SetOption replace's/store's option at options.
+//
+// Return's modified options.
+func (options Options) SetOption(opt Option) Options {
 	idxPre, idxPost := options.findPositon(opt.ID)
 	if idxPre == -1 && idxPost == -1 {
 		//append
@@ -351,6 +355,7 @@ func (options Options) Add(opt Option) Options {
 	return options
 }
 
+// Remove remove's all options with ID.
 func (options Options) Remove(ID OptionID) Options {
 	idxPre, idxPost, err := options.Find(ID)
 	if err != nil {
@@ -367,6 +372,9 @@ func (options Options) Remove(ID OptionID) Options {
 	return options
 }
 
+// Marshal marshal's options to buf.
+//
+// Return's number of used buf byte's.
 func (m Options) Marshal(buf []byte) (int, error) {
 	previousID := OptionID(0)
 	length := 0
@@ -403,6 +411,7 @@ func (m Options) Marshal(buf []byte) (int, error) {
 	return length, nil
 }
 
+// Unmarshal unmarshal's data bytes to options and returns number of consumned byte's.
 func (m *Options) Unmarshal(data []byte, optionDefs map[OptionID]OptionDef) (int, error) {
 	prev := 0
 	processed := 0
@@ -461,6 +470,9 @@ func (m *Options) Unmarshal(data []byte, optionDefs map[OptionID]OptionDef) (int
 	return processed, nil
 }
 
+// SetOptions replace's options.
+//
+// Return's modified options, number of used buf bytes and error if occurs.
 func (m Options) SetOptions(buf []byte, in Options) (Options, int, error) {
 	opts := m[:0]
 	used := 0
