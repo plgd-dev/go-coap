@@ -37,12 +37,13 @@ type GoPoolFunc = func(func() error) error
 
 type BlockwiseFactoryFunc = func(getSendedRequestFromOutside func(token message.Token) (blockwise.Message, bool)) *blockwise.BlockWise
 
+
 var defaultServerOptions = serverOptions{
 	ctx:            context.Background(),
 	maxMessageSize: 64 * 1024,
 	heartBeat:      time.Millisecond * 100,
 	handler: func(w *ResponseWriter, r *Message) {
-		w.SetCode(codes.NotFound)
+		w.SetResponse(codes.NotFound, message.TextPlain, nil)
 	},
 	errors: func(err error) {
 		fmt.Println(err)
@@ -114,19 +115,13 @@ type Listener interface {
 	AcceptWithContext(ctx context.Context) (net.Conn, error)
 }
 
-func NewServer(handler HandlerFunc, opt ...ServerOption) *Server {
+func NewServer(opt ...ServerOption) *Server {
 	opts := defaultServerOptions
 	for _, o := range opt {
 		o.apply(&opts)
 	}
 
 	ctx, cancel := context.WithCancel(opts.ctx)
-	if handler == nil {
-		handler = func(w *ResponseWriter, r *Message) {
-			w.SetCode(codes.BadRequest)
-		}
-	}
-
 	b := make([]byte, 4)
 	rand.Read(b)
 	msgID := binary.BigEndian.Uint32(b)
@@ -135,7 +130,7 @@ func NewServer(handler HandlerFunc, opt ...ServerOption) *Server {
 	return &Server{
 		ctx:               ctx,
 		cancel:            cancel,
-		handler:           handler,
+		handler:           opts.handler,
 		maxMessageSize:    opts.maxMessageSize,
 		heartBeat:         opts.heartBeat,
 		errors:            opts.errors,

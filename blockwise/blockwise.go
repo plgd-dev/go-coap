@@ -192,17 +192,6 @@ func (b *BlockWise) Do(r Message, maxSzx SZX, maxMessageSize int, do func(req Me
 	if len(r.Token()) == 0 {
 		return nil, fmt.Errorf("invalid token")
 	}
-	if r.Payload() == nil {
-		return do(r)
-	}
-	payloadSize, err := r.PayloadSize()
-	if err != nil {
-		return nil, fmt.Errorf("cannot get size of payload: %w", err)
-	}
-
-	if payloadSize <= int64(maxSzx.Size()) {
-		return do(r)
-	}
 
 	blockID := message.Block2
 	sizeID := message.Size2
@@ -217,10 +206,23 @@ func (b *BlockWise) Do(r Message, maxSzx SZX, maxMessageSize int, do func(req Me
 	req.SetCode(r.Code())
 	req.SetToken(r.Token())
 	req.SetOptions(r.Options())
-	req.SetOptionUint32(sizeID, uint32(payloadSize))
 	tokenStr := r.Token().String()
 	b.bwSendedRequest.Store(tokenStr, req)
 	defer b.bwSendedRequest.Delete(tokenStr)
+
+	if r.Payload() == nil {
+		resp, err := do(r)
+		return resp, err
+	}
+	payloadSize, err := r.PayloadSize()
+	if err != nil {
+		return nil, fmt.Errorf("cannot get size of payload: %w", err)
+	}
+
+	if payloadSize <= int64(maxSzx.Size()) {
+		return do(r)
+	}
+	req.SetOptionUint32(sizeID, uint32(payloadSize))
 
 	num := 0
 	buf := make([]byte, 1024)
@@ -307,7 +309,6 @@ func (w *writeRequestResponse) Message() Message {
 
 // WriteRequest sends an coap request via blockwise transfer.
 func (b *BlockWise) WriteRequest(request Message, maxSZX SZX, maxMessageSize int, writeRequest func(r Message) error) error {
-
 	req := b.acquireMessage(request.Context())
 	req.SetCode(request.Code())
 	req.SetToken(request.Token())
@@ -401,6 +402,10 @@ func (b *BlockWise) handleSendingMessage(w ResponseWriter, sendingMessage Messag
 	sendMessage.SetOptionUint32(blockType, block)
 	fmt.Printf("%p handleSendingMessage (%v, %v, %v)\n", b, szx, num, more)
 	w.SetMessage(sendMessage)
+	etag, _ := sendingMessage.GetOptionBytes(message.ETag)
+	fmt.Printf("%p handleSendingMessage sendingMessage ETAG %v\n", b, etag)
+	etag, _ = sendMessage.GetOptionBytes(message.ETag)
+	fmt.Printf("%p handleSendingMessage ETAG %v\n", b, etag)
 	return more, nil
 }
 

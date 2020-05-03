@@ -44,11 +44,11 @@ func TestClientConn_Get(t *testing.T) {
 	var wg sync.WaitGroup
 	defer wg.Wait()
 
-	s := NewServer(func(w *ResponseWriter, r *Message) {
-		w.SetCode(codes.BadRequest)
-		w.WriteFrom(message.TextPlain, bytes.NewReader(make([]byte, 5330)))
+	s := NewServer(WithHandler(func(w *ResponseWriter, r *Message) {
+		err := w.SetResponse(codes.BadRequest, message.TextPlain, bytes.NewReader(make([]byte, 5330)))
+		require.NoError(t, err)
 		require.NotEmpty(t, w.ClientConn())
-	})
+	}))
 	defer s.Stop()
 
 	wg.Add(1)
@@ -64,7 +64,7 @@ func TestClientConn_Get(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			ctx, cancel := context.WithTimeout(context.Background(), time.Second*20)
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second*3600)
 			defer cancel()
 			got, err := cc.Get(ctx, tt.args.path, tt.args.queries...)
 			if tt.wantErr {
@@ -98,10 +98,7 @@ func TestClientConn_Ping(t *testing.T) {
 	var wg sync.WaitGroup
 	defer wg.Wait()
 
-	s := NewServer(func(w *ResponseWriter, r *Message) {
-		w.SetCode(codes.BadRequest)
-		require.NotEmpty(t, w.ClientConn())
-	})
+	s := NewServer()
 	defer s.Stop()
 
 	wg.Add(1)

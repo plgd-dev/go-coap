@@ -10,6 +10,7 @@ import (
 	"sync/atomic"
 
 	"github.com/go-ocf/go-coap/v2/blockwise"
+	"github.com/go-ocf/go-coap/v2/message"
 	"github.com/go-ocf/go-coap/v2/message/codes"
 	coapUDP "github.com/go-ocf/go-coap/v2/message/udp"
 	coapNet "github.com/go-ocf/go-coap/v2/net"
@@ -109,7 +110,6 @@ func (b *bwResponseWriter) Message() blockwise.Message {
 func (b *bwResponseWriter) SetMessage(m blockwise.Message) {
 	ReleaseRequest(b.w.response)
 	b.w.response = m.(*Message)
-	b.w.want = true
 }
 
 func (s *Session) Handle(w *ResponseWriter, r *Message) {
@@ -164,7 +164,7 @@ func (s *Session) processBuffer(buffer []byte, cc *ClientConn) error {
 	s.goPool(func() error {
 		origResp := AcquireRequest(s.ctx)
 		origResp.SetToken(req.Token())
-		w := NewResponseWriter(origResp, cc)
+		w := NewResponseWriter(origResp, cc, req.Options())
 		typ := req.Type()
 		mid := req.MessageID()
 		s.Handle(w, req)
@@ -215,5 +215,5 @@ func (s *Session) WriteRequest(req *Message) error {
 }
 
 func (s *Session) sendPong(w *ResponseWriter, r *Message) {
-	w.SetCode(codes.Empty)
+	w.SetResponse(codes.Empty, message.TextPlain, nil)
 }

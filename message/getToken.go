@@ -2,13 +2,13 @@ package message
 
 import (
 	"crypto/rand"
-	"encoding/base64"
+	"encoding/hex"
 )
 
 type Token []byte
 
 func (t Token) String() string {
-	return base64.StdEncoding.EncodeToString(t)
+	return hex.EncodeToString(t)
 }
 
 // GetToken generates a random token by a given length

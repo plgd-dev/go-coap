@@ -1,7 +1,22 @@
 // Package coap provides a CoAP client and server.
-package coapservertcp
+package coap
 
-import "sync"
+import (
+	"errors"
+	"io"
+	"sync"
+
+	"github.com/go-ocf/go-coap/v2/message"
+	"github.com/go-ocf/go-coap/v2/message/codes"
+)
+
+type ResponseWriter = interface {
+	SetResponse(code codes.Code, contentFormat message.MediaType, d io.ReadSeeker, opts ...message.Option) error
+}
+
+type Request = interface{}
+
+type Handler func(w ResponseWriter, r Request)
 
 // ServeMux is an COAP request multiplexer. It matches the
 // path name of each incoming request against a list of
@@ -21,23 +36,27 @@ type muxEntry struct {
 
 // NewServeMux allocates and returns a new ServeMux.
 func NewServeMux() *ServeMux {
-	return &ServeMux{z: make(map[string]muxEntry), m: new(sync.RWMutex), defaultHandler: HandlerFunc(HandleFailed)}
+	return &ServeMux{z: make(map[string]muxEntry), m: new(sync.RWMutex), defaultHandler: func(w ResponseWriter, r Request) {
+		w.SetResponse(codes.NotFound, message.TextPlain, nil)
+	}}
 }
-
-// DefaultServeMux is the default ServeMux used by Serve.
-var DefaultServeMux = NewServeMux()
 
 // Does path match pattern?
 func pathMatch(pattern, path string) bool {
-	if len(pattern) == 0 {
-		// should not happen
+	switch pattern {
+	case "", "/":
+		switch path {
+		case "", "/":
+			return true
+		}
 		return false
+	default:
+		n := len(pattern)
+		if pattern[n-1] != '/' {
+			return pattern == path
+		}
+		return len(path) >= n && path[0:n] == pattern
 	}
-	n := len(pattern)
-	if pattern[n-1] != '/' {
-		return pattern == path
-	}
-	return len(path) >= n && path[0:n] == pattern
 }
 
 // Find a handler on a handler map given a path string
@@ -60,56 +79,54 @@ func (mux *ServeMux) match(path string) (h Handler, pattern string) {
 }
 
 // Handle adds a handler to the ServeMux for pattern.
-func (mux *ServeMux) Handle(pattern string, handler Handler) {
-	for pattern != "" && pattern[0] == '/' {
-		pattern = pattern[1:]
+func (mux *ServeMux) HandleFunc(pattern string, handler Handler) error {
+	switch pattern {
+	case "", "/":
+		pattern = "/"
+	default:
+		if pattern[0] == '/' {
+			pattern = pattern[1:]
+		}
 	}
 
-	if pattern == "" {
-		panic("COAP: invalid pattern " + pattern)
-	}
 	if handler == nil {
-		panic("COAP: nil handler")
+		return errors.New("nil handler")
 	}
 
 	mux.m.Lock()
 	mux.z[pattern] = muxEntry{h: handler, pattern: pattern}
 	mux.m.Unlock()
+	return nil
 }
 
-// DefaultHandle set default handler to the ServeMux
-func (mux *ServeMux) DefaultHandle(handler Handler) {
+// DefaultHandleFunc set default handler func to the ServeMux
+func (mux *ServeMux) DefaultHandleFunc(handler Handler) {
 	mux.m.Lock()
 	mux.defaultHandler = handler
 	mux.m.Unlock()
 }
 
-// HandleFunc adds a handler function to the ServeMux for pattern.
-func (mux *ServeMux) HandleFunc(pattern string, handler func(w ResponseWriter, r *Request)) {
-	mux.Handle(pattern, HandlerFunc(handler))
-}
-
-// DefaultHandleFunc set a default handler function to the ServeMux.
-func (mux *ServeMux) DefaultHandleFunc(handler func(w ResponseWriter, r *Request)) {
-	mux.DefaultHandle(HandlerFunc(handler))
-}
-
 // HandleRemove deregistrars the handler specific for pattern from the ServeMux.
-func (mux *ServeMux) HandleRemove(pattern string) {
-	if pattern == "" {
-		panic("COAP: invalid pattern " + pattern)
+func (mux *ServeMux) HandleRemove(pattern string) error {
+	switch pattern {
+	case "", "/":
+		pattern = "/"
 	}
 	mux.m.Lock()
-	delete(mux.z, pattern)
-	mux.m.Unlock()
+	defer mux.m.Unlock()
+	if _, ok := mux.z[pattern]; ok {
+		delete(mux.z, pattern)
+		return nil
+	}
+	return errors.New("pattern is not registered in")
 }
 
-// ServeCOAP dispatches the request to the handler whose
+// Handle dispatches the request to the handler whose
 // pattern most closely matches the request message. If DefaultServeMux
 // is used the correct thing for DS queries is done: a possible parent
 // is sought.
 // If no handler is found a standard NotFound message is returned
-func (mux *ServeMux) ServeCOAP(w ResponseWriter, r *Request) {
+func (mux *ServeMux) Handle(w ResponseWriter, r Request) {
 	h, _ := mux.match(r.Msg.PathString())
 	if h == nil {
 		h = mux.defaultHandler

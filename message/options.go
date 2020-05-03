@@ -428,3 +428,24 @@ func (m *Options) Unmarshal(data []byte, optionDefs map[OptionID]OptionDef) (int
 
 	return processed, nil
 }
+
+func (m Options) SetOptions(buf []byte, in Options) (int, Options, error) {
+	opts := m[:0]
+	used := 0
+	for idx, o := range in {
+		if len(buf) < len(o.Value) {
+			for i := idx; i < len(in); i++ {
+				used += len(in[idx].Value)
+			}
+			return used, m, ErrTooSmall
+		}
+		copy(buf, o.Value)
+		used += len(o.Value)
+		opts = opts.Add(Option{
+			ID:    o.ID,
+			Value: buf[:len(o.Value)],
+		})
+		buf = buf[len(o.Value):]
+	}
+	return used, opts, nil
+}

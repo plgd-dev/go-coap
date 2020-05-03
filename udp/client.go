@@ -24,7 +24,7 @@ var defaultDialOptions = dialOptions{
 	handler: func(w *ResponseWriter, r *Message) {
 		switch r.Code() {
 		case codes.POST, codes.PUT, codes.GET, codes.DELETE:
-			w.SetCode(codes.NotFound)
+			w.SetResponse(codes.NotFound, message.TextPlain, nil)
 		}
 	},
 	errors: func(err error) {

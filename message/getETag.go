@@ -2,6 +2,7 @@ package message
 
 import (
 	"encoding/binary"
+	"fmt"
 	"hash/crc64"
 	"io"
 )
@@ -39,5 +40,6 @@ func GetETag(r io.ReadSeeker) ([]byte, error) {
 	}
 	b := make([]byte, 8)
 	binary.LittleEndian.PutUint64(b, c64.Sum64())
+	fmt.Printf("ETAG %v\n", b)
 	return b, nil
 }

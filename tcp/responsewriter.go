@@ -19,7 +19,7 @@ func NewResponseWriter(response *Request) *ResponseWriter {
 	}
 }
 
-func (r *ResponseWriter) WriteFrom(contentFormat message.MediaType, d io.ReadSeeker) (err error) {
+func (r *ResponseWriter) SetResponse(contentFormat message.MediaType, d io.ReadSeeker) (err error) {
 	r.want = true
 	r.response.SetContentFormat(contentFormat)
 	return r.response.SetPayload(d)

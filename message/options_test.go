@@ -39,6 +39,52 @@ func TestFindObserve(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestETAG(t *testing.T) {
+	opts := Options{
+		{
+			ID: ETag,
+			//Value: []byte{0x14, 0xd2, 0xe, 0x17, 0xe7, 0xa0, 0xb7, 0x91},
+			Value: []byte{238, 32, 201, 23, 231, 160, 183, 145},
+		},
+		{
+			ID:    ContentFormat,
+			Value: []byte{},
+		},
+		{
+			ID:    Block2,
+			Value: []byte{0x0e},
+		},
+		{
+			ID:    Size2,
+			Value: []byte{0x14, 0xd2},
+		},
+	}
+	buf := make([]byte, 1024)
+	newOpts := make(Options, 0, len(opts))
+	n, newOpts, err := newOpts.SetOptions(buf, opts)
+	require.NoError(t, err)
+	require.Equal(t, opts, newOpts)
+	require.Equal(t, 11, n)
+	buf = buf[n:]
+
+	opts, n, err = newOpts.SetOptionUint32(buf, Size2, uint32(5330))
+	require.NoError(t, err)
+	require.Equal(t, opts, newOpts)
+	require.Equal(t, 2, n)
+	buf = buf[n:]
+
+	opts, n, err = newOpts.SetOptionUint32(buf, Block2, uint32(8))
+	require.NoError(t, err)
+	require.Equal(t, opts, newOpts)
+	require.Equal(t, 1, n)
+	buf = buf[1:]
+
+	etag, err := newOpts.GetOptionBytes(ETag)
+	require.NoError(t, err)
+	require.Equal(t, opts[0].Value, etag)
+
+}
+
 func TestSetPath(t *testing.T) {
 	options := make(Options, 0, 10)
 	options, _, err := options.SetPath(make([]byte, 32), "/light/2")

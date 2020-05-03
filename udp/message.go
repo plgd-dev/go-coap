@@ -67,17 +67,15 @@ func (r *Message) SetToken(token message.Token) {
 }
 
 func (r *Message) SetOptions(in message.Options) {
-	r.msg.Options = r.msg.Options[:0]
-	for _, o := range in {
-		if len(r.valueBuffer) < len(o.Value) {
-			r.valueBuffer = append(r.valueBuffer, make([]byte, len(o.Value))...)
-		}
-		copy(r.valueBuffer, o.Value)
-		r.msg.Options = r.msg.Options.Add(message.Option{
-			ID:    o.ID,
-			Value: r.valueBuffer[:len(o.Value)],
-		})
-		r.valueBuffer = r.valueBuffer[len(o.Value):]
+	used, opts, err := r.msg.Options.SetOptions(r.valueBuffer, in)
+	if err == message.ErrTooSmall {
+		r.valueBuffer = append(r.valueBuffer, make([]byte, used)...)
+		used, opts, err = r.msg.Options.SetOptions(r.valueBuffer, in)
+	}
+	r.msg.Options = opts
+	r.valueBuffer = r.valueBuffer[used:]
+	if len(in) > 0 {
+		r.wantSend = true
 	}
 }
 
@@ -87,11 +85,12 @@ func (r *Message) Options() message.Options {
 
 func (r *Message) SetPath(p string) {
 	opts, used, err := r.msg.Options.SetPath(r.valueBuffer, p)
-	r.msg.Options = opts
+
 	if err == message.ErrTooSmall {
 		r.valueBuffer = append(r.valueBuffer, make([]byte, used)...)
-		r.msg.Options, used, err = r.msg.Options.SetPath(r.valueBuffer, p)
+		opts, used, err = r.msg.Options.SetPath(r.valueBuffer, p)
 	}
+	r.msg.Options = opts
 	r.valueBuffer = r.valueBuffer[used:]
 	r.wantSend = true
 }
@@ -140,22 +139,22 @@ func (r *Message) GetOptionUint32(id message.OptionID) (uint32, error) {
 
 func (r *Message) SetOptionString(opt message.OptionID, value string) {
 	opts, used, err := r.msg.Options.SetOptionString(r.valueBuffer, opt, value)
-	r.msg.Options = opts
 	if err == message.ErrTooSmall {
 		r.valueBuffer = append(r.valueBuffer, make([]byte, used)...)
-		r.msg.Options, used, err = r.msg.Options.SetOptionString(r.valueBuffer, opt, value)
+		opts, used, err = r.msg.Options.SetOptionString(r.valueBuffer, opt, value)
 	}
+	r.msg.Options = opts
 	r.valueBuffer = r.valueBuffer[used:]
 	r.wantSend = true
 }
 
 func (r *Message) AddOptionString(opt message.OptionID, value string) {
 	opts, used, err := r.msg.Options.AddOptionString(r.valueBuffer, opt, value)
-	r.msg.Options = opts
 	if err == message.ErrTooSmall {
 		r.valueBuffer = append(r.valueBuffer, make([]byte, used)...)
-		r.msg.Options, used, err = r.msg.Options.AddOptionString(r.valueBuffer, opt, value)
+		opts, used, err = r.msg.Options.AddOptionString(r.valueBuffer, opt, value)
 	}
+	r.msg.Options = opts
 	r.valueBuffer = r.valueBuffer[used:]
 	r.wantSend = true
 }
@@ -176,22 +175,22 @@ func (r *Message) GetOptionBytes(id message.OptionID) ([]byte, error) {
 
 func (r *Message) SetOptionUint32(opt message.OptionID, value uint32) {
 	opts, used, err := r.msg.Options.SetOptionUint32(r.valueBuffer, opt, value)
-	r.msg.Options = opts
 	if err == message.ErrTooSmall {
 		r.valueBuffer = append(r.valueBuffer, make([]byte, used)...)
-		r.msg.Options, used, err = r.msg.Options.SetOptionUint32(r.valueBuffer, opt, value)
+		opts, used, err = r.msg.Options.SetOptionUint32(r.valueBuffer, opt, value)
 	}
+	r.msg.Options = opts
 	r.valueBuffer = r.valueBuffer[used:]
 	r.wantSend = true
 }
 
 func (r *Message) AddOptionUint32(opt message.OptionID, value uint32) {
 	opts, used, err := r.msg.Options.AddOptionUint32(r.valueBuffer, opt, value)
-	r.msg.Options = opts
 	if err == message.ErrTooSmall {
 		r.valueBuffer = append(r.valueBuffer, make([]byte, used)...)
-		r.msg.Options, used, err = r.msg.Options.AddOptionUint32(r.valueBuffer, opt, value)
+		opts, used, err = r.msg.Options.AddOptionUint32(r.valueBuffer, opt, value)
 	}
+	r.msg.Options = opts
 	r.valueBuffer = r.valueBuffer[used:]
 	r.wantSend = true
 }
