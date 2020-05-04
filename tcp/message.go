@@ -1,4 +1,4 @@
-package udp
+package tcp
 
 import (
 	"bytes"
@@ -9,7 +9,7 @@ import (
 
 	"github.com/go-ocf/go-coap/v2/message"
 	"github.com/go-ocf/go-coap/v2/message/codes"
-	coapUDP "github.com/go-ocf/go-coap/v2/message/udp"
+	coapTCP "github.com/go-ocf/go-coap/v2/message/tcp"
 )
 
 var (
@@ -20,7 +20,7 @@ type Message struct {
 	noCopy
 
 	//local vars
-	msg             coapUDP.Message
+	msg             coapTCP.Message
 	rawData         []byte
 	valueBuffer     []byte
 	origValueBuffer []byte
@@ -93,23 +93,6 @@ func (r *Message) SetPath(p string) {
 	r.msg.Options = opts
 	r.valueBuffer = r.valueBuffer[used:]
 	r.wantSend = true
-}
-
-func (r *Message) SetMessageID(mid uint16) {
-	r.msg.MessageID = mid
-}
-
-func (r *Message) MessageID() uint16 {
-	return r.msg.MessageID
-}
-
-func (r *Message) SetType(typ coapUDP.Type) {
-	r.msg.Type = typ
-	r.wantSend = true
-}
-
-func (r *Message) Type() coapUDP.Type {
-	return r.msg.Type
 }
 
 func (r *Message) Code() codes.Code {
@@ -252,6 +235,23 @@ func (r *Message) Payload() io.ReadSeeker {
 	return r.payload
 }
 
+func (r *Message) UnmarshalWithHeader(hdr coapTCP.MessageHeader, data []byte) (int, error) {
+	r.Reset()
+	if len(r.rawData) < len(data) {
+		r.rawData = make([]byte, len(data))
+	}
+	copy(r.rawData, data)
+	r.rawData = r.rawData[:len(data)]
+	n, err := r.msg.UnmarshalWithHeader(hdr, data)
+	if err != nil {
+		return n, err
+	}
+	if len(r.msg.Payload) > 0 {
+		r.payload = bytes.NewReader(r.msg.Payload)
+	}
+	return n, err
+}
+
 func (r *Message) Unmarshal(data []byte) (int, error) {
 	r.Reset()
 	if len(r.rawData) < len(data) {
@@ -340,7 +340,7 @@ func AcquireMessage(ctx context.Context) *Message {
 	if v == nil {
 		valueBuffer := make([]byte, 256)
 		return &Message{
-			msg: coapUDP.Message{
+			msg: coapTCP.Message{
 				Options: make(message.Options, 0, 16),
 			},
 			rawData:         make([]byte, 256),

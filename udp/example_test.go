@@ -1,12 +1,26 @@
 package udp_test
 
+import (
+	"context"
+	"fmt"
+	"io/ioutil"
+	"log"
+	"sync"
+	"time"
+
+	"github.com/go-ocf/go-coap/v2/net"
+	"github.com/go-ocf/go-coap/v2/udp"
+)
+
 func ExampleGet() {
 	conn, err := udp.Dial("pluggedin.cloud:5683")
 	if err != nil {
 		log.Fatal(err)
 	}
 	defer conn.Close()
-	res, err := conn.Get("/oic/res")
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	res, err := conn.Get(ctx, "/oic/res")
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -18,19 +32,18 @@ func ExampleGet() {
 }
 
 func ExampleServe() {
-	l, err := coapNet.ListenUDP("udp", "0.0.0.0:5683")
+	l, err := net.NewListenUDP("udp", "0.0.0.0:5683")
 	if err != nil {
 		log.Fatal(err)
 	}
 	defer l.Close()
-	s := NewServer()
+	s := udp.NewServer()
 	defer s.Stop()
 	log.Fatal(s.Serve(l))
 }
 
-
 func ExampleDiscovery() {
-	l, err := coapNet.ListenUDP("udp", "")
+	l, err := net.NewListenUDP("udp", "")
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -38,7 +51,7 @@ func ExampleDiscovery() {
 	var wg sync.WaitGroup
 	defer wg.Wait()
 
-	s := NewServer()
+	s := udp.NewServer()
 	defer s.Stop()
 	wg.Add(1)
 	go func() {
@@ -48,7 +61,7 @@ func ExampleDiscovery() {
 	}()
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	err := s.Discover(ctx, "224.0.1.187:5683", "/oic/res", func(cc *ClientConn, res *Message){
+	err = s.Discover(ctx, "224.0.1.187:5683", "/oic/res", func(cc *udp.ClientConn, res *udp.Message) {
 		data, err := ioutil.ReadAll(res.Payload())
 		if err != nil {
 			log.Fatal(err)

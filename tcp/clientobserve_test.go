@@ -1,4 +1,4 @@
-package udp
+package tcp
 
 import (
 	"bytes"
@@ -43,13 +43,13 @@ func TestClientConn_Observe(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			l, err := coapNet.ListenUDP("udp", "")
+			l, err := coapNet.NewTCPListener("tcp", "")
 			require.NoError(t, err)
 			defer l.Close()
 			var wg sync.WaitGroup
 			defer wg.Wait()
 
-			s := NewServer(WithHandler(func(w *ResponseWriter, r *Message) {
+			s := NewServer(WithHandlerFunc(func(w *ResponseWriter, r *Message) {
 				switch r.Code() {
 				case codes.PUT, codes.POST, codes.DELETE:
 					w.SetResponse(codes.NotFound, message.TextPlain, nil)
@@ -82,8 +82,8 @@ func TestClientConn_Observe(t *testing.T) {
 						p := bytes.NewReader(tt.args.payload)
 						etag, err := message.GetETag(p)
 						require.NoError(t, err)
-						req := AcquireRequest(cc.Context())
-						defer ReleaseRequest(req)
+						req := AcquireMessage(cc.Context())
+						defer ReleaseMessage(req)
 						req.SetCode(codes.Content)
 						req.SetContentFormat(message.TextPlain)
 						req.SetObserve(uint32(i) + 2)
@@ -110,7 +110,7 @@ func TestClientConn_Observe(t *testing.T) {
 				t.Log(err)
 			}()
 
-			cc, err := Dial(l.LocalAddr().String())
+			cc, err := Dial(l.Addr().String())
 			require.NoError(t, err)
 			defer cc.Close()
 
@@ -160,7 +160,7 @@ type observer struct {
 	numEvents int
 }
 
-func (o *observer) observe(cc *ClientConn, req *Message) {
+func (o *observer) observe(req *Message) {
 	req.Hijack()
 	o.Lock()
 	defer o.Unlock()

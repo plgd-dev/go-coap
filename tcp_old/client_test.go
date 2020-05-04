@@ -1,4 +1,4 @@
-package udp
+package tcpold
 
 import (
 	"bytes"
@@ -58,7 +58,7 @@ func TestClientConn_Get(t *testing.T) {
 		},
 	}
 
-	l, err := coapNet.NewListenUDP("udp", "")
+	l, err := coapNet.ListenUDP("udp", "")
 	require.NoError(t, err)
 	defer l.Close()
 	var wg sync.WaitGroup
@@ -166,7 +166,7 @@ func TestClientConn_Post(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			l, err := coapNet.NewListenUDP("udp", "")
+			l, err := coapNet.ListenUDP("udp", "")
 			require.NoError(t, err)
 			defer l.Close()
 			var wg sync.WaitGroup
@@ -285,7 +285,7 @@ func TestClientConn_Put(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			l, err := coapNet.NewListenUDP("udp", "")
+			l, err := coapNet.ListenUDP("udp", "")
 			require.NoError(t, err)
 			defer l.Close()
 			var wg sync.WaitGroup
@@ -394,7 +394,7 @@ func TestClientConn_Delete(t *testing.T) {
 		},
 	}
 
-	l, err := coapNet.NewListenUDP("udp", "")
+	l, err := coapNet.ListenUDP("udp", "")
 	require.NoError(t, err)
 	defer l.Close()
 	var wg sync.WaitGroup
@@ -453,7 +453,7 @@ func TestClientConn_Delete(t *testing.T) {
 }
 
 func TestClientConn_Ping(t *testing.T) {
-	l, err := coapNet.NewListenUDP("udp", "")
+	l, err := coapNet.ListenUDP("udp", "")
 	require.NoError(t, err)
 	defer l.Close()
 	var wg sync.WaitGroup

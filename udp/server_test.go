@@ -40,7 +40,7 @@ func TestServer_Discover(t *testing.T) {
 	multicastAddr := "224.0.1.187:5684"
 	path := "/oic/res"
 
-	l, err := coapNet.ListenUDP("udp", multicastAddr)
+	l, err := coapNet.NewListenUDP("udp", multicastAddr)
 	require.NoError(t, err)
 	defer l.Close()
 
@@ -62,7 +62,7 @@ func TestServer_Discover(t *testing.T) {
 	var wg sync.WaitGroup
 	defer wg.Wait()
 
-	s := NewServer(WithHandler(func(w *ResponseWriter, r *Message) {
+	s := NewServer(WithHandlerFunc(func(w *ResponseWriter, r *Message) {
 		w.SetResponse(codes.BadRequest, message.TextPlain, bytes.NewReader(make([]byte, 5330)))
 		require.NotEmpty(t, w.ClientConn())
 	}))

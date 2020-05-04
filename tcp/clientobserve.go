@@ -1,4 +1,4 @@
-package udp
+package tcp
 
 import (
 	"context"
@@ -38,14 +38,14 @@ func (o *Observation) Cancel(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("cannot cancel observation request: %w", err)
 	}
-	defer ReleaseRequest(req)
+	defer ReleaseMessage(req)
 	req.SetObserve(1)
 	req.SetToken(o.token)
 	o.cc.observationTokenHandler.Pop(o.token)
 	registeredRequest, ok := o.cc.observationRequests.Load(o.token.String())
 	if ok {
 		o.cc.observationRequests.Delete(o.token.String())
-		ReleaseRequest(registeredRequest.(*Message))
+		ReleaseMessage(registeredRequest.(*Message))
 	}
 	return o.cc.WriteRequest(req)
 }
@@ -68,8 +68,8 @@ func (o *Observation) wantBeNotified(r *Message) bool {
 }
 
 // Observe subscribes for every change of resource on path.
-func (cc *ClientConn) Observe(ctx context.Context, path string, observeFunc func(cc *ClientConn, req *Message)) (*Observation, error) {
-	req, err := NewGetRequest(ctx, path)
+func (cc *ClientConn) Observe(ctx context.Context, path string, observeFunc func(req *Message), opts ...message.Option) (*Observation, error) {
+	req, err := NewGetRequest(ctx, path, opts...)
 	if err != nil {
 		return nil, fmt.Errorf("cannot create observe request: %w", err)
 	}
@@ -86,7 +86,7 @@ func (cc *ClientConn) Observe(ctx context.Context, path string, observeFunc func
 	cc.observationRequests.Store(token.String(), req)
 	err = o.cc.observationTokenHandler.Insert(token.String(), func(w *ResponseWriter, r *Message) {
 		if o.wantBeNotified(r) {
-			observeFunc(w.ClientConn(), r)
+			observeFunc(r)
 		}
 		if atomic.CompareAndSwapUint32(&waitForReponse, 1, 0) {
 			select {
@@ -99,7 +99,7 @@ func (cc *ClientConn) Observe(ctx context.Context, path string, observeFunc func
 		if *err != nil {
 			cc.observationTokenHandler.Pop(token)
 			cc.observationRequests.Delete(token.String())
-			ReleaseRequest(req)
+			ReleaseMessage(req)
 		}
 	}(&err)
 	if err != nil {

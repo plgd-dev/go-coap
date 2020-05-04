@@ -1,5 +1,4 @@
-// Package coap provides a CoAP client and server.
-package coap
+package mux
 
 import (
 	"errors"
@@ -12,11 +11,23 @@ import (
 
 type ResponseWriter = interface {
 	SetResponse(code codes.Code, contentFormat message.MediaType, d io.ReadSeeker, opts ...message.Option) error
+	ClientConn() ClientConn
 }
 
-type Request = interface{}
+type Handler interface {
+	ServeCOAP(w ResponseWriter, r *Message)
+}
 
-type Handler func(w ResponseWriter, r Request)
+// The HandlerFunc type is an adapter to allow the use of
+// ordinary functions as COAP handlers.  If f is a function
+// with the appropriate signature, HandlerFunc(f) is a
+// Handler object that calls f.
+type HandlerFunc func(w ResponseWriter, r *Message)
+
+// ServeCOAP calls f(w, r).
+func (f HandlerFunc) ServeCOAP(w ResponseWriter, r *Message) {
+	f(w, r)
+}
 
 // ServeMux is an COAP request multiplexer. It matches the
 // path name of each incoming request against a list of
@@ -36,9 +47,9 @@ type muxEntry struct {
 
 // NewServeMux allocates and returns a new ServeMux.
 func NewServeMux() *ServeMux {
-	return &ServeMux{z: make(map[string]muxEntry), m: new(sync.RWMutex), defaultHandler: func(w ResponseWriter, r Request) {
+	return &ServeMux{z: make(map[string]muxEntry), m: new(sync.RWMutex), defaultHandler: HandlerFunc(func(w ResponseWriter, r *Message) {
 		w.SetResponse(codes.NotFound, message.TextPlain, nil)
-	}}
+	})}
 }
 
 // Does path match pattern?
@@ -79,7 +90,7 @@ func (mux *ServeMux) match(path string) (h Handler, pattern string) {
 }
 
 // Handle adds a handler to the ServeMux for pattern.
-func (mux *ServeMux) HandleFunc(pattern string, handler Handler) error {
+func (mux *ServeMux) Handle(pattern string, handler Handler) error {
 	switch pattern {
 	case "", "/":
 		pattern = "/"
@@ -99,11 +110,21 @@ func (mux *ServeMux) HandleFunc(pattern string, handler Handler) error {
 	return nil
 }
 
-// DefaultHandleFunc set default handler func to the ServeMux
-func (mux *ServeMux) DefaultHandleFunc(handler Handler) {
+// DefaultHandle set default handler to the ServeMux
+func (mux *ServeMux) DefaultHandle(handler Handler) {
 	mux.m.Lock()
 	mux.defaultHandler = handler
 	mux.m.Unlock()
+}
+
+// HandleFunc adds a handler function to the ServeMux for pattern.
+func (mux *ServeMux) HandleFunc(pattern string, handler func(w ResponseWriter, r *Message)) {
+	mux.Handle(pattern, HandlerFunc(handler))
+}
+
+// DefaultHandleFunc set a default handler function to the ServeMux.
+func (mux *ServeMux) DefaultHandleFunc(handler func(w ResponseWriter, r *Message)) {
+	mux.DefaultHandle(HandlerFunc(handler))
 }
 
 // HandleRemove deregistrars the handler specific for pattern from the ServeMux.
@@ -121,41 +142,29 @@ func (mux *ServeMux) HandleRemove(pattern string) error {
 	return errors.New("pattern is not registered in")
 }
 
-// Handle dispatches the request to the handler whose
+// ServeCOAP dispatches the request to the handler whose
 // pattern most closely matches the request message. If DefaultServeMux
 // is used the correct thing for DS queries is done: a possible parent
 // is sought.
 // If no handler is found a standard NotFound message is returned
-func (mux *ServeMux) Handle(w ResponseWriter, r Request) {
-	h, _ := mux.match(r.Msg.PathString())
+func (mux *ServeMux) ServeCOAP(w ResponseWriter, r *Message) {
+	buf := make([]byte, 64)
+	used, err := r.Options.Path(buf)
+	if err == message.ErrTooSmall {
+		buf = append(buf, make([]byte, used-len(buf))...)
+		used, err = r.Options.Path(buf)
+	}
+	if err != nil {
+		mux.defaultHandler.ServeCOAP(w, r)
+		return
+	}
+	buf = buf[:used]
+	h, _ := mux.match(string(buf))
 	if h == nil {
 		h = mux.defaultHandler
-		if h == nil {
-			h = failedHandler()
-		}
+	}
+	if h == nil {
+		return
 	}
 	h.ServeCOAP(w, r)
-}
-
-// Handle registers the handler with the given pattern
-// in the DefaultServeMux. The documentation for
-// ServeMux explains how patterns are matched.
-func Handle(pattern string, handler Handler) { DefaultServeMux.Handle(pattern, handler) }
-
-// HandleFunc registers the handler function with the given pattern
-// in the DefaultServeMux.
-func HandleFunc(pattern string, handler func(w ResponseWriter, r *Request)) {
-	DefaultServeMux.HandleFunc(pattern, handler)
-}
-
-// HandleRemove deregisters the handle with the given pattern
-// in the DefaultServeMux.
-func HandleRemove(pattern string) { DefaultServeMux.HandleRemove(pattern) }
-
-// DefaultHandle set the default handler in the DefaultServeMux.
-func DefaultHandle(handler Handler) { DefaultServeMux.DefaultHandle(handler) }
-
-// DefaultHandleFunc set the default handler in the DefaultServeMux.
-func DefaultHandleFunc(handler func(w ResponseWriter, r *Request)) {
-	DefaultServeMux.DefaultHandleFunc(handler)
 }

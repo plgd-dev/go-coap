@@ -1,4 +1,4 @@
-package tcp
+package tcpold
 
 import (
 	"context"
@@ -75,12 +75,12 @@ func (r *Request) GetOptionUint32(id message.OptionID) (uint32, error) {
 	return r.msg.Options.GetOptionUint32(id)
 }
 
-func (r *Request) SetOptionString(opt message.OptionID, value string) {
-	opts, used, err := r.msg.Options.SetOptionString(r.valueBuffer, opt, value)
+func (r *Request) ResetTotring(opt message.OptionID, value string) {
+	opts, used, err := r.msg.Options.ResetTotring(r.valueBuffer, opt, value)
 	r.msg.Options = opts
 	if err == message.ErrTooSmall {
 		r.valueBuffer = r.valueBuffer[:len(r.valueBuffer)+used]
-		r.msg.Options, used, err = r.msg.Options.SetOptionString(r.valueBuffer, opt, value)
+		r.msg.Options, used, err = r.msg.Options.ResetTotring(r.valueBuffer, opt, value)
 	}
 	r.valueBuffer = r.valueBuffer[used:]
 }
@@ -241,12 +241,12 @@ func (r *Request) IsHijacked() bool {
 	return atomic.LoadUint32(&r.hijacked) == 1
 }
 
-// AcquireRequest returns an empty Request instance from Request pool.
+// AcquireMessage returns an empty Request instance from Request pool.
 //
-// The returned Request instance may be passed to ReleaseRequest when it is
+// The returned Request instance may be passed to ReleaseMessage when it is
 // no longer needed. This allows Request recycling, reduces GC pressure
 // and usually improves performance.
-func AcquireRequest(ctx context.Context) *Request {
+func AcquireMessage(ctx context.Context) *Request {
 	v := RequestPool.Get()
 	if v == nil {
 		valueBuffer := make([]byte, 256)
@@ -267,11 +267,11 @@ func AcquireRequest(ctx context.Context) *Request {
 	return r
 }
 
-// ReleaseRequest returns req acquired via AcquireRequest to Request pool.
+// ReleaseMessage returns req acquired via AcquireMessage to Request pool.
 //
 // It is forbidden accessing req and/or its' members after returning
 // it to Request pool.
-func ReleaseRequest(req *Request) {
+func ReleaseMessage(req *Request) {
 	req.Reset()
 	RequestPool.Put(req)
 }

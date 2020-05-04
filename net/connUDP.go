@@ -20,6 +20,7 @@ type UDPConn struct {
 	connection *net.UDPConn
 	packetConn packetConn
 	errors     func(err error)
+	network    string
 
 	lock sync.Mutex
 }
@@ -197,7 +198,7 @@ func WithErrors(v func(err error)) errors {
 	}
 }
 
-func ListenUDP(network, addr string, opts ...UDPOption) (*UDPConn, error) {
+func NewListenUDP(network, addr string, opts ...UDPOption) (*UDPConn, error) {
 	listenAddress, err := net.ResolveUDPAddr(network, addr)
 	if err != nil {
 		return nil, err
@@ -206,11 +207,11 @@ func ListenUDP(network, addr string, opts ...UDPOption) (*UDPConn, error) {
 	if err != nil {
 		return nil, err
 	}
-	return NewUDPConn(conn, opts...), nil
+	return NewUDPConn(network, conn, opts...), nil
 }
 
 // NewUDPConn creates connection over net.UDPConn.
-func NewUDPConn(c *net.UDPConn, opts ...UDPOption) *UDPConn {
+func NewUDPConn(network string, c *net.UDPConn, opts ...UDPOption) *UDPConn {
 	cfg := defaultUDPConnOptions
 	for _, o := range opts {
 		o.applyUDP(&cfg)
@@ -224,7 +225,7 @@ func NewUDPConn(c *net.UDPConn, opts ...UDPOption) *UDPConn {
 		packetConn = newPacketConnIPv4(ipv4.NewPacketConn(c))
 	}
 
-	connection := UDPConn{connection: c, heartBeat: cfg.heartBeat, packetConn: packetConn, errors: cfg.errors}
+	connection := UDPConn{network: network, connection: c, heartBeat: cfg.heartBeat, packetConn: packetConn, errors: cfg.errors}
 	return &connection
 }
 
@@ -236,6 +237,11 @@ func (c *UDPConn) LocalAddr() net.Addr {
 // RemoteAddr returns the remote network address. The Addr returned is shared by all invocations of RemoteAddr, so do not modify it.
 func (c *UDPConn) RemoteAddr() net.Addr {
 	return c.connection.RemoteAddr()
+}
+
+// Network name of the network (for example, udp4, udp6, udp)
+func (c *UDPConn) Network() string {
+	return c.network
 }
 
 // Close closes the connection.

@@ -108,7 +108,7 @@ func (b *bwResponseWriter) Message() blockwise.Message {
 }
 
 func (b *bwResponseWriter) SetMessage(m blockwise.Message) {
-	ReleaseRequest(b.w.response)
+	ReleaseMessage(b.w.response)
 	b.w.response = m.(*Message)
 }
 
@@ -154,23 +154,23 @@ func (s *Session) processBuffer(buffer []byte, cc *ClientConn) error {
 	if s.maxMessageSize >= 0 && len(buffer) > s.maxMessageSize {
 		return fmt.Errorf("max message size(%v) was exceeded %v", s.maxMessageSize, len(buffer))
 	}
-	req := AcquireRequest(s.ctx)
+	req := AcquireMessage(s.ctx)
 	_, err := req.Unmarshal(buffer)
 	if err != nil {
-		ReleaseRequest(req)
+		ReleaseMessage(req)
 		return err
 	}
 	req.sequence = s.Sequence()
 	s.goPool(func() error {
-		origResp := AcquireRequest(s.ctx)
+		origResp := AcquireMessage(s.ctx)
 		origResp.SetToken(req.Token())
 		w := NewResponseWriter(origResp, cc, req.Options())
 		typ := req.Type()
 		mid := req.MessageID()
 		s.Handle(w, req)
-		defer ReleaseRequest(w.response)
+		defer ReleaseMessage(w.response)
 		if !req.IsHijacked() {
-			ReleaseRequest(req)
+			ReleaseMessage(req)
 		}
 		if w.response.WantToSend() {
 			if typ == coapUDP.Confirmable {

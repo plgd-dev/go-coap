@@ -14,6 +14,7 @@ github.com/envoyproxy/go-control-plane v0.9.4/go.mod h1:6rpuAdCZL397s3pYoYcLgu1m
 github.com/envoyproxy/protoc-gen-validate v0.1.0/go.mod h1:iSmxcyjqTsJpI2R4NaDN7+kN2VEUnK/pcBlmesArF7c=
 github.com/go-ocf/go-coap v0.0.0-20200420092245-1fa077b7846f h1:k3U5CRL7evFZUaECeRSDjStcrLIF2r9o4fUYHVPE4Tw=
 github.com/go-ocf/go-coap v0.0.0-20200420092245-1fa077b7846f/go.mod h1:xiQO3p677O57WHSCCEYGkug7JapYynpBfgviy8aF2to=
+github.com/go-ocf/go-coap v0.0.0-20200503182930-509338af26c8 h1:ieuAqWZcqrEAowslHtq7VhF3iQVaw3wx0NrAKzOj2dc=
 github.com/golang/glog v0.0.0-20160126235308-23def4e6c14b/go.mod h1:SBH7ygxi8pfUlaOkMMuAQtPIUF8ecWP5IEl/CR7VP2Q=
 github.com/golang/mock v1.1.1/go.mod h1:oTYuIxOrZwtPieC+H1uAHpcLFnEyAGVDL/k47Jfbm0A=
 github.com/golang/protobuf v1.2.0/go.mod h1:6lQm79b+lXiMfvg/cZm0SGofjICqVBUtrP5yJMmIC1U=

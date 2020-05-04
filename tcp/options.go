@@ -1,4 +1,4 @@
-package udp
+package tcp
 
 import (
 	"context"
@@ -125,7 +125,7 @@ func (o NetOpt) applyDial(opts *dialOptions) {
 	opts.net = o.net
 }
 
-// WithNetwork define's udp version (udp4, udp6, udp) for client.
+// WithNetwork define's tcp version (udp4, udp6, tcp) for client.
 func WithNetwork(net string) NetOpt {
 	return NetOpt{net: net}
 }

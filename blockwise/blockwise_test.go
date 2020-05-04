@@ -91,7 +91,7 @@ func (r *request) Remove(id message.OptionID) {
 	}
 }
 
-func (r *request) SetOptions(in message.Options) {
+func (r *request) ResetTo(in message.Options) {
 	r.options = r.options[:0]
 	for _, o := range in {
 		v := make([]byte, len(o.Value))
@@ -138,13 +138,13 @@ func (r *request) PayloadSize() (int64, error) {
 	return size, nil
 }
 
-func acquireRequest(ctx context.Context) Message {
+func acquireMessage(ctx context.Context) Message {
 	return &request{
 		ctx: ctx,
 	}
 }
 
-func releaseRequest(r Message) {
+func releaseMessage(r Message) {
 	req := r.(*request)
 	req.options = nil
 	req.token = nil
@@ -161,9 +161,9 @@ func makeDo(t *testing.T, sender, receiver *BlockWise, senderMaxSZX SZX, senderM
 			roReq = req
 			for {
 				var resp Message
-				receiverResp := newResponseWriter(acquireRequest(roReq.Context()))
+				receiverResp := newResponseWriter(acquireMessage(roReq.Context()))
 				receiver.Handle(receiverResp, roReq, senderMaxSZX, senderMaxMessageSize, next)
-				senderResp := newResponseWriter(acquireRequest(roReq.Context()))
+				senderResp := newResponseWriter(acquireMessage(roReq.Context()))
 				sender.Handle(senderResp, receiverResp.Message(), receiverMaxSZX, receiverMaxMessageSize, func(w ResponseWriter, r Message) {
 					resp = r
 				})
@@ -182,8 +182,8 @@ func makeDo(t *testing.T, sender, receiver *BlockWise, senderMaxSZX SZX, senderM
 }
 
 func TestBlockWise_Do(t *testing.T) {
-	sender := NewBlockWise(acquireRequest, releaseRequest, time.Second*10, func(err error) { t.Log(err) }, true, nil)
-	receiver := NewBlockWise(acquireRequest, releaseRequest, time.Second*10, func(err error) { t.Log(err) }, true, nil)
+	sender := NewBlockWise(acquireMessage, releaseMessage, time.Second*10, func(err error) { t.Log(err) }, true, nil)
+	receiver := NewBlockWise(acquireMessage, releaseMessage, time.Second*10, func(err error) { t.Log(err) }, true, nil)
 	type args struct {
 		r              Message
 		szx            SZX
@@ -413,12 +413,12 @@ func makeWriteReq(t *testing.T, sender, receiver *BlockWise, senderMaxSZX SZX, s
 			var roReq Message
 			roReq = req
 			for {
-				receiverResp := newResponseWriter(acquireRequest(roReq.Context()))
+				receiverResp := newResponseWriter(acquireMessage(roReq.Context()))
 				receiver.Handle(receiverResp, roReq, senderMaxSZX, senderMaxMessageSize, func(w ResponseWriter, r Message) {
 					defer close(c)
 					next(w, r)
 				})
-				senderResp := newResponseWriter(acquireRequest(roReq.Context()))
+				senderResp := newResponseWriter(acquireMessage(roReq.Context()))
 				sender.Handle(senderResp, receiverResp.Message(), receiverMaxSZX, receiverMaxMessageSize, func(w ResponseWriter, r Message) {
 				})
 				select {
@@ -437,8 +437,8 @@ func makeWriteReq(t *testing.T, sender, receiver *BlockWise, senderMaxSZX SZX, s
 }
 
 func TestBlockWise_WriteRequest(t *testing.T) {
-	sender := NewBlockWise(acquireRequest, releaseRequest, time.Second*10, func(err error) { t.Log(err) }, true, nil)
-	receiver := NewBlockWise(acquireRequest, releaseRequest, time.Second*10, func(err error) { t.Log(err) }, true, nil)
+	sender := NewBlockWise(acquireMessage, releaseMessage, time.Second*10, func(err error) { t.Log(err) }, true, nil)
+	receiver := NewBlockWise(acquireMessage, releaseMessage, time.Second*10, func(err error) { t.Log(err) }, true, nil)
 	type args struct {
 		r              Message
 		szx            SZX

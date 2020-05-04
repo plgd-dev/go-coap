@@ -35,13 +35,13 @@ type ErrorFunc = func(error)
 
 type GoPoolFunc = func(func() error) error
 
-type BlockwiseFactoryFunc = func(getSendedRequestFromOutside func(token message.Token) (blockwise.Message, bool)) *blockwise.BlockWise
+type BlockwiseFactoryFunc = func(getSendedRequest func(token message.Token) (blockwise.Message, bool)) *blockwise.BlockWise
 
+type OnNewClientConnFunc = func(cc *ClientConn)
 
 var defaultServerOptions = serverOptions{
 	ctx:            context.Background(),
 	maxMessageSize: 64 * 1024,
-	heartBeat:      time.Millisecond * 100,
 	handler: func(w *ResponseWriter, r *Message) {
 		w.SetResponse(codes.NotFound, message.TextPlain, nil)
 	},
@@ -57,43 +57,37 @@ var defaultServerOptions = serverOptions{
 		}()
 		return nil
 	},
-	keepalive:    keepalive.New(),
-	net:          "udp",
-	blockwiseSZX: blockwise.SZX1024,
-	blockWiseFactory: func(getSendedRequestFromOutside func(token message.Token) (blockwise.Message, bool)) *blockwise.BlockWise {
-		return blockwise.NewBlockWise(func(ctx context.Context) blockwise.Message {
-			return AcquireRequest(ctx)
-		}, func(m blockwise.Message) {
-			ReleaseRequest(m.(*Message))
-		}, time.Second*3, func(err error) {
-			fmt.Println(err)
-		}, false, getSendedRequestFromOutside)
-	},
+	keepalive:                keepalive.New(),
+	blockwiseEnable:          true,
+	blockwiseSZX:             blockwise.SZX1024,
+	blockwiseTransferTimeout: time.Second * 3,
+	onNewClientConn:            func(cc *ClientConn) {},
 }
 
 type serverOptions struct {
-	ctx              context.Context
-	maxMessageSize   int
-	heartBeat        time.Duration
-	handler          HandlerFunc
-	errors           ErrorFunc
-	goPool           GoPoolFunc
-	keepalive        *keepalive.KeepAlive
-	net              string
-	blockwiseSZX     blockwise.SZX
-	blockWiseFactory BlockwiseFactoryFunc
+	ctx                      context.Context
+	maxMessageSize           int
+	handler                  HandlerFunc
+	errors                   ErrorFunc
+	goPool                   GoPoolFunc
+	keepalive                *keepalive.KeepAlive
+	net                      string
+	blockwiseSZX             blockwise.SZX
+	blockwiseEnable          bool
+	blockwiseTransferTimeout time.Duration
+	onNewClientConn            OnNewClientConnFunc
 }
 
 type Server struct {
-	maxMessageSize   int
-	heartBeat        time.Duration
-	handler          HandlerFunc
-	errors           ErrorFunc
-	goPool           GoPoolFunc
-	keepalive        *keepalive.KeepAlive
-	blockwiseSZX     blockwise.SZX
-	blockWiseFactory BlockwiseFactoryFunc
-	net              string
+	maxMessageSize           int
+	handler                  HandlerFunc
+	errors                   ErrorFunc
+	goPool                   GoPoolFunc
+	keepalive                *keepalive.KeepAlive
+	blockwiseSZX             blockwise.SZX
+	blockwiseEnable          bool
+	blockwiseTransferTimeout time.Duration
+	onNewClientConn            OnNewClientConnFunc
 
 	conns             map[string]*ClientConn
 	connsMutex        sync.Mutex
@@ -128,21 +122,20 @@ func NewServer(opt ...ServerOption) *Server {
 	serverStartedChan := make(chan struct{})
 
 	return &Server{
-		ctx:               ctx,
-		cancel:            cancel,
-		handler:           opts.handler,
-		maxMessageSize:    opts.maxMessageSize,
-		heartBeat:         opts.heartBeat,
-		errors:            opts.errors,
-		goPool:            opts.goPool,
-		net:               opts.net,
-		keepalive:         opts.keepalive,
-		blockwiseSZX:      opts.blockwiseSZX,
-		blockWiseFactory:  opts.blockWiseFactory,
-		multicastHandler:  NewHandlerContainer(),
-		multicastRequests: &sync.Map{},
-		msgID:             msgID,
-		serverStartedChan: serverStartedChan,
+		ctx:                      ctx,
+		cancel:                   cancel,
+		handler:                  opts.handler,
+		maxMessageSize:           opts.maxMessageSize,
+		errors:                   opts.errors,
+		goPool:                   opts.goPool,
+		keepalive:                opts.keepalive,
+		blockwiseSZX:             opts.blockwiseSZX,
+		blockwiseEnable:          opts.blockwiseEnable,
+		blockwiseTransferTimeout: opts.blockwiseTransferTimeout,
+		multicastHandler:         NewHandlerContainer(),
+		multicastRequests:        &sync.Map{},
+		msgID:                    msgID,
+		serverStartedChan:        serverStartedChan,
 
 		conns: make(map[string]*ClientConn),
 	}
@@ -181,6 +174,9 @@ func (s *Server) Serve(l *coapNet.UDPConn) error {
 		buf = buf[:n]
 		cc, created := s.getOrCreateClientConn(l, raddr)
 		if created {
+			if s.onNewClientConn != nil {
+				s.onNewClientConn(cc)
+			}
 			if s.keepalive != nil {
 				wg.Add(1)
 				go func() {
@@ -238,16 +234,18 @@ func (s *Server) getOrCreateClientConn(UDPConn *coapNet.UDPConn, raddr *net.UDPA
 	if cc == nil {
 		created = true
 		var blockWise *blockwise.BlockWise
-		if s.blockWiseFactory != nil {
-			blockWise = s.blockWiseFactory(
-				func(token message.Token) (blockwise.Message, bool) {
-					msg, ok := s.multicastRequests.Load(token.String())
-					if !ok {
-						return nil, ok
-					}
-					return msg.(blockwise.Message), ok
-				},
-			)
+		if s.blockwiseEnable {
+			blockWise = blockwise.NewBlockWise(func(ctx context.Context) blockwise.Message {
+				return AcquireMessage(ctx)
+			}, func(m blockwise.Message) {
+				ReleaseMessage(m.(*Message))
+			}, s.blockwiseTransferTimeout, s.errors, false, func(token message.Token) (blockwise.Message, bool) {
+				msg, ok := s.multicastRequests.Load(token.String())
+				if !ok {
+					return nil, ok
+				}
+				return msg.(blockwise.Message), ok
+			})
 		}
 		obsHandler := NewHandlerContainer()
 		cc = NewClientConn(
@@ -296,7 +294,7 @@ func (s *Server) Discover(ctx context.Context, multicastAddr, path string, recei
 		return fmt.Errorf("cannot create discover request: %w", err)
 	}
 	req.SetMessageID(s.getMID())
-	defer ReleaseRequest(req)
+	defer ReleaseMessage(req)
 	return s.DiscoveryRequest(req, multicastAddr, receiverFunc, opts...)
 }
 
@@ -310,7 +308,11 @@ func (s *Server) DiscoveryRequest(req *Message, multicastAddr string, receiverFu
 	for _, o := range opts {
 		o.apply(&cfg)
 	}
-	addr, err := net.ResolveUDPAddr(s.net, multicastAddr)
+	c := s.conn()
+	if c == nil {
+		return fmt.Errorf("server doesn't serve connection")
+	}
+	addr, err := net.ResolveUDPAddr(c.Network(), multicastAddr)
 	if err != nil {
 		return fmt.Errorf("cannot resolve address: %w", err)
 	}
@@ -320,10 +322,6 @@ func (s *Server) DiscoveryRequest(req *Message, multicastAddr string, receiverFu
 	data, err := req.Marshal()
 	if err != nil {
 		return fmt.Errorf("cannot marshal req: %w", err)
-	}
-	c := s.conn()
-	if c == nil {
-		return fmt.Errorf("server doesn't serve connection")
 	}
 	s.multicastRequests.Store(token.String(), req)
 	defer s.multicastRequests.Delete(token.String())

@@ -17,7 +17,7 @@ type ResponseWriter struct {
 
 func NewResponseWriter(response *Message, cc *ClientConn, requestOptions message.Options) *ResponseWriter {
 	var noResponseValue *uint32
-	v, err := requestOptions.GetOptionUint32(message.NoResponse)
+	v, err := requestOptions.GetUint32(message.NoResponse)
 	if err == nil {
 		noResponseValue = &v
 	}
@@ -38,7 +38,7 @@ func (r *ResponseWriter) SetResponse(code codes.Code, contentFormat message.Medi
 	}
 
 	r.response.SetCode(code)
-	r.response.SetOptions(opts)
+	r.response.ResetTo(opts)
 	if d != nil {
 		r.response.SetContentFormat(contentFormat)
 		r.response.SetPayload(d)

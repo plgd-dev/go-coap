@@ -85,7 +85,7 @@ type Message interface {
 	SetToken(message.Token)
 	SetOptionUint32(id message.OptionID, value uint32)
 	Remove(id message.OptionID)
-	SetOptions(message.Options)
+	ResetTo(message.Options)
 	SetPayload(r io.ReadSeeker)
 }
 
@@ -205,7 +205,7 @@ func (b *BlockWise) Do(r Message, maxSzx SZX, maxMessageSize int, do func(req Me
 	defer b.releaseMessage(req)
 	req.SetCode(r.Code())
 	req.SetToken(r.Token())
-	req.SetOptions(r.Options())
+	req.ResetTo(r.Options())
 	tokenStr := r.Token().String()
 	b.bwSendedRequest.Store(tokenStr, req)
 	defer b.bwSendedRequest.Delete(tokenStr)
@@ -290,7 +290,7 @@ func NewWriteRequestResponse(request Message, acquireMessage func(context.Contex
 	req := acquireMessage(request.Context())
 	req.SetCode(request.Code())
 	req.SetToken(request.Token())
-	req.SetOptions(request.Options())
+	req.ResetTo(request.Options())
 	req.SetPayload(request.Payload())
 	return &writeRequestResponse{
 		request:        req,
@@ -312,7 +312,7 @@ func (b *BlockWise) WriteRequest(request Message, maxSZX SZX, maxMessageSize int
 	req := b.acquireMessage(request.Context())
 	req.SetCode(request.Code())
 	req.SetToken(request.Token())
-	req.SetOptions(request.Options())
+	req.ResetTo(request.Options())
 	tokenStr := request.Token().String()
 	b.bwSendedRequest.Store(tokenStr, req)
 	startSendingMessageBlock, err := EncodeBlockOption(maxSZX, 0, true)
@@ -360,7 +360,7 @@ func (b *BlockWise) handleSendingMessage(w ResponseWriter, sendingMessage Messag
 	}
 	sendMessage := b.acquireMessage(sendingMessage.Context())
 	sendMessage.SetCode(sendingMessage.Code())
-	sendMessage.SetOptions(sendingMessage.Options())
+	sendMessage.ResetTo(sendingMessage.Options())
 	sendMessage.SetToken(token)
 	payloadSize, err := sendingMessage.PayloadSize()
 	if err != nil {
@@ -545,7 +545,7 @@ func (b *BlockWise) startSendingMessage(w ResponseWriter, maxSZX SZX, maxMessage
 		return nil
 	}
 	sendingMessage := b.acquireMessage(w.Message().Context())
-	sendingMessage.SetOptions(w.Message().Options())
+	sendingMessage.ResetTo(w.Message().Options())
 	sendingMessage.SetPayload(w.Message().Payload())
 	sendingMessage.SetCode(w.Message().Code())
 	sendingMessage.SetToken(w.Message().Token())
@@ -611,7 +611,7 @@ func (b *BlockWise) processReceivedMessage(w ResponseWriter, r Message, maxSzx S
 		bwSendedRequest := b.acquireMessage(sendedRequest.Context())
 		bwSendedRequest.SetCode(sendedRequest.Code())
 		bwSendedRequest.SetToken(token)
-		bwSendedRequest.SetOptions(sendedRequest.Options())
+		bwSendedRequest.ResetTo(sendedRequest.Options())
 		b.bwSendedRequest.Store(token.String(), bwSendedRequest)
 	}
 
@@ -632,7 +632,7 @@ func (b *BlockWise) processReceivedMessage(w ResponseWriter, r Message, maxSzx S
 			return nil
 		}
 		cachedReceivedMessage := b.acquireMessage(r.Context())
-		cachedReceivedMessage.SetOptions(r.Options())
+		cachedReceivedMessage.ResetTo(r.Options())
 		cachedReceivedMessage.SetToken(r.Token())
 		cachedReceivedMessageGuard = newRequestGuard(cachedReceivedMessage)
 		err := b.receivingMessagesCache.Add(tokenStr, cachedReceivedMessageGuard, cache.DefaultExpiration)
@@ -713,7 +713,7 @@ func (b *BlockWise) processReceivedMessage(w ResponseWriter, r Message, maxSzx S
 	sendMessage.SetToken(token)
 	sendMessage.SetCode(codes.Continue)
 	if sendedRequest != nil {
-		sendMessage.SetOptions(sendedRequest.Options())
+		sendMessage.ResetTo(sendedRequest.Options())
 		sendMessage.SetCode(sendedRequest.Code())
 		sendMessage.Remove(message.Observe)
 	}

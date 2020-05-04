@@ -1,4 +1,4 @@
-package tcp
+package tcpold
 
 import (
 	"bytes"
@@ -7,8 +7,8 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"github.com/go-ocf/go-coap/v2/blockwise"
 	"github.com/go-ocf/go-coap/v2/message"
+
 	"github.com/go-ocf/go-coap/v2/message/codes"
 	coapTCP "github.com/go-ocf/go-coap/v2/message/tcp"
 	coapNet "github.com/go-ocf/go-coap/v2/net"
@@ -26,13 +26,9 @@ type Session struct {
 	disableTCPSignalMessageCSM      bool
 	goPool                          GoPoolFunc
 
-	sequence              uint64
-	tokenHandlerContainer *HandlerContainer
-	midHandlerContainer   *HandlerContainer
-	handler               HandlerFunc
-
-	blockwiseSZX blockwise.SZX
-	blockWise    *blockwise.BlockWise
+	sequence    uint64
+	tokenHander *TokenHandler
+	handler     HandlerFunc
 
 	onClose []EventFunc
 	onRun   []EventFunc
@@ -47,27 +43,22 @@ func NewSession(
 	connection *coapNet.Conn,
 	handler HandlerFunc,
 	maxMessageSize int,
-	goPool GoPoolFunc,
-	blockwiseSZX blockwise.SZX,
-	blockWise *blockwise.BlockWise,
+
 	disablePeerTCPSignalMessageCSMs bool,
 	disableTCPSignalMessageCSM bool,
+	goPool GoPoolFunc,
 ) *Session {
 	ctx, cancel := context.WithCancel(ctx)
-
 	return &Session{
 		ctx:                             ctx,
 		cancel:                          cancel,
 		connection:                      connection,
 		handler:                         handler,
 		maxMessageSize:                  maxMessageSize,
-		tokenHandlerContainer:           NewHandlerContainer(),
-		midHandlerContainer:             NewHandlerContainer(),
-		goPool:                          goPool,
-		blockWise:                       blockWise,
-		blockwiseSZX:                    blockwiseSZX,
+		tokenHander:                     NewTokenHandler(),
 		disablePeerTCPSignalMessageCSMs: disablePeerTCPSignalMessageCSMs,
 		disableTCPSignalMessageCSM:      disableTCPSignalMessageCSM,
+		goPool:                          goPool,
 	}
 }
 
@@ -97,6 +88,14 @@ func (s *Session) Context() context.Context {
 	return s.ctx
 }
 
+func (s *Session) Handle(w *ResponseWriter, r *Request) {
+	s.handleSignals(w, r)
+}
+
+func (s *Session) TokenHandler() *TokenHandler {
+	return s.tokenHander
+}
+
 func (s *Session) PeerMaxMessageSize() uint32 {
 	return atomic.LoadUint32(&s.peerMaxMessageSize)
 }
@@ -105,32 +104,7 @@ func (s *Session) PeerBlockWiseTransferEnabled() bool {
 	return atomic.LoadUint32(&s.peerBlockWiseTranferEnabled) == 1
 }
 
-func (s *Session) handleBlockwise(w *ResponseWriter, r *Message) {
-	if s.blockWise != nil {
-		bwr := bwResponseWriter{
-			w: w,
-		}
-		s.blockWise.Handle(&bwr, r, s.blockwiseSZX, s.maxMessageSize, func(bw blockwise.ResponseWriter, br blockwise.Message) {
-			h, err := s.tokenHandlerContainer.Pop(r.Token())
-			w := bw.(*bwResponseWriter).w
-			r := br.(*Message)
-			if err == nil {
-				h(w, r)
-				return
-			}
-			s.handler(w, r)
-		})
-		return
-	}
-	h, err := s.tokenHandlerContainer.Pop(r.Token())
-	if err == nil {
-		h(w, r)
-		return
-	}
-	s.handler(w, r)
-}
-
-func (s *Session) handleSignals(w *ResponseWriter, r *Message) {
+func (s *Session) handleSignals(w *ResponseWriter, r *Request) {
 	switch r.Code() {
 	case codes.CSM:
 		if s.disablePeerTCPSignalMessageCSMs {
@@ -139,8 +113,8 @@ func (s *Session) handleSignals(w *ResponseWriter, r *Message) {
 		if size, err := r.GetOptionUint32(coapTCP.MaxMessageSize); err == nil {
 			atomic.StoreUint32(&s.peerMaxMessageSize, size)
 		}
-		if r.HasOption(coapTCP.BlockWiseTransfer) {
-			atomic.StoreUint32(&s.peerBlockWiseTranferEnabled, 1)
+		if r.hasBlockWiseOption() {
+			atomic.StoreUint32(&s.peerMaxMessageSize, 1)
 		}
 		return
 	case codes.Ping:
@@ -160,28 +134,7 @@ func (s *Session) handleSignals(w *ResponseWriter, r *Message) {
 		}
 		return
 	}
-	s.handleBlockwise(w, r)
-}
-
-type bwResponseWriter struct {
-	w *ResponseWriter
-}
-
-func (b *bwResponseWriter) Message() blockwise.Message {
-	return b.w.response
-}
-
-func (b *bwResponseWriter) SetMessage(m blockwise.Message) {
-	ReleaseMessage(b.w.response)
-	b.w.response = m.(*Message)
-}
-
-func (s *Session) Handle(w *ResponseWriter, r *Message) {
-	s.handleSignals(w, r)
-}
-
-func (s *Session) TokenHandler() *HandlerContainer {
-	return s.tokenHandlerContainer
+	s.tokenHander.Handle(w, r, s.handler)
 }
 
 func (s *Session) processBuffer(buffer *bytes.Buffer, cc *ClientConn) error {
@@ -213,19 +166,19 @@ func (s *Session) processBuffer(buffer *bytes.Buffer, cc *ClientConn) error {
 		}
 		req.sequence = s.Sequence()
 		s.goPool(func() error {
-			origResp := AcquireMessage(s.ctx)
-			origResp.SetToken(req.Token())
-			w := NewResponseWriter(origResp, cc, req.Options())
+			resp := AcquireMessage(s.ctx)
+			defer ReleaseMessage(resp)
+			resp.SetToken(req.Token())
+			w := NewResponseWriter(resp)
 			s.Handle(w, req)
-			defer ReleaseMessage(w.response)
 			if !req.IsHijacked() {
 				ReleaseMessage(req)
 			}
-			if w.response.WantToSend() {
-				err := s.WriteRequest(w.response)
+			if w.wantWrite() {
+				err := s.WriteRequest(resp)
 				if err != nil {
-					s.Close()
-					return fmt.Errorf("cannot write response: %w", err)
+					s.cancel()
+					return fmt.Errorf("cannot write request: %v", err)
 				}
 			}
 			return nil
@@ -234,7 +187,7 @@ func (s *Session) processBuffer(buffer *bytes.Buffer, cc *ClientConn) error {
 	return nil
 }
 
-func (s *Session) WriteRequest(req *Message) error {
+func (s *Session) WriteRequest(req *Request) error {
 	data, err := req.Marshal()
 	if err != nil {
 		return fmt.Errorf("cannot marshal: %v", err)
@@ -254,6 +207,44 @@ func (s *Session) sendCSM() error {
 	return s.WriteRequest(req)
 }
 
-func (s *Session) sendPong(w *ResponseWriter, r *Message) {
-	w.SetResponse(codes.Pong, message.TextPlain, nil)
+func (s *Session) sendPong(w *ResponseWriter, r *Request) {
+	w.SetCode(codes.Pong)
+}
+
+func (s *Session) Run() (err error) {
+	defer func() {
+		err1 := s.connection.Close()
+		if err == nil {
+			err = err1
+		}
+		for _, f := range s.onClose {
+			f()
+		}
+	}()
+	s.wgClose.Add(1)
+	defer s.wgClose.Done()
+	if !s.disableTCPSignalMessageCSM {
+		err := s.sendCSM()
+		if err != nil {
+			return err
+		}
+	}
+	for _, f := range s.onRun {
+		f()
+	}
+	buffer := bytes.NewBuffer(make([]byte, 0, 1024))
+	readBuf := make([]byte, 1024)
+	for {
+		err = s.processBuffer(buffer)
+		if err != nil {
+			return err
+		}
+		readLen, err := s.connection.ReadWithContext(s.ctx, readBuf)
+		if err != nil {
+			return err
+		}
+		if readLen > 0 {
+			buffer.Write(readBuf[:readLen])
+		}
+	}
 }

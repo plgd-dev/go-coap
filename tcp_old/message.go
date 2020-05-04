@@ -1,4 +1,4 @@
-package udp
+package tcpold
 
 import (
 	"bytes"

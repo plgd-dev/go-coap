@@ -61,7 +61,7 @@ func TestETAG(t *testing.T) {
 	}
 	buf := make([]byte, 1024)
 	newOpts := make(Options, 0, len(opts))
-	n, newOpts, err := newOpts.SetOptions(buf, opts)
+	n, newOpts, err := newOpts.ResetTo(buf, opts)
 	require.NoError(t, err)
 	require.Equal(t, opts, newOpts)
 	require.Equal(t, 11, n)

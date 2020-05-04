@@ -39,33 +39,27 @@ var defaultDialOptions = dialOptions{
 		}()
 		return nil
 	},
-	dialer:       &net.Dialer{Timeout: time.Second * 3},
-	keepalive:    keepalive.New(),
-	net:          "udp",
-	blockwiseSZX: blockwise.SZX1024,
-	blockWiseFactory: func(getSendedRequestFromOutside func(token message.Token) (blockwise.Message, bool)) *blockwise.BlockWise {
-		return blockwise.NewBlockWise(func(ctx context.Context) blockwise.Message {
-			return AcquireRequest(ctx)
-		}, func(m blockwise.Message) {
-			ReleaseRequest(m.(*Message))
-		}, time.Second*3, func(err error) {
-			fmt.Println(err)
-		}, false, getSendedRequestFromOutside)
-	},
+	dialer:                   &net.Dialer{Timeout: time.Second * 3},
+	keepalive:                keepalive.New(),
+	net:                      "udp",
+	blockwiseSZX:             blockwise.SZX1024,
+	blockwiseEnable:          true,
+	blockwiseTransferTimeout: time.Second * 3,
 }
 
 type dialOptions struct {
-	ctx              context.Context
-	maxMessageSize   int
-	heartBeat        time.Duration
-	handler          HandlerFunc
-	errors           ErrorFunc
-	goPool           GoPoolFunc
-	dialer           *net.Dialer
-	keepalive        *keepalive.KeepAlive
-	net              string
-	blockwiseSZX     blockwise.SZX
-	blockWiseFactory BlockwiseFactoryFunc
+	ctx                      context.Context
+	maxMessageSize           int
+	heartBeat                time.Duration
+	handler                  HandlerFunc
+	errors                   ErrorFunc
+	goPool                   GoPoolFunc
+	dialer                   *net.Dialer
+	keepalive                *keepalive.KeepAlive
+	net                      string
+	blockwiseSZX             blockwise.SZX
+	blockwiseEnable          bool
+	blockwiseTransferTimeout time.Duration
 }
 
 // A DialOption sets options such as credentials, keepalive parameters, etc.
@@ -103,21 +97,24 @@ func Dial(target string, opts ...DialOption) (*ClientConn, error) {
 	}
 	observatioRequests := &sync.Map{}
 	var blockWise *blockwise.BlockWise
-	if cfg.blockWiseFactory != nil {
-		blockWise = cfg.blockWiseFactory(
-			func(token message.Token) (blockwise.Message, bool) {
-				msg, ok := observatioRequests.Load(token.String())
-				if !ok {
-					return nil, ok
-				}
-				return msg.(blockwise.Message), ok
-			},
+	if cfg.blockwiseEnable {
+		blockWise = blockwise.NewBlockWise(func(ctx context.Context) blockwise.Message {
+			return AcquireMessage(ctx)
+		}, func(m blockwise.Message) {
+			ReleaseMessage(m.(*Message))
+		}, cfg.blockwiseTransferTimeout, cfg.errors, false, func(token message.Token) (blockwise.Message, bool) {
+			msg, ok := observatioRequests.Load(token.String())
+			if !ok {
+				return nil, ok
+			}
+			return msg.(blockwise.Message), ok
+		},
 		)
 	}
 
 	observationTokenHandler := NewHandlerContainer()
 
-	l := coapNet.NewUDPConn(conn, coapNet.WithHeartBeat(cfg.heartBeat), coapNet.WithErrors(cfg.errors))
+	l := coapNet.NewUDPConn(cfg.net, conn, coapNet.WithHeartBeat(cfg.heartBeat), coapNet.WithErrors(cfg.errors))
 	cc := NewClientConn(NewSession(cfg.ctx,
 		l,
 		addr,
@@ -249,10 +246,10 @@ func newCommonRequest(ctx context.Context, code codes.Code, path string, opts ..
 	if err != nil {
 		return nil, fmt.Errorf("cannot get token: %w", err)
 	}
-	req := AcquireRequest(ctx)
+	req := AcquireMessage(ctx)
 	req.SetCode(code)
 	req.SetToken(token)
-	req.SetOptions(opts)
+	req.ResetTo(opts)
 	req.SetPath(path)
 	req.SetType(coapUDP.NonConfirmable)
 	return req, nil
@@ -276,7 +273,7 @@ func (cc *ClientConn) Get(ctx context.Context, path string, opts ...message.Opti
 	if err != nil {
 		return nil, fmt.Errorf("cannot create get request: %w", err)
 	}
-	defer ReleaseRequest(req)
+	defer ReleaseMessage(req)
 	return cc.Do(req)
 }
 
@@ -309,11 +306,11 @@ func NewPostRequest(ctx context.Context, path string, contentFormat message.Medi
 //
 // If payload is nil then content format is not used.
 func (cc *ClientConn) Post(ctx context.Context, path string, contentFormat message.MediaType, payload io.ReadSeeker, opts ...message.Option) (*Message, error) {
-	req, err := NewPostRequest(ctx, path, contentFormat, payload, queries...)
+	req, err := NewPostRequest(ctx, path, contentFormat, payload, opts...)
 	if err != nil {
 		return nil, fmt.Errorf("cannot create post request: %w", err)
 	}
-	defer ReleaseRequest(req)
+	defer ReleaseMessage(req)
 	return cc.Do(req)
 }
 
@@ -347,19 +344,19 @@ func (cc *ClientConn) Put(ctx context.Context, path string, contentFormat messag
 	if err != nil {
 		return nil, fmt.Errorf("cannot create put request: %w", err)
 	}
-	defer ReleaseRequest(req)
+	defer ReleaseMessage(req)
 	return cc.Do(req)
 }
 
 // Delete deletes the resource identified by the request path.
 //
 // Use ctx to set timeout.
-func (cc *ClientConn) Delete(ctx context.Context, path string) (*Message, error) {
-	req, err := newCommonRequest(ctx, codes.DELETE, path)
+func (cc *ClientConn) Delete(ctx context.Context, path string, opts ...message.Option) (*Message, error) {
+	req, err := newCommonRequest(ctx, codes.DELETE, path, opts...)
 	if err != nil {
 		return nil, fmt.Errorf("cannot create delete request: %w", err)
 	}
-	defer ReleaseRequest(req)
+	defer ReleaseMessage(req)
 	return cc.Do(req)
 }
 
@@ -374,8 +371,8 @@ func (cc *ClientConn) Context() context.Context {
 //
 // Use ctx to set timeout.
 func (cc *ClientConn) Ping(ctx context.Context) error {
-	req := AcquireRequest(ctx)
-	defer ReleaseRequest(req)
+	req := AcquireMessage(ctx)
+	defer ReleaseMessage(req)
 	req.SetType(coapUDP.Confirmable)
 	req.SetCode(codes.Empty)
 	req.SetMessageID(cc.session.getMID())
@@ -383,7 +380,7 @@ func (cc *ClientConn) Ping(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	defer ReleaseRequest(resp)
+	defer ReleaseMessage(resp)
 	if resp.Type() == coapUDP.Reset || resp.Type() == coapUDP.Acknowledgement {
 		return nil
 	}
