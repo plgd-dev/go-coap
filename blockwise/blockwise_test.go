@@ -91,7 +91,7 @@ func (r *request) Remove(id message.OptionID) {
 	}
 }
 
-func (r *request) ResetTo(in message.Options) {
+func (r *request) ResetOptionsTo(in message.Options) {
 	r.options = r.options[:0]
 	for _, o := range in {
 		v := make([]byte, len(o.Value))
@@ -111,7 +111,7 @@ func (r *request) SetPayload(p io.ReadSeeker) {
 	r.payload = p
 }
 
-func (r *request) Payload() io.ReadSeeker {
+func (r *request) Body() io.ReadSeeker {
 	return r.payload
 }
 

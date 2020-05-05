@@ -472,10 +472,10 @@ func (options *Options) Unmarshal(data []byte, optionDefs map[OptionID]OptionDef
 	return processed, nil
 }
 
-// ResetTo reset's options to in options.
+// ResetOptionsTo reset's options to in options.
 //
 // Return's modified options, number of used buf bytes and error if occurs.
-func (options Options) ResetTo(buf []byte, in Options) (Options, int, error) {
+func (options Options) ResetOptionsTo(buf []byte, in Options) (Options, int, error) {
 	opts := options[:0]
 	used := 0
 	for idx, o := range in {

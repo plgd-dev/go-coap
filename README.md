@@ -20,7 +20,7 @@ Features supported:
 [coap-block-wise-transfers]: https://tools.ietf.org/html/rfc7959
 [coap-observe]: https://tools.ietf.org/html/rfc7641
 [coap-noresponse]: https://tools.ietf.org/html/rfc7967
-[pion-dtls]: https://github.com/pion/dtls
+[pion-dtls]: https://github.com/pion/dtls/v2
 
 ## Samples
 
@@ -86,7 +86,7 @@ Features supported:
 			log.Fatalf("Error sending request: %v", err)
 		}
 
-		log.Printf("Response payload: %v", resp.Payload())
+		log.Printf("Response payload: %v", resp.Body())
 	}
 ```
 

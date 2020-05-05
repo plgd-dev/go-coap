@@ -65,13 +65,13 @@ func TestClientConn_Get(t *testing.T) {
 	defer wg.Wait()
 
 	m := mux.NewServeMux()
-	m.Handle("/a", mux.HandlerFunc(func(w mux.ResponseWriter, r *mux.Message) {
+	m.Handle("/a", mux.HandlerFunc(func(w mux.ResponseWriter, r *message.Message) {
 		assert.Equal(t, codes.GET, r.Code)
 		err := w.SetResponse(codes.BadRequest, message.TextPlain, bytes.NewReader(make([]byte, 5330)))
 		require.NoError(t, err)
 		require.NotEmpty(t, w.ClientConn())
 	}))
-	m.Handle("/b", mux.HandlerFunc(func(w mux.ResponseWriter, r *mux.Message) {
+	m.Handle("/b", mux.HandlerFunc(func(w mux.ResponseWriter, r *message.Message) {
 		assert.Equal(t, codes.GET, r.Code)
 		err := w.SetResponse(codes.Content, message.TextPlain, bytes.NewReader([]byte("b")))
 		require.NoError(t, err)
@@ -108,7 +108,7 @@ func TestClientConn_Get(t *testing.T) {
 				require.NoError(t, err)
 				require.Equal(t, *tt.wantContentFormat, ct)
 				buf := bytes.NewBuffer(nil)
-				_, err = buf.ReadFrom(got.Payload())
+				_, err = buf.ReadFrom(got.Body())
 				require.NoError(t, err)
 				require.Equal(t, tt.wantPayload, buf.Bytes())
 			}
@@ -173,7 +173,7 @@ func TestClientConn_Post(t *testing.T) {
 			defer wg.Wait()
 
 			m := mux.NewServeMux()
-			m.Handle("/a", mux.HandlerFunc(func(w mux.ResponseWriter, r *mux.Message) {
+			m.Handle("/a", mux.HandlerFunc(func(w mux.ResponseWriter, r *message.Message) {
 				assert.Equal(t, codes.POST, r.Code)
 				ct, err := r.Options.GetUint32(message.ContentFormat)
 				require.NoError(t, err)
@@ -186,7 +186,7 @@ func TestClientConn_Post(t *testing.T) {
 				require.NoError(t, err)
 				require.NotEmpty(t, w.ClientConn())
 			}))
-			m.Handle("/b", mux.HandlerFunc(func(w mux.ResponseWriter, r *mux.Message) {
+			m.Handle("/b", mux.HandlerFunc(func(w mux.ResponseWriter, r *message.Message) {
 				assert.Equal(t, codes.POST, r.Code)
 				ct, err := r.Options.GetUint32(message.ContentFormat)
 				require.NoError(t, err)
@@ -227,7 +227,7 @@ func TestClientConn_Post(t *testing.T) {
 				require.NoError(t, err)
 				require.Equal(t, *tt.wantContentFormat, ct)
 				buf := bytes.NewBuffer(nil)
-				_, err = buf.ReadFrom(got.Payload())
+				_, err = buf.ReadFrom(got.Body())
 				require.NoError(t, err)
 				require.Equal(t, tt.wantPayload, buf.Bytes())
 			}
@@ -292,7 +292,7 @@ func TestClientConn_Put(t *testing.T) {
 			defer wg.Wait()
 
 			m := mux.NewServeMux()
-			m.Handle("/a", mux.HandlerFunc(func(w mux.ResponseWriter, r *mux.Message) {
+			m.Handle("/a", mux.HandlerFunc(func(w mux.ResponseWriter, r *message.Message) {
 				assert.Equal(t, codes.PUT, r.Code)
 				ct, err := r.Options.GetUint32(message.ContentFormat)
 				require.NoError(t, err)
@@ -305,7 +305,7 @@ func TestClientConn_Put(t *testing.T) {
 				require.NoError(t, err)
 				require.NotEmpty(t, w.ClientConn())
 			}))
-			m.Handle("/b", mux.HandlerFunc(func(w mux.ResponseWriter, r *mux.Message) {
+			m.Handle("/b", mux.HandlerFunc(func(w mux.ResponseWriter, r *message.Message) {
 				assert.Equal(t, codes.PUT, r.Code)
 				ct, err := r.Options.GetUint32(message.ContentFormat)
 				require.NoError(t, err)
@@ -346,7 +346,7 @@ func TestClientConn_Put(t *testing.T) {
 				require.NoError(t, err)
 				require.Equal(t, *tt.wantContentFormat, ct)
 				buf := bytes.NewBuffer(nil)
-				_, err = buf.ReadFrom(got.Payload())
+				_, err = buf.ReadFrom(got.Body())
 				require.NoError(t, err)
 				require.Equal(t, tt.wantPayload, buf.Bytes())
 			}
@@ -401,13 +401,13 @@ func TestClientConn_Delete(t *testing.T) {
 	defer wg.Wait()
 
 	m := mux.NewServeMux()
-	m.Handle("/a", mux.HandlerFunc(func(w mux.ResponseWriter, r *mux.Message) {
+	m.Handle("/a", mux.HandlerFunc(func(w mux.ResponseWriter, r *message.Message) {
 		assert.Equal(t, codes.DELETE, r.Code)
 		err := w.SetResponse(codes.BadRequest, message.TextPlain, bytes.NewReader(make([]byte, 5330)))
 		require.NoError(t, err)
 		require.NotEmpty(t, w.ClientConn())
 	}))
-	m.Handle("/b", mux.HandlerFunc(func(w mux.ResponseWriter, r *mux.Message) {
+	m.Handle("/b", mux.HandlerFunc(func(w mux.ResponseWriter, r *message.Message) {
 		assert.Equal(t, codes.DELETE, r.Code)
 		err := w.SetResponse(codes.Deleted, message.TextPlain, bytes.NewReader([]byte("b")))
 		require.NoError(t, err)
@@ -444,7 +444,7 @@ func TestClientConn_Delete(t *testing.T) {
 				require.NoError(t, err)
 				require.Equal(t, *tt.wantContentFormat, ct)
 				buf := bytes.NewBuffer(nil)
-				_, err = buf.ReadFrom(got.Payload())
+				_, err = buf.ReadFrom(got.Body())
 				require.NoError(t, err)
 				require.Equal(t, tt.wantPayload, buf.Bytes())
 			}

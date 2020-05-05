@@ -13,15 +13,16 @@ import (
 	"github.com/go-ocf/go-coap/v2/message"
 
 	"github.com/go-ocf/go-coap/v2/message/codes"
-	coapUDP "github.com/go-ocf/go-coap/v2/message/udp"
 	coapNet "github.com/go-ocf/go-coap/v2/net"
+	udpMessage "github.com/go-ocf/go-coap/v2/udp/message"
+	"github.com/go-ocf/go-coap/v2/udp/message/pool"
 )
 
 var defaultDialOptions = dialOptions{
 	ctx:            context.Background(),
 	maxMessageSize: 64 * 1024,
 	heartBeat:      time.Millisecond * 100,
-	handler: func(w *ResponseWriter, r *Message) {
+	handler: func(w *ResponseWriter, r *pool.Message) {
 		switch r.Code() {
 		case codes.POST, codes.PUT, codes.GET, codes.DELETE:
 			w.SetResponse(codes.NotFound, message.TextPlain, nil)
@@ -99,9 +100,9 @@ func Dial(target string, opts ...DialOption) (*ClientConn, error) {
 	var blockWise *blockwise.BlockWise
 	if cfg.blockwiseEnable {
 		blockWise = blockwise.NewBlockWise(func(ctx context.Context) blockwise.Message {
-			return AcquireMessage(ctx)
+			return pool.AcquireMessage(ctx)
 		}, func(m blockwise.Message) {
-			ReleaseMessage(m.(*Message))
+			pool.ReleaseMessage(m.(*pool.Message))
 		}, cfg.blockwiseTransferTimeout, cfg.errors, false, func(token message.Token) (blockwise.Message, bool) {
 			msg, ok := observatioRequests.Load(token.String())
 			if !ok {
@@ -157,13 +158,13 @@ func (cc *ClientConn) Close() error {
 	return cc.session.Close()
 }
 
-func (cc *ClientConn) do(req *Message) (*Message, error) {
+func (cc *ClientConn) do(req *pool.Message) (*pool.Message, error) {
 	token := req.Token()
 	if token == nil {
 		return nil, fmt.Errorf("invalid token")
 	}
-	respChan := make(chan *Message, 1)
-	err := cc.session.TokenHandler().Insert(token, func(w *ResponseWriter, r *Message) {
+	respChan := make(chan *pool.Message, 1)
+	err := cc.session.TokenHandler().Insert(token, func(w *ResponseWriter, r *pool.Message) {
 		r.Hijack()
 		respChan <- r
 	})
@@ -177,10 +178,10 @@ func (cc *ClientConn) do(req *Message) (*Message, error) {
 	}
 
 	select {
-	case <-req.ctx.Done():
-		return nil, req.ctx.Err()
+	case <-req.Context().Done():
+		return nil, req.Context().Err()
 	case <-cc.session.Context().Done():
-		return nil, fmt.Errorf("connection was closed: %w", req.ctx.Err())
+		return nil, fmt.Errorf("connection was closed: %w", req.Context().Err())
 	case resp := <-respChan:
 		return resp, nil
 	}
@@ -192,33 +193,33 @@ func (cc *ClientConn) do(req *Message) (*Message, error) {
 // Any status code doesn't cause an error.
 //
 // Caller is responsible to release request and response.
-func (cc *ClientConn) Do(req *Message) (*Message, error) {
+func (cc *ClientConn) Do(req *pool.Message) (*pool.Message, error) {
 	if cc.session.blockWise == nil {
 		return cc.do(req)
 	}
 	bwresp, err := cc.session.blockWise.Do(req, cc.session.blockwiseSZX, cc.session.maxMessageSize, func(bwreq blockwise.Message) (blockwise.Message, error) {
-		return cc.do(bwreq.(*Message))
+		return cc.do(bwreq.(*pool.Message))
 	})
-	return bwresp.(*Message), err
+	return bwresp.(*pool.Message), err
 }
 
-func (cc *ClientConn) writeRequest(req *Message) error {
+func (cc *ClientConn) writeRequest(req *pool.Message) error {
 	return cc.session.WriteRequest(req)
 }
 
 // WriteRequest sends an coap request.
-func (cc *ClientConn) WriteRequest(req *Message) error {
+func (cc *ClientConn) WriteRequest(req *pool.Message) error {
 	if cc.session.blockWise == nil {
 		return cc.writeRequest(req)
 	}
 	return cc.session.blockWise.WriteRequest(req, cc.session.blockwiseSZX, cc.session.maxMessageSize, func(bwreq blockwise.Message) error {
-		return cc.writeRequest(bwreq.(*Message))
+		return cc.writeRequest(bwreq.(*pool.Message))
 	})
 }
 
-func (cc *ClientConn) doWithMID(req *Message) (*Message, error) {
-	respChan := make(chan *Message, 1)
-	err := cc.session.midHandlerContainer.Insert(req.MessageID(), func(w *ResponseWriter, r *Message) {
+func (cc *ClientConn) doWithMID(req *pool.Message) (*pool.Message, error) {
+	respChan := make(chan *pool.Message, 1)
+	err := cc.session.midHandlerContainer.Insert(req.MessageID(), func(w *ResponseWriter, r *pool.Message) {
 		r.Hijack()
 		respChan <- r
 	})
@@ -232,33 +233,33 @@ func (cc *ClientConn) doWithMID(req *Message) (*Message, error) {
 	}
 
 	select {
-	case <-req.ctx.Done():
-		return nil, req.ctx.Err()
+	case <-req.Context().Done():
+		return nil, req.Context().Err()
 	case <-cc.session.Context().Done():
-		return nil, fmt.Errorf("connection was closed: %w", req.ctx.Err())
+		return nil, fmt.Errorf("connection was closed: %w", req.Context().Err())
 	case resp := <-respChan:
 		return resp, nil
 	}
 }
 
-func newCommonRequest(ctx context.Context, code codes.Code, path string, opts ...message.Option) (*Message, error) {
+func newCommonRequest(ctx context.Context, code codes.Code, path string, opts ...message.Option) (*pool.Message, error) {
 	token, err := message.GetToken()
 	if err != nil {
 		return nil, fmt.Errorf("cannot get token: %w", err)
 	}
-	req := AcquireMessage(ctx)
+	req := pool.AcquireMessage(ctx)
 	req.SetCode(code)
 	req.SetToken(token)
-	req.ResetTo(opts)
+	req.ResetOptionsTo(opts)
 	req.SetPath(path)
-	req.SetType(coapUDP.NonConfirmable)
+	req.SetType(udpMessage.NonConfirmable)
 	return req, nil
 }
 
 // NewGetRequest creates get request.
 //
 // Use ctx to set timeout.
-func NewGetRequest(ctx context.Context, path string, opts ...message.Option) (*Message, error) {
+func NewGetRequest(ctx context.Context, path string, opts ...message.Option) (*pool.Message, error) {
 	return newCommonRequest(ctx, codes.GET, path, opts...)
 }
 
@@ -268,12 +269,13 @@ func NewGetRequest(ctx context.Context, path string, opts ...message.Option) (*M
 //
 // An error is returned if by failure to speak COAP (such as a network connectivity problem).
 // Any status code doesn't cause an error.
-func (cc *ClientConn) Get(ctx context.Context, path string, opts ...message.Option) (*Message, error) {
+func (cc *ClientConn) Get(ctx context.Context, path string, opts ...message.Option) (*pool.Message, error) {
 	req, err := NewGetRequest(ctx, path, opts...)
 	if err != nil {
 		return nil, fmt.Errorf("cannot create get request: %w", err)
 	}
-	defer ReleaseMessage(req)
+	req.SetMessageID(cc.session.getMID())
+	defer pool.ReleaseMessage(req)
 	return cc.Do(req)
 }
 
@@ -285,7 +287,7 @@ func (cc *ClientConn) Get(ctx context.Context, path string, opts ...message.Opti
 // Any status code doesn't cause an error.
 //
 // If payload is nil then content format is not used.
-func NewPostRequest(ctx context.Context, path string, contentFormat message.MediaType, payload io.ReadSeeker, opts ...message.Option) (*Message, error) {
+func NewPostRequest(ctx context.Context, path string, contentFormat message.MediaType, payload io.ReadSeeker, opts ...message.Option) (*pool.Message, error) {
 	req, err := newCommonRequest(ctx, codes.POST, path, opts...)
 	if err != nil {
 		return nil, err
@@ -305,12 +307,13 @@ func NewPostRequest(ctx context.Context, path string, contentFormat message.Medi
 // Any status code doesn't cause an error.
 //
 // If payload is nil then content format is not used.
-func (cc *ClientConn) Post(ctx context.Context, path string, contentFormat message.MediaType, payload io.ReadSeeker, opts ...message.Option) (*Message, error) {
+func (cc *ClientConn) Post(ctx context.Context, path string, contentFormat message.MediaType, payload io.ReadSeeker, opts ...message.Option) (*pool.Message, error) {
 	req, err := NewPostRequest(ctx, path, contentFormat, payload, opts...)
 	if err != nil {
 		return nil, fmt.Errorf("cannot create post request: %w", err)
 	}
-	defer ReleaseMessage(req)
+	req.SetMessageID(cc.session.getMID())
+	defer pool.ReleaseMessage(req)
 	return cc.Do(req)
 }
 
@@ -319,7 +322,7 @@ func (cc *ClientConn) Post(ctx context.Context, path string, contentFormat messa
 // Use ctx to set timeout.
 //
 // If payload is nil then content format is not used.
-func NewPutRequest(ctx context.Context, path string, contentFormat message.MediaType, payload io.ReadSeeker, opts ...message.Option) (*Message, error) {
+func NewPutRequest(ctx context.Context, path string, contentFormat message.MediaType, payload io.ReadSeeker, opts ...message.Option) (*pool.Message, error) {
 	req, err := newCommonRequest(ctx, codes.PUT, path, opts...)
 	if err != nil {
 		return nil, err
@@ -339,24 +342,26 @@ func NewPutRequest(ctx context.Context, path string, contentFormat message.Media
 // Any status code doesn't cause an error.
 //
 // If payload is nil then content format is not used.
-func (cc *ClientConn) Put(ctx context.Context, path string, contentFormat message.MediaType, payload io.ReadSeeker, opts ...message.Option) (*Message, error) {
+func (cc *ClientConn) Put(ctx context.Context, path string, contentFormat message.MediaType, payload io.ReadSeeker, opts ...message.Option) (*pool.Message, error) {
 	req, err := NewPutRequest(ctx, path, contentFormat, payload, opts...)
 	if err != nil {
 		return nil, fmt.Errorf("cannot create put request: %w", err)
 	}
-	defer ReleaseMessage(req)
+	req.SetMessageID(cc.session.getMID())
+	defer pool.ReleaseMessage(req)
 	return cc.Do(req)
 }
 
 // Delete deletes the resource identified by the request path.
 //
 // Use ctx to set timeout.
-func (cc *ClientConn) Delete(ctx context.Context, path string, opts ...message.Option) (*Message, error) {
+func (cc *ClientConn) Delete(ctx context.Context, path string, opts ...message.Option) (*pool.Message, error) {
 	req, err := newCommonRequest(ctx, codes.DELETE, path, opts...)
 	if err != nil {
 		return nil, fmt.Errorf("cannot create delete request: %w", err)
 	}
-	defer ReleaseMessage(req)
+	req.SetMessageID(cc.session.getMID())
+	defer pool.ReleaseMessage(req)
 	return cc.Do(req)
 }
 
@@ -371,17 +376,17 @@ func (cc *ClientConn) Context() context.Context {
 //
 // Use ctx to set timeout.
 func (cc *ClientConn) Ping(ctx context.Context) error {
-	req := AcquireMessage(ctx)
-	defer ReleaseMessage(req)
-	req.SetType(coapUDP.Confirmable)
+	req := pool.AcquireMessage(ctx)
+	defer pool.ReleaseMessage(req)
+	req.SetType(udpMessage.Confirmable)
 	req.SetCode(codes.Empty)
 	req.SetMessageID(cc.session.getMID())
 	resp, err := cc.doWithMID(req)
 	if err != nil {
 		return err
 	}
-	defer ReleaseMessage(resp)
-	if resp.Type() == coapUDP.Reset || resp.Type() == coapUDP.Acknowledgement {
+	defer pool.ReleaseMessage(resp)
+	if resp.Type() == udpMessage.Reset || resp.Type() == udpMessage.Acknowledgement {
 		return nil
 	}
 	return fmt.Errorf("unexpected response(%v)", resp)
@@ -413,4 +418,8 @@ func (cc *ClientConn) AddOnClose(f EventFunc) {
 
 func (cc *ClientConn) processBuffer(buffer []byte) error {
 	return cc.session.processBuffer(buffer, cc)
+}
+
+func (cc *ClientConn) RemoteAddr() net.Addr {
+	return cc.session.raddr
 }

@@ -15,17 +15,17 @@ type ResponseWriter = interface {
 }
 
 type Handler interface {
-	ServeCOAP(w ResponseWriter, r *Message)
+	ServeCOAP(w ResponseWriter, r *message.Message)
 }
 
 // The HandlerFunc type is an adapter to allow the use of
 // ordinary functions as COAP handlers.  If f is a function
 // with the appropriate signature, HandlerFunc(f) is a
 // Handler object that calls f.
-type HandlerFunc func(w ResponseWriter, r *Message)
+type HandlerFunc func(w ResponseWriter, r *message.Message)
 
 // ServeCOAP calls f(w, r).
-func (f HandlerFunc) ServeCOAP(w ResponseWriter, r *Message) {
+func (f HandlerFunc) ServeCOAP(w ResponseWriter, r *message.Message) {
 	f(w, r)
 }
 
@@ -47,7 +47,7 @@ type muxEntry struct {
 
 // NewServeMux allocates and returns a new ServeMux.
 func NewServeMux() *ServeMux {
-	return &ServeMux{z: make(map[string]muxEntry), m: new(sync.RWMutex), defaultHandler: HandlerFunc(func(w ResponseWriter, r *Message) {
+	return &ServeMux{z: make(map[string]muxEntry), m: new(sync.RWMutex), defaultHandler: HandlerFunc(func(w ResponseWriter, r *message.Message) {
 		w.SetResponse(codes.NotFound, message.TextPlain, nil)
 	})}
 }
@@ -118,12 +118,12 @@ func (mux *ServeMux) DefaultHandle(handler Handler) {
 }
 
 // HandleFunc adds a handler function to the ServeMux for pattern.
-func (mux *ServeMux) HandleFunc(pattern string, handler func(w ResponseWriter, r *Message)) {
+func (mux *ServeMux) HandleFunc(pattern string, handler func(w ResponseWriter, r *message.Message)) {
 	mux.Handle(pattern, HandlerFunc(handler))
 }
 
 // DefaultHandleFunc set a default handler function to the ServeMux.
-func (mux *ServeMux) DefaultHandleFunc(handler func(w ResponseWriter, r *Message)) {
+func (mux *ServeMux) DefaultHandleFunc(handler func(w ResponseWriter, r *message.Message)) {
 	mux.DefaultHandle(HandlerFunc(handler))
 }
 
@@ -147,7 +147,7 @@ func (mux *ServeMux) HandleRemove(pattern string) error {
 // is used the correct thing for DS queries is done: a possible parent
 // is sought.
 // If no handler is found a standard NotFound message is returned
-func (mux *ServeMux) ServeCOAP(w ResponseWriter, r *Message) {
+func (mux *ServeMux) ServeCOAP(w ResponseWriter, r *message.Message) {
 	buf := make([]byte, 64)
 	used, err := r.Options.Path(buf)
 	if err == message.ErrTooSmall {

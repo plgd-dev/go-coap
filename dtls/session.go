@@ -1,27 +1,25 @@
-package udp
+package dtls
 
 import (
 	"context"
 	"crypto/rand"
 	"encoding/binary"
 	"fmt"
-	"net"
 	"sync"
 	"sync/atomic"
 
 	"github.com/go-ocf/go-coap/v2/blockwise"
 	"github.com/go-ocf/go-coap/v2/message"
 	"github.com/go-ocf/go-coap/v2/message/codes"
+	coapNet "github.com/go-ocf/go-coap/v2/net"
 	udpMessage "github.com/go-ocf/go-coap/v2/udp/message"
 	"github.com/go-ocf/go-coap/v2/udp/message/pool"
-	coapNet "github.com/go-ocf/go-coap/v2/net"
 )
 
 type EventFunc func()
 
 type Session struct {
-	connection *coapNet.UDPConn
-	raddr      *net.UDPAddr
+	connection *coapNet.Conn
 
 	maxMessageSize int
 	msgID          uint32
@@ -45,8 +43,7 @@ type Session struct {
 
 func NewSession(
 	ctx context.Context,
-	connection *coapNet.UDPConn,
-	raddr *net.UDPAddr,
+	connection *coapNet.Conn,
 	handler HandlerFunc,
 	maxMessageSize int,
 	goPool GoPoolFunc,
@@ -62,7 +59,6 @@ func NewSession(
 		ctx:                   ctx,
 		cancel:                cancel,
 		connection:            connection,
-		raddr:                 raddr,
 		msgID:                 msgID,
 		handler:               handler,
 		maxMessageSize:        maxMessageSize,
@@ -212,9 +208,38 @@ func (s *Session) WriteRequest(req *pool.Message) error {
 	if err != nil {
 		return fmt.Errorf("cannot marshal: %v", err)
 	}
-	return s.connection.WriteWithContext(req.Context(), s.raddr, data)
+	return s.connection.WriteWithContext(req.Context(), data)
 }
 
 func (s *Session) sendPong(w *ResponseWriter, r *pool.Message) {
 	w.SetResponse(codes.Empty, message.TextPlain, nil)
+}
+
+// Run reads and process requests from a connection, until the connection is not closed.
+func (s *Session) Run(cc *ClientConn) (err error) {
+	defer func() {
+		err1 := s.Close()
+		if err == nil {
+			err = err1
+		}
+		for _, f := range s.onClose {
+			f()
+		}
+	}()
+	for _, f := range s.onRun {
+		f()
+	}
+	m := make([]byte, s.maxMessageSize)
+	for {
+		readBuf := m
+		readLen, err := s.connection.ReadWithContext(s.ctx, readBuf)
+		if err != nil {
+			return err
+		}
+		readBuf = readBuf[:readLen]
+		err = s.processBuffer(readBuf, cc)
+		if err != nil {
+			return err
+		}
+	}
 }

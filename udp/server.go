@@ -16,6 +16,7 @@ import (
 	"github.com/go-ocf/go-coap/v2/keepalive"
 
 	"github.com/go-ocf/go-coap/v2/message/codes"
+	"github.com/go-ocf/go-coap/v2/udp/message/pool"
 
 	coapNet "github.com/go-ocf/go-coap/v2/net"
 )
@@ -29,7 +30,7 @@ type ServerOption interface {
 // ordinary functions as COAP handlers.  If f is a function
 // with the appropriate signature, HandlerFunc(f) is a
 // Handler object that calls f.
-type HandlerFunc func(*ResponseWriter, *Message)
+type HandlerFunc func(*ResponseWriter, *pool.Message)
 
 type ErrorFunc = func(error)
 
@@ -42,7 +43,7 @@ type OnNewClientConnFunc = func(cc *ClientConn)
 var defaultServerOptions = serverOptions{
 	ctx:            context.Background(),
 	maxMessageSize: 64 * 1024,
-	handler: func(w *ResponseWriter, r *Message) {
+	handler: func(w *ResponseWriter, r *pool.Message) {
 		w.SetResponse(codes.NotFound, message.TextPlain, nil)
 	},
 	errors: func(err error) {
@@ -61,7 +62,7 @@ var defaultServerOptions = serverOptions{
 	blockwiseEnable:          true,
 	blockwiseSZX:             blockwise.SZX1024,
 	blockwiseTransferTimeout: time.Second * 3,
-	onNewClientConn:            func(cc *ClientConn) {},
+	onNewClientConn:          func(cc *ClientConn) {},
 }
 
 type serverOptions struct {
@@ -75,7 +76,7 @@ type serverOptions struct {
 	blockwiseSZX             blockwise.SZX
 	blockwiseEnable          bool
 	blockwiseTransferTimeout time.Duration
-	onNewClientConn            OnNewClientConnFunc
+	onNewClientConn          OnNewClientConnFunc
 }
 
 type Server struct {
@@ -87,7 +88,7 @@ type Server struct {
 	blockwiseSZX             blockwise.SZX
 	blockwiseEnable          bool
 	blockwiseTransferTimeout time.Duration
-	onNewClientConn            OnNewClientConnFunc
+	onNewClientConn          OnNewClientConnFunc
 
 	conns             map[string]*ClientConn
 	connsMutex        sync.Mutex
@@ -101,12 +102,6 @@ type Server struct {
 
 	listen      *coapNet.UDPConn
 	listenMutex sync.Mutex
-}
-
-// Listener defined used by coap
-type Listener interface {
-	Close() error
-	AcceptWithContext(ctx context.Context) (net.Conn, error)
 }
 
 func NewServer(opt ...ServerOption) *Server {
@@ -136,6 +131,7 @@ func NewServer(opt ...ServerOption) *Server {
 		multicastRequests:        &sync.Map{},
 		msgID:                    msgID,
 		serverStartedChan:        serverStartedChan,
+		onNewClientConn:          opts.onNewClientConn,
 
 		conns: make(map[string]*ClientConn),
 	}
@@ -236,9 +232,9 @@ func (s *Server) getOrCreateClientConn(UDPConn *coapNet.UDPConn, raddr *net.UDPA
 		var blockWise *blockwise.BlockWise
 		if s.blockwiseEnable {
 			blockWise = blockwise.NewBlockWise(func(ctx context.Context) blockwise.Message {
-				return AcquireMessage(ctx)
+				return pool.AcquireMessage(ctx)
 			}, func(m blockwise.Message) {
-				ReleaseMessage(m.(*Message))
+				pool.ReleaseMessage(m.(*pool.Message))
 			}, s.blockwiseTransferTimeout, s.errors, false, func(token message.Token) (blockwise.Message, bool) {
 				msg, ok := s.multicastRequests.Load(token.String())
 				if !ok {
@@ -253,7 +249,7 @@ func (s *Server) getOrCreateClientConn(UDPConn *coapNet.UDPConn, raddr *net.UDPA
 				s.ctx,
 				UDPConn,
 				raddr,
-				NewObservatiomHandler(obsHandler, func(w *ResponseWriter, r *Message) {
+				NewObservatiomHandler(obsHandler, func(w *ResponseWriter, r *pool.Message) {
 					h, err := s.multicastHandler.Get(r.Token())
 					if err == nil {
 						h(w, r)
@@ -288,18 +284,18 @@ type MulticastOption interface {
 }
 
 // Discover sends GET to multicast address and wait for responses until context timeouts or server shutdown.
-func (s *Server) Discover(ctx context.Context, multicastAddr, path string, receiverFunc func(cc *ClientConn, resp *Message), opts ...MulticastOption) error {
+func (s *Server) Discover(ctx context.Context, multicastAddr, path string, receiverFunc func(cc *ClientConn, resp *pool.Message), opts ...MulticastOption) error {
 	req, err := NewGetRequest(ctx, path)
 	if err != nil {
 		return fmt.Errorf("cannot create discover request: %w", err)
 	}
 	req.SetMessageID(s.getMID())
-	defer ReleaseMessage(req)
+	defer pool.ReleaseMessage(req)
 	return s.DiscoveryRequest(req, multicastAddr, receiverFunc, opts...)
 }
 
 // DiscoveryRequest sends request to multicast addressand wait for responses until request timeouts or server shutdown.
-func (s *Server) DiscoveryRequest(req *Message, multicastAddr string, receiverFunc func(cc *ClientConn, resp *Message), opts ...MulticastOption) error {
+func (s *Server) DiscoveryRequest(req *pool.Message, multicastAddr string, receiverFunc func(cc *ClientConn, resp *pool.Message), opts ...MulticastOption) error {
 	token := req.Token()
 	if len(token) == 0 {
 		return fmt.Errorf("invalid token")
@@ -325,7 +321,7 @@ func (s *Server) DiscoveryRequest(req *Message, multicastAddr string, receiverFu
 	}
 	s.multicastRequests.Store(token.String(), req)
 	defer s.multicastRequests.Delete(token.String())
-	err = s.multicastHandler.Insert(token, func(w *ResponseWriter, r *Message) {
+	err = s.multicastHandler.Insert(token, func(w *ResponseWriter, r *pool.Message) {
 		receiverFunc(w.ClientConn(), r)
 	})
 	if err != nil {
@@ -338,10 +334,10 @@ func (s *Server) DiscoveryRequest(req *Message, multicastAddr string, receiverFu
 		return err
 	}
 	select {
-	case <-req.ctx.Done():
+	case <-req.Context().Done():
 		return nil
 	case <-s.ctx.Done():
-		return fmt.Errorf("server was closed: %w", req.ctx.Err())
+		return fmt.Errorf("server was closed: %w", req.Context().Err())
 	}
 }
 

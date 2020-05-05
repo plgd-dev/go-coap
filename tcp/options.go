@@ -2,6 +2,7 @@ package tcp
 
 import (
 	"context"
+	"crypto/tls"
 	"time"
 
 	"github.com/go-ocf/go-coap/v2/blockwise"
@@ -135,6 +136,10 @@ type HeartBeatOpt struct {
 	heartbeat time.Duration
 }
 
+func (o HeartBeatOpt) apply(opts *serverOptions) {
+	opts.heartBeat = o.heartbeat
+}
+
 func (o HeartBeatOpt) applyDial(opts *dialOptions) {
 	opts.heartBeat = o.heartbeat
 }
@@ -170,4 +175,68 @@ func WithBlockwise(enable bool, szx blockwise.SZX, transferTimeout time.Duration
 		szx:             szx,
 		transferTimeout: transferTimeout,
 	}
+}
+
+// OnNewClientConnOpt network option.
+type OnNewClientConnOpt struct {
+	onNewClientConn OnNewClientConnFunc
+}
+
+func (o OnNewClientConnOpt) apply(opts *serverOptions) {
+	opts.onNewClientConn = o.onNewClientConn
+}
+
+// WithOnNewClientConn server's notify about new client connection.
+func WithOnNewClientConn(onNewClientConn OnNewClientConnFunc) OnNewClientConnOpt {
+	return OnNewClientConnOpt{
+		onNewClientConn: onNewClientConn,
+	}
+}
+
+// DisablePeerTCPSignalMessageCSMsOpt coap-tcp csm option.
+type DisablePeerTCPSignalMessageCSMsOpt struct {
+}
+
+func (o DisablePeerTCPSignalMessageCSMsOpt) apply(opts *serverOptions) {
+	opts.disablePeerTCPSignalMessageCSMs = true
+}
+
+func (o DisablePeerTCPSignalMessageCSMsOpt) dialApply(opts *dialOptions) {
+	opts.disablePeerTCPSignalMessageCSMs = true
+}
+
+// WithDisablePeerTCPSignalMessageCSMs ignor peer's CSM message.
+func WithDisablePeerTCPSignalMessageCSMs() DisablePeerTCPSignalMessageCSMsOpt {
+	return DisablePeerTCPSignalMessageCSMsOpt{}
+}
+
+// DisableTCPSignalMessageCSMOpt coap-tcp csm option.
+type DisableTCPSignalMessageCSMOpt struct {
+}
+
+func (o DisableTCPSignalMessageCSMOpt) apply(opts *serverOptions) {
+	opts.disableTCPSignalMessageCSM = true
+}
+
+func (o DisableTCPSignalMessageCSMOpt) dialApply(opts *dialOptions) {
+	opts.disableTCPSignalMessageCSM = true
+}
+
+// WithDisableTCPSignalMessageCSM don't send CSM when client conn is created.
+func WithDisableTCPSignalMessageCSM() DisableTCPSignalMessageCSMOpt {
+	return DisableTCPSignalMessageCSMOpt{}
+}
+
+// TLSOpt tls configuration option.
+type TLSOpt struct {
+	tlsCfg *tls.Config
+}
+
+func (o TLSOpt) dialApply(opts *dialOptions) {
+	opts.tlsCfg = o.tlsCfg
+}
+
+// WithTLS creates tls connection.
+func WithTLS(cfg *tls.Config) DisableTCPSignalMessageCSMOpt {
+	return DisableTCPSignalMessageCSMOpt{}
 }

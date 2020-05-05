@@ -10,8 +10,9 @@ import (
 	"github.com/go-ocf/go-coap/v2/blockwise"
 	"github.com/go-ocf/go-coap/v2/message"
 	"github.com/go-ocf/go-coap/v2/message/codes"
-	coapTCP "github.com/go-ocf/go-coap/v2/message/tcp"
 	coapNet "github.com/go-ocf/go-coap/v2/net"
+	coapTCP "github.com/go-ocf/go-coap/v2/tcp/message"
+	"github.com/go-ocf/go-coap/v2/tcp/message/pool"
 )
 
 type EventFunc func()
@@ -105,15 +106,15 @@ func (s *Session) PeerBlockWiseTransferEnabled() bool {
 	return atomic.LoadUint32(&s.peerBlockWiseTranferEnabled) == 1
 }
 
-func (s *Session) handleBlockwise(w *ResponseWriter, r *Message) {
-	if s.blockWise != nil {
+func (s *Session) handleBlockwise(w *ResponseWriter, r *pool.Message) {
+	if s.blockWise != nil && s.PeerBlockWiseTransferEnabled() {
 		bwr := bwResponseWriter{
 			w: w,
 		}
 		s.blockWise.Handle(&bwr, r, s.blockwiseSZX, s.maxMessageSize, func(bw blockwise.ResponseWriter, br blockwise.Message) {
 			h, err := s.tokenHandlerContainer.Pop(r.Token())
 			w := bw.(*bwResponseWriter).w
-			r := br.(*Message)
+			r := br.(*pool.Message)
 			if err == nil {
 				h(w, r)
 				return
@@ -130,7 +131,7 @@ func (s *Session) handleBlockwise(w *ResponseWriter, r *Message) {
 	s.handler(w, r)
 }
 
-func (s *Session) handleSignals(w *ResponseWriter, r *Message) {
+func (s *Session) handleSignals(w *ResponseWriter, r *pool.Message) {
 	switch r.Code() {
 	case codes.CSM:
 		if s.disablePeerTCPSignalMessageCSMs {
@@ -172,11 +173,11 @@ func (b *bwResponseWriter) Message() blockwise.Message {
 }
 
 func (b *bwResponseWriter) SetMessage(m blockwise.Message) {
-	ReleaseMessage(b.w.response)
-	b.w.response = m.(*Message)
+	pool.ReleaseMessage(b.w.response)
+	b.w.response = m.(*pool.Message)
 }
 
-func (s *Session) Handle(w *ResponseWriter, r *Message) {
+func (s *Session) Handle(w *ResponseWriter, r *pool.Message) {
 	s.handleSignals(w, r)
 }
 
@@ -205,23 +206,23 @@ func (s *Session) processBuffer(buffer *bytes.Buffer, cc *ClientConn) error {
 		if n != hdr.TotalLen {
 			return fmt.Errorf("invalid data: %v", err)
 		}
-		req := AcquireMessage(s.ctx)
-		_, err = req.UnmarshalWithHeader(hdr, msgRaw[hdr.HeaderLen:])
+		req := pool.AcquireMessage(s.ctx)
+		_, err = req.Unmarshal(msgRaw)
 		if err != nil {
-			ReleaseMessage(req)
+			pool.ReleaseMessage(req)
 			return fmt.Errorf("cannot unmarshal with header: %v", err)
 		}
-		req.sequence = s.Sequence()
+		req.SetSequence(s.Sequence())
 		s.goPool(func() error {
-			origResp := AcquireMessage(s.ctx)
+			origResp := pool.AcquireMessage(s.ctx)
 			origResp.SetToken(req.Token())
 			w := NewResponseWriter(origResp, cc, req.Options())
 			s.Handle(w, req)
-			defer ReleaseMessage(w.response)
+			defer pool.ReleaseMessage(w.response)
 			if !req.IsHijacked() {
-				ReleaseMessage(req)
+				pool.ReleaseMessage(req)
 			}
-			if w.response.WantToSend() {
+			if w.response.IsModified() {
 				err := s.WriteRequest(w.response)
 				if err != nil {
 					s.Close()
@@ -234,7 +235,7 @@ func (s *Session) processBuffer(buffer *bytes.Buffer, cc *ClientConn) error {
 	return nil
 }
 
-func (s *Session) WriteRequest(req *Message) error {
+func (s *Session) WriteRequest(req *pool.Message) error {
 	data, err := req.Marshal()
 	if err != nil {
 		return fmt.Errorf("cannot marshal: %v", err)
@@ -247,13 +248,50 @@ func (s *Session) sendCSM() error {
 	if err != nil {
 		return fmt.Errorf("cannot get token: %w", err)
 	}
-	req := AcquireMessage(s.ctx)
-	defer ReleaseMessage(req)
+	req := pool.AcquireMessage(s.ctx)
+	defer pool.ReleaseMessage(req)
 	req.SetCode(codes.CSM)
 	req.SetToken(token)
 	return s.WriteRequest(req)
 }
 
-func (s *Session) sendPong(w *ResponseWriter, r *Message) {
+func (s *Session) sendPong(w *ResponseWriter, r *pool.Message) {
 	w.SetResponse(codes.Pong, message.TextPlain, nil)
+}
+
+// Run reads and process requests from a connection, until the connection is not closed.
+func (s *Session) Run(cc *ClientConn) (err error) {
+	defer func() {
+		err1 := s.Close()
+		if err == nil {
+			err = err1
+		}
+		for _, f := range s.onClose {
+			f()
+		}
+	}()
+	if !s.disableTCPSignalMessageCSM {
+		err := s.sendCSM()
+		if err != nil {
+			return fmt.Errorf("cannot send CSM: %w", err)
+		}
+	}
+	for _, f := range s.onRun {
+		f()
+	}
+	buffer := bytes.NewBuffer(make([]byte, 0, 1024))
+	readBuf := make([]byte, 1024)
+	for {
+		err = s.processBuffer(buffer, cc)
+		if err != nil {
+			return err
+		}
+		readLen, err := s.connection.ReadWithContext(s.ctx, readBuf)
+		if err != nil {
+			return err
+		}
+		if readLen > 0 {
+			buffer.Write(readBuf[:readLen])
+		}
+	}
 }

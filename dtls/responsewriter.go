@@ -1,4 +1,4 @@
-package tcp
+package dtls
 
 import (
 	"io"
@@ -6,10 +6,10 @@ import (
 	"github.com/go-ocf/go-coap/v2/message"
 	"github.com/go-ocf/go-coap/v2/message/codes"
 	"github.com/go-ocf/go-coap/v2/noresponse"
-	"github.com/go-ocf/go-coap/v2/tcp/message/pool"
+	"github.com/go-ocf/go-coap/v2/udp/message/pool"
 )
 
-// A ResponseWriter interface is used by an CAOP handler to construct an COAP response.
+// A ResponseWriter interface is used by an COAP handler to construct an COAP response.
 type ResponseWriter struct {
 	noResponseValue *uint32
 	response        *pool.Message

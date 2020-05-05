@@ -1,26 +1,25 @@
 package main
 
 import (
+	"context"
 	"log"
+	"time"
 
-	coap "github.com/go-ocf/go-coap"
+	"github.com/go-ocf/go-coap/v2/udp"
+	"github.com/go-ocf/go-coap/v2/udp/message/pool"
 )
-
-func observe(w coap.ResponseWriter, req *coap.Request) {
-	log.Printf("Got %s", req.Msg.Payload())
-}
 
 func main() {
 	sync := make(chan bool)
-	client := &coap.Client{}
-
-	co, err := client.Dial("localhost:5688")
+	co, err := udp.Dial("localhost:5688")
 	if err != nil {
 		log.Fatalf("Error dialing: %v", err)
 	}
 	num := 0
-	obs, err := co.Observe("/some/path", func(req *coap.Request) {
-		log.Printf("Got %s", req.Msg.Payload())
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	obs, err := co.Observe(ctx, "/some/path", func(req *pool.Message) {
+		log.Printf("Got %+v\n", req)
 		num++
 		if num >= 10 {
 			sync <- true
@@ -30,6 +29,7 @@ func main() {
 		log.Fatalf("Unexpected error '%v'", err)
 	}
 	<-sync
-	obs.Cancel()
-
+	ctx, cancel = context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	obs.Cancel(ctx)
 }

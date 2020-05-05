@@ -1,19 +1,22 @@
-package tcp
+package dtls
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/binary"
 	"fmt"
 	"net"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/go-ocf/go-coap/v2/blockwise"
 	"github.com/go-ocf/go-coap/v2/message"
-	"github.com/go-ocf/go-coap/v2/tcp/message/pool"
 
 	"github.com/go-ocf/go-coap/v2/keepalive"
 
 	"github.com/go-ocf/go-coap/v2/message/codes"
+	"github.com/go-ocf/go-coap/v2/udp/message/pool"
 
 	coapNet "github.com/go-ocf/go-coap/v2/net"
 )
@@ -64,19 +67,18 @@ var defaultServerOptions = serverOptions{
 }
 
 type serverOptions struct {
-	ctx                             context.Context
-	maxMessageSize                  int
-	handler                         HandlerFunc
-	errors                          ErrorFunc
-	goPool                          GoPoolFunc
-	keepalive                       *keepalive.KeepAlive
-	blockwiseSZX                    blockwise.SZX
-	blockwiseEnable                 bool
-	blockwiseTransferTimeout        time.Duration
-	onNewClientConn                 OnNewClientConnFunc
-	heartBeat                       time.Duration
-	disablePeerTCPSignalMessageCSMs bool
-	disableTCPSignalMessageCSM      bool
+	ctx                      context.Context
+	maxMessageSize           int
+	handler                  HandlerFunc
+	errors                   ErrorFunc
+	goPool                   GoPoolFunc
+	keepalive                *keepalive.KeepAlive
+	net                      string
+	blockwiseSZX             blockwise.SZX
+	blockwiseEnable          bool
+	blockwiseTransferTimeout time.Duration
+	onNewClientConn          OnNewClientConnFunc
+	heartBeat                time.Duration
 }
 
 // Listener defined used by coap
@@ -86,21 +88,21 @@ type Listener interface {
 }
 
 type Server struct {
-	maxMessageSize                  int
-	handler                         HandlerFunc
-	errors                          ErrorFunc
-	goPool                          GoPoolFunc
-	keepalive                       *keepalive.KeepAlive
-	blockwiseSZX                    blockwise.SZX
-	blockwiseEnable                 bool
-	blockwiseTransferTimeout        time.Duration
-	onNewClientConn                 OnNewClientConnFunc
-	heartBeat                       time.Duration
-	disablePeerTCPSignalMessageCSMs bool
-	disableTCPSignalMessageCSM      bool
+	maxMessageSize           int
+	handler                  HandlerFunc
+	errors                   ErrorFunc
+	goPool                   GoPoolFunc
+	keepalive                *keepalive.KeepAlive
+	blockwiseSZX             blockwise.SZX
+	blockwiseEnable          bool
+	blockwiseTransferTimeout time.Duration
+	onNewClientConn          OnNewClientConnFunc
+	heartBeat                time.Duration
 
 	ctx    context.Context
 	cancel context.CancelFunc
+
+	msgID uint32
 
 	listen      Listener
 	listenMutex sync.Mutex
@@ -113,27 +115,29 @@ func NewServer(opt ...ServerOption) *Server {
 	}
 
 	ctx, cancel := context.WithCancel(opts.ctx)
+	b := make([]byte, 4)
+	rand.Read(b)
+	msgID := binary.BigEndian.Uint32(b)
 
 	return &Server{
-		ctx:                             ctx,
-		cancel:                          cancel,
-		handler:                         opts.handler,
-		maxMessageSize:                  opts.maxMessageSize,
-		errors:                          opts.errors,
-		goPool:                          opts.goPool,
-		keepalive:                       opts.keepalive,
-		blockwiseSZX:                    opts.blockwiseSZX,
-		blockwiseEnable:                 opts.blockwiseEnable,
-		blockwiseTransferTimeout:        opts.blockwiseTransferTimeout,
-		heartBeat:                       opts.heartBeat,
-		disablePeerTCPSignalMessageCSMs: opts.disablePeerTCPSignalMessageCSMs,
-		disableTCPSignalMessageCSM:      opts.disablePeerTCPSignalMessageCSMs,
-		onNewClientConn:                 opts.onNewClientConn,
+		ctx:                      ctx,
+		cancel:                   cancel,
+		handler:                  opts.handler,
+		maxMessageSize:           opts.maxMessageSize,
+		errors:                   opts.errors,
+		goPool:                   opts.goPool,
+		keepalive:                opts.keepalive,
+		blockwiseSZX:             opts.blockwiseSZX,
+		blockwiseEnable:          opts.blockwiseEnable,
+		blockwiseTransferTimeout: opts.blockwiseTransferTimeout,
+		msgID:                    msgID,
+		onNewClientConn:          opts.onNewClientConn,
+		heartBeat:                opts.heartBeat,
 	}
 }
 
 func (s *Server) Serve(l Listener) error {
-	if s.blockwiseSZX > blockwise.SZXBERT {
+	if s.blockwiseSZX > blockwise.SZX1024 {
 		return fmt.Errorf("invalid blockwiseSZX")
 	}
 
@@ -213,9 +217,14 @@ func (s *Server) createClientConn(connection *coapNet.Conn) *ClientConn {
 			NewObservatiomHandler(obsHandler, func(w *ResponseWriter, r *pool.Message) {
 				s.handler(w, r)
 			}),
-			s.maxMessageSize, s.goPool, s.blockwiseSZX, blockWise, s.disablePeerTCPSignalMessageCSMs, s.disableTCPSignalMessageCSM),
+			s.maxMessageSize, s.goPool, s.blockwiseSZX, blockWise),
 		obsHandler, nil,
 	)
 
 	return cc
+}
+
+// GetMID generates a message id for UDP-coap
+func (s *Server) getMID() uint16 {
+	return uint16(atomic.AddUint32(&s.msgID, 1) % 0xffff)
 }

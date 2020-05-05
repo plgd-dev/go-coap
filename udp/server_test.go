@@ -11,23 +11,24 @@ import (
 	"github.com/go-ocf/go-coap/v2/message"
 	"github.com/go-ocf/go-coap/v2/message/codes"
 	coapNet "github.com/go-ocf/go-coap/v2/net"
+	"github.com/go-ocf/go-coap/v2/udp/message/pool"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 type mcastreceiver struct {
-	msgs []*Message
+	msgs []*pool.Message
 	sync.Mutex
 }
 
-func (m *mcastreceiver) process(cc *ClientConn, resp *Message) {
+func (m *mcastreceiver) process(cc *ClientConn, resp *pool.Message) {
 	m.Lock()
 	defer m.Unlock()
 	resp.Hijack()
 	m.msgs = append(m.msgs, resp)
 }
 
-func (m *mcastreceiver) pop() []*Message {
+func (m *mcastreceiver) pop() []*pool.Message {
 	m.Lock()
 	defer m.Unlock()
 	r := m.msgs
@@ -40,14 +41,14 @@ func TestServer_Discover(t *testing.T) {
 	multicastAddr := "224.0.1.187:5684"
 	path := "/oic/res"
 
-	l, err := coapNet.NewListenUDP("udp", multicastAddr)
+	l, err := coapNet.NewListenUDP("udp4", multicastAddr)
 	require.NoError(t, err)
 	defer l.Close()
 
 	ifaces, err := net.Interfaces()
 	require.NoError(t, err)
 
-	a, err := net.ResolveUDPAddr("udp", multicastAddr)
+	a, err := net.ResolveUDPAddr("udp4", multicastAddr)
 	require.NoError(t, err)
 
 	for _, iface := range ifaces {
@@ -62,7 +63,7 @@ func TestServer_Discover(t *testing.T) {
 	var wg sync.WaitGroup
 	defer wg.Wait()
 
-	s := NewServer(WithHandlerFunc(func(w *ResponseWriter, r *Message) {
+	s := NewServer(WithHandlerFunc(func(w *ResponseWriter, r *pool.Message) {
 		w.SetResponse(codes.BadRequest, message.TextPlain, bytes.NewReader(make([]byte, 5330)))
 		require.NotEmpty(t, w.ClientConn())
 	}))

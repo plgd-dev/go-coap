@@ -8,6 +8,7 @@ import (
 
 	"github.com/go-ocf/go-coap/v2/message"
 	"github.com/go-ocf/go-coap/v2/message/codes"
+	"github.com/go-ocf/go-coap/v2/udp/message/pool"
 )
 
 //Observation represents subscription to resource on the server
@@ -21,8 +22,8 @@ type Observation struct {
 	mutex sync.Mutex
 }
 
-func NewObservatiomHandler(obsertionTokenHandler *HandlerContainer, next func(w *ResponseWriter, r *Message)) func(w *ResponseWriter, r *Message) {
-	return func(w *ResponseWriter, r *Message) {
+func NewObservatiomHandler(obsertionTokenHandler *HandlerContainer, next func(w *ResponseWriter, r *pool.Message)) func(w *ResponseWriter, r *pool.Message) {
+	return func(w *ResponseWriter, r *pool.Message) {
 		v, err := obsertionTokenHandler.Get(r.Token())
 		if err != nil {
 			next(w, r)
@@ -38,19 +39,19 @@ func (o *Observation) Cancel(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("cannot cancel observation request: %w", err)
 	}
-	defer ReleaseMessage(req)
+	defer pool.ReleaseMessage(req)
 	req.SetObserve(1)
 	req.SetToken(o.token)
 	o.cc.observationTokenHandler.Pop(o.token)
 	registeredRequest, ok := o.cc.observationRequests.Load(o.token.String())
 	if ok {
 		o.cc.observationRequests.Delete(o.token.String())
-		ReleaseMessage(registeredRequest.(*Message))
+		pool.ReleaseMessage(registeredRequest.(*pool.Message))
 	}
 	return o.cc.WriteRequest(req)
 }
 
-func (o *Observation) wantBeNotified(r *Message) bool {
+func (o *Observation) wantBeNotified(r *pool.Message) bool {
 	obsSequence, err := r.Observe()
 	if err != nil {
 		return true
@@ -68,7 +69,7 @@ func (o *Observation) wantBeNotified(r *Message) bool {
 }
 
 // Observe subscribes for every change of resource on path.
-func (cc *ClientConn) Observe(ctx context.Context, path string, observeFunc func(req *Message), opts ...message.Option) (*Observation, error) {
+func (cc *ClientConn) Observe(ctx context.Context, path string, observeFunc func(req *pool.Message), opts ...message.Option) (*Observation, error) {
 	req, err := NewGetRequest(ctx, path, opts...)
 	if err != nil {
 		return nil, fmt.Errorf("cannot create observe request: %w", err)
@@ -84,7 +85,7 @@ func (cc *ClientConn) Observe(ctx context.Context, path string, observeFunc func
 	respCodeChan := make(chan codes.Code, 1)
 	waitForReponse := uint32(1)
 	cc.observationRequests.Store(token.String(), req)
-	err = o.cc.observationTokenHandler.Insert(token.String(), func(w *ResponseWriter, r *Message) {
+	err = o.cc.observationTokenHandler.Insert(token.String(), func(w *ResponseWriter, r *pool.Message) {
 		if o.wantBeNotified(r) {
 			observeFunc(r)
 		}
@@ -99,7 +100,7 @@ func (cc *ClientConn) Observe(ctx context.Context, path string, observeFunc func
 		if *err != nil {
 			cc.observationTokenHandler.Pop(token)
 			cc.observationRequests.Delete(token.String())
-			ReleaseMessage(req)
+			pool.ReleaseMessage(req)
 		}
 	}(&err)
 	if err != nil {
@@ -111,11 +112,11 @@ func (cc *ClientConn) Observe(ctx context.Context, path string, observeFunc func
 		return nil, err
 	}
 	select {
-	case <-req.ctx.Done():
-		err = req.ctx.Err()
+	case <-req.Context().Done():
+		err = req.Context().Err()
 		return nil, err
 	case <-cc.Context().Done():
-		err = fmt.Errorf("connection was closed: %w", req.ctx.Err())
+		err = fmt.Errorf("connection was closed: %w", req.Context().Err())
 		return nil, err
 	case respCode := <-respCodeChan:
 		if respCode != codes.Content {

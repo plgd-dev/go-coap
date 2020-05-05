@@ -1,8 +1,9 @@
-package udp
+package dtls
 
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"io"
 	"io/ioutil"
 	"sync"
@@ -10,6 +11,7 @@ import (
 	"time"
 
 	"github.com/go-ocf/go-coap/v2/mux"
+	"github.com/pion/dtls/v2"
 
 	"github.com/go-ocf/go-coap/v2/message"
 	"github.com/go-ocf/go-coap/v2/message/codes"
@@ -58,7 +60,15 @@ func TestClientConn_Get(t *testing.T) {
 		},
 	}
 
-	l, err := coapNet.NewListenUDP("udp", "")
+	dtlsCfg := &dtls.Config{
+		PSK: func(hint []byte) ([]byte, error) {
+			fmt.Printf("Hint: %s \n", hint)
+			return []byte{0xAB, 0xC1, 0x23}, nil
+		},
+		PSKIdentityHint: []byte("Pion DTLS Server"),
+		CipherSuites:    []dtls.CipherSuiteID{dtls.TLS_PSK_WITH_AES_128_CCM_8},
+	}
+	l, err := coapNet.NewDTLSListener("udp", "", dtlsCfg)
 	require.NoError(t, err)
 	defer l.Close()
 	var wg sync.WaitGroup
@@ -88,7 +98,7 @@ func TestClientConn_Get(t *testing.T) {
 		t.Log(err)
 	}()
 
-	cc, err := Dial(l.LocalAddr().String())
+	cc, err := Dial(l.Addr().String(), dtlsCfg)
 	require.NoError(t, err)
 	defer cc.Close()
 
@@ -166,7 +176,15 @@ func TestClientConn_Post(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			l, err := coapNet.NewListenUDP("udp", "")
+			dtlsCfg := &dtls.Config{
+				PSK: func(hint []byte) ([]byte, error) {
+					fmt.Printf("Hint: %s \n", hint)
+					return []byte{0xAB, 0xC1, 0x23}, nil
+				},
+				PSKIdentityHint: []byte("Pion DTLS Server"),
+				CipherSuites:    []dtls.CipherSuiteID{dtls.TLS_PSK_WITH_AES_128_CCM_8},
+			}
+			l, err := coapNet.NewDTLSListener("udp", "", dtlsCfg)
 			require.NoError(t, err)
 			defer l.Close()
 			var wg sync.WaitGroup
@@ -209,7 +227,7 @@ func TestClientConn_Post(t *testing.T) {
 				t.Log(err)
 			}()
 
-			cc, err := Dial(l.LocalAddr().String())
+			cc, err := Dial(l.Addr().String(), dtlsCfg)
 			require.NoError(t, err)
 			defer cc.Close()
 
@@ -285,7 +303,15 @@ func TestClientConn_Put(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			l, err := coapNet.NewListenUDP("udp", "")
+			dtlsCfg := &dtls.Config{
+				PSK: func(hint []byte) ([]byte, error) {
+					fmt.Printf("Hint: %s \n", hint)
+					return []byte{0xAB, 0xC1, 0x23}, nil
+				},
+				PSKIdentityHint: []byte("Pion DTLS Server"),
+				CipherSuites:    []dtls.CipherSuiteID{dtls.TLS_PSK_WITH_AES_128_CCM_8},
+			}
+			l, err := coapNet.NewDTLSListener("udp", "", dtlsCfg)
 			require.NoError(t, err)
 			defer l.Close()
 			var wg sync.WaitGroup
@@ -328,7 +354,7 @@ func TestClientConn_Put(t *testing.T) {
 				t.Log(err)
 			}()
 
-			cc, err := Dial(l.LocalAddr().String())
+			cc, err := Dial(l.Addr().String(), dtlsCfg)
 			require.NoError(t, err)
 			defer cc.Close()
 
@@ -394,7 +420,15 @@ func TestClientConn_Delete(t *testing.T) {
 		},
 	}
 
-	l, err := coapNet.NewListenUDP("udp", "")
+	dtlsCfg := &dtls.Config{
+		PSK: func(hint []byte) ([]byte, error) {
+			fmt.Printf("Hint: %s \n", hint)
+			return []byte{0xAB, 0xC1, 0x23}, nil
+		},
+		PSKIdentityHint: []byte("Pion DTLS Server"),
+		CipherSuites:    []dtls.CipherSuiteID{dtls.TLS_PSK_WITH_AES_128_CCM_8},
+	}
+	l, err := coapNet.NewDTLSListener("udp", "", dtlsCfg)
 	require.NoError(t, err)
 	defer l.Close()
 	var wg sync.WaitGroup
@@ -424,7 +458,7 @@ func TestClientConn_Delete(t *testing.T) {
 		t.Log(err)
 	}()
 
-	cc, err := Dial(l.LocalAddr().String())
+	cc, err := Dial(l.Addr().String(), dtlsCfg)
 	require.NoError(t, err)
 	defer cc.Close()
 
@@ -453,7 +487,15 @@ func TestClientConn_Delete(t *testing.T) {
 }
 
 func TestClientConn_Ping(t *testing.T) {
-	l, err := coapNet.NewListenUDP("udp", "")
+	dtlsCfg := &dtls.Config{
+		PSK: func(hint []byte) ([]byte, error) {
+			fmt.Printf("Hint: %s \n", hint)
+			return []byte{0xAB, 0xC1, 0x23}, nil
+		},
+		PSKIdentityHint: []byte("Pion DTLS Server"),
+		CipherSuites:    []dtls.CipherSuiteID{dtls.TLS_PSK_WITH_AES_128_CCM_8},
+	}
+	l, err := coapNet.NewDTLSListener("udp", "", dtlsCfg)
 	require.NoError(t, err)
 	defer l.Close()
 	var wg sync.WaitGroup
@@ -468,7 +510,7 @@ func TestClientConn_Ping(t *testing.T) {
 		s.Serve(l)
 	}()
 
-	cc, err := Dial(l.LocalAddr().String())
+	cc, err := Dial(l.Addr().String(), dtlsCfg)
 	require.NoError(t, err)
 	defer cc.Close()
 

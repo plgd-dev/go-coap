@@ -1,4 +1,4 @@
-package tcp
+package dtls
 
 import (
 	"context"
@@ -9,7 +9,7 @@ import (
 	"github.com/go-ocf/go-coap/v2/message"
 	"github.com/go-ocf/go-coap/v2/message/codes"
 	"github.com/go-ocf/go-coap/v2/mux"
-	"github.com/go-ocf/go-coap/v2/tcp/message/pool"
+	"github.com/go-ocf/go-coap/v2/udp/message/pool"
 )
 
 // WithMux set's multiplexer for handle requests.

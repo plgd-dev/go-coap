@@ -3,6 +3,7 @@ package tcp
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -10,6 +11,7 @@ import (
 	"github.com/go-ocf/go-coap/v2/message"
 	"github.com/go-ocf/go-coap/v2/message/codes"
 	coapNet "github.com/go-ocf/go-coap/v2/net"
+	"github.com/go-ocf/go-coap/v2/tcp/message/pool"
 	"github.com/stretchr/testify/require"
 )
 
@@ -24,14 +26,16 @@ func TestClientConn_Observe(t *testing.T) {
 		args    args
 		wantErr bool
 	}{
-		{
-			name: "10bytes",
-			args: args{
-				path:      "/tmp",
-				numEvents: 1,
-				payload:   make([]byte, 10),
+		/*
+			{
+				name: "10bytes",
+				args: args{
+					path:      "/tmp",
+					numEvents: 1,
+					payload:   make([]byte, 10),
+				},
 			},
-		},
+		*/
 		{
 			name: "5000bytes",
 			args: args{
@@ -49,7 +53,7 @@ func TestClientConn_Observe(t *testing.T) {
 			var wg sync.WaitGroup
 			defer wg.Wait()
 
-			s := NewServer(WithHandlerFunc(func(w *ResponseWriter, r *Message) {
+			s := NewServer(WithKeepAlive(nil), WithHandlerFunc(func(w *ResponseWriter, r *pool.Message) {
 				switch r.Code() {
 				case codes.PUT, codes.POST, codes.DELETE:
 					w.SetResponse(codes.NotFound, message.TextPlain, nil)
@@ -82,8 +86,8 @@ func TestClientConn_Observe(t *testing.T) {
 						p := bytes.NewReader(tt.args.payload)
 						etag, err := message.GetETag(p)
 						require.NoError(t, err)
-						req := AcquireMessage(cc.Context())
-						defer ReleaseMessage(req)
+						req := pool.AcquireMessage(cc.Context())
+						defer pool.ReleaseMessage(req)
 						req.SetCode(codes.Content)
 						req.SetContentFormat(message.TextPlain)
 						req.SetObserve(uint32(i) + 2)
@@ -110,11 +114,11 @@ func TestClientConn_Observe(t *testing.T) {
 				t.Log(err)
 			}()
 
-			cc, err := Dial(l.Addr().String())
+			cc, err := Dial(l.Addr().String(), WithKeepAlive(nil))
 			require.NoError(t, err)
 			defer cc.Close()
 
-			ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second*3600)
 			defer cancel()
 			obs := &observer{
 				t:         t,
@@ -141,7 +145,7 @@ func TestClientConn_ObserveIotivityLite(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*2)
 	defer cancel()
-	obs, err := cc.Observe(ctx, "/light/2", func(cc *ClientConn, req *Message) {
+	obs, err := cc.Observe(ctx, "/light/2", func(cc *ClientConn, req *pool.Message) {
 		fmt.Printf("observe %+v\n", req)
 	})
 	require.NoError(t, err)
@@ -154,19 +158,20 @@ func TestClientConn_ObserveIotivityLite(t *testing.T) {
 
 type observer struct {
 	t    require.TestingT
-	msgs []*Message
+	msgs []*pool.Message
 	sync.Mutex
 	done      chan bool
 	numEvents int
 }
 
-func (o *observer) observe(req *Message) {
+func (o *observer) observe(req *pool.Message) {
 	req.Hijack()
 	o.Lock()
 	defer o.Unlock()
 	o.msgs = append(o.msgs, req)
 	obs, err := req.Observe()
 	require.NoError(o.t, err)
+	fmt.Printf("OBS %v\n", obs)
 	if obs > uint32(o.numEvents) {
 		select {
 		case o.done <- true:

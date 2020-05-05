@@ -1,66 +1,71 @@
 package main
 
 import (
+	"bytes"
 	"log"
-	"sync"
+	gonet "net"
 
-	coap "github.com/go-ocf/go-coap"
-	"github.com/go-ocf/go-coap/codes"
+	"github.com/go-ocf/go-coap/v2/message"
+	"github.com/go-ocf/go-coap/v2/message/codes"
+	"github.com/go-ocf/go-coap/v2/mux"
+	"github.com/go-ocf/go-coap/v2/net"
+	"github.com/go-ocf/go-coap/v2/udp"
 )
 
-var responseClientConn = make(map[string]*coap.ClientConn, 0)
-var lockResponseClientConn sync.Mutex
-
-func handleDirect(w coap.ResponseWriter, r *coap.Request) {
-	log.Printf("Got direct message: path=%q: from %v", r.Msg.Path(), r.Client.RemoteAddr())
-	w.SetContentFormat(coap.TextPlain)
-	if _, err := w.Write([]byte("direct response")); err != nil {
-		log.Printf("Cannot write direct response %v", err)
-		lockResponseClientConn.Lock()
-		defer lockResponseClientConn.Unlock()
-		delete(responseClientConn, r.Client.RemoteAddr().String())
+func handleMcast(w mux.ResponseWriter, r *message.Message) {
+	buf := make([]byte, 32)
+	m, err := r.Options.Path(buf)
+	if err != message.ErrTooSmall {
+		buf = append(buf, make([]byte, m)...)
+		m, err = r.Options.Path(buf)
 	}
-}
-
-func handleMcast(w coap.ResponseWriter, r *coap.Request) {
-	log.Printf("Got mcast message: path=%q: from %v", r.Msg.Path(), r.Client.RemoteAddr())
-
-	remoteAddress := r.Client.RemoteAddr().String()
-	resp := w.NewResponse(codes.Content)
-	resp.SetOption(coap.ContentFormat, coap.TextPlain)
-	resp.SetPayload([]byte("mcast response"))
-
-	lockResponseClientConn.Lock()
-	defer lockResponseClientConn.Unlock()
-	// check if connection was not already exist
-	if clientConn, ok := responseClientConn[remoteAddress]; ok {
-		// send response via connection
-		if err := clientConn.WriteMsg(resp); err != nil {
-			log.Printf("cannot write response %v", err)
-			delete(responseClientConn, remoteAddress)
-		}
+	if err != nil {
+		log.Printf("cannot get path: %v", err)
 		return
 	}
+	buf = buf[:m]
 
-	// create connection and send response
-	client := coap.Client{
-		Handler: handleDirect,
-	}
-	clientConn, err := client.Dial(remoteAddress)
-	if err != nil {
-		log.Printf("cannot connect to %v: %v", remoteAddress, err)
-	}
-	err = clientConn.WriteMsg(resp)
-	if err != nil {
-		log.Printf("cannot write response %v", err)
-		return
-	}
-	responseClientConn[remoteAddress] = clientConn
+	log.Printf("Got mcast message: path=%q: from %v", buf, w.ClientConn().RemoteAddr())
+	w.SetResponse(codes.Content, message.TextPlain, bytes.NewReader([]byte("mcast response")))
 }
 
 func main() {
-	mux := coap.NewServeMux()
-	mux.Handle("/oic/res", coap.HandlerFunc(handleMcast))
+	m := mux.NewServeMux()
+	m.Handle("/oic/res", mux.HandlerFunc(handleMcast))
+	multicastAddr := "224.0.1.187:5683"
 
-	log.Fatal(coap.ListenAndServe("udp-mcast", "224.0.1.187:5688", mux))
+	l, err := net.NewListenUDP("udp4", multicastAddr)
+	if err != nil {
+		log.Println(err)
+		return
+	}
+
+	ifaces, err := gonet.Interfaces()
+	if err != nil {
+		log.Println(err)
+		return
+	}
+
+	a, err := gonet.ResolveUDPAddr("udp", multicastAddr)
+	if err != nil {
+		log.Println(err)
+		return
+	}
+
+	for _, iface := range ifaces {
+		err := l.JoinGroup(&iface, a)
+		if err != nil {
+			log.Printf("cannot JoinGroup(%v, %v): %v", iface, a, err)
+		}
+	}
+	err = l.SetMulticastLoopback(true)
+	if err != nil {
+		log.Println(err)
+		return
+	}
+
+	defer l.Close()
+	s := udp.NewServer(udp.WithMux(m))
+	defer s.Stop()
+	log.Fatal(s.Serve(l))
 }

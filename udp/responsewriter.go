@@ -6,16 +6,17 @@ import (
 	"github.com/go-ocf/go-coap/v2/message"
 	"github.com/go-ocf/go-coap/v2/message/codes"
 	"github.com/go-ocf/go-coap/v2/noresponse"
+	"github.com/go-ocf/go-coap/v2/udp/message/pool"
 )
 
-// A ResponseWriter interface is used by an CAOP handler to construct an COAP response.
+// A ResponseWriter interface is used by an COAP handler to construct an COAP response.
 type ResponseWriter struct {
 	noResponseValue *uint32
-	response        *Message
+	response        *pool.Message
 	cc              *ClientConn
 }
 
-func NewResponseWriter(response *Message, cc *ClientConn, requestOptions message.Options) *ResponseWriter {
+func NewResponseWriter(response *pool.Message, cc *ClientConn, requestOptions message.Options) *ResponseWriter {
 	var noResponseValue *uint32
 	v, err := requestOptions.GetUint32(message.NoResponse)
 	if err == nil {
@@ -38,7 +39,7 @@ func (r *ResponseWriter) SetResponse(code codes.Code, contentFormat message.Medi
 	}
 
 	r.response.SetCode(code)
-	r.response.ResetTo(opts)
+	r.response.ResetOptionsTo(opts)
 	if d != nil {
 		r.response.SetContentFormat(contentFormat)
 		r.response.SetPayload(d)

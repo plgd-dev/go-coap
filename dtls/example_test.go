@@ -1,4 +1,4 @@
-package udp_test
+package dtls_test
 
 import (
 	"context"
@@ -8,9 +8,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/go-ocf/go-coap/v2/udp/message/pool"
 	"github.com/go-ocf/go-coap/v2/net"
 	"github.com/go-ocf/go-coap/v2/udp"
+	"github.com/go-ocf/go-coap/v2/udp/message/pool"
 )
 
 func ExampleGet() {

@@ -1,8 +1,7 @@
-package tcp
+package dtls
 
 import (
 	"context"
-	"crypto/tls"
 	"fmt"
 	"io"
 	"net"
@@ -12,10 +11,12 @@ import (
 	"github.com/go-ocf/go-coap/v2/blockwise"
 	"github.com/go-ocf/go-coap/v2/keepalive"
 	"github.com/go-ocf/go-coap/v2/message"
-	"github.com/go-ocf/go-coap/v2/tcp/message/pool"
+	"github.com/pion/dtls/v2"
 
 	"github.com/go-ocf/go-coap/v2/message/codes"
 	coapNet "github.com/go-ocf/go-coap/v2/net"
+	udpMessage "github.com/go-ocf/go-coap/v2/udp/message"
+	"github.com/go-ocf/go-coap/v2/udp/message/pool"
 )
 
 var defaultDialOptions = dialOptions{
@@ -42,28 +43,25 @@ var defaultDialOptions = dialOptions{
 	},
 	dialer:                   &net.Dialer{Timeout: time.Second * 3},
 	keepalive:                keepalive.New(),
-	net:                      "tcp",
+	net:                      "udp",
 	blockwiseSZX:             blockwise.SZX1024,
 	blockwiseEnable:          true,
 	blockwiseTransferTimeout: time.Second * 3,
 }
 
 type dialOptions struct {
-	ctx                             context.Context
-	maxMessageSize                  int
-	heartBeat                       time.Duration
-	handler                         HandlerFunc
-	errors                          ErrorFunc
-	goPool                          GoPoolFunc
-	dialer                          *net.Dialer
-	keepalive                       *keepalive.KeepAlive
-	net                             string
-	blockwiseSZX                    blockwise.SZX
-	blockwiseEnable                 bool
-	blockwiseTransferTimeout        time.Duration
-	disablePeerTCPSignalMessageCSMs bool
-	disableTCPSignalMessageCSM      bool
-	tlsCfg                          *tls.Config
+	ctx                      context.Context
+	maxMessageSize           int
+	heartBeat                time.Duration
+	handler                  HandlerFunc
+	errors                   ErrorFunc
+	goPool                   GoPoolFunc
+	dialer                   *net.Dialer
+	keepalive                *keepalive.KeepAlive
+	net                      string
+	blockwiseSZX             blockwise.SZX
+	blockwiseEnable          bool
+	blockwiseTransferTimeout time.Duration
 }
 
 // A DialOption sets options such as credentials, keepalive parameters, etc.
@@ -80,19 +78,18 @@ type ClientConn struct {
 }
 
 // Dial creates a client connection to the given target.
-func Dial(target string, opts ...DialOption) (*ClientConn, error) {
+func Dial(target string, dtlsCfg *dtls.Config, opts ...DialOption) (*ClientConn, error) {
 	cfg := defaultDialOptions
 	for _, o := range opts {
 		o.applyDial(&cfg)
 	}
 
-	var conn net.Conn
-	var err error
-	if cfg.tlsCfg != nil {
-		conn, err = tls.DialWithDialer(cfg.dialer, cfg.net, target, cfg.tlsCfg)
-	} else {
-		conn, err = cfg.dialer.DialContext(cfg.ctx, cfg.net, target)
+	c, err := cfg.dialer.DialContext(cfg.ctx, cfg.net, target)
+	if err != nil {
+		return nil, err
 	}
+
+	conn, err := dtls.Client(c, dtlsCfg)
 	if err != nil {
 		return nil, err
 	}
@@ -124,8 +121,6 @@ func Dial(target string, opts ...DialOption) (*ClientConn, error) {
 		cfg.goPool,
 		cfg.blockwiseSZX,
 		blockWise,
-		cfg.disablePeerTCPSignalMessageCSMs,
-		cfg.disableTCPSignalMessageCSM,
 	), observationTokenHandler, observatioRequests)
 
 	go func() {
@@ -196,7 +191,7 @@ func (cc *ClientConn) do(req *pool.Message) (*pool.Message, error) {
 //
 // Caller is responsible to release request and response.
 func (cc *ClientConn) Do(req *pool.Message) (*pool.Message, error) {
-	if !cc.session.PeerBlockWiseTransferEnabled() || cc.session.blockWise == nil {
+	if cc.session.blockWise == nil {
 		return cc.do(req)
 	}
 	bwresp, err := cc.session.blockWise.Do(req, cc.session.blockwiseSZX, cc.session.maxMessageSize, func(bwreq blockwise.Message) (blockwise.Message, error) {
@@ -211,12 +206,37 @@ func (cc *ClientConn) writeRequest(req *pool.Message) error {
 
 // WriteRequest sends an coap request.
 func (cc *ClientConn) WriteRequest(req *pool.Message) error {
-	if !cc.session.PeerBlockWiseTransferEnabled() || cc.session.blockWise == nil {
+	if cc.session.blockWise == nil {
 		return cc.writeRequest(req)
 	}
 	return cc.session.blockWise.WriteRequest(req, cc.session.blockwiseSZX, cc.session.maxMessageSize, func(bwreq blockwise.Message) error {
 		return cc.writeRequest(bwreq.(*pool.Message))
 	})
+}
+
+func (cc *ClientConn) doWithMID(req *pool.Message) (*pool.Message, error) {
+	respChan := make(chan *pool.Message, 1)
+	err := cc.session.midHandlerContainer.Insert(req.MessageID(), func(w *ResponseWriter, r *pool.Message) {
+		r.Hijack()
+		respChan <- r
+	})
+	if err != nil {
+		return nil, fmt.Errorf("cannot insert mid handler: %w", err)
+	}
+	defer cc.session.midHandlerContainer.Pop(req.MessageID())
+	err = cc.session.WriteRequest(req)
+	if err != nil {
+		return nil, fmt.Errorf("cannot write request: %w", err)
+	}
+
+	select {
+	case <-req.Context().Done():
+		return nil, req.Context().Err()
+	case <-cc.session.Context().Done():
+		return nil, fmt.Errorf("connection was closed: %w", req.Context().Err())
+	case resp := <-respChan:
+		return resp, nil
+	}
 }
 
 func newCommonRequest(ctx context.Context, code codes.Code, path string, opts ...message.Option) (*pool.Message, error) {
@@ -229,6 +249,7 @@ func newCommonRequest(ctx context.Context, code codes.Code, path string, opts ..
 	req.SetToken(token)
 	req.ResetOptionsTo(opts)
 	req.SetPath(path)
+	req.SetType(udpMessage.NonConfirmable)
 	return req, nil
 }
 
@@ -250,6 +271,7 @@ func (cc *ClientConn) Get(ctx context.Context, path string, opts ...message.Opti
 	if err != nil {
 		return nil, fmt.Errorf("cannot create get request: %w", err)
 	}
+	req.SetMessageID(cc.session.getMID())
 	defer pool.ReleaseMessage(req)
 	return cc.Do(req)
 }
@@ -287,6 +309,7 @@ func (cc *ClientConn) Post(ctx context.Context, path string, contentFormat messa
 	if err != nil {
 		return nil, fmt.Errorf("cannot create post request: %w", err)
 	}
+	req.SetMessageID(cc.session.getMID())
 	defer pool.ReleaseMessage(req)
 	return cc.Do(req)
 }
@@ -321,6 +344,7 @@ func (cc *ClientConn) Put(ctx context.Context, path string, contentFormat messag
 	if err != nil {
 		return nil, fmt.Errorf("cannot create put request: %w", err)
 	}
+	req.SetMessageID(cc.session.getMID())
 	defer pool.ReleaseMessage(req)
 	return cc.Do(req)
 }
@@ -333,6 +357,7 @@ func (cc *ClientConn) Delete(ctx context.Context, path string, opts ...message.O
 	if err != nil {
 		return nil, fmt.Errorf("cannot create delete request: %w", err)
 	}
+	req.SetMessageID(cc.session.getMID())
 	defer pool.ReleaseMessage(req)
 	return cc.Do(req)
 }
@@ -348,33 +373,30 @@ func (cc *ClientConn) Context() context.Context {
 //
 // Use ctx to set timeout.
 func (cc *ClientConn) Ping(ctx context.Context) error {
-	token, err := message.GetToken()
-	if err != nil {
-		return fmt.Errorf("cannot get token: %w", err)
-	}
 	req := pool.AcquireMessage(ctx)
-	req.SetToken(token)
-	req.SetCode(codes.Ping)
 	defer pool.ReleaseMessage(req)
-	resp, err := cc.Do(req)
+	req.SetType(udpMessage.Confirmable)
+	req.SetCode(codes.Empty)
+	req.SetMessageID(cc.session.getMID())
+	resp, err := cc.doWithMID(req)
 	if err != nil {
 		return err
 	}
 	defer pool.ReleaseMessage(resp)
-	if resp.Code() == codes.Pong {
+	if resp.Type() == udpMessage.Reset || resp.Type() == udpMessage.Acknowledgement {
 		return nil
 	}
-	return fmt.Errorf("unexpected code(%v)", resp.Code())
-}
-
-// Run reads and process requests from a connection, until the connection is not closed.
-func (cc *ClientConn) Run() (err error) {
-	return cc.session.Run(cc)
+	return fmt.Errorf("unexpected response(%v)", resp)
 }
 
 // AddOnClose calls function on close connection event.
 func (cc *ClientConn) AddOnClose(f EventFunc) {
 	cc.session.AddOnClose(f)
+}
+
+// Run reads and process requests from a connection, until the connection is not closed.
+func (cc *ClientConn) Run() (err error) {
+	return cc.session.Run(cc)
 }
 
 func (cc *ClientConn) RemoteAddr() net.Addr {

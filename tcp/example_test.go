@@ -23,7 +23,7 @@ func ExampleGet() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	data, err := ioutil.ReadAll(res.Payload())
+	data, err := ioutil.ReadAll(res.Body())
 	if err != nil {
 		log.Fatal(err)
 	}

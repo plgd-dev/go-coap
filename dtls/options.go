@@ -1,4 +1,4 @@
-package udp
+package dtls
 
 import (
 	"context"
@@ -133,6 +133,10 @@ func WithNetwork(net string) NetOpt {
 // HeartBeatOpt heatbeat of read/write operations over connection.
 type HeartBeatOpt struct {
 	heartbeat time.Duration
+}
+
+func (o HeartBeatOpt) apply(opts *serverOptions) {
+	opts.heartBeat = o.heartbeat
 }
 
 func (o HeartBeatOpt) applyDial(opts *dialOptions) {
