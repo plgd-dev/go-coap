@@ -34,9 +34,8 @@ func TestMarshalMessage(t *testing.T) {
 		Type:      NonConfirmable,
 		Options: message.Options{
 			{
-				ID: message.ETag,
-				//Value: []byte{0x14, 0xd2, 0xe, 0x17, 0xe7, 0xa0, 0xb7, 0x91},
-				Value: []byte{238, 32, 201, 23, 231, 160, 183, 145},
+				ID:    message.ETag,
+				Value: []byte{0x14, 0xd2, 0xe, 0x17, 0xe7, 0xa0, 0xb7, 0x91},
 			},
 			{
 				ID:    message.ContentFormat,

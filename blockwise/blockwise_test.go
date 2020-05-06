@@ -61,7 +61,7 @@ func (r *request) Token() message.Token {
 }
 
 func (r *request) SetOptionUint32(id message.OptionID, value uint32) {
-	opts, _, err := r.options.SetOptionUint32(make([]byte, 4), id, value)
+	opts, _, err := r.options.SetUint32(make([]byte, 4), id, value)
 	r.options = opts
 	if err != nil {
 		panic(err)
@@ -69,11 +69,11 @@ func (r *request) SetOptionUint32(id message.OptionID, value uint32) {
 }
 
 func (r *request) GetOptionUint32(id message.OptionID) (uint32, error) {
-	return r.options.GetOptionUint32(id)
+	return r.options.GetUint32(id)
 }
 
 func (r *request) SetOptionBytes(id message.OptionID, value []byte) {
-	opts, _, err := r.options.SetOptionBytes(make([]byte, len(value)), id, value)
+	opts, _, err := r.options.SetBytes(make([]byte, len(value)), id, value)
 	r.options = opts
 	if err != nil {
 		panic(err)
@@ -81,7 +81,7 @@ func (r *request) SetOptionBytes(id message.OptionID, value []byte) {
 }
 
 func (r *request) GetOptionBytes(id message.OptionID) ([]byte, error) {
-	return r.options.GetOptionBytes(id)
+	return r.options.GetBytes(id)
 }
 
 func (r *request) Remove(id message.OptionID) {

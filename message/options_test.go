@@ -21,8 +21,8 @@ func testFindPositionBytesOption(t *testing.T, options Options, id OptionID, pre
 func TestFindPositonBytesOption1(t *testing.T) {
 	options := make(Options, 0, 10)
 	options = append(options, Options{{ID: 11, Value: []byte{97, 98, 99}}}...)
-	options, _, _ = options.SetOptionUint32(make([]byte, 4), 60, 128)
-	options, _, _ = options.SetOptionUint32(make([]byte, 4), 27, 8)
+	options, _, _ = options.SetUint32(make([]byte, 4), 60, 128)
+	options, _, _ = options.SetUint32(make([]byte, 4), 27, 8)
 	_, _, err := options.Find(27)
 	require.NoError(t, err)
 }
@@ -42,8 +42,7 @@ func TestFindObserve(t *testing.T) {
 func TestETAG(t *testing.T) {
 	opts := Options{
 		{
-			ID: ETag,
-			//Value: []byte{0x14, 0xd2, 0xe, 0x17, 0xe7, 0xa0, 0xb7, 0x91},
+			ID:    ETag,
 			Value: []byte{238, 32, 201, 23, 231, 160, 183, 145},
 		},
 		{
@@ -61,25 +60,25 @@ func TestETAG(t *testing.T) {
 	}
 	buf := make([]byte, 1024)
 	newOpts := make(Options, 0, len(opts))
-	n, newOpts, err := newOpts.ResetOptionsTo(buf, opts)
+	newOpts, n, err := newOpts.ResetOptionsTo(buf, opts)
 	require.NoError(t, err)
 	require.Equal(t, opts, newOpts)
 	require.Equal(t, 11, n)
 	buf = buf[n:]
 
-	opts, n, err = newOpts.SetOptionUint32(buf, Size2, uint32(5330))
+	opts, n, err = newOpts.SetUint32(buf, Size2, uint32(5330))
 	require.NoError(t, err)
 	require.Equal(t, opts, newOpts)
 	require.Equal(t, 2, n)
 	buf = buf[n:]
 
-	opts, n, err = newOpts.SetOptionUint32(buf, Block2, uint32(8))
+	opts, n, err = newOpts.SetUint32(buf, Block2, uint32(8))
 	require.NoError(t, err)
 	require.Equal(t, opts, newOpts)
 	require.Equal(t, 1, n)
 	buf = buf[1:]
 
-	etag, err := newOpts.GetOptionBytes(ETag)
+	etag, err := newOpts.GetBytes(ETag)
 	require.NoError(t, err)
 	require.Equal(t, opts[0].Value, etag)
 
@@ -163,7 +162,7 @@ func TestSetBytesOption(t *testing.T) {
 	require.Len(t, options, 3)
 
 	v := make([]string, 2)
-	n, err := options.ReadStrings(1, v)
+	n, err := options.GetStrings(1, v)
 	require.Equal(t, nil, err)
 	require.Equal(t, 1, n)
 	require.Equal(t, []string{"11"}, v[:n])
@@ -187,7 +186,7 @@ func TestAddBytesOption(t *testing.T) {
 	options = testAddBytesOption(t, options, Option{ID: 3, Value: []byte("3")}, 3)
 	options = testAddBytesOption(t, options, Option{ID: 1, Value: []byte("4")}, 2)
 	v := make([][]byte, 2)
-	n, err := options.ReadBytes(0, v)
+	n, err := options.GetBytess(0, v)
 	require.Equal(t, nil, err)
 	require.Equal(t, 2, n)
 	require.Equal(t, [][]byte{[]byte{0x30}, []byte{0x31}}, v)
@@ -277,7 +276,7 @@ func BenchmarkPathOption(b *testing.B) {
 		}
 
 		v := make([]string, 3)
-		n, err := options.ReadStrings(URIPath, v)
+		n, err := options.GetStrings(URIPath, v)
 		if n != 3 {
 			b.Fatalf("bad length")
 		}

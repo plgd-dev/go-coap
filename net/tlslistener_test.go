@@ -5,7 +5,9 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"io/ioutil"
+	"net"
 	"os"
+	"sync"
 	"testing"
 	"time"
 
@@ -80,23 +82,30 @@ func TestTLSListener_AcceptWithContext(t *testing.T) {
 	config := SetTLSConfig(t)
 
 	listener, err := NewTLSListener("tcp", "127.0.0.1:", config, WithHeartBeat(time.Millisecond*100))
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	defer listener.Close()
 
+	var wg sync.WaitGroup
+	wg.Add(1)
+	defer wg.Wait()
 	go func() {
+		defer wg.Done()
 		for i := 0; i < len(tests); i++ {
+			time.Sleep(time.Millisecond * 200)
 			cert, err := tls.X509KeyPair(CertPEMBlock, KeyPEMBlock)
-			assert.NoError(t, err)
+			require.NoError(t, err)
 
-			c, err := tls.Dial("tcp", listener.Addr().String(), &tls.Config{
+			c, err := tls.DialWithDialer(&net.Dialer{
+				Timeout: time.Millisecond * 200,
+			}, "tcp", listener.Addr().String(), &tls.Config{
 				InsecureSkipVerify: true,
 				Certificates:       []tls.Certificate{cert},
 			})
-			assert.NoError(t, err)
+			if err != nil {
+				continue
+			}
 			_, err = c.Write([]byte("hello"))
 			assert.NoError(t, err)
-
-			time.Sleep(time.Millisecond * 200)
 			c.Close()
 		}
 	}()
@@ -107,7 +116,7 @@ func TestTLSListener_AcceptWithContext(t *testing.T) {
 			if tt.wantErr {
 				assert.Error(t, err)
 			} else {
-				assert.NoError(t, err)
+				require.NoError(t, err)
 				b := make([]byte, 1024)
 				_, err = con.Read(b)
 				assert.NoError(t, err)

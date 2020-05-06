@@ -52,14 +52,14 @@ func TestUDPConn_WriteWithContext(t *testing.T) {
 	assert.NoError(t, err)
 	l1, err := net.ListenUDP("udp", a)
 	assert.NoError(t, err)
-	c1 := NewUDPConn(l1, WithHeartBeat(time.Millisecond*100), WithErrors(func(err error) { t.Log(err) }))
+	c1 := NewUDPConn("udp", l1, WithHeartBeat(time.Millisecond*100), WithErrors(func(err error) { t.Log(err) }))
 	defer c1.Close()
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
 	l2, err := net.ListenUDP("udp", b)
 	assert.NoError(t, err)
-	c2 := NewUDPConn(l2, WithHeartBeat(time.Millisecond*100), WithErrors(func(err error) { t.Log(err) }))
+	c2 := NewUDPConn("udp", l2, WithHeartBeat(time.Millisecond*100), WithErrors(func(err error) { t.Log(err) }))
 	defer c2.Close()
 
 	go func() {
@@ -129,7 +129,7 @@ func TestUDPConn_writeMulticastWithContext(t *testing.T) {
 	assert.NoError(t, err)
 	l2, err := net.ListenUDP("udp4", c)
 	assert.NoError(t, err)
-	c2 := NewUDPConn(l2, WithHeartBeat(time.Millisecond*100), WithErrors(func(err error) { t.Log(err) }))
+	c2 := NewUDPConn("udp", l2, WithHeartBeat(time.Millisecond*100), WithErrors(func(err error) { t.Log(err) }))
 	defer c2.Close()
 	ifaces, err := net.Interfaces()
 	require.NoError(t, err)
@@ -141,7 +141,6 @@ func TestUDPConn_writeMulticastWithContext(t *testing.T) {
 		}
 	}
 
-	assert.NoError(t, err)
 	err = c2.SetMulticastLoopback(true)
 	assert.NoError(t, err)
 
@@ -149,7 +148,7 @@ func TestUDPConn_writeMulticastWithContext(t *testing.T) {
 	assert.NoError(t, err)
 	l1, err := net.ListenUDP("udp4", a)
 	assert.NoError(t, err)
-	c1 := NewUDPConn(l1, WithHeartBeat(time.Millisecond*100), WithErrors(func(err error) { t.Log(err) }))
+	c1 := NewUDPConn("udp", l1, WithHeartBeat(time.Millisecond*100), WithErrors(func(err error) { t.Log(err) }))
 	defer c1.Close()
 	assert.NoError(t, err)
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*3)
