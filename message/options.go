@@ -209,7 +209,7 @@ func (options Options) GetBytess(id OptionID, r [][]byte) (int, error) {
 func (options Options) AddUint32(buf []byte, id OptionID, value uint32) (Options, int, error) {
 	enc, err := EncodeUint32(buf, uint32(value))
 	if err != nil {
-		return options, -1, err
+		return options, enc, err
 	}
 	o := options.Add(Option{ID: id, Value: buf[:enc]})
 	return o, enc, err
@@ -221,7 +221,7 @@ func (options Options) AddUint32(buf []byte, id OptionID, value uint32) (Options
 func (options Options) SetUint32(buf []byte, id OptionID, value uint32) (Options, int, error) {
 	enc, err := EncodeUint32(buf, uint32(value))
 	if err != nil {
-		return options, -1, err
+		return options, enc, err
 	}
 	o := options.Set(Option{ID: id, Value: buf[:enc]})
 	return o, enc, err
