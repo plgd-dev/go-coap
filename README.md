@@ -30,34 +30,30 @@ Features supported:
 ```go
 	// Server
 	// See /examples/simple/server/main.go
-	func handleA(w coap.ResponseWriter, req *coap.Request) {
-		log.Printf("Got message in handleA: path=%q: %#v from %v", req.Msg.Path(), req.Msg, req.Client.RemoteAddr())
-		w.SetContentFormat(coap.TextPlain)
-		log.Printf("Transmitting from A")
-		ctx, cancel := context.WithTimeout(req.Ctx, time.Second)
-		defer cancel()
-		if _, err := w.WriteWithContext(ctx, []byte("hello world")); err != nil {
-			log.Printf("Cannot send response: %v", err)
+	func handleA(w mux.ResponseWriter, req *message.Message) {
+		log.Printf("got message in handleA:  %+v from %v\n", req, w.ClientConn().RemoteAddr())
+		err := w.SetResponse(codes.GET, message.TextPlain, bytes.NewReader([]byte("hello world")))
+		if err != nil {
+			log.Printf("cannot set response: %v", err)
 		}
 	}
 
 	func main() {
-func main() {
-	m := mux.NewServeMux()
-	m.Handle("/a", mux.HandlerFunc(handleA))
-	m.Handle("/b", mux.HandlerFunc(handleB))
+		m := mux.NewServeMux()
+		m.Handle("/a", mux.HandlerFunc(handleA))
+		m.Handle("/b", mux.HandlerFunc(handleB))
 
-	log.Fatal(coap.ListenAndServe("udp", ":5688", m))
+		log.Fatal(coap.ListenAndServe("udp", ":5688", m))
 
 		
 		// for tcp
-		// log.Fatal(coap.ListenAndServe("tcp", ":5688",  mux))
+		// log.Fatal(coap.ListenAndServe("tcp", ":5688",  m))
 
 		// for tcp-tls
-		// log.Fatal(coap.ListenAndServeTLS("tcp-tls", ":5688", &tls.Config{...}, mux))
+		// log.Fatal(coap.ListenAndServeTLS("tcp-tls", ":5688", &tls.Config{...}, m))
 
 		// for udp-dtls
-		// log.Fatal(coap.ListenAndServeDTLS("udp-dtls", ":5688", &dtls.Config{...}, mux))
+		// log.Fatal(coap.ListenAndServeDTLS("udp-dtls", ":5688", &dtls.Config{...}, m))
 	}
 ```
 #### Client
@@ -65,31 +61,28 @@ func main() {
 	// Client
 	// See /examples/simpler/client/main.go
 	func main() {
-		co, err := coap.Dial("udp", "localhost:5688")
+		co, err := udp.Dial("localhost:5688")
 		
 		// for tcp
-		// co, err := coap.Dial("tcp", "localhost:5688")
+		// co, err := tcp.Dial("localhost:5688")
 		
 		// for tcp-tls
-		// co, err := coap.DialTLS("tcp-tls", localhost:5688", &tls.Config{...})
+		// co, err := tcp.Dial("localhost:5688", tcp.WithTLS(&tls.Config{...}))
 
-		// for udp-dtls
-		// co, err := coap.DialDTLS("udp-dtls", "localhost:5688", &dtls.Config{...}, mux))
+		// for dtls
+		// co, err := dtls.Dial("localhost:5688", &dtls.Config{...}))
 
 		if err != nil {
 			log.Fatalf("Error dialing: %v", err)
 		}
-
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 		defer cancel()
-		resp, err := co.GetWithContext(ctx, path)
-
-
+		resp, err := co.Get(ctx, "/a")
 		if err != nil {
-			log.Fatalf("Error sending request: %v", err)
+			log.Fatalf("Cannot get response: %v", err)
+			return
 		}
-
-		log.Printf("Response payload: %v", resp.Body())
+		log.Printf("Response: %+v", resp)
 	}
 ```
 
