@@ -111,6 +111,10 @@ func (cc *MuxClientConn) RemoteAddr() net.Addr {
 	return cc.cc.RemoteAddr()
 }
 
+func (cc *MuxClientConn) Context() context.Context {
+	return cc.cc.Context()
+}
+
 func muxmsg2msg(m *message.Message) (*pool.Message, error) {
 	if m.Context == nil {
 		return nil, fmt.Errorf("invalid context")

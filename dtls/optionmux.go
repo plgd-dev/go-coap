@@ -152,3 +152,7 @@ func (cc *MuxClientConn) Observe(ctx context.Context, path string, observeFunc f
 func (cc *MuxClientConn) RemoteAddr() net.Addr {
 	return cc.cc.RemoteAddr()
 }
+
+func (cc *MuxClientConn) Context() context.Context {
+	return cc.cc.Context()
+}
