@@ -58,27 +58,33 @@ var defaultServerOptions = serverOptions{
 		}()
 		return nil
 	},
-	keepalive:                keepalive.New(),
-	blockwiseEnable:          true,
-	blockwiseSZX:             blockwise.SZX1024,
-	blockwiseTransferTimeout: time.Second * 3,
-	onNewClientConn:          func(cc *ClientConn) {},
-	heartBeat:                time.Millisecond * 100,
+	keepalive:                      keepalive.New(),
+	blockwiseEnable:                true,
+	blockwiseSZX:                   blockwise.SZX1024,
+	blockwiseTransferTimeout:       time.Second * 3,
+	onNewClientConn:                func(cc *ClientConn) {},
+	heartBeat:                      time.Millisecond * 100,
+	transmissionNStart:             time.Second,
+	transmissionAcknowledgeTimeout: time.Second * 2,
+	transmissionMaxRetransmit:      4,
 }
 
 type serverOptions struct {
-	ctx                      context.Context
-	maxMessageSize           int
-	handler                  HandlerFunc
-	errors                   ErrorFunc
-	goPool                   GoPoolFunc
-	keepalive                *keepalive.KeepAlive
-	net                      string
-	blockwiseSZX             blockwise.SZX
-	blockwiseEnable          bool
-	blockwiseTransferTimeout time.Duration
-	onNewClientConn          OnNewClientConnFunc
-	heartBeat                time.Duration
+	ctx                            context.Context
+	maxMessageSize                 int
+	handler                        HandlerFunc
+	errors                         ErrorFunc
+	goPool                         GoPoolFunc
+	keepalive                      *keepalive.KeepAlive
+	net                            string
+	blockwiseSZX                   blockwise.SZX
+	blockwiseEnable                bool
+	blockwiseTransferTimeout       time.Duration
+	onNewClientConn                OnNewClientConnFunc
+	heartBeat                      time.Duration
+	transmissionNStart             time.Duration
+	transmissionAcknowledgeTimeout time.Duration
+	transmissionMaxRetransmit      int
 }
 
 // Listener defined used by coap
@@ -88,16 +94,19 @@ type Listener interface {
 }
 
 type Server struct {
-	maxMessageSize           int
-	handler                  HandlerFunc
-	errors                   ErrorFunc
-	goPool                   GoPoolFunc
-	keepalive                *keepalive.KeepAlive
-	blockwiseSZX             blockwise.SZX
-	blockwiseEnable          bool
-	blockwiseTransferTimeout time.Duration
-	onNewClientConn          OnNewClientConnFunc
-	heartBeat                time.Duration
+	maxMessageSize                 int
+	handler                        HandlerFunc
+	errors                         ErrorFunc
+	goPool                         GoPoolFunc
+	keepalive                      *keepalive.KeepAlive
+	blockwiseSZX                   blockwise.SZX
+	blockwiseEnable                bool
+	blockwiseTransferTimeout       time.Duration
+	onNewClientConn                OnNewClientConnFunc
+	heartBeat                      time.Duration
+	transmissionNStart             time.Duration
+	transmissionAcknowledgeTimeout time.Duration
+	transmissionMaxRetransmit      int
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -120,19 +129,22 @@ func NewServer(opt ...ServerOption) *Server {
 	msgID := binary.BigEndian.Uint32(b)
 
 	return &Server{
-		ctx:                      ctx,
-		cancel:                   cancel,
-		handler:                  opts.handler,
-		maxMessageSize:           opts.maxMessageSize,
-		errors:                   opts.errors,
-		goPool:                   opts.goPool,
-		keepalive:                opts.keepalive,
-		blockwiseSZX:             opts.blockwiseSZX,
-		blockwiseEnable:          opts.blockwiseEnable,
-		blockwiseTransferTimeout: opts.blockwiseTransferTimeout,
-		msgID:                    msgID,
-		onNewClientConn:          opts.onNewClientConn,
-		heartBeat:                opts.heartBeat,
+		ctx:                            ctx,
+		cancel:                         cancel,
+		handler:                        opts.handler,
+		maxMessageSize:                 opts.maxMessageSize,
+		errors:                         opts.errors,
+		goPool:                         opts.goPool,
+		keepalive:                      opts.keepalive,
+		blockwiseSZX:                   opts.blockwiseSZX,
+		blockwiseEnable:                opts.blockwiseEnable,
+		blockwiseTransferTimeout:       opts.blockwiseTransferTimeout,
+		msgID:                          msgID,
+		onNewClientConn:                opts.onNewClientConn,
+		heartBeat:                      opts.heartBeat,
+		transmissionNStart:             opts.transmissionNStart,
+		transmissionAcknowledgeTimeout: opts.transmissionAcknowledgeTimeout,
+		transmissionMaxRetransmit:      opts.transmissionMaxRetransmit,
 	}
 }
 
@@ -218,7 +230,7 @@ func (s *Server) createClientConn(connection *coapNet.Conn) *ClientConn {
 				s.handler(w, r)
 			}),
 			s.maxMessageSize, s.goPool, s.blockwiseSZX, blockWise),
-		obsHandler, nil,
+		obsHandler, nil, s.transmissionNStart, s.transmissionAcknowledgeTimeout, s.transmissionMaxRetransmit,
 	)
 
 	return cc

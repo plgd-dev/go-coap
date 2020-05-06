@@ -12,9 +12,9 @@ import (
 	"github.com/go-ocf/go-coap/v2/blockwise"
 	"github.com/go-ocf/go-coap/v2/message"
 	"github.com/go-ocf/go-coap/v2/message/codes"
+	coapNet "github.com/go-ocf/go-coap/v2/net"
 	udpMessage "github.com/go-ocf/go-coap/v2/udp/message"
 	"github.com/go-ocf/go-coap/v2/udp/message/pool"
-	coapNet "github.com/go-ocf/go-coap/v2/net"
 )
 
 type EventFunc func()
@@ -123,6 +123,10 @@ func (s *Session) Handle(w *ResponseWriter, r *pool.Message) {
 		h(w, r)
 		return
 	}
+	if r.IsSeparate() {
+		// msg was processed by token handler - just drop it.
+		return
+	}
 	if s.blockWise != nil {
 		bwr := bwResponseWriter{
 			w: w,
@@ -217,4 +221,22 @@ func (s *Session) WriteRequest(req *pool.Message) error {
 
 func (s *Session) sendPong(w *ResponseWriter, r *pool.Message) {
 	w.SetResponse(codes.Empty, message.TextPlain, nil)
+}
+
+func (s *Session) Run(cc *ClientConn) error {
+	m := make([]byte, s.maxMessageSize)
+	for {
+		buf := m
+		n, _, err := s.connection.ReadWithContext(cc.session.ctx, buf)
+		if err != nil {
+			s.Close()
+			return err
+		}
+		buf = buf[:n]
+		err = s.processBuffer(buf, cc)
+		if err != nil {
+			s.Close()
+			return err
+		}
+	}
 }

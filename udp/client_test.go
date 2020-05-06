@@ -3,6 +3,7 @@ package udp
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"io"
 	"io/ioutil"
 	"log"
@@ -15,6 +16,8 @@ import (
 	"github.com/go-ocf/go-coap/v2/message"
 	"github.com/go-ocf/go-coap/v2/message/codes"
 	coapNet "github.com/go-ocf/go-coap/v2/net"
+	udpMessage "github.com/go-ocf/go-coap/v2/udp/message"
+	"github.com/go-ocf/go-coap/v2/udp/message/pool"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -117,7 +120,7 @@ func TestClientConn_Get(t *testing.T) {
 	}
 }
 
-func TestClientConn_Get_SepareateResponse(t *testing.T) {
+func TestClientConn_Get_SepareateMessage(t *testing.T) {
 	l, err := coapNet.NewListenUDP("udp", "")
 	require.NoError(t, err)
 	defer l.Close()
@@ -126,31 +129,34 @@ func TestClientConn_Get_SepareateResponse(t *testing.T) {
 
 	m := mux.NewServeMux()
 	m.Handle("/a", mux.HandlerFunc(func(w mux.ResponseWriter, r *message.Message) {
-		assert.Equal(t, codes.GET, r.Code)
-		customResp := message.Message{
-			Code:    codes.Content,
-			Token:   r.Token,
-			Context: r.Context,
-			Options: make(message.Options, 0, 16),
-			//Body:    bytes.NewReader(make([]byte, 10)),
-		}
-		optsBuf := make([]byte, 32)
-		opts, used, err := customResp.Options.SetContentFormat(optsBuf, message.TextPlain)
-		if err == message.ErrTooSmall {
-			optsBuf = append(optsBuf, make([]byte, used)...)
-			opts, used, err = customResp.Options.SetContentFormat(optsBuf, message.TextPlain)
-		}
-		if err != nil {
-			log.Printf("cannot set options to response: %v", err)
-			return
-		}
-		optsBuf = optsBuf[:used]
-		customResp.Options = opts
+		go func() {
+			time.Sleep(time.Second * 1)
+			assert.Equal(t, codes.GET, r.Code)
+			customResp := message.Message{
+				Code:    codes.Content,
+				Token:   r.Token,
+				Context: r.Context,
+				Options: make(message.Options, 0, 16),
+				//Body:    bytes.NewReader(make([]byte, 10)),
+			}
+			optsBuf := make([]byte, 32)
+			opts, used, err := customResp.Options.SetContentFormat(optsBuf, message.TextPlain)
+			if err == message.ErrTooSmall {
+				optsBuf = append(optsBuf, make([]byte, used)...)
+				opts, used, err = customResp.Options.SetContentFormat(optsBuf, message.TextPlain)
+			}
+			if err != nil {
+				log.Printf("cannot set options to response: %v", err)
+				return
+			}
+			optsBuf = optsBuf[:used]
+			customResp.Options = opts
 
-		err = w.ClientConn().WriteRequest(&customResp)
-		if err != nil {
-			log.Printf("cannot set response: %v", err)
-		}
+			err = w.ClientConn().WriteRequest(&customResp)
+			if err != nil {
+				log.Printf("cannot set response: %v", err)
+			}
+		}()
 	}))
 
 	s := NewServer(WithMux(m))
@@ -163,14 +169,20 @@ func TestClientConn_Get_SepareateResponse(t *testing.T) {
 		t.Log(err)
 	}()
 
-	cc, err := Dial(l.LocalAddr().String())
+	cc, err := Dial(l.LocalAddr().String(), WithHandlerFunc(func(w *ResponseWriter, r *pool.Message) {
+		assert.NoError(t, fmt.Errorf("none msg expected comes: %+v", r))
+	}))
 	require.NoError(t, err)
 	defer cc.Close()
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*3600)
 	defer cancel()
 
-	resp, err := cc.Get(ctx, "/a")
+	req, err := NewGetRequest(ctx, "/a")
+	require.NoError(t, err)
+	req.SetType(udpMessage.Confirmable)
+	req.SetMessageID(cc.GetMID())
+	resp, err := cc.Do(req)
 	require.NoError(t, err)
 	assert.Equal(t, codes.Content, resp.Code())
 

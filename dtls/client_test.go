@@ -6,11 +6,14 @@ import (
 	"fmt"
 	"io"
 	"io/ioutil"
+	"log"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/go-ocf/go-coap/v2/mux"
+	udpMessage "github.com/go-ocf/go-coap/v2/udp/message"
+	"github.com/go-ocf/go-coap/v2/udp/message/pool"
 	"github.com/pion/dtls/v2"
 
 	"github.com/go-ocf/go-coap/v2/message"
@@ -124,6 +127,81 @@ func TestClientConn_Get(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestClientConn_Get_SepareateMessage(t *testing.T) {
+	dtlsCfg := &dtls.Config{
+		PSK: func(hint []byte) ([]byte, error) {
+			fmt.Printf("Hint: %s \n", hint)
+			return []byte{0xAB, 0xC1, 0x23}, nil
+		},
+		PSKIdentityHint: []byte("Pion DTLS Server"),
+		CipherSuites:    []dtls.CipherSuiteID{dtls.TLS_PSK_WITH_AES_128_CCM_8},
+	}
+	l, err := coapNet.NewDTLSListener("udp", "", dtlsCfg)
+	require.NoError(t, err)
+	defer l.Close()
+	var wg sync.WaitGroup
+	defer wg.Wait()
+
+	m := mux.NewServeMux()
+	m.Handle("/a", mux.HandlerFunc(func(w mux.ResponseWriter, r *message.Message) {
+		go func() {
+			time.Sleep(time.Second * 1)
+			assert.Equal(t, codes.GET, r.Code)
+			customResp := message.Message{
+				Code:    codes.Content,
+				Token:   r.Token,
+				Context: r.Context,
+				Options: make(message.Options, 0, 16),
+				//Body:    bytes.NewReader(make([]byte, 10)),
+			}
+			optsBuf := make([]byte, 32)
+			opts, used, err := customResp.Options.SetContentFormat(optsBuf, message.TextPlain)
+			if err == message.ErrTooSmall {
+				optsBuf = append(optsBuf, make([]byte, used)...)
+				opts, used, err = customResp.Options.SetContentFormat(optsBuf, message.TextPlain)
+			}
+			if err != nil {
+				log.Printf("cannot set options to response: %v", err)
+				return
+			}
+			optsBuf = optsBuf[:used]
+			customResp.Options = opts
+
+			err = w.ClientConn().WriteRequest(&customResp)
+			if err != nil {
+				log.Printf("cannot set response: %v", err)
+			}
+		}()
+	}))
+
+	s := NewServer(WithMux(m))
+	defer s.Stop()
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		err := s.Serve(l)
+		t.Log(err)
+	}()
+
+	cc, err := Dial(l.Addr().String(), dtlsCfg, WithHandlerFunc(func(w *ResponseWriter, r *pool.Message) {
+		assert.NoError(t, fmt.Errorf("none msg expected comes: %+v", r))
+	}))
+	require.NoError(t, err)
+	defer cc.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second*3600)
+	defer cancel()
+
+	req, err := NewGetRequest(ctx, "/a")
+	require.NoError(t, err)
+	req.SetType(udpMessage.Confirmable)
+	req.SetMessageID(cc.GetMID())
+	resp, err := cc.Do(req)
+	require.NoError(t, err)
+	assert.Equal(t, codes.Content, resp.Code())
 }
 
 func TestClientConn_Post(t *testing.T) {

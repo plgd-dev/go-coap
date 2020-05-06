@@ -1,6 +1,7 @@
 package dtls
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"io"
@@ -41,27 +42,33 @@ var defaultDialOptions = dialOptions{
 		}()
 		return nil
 	},
-	dialer:                   &net.Dialer{Timeout: time.Second * 3},
-	keepalive:                keepalive.New(),
-	net:                      "udp",
-	blockwiseSZX:             blockwise.SZX1024,
-	blockwiseEnable:          true,
-	blockwiseTransferTimeout: time.Second * 3,
+	dialer:                         &net.Dialer{Timeout: time.Second * 3},
+	keepalive:                      keepalive.New(),
+	net:                            "udp",
+	blockwiseSZX:                   blockwise.SZX1024,
+	blockwiseEnable:                true,
+	blockwiseTransferTimeout:       time.Second * 3,
+	transmissionNStart:             time.Second,
+	transmissionAcknowledgeTimeout: time.Second * 2,
+	transmissionMaxRetransmit:      4,
 }
 
 type dialOptions struct {
-	ctx                      context.Context
-	maxMessageSize           int
-	heartBeat                time.Duration
-	handler                  HandlerFunc
-	errors                   ErrorFunc
-	goPool                   GoPoolFunc
-	dialer                   *net.Dialer
-	keepalive                *keepalive.KeepAlive
-	net                      string
-	blockwiseSZX             blockwise.SZX
-	blockwiseEnable          bool
-	blockwiseTransferTimeout time.Duration
+	ctx                            context.Context
+	maxMessageSize                 int
+	heartBeat                      time.Duration
+	handler                        HandlerFunc
+	errors                         ErrorFunc
+	goPool                         GoPoolFunc
+	dialer                         *net.Dialer
+	keepalive                      *keepalive.KeepAlive
+	net                            string
+	blockwiseSZX                   blockwise.SZX
+	blockwiseEnable                bool
+	blockwiseTransferTimeout       time.Duration
+	transmissionNStart             time.Duration
+	transmissionAcknowledgeTimeout time.Duration
+	transmissionMaxRetransmit      int
 }
 
 // A DialOption sets options such as credentials, keepalive parameters, etc.
@@ -72,9 +79,12 @@ type DialOption interface {
 // ClientConn represents a virtual connection to a conceptual endpoint, to perform COAPs commands.
 type ClientConn struct {
 	noCopy
-	session                 *Session
-	observationTokenHandler *HandlerContainer
-	observationRequests     *sync.Map
+	session                        *Session
+	observationTokenHandler        *HandlerContainer
+	observationRequests            *sync.Map
+	transmissionNStart             time.Duration
+	transmissionAcknowledgeTimeout time.Duration
+	transmissionMaxRetransmit      int
 }
 
 // Dial creates a client connection to the given target.
@@ -121,7 +131,7 @@ func Dial(target string, dtlsCfg *dtls.Config, opts ...DialOption) (*ClientConn,
 		cfg.goPool,
 		cfg.blockwiseSZX,
 		blockWise,
-	), observationTokenHandler, observatioRequests)
+	), observationTokenHandler, observatioRequests, cfg.transmissionNStart, cfg.transmissionAcknowledgeTimeout, cfg.transmissionMaxRetransmit)
 
 	go func() {
 		err := cc.Run()
@@ -142,11 +152,21 @@ func Dial(target string, dtlsCfg *dtls.Config, opts ...DialOption) (*ClientConn,
 }
 
 // NewClientConn creates connection over session and observation.
-func NewClientConn(session *Session, observationTokenHandler *HandlerContainer, observationRequests *sync.Map) *ClientConn {
+func NewClientConn(
+	session *Session,
+	observationTokenHandler *HandlerContainer,
+	observationRequests *sync.Map,
+	transmissionNStart time.Duration,
+	transmissionAcknowledgeTimeout time.Duration,
+	transmissionMaxRetransmit int,
+) *ClientConn {
 	return &ClientConn{
-		session:                 session,
-		observationTokenHandler: observationTokenHandler,
-		observationRequests:     observationRequests,
+		session:                        session,
+		observationTokenHandler:        observationTokenHandler,
+		observationRequests:            observationRequests,
+		transmissionNStart:             transmissionNStart,
+		transmissionAcknowledgeTimeout: transmissionAcknowledgeTimeout,
+		transmissionMaxRetransmit:      transmissionMaxRetransmit,
 	}
 }
 
@@ -161,6 +181,25 @@ func (cc *ClientConn) do(req *pool.Message) (*pool.Message, error) {
 		return nil, fmt.Errorf("invalid token")
 	}
 	respChan := make(chan *pool.Message, 1)
+	errChan := make(chan error, 1)
+	if req.Type() == udpMessage.Confirmable {
+		err := cc.session.midHandlerContainer.Insert(req.MessageID(), func(w *ResponseWriter, r *pool.Message) {
+			if r.IsSeparate() {
+				// separate message - just accept
+				return
+			}
+			if bytes.Equal(r.Token(), token) {
+				r.Hijack()
+				respChan <- r
+				return
+			}
+			errChan <- fmt.Errorf("unexpected msg comes: %+v", r)
+		})
+		if err != nil {
+			return nil, fmt.Errorf("cannot insert mid handler: %w", err)
+		}
+		defer cc.session.midHandlerContainer.Pop(req.MessageID())
+	}
 	err := cc.session.TokenHandler().Insert(token, func(w *ResponseWriter, r *pool.Message) {
 		r.Hijack()
 		respChan <- r
@@ -173,15 +212,40 @@ func (cc *ClientConn) do(req *pool.Message) (*pool.Message, error) {
 	if err != nil {
 		return nil, fmt.Errorf("cannot write request: %w", err)
 	}
-
-	select {
-	case <-req.Context().Done():
-		return nil, req.Context().Err()
-	case <-cc.session.Context().Done():
-		return nil, fmt.Errorf("connection was closed: %w", req.Context().Err())
-	case resp := <-respChan:
-		return resp, nil
+	inf := make(<-chan time.Time)
+	for i := 0; i < cc.transmissionMaxRetransmit; i++ {
+		timeout := inf
+		if req.Type() == udpMessage.Confirmable {
+			timeout = time.After(cc.transmissionAcknowledgeTimeout)
+		}
+		select {
+		case <-req.Context().Done():
+			return nil, req.Context().Err()
+		case <-cc.session.Context().Done():
+			return nil, fmt.Errorf("connection was closed: %w", req.Context().Err())
+		case resp := <-respChan:
+			return resp, nil
+		case err = <-errChan:
+			return nil, err
+		case <-timeout:
+			select {
+			case <-req.Context().Done():
+				return nil, req.Context().Err()
+			case <-cc.session.Context().Done():
+				return nil, fmt.Errorf("connection was closed: %w", req.Context().Err())
+			case resp := <-respChan:
+				return resp, nil
+			case err = <-errChan:
+				return nil, err
+			case <-time.After(cc.transmissionNStart):
+				err = cc.session.WriteRequest(req)
+				if err != nil {
+					return nil, fmt.Errorf("cannot write request: %w", err)
+				}
+			}
+		}
 	}
+	return nil, fmt.Errorf("cannot do request: timeout: retransmision(%v) was exited", cc.transmissionMaxRetransmit)
 }
 
 // Do sends an coap request and returns an coap response.
@@ -401,4 +465,8 @@ func (cc *ClientConn) Run() (err error) {
 
 func (cc *ClientConn) RemoteAddr() net.Addr {
 	return cc.session.connection.RemoteAddr()
+}
+
+func (cc *ClientConn) GetMID() uint16 {
+	return cc.session.getMID()
 }

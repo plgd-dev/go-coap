@@ -58,37 +58,46 @@ var defaultServerOptions = serverOptions{
 		}()
 		return nil
 	},
-	keepalive:                keepalive.New(),
-	blockwiseEnable:          true,
-	blockwiseSZX:             blockwise.SZX1024,
-	blockwiseTransferTimeout: time.Second * 3,
-	onNewClientConn:          func(cc *ClientConn) {},
+	keepalive:                      keepalive.New(),
+	blockwiseEnable:                true,
+	blockwiseSZX:                   blockwise.SZX1024,
+	blockwiseTransferTimeout:       time.Second * 3,
+	onNewClientConn:                func(cc *ClientConn) {},
+	transmissionNStart:             time.Second,
+	transmissionAcknowledgeTimeout: time.Second * 2,
+	transmissionMaxRetransmit:      4,
 }
 
 type serverOptions struct {
-	ctx                      context.Context
-	maxMessageSize           int
-	handler                  HandlerFunc
-	errors                   ErrorFunc
-	goPool                   GoPoolFunc
-	keepalive                *keepalive.KeepAlive
-	net                      string
-	blockwiseSZX             blockwise.SZX
-	blockwiseEnable          bool
-	blockwiseTransferTimeout time.Duration
-	onNewClientConn          OnNewClientConnFunc
+	ctx                            context.Context
+	maxMessageSize                 int
+	handler                        HandlerFunc
+	errors                         ErrorFunc
+	goPool                         GoPoolFunc
+	keepalive                      *keepalive.KeepAlive
+	net                            string
+	blockwiseSZX                   blockwise.SZX
+	blockwiseEnable                bool
+	blockwiseTransferTimeout       time.Duration
+	onNewClientConn                OnNewClientConnFunc
+	transmissionNStart             time.Duration
+	transmissionAcknowledgeTimeout time.Duration
+	transmissionMaxRetransmit      int
 }
 
 type Server struct {
-	maxMessageSize           int
-	handler                  HandlerFunc
-	errors                   ErrorFunc
-	goPool                   GoPoolFunc
-	keepalive                *keepalive.KeepAlive
-	blockwiseSZX             blockwise.SZX
-	blockwiseEnable          bool
-	blockwiseTransferTimeout time.Duration
-	onNewClientConn          OnNewClientConnFunc
+	maxMessageSize                 int
+	handler                        HandlerFunc
+	errors                         ErrorFunc
+	goPool                         GoPoolFunc
+	keepalive                      *keepalive.KeepAlive
+	blockwiseSZX                   blockwise.SZX
+	blockwiseEnable                bool
+	blockwiseTransferTimeout       time.Duration
+	onNewClientConn                OnNewClientConnFunc
+	transmissionNStart             time.Duration
+	transmissionAcknowledgeTimeout time.Duration
+	transmissionMaxRetransmit      int
 
 	conns             map[string]*ClientConn
 	connsMutex        sync.Mutex
@@ -117,21 +126,24 @@ func NewServer(opt ...ServerOption) *Server {
 	serverStartedChan := make(chan struct{})
 
 	return &Server{
-		ctx:                      ctx,
-		cancel:                   cancel,
-		handler:                  opts.handler,
-		maxMessageSize:           opts.maxMessageSize,
-		errors:                   opts.errors,
-		goPool:                   opts.goPool,
-		keepalive:                opts.keepalive,
-		blockwiseSZX:             opts.blockwiseSZX,
-		blockwiseEnable:          opts.blockwiseEnable,
-		blockwiseTransferTimeout: opts.blockwiseTransferTimeout,
-		multicastHandler:         NewHandlerContainer(),
-		multicastRequests:        &sync.Map{},
-		msgID:                    msgID,
-		serverStartedChan:        serverStartedChan,
-		onNewClientConn:          opts.onNewClientConn,
+		ctx:                            ctx,
+		cancel:                         cancel,
+		handler:                        opts.handler,
+		maxMessageSize:                 opts.maxMessageSize,
+		errors:                         opts.errors,
+		goPool:                         opts.goPool,
+		keepalive:                      opts.keepalive,
+		blockwiseSZX:                   opts.blockwiseSZX,
+		blockwiseEnable:                opts.blockwiseEnable,
+		blockwiseTransferTimeout:       opts.blockwiseTransferTimeout,
+		multicastHandler:               NewHandlerContainer(),
+		multicastRequests:              &sync.Map{},
+		msgID:                          msgID,
+		serverStartedChan:              serverStartedChan,
+		onNewClientConn:                opts.onNewClientConn,
+		transmissionNStart:             opts.transmissionNStart,
+		transmissionAcknowledgeTimeout: opts.transmissionAcknowledgeTimeout,
+		transmissionMaxRetransmit:      opts.transmissionMaxRetransmit,
 
 		conns: make(map[string]*ClientConn),
 	}
@@ -184,7 +196,7 @@ func (s *Server) Serve(l *coapNet.UDPConn) error {
 				}()
 			}
 		}
-		err = cc.processBuffer(buf)
+		err = cc.session.processBuffer(buf, cc)
 		if err != nil {
 			cc.Close()
 			s.errors(err)
@@ -258,7 +270,7 @@ func (s *Server) getOrCreateClientConn(UDPConn *coapNet.UDPConn, raddr *net.UDPA
 					s.handler(w, r)
 				}),
 				s.maxMessageSize, s.goPool, s.blockwiseSZX, blockWise),
-			obsHandler, s.multicastRequests,
+			obsHandler, s.multicastRequests, s.transmissionNStart, s.transmissionAcknowledgeTimeout, s.transmissionMaxRetransmit,
 		)
 		cc.AddOnClose(func() {
 			s.connsMutex.Lock()

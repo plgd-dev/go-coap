@@ -7,6 +7,7 @@ import (
 	"sync"
 
 	"github.com/go-ocf/go-coap/v2/message"
+	"github.com/go-ocf/go-coap/v2/message/codes"
 	"github.com/go-ocf/go-coap/v2/message/pool"
 	udp "github.com/go-ocf/go-coap/v2/udp/message"
 )
@@ -135,6 +136,10 @@ func (r *Message) Marshal() ([]byte, error) {
 	}
 	r.rawMarshalData = r.rawMarshalData[:n]
 	return r.rawMarshalData, nil
+}
+
+func (r *Message) IsSeparate() bool {
+	return r.Code() == codes.Empty && r.Token() == nil && r.Type() == udp.Acknowledgement && len(r.Options()) == 0 && r.Body() == nil
 }
 
 // AcquireMessage returns an empty Message instance from Message pool.
