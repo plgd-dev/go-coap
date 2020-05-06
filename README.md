@@ -20,7 +20,7 @@ Features supported:
 [coap-block-wise-transfers]: https://tools.ietf.org/html/rfc7959
 [coap-observe]: https://tools.ietf.org/html/rfc7641
 [coap-noresponse]: https://tools.ietf.org/html/rfc7967
-[pion-dtls]: https://github.com/pion/dtls/v2
+[pion-dtls]: https://github.com/pion/dtls
 
 ## Samples
 
@@ -42,10 +42,13 @@ Features supported:
 	}
 
 	func main() {
-		mux := coap.NewServeMux()
-		mux.Handle("/a", coap.HandlerFunc(handleA))
+func main() {
+	m := mux.NewServeMux()
+	m.Handle("/a", mux.HandlerFunc(handleA))
+	m.Handle("/b", mux.HandlerFunc(handleB))
 
-		log.Fatal(coap.ListenAndServe("udp", ":5688", mux))
+	log.Fatal(coap.ListenAndServe("udp", ":5688", m))
+
 		
 		// for tcp
 		// log.Fatal(coap.ListenAndServe("tcp", ":5688",  mux))
