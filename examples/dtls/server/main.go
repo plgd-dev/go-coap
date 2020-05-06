@@ -14,7 +14,7 @@ import (
 
 func handleA(w mux.ResponseWriter, req *message.Message) {
 	log.Printf("got message in handleA:  %+v from %v\n", req, w.ClientConn().RemoteAddr())
-	err := w.SetResponse(codes.GET, message.TextPlain, bytes.NewReader([]byte("hello world")))
+	err := w.SetResponse(codes.GET, message.TextPlain, bytes.NewReader([]byte("A hello world")))
 	if err != nil {
 		log.Printf("cannot set response: %v", err)
 	}
@@ -27,6 +27,7 @@ func handleB(w mux.ResponseWriter, req *message.Message) {
 		Token:   req.Token,
 		Context: req.Context,
 		Options: make(message.Options, 0, 16),
+		Body:    bytes.NewReader([]byte("B hello world")),
 	}
 	optsBuf := make([]byte, 32)
 	opts, used, err := customResp.Options.SetContentFormat(optsBuf, message.TextPlain)

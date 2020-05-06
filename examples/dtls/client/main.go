@@ -34,5 +34,5 @@ func main() {
 	if err != nil {
 		log.Fatalf("Error sending request: %v", err)
 	}
-	log.Printf("Response payload: %v", resp.Body())
+	log.Printf("Response payload: %+v", resp)
 }

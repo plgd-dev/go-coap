@@ -258,14 +258,13 @@ func (b *BlockWise) Do(r Message, maxSzx SZX, maxMessageSize int, do func(req Me
 		if err != nil {
 			return nil, fmt.Errorf("cannot encode block option(%v, %v, %v) to bw request: %w", szx, num, more, err)
 		}
-		fmt.Printf("Do: block option(%v, %v, %v), payloadLen %v\n", szx, num, more, readed)
 
 		req.SetOptionUint32(blockID, block)
 		resp, err := do(req)
 		if err != nil {
 			return nil, fmt.Errorf("cannot do bw request: %w", err)
 		}
-		fmt.Printf("Do: resp %v\n", resp)
+
 		if resp.Code() != codes.Continue {
 			return resp, nil
 		}
@@ -277,7 +276,7 @@ func (b *BlockWise) Do(r Message, maxSzx SZX, maxMessageSize int, do func(req Me
 		if err != nil {
 			return resp, fmt.Errorf("cannot decode block option of bw response: %w", err)
 		}
-		fmt.Printf("Do: block decoded option(%v, %v)\n", szx, num)
+
 	}
 }
 
@@ -400,11 +399,7 @@ func (b *BlockWise) handleSendingMessage(w ResponseWriter, sendingMessage Messag
 		return false, fmt.Errorf("cannot encode block option(%v,%v,%v): %w", szx, num, more, err)
 	}
 	sendMessage.SetOptionUint32(blockType, block)
-	fmt.Printf("%p handleSendingMessage (%v, %v, %v)\n", b, szx, num, more)
 	w.SetMessage(sendMessage)
-	etag, _ := sendingMessage.GetOptionBytes(message.ETag)
-	etag, _ = sendMessage.GetOptionBytes(message.ETag)
-	fmt.Printf("%p handleSendingMessage Code %v ETAG %v\n", b, sendMessage.Code(), etag)
 	return more, nil
 }
 
@@ -429,7 +424,7 @@ func (b *BlockWise) Handle(w ResponseWriter, r Message, maxSZX SZX, maxMessageSi
 		panic("invalid maxSZX")
 	}
 	token := r.Token()
-	fmt.Printf("%p Handle %v\n", b, r)
+
 	if len(token) == 0 {
 		err := b.handleReceivedMessage(w, r, maxSZX, maxMessageSize, next)
 		if err != nil {
@@ -440,10 +435,10 @@ func (b *BlockWise) Handle(w ResponseWriter, r Message, maxSZX SZX, maxMessageSi
 	}
 	tokenStr := token.String()
 	v, ok := b.sendingMessagesCache.Get(tokenStr)
-	fmt.Printf("%p Handle.sendingMessagesCache %v %v\n", b, v, ok)
+
 	if !ok {
 		err := b.handleReceivedMessage(w, r, maxSZX, maxMessageSize, next)
-		fmt.Printf("%p Handle.handleReceivedMessage %v\n", b, err)
+
 		if err != nil {
 			b.sendReset(w)
 			b.errors(fmt.Errorf("handleReceivedMessage: %w", err))
@@ -517,7 +512,7 @@ func (b *BlockWise) continueSendingMessage(w ResponseWriter, r Message, maxSZX S
 		return false, fmt.Errorf("cannot get block2 option: %w", err)
 	}
 	more, err := b.handleSendingMessage(w, resp, maxSZX, maxMessageSize, r.Token(), block)
-	fmt.Printf("%p Handle.handleSendingMessage %v\n", b, err)
+
 	if err != nil {
 		return false, fmt.Errorf("handleSendingMessage: %w", err)
 	}
@@ -536,7 +531,6 @@ func isObserveResponse(msg Message) bool {
 }
 
 func (b *BlockWise) startSendingMessage(w ResponseWriter, maxSZX SZX, maxMessageSize int, block uint32) error {
-	fmt.Printf("%p startSendingMessage: %v\n", b, w.Message())
 
 	payloadSize, err := w.Message().PayloadSize()
 	if err != nil {
@@ -592,7 +586,7 @@ func (b *BlockWise) processReceivedMessage(w ResponseWriter, r Message, maxSzx S
 
 	block, err := r.GetOptionUint32(blockType)
 	if err != nil {
-		fmt.Printf("%p Handle.processReceivedMessage.GetOptionUint32(blockType) %v %v\n", b, r, err)
+
 		next(w, r)
 		return nil
 	}
@@ -617,7 +611,6 @@ func (b *BlockWise) processReceivedMessage(w ResponseWriter, r Message, maxSzx S
 		b.bwSendedRequest.Store(token.String(), bwSendedRequest)
 	}
 
-	fmt.Printf("%p processReceivedMessage: DecodeBlockOption: %v %v %v\n", b, szx, num, more)
 	tokenStr := token.String()
 	cachedReceivedMessageGuard, ok := b.receivingMessagesCache.Get(tokenStr)
 	if !ok {
@@ -670,7 +663,7 @@ func (b *BlockWise) processReceivedMessage(w ResponseWriter, r Message, maxSzx S
 	if err != nil {
 		return fmt.Errorf("cannot get size of payload: %w", err)
 	}
-	fmt.Printf("%p processReceivedMessage: %p %p, %v payloadSize: %v %v\n", b, messageGuard, cachedReceivedMessage.Body(), tokenStr, payloadSize, cachedReceivedMessage.Body())
+
 	if off <= int(payloadSize) {
 		copyn, err := payloadFile.Seek(int64(off), io.SeekStart)
 		if err != nil {
@@ -685,7 +678,7 @@ func (b *BlockWise) processReceivedMessage(w ResponseWriter, r Message, maxSzx S
 			return fmt.Errorf("cannot copy to cached request: %w", err)
 		}
 		payloadSize = copyn + written
-		fmt.Printf("processReceivedMessage: cachedReceivedMessage.SetPayload: %p %v %v %v %v\n", cachedReceivedMessage.Body(), copyn, written, payloadSize, cachedReceivedMessage.Body())
+
 	}
 	if !more {
 		b.receivingMessagesCache.Delete(tokenStr)
@@ -700,7 +693,7 @@ func (b *BlockWise) processReceivedMessage(w ResponseWriter, r Message, maxSzx S
 			return fmt.Errorf("cannot seek to start of cachedReceivedMessage request: %w", err)
 		}
 		next(w, cachedReceivedMessage)
-		fmt.Printf("processReceivedMessage: resp %v\n", w.Message())
+
 		return nil
 	}
 	if szx > maxSzx {

@@ -25,6 +25,7 @@ func handleB(w mux.ResponseWriter, req *message.Message) {
 		Token:   req.Token,
 		Context: req.Context,
 		Options: make(message.Options, 0, 16),
+		Body:    bytes.NewReader([]byte("B hello world")),
 	}
 	optsBuf := make([]byte, 32)
 	opts, used, err := customResp.Options.SetContentFormat(optsBuf, message.TextPlain)
