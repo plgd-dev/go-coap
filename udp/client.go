@@ -88,11 +88,16 @@ func Dial(target string, opts ...DialOption) (*client.ClientConn, error) {
 	if !ok {
 		return nil, fmt.Errorf("unsupported connection type: %T", c)
 	}
+	return Client(conn, opts...), nil
+}
 
-	addr, ok := conn.RemoteAddr().(*net.UDPAddr)
-	if !ok {
-		return nil, fmt.Errorf("cannot get target upd address")
+// Client creates client over udp connection.
+func Client(conn *net.UDPConn, opts ...DialOption) *client.ClientConn {
+	cfg := defaultDialOptions
+	for _, o := range opts {
+		o.applyDial(&cfg)
 	}
+	addr, _ := conn.RemoteAddr().(*net.UDPAddr)
 	observatioRequests := &sync.Map{}
 	var blockWise *blockwise.BlockWise
 	if cfg.blockwiseEnable {
@@ -141,5 +146,5 @@ func Dial(target string, opts ...DialOption) (*client.ClientConn, error) {
 		}()
 	}
 
-	return cc, nil
+	return cc
 }
