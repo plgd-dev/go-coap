@@ -107,7 +107,7 @@ func (r *request) Options() message.Options {
 	return r.options
 }
 
-func (r *request) SetPayload(p io.ReadSeeker) {
+func (r *request) SetBody(p io.ReadSeeker) {
 	r.payload = p
 }
 
@@ -115,7 +115,7 @@ func (r *request) Body() io.ReadSeeker {
 	return r.payload
 }
 
-func (r *request) PayloadSize() (int64, error) {
+func (r *request) BodySize() (int64, error) {
 	if r.payload == nil {
 		return 0, nil
 	}

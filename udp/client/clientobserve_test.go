@@ -90,7 +90,7 @@ func TestClientConn_Observe(t *testing.T) {
 						req.SetCode(codes.Content)
 						req.SetContentFormat(message.TextPlain)
 						req.SetObserve(uint32(i) + 2)
-						req.SetPayload(p)
+						req.SetBody(p)
 						req.SetETag(etag)
 						req.SetToken(token)
 						err = cc.WriteRequest(req)

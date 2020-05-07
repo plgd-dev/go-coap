@@ -121,7 +121,7 @@ func muxmsg2msg(m *message.Message) (*pool.Message, error) {
 	r := pool.AcquireMessage(m.Context)
 	r.SetCode(m.Code)
 	r.ResetOptionsTo(m.Options)
-	r.SetPayload(m.Body)
+	r.SetBody(m.Body)
 	r.SetToken(m.Token)
 	return r, nil
 }

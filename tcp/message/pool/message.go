@@ -61,7 +61,7 @@ func (r *Message) Unmarshal(data []byte) (int, error) {
 	r.Message.SetToken(m.Token)
 	r.Message.ResetOptionsTo(m.Options)
 	if len(m.Payload) > 0 {
-		r.Message.SetPayload(bytes.NewReader(m.Payload))
+		r.Message.SetBody(bytes.NewReader(m.Payload))
 	}
 	return n, err
 }
@@ -74,7 +74,7 @@ func (r *Message) Marshal() ([]byte, error) {
 	}
 	payload := make([]byte, 1024)
 	if r.Message.Body() != nil {
-		size, err := r.PayloadSize()
+		size, err := r.BodySize()
 		if err != nil {
 			return nil, err
 		}

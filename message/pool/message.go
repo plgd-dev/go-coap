@@ -217,7 +217,7 @@ func (r *Message) ETag() ([]byte, error) {
 	return r.GetOptionBytes(message.ETag)
 }
 
-func (r *Message) PayloadSize() (int64, error) {
+func (r *Message) BodySize() (int64, error) {
 	if r.payload == nil {
 		return 0, nil
 	}
@@ -240,7 +240,7 @@ func (r *Message) PayloadSize() (int64, error) {
 	return size, nil
 }
 
-func (r *Message) SetPayload(s io.ReadSeeker) {
+func (r *Message) SetBody(s io.ReadSeeker) {
 	r.payload = s
 	r.isModified = true
 }

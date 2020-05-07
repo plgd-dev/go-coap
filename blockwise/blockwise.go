@@ -75,7 +75,7 @@ type ROMessage interface {
 	GetOptionBytes(id message.OptionID) ([]byte, error)
 	Options() message.Options
 	Body() io.ReadSeeker
-	PayloadSize() (int64, error)
+	BodySize() (int64, error)
 }
 
 // Message defines message interface for blockwise transfer.
@@ -86,7 +86,7 @@ type Message interface {
 	SetOptionUint32(id message.OptionID, value uint32)
 	Remove(id message.OptionID)
 	ResetOptionsTo(message.Options)
-	SetPayload(r io.ReadSeeker)
+	SetBody(r io.ReadSeeker)
 }
 
 // EncodeBlockOption encodes block values to coap option.
@@ -214,7 +214,7 @@ func (b *BlockWise) Do(r Message, maxSzx SZX, maxMessageSize int, do func(req Me
 		resp, err := do(r)
 		return resp, err
 	}
-	payloadSize, err := r.PayloadSize()
+	payloadSize, err := r.BodySize()
 	if err != nil {
 		return nil, fmt.Errorf("cannot get size of payload: %w", err)
 	}
@@ -249,7 +249,7 @@ func (b *BlockWise) Do(r Message, maxSzx SZX, maxMessageSize int, do func(req Me
 			return nil, fmt.Errorf("cannot read payload: %w", err)
 		}
 		buf = buf[:readed]
-		req.SetPayload(bytes.NewReader(buf))
+		req.SetBody(bytes.NewReader(buf))
 		more := true
 		if newOff+int64(readed) == payloadSize {
 			more = false
@@ -290,7 +290,7 @@ func NewWriteRequestResponse(request Message, acquireMessage func(context.Contex
 	req.SetCode(request.Code())
 	req.SetToken(request.Token())
 	req.ResetOptionsTo(request.Options())
-	req.SetPayload(request.Body())
+	req.SetBody(request.Body())
 	return &writeRequestResponse{
 		request:        req,
 		releaseMessage: releaseMessage,
@@ -361,7 +361,7 @@ func (b *BlockWise) handleSendingMessage(w ResponseWriter, sendingMessage Messag
 	sendMessage.SetCode(sendingMessage.Code())
 	sendMessage.ResetOptionsTo(sendingMessage.Options())
 	sendMessage.SetToken(token)
-	payloadSize, err := sendingMessage.PayloadSize()
+	payloadSize, err := sendingMessage.BodySize()
 	if err != nil {
 		return false, fmt.Errorf("cannot get size of payload: %w", err)
 	}
@@ -387,7 +387,7 @@ func (b *BlockWise) handleSendingMessage(w ResponseWriter, sendingMessage Messag
 	}
 
 	buf = buf[:readed]
-	sendMessage.SetPayload(bytes.NewReader(buf))
+	sendMessage.SetBody(bytes.NewReader(buf))
 	more := true
 	if offSeek+int64(readed) == payloadSize {
 		more = false
@@ -532,7 +532,7 @@ func isObserveResponse(msg Message) bool {
 
 func (b *BlockWise) startSendingMessage(w ResponseWriter, maxSZX SZX, maxMessageSize int, block uint32) error {
 
-	payloadSize, err := w.Message().PayloadSize()
+	payloadSize, err := w.Message().BodySize()
 	if err != nil {
 		return fmt.Errorf("cannot get size of payload: %w", err)
 	}
@@ -542,7 +542,7 @@ func (b *BlockWise) startSendingMessage(w ResponseWriter, maxSZX SZX, maxMessage
 	}
 	sendingMessage := b.acquireMessage(w.Message().Context())
 	sendingMessage.ResetOptionsTo(w.Message().Options())
-	sendingMessage.SetPayload(w.Message().Body())
+	sendingMessage.SetBody(w.Message().Body())
 	sendingMessage.SetCode(w.Message().Code())
 	sendingMessage.SetToken(w.Message().Token())
 
@@ -635,7 +635,7 @@ func (b *BlockWise) processReceivedMessage(w ResponseWriter, r Message, maxSzx S
 		if err != nil {
 			return fmt.Errorf("request was already stored in cache")
 		}
-		cachedReceivedMessage.SetPayload(memfile.New(make([]byte, 0, 1024)))
+		cachedReceivedMessage.SetBody(memfile.New(make([]byte, 0, 1024)))
 	}
 	messageGuard := cachedReceivedMessageGuard.(*messageGuard)
 	defer func(err *error) {
@@ -659,7 +659,7 @@ func (b *BlockWise) processReceivedMessage(w ResponseWriter, r Message, maxSzx S
 
 	payloadFile := cachedReceivedMessage.Body().(*memfile.File)
 	off := num * szx.Size()
-	payloadSize, err := cachedReceivedMessage.PayloadSize()
+	payloadSize, err := cachedReceivedMessage.BodySize()
 	if err != nil {
 		return fmt.Errorf("cannot get size of payload: %w", err)
 	}

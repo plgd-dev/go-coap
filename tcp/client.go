@@ -269,7 +269,7 @@ func NewPostRequest(ctx context.Context, path string, contentFormat message.Medi
 	}
 	if payload != nil {
 		req.SetContentFormat(contentFormat)
-		req.SetPayload(payload)
+		req.SetBody(payload)
 	}
 	return req, nil
 }
@@ -303,7 +303,7 @@ func NewPutRequest(ctx context.Context, path string, contentFormat message.Media
 	}
 	if payload != nil {
 		req.SetContentFormat(contentFormat)
-		req.SetPayload(payload)
+		req.SetBody(payload)
 	}
 	return req, nil
 }

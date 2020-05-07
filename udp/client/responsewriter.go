@@ -42,7 +42,7 @@ func (r *ResponseWriter) SetResponse(code codes.Code, contentFormat message.Medi
 	r.response.ResetOptionsTo(opts)
 	if d != nil {
 		r.response.SetContentFormat(contentFormat)
-		r.response.SetPayload(d)
+		r.response.SetBody(d)
 		if !r.response.HasOption(message.ETag) {
 			etag, err := message.GetETag(d)
 			if err != nil {
