@@ -2,6 +2,7 @@ github.com/davecgh/go-spew v1.1.0 h1:ZDRjVQ15GmhC3fiQ8ni8+OwkZQO4DARzQgrnXU1Liz8
 github.com/davecgh/go-spew v1.1.0/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=
 github.com/dsnet/golib/memfile v0.0.0-20190531212259-571cdbcff553 h1:qd7Hp/zOU5vOHkyfqefAFop3O4ATL3F8vxrYmL2q8bI=
 github.com/dsnet/golib/memfile v0.0.0-20190531212259-571cdbcff553/go.mod h1:tXGNW9q3RwvWt1VV2qrRKlSSz0npnh12yftCSCy2T64=
+github.com/go-ocf/go-coap v0.0.0-20200503182930-509338af26c8 h1:ieuAqWZcqrEAowslHtq7VhF3iQVaw3wx0NrAKzOj2dc=
 github.com/patrickmn/go-cache v2.1.0+incompatible h1:HRMgzkcYKYpi3C8ajMPV8OFXaaRUnok+kx1WdO15EQc=
 github.com/patrickmn/go-cache v2.1.0+incompatible/go.mod h1:3Qf8kWWT7OJRJbdiICTKqZju1ZixQ/KpMGzzAfe6+WQ=
 github.com/pion/dtls/v2 v2.0.1-0.20200503085337-8e86b3a7d585 h1:0v1k/bHrth28TctdEWnrCgLehYn3nOvFAwOwtwmyC34=

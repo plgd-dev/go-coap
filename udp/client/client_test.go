@@ -1,4 +1,4 @@
-package udp
+package client_test
 
 import (
 	"bytes"
@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/go-ocf/go-coap/v2/mux"
+	"github.com/go-ocf/go-coap/v2/udp"
 
 	"github.com/go-ocf/go-coap/v2/message"
 	"github.com/go-ocf/go-coap/v2/message/codes"
@@ -83,7 +84,7 @@ func TestClientConn_Get(t *testing.T) {
 		require.NotEmpty(t, w.ClientConn())
 	}))
 
-	s := NewServer(WithMux(m))
+	s := udp.NewServer(udp.WithMux(m))
 	defer s.Stop()
 
 	wg.Add(1)
@@ -93,7 +94,7 @@ func TestClientConn_Get(t *testing.T) {
 		t.Log(err)
 	}()
 
-	cc, err := Dial(l.LocalAddr().String())
+	cc, err := udp.Dial(l.LocalAddr().String())
 	require.NoError(t, err)
 	defer cc.Close()
 
@@ -160,7 +161,7 @@ func TestClientConn_Get_SepareateMessage(t *testing.T) {
 		}()
 	}))
 
-	s := NewServer(WithMux(m))
+	s := udp.NewServer(udp.WithMux(m))
 	defer s.Stop()
 
 	wg.Add(1)
@@ -170,7 +171,7 @@ func TestClientConn_Get_SepareateMessage(t *testing.T) {
 		t.Log(err)
 	}()
 
-	cc, err := Dial(l.LocalAddr().String(), WithHandlerFunc(func(w *client.ResponseWriter, r *pool.Message) {
+	cc, err := udp.Dial(l.LocalAddr().String(), udp.WithHandlerFunc(func(w *client.ResponseWriter, r *pool.Message) {
 		assert.NoError(t, fmt.Errorf("none msg expected comes: %+v", r))
 	}))
 	require.NoError(t, err)
@@ -272,7 +273,7 @@ func TestClientConn_Post(t *testing.T) {
 				require.NotEmpty(t, w.ClientConn())
 			}))
 
-			s := NewServer(WithMux(m))
+			s := udp.NewServer(udp.WithMux(m))
 			defer s.Stop()
 
 			wg.Add(1)
@@ -282,7 +283,7 @@ func TestClientConn_Post(t *testing.T) {
 				t.Log(err)
 			}()
 
-			cc, err := Dial(l.LocalAddr().String())
+			cc, err := udp.Dial(l.LocalAddr().String())
 			require.NoError(t, err)
 			defer cc.Close()
 
@@ -391,7 +392,7 @@ func TestClientConn_Put(t *testing.T) {
 				require.NotEmpty(t, w.ClientConn())
 			}))
 
-			s := NewServer(WithMux(m))
+			s := udp.NewServer(udp.WithMux(m))
 			defer s.Stop()
 
 			wg.Add(1)
@@ -401,7 +402,7 @@ func TestClientConn_Put(t *testing.T) {
 				t.Log(err)
 			}()
 
-			cc, err := Dial(l.LocalAddr().String())
+			cc, err := udp.Dial(l.LocalAddr().String())
 			require.NoError(t, err)
 			defer cc.Close()
 
@@ -487,7 +488,7 @@ func TestClientConn_Delete(t *testing.T) {
 		require.NotEmpty(t, w.ClientConn())
 	}))
 
-	s := NewServer(WithMux(m))
+	s := udp.NewServer(udp.WithMux(m))
 	defer s.Stop()
 
 	wg.Add(1)
@@ -497,7 +498,7 @@ func TestClientConn_Delete(t *testing.T) {
 		t.Log(err)
 	}()
 
-	cc, err := Dial(l.LocalAddr().String())
+	cc, err := udp.Dial(l.LocalAddr().String())
 	require.NoError(t, err)
 	defer cc.Close()
 
@@ -532,7 +533,7 @@ func TestClientConn_Ping(t *testing.T) {
 	var wg sync.WaitGroup
 	defer wg.Wait()
 
-	s := NewServer()
+	s := udp.NewServer()
 	defer s.Stop()
 
 	wg.Add(1)
@@ -541,7 +542,7 @@ func TestClientConn_Ping(t *testing.T) {
 		s.Serve(l)
 	}()
 
-	cc, err := Dial(l.LocalAddr().String())
+	cc, err := udp.Dial(l.LocalAddr().String())
 	require.NoError(t, err)
 	defer cc.Close()
 

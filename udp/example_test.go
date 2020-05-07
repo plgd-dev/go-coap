@@ -8,9 +8,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/go-ocf/go-coap/v2/udp/message/pool"
 	"github.com/go-ocf/go-coap/v2/net"
 	"github.com/go-ocf/go-coap/v2/udp"
+	"github.com/go-ocf/go-coap/v2/udp/client"
+	"github.com/go-ocf/go-coap/v2/udp/message/pool"
 )
 
 func ExampleGet() {
@@ -62,7 +63,7 @@ func ExampleDiscovery() {
 	}()
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	err = s.Discover(ctx, "224.0.1.187:5683", "/oic/res", func(cc *udp.ClientConn, res *pool.Message) {
+	err = s.Discover(ctx, "224.0.1.187:5683", "/oic/res", func(cc *client.ClientConn, res *pool.Message) {
 		data, err := ioutil.ReadAll(res.Body())
 		if err != nil {
 			log.Fatal(err)

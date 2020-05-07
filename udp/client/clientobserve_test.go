@@ -1,4 +1,4 @@
-package udp
+package client_test
 
 import (
 	"bytes"
@@ -9,8 +9,10 @@ import (
 
 	"github.com/go-ocf/go-coap/v2/message"
 	"github.com/go-ocf/go-coap/v2/message/codes"
-	"github.com/go-ocf/go-coap/v2/udp/message/pool"
 	coapNet "github.com/go-ocf/go-coap/v2/net"
+	"github.com/go-ocf/go-coap/v2/udp"
+	"github.com/go-ocf/go-coap/v2/udp/client"
+	"github.com/go-ocf/go-coap/v2/udp/message/pool"
 	"github.com/stretchr/testify/require"
 )
 
@@ -50,7 +52,7 @@ func TestClientConn_Observe(t *testing.T) {
 			var wg sync.WaitGroup
 			defer wg.Wait()
 
-			s := NewServer(WithHandlerFunc(func(w *ResponseWriter, r *pool.Message) {
+			s := udp.NewServer(udp.WithHandlerFunc(func(w *client.ResponseWriter, r *pool.Message) {
 				switch r.Code() {
 				case codes.PUT, codes.POST, codes.DELETE:
 					w.SetResponse(codes.NotFound, message.TextPlain, nil)
@@ -111,7 +113,7 @@ func TestClientConn_Observe(t *testing.T) {
 				t.Log(err)
 			}()
 
-			cc, err := Dial(l.LocalAddr().String())
+			cc, err := udp.Dial(l.LocalAddr().String())
 			require.NoError(t, err)
 			defer cc.Close()
 

@@ -5,16 +5,23 @@ import (
 	"fmt"
 	"io/ioutil"
 	"log"
-	"sync"
 	"time"
 
+	"github.com/go-ocf/go-coap/v2/dtls"
 	"github.com/go-ocf/go-coap/v2/net"
-	"github.com/go-ocf/go-coap/v2/udp"
-	"github.com/go-ocf/go-coap/v2/udp/message/pool"
+	piondtls "github.com/pion/dtls/v2"
 )
 
 func ExampleGet() {
-	conn, err := udp.Dial("pluggedin.cloud:5683")
+	dtlsCfg := &piondtls.Config{
+		PSK: func(hint []byte) ([]byte, error) {
+			fmt.Printf("Hint: %s \n", hint)
+			return []byte{0xAB, 0xC1, 0x23}, nil
+		},
+		PSKIdentityHint: []byte("Pion DTLS Server"),
+		CipherSuites:    []piondtls.CipherSuiteID{piondtls.TLS_PSK_WITH_AES_128_CCM_8},
+	}
+	conn, err := dtls.Dial("pluggedin.cloud:5684", dtlsCfg)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -33,43 +40,20 @@ func ExampleGet() {
 }
 
 func ExampleServe() {
-	l, err := net.NewListenUDP("udp", "0.0.0.0:5683")
+	dtlsCfg := &piondtls.Config{
+		PSK: func(hint []byte) ([]byte, error) {
+			fmt.Printf("Hint: %s \n", hint)
+			return []byte{0xAB, 0xC1, 0x23}, nil
+		},
+		PSKIdentityHint: []byte("Pion DTLS Server"),
+		CipherSuites:    []piondtls.CipherSuiteID{piondtls.TLS_PSK_WITH_AES_128_CCM_8},
+	}
+	l, err := net.NewDTLSListener("udp", "0.0.0.0:5683", dtlsCfg)
 	if err != nil {
 		log.Fatal(err)
 	}
 	defer l.Close()
-	s := udp.NewServer()
+	s := dtls.NewServer()
 	defer s.Stop()
 	log.Fatal(s.Serve(l))
-}
-
-func ExampleDiscovery() {
-	l, err := net.NewListenUDP("udp", "")
-	if err != nil {
-		log.Fatal(err)
-	}
-	defer l.Close()
-	var wg sync.WaitGroup
-	defer wg.Wait()
-
-	s := udp.NewServer()
-	defer s.Stop()
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		err := s.Serve(l)
-		log.Println(err)
-	}()
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-	defer cancel()
-	err = s.Discover(ctx, "224.0.1.187:5683", "/oic/res", func(cc *udp.ClientConn, res *pool.Message) {
-		data, err := ioutil.ReadAll(res.Body())
-		if err != nil {
-			log.Fatal(err)
-		}
-		fmt.Printf("%v", data)
-	})
-	if err != nil {
-		log.Fatal(err)
-	}
 }

@@ -16,6 +16,7 @@ import (
 	"github.com/go-ocf/go-coap/v2/keepalive"
 
 	"github.com/go-ocf/go-coap/v2/message/codes"
+	"github.com/go-ocf/go-coap/v2/udp/client"
 	"github.com/go-ocf/go-coap/v2/udp/message/pool"
 
 	coapNet "github.com/go-ocf/go-coap/v2/net"
@@ -30,7 +31,7 @@ type ServerOption interface {
 // ordinary functions as COAP handlers.  If f is a function
 // with the appropriate signature, HandlerFunc(f) is a
 // Handler object that calls f.
-type HandlerFunc func(*ResponseWriter, *pool.Message)
+type HandlerFunc = func(*client.ResponseWriter, *pool.Message)
 
 type ErrorFunc = func(error)
 
@@ -38,12 +39,12 @@ type GoPoolFunc = func(func() error) error
 
 type BlockwiseFactoryFunc = func(getSendedRequest func(token message.Token) (blockwise.Message, bool)) *blockwise.BlockWise
 
-type OnNewClientConnFunc = func(cc *ClientConn)
+type OnNewClientConnFunc = func(cc *client.ClientConn)
 
 var defaultServerOptions = serverOptions{
 	ctx:            context.Background(),
 	maxMessageSize: 64 * 1024,
-	handler: func(w *ResponseWriter, r *pool.Message) {
+	handler: func(w *client.ResponseWriter, r *pool.Message) {
 		w.SetResponse(codes.NotFound, message.TextPlain, nil)
 	},
 	errors: func(err error) {
@@ -61,8 +62,8 @@ var defaultServerOptions = serverOptions{
 	keepalive:                      keepalive.New(),
 	blockwiseEnable:                true,
 	blockwiseSZX:                   blockwise.SZX1024,
-	blockwiseTransferTimeout:       time.Second * 3,
-	onNewClientConn:                func(cc *ClientConn) {},
+	blockwiseTransferTimeout:       time.Second * 5,
+	onNewClientConn:                func(cc *client.ClientConn) {},
 	heartBeat:                      time.Millisecond * 100,
 	transmissionNStart:             time.Second,
 	transmissionAcknowledgeTimeout: time.Second * 2,
@@ -210,7 +211,7 @@ func (s *Server) Stop() {
 	s.cancel()
 }
 
-func (s *Server) createClientConn(connection *coapNet.Conn) *ClientConn {
+func (s *Server) createClientConn(connection *coapNet.Conn) *client.ClientConn {
 	var blockWise *blockwise.BlockWise
 	if s.blockwiseEnable {
 		blockWise = blockwise.NewBlockWise(func(ctx context.Context) blockwise.Message {
@@ -221,16 +222,25 @@ func (s *Server) createClientConn(connection *coapNet.Conn) *ClientConn {
 			return nil, false
 		})
 	}
-	obsHandler := NewHandlerContainer()
-	cc := NewClientConn(
-		NewSession(
-			s.ctx,
-			connection,
-			NewObservatiomHandler(obsHandler, func(w *ResponseWriter, r *pool.Message) {
-				s.handler(w, r)
-			}),
-			s.maxMessageSize, s.goPool, s.blockwiseSZX, blockWise),
-		obsHandler, nil, s.transmissionNStart, s.transmissionAcknowledgeTimeout, s.transmissionMaxRetransmit,
+	obsHandler := client.NewHandlerContainer()
+	session := NewSession(
+		s.ctx,
+		connection,
+		s.maxMessageSize,
+	)
+	cc := client.NewClientConn(
+		session,
+		obsHandler,
+		nil,
+		s.transmissionNStart,
+		s.transmissionAcknowledgeTimeout,
+		s.transmissionMaxRetransmit,
+		client.NewObservatiomHandler(obsHandler, func(w *client.ResponseWriter, r *pool.Message) {
+			s.handler(w, r)
+		}),
+		s.blockwiseSZX,
+		blockWise,
+		s.goPool,
 	)
 
 	return cc

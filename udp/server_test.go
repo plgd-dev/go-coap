@@ -11,6 +11,7 @@ import (
 	"github.com/go-ocf/go-coap/v2/message"
 	"github.com/go-ocf/go-coap/v2/message/codes"
 	coapNet "github.com/go-ocf/go-coap/v2/net"
+	"github.com/go-ocf/go-coap/v2/udp/client"
 	"github.com/go-ocf/go-coap/v2/udp/message/pool"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -21,7 +22,7 @@ type mcastreceiver struct {
 	sync.Mutex
 }
 
-func (m *mcastreceiver) process(cc *ClientConn, resp *pool.Message) {
+func (m *mcastreceiver) process(cc *client.ClientConn, resp *pool.Message) {
 	m.Lock()
 	defer m.Unlock()
 	resp.Hijack()
@@ -63,7 +64,7 @@ func TestServer_Discover(t *testing.T) {
 	var wg sync.WaitGroup
 	defer wg.Wait()
 
-	s := NewServer(WithHandlerFunc(func(w *ResponseWriter, r *pool.Message) {
+	s := NewServer(WithHandlerFunc(func(w *client.ResponseWriter, r *pool.Message) {
 		w.SetResponse(codes.BadRequest, message.TextPlain, bytes.NewReader(make([]byte, 5330)))
 		require.NotEmpty(t, w.ClientConn())
 	}))

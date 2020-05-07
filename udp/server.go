@@ -16,6 +16,7 @@ import (
 	"github.com/go-ocf/go-coap/v2/keepalive"
 
 	"github.com/go-ocf/go-coap/v2/message/codes"
+	"github.com/go-ocf/go-coap/v2/udp/client"
 	"github.com/go-ocf/go-coap/v2/udp/message/pool"
 
 	coapNet "github.com/go-ocf/go-coap/v2/net"
@@ -30,7 +31,7 @@ type ServerOption interface {
 // ordinary functions as COAP handlers.  If f is a function
 // with the appropriate signature, HandlerFunc(f) is a
 // Handler object that calls f.
-type HandlerFunc func(*ResponseWriter, *pool.Message)
+type HandlerFunc = func(*client.ResponseWriter, *pool.Message)
 
 type ErrorFunc = func(error)
 
@@ -38,12 +39,12 @@ type GoPoolFunc = func(func() error) error
 
 type BlockwiseFactoryFunc = func(getSendedRequest func(token message.Token) (blockwise.Message, bool)) *blockwise.BlockWise
 
-type OnNewClientConnFunc = func(cc *ClientConn)
+type OnNewClientConnFunc = func(cc *client.ClientConn)
 
 var defaultServerOptions = serverOptions{
 	ctx:            context.Background(),
 	maxMessageSize: 64 * 1024,
-	handler: func(w *ResponseWriter, r *pool.Message) {
+	handler: func(w *client.ResponseWriter, r *pool.Message) {
 		w.SetResponse(codes.NotFound, message.TextPlain, nil)
 	},
 	errors: func(err error) {
@@ -62,7 +63,7 @@ var defaultServerOptions = serverOptions{
 	blockwiseEnable:                true,
 	blockwiseSZX:                   blockwise.SZX1024,
 	blockwiseTransferTimeout:       time.Second * 3,
-	onNewClientConn:                func(cc *ClientConn) {},
+	onNewClientConn:                func(cc *client.ClientConn) {},
 	transmissionNStart:             time.Second,
 	transmissionAcknowledgeTimeout: time.Second * 2,
 	transmissionMaxRetransmit:      4,
@@ -99,14 +100,14 @@ type Server struct {
 	transmissionAcknowledgeTimeout time.Duration
 	transmissionMaxRetransmit      int
 
-	conns             map[string]*ClientConn
+	conns             map[string]*client.ClientConn
 	connsMutex        sync.Mutex
 	ctx               context.Context
 	cancel            context.CancelFunc
 	serverStartedChan chan struct{}
 
 	multicastRequests *sync.Map
-	multicastHandler  *HandlerContainer
+	multicastHandler  *client.HandlerContainer
 	msgID             uint32
 
 	listen      *coapNet.UDPConn
@@ -136,7 +137,7 @@ func NewServer(opt ...ServerOption) *Server {
 		blockwiseSZX:                   opts.blockwiseSZX,
 		blockwiseEnable:                opts.blockwiseEnable,
 		blockwiseTransferTimeout:       opts.blockwiseTransferTimeout,
-		multicastHandler:               NewHandlerContainer(),
+		multicastHandler:               client.NewHandlerContainer(),
 		multicastRequests:              &sync.Map{},
 		msgID:                          msgID,
 		serverStartedChan:              serverStartedChan,
@@ -145,7 +146,7 @@ func NewServer(opt ...ServerOption) *Server {
 		transmissionAcknowledgeTimeout: opts.transmissionAcknowledgeTimeout,
 		transmissionMaxRetransmit:      opts.transmissionMaxRetransmit,
 
-		conns: make(map[string]*ClientConn),
+		conns: make(map[string]*client.ClientConn),
 	}
 }
 
@@ -196,7 +197,7 @@ func (s *Server) Serve(l *coapNet.UDPConn) error {
 				}()
 			}
 		}
-		err = cc.session.processBuffer(buf, cc)
+		err = cc.Process(buf)
 		if err != nil {
 			cc.Close()
 			s.errors(err)
@@ -213,7 +214,7 @@ func (s *Server) Stop() {
 func (s *Server) closeSessions() {
 	s.connsMutex.Lock()
 	tmp := s.conns
-	s.conns = make(map[string]*ClientConn)
+	s.conns = make(map[string]*client.ClientConn)
 	s.connsMutex.Unlock()
 	for _, v := range tmp {
 		v.Close()
@@ -233,7 +234,7 @@ func (s *Server) conn() *coapNet.UDPConn {
 	return s.listen
 }
 
-func (s *Server) getOrCreateClientConn(UDPConn *coapNet.UDPConn, raddr *net.UDPAddr) (*ClientConn, bool) {
+func (s *Server) getOrCreateClientConn(UDPConn *coapNet.UDPConn, raddr *net.UDPAddr) (*client.ClientConn, bool) {
 	s.connsMutex.Lock()
 	defer s.connsMutex.Unlock()
 	key := raddr.String()
@@ -255,22 +256,31 @@ func (s *Server) getOrCreateClientConn(UDPConn *coapNet.UDPConn, raddr *net.UDPA
 				return msg.(blockwise.Message), ok
 			})
 		}
-		obsHandler := NewHandlerContainer()
-		cc = NewClientConn(
-			NewSession(
-				s.ctx,
-				UDPConn,
-				raddr,
-				NewObservatiomHandler(obsHandler, func(w *ResponseWriter, r *pool.Message) {
-					h, err := s.multicastHandler.Get(r.Token())
-					if err == nil {
-						h(w, r)
-						return
-					}
-					s.handler(w, r)
-				}),
-				s.maxMessageSize, s.goPool, s.blockwiseSZX, blockWise),
-			obsHandler, s.multicastRequests, s.transmissionNStart, s.transmissionAcknowledgeTimeout, s.transmissionMaxRetransmit,
+		obsHandler := client.NewHandlerContainer()
+		session := NewSession(
+			s.ctx,
+			UDPConn,
+			raddr,
+			s.maxMessageSize,
+		)
+		cc = client.NewClientConn(
+			session,
+			obsHandler,
+			s.multicastRequests,
+			s.transmissionNStart,
+			s.transmissionAcknowledgeTimeout,
+			s.transmissionMaxRetransmit,
+			client.NewObservatiomHandler(obsHandler, func(w *client.ResponseWriter, r *pool.Message) {
+				h, err := s.multicastHandler.Get(r.Token())
+				if err == nil {
+					h(w, r)
+					return
+				}
+				s.handler(w, r)
+			}),
+			s.blockwiseSZX,
+			blockWise,
+			s.goPool,
 		)
 		cc.AddOnClose(func() {
 			s.connsMutex.Lock()
@@ -296,8 +306,8 @@ type MulticastOption interface {
 }
 
 // Discover sends GET to multicast address and wait for responses until context timeouts or server shutdown.
-func (s *Server) Discover(ctx context.Context, multicastAddr, path string, receiverFunc func(cc *ClientConn, resp *pool.Message), opts ...MulticastOption) error {
-	req, err := NewGetRequest(ctx, path)
+func (s *Server) Discover(ctx context.Context, multicastAddr, path string, receiverFunc func(cc *client.ClientConn, resp *pool.Message), opts ...MulticastOption) error {
+	req, err := client.NewGetRequest(ctx, path)
 	if err != nil {
 		return fmt.Errorf("cannot create discover request: %w", err)
 	}
@@ -307,7 +317,7 @@ func (s *Server) Discover(ctx context.Context, multicastAddr, path string, recei
 }
 
 // DiscoveryRequest sends request to multicast addressand wait for responses until request timeouts or server shutdown.
-func (s *Server) DiscoveryRequest(req *pool.Message, multicastAddr string, receiverFunc func(cc *ClientConn, resp *pool.Message), opts ...MulticastOption) error {
+func (s *Server) DiscoveryRequest(req *pool.Message, multicastAddr string, receiverFunc func(cc *client.ClientConn, resp *pool.Message), opts ...MulticastOption) error {
 	token := req.Token()
 	if len(token) == 0 {
 		return fmt.Errorf("invalid token")
@@ -333,7 +343,7 @@ func (s *Server) DiscoveryRequest(req *pool.Message, multicastAddr string, recei
 	}
 	s.multicastRequests.Store(token.String(), req)
 	defer s.multicastRequests.Delete(token.String())
-	err = s.multicastHandler.Insert(token, func(w *ResponseWriter, r *pool.Message) {
+	err = s.multicastHandler.Insert(token, func(w *client.ResponseWriter, r *pool.Message) {
 		receiverFunc(w.ClientConn(), r)
 	})
 	if err != nil {
