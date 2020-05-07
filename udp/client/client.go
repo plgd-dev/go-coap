@@ -1,7 +1,6 @@
 package client
 
 import (
-	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/binary"
@@ -99,25 +98,6 @@ func (cc *ClientConn) do(req *pool.Message) (*pool.Message, error) {
 		return nil, fmt.Errorf("invalid token")
 	}
 	respChan := make(chan *pool.Message, 1)
-	errChan := make(chan error, 1)
-	if req.Type() == udpMessage.Confirmable {
-		err := cc.midHandlerContainer.Insert(req.MessageID(), func(w *ResponseWriter, r *pool.Message) {
-			if r.IsSeparate() {
-				// separate message - just accept
-				return
-			}
-			if bytes.Equal(r.Token(), token) {
-				r.Hijack()
-				respChan <- r
-				return
-			}
-			errChan <- fmt.Errorf("unexpected msg comes: %+v", r)
-		})
-		if err != nil {
-			return nil, fmt.Errorf("cannot insert mid handler: %w", err)
-		}
-		defer cc.midHandlerContainer.Pop(req.MessageID())
-	}
 	err := cc.tokenHandlerContainer.Insert(token, func(w *ResponseWriter, r *pool.Message) {
 		r.Hijack()
 		respChan <- r
@@ -126,44 +106,18 @@ func (cc *ClientConn) do(req *pool.Message) (*pool.Message, error) {
 		return nil, fmt.Errorf("cannot add token handler: %w", err)
 	}
 	defer cc.tokenHandlerContainer.Pop(token)
-	err = cc.session.WriteRequest(req)
+	err = cc.writeRequest(req)
 	if err != nil {
 		return nil, fmt.Errorf("cannot write request: %w", err)
 	}
-	inf := make(<-chan time.Time)
-	for i := 0; i < cc.transmissionMaxRetransmit; i++ {
-		timeout := inf
-		if req.Type() == udpMessage.Confirmable {
-			timeout = time.After(cc.transmissionAcknowledgeTimeout)
-		}
-		select {
-		case <-req.Context().Done():
-			return nil, req.Context().Err()
-		case <-cc.session.Context().Done():
-			return nil, fmt.Errorf("connection was closed: %w", req.Context().Err())
-		case resp := <-respChan:
-			return resp, nil
-		case err = <-errChan:
-			return nil, err
-		case <-timeout:
-			select {
-			case <-req.Context().Done():
-				return nil, req.Context().Err()
-			case <-cc.session.Context().Done():
-				return nil, fmt.Errorf("connection was closed: %w", req.Context().Err())
-			case resp := <-respChan:
-				return resp, nil
-			case err = <-errChan:
-				return nil, err
-			case <-time.After(cc.transmissionNStart):
-				err = cc.session.WriteRequest(req)
-				if err != nil {
-					return nil, fmt.Errorf("cannot write request: %w", err)
-				}
-			}
-		}
+	select {
+	case <-req.Context().Done():
+		return nil, req.Context().Err()
+	case <-cc.session.Context().Done():
+		return nil, fmt.Errorf("connection was closed: %w", req.Context().Err())
+	case resp := <-respChan:
+		return resp, nil
 	}
-	return nil, fmt.Errorf("cannot do request: timeout: retransmision(%v) was exited", cc.transmissionMaxRetransmit)
 }
 
 // Do sends an coap request and returns an coap response.
@@ -183,7 +137,50 @@ func (cc *ClientConn) Do(req *pool.Message) (*pool.Message, error) {
 }
 
 func (cc *ClientConn) writeRequest(req *pool.Message) error {
-	return cc.session.WriteRequest(req)
+	if req.Type() != udpMessage.Confirmable {
+		return cc.session.WriteRequest(req)
+	}
+	respChan := make(chan struct{})
+	err := cc.midHandlerContainer.Insert(req.MessageID(), func(w *ResponseWriter, r *pool.Message) {
+		close(respChan)
+		if r.IsSeparate() {
+			// separate message - just accept
+			return
+		}
+		cc.handleBW(w, r)
+	})
+	if err != nil {
+		return fmt.Errorf("cannot insert mid handler: %w", err)
+	}
+	defer cc.midHandlerContainer.Pop(req.MessageID())
+
+	err = cc.session.WriteRequest(req)
+	if err != nil {
+		return fmt.Errorf("cannot write request: %w", err)
+	}
+	for i := 0; i < cc.transmissionMaxRetransmit; i++ {
+		select {
+		case <-respChan:
+			return nil
+		case <-req.Context().Done():
+			return req.Context().Err()
+		case <-cc.Context().Done():
+			return fmt.Errorf("connection was closed: %w", cc.Context().Err())
+		case <-time.After(cc.transmissionAcknowledgeTimeout):
+			select {
+			case <-req.Context().Done():
+				return req.Context().Err()
+			case <-cc.session.Context().Done():
+				return fmt.Errorf("connection was closed: %w", req.Context().Err())
+			case <-time.After(cc.transmissionNStart):
+				err = cc.session.WriteRequest(req)
+				if err != nil {
+					return fmt.Errorf("cannot write request: %w", err)
+				}
+			}
+		}
+	}
+	return fmt.Errorf("timeout: retransmision(%v) was exhausted", cc.transmissionMaxRetransmit)
 }
 
 // WriteRequest sends an coap request.
@@ -407,7 +404,32 @@ func (b *bwResponseWriter) SetMessage(m blockwise.Message) {
 	b.w.response = m.(*pool.Message)
 }
 
-func (cc *ClientConn) Handle(w *ResponseWriter, r *pool.Message) {
+func (cc *ClientConn) handleBW(w *ResponseWriter, r *pool.Message) {
+	if cc.blockWise != nil {
+		bwr := bwResponseWriter{
+			w: w,
+		}
+		cc.blockWise.Handle(&bwr, r, cc.blockwiseSZX, cc.session.MaxMessageSize(), func(bw blockwise.ResponseWriter, br blockwise.Message) {
+			h, err := cc.tokenHandlerContainer.Pop(r.Token())
+			w := bw.(*bwResponseWriter).w
+			r := br.(*pool.Message)
+			if err == nil {
+				h(w, r)
+				return
+			}
+			cc.handler(w, r)
+		})
+		return
+	}
+	h, err := cc.tokenHandlerContainer.Pop(r.Token())
+	if err == nil {
+		h(w, r)
+		return
+	}
+	cc.handler(w, r)
+}
+
+func (cc *ClientConn) handle(w *ResponseWriter, r *pool.Message) {
 	if r.Code() == codes.Empty && r.Type() == udpMessage.Confirmable && len(r.Token()) == 0 && len(r.Options()) == 0 && r.Body() == nil {
 		cc.sendPong(w, r)
 		return
@@ -421,28 +443,7 @@ func (cc *ClientConn) Handle(w *ResponseWriter, r *pool.Message) {
 		// msg was processed by token handler - just drop it.
 		return
 	}
-	if cc.blockWise != nil {
-		bwr := bwResponseWriter{
-			w: w,
-		}
-		cc.blockWise.Handle(&bwr, r, cc.blockwiseSZX, cc.session.MaxMessageSize(), func(bw blockwise.ResponseWriter, br blockwise.Message) {
-			h, err = cc.tokenHandlerContainer.Pop(r.Token())
-			w := bw.(*bwResponseWriter).w
-			r := br.(*pool.Message)
-			if err == nil {
-				h(w, r)
-				return
-			}
-			cc.handler(w, r)
-		})
-		return
-	}
-	h, err = cc.tokenHandlerContainer.Pop(r.Token())
-	if err == nil {
-		h(w, r)
-		return
-	}
-	cc.handler(w, r)
+	cc.handleBW(w, r)
 }
 
 func (cc *ClientConn) Sequence() uint64 {
@@ -466,7 +467,7 @@ func (cc *ClientConn) Process(datagram []byte) error {
 		w := NewResponseWriter(origResp, cc, req.Options())
 		typ := req.Type()
 		mid := req.MessageID()
-		cc.Handle(w, req)
+		cc.handle(w, req)
 		defer pool.ReleaseMessage(w.response)
 		if !req.IsHijacked() {
 			pool.ReleaseMessage(req)
