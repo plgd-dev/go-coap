@@ -2,6 +2,12 @@
 [![codecov](https://codecov.io/gh/go-ocf/go-coap/branch/master/graph/badge.svg)](https://codecov.io/gh/go-ocf/go-coap)
 [![Go Report](https://goreportcard.com/badge/github.com/go-ocf/go-coap)](https://goreportcard.com/report/github.com/go-ocf/go-coap)
 [![FOSSA Status](https://app.fossa.io/api/projects/git%2Bgithub.com%2Fgo-ocf%2Fgo-coap.svg?type=shield)](https://app.fossa.io/projects/git%2Bgithub.com%2Fgo-ocf%2Fgo-coap?ref=badge_shield)
+[![backer](https://opencollective.com/go-coap/backers/badge.svg)](https://opencollective.com/go-coap#backer)
+[![sponsors](https://opencollective.com/go-coap/sponsors/badge.svg)](https://opencollective.com/go-coap#sponsors)
+[![contributors](https://img.shields.io/github/contributors/go-ocf/go-coap)](https://github.com/go-ocf/go-coap/graphs/contributors)
+[![GitHub stars](https://img.shields.io/github/stars/go-ocf/go-coap)](https://github.com/go-ocf/go-coap/stargazers)
+[![GitHub license](https://img.shields.io/github/license/go-ocf/go-coap)](https://github.com/go-ocf/go-coap/blob/master/LICENSE)
+
 
 # CoAP Client and Server for go
 
@@ -117,3 +123,20 @@ $ docker run --mount type=bind,source="$(pwd)",target=/shared,readonly --network
 Apache 2.0
 
 [![FOSSA Status](https://app.fossa.io/api/projects/git%2Bgithub.com%2Fgo-ocf%2Fgo-coap.svg?type=large)](https://app.fossa.io/projects/git%2Bgithub.com%2Fgo-ocf%2Fgo-coap?ref=badge_large)
+
+
+<h2 align="center">Sponsors</h2>
+
+[Become a sponsor](https://opencollective.com/go-coap#sponsor) and get your logo on our README on Github with a link to your site.
+
+<div align="center">
+
+<a href="https://opencollective.com/go-coap/sponsor/0/website?requireActive=false" target="_blank"><img src="https://opencollective.com/go-coap/sponsor/0/avatar.svg?requireActive=false"></a>
+
+</div>
+
+<h2 align="center">Backers</h2>
+
+[Become a backer](https://opencollective.com/go-coap#backer) and get your image on our README on Github with a link to your site.
+
+<a href="https://opencollective.com/go-coap/backer/0/website?requireActive=false" target="_blank"><img src="https://opencollective.com/go-coap/backer/0/avatar.svg?requireActive=false"></a>
