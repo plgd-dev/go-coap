@@ -187,3 +187,33 @@ func WithOnNewClientConn(onNewClientConn OnNewClientConnFunc) OnNewClientConnOpt
 		onNewClientConn: onNewClientConn,
 	}
 }
+
+// TransmissionOpt transmission options.
+type TransmissionOpt struct {
+	transmissionNStart             time.Duration
+	transmissionAcknowledgeTimeout time.Duration
+	transmissionMaxRetransmit      int
+}
+
+func (o TransmissionOpt) apply(opts *serverOptions) {
+	opts.transmissionNStart = o.transmissionNStart
+	opts.transmissionAcknowledgeTimeout = o.transmissionAcknowledgeTimeout
+	opts.transmissionMaxRetransmit = o.transmissionMaxRetransmit
+}
+
+func (o TransmissionOpt) applyDial(opts *dialOptions) {
+	opts.transmissionNStart = o.transmissionNStart
+	opts.transmissionAcknowledgeTimeout = o.transmissionAcknowledgeTimeout
+	opts.transmissionMaxRetransmit = o.transmissionMaxRetransmit
+}
+
+// WithTransmission set options for (re)transmission for Confirmable message-s.
+func WithTransmission(transmissionNStart time.Duration,
+	transmissionAcknowledgeTimeout time.Duration,
+	transmissionMaxRetransmit int) TransmissionOpt {
+	return TransmissionOpt{
+		transmissionNStart:             transmissionNStart,
+		transmissionAcknowledgeTimeout: transmissionAcknowledgeTimeout,
+		transmissionMaxRetransmit:      transmissionMaxRetransmit,
+	}
+}
