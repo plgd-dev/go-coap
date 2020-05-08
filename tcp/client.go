@@ -96,6 +96,15 @@ func Dial(target string, opts ...DialOption) (*ClientConn, error) {
 	if err != nil {
 		return nil, err
 	}
+	return Client(conn, opts...), nil
+}
+
+// Client creates client over tcp/tcp-tls connection.
+func Client(conn net.Conn, opts ...DialOption) *ClientConn {
+	cfg := defaultDialOptions
+	for _, o := range opts {
+		o.applyDial(&cfg)
+	}
 
 	observatioRequests := &sync.Map{}
 	var blockWise *blockwise.BlockWise
@@ -143,7 +152,7 @@ func Dial(target string, opts ...DialOption) (*ClientConn, error) {
 		}()
 	}
 
-	return cc, nil
+	return cc
 }
 
 // NewClientConn creates connection over session and observation.

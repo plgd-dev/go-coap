@@ -90,6 +90,15 @@ func Dial(target string, dtlsCfg *dtls.Config, opts ...DialOption) (*client.Clie
 	if err != nil {
 		return nil, err
 	}
+	return Client(conn, opts...), nil
+}
+
+// Client creates client over dtls connection.
+func Client(conn *dtls.Conn, opts ...DialOption) *client.ClientConn {
+	cfg := defaultDialOptions
+	for _, o := range opts {
+		o.applyDial(&cfg)
+	}
 
 	observatioRequests := &sync.Map{}
 	var blockWise *blockwise.BlockWise
@@ -138,5 +147,5 @@ func Dial(target string, dtlsCfg *dtls.Config, opts ...DialOption) (*client.Clie
 		}()
 	}
 
-	return cc, nil
+	return cc
 }

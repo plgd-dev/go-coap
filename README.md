@@ -50,10 +50,10 @@ Features supported:
 		// log.Fatal(coap.ListenAndServe("tcp", ":5688",  m))
 
 		// for tcp-tls
-		// log.Fatal(coap.ListenAndServeTLS("tcp-tls", ":5688", &tls.Config{...}, m))
+		// log.Fatal(coap.ListenAndServeTLS("tcp", ":5688", &tls.Config{...}, m))
 
 		// for udp-dtls
-		// log.Fatal(coap.ListenAndServeDTLS("udp-dtls", ":5688", &dtls.Config{...}, m))
+		// log.Fatal(coap.ListenAndServeDTLS("udp", ":5688", &dtls.Config{...}, m))
 	}
 ```
 #### Client
