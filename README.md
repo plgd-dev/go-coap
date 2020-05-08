@@ -100,13 +100,15 @@ The go-coap provides servers and clients for DTLS, TCP-TLS, UDP, TCP in golang l
 
 ### Observe / Notify
 
-[Server](examples/observe/server/main.go)
-[Client](examples/observe/client/main.go)
+[Server](examples/observe/server/main.go) example.
+
+[Client](examples/observe/client/main.go) example.
 
 ### Multicast
 
-[Server](examples/mcast/server/main.go)
-[Client](examples/mcast/client/main.go)
+[Server](examples/mcast/server/main.go) example.
+
+[Client](examples/mcast/client/main.go) example.
 
 ## Contributing
 
