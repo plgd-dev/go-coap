@@ -247,6 +247,6 @@ func (s *Server) createClientConn(connection *coapNet.Conn) *client.ClientConn {
 }
 
 // GetMID generates a message id for UDP-coap
-func (s *Server) getMID() uint16 {
+func (s *Server) GetMID() uint16 {
 	return uint16(atomic.AddUint32(&s.msgID, 1) % 0xffff)
 }

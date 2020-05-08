@@ -76,6 +76,7 @@ type ROMessage interface {
 	Options() message.Options
 	Body() io.ReadSeeker
 	BodySize() (int64, error)
+	Sequence() uint64
 }
 
 // Message defines message interface for blockwise transfer.
@@ -87,6 +88,7 @@ type Message interface {
 	Remove(id message.OptionID)
 	ResetOptionsTo(message.Options)
 	SetBody(r io.ReadSeeker)
+	SetSequence(uint64)
 }
 
 // EncodeBlockOption encodes block values to coap option.
@@ -629,6 +631,7 @@ func (b *BlockWise) processReceivedMessage(w ResponseWriter, r Message, maxSzx S
 		cachedReceivedMessage := b.acquireMessage(r.Context())
 		cachedReceivedMessage.ResetOptionsTo(r.Options())
 		cachedReceivedMessage.SetToken(r.Token())
+		cachedReceivedMessage.SetSequence(r.Sequence())
 		cachedReceivedMessageGuard = newRequestGuard(cachedReceivedMessage)
 		err := b.receivingMessagesCache.Add(tokenStr, cachedReceivedMessageGuard, cache.DefaultExpiration)
 		// request was already stored in cache, silently

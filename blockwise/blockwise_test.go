@@ -33,11 +33,12 @@ func newResponseWriter(r Message) *responseWriter {
 }
 
 type request struct {
-	code    codes.Code
-	ctx     context.Context
-	token   message.Token
-	options message.Options
-	payload io.ReadSeeker
+	code     codes.Code
+	ctx      context.Context
+	token    message.Token
+	options  message.Options
+	payload  io.ReadSeeker
+	sequence uint64
 }
 
 func (r *request) Context() context.Context {
@@ -58,6 +59,14 @@ func (r *request) SetToken(token message.Token) {
 
 func (r *request) Token() message.Token {
 	return r.token
+}
+
+func (r *request) SetSequence(s uint64) {
+	r.sequence = s
+}
+
+func (r *request) Sequence() uint64 {
+	return r.sequence
 }
 
 func (r *request) SetOptionUint32(id message.OptionID, value uint32) {

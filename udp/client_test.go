@@ -108,6 +108,8 @@ func TestClientConn_Get(t *testing.T) {
 			}
 			require.NoError(t, err)
 			require.Equal(t, tt.wantCode, got.Code())
+			fmt.Printf("seq %v\n", got.Sequence())
+			assert.Greater(t, got.Sequence(), uint64(0))
 			if tt.wantContentFormat != nil {
 				ct, err := got.ContentFormat()
 				require.NoError(t, err)

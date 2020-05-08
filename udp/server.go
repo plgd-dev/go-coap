@@ -311,7 +311,7 @@ func (s *Server) Discover(ctx context.Context, multicastAddr, path string, recei
 	if err != nil {
 		return fmt.Errorf("cannot create discover request: %w", err)
 	}
-	req.SetMessageID(s.getMID())
+	req.SetMessageID(s.GetMID())
 	defer pool.ReleaseMessage(req)
 	return s.DiscoveryRequest(req, multicastAddr, receiverFunc, opts...)
 }
@@ -364,6 +364,6 @@ func (s *Server) DiscoveryRequest(req *pool.Message, multicastAddr string, recei
 }
 
 // GetMID generates a message id for UDP-coap
-func (s *Server) getMID() uint16 {
+func (s *Server) GetMID() uint16 {
 	return uint16(atomic.AddUint32(&s.msgID, 1) % 0xffff)
 }
