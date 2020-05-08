@@ -9,9 +9,14 @@
 [![GitHub license](https://img.shields.io/github/license/go-ocf/go-coap)](https://github.com/go-ocf/go-coap/blob/master/LICENSE)
 
 
-# CoAP Client and Server for go
+# Go-CoAP
 
-Features supported:
+The Constrained Application Protocol (CoAP) is a specialized web transfer protocol for use with constrained nodes and constrained networks in the Internet of Things.
+The protocol is designed for machine-to-machine (M2M) applications such as smart energy and building automation.
+
+The go-coap provides servers and clients for DTLS, TCP-TLS, UDP, TCP in golang language.
+
+## Features:
 * CoAP over UDP [RFC 7252][coap].
 * CoAP over TCP/TLS [RFC 8232][coap-tcp]
 * Observe resources in CoAP [RFC 7641][coap-observe]
