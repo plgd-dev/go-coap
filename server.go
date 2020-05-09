@@ -67,6 +67,10 @@ func (f HandlerFunc) ServeCOAP(w ResponseWriter, r *Request) {
 	f(w, r)
 }
 
+// The ListenerErrorFunc type is used to handle listener errors
+// that occur while the server is listening for incoming sessions
+type ListenerErrorFunc func(err error) bool
+
 // HandleFailed returns a HandlerFunc that returns NotFound for every request it gets.
 func HandleFailed(w ResponseWriter, req *Request) {
 	msg := req.Client.NewMessage(MessageParams{
@@ -82,19 +86,26 @@ func failedHandler() Handler { return HandlerFunc(HandleFailed) }
 
 // ListenAndServe Starts a server on address and network specified Invoke handler
 // for incoming queries.
-func ListenAndServe(network string, addr string, handler Handler) error {
-	server := &Server{Addr: addr, Net: network, Handler: handler}
+func ListenAndServe(network string, addr string, handler Handler, listenerErrorFunc ListenerErrorFunc) error {
+	server := &Server{
+		Addr:              addr,
+		Net:               network,
+		Handler:           handler,
+		listenerErrorFunc: listenerErrorFunc,
+	}
+
 	return server.ListenAndServe()
 }
 
 // ListenAndServeTLS acts like http.ListenAndServeTLS, more information in
 // http://golang.org/pkg/net/http/#ListenAndServeTLS
-func ListenAndServeTLS(network, addr string, config *tls.Config, handler Handler) error {
+func ListenAndServeTLS(network, addr string, config *tls.Config, handler Handler, listenerErrorFunc ListenerErrorFunc) error {
 	server := &Server{
-		Addr:      addr,
-		Net:       fixNetTLS(network),
-		TLSConfig: config,
-		Handler:   handler,
+		Addr:              addr,
+		Net:               fixNetTLS(network),
+		TLSConfig:         config,
+		Handler:           handler,
+		listenerErrorFunc: listenerErrorFunc,
 	}
 
 	return server.ListenAndServe()
@@ -102,12 +113,13 @@ func ListenAndServeTLS(network, addr string, config *tls.Config, handler Handler
 
 // ListenAndServeDTLS acts like ListenAndServeTLS, more information in
 // http://golang.org/pkg/net/http/#ListenAndServeTLS
-func ListenAndServeDTLS(network string, addr string, config *dtls.Config, handler Handler) error {
+func ListenAndServeDTLS(network string, addr string, config *dtls.Config, handler Handler, listenerErrorFunc ListenerErrorFunc) error {
 	server := &Server{
-		Addr:       addr,
-		Net:        fixNetDTLS(network),
-		DTLSConfig: config,
-		Handler:    handler,
+		Addr:              addr,
+		Net:               fixNetDTLS(network),
+		DTLSConfig:        config,
+		Handler:           handler,
+		listenerErrorFunc: listenerErrorFunc,
 	}
 
 	return server.ListenAndServe()
@@ -173,6 +185,9 @@ type Server struct {
 	KeepAlive KeepAlive
 	// Report errors
 	Errors func(err error)
+
+	// Handler errors on listener
+	listenerErrorFunc ListenerErrorFunc
 
 	// UDP packet or TCP connection queue
 	queue chan *Request
@@ -570,11 +585,16 @@ func (srv *Server) serveDTLSListener(l Listener) error {
 	for {
 		rw, err := l.AcceptWithContext(ctx)
 		if err != nil {
+			cont := srv.listenerErrorFunc(err)
 			switch err {
 			case ErrServerClosed, context.DeadlineExceeded, context.Canceled:
 				wg.Wait()
 				return fmt.Errorf("cannot accept DTLS: %v", err)
 			default:
+				if !cont {
+					wg.Wait()
+					return fmt.Errorf("cannot serve dtls: %v", err)
+				}
 				continue
 			}
 		}
@@ -649,11 +669,16 @@ func (srv *Server) serveTCPListener(l Listener) error {
 	for {
 		rw, err := l.AcceptWithContext(ctx)
 		if err != nil {
+			cont := srv.listenerErrorFunc(err)
 			switch err {
 			case ErrServerClosed, context.DeadlineExceeded, context.Canceled:
 				wg.Wait()
 				return fmt.Errorf("cannot accept TCP: %v", err)
 			default:
+				if !cont {
+					wg.Wait()
+					return fmt.Errorf("cannot serve tcp: %v", err)
+				}
 				continue
 			}
 		}
