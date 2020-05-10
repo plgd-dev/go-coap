@@ -8,7 +8,6 @@
 [![GitHub stars](https://img.shields.io/github/stars/go-ocf/go-coap)](https://github.com/go-ocf/go-coap/stargazers)
 [![GitHub license](https://img.shields.io/github/license/go-ocf/go-coap)](https://github.com/go-ocf/go-coap/blob/master/LICENSE)
 
-
 # Go-CoAP
 
 The Constrained Application Protocol (CoAP) is a specialized web transfer protocol for use with constrained nodes and constrained networks in the Internet of Things.
@@ -16,7 +15,7 @@ The protocol is designed for machine-to-machine (M2M) applications such as smart
 
 The go-coap provides servers and clients for DTLS, TCP-TLS, UDP, TCP in golang language.
 
-## Features:
+## Features
 * CoAP over UDP [RFC 7252][coap].
 * CoAP over TCP/TLS [RFC 8232][coap-tcp]
 * Observe resources in CoAP [RFC 7641][coap-observe]
@@ -97,7 +96,6 @@ The go-coap provides servers and clients for DTLS, TCP-TLS, UDP, TCP in golang l
 	}
 ```
 
-
 ### Observe / Notify
 
 [Server](examples/observe/server/main.go) example.
@@ -123,7 +121,6 @@ $ docker run --mount type=bind,source="$(pwd)",target=/shared,readonly --network
 Apache 2.0
 
 [![FOSSA Status](https://app.fossa.io/api/projects/git%2Bgithub.com%2Fgo-ocf%2Fgo-coap.svg?type=large)](https://app.fossa.io/projects/git%2Bgithub.com%2Fgo-ocf%2Fgo-coap?ref=badge_large)
-
 
 <h2 align="center">Sponsors</h2>
 
