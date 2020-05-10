@@ -7,6 +7,8 @@
 [![contributors](https://img.shields.io/github/contributors/go-ocf/go-coap)](https://github.com/go-ocf/go-coap/graphs/contributors)
 [![GitHub stars](https://img.shields.io/github/stars/go-ocf/go-coap)](https://github.com/go-ocf/go-coap/stargazers)
 [![GitHub license](https://img.shields.io/github/license/go-ocf/go-coap)](https://github.com/go-ocf/go-coap/blob/master/LICENSE)
+[![GoDoc](https://godoc.org/github.com/go-ocf/go-coap?status.svg)](https://godoc.org/github.com/go-ocf/go-coap)
+[![Sourcegraph](https://sourcegraph.com/github.com/go-ocf/go-coap/-/badge.svg)](https://sourcegraph.com/github.com/go-ocf/go-coap?badge)
 
 # Go-CoAP
 
