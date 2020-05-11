@@ -32,5 +32,10 @@ func main() {
 		log.Fatalf("Run %v LISTEN_ADDRESS:PORT ", os.Args[0])
 	}
 
-	log.Fatal(coap.ListenAndServe("tcp", os.Args[1], coap.HandlerFunc(handleA)))
+	listenerErrorHandler := func(err error) bool {
+		log.Printf("Listener error occurred: %v", err)
+		return true
+	}
+
+	log.Fatal(coap.ListenAndServe("tcp", os.Args[1], coap.HandlerFunc(handleA), listenerErrorHandler))
 }

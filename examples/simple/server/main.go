@@ -38,5 +38,10 @@ func main() {
 	mux.Handle("/a", coap.HandlerFunc(handleA))
 	mux.Handle("/b", coap.HandlerFunc(handleB))
 
-	log.Fatal(coap.ListenAndServe("udp", ":5688", mux))
+	listenerErrorHandler := func(err error) bool {
+		log.Printf("Listener error occurred: %v", err)
+		return true
+	}
+
+	log.Fatal(coap.ListenAndServe("udp", ":5688", mux, listenerErrorHandler))
 }

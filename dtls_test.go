@@ -128,11 +128,17 @@ func TestRSACerts(t *testing.T) {
 		ClientAuth:           dtls.RequireAnyClientCert,
 	}
 
+	listenerErrorHandler := func(err error) bool {
+		fmt.Fprintf(os.Stderr, "Listener error occurred: %v", err)
+		return true
+	}
+
 	s := &Server{
-		Net:        "udp-dtls",
-		Addr:       ":5688",
-		DTLSConfig: config,
-		Handler:    HandlerFunc(EchoServer),
+		Net:               "udp-dtls",
+		Addr:              ":5688",
+		DTLSConfig:        config,
+		Handler:           HandlerFunc(EchoServer),
+		listenerErrorFunc: listenerErrorHandler,
 	}
 	err = s.ListenAndServe()
 	require.Error(t, err)
@@ -155,10 +161,16 @@ func TestECDSACerts_PeerCertificate(t *testing.T) {
 	l, err := coapNet.NewDTLSListener("udp", ":", &config, time.Millisecond*100)
 	require.NoError(t, err)
 
+	listenerErrorHandler := func(err error) bool {
+		fmt.Fprintf(os.Stderr, "Listener error occurred: %v", err)
+		return true
+	}
+
 	s := &Server{
-		Net:       "udp-dtls",
-		Listener:  l,
-		KeepAlive: MustMakeKeepAlive(time.Second),
+		Net:               "udp-dtls",
+		Listener:          l,
+		KeepAlive:         MustMakeKeepAlive(time.Second),
+		listenerErrorFunc: listenerErrorHandler,
 	}
 	s.Handler = HandlerFunc(func(w ResponseWriter, r *Request) {
 		certs := r.Client.PeerCertificates()

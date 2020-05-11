@@ -117,6 +117,11 @@ func TestKeepAliveTCP_Server(t *testing.T) {
 	var wg sync.WaitGroup
 	wg.Add(1)
 
+	listenerErrorHandler := func(err error) bool {
+		fmt.Printf("Listener error occurred: %v", err)
+		return true
+	}
+
 	s := &Server{Listener: l, ReadTimeout: time.Second * 3600, WriteTimeout: time.Second * 3600,
 		NotifySessionNewFunc: func(s *ClientConn) {
 			fmt.Printf("networkSession start %v\n", s.RemoteAddr())
@@ -141,6 +146,7 @@ func TestKeepAliveTCP_Server(t *testing.T) {
 				}
 			},
 		},
+		listenerErrorFunc: listenerErrorHandler,
 	}
 	defer s.Shutdown()
 
@@ -167,6 +173,11 @@ func TestKeepAliveTCPTLS_Server(t *testing.T) {
 	var wg sync.WaitGroup
 	wg.Add(1)
 
+	listenerErrorHandler := func(err error) bool {
+		fmt.Printf("Listener error occurred: %v", err)
+		return true
+	}
+
 	s := &Server{Listener: l, ReadTimeout: time.Second * 3600, WriteTimeout: time.Second * 3600,
 		NotifySessionNewFunc: func(s *ClientConn) {
 			fmt.Printf("networkSession start %v\n", s.RemoteAddr())
@@ -191,6 +202,7 @@ func TestKeepAliveTCPTLS_Server(t *testing.T) {
 				}
 			},
 		},
+		listenerErrorFunc: listenerErrorHandler,
 	}
 	defer s.Shutdown()
 
@@ -214,6 +226,11 @@ func TestKeepAliveUDP_Server(t *testing.T) {
 
 	var wg sync.WaitGroup
 	wg.Add(1)
+
+	listenerErrorHandler := func(err error) bool {
+		fmt.Printf("Listener error occurred: %v", err)
+		return true
+	}
 
 	s := &Server{ReadTimeout: time.Second * 3600, WriteTimeout: time.Second * 3600,
 		NotifySessionNewFunc: func(s *ClientConn) {
@@ -239,6 +256,7 @@ func TestKeepAliveUDP_Server(t *testing.T) {
 				}
 			},
 		},
+		listenerErrorFunc: listenerErrorHandler,
 	}
 	defer s.Shutdown()
 
@@ -272,6 +290,11 @@ func TestKeepAliveDTLS_Server(t *testing.T) {
 	var wg sync.WaitGroup
 	wg.Add(1)
 
+	listenerErrorHandler := func(err error) bool {
+		fmt.Printf("Listener error occurred: %v", err)
+		return true
+	}
+
 	s := &Server{Listener: l, ReadTimeout: time.Second * 3600, WriteTimeout: time.Second * 3600,
 		NotifySessionNewFunc: func(s *ClientConn) {
 			fmt.Printf("networkSession start %v\n", s.RemoteAddr())
@@ -296,6 +319,7 @@ func TestKeepAliveDTLS_Server(t *testing.T) {
 				}
 			},
 		},
+		listenerErrorFunc: listenerErrorHandler,
 	}
 	defer s.Shutdown()
 

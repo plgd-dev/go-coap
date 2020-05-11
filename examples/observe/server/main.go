@@ -29,6 +29,11 @@ func periodicTransmitter(w coap.ResponseWriter, req *coap.Request) {
 }
 
 func main() {
+	listenerErrorHandler := func(err error) bool {
+		log.Printf("Listener error occurred: %v", err)
+		return true
+	}
+
 	log.Fatal(coap.ListenAndServe("udp", ":5688",
 		coap.HandlerFunc(func(w coap.ResponseWriter, req *coap.Request) {
 			log.Printf("Got message path=%q: %#v from %v", req.Msg.Path(), req.Msg, req.Client.RemoteAddr())
@@ -42,5 +47,5 @@ func main() {
 					log.Printf("Error on transmitter: %v", err)
 				}
 			}
-		})))
+		}), listenerErrorHandler))
 }
