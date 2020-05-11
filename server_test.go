@@ -96,6 +96,11 @@ func RunLocalServerUDPWithHandlerIfaces(lnet, laddr string, BlockWiseTransfer bo
 		}
 	}
 
+	listenerErrorHandler := func(err error) bool {
+		fmt.Printf("Listener error occurred: %v", err)
+		return true
+	}
+
 	server := &Server{ReadTimeout: time.Hour, WriteTimeout: time.Hour,
 		NotifySessionNewFunc: func(s *ClientConn) {
 			fmt.Printf("networkSession start %v\n", s.RemoteAddr())
@@ -106,6 +111,7 @@ func RunLocalServerUDPWithHandlerIfaces(lnet, laddr string, BlockWiseTransfer bo
 		Handler:              handler,
 		BlockWiseTransfer:    &BlockWiseTransfer,
 		BlockWiseTransferSzx: &BlockWiseTransferSzx,
+		listenerErrorFunc:    listenerErrorHandler,
 	}
 
 	waitLock := sync.Mutex{}
@@ -181,13 +187,19 @@ func RunLocalTLSServer(laddr string, config *tls.Config) (*Server, string, chan 
 		return nil, "", nil, err
 	}
 
+	listenerErrorHandler := func(err error) bool {
+		fmt.Printf("Listener error occurred: %v", err)
+		return true
+	}
+
 	server := &Server{Listener: l, ReadTimeout: time.Hour, WriteTimeout: time.Hour,
 		NotifySessionNewFunc: func(s *ClientConn) {
 			fmt.Printf("networkSession start %v\n", s.RemoteAddr())
 		}, NotifySessionEndFunc: func(w *ClientConn, err error) {
 			fmt.Printf("networkSession end %v: %v\n", w.RemoteAddr(), err)
 		},
-		MaxMessageSize: ^uint32(0),
+		MaxMessageSize:    ^uint32(0),
+		listenerErrorFunc: listenerErrorHandler,
 	}
 
 	// fin must be buffered so the goroutine below won't block
