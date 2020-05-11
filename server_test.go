@@ -137,6 +137,11 @@ func RunLocalServerTCPWithHandler(laddr string, BlockWiseTransfer bool, BlockWis
 		return nil, "", nil, fmt.Errorf("cannot create new tls listener: %v", err)
 	}
 
+	listenerErrorHandler := func(err error) bool {
+		fmt.Printf("Listener error occurred: %v", err)
+		return true
+	}
+
 	server := &Server{Listener: l, ReadTimeout: time.Second * 3600, WriteTimeout: time.Second * 3600,
 		NotifySessionNewFunc: func(s *ClientConn) {
 			fmt.Printf("networkSession start %v\n", s.RemoteAddr())
@@ -146,6 +151,7 @@ func RunLocalServerTCPWithHandler(laddr string, BlockWiseTransfer bool, BlockWis
 		BlockWiseTransfer:    &BlockWiseTransfer,
 		BlockWiseTransferSzx: &BlockWiseTransferSzx,
 		MaxMessageSize:       ^uint32(0),
+		listenerErrorFunc:    listenerErrorHandler,
 	}
 
 	waitLock := sync.Mutex{}
@@ -203,6 +209,11 @@ func RunLocalDTLSServer(laddr string, config *dtls.Config, BlockWiseTransfer boo
 		return nil, "", nil, err
 	}
 
+	listenerErrorHandler := func(err error) bool {
+		fmt.Printf("Listener error occurred: %v", err)
+		return true
+	}
+
 	server := &Server{Listener: l, ReadTimeout: time.Hour, WriteTimeout: time.Hour,
 		BlockWiseTransfer:    &BlockWiseTransfer,
 		BlockWiseTransferSzx: &BlockWiseTransferSzx,
@@ -211,7 +222,8 @@ func RunLocalDTLSServer(laddr string, config *dtls.Config, BlockWiseTransfer boo
 		}, NotifySessionEndFunc: func(w *ClientConn, err error) {
 			fmt.Printf("networkSession end %v: %v\n", w.RemoteAddr(), err)
 		},
-		MaxMessageSize: ^uint32(0),
+		MaxMessageSize:    ^uint32(0),
+		listenerErrorFunc: listenerErrorHandler,
 	}
 
 	// fin must be buffered so the goroutine below won't block

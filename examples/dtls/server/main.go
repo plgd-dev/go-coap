@@ -34,6 +34,11 @@ func main() {
 	mux.Handle("/a", coap.HandlerFunc(handleA))
 	mux.Handle("/b", coap.HandlerFunc(handleB))
 
+	listenerErrorHandler := func(err error) bool {
+		log.Printf("Listener error occurred: %v", err)
+		return true
+	}
+
 	log.Fatal(coap.ListenAndServeDTLS("udp", ":5688", &dtls.Config{
 		PSK: func(hint []byte) ([]byte, error) {
 			fmt.Printf("Client's hint: %s \n", hint)
@@ -41,5 +46,5 @@ func main() {
 		},
 		PSKIdentityHint: []byte("Pion DTLS Client"),
 		CipherSuites:    []dtls.CipherSuiteID{dtls.TLS_PSK_WITH_AES_128_CCM_8},
-	}, mux))
+	}, mux, listenerErrorHandler))
 }
