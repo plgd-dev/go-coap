@@ -100,7 +100,7 @@ func TestClientConn_Get(t *testing.T) {
 	go func() {
 		defer wg.Done()
 		err := s.Serve(l)
-		t.Log(err)
+		require.NoError(t, err)
 	}()
 
 	cc, err := dtls.Dial(l.Addr().String(), dtlsCfg)
@@ -185,7 +185,7 @@ func TestClientConn_Get_SepareateMessage(t *testing.T) {
 	go func() {
 		defer wg.Done()
 		err := s.Serve(l)
-		t.Log(err)
+		require.NoError(t, err)
 	}()
 
 	cc, err := dtls.Dial(l.Addr().String(), dtlsCfg, dtls.WithHandlerFunc(func(w *client.ResponseWriter, r *pool.Message) {
@@ -304,7 +304,7 @@ func TestClientConn_Post(t *testing.T) {
 			go func() {
 				defer wg.Done()
 				err := s.Serve(l)
-				t.Log(err)
+				require.NoError(t, err)
 			}()
 
 			cc, err := dtls.Dial(l.Addr().String(), dtlsCfg)
@@ -431,7 +431,7 @@ func TestClientConn_Put(t *testing.T) {
 			go func() {
 				defer wg.Done()
 				err := s.Serve(l)
-				t.Log(err)
+				require.NoError(t, err)
 			}()
 
 			cc, err := dtls.Dial(l.Addr().String(), dtlsCfg)
@@ -535,7 +535,7 @@ func TestClientConn_Delete(t *testing.T) {
 	go func() {
 		defer wg.Done()
 		err := s.Serve(l)
-		t.Log(err)
+		require.NoError(t, err)
 	}()
 
 	cc, err := dtls.Dial(l.Addr().String(), dtlsCfg)
@@ -587,7 +587,8 @@ func TestClientConn_Ping(t *testing.T) {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		s.Serve(l)
+		err := s.Serve(l)
+		require.NoError(t, err)
 	}()
 
 	cc, err := dtls.Dial(l.Addr().String(), dtlsCfg)
@@ -603,4 +604,48 @@ func TestClientConn_Ping(t *testing.T) {
 	defer cancel()
 	err = cc.Ping(ctx)
 	require.NoError(t, err)
+}
+
+func TestClientConn_HandeShakeFailure(t *testing.T) {
+	dtlsCfg := &piondtls.Config{
+		PSK: func(hint []byte) ([]byte, error) {
+			fmt.Printf("Hint: %s \n", hint)
+			return []byte{0xAB, 0xC1, 0x23}, nil
+		},
+		PSKIdentityHint: []byte("Pion DTLS Server"),
+		CipherSuites:    []piondtls.CipherSuiteID{piondtls.TLS_PSK_WITH_AES_128_CCM_8},
+		ConnectContextMaker: func() (context.Context, func()) {
+			return context.WithTimeout(context.Background(), 1*time.Second)
+		},
+	}
+	l, err := coapNet.NewDTLSListener("udp", "", dtlsCfg)
+	require.NoError(t, err)
+	defer l.Close()
+	var wg sync.WaitGroup
+	defer wg.Wait()
+
+	s := dtls.NewServer()
+	defer s.Stop()
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		err := s.Serve(l)
+		require.NoError(t, err)
+	}()
+
+	dtlsCfgClient := &piondtls.Config{
+		PSK: func(hint []byte) ([]byte, error) {
+			fmt.Printf("Hint: %s \n", hint)
+			return []byte{0xAB, 0xC1, 0x24}, nil
+		},
+		PSKIdentityHint: []byte("Pion DTLS Client"),
+		CipherSuites:    []piondtls.CipherSuiteID{piondtls.TLS_PSK_WITH_AES_128_CCM_8},
+		ConnectContextMaker: func() (context.Context, func()) {
+			return context.WithTimeout(context.Background(), 1*time.Second)
+		},
+	}
+	_, err = dtls.Dial(l.Addr().String(), dtlsCfgClient)
+	require.Error(t, err)
+	//time.Sleep(time.Second)
 }

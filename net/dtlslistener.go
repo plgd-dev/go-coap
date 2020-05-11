@@ -34,9 +34,6 @@ func (l *DTLSListener) acceptLoop() {
 		conn, err := l.listener.Accept()
 		select {
 		case l.connCh <- connData{conn: conn, err: err}:
-			if err != nil {
-				return
-			}
 		case <-l.doneCh:
 			return
 		}
@@ -98,14 +95,14 @@ func (l *DTLSListener) AcceptWithContext(ctx context.Context) (net.Conn, error) 
 		}
 		err := l.SetDeadline(time.Now().Add(l.heartBeat))
 		if err != nil {
-			return nil, fmt.Errorf("cannot accept connections: %v", err)
+			return nil, fmt.Errorf("cannot set deadline to accept connection: %v", err)
 		}
 		rw, err := l.Accept()
 		if err != nil {
 			if isTemporary(err) {
 				continue
 			}
-			return nil, fmt.Errorf("cannot accept connections: %v", err)
+			return nil, fmt.Errorf("cannot accept connection: %v", err)
 		}
 		return rw, nil
 	}

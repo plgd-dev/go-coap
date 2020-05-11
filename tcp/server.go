@@ -156,8 +156,14 @@ func (s *Server) Serve(l Listener) error {
 		if err != nil {
 			switch err {
 			case context.DeadlineExceeded, context.Canceled:
+				select {
+				case <-s.ctx.Done():
+				default:
+					s.errors(fmt.Errorf("cannot accept connection: %w", err))
+					continue
+				}
 				wg.Wait()
-				return fmt.Errorf("cannot accept: %w", err)
+				return nil
 			default:
 				continue
 			}

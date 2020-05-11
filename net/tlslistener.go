@@ -62,14 +62,14 @@ func (l *TLSListener) AcceptWithContext(ctx context.Context) (net.Conn, error) {
 		}
 		err := l.SetDeadline(time.Now().Add(l.heartBeat))
 		if err != nil {
-			return nil, fmt.Errorf("cannot accept connections: %v", err)
+			return nil, fmt.Errorf("cannot set deadline to accept connection: %v", err)
 		}
 		rw, err := l.listener.Accept()
 		if err != nil {
 			if isTemporary(err) {
 				continue
 			}
-			return nil, fmt.Errorf("cannot accept connections: %v", err)
+			return nil, fmt.Errorf("cannot accept connection: %v", err)
 		}
 		return rw, nil
 	}

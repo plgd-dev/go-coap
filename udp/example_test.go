@@ -59,7 +59,9 @@ func ExampleDiscovery() {
 	go func() {
 		defer wg.Done()
 		err := s.Serve(l)
-		log.Println(err)
+		if err != nil {
+			log.Println(err)
+		}
 	}()
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()

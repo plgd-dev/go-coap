@@ -110,7 +110,7 @@ func TestClientConn_Observe(t *testing.T) {
 			go func() {
 				defer wg.Done()
 				err := s.Serve(l)
-				t.Log(err)
+				require.NoError(t, err)
 			}()
 
 			cc, err := udp.Dial(l.LocalAddr().String())

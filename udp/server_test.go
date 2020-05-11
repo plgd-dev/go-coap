@@ -74,7 +74,7 @@ func TestServer_Discover(t *testing.T) {
 	go func() {
 		defer wg.Done()
 		err := s.Serve(l)
-		t.Log(err)
+		require.NoError(t, err)
 	}()
 
 	ld, err := coapNet.NewListenUDP("udp4", "")
@@ -88,7 +88,7 @@ func TestServer_Discover(t *testing.T) {
 	go func() {
 		defer wg.Done()
 		err := sd.Serve(ld)
-		t.Log(err)
+		require.NoError(t, err)
 	}()
 
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)

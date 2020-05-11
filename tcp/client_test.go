@@ -85,7 +85,7 @@ func TestClientConn_Get(t *testing.T) {
 	go func() {
 		defer wg.Done()
 		err := s.Serve(l)
-		t.Log(err)
+		require.NoError(t, err)
 	}()
 
 	cc, err := Dial(l.Addr().String())
@@ -206,7 +206,7 @@ func TestClientConn_Post(t *testing.T) {
 			go func() {
 				defer wg.Done()
 				err := s.Serve(l)
-				t.Log(err)
+				require.NoError(t, err)
 			}()
 
 			cc, err := Dial(l.Addr().String())
@@ -325,7 +325,7 @@ func TestClientConn_Put(t *testing.T) {
 			go func() {
 				defer wg.Done()
 				err := s.Serve(l)
-				t.Log(err)
+				require.NoError(t, err)
 			}()
 
 			cc, err := Dial(l.Addr().String())
@@ -421,7 +421,7 @@ func TestClientConn_Delete(t *testing.T) {
 	go func() {
 		defer wg.Done()
 		err := s.Serve(l)
-		t.Log(err)
+		require.NoError(t, err)
 	}()
 
 	cc, err := Dial(l.Addr().String())
@@ -465,7 +465,8 @@ func TestClientConn_Ping(t *testing.T) {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		s.Serve(l)
+		err := s.Serve(l)
+		require.NoError(t, err)
 	}()
 
 	cc, err := Dial(l.Addr().String())

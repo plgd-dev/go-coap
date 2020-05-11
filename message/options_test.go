@@ -189,7 +189,7 @@ func TestAddBytesOption(t *testing.T) {
 	n, err := options.GetBytess(0, v)
 	require.Equal(t, nil, err)
 	require.Equal(t, 2, n)
-	require.Equal(t, [][]byte{[]byte{0x30}, []byte{0x31}}, v)
+	require.Equal(t, [][]byte{{0x30}, {0x31}}, v)
 }
 
 func testRemoveBytesOption(t *testing.T, options Options, option OptionID, expectedLen int) Options {

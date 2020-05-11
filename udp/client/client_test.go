@@ -91,7 +91,7 @@ func TestClientConn_Get(t *testing.T) {
 	go func() {
 		defer wg.Done()
 		err := s.Serve(l)
-		t.Log(err)
+		require.NoError(t, err)
 	}()
 
 	cc, err := udp.Dial(l.LocalAddr().String())
@@ -168,7 +168,7 @@ func TestClientConn_Get_SepareateMessage(t *testing.T) {
 	go func() {
 		defer wg.Done()
 		err := s.Serve(l)
-		t.Log(err)
+		require.NoError(t, err)
 	}()
 
 	cc, err := udp.Dial(l.LocalAddr().String(), udp.WithHandlerFunc(func(w *client.ResponseWriter, r *pool.Message) {
@@ -280,7 +280,7 @@ func TestClientConn_Post(t *testing.T) {
 			go func() {
 				defer wg.Done()
 				err := s.Serve(l)
-				t.Log(err)
+				require.NoError(t, err)
 			}()
 
 			cc, err := udp.Dial(l.LocalAddr().String())
@@ -399,7 +399,7 @@ func TestClientConn_Put(t *testing.T) {
 			go func() {
 				defer wg.Done()
 				err := s.Serve(l)
-				t.Log(err)
+				require.NoError(t, err)
 			}()
 
 			cc, err := udp.Dial(l.LocalAddr().String())
@@ -495,7 +495,7 @@ func TestClientConn_Delete(t *testing.T) {
 	go func() {
 		defer wg.Done()
 		err := s.Serve(l)
-		t.Log(err)
+		require.NoError(t, err)
 	}()
 
 	cc, err := udp.Dial(l.LocalAddr().String())
@@ -539,7 +539,8 @@ func TestClientConn_Ping(t *testing.T) {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		s.Serve(l)
+		err := s.Serve(l)
+		require.NoError(t, err)
 	}()
 
 	cc, err := udp.Dial(l.LocalAddr().String())

@@ -21,7 +21,10 @@ func main() {
 	s := udp.NewServer()
 	defer s.Stop()
 	go func() {
-		s.Serve(l)
+		err := s.Serve(l)
+		if err != nil {
+			log.Println(err)
+		}
 	}()
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)

@@ -178,7 +178,12 @@ func (s *Server) Serve(l *coapNet.UDPConn) error {
 		n, raddr, err := l.ReadWithContext(s.ctx, buf)
 		if err != nil {
 			wg.Wait()
-			return err
+			select {
+			case <-s.ctx.Done():
+				return nil
+			default:
+				return err
+			}
 		}
 		buf = buf[:n]
 		cc, created := s.getOrCreateClientConn(l, raddr)

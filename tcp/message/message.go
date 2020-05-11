@@ -74,21 +74,21 @@ const (
 )
 
 var signalCSMOptionDefs = map[message.OptionID]message.OptionDef{
-	MaxMessageSize:    message.OptionDef{ValueFormat: message.ValueUint, MinLen: 0, MaxLen: 4},
-	BlockWiseTransfer: message.OptionDef{ValueFormat: message.ValueEmpty, MinLen: 0, MaxLen: 0},
+	MaxMessageSize:    {ValueFormat: message.ValueUint, MinLen: 0, MaxLen: 4},
+	BlockWiseTransfer: {ValueFormat: message.ValueEmpty, MinLen: 0, MaxLen: 0},
 }
 
 var signalPingPongOptionDefs = map[message.OptionID]message.OptionDef{
-	Custody: message.OptionDef{ValueFormat: message.ValueEmpty, MinLen: 0, MaxLen: 0},
+	Custody: {ValueFormat: message.ValueEmpty, MinLen: 0, MaxLen: 0},
 }
 
 var signalReleaseOptionDefs = map[message.OptionID]message.OptionDef{
-	AlternativeAddress: message.OptionDef{ValueFormat: message.ValueString, MinLen: 1, MaxLen: 255},
-	HoldOff:            message.OptionDef{ValueFormat: message.ValueUint, MinLen: 0, MaxLen: 3},
+	AlternativeAddress: {ValueFormat: message.ValueString, MinLen: 1, MaxLen: 255},
+	HoldOff:            {ValueFormat: message.ValueUint, MinLen: 0, MaxLen: 3},
 }
 
 var signalAbortOptionDefs = map[message.OptionID]message.OptionDef{
-	BadCSMOption: message.OptionDef{ValueFormat: message.ValueUint, MinLen: 0, MaxLen: 2},
+	BadCSMOption: {ValueFormat: message.ValueUint, MinLen: 0, MaxLen: 2},
 }
 
 // TcpMessage is a CoAP MessageBase that can encode itself for Message
