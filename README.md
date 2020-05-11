@@ -45,16 +45,21 @@ Features supported:
 		mux := coap.NewServeMux()
 		mux.Handle("/a", coap.HandlerFunc(handleA))
 
-		log.Fatal(coap.ListenAndServe("udp", ":5688", mux))
+		listenerErrorHandler := func(err error) bool {
+			log.Printf("Error occurred on listener: %v", err)
+			return true
+		}
+
+		log.Fatal(coap.ListenAndServe("udp", ":5688", mux, listenerErrorHandler))
 		
 		// for tcp
-		// log.Fatal(coap.ListenAndServe("tcp", ":5688",  mux))
+		// log.Fatal(coap.ListenAndServe("tcp", ":5688",  mux, listenerErrorHandler))
 
 		// for tcp-tls
-		// log.Fatal(coap.ListenAndServeTLS("tcp-tls", ":5688", &tls.Config{...}, mux))
+		// log.Fatal(coap.ListenAndServeTLS("tcp-tls", ":5688", &tls.Config{...}, mux, listenerErrorHandler))
 
 		// for udp-dtls
-		// log.Fatal(coap.ListenAndServeDTLS("udp-dtls", ":5688", &dtls.Config{...}, mux))
+		// log.Fatal(coap.ListenAndServeDTLS("udp-dtls", ":5688", &dtls.Config{...}, mux, listenerErrorHandler))
 	}
 ```
 #### Client
