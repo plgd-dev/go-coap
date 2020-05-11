@@ -35,7 +35,7 @@ func (l *DTLSListener) acceptLoop() {
 		select {
 		case l.connCh <- connData{conn: conn, err: err}:
 			if err != nil {
-				return
+				continue
 			}
 		case <-l.doneCh:
 			return
