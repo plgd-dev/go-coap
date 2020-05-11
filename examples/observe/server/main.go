@@ -13,18 +13,12 @@ import (
 )
 
 func getPath(opts message.Options) string {
-	buf := make([]byte, 32)
-	m, err := opts.Path(buf)
-	if err == message.ErrTooSmall {
-		buf = append(buf, make([]byte, m)...)
-		m, err = opts.Path(buf)
-	}
+	path, err := opts.Path()
 	if err != nil {
 		log.Printf("cannot get path: %v", err)
 		return ""
 	}
-	buf = buf[:m]
-	return string(buf)
+	return path
 }
 
 func sendResponse(cc mux.ClientConn, token []byte, subded time.Time, obs int64) error {

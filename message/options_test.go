@@ -232,22 +232,16 @@ func TestPathOption(t *testing.T) {
 		t.Fatalf("unexpected length %d", bufLen)
 	}
 
-	runes := make([]byte, 32)
-	bufLen, err = options.Path(runes)
+	newPath, err := options.Path()
 	if err != nil {
 		t.Fatalf("unexpected error %d", err)
 	}
-	if bufLen == 6 {
-		t.Fatalf("unexpected length %d", bufLen)
-	}
-	newPath := string(runes[:bufLen])
 	if newPath != path {
 		t.Fatalf("unexpected value %v, expected %v", newPath, path)
 	}
 }
 
 func BenchmarkPathOption(b *testing.B) {
-	runes := make([]byte, 32)
 	buf := make([]byte, 256)
 	b.ResetTimer()
 	for i := uint32(0); i < uint32(b.N); i++ {
@@ -260,19 +254,6 @@ func BenchmarkPathOption(b *testing.B) {
 		}
 		if bufLen != 3 {
 			b.Fatalf("unexpected length %d", bufLen)
-		}
-
-		bufLen, err = options.Path(runes)
-		if err != nil {
-			b.Fatalf("unexpected error %d", err)
-		}
-		if bufLen == 6 {
-			b.Fatalf("unexpected length %d", bufLen)
-		}
-
-		newPath := string(runes[:bufLen])
-		if newPath != path {
-			b.Fatalf("unexpected path")
 		}
 
 		v := make([]string, 3)

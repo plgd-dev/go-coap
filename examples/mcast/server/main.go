@@ -13,19 +13,13 @@ import (
 )
 
 func handleMcast(w mux.ResponseWriter, r *message.Message) {
-	buf := make([]byte, 32)
-	m, err := r.Options.Path(buf)
-	if err != message.ErrTooSmall {
-		buf = append(buf, make([]byte, m)...)
-		m, err = r.Options.Path(buf)
-	}
+	path, err := r.Options.Path()
 	if err != nil {
 		log.Printf("cannot get path: %v", err)
 		return
 	}
-	buf = buf[:m]
 
-	log.Printf("Got mcast message: path=%q: from %v", buf, w.ClientConn().RemoteAddr())
+	log.Printf("Got mcast message: path=%q: from %v", path, w.ClientConn().RemoteAddr())
 	w.SetResponse(codes.Content, message.TextPlain, bytes.NewReader([]byte("mcast response")))
 }
 

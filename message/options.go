@@ -40,10 +40,7 @@ func (options Options) SetPath(buf []byte, path string) (Options, int, error) {
 	return o, encoded, nil
 }
 
-// Path joins URIPath options by '/' to the buf.
-//
-// Return's number of used buf bytes or error when occurs.
-func (options Options) Path(buf []byte) (int, error) {
+func (options Options) path(buf []byte) (int, error) {
 	firstIdx, lastIdx, err := options.Find(URIPath)
 	if err != nil {
 		return -1, err
@@ -66,6 +63,23 @@ func (options Options) Path(buf []byte) (int, error) {
 		buf = buf[len(options[i].Value):]
 	}
 	return needed, nil
+}
+
+// Path joins URIPath options by '/' to the buf.
+//
+// Return's number of used buf bytes or error when occurs.
+func (options Options) Path() (string, error) {
+	buf := make([]byte, 32)
+	m, err := options.path(buf)
+	if err == ErrTooSmall {
+		buf = append(buf, make([]byte, m)...)
+		m, err = options.path(buf)
+	}
+	if err != nil {
+		return "", err
+	}
+	buf = buf[:m]
+	return string(buf), nil
 }
 
 // SetString replace's/store's string option to options.
@@ -119,6 +133,12 @@ func (options Options) GetUint32(id OptionID) (uint32, error) {
 	}
 	val, _, err := DecodeUint32(options[firstIdx].Value)
 	return val, err
+}
+
+// ContentFormat get's content format of body.
+func (options Options) ContentFormat() (MediaType, error) {
+	v, err := options.GetUint32(ContentFormat)
+	return MediaType(v), err
 }
 
 // GetString get's first option with id of type string.
@@ -183,6 +203,20 @@ func (options Options) GetStrings(id OptionID, r []string) (int, error) {
 	}
 
 	return idx, nil
+}
+
+// Queries get's URIQuery parameters.
+func (options Options) Queries() ([]string, error) {
+	q := make([]string, 4)
+	n, err := options.GetStrings(URIQuery, q)
+	if err == ErrTooSmall {
+		q = append(q, make([]string, n-len(q))...)
+		n, err = options.GetStrings(URIQuery, q)
+	}
+	if err != nil {
+		return nil, err
+	}
+	return q[:n], nil
 }
 
 // GetBytess get's all options with same id.

@@ -148,18 +148,12 @@ func (mux *ServeMux) HandleRemove(pattern string) error {
 // is sought.
 // If no handler is found a standard NotFound message is returned
 func (mux *ServeMux) ServeCOAP(w ResponseWriter, r *message.Message) {
-	buf := make([]byte, 64)
-	used, err := r.Options.Path(buf)
-	if err == message.ErrTooSmall {
-		buf = append(buf, make([]byte, used-len(buf))...)
-		used, err = r.Options.Path(buf)
-	}
+	path, err := r.Options.Path()
 	if err != nil {
 		mux.defaultHandler.ServeCOAP(w, r)
 		return
 	}
-	buf = buf[:used]
-	h, _ := mux.match(string(buf))
+	h, _ := mux.match(path)
 	if h == nil {
 		h = mux.defaultHandler
 	}
