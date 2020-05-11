@@ -201,7 +201,7 @@ func (o DisablePeerTCPSignalMessageCSMsOpt) apply(opts *serverOptions) {
 	opts.disablePeerTCPSignalMessageCSMs = true
 }
 
-func (o DisablePeerTCPSignalMessageCSMsOpt) dialApply(opts *dialOptions) {
+func (o DisablePeerTCPSignalMessageCSMsOpt) applyDial(opts *dialOptions) {
 	opts.disablePeerTCPSignalMessageCSMs = true
 }
 
@@ -218,7 +218,7 @@ func (o DisableTCPSignalMessageCSMOpt) apply(opts *serverOptions) {
 	opts.disableTCPSignalMessageCSM = true
 }
 
-func (o DisableTCPSignalMessageCSMOpt) dialApply(opts *dialOptions) {
+func (o DisableTCPSignalMessageCSMOpt) applyDial(opts *dialOptions) {
 	opts.disableTCPSignalMessageCSM = true
 }
 

@@ -2,501 +2,132 @@ package client
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/binary"
 	"fmt"
 	"io"
 	"net"
-	"sync"
-	"sync/atomic"
-	"time"
 
-	"github.com/go-ocf/go-coap/v2/blockwise"
 	"github.com/go-ocf/go-coap/v2/message"
-
-	"github.com/go-ocf/go-coap/v2/message/codes"
-	udpMessage "github.com/go-ocf/go-coap/v2/udp/message"
+	"github.com/go-ocf/go-coap/v2/mux"
 	"github.com/go-ocf/go-coap/v2/udp/message/pool"
 )
 
-type HandlerFunc func(*ResponseWriter, *pool.Message)
-type ErrorFunc = func(error)
-type GoPoolFunc = func(func() error) error
-type EventFunc = func()
-
-type Session interface {
-	Context() context.Context
-	Close() error
-	MaxMessageSize() int
-	RemoteAddr() net.Addr
-	WriteRequest(req *pool.Message) error
-	Run(cc *ClientConn) error
-	AddOnClose(f EventFunc)
+type Client struct {
+	cc *ClientConn
 }
 
-// ClientConn represents a virtual connection to a conceptual endpoint, to perform COAPs commands.
-type ClientConn struct {
-	session                        Session
-	handler                        HandlerFunc
-	observationTokenHandler        *HandlerContainer
-	observationRequests            *sync.Map
-	transmissionNStart             time.Duration
-	transmissionAcknowledgeTimeout time.Duration
-	transmissionMaxRetransmit      int
-	blockwiseSZX                   blockwise.SZX
-	blockWise                      *blockwise.BlockWise
-	goPool                         GoPoolFunc
-
-	tokenHandlerContainer *HandlerContainer
-	midHandlerContainer   *HandlerContainer
-	msgID                 uint32
-	sequence              uint64
-}
-
-// NewClientConn creates connection over session and observation.
-func NewClientConn(
-	session Session,
-	observationTokenHandler *HandlerContainer,
-	observationRequests *sync.Map,
-	transmissionNStart time.Duration,
-	transmissionAcknowledgeTimeout time.Duration,
-	transmissionMaxRetransmit int,
-	handler HandlerFunc,
-	blockwiseSZX blockwise.SZX,
-	blockWise *blockwise.BlockWise,
-	goPool GoPoolFunc,
-) *ClientConn {
-	b := make([]byte, 4)
-	rand.Read(b)
-	msgID := binary.BigEndian.Uint32(b)
-	return &ClientConn{
-		session:                        session,
-		observationTokenHandler:        observationTokenHandler,
-		observationRequests:            observationRequests,
-		transmissionNStart:             transmissionNStart,
-		transmissionAcknowledgeTimeout: transmissionAcknowledgeTimeout,
-		transmissionMaxRetransmit:      transmissionMaxRetransmit,
-		handler:                        handler,
-		blockwiseSZX:                   blockwiseSZX,
-		blockWise:                      blockWise,
-
-		tokenHandlerContainer: NewHandlerContainer(),
-		midHandlerContainer:   NewHandlerContainer(),
-		msgID:                 msgID,
-		goPool:                goPool,
+func NewClient(cc *ClientConn) *Client {
+	return &Client{
+		cc: cc,
 	}
 }
 
-// Close closes connection without wait of ends Run function.
-func (cc *ClientConn) Close() error {
-	return cc.session.Close()
+func (cc *Client) Ping(ctx context.Context) error {
+	return cc.cc.Ping(ctx)
 }
 
-func (cc *ClientConn) do(req *pool.Message) (*pool.Message, error) {
-	token := req.Token()
-	if token == nil {
-		return nil, fmt.Errorf("invalid token")
+func poolmsg2msg(m *pool.Message) *message.Message {
+	opts := make(message.Options, 0, len(m.Options()))
+	buf := make([]byte, 64)
+	opts, used, err := opts.ResetOptionsTo(buf, m.Options())
+	if err == message.ErrTooSmall {
+		buf = append(buf, make([]byte, used-len(buf))...)
+		opts, used, err = opts.ResetOptionsTo(buf, m.Options())
 	}
-	respChan := make(chan *pool.Message, 1)
-	err := cc.tokenHandlerContainer.Insert(token, func(w *ResponseWriter, r *pool.Message) {
-		r.Hijack()
-		respChan <- r
-	})
-	if err != nil {
-		return nil, fmt.Errorf("cannot add token handler: %w", err)
-	}
-	defer cc.tokenHandlerContainer.Pop(token)
-	err = cc.writeRequest(req)
-	if err != nil {
-		return nil, fmt.Errorf("cannot write request: %w", err)
-	}
-	select {
-	case <-req.Context().Done():
-		return nil, req.Context().Err()
-	case <-cc.session.Context().Done():
-		return nil, fmt.Errorf("connection was closed: %w", req.Context().Err())
-	case resp := <-respChan:
-		return resp, nil
+	return &message.Message{
+		Context: m.Context(),
+		Code:    m.Code(),
+		Token:   m.Token(),
+		Body:    m.Body(),
+		Options: opts,
 	}
 }
 
-// Do sends an coap request and returns an coap response.
-//
-// An error is returned if by failure to speak COAP (such as a network connectivity problem).
-// Any status code doesn't cause an error.
-//
-// Caller is responsible to release request and response.
-func (cc *ClientConn) Do(req *pool.Message) (*pool.Message, error) {
-	if cc.blockWise == nil {
-		return cc.do(req)
-	}
-	bwresp, err := cc.blockWise.Do(req, cc.blockwiseSZX, cc.session.MaxMessageSize(), func(bwreq blockwise.Message) (blockwise.Message, error) {
-		return cc.do(bwreq.(*pool.Message))
-	})
-	return bwresp.(*pool.Message), err
-}
-
-func (cc *ClientConn) writeRequest(req *pool.Message) error {
-	if req.Type() != udpMessage.Confirmable {
-		return cc.session.WriteRequest(req)
-	}
-	respChan := make(chan struct{})
-	err := cc.midHandlerContainer.Insert(req.MessageID(), func(w *ResponseWriter, r *pool.Message) {
-		close(respChan)
-		if r.IsSeparate() {
-			// separate message - just accept
-			return
-		}
-		cc.handleBW(w, r)
-	})
-	if err != nil {
-		return fmt.Errorf("cannot insert mid handler: %w", err)
-	}
-	defer cc.midHandlerContainer.Pop(req.MessageID())
-
-	err = cc.session.WriteRequest(req)
-	if err != nil {
-		return fmt.Errorf("cannot write request: %w", err)
-	}
-	for i := 0; i < cc.transmissionMaxRetransmit; i++ {
-		select {
-		case <-respChan:
-			return nil
-		case <-req.Context().Done():
-			return req.Context().Err()
-		case <-cc.Context().Done():
-			return fmt.Errorf("connection was closed: %w", cc.Context().Err())
-		case <-time.After(cc.transmissionAcknowledgeTimeout):
-			select {
-			case <-req.Context().Done():
-				return req.Context().Err()
-			case <-cc.session.Context().Done():
-				return fmt.Errorf("connection was closed: %w", req.Context().Err())
-			case <-time.After(cc.transmissionNStart):
-				err = cc.session.WriteRequest(req)
-				if err != nil {
-					return fmt.Errorf("cannot write request: %w", err)
-				}
-			}
-		}
-	}
-	return fmt.Errorf("timeout: retransmision(%v) was exhausted", cc.transmissionMaxRetransmit)
-}
-
-// WriteRequest sends an coap request.
-func (cc *ClientConn) WriteRequest(req *pool.Message) error {
-	if cc.blockWise == nil {
-		return cc.writeRequest(req)
-	}
-	return cc.blockWise.WriteRequest(req, cc.blockwiseSZX, cc.session.MaxMessageSize(), func(bwreq blockwise.Message) error {
-		return cc.writeRequest(bwreq.(*pool.Message))
-	})
-}
-
-func (cc *ClientConn) doWithMID(req *pool.Message) (*pool.Message, error) {
-	respChan := make(chan *pool.Message, 1)
-	err := cc.midHandlerContainer.Insert(req.MessageID(), func(w *ResponseWriter, r *pool.Message) {
-		r.Hijack()
-		respChan <- r
-	})
-	if err != nil {
-		return nil, fmt.Errorf("cannot insert mid handler: %w", err)
-	}
-	defer cc.midHandlerContainer.Pop(req.MessageID())
-	err = cc.session.WriteRequest(req)
-	if err != nil {
-		return nil, fmt.Errorf("cannot write request: %w", err)
-	}
-
-	select {
-	case <-req.Context().Done():
-		return nil, req.Context().Err()
-	case <-cc.session.Context().Done():
-		return nil, fmt.Errorf("connection was closed: %w", req.Context().Err())
-	case resp := <-respChan:
-		return resp, nil
-	}
-}
-
-func newCommonRequest(ctx context.Context, code codes.Code, path string, opts ...message.Option) (*pool.Message, error) {
-	token, err := message.GetToken()
-	if err != nil {
-		return nil, fmt.Errorf("cannot get token: %w", err)
-	}
-	req := pool.AcquireMessage(ctx)
-	req.SetCode(code)
-	req.SetToken(token)
-	req.ResetOptionsTo(opts)
-	req.SetPath(path)
-	req.SetType(udpMessage.NonConfirmable)
-	return req, nil
-}
-
-// NewGetRequest creates get request.
-//
-// Use ctx to set timeout.
-func NewGetRequest(ctx context.Context, path string, opts ...message.Option) (*pool.Message, error) {
-	return newCommonRequest(ctx, codes.GET, path, opts...)
-}
-
-// Get issues a GET to the specified path.
-//
-// Use ctx to set timeout.
-//
-// An error is returned if by failure to speak COAP (such as a network connectivity problem).
-// Any status code doesn't cause an error.
-func (cc *ClientConn) Get(ctx context.Context, path string, opts ...message.Option) (*pool.Message, error) {
-	req, err := NewGetRequest(ctx, path, opts...)
-	if err != nil {
-		return nil, fmt.Errorf("cannot create get request: %w", err)
-	}
-	req.SetMessageID(cc.GetMID())
-	defer pool.ReleaseMessage(req)
-	return cc.Do(req)
-}
-
-// NewPostRequest creates post request.
-//
-// Use ctx to set timeout.
-//
-// An error is returned if by failure to speak COAP (such as a network connectivity problem).
-// Any status code doesn't cause an error.
-//
-// If payload is nil then content format is not used.
-func NewPostRequest(ctx context.Context, path string, contentFormat message.MediaType, payload io.ReadSeeker, opts ...message.Option) (*pool.Message, error) {
-	req, err := newCommonRequest(ctx, codes.POST, path, opts...)
+func (cc *Client) Delete(ctx context.Context, path string, opts ...message.Option) (*message.Message, error) {
+	resp, err := cc.cc.Delete(ctx, path, opts...)
 	if err != nil {
 		return nil, err
-	}
-	if payload != nil {
-		req.SetContentFormat(contentFormat)
-		req.SetBody(payload)
-	}
-	return req, nil
-}
-
-// Post issues a POST to the specified path.
-//
-// Use ctx to set timeout.
-//
-// An error is returned if by failure to speak COAP (such as a network connectivity problem).
-// Any status code doesn't cause an error.
-//
-// If payload is nil then content format is not used.
-func (cc *ClientConn) Post(ctx context.Context, path string, contentFormat message.MediaType, payload io.ReadSeeker, opts ...message.Option) (*pool.Message, error) {
-	req, err := NewPostRequest(ctx, path, contentFormat, payload, opts...)
-	if err != nil {
-		return nil, fmt.Errorf("cannot create post request: %w", err)
-	}
-	req.SetMessageID(cc.GetMID())
-	defer pool.ReleaseMessage(req)
-	return cc.Do(req)
-}
-
-// NewPutRequest creates put request.
-//
-// Use ctx to set timeout.
-//
-// If payload is nil then content format is not used.
-func NewPutRequest(ctx context.Context, path string, contentFormat message.MediaType, payload io.ReadSeeker, opts ...message.Option) (*pool.Message, error) {
-	req, err := newCommonRequest(ctx, codes.PUT, path, opts...)
-	if err != nil {
-		return nil, err
-	}
-	if payload != nil {
-		req.SetContentFormat(contentFormat)
-		req.SetBody(payload)
-	}
-	return req, nil
-}
-
-// Put issues a PUT to the specified path.
-//
-// Use ctx to set timeout.
-//
-// An error is returned if by failure to speak COAP (such as a network connectivity problem).
-// Any status code doesn't cause an error.
-//
-// If payload is nil then content format is not used.
-func (cc *ClientConn) Put(ctx context.Context, path string, contentFormat message.MediaType, payload io.ReadSeeker, opts ...message.Option) (*pool.Message, error) {
-	req, err := NewPutRequest(ctx, path, contentFormat, payload, opts...)
-	if err != nil {
-		return nil, fmt.Errorf("cannot create put request: %w", err)
-	}
-	req.SetMessageID(cc.GetMID())
-	defer pool.ReleaseMessage(req)
-	return cc.Do(req)
-}
-
-// Delete deletes the resource identified by the request path.
-//
-// Use ctx to set timeout.
-func (cc *ClientConn) Delete(ctx context.Context, path string, opts ...message.Option) (*pool.Message, error) {
-	req, err := newCommonRequest(ctx, codes.DELETE, path, opts...)
-	if err != nil {
-		return nil, fmt.Errorf("cannot create delete request: %w", err)
-	}
-	req.SetMessageID(cc.GetMID())
-	defer pool.ReleaseMessage(req)
-	return cc.Do(req)
-}
-
-// Context returns the client's context.
-//
-// If connections was closed context is cancelled.
-func (cc *ClientConn) Context() context.Context {
-	return cc.session.Context()
-}
-
-// Ping issues a PING to the client and waits for PONG reponse.
-//
-// Use ctx to set timeout.
-func (cc *ClientConn) Ping(ctx context.Context) error {
-	req := pool.AcquireMessage(ctx)
-	defer pool.ReleaseMessage(req)
-	req.SetType(udpMessage.Confirmable)
-	req.SetCode(codes.Empty)
-	req.SetMessageID(cc.GetMID())
-	resp, err := cc.doWithMID(req)
-	if err != nil {
-		return err
 	}
 	defer pool.ReleaseMessage(resp)
-	if resp.Type() == udpMessage.Reset || resp.Type() == udpMessage.Acknowledgement {
-		return nil
-	}
-	return fmt.Errorf("unexpected response(%v)", resp)
+	return poolmsg2msg(resp), err
 }
 
-// Run reads and process requests from a connection, until the connection is not closed.
-func (cc *ClientConn) Run() error {
-	return cc.session.Run(cc)
-}
-
-// AddOnClose calls function on close connection event.
-func (cc *ClientConn) AddOnClose(f EventFunc) {
-	cc.session.AddOnClose(f)
-}
-
-func (cc *ClientConn) RemoteAddr() net.Addr {
-	return cc.session.RemoteAddr()
-}
-
-// GetMID generates a message id for UDP-coap
-func (cc *ClientConn) GetMID() uint16 {
-	return uint16(atomic.AddUint32(&cc.msgID, 1) % 0xffff)
-}
-
-func (cc *ClientConn) sendPong(w *ResponseWriter, r *pool.Message) {
-	w.SetResponse(codes.Empty, message.TextPlain, nil)
-}
-
-type bwResponseWriter struct {
-	w *ResponseWriter
-}
-
-func (b *bwResponseWriter) Message() blockwise.Message {
-	return b.w.response
-}
-
-func (b *bwResponseWriter) SetMessage(m blockwise.Message) {
-	pool.ReleaseMessage(b.w.response)
-	b.w.response = m.(*pool.Message)
-}
-
-func (cc *ClientConn) handleBW(w *ResponseWriter, r *pool.Message) {
-	if cc.blockWise != nil {
-		bwr := bwResponseWriter{
-			w: w,
-		}
-		cc.blockWise.Handle(&bwr, r, cc.blockwiseSZX, cc.session.MaxMessageSize(), func(bw blockwise.ResponseWriter, br blockwise.Message) {
-			h, err := cc.tokenHandlerContainer.Pop(r.Token())
-			w := bw.(*bwResponseWriter).w
-			r := br.(*pool.Message)
-			if err == nil {
-				h(w, r)
-				return
-			}
-			cc.handler(w, r)
-		})
-		return
-	}
-	h, err := cc.tokenHandlerContainer.Pop(r.Token())
-	if err == nil {
-		h(w, r)
-		return
-	}
-	cc.handler(w, r)
-}
-
-func (cc *ClientConn) handle(w *ResponseWriter, r *pool.Message) {
-	if r.Code() == codes.Empty && r.Type() == udpMessage.Confirmable && len(r.Token()) == 0 && len(r.Options()) == 0 && r.Body() == nil {
-		cc.sendPong(w, r)
-		return
-	}
-	h, err := cc.midHandlerContainer.Pop(r.MessageID())
-	if err == nil {
-		h(w, r)
-		return
-	}
-	if r.IsSeparate() {
-		// msg was processed by token handler - just drop it.
-		return
-	}
-	cc.handleBW(w, r)
-}
-
-func (cc *ClientConn) Sequence() uint64 {
-	return atomic.AddUint64(&cc.sequence, 1)
-}
-
-func (cc *ClientConn) Process(datagram []byte) error {
-	if cc.session.MaxMessageSize() >= 0 && len(datagram) > cc.session.MaxMessageSize() {
-		return fmt.Errorf("max message size(%v) was exceeded %v", cc.session.MaxMessageSize(), len(datagram))
-	}
-	req := pool.AcquireMessage(cc.Context())
-	_, err := req.Unmarshal(datagram)
+func (cc *Client) Put(ctx context.Context, path string, contentFormat message.MediaType, payload io.ReadSeeker, opts ...message.Option) (*message.Message, error) {
+	resp, err := cc.cc.Put(ctx, path, contentFormat, payload, opts...)
 	if err != nil {
-		pool.ReleaseMessage(req)
+		return nil, err
+	}
+	defer pool.ReleaseMessage(resp)
+	return poolmsg2msg(resp), err
+}
+
+func (cc *Client) Post(ctx context.Context, path string, contentFormat message.MediaType, payload io.ReadSeeker, opts ...message.Option) (*message.Message, error) {
+	resp, err := cc.cc.Post(ctx, path, contentFormat, payload, opts...)
+	if err != nil {
+		return nil, err
+	}
+	defer pool.ReleaseMessage(resp)
+	return poolmsg2msg(resp), err
+}
+
+func (cc *Client) Get(ctx context.Context, path string, opts ...message.Option) (*message.Message, error) {
+	resp, err := cc.cc.Get(ctx, path, opts...)
+	if err != nil {
+		return nil, err
+	}
+	defer pool.ReleaseMessage(resp)
+	return poolmsg2msg(resp), err
+}
+
+func (cc *Client) Close() error {
+	return cc.cc.Close()
+}
+
+func (cc *Client) RemoteAddr() net.Addr {
+	return cc.cc.RemoteAddr()
+}
+
+func (cc *Client) Context() context.Context {
+	return cc.cc.Context()
+}
+
+func msg2poolmsg(m *message.Message) (*pool.Message, error) {
+	if m.Context == nil {
+		return nil, fmt.Errorf("invalid context")
+	}
+	r := pool.AcquireMessage(m.Context)
+	r.SetCode(m.Code)
+	r.ResetOptionsTo(m.Options)
+	r.SetBody(m.Body)
+	r.SetToken(m.Token)
+	return r, nil
+}
+
+func (cc *Client) WriteRequest(req *message.Message) error {
+	r, err := msg2poolmsg(req)
+	if err != nil {
 		return err
 	}
-	req.SetSequence(cc.Sequence())
-	cc.goPool(func() error {
-		origResp := pool.AcquireMessage(cc.Context())
-		origResp.SetToken(req.Token())
-		w := NewResponseWriter(origResp, cc, req.Options())
-		typ := req.Type()
-		mid := req.MessageID()
-		cc.handle(w, req)
-		defer pool.ReleaseMessage(w.response)
-		if !req.IsHijacked() {
-			pool.ReleaseMessage(req)
-		}
-		if w.response.IsModified() {
-			if typ == udpMessage.Confirmable {
-				w.response.SetType(udpMessage.Acknowledgement)
-				w.response.SetMessageID(mid)
-			} else {
-				w.response.SetType(udpMessage.NonConfirmable)
-				w.response.SetMessageID(cc.GetMID())
-			}
-			err := cc.session.WriteRequest(w.response)
-			if err != nil {
-				cc.Close()
-				return fmt.Errorf("cannot write response: %w", err)
-			}
-		} else if typ == udpMessage.Confirmable {
-			w.response.Reset()
-			w.response.SetCode(codes.Empty)
-			w.response.SetType(udpMessage.Acknowledgement)
-			w.response.SetMessageID(mid)
-			err := cc.session.WriteRequest(w.response)
-			if err != nil {
-				cc.Close()
-				return fmt.Errorf("cannot write ack reponse: %w", err)
-			}
-		}
-		return nil
-	})
-	return nil
+	defer pool.ReleaseMessage(r)
+	return cc.cc.WriteRequest(r)
+}
+
+func (cc *Client) Do(req *message.Message) (*message.Message, error) {
+	r, err := msg2poolmsg(req)
+	if err != nil {
+		return nil, err
+	}
+	defer pool.ReleaseMessage(r)
+	resp, err := cc.cc.Do(r)
+	if err != nil {
+		return nil, err
+	}
+	defer pool.ReleaseMessage(resp)
+	return poolmsg2msg(resp), err
+}
+
+func (cc *Client) Observe(ctx context.Context, path string, observeFunc func(notification *message.Message), opts ...message.Option) (mux.Observation, error) {
+	return cc.cc.Observe(ctx, path, func(n *pool.Message) {
+		muxn := poolmsg2msg(n)
+		observeFunc(muxn)
+	}, opts...)
 }
