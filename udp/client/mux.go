@@ -14,7 +14,7 @@ func HandlerFuncToMux(m mux.Handler) HandlerFunc {
 		muxw := &muxResponseWriter{
 			w: w,
 		}
-		muxr := poolmsg2msg(r)
+		muxr := pool.ConvertTo(r)
 		m.ServeCOAP(muxw, muxr)
 	}
 	return h

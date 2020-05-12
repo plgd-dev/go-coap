@@ -3,6 +3,7 @@ package pool
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"io"
 	"sync"
 
@@ -170,4 +171,35 @@ func AcquireMessage(ctx context.Context) *Message {
 func ReleaseMessage(req *Message) {
 	req.Reset()
 	messagePool.Put(req)
+}
+
+// ConvertFrom converts common message to pool message.
+func ConvertFrom(m *message.Message) (*Message, error) {
+	if m.Context == nil {
+		return nil, fmt.Errorf("invalid context")
+	}
+	r := AcquireMessage(m.Context)
+	r.SetCode(m.Code)
+	r.ResetOptionsTo(m.Options)
+	r.SetBody(m.Body)
+	r.SetToken(m.Token)
+	return r, nil
+}
+
+// ConvertTo converts pool message to common message.
+func ConvertTo(m *Message) *message.Message {
+	opts := make(message.Options, 0, len(m.Options()))
+	buf := make([]byte, 64)
+	opts, used, err := opts.ResetOptionsTo(buf, m.Options())
+	if err == message.ErrTooSmall {
+		buf = append(buf, make([]byte, used-len(buf))...)
+		opts, used, err = opts.ResetOptionsTo(buf, m.Options())
+	}
+	return &message.Message{
+		Context: m.Context(),
+		Code:    m.Code(),
+		Token:   m.Token(),
+		Body:    m.Body(),
+		Options: opts,
+	}
 }
