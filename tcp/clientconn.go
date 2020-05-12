@@ -211,7 +211,10 @@ func (cc *ClientConn) Do(req *pool.Message) (*pool.Message, error) {
 	bwresp, err := cc.session.blockWise.Do(req, cc.session.blockwiseSZX, cc.session.maxMessageSize, func(bwreq blockwise.Message) (blockwise.Message, error) {
 		return cc.do(bwreq.(*pool.Message))
 	})
-	return bwresp.(*pool.Message), err
+	if err != nil {
+		return nil, err
+	}
+	return bwresp.(*pool.Message), nil
 }
 
 func (cc *ClientConn) writeRequest(req *pool.Message) error {
