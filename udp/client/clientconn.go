@@ -97,6 +97,10 @@ func (cc *ClientConn) do(req *pool.Message) (*pool.Message, error) {
 	if token == nil {
 		return nil, fmt.Errorf("invalid token")
 	}
+
+	req.SetMessageID(cc.GetMID())
+	req.SetType(udpMessage.Confirmable)
+
 	respChan := make(chan *pool.Message, 1)
 	err := cc.tokenHandlerContainer.Insert(token, func(w *ResponseWriter, r *pool.Message) {
 		r.Hijack()
@@ -253,7 +257,6 @@ func (cc *ClientConn) Get(ctx context.Context, path string, opts ...message.Opti
 	if err != nil {
 		return nil, fmt.Errorf("cannot create get request: %w", err)
 	}
-	req.SetMessageID(cc.GetMID())
 	defer pool.ReleaseMessage(req)
 	return cc.Do(req)
 }
@@ -291,7 +294,6 @@ func (cc *ClientConn) Post(ctx context.Context, path string, contentFormat messa
 	if err != nil {
 		return nil, fmt.Errorf("cannot create post request: %w", err)
 	}
-	req.SetMessageID(cc.GetMID())
 	defer pool.ReleaseMessage(req)
 	return cc.Do(req)
 }
@@ -326,7 +328,6 @@ func (cc *ClientConn) Put(ctx context.Context, path string, contentFormat messag
 	if err != nil {
 		return nil, fmt.Errorf("cannot create put request: %w", err)
 	}
-	req.SetMessageID(cc.GetMID())
 	defer pool.ReleaseMessage(req)
 	return cc.Do(req)
 }
@@ -339,7 +340,6 @@ func (cc *ClientConn) Delete(ctx context.Context, path string, opts ...message.O
 	if err != nil {
 		return nil, fmt.Errorf("cannot create delete request: %w", err)
 	}
-	req.SetMessageID(cc.GetMID())
 	defer pool.ReleaseMessage(req)
 	return cc.Do(req)
 }
