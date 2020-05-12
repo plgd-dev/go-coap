@@ -18,7 +18,7 @@ const (
 	maxBlockNumber = int(1048575)
 )
 
-// SZX enum representation for szx
+// SZX enum representation for the size of the block
 type SZX uint8
 
 // Size number of bytes.
@@ -67,7 +67,9 @@ type ResponseWriter interface {
 	SetMessage(Message)
 }
 
-type ROMessage interface {
+// Message defines message interface for blockwise transfer.
+type Message interface {
+	// getters
 	Context() context.Context
 	Code() codes.Code
 	Token() message.Token
@@ -77,11 +79,7 @@ type ROMessage interface {
 	Body() io.ReadSeeker
 	BodySize() (int64, error)
 	Sequence() uint64
-}
-
-// Message defines message interface for blockwise transfer.
-type Message interface {
-	ROMessage
+	// setters
 	SetCode(codes.Code)
 	SetToken(message.Token)
 	SetOptionUint32(id message.OptionID, value uint32)
