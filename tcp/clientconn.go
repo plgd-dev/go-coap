@@ -128,7 +128,7 @@ func Client(conn net.Conn, opts ...DialOption) *ClientConn {
 	l := coapNet.NewConn(conn, coapNet.WithHeartBeat(cfg.heartBeat))
 	cc := NewClientConn(NewSession(cfg.ctx,
 		l,
-		NewObservatiomHandler(observationTokenHandler, cfg.handler),
+		NewObservationHandler(observationTokenHandler, cfg.handler),
 		cfg.maxMessageSize,
 		cfg.goPool,
 		cfg.blockwiseSZX,

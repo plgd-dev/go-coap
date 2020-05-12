@@ -473,10 +473,13 @@ func (cc *ClientConn) Process(datagram []byte) error {
 			pool.ReleaseMessage(req)
 		}
 		if w.response.IsModified() {
-			if typ == udpMessage.Confirmable {
+			switch {
+			case w.response.Type() == udpMessage.Reset:
+				w.response.SetMessageID(mid)
+			case typ == udpMessage.Confirmable:
 				w.response.SetType(udpMessage.Acknowledgement)
 				w.response.SetMessageID(mid)
-			} else {
+			default:
 				w.response.SetType(udpMessage.NonConfirmable)
 				w.response.SetMessageID(cc.GetMID())
 			}

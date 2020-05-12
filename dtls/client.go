@@ -126,7 +126,7 @@ func Client(conn *dtls.Conn, opts ...DialOption) *client.ClientConn {
 	)
 	cc := client.NewClientConn(session,
 		observationTokenHandler, observatioRequests, cfg.transmissionNStart, cfg.transmissionAcknowledgeTimeout, cfg.transmissionMaxRetransmit,
-		client.NewObservatiomHandler(observationTokenHandler, cfg.handler),
+		client.NewObservationHandler(observationTokenHandler, cfg.handler),
 		cfg.blockwiseSZX,
 		blockWise,
 		cfg.goPool,

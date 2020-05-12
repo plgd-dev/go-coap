@@ -216,7 +216,7 @@ func (s *Server) createClientConn(connection *coapNet.Conn) *ClientConn {
 		NewSession(
 			s.ctx,
 			connection,
-			NewObservatiomHandler(obsHandler, func(w *ResponseWriter, r *pool.Message) {
+			NewObservationHandler(obsHandler, func(w *ResponseWriter, r *pool.Message) {
 				s.handler(w, r)
 			}),
 			s.maxMessageSize, s.goPool, s.blockwiseSZX, blockWise, s.disablePeerTCPSignalMessageCSMs, s.disableTCPSignalMessageCSM),

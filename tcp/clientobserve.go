@@ -22,7 +22,7 @@ type Observation struct {
 	mutex sync.Mutex
 }
 
-func NewObservatiomHandler(obsertionTokenHandler *HandlerContainer, next func(w *ResponseWriter, r *pool.Message)) func(w *ResponseWriter, r *pool.Message) {
+func NewObservationHandler(obsertionTokenHandler *HandlerContainer, next func(w *ResponseWriter, r *pool.Message)) func(w *ResponseWriter, r *pool.Message) {
 	return func(w *ResponseWriter, r *pool.Message) {
 		v, err := obsertionTokenHandler.Get(r.Token())
 		if err != nil {

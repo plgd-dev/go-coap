@@ -275,7 +275,7 @@ func (s *Server) getOrCreateClientConn(UDPConn *coapNet.UDPConn, raddr *net.UDPA
 			s.transmissionNStart,
 			s.transmissionAcknowledgeTimeout,
 			s.transmissionMaxRetransmit,
-			client.NewObservatiomHandler(obsHandler, func(w *client.ResponseWriter, r *pool.Message) {
+			client.NewObservationHandler(obsHandler, func(w *client.ResponseWriter, r *pool.Message) {
 				h, err := s.multicastHandler.Get(r.Token())
 				if err == nil {
 					h(w, r)

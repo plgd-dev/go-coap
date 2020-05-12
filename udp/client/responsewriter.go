@@ -6,6 +6,7 @@ import (
 	"github.com/go-ocf/go-coap/v2/message"
 	"github.com/go-ocf/go-coap/v2/message/codes"
 	"github.com/go-ocf/go-coap/v2/noresponse"
+	udpMessage "github.com/go-ocf/go-coap/v2/udp/message"
 	"github.com/go-ocf/go-coap/v2/udp/message/pool"
 )
 
@@ -56,4 +57,10 @@ func (r *ResponseWriter) SetResponse(code codes.Code, contentFormat message.Medi
 
 func (r *ResponseWriter) ClientConn() *ClientConn {
 	return r.cc
+}
+
+func (r *ResponseWriter) SendReset() {
+	r.response.Reset()
+	r.response.SetCode(codes.Empty)
+	r.response.SetType(udpMessage.Reset)
 }

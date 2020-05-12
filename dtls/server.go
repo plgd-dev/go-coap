@@ -241,7 +241,7 @@ func (s *Server) createClientConn(connection *coapNet.Conn) *client.ClientConn {
 		s.transmissionNStart,
 		s.transmissionAcknowledgeTimeout,
 		s.transmissionMaxRetransmit,
-		client.NewObservatiomHandler(obsHandler, func(w *client.ResponseWriter, r *pool.Message) {
+		client.NewObservationHandler(obsHandler, func(w *client.ResponseWriter, r *pool.Message) {
 			s.handler(w, r)
 		}),
 		s.blockwiseSZX,
