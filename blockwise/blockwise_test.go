@@ -33,7 +33,7 @@ func newResponseWriter(r Message) *responseWriter {
 	}
 }
 
-type request struct {
+type testmessage struct {
 	code     codes.Code
 	ctx      context.Context
 	token    message.Token
@@ -42,35 +42,53 @@ type request struct {
 	sequence uint64
 }
 
-func (r *request) Context() context.Context {
+func (r *testmessage) String() string {
+	buf := fmt.Sprintf("Code: %v, Token %v", r.code, r.token)
+	path, err := r.options.Path()
+	if err != nil {
+		buf = fmt.Sprintf("%s, Path: %v", buf, path)
+	}
+	cf, err := r.options.ContentFormat()
+	if err == nil {
+		mt := message.MediaType(cf)
+		buf = fmt.Sprintf("%s, Format: %v", buf, mt)
+	}
+	queries, err := r.options.Queries()
+	if err == nil {
+		buf = fmt.Sprintf("%s, Queries: %+v", buf, queries)
+	}
+	return buf
+}
+
+func (r *testmessage) Context() context.Context {
 	return r.ctx
 }
 
-func (r *request) SetCode(c codes.Code) {
+func (r *testmessage) SetCode(c codes.Code) {
 	r.code = c
 }
 
-func (r *request) Code() codes.Code {
+func (r *testmessage) Code() codes.Code {
 	return r.code
 }
 
-func (r *request) SetToken(token message.Token) {
+func (r *testmessage) SetToken(token message.Token) {
 	r.token = token
 }
 
-func (r *request) Token() message.Token {
+func (r *testmessage) Token() message.Token {
 	return r.token
 }
 
-func (r *request) SetSequence(s uint64) {
+func (r *testmessage) SetSequence(s uint64) {
 	r.sequence = s
 }
 
-func (r *request) Sequence() uint64 {
+func (r *testmessage) Sequence() uint64 {
 	return r.sequence
 }
 
-func (r *request) SetOptionUint32(id message.OptionID, value uint32) {
+func (r *testmessage) SetOptionUint32(id message.OptionID, value uint32) {
 	opts, _, err := r.options.SetUint32(make([]byte, 4), id, value)
 	r.options = opts
 	if err != nil {
@@ -78,11 +96,11 @@ func (r *request) SetOptionUint32(id message.OptionID, value uint32) {
 	}
 }
 
-func (r *request) GetOptionUint32(id message.OptionID) (uint32, error) {
+func (r *testmessage) GetOptionUint32(id message.OptionID) (uint32, error) {
 	return r.options.GetUint32(id)
 }
 
-func (r *request) SetOptionBytes(id message.OptionID, value []byte) {
+func (r *testmessage) SetOptionBytes(id message.OptionID, value []byte) {
 	opts, _, err := r.options.SetBytes(make([]byte, len(value)), id, value)
 	r.options = opts
 	if err != nil {
@@ -90,18 +108,18 @@ func (r *request) SetOptionBytes(id message.OptionID, value []byte) {
 	}
 }
 
-func (r *request) GetOptionBytes(id message.OptionID) ([]byte, error) {
+func (r *testmessage) GetOptionBytes(id message.OptionID) ([]byte, error) {
 	return r.options.GetBytes(id)
 }
 
-func (r *request) Remove(id message.OptionID) {
+func (r *testmessage) Remove(id message.OptionID) {
 	r.options = r.options.Remove(id)
 	if len(r.options) == 0 {
 		r.options = nil
 	}
 }
 
-func (r *request) ResetOptionsTo(in message.Options) {
+func (r *testmessage) ResetOptionsTo(in message.Options) {
 	r.options = r.options[:0]
 	for _, o := range in {
 		v := make([]byte, len(o.Value))
@@ -113,19 +131,19 @@ func (r *request) ResetOptionsTo(in message.Options) {
 	}
 }
 
-func (r *request) Options() message.Options {
+func (r *testmessage) Options() message.Options {
 	return r.options
 }
 
-func (r *request) SetBody(p io.ReadSeeker) {
+func (r *testmessage) SetBody(p io.ReadSeeker) {
 	r.payload = p
 }
 
-func (r *request) Body() io.ReadSeeker {
+func (r *testmessage) Body() io.ReadSeeker {
 	return r.payload
 }
 
-func (r *request) BodySize() (int64, error) {
+func (r *testmessage) BodySize() (int64, error) {
 	if r.payload == nil {
 		return 0, nil
 	}
@@ -149,13 +167,13 @@ func (r *request) BodySize() (int64, error) {
 }
 
 func acquireMessage(ctx context.Context) Message {
-	return &request{
+	return &testmessage{
 		ctx: ctx,
 	}
 }
 
 func releaseMessage(r Message) {
-	req := r.(*request)
+	req := r.(*testmessage)
 	req.options = nil
 	req.token = nil
 	req.payload = nil
@@ -209,7 +227,7 @@ func TestBlockWise_Do(t *testing.T) {
 		{
 			name: "SZX16-SZX16",
 			args: args{
-				r: &request{
+				r: &testmessage{
 					ctx:     context.Background(),
 					token:   []byte{2},
 					options: message.Options{message.Option{ID: message.URIPath, Value: []byte("abc")}},
@@ -219,14 +237,14 @@ func TestBlockWise_Do(t *testing.T) {
 				szx:            SZX16,
 				maxMessageSize: SZX16.Size(),
 				do: makeDo(t, sender, receiver, SZX16, SZX16.Size(), SZX16, SZX16.Size(), func(w ResponseWriter, r Message) {
-					require.Equal(t, &request{
+					require.Equal(t, &testmessage{
 						ctx:     context.Background(),
 						token:   []byte{2},
 						options: message.Options{message.Option{ID: message.URIPath, Value: []byte("abc")}},
 						code:    codes.POST,
 						payload: memfile.New(make([]byte, 128))}, r)
 					w.SetMessage(
-						&request{
+						&testmessage{
 							ctx:     context.Background(),
 							token:   r.Token(),
 							code:    codes.Changed,
@@ -235,7 +253,7 @@ func TestBlockWise_Do(t *testing.T) {
 					)
 				}),
 			},
-			want: &request{
+			want: &testmessage{
 				ctx:     context.Background(),
 				token:   []byte{2},
 				code:    codes.Changed,
@@ -245,7 +263,7 @@ func TestBlockWise_Do(t *testing.T) {
 		{
 			name: "SZX16-SZX1024",
 			args: args{
-				r: &request{
+				r: &testmessage{
 					ctx:     context.Background(),
 					token:   []byte{2},
 					options: message.Options{message.Option{ID: message.URIPath, Value: []byte("abc")}},
@@ -255,14 +273,14 @@ func TestBlockWise_Do(t *testing.T) {
 				szx:            SZX16,
 				maxMessageSize: SZX16.Size(),
 				do: makeDo(t, sender, receiver, SZX16, SZX16.Size(), SZX1024, SZX1024.Size(), func(w ResponseWriter, r Message) {
-					require.Equal(t, &request{
+					require.Equal(t, &testmessage{
 						ctx:     context.Background(),
 						token:   []byte{2},
 						options: message.Options{message.Option{ID: message.URIPath, Value: []byte("abc")}},
 						code:    codes.POST,
 						payload: memfile.New(make([]byte, 128))}, r)
 					w.SetMessage(
-						&request{
+						&testmessage{
 							ctx:     context.Background(),
 							token:   r.Token(),
 							code:    codes.Changed,
@@ -271,7 +289,7 @@ func TestBlockWise_Do(t *testing.T) {
 					)
 				}),
 			},
-			want: &request{
+			want: &testmessage{
 				ctx:     context.Background(),
 				token:   []byte{2},
 				code:    codes.Changed,
@@ -281,7 +299,7 @@ func TestBlockWise_Do(t *testing.T) {
 		{
 			name: "SZXBERT-SZXBERT",
 			args: args{
-				r: &request{
+				r: &testmessage{
 					ctx:     context.Background(),
 					token:   []byte{'B', 'E', 'R', 'T'},
 					options: message.Options{message.Option{ID: message.URIPath, Value: []byte("abc")}},
@@ -291,14 +309,14 @@ func TestBlockWise_Do(t *testing.T) {
 				szx:            SZXBERT,
 				maxMessageSize: SZXBERT.Size() * 2,
 				do: makeDo(t, sender, receiver, SZXBERT, SZXBERT.Size()*2, SZXBERT, SZXBERT.Size()*5, func(w ResponseWriter, r Message) {
-					require.Equal(t, &request{
+					require.Equal(t, &testmessage{
 						ctx:     context.Background(),
 						token:   []byte{'B', 'E', 'R', 'T'},
 						options: message.Options{message.Option{ID: message.URIPath, Value: []byte("abc")}},
 						code:    codes.POST,
 						payload: memfile.New(make([]byte, 11111))}, r)
 					w.SetMessage(
-						&request{
+						&testmessage{
 							ctx:     context.Background(),
 							token:   r.Token(),
 							code:    codes.Changed,
@@ -307,7 +325,7 @@ func TestBlockWise_Do(t *testing.T) {
 					)
 				}),
 			},
-			want: &request{
+			want: &testmessage{
 				ctx:     context.Background(),
 				token:   []byte{'B', 'E', 'R', 'T'},
 				code:    codes.Changed,
@@ -317,7 +335,7 @@ func TestBlockWise_Do(t *testing.T) {
 		{
 			name: "PUT-SZX16-SZX16",
 			args: args{
-				r: &request{
+				r: &testmessage{
 					ctx:     context.Background(),
 					token:   []byte{2},
 					options: message.Options{message.Option{ID: message.URIPath, Value: []byte("abc")}},
@@ -327,14 +345,14 @@ func TestBlockWise_Do(t *testing.T) {
 				szx:            SZX16,
 				maxMessageSize: SZX16.Size(),
 				do: makeDo(t, sender, receiver, SZX16, SZX16.Size(), SZX16, SZX16.Size(), func(w ResponseWriter, r Message) {
-					require.Equal(t, &request{
+					require.Equal(t, &testmessage{
 						ctx:     context.Background(),
 						token:   []byte{2},
 						options: message.Options{message.Option{ID: message.URIPath, Value: []byte("abc")}},
 						code:    codes.PUT,
 						payload: memfile.New(make([]byte, 128))}, r)
 					w.SetMessage(
-						&request{
+						&testmessage{
 							ctx:     context.Background(),
 							token:   r.Token(),
 							code:    codes.Created,
@@ -343,7 +361,7 @@ func TestBlockWise_Do(t *testing.T) {
 					)
 				}),
 			},
-			want: &request{
+			want: &testmessage{
 				ctx:     context.Background(),
 				token:   []byte{2},
 				code:    codes.Created,
@@ -353,7 +371,7 @@ func TestBlockWise_Do(t *testing.T) {
 		{
 			name: "GET-SZX16-SZX16",
 			args: args{
-				r: &request{
+				r: &testmessage{
 					ctx:     context.Background(),
 					token:   []byte{2},
 					options: message.Options{message.Option{ID: message.URIPath, Value: []byte("abc")}},
@@ -362,14 +380,14 @@ func TestBlockWise_Do(t *testing.T) {
 				szx:            SZX16,
 				maxMessageSize: SZX16.Size(),
 				do: makeDo(t, sender, receiver, SZX16, SZX16.Size(), SZX16, SZX16.Size(), func(w ResponseWriter, r Message) {
-					require.Equal(t, &request{
+					require.Equal(t, &testmessage{
 						ctx:     context.Background(),
 						token:   []byte{2},
 						options: message.Options{message.Option{ID: message.URIPath, Value: []byte("abc")}},
 						code:    codes.GET,
 					}, r)
 					w.SetMessage(
-						&request{
+						&testmessage{
 							ctx:     context.Background(),
 							token:   r.Token(),
 							code:    codes.Content,
@@ -378,7 +396,7 @@ func TestBlockWise_Do(t *testing.T) {
 					)
 				}),
 			},
-			want: &request{
+			want: &testmessage{
 				ctx:     context.Background(),
 				token:   []byte{2},
 				code:    codes.Content,
@@ -526,14 +544,14 @@ func makeWriteReq(t *testing.T, sender, receiver *BlockWise, senderMaxSZX SZX, s
 	}
 }
 
-func TestBlockWise_WriteRequest(t *testing.T) {
+func TestBlockWise_Writetestmessage(t *testing.T) {
 	sender := NewBlockWise(acquireMessage, releaseMessage, time.Second*3600, func(err error) { t.Log(err) }, true, nil)
 	receiver := NewBlockWise(acquireMessage, releaseMessage, time.Second*3600, func(err error) { t.Log(err) }, true, nil)
 	type args struct {
-		r              Message
-		szx            SZX
-		maxMessageSize int
-		writeRequest   func(req Message) error
+		r                Message
+		szx              SZX
+		maxMessageSize   int
+		writetestmessage func(req Message) error
 	}
 	tests := []struct {
 		name    string
@@ -544,7 +562,7 @@ func TestBlockWise_WriteRequest(t *testing.T) {
 		{
 			name: "SZX16-SZX16",
 			args: args{
-				r: &request{
+				r: &testmessage{
 					ctx:     context.Background(),
 					token:   []byte{1},
 					options: message.Options{message.Option{ID: message.URIPath, Value: []byte("abc")}},
@@ -553,7 +571,7 @@ func TestBlockWise_WriteRequest(t *testing.T) {
 				},
 				szx:            SZX16,
 				maxMessageSize: SZX16.Size(),
-				writeRequest: makeWriteReq(t, sender, receiver, SZX16, SZX16.Size(), SZX16, SZX16.Size(), func(w ResponseWriter, r Message) {
+				writetestmessage: makeWriteReq(t, sender, receiver, SZX16, SZX16.Size(), SZX16, SZX16.Size(), func(w ResponseWriter, r Message) {
 					require.NoError(t, fmt.Errorf("not expected received message: %+v", r))
 				}),
 			},
@@ -561,7 +579,7 @@ func TestBlockWise_WriteRequest(t *testing.T) {
 		{
 			name: "SZX16-SZX1024",
 			args: args{
-				r: &request{
+				r: &testmessage{
 					ctx:     context.Background(),
 					token:   []byte{2},
 					options: message.Options{message.Option{ID: message.URIPath, Value: []byte("abc")}},
@@ -570,8 +588,8 @@ func TestBlockWise_WriteRequest(t *testing.T) {
 				},
 				szx:            SZX16,
 				maxMessageSize: SZX16.Size(),
-				writeRequest: makeWriteReq(t, sender, receiver, SZX16, SZX16.Size(), SZX1024, SZX1024.Size(), func(w ResponseWriter, r Message) {
-					require.Equal(t, &request{
+				writetestmessage: makeWriteReq(t, sender, receiver, SZX16, SZX16.Size(), SZX1024, SZX1024.Size(), func(w ResponseWriter, r Message) {
+					require.Equal(t, &testmessage{
 						ctx:     context.Background(),
 						token:   []byte{2},
 						options: message.Options{message.Option{ID: message.URIPath, Value: []byte("abc")}},
@@ -583,7 +601,7 @@ func TestBlockWise_WriteRequest(t *testing.T) {
 		{
 			name: "SZXBERT-SZXBERT",
 			args: args{
-				r: &request{
+				r: &testmessage{
 					ctx:     context.Background(),
 					token:   []byte{'B', 'E', 'R', 'T'},
 					options: message.Options{message.Option{ID: message.URIPath, Value: []byte("abc")}},
@@ -592,8 +610,8 @@ func TestBlockWise_WriteRequest(t *testing.T) {
 				},
 				szx:            SZXBERT,
 				maxMessageSize: SZXBERT.Size() * 2,
-				writeRequest: makeWriteReq(t, sender, receiver, SZXBERT, SZXBERT.Size()*2, SZXBERT, SZXBERT.Size()*5, func(w ResponseWriter, r Message) {
-					require.Equal(t, &request{
+				writetestmessage: makeWriteReq(t, sender, receiver, SZXBERT, SZXBERT.Size()*2, SZXBERT, SZXBERT.Size()*5, func(w ResponseWriter, r Message) {
+					require.Equal(t, &testmessage{
 						ctx:     context.Background(),
 						token:   []byte{'B', 'E', 'R', 'T'},
 						options: message.Options{message.Option{ID: message.URIPath, Value: []byte("abc")}},
@@ -606,7 +624,7 @@ func TestBlockWise_WriteRequest(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := sender.WriteRequest(tt.args.r, tt.args.szx, tt.args.maxMessageSize, tt.args.writeRequest)
+			err := sender.WriteMessage(tt.args.r, tt.args.szx, tt.args.maxMessageSize, tt.args.writetestmessage)
 			if tt.wantErr {
 				assert.Error(t, err)
 				return

@@ -93,7 +93,7 @@ func TestClientConn_Observe(t *testing.T) {
 						req.SetBody(p)
 						req.SetETag(etag)
 						req.SetToken(token)
-						err = cc.WriteRequest(req)
+						err = cc.WriteMessage(req)
 						require.NoError(t, err)
 					}
 				case 1:

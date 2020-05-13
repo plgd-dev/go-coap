@@ -155,7 +155,7 @@ func TestClientConn_Get_SepareateMessage(t *testing.T) {
 			optsBuf = optsBuf[:used]
 			customResp.Options = opts
 
-			err = w.ClientConn().WriteRequest(&customResp)
+			err = w.ClientConn().WriteMessage(&customResp)
 			if err != nil {
 				log.Printf("cannot set response: %v", err)
 			}

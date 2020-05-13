@@ -48,7 +48,7 @@ func (o *Observation) Cancel(ctx context.Context) error {
 		o.cc.observationRequests.Delete(o.token.String())
 		pool.ReleaseMessage(registeredRequest.(*pool.Message))
 	}
-	return o.cc.WriteRequest(req)
+	return o.cc.WriteMessage(req)
 }
 
 func (o *Observation) wantBeNotified(r *pool.Message) bool {
@@ -107,7 +107,7 @@ func (cc *ClientConn) Observe(ctx context.Context, path string, observeFunc func
 		return nil, err
 	}
 
-	err = cc.WriteRequest(req)
+	err = cc.WriteMessage(req)
 	if err != nil {
 		return nil, err
 	}

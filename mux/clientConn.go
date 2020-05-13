@@ -22,7 +22,7 @@ type ClientConn interface {
 
 	RemoteAddr() net.Addr
 	Context() context.Context
-	WriteRequest(req *message.Message) error
+	WriteMessage(req *message.Message) error
 	Do(req *message.Message) (*message.Message, error)
 	Close() error
 }

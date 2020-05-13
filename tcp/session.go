@@ -223,7 +223,7 @@ func (s *Session) processBuffer(buffer *bytes.Buffer, cc *ClientConn) error {
 				pool.ReleaseMessage(req)
 			}
 			if w.response.IsModified() {
-				err := s.WriteRequest(w.response)
+				err := s.WriteMessage(w.response)
 				if err != nil {
 					s.Close()
 					return fmt.Errorf("cannot write response: %w", err)
@@ -235,7 +235,7 @@ func (s *Session) processBuffer(buffer *bytes.Buffer, cc *ClientConn) error {
 	return nil
 }
 
-func (s *Session) WriteRequest(req *pool.Message) error {
+func (s *Session) WriteMessage(req *pool.Message) error {
 	data, err := req.Marshal()
 	if err != nil {
 		return fmt.Errorf("cannot marshal: %v", err)
@@ -252,7 +252,7 @@ func (s *Session) sendCSM() error {
 	defer pool.ReleaseMessage(req)
 	req.SetCode(codes.CSM)
 	req.SetToken(token)
-	return s.WriteRequest(req)
+	return s.WriteMessage(req)
 }
 
 func (s *Session) sendPong(w *ResponseWriter, r *pool.Message) {

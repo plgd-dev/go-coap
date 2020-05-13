@@ -2,6 +2,7 @@ package message
 
 import (
 	"context"
+	"fmt"
 	"io"
 
 	"github.com/go-ocf/go-coap/v2/message/codes"
@@ -12,8 +13,26 @@ const MaxTokenSize = 8
 
 type Message struct {
 	Context context.Context
-	Token   []byte
+	Token   Token
 	Code    codes.Code
 	Options Options
 	Body    io.ReadSeeker
+}
+
+func (r *Message) String() string {
+	buf := fmt.Sprintf("Code: %v, Token: %v", r.Code, r.Token)
+	path, err := r.Options.Path()
+	if err != nil {
+		buf = fmt.Sprintf("%s, Path: %v", buf, path)
+	}
+	cf, err := r.Options.ContentFormat()
+	if err == nil {
+		mt := MediaType(cf)
+		buf = fmt.Sprintf("%s, ContentFormat: %v", buf, mt)
+	}
+	queries, err := r.Options.Queries()
+	if err == nil {
+		buf = fmt.Sprintf("%s, Queries: %+v", buf, queries)
+	}
+	return buf
 }

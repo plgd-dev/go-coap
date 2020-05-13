@@ -143,6 +143,10 @@ func (r *Message) IsSeparate() bool {
 	return r.Code() == codes.Empty && r.Token() == nil && r.Type() == udp.Acknowledgement && len(r.Options()) == 0 && r.Body() == nil
 }
 
+func (r *Message) String() string {
+	return fmt.Sprintf("Type: %v, MID: %v, %s", r.Type(), r.MessageID(), r.Message.String())
+}
+
 // AcquireMessage returns an empty Message instance from Message pool.
 //
 // The returned Message instance may be passed to ReleaseMessage when it is

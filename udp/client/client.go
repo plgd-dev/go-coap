@@ -72,14 +72,14 @@ func (cc *Client) Context() context.Context {
 	return cc.cc.Context()
 }
 
-func (cc *Client) WriteRequest(req *message.Message) error {
+func (cc *Client) WriteMessage(req *message.Message) error {
 	r, err := pool.ConvertFrom(req)
 	if err != nil {
 		return err
 	}
 	r.SetMessageID(cc.cc.GetMID())
 	defer pool.ReleaseMessage(r)
-	return cc.cc.WriteRequest(r)
+	return cc.cc.WriteMessage(r)
 }
 
 func (cc *Client) Do(req *message.Message) (*message.Message, error) {

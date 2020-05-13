@@ -72,13 +72,13 @@ func (cc *ClientTCP) Context() context.Context {
 	return cc.cc.Context()
 }
 
-func (cc *ClientTCP) WriteRequest(req *message.Message) error {
+func (cc *ClientTCP) WriteMessage(req *message.Message) error {
 	r, err := pool.ConvertFrom(req)
 	if err != nil {
 		return err
 	}
 	defer pool.ReleaseMessage(r)
-	return cc.cc.WriteRequest(r)
+	return cc.cc.WriteMessage(r)
 }
 
 func (cc *ClientTCP) Do(req *message.Message) (*message.Message, error) {

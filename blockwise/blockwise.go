@@ -87,6 +87,7 @@ type Message interface {
 	ResetOptionsTo(message.Options)
 	SetBody(r io.ReadSeeker)
 	SetSequence(uint64)
+	String() string
 }
 
 // EncodeBlockOption encodes block values to coap option.
@@ -184,7 +185,7 @@ func bufferSize(szx SZX, maxMessageSize int) int {
 	return (maxMessageSize / szx.Size()) * szx.Size()
 }
 
-// Do sends an coap request and returns an coap response via blockwise transfer.
+// Do sends an coap message and returns an coap response via blockwise transfer.
 func (b *BlockWise) Do(r Message, maxSzx SZX, maxMessageSize int, do func(req Message) (Message, error)) (Message, error) {
 	if maxSzx > SZXBERT {
 		return nil, fmt.Errorf("invalid szx")
@@ -193,36 +194,33 @@ func (b *BlockWise) Do(r Message, maxSzx SZX, maxMessageSize int, do func(req Me
 		return nil, fmt.Errorf("invalid token")
 	}
 
-	blockID := message.Block2
-	sizeID := message.Size2
-	switch r.Code() {
-	case codes.POST, codes.PUT:
-		blockID = message.Block1
-		sizeID = message.Size1
-	}
-
 	req := b.acquireMessage(r.Context())
 	defer b.releaseMessage(req)
 	req.SetCode(r.Code())
 	req.SetToken(r.Token())
 	req.ResetOptionsTo(r.Options())
+
 	tokenStr := r.Token().String()
 	b.bwSendedRequest.Store(tokenStr, req)
 	defer b.bwSendedRequest.Delete(tokenStr)
-
 	if r.Body() == nil {
-		resp, err := do(r)
-		return resp, err
+		return do(r)
 	}
 	payloadSize, err := r.BodySize()
 	if err != nil {
 		return nil, fmt.Errorf("cannot get size of payload: %w", err)
 	}
-
 	if payloadSize <= int64(maxSzx.Size()) {
 		return do(r)
 	}
-	req.SetOptionUint32(sizeID, uint32(payloadSize))
+
+	switch r.Code() {
+	case codes.POST, codes.PUT:
+		break
+	default:
+		return nil, fmt.Errorf("no supported command(%v)", r.Code())
+	}
+	req.SetOptionUint32(message.Size1, uint32(payloadSize))
 
 	num := 0
 	buf := make([]byte, 1024)
@@ -259,27 +257,30 @@ func (b *BlockWise) Do(r Message, maxSzx SZX, maxMessageSize int, do func(req Me
 			return nil, fmt.Errorf("cannot encode block option(%v, %v, %v) to bw request: %w", szx, num, more, err)
 		}
 
-		req.SetOptionUint32(blockID, block)
+		req.SetOptionUint32(message.Block1, block)
 		resp, err := do(req)
 		if err != nil {
 			return nil, fmt.Errorf("cannot do bw request: %w", err)
 		}
-
-		if resp.Code() != codes.Continue {
-			return resp, nil
-		}
-		block, err = resp.GetOptionUint32(blockID)
+		block, err = resp.GetOptionUint32(message.Block1)
 		if err != nil {
 			return resp, nil
 		}
+		switch resp.Code() {
+		case codes.Continue, codes.Created, codes.Changed:
+		default:
+			return resp, nil
+		}
+
 		var newSzx SZX
 		var newNum int
 		newSzx, newNum, _, err = DecodeBlockOption(block)
 		if err != nil {
 			return resp, fmt.Errorf("cannot decode block option of bw response: %w", err)
 		}
-		func(n int) {
-		}(newNum)
+		if num != newNum {
+			return resp, fmt.Errorf("unexpected of acknowleged seqencenumber(%v != %v)", num, newNum)
+		}
 
 		num = num + newSzx.Size()/szx.Size()
 		szx = newSzx
@@ -312,8 +313,8 @@ func (w *writeRequestResponse) Message() Message {
 	return w.request
 }
 
-// WriteRequest sends an coap request via blockwise transfer.
-func (b *BlockWise) WriteRequest(request Message, maxSZX SZX, maxMessageSize int, writeRequest func(r Message) error) error {
+// WriteMessage sends an coap message via blockwise transfer.
+func (b *BlockWise) WriteMessage(request Message, maxSZX SZX, maxMessageSize int, writeRequest func(r Message) error) error {
 	req := b.acquireMessage(request.Context())
 	req.SetCode(request.Code())
 	req.SetToken(request.Token())
@@ -435,7 +436,7 @@ func (b *BlockWise) Handle(w ResponseWriter, r Message, maxSZX SZX, maxMessageSi
 		err := b.handleReceivedMessage(w, r, maxSZX, maxMessageSize, next)
 		if err != nil {
 			b.sendEntityIncomplete(w, token)
-			b.errors(fmt.Errorf("handleReceivedMessage: %w", err))
+			b.errors(fmt.Errorf("handleReceivedMessage(%v): %w", r, err))
 		}
 		return
 	}
@@ -446,14 +447,14 @@ func (b *BlockWise) Handle(w ResponseWriter, r Message, maxSZX SZX, maxMessageSi
 		err := b.handleReceivedMessage(w, r, maxSZX, maxMessageSize, next)
 		if err != nil {
 			b.sendEntityIncomplete(w, token)
-			b.errors(fmt.Errorf("handleReceivedMessage: %w", err))
+			b.errors(fmt.Errorf("handleReceivedMessage(%v): %w", r, err))
 		}
 		return
 	}
 	more, err := b.continueSendingMessage(w, r, maxSZX, maxMessageSize, v.(*messageGuard))
 	if err != nil {
 		b.sendingMessagesCache.Delete(tokenStr)
-		b.errors(fmt.Errorf("continueSendingMessage: %w", err))
+		b.errors(fmt.Errorf("continueSendingMessage(%v): %w", r, err))
 		return
 	}
 	if b.autoCleanUpResponseCache && more == false {

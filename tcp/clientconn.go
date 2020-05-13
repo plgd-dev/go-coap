@@ -183,7 +183,7 @@ func (cc *ClientConn) do(req *pool.Message) (*pool.Message, error) {
 		return nil, fmt.Errorf("cannot add token handler: %w", err)
 	}
 	defer cc.session.TokenHandler().Pop(token)
-	err = cc.session.WriteRequest(req)
+	err = cc.session.WriteMessage(req)
 	if err != nil {
 		return nil, fmt.Errorf("cannot write request: %w", err)
 	}
@@ -198,7 +198,7 @@ func (cc *ClientConn) do(req *pool.Message) (*pool.Message, error) {
 	}
 }
 
-// Do sends an coap request and returns an coap response.
+// Do sends an coap message and returns an coap response.
 //
 // An error is returned if by failure to speak COAP (such as a network connectivity problem).
 // Any status code doesn't cause an error.
@@ -218,15 +218,15 @@ func (cc *ClientConn) Do(req *pool.Message) (*pool.Message, error) {
 }
 
 func (cc *ClientConn) writeRequest(req *pool.Message) error {
-	return cc.session.WriteRequest(req)
+	return cc.session.WriteMessage(req)
 }
 
-// WriteRequest sends an coap request.
-func (cc *ClientConn) WriteRequest(req *pool.Message) error {
+// WriteMessage sends an coap message.
+func (cc *ClientConn) WriteMessage(req *pool.Message) error {
 	if !cc.session.PeerBlockWiseTransferEnabled() || cc.session.blockWise == nil {
 		return cc.writeRequest(req)
 	}
-	return cc.session.blockWise.WriteRequest(req, cc.session.blockwiseSZX, cc.session.maxMessageSize, func(bwreq blockwise.Message) error {
+	return cc.session.blockWise.WriteMessage(req, cc.session.blockwiseSZX, cc.session.maxMessageSize, func(bwreq blockwise.Message) error {
 		return cc.writeRequest(bwreq.(*pool.Message))
 	})
 }

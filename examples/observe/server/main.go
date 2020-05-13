@@ -49,7 +49,7 @@ func sendResponse(cc mux.ClientConn, token []byte, subded time.Time, obs int64) 
 		}
 	}
 	m.Options = opts
-	return cc.WriteRequest(&m)
+	return cc.WriteMessage(&m)
 }
 
 func periodicTransmitter(cc mux.ClientConn, token []byte) {
