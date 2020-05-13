@@ -161,7 +161,7 @@ func (options Options) SetBytes(buf []byte, id OptionID, data []byte) (Options, 
 		return options, -1, ErrInvalidValueLength
 	}
 	copy(buf, data)
-	return options.Set(Option{ID: URIPath, Value: buf[:len(data)]}), len(data), nil
+	return options.Set(Option{ID: id, Value: buf[:len(data)]}), len(data), nil
 }
 
 // AddBytes append's byte's option to options.
@@ -175,7 +175,7 @@ func (options Options) AddBytes(buf []byte, id OptionID, data []byte) (Options, 
 		return options, -1, ErrInvalidValueLength
 	}
 	copy(buf, data)
-	return options.Add(Option{ID: URIPath, Value: buf[:len(data)]}), len(data), nil
+	return options.Add(Option{ID: id, Value: buf[:len(data)]}), len(data), nil
 }
 
 // GetBytes get's first option with id of type byte's.

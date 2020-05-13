@@ -241,6 +241,15 @@ func TestPathOption(t *testing.T) {
 	}
 }
 
+func TestQueryOption(t *testing.T) {
+	v := "if=oic.if.baseline"
+	buf := make([]byte, len(v))
+	var opts Options
+	opts, _, err := opts.AddString(buf, URIQuery, v)
+	require.NoError(t, err)
+	require.True(t, opts.HasOption(URIQuery))
+}
+
 func BenchmarkPathOption(b *testing.B) {
 	buf := make([]byte, 256)
 	b.ResetTimer()

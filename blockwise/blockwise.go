@@ -267,7 +267,11 @@ func (b *BlockWise) Do(r Message, maxSzx SZX, maxMessageSize int, do func(req Me
 			return resp, nil
 		}
 		switch resp.Code() {
-		case codes.Continue, codes.Created, codes.Changed:
+		case codes.Continue:
+		case codes.Created, codes.Changed:
+			if !more {
+				return resp, nil
+			}
 		default:
 			return resp, nil
 		}
