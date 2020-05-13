@@ -144,9 +144,8 @@ func (cc *ClientConn) Do(req *pool.Message) (*pool.Message, error) {
 }
 
 func (cc *ClientConn) writeRequest(req *pool.Message) error {
-	if req.Type() != udpMessage.Confirmable {
-		return cc.session.WriteMessage(req)
-	}
+	req.SetMessageID(cc.GetMID())
+	req.SetType(udpMessage.Confirmable)
 	respChan := make(chan struct{})
 	err := cc.midHandlerContainer.Insert(req.MessageID(), func(w *ResponseWriter, r *pool.Message) {
 		close(respChan)
