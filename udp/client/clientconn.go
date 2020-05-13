@@ -110,7 +110,7 @@ func (cc *ClientConn) do(req *pool.Message) (*pool.Message, error) {
 		return nil, fmt.Errorf("cannot add token handler: %w", err)
 	}
 	defer cc.tokenHandlerContainer.Pop(token)
-	err = cc.writeRequest(req)
+	err = cc.writeMessage(req)
 	if err != nil {
 		return nil, fmt.Errorf("cannot write request: %w", err)
 	}
@@ -143,7 +143,7 @@ func (cc *ClientConn) Do(req *pool.Message) (*pool.Message, error) {
 	return bwresp.(*pool.Message), nil
 }
 
-func (cc *ClientConn) writeRequest(req *pool.Message) error {
+func (cc *ClientConn) writeMessage(req *pool.Message) error {
 	req.SetMessageID(cc.GetMID())
 	req.SetType(udpMessage.Confirmable)
 	respChan := make(chan struct{})
@@ -192,10 +192,10 @@ func (cc *ClientConn) writeRequest(req *pool.Message) error {
 // WriteMessage sends an coap message.
 func (cc *ClientConn) WriteMessage(req *pool.Message) error {
 	if cc.blockWise == nil {
-		return cc.writeRequest(req)
+		return cc.writeMessage(req)
 	}
 	return cc.blockWise.WriteMessage(req, cc.blockwiseSZX, cc.session.MaxMessageSize(), func(bwreq blockwise.Message) error {
-		return cc.writeRequest(bwreq.(*pool.Message))
+		return cc.writeMessage(bwreq.(*pool.Message))
 	})
 }
 

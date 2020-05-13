@@ -217,17 +217,17 @@ func (cc *ClientConn) Do(req *pool.Message) (*pool.Message, error) {
 	return bwresp.(*pool.Message), nil
 }
 
-func (cc *ClientConn) writeRequest(req *pool.Message) error {
+func (cc *ClientConn) writeMessage(req *pool.Message) error {
 	return cc.session.WriteMessage(req)
 }
 
 // WriteMessage sends an coap message.
 func (cc *ClientConn) WriteMessage(req *pool.Message) error {
 	if !cc.session.PeerBlockWiseTransferEnabled() || cc.session.blockWise == nil {
-		return cc.writeRequest(req)
+		return cc.writeMessage(req)
 	}
 	return cc.session.blockWise.WriteMessage(req, cc.session.blockwiseSZX, cc.session.maxMessageSize, func(bwreq blockwise.Message) error {
-		return cc.writeRequest(bwreq.(*pool.Message))
+		return cc.writeMessage(bwreq.(*pool.Message))
 	})
 }
 

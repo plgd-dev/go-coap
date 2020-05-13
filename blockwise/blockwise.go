@@ -291,34 +291,34 @@ func (b *BlockWise) Do(r Message, maxSzx SZX, maxMessageSize int, do func(req Me
 	}
 }
 
-type writeRequestResponse struct {
+type writeMessageResponse struct {
 	request        Message
 	releaseMessage func(Message)
 }
 
-func NewWriteRequestResponse(request Message, acquireMessage func(context.Context) Message, releaseMessage func(Message)) *writeRequestResponse {
+func NewWriteRequestResponse(request Message, acquireMessage func(context.Context) Message, releaseMessage func(Message)) *writeMessageResponse {
 	req := acquireMessage(request.Context())
 	req.SetCode(request.Code())
 	req.SetToken(request.Token())
 	req.ResetOptionsTo(request.Options())
 	req.SetBody(request.Body())
-	return &writeRequestResponse{
+	return &writeMessageResponse{
 		request:        req,
 		releaseMessage: releaseMessage,
 	}
 }
 
-func (w *writeRequestResponse) SetMessage(r Message) {
+func (w *writeMessageResponse) SetMessage(r Message) {
 	w.releaseMessage(w.request)
 	w.request = r
 }
 
-func (w *writeRequestResponse) Message() Message {
+func (w *writeMessageResponse) Message() Message {
 	return w.request
 }
 
 // WriteMessage sends an coap message via blockwise transfer.
-func (b *BlockWise) WriteMessage(request Message, maxSZX SZX, maxMessageSize int, writeRequest func(r Message) error) error {
+func (b *BlockWise) WriteMessage(request Message, maxSZX SZX, maxMessageSize int, writeMessage func(r Message) error) error {
 	req := b.acquireMessage(request.Context())
 	req.SetCode(request.Code())
 	req.SetToken(request.Token())
@@ -335,7 +335,7 @@ func (b *BlockWise) WriteMessage(request Message, maxSZX SZX, maxMessageSize int
 	if err != nil {
 		return fmt.Errorf("cannot start writing request: %w", err)
 	}
-	return writeRequest(w.Message())
+	return writeMessage(w.Message())
 }
 
 func fitSZX(r Message, blockType message.OptionID, maxSZX SZX) SZX {
