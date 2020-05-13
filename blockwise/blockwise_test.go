@@ -3,6 +3,7 @@ package blockwise
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"io"
 	"testing"
 	"time"
@@ -191,8 +192,8 @@ func makeDo(t *testing.T, sender, receiver *BlockWise, senderMaxSZX SZX, senderM
 }
 
 func TestBlockWise_Do(t *testing.T) {
-	sender := NewBlockWise(acquireMessage, releaseMessage, time.Second*10, func(err error) { t.Log(err) }, true, nil)
-	receiver := NewBlockWise(acquireMessage, releaseMessage, time.Second*10, func(err error) { t.Log(err) }, true, nil)
+	sender := NewBlockWise(acquireMessage, releaseMessage, time.Second*3600, func(err error) { t.Log(err) }, true, nil)
+	receiver := NewBlockWise(acquireMessage, releaseMessage, time.Second*3600, func(err error) { t.Log(err) }, true, nil)
 	type args struct {
 		r              Message
 		szx            SZX
@@ -228,7 +229,7 @@ func TestBlockWise_Do(t *testing.T) {
 						&request{
 							ctx:     context.Background(),
 							token:   r.Token(),
-							code:    codes.Content,
+							code:    codes.Changed,
 							payload: bytes.NewReader(make([]byte, 17)),
 						},
 					)
@@ -237,7 +238,7 @@ func TestBlockWise_Do(t *testing.T) {
 			want: &request{
 				ctx:     context.Background(),
 				token:   []byte{2},
-				code:    codes.Content,
+				code:    codes.Changed,
 				payload: memfile.New(make([]byte, 17)),
 			},
 		},
@@ -264,7 +265,7 @@ func TestBlockWise_Do(t *testing.T) {
 						&request{
 							ctx:     context.Background(),
 							token:   r.Token(),
-							code:    codes.Content,
+							code:    codes.Changed,
 							payload: bytes.NewReader(make([]byte, 17)),
 						},
 					)
@@ -273,7 +274,7 @@ func TestBlockWise_Do(t *testing.T) {
 			want: &request{
 				ctx:     context.Background(),
 				token:   []byte{2},
-				code:    codes.Content,
+				code:    codes.Changed,
 				payload: memfile.New(make([]byte, 17)),
 			},
 		},
@@ -300,7 +301,7 @@ func TestBlockWise_Do(t *testing.T) {
 						&request{
 							ctx:     context.Background(),
 							token:   r.Token(),
-							code:    codes.Content,
+							code:    codes.Changed,
 							payload: bytes.NewReader(make([]byte, 22222)),
 						},
 					)
@@ -309,8 +310,79 @@ func TestBlockWise_Do(t *testing.T) {
 			want: &request{
 				ctx:     context.Background(),
 				token:   []byte{'B', 'E', 'R', 'T'},
-				code:    codes.Content,
+				code:    codes.Changed,
 				payload: memfile.New(make([]byte, 22222)),
+			},
+		},
+		{
+			name: "PUT-SZX16-SZX16",
+			args: args{
+				r: &request{
+					ctx:     context.Background(),
+					token:   []byte{2},
+					options: message.Options{message.Option{ID: message.URIPath, Value: []byte("abc")}},
+					code:    codes.PUT,
+					payload: bytes.NewReader(make([]byte, 128)),
+				},
+				szx:            SZX16,
+				maxMessageSize: SZX16.Size(),
+				do: makeDo(t, sender, receiver, SZX16, SZX16.Size(), SZX16, SZX16.Size(), func(w ResponseWriter, r Message) {
+					require.Equal(t, &request{
+						ctx:     context.Background(),
+						token:   []byte{2},
+						options: message.Options{message.Option{ID: message.URIPath, Value: []byte("abc")}},
+						code:    codes.PUT,
+						payload: memfile.New(make([]byte, 128))}, r)
+					w.SetMessage(
+						&request{
+							ctx:     context.Background(),
+							token:   r.Token(),
+							code:    codes.Created,
+							payload: bytes.NewReader(make([]byte, 17)),
+						},
+					)
+				}),
+			},
+			want: &request{
+				ctx:     context.Background(),
+				token:   []byte{2},
+				code:    codes.Created,
+				payload: memfile.New(make([]byte, 17)),
+			},
+		},
+		{
+			name: "GET-SZX16-SZX16",
+			args: args{
+				r: &request{
+					ctx:     context.Background(),
+					token:   []byte{2},
+					options: message.Options{message.Option{ID: message.URIPath, Value: []byte("abc")}},
+					code:    codes.GET,
+				},
+				szx:            SZX16,
+				maxMessageSize: SZX16.Size(),
+				do: makeDo(t, sender, receiver, SZX16, SZX16.Size(), SZX16, SZX16.Size(), func(w ResponseWriter, r Message) {
+					require.Equal(t, &request{
+						ctx:     context.Background(),
+						token:   []byte{2},
+						options: message.Options{message.Option{ID: message.URIPath, Value: []byte("abc")}},
+						code:    codes.GET,
+					}, r)
+					w.SetMessage(
+						&request{
+							ctx:     context.Background(),
+							token:   r.Token(),
+							code:    codes.Content,
+							payload: bytes.NewReader(make([]byte, 399)),
+						},
+					)
+				}),
+			},
+			want: &request{
+				ctx:     context.Background(),
+				token:   []byte{2},
+				code:    codes.Content,
+				payload: memfile.New(make([]byte, 399)),
 			},
 		},
 	}
@@ -428,8 +500,17 @@ func makeWriteReq(t *testing.T, sender, receiver *BlockWise, senderMaxSZX SZX, s
 					next(w, r)
 				})
 				senderResp := newResponseWriter(acquireMessage(roReq.Context()))
+				orig := senderResp.Message()
 				sender.Handle(senderResp, receiverResp.Message(), receiverMaxSZX, receiverMaxMessageSize, func(w ResponseWriter, r Message) {
 				})
+				if orig == senderResp.Message() {
+					select {
+					case <-c:
+						return
+					default:
+						close(c)
+					}
+				}
 				select {
 				case <-c:
 					return
@@ -446,8 +527,8 @@ func makeWriteReq(t *testing.T, sender, receiver *BlockWise, senderMaxSZX SZX, s
 }
 
 func TestBlockWise_WriteRequest(t *testing.T) {
-	sender := NewBlockWise(acquireMessage, releaseMessage, time.Second*10, func(err error) { t.Log(err) }, true, nil)
-	receiver := NewBlockWise(acquireMessage, releaseMessage, time.Second*10, func(err error) { t.Log(err) }, true, nil)
+	sender := NewBlockWise(acquireMessage, releaseMessage, time.Second*3600, func(err error) { t.Log(err) }, true, nil)
+	receiver := NewBlockWise(acquireMessage, releaseMessage, time.Second*3600, func(err error) { t.Log(err) }, true, nil)
 	type args struct {
 		r              Message
 		szx            SZX
@@ -473,12 +554,7 @@ func TestBlockWise_WriteRequest(t *testing.T) {
 				szx:            SZX16,
 				maxMessageSize: SZX16.Size(),
 				writeRequest: makeWriteReq(t, sender, receiver, SZX16, SZX16.Size(), SZX16, SZX16.Size(), func(w ResponseWriter, r Message) {
-					require.Equal(t, &request{
-						ctx:     context.Background(),
-						token:   []byte{1},
-						options: message.Options{message.Option{ID: message.URIPath, Value: []byte("abc")}},
-						code:    codes.Content,
-						payload: memfile.New(make([]byte, 128))}, r)
+					require.NoError(t, fmt.Errorf("not expected received message: %+v", r))
 				}),
 			},
 		},

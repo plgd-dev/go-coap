@@ -37,6 +37,42 @@ func (m *mcastreceiver) pop() []*pool.Message {
 	return r
 }
 
+/*
+func TestServer_DiscoverIotivity(t *testing.T) {
+	timeout := time.Millisecond * 500
+	multicastAddr := "224.0.1.187:5683"
+	path := "/oic/res"
+
+	var wg sync.WaitGroup
+	defer wg.Wait()
+
+	ld, err := coapNet.NewListenUDP("udp4", "")
+	require.NoError(t, err)
+	defer ld.Close()
+
+	sd := NewServer()
+	defer sd.Stop()
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		err := sd.Serve(ld)
+		require.NoError(t, err)
+	}()
+
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	recv := &mcastreceiver{}
+	err = sd.Discover(ctx, multicastAddr, path, recv.process)
+	require.NoError(t, err)
+	got := recv.pop()
+	assert.Greater(t, len(got), 1)
+	assert.Equal(t, codes.Content, got[0].Code())
+	buf, err := ioutil.ReadAll(got[0].Body())
+	require.NoError(t, err)
+}
+*/
+
 func TestServer_Discover(t *testing.T) {
 	timeout := time.Millisecond * 500
 	multicastAddr := "224.0.1.187:5684"
