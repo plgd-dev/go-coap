@@ -21,7 +21,7 @@ func getPath(opts message.Options) string {
 	return path
 }
 
-func sendResponse(cc mux.ClientConn, token []byte, subded time.Time, obs int64) error {
+func sendResponse(cc mux.Client, token []byte, subded time.Time, obs int64) error {
 	m := message.Message{
 		Code:    codes.Content,
 		Token:   token,
@@ -52,7 +52,7 @@ func sendResponse(cc mux.ClientConn, token []byte, subded time.Time, obs int64) 
 	return cc.WriteMessage(&m)
 }
 
-func periodicTransmitter(cc mux.ClientConn, token []byte) {
+func periodicTransmitter(cc mux.Client, token []byte) {
 	subded := time.Now()
 	obs := int64(2)
 	for {
@@ -68,14 +68,14 @@ func periodicTransmitter(cc mux.ClientConn, token []byte) {
 func main() {
 	log.Fatal(coap.ListenAndServe("udp", ":5688",
 		mux.HandlerFunc(func(w mux.ResponseWriter, req *message.Message) {
-			log.Printf("Got message path=%v: %+v from %v", getPath(req.Options), req, w.ClientConn().RemoteAddr())
+			log.Printf("Got message path=%v: %+v from %v", getPath(req.Options), req, w.Client().RemoteAddr())
 			obs, err := req.Options.GetUint32(message.Observe)
 			switch {
 			case req.Code == codes.GET && err == nil && obs == 0:
-				go periodicTransmitter(w.ClientConn(), req.Token)
+				go periodicTransmitter(w.Client(), req.Token)
 			case req.Code == codes.GET:
 				subded := time.Now()
-				err := sendResponse(w.ClientConn(), req.Token, subded, -1)
+				err := sendResponse(w.Client(), req.Token, subded, -1)
 				if err != nil {
 					log.Printf("Error on transmitter: %v", err)
 				}

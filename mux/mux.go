@@ -11,7 +11,7 @@ import (
 
 type ResponseWriter = interface {
 	SetResponse(code codes.Code, contentFormat message.MediaType, d io.ReadSeeker, opts ...message.Option) error
-	ClientConn() ClientConn
+	Client() Client
 }
 
 type Handler interface {

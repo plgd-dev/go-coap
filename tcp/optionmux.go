@@ -29,6 +29,6 @@ func (w *muxResponseWriter) SetResponse(code codes.Code, contentFormat message.M
 	return w.w.SetResponse(code, contentFormat, d, opts...)
 }
 
-func (w *muxResponseWriter) ClientConn() mux.ClientConn {
+func (w *muxResponseWriter) Client() mux.Client {
 	return w.w.ClientConn().Client()
 }

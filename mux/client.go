@@ -12,7 +12,7 @@ type Observation = interface {
 	Cancel(ctx context.Context) error
 }
 
-type ClientConn interface {
+type Client interface {
 	Ping(ctx context.Context) error
 	Get(ctx context.Context, path string, opts ...message.Option) (*message.Message, error)
 	Delete(ctx context.Context, path string, opts ...message.Option) (*message.Message, error)

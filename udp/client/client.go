@@ -20,12 +20,12 @@ func NewClient(cc *ClientConn) *Client {
 	}
 }
 
-func (cc *Client) Ping(ctx context.Context) error {
-	return cc.cc.Ping(ctx)
+func (c *Client) Ping(ctx context.Context) error {
+	return c.cc.Ping(ctx)
 }
 
-func (cc *Client) Delete(ctx context.Context, path string, opts ...message.Option) (*message.Message, error) {
-	resp, err := cc.cc.Delete(ctx, path, opts...)
+func (c *Client) Delete(ctx context.Context, path string, opts ...message.Option) (*message.Message, error) {
+	resp, err := c.cc.Delete(ctx, path, opts...)
 	if err != nil {
 		return nil, err
 	}
@@ -33,8 +33,8 @@ func (cc *Client) Delete(ctx context.Context, path string, opts ...message.Optio
 	return pool.ConvertTo(resp), err
 }
 
-func (cc *Client) Put(ctx context.Context, path string, contentFormat message.MediaType, payload io.ReadSeeker, opts ...message.Option) (*message.Message, error) {
-	resp, err := cc.cc.Put(ctx, path, contentFormat, payload, opts...)
+func (c *Client) Put(ctx context.Context, path string, contentFormat message.MediaType, payload io.ReadSeeker, opts ...message.Option) (*message.Message, error) {
+	resp, err := c.cc.Put(ctx, path, contentFormat, payload, opts...)
 	if err != nil {
 		return nil, err
 	}
@@ -42,8 +42,8 @@ func (cc *Client) Put(ctx context.Context, path string, contentFormat message.Me
 	return pool.ConvertTo(resp), err
 }
 
-func (cc *Client) Post(ctx context.Context, path string, contentFormat message.MediaType, payload io.ReadSeeker, opts ...message.Option) (*message.Message, error) {
-	resp, err := cc.cc.Post(ctx, path, contentFormat, payload, opts...)
+func (c *Client) Post(ctx context.Context, path string, contentFormat message.MediaType, payload io.ReadSeeker, opts ...message.Option) (*message.Message, error) {
+	resp, err := c.cc.Post(ctx, path, contentFormat, payload, opts...)
 	if err != nil {
 		return nil, err
 	}
@@ -51,8 +51,8 @@ func (cc *Client) Post(ctx context.Context, path string, contentFormat message.M
 	return pool.ConvertTo(resp), err
 }
 
-func (cc *Client) Get(ctx context.Context, path string, opts ...message.Option) (*message.Message, error) {
-	resp, err := cc.cc.Get(ctx, path, opts...)
+func (c *Client) Get(ctx context.Context, path string, opts ...message.Option) (*message.Message, error) {
+	resp, err := c.cc.Get(ctx, path, opts...)
 	if err != nil {
 		return nil, err
 	}
@@ -60,35 +60,35 @@ func (cc *Client) Get(ctx context.Context, path string, opts ...message.Option) 
 	return pool.ConvertTo(resp), err
 }
 
-func (cc *Client) Close() error {
-	return cc.cc.Close()
+func (c *Client) Close() error {
+	return c.cc.Close()
 }
 
-func (cc *Client) RemoteAddr() net.Addr {
-	return cc.cc.RemoteAddr()
+func (c *Client) RemoteAddr() net.Addr {
+	return c.cc.RemoteAddr()
 }
 
-func (cc *Client) Context() context.Context {
-	return cc.cc.Context()
+func (c *Client) Context() context.Context {
+	return c.cc.Context()
 }
 
-func (cc *Client) WriteMessage(req *message.Message) error {
+func (c *Client) WriteMessage(req *message.Message) error {
 	r, err := pool.ConvertFrom(req)
 	if err != nil {
 		return err
 	}
-	r.SetMessageID(cc.cc.GetMID())
+	r.SetMessageID(c.cc.GetMID())
 	defer pool.ReleaseMessage(r)
-	return cc.cc.WriteMessage(r)
+	return c.cc.WriteMessage(r)
 }
 
-func (cc *Client) Do(req *message.Message) (*message.Message, error) {
+func (c *Client) Do(req *message.Message) (*message.Message, error) {
 	r, err := pool.ConvertFrom(req)
 	if err != nil {
 		return nil, err
 	}
 	defer pool.ReleaseMessage(r)
-	resp, err := cc.cc.Do(r)
+	resp, err := c.cc.Do(r)
 	if err != nil {
 		return nil, err
 	}
@@ -96,8 +96,8 @@ func (cc *Client) Do(req *message.Message) (*message.Message, error) {
 	return pool.ConvertTo(resp), err
 }
 
-func (cc *Client) Observe(ctx context.Context, path string, observeFunc func(notification *message.Message), opts ...message.Option) (mux.Observation, error) {
-	return cc.cc.Observe(ctx, path, func(n *pool.Message) {
+func (c *Client) Observe(ctx context.Context, path string, observeFunc func(notification *message.Message), opts ...message.Option) (mux.Observation, error) {
+	return c.cc.Observe(ctx, path, func(n *pool.Message) {
 		muxn := pool.ConvertTo(n)
 		observeFunc(muxn)
 	}, opts...)

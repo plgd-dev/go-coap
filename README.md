@@ -43,7 +43,7 @@ The go-coap provides servers and clients for DTLS, TCP-TLS, UDP, TCP in golang l
 	// Server
 	// See /examples/simple/server/main.go
 	func handleA(w mux.ResponseWriter, req *message.Message) {
-		log.Printf("got message in handleA:  %+v from %v\n", req, w.ClientConn().RemoteAddr())
+		log.Printf("got message in handleA:  %+v from %v\n", req, w.Client().RemoteAddr())
 		err := w.SetResponse(codes.GET, message.TextPlain, bytes.NewReader([]byte("hello world")))
 		if err != nil {
 			log.Printf("cannot set response: %v", err)

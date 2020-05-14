@@ -84,13 +84,13 @@ func TestClientConn_Get(t *testing.T) {
 		assert.Equal(t, codes.GET, r.Code)
 		err := w.SetResponse(codes.BadRequest, message.TextPlain, bytes.NewReader(make([]byte, 5330)))
 		require.NoError(t, err)
-		require.NotEmpty(t, w.ClientConn())
+		require.NotEmpty(t, w.Client())
 	}))
 	m.Handle("/b", mux.HandlerFunc(func(w mux.ResponseWriter, r *message.Message) {
 		assert.Equal(t, codes.GET, r.Code)
 		err := w.SetResponse(codes.Content, message.TextPlain, bytes.NewReader([]byte("b")))
 		require.NoError(t, err)
-		require.NotEmpty(t, w.ClientConn())
+		require.NotEmpty(t, w.Client())
 	}))
 
 	s := dtls.NewServer(dtls.WithMux(m))
@@ -171,7 +171,7 @@ func TestClientConn_Get_SepareateMessage(t *testing.T) {
 			optsBuf = optsBuf[:used]
 			customResp.Options = opts
 
-			err = w.ClientConn().WriteMessage(&customResp)
+			err = w.Client().WriteMessage(&customResp)
 			if err != nil {
 				log.Printf("cannot set response: %v", err)
 			}
@@ -282,7 +282,7 @@ func TestClientConn_Post(t *testing.T) {
 
 				err = w.SetResponse(codes.BadRequest, message.TextPlain, bytes.NewReader(make([]byte, 5330)))
 				require.NoError(t, err)
-				require.NotEmpty(t, w.ClientConn())
+				require.NotEmpty(t, w.Client())
 			}))
 			m.Handle("/b", mux.HandlerFunc(func(w mux.ResponseWriter, r *message.Message) {
 				assert.Equal(t, codes.POST, r.Code)
@@ -294,7 +294,7 @@ func TestClientConn_Post(t *testing.T) {
 				assert.Equal(t, buf, []byte("b-send"))
 				err = w.SetResponse(codes.Content, message.TextPlain, bytes.NewReader([]byte("b")))
 				require.NoError(t, err)
-				require.NotEmpty(t, w.ClientConn())
+				require.NotEmpty(t, w.Client())
 			}))
 
 			s := dtls.NewServer(dtls.WithMux(m))
@@ -409,7 +409,7 @@ func TestClientConn_Put(t *testing.T) {
 
 				err = w.SetResponse(codes.BadRequest, message.TextPlain, bytes.NewReader(make([]byte, 5330)))
 				require.NoError(t, err)
-				require.NotEmpty(t, w.ClientConn())
+				require.NotEmpty(t, w.Client())
 			}))
 			m.Handle("/b", mux.HandlerFunc(func(w mux.ResponseWriter, r *message.Message) {
 				assert.Equal(t, codes.PUT, r.Code)
@@ -421,7 +421,7 @@ func TestClientConn_Put(t *testing.T) {
 				assert.Equal(t, buf, []byte("b-send"))
 				err = w.SetResponse(codes.Content, message.TextPlain, bytes.NewReader([]byte("b")))
 				require.NoError(t, err)
-				require.NotEmpty(t, w.ClientConn())
+				require.NotEmpty(t, w.Client())
 			}))
 
 			s := dtls.NewServer(dtls.WithMux(m))
@@ -519,13 +519,13 @@ func TestClientConn_Delete(t *testing.T) {
 		assert.Equal(t, codes.DELETE, r.Code)
 		err := w.SetResponse(codes.BadRequest, message.TextPlain, bytes.NewReader(make([]byte, 5330)))
 		require.NoError(t, err)
-		require.NotEmpty(t, w.ClientConn())
+		require.NotEmpty(t, w.Client())
 	}))
 	m.Handle("/b", mux.HandlerFunc(func(w mux.ResponseWriter, r *message.Message) {
 		assert.Equal(t, codes.DELETE, r.Code)
 		err := w.SetResponse(codes.Deleted, message.TextPlain, bytes.NewReader([]byte("b")))
 		require.NoError(t, err)
-		require.NotEmpty(t, w.ClientConn())
+		require.NotEmpty(t, w.Client())
 	}))
 
 	s := dtls.NewServer(dtls.WithMux(m))
