@@ -12,20 +12,20 @@ import (
 	piondtls "github.com/pion/dtls/v2"
 )
 
-func handleA(w mux.ResponseWriter, req *message.Message) {
-	log.Printf("got message in handleA:  %+v from %v\n", req, w.Client().RemoteAddr())
+func handleA(w mux.ResponseWriter, r *mux.Message) {
+	log.Printf("got message in handleA:  %+v from %v\n", r, w.Client().RemoteAddr())
 	err := w.SetResponse(codes.GET, message.TextPlain, bytes.NewReader([]byte("A hello world")))
 	if err != nil {
 		log.Printf("cannot set response: %v", err)
 	}
 }
 
-func handleB(w mux.ResponseWriter, req *message.Message) {
-	log.Printf("got message in handleB:  %+v from %v\n", req, w.Client().RemoteAddr())
+func handleB(w mux.ResponseWriter, r *mux.Message) {
+	log.Printf("got message in handleB:  %+v from %v\n", r, w.Client().RemoteAddr())
 	customResp := message.Message{
 		Code:    codes.Content,
-		Token:   req.Token,
-		Context: req.Context,
+		Token:   r.Token,
+		Context: r.Context,
 		Options: make(message.Options, 0, 16),
 		Body:    bytes.NewReader([]byte("B hello world")),
 	}

@@ -12,7 +12,7 @@ import (
 	"github.com/go-ocf/go-coap/v2/udp"
 )
 
-func handleMcast(w mux.ResponseWriter, r *message.Message) {
+func handleMcast(w mux.ResponseWriter, r *mux.Message) {
 	path, err := r.Options.Path()
 	if err != nil {
 		log.Printf("cannot get path: %v", err)

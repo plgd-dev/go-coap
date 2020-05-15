@@ -130,7 +130,8 @@ func (p *packetConnIPv6) SetControlMessage(on bool) error {
 	return p.packetConnIPv6.SetMulticastLoopback(on)
 }
 
-func isIPv6(addr net.IP) bool {
+// IsIPv6 return's true if addr is IPV6.
+func IsIPv6(addr net.IP) bool {
 	if ip := addr.To16(); ip != nil && ip.To4() == nil {
 		return true
 	}
@@ -219,7 +220,7 @@ func NewUDPConn(network string, c *net.UDPConn, opts ...UDPOption) *UDPConn {
 
 	var packetConn packetConn
 
-	if isIPv6(c.LocalAddr().(*net.UDPAddr).IP) {
+	if IsIPv6(c.LocalAddr().(*net.UDPAddr).IP) {
 		packetConn = newPacketConnIPv6(ipv6.NewPacketConn(c))
 	} else {
 		packetConn = newPacketConnIPv4(ipv4.NewPacketConn(c))
@@ -251,7 +252,7 @@ func (c *UDPConn) Close() error {
 
 func (c *UDPConn) writeToAddr(ctx context.Context, heartBeat time.Duration, multicastHopLimit int, iface net.Interface, srcAddr net.Addr, port string, raddr *net.UDPAddr, buffer []byte) error {
 	netType := "udp4"
-	if isIPv6(raddr.IP) {
+	if IsIPv6(raddr.IP) {
 		netType = "udp6"
 	}
 	addrMask := srcAddr.String()
@@ -292,7 +293,7 @@ func (c *UDPConn) WriteMulticast(ctx context.Context, raddr *net.UDPAddr, hopLim
 	if raddr == nil {
 		return fmt.Errorf("cannot write multicast with context: invalid raddr")
 	}
-	if _, ok := c.packetConn.(*packetConnIPv4); ok && isIPv6(raddr.IP) {
+	if _, ok := c.packetConn.(*packetConnIPv4); ok && IsIPv6(raddr.IP) {
 		return fmt.Errorf("cannot write multicast with context: invalid destination address")
 	}
 

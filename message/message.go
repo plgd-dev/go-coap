@@ -12,11 +12,13 @@ import (
 const MaxTokenSize = 8
 
 type Message struct {
+	// Context context of request.
 	Context context.Context
 	Token   Token
 	Code    codes.Code
 	Options Options
-	Body    io.ReadSeeker
+	// Body of message. It is nil for message without body.
+	Body io.ReadSeeker
 }
 
 func (r *Message) String() string {
