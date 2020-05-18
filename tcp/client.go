@@ -101,3 +101,8 @@ func (c *ClientTCP) Observe(ctx context.Context, path string, observeFunc func(n
 		observeFunc(muxn)
 	}, opts...)
 }
+
+// Sequence acquires sequence number.
+func (c *ClientTCP) Sequence() uint64 {
+	return c.cc.Sequence()
+}

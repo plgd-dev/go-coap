@@ -448,6 +448,7 @@ func (cc *ClientConn) handle(w *ResponseWriter, r *pool.Message) {
 	cc.handleBW(w, r)
 }
 
+// Sequence acquires sequence number.
 func (cc *ClientConn) Sequence() uint64 {
 	return atomic.AddUint64(&cc.sequence, 1)
 }

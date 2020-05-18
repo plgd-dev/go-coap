@@ -25,4 +25,5 @@ type Client interface {
 	WriteMessage(req *message.Message) error
 	Do(req *message.Message) (*message.Message, error)
 	Close() error
+	Sequence() uint64
 }

@@ -389,10 +389,17 @@ func (cc *ClientConn) AddOnClose(f EventFunc) {
 	cc.session.AddOnClose(f)
 }
 
+// RemoteAddr gets remote address.
 func (cc *ClientConn) RemoteAddr() net.Addr {
 	return cc.session.connection.RemoteAddr()
 }
 
+// Client get instance which implements mux.Client.
 func (cc *ClientConn) Client() *ClientTCP {
 	return NewClientTCP(cc)
+}
+
+// Sequence acquires sequence number.
+func (cc *ClientConn) Sequence() uint64 {
+	return cc.session.Sequence()
 }

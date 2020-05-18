@@ -102,3 +102,8 @@ func (c *Client) Observe(ctx context.Context, path string, observeFunc func(noti
 		observeFunc(muxn)
 	}, opts...)
 }
+
+// Sequence acquires sequence number.
+func (c *Client) Sequence() uint64 {
+	return c.cc.Sequence()
+}
