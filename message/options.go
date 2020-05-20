@@ -276,6 +276,17 @@ func (options Options) Observe() (uint32, error) {
 	return options.GetUint32(Observe)
 }
 
+// SetAccept set's accept option.
+func (options Options) SetAccept(buf []byte, contentFormat MediaType) (Options, int, error) {
+	return options.SetUint32(buf, Accept, uint32(contentFormat))
+}
+
+// Accept get's accept option.
+func (options Options) Accept() (MediaType, error) {
+	v, err := options.GetUint32(Accept)
+	return MediaType(v), err
+}
+
 // Find return's range of type options. First number is index and second number is index of next option type.
 func (options Options) Find(ID OptionID) (int, int, error) {
 	idxPre, idxPost := options.findPositon(ID)

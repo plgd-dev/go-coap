@@ -214,6 +214,17 @@ func (r *Message) Observe() (uint32, error) {
 	return r.GetOptionUint32(message.Observe)
 }
 
+// SetAccept set's accept option.
+func (r *Message) SetAccept(contentFormat message.MediaType) {
+	r.SetOptionUint32(message.Accept, uint32(contentFormat))
+}
+
+// Accept get's accept option.
+func (r *Message) Accept() (message.MediaType, error) {
+	v, err := r.GetOptionUint32(message.Accept)
+	return message.MediaType(v), err
+}
+
 func (r *Message) ETag() ([]byte, error) {
 	return r.GetOptionBytes(message.ETag)
 }
