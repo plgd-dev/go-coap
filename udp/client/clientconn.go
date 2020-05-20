@@ -331,11 +331,18 @@ func (cc *ClientConn) Put(ctx context.Context, path string, contentFormat messag
 	return cc.Do(req)
 }
 
+// NewDeleteRequest creates delete request.
+//
+// Use ctx to set timeout.
+func NewDeleteRequest(ctx context.Context, path string, opts ...message.Option) (*pool.Message, error) {
+	return newCommonRequest(ctx, codes.DELETE, path, opts...)
+}
+
 // Delete deletes the resource identified by the request path.
 //
 // Use ctx to set timeout.
 func (cc *ClientConn) Delete(ctx context.Context, path string, opts ...message.Option) (*pool.Message, error) {
-	req, err := newCommonRequest(ctx, codes.DELETE, path, opts...)
+	req, err := NewDeleteRequest(ctx, path, opts...)
 	if err != nil {
 		return nil, fmt.Errorf("cannot create delete request: %w", err)
 	}
