@@ -266,6 +266,16 @@ func (options Options) SetContentFormat(buf []byte, contentFormat MediaType) (Op
 	return options.SetUint32(buf, ContentFormat, uint32(contentFormat))
 }
 
+// SetObserve set's ContentFormat option.
+func (options Options) SetObserve(buf []byte, observe uint32) (Options, int, error) {
+	return options.SetUint32(buf, Observe, observe)
+}
+
+// Observe get's observe option.
+func (options Options) Observe() (uint32, error) {
+	return options.GetUint32(Observe)
+}
+
 // Find return's range of type options. First number is index and second number is index of next option type.
 func (options Options) Find(ID OptionID) (int, int, error) {
 	idxPre, idxPost := options.findPositon(ID)
