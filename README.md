@@ -51,7 +51,7 @@ The go-coap provides servers and clients for DTLS, TCP-TLS, UDP, TCP in golang l
 	}
 
 	func main() {
-		m := mux.NewServeMux()
+		m := mux.NewRouter()
 		m.Handle("/a", mux.HandlerFunc(handleA))
 		m.Handle("/b", mux.HandlerFunc(handleB))
 

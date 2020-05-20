@@ -47,7 +47,7 @@ func handleB(w mux.ResponseWriter, r *mux.Message) {
 }
 
 func main() {
-	m := mux.NewServeMux()
+	m := mux.NewRouter()
 	m.Handle("/a", mux.HandlerFunc(handleA))
 	m.Handle("/b", mux.HandlerFunc(handleB))
 

@@ -39,10 +39,10 @@ func sendResponse(cc mux.Client, token []byte, subded time.Time, obs int64) erro
 		return fmt.Errorf("cannot set content format to response: %w", err)
 	}
 	if obs >= 0 {
-		opts, n, err = opts.SetUint32(buf, message.Observe, uint32(obs))
+		opts, n, err = opts.SetObserve(buf, uint32(obs))
 		if err == message.ErrTooSmall {
 			buf = append(buf, make([]byte, n)...)
-			opts, n, err = opts.SetUint32(buf, message.Observe, uint32(obs))
+			opts, n, err = opts.SetObserve(buf, uint32(obs))
 		}
 		if err != nil {
 			return fmt.Errorf("cannot set options to response: %w", err)
@@ -69,7 +69,7 @@ func main() {
 	log.Fatal(coap.ListenAndServe("udp", ":5688",
 		mux.HandlerFunc(func(w mux.ResponseWriter, r *mux.Message) {
 			log.Printf("Got message path=%v: %+v from %v", getPath(r.Options), r, w.Client().RemoteAddr())
-			obs, err := r.Options.GetUint32(message.Observe)
+			obs, err := r.Options.Observe()
 			switch {
 			case r.Code == codes.GET && err == nil && obs == 0:
 				go periodicTransmitter(w.Client(), r.Token)

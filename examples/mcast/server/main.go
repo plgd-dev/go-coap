@@ -24,7 +24,7 @@ func handleMcast(w mux.ResponseWriter, r *mux.Message) {
 }
 
 func main() {
-	m := mux.NewServeMux()
+	m := mux.NewRouter()
 	m.Handle("/oic/res", mux.HandlerFunc(handleMcast))
 	multicastAddr := "224.0.1.187:5683"
 

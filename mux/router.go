@@ -29,15 +29,16 @@ func (f HandlerFunc) ServeCOAP(w ResponseWriter, r *Message) {
 	f(w, r)
 }
 
-// ServeMux is an COAP request multiplexer. It matches the
+// Router is an COAP request multiplexer. It matches the
 // path name of each incoming request against a list of
 // registered patterns add calls the handler for the pattern
 // with same name.
-// ServeMux is also safe for concurrent access from multiple goroutines.
-type ServeMux struct {
+// Router is also safe for concurrent access from multiple goroutines.
+type Router struct {
 	z              map[string]muxEntry
 	m              *sync.RWMutex
 	defaultHandler Handler
+	middlewares    []MiddlewareFunc
 }
 
 type muxEntry struct {
@@ -45,11 +46,16 @@ type muxEntry struct {
 	pattern string
 }
 
-// NewServeMux allocates and returns a new ServeMux.
-func NewServeMux() *ServeMux {
-	return &ServeMux{z: make(map[string]muxEntry), m: new(sync.RWMutex), defaultHandler: HandlerFunc(func(w ResponseWriter, r *Message) {
-		w.SetResponse(codes.NotFound, message.TextPlain, nil)
-	})}
+// NewRouter allocates and returns a new Router.
+func NewRouter() *Router {
+	return &Router{
+		z:           make(map[string]muxEntry),
+		m:           new(sync.RWMutex),
+		middlewares: make([]MiddlewareFunc, 0, 2),
+		defaultHandler: HandlerFunc(func(w ResponseWriter, r *Message) {
+			w.SetResponse(codes.NotFound, message.TextPlain, nil)
+		}),
+	}
 }
 
 // Does path match pattern?
@@ -72,11 +78,11 @@ func pathMatch(pattern, path string) bool {
 
 // Find a handler on a handler map given a path string
 // Most-specific (longest) pattern wins
-func (mux *ServeMux) match(path string) (h Handler, pattern string) {
-	mux.m.RLock()
-	defer mux.m.RUnlock()
+func (r *Router) match(path string) (h Handler, pattern string) {
+	r.m.RLock()
+	defer r.m.RUnlock()
 	var n = 0
-	for k, v := range mux.z {
+	for k, v := range r.z {
 		if !pathMatch(k, path) {
 			continue
 		}
@@ -89,8 +95,8 @@ func (mux *ServeMux) match(path string) (h Handler, pattern string) {
 	return
 }
 
-// Handle adds a handler to the ServeMux for pattern.
-func (mux *ServeMux) Handle(pattern string, handler Handler) error {
+// Handle adds a handler to the Router for pattern.
+func (r *Router) Handle(pattern string, handler Handler) error {
 	switch pattern {
 	case "", "/":
 		pattern = "/"
@@ -104,39 +110,39 @@ func (mux *ServeMux) Handle(pattern string, handler Handler) error {
 		return errors.New("nil handler")
 	}
 
-	mux.m.Lock()
-	mux.z[pattern] = muxEntry{h: handler, pattern: pattern}
-	mux.m.Unlock()
+	r.m.Lock()
+	r.z[pattern] = muxEntry{h: handler, pattern: pattern}
+	r.m.Unlock()
 	return nil
 }
 
-// DefaultHandle set default handler to the ServeMux
-func (mux *ServeMux) DefaultHandle(handler Handler) {
-	mux.m.Lock()
-	mux.defaultHandler = handler
-	mux.m.Unlock()
+// DefaultHandle set default handler to the Router
+func (r *Router) DefaultHandle(handler Handler) {
+	r.m.Lock()
+	r.defaultHandler = handler
+	r.m.Unlock()
 }
 
-// HandleFunc adds a handler function to the ServeMux for pattern.
-func (mux *ServeMux) HandleFunc(pattern string, handler func(w ResponseWriter, r *Message)) {
-	mux.Handle(pattern, HandlerFunc(handler))
+// HandleFunc adds a handler function to the Router for pattern.
+func (r *Router) HandleFunc(pattern string, handler func(w ResponseWriter, r *Message)) {
+	r.Handle(pattern, HandlerFunc(handler))
 }
 
-// DefaultHandleFunc set a default handler function to the ServeMux.
-func (mux *ServeMux) DefaultHandleFunc(handler func(w ResponseWriter, r *Message)) {
-	mux.DefaultHandle(HandlerFunc(handler))
+// DefaultHandleFunc set a default handler function to the Router.
+func (r *Router) DefaultHandleFunc(handler func(w ResponseWriter, r *Message)) {
+	r.DefaultHandle(HandlerFunc(handler))
 }
 
-// HandleRemove deregistrars the handler specific for pattern from the ServeMux.
-func (mux *ServeMux) HandleRemove(pattern string) error {
+// HandleRemove deregistrars the handler specific for pattern from the Router.
+func (r *Router) HandleRemove(pattern string) error {
 	switch pattern {
 	case "", "/":
 		pattern = "/"
 	}
-	mux.m.Lock()
-	defer mux.m.Unlock()
-	if _, ok := mux.z[pattern]; ok {
-		delete(mux.z, pattern)
+	r.m.Lock()
+	defer r.m.Unlock()
+	if _, ok := r.z[pattern]; ok {
+		delete(r.z, pattern)
 		return nil
 	}
 	return errors.New("pattern is not registered in")
@@ -147,18 +153,21 @@ func (mux *ServeMux) HandleRemove(pattern string) error {
 // is used the correct thing for DS queries is done: a possible parent
 // is sought.
 // If no handler is found a standard NotFound message is returned
-func (mux *ServeMux) ServeCOAP(w ResponseWriter, r *Message) {
-	path, err := r.Options.Path()
+func (r *Router) ServeCOAP(w ResponseWriter, req *Message) {
+	path, err := req.Options.Path()
 	if err != nil {
-		mux.defaultHandler.ServeCOAP(w, r)
+		r.defaultHandler.ServeCOAP(w, req)
 		return
 	}
-	h, _ := mux.match(path)
+	h, _ := r.match(path)
 	if h == nil {
-		h = mux.defaultHandler
+		h = r.defaultHandler
 	}
 	if h == nil {
 		return
 	}
-	h.ServeCOAP(w, r)
+	for i := len(r.middlewares) - 1; i >= 0; i-- {
+		h = r.middlewares[i].Middleware(h)
+	}
+	h.ServeCOAP(w, req)
 }

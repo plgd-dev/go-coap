@@ -69,7 +69,7 @@ func TestClientConn_Get(t *testing.T) {
 	var wg sync.WaitGroup
 	defer wg.Wait()
 
-	m := mux.NewServeMux()
+	m := mux.NewRouter()
 	m.Handle("/a", mux.HandlerFunc(func(w mux.ResponseWriter, r *mux.Message) {
 		assert.Equal(t, codes.GET, r.Code)
 		err := w.SetResponse(codes.BadRequest, message.TextPlain, bytes.NewReader(make([]byte, 5330)))
@@ -130,7 +130,7 @@ func TestClientConn_Get_SepareateMessage(t *testing.T) {
 	var wg sync.WaitGroup
 	defer wg.Wait()
 
-	m := mux.NewServeMux()
+	m := mux.NewRouter()
 	m.Handle("/a", mux.HandlerFunc(func(w mux.ResponseWriter, r *mux.Message) {
 		go func() {
 			time.Sleep(time.Second * 1)
@@ -247,7 +247,7 @@ func TestClientConn_Post(t *testing.T) {
 			var wg sync.WaitGroup
 			defer wg.Wait()
 
-			m := mux.NewServeMux()
+			m := mux.NewRouter()
 			m.Handle("/a", mux.HandlerFunc(func(w mux.ResponseWriter, r *mux.Message) {
 				assert.Equal(t, codes.POST, r.Code)
 				ct, err := r.Options.GetUint32(message.ContentFormat)
@@ -366,7 +366,7 @@ func TestClientConn_Put(t *testing.T) {
 			var wg sync.WaitGroup
 			defer wg.Wait()
 
-			m := mux.NewServeMux()
+			m := mux.NewRouter()
 			m.Handle("/a", mux.HandlerFunc(func(w mux.ResponseWriter, r *mux.Message) {
 				assert.Equal(t, codes.PUT, r.Code)
 				ct, err := r.Options.GetUint32(message.ContentFormat)
@@ -475,7 +475,7 @@ func TestClientConn_Delete(t *testing.T) {
 	var wg sync.WaitGroup
 	defer wg.Wait()
 
-	m := mux.NewServeMux()
+	m := mux.NewRouter()
 	m.Handle("/a", mux.HandlerFunc(func(w mux.ResponseWriter, r *mux.Message) {
 		assert.Equal(t, codes.DELETE, r.Code)
 		err := w.SetResponse(codes.BadRequest, message.TextPlain, bytes.NewReader(make([]byte, 5330)))
