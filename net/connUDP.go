@@ -185,16 +185,16 @@ func WithHeartBeat(v time.Duration) heartBeat {
 	}
 }
 
-type errors struct {
+type errorsOpt struct {
 	errors func(err error)
 }
 
-func (h errors) applyUDP(o *udpConnOptions) {
+func (h errorsOpt) applyUDP(o *udpConnOptions) {
 	o.errors = h.errors
 }
 
-func WithErrors(v func(err error)) errors {
-	return errors{
+func WithErrors(v func(err error)) errorsOpt {
+	return errorsOpt{
 		errors: v,
 	}
 }
@@ -276,7 +276,7 @@ func (c *UDPConn) writeToAddr(ctx context.Context, heartBeat time.Duration, mult
 	p.SetMulticastHopLimit(multicastHopLimit)
 	err := p.SetWriteDeadline(time.Now().Add(heartBeat))
 	if err != nil {
-		return fmt.Errorf("cannot write multicast with context: cannot set write deadline for connection: %v", err)
+		return fmt.Errorf("cannot write multicast with context: cannot set write deadline for connection: %w", err)
 	}
 	ip := net.ParseIP(addr)
 	if ip == nil {
@@ -299,7 +299,7 @@ func (c *UDPConn) WriteMulticast(ctx context.Context, raddr *net.UDPAddr, hopLim
 
 	ifaces, err := net.Interfaces()
 	if err != nil {
-		return fmt.Errorf("cannot write multicast with context: cannot get interfaces for multicast connection: %v", err)
+		return fmt.Errorf("cannot write multicast with context: cannot get interfaces for multicast connection: %w", err)
 	}
 	c.lock.Lock()
 	defer c.lock.Unlock()
@@ -353,14 +353,14 @@ func (c *UDPConn) WriteWithContext(ctx context.Context, raddr *net.UDPAddr, buff
 		}
 		err := c.connection.SetWriteDeadline(time.Now().Add(c.heartBeat))
 		if err != nil {
-			return fmt.Errorf("cannot set write deadline for udp connection: %v", err)
+			return fmt.Errorf("cannot set write deadline for udp connection: %w", err)
 		}
 		n, err := WriteToUDP(c.connection, raddr, buffer[written:])
 		if err != nil {
 			if isTemporary(err) {
 				continue
 			}
-			return fmt.Errorf("cannot write to udp connection: %v", err)
+			return fmt.Errorf("cannot write to udp connection: %w", err)
 		}
 		written += n
 	}
@@ -373,16 +373,12 @@ func (c *UDPConn) ReadWithContext(ctx context.Context, buffer []byte) (int, *net
 	for {
 		select {
 		case <-ctx.Done():
-			if ctx.Err() != nil {
-				return -1, nil, fmt.Errorf("cannot read from udp connection: %v", ctx.Err())
-			}
-			return -1, nil, fmt.Errorf("cannot read from udp connection")
+			return -1, nil, ctx.Err()
 		default:
 		}
-
 		err := c.connection.SetReadDeadline(time.Now().Add(c.heartBeat))
 		if err != nil {
-			return -1, nil, fmt.Errorf("cannot set read deadline for udp connection: %v", err)
+			return -1, nil, fmt.Errorf("cannot set read deadline for udp connection: %w", err)
 		}
 		n, s, err := c.connection.ReadFromUDP(buffer)
 		if err != nil {

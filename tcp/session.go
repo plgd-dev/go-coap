@@ -201,16 +201,16 @@ func (s *Session) processBuffer(buffer *bytes.Buffer, cc *ClientConn) error {
 		msgRaw := make([]byte, hdr.TotalLen)
 		n, err := buffer.Read(msgRaw)
 		if err != nil {
-			return fmt.Errorf("cannot read full: %v", err)
+			return fmt.Errorf("cannot read full: %w", err)
 		}
 		if n != hdr.TotalLen {
-			return fmt.Errorf("invalid data: %v", err)
+			return fmt.Errorf("invalid data: %w", err)
 		}
 		req := pool.AcquireMessage(s.ctx)
 		_, err = req.Unmarshal(msgRaw)
 		if err != nil {
 			pool.ReleaseMessage(req)
-			return fmt.Errorf("cannot unmarshal with header: %v", err)
+			return fmt.Errorf("cannot unmarshal with header: %w", err)
 		}
 		req.SetSequence(s.Sequence())
 		s.goPool(func() error {
@@ -238,7 +238,7 @@ func (s *Session) processBuffer(buffer *bytes.Buffer, cc *ClientConn) error {
 func (s *Session) WriteMessage(req *pool.Message) error {
 	data, err := req.Marshal()
 	if err != nil {
-		return fmt.Errorf("cannot marshal: %v", err)
+		return fmt.Errorf("cannot marshal: %w", err)
 	}
 	return s.connection.WriteWithContext(req.Context(), data)
 }

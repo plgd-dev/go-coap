@@ -155,6 +155,10 @@ func (s *Server) Serve(l Listener) error {
 		rw, err := l.AcceptWithContext(s.ctx)
 		if err != nil {
 			switch err {
+			case coapNet.ErrListenerIsClosed:
+				s.Stop()
+				wg.Wait()
+				return nil
 			case context.DeadlineExceeded, context.Canceled:
 				select {
 				case <-s.ctx.Done():

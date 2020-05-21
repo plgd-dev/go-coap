@@ -18,12 +18,12 @@ type TCPListener struct {
 func newNetTCPListen(network string, addr string) (*net.TCPListener, error) {
 	a, err := net.ResolveTCPAddr(network, addr)
 	if err != nil {
-		return nil, fmt.Errorf("cannot create new net tcp listener: %v", err)
+		return nil, fmt.Errorf("cannot create new net tcp listener: %w", err)
 	}
 
 	tcp, err := net.ListenTCP(network, a)
 	if err != nil {
-		return nil, fmt.Errorf("cannot create new net tcp listener: %v", err)
+		return nil, fmt.Errorf("cannot create new net tcp listener: %w", err)
 	}
 	return tcp, nil
 }
@@ -50,32 +50,32 @@ func NewTCPListener(network string, addr string, opts ...TCPListenerOption) (*TC
 	}
 	tcp, err := newNetTCPListen(network, addr)
 	if err != nil {
-		return nil, fmt.Errorf("cannot create new tcp listener: %v", err)
+		return nil, fmt.Errorf("cannot create new tcp listener: %w", err)
 	}
 	return &TCPListener{listener: tcp, heartBeat: cfg.heartBeat}, nil
 }
 
-// AcceptContext waits with context for a generic Conn.
+// AcceptWithContext waits with context for a generic Conn.
 func (l *TCPListener) AcceptWithContext(ctx context.Context) (net.Conn, error) {
 	for {
-		if atomic.LoadUint32(&l.closed) == 1 {
-			return nil, ErrServerClosed
-		}
 		select {
 		case <-ctx.Done():
 			return nil, ctx.Err()
 		default:
 		}
+		if atomic.LoadUint32(&l.closed) == 1 {
+			return nil, ErrListenerIsClosed
+		}
 		err := l.SetDeadline(time.Now().Add(l.heartBeat))
 		if err != nil {
-			return nil, fmt.Errorf("cannot set deadline to accept connection: %v", err)
+			return nil, fmt.Errorf("cannot set deadline to accept connection: %w", err)
 		}
 		rw, err := l.listener.Accept()
 		if err != nil {
 			if isTemporary(err) {
 				continue
 			}
-			return nil, fmt.Errorf("cannot accept connection: %v", err)
+			return nil, fmt.Errorf("cannot accept connection: %w", err)
 		}
 		return rw, nil
 	}

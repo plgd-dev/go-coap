@@ -64,7 +64,7 @@ func (s *Session) Context() context.Context {
 func (s *Session) WriteMessage(req *pool.Message) error {
 	data, err := req.Marshal()
 	if err != nil {
-		return fmt.Errorf("cannot marshal: %v", err)
+		return fmt.Errorf("cannot marshal: %w", err)
 	}
 	return s.connection.WriteWithContext(req.Context(), data)
 }
