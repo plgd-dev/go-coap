@@ -241,7 +241,7 @@ func (s *Server) createClientConn(connection *coapNet.Conn) *client.ClientConn {
 	cc := client.NewClientConn(
 		session,
 		obsHandler,
-		nil,
+		new(sync.Map),
 		s.transmissionNStart,
 		s.transmissionAcknowledgeTimeout,
 		s.transmissionMaxRetransmit,

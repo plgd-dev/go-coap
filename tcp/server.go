@@ -224,7 +224,7 @@ func (s *Server) createClientConn(connection *coapNet.Conn) *ClientConn {
 				s.handler(w, r)
 			}),
 			s.maxMessageSize, s.goPool, s.blockwiseSZX, blockWise, s.disablePeerTCPSignalMessageCSMs, s.disableTCPSignalMessageCSM),
-		obsHandler, nil,
+		obsHandler, new(sync.Map),
 	)
 
 	return cc

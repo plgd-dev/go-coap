@@ -86,12 +86,13 @@ func (cc *ClientConn) Observe(ctx context.Context, path string, observeFunc func
 	waitForReponse := uint32(1)
 	cc.observationRequests.Store(token.String(), req)
 	err = o.cc.observationTokenHandler.Insert(token.String(), func(w *ResponseWriter, r *pool.Message) {
+		code := r.Code()
 		if o.wantBeNotified(r) {
 			observeFunc(r)
 		}
 		if atomic.CompareAndSwapUint32(&waitForReponse, 1, 0) {
 			select {
-			case respCodeChan <- r.Code():
+			case respCodeChan <- code:
 			default:
 			}
 		}
