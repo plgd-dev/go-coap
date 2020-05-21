@@ -232,11 +232,13 @@ type TLSOpt struct {
 	tlsCfg *tls.Config
 }
 
-func (o TLSOpt) dialApply(opts *dialOptions) {
+func (o TLSOpt) applyDial(opts *dialOptions) {
 	opts.tlsCfg = o.tlsCfg
 }
 
 // WithTLS creates tls connection.
-func WithTLS(cfg *tls.Config) DisableTCPSignalMessageCSMOpt {
-	return DisableTCPSignalMessageCSMOpt{}
+func WithTLS(cfg *tls.Config) TLSOpt {
+	return TLSOpt{
+		tlsCfg: cfg,
+	}
 }
