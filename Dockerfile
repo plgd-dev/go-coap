@@ -1,7 +1,11 @@
-FROM golang:1.13.5-alpine3.10 AS build
-RUN apk add --no-cache curl git build-base
-WORKDIR $GOPATH/src/github.com/go-ocf/go-coap
+FROM ubuntu:20.04 AS cloud-test
+RUN apt-get update \
+    && apt-get install -y gcc make git curl file
+RUN git clone https://github.com/udhos/update-golang.git \
+    && cd update-golang \
+    && ./update-golang.sh \
+    && ln -s /usr/local/go/bin/go /usr/bin/go
+WORKDIR $GOPATH/src/github.com/go-ocf/cloud
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
-
