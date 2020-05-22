@@ -106,3 +106,8 @@ func (c *ClientTCP) Observe(ctx context.Context, path string, observeFunc func(n
 func (c *ClientTCP) Sequence() uint64 {
 	return c.cc.Sequence()
 }
+
+// ClientConn get's underlaying client connection.
+func (c *ClientTCP) ClientConn() interface{} {
+	return c.cc
+}
