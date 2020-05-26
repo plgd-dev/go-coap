@@ -149,18 +149,24 @@ func NewServer(opt ...ServerOption) *Server {
 	}
 }
 
+func (s *Server) checkAndSetListener(l Listener) error {
+	s.listenMutex.Lock()
+	defer s.listenMutex.Unlock()
+	if s.listen != nil {
+		return fmt.Errorf("server already serve listener")
+	}
+	s.listen = l
+	return nil
+}
+
 func (s *Server) Serve(l Listener) error {
 	if s.blockwiseSZX > blockwise.SZX1024 {
 		return fmt.Errorf("invalid blockwiseSZX")
 	}
-
-	s.listenMutex.Lock()
-	if s.listen != nil {
-		s.listenMutex.Unlock()
-		return fmt.Errorf("server already serve listener")
+	err := s.checkAndSetListener(l)
+	if err != nil {
+		return err
 	}
-	s.listen = l
-	s.listenMutex.Unlock()
 	defer func() {
 		s.listenMutex.Lock()
 		defer s.listenMutex.Unlock()
@@ -224,13 +230,16 @@ func (s *Server) Stop() {
 func (s *Server) createClientConn(connection *coapNet.Conn) *client.ClientConn {
 	var blockWise *blockwise.BlockWise
 	if s.blockwiseEnable {
-		blockWise = blockwise.NewBlockWise(func(ctx context.Context) blockwise.Message {
-			return pool.AcquireMessage(ctx)
-		}, func(m blockwise.Message) {
-			pool.ReleaseMessage(m.(*pool.Message))
-		}, s.blockwiseTransferTimeout, s.errors, false, func(token message.Token) (blockwise.Message, bool) {
-			return nil, false
-		})
+		blockWise = blockwise.NewBlockWise(
+			bwAcquireMessage,
+			bwReleaseMessage,
+			s.blockwiseTransferTimeout,
+			s.errors,
+			false,
+			func(token message.Token) (blockwise.Message, bool) {
+				return nil, false
+			},
+		)
 	}
 	obsHandler := client.NewHandlerContainer()
 	session := NewSession(
@@ -245,9 +254,7 @@ func (s *Server) createClientConn(connection *coapNet.Conn) *client.ClientConn {
 		s.transmissionNStart,
 		s.transmissionAcknowledgeTimeout,
 		s.transmissionMaxRetransmit,
-		client.NewObservationHandler(obsHandler, func(w *client.ResponseWriter, r *pool.Message) {
-			s.handler(w, r)
-		}),
+		client.NewObservationHandler(obsHandler, s.handler),
 		s.blockwiseSZX,
 		blockWise,
 		s.goPool,

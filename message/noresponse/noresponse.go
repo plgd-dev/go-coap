@@ -20,13 +20,6 @@ func isSet(n uint32, pos uint32) bool {
 	return (val > 0)
 }
 
-func powerOfTwo(exponent uint32) uint32 {
-	if exponent != 0 {
-		return (2 * powerOfTwo(exponent-1))
-	}
-	return 1
-}
-
 func decodeNoResponseOption(v uint32) []codes.Code {
 	var codes []codes.Code
 	if v == 0 {
@@ -38,7 +31,7 @@ func decodeNoResponseOption(v uint32) []codes.Code {
 	// Max bit value:4; ref:table_2_rfc7967
 	for i = 0; i <= 4; i++ {
 		if isSet(v, i) {
-			index := powerOfTwo(i)
+			index := uint32(1 << i)
 			codes = append(codes, noResponseValueMap[index]...)
 		}
 	}

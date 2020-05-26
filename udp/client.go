@@ -91,6 +91,25 @@ func Dial(target string, opts ...DialOption) (*client.ClientConn, error) {
 	return Client(conn, opts...), nil
 }
 
+func bwAcquireMessage(ctx context.Context) blockwise.Message {
+	return pool.AcquireMessage(ctx)
+}
+
+func bwReleaseMessage(m blockwise.Message) {
+	pool.ReleaseMessage(m.(*pool.Message))
+}
+
+func bwCreateHandlerFunc(observatioRequests *sync.Map) func(token message.Token) (blockwise.Message, bool) {
+	return func(token message.Token) (blockwise.Message, bool) {
+		msg, ok := observatioRequests.Load(token.String())
+		if !ok {
+			return nil, ok
+		}
+		bwMessage := msg.(blockwise.Message)
+		return bwMessage, ok
+	}
+}
+
 // Client creates client over udp connection.
 func Client(conn *net.UDPConn, opts ...DialOption) *client.ClientConn {
 	cfg := defaultDialOptions
@@ -101,17 +120,13 @@ func Client(conn *net.UDPConn, opts ...DialOption) *client.ClientConn {
 	observatioRequests := &sync.Map{}
 	var blockWise *blockwise.BlockWise
 	if cfg.blockwiseEnable {
-		blockWise = blockwise.NewBlockWise(func(ctx context.Context) blockwise.Message {
-			return pool.AcquireMessage(ctx)
-		}, func(m blockwise.Message) {
-			pool.ReleaseMessage(m.(*pool.Message))
-		}, cfg.blockwiseTransferTimeout, cfg.errors, false, func(token message.Token) (blockwise.Message, bool) {
-			msg, ok := observatioRequests.Load(token.String())
-			if !ok {
-				return nil, ok
-			}
-			return msg.(blockwise.Message), ok
-		},
+		blockWise = blockwise.NewBlockWise(
+			bwAcquireMessage,
+			bwReleaseMessage,
+			cfg.blockwiseTransferTimeout,
+			cfg.errors,
+			false,
+			bwCreateHandlerFunc(observatioRequests),
 		)
 	}
 

@@ -66,7 +66,6 @@ func (r *Message) SetToken(token message.Token) {
 		return
 	}
 	r.msg.Token = append(r.msg.Token[:0], token...)
-	//r.isModified = true
 }
 
 func (r *Message) ResetOptionsTo(in message.Options) {

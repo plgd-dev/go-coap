@@ -150,20 +150,27 @@ func NewServer(opt ...ServerOption) *Server {
 	}
 }
 
+func (s *Server) checkAndSetListener(l *coapNet.UDPConn) error {
+	s.listenMutex.Lock()
+	defer s.listenMutex.Unlock()
+	if s.listen != nil {
+		return fmt.Errorf("server already serve: %v", s.listen.LocalAddr().String())
+	}
+	s.listen = l
+	close(s.serverStartedChan)
+	return nil
+}
+
 func (s *Server) Serve(l *coapNet.UDPConn) error {
 	if s.blockwiseSZX > blockwise.SZX1024 {
 		return fmt.Errorf("invalid blockwiseSZX")
 	}
 
-	m := make([]byte, s.maxMessageSize)
-	s.listenMutex.Lock()
-	if s.listen != nil {
-		s.listenMutex.Unlock()
-		return fmt.Errorf("server already serve: %v", s.listen.LocalAddr().String())
+	err := s.checkAndSetListener(l)
+	if err != nil {
+		return err
 	}
-	s.listen = l
-	close(s.serverStartedChan)
-	s.listenMutex.Unlock()
+
 	defer func() {
 		s.closeSessions()
 		s.listenMutex.Lock()
@@ -172,6 +179,7 @@ func (s *Server) Serve(l *coapNet.UDPConn) error {
 		s.serverStartedChan = make(chan struct{}, 1)
 	}()
 
+	m := make([]byte, s.maxMessageSize)
 	var wg sync.WaitGroup
 	for {
 		buf := m
@@ -249,17 +257,14 @@ func (s *Server) getOrCreateClientConn(UDPConn *coapNet.UDPConn, raddr *net.UDPA
 		created = true
 		var blockWise *blockwise.BlockWise
 		if s.blockwiseEnable {
-			blockWise = blockwise.NewBlockWise(func(ctx context.Context) blockwise.Message {
-				return pool.AcquireMessage(ctx)
-			}, func(m blockwise.Message) {
-				pool.ReleaseMessage(m.(*pool.Message))
-			}, s.blockwiseTransferTimeout, s.errors, false, func(token message.Token) (blockwise.Message, bool) {
-				msg, ok := s.multicastRequests.Load(token.String())
-				if !ok {
-					return nil, ok
-				}
-				return msg.(blockwise.Message), ok
-			})
+			blockWise = blockwise.NewBlockWise(
+				bwAcquireMessage,
+				bwReleaseMessage,
+				s.blockwiseTransferTimeout,
+				s.errors,
+				false,
+				bwCreateHandlerFunc(s.multicastRequests),
+			)
 		}
 		obsHandler := client.NewHandlerContainer()
 		session := NewSession(
