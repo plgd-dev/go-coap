@@ -131,7 +131,7 @@ func TestClientConn_Get(t *testing.T) {
 	}
 }
 
-func TestClientConn_Get_SepareateMessage(t *testing.T) {
+func TestClientConn_Get_SeparateMessage(t *testing.T) {
 	dtlsCfg := &piondtls.Config{
 		PSK: func(hint []byte) ([]byte, error) {
 			fmt.Printf("Hint: %s \n", hint)

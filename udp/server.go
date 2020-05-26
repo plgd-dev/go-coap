@@ -10,10 +10,10 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/go-ocf/go-coap/v2/blockwise"
 	"github.com/go-ocf/go-coap/v2/message"
+	"github.com/go-ocf/go-coap/v2/net/blockwise"
 
-	"github.com/go-ocf/go-coap/v2/keepalive"
+	"github.com/go-ocf/go-coap/v2/net/keepalive"
 
 	"github.com/go-ocf/go-coap/v2/message/codes"
 	"github.com/go-ocf/go-coap/v2/udp/client"

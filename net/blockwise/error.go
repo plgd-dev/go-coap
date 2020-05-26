@@ -3,8 +3,8 @@ package blockwise
 import "errors"
 
 var (
-	// ErrBlockNumberExceedLimit block number exceed limit 1,048,576
-	ErrBlockNumberExceedLimit = errors.New("block number exceed limit 1,048,576")
+	// ErrBlockNumberExceedLimit block number exceeded the limit 1,048,576
+	ErrBlockNumberExceedLimit = errors.New("block number exceeded the limit 1,048,576")
 
 	// ErrBlockInvalidSize block has invalid size
 	ErrBlockInvalidSize = errors.New("block has invalid size")

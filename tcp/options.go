@@ -5,8 +5,8 @@ import (
 	"crypto/tls"
 	"time"
 
-	"github.com/go-ocf/go-coap/v2/blockwise"
-	"github.com/go-ocf/go-coap/v2/keepalive"
+	"github.com/go-ocf/go-coap/v2/net/blockwise"
+	"github.com/go-ocf/go-coap/v2/net/keepalive"
 )
 
 // HandlerFuncOpt handler function option.

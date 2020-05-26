@@ -11,8 +11,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/go-ocf/go-coap/v2/blockwise"
 	"github.com/go-ocf/go-coap/v2/message"
+	"github.com/go-ocf/go-coap/v2/net/blockwise"
 
 	"github.com/go-ocf/go-coap/v2/message/codes"
 	udpMessage "github.com/go-ocf/go-coap/v2/udp/message"

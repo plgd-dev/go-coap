@@ -218,7 +218,7 @@ func (b *BlockWise) Do(r Message, maxSzx SZX, maxMessageSize int, do func(req Me
 	case codes.POST, codes.PUT:
 		break
 	default:
-		return nil, fmt.Errorf("no supported command(%v)", r.Code())
+		return nil, fmt.Errorf("unsupported command(%v)", r.Code())
 	}
 	req.SetOptionUint32(message.Size1, uint32(payloadSize))
 

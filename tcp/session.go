@@ -7,10 +7,10 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"github.com/go-ocf/go-coap/v2/blockwise"
 	"github.com/go-ocf/go-coap/v2/message"
 	"github.com/go-ocf/go-coap/v2/message/codes"
 	coapNet "github.com/go-ocf/go-coap/v2/net"
+	"github.com/go-ocf/go-coap/v2/net/blockwise"
 	coapTCP "github.com/go-ocf/go-coap/v2/tcp/message"
 	"github.com/go-ocf/go-coap/v2/tcp/message/pool"
 )

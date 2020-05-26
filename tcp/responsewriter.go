@@ -5,7 +5,7 @@ import (
 
 	"github.com/go-ocf/go-coap/v2/message"
 	"github.com/go-ocf/go-coap/v2/message/codes"
-	"github.com/go-ocf/go-coap/v2/noresponse"
+	"github.com/go-ocf/go-coap/v2/message/noresponse"
 	"github.com/go-ocf/go-coap/v2/tcp/message/pool"
 )
 

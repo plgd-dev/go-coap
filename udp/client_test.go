@@ -123,7 +123,7 @@ func TestClientConn_Get(t *testing.T) {
 	}
 }
 
-func TestClientConn_Get_SepareateMessage(t *testing.T) {
+func TestClientConn_Get_SeparateMessage(t *testing.T) {
 	l, err := coapNet.NewListenUDP("udp", "")
 	require.NoError(t, err)
 	defer l.Close()
