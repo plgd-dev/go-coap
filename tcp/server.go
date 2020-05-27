@@ -140,6 +140,27 @@ func (s *Server) checkAndSetListener(l Listener) error {
 	return nil
 }
 
+func (s *Server) checkAcceptError(err error) (bool, error) {
+	if err == nil {
+		return true, nil
+	}
+	switch err {
+	case coapNet.ErrListenerIsClosed:
+		s.Stop()
+		return false, nil
+	case context.DeadlineExceeded, context.Canceled:
+		select {
+		case <-s.ctx.Done():
+		default:
+			s.errors(fmt.Errorf("cannot accept connection: %w", err))
+			return true, nil
+		}
+		return false, nil
+	default:
+		return true, nil
+	}
+}
+
 func (s *Server) Serve(l Listener) error {
 	if s.blockwiseSZX > blockwise.SZXBERT {
 		return fmt.Errorf("invalid blockwiseSZX")
@@ -156,26 +177,15 @@ func (s *Server) Serve(l Listener) error {
 		s.listen = nil
 	}()
 	var wg sync.WaitGroup
+	defer wg.Wait()
 	for {
 		rw, err := l.AcceptWithContext(s.ctx)
+		ok, err := s.checkAcceptError(err)
 		if err != nil {
-			switch err {
-			case coapNet.ErrListenerIsClosed:
-				s.Stop()
-				wg.Wait()
-				return nil
-			case context.DeadlineExceeded, context.Canceled:
-				select {
-				case <-s.ctx.Done():
-				default:
-					s.errors(fmt.Errorf("cannot accept connection: %w", err))
-					continue
-				}
-				wg.Wait()
-				return nil
-			default:
-				continue
-			}
+			return err
+		}
+		if !ok {
+			return nil
 		}
 		if rw != nil {
 			wg.Add(1)
