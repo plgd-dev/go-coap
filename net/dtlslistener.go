@@ -40,20 +40,38 @@ func (l *DTLSListener) acceptLoop() {
 	}
 }
 
+var defaultDTLSListenerOptions = dtlsListenerOptions{
+	heartBeat: time.Millisecond * 200,
+}
+
+type dtlsListenerOptions struct {
+	heartBeat time.Duration
+}
+
+// A DTLSListenerOption sets options such as heartBeat parameters, etc.
+type DTLSListenerOption interface {
+	applyDTLSListener(*dtlsListenerOptions)
+}
+
 // NewDTLSListener creates dtls listener.
 // Known networks are "udp", "udp4" (IPv4-only), "udp6" (IPv6-only).
-func NewDTLSListener(network string, addr string, cfg *dtls.Config, heartBeat time.Duration) (*DTLSListener, error) {
+func NewDTLSListener(network string, addr string, dtlsCfg *dtls.Config, opts ...DTLSListenerOption) (*DTLSListener, error) {
+	cfg := defaultDTLSListenerOptions
+	for _, o := range opts {
+		o.applyDTLSListener(&cfg)
+	}
+
 	a, err := net.ResolveUDPAddr(network, addr)
 	if err != nil {
-		return nil, fmt.Errorf("cannot resolve address: %v", err)
+		return nil, fmt.Errorf("cannot resolve address: %w", err)
 	}
-	listener, err := dtls.Listen(network, a, cfg)
+	listener, err := dtls.Listen(network, a, dtlsCfg)
 	if err != nil {
-		return nil, fmt.Errorf("cannot create new dtls listener: %v", err)
+		return nil, fmt.Errorf("cannot create new dtls listener: %w", err)
 	}
 	l := DTLSListener{
 		listener:  listener,
-		heartBeat: heartBeat,
+		heartBeat: cfg.heartBeat,
 		doneCh:    make(chan struct{}),
 		connCh:    make(chan connData),
 	}
@@ -67,24 +85,25 @@ func NewDTLSListener(network string, addr string, cfg *dtls.Config, heartBeat ti
 // AcceptWithContext waits with context for a generic Conn.
 func (l *DTLSListener) AcceptWithContext(ctx context.Context) (net.Conn, error) {
 	for {
-		if atomic.LoadUint32(&l.closed) == 1 {
-			return nil, ErrServerClosed
-		}
 		select {
 		case <-ctx.Done():
 			return nil, ctx.Err()
 		default:
 		}
+		if atomic.LoadUint32(&l.closed) == 1 {
+			return nil, ErrListenerIsClosed
+		}
 		err := l.SetDeadline(time.Now().Add(l.heartBeat))
 		if err != nil {
-			return nil, fmt.Errorf("cannot set deadline to accept connection: %v", err)
+			return nil, fmt.Errorf("cannot set deadline to accept connection: %w", err)
 		}
 		rw, err := l.Accept()
 		if err != nil {
+			// check context in regular intervals and then resume listening
 			if isTemporary(err) {
 				continue
 			}
-			return nil, fmt.Errorf("cannot accept connection: %v", err)
+			return nil, fmt.Errorf("cannot accept connection: %w", err)
 		}
 		return rw, nil
 	}

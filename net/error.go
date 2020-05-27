@@ -1,7 +1,5 @@
 package net
 
-type Error string
+import "errors"
 
-func (e Error) Error() string { return string(e) }
-
-const ErrServerClosed = Error("listen socket was closed")
+var ErrListenerIsClosed = errors.New("listen socket was closed")

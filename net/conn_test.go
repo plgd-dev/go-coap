@@ -40,7 +40,7 @@ func TestConn_WriteWithContext(t *testing.T) {
 		},
 	}
 
-	listener, err := NewTCPListener("tcp", "127.0.0.1:", time.Millisecond*100)
+	listener, err := NewTCPListener("tcp", "127.0.0.1:", WithHeartBeat(time.Millisecond*100))
 	assert.NoError(t, err)
 	defer listener.Close()
 	ctx, cancel := context.WithCancel(context.Background())
@@ -52,7 +52,7 @@ func TestConn_WriteWithContext(t *testing.T) {
 			if err != nil {
 				return
 			}
-			c := NewConn(conn, time.Millisecond*10)
+			c := NewConn(conn, WithHeartBeat(time.Millisecond*10))
 			b := make([]byte, len(helloWorld))
 			_ = c.ReadFullWithContext(ctx, b)
 			c.Close()
@@ -63,7 +63,7 @@ func TestConn_WriteWithContext(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			tcpConn, err := net.Dial("tcp", listener.Addr().String())
 			assert.NoError(t, err)
-			c := NewConn(tcpConn, time.Millisecond*100)
+			c := NewConn(tcpConn, WithHeartBeat(time.Millisecond*100))
 			defer c.Close()
 
 			c.LocalAddr()

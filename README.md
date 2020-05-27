@@ -2,10 +2,22 @@
 [![codecov](https://codecov.io/gh/go-ocf/go-coap/branch/master/graph/badge.svg)](https://codecov.io/gh/go-ocf/go-coap)
 [![Go Report](https://goreportcard.com/badge/github.com/go-ocf/go-coap)](https://goreportcard.com/report/github.com/go-ocf/go-coap)
 [![FOSSA Status](https://app.fossa.io/api/projects/git%2Bgithub.com%2Fgo-ocf%2Fgo-coap.svg?type=shield)](https://app.fossa.io/projects/git%2Bgithub.com%2Fgo-ocf%2Fgo-coap?ref=badge_shield)
+[![backer](https://opencollective.com/go-coap/backers/badge.svg)](https://opencollective.com/go-coap#backer)
+[![sponsors](https://opencollective.com/go-coap/sponsors/badge.svg)](https://opencollective.com/go-coap#sponsors)
+[![contributors](https://img.shields.io/github/contributors/go-ocf/go-coap)](https://github.com/go-ocf/go-coap/graphs/contributors)
+[![GitHub stars](https://img.shields.io/github/stars/go-ocf/go-coap)](https://github.com/go-ocf/go-coap/stargazers)
+[![GitHub license](https://img.shields.io/github/license/go-ocf/go-coap)](https://github.com/go-ocf/go-coap/blob/master/LICENSE)
+[![GoDoc](https://godoc.org/github.com/go-ocf/go-coap?status.svg)](https://godoc.org/github.com/go-ocf/go-coap)
+[![Sourcegraph](https://sourcegraph.com/github.com/go-ocf/go-coap/-/badge.svg)](https://sourcegraph.com/github.com/go-ocf/go-coap?badge)
 
-# CoAP Client and Server for go
+# Go-CoAP
 
-Features supported:
+The Constrained Application Protocol (CoAP) is a specialized web transfer protocol for use with constrained nodes and constrained networks in the Internet of Things.
+The protocol is designed for machine-to-machine (M2M) applications such as smart energy and building automation.
+
+The go-coap provides servers and clients for DTLS, TCP-TLS, UDP, TCP in golang language.
+
+## Features
 * CoAP over UDP [RFC 7252][coap].
 * CoAP over TCP/TLS [RFC 8232][coap-tcp]
 * Observe resources in CoAP [RFC 7641][coap-observe]
@@ -30,36 +42,30 @@ Features supported:
 ```go
 	// Server
 	// See /examples/simple/server/main.go
-	func handleA(w coap.ResponseWriter, req *coap.Request) {
-		log.Printf("Got message in handleA: path=%q: %#v from %v", req.Msg.Path(), req.Msg, req.Client.RemoteAddr())
-		w.SetContentFormat(coap.TextPlain)
-		log.Printf("Transmitting from A")
-		ctx, cancel := context.WithTimeout(req.Ctx, time.Second)
-		defer cancel()
-		if _, err := w.WriteWithContext(ctx, []byte("hello world")); err != nil {
-			log.Printf("Cannot send response: %v", err)
+	func handleA(w mux.ResponseWriter, req *message.Message) {
+		log.Printf("got message in handleA:  %+v from %v\n", req, w.Client().RemoteAddr())
+		err := w.SetResponse(codes.GET, message.TextPlain, bytes.NewReader([]byte("hello world")))
+		if err != nil {
+			log.Printf("cannot set response: %v", err)
 		}
 	}
 
 	func main() {
-		mux := coap.NewServeMux()
-		mux.Handle("/a", coap.HandlerFunc(handleA))
+		m := mux.NewRouter()
+		m.Handle("/a", mux.HandlerFunc(handleA))
+		m.Handle("/b", mux.HandlerFunc(handleB))
 
-		listenerErrorHandler := func(err error) bool {
-			log.Printf("Error occurred on listener: %v", err)
-			return true
-		}
+		log.Fatal(coap.ListenAndServe("udp", ":5688", m))
 
-		log.Fatal(coap.ListenAndServe("udp", ":5688", mux, listenerErrorHandler))
 		
 		// for tcp
-		// log.Fatal(coap.ListenAndServe("tcp", ":5688",  mux, listenerErrorHandler))
+		// log.Fatal(coap.ListenAndServe("tcp", ":5688",  m))
 
 		// for tcp-tls
-		// log.Fatal(coap.ListenAndServeTLS("tcp-tls", ":5688", &tls.Config{...}, mux, listenerErrorHandler))
+		// log.Fatal(coap.ListenAndServeTLS("tcp", ":5688", &tls.Config{...}, m))
 
 		// for udp-dtls
-		// log.Fatal(coap.ListenAndServeDTLS("udp-dtls", ":5688", &dtls.Config{...}, mux, listenerErrorHandler))
+		// log.Fatal(coap.ListenAndServeDTLS("udp", ":5688", &dtls.Config{...}, m))
 	}
 ```
 #### Client
@@ -67,51 +73,42 @@ Features supported:
 	// Client
 	// See /examples/simpler/client/main.go
 	func main() {
-		co, err := coap.Dial("udp", "localhost:5688")
+		co, err := udp.Dial("localhost:5688")
 		
 		// for tcp
-		// co, err := coap.Dial("tcp", "localhost:5688")
+		// co, err := tcp.Dial("localhost:5688")
 		
 		// for tcp-tls
-		// co, err := coap.DialTLS("tcp-tls", localhost:5688", &tls.Config{...})
+		// co, err := tcp.Dial("localhost:5688", tcp.WithTLS(&tls.Config{...}))
 
-		// for udp-dtls
-		// co, err := coap.DialDTLS("udp-dtls", "localhost:5688", &dtls.Config{...}, mux))
+		// for dtls
+		// co, err := dtls.Dial("localhost:5688", &dtls.Config{...}))
 
 		if err != nil {
 			log.Fatalf("Error dialing: %v", err)
 		}
-
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 		defer cancel()
-		resp, err := co.GetWithContext(ctx, path)
-
-
+		resp, err := co.Get(ctx, "/a")
 		if err != nil {
-			log.Fatalf("Error sending request: %v", err)
+			log.Fatalf("Cannot get response: %v", err)
+			return
 		}
-
-		log.Printf("Response payload: %v", resp.Payload())
+		log.Printf("Response: %+v", resp)
 	}
 ```
 
-
 ### Observe / Notify
 
-#### Server
-Look to examples/observe/server/main.go
+[Server](examples/observe/server/main.go) example.
 
-#### Client
-Look to examples/observe/client/main.go
-
+[Client](examples/observe/client/main.go) example.
 
 ### Multicast
 
-#### Server
-Look to examples/mcast/server/main.go
+[Server](examples/mcast/server/main.go) example.
 
-#### Client
-Look to examples/mcast/client/main.go
+[Client](examples/mcast/client/main.go) example.
 
 ## Contributing
 
@@ -126,3 +123,19 @@ $ docker run --mount type=bind,source="$(pwd)",target=/shared,readonly --network
 Apache 2.0
 
 [![FOSSA Status](https://app.fossa.io/api/projects/git%2Bgithub.com%2Fgo-ocf%2Fgo-coap.svg?type=large)](https://app.fossa.io/projects/git%2Bgithub.com%2Fgo-ocf%2Fgo-coap?ref=badge_large)
+
+<h2 align="center">Sponsors</h2>
+
+[Become a sponsor](https://opencollective.com/go-coap#sponsor) and get your logo on our README on Github with a link to your site.
+
+<div align="center">
+
+<a href="https://opencollective.com/go-coap/sponsor/0/website?requireActive=false" target="_blank"><img src="https://opencollective.com/go-coap/sponsor/0/avatar.svg?requireActive=false"></a>
+
+</div>
+
+<h2 align="center">Backers</h2>
+
+[Become a backer](https://opencollective.com/go-coap#backer) and get your image on our README on Github with a link to your site.
+
+<a href="https://opencollective.com/go-coap/backer/0/website?requireActive=false" target="_blank"><img src="https://opencollective.com/go-coap/backer/0/avatar.svg?requireActive=false"></a>

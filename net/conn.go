@@ -19,11 +19,28 @@ type Conn struct {
 	lock       sync.Mutex
 }
 
+var defaultConnOptions = connOptions{
+	heartBeat: time.Millisecond * 200,
+}
+
+type connOptions struct {
+	heartBeat time.Duration
+}
+
+// A ConnOption sets options such as heartBeat, errors parameters, etc.
+type ConnOption interface {
+	applyConn(*connOptions)
+}
+
 // NewConn creates connection over net.Conn.
-func NewConn(c net.Conn, heartBeat time.Duration) *Conn {
+func NewConn(c net.Conn, opts ...ConnOption) *Conn {
+	cfg := defaultConnOptions
+	for _, o := range opts {
+		o.applyConn(&cfg)
+	}
 	connection := Conn{
 		connection: c,
-		heartBeat:  heartBeat,
+		heartBeat:  cfg.heartBeat,
 		readBuffer: bufio.NewReaderSize(c, 2048),
 	}
 	return &connection
@@ -62,7 +79,7 @@ func (c *Conn) WriteWithContext(ctx context.Context, data []byte) error {
 		}
 		err := c.connection.SetWriteDeadline(time.Now().Add(c.heartBeat))
 		if err != nil {
-			return fmt.Errorf("cannot set write deadline for tcp connection: %v", err)
+			return fmt.Errorf("cannot set write deadline for tcp connection: %w", err)
 		}
 		n, err := c.connection.Write(data[written:])
 
@@ -83,7 +100,7 @@ func (c *Conn) ReadFullWithContext(ctx context.Context, buffer []byte) error {
 	for offset < len(buffer) {
 		n, err := c.ReadWithContext(ctx, buffer[offset:])
 		if err != nil {
-			return fmt.Errorf("cannot read full from tcp connection: %v", err)
+			return fmt.Errorf("cannot read full from tcp connection: %w", err)
 		}
 		offset += n
 	}
@@ -104,14 +121,14 @@ func (c *Conn) ReadWithContext(ctx context.Context, buffer []byte) (int, error) 
 
 		err := c.connection.SetReadDeadline(time.Now().Add(c.heartBeat))
 		if err != nil {
-			return -1, fmt.Errorf("cannot set read deadline for tcp connection: %v", err)
+			return -1, fmt.Errorf("cannot set read deadline for tcp connection: %w", err)
 		}
 		n, err := c.readBuffer.Read(buffer)
 		if err != nil {
 			if isTemporary(err) {
 				continue
 			}
-			return -1, fmt.Errorf("cannot read from tcp connection: %v", err)
+			return -1, fmt.Errorf("cannot read from tcp connection: %w", err)
 		}
 		return n, err
 	}

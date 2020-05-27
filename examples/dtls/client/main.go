@@ -1,22 +1,24 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"os"
+	"time"
 
-	coap "github.com/go-ocf/go-coap"
-	dtls "github.com/pion/dtls/v2"
+	"github.com/go-ocf/go-coap/v2/dtls"
+	piondtls "github.com/pion/dtls/v2"
 )
 
 func main() {
-	co, err := coap.DialDTLS("udp", "localhost:5688", &dtls.Config{
+	co, err := dtls.Dial("localhost:5688", &piondtls.Config{
 		PSK: func(hint []byte) ([]byte, error) {
 			fmt.Printf("Server's hint: %s \n", hint)
 			return []byte{0xAB, 0xC1, 0x23}, nil
 		},
-		PSKIdentityHint: []byte("Pion DTLS Server"),
-		CipherSuites:    []dtls.CipherSuiteID{dtls.TLS_PSK_WITH_AES_128_CCM_8},
+		PSKIdentityHint: []byte("Pion DTLS Client"),
+		CipherSuites:    []piondtls.CipherSuiteID{piondtls.TLS_PSK_WITH_AES_128_CCM_8},
 	})
 	if err != nil {
 		log.Fatalf("Error dialing: %v", err)
@@ -25,11 +27,12 @@ func main() {
 	if len(os.Args) > 1 {
 		path = os.Args[1]
 	}
-	resp, err := co.Get(path)
 
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	resp, err := co.Get(ctx, path)
 	if err != nil {
 		log.Fatalf("Error sending request: %v", err)
 	}
-
-	log.Printf("Response payload: %v", resp.Payload())
+	log.Printf("Response payload: %+v", resp)
 }

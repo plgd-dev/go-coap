@@ -12,15 +12,15 @@ import (
 	"golang.org/x/net/ipv6"
 )
 
-// ConnUDP is a udp connection provides Read/Write with context.
+// UDPConn is a udp connection provides Read/Write with context.
 //
-// Multiple goroutines may invoke methods on a ConnUDP simultaneously.
-type ConnUDP struct {
-	heartBeat         time.Duration
-	connection        *net.UDPConn
-	packetConn        packetConn
-	multicastHopLimit int
-	errors            func(err error)
+// Multiple goroutines may invoke methods on a UDPConn simultaneously.
+type UDPConn struct {
+	heartBeat  time.Duration
+	connection *net.UDPConn
+	packetConn packetConn
+	errors     func(err error)
+	network    string
 
 	lock sync.Mutex
 }
@@ -130,45 +130,129 @@ func (p *packetConnIPv6) SetControlMessage(on bool) error {
 	return p.packetConnIPv6.SetMulticastLoopback(on)
 }
 
-func isIPv6(addr net.IP) bool {
+// IsIPv6 return's true if addr is IPV6.
+func IsIPv6(addr net.IP) bool {
 	if ip := addr.To16(); ip != nil && ip.To4() == nil {
 		return true
 	}
 	return false
 }
 
-// NewConnUDP creates connection over net.UDPConn.
-func NewConnUDP(c *net.UDPConn, heartBeat time.Duration, multicastHopLimit int, errors func(err error)) *ConnUDP {
+var defaultUDPConnOptions = udpConnOptions{
+	heartBeat: time.Millisecond * 200,
+	errors: func(err error) {
+		fmt.Println(err)
+	},
+}
+
+type udpConnOptions struct {
+	heartBeat time.Duration
+	errors    func(err error)
+}
+
+// A UDPOption sets options such as heartBeat, errors parameters, etc.
+type UDPOption interface {
+	applyUDP(*udpConnOptions)
+}
+
+type heartBeat struct {
+	heartBeat time.Duration
+}
+
+func (h heartBeat) applyUDP(o *udpConnOptions) {
+	o.heartBeat = h.heartBeat
+}
+
+func (h heartBeat) applyConn(o *connOptions) {
+	o.heartBeat = h.heartBeat
+}
+
+func (h heartBeat) applyTCPListener(o *tcpListenerOptions) {
+	o.heartBeat = h.heartBeat
+}
+
+func (h heartBeat) applyTLSListener(o *tlsListenerOptions) {
+	o.heartBeat = h.heartBeat
+}
+
+func (h heartBeat) applyDTLSListener(o *dtlsListenerOptions) {
+	o.heartBeat = h.heartBeat
+}
+
+func WithHeartBeat(v time.Duration) heartBeat {
+	return heartBeat{
+		heartBeat: v,
+	}
+}
+
+type errorsOpt struct {
+	errors func(err error)
+}
+
+func (h errorsOpt) applyUDP(o *udpConnOptions) {
+	o.errors = h.errors
+}
+
+func WithErrors(v func(err error)) errorsOpt {
+	return errorsOpt{
+		errors: v,
+	}
+}
+
+func NewListenUDP(network, addr string, opts ...UDPOption) (*UDPConn, error) {
+	listenAddress, err := net.ResolveUDPAddr(network, addr)
+	if err != nil {
+		return nil, err
+	}
+	conn, err := net.ListenUDP(network, listenAddress)
+	if err != nil {
+		return nil, err
+	}
+	return NewUDPConn(network, conn, opts...), nil
+}
+
+// NewUDPConn creates connection over net.UDPConn.
+func NewUDPConn(network string, c *net.UDPConn, opts ...UDPOption) *UDPConn {
+	cfg := defaultUDPConnOptions
+	for _, o := range opts {
+		o.applyUDP(&cfg)
+	}
+
 	var packetConn packetConn
 
-	if isIPv6(c.LocalAddr().(*net.UDPAddr).IP) {
+	if IsIPv6(c.LocalAddr().(*net.UDPAddr).IP) {
 		packetConn = newPacketConnIPv6(ipv6.NewPacketConn(c))
 	} else {
 		packetConn = newPacketConnIPv4(ipv4.NewPacketConn(c))
 	}
 
-	connection := ConnUDP{connection: c, heartBeat: heartBeat, packetConn: packetConn, multicastHopLimit: multicastHopLimit, errors: errors}
+	connection := UDPConn{network: network, connection: c, heartBeat: cfg.heartBeat, packetConn: packetConn, errors: cfg.errors}
 	return &connection
 }
 
 // LocalAddr returns the local network address. The Addr returned is shared by all invocations of LocalAddr, so do not modify it.
-func (c *ConnUDP) LocalAddr() net.Addr {
+func (c *UDPConn) LocalAddr() net.Addr {
 	return c.connection.LocalAddr()
 }
 
 // RemoteAddr returns the remote network address. The Addr returned is shared by all invocations of RemoteAddr, so do not modify it.
-func (c *ConnUDP) RemoteAddr() net.Addr {
+func (c *UDPConn) RemoteAddr() net.Addr {
 	return c.connection.RemoteAddr()
 }
 
+// Network name of the network (for example, udp4, udp6, udp)
+func (c *UDPConn) Network() string {
+	return c.network
+}
+
 // Close closes the connection.
-func (c *ConnUDP) Close() error {
+func (c *UDPConn) Close() error {
 	return c.connection.Close()
 }
 
-func (c *ConnUDP) writeToAddr(ctx context.Context, heartBeat time.Duration, multicastHopLimit int, iface net.Interface, srcAddr net.Addr, port string, udpCtx *ConnUDPContext, buffer []byte) error {
+func (c *UDPConn) writeToAddr(ctx context.Context, heartBeat time.Duration, multicastHopLimit int, iface net.Interface, srcAddr net.Addr, port string, raddr *net.UDPAddr, buffer []byte) error {
 	netType := "udp4"
-	if isIPv6(udpCtx.raddr.IP) {
+	if IsIPv6(raddr.IP) {
 		netType = "udp6"
 	}
 	addrMask := srcAddr.String()
@@ -192,7 +276,7 @@ func (c *ConnUDP) writeToAddr(ctx context.Context, heartBeat time.Duration, mult
 	p.SetMulticastHopLimit(multicastHopLimit)
 	err := p.SetWriteDeadline(time.Now().Add(heartBeat))
 	if err != nil {
-		return fmt.Errorf("cannot write multicast with context: cannot set write deadline for connection: %v", err)
+		return fmt.Errorf("cannot write multicast with context: cannot set write deadline for connection: %w", err)
 	}
 	ip := net.ParseIP(addr)
 	if ip == nil {
@@ -201,21 +285,21 @@ func (c *ConnUDP) writeToAddr(ctx context.Context, heartBeat time.Duration, mult
 	_, err = p.WriteTo(buffer, &ControlMessage{
 		Src:     ip,
 		IfIndex: iface.Index,
-	}, udpCtx.raddr)
+	}, raddr)
 	return err
 }
 
-func (c *ConnUDP) writeMulticastWithContext(ctx context.Context, udpCtx *ConnUDPContext, buffer []byte) error {
-	if udpCtx == nil {
-		return fmt.Errorf("cannot write multicast with context: invalid udpCtx")
+func (c *UDPConn) WriteMulticast(ctx context.Context, raddr *net.UDPAddr, hopLimit int, buffer []byte) error {
+	if raddr == nil {
+		return fmt.Errorf("cannot write multicast with context: invalid raddr")
 	}
-	if _, ok := c.packetConn.(*packetConnIPv4); ok && isIPv6(udpCtx.raddr.IP) {
+	if _, ok := c.packetConn.(*packetConnIPv4); ok && IsIPv6(raddr.IP) {
 		return fmt.Errorf("cannot write multicast with context: invalid destination address")
 	}
 
 	ifaces, err := net.Interfaces()
 	if err != nil {
-		return fmt.Errorf("cannot write multicast with context: cannot get interfaces for multicast connection: %v", err)
+		return fmt.Errorf("cannot write multicast with context: cannot get interfaces for multicast connection: %w", err)
 	}
 	c.lock.Lock()
 	defer c.lock.Unlock()
@@ -238,7 +322,7 @@ LOOP:
 		port := addr[len(addr)-1]
 
 		for _, ifaceAddr := range ifaceAddrs {
-			err = c.writeToAddr(ctx, c.heartBeat, c.multicastHopLimit, iface, ifaceAddr, port, udpCtx, buffer)
+			err = c.writeToAddr(ctx, c.heartBeat, hopLimit, iface, ifaceAddr, port, raddr, buffer)
 			if err != nil {
 				if isTemporary(err) {
 					continue LOOP
@@ -253,12 +337,9 @@ LOOP:
 }
 
 // WriteWithContext writes data with context.
-func (c *ConnUDP) WriteWithContext(ctx context.Context, udpCtx *ConnUDPContext, buffer []byte) error {
-	if udpCtx == nil {
-		return fmt.Errorf("cannot write with context: invalid udpCtx")
-	}
-	if udpCtx.raddr.IP.IsMulticast() {
-		return c.writeMulticastWithContext(ctx, udpCtx, buffer)
+func (c *UDPConn) WriteWithContext(ctx context.Context, raddr *net.UDPAddr, buffer []byte) error {
+	if raddr == nil {
+		return fmt.Errorf("cannot write with context: invalid raddr")
 	}
 
 	written := 0
@@ -272,14 +353,14 @@ func (c *ConnUDP) WriteWithContext(ctx context.Context, udpCtx *ConnUDPContext, 
 		}
 		err := c.connection.SetWriteDeadline(time.Now().Add(c.heartBeat))
 		if err != nil {
-			return fmt.Errorf("cannot set write deadline for udp connection: %v", err)
+			return fmt.Errorf("cannot set write deadline for udp connection: %w", err)
 		}
-		n, err := WriteToSessionUDP(c.connection, udpCtx, buffer[written:])
+		n, err := WriteToUDP(c.connection, raddr, buffer[written:])
 		if err != nil {
 			if isTemporary(err) {
 				continue
 			}
-			return fmt.Errorf("cannot write to udp connection: %v", err)
+			return fmt.Errorf("cannot write to udp connection: %w", err)
 		}
 		written += n
 	}
@@ -288,23 +369,20 @@ func (c *ConnUDP) WriteWithContext(ctx context.Context, udpCtx *ConnUDPContext, 
 }
 
 // ReadWithContext reads packet with context.
-func (c *ConnUDP) ReadWithContext(ctx context.Context, buffer []byte) (int, *ConnUDPContext, error) {
+func (c *UDPConn) ReadWithContext(ctx context.Context, buffer []byte) (int, *net.UDPAddr, error) {
 	for {
 		select {
 		case <-ctx.Done():
-			if ctx.Err() != nil {
-				return -1, nil, fmt.Errorf("cannot read from udp connection: %v", ctx.Err())
-			}
-			return -1, nil, fmt.Errorf("cannot read from udp connection")
+			return -1, nil, ctx.Err()
 		default:
 		}
-
 		err := c.connection.SetReadDeadline(time.Now().Add(c.heartBeat))
 		if err != nil {
-			return -1, nil, fmt.Errorf("cannot set read deadline for udp connection: %v", err)
+			return -1, nil, fmt.Errorf("cannot set read deadline for udp connection: %w", err)
 		}
-		n, s, err := ReadFromSessionUDP(c.connection, buffer)
+		n, s, err := c.connection.ReadFromUDP(buffer)
 		if err != nil {
+			// check context in regular intervals and then resume listening
 			if isTemporary(err) {
 				continue
 			}
@@ -316,7 +394,7 @@ func (c *ConnUDP) ReadWithContext(ctx context.Context, buffer []byte) (int, *Con
 
 // SetMulticastLoopback sets whether transmitted multicast packets
 // should be copied and send back to the originator.
-func (c *ConnUDP) SetMulticastLoopback(on bool) error {
+func (c *UDPConn) SetMulticastLoopback(on bool) error {
 	return c.packetConn.SetMulticastLoopback(on)
 }
 
@@ -329,12 +407,12 @@ func (c *ConnUDP) SetMulticastLoopback(on bool) error {
 // nil, although this is not recommended because the assignment
 // depends on platforms and sometimes it might require routing
 // configuration.
-func (c *ConnUDP) JoinGroup(ifi *net.Interface, group net.Addr) error {
+func (c *UDPConn) JoinGroup(ifi *net.Interface, group net.Addr) error {
 	return c.packetConn.JoinGroup(ifi, group)
 }
 
 // LeaveGroup leaves the group address group on the interface ifi
 // regardless of whether the group is any-source group or source-specific group.
-func (c *ConnUDP) LeaveGroup(ifi *net.Interface, group net.Addr) error {
+func (c *UDPConn) LeaveGroup(ifi *net.Interface, group net.Addr) error {
 	return c.packetConn.LeaveGroup(ifi, group)
 }
