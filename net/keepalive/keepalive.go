@@ -90,52 +90,63 @@ func New(opts ...Option) *KeepAlive {
 	}
 }
 
-func (k *KeepAlive) Run(c ClientConn) error {
-	ping := func() error {
-		ctx, cancel := context.WithTimeout(c.Context(), k.cfg.config.WaitForPong)
-		defer cancel()
-		return c.Ping(ctx)
-	}
+func ping(c ClientConn, timeout time.Duration) error {
+	ctx, cancel := context.WithTimeout(c.Context(), timeout)
+	defer cancel()
+	return c.Ping(ctx)
+}
 
+func (k *KeepAlive) doPing(c ClientConn) (bool, error) {
+	err := ping(c, k.cfg.config.WaitForPong)
+	if err == nil {
+		return true, nil
+	}
+	if err != context.DeadlineExceeded {
+		if err == context.Canceled {
+			return false, nil
+		}
+		c.Close()
+		return false, err
+	}
+	retryPolicy := k.cfg.config.NewRetryPolicy()
+	for {
+		when, err := retryPolicy()
+		if err != nil {
+			c.Close()
+			return false, err
+		}
+		select {
+		case <-c.Context().Done():
+			return false, nil
+		case <-time.After(time.Until(when)):
+			err := ping(c, k.cfg.config.WaitForPong)
+			if err == context.DeadlineExceeded {
+				continue
+			}
+			if err == nil {
+				return true, nil
+			}
+			c.Close()
+			return false, err
+		}
+	}
+}
+
+func (k *KeepAlive) Run(c ClientConn) error {
 	ticker := time.NewTicker(k.cfg.config.Interval)
 	defer ticker.Stop()
-PING_LOOP:
-	for {
+	ok := true
+	for ok {
 		select {
 		case <-ticker.C:
-			if err := ping(); err != nil {
-				if err != context.DeadlineExceeded {
-					if err == context.Canceled {
-						return nil
-					}
-					c.Close()
-					return err
-				}
-				retryPolicy := k.cfg.config.NewRetryPolicy()
-				for {
-					when, err := retryPolicy()
-					if err != nil {
-						c.Close()
-						return err
-					}
-					select {
-					case <-c.Context().Done():
-						return nil
-					case <-time.After(time.Until(when)):
-						err := ping()
-						if err == context.DeadlineExceeded {
-							continue
-						}
-						if err == nil {
-							goto PING_LOOP
-						}
-						c.Close()
-						return err
-					}
-				}
+			var err error
+			ok, err = k.doPing(c)
+			if err != nil {
+				return err
 			}
 		case <-c.Context().Done():
 			return nil
 		}
 	}
+	return nil
 }

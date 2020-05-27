@@ -15,7 +15,7 @@ import (
 func TestUDPConn_WriteWithContext(t *testing.T) {
 	peerAddr := "127.0.0.1:2154"
 	b, err := net.ResolveUDPAddr("udp", peerAddr)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 
 	ctxCanceled, ctxCancel := context.WithCancel(context.Background())
 	ctxCancel()
@@ -49,16 +49,16 @@ func TestUDPConn_WriteWithContext(t *testing.T) {
 	}
 
 	a, err := net.ResolveUDPAddr("udp", "127.0.0.1:")
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	l1, err := net.ListenUDP("udp", a)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	c1 := NewUDPConn("udp", l1, WithHeartBeat(time.Millisecond*100), WithErrors(func(err error) { t.Log(err) }))
 	defer c1.Close()
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
 	l2, err := net.ListenUDP("udp", b)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	c2 := NewUDPConn("udp", l2, WithHeartBeat(time.Millisecond*100), WithErrors(func(err error) { t.Log(err) }))
 	defer c2.Close()
 
@@ -89,7 +89,7 @@ func TestUDPConn_WriteWithContext(t *testing.T) {
 func TestUDPConn_writeMulticastWithContext(t *testing.T) {
 	peerAddr := "224.0.1.187:5683"
 	b, err := net.ResolveUDPAddr("udp4", peerAddr)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 
 	ctxCanceled, ctxCancel := context.WithCancel(context.Background())
 	ctxCancel()
@@ -126,9 +126,9 @@ func TestUDPConn_writeMulticastWithContext(t *testing.T) {
 
 	listenAddr := ":" + strconv.Itoa(b.Port)
 	c, err := net.ResolveUDPAddr("udp4", listenAddr)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	l2, err := net.ListenUDP("udp4", c)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	c2 := NewUDPConn("udp", l2, WithHeartBeat(time.Millisecond*100), WithErrors(func(err error) { t.Log(err) }))
 	defer c2.Close()
 	ifaces, err := net.Interfaces()
@@ -142,15 +142,15 @@ func TestUDPConn_writeMulticastWithContext(t *testing.T) {
 	}
 
 	err = c2.SetMulticastLoopback(true)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 
 	a, err := net.ResolveUDPAddr("udp4", "")
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	l1, err := net.ListenUDP("udp4", a)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	c1 := NewUDPConn("udp", l1, WithHeartBeat(time.Millisecond*100), WithErrors(func(err error) { t.Log(err) }))
 	defer c1.Close()
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*3)
 	defer cancel()
 
