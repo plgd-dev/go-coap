@@ -141,7 +141,7 @@ func Client(conn net.Conn, opts ...DialOption) *ClientConn {
 	observationTokenHandler := NewHandlerContainer()
 
 	l := coapNet.NewConn(conn, coapNet.WithHeartBeat(cfg.heartBeat))
-	cc := NewClientConn(NewSession(cfg.ctx,
+	session := NewSession(cfg.ctx,
 		l,
 		NewObservationHandler(observationTokenHandler, cfg.handler),
 		cfg.maxMessageSize,
@@ -150,7 +150,8 @@ func Client(conn net.Conn, opts ...DialOption) *ClientConn {
 		blockWise,
 		cfg.disablePeerTCPSignalMessageCSMs,
 		cfg.disableTCPSignalMessageCSM,
-	), observationTokenHandler, observatioRequests)
+	)
+	cc := NewClientConn(session, observationTokenHandler, observatioRequests)
 
 	go func() {
 		err := cc.Run()

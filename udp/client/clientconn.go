@@ -19,7 +19,7 @@ import (
 	"github.com/go-ocf/go-coap/v2/udp/message/pool"
 )
 
-type HandlerFunc func(*ResponseWriter, *pool.Message)
+type HandlerFunc = func(*ResponseWriter, *pool.Message)
 type ErrorFunc = func(error)
 type GoPoolFunc = func(func() error) error
 type EventFunc = func()

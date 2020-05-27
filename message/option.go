@@ -2,6 +2,7 @@ package message
 
 import (
 	"encoding/binary"
+	"fmt"
 	"strconv"
 )
 
@@ -74,51 +75,44 @@ const (
 	NoResponse    OptionID = 258
 )
 
+var optionIDToString = map[OptionID]string{
+	IfMatch:       "IfMatch",
+	URIHost:       "URIHost",
+	ETag:          "ETag",
+	IfNoneMatch:   "IfNoneMatch",
+	Observe:       "Observe",
+	URIPort:       "URIPort",
+	LocationPath:  "LocationPath",
+	URIPath:       "URIPath",
+	ContentFormat: "ContentFormat",
+	MaxAge:        "MaxAge",
+	URIQuery:      "URIQuery",
+	Accept:        "Accept",
+	LocationQuery: "LocationQuery",
+	Block2:        "Block2",
+	Block1:        "Block1",
+	Size2:         "Size2",
+	ProxyURI:      "ProxyURI",
+	ProxyScheme:   "ProxyScheme",
+	Size1:         "Size1",
+	NoResponse:    "NoResponse",
+}
+
 func (o OptionID) String() string {
-	switch o {
-	case IfMatch:
-		return "IfMatch"
-	case URIHost:
-		return "URIHost"
-	case ETag:
-		return "ETag"
-	case IfNoneMatch:
-		return "IfNoneMatch"
-	case Observe:
-		return "Observe"
-	case URIPort:
-		return "URIPort"
-	case LocationPath:
-		return "LocationPath"
-	case URIPath:
-		return "URIPath"
-	case ContentFormat:
-		return "ContentFormat"
-	case MaxAge:
-		return "MaxAge"
-	case URIQuery:
-		return "URIQuery"
-	case Accept:
-		return "Accept"
-	case LocationQuery:
-		return "LocationQuery"
-	case Block2:
-		return "Block2"
-	case Block1:
-		return "Block1"
-	case Size2:
-		return "Size2"
-	case ProxyURI:
-		return "ProxyURI"
-	case ProxyScheme:
-		return "ProxyScheme"
-	case Size1:
-		return "Size1"
-	case NoResponse:
-		return "NoResponse"
-	default:
+	str, ok := optionIDToString[o]
+	if !ok {
 		return "Option(" + strconv.FormatInt(int64(o), 10) + ")"
 	}
+	return str
+}
+
+func ToOptionID(v string) (OptionID, error) {
+	for key, val := range optionIDToString {
+		if val == v {
+			return key, nil
+		}
+	}
+	return 0, fmt.Errorf("not found")
 }
 
 // Option value format (RFC7252 section 3.2)
@@ -175,8 +169,8 @@ var (
 	AppOctets         MediaType = 42    // application/octet-stream
 	AppExi            MediaType = 47    // application/exi
 	AppJSON           MediaType = 50    // application/json
-	AppJsonPatch      MediaType = 51    //application/json-patch+json (RFC6902)
-	AppJsonMergePatch MediaType = 52    //application/merge-patch+json (RFC7396)
+	AppJSONPatch      MediaType = 51    //application/json-patch+json (RFC6902)
+	AppJSONMergePatch MediaType = 52    //application/merge-patch+json (RFC7396)
 	AppCBOR           MediaType = 60    //application/cbor (RFC 7049)
 	AppCWT            MediaType = 61    //application/cwt
 	AppCoseEncrypt    MediaType = 96    //application/cose; cose-type="cose-encrypt" (RFC 8152)
@@ -190,54 +184,46 @@ var (
 	AppLwm2mJSON      MediaType = 11543 //application/vnd.oma.lwm2m+json
 )
 
+var mediaTypeToString = map[MediaType]string{
+	TextPlain:         "text/plain;charset=utf-8",
+	AppCoseEncrypt0:   "application/cose; cose-type=\"cose-encrypt0\" (RFC 8152)",
+	AppCoseMac0:       "application/cose; cose-type=\"cose-mac0\" (RFC 8152)",
+	AppCoseSign1:      "application/cose; cose-type=\"cose-sign1\" (RFC 8152)",
+	AppLinkFormat:     "application/link-format",
+	AppXML:            "application/xml",
+	AppOctets:         "application/octet-stream",
+	AppExi:            "application/exi",
+	AppJSON:           "application/json",
+	AppJSONPatch:      "application/json-patch+json (RFC6902)",
+	AppJSONMergePatch: "application/merge-patch+json (RFC7396)",
+	AppCBOR:           "application/cbor (RFC 7049)",
+	AppCWT:            "application/cwt",
+	AppCoseEncrypt:    "application/cose; cose-type=\"cose-encrypt\" (RFC 8152)",
+	AppCoseMac:        "application/cose; cose-type=\"cose-mac\" (RFC 8152)",
+	AppCoseSign:       "application/cose; cose-type=\"cose-sign\" (RFC 8152)",
+	AppCoseKey:        "application/cose-key (RFC 8152)",
+	AppCoseKeySet:     "application/cose-key-set (RFC 8152)",
+	AppCoapGroup:      "coap-group+json (RFC 7390)",
+	AppOcfCbor:        "application/vnd.ocf+cbor",
+	AppLwm2mTLV:       "application/vnd.oma.lwm2m+tlv",
+	AppLwm2mJSON:      "application/vnd.oma.lwm2m+json",
+}
+
 func (c MediaType) String() string {
-	switch c {
-	case TextPlain:
-		return "text/plain;charset=utf-8"
-	case AppCoseEncrypt0:
-		return "application/cose; cose-type=\"cose-encrypt0\" (RFC 8152)"
-	case AppCoseMac0:
-		return "application/cose; cose-type=\"cose-mac0\" (RFC 8152)"
-	case AppCoseSign1:
-		return "application/cose; cose-type=\"cose-sign1\" (RFC 8152)"
-	case AppLinkFormat:
-		return "application/link-format"
-	case AppXML:
-		return "application/xml"
-	case AppOctets:
-		return "application/octet-stream"
-	case AppExi:
-		return "application/exi"
-	case AppJSON:
-		return "application/json"
-	case AppJsonPatch:
-		return "application/json-patch+json (RFC6902)"
-	case AppJsonMergePatch:
-		return "application/merge-patch+json (RFC7396)"
-	case AppCBOR:
-		return "application/cbor (RFC 7049)"
-	case AppCWT:
-		return "application/cwt"
-	case AppCoseEncrypt:
-		return "application/cose; cose-type=\"cose-encrypt\" (RFC 8152)"
-	case AppCoseMac:
-		return "application/cose; cose-type=\"cose-mac\" (RFC 8152)"
-	case AppCoseSign:
-		return "application/cose; cose-type=\"cose-sign\" (RFC 8152)"
-	case AppCoseKey:
-		return "application/cose-key (RFC 8152)"
-	case AppCoseKeySet:
-		return "application/cose-key-set (RFC 8152)"
-	case AppCoapGroup:
-		return "coap-group+json (RFC 7390)"
-	case AppOcfCbor:
-		return "application/vnd.ocf+cbor"
-	case AppLwm2mTLV:
-		return "application/vnd.oma.lwm2m+tlv"
-	case AppLwm2mJSON:
-		return "application/vnd.oma.lwm2m+json"
+	str, ok := mediaTypeToString[c]
+	if !ok {
+		return "MediaType(" + strconv.FormatInt(int64(c), 10) + ")"
 	}
-	return "MediaType(" + strconv.FormatInt(int64(c), 10) + ")"
+	return str
+}
+
+func ToMediaType(v string) (MediaType, error) {
+	for key, val := range mediaTypeToString {
+		if val == v {
+			return key, nil
+		}
+	}
+	return 0, fmt.Errorf("not found")
 }
 
 func extendOpt(opt int) (int, int) {

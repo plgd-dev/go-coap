@@ -99,6 +99,7 @@ func (l *DTLSListener) AcceptWithContext(ctx context.Context) (net.Conn, error) 
 		}
 		rw, err := l.Accept()
 		if err != nil {
+			// check context in regular intervals and then resume listening
 			if isTemporary(err) {
 				continue
 			}

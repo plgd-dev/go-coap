@@ -18,16 +18,17 @@ const (
 	Reset Type = 3
 )
 
+var typeToString = map[Type]string{
+	Confirmable:     "Confirmable",
+	NonConfirmable:  "NonConfirmable",
+	Acknowledgement: "Acknowledgement",
+	Reset:           "reset",
+}
+
 func (t Type) String() string {
-	switch t {
-	case Confirmable:
-		return "Confirmable"
-	case NonConfirmable:
-		return "NonConfirmable"
-	case Acknowledgement:
-		return "Acknowledgement"
-	case Reset:
-		return "reset"
+	val, ok := typeToString[t]
+	if ok {
+		return val
 	}
 	return "Type(" + strconv.FormatInt(int64(t), 10) + ")"
 }

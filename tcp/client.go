@@ -95,11 +95,15 @@ func (c *ClientTCP) Do(req *message.Message) (*message.Message, error) {
 	return pool.ConvertTo(resp), err
 }
 
-func (c *ClientTCP) Observe(ctx context.Context, path string, observeFunc func(notification *message.Message), opts ...message.Option) (mux.Observation, error) {
-	return c.cc.Observe(ctx, path, func(n *pool.Message) {
+func createClientConnObserveHandler(observeFunc func(notification *message.Message)) func(n *pool.Message) {
+	return func(n *pool.Message) {
 		muxn := pool.ConvertTo(n)
 		observeFunc(muxn)
-	}, opts...)
+	}
+}
+
+func (c *ClientTCP) Observe(ctx context.Context, path string, observeFunc func(notification *message.Message), opts ...message.Option) (mux.Observation, error) {
+	return c.cc.Observe(ctx, path, createClientConnObserveHandler(observeFunc), opts...)
 }
 
 // Sequence acquires sequence number.

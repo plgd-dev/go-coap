@@ -382,6 +382,7 @@ func (c *UDPConn) ReadWithContext(ctx context.Context, buffer []byte) (int, *net
 		}
 		n, s, err := c.connection.ReadFromUDP(buffer)
 		if err != nil {
+			// check context in regular intervals and then resume listening
 			if isTemporary(err) {
 				continue
 			}

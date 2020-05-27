@@ -24,10 +24,8 @@ type ServerOption interface {
 }
 
 // The HandlerFunc type is an adapter to allow the use of
-// ordinary functions as COAP handlers.  If f is a function
-// with the appropriate signature, HandlerFunc(f) is a
-// Handler object that calls f.
-type HandlerFunc func(*ResponseWriter, *pool.Message)
+// ordinary functions as COAP handlers.
+type HandlerFunc = func(*ResponseWriter, *pool.Message)
 
 type ErrorFunc = func(error)
 

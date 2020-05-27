@@ -22,7 +22,7 @@ type Observation struct {
 	mutex sync.Mutex
 }
 
-func NewObservationHandler(obsertionTokenHandler *HandlerContainer, next func(w *ResponseWriter, r *pool.Message)) func(w *ResponseWriter, r *pool.Message) {
+func NewObservationHandler(obsertionTokenHandler *HandlerContainer, next HandlerFunc) HandlerFunc {
 	return func(w *ResponseWriter, r *pool.Message) {
 		v, err := obsertionTokenHandler.Get(r.Token())
 		if err == nil {
@@ -38,8 +38,18 @@ func NewObservationHandler(obsertionTokenHandler *HandlerContainer, next func(w 
 	}
 }
 
+func (o *Observation) cleanUp() {
+	o.cc.observationTokenHandler.Pop(o.token)
+	registeredRequest, ok := o.cc.observationRequests.Load(o.token.String())
+	if ok {
+		o.cc.observationRequests.Delete(o.token.String())
+		pool.ReleaseMessage(registeredRequest.(*pool.Message))
+	}
+}
+
 // Cancel remove observation from server. For recreate observation use Observe.
 func (o *Observation) Cancel(ctx context.Context) error {
+	o.cleanUp()
 	req, err := NewGetRequest(ctx, o.path)
 	if err != nil {
 		return fmt.Errorf("cannot cancel observation request: %w", err)
@@ -47,12 +57,6 @@ func (o *Observation) Cancel(ctx context.Context) error {
 	defer pool.ReleaseMessage(req)
 	req.SetObserve(1)
 	req.SetToken(o.token)
-	o.cc.observationTokenHandler.Pop(o.token)
-	registeredRequest, ok := o.cc.observationRequests.Load(o.token.String())
-	if ok {
-		o.cc.observationRequests.Delete(o.token.String())
-		pool.ReleaseMessage(registeredRequest.(*pool.Message))
-	}
 	return o.cc.WriteMessage(req)
 }
 
@@ -104,9 +108,7 @@ func (cc *ClientConn) Observe(ctx context.Context, path string, observeFunc func
 	})
 	defer func(err *error) {
 		if *err != nil {
-			cc.observationTokenHandler.Pop(token)
-			cc.observationRequests.Delete(token.String())
-			pool.ReleaseMessage(req)
+			o.cleanUp()
 		}
 	}(&err)
 	if err != nil {

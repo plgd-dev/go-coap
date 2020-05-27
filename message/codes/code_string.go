@@ -1,72 +1,57 @@
 package codes
 
-import "strconv"
+import (
+	"fmt"
+	"strconv"
+)
+
+var codeToString = map[Code]string{
+	Empty:                 "Empty",
+	GET:                   "GET",
+	POST:                  "POST",
+	PUT:                   "PUT",
+	DELETE:                "DELETE",
+	Created:               "Created",
+	Deleted:               "Deleted",
+	Valid:                 "Valid",
+	Changed:               "Changed",
+	Content:               "Content",
+	BadRequest:            "BadRequest",
+	Unauthorized:          "Unauthorized",
+	BadOption:             "BadOption",
+	Forbidden:             "Forbidden",
+	NotFound:              "NotFound",
+	MethodNotAllowed:      "MethodNotAllowed",
+	NotAcceptable:         "NotAcceptable",
+	PreconditionFailed:    "PreconditionFailed",
+	RequestEntityTooLarge: "RequestEntityTooLarge",
+	UnsupportedMediaType:  "UnsupportedMediaType",
+	InternalServerError:   "InternalServerError",
+	NotImplemented:        "NotImplemented",
+	BadGateway:            "BadGateway",
+	ServiceUnavailable:    "ServiceUnavailable",
+	GatewayTimeout:        "GatewayTimeout",
+	ProxyingNotSupported:  "ProxyingNotSupported",
+	CSM:                   "Capabilities and Settings Messages",
+	Ping:                  "Ping",
+	Pong:                  "Pong",
+	Release:               "Release",
+	Abort:                 "Abort",
+}
 
 func (c Code) String() string {
-	switch c {
-	case Empty:
-		return "Empty"
-	case GET:
-		return "GET"
-	case POST:
-		return "POST"
-	case PUT:
-		return "PUT"
-	case DELETE:
-		return "DELETE"
-	case Created:
-		return "Created"
-	case Deleted:
-		return "Deleted"
-	case Valid:
-		return "Valid"
-	case Changed:
-		return "Changed"
-	case Content:
-		return "Content"
-	case BadRequest:
-		return "BadRequest"
-	case Unauthorized:
-		return "Unauthorized"
-	case BadOption:
-		return "BadOption"
-	case Forbidden:
-		return "Forbidden"
-	case NotFound:
-		return "NotFound"
-	case MethodNotAllowed:
-		return "MethodNotAllowed"
-	case NotAcceptable:
-		return "NotAcceptable"
-	case PreconditionFailed:
-		return "PreconditionFailed"
-	case RequestEntityTooLarge:
-		return "RequestEntityTooLarge"
-	case UnsupportedMediaType:
-		return "UnsupportedMediaType"
-	case InternalServerError:
-		return "InternalServerError"
-	case NotImplemented:
-		return "NotImplemented"
-	case BadGateway:
-		return "BadGateway"
-	case ServiceUnavailable:
-		return "ServiceUnavailable"
-	case GatewayTimeout:
-		return "GatewayTimeout"
-	case ProxyingNotSupported:
-		return "ProxyingNotSupported"
-	case CSM:
-		return "Capabilities and Settings Messages"
-	case Ping:
-		return "Ping"
-	case Pong:
-		return "Pong"
-	case Release:
-		return "Release"
-	case Abort:
-		return "Abort"
-	default:
-		return "Code(" + strconv.FormatInt(int64(c), 10) + ")"
+	val, ok := codeToString[c]
+	if ok {
+		return val
 	}
+	return "Code(" + strconv.FormatInt(int64(c), 10) + ")"
+}
+
+func ToCode(v string) (Code, error) {
+	for key, val := range codeToString {
+		if v == val {
+			return key, nil
+		}
+	}
+	return 0, fmt.Errorf("not found")
 }

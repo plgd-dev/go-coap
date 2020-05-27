@@ -14,33 +14,36 @@ import (
 	"github.com/patrickmn/go-cache"
 )
 
+// Block Opion value is represented: https://tools.ietf.org/html/rfc7959#section-2.2
+//  0
+//  0 1 2 3 4 5 6 7
+// +-+-+-+-+-+-+-+-+
+// |  NUM  |M| SZX |
+// +-+-+-+-+-+-+-+-+
+//  0                   1
+//  0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5
+// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+// |          NUM          |M| SZX |
+// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+//  0                   1                   2
+//  0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3
+// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+// |                   NUM                 |M| SZX |
+// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+
 const (
-	maxBlockNumber = int(1048575)
+	// max block size is 3bytes: https://tools.ietf.org/html/rfc7959#section-2.1
+	maxBlockValue = 0xffffff
+	// maxBlockNumber is 20bits (NUM)
+	maxBlockNumber = 0xffff7
+	// moreBlocksFollowingMask is represented by one bit (M)
+	moreBlocksFollowingMask = 0x8
+	// szxMask last 3bits represents SZX (SZX)
+	szxMask = 0x7
 )
 
-// SZX enum representation for the size of the block
+// SZX enum representation for the size of the block: https://tools.ietf.org/html/rfc7959#section-2.2
 type SZX uint8
-
-// Size number of bytes.
-func (s SZX) Size() int {
-	switch s {
-	case SZX16:
-		return 16
-	case SZX32:
-		return 32
-	case SZX64:
-		return 64
-	case SZX128:
-		return 128
-	case SZX256:
-		return 256
-	case SZX512:
-		return 512
-	case SZX1024, SZXBERT:
-		return 1024
-	}
-	return -1
-}
 
 const (
 	//SZX16 block of size 16bytes
@@ -60,6 +63,26 @@ const (
 	//SZXBERT block of size n*1024bytes
 	SZXBERT SZX = 7
 )
+
+var szxToSize = map[SZX]int64{
+	SZX16:   16,
+	SZX32:   32,
+	SZX64:   64,
+	SZX128:  128,
+	SZX256:  256,
+	SZX512:  512,
+	SZX1024: 1024,
+	SZXBERT: 1024,
+}
+
+// Size number of bytes.
+func (s SZX) Size() int64 {
+	val, ok := szxToSize[s]
+	if ok {
+		return val
+	}
+	return -1
+}
 
 // ResponseWriter defines response interface for blockwise transfer.
 type ResponseWriter interface {
@@ -91,7 +114,7 @@ type Message interface {
 }
 
 // EncodeBlockOption encodes block values to coap option.
-func EncodeBlockOption(szx SZX, blockNumber int, moreBlocksFollowing bool) (uint32, error) {
+func EncodeBlockOption(szx SZX, blockNumber int64, moreBlocksFollowing bool) (uint32, error) {
 	if szx > SZXBERT {
 		return 0, ErrInvalidSZX
 	}
@@ -112,16 +135,17 @@ func EncodeBlockOption(szx SZX, blockNumber int, moreBlocksFollowing bool) (uint
 }
 
 // DecodeBlockOption decodes coap block option to block values.
-func DecodeBlockOption(blockVal uint32) (szx SZX, blockNumber int, moreBlocksFollowing bool, err error) {
-	if blockVal > 0xffffff {
+func DecodeBlockOption(blockVal uint32) (szx SZX, blockNumber int64, moreBlocksFollowing bool, err error) {
+	if blockVal > maxBlockValue {
 		err = ErrBlockInvalidSize
+		return
 	}
 
-	szx = SZX(blockVal & 0x7)  //masking for the SZX
-	if (blockVal & 0x8) != 0 { //masking for the "M"
+	szx = SZX(blockVal & szxMask)                  //masking for the SZX
+	if (blockVal & moreBlocksFollowingMask) != 0 { //masking for the "M"
 		moreBlocksFollowing = true
 	}
-	blockNumber = int(blockVal) >> 4 //shifting out the SZX and M vals. leaving the block number behind
+	blockNumber = int64(blockVal) >> 4 //shifting out the SZX and M vals. leaving the block number behind
 	if blockNumber > maxBlockNumber {
 		err = ErrBlockNumberExceedLimit
 	}
@@ -178,11 +202,11 @@ func NewBlockWise(
 	}
 }
 
-func bufferSize(szx SZX, maxMessageSize int) int {
+func bufferSize(szx SZX, maxMessageSize int) int64 {
 	if szx < SZXBERT {
 		return szx.Size()
 	}
-	return (maxMessageSize / szx.Size()) * szx.Size()
+	return (int64(maxMessageSize) / szx.Size()) * szx.Size()
 }
 
 // Do sends an coap message and returns an coap response via blockwise transfer.
@@ -222,12 +246,12 @@ func (b *BlockWise) Do(r Message, maxSzx SZX, maxMessageSize int, do func(req Me
 	}
 	req.SetOptionUint32(message.Size1, uint32(payloadSize))
 
-	num := 0
+	num := int64(0)
 	buf := make([]byte, 1024)
 	szx := maxSzx
 	for {
 		newBufLen := bufferSize(szx, maxMessageSize)
-		if cap(buf) < newBufLen {
+		if int64(cap(buf)) < newBufLen {
 			buf = make([]byte, newBufLen)
 		}
 		buf = buf[:newBufLen]
@@ -277,7 +301,7 @@ func (b *BlockWise) Do(r Message, maxSzx SZX, maxMessageSize int, do func(req Me
 		}
 
 		var newSzx SZX
-		var newNum int
+		var newNum int64
 		newSzx, newNum, _, err = DecodeBlockOption(block)
 		if err != nil {
 			return resp, fmt.Errorf("cannot decode block option of bw response: %w", err)
@@ -385,7 +409,7 @@ func (b *BlockWise) handleSendingMessage(w ResponseWriter, sendingMessage Messag
 	}
 	buf := make([]byte, 1024)
 	newBufLen := bufferSize(szx, maxMessageSize)
-	if len(buf) < newBufLen {
+	if int64(len(buf)) < newBufLen {
 		buf = make([]byte, newBufLen)
 	}
 	buf = buf[:newBufLen]
@@ -404,7 +428,7 @@ func (b *BlockWise) handleSendingMessage(w ResponseWriter, sendingMessage Messag
 		more = false
 	}
 	sendMessage.SetOptionUint32(sizeType, uint32(payloadSize))
-	num = (int(offSeek)+readed)/szx.Size() - (readed / szx.Size())
+	num = (offSeek+int64(readed))/szx.Size() - (int64(readed) / szx.Size())
 	block, err = EncodeBlockOption(szx, num, more)
 	if err != nil {
 		return false, fmt.Errorf("cannot encode block option(%v,%v,%v): %w", szx, num, more, err)
@@ -529,7 +553,7 @@ func (b *BlockWise) continueSendingMessage(w ResponseWriter, r Message, maxSZX S
 		if err != nil {
 			return false, fmt.Errorf("cannot get current position of seek: %w", err)
 		}
-		num = int(off / int64(szx.Size()))
+		num = off / szx.Size()
 		block, err = EncodeBlockOption(szx, num, more)
 		if err != nil {
 			return false, fmt.Errorf("cannot encode %v(%v, %v, %v) option: %w", blockType, szx, num, more, err)
@@ -691,7 +715,7 @@ func (b *BlockWise) processReceivedMessage(w ResponseWriter, r Message, maxSzx S
 		return fmt.Errorf("cannot get size of payload: %w", err)
 	}
 
-	if off <= int(payloadSize) {
+	if int64(off) <= payloadSize {
 		copyn, err := payloadFile.Seek(int64(off), io.SeekStart)
 		if err != nil {
 			return fmt.Errorf("cannot seek to off(%v) of cached request: %w", off, err)
@@ -730,7 +754,7 @@ func (b *BlockWise) processReceivedMessage(w ResponseWriter, r Message, maxSzx S
 	sendMessage := b.acquireMessage(r.Context())
 	sendMessage.SetToken(token)
 	if blockType == message.Block2 {
-		num = int(payloadSize) / szx.Size()
+		num = payloadSize / szx.Size()
 		sendMessage.ResetOptionsTo(sendedRequest.Options())
 		sendMessage.SetCode(sendedRequest.Code())
 		sendMessage.Remove(message.Observe)

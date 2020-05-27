@@ -93,7 +93,9 @@ func (o GoPoolOpt) applyDial(opts *dialOptions) {
 	opts.goPool = o.goPool
 }
 
-// WithGoPool set function for managing spawning go routines for handling incoming request's.
+// WithGoPool sets function for managing spawning go routines
+// for handling incoming request's.
+// Eg: https://github.com/panjf2000/ants.
 func WithGoPool(goPool GoPoolFunc) GoPoolOpt {
 	return GoPoolOpt{goPool: goPool}
 }

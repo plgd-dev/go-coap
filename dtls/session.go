@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"net"
-	"sync"
 
 	coapNet "github.com/go-ocf/go-coap/v2/net"
 	"github.com/go-ocf/go-coap/v2/udp/client"
@@ -20,9 +19,8 @@ type Session struct {
 	onClose []EventFunc
 	onRun   []EventFunc
 
-	cancel  context.CancelFunc
-	ctx     context.Context
-	wgClose sync.WaitGroup
+	cancel context.CancelFunc
+	ctx    context.Context
 }
 
 func NewSession(
@@ -53,7 +51,6 @@ func (s *Session) AddOnRun(f EventFunc) {
 
 func (s *Session) Close() error {
 	s.cancel()
-	defer s.wgClose.Wait()
 	return nil
 }
 
