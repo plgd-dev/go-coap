@@ -102,7 +102,7 @@ func TestServer_Discover(t *testing.T) {
 
 	s := NewServer(WithHandlerFunc(func(w *client.ResponseWriter, r *pool.Message) {
 		w.SetResponse(codes.BadRequest, message.TextPlain, bytes.NewReader(make([]byte, 5330)))
-		require.NotEmpty(t, w.ClientConn())
+		require.NotNil(t, w.ClientConn())
 	}))
 	defer s.Stop()
 
