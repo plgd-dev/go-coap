@@ -1,7 +1,6 @@
 package pool
 
 import (
-	"fmt"
 	"io"
 	"sync"
 	"sync/atomic"
@@ -281,19 +280,5 @@ func (r *Message) IsModified() bool {
 }
 
 func (r *Message) String() string {
-	buf := fmt.Sprintf("Code: %v, Token: %v", r.Code(), r.Token())
-	path, err := r.Options().Path()
-	if err != nil {
-		buf = fmt.Sprintf("%s, Path: %v", buf, path)
-	}
-	cf, err := r.Options().ContentFormat()
-	if err == nil {
-		mt := message.MediaType(cf)
-		buf = fmt.Sprintf("%s, ContentFormat: %v", buf, mt)
-	}
-	queries, err := r.Options().Queries()
-	if err == nil {
-		buf = fmt.Sprintf("%s, Queries: %+v", buf, queries)
-	}
-	return buf
+	return r.msg.String()
 }

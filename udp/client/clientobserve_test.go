@@ -67,7 +67,7 @@ func TestClientConn_Observe(t *testing.T) {
 					return
 				}
 				require.NoError(t, err)
-				require.NotEmpty(t, w.ClientConn())
+				require.NotNil(t, w.ClientConn())
 				token := r.Token()
 				switch obs {
 				case 0:

@@ -41,9 +41,17 @@ The go-coap provides servers and clients for DTLS, TCP-TLS, UDP, TCP in golang l
 #### Server UDP/TCP
 ```go
 	// Server
+	
+	// Middleware function, which will be called for each request.
+	func loggingMiddleware(next mux.Handler) mux.Handler {
+		return mux.HandlerFunc(func(w mux.ResponseWriter, r *mux.Message) {
+			log.Printf("ClientAddress %v, %v\n", w.Client().RemoteAddr(), r.String())
+			next.ServeCOAP(w, r)
+		})
+	}
+	
 	// See /examples/simple/server/main.go
 	func handleA(w mux.ResponseWriter, req *message.Message) {
-		log.Printf("got message in handleA:  %+v from %v\n", req, w.Client().RemoteAddr())
 		err := w.SetResponse(codes.GET, message.TextPlain, bytes.NewReader([]byte("hello world")))
 		if err != nil {
 			log.Printf("cannot set response: %v", err)
@@ -51,21 +59,22 @@ The go-coap provides servers and clients for DTLS, TCP-TLS, UDP, TCP in golang l
 	}
 
 	func main() {
-		m := mux.NewRouter()
-		m.Handle("/a", mux.HandlerFunc(handleA))
-		m.Handle("/b", mux.HandlerFunc(handleB))
+		r := mux.NewRouter()
+		r.Use(loggingMiddleware)
+		r.Handle("/a", mux.HandlerFunc(handleA))
+		r.Handle("/b", mux.HandlerFunc(handleB))
 
-		log.Fatal(coap.ListenAndServe("udp", ":5688", m))
+		log.Fatal(coap.ListenAndServe("udp", ":5688", r))
 
 		
 		// for tcp
-		// log.Fatal(coap.ListenAndServe("tcp", ":5688",  m))
+		// log.Fatal(coap.ListenAndServe("tcp", ":5688",  r))
 
 		// for tcp-tls
-		// log.Fatal(coap.ListenAndServeTLS("tcp", ":5688", &tls.Config{...}, m))
+		// log.Fatal(coap.ListenAndServeTLS("tcp", ":5688", &tls.Config{...}, r))
 
 		// for udp-dtls
-		// log.Fatal(coap.ListenAndServeDTLS("udp", ":5688", &dtls.Config{...}, m))
+		// log.Fatal(coap.ListenAndServeDTLS("udp", ":5688", &dtls.Config{...}, r))
 	}
 ```
 #### Client

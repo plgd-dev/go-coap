@@ -24,7 +24,7 @@ type Message struct {
 func (r *Message) String() string {
 	buf := fmt.Sprintf("Code: %v, Token: %v", r.Code, r.Token)
 	path, err := r.Options.Path()
-	if err != nil {
+	if err == nil {
 		buf = fmt.Sprintf("%s, Path: %v", buf, path)
 	}
 	cf, err := r.Options.ContentFormat()

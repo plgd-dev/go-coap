@@ -10,16 +10,21 @@ import (
 	"github.com/go-ocf/go-coap/v2/mux"
 )
 
+func loggingMiddleware(next mux.Handler) mux.Handler {
+	return mux.HandlerFunc(func(w mux.ResponseWriter, r *mux.Message) {
+		log.Printf("ClientAddress %v, %v\n", w.Client().RemoteAddr(), r.String())
+		next.ServeCOAP(w, r)
+	})
+}
+
 func handleA(w mux.ResponseWriter, r *mux.Message) {
-	log.Printf("got message in handleA:  %+v from %v\n", r, w.Client().RemoteAddr())
-	err := w.SetResponse(codes.GET, message.TextPlain, bytes.NewReader([]byte("hello world")))
+	err := w.SetResponse(codes.Content, message.TextPlain, bytes.NewReader([]byte("hello world")))
 	if err != nil {
 		log.Printf("cannot set response: %v", err)
 	}
 }
 
 func handleB(w mux.ResponseWriter, r *mux.Message) {
-	log.Printf("got message in handleB:  %+v from %v\n", r, w.Client().RemoteAddr())
 	customResp := message.Message{
 		Code:    codes.Content,
 		Token:   r.Token,
@@ -47,9 +52,10 @@ func handleB(w mux.ResponseWriter, r *mux.Message) {
 }
 
 func main() {
-	m := mux.NewRouter()
-	m.Handle("/a", mux.HandlerFunc(handleA))
-	m.Handle("/b", mux.HandlerFunc(handleB))
+	r := mux.NewRouter()
+	r.Use(loggingMiddleware)
+	r.Handle("/a", mux.HandlerFunc(handleA))
+	r.Handle("/b", mux.HandlerFunc(handleB))
 
-	log.Fatal(coap.ListenAndServe("udp", ":5688", m))
+	log.Fatal(coap.ListenAndServe("udp", ":5688", r))
 }
