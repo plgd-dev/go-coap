@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"sync"
 
 	coapNet "github.com/go-ocf/go-coap/v2/net"
 	"github.com/go-ocf/go-coap/v2/udp/client"
@@ -16,6 +17,7 @@ type Session struct {
 	connection     *coapNet.Conn
 	maxMessageSize int
 
+	mutex   sync.Mutex
 	onClose []EventFunc
 	onRun   []EventFunc
 
@@ -42,11 +44,43 @@ func (s *Session) Done() <-chan struct{} {
 }
 
 func (s *Session) AddOnClose(f EventFunc) {
+	s.mutex.Lock()
+	defer s.mutex.Unlock()
 	s.onClose = append(s.onClose, f)
 }
 
 func (s *Session) AddOnRun(f EventFunc) {
+	s.mutex.Lock()
+	defer s.mutex.Unlock()
 	s.onRun = append(s.onRun, f)
+}
+
+func (s *Session) popOnClose() []EventFunc {
+	s.mutex.Lock()
+	defer s.mutex.Unlock()
+	tmp := s.onClose
+	s.onClose = nil
+	return tmp
+}
+
+func (s *Session) popOnRun() []EventFunc {
+	s.mutex.Lock()
+	defer s.mutex.Unlock()
+	tmp := s.onRun
+	s.onRun = nil
+	return tmp
+}
+
+func (s *Session) close() {
+	for _, f := range s.popOnClose() {
+		f()
+	}
+}
+
+func (s *Session) start() {
+	for _, f := range s.popOnRun() {
+		f()
+	}
 }
 
 func (s *Session) Close() error {
@@ -81,13 +115,9 @@ func (s *Session) Run(cc *client.ClientConn) (err error) {
 		if err == nil {
 			err = err1
 		}
-		for _, f := range s.onClose {
-			f()
-		}
+		s.close()
 	}()
-	for _, f := range s.onRun {
-		f()
-	}
+	s.start()
 	m := make([]byte, s.maxMessageSize)
 	for {
 		readBuf := m

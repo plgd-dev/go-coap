@@ -35,12 +35,12 @@ type Session struct {
 	blockwiseSZX blockwise.SZX
 	blockWise    *blockwise.BlockWise
 
+	mutex   sync.Mutex
 	onClose []EventFunc
 	onRun   []EventFunc
 
-	cancel  context.CancelFunc
-	ctx     context.Context
-	wgClose sync.WaitGroup
+	cancel context.CancelFunc
+	ctx    context.Context
 }
 
 func NewSession(
@@ -77,16 +77,47 @@ func (s *Session) Done() <-chan struct{} {
 }
 
 func (s *Session) AddOnClose(f EventFunc) {
+	s.mutex.Lock()
+	defer s.mutex.Unlock()
 	s.onClose = append(s.onClose, f)
 }
 
 func (s *Session) AddOnRun(f EventFunc) {
+	s.mutex.Lock()
+	defer s.mutex.Unlock()
 	s.onRun = append(s.onRun, f)
+}
+
+func (s *Session) popOnClose() []EventFunc {
+	s.mutex.Lock()
+	defer s.mutex.Unlock()
+	tmp := s.onClose
+	s.onClose = nil
+	return tmp
+}
+
+func (s *Session) popOnRun() []EventFunc {
+	s.mutex.Lock()
+	defer s.mutex.Unlock()
+	tmp := s.onRun
+	s.onRun = nil
+	return tmp
+}
+
+func (s *Session) close() {
+	for _, f := range s.popOnClose() {
+		f()
+	}
+}
+
+func (s *Session) start() {
+	for _, f := range s.popOnRun() {
+		f()
+	}
 }
 
 func (s *Session) Close() error {
 	s.cancel()
-	defer s.wgClose.Wait()
 	return nil
 }
 
@@ -266,9 +297,7 @@ func (s *Session) Run(cc *ClientConn) (err error) {
 		if err == nil {
 			err = err1
 		}
-		for _, f := range s.onClose {
-			f()
-		}
+		s.close()
 	}()
 	if !s.disableTCPSignalMessageCSM {
 		err := s.sendCSM()
@@ -276,9 +305,7 @@ func (s *Session) Run(cc *ClientConn) (err error) {
 			return fmt.Errorf("cannot send CSM: %w", err)
 		}
 	}
-	for _, f := range s.onRun {
-		f()
-	}
+	s.start()
 	buffer := bytes.NewBuffer(make([]byte, 0, 1024))
 	readBuf := make([]byte, 1024)
 	for {

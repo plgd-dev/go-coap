@@ -18,12 +18,12 @@ type Session struct {
 	raddr          *net.UDPAddr
 	maxMessageSize int
 
+	mutex   sync.Mutex
 	onClose []EventFunc
 	onRun   []EventFunc
 
-	cancel  context.CancelFunc
-	ctx     context.Context
-	wgClose sync.WaitGroup
+	cancel context.CancelFunc
+	ctx    context.Context
 }
 
 func NewSession(
@@ -47,16 +47,47 @@ func (s *Session) Done() <-chan struct{} {
 }
 
 func (s *Session) AddOnClose(f EventFunc) {
+	s.mutex.Lock()
+	defer s.mutex.Unlock()
 	s.onClose = append(s.onClose, f)
 }
 
 func (s *Session) AddOnRun(f EventFunc) {
+	s.mutex.Lock()
+	defer s.mutex.Unlock()
 	s.onRun = append(s.onRun, f)
+}
+
+func (s *Session) popOnClose() []EventFunc {
+	s.mutex.Lock()
+	defer s.mutex.Unlock()
+	tmp := s.onClose
+	s.onClose = nil
+	return tmp
+}
+
+func (s *Session) popOnRun() []EventFunc {
+	s.mutex.Lock()
+	defer s.mutex.Unlock()
+	tmp := s.onRun
+	s.onRun = nil
+	return tmp
+}
+
+func (s *Session) close() {
+	for _, f := range s.popOnClose() {
+		f()
+	}
+}
+
+func (s *Session) start() {
+	for _, f := range s.popOnRun() {
+		f()
+	}
 }
 
 func (s *Session) Close() error {
 	s.cancel()
-	defer s.wgClose.Wait()
 	return nil
 }
 
@@ -72,19 +103,26 @@ func (s *Session) WriteMessage(req *pool.Message) error {
 	return s.connection.WriteWithContext(req.Context(), s.raddr, data)
 }
 
-func (s *Session) Run(cc *client.ClientConn) error {
+func (s *Session) Run(cc *client.ClientConn) (err error) {
+	defer func() {
+		err1 := s.Close()
+		if err == nil {
+			err = err1
+		}
+		s.close()
+		s.connection.Close()
+	}()
+	s.start()
 	m := make([]byte, s.maxMessageSize)
 	for {
 		buf := m
 		n, _, err := s.connection.ReadWithContext(s.ctx, buf)
 		if err != nil {
-			s.Close()
 			return err
 		}
 		buf = buf[:n]
 		err = cc.Process(buf)
 		if err != nil {
-			s.Close()
 			return err
 		}
 	}
