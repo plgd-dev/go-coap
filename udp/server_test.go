@@ -1,4 +1,4 @@
-package udp
+package udp_test
 
 import (
 	"bytes"
@@ -11,6 +11,7 @@ import (
 	"github.com/go-ocf/go-coap/v2/message"
 	"github.com/go-ocf/go-coap/v2/message/codes"
 	coapNet "github.com/go-ocf/go-coap/v2/net"
+	"github.com/go-ocf/go-coap/v2/udp"
 	"github.com/go-ocf/go-coap/v2/udp/client"
 	"github.com/go-ocf/go-coap/v2/udp/message/pool"
 	"github.com/stretchr/testify/assert"
@@ -100,7 +101,7 @@ func TestServer_Discover(t *testing.T) {
 	var wg sync.WaitGroup
 	defer wg.Wait()
 
-	s := NewServer(WithHandlerFunc(func(w *client.ResponseWriter, r *pool.Message) {
+	s := udp.NewServer(udp.WithHandlerFunc(func(w *client.ResponseWriter, r *pool.Message) {
 		w.SetResponse(codes.BadRequest, message.TextPlain, bytes.NewReader(make([]byte, 5330)))
 		require.NotNil(t, w.ClientConn())
 	}))
@@ -117,7 +118,7 @@ func TestServer_Discover(t *testing.T) {
 	require.NoError(t, err)
 	defer ld.Close()
 
-	sd := NewServer()
+	sd := udp.NewServer()
 	defer sd.Stop()
 
 	wg.Add(1)
@@ -135,4 +136,40 @@ func TestServer_Discover(t *testing.T) {
 	got := recv.pop()
 	assert.Greater(t, len(got), 1)
 	assert.Equal(t, codes.BadRequest, got[0].Code())
+}
+
+func TestServer_CleanUpConns(t *testing.T) {
+	ld, err := coapNet.NewListenUDP("udp4", "")
+	require.NoError(t, err)
+	defer ld.Close()
+
+	var checkCloseWg sync.WaitGroup
+	defer checkCloseWg.Wait()
+	sd := udp.NewServer(udp.WithOnNewClientConn(func(cc *client.ClientConn) {
+		checkCloseWg.Add(1)
+		cc.AddOnClose(func() {
+			checkCloseWg.Done()
+		})
+	}))
+	defer sd.Stop()
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		err := sd.Serve(ld)
+		require.NoError(t, err)
+	}()
+
+	cc, err := udp.Dial(ld.LocalAddr().String())
+	require.NoError(t, err)
+	checkCloseWg.Add(1)
+	cc.AddOnClose(func() {
+		checkCloseWg.Done()
+	})
+	defer cc.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	err = cc.Ping(ctx)
+	require.NoError(t, err)
 }
