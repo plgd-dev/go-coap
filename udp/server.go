@@ -192,12 +192,11 @@ func (s *Server) Serve(l *coapNet.UDPConn) error {
 			}
 		}
 		buf = buf[:n]
-		cc, closeFunc, startFunc, created := s.getOrCreateClientConn(l, raddr)
+		cc, closeFunc, created := s.getOrCreateClientConn(l, raddr)
 		if created {
 			if s.onNewClientConn != nil {
 				s.onNewClientConn(cc)
 			}
-			startFunc()
 			if s.keepalive != nil {
 				wg.Add(1)
 				go func() {
@@ -251,7 +250,7 @@ func (s *Server) conn() *coapNet.UDPConn {
 	return s.listen
 }
 
-func (s *Server) getOrCreateClientConn(UDPConn *coapNet.UDPConn, raddr *net.UDPAddr) (cc *client.ClientConn, close func(), start func(), created bool) {
+func (s *Server) getOrCreateClientConn(UDPConn *coapNet.UDPConn, raddr *net.UDPAddr) (cc *client.ClientConn, closeFunc func(), created bool) {
 	s.connsMutex.Lock()
 	defer s.connsMutex.Unlock()
 	key := raddr.String()
@@ -276,11 +275,10 @@ func (s *Server) getOrCreateClientConn(UDPConn *coapNet.UDPConn, raddr *net.UDPA
 			raddr,
 			s.maxMessageSize,
 		)
-		close = func() {
+		closeFunc = func() {
 			<-session.Context().Done()
 			session.close()
 		}
-		start = session.start
 		cc = client.NewClientConn(
 			session,
 			obsHandler,
@@ -307,7 +305,7 @@ func (s *Server) getOrCreateClientConn(UDPConn *coapNet.UDPConn, raddr *net.UDPA
 		})
 		s.conns[key] = cc
 	}
-	return cc, close, start, created
+	return cc, closeFunc, created
 }
 
 // GetMID generates a message id for UDP-coap

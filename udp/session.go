@@ -20,7 +20,6 @@ type Session struct {
 
 	mutex   sync.Mutex
 	onClose []EventFunc
-	onRun   []EventFunc
 
 	cancel context.CancelFunc
 	ctx    context.Context
@@ -52,12 +51,6 @@ func (s *Session) AddOnClose(f EventFunc) {
 	s.onClose = append(s.onClose, f)
 }
 
-func (s *Session) AddOnRun(f EventFunc) {
-	s.mutex.Lock()
-	defer s.mutex.Unlock()
-	s.onRun = append(s.onRun, f)
-}
-
 func (s *Session) popOnClose() []EventFunc {
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
@@ -66,22 +59,8 @@ func (s *Session) popOnClose() []EventFunc {
 	return tmp
 }
 
-func (s *Session) popOnRun() []EventFunc {
-	s.mutex.Lock()
-	defer s.mutex.Unlock()
-	tmp := s.onRun
-	s.onRun = nil
-	return tmp
-}
-
 func (s *Session) close() {
 	for _, f := range s.popOnClose() {
-		f()
-	}
-}
-
-func (s *Session) start() {
-	for _, f := range s.popOnRun() {
 		f()
 	}
 }
@@ -112,7 +91,6 @@ func (s *Session) Run(cc *client.ClientConn) (err error) {
 		s.close()
 		s.connection.Close()
 	}()
-	s.start()
 	m := make([]byte, s.maxMessageSize)
 	for {
 		buf := m
