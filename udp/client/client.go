@@ -30,7 +30,7 @@ func (c *Client) Delete(ctx context.Context, path string, opts ...message.Option
 		return nil, err
 	}
 	defer pool.ReleaseMessage(resp)
-	return pool.ConvertTo(resp), err
+	return pool.ConvertTo(resp)
 }
 
 func (c *Client) Put(ctx context.Context, path string, contentFormat message.MediaType, payload io.ReadSeeker, opts ...message.Option) (*message.Message, error) {
@@ -39,7 +39,7 @@ func (c *Client) Put(ctx context.Context, path string, contentFormat message.Med
 		return nil, err
 	}
 	defer pool.ReleaseMessage(resp)
-	return pool.ConvertTo(resp), err
+	return pool.ConvertTo(resp)
 }
 
 func (c *Client) Post(ctx context.Context, path string, contentFormat message.MediaType, payload io.ReadSeeker, opts ...message.Option) (*message.Message, error) {
@@ -48,7 +48,7 @@ func (c *Client) Post(ctx context.Context, path string, contentFormat message.Me
 		return nil, err
 	}
 	defer pool.ReleaseMessage(resp)
-	return pool.ConvertTo(resp), err
+	return pool.ConvertTo(resp)
 }
 
 func (c *Client) Get(ctx context.Context, path string, opts ...message.Option) (*message.Message, error) {
@@ -57,7 +57,7 @@ func (c *Client) Get(ctx context.Context, path string, opts ...message.Option) (
 		return nil, err
 	}
 	defer pool.ReleaseMessage(resp)
-	return pool.ConvertTo(resp), err
+	return pool.ConvertTo(resp)
 }
 
 func (c *Client) Close() error {
@@ -93,12 +93,15 @@ func (c *Client) Do(req *message.Message) (*message.Message, error) {
 		return nil, err
 	}
 	defer pool.ReleaseMessage(resp)
-	return pool.ConvertTo(resp), err
+	return pool.ConvertTo(resp)
 }
 
 func createClientConnObserveHandler(observeFunc func(notification *message.Message)) func(n *pool.Message) {
 	return func(n *pool.Message) {
-		muxn := pool.ConvertTo(n)
+		muxn, err := pool.ConvertTo(n)
+		if err != nil {
+			return
+		}
 		observeFunc(muxn)
 	}
 }
