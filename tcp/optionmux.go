@@ -15,7 +15,10 @@ func WithMux(m mux.Handler) HandlerFuncOpt {
 		muxw := &muxResponseWriter{
 			w: w,
 		}
-		muxr := pool.ConvertTo(r)
+		muxr, err := pool.ConvertTo(r)
+		if err != nil {
+			return
+		}
 		m.ServeCOAP(muxw, &mux.Message{
 			Message:        muxr,
 			SequenceNumber: r.Sequence(),

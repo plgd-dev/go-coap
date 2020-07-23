@@ -73,30 +73,11 @@ func (r *Message) Marshal() ([]byte, error) {
 		Token:   r.Message.Token(),
 		Options: r.Message.Options(),
 	}
-	payload := make([]byte, 1024)
-	if r.Message.Body() != nil {
-		size, err := r.BodySize()
-		if err != nil {
-			return nil, err
-		}
-		_, err = r.Message.Body().Seek(0, io.SeekStart)
-		if err != nil {
-			return nil, err
-		}
-		if int64(len(payload)) < size {
-			payload = make([]byte, size)
-		}
-		n, err := io.ReadFull(r.Message.Body(), payload)
-		if err != nil {
-			if err == io.ErrUnexpectedEOF && int64(n) == size {
-				err = nil
-			}
-		}
-		if err != nil {
-			return nil, err
-		}
-		m.Payload = payload[:n]
+	payload, err := r.ReadBody()
+	if err != nil {
+		return nil, err
 	}
+	m.Payload = payload
 	size, err := m.Size()
 	if err != nil {
 		return nil, err
@@ -156,7 +137,7 @@ func ConvertFrom(m *message.Message) (*Message, error) {
 }
 
 // ConvertTo converts pool message to common message.
-func ConvertTo(m *Message) *message.Message {
+func ConvertTo(m *Message) (*message.Message, error) {
 	opts := make(message.Options, 0, len(m.Options()))
 	buf := make([]byte, 64)
 	opts, used, err := opts.ResetOptionsTo(buf, m.Options())
@@ -164,11 +145,22 @@ func ConvertTo(m *Message) *message.Message {
 		buf = append(buf, make([]byte, used-len(buf))...)
 		opts, used, err = opts.ResetOptionsTo(buf, m.Options())
 	}
+	if err != nil {
+		return nil, err
+	}
+	var body io.ReadSeeker
+	if m.Body() != nil {
+		payload, err := m.ReadBody()
+		if err != nil {
+			return nil, err
+		}
+		body = bytes.NewReader(payload)
+	}
 	return &message.Message{
 		Context: m.Context(),
 		Code:    m.Code(),
 		Token:   m.Token(),
-		Body:    m.Body(),
+		Body:    body,
 		Options: opts,
-	}
+	}, nil
 }
