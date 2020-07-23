@@ -284,29 +284,26 @@ func (r *Message) String() string {
 }
 
 func (r *Message) ReadBody() ([]byte, error) {
-	payload := make([]byte, 1024)
-	if r.Body() != nil {
-		size, err := r.BodySize()
-		if err != nil {
-			return nil, err
-		}
-		_, err = r.Body().Seek(0, io.SeekStart)
-		if err != nil {
-			return nil, err
-		}
-		if int64(len(payload)) < size {
-			payload = make([]byte, size)
-		}
-		n, err := io.ReadFull(r.Body(), payload)
-		if err != nil {
-			if err == io.ErrUnexpectedEOF && int64(n) == size {
-				err = nil
-			}
-		}
-		if err != nil {
-			return nil, err
-		}
-		return payload[:n], nil
+	if r.Body() == nil {
+		return nil, nil
 	}
-	return nil, nil
+	payload := make([]byte, 1024)
+	size, err := r.BodySize()
+	if err != nil {
+		return nil, err
+	}
+	_, err = r.Body().Seek(0, io.SeekStart)
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(payload)) < size {
+		payload = make([]byte, size)
+	}
+	n, err := io.ReadFull(r.Body(), payload)
+	if err == io.ErrUnexpectedEOF && int64(n) == size {
+		err = nil
+	} else if err != nil {
+		return nil, err
+	}
+	return payload[:n], nil
 }
