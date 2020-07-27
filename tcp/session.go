@@ -40,6 +40,8 @@ type Session struct {
 
 	cancel context.CancelFunc
 	ctx    context.Context
+
+	errSendCSM error
 }
 
 func NewSession(
@@ -52,10 +54,11 @@ func NewSession(
 	blockWise *blockwise.BlockWise,
 	disablePeerTCPSignalMessageCSMs bool,
 	disableTCPSignalMessageCSM bool,
+
 ) *Session {
 	ctx, cancel := context.WithCancel(ctx)
 
-	return &Session{
+	s := &Session{
 		ctx:                             ctx,
 		cancel:                          cancel,
 		connection:                      connection,
@@ -69,6 +72,14 @@ func NewSession(
 		disablePeerTCPSignalMessageCSMs: disablePeerTCPSignalMessageCSMs,
 		disableTCPSignalMessageCSM:      disableTCPSignalMessageCSM,
 	}
+	if !disableTCPSignalMessageCSM {
+		err := s.sendCSM()
+		if err != nil {
+			s.errSendCSM = fmt.Errorf("cannot send CSM: %w", err)
+		}
+	}
+
+	return s
 }
 
 func (s *Session) Done() <-chan struct{} {
@@ -278,11 +289,8 @@ func (s *Session) Run(cc *ClientConn) (err error) {
 		}
 		s.close()
 	}()
-	if !s.disableTCPSignalMessageCSM {
-		err := s.sendCSM()
-		if err != nil {
-			return fmt.Errorf("cannot send CSM: %w", err)
-		}
+	if s.errSendCSM != nil {
+		return s.errSendCSM
 	}
 	buffer := bytes.NewBuffer(make([]byte, 0, 1024))
 	readBuf := make([]byte, 1024)

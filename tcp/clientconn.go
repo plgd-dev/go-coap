@@ -208,7 +208,7 @@ func (cc *ClientConn) do(req *pool.Message) (*pool.Message, error) {
 	case <-req.Context().Done():
 		return nil, req.Context().Err()
 	case <-cc.session.Context().Done():
-		return nil, fmt.Errorf("connection was closed: %w", req.Context().Err())
+		return nil, fmt.Errorf("connection was closed: %w", cc.Context().Err())
 	case resp := <-respChan:
 		return resp, nil
 	}

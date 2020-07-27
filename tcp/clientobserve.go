@@ -119,7 +119,7 @@ func (cc *ClientConn) Observe(ctx context.Context, path string, observeFunc func
 		err = req.Context().Err()
 		return nil, err
 	case <-cc.Context().Done():
-		err = fmt.Errorf("connection was closed: %w", req.Context().Err())
+		err = fmt.Errorf("connection was closed: %w", cc.Context().Err())
 		return nil, err
 	case respCode := <-respCodeChan:
 		if respCode != codes.Content {
