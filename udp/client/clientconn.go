@@ -177,7 +177,7 @@ func (cc *ClientConn) writeMessage(req *pool.Message) error {
 			case <-req.Context().Done():
 				return req.Context().Err()
 			case <-cc.session.Context().Done():
-				return fmt.Errorf("connection was closed: %w", req.Context().Err())
+				return fmt.Errorf("connection was closed: %w", cc.Context().Err())
 			case <-time.After(cc.transmissionNStart):
 				err = cc.session.WriteMessage(req)
 				if err != nil {
@@ -218,7 +218,7 @@ func (cc *ClientConn) doWithMID(req *pool.Message) (*pool.Message, error) {
 	case <-req.Context().Done():
 		return nil, req.Context().Err()
 	case <-cc.session.Context().Done():
-		return nil, fmt.Errorf("connection was closed: %w", req.Context().Err())
+		return nil, fmt.Errorf("connection was closed: %w", cc.Context().Err())
 	case resp := <-respChan:
 		return resp, nil
 	}
