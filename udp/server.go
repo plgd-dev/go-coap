@@ -2,12 +2,9 @@ package udp
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/binary"
 	"fmt"
 	"net"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/go-ocf/go-coap/v2/message"
@@ -106,7 +103,6 @@ type Server struct {
 
 	multicastRequests *sync.Map
 	multicastHandler  *client.HandlerContainer
-	msgID             uint32
 
 	listen      *coapNet.UDPConn
 	listenMutex sync.Mutex
@@ -119,9 +115,6 @@ func NewServer(opt ...ServerOption) *Server {
 	}
 
 	ctx, cancel := context.WithCancel(opts.ctx)
-	b := make([]byte, 4)
-	rand.Read(b)
-	msgID := binary.BigEndian.Uint32(b)
 	serverStartedChan := make(chan struct{})
 
 	return &Server{
@@ -137,7 +130,6 @@ func NewServer(opt ...ServerOption) *Server {
 		blockwiseTransferTimeout:       opts.blockwiseTransferTimeout,
 		multicastHandler:               client.NewHandlerContainer(),
 		multicastRequests:              &sync.Map{},
-		msgID:                          msgID,
 		serverStartedChan:              serverStartedChan,
 		onNewClientConn:                opts.onNewClientConn,
 		transmissionNStart:             opts.transmissionNStart,
@@ -306,9 +298,4 @@ func (s *Server) getOrCreateClientConn(UDPConn *coapNet.UDPConn, raddr *net.UDPA
 		s.conns[key] = cc
 	}
 	return cc, closeFunc, created
-}
-
-// GetMID generates a message id for UDP-coap
-func (s *Server) GetMID() uint16 {
-	return uint16(atomic.AddUint32(&s.msgID, 1) % 0xffff)
 }

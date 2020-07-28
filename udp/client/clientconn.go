@@ -2,8 +2,6 @@ package client
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/binary"
 	"fmt"
 	"io"
 	"net"
@@ -49,7 +47,6 @@ type ClientConn struct {
 
 	tokenHandlerContainer *HandlerContainer
 	midHandlerContainer   *HandlerContainer
-	msgID                 uint32
 	sequence              uint64
 }
 
@@ -66,9 +63,6 @@ func NewClientConn(
 	blockWise *blockwise.BlockWise,
 	goPool GoPoolFunc,
 ) *ClientConn {
-	b := make([]byte, 4)
-	rand.Read(b)
-	msgID := binary.BigEndian.Uint32(b)
 	return &ClientConn{
 		session:                        session,
 		observationTokenHandler:        observationTokenHandler,
@@ -82,7 +76,6 @@ func NewClientConn(
 
 		tokenHandlerContainer: NewHandlerContainer(),
 		midHandlerContainer:   NewHandlerContainer(),
-		msgID:                 msgID,
 		goPool:                goPool,
 	}
 }
@@ -98,7 +91,7 @@ func (cc *ClientConn) do(req *pool.Message) (*pool.Message, error) {
 		return nil, fmt.Errorf("invalid token")
 	}
 
-	req.SetMessageID(cc.GetMID())
+	req.SetMessageID(udpMessage.GetMID())
 	req.SetType(udpMessage.Confirmable)
 
 	respChan := make(chan *pool.Message, 1)
@@ -144,7 +137,7 @@ func (cc *ClientConn) Do(req *pool.Message) (*pool.Message, error) {
 }
 
 func (cc *ClientConn) writeMessage(req *pool.Message) error {
-	req.SetMessageID(cc.GetMID())
+	req.SetMessageID(udpMessage.GetMID())
 	req.SetType(udpMessage.Confirmable)
 	respChan := make(chan struct{})
 	err := cc.midHandlerContainer.Insert(req.MessageID(), func(w *ResponseWriter, r *pool.Message) {
@@ -365,7 +358,7 @@ func (cc *ClientConn) Ping(ctx context.Context) error {
 	defer pool.ReleaseMessage(req)
 	req.SetType(udpMessage.Confirmable)
 	req.SetCode(codes.Empty)
-	req.SetMessageID(cc.GetMID())
+	req.SetMessageID(udpMessage.GetMID())
 	resp, err := cc.doWithMID(req)
 	if err != nil {
 		return err
@@ -389,11 +382,6 @@ func (cc *ClientConn) AddOnClose(f EventFunc) {
 
 func (cc *ClientConn) RemoteAddr() net.Addr {
 	return cc.session.RemoteAddr()
-}
-
-// GetMID generates a message id for UDP-coap
-func (cc *ClientConn) GetMID() uint16 {
-	return uint16(atomic.AddUint32(&cc.msgID, 1) % 0xffff)
 }
 
 func (cc *ClientConn) sendPong(w *ResponseWriter, r *pool.Message) {
@@ -491,7 +479,7 @@ func (cc *ClientConn) Process(datagram []byte) error {
 				w.response.SetMessageID(mid)
 			default:
 				w.response.SetType(udpMessage.NonConfirmable)
-				w.response.SetMessageID(cc.GetMID())
+				w.response.SetMessageID(udpMessage.GetMID())
 			}
 			err := cc.session.WriteMessage(w.response)
 			if err != nil {

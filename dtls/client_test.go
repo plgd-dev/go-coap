@@ -200,7 +200,7 @@ func TestClientConn_Get_SeparateMessage(t *testing.T) {
 	req, err := client.NewGetRequest(ctx, "/a")
 	require.NoError(t, err)
 	req.SetType(udpMessage.Confirmable)
-	req.SetMessageID(cc.GetMID())
+	req.SetMessageID(udpMessage.GetMID())
 	resp, err := cc.Do(req)
 	require.NoError(t, err)
 	assert.Equal(t, codes.Content, resp.Code())
