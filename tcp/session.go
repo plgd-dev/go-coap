@@ -26,6 +26,7 @@ type Session struct {
 	disablePeerTCPSignalMessageCSMs bool
 	disableTCPSignalMessageCSM      bool
 	goPool                          GoPoolFunc
+	errors                          ErrorFunc
 
 	sequence              uint64
 	tokenHandlerContainer *HandlerContainer
@@ -50,6 +51,7 @@ func NewSession(
 	handler HandlerFunc,
 	maxMessageSize int,
 	goPool GoPoolFunc,
+	errors ErrorFunc,
 	blockwiseSZX blockwise.SZX,
 	blockWise *blockwise.BlockWise,
 	disablePeerTCPSignalMessageCSMs bool,
@@ -57,6 +59,9 @@ func NewSession(
 
 ) *Session {
 	ctx, cancel := context.WithCancel(ctx)
+	if errors == nil {
+		errors = func(error) {}
+	}
 
 	s := &Session{
 		ctx:                             ctx,
@@ -67,6 +72,7 @@ func NewSession(
 		tokenHandlerContainer:           NewHandlerContainer(),
 		midHandlerContainer:             NewHandlerContainer(),
 		goPool:                          goPool,
+		errors:                          errors,
 		blockWise:                       blockWise,
 		blockwiseSZX:                    blockwiseSZX,
 		disablePeerTCPSignalMessageCSMs: disablePeerTCPSignalMessageCSMs,
@@ -234,7 +240,7 @@ func (s *Session) processBuffer(buffer *bytes.Buffer, cc *ClientConn) error {
 			return fmt.Errorf("cannot unmarshal with header: %w", err)
 		}
 		req.SetSequence(s.Sequence())
-		s.goPool(func() error {
+		s.goPool(func() {
 			origResp := pool.AcquireMessage(s.ctx)
 			origResp.SetToken(req.Token())
 			w := NewResponseWriter(origResp, cc, req.Options())
@@ -247,10 +253,9 @@ func (s *Session) processBuffer(buffer *bytes.Buffer, cc *ClientConn) error {
 				err := s.WriteMessage(w.response)
 				if err != nil {
 					s.Close()
-					return fmt.Errorf("cannot write response: %w", err)
+					s.errors(fmt.Errorf("cannot write response: %w", err))
 				}
 			}
-			return nil
 		})
 	}
 	return nil
