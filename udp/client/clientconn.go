@@ -19,7 +19,7 @@ import (
 
 type HandlerFunc = func(*ResponseWriter, *pool.Message)
 type ErrorFunc = func(error)
-type GoPoolFunc = func(func() error) error
+type GoPoolFunc = func(func()) error
 type EventFunc = func()
 
 type Session interface {
@@ -44,6 +44,7 @@ type ClientConn struct {
 	blockwiseSZX                   blockwise.SZX
 	blockWise                      *blockwise.BlockWise
 	goPool                         GoPoolFunc
+	errors                         ErrorFunc
 
 	tokenHandlerContainer *HandlerContainer
 	midHandlerContainer   *HandlerContainer
@@ -62,7 +63,11 @@ func NewClientConn(
 	blockwiseSZX blockwise.SZX,
 	blockWise *blockwise.BlockWise,
 	goPool GoPoolFunc,
+	errors ErrorFunc,
 ) *ClientConn {
+	if errors == nil {
+		errors = func(error) {}
+	}
 	return &ClientConn{
 		session:                        session,
 		observationTokenHandler:        observationTokenHandler,
@@ -77,6 +82,7 @@ func NewClientConn(
 		tokenHandlerContainer: NewHandlerContainer(),
 		midHandlerContainer:   NewHandlerContainer(),
 		goPool:                goPool,
+		errors:                errors,
 	}
 }
 
@@ -459,7 +465,7 @@ func (cc *ClientConn) Process(datagram []byte) error {
 		return err
 	}
 	req.SetSequence(cc.Sequence())
-	cc.goPool(func() error {
+	cc.goPool(func() {
 		origResp := pool.AcquireMessage(cc.Context())
 		origResp.SetToken(req.Token())
 		w := NewResponseWriter(origResp, cc, req.Options())
@@ -484,7 +490,8 @@ func (cc *ClientConn) Process(datagram []byte) error {
 			err := cc.session.WriteMessage(w.response)
 			if err != nil {
 				cc.Close()
-				return fmt.Errorf("cannot write response: %w", err)
+				cc.errors(fmt.Errorf("cannot write response: %w", err))
+				return
 			}
 		} else if typ == udpMessage.Confirmable {
 			w.response.Reset()
@@ -494,10 +501,10 @@ func (cc *ClientConn) Process(datagram []byte) error {
 			err := cc.session.WriteMessage(w.response)
 			if err != nil {
 				cc.Close()
-				return fmt.Errorf("cannot write ack reponse: %w", err)
+				cc.errors(fmt.Errorf("cannot write ack reponse: %w", err))
+				return
 			}
 		}
-		return nil
 	})
 	return nil
 }

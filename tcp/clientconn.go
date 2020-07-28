@@ -31,12 +31,9 @@ var defaultDialOptions = dialOptions{
 	errors: func(err error) {
 		fmt.Println(err)
 	},
-	goPool: func(f func() error) error {
+	goPool: func(f func()) error {
 		go func() {
-			err := f()
-			if err != nil {
-				fmt.Println(err)
-			}
+			f()
 		}()
 		return nil
 	},
@@ -124,6 +121,9 @@ func Client(conn net.Conn, opts ...DialOption) *ClientConn {
 	for _, o := range opts {
 		o.applyDial(&cfg)
 	}
+	if cfg.errors == nil {
+		cfg.errors = func(error) {}
+	}
 
 	observatioRequests := &sync.Map{}
 	var blockWise *blockwise.BlockWise
@@ -146,6 +146,7 @@ func Client(conn net.Conn, opts ...DialOption) *ClientConn {
 		NewObservationHandler(observationTokenHandler, cfg.handler),
 		cfg.maxMessageSize,
 		cfg.goPool,
+		cfg.errors,
 		cfg.blockwiseSZX,
 		blockWise,
 		cfg.disablePeerTCPSignalMessageCSMs,

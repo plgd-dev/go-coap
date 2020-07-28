@@ -29,7 +29,7 @@ type HandlerFunc = func(*ResponseWriter, *pool.Message)
 
 type ErrorFunc = func(error)
 
-type GoPoolFunc = func(func() error) error
+type GoPoolFunc = func(func()) error
 
 type BlockwiseFactoryFunc = func(getSendedRequest func(token message.Token) (blockwise.Message, bool)) *blockwise.BlockWise
 
@@ -44,12 +44,9 @@ var defaultServerOptions = serverOptions{
 	errors: func(err error) {
 		fmt.Println(err)
 	},
-	goPool: func(f func() error) error {
+	goPool: func(f func()) error {
 		go func() {
-			err := f()
-			if err != nil {
-				fmt.Println(err)
-			}
+			f()
 		}()
 		return nil
 	},
@@ -239,7 +236,7 @@ func (s *Server) createClientConn(connection *coapNet.Conn) *ClientConn {
 			s.ctx,
 			connection,
 			NewObservationHandler(obsHandler, s.handler),
-			s.maxMessageSize, s.goPool, s.blockwiseSZX, blockWise, s.disablePeerTCPSignalMessageCSMs, s.disableTCPSignalMessageCSM),
+			s.maxMessageSize, s.goPool, s.errors, s.blockwiseSZX, blockWise, s.disablePeerTCPSignalMessageCSMs, s.disableTCPSignalMessageCSM),
 		obsHandler, new(sync.Map),
 	)
 

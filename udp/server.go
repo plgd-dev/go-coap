@@ -30,7 +30,7 @@ type HandlerFunc = func(*client.ResponseWriter, *pool.Message)
 
 type ErrorFunc = func(error)
 
-type GoPoolFunc = func(func() error) error
+type GoPoolFunc = func(func()) error
 
 type BlockwiseFactoryFunc = func(getSendedRequest func(token message.Token) (blockwise.Message, bool)) *blockwise.BlockWise
 
@@ -45,12 +45,9 @@ var defaultServerOptions = serverOptions{
 	errors: func(err error) {
 		fmt.Println(err)
 	},
-	goPool: func(f func() error) error {
+	goPool: func(f func()) error {
 		go func() {
-			err := f()
-			if err != nil {
-				fmt.Println(err)
-			}
+			f()
 		}()
 		return nil
 	},
@@ -289,6 +286,7 @@ func (s *Server) getOrCreateClientConn(UDPConn *coapNet.UDPConn, raddr *net.UDPA
 			s.blockwiseSZX,
 			blockWise,
 			s.goPool,
+			s.errors,
 		)
 		cc.AddOnClose(func() {
 			s.connsMutex.Lock()
