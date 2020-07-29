@@ -10,6 +10,7 @@ import (
 	"github.com/go-ocf/go-coap/v2/message"
 	"github.com/go-ocf/go-coap/v2/net/blockwise"
 	"github.com/go-ocf/go-coap/v2/tcp/message/pool"
+	kitSync "github.com/go-ocf/kit/sync"
 
 	"github.com/go-ocf/go-coap/v2/net/keepalive"
 
@@ -237,7 +238,7 @@ func (s *Server) createClientConn(connection *coapNet.Conn) *ClientConn {
 			connection,
 			NewObservationHandler(obsHandler, s.handler),
 			s.maxMessageSize, s.goPool, s.errors, s.blockwiseSZX, blockWise, s.disablePeerTCPSignalMessageCSMs, s.disableTCPSignalMessageCSM),
-		obsHandler, new(sync.Map),
+		obsHandler, kitSync.NewMap(),
 	)
 
 	return cc

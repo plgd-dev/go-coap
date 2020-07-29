@@ -17,6 +17,7 @@ import (
 	"github.com/go-ocf/go-coap/v2/udp/message/pool"
 
 	coapNet "github.com/go-ocf/go-coap/v2/net"
+	kitSync "github.com/go-ocf/kit/sync"
 )
 
 // A ServerOption sets options such as credentials, codec and keepalive parameters, etc.
@@ -98,7 +99,7 @@ type Server struct {
 	cancel            context.CancelFunc
 	serverStartedChan chan struct{}
 
-	multicastRequests *sync.Map
+	multicastRequests *kitSync.Map
 	multicastHandler  *client.HandlerContainer
 
 	listen      *coapNet.UDPConn
@@ -126,7 +127,7 @@ func NewServer(opt ...ServerOption) *Server {
 		blockwiseEnable:                opts.blockwiseEnable,
 		blockwiseTransferTimeout:       opts.blockwiseTransferTimeout,
 		multicastHandler:               client.NewHandlerContainer(),
-		multicastRequests:              &sync.Map{},
+		multicastRequests:              kitSync.NewMap(),
 		serverStartedChan:              serverStartedChan,
 		onNewClientConn:                opts.onNewClientConn,
 		transmissionNStart:             opts.transmissionNStart,

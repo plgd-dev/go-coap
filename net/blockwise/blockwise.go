@@ -8,6 +8,8 @@ import (
 	"sync"
 	"time"
 
+	kitSync "github.com/go-ocf/kit/sync"
+
 	"github.com/dsnet/golib/memfile"
 	"github.com/go-ocf/go-coap/v2/message"
 	"github.com/go-ocf/go-coap/v2/message/codes"
@@ -160,7 +162,8 @@ type BlockWise struct {
 	errors                      func(error)
 	autoCleanUpResponseCache    bool
 	getSendedRequestFromOutside func(token message.Token) (Message, bool)
-	bwSendedRequest             *sync.Map
+
+	bwSendedRequest *kitSync.Map
 }
 
 type messageGuard struct {
@@ -174,6 +177,8 @@ func newRequestGuard(request Message) *messageGuard {
 	}
 }
 
+// NewBlockWise provides blockwise.
+// getSendedRequestFromOutside must returns a copy of request which will be released by function releaseMessage after use.
 func NewBlockWise(
 	acquireMessage func(ctx context.Context) Message,
 	releaseMessage func(Message),
@@ -183,8 +188,8 @@ func NewBlockWise(
 	getSendedRequestFromOutside func(token message.Token) (Message, bool),
 ) *BlockWise {
 	receivingMessagesCache := cache.New(expiration, expiration)
-	bwSendedRequest := new(sync.Map)
-	receivingMessagesCache.OnEvicted(func(tokenstr string, rece interface{}) {
+	bwSendedRequest := kitSync.NewMap()
+	receivingMessagesCache.OnEvicted(func(tokenstr string, _ interface{}) {
 		bwSendedRequest.Delete(tokenstr)
 	})
 	if getSendedRequestFromOutside == nil {
@@ -209,6 +214,14 @@ func bufferSize(szx SZX, maxMessageSize int) int64 {
 	return (int64(maxMessageSize) / szx.Size()) * szx.Size()
 }
 
+func (b *BlockWise) newSendRequestMessage(r Message) Message {
+	req := b.acquireMessage(r.Context())
+	req.SetCode(r.Code())
+	req.SetToken(r.Token())
+	req.ResetOptionsTo(r.Options())
+	return req
+}
+
 // Do sends an coap message and returns an coap response via blockwise transfer.
 func (b *BlockWise) Do(r Message, maxSzx SZX, maxMessageSize int, do func(req Message) (Message, error)) (Message, error) {
 	if maxSzx > SZXBERT {
@@ -218,11 +231,8 @@ func (b *BlockWise) Do(r Message, maxSzx SZX, maxMessageSize int, do func(req Me
 		return nil, fmt.Errorf("invalid token")
 	}
 
-	req := b.acquireMessage(r.Context())
+	req := b.newSendRequestMessage(r)
 	defer b.releaseMessage(req)
-	req.SetCode(r.Code())
-	req.SetToken(r.Token())
-	req.ResetOptionsTo(r.Options())
 
 	tokenStr := r.Token().String()
 	b.bwSendedRequest.Store(tokenStr, req)
@@ -343,11 +353,8 @@ func (w *writeMessageResponse) Message() Message {
 
 // WriteMessage sends an coap message via blockwise transfer.
 func (b *BlockWise) WriteMessage(request Message, maxSZX SZX, maxMessageSize int, writeMessage func(r Message) error) error {
-	req := b.acquireMessage(request.Context())
-	req.SetCode(request.Code())
-	req.SetToken(request.Token())
-	req.ResetOptionsTo(request.Options())
-	tokenStr := request.Token().String()
+	req := b.newSendRequestMessage(request)
+	tokenStr := req.Token().String()
 	b.bwSendedRequest.Store(tokenStr, req)
 	startSendingMessageBlock, err := EncodeBlockOption(maxSZX, 0, true)
 	if err != nil {
@@ -609,7 +616,10 @@ func (b *BlockWise) startSendingMessage(w ResponseWriter, maxSZX SZX, maxMessage
 }
 
 func (b *BlockWise) getSendedRequest(token message.Token) Message {
-	v, ok := b.bwSendedRequest.Load(token.String())
+	v, ok := b.bwSendedRequest.LoadWithFunc(token.String(), func(v interface{}) interface{} {
+		r := v.(Message)
+		return b.newSendRequestMessage(r)
+	})
 	if ok {
 		return v.(Message)
 	}
@@ -642,6 +652,9 @@ func (b *BlockWise) processReceivedMessage(w ResponseWriter, r Message, maxSzx S
 		return fmt.Errorf("cannot decode block option: %w", err)
 	}
 	sendedRequest := b.getSendedRequest(token)
+	if sendedRequest != nil {
+		defer b.releaseMessage(sendedRequest)
+	}
 	if blockType == message.Block2 && sendedRequest == nil {
 		return fmt.Errorf("cannot request body without paired request")
 	}

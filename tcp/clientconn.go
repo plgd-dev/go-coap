@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"net"
-	"sync"
 	"time"
 
 	"github.com/go-ocf/go-coap/v2/message"
@@ -16,6 +15,7 @@ import (
 
 	"github.com/go-ocf/go-coap/v2/message/codes"
 	coapNet "github.com/go-ocf/go-coap/v2/net"
+	kitSync "github.com/go-ocf/kit/sync"
 )
 
 var defaultDialOptions = dialOptions{
@@ -73,7 +73,7 @@ type ClientConn struct {
 	noCopy
 	session                 *Session
 	observationTokenHandler *HandlerContainer
-	observationRequests     *sync.Map
+	observationRequests     *kitSync.Map
 }
 
 // Dial creates a client connection to the given target.
@@ -104,9 +104,16 @@ func bwReleaseMessage(m blockwise.Message) {
 	pool.ReleaseMessage(m.(*pool.Message))
 }
 
-func bwCreateHandlerFunc(observatioRequests *sync.Map) func(token message.Token) (blockwise.Message, bool) {
+func bwCreateHandlerFunc(observatioRequests *kitSync.Map) func(token message.Token) (blockwise.Message, bool) {
 	return func(token message.Token) (blockwise.Message, bool) {
-		msg, ok := observatioRequests.Load(token.String())
+		msg, ok := observatioRequests.LoadWithFunc(token.String(), func(v interface{}) interface{} {
+			r := v.(*pool.Message)
+			d := pool.AcquireMessage(r.Context())
+			d.ResetOptionsTo(r.Options())
+			d.SetCode(r.Code())
+			d.SetToken(r.Token())
+			return d
+		})
 		if !ok {
 			return nil, ok
 		}
@@ -125,7 +132,7 @@ func Client(conn net.Conn, opts ...DialOption) *ClientConn {
 		cfg.errors = func(error) {}
 	}
 
-	observatioRequests := &sync.Map{}
+	observatioRequests := kitSync.NewMap()
 	var blockWise *blockwise.BlockWise
 	if cfg.blockwiseEnable {
 		blockWise = blockwise.NewBlockWise(
@@ -173,7 +180,7 @@ func Client(conn net.Conn, opts ...DialOption) *ClientConn {
 }
 
 // NewClientConn creates connection over session and observation.
-func NewClientConn(session *Session, observationTokenHandler *HandlerContainer, observationRequests *sync.Map) *ClientConn {
+func NewClientConn(session *Session, observationTokenHandler *HandlerContainer, observationRequests *kitSync.Map) *ClientConn {
 	return &ClientConn{
 		session:                 session,
 		observationTokenHandler: observationTokenHandler,
