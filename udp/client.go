@@ -4,12 +4,12 @@ import (
 	"context"
 	"fmt"
 	"net"
-	"sync"
 	"time"
 
 	"github.com/go-ocf/go-coap/v2/message"
 	"github.com/go-ocf/go-coap/v2/net/blockwise"
 	"github.com/go-ocf/go-coap/v2/net/keepalive"
+	kitSync "github.com/go-ocf/kit/sync"
 
 	"github.com/go-ocf/go-coap/v2/message/codes"
 	coapNet "github.com/go-ocf/go-coap/v2/net"
@@ -96,9 +96,17 @@ func bwReleaseMessage(m blockwise.Message) {
 	pool.ReleaseMessage(m.(*pool.Message))
 }
 
-func bwCreateHandlerFunc(observatioRequests *sync.Map) func(token message.Token) (blockwise.Message, bool) {
+func bwCreateHandlerFunc(observatioRequests *kitSync.Map) func(token message.Token) (blockwise.Message, bool) {
 	return func(token message.Token) (blockwise.Message, bool) {
-		msg, ok := observatioRequests.Load(token.String())
+		msg, ok := observatioRequests.LoadWithFunc(token.String(), func(v interface{}) interface{} {
+			r := v.(*pool.Message)
+			d := pool.AcquireMessage(r.Context())
+			d.ResetOptionsTo(r.Options())
+			d.SetCode(r.Code())
+			d.SetToken(r.Token())
+			d.SetMessageID(r.MessageID())
+			return d
+		})
 		if !ok {
 			return nil, ok
 		}
@@ -117,7 +125,7 @@ func Client(conn *net.UDPConn, opts ...DialOption) *client.ClientConn {
 		cfg.errors = func(error) {}
 	}
 	addr, _ := conn.RemoteAddr().(*net.UDPAddr)
-	observatioRequests := &sync.Map{}
+	observatioRequests := kitSync.NewMap()
 	var blockWise *blockwise.BlockWise
 	if cfg.blockwiseEnable {
 		blockWise = blockwise.NewBlockWise(

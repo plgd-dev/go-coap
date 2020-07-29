@@ -35,9 +35,8 @@ func NewObservationHandler(obsertionTokenHandler *HandlerContainer, next Handler
 
 func (o *Observation) cleanUp() {
 	o.cc.observationTokenHandler.Pop(o.token)
-	registeredRequest, ok := o.cc.observationRequests.Load(o.token.String())
+	registeredRequest, ok := o.cc.observationRequests.PullOut(o.token.String())
 	if ok {
-		o.cc.observationRequests.Delete(o.token.String())
 		pool.ReleaseMessage(registeredRequest.(*pool.Message))
 	}
 }

@@ -12,6 +12,7 @@ import (
 
 	"github.com/go-ocf/go-coap/v2/message"
 	"github.com/go-ocf/go-coap/v2/net/blockwise"
+	kitSync "github.com/go-ocf/kit/sync"
 
 	"github.com/go-ocf/go-coap/v2/net/keepalive"
 
@@ -255,7 +256,7 @@ func (s *Server) createClientConn(connection *coapNet.Conn) *client.ClientConn {
 	cc := client.NewClientConn(
 		session,
 		obsHandler,
-		new(sync.Map),
+		kitSync.NewMap(),
 		s.transmissionNStart,
 		s.transmissionAcknowledgeTimeout,
 		s.transmissionMaxRetransmit,

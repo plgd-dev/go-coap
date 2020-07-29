@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io"
 	"net"
-	"sync"
 	"sync/atomic"
 	"time"
 
@@ -15,6 +14,7 @@ import (
 	"github.com/go-ocf/go-coap/v2/message/codes"
 	udpMessage "github.com/go-ocf/go-coap/v2/udp/message"
 	"github.com/go-ocf/go-coap/v2/udp/message/pool"
+	kitSync "github.com/go-ocf/kit/sync"
 )
 
 type HandlerFunc = func(*ResponseWriter, *pool.Message)
@@ -37,7 +37,7 @@ type ClientConn struct {
 	session                        Session
 	handler                        HandlerFunc
 	observationTokenHandler        *HandlerContainer
-	observationRequests            *sync.Map
+	observationRequests            *kitSync.Map
 	transmissionNStart             time.Duration
 	transmissionAcknowledgeTimeout time.Duration
 	transmissionMaxRetransmit      int
@@ -55,7 +55,7 @@ type ClientConn struct {
 func NewClientConn(
 	session Session,
 	observationTokenHandler *HandlerContainer,
-	observationRequests *sync.Map,
+	observationRequests *kitSync.Map,
 	transmissionNStart time.Duration,
 	transmissionAcknowledgeTimeout time.Duration,
 	transmissionMaxRetransmit int,

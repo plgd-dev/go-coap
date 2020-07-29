@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"net"
-	"sync"
 	"time"
 
 	"github.com/go-ocf/go-coap/v2/message"
@@ -16,6 +15,7 @@ import (
 	coapNet "github.com/go-ocf/go-coap/v2/net"
 	"github.com/go-ocf/go-coap/v2/udp/client"
 	"github.com/go-ocf/go-coap/v2/udp/message/pool"
+	kitSync "github.com/go-ocf/kit/sync"
 )
 
 var defaultDialOptions = dialOptions{
@@ -98,12 +98,17 @@ func bwReleaseMessage(m blockwise.Message) {
 	pool.ReleaseMessage(m.(*pool.Message))
 }
 
-func bwCreateHandlerFunc(observatioRequests *sync.Map) func(token message.Token) (blockwise.Message, bool) {
+func bwCreateHandlerFunc(observatioRequests *kitSync.Map) func(token message.Token) (blockwise.Message, bool) {
 	return func(token message.Token) (blockwise.Message, bool) {
-		msg, ok := observatioRequests.Load(token.String())
-		if !ok {
-			return nil, ok
-		}
+		msg, ok := observatioRequests.LoadWithFunc(token.String(), func(v interface{}) interface{} {
+			r := v.(*pool.Message)
+			d := pool.AcquireMessage(r.Context())
+			d.ResetOptionsTo(r.Options())
+			d.SetCode(r.Code())
+			d.SetToken(r.Token())
+			d.SetMessageID(r.MessageID())
+			return d
+		})
 		bwMessage := msg.(blockwise.Message)
 		return bwMessage, ok
 	}
@@ -119,7 +124,7 @@ func Client(conn *dtls.Conn, opts ...DialOption) *client.ClientConn {
 		cfg.errors = func(error) {}
 	}
 
-	observatioRequests := &sync.Map{}
+	observatioRequests := kitSync.NewMap()
 	var blockWise *blockwise.BlockWise
 	if cfg.blockwiseEnable {
 		blockWise = blockwise.NewBlockWise(
