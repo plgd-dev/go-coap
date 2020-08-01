@@ -12,6 +12,8 @@ github.com/davecgh/go-spew v1.1.1/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSs
 github.com/dgrijalva/jwt-go v3.2.0+incompatible/go.mod h1:E3ru+11k8xSBh+hMPgOLZmtrrCbhqsmaPHjLKYnJCaQ=
 github.com/dsnet/golib/memfile v0.0.0-20190531212259-571cdbcff553 h1:qd7Hp/zOU5vOHkyfqefAFop3O4ATL3F8vxrYmL2q8bI=
 github.com/dsnet/golib/memfile v0.0.0-20190531212259-571cdbcff553/go.mod h1:tXGNW9q3RwvWt1VV2qrRKlSSz0npnh12yftCSCy2T64=
+github.com/dsnet/golib/memfile v0.0.0-20200723050859-c110804dfa93 h1:I48YLRgQEeWsjF7LmNcl62vTHSUfUfEVe3I1oHXiS5o=
+github.com/dsnet/golib/memfile v0.0.0-20200723050859-c110804dfa93/go.mod h1:tXGNW9q3RwvWt1VV2qrRKlSSz0npnh12yftCSCy2T64=
 github.com/envoyproxy/go-control-plane v0.9.0/go.mod h1:YTl/9mNaCwkRvm6d1a2C3ymFceY/DCBVvsKhRF0iEA4=
 github.com/envoyproxy/go-control-plane v0.9.1-0.20191026205805-5f8ba28d4473/go.mod h1:YTl/9mNaCwkRvm6d1a2C3ymFceY/DCBVvsKhRF0iEA4=
 github.com/envoyproxy/go-control-plane v0.9.4/go.mod h1:6rpuAdCZL397s3pYoYcLgu1mIlRU8Am5FuJP05cCM98=
@@ -21,9 +23,6 @@ github.com/fxamacker/cbor/v2 v2.2.0/go.mod h1:TA1xS00nchWmaBnEIxPSE5oHLuJBAVvqrt
 github.com/go-acme/lego v2.7.2+incompatible/go.mod h1:yzMNe9CasVUhkquNvti5nAtPmG94USbYxYrZfTkIn0M=
 github.com/go-kit/kit v0.9.0/go.mod h1:xBxKIO96dXMWWy0MnWVtmwkA9/13aqxPnvrjFYMA2as=
 github.com/go-logfmt/logfmt v0.4.0/go.mod h1:3RMwSq7FuexP4Kalkev3ejPJsZTpXXBr9+V4qmtdjCk=
-github.com/go-ocf/go-coap v0.0.0-20200503182930-509338af26c8 h1:ieuAqWZcqrEAowslHtq7VhF3iQVaw3wx0NrAKzOj2dc=
-github.com/go-ocf/go-coap v0.0.0-20200507195925-de47755e89b8 h1:8OFS9Z/RAvTnH72LdeRZK1TGTuQ+xcf9rajHoYXlxnk=
-github.com/go-ocf/go-coap v0.0.0-20200511140640-db6048acfdd3 h1:oIfjM7VTgcV2DLvHpQSg3iwqAXL5RHG/dsg/oS9/ITQ=
 github.com/go-ocf/go-coap/v2 v2.0.4-0.20200728125043-f38b86f047a7/go.mod h1:X9wVKcaOSx7wBxKcvrWgMQq1R2DNeA7NBLW2osIb8TM=
 github.com/go-ocf/kit v0.0.0-20200728130040-4aebdb6982bc h1:VfEKBNg9m0rHO88jv/fOCXW1MN+Z4imfGZhYF0G8484=
 github.com/go-ocf/kit v0.0.0-20200728130040-4aebdb6982bc/go.mod h1:TIsoMT/iB7t9P6ahkcOnsmvS83SIJsv9qXRfz/yLf6M=
