@@ -21,6 +21,7 @@ type HandlerFunc = func(*ResponseWriter, *pool.Message)
 type ErrorFunc = func(error)
 type GoPoolFunc = func(func()) error
 type EventFunc = func()
+type GetMIDFunc = func() uint16
 
 type Session interface {
 	Context() context.Context
@@ -45,6 +46,7 @@ type ClientConn struct {
 	blockWise                      *blockwise.BlockWise
 	goPool                         GoPoolFunc
 	errors                         ErrorFunc
+	getMID                         GetMIDFunc
 
 	tokenHandlerContainer *HandlerContainer
 	midHandlerContainer   *HandlerContainer
@@ -64,9 +66,13 @@ func NewClientConn(
 	blockWise *blockwise.BlockWise,
 	goPool GoPoolFunc,
 	errors ErrorFunc,
+	getMID GetMIDFunc,
 ) *ClientConn {
 	if errors == nil {
 		errors = func(error) {}
+	}
+	if getMID == nil {
+		getMID = udpMessage.GetMID
 	}
 	return &ClientConn{
 		session:                        session,
@@ -83,6 +89,7 @@ func NewClientConn(
 		midHandlerContainer:   NewHandlerContainer(),
 		goPool:                goPool,
 		errors:                errors,
+		getMID:                getMID,
 	}
 }
 
@@ -97,7 +104,7 @@ func (cc *ClientConn) do(req *pool.Message) (*pool.Message, error) {
 		return nil, fmt.Errorf("invalid token")
 	}
 
-	req.SetMessageID(udpMessage.GetMID())
+	req.SetMessageID(cc.getMID())
 	req.SetType(udpMessage.Confirmable)
 
 	respChan := make(chan *pool.Message, 1)
@@ -143,7 +150,7 @@ func (cc *ClientConn) Do(req *pool.Message) (*pool.Message, error) {
 }
 
 func (cc *ClientConn) writeMessage(req *pool.Message) error {
-	req.SetMessageID(udpMessage.GetMID())
+	req.SetMessageID(cc.getMID())
 	req.SetType(udpMessage.Confirmable)
 	respChan := make(chan struct{})
 	err := cc.midHandlerContainer.Insert(req.MessageID(), func(w *ResponseWriter, r *pool.Message) {
@@ -364,7 +371,7 @@ func (cc *ClientConn) Ping(ctx context.Context) error {
 	defer pool.ReleaseMessage(req)
 	req.SetType(udpMessage.Confirmable)
 	req.SetCode(codes.Empty)
-	req.SetMessageID(udpMessage.GetMID())
+	req.SetMessageID(cc.getMID())
 	resp, err := cc.doWithMID(req)
 	if err != nil {
 		return err
@@ -485,7 +492,7 @@ func (cc *ClientConn) Process(datagram []byte) error {
 				w.response.SetMessageID(mid)
 			default:
 				w.response.SetType(udpMessage.NonConfirmable)
-				w.response.SetMessageID(udpMessage.GetMID())
+				w.response.SetMessageID(cc.getMID())
 			}
 			err := cc.session.WriteMessage(w.response)
 			if err != nil {

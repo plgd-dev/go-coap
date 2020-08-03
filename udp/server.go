@@ -14,6 +14,7 @@ import (
 
 	"github.com/go-ocf/go-coap/v2/message/codes"
 	"github.com/go-ocf/go-coap/v2/udp/client"
+	udpMessage "github.com/go-ocf/go-coap/v2/udp/message"
 	"github.com/go-ocf/go-coap/v2/udp/message/pool"
 
 	coapNet "github.com/go-ocf/go-coap/v2/net"
@@ -36,6 +37,8 @@ type GoPoolFunc = func(func()) error
 type BlockwiseFactoryFunc = func(getSendedRequest func(token message.Token) (blockwise.Message, bool)) *blockwise.BlockWise
 
 type OnNewClientConnFunc = func(cc *client.ClientConn)
+
+type GetMIDFunc = func() uint16
 
 var defaultServerOptions = serverOptions{
 	ctx:            context.Background(),
@@ -60,6 +63,7 @@ var defaultServerOptions = serverOptions{
 	transmissionNStart:             time.Second,
 	transmissionAcknowledgeTimeout: time.Second * 2,
 	transmissionMaxRetransmit:      4,
+	getMID:                         udpMessage.GetMID,
 }
 
 type serverOptions struct {
@@ -77,6 +81,7 @@ type serverOptions struct {
 	transmissionNStart             time.Duration
 	transmissionAcknowledgeTimeout time.Duration
 	transmissionMaxRetransmit      int
+	getMID                         GetMIDFunc
 }
 
 type Server struct {
@@ -92,6 +97,7 @@ type Server struct {
 	transmissionNStart             time.Duration
 	transmissionAcknowledgeTimeout time.Duration
 	transmissionMaxRetransmit      int
+	getMID                         GetMIDFunc
 
 	conns             map[string]*client.ClientConn
 	connsMutex        sync.Mutex
@@ -110,6 +116,14 @@ func NewServer(opt ...ServerOption) *Server {
 	opts := defaultServerOptions
 	for _, o := range opt {
 		o.apply(&opts)
+	}
+
+	if opts.errors == nil {
+		opts.errors = func(error) {}
+	}
+
+	if opts.getMID == nil {
+		opts.getMID = udpMessage.GetMID
 	}
 
 	ctx, cancel := context.WithCancel(opts.ctx)
@@ -133,6 +147,7 @@ func NewServer(opt ...ServerOption) *Server {
 		transmissionNStart:             opts.transmissionNStart,
 		transmissionAcknowledgeTimeout: opts.transmissionAcknowledgeTimeout,
 		transmissionMaxRetransmit:      opts.transmissionMaxRetransmit,
+		getMID:                         opts.getMID,
 
 		conns: make(map[string]*client.ClientConn),
 	}
@@ -288,6 +303,7 @@ func (s *Server) getOrCreateClientConn(UDPConn *coapNet.UDPConn, raddr *net.UDPA
 			blockWise,
 			s.goPool,
 			s.errors,
+			s.getMID,
 		)
 		cc.AddOnClose(func() {
 			s.connsMutex.Lock()

@@ -14,6 +14,7 @@ import (
 	"github.com/go-ocf/go-coap/v2/message/codes"
 	coapNet "github.com/go-ocf/go-coap/v2/net"
 	"github.com/go-ocf/go-coap/v2/udp/client"
+	udpMessage "github.com/go-ocf/go-coap/v2/udp/message"
 	"github.com/go-ocf/go-coap/v2/udp/message/pool"
 )
 
@@ -45,6 +46,7 @@ var defaultDialOptions = dialOptions{
 	transmissionNStart:             time.Second,
 	transmissionAcknowledgeTimeout: time.Second * 2,
 	transmissionMaxRetransmit:      4,
+	getMID:                         udpMessage.GetMID,
 }
 
 type dialOptions struct {
@@ -63,6 +65,7 @@ type dialOptions struct {
 	transmissionNStart             time.Duration
 	transmissionAcknowledgeTimeout time.Duration
 	transmissionMaxRetransmit      int
+	getMID                         GetMIDFunc
 }
 
 // A DialOption sets options such as credentials, keepalive parameters, etc.
@@ -153,6 +156,7 @@ func Client(conn *net.UDPConn, opts ...DialOption) *client.ClientConn {
 		blockWise,
 		cfg.goPool,
 		cfg.errors,
+		cfg.getMID,
 	)
 
 	go func() {
