@@ -7,7 +7,6 @@ import (
 
 	"github.com/go-ocf/go-coap/v2/message"
 	"github.com/go-ocf/go-coap/v2/mux"
-	udpMessage "github.com/go-ocf/go-coap/v2/udp/message"
 	"github.com/go-ocf/go-coap/v2/udp/message/pool"
 )
 
@@ -78,7 +77,6 @@ func (c *Client) WriteMessage(req *message.Message) error {
 	if err != nil {
 		return err
 	}
-	r.SetMessageID(udpMessage.GetMID())
 	defer pool.ReleaseMessage(r)
 	return c.cc.WriteMessage(r)
 }

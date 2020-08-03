@@ -2,8 +2,6 @@ package dtls
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/binary"
 	"fmt"
 	"net"
 	"sync"
@@ -18,6 +16,7 @@ import (
 
 	"github.com/go-ocf/go-coap/v2/message/codes"
 	"github.com/go-ocf/go-coap/v2/udp/client"
+	udpMessage "github.com/go-ocf/go-coap/v2/udp/message"
 	"github.com/go-ocf/go-coap/v2/udp/message/pool"
 
 	coapNet "github.com/go-ocf/go-coap/v2/net"
@@ -39,6 +38,8 @@ type GoPoolFunc = func(func()) error
 type BlockwiseFactoryFunc = func(getSendedRequest func(token message.Token) (blockwise.Message, bool)) *blockwise.BlockWise
 
 type OnNewClientConnFunc = func(cc *client.ClientConn)
+
+type GetMIDFunc = func() uint16
 
 var defaultServerOptions = serverOptions{
 	ctx:            context.Background(),
@@ -64,6 +65,7 @@ var defaultServerOptions = serverOptions{
 	transmissionNStart:             time.Second,
 	transmissionAcknowledgeTimeout: time.Second * 2,
 	transmissionMaxRetransmit:      4,
+	getMID:                         udpMessage.GetMID,
 }
 
 type serverOptions struct {
@@ -82,6 +84,7 @@ type serverOptions struct {
 	transmissionNStart             time.Duration
 	transmissionAcknowledgeTimeout time.Duration
 	transmissionMaxRetransmit      int
+	getMID                         GetMIDFunc
 }
 
 // Listener defined used by coap
@@ -104,6 +107,7 @@ type Server struct {
 	transmissionNStart             time.Duration
 	transmissionAcknowledgeTimeout time.Duration
 	transmissionMaxRetransmit      int
+	getMID                         GetMIDFunc
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -121,9 +125,13 @@ func NewServer(opt ...ServerOption) *Server {
 	}
 
 	ctx, cancel := context.WithCancel(opts.ctx)
-	b := make([]byte, 4)
-	rand.Read(b)
-	msgID := binary.BigEndian.Uint32(b)
+	if opts.errors == nil {
+		opts.errors = func(error) {}
+	}
+
+	if opts.getMID == nil {
+		opts.getMID = udpMessage.GetMID
+	}
 
 	return &Server{
 		ctx:                            ctx,
@@ -136,12 +144,12 @@ func NewServer(opt ...ServerOption) *Server {
 		blockwiseSZX:                   opts.blockwiseSZX,
 		blockwiseEnable:                opts.blockwiseEnable,
 		blockwiseTransferTimeout:       opts.blockwiseTransferTimeout,
-		msgID:                          msgID,
 		onNewClientConn:                opts.onNewClientConn,
 		heartBeat:                      opts.heartBeat,
 		transmissionNStart:             opts.transmissionNStart,
 		transmissionAcknowledgeTimeout: opts.transmissionAcknowledgeTimeout,
 		transmissionMaxRetransmit:      opts.transmissionMaxRetransmit,
+		getMID:                         opts.getMID,
 	}
 }
 
@@ -265,6 +273,7 @@ func (s *Server) createClientConn(connection *coapNet.Conn) *client.ClientConn {
 		blockWise,
 		s.goPool,
 		s.errors,
+		s.getMID,
 	)
 
 	return cc
