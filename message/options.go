@@ -536,7 +536,7 @@ func (options Options) ResetOptionsTo(buf []byte, in Options) (Options, int, err
 	for idx, o := range in {
 		if len(buf) < len(o.Value) {
 			for i := idx; i < len(in); i++ {
-				used += len(in[idx].Value)
+				used += len(in[i].Value)
 			}
 			return options, used, ErrTooSmall
 		}
