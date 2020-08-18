@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"net"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/go-ocf/go-coap/v2/message"
@@ -111,8 +110,6 @@ type Server struct {
 
 	ctx    context.Context
 	cancel context.CancelFunc
-
-	msgID uint32
 
 	listen      Listener
 	listenMutex sync.Mutex
@@ -277,9 +274,4 @@ func (s *Server) createClientConn(connection *coapNet.Conn) *client.ClientConn {
 	)
 
 	return cc
-}
-
-// GetMID generates a message id for UDP-coap
-func (s *Server) GetMID() uint16 {
-	return uint16(atomic.AddUint32(&s.msgID, 1) % 0xffff)
 }
