@@ -11,10 +11,10 @@ import (
 	"github.com/plgd-dev/go-coap/v2/message"
 	"github.com/plgd-dev/go-coap/v2/net/blockwise"
 
-	kitSync "github.com/go-ocf/kit/sync"
 	"github.com/plgd-dev/go-coap/v2/message/codes"
 	udpMessage "github.com/plgd-dev/go-coap/v2/udp/message"
 	"github.com/plgd-dev/go-coap/v2/udp/message/pool"
+	kitSync "github.com/plgd-dev/kit/sync"
 )
 
 type HandlerFunc = func(*ResponseWriter, *pool.Message)

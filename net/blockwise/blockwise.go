@@ -8,7 +8,7 @@ import (
 	"sync"
 	"time"
 
-	kitSync "github.com/go-ocf/kit/sync"
+	kitSync "github.com/plgd-dev/kit/sync"
 
 	"github.com/dsnet/golib/memfile"
 	"github.com/patrickmn/go-cache"
