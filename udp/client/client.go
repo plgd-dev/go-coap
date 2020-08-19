@@ -5,9 +5,9 @@ import (
 	"io"
 	"net"
 
-	"github.com/go-ocf/go-coap/v2/message"
-	"github.com/go-ocf/go-coap/v2/mux"
-	"github.com/go-ocf/go-coap/v2/udp/message/pool"
+	"github.com/plgd-dev/go-coap/v2/message"
+	"github.com/plgd-dev/go-coap/v2/mux"
+	"github.com/plgd-dev/go-coap/v2/udp/message/pool"
 )
 
 type Client struct {

@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"net"
 
-	"github.com/go-ocf/go-coap/v2/udp/client"
-	"github.com/go-ocf/go-coap/v2/udp/message/pool"
+	"github.com/plgd-dev/go-coap/v2/udp/client"
+	"github.com/plgd-dev/go-coap/v2/udp/message/pool"
 )
 
 var defaultMulticastOptions = multicastOptions{

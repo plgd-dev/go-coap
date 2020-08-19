@@ -1,4 +1,4 @@
-package codes // import "github.com/go-ocf/go-coap/codes"
+package codes // import "github.com/plgd-dev/go-coap/codes"
 
 import (
 	"fmt"

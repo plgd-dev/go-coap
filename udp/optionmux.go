@@ -1,8 +1,8 @@
 package udp
 
 import (
-	"github.com/go-ocf/go-coap/v2/mux"
-	"github.com/go-ocf/go-coap/v2/udp/client"
+	"github.com/plgd-dev/go-coap/v2/mux"
+	"github.com/plgd-dev/go-coap/v2/udp/client"
 )
 
 // WithMux set's multiplexer for handle requests.

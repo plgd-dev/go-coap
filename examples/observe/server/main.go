@@ -6,10 +6,10 @@ import (
 	"log"
 	"time"
 
-	coap "github.com/go-ocf/go-coap/v2"
-	"github.com/go-ocf/go-coap/v2/message"
-	"github.com/go-ocf/go-coap/v2/message/codes"
-	"github.com/go-ocf/go-coap/v2/mux"
+	coap "github.com/plgd-dev/go-coap/v2"
+	"github.com/plgd-dev/go-coap/v2/message"
+	"github.com/plgd-dev/go-coap/v2/message/codes"
+	"github.com/plgd-dev/go-coap/v2/mux"
 )
 
 func getPath(opts message.Options) string {

@@ -8,13 +8,13 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/go-ocf/go-coap/v2/message"
-	"github.com/go-ocf/go-coap/v2/net/blockwise"
+	"github.com/plgd-dev/go-coap/v2/message"
+	"github.com/plgd-dev/go-coap/v2/net/blockwise"
 
-	"github.com/go-ocf/go-coap/v2/message/codes"
-	udpMessage "github.com/go-ocf/go-coap/v2/udp/message"
-	"github.com/go-ocf/go-coap/v2/udp/message/pool"
 	kitSync "github.com/go-ocf/kit/sync"
+	"github.com/plgd-dev/go-coap/v2/message/codes"
+	udpMessage "github.com/plgd-dev/go-coap/v2/udp/message"
+	"github.com/plgd-dev/go-coap/v2/udp/message/pool"
 )
 
 type HandlerFunc = func(*ResponseWriter, *pool.Message)

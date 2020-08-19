@@ -8,10 +8,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/go-ocf/go-coap/v2/net"
-	"github.com/go-ocf/go-coap/v2/udp"
-	"github.com/go-ocf/go-coap/v2/udp/client"
-	"github.com/go-ocf/go-coap/v2/udp/message/pool"
+	"github.com/plgd-dev/go-coap/v2/net"
+	"github.com/plgd-dev/go-coap/v2/udp"
+	"github.com/plgd-dev/go-coap/v2/udp/client"
+	"github.com/plgd-dev/go-coap/v2/udp/message/pool"
 )
 
 func ExampleGet() {

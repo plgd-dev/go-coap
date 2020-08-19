@@ -1,14 +1,14 @@
-[![Build Status](https://travis-ci.com/go-ocf/go-coap.svg?branch=master)](https://travis-ci.com/go-ocf/go-coap)
-[![codecov](https://codecov.io/gh/go-ocf/go-coap/branch/master/graph/badge.svg)](https://codecov.io/gh/go-ocf/go-coap)
-[![Go Report](https://goreportcard.com/badge/github.com/go-ocf/go-coap)](https://goreportcard.com/report/github.com/go-ocf/go-coap)
+[![Build Status](https://travis-ci.com/plgd-dev/go-coap.svg?branch=master)](https://travis-ci.com/plgd-dev/go-coap)
+[![codecov](https://codecov.io/gh/plgd-dev/go-coap/branch/master/graph/badge.svg)](https://codecov.io/gh/plgd-dev/go-coap)
+[![Go Report](https://goreportcard.com/badge/github.com/plgd-dev/go-coap)](https://goreportcard.com/report/github.com/plgd-dev/go-coap)
 [![FOSSA Status](https://app.fossa.io/api/projects/git%2Bgithub.com%2Fgo-ocf%2Fgo-coap.svg?type=shield)](https://app.fossa.io/projects/git%2Bgithub.com%2Fgo-ocf%2Fgo-coap?ref=badge_shield)
 [![backer](https://opencollective.com/go-coap/backers/badge.svg)](https://opencollective.com/go-coap#backer)
 [![sponsors](https://opencollective.com/go-coap/sponsors/badge.svg)](https://opencollective.com/go-coap#sponsors)
-[![contributors](https://img.shields.io/github/contributors/go-ocf/go-coap)](https://github.com/go-ocf/go-coap/graphs/contributors)
-[![GitHub stars](https://img.shields.io/github/stars/go-ocf/go-coap)](https://github.com/go-ocf/go-coap/stargazers)
-[![GitHub license](https://img.shields.io/github/license/go-ocf/go-coap)](https://github.com/go-ocf/go-coap/blob/master/LICENSE)
-[![GoDoc](https://godoc.org/github.com/go-ocf/go-coap?status.svg)](https://godoc.org/github.com/go-ocf/go-coap)
-[![Sourcegraph](https://sourcegraph.com/github.com/go-ocf/go-coap/-/badge.svg)](https://sourcegraph.com/github.com/go-ocf/go-coap?badge)
+[![contributors](https://img.shields.io/github/contributors/plgd-dev/go-coap)](https://github.com/plgd-dev/go-coap/graphs/contributors)
+[![GitHub stars](https://img.shields.io/github/stars/plgd-dev/go-coap)](https://github.com/plgd-dev/go-coap/stargazers)
+[![GitHub license](https://img.shields.io/github/license/plgd-dev/go-coap)](https://github.com/plgd-dev/go-coap/blob/master/LICENSE)
+[![GoDoc](https://godoc.org/github.com/plgd-dev/go-coap?status.svg)](https://godoc.org/github.com/plgd-dev/go-coap)
+[![Sourcegraph](https://sourcegraph.com/github.com/plgd-dev/go-coap/-/badge.svg)](https://sourcegraph.com/github.com/plgd-dev/go-coap?badge)
 
 # Go-CoAP
 

@@ -1,6 +1,6 @@
 package mux
 
-import "github.com/go-ocf/go-coap/v2/message"
+import "github.com/plgd-dev/go-coap/v2/message"
 
 // Message contains message with sequence number.
 type Message struct {

@@ -7,9 +7,9 @@ import (
 	"io"
 	"sync"
 
-	"github.com/go-ocf/go-coap/v2/message"
-	"github.com/go-ocf/go-coap/v2/message/pool"
-	tcp "github.com/go-ocf/go-coap/v2/tcp/message"
+	"github.com/plgd-dev/go-coap/v2/message"
+	"github.com/plgd-dev/go-coap/v2/message/pool"
+	tcp "github.com/plgd-dev/go-coap/v2/tcp/message"
 )
 
 var (

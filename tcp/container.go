@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/go-ocf/go-coap/v2/message"
+	"github.com/plgd-dev/go-coap/v2/message"
 )
 
 // HandlerContainer for regirstration handlers by key

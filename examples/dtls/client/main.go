@@ -7,8 +7,8 @@ import (
 	"os"
 	"time"
 
-	"github.com/go-ocf/go-coap/v2/dtls"
 	piondtls "github.com/pion/dtls/v2"
+	"github.com/plgd-dev/go-coap/v2/dtls"
 )
 
 func main() {
