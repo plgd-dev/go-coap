@@ -5,8 +5,8 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/go-ocf/go-coap/v2/message"
-	"github.com/go-ocf/go-coap/v2/message/codes"
+	"github.com/plgd-dev/go-coap/v2/message"
+	"github.com/plgd-dev/go-coap/v2/message/codes"
 )
 
 func testMarshalMessage(t *testing.T, msg Message, buf []byte, expectedOut []byte) {

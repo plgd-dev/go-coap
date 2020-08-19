@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/go-ocf/go-coap/v2/message/codes"
+	"github.com/plgd-dev/go-coap/v2/message/codes"
 )
 
 // MaxTokenSize maximum of token size that can be used in message

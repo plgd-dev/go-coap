@@ -11,9 +11,9 @@ import (
 	kitSync "github.com/go-ocf/kit/sync"
 
 	"github.com/dsnet/golib/memfile"
-	"github.com/go-ocf/go-coap/v2/message"
-	"github.com/go-ocf/go-coap/v2/message/codes"
 	"github.com/patrickmn/go-cache"
+	"github.com/plgd-dev/go-coap/v2/message"
+	"github.com/plgd-dev/go-coap/v2/message/codes"
 )
 
 // Block Opion value is represented: https://tools.ietf.org/html/rfc7959#section-2.2

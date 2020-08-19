@@ -7,10 +7,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/go-ocf/go-coap/v2/dtls"
-	coapNet "github.com/go-ocf/go-coap/v2/net"
-	"github.com/go-ocf/go-coap/v2/udp/client"
 	piondtls "github.com/pion/dtls/v2"
+	"github.com/plgd-dev/go-coap/v2/dtls"
+	coapNet "github.com/plgd-dev/go-coap/v2/net"
+	"github.com/plgd-dev/go-coap/v2/udp/client"
 	"github.com/stretchr/testify/require"
 )
 

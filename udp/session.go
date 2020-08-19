@@ -6,9 +6,9 @@ import (
 	"net"
 	"sync"
 
-	coapNet "github.com/go-ocf/go-coap/v2/net"
-	"github.com/go-ocf/go-coap/v2/udp/client"
-	"github.com/go-ocf/go-coap/v2/udp/message/pool"
+	coapNet "github.com/plgd-dev/go-coap/v2/net"
+	"github.com/plgd-dev/go-coap/v2/udp/client"
+	"github.com/plgd-dev/go-coap/v2/udp/message/pool"
 )
 
 type EventFunc = func()

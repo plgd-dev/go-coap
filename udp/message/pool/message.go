@@ -7,10 +7,10 @@ import (
 	"io"
 	"sync"
 
-	"github.com/go-ocf/go-coap/v2/message"
-	"github.com/go-ocf/go-coap/v2/message/codes"
-	"github.com/go-ocf/go-coap/v2/message/pool"
-	udp "github.com/go-ocf/go-coap/v2/udp/message"
+	"github.com/plgd-dev/go-coap/v2/message"
+	"github.com/plgd-dev/go-coap/v2/message/codes"
+	"github.com/plgd-dev/go-coap/v2/message/pool"
+	udp "github.com/plgd-dev/go-coap/v2/udp/message"
 )
 
 var (

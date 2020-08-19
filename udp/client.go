@@ -6,16 +6,16 @@ import (
 	"net"
 	"time"
 
-	"github.com/go-ocf/go-coap/v2/message"
-	"github.com/go-ocf/go-coap/v2/net/blockwise"
-	"github.com/go-ocf/go-coap/v2/net/keepalive"
 	kitSync "github.com/go-ocf/kit/sync"
+	"github.com/plgd-dev/go-coap/v2/message"
+	"github.com/plgd-dev/go-coap/v2/net/blockwise"
+	"github.com/plgd-dev/go-coap/v2/net/keepalive"
 
-	"github.com/go-ocf/go-coap/v2/message/codes"
-	coapNet "github.com/go-ocf/go-coap/v2/net"
-	"github.com/go-ocf/go-coap/v2/udp/client"
-	udpMessage "github.com/go-ocf/go-coap/v2/udp/message"
-	"github.com/go-ocf/go-coap/v2/udp/message/pool"
+	"github.com/plgd-dev/go-coap/v2/message/codes"
+	coapNet "github.com/plgd-dev/go-coap/v2/net"
+	"github.com/plgd-dev/go-coap/v2/udp/client"
+	udpMessage "github.com/plgd-dev/go-coap/v2/udp/message"
+	"github.com/plgd-dev/go-coap/v2/udp/message/pool"
 )
 
 var defaultDialOptions = dialOptions{

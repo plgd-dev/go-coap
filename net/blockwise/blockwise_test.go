@@ -9,8 +9,8 @@ import (
 	"time"
 
 	"github.com/dsnet/golib/memfile"
-	"github.com/go-ocf/go-coap/v2/message"
-	"github.com/go-ocf/go-coap/v2/message/codes"
+	"github.com/plgd-dev/go-coap/v2/message"
+	"github.com/plgd-dev/go-coap/v2/message/codes"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

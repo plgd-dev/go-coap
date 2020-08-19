@@ -7,9 +7,9 @@ import (
 	"log"
 	"time"
 
-	"github.com/go-ocf/go-coap/v2/dtls"
-	"github.com/go-ocf/go-coap/v2/net"
 	piondtls "github.com/pion/dtls/v2"
+	"github.com/plgd-dev/go-coap/v2/dtls"
+	"github.com/plgd-dev/go-coap/v2/net"
 )
 
 func ExampleGet() {

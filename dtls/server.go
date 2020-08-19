@@ -7,18 +7,18 @@ import (
 	"sync"
 	"time"
 
-	"github.com/go-ocf/go-coap/v2/message"
-	"github.com/go-ocf/go-coap/v2/net/blockwise"
 	kitSync "github.com/go-ocf/kit/sync"
+	"github.com/plgd-dev/go-coap/v2/message"
+	"github.com/plgd-dev/go-coap/v2/net/blockwise"
 
-	"github.com/go-ocf/go-coap/v2/net/keepalive"
+	"github.com/plgd-dev/go-coap/v2/net/keepalive"
 
-	"github.com/go-ocf/go-coap/v2/message/codes"
-	"github.com/go-ocf/go-coap/v2/udp/client"
-	udpMessage "github.com/go-ocf/go-coap/v2/udp/message"
-	"github.com/go-ocf/go-coap/v2/udp/message/pool"
+	"github.com/plgd-dev/go-coap/v2/message/codes"
+	"github.com/plgd-dev/go-coap/v2/udp/client"
+	udpMessage "github.com/plgd-dev/go-coap/v2/udp/message"
+	"github.com/plgd-dev/go-coap/v2/udp/message/pool"
 
-	coapNet "github.com/go-ocf/go-coap/v2/net"
+	coapNet "github.com/plgd-dev/go-coap/v2/net"
 )
 
 // A ServerOption sets options such as credentials, codec and keepalive parameters, etc.
