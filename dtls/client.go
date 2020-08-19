@@ -11,7 +11,7 @@ import (
 	"github.com/plgd-dev/go-coap/v2/net/blockwise"
 	"github.com/plgd-dev/go-coap/v2/net/keepalive"
 
-	kitSync "github.com/go-ocf/kit/sync"
+	kitSync "github.com/plgd-dev/kit/sync"
 	"github.com/plgd-dev/go-coap/v2/message/codes"
 	coapNet "github.com/plgd-dev/go-coap/v2/net"
 	"github.com/plgd-dev/go-coap/v2/udp/client"

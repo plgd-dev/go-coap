@@ -7,7 +7,7 @@ import (
 	"sync"
 	"time"
 
-	kitSync "github.com/go-ocf/kit/sync"
+	kitSync "github.com/plgd-dev/kit/sync"
 	"github.com/plgd-dev/go-coap/v2/message"
 	"github.com/plgd-dev/go-coap/v2/net/blockwise"
 

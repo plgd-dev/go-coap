@@ -1,7 +1,7 @@
 [![Build Status](https://travis-ci.com/plgd-dev/go-coap.svg?branch=master)](https://travis-ci.com/plgd-dev/go-coap)
 [![codecov](https://codecov.io/gh/plgd-dev/go-coap/branch/master/graph/badge.svg)](https://codecov.io/gh/plgd-dev/go-coap)
 [![Go Report](https://goreportcard.com/badge/github.com/plgd-dev/go-coap)](https://goreportcard.com/report/github.com/plgd-dev/go-coap)
-[![FOSSA Status](https://app.fossa.io/api/projects/git%2Bgithub.com%2Fgo-ocf%2Fgo-coap.svg?type=shield)](https://app.fossa.io/projects/git%2Bgithub.com%2Fgo-ocf%2Fgo-coap?ref=badge_shield)
+[![FOSSA Status](https://app.fossa.io/api/projects/git%2Bgithub.com%2Fplgd-dev%2Fgo-coap.svg?type=shield)](https://app.fossa.io/projects/git%2Bgithub.com%2Fplgd-dev%2Fgo-coap?ref=badge_shield)
 [![backer](https://opencollective.com/go-coap/backers/badge.svg)](https://opencollective.com/go-coap#backer)
 [![sponsors](https://opencollective.com/go-coap/sponsors/badge.svg)](https://opencollective.com/go-coap#sponsors)
 [![contributors](https://img.shields.io/github/contributors/plgd-dev/go-coap)](https://github.com/plgd-dev/go-coap/graphs/contributors)
@@ -131,7 +131,7 @@ $ docker run --mount type=bind,source="$(pwd)",target=/shared,readonly --network
 ## License
 Apache 2.0
 
-[![FOSSA Status](https://app.fossa.io/api/projects/git%2Bgithub.com%2Fgo-ocf%2Fgo-coap.svg?type=large)](https://app.fossa.io/projects/git%2Bgithub.com%2Fgo-ocf%2Fgo-coap?ref=badge_large)
+[![FOSSA Status](https://app.fossa.io/api/projects/git%2Bgithub.com%2Fplgd-dev%2Fgo-coap.svg?type=large)](https://app.fossa.io/projects/git%2Bgithub.com%2Fplgd-dev%2Fgo-coap?ref=badge_large)
 
 <h2 align="center">Sponsors</h2>
 
