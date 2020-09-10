@@ -122,7 +122,7 @@ func (cc *ClientConn) Observe(ctx context.Context, path string, observeFunc func
 		return nil, err
 	case respCode := <-respCodeChan:
 		if respCode != codes.Content {
-			err = fmt.Errorf("unexected return code(%v)", respCode)
+			err = fmt.Errorf("unexpected return code(%v)", respCode)
 			return nil, err
 		}
 		return o, nil
