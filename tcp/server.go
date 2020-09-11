@@ -7,10 +7,10 @@ import (
 	"sync"
 	"time"
 
-	kitSync "github.com/plgd-dev/kit/sync"
 	"github.com/plgd-dev/go-coap/v2/message"
 	"github.com/plgd-dev/go-coap/v2/net/blockwise"
 	"github.com/plgd-dev/go-coap/v2/tcp/message/pool"
+	kitSync "github.com/plgd-dev/kit/sync"
 
 	"github.com/plgd-dev/go-coap/v2/net/keepalive"
 
@@ -123,7 +123,7 @@ func NewServer(opt ...ServerOption) *Server {
 		blockwiseTransferTimeout:        opts.blockwiseTransferTimeout,
 		heartBeat:                       opts.heartBeat,
 		disablePeerTCPSignalMessageCSMs: opts.disablePeerTCPSignalMessageCSMs,
-		disableTCPSignalMessageCSM:      opts.disablePeerTCPSignalMessageCSMs,
+		disableTCPSignalMessageCSM:      opts.disableTCPSignalMessageCSM,
 		onNewClientConn:                 opts.onNewClientConn,
 	}
 }
