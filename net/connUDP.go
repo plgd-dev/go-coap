@@ -386,7 +386,7 @@ func (c *UDPConn) ReadWithContext(ctx context.Context, buffer []byte) (int, *net
 			if isTemporary(err) {
 				continue
 			}
-			return -1, nil, fmt.Errorf("cannot read from udp connection: %v", ctx.Err())
+			return -1, nil, fmt.Errorf("cannot read from udp connection: %w", ctx.Err())
 		}
 		return n, s, err
 	}
