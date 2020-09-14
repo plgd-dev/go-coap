@@ -66,7 +66,7 @@ func (c *Conn) Close() error {
 	return c.connection.Close()
 }
 
-// WriteContext writes data with context.
+// WriteWithContext writes data with context.
 func (c *Conn) WriteWithContext(ctx context.Context, data []byte) error {
 	written := 0
 	c.lock.Lock()
@@ -87,14 +87,14 @@ func (c *Conn) WriteWithContext(ctx context.Context, data []byte) error {
 			if isTemporary(err) {
 				continue
 			}
-			return fmt.Errorf("cannot write to tcp connection")
+			return fmt.Errorf("cannot write to tcp connection: %w", err)
 		}
 		written += n
 	}
 	return nil
 }
 
-// ReadFullContext reads stream with context until whole buffer is satisfied.
+// ReadFullWithContext reads stream with context until whole buffer is satisfied.
 func (c *Conn) ReadFullWithContext(ctx context.Context, buffer []byte) error {
 	offset := 0
 	for offset < len(buffer) {
@@ -107,7 +107,7 @@ func (c *Conn) ReadFullWithContext(ctx context.Context, buffer []byte) error {
 	return nil
 }
 
-// ReadContext reads stream with context.
+// ReadWithContext reads stream with context.
 func (c *Conn) ReadWithContext(ctx context.Context, buffer []byte) (int, error) {
 	for {
 		select {
