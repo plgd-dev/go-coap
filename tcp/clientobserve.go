@@ -51,7 +51,9 @@ func (o *Observation) Cancel(ctx context.Context) error {
 	defer pool.ReleaseMessage(req)
 	req.SetObserve(1)
 	req.SetToken(o.token)
-	return o.cc.WriteMessage(req)
+	resp, err := o.cc.Do(req)
+	pool.ReleaseMessage(resp)
+	return err
 }
 
 func (o *Observation) wantBeNotified(r *pool.Message) bool {
