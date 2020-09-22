@@ -52,8 +52,14 @@ func (o *Observation) Cancel(ctx context.Context) error {
 	req.SetObserve(1)
 	req.SetToken(o.token)
 	resp, err := o.cc.Do(req)
-	pool.ReleaseMessage(resp)
-	return err
+	defer pool.ReleaseMessage(resp)
+	if err != nil {
+		return err
+	}
+	if resp.Code() != codes.Content {
+		return fmt.Errorf("unexpected return code(%v)", resp.Code())
+	}
+	return nil
 }
 
 func (o *Observation) wantBeNotified(r *pool.Message) bool {
