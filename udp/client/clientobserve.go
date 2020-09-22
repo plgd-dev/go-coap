@@ -57,10 +57,10 @@ func (o *Observation) Cancel(ctx context.Context) error {
 	req.SetObserve(1)
 	req.SetToken(o.token)
 	resp, err := o.cc.Do(req)
-	defer pool.ReleaseMessage(resp)
 	if err != nil {
 		return err
 	}
+	defer pool.ReleaseMessage(resp)
 	if resp.Code() != codes.Content {
 		return fmt.Errorf("unexpected return code(%v)", resp.Code())
 	}
