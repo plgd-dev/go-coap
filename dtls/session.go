@@ -16,6 +16,7 @@ type EventFunc = func()
 type Session struct {
 	connection     *coapNet.Conn
 	maxMessageSize int
+	closeSocket    bool
 
 	mutex   sync.Mutex
 	onClose []EventFunc
@@ -28,6 +29,7 @@ func NewSession(
 	ctx context.Context,
 	connection *coapNet.Conn,
 	maxMessageSize int,
+	closeSocket bool,
 ) *Session {
 	ctx, cancel := context.WithCancel(ctx)
 	return &Session{
@@ -35,6 +37,7 @@ func NewSession(
 		cancel:         cancel,
 		connection:     connection,
 		maxMessageSize: maxMessageSize,
+		closeSocket:    closeSocket,
 	}
 }
 
@@ -56,10 +59,14 @@ func (s *Session) popOnClose() []EventFunc {
 	return tmp
 }
 
-func (s *Session) close() {
+func (s *Session) close() error {
 	for _, f := range s.popOnClose() {
 		f()
 	}
+	if s.closeSocket {
+		return s.connection.Close()
+	}
+	return nil
 }
 
 func (s *Session) Close() error {
@@ -94,7 +101,10 @@ func (s *Session) Run(cc *client.ClientConn) (err error) {
 		if err == nil {
 			err = err1
 		}
-		s.close()
+		err1 = s.close()
+		if err == nil {
+			err = err1
+		}
 	}()
 	m := make([]byte, s.maxMessageSize)
 	for {

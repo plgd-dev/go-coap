@@ -7,9 +7,9 @@ import (
 	"sync"
 	"time"
 
-	kitSync "github.com/plgd-dev/kit/sync"
 	"github.com/plgd-dev/go-coap/v2/message"
 	"github.com/plgd-dev/go-coap/v2/net/blockwise"
+	kitSync "github.com/plgd-dev/kit/sync"
 
 	"github.com/plgd-dev/go-coap/v2/net/keepalive"
 
@@ -257,6 +257,7 @@ func (s *Server) createClientConn(connection *coapNet.Conn) *client.ClientConn {
 		s.ctx,
 		connection,
 		s.maxMessageSize,
+		true,
 	)
 	cc := client.NewClientConn(
 		session,

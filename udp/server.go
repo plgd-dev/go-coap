@@ -279,6 +279,7 @@ func (s *Server) getOrCreateClientConn(UDPConn *coapNet.UDPConn, raddr *net.UDPA
 			UDPConn,
 			raddr,
 			s.maxMessageSize,
+			false,
 		)
 		closeFunc = func() {
 			<-session.Context().Done()
