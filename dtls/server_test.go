@@ -6,7 +6,6 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"fmt"
-	"log"
 	"math/big"
 	"os"
 	"regexp"
@@ -153,9 +152,7 @@ func TestServer_SetContextValueWithPKI(t *testing.T) {
 	onNewConn := func(cc *client.ClientConn, dtlsConn *piondtls.Conn) {
 		// set connection context certificate
 		clientCert, err := x509.ParseCertificate(dtlsConn.ConnectionState().PeerCertificates[0])
-		if err != nil {
-			log.Fatal(err)
-		}
+		require.NoError(t, err)
 		cc.Session().SetContextValue("client-cert", clientCert)
 	}
 	handle := func(w *client.ResponseWriter, r *pool.Message) {
