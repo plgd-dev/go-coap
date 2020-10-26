@@ -237,3 +237,16 @@ func (o GetMIDOpt) applyDial(opts *dialOptions) {
 func WithGetMID(getMID GetMIDFunc) GetMIDOpt {
 	return GetMIDOpt{getMID: getMID}
 }
+
+// CloseSocketOpt close socket option.
+type CloseSocketOpt struct {
+}
+
+func (o CloseSocketOpt) applyDial(opts *dialOptions) {
+	opts.closeSocket = true
+}
+
+// WithCloseSocket closes socket at the close connection.
+func WithCloseSocket() CloseSocketOpt {
+	return CloseSocketOpt{}
+}

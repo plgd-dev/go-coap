@@ -13,9 +13,9 @@ import (
 	"github.com/plgd-dev/go-coap/v2/net/keepalive"
 	"github.com/plgd-dev/go-coap/v2/tcp/message/pool"
 
-	kitSync "github.com/plgd-dev/kit/sync"
 	"github.com/plgd-dev/go-coap/v2/message/codes"
 	coapNet "github.com/plgd-dev/go-coap/v2/net"
+	kitSync "github.com/plgd-dev/kit/sync"
 )
 
 var defaultDialOptions = dialOptions{
@@ -61,6 +61,7 @@ type dialOptions struct {
 	disablePeerTCPSignalMessageCSMs bool
 	disableTCPSignalMessageCSM      bool
 	tlsCfg                          *tls.Config
+	closeSocket                     bool
 }
 
 // A DialOption sets options such as credentials, keepalive parameters, etc.
@@ -93,6 +94,7 @@ func Dial(target string, opts ...DialOption) (*ClientConn, error) {
 	if err != nil {
 		return nil, err
 	}
+	opts = append(opts, WithCloseSocket())
 	return Client(conn, opts...), nil
 }
 
@@ -158,6 +160,7 @@ func Client(conn net.Conn, opts ...DialOption) *ClientConn {
 		blockWise,
 		cfg.disablePeerTCPSignalMessageCSMs,
 		cfg.disableTCPSignalMessageCSM,
+		cfg.closeSocket,
 	)
 	cc := NewClientConn(session, observationTokenHandler, observatioRequests)
 

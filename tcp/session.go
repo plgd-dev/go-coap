@@ -27,6 +27,7 @@ type Session struct {
 	disableTCPSignalMessageCSM      bool
 	goPool                          GoPoolFunc
 	errors                          ErrorFunc
+	closeSocket                     bool
 
 	sequence              uint64
 	tokenHandlerContainer *HandlerContainer
@@ -56,7 +57,7 @@ func NewSession(
 	blockWise *blockwise.BlockWise,
 	disablePeerTCPSignalMessageCSMs bool,
 	disableTCPSignalMessageCSM bool,
-
+	closeSocket bool,
 ) *Session {
 	ctx, cancel := context.WithCancel(ctx)
 	if errors == nil {
@@ -77,6 +78,7 @@ func NewSession(
 		blockwiseSZX:                    blockwiseSZX,
 		disablePeerTCPSignalMessageCSMs: disablePeerTCPSignalMessageCSMs,
 		disableTCPSignalMessageCSM:      disableTCPSignalMessageCSM,
+		closeSocket:                     closeSocket,
 	}
 	if !disableTCPSignalMessageCSM {
 		err := s.sendCSM()
@@ -106,10 +108,14 @@ func (s *Session) popOnClose() []EventFunc {
 	return tmp
 }
 
-func (s *Session) close() {
+func (s *Session) close() error {
 	for _, f := range s.popOnClose() {
 		f()
 	}
+	if s.closeSocket {
+		return s.connection.Close()
+	}
+	return nil
 }
 
 func (s *Session) Close() error {
@@ -292,7 +298,10 @@ func (s *Session) Run(cc *ClientConn) (err error) {
 		if err == nil {
 			err = err1
 		}
-		s.close()
+		err1 = s.close()
+		if err == nil {
+			err = err1
+		}
 	}()
 	if s.errSendCSM != nil {
 		return s.errSendCSM
