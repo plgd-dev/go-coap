@@ -7,9 +7,10 @@ import (
 	"sync"
 	"time"
 
-	kitSync "github.com/plgd-dev/kit/sync"
+	"github.com/pion/dtls/v2"
 	"github.com/plgd-dev/go-coap/v2/message"
 	"github.com/plgd-dev/go-coap/v2/net/blockwise"
+	kitSync "github.com/plgd-dev/kit/sync"
 
 	"github.com/plgd-dev/go-coap/v2/net/keepalive"
 
@@ -36,7 +37,7 @@ type GoPoolFunc = func(func()) error
 
 type BlockwiseFactoryFunc = func(getSendedRequest func(token message.Token) (blockwise.Message, bool)) *blockwise.BlockWise
 
-type OnNewClientConnFunc = func(cc *client.ClientConn)
+type OnNewClientConnFunc = func(cc *client.ClientConn, dtlsConn *dtls.Conn)
 
 type GetMIDFunc = func() uint16
 
@@ -59,7 +60,7 @@ var defaultServerOptions = serverOptions{
 	blockwiseEnable:                true,
 	blockwiseSZX:                   blockwise.SZX1024,
 	blockwiseTransferTimeout:       time.Second * 5,
-	onNewClientConn:                func(cc *client.ClientConn) {},
+	onNewClientConn:                func(cc *client.ClientConn, dtlsConn *dtls.Conn) {},
 	heartBeat:                      time.Millisecond * 100,
 	transmissionNStart:             time.Second,
 	transmissionAcknowledgeTimeout: time.Second * 2,
@@ -210,7 +211,8 @@ func (s *Server) Serve(l Listener) error {
 			wg.Add(1)
 			cc := s.createClientConn(coapNet.NewConn(rw, coapNet.WithHeartBeat(s.heartBeat)))
 			if s.onNewClientConn != nil {
-				s.onNewClientConn(cc)
+				dtlsConn := rw.(*dtls.Conn)
+				s.onNewClientConn(cc, dtlsConn)
 			}
 			go func() {
 				defer wg.Done()

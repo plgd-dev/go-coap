@@ -29,7 +29,7 @@ func TestServer_CleanUpConns(t *testing.T) {
 
 	var checkCloseWg sync.WaitGroup
 	defer checkCloseWg.Wait()
-	sd := dtls.NewServer(dtls.WithOnNewClientConn(func(cc *client.ClientConn) {
+	sd := dtls.NewServer(dtls.WithOnNewClientConn(func(cc *client.ClientConn, dtlsConn *piondtls.Conn) {
 		checkCloseWg.Add(1)
 		cc.AddOnClose(func() {
 			checkCloseWg.Done()
