@@ -1,16 +1,27 @@
 package dtls_test
 
 import (
+	"bytes"
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"fmt"
+	"log"
+	"math/big"
+	"os"
+	"regexp"
 	"sync"
 	"testing"
 	"time"
 
 	piondtls "github.com/pion/dtls/v2"
 	"github.com/plgd-dev/go-coap/v2/dtls"
+	"github.com/plgd-dev/go-coap/v2/examples/dtls/pki"
+	"github.com/plgd-dev/go-coap/v2/message"
+	"github.com/plgd-dev/go-coap/v2/message/codes"
 	coapNet "github.com/plgd-dev/go-coap/v2/net"
 	"github.com/plgd-dev/go-coap/v2/udp/client"
+	"github.com/plgd-dev/go-coap/v2/udp/message/pool"
 	"github.com/stretchr/testify/require"
 )
 
@@ -55,5 +66,117 @@ func TestServer_CleanUpConns(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 	err = cc.Ping(ctx)
+	require.NoError(t, err)
+}
+
+func getCertPath() string {
+	cwd, _ := os.Getwd()
+	re := regexp.MustCompile(`^(.*/go-coap/)`)
+	return string(re.Find([]byte(cwd))) + "examples/dtls/pki/certs"
+}
+
+func createDTLSConfig(ctx context.Context) (serverConfig *piondtls.Config, clientConfig *piondtls.Config, clientSerial *big.Int, err error) {
+	basePath := getCertPath()
+	// server cert
+	certBytes, err := pki.LoadFile(basePath + "/server_cert.pem")
+	if err != nil {
+		return
+	}
+	keyBytes, err := pki.LoadFile(basePath + "/server_key.pem")
+	if err != nil {
+		return
+	}
+	// root cert
+	certificate, err := pki.LoadKeyAndCertificate(keyBytes, certBytes)
+	if err != nil {
+		return
+	}
+	rootBytes, err := pki.LoadFile(basePath + "/root_ca_cert.pem")
+	if err != nil {
+		return
+	}
+	// cert pool
+	certPool, err := pki.LoadCertPool(rootBytes)
+	if err != nil {
+		return
+	}
+
+	serverConfig = &piondtls.Config{
+		Certificates:         []tls.Certificate{*certificate},
+		ExtendedMasterSecret: piondtls.RequireExtendedMasterSecret,
+		ClientCAs:            certPool,
+		ClientAuth:           piondtls.RequireAndVerifyClientCert,
+		ConnectContextMaker: func() (context.Context, func()) {
+			return context.WithTimeout(ctx, 30*time.Second)
+		},
+	}
+
+	certBytes, err = pki.LoadFile(basePath + "/client_cert.pem")
+	if err != nil {
+		return
+	}
+	keyBytes, err = pki.LoadFile(basePath + "/client_key.pem")
+	if err != nil {
+		return
+	}
+	// client cert
+	certificate, err = pki.LoadKeyAndCertificate(keyBytes, certBytes)
+	if err != nil {
+		return
+	}
+	clientInfo, err := x509.ParseCertificate(certificate.Certificate[0])
+	if err != nil {
+		return
+	}
+	clientSerial = clientInfo.SerialNumber
+
+	clientConfig = &piondtls.Config{
+		Certificates:         []tls.Certificate{*certificate},
+		ExtendedMasterSecret: piondtls.RequireExtendedMasterSecret,
+		RootCAs:              certPool,
+		InsecureSkipVerify:   true,
+	}
+
+	return
+}
+
+func TestServer_SetContextValueWithPKI(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	serverCgf, clientCgf, clientSerial, err := createDTLSConfig(ctx)
+	require.NoError(t, err)
+
+	ld, err := coapNet.NewDTLSListener("udp4", "", serverCgf)
+	require.NoError(t, err)
+	defer ld.Close()
+
+	onNewConn := func(cc *client.ClientConn, dtlsConn *piondtls.Conn) {
+		// set connection context certificate
+		clientCert, err := x509.ParseCertificate(dtlsConn.ConnectionState().PeerCertificates[0])
+		if err != nil {
+			log.Fatal(err)
+		}
+		cc.Session().SetContextValue("client-cert", clientCert)
+	}
+	handle := func(w *client.ResponseWriter, r *pool.Message) {
+		// get certificate from connection context
+		clientCert := r.Context().Value("client-cert").(*x509.Certificate)
+		require.Equal(t, clientCert.SerialNumber, clientSerial)
+		require.NotNil(t, clientCert)
+		w.SetResponse(codes.Content, message.TextPlain, bytes.NewReader([]byte("done")))
+	}
+
+	sd := dtls.NewServer(dtls.WithHandlerFunc(handle), dtls.WithOnNewClientConn(onNewConn))
+	defer sd.Stop()
+	go func() {
+		err := sd.Serve(ld)
+		require.NoError(t, err)
+	}()
+
+	cc, err := dtls.Dial(ld.Addr().String(), clientCgf)
+	require.NoError(t, err)
+	defer cc.Close()
+
+	_, err = cc.Get(ctx, "/")
 	require.NoError(t, err)
 }
