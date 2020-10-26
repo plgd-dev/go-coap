@@ -41,6 +41,10 @@ func NewSession(
 	}
 }
 
+func (s *Session) SetContextValue(key interface{}, val interface{}) {
+	s.ctx = context.WithValue(s.ctx, key, val)
+}
+
 func (s *Session) Done() <-chan struct{} {
 	return s.ctx.Done()
 }
