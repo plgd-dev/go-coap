@@ -37,6 +37,10 @@ type GoPoolFunc = func(func()) error
 
 type BlockwiseFactoryFunc = func(getSendedRequest func(token message.Token) (blockwise.Message, bool)) *blockwise.BlockWise
 
+// OnNewClientConnFunc is the callback for new connections.
+//
+// Note: Calling `dtlsConn.Close()` is forbidden, and `dtlsConn` should be treated as a
+// "read-only" parameter, mainly used to get the peer certificate from the underlining connection
 type OnNewClientConnFunc = func(cc *client.ClientConn, dtlsConn *dtls.Conn)
 
 type GetMIDFunc = func() uint16

@@ -72,6 +72,8 @@ func (s *Session) Context() context.Context {
 }
 
 func (s *Session) SetContextValue(key interface{}, val interface{}) {
+	s.mutex.Lock()
+	defer s.mutex.Unlock()
 	s.ctx = context.WithValue(s.ctx, key, val)
 }
 
