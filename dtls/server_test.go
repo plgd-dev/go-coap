@@ -7,8 +7,6 @@ import (
 	"crypto/x509"
 	"fmt"
 	"math/big"
-	"os"
-	"regexp"
 	"sync"
 	"testing"
 	"time"
@@ -66,12 +64,6 @@ func TestServer_CleanUpConns(t *testing.T) {
 	defer cancel()
 	err = cc.Ping(ctx)
 	require.NoError(t, err)
-}
-
-func getCertPath() string {
-	cwd, _ := os.Getwd()
-	re := regexp.MustCompile(`^(.*/go-coap/)`)
-	return string(re.Find([]byte(cwd))) + "examples/dtls/pki/certs"
 }
 
 func createDTLSConfig(ctx context.Context) (serverConfig *piondtls.Config, clientConfig *piondtls.Config, clientSerial *big.Int, err error) {
