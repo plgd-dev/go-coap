@@ -8,18 +8,8 @@ import (
 	"crypto/x509"
 	"encoding/pem"
 	"errors"
-	"io/ioutil"
-	"path/filepath"
 	"strings"
 )
-
-func LoadFile(path string) ([]byte, error) {
-	rawData, err := ioutil.ReadFile(filepath.Clean(path))
-	if err != nil {
-		return nil, err
-	}
-	return rawData, nil
-}
 
 // LoadCertificate loads cert from bytes
 func LoadCertificate(certBytes []byte) (*tls.Certificate, error) {

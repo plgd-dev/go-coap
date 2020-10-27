@@ -37,20 +37,17 @@ func main() {
 }
 
 func createClientConfig(ctx context.Context) (*piondtls.Config, error) {
-	certBytes, err := pki.LoadFile("../certs/client_cert.pem")
-	if err != nil {
-		return nil, err
-	}
-	keyBytes, err := pki.LoadFile("../certs/client_key.pem")
+	// root cert
+	ca, rootBytes, _, caPriv, err := pki.GenerateCA()
 	if err != nil {
 		return nil, err
 	}
 	// client cert
-	certificate, err := pki.LoadKeyAndCertificate(keyBytes, certBytes)
+	certBytes, keyBytes, err := pki.GenerateCertificate(ca, caPriv, "client@test.com")
 	if err != nil {
 		return nil, err
 	}
-	rootBytes, err := pki.LoadFile("../certs/root_ca_cert.pem")
+	certificate, err := pki.LoadKeyAndCertificate(keyBytes, certBytes)
 	if err != nil {
 		return nil, err
 	}

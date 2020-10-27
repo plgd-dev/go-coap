@@ -1,6 +1,6 @@
 # Server And Client PKI generation
-The certificates used in the pki examples are self signed, generated using openssl.
-Here ECDSA is used (SECP224R1), but you can use any [cyphers supported by pion/dtls](https://github.com/pion/dtls#supported-ciphers).
+The certificates used in the pki examples are generated using golang crypto library.
+You can also generate them using openssl, as seen below.
 
 ## Generate self signed CA
 ```sh

@@ -75,22 +75,17 @@ func getCertPath() string {
 }
 
 func createDTLSConfig(ctx context.Context) (serverConfig *piondtls.Config, clientConfig *piondtls.Config, clientSerial *big.Int, err error) {
-	basePath := getCertPath()
-	// server cert
-	certBytes, err := pki.LoadFile(basePath + "/server_cert.pem")
-	if err != nil {
-		return
-	}
-	keyBytes, err := pki.LoadFile(basePath + "/server_key.pem")
-	if err != nil {
-		return
-	}
 	// root cert
-	certificate, err := pki.LoadKeyAndCertificate(keyBytes, certBytes)
+	ca, rootBytes, _, caPriv, err := pki.GenerateCA()
 	if err != nil {
 		return
 	}
-	rootBytes, err := pki.LoadFile(basePath + "/root_ca_cert.pem")
+	// server cert
+	certBytes, keyBytes, err := pki.GenerateCertificate(ca, caPriv, "server@test.com")
+	if err != nil {
+		return
+	}
+	certificate, err := pki.LoadKeyAndCertificate(keyBytes, certBytes)
 	if err != nil {
 		return
 	}
@@ -110,15 +105,11 @@ func createDTLSConfig(ctx context.Context) (serverConfig *piondtls.Config, clien
 		},
 	}
 
-	certBytes, err = pki.LoadFile(basePath + "/client_cert.pem")
-	if err != nil {
-		return
-	}
-	keyBytes, err = pki.LoadFile(basePath + "/client_key.pem")
-	if err != nil {
-		return
-	}
 	// client cert
+	certBytes, keyBytes, err = pki.GenerateCertificate(ca, caPriv, "client@test.com")
+	if err != nil {
+		return
+	}
 	certificate, err = pki.LoadKeyAndCertificate(keyBytes, certBytes)
 	if err != nil {
 		return

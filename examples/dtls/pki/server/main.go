@@ -39,6 +39,7 @@ func handleA(w mux.ResponseWriter, r *mux.Message) {
 	clientCert := r.Context.Value("client-cert").(*x509.Certificate)
 	log.Println("Serial number:", toHexInt(clientCert.SerialNumber))
 	log.Println("Subject:", clientCert.Subject)
+	log.Println("Email:", clientCert.EmailAddresses)
 
 	log.Printf("got message in handleA:  %+v from %v\n", r, w.Client().RemoteAddr())
 	err := w.SetResponse(codes.GET, message.TextPlain, bytes.NewReader([]byte("A hello world")))
@@ -71,21 +72,17 @@ func listenAndServeDTLS(network string, addr string, config *piondtls.Config, ha
 }
 
 func createServerConfig(ctx context.Context) (*piondtls.Config, error) {
-	// server cert
-	certBytes, err := pki.LoadFile("../certs/server_cert.pem")
-	if err != nil {
-		return nil, err
-	}
-	keyBytes, err := pki.LoadFile("../certs/server_key.pem")
-	if err != nil {
-		return nil, err
-	}
 	// root cert
-	certificate, err := pki.LoadKeyAndCertificate(keyBytes, certBytes)
+	ca, rootBytes, _, caPriv, err := pki.GenerateCA()
 	if err != nil {
 		return nil, err
 	}
-	rootBytes, err := pki.LoadFile("../certs/root_ca_cert.pem")
+	// server cert
+	certBytes, keyBytes, err := pki.GenerateCertificate(ca, caPriv, "server@test.com")
+	if err != nil {
+		return nil, err
+	}
+	certificate, err := pki.LoadKeyAndCertificate(keyBytes, certBytes)
 	if err != nil {
 		return nil, err
 	}
