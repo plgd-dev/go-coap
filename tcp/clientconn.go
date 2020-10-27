@@ -13,9 +13,9 @@ import (
 	"github.com/plgd-dev/go-coap/v2/net/keepalive"
 	"github.com/plgd-dev/go-coap/v2/tcp/message/pool"
 
-	kitSync "github.com/plgd-dev/kit/sync"
 	"github.com/plgd-dev/go-coap/v2/message/codes"
 	coapNet "github.com/plgd-dev/go-coap/v2/net"
+	kitSync "github.com/plgd-dev/kit/sync"
 )
 
 var defaultDialOptions = dialOptions{
@@ -186,6 +186,10 @@ func NewClientConn(session *Session, observationTokenHandler *HandlerContainer, 
 		observationTokenHandler: observationTokenHandler,
 		observationRequests:     observationRequests,
 	}
+}
+
+func (cc *ClientConn) Session() *Session {
+	return cc.session
 }
 
 // Close closes connection without wait of ends Run function.
