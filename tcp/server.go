@@ -246,7 +246,7 @@ func (s *Server) createClientConn(connection *coapNet.Conn) *ClientConn {
 			s.ctx,
 			connection,
 			NewObservationHandler(obsHandler, s.handler),
-			s.maxMessageSize, s.goPool, s.errors, s.blockwiseSZX, blockWise, s.disablePeerTCPSignalMessageCSMs, s.disableTCPSignalMessageCSM),
+			s.maxMessageSize, s.goPool, s.errors, s.blockwiseSZX, blockWise, s.disablePeerTCPSignalMessageCSMs, s.disableTCPSignalMessageCSM, true),
 		obsHandler, kitSync.NewMap(),
 	)
 

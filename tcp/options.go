@@ -247,3 +247,16 @@ func WithTLS(cfg *tls.Config) TLSOpt {
 		tlsCfg: cfg,
 	}
 }
+
+// CloseSocketOpt close socket option.
+type CloseSocketOpt struct {
+}
+
+func (o CloseSocketOpt) applyDial(opts *dialOptions) {
+	opts.closeSocket = true
+}
+
+// WithCloseSocket closes socket at the close connection.
+func WithCloseSocket() CloseSocketOpt {
+	return CloseSocketOpt{}
+}

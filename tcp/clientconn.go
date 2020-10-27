@@ -61,6 +61,7 @@ type dialOptions struct {
 	disablePeerTCPSignalMessageCSMs bool
 	disableTCPSignalMessageCSM      bool
 	tlsCfg                          *tls.Config
+	closeSocket                     bool
 }
 
 // A DialOption sets options such as credentials, keepalive parameters, etc.
@@ -93,6 +94,7 @@ func Dial(target string, opts ...DialOption) (*ClientConn, error) {
 	if err != nil {
 		return nil, err
 	}
+	opts = append(opts, WithCloseSocket())
 	return Client(conn, opts...), nil
 }
 
@@ -158,6 +160,7 @@ func Client(conn net.Conn, opts ...DialOption) *ClientConn {
 		blockWise,
 		cfg.disablePeerTCPSignalMessageCSMs,
 		cfg.disableTCPSignalMessageCSM,
+		cfg.closeSocket,
 	)
 	cc := NewClientConn(session, observationTokenHandler, observatioRequests)
 

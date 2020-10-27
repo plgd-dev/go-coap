@@ -263,6 +263,7 @@ func (s *Server) createClientConn(connection *coapNet.Conn) *client.ClientConn {
 		s.ctx,
 		connection,
 		s.maxMessageSize,
+		true,
 	)
 	cc := client.NewClientConn(
 		session,

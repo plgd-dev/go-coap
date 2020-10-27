@@ -11,12 +11,12 @@ import (
 	"github.com/plgd-dev/go-coap/v2/net/blockwise"
 	"github.com/plgd-dev/go-coap/v2/net/keepalive"
 
-	kitSync "github.com/plgd-dev/kit/sync"
 	"github.com/plgd-dev/go-coap/v2/message/codes"
 	coapNet "github.com/plgd-dev/go-coap/v2/net"
 	"github.com/plgd-dev/go-coap/v2/udp/client"
 	udpMessage "github.com/plgd-dev/go-coap/v2/udp/message"
 	"github.com/plgd-dev/go-coap/v2/udp/message/pool"
+	kitSync "github.com/plgd-dev/kit/sync"
 )
 
 var defaultDialOptions = dialOptions{
@@ -67,6 +67,7 @@ type dialOptions struct {
 	transmissionAcknowledgeTimeout time.Duration
 	transmissionMaxRetransmit      int
 	getMID                         GetMIDFunc
+	closeSocket                    bool
 }
 
 // A DialOption sets options such as credentials, keepalive parameters, etc.
@@ -90,6 +91,7 @@ func Dial(target string, dtlsCfg *dtls.Config, opts ...DialOption) (*client.Clie
 	if err != nil {
 		return nil, err
 	}
+	opts = append(opts, WithCloseSocket())
 	return Client(conn, opts...), nil
 }
 
@@ -146,6 +148,7 @@ func Client(conn *dtls.Conn, opts ...DialOption) *client.ClientConn {
 	session := NewSession(cfg.ctx,
 		l,
 		cfg.maxMessageSize,
+		cfg.closeSocket,
 	)
 	cc := client.NewClientConn(session,
 		observationTokenHandler, observatioRequests, cfg.transmissionNStart, cfg.transmissionAcknowledgeTimeout, cfg.transmissionMaxRetransmit,

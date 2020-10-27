@@ -66,6 +66,7 @@ type dialOptions struct {
 	transmissionAcknowledgeTimeout time.Duration
 	transmissionMaxRetransmit      int
 	getMID                         GetMIDFunc
+	closeSocket                    bool
 }
 
 // A DialOption sets options such as credentials, keepalive parameters, etc.
@@ -88,6 +89,7 @@ func Dial(target string, opts ...DialOption) (*client.ClientConn, error) {
 	if !ok {
 		return nil, fmt.Errorf("unsupported connection type: %T", c)
 	}
+	opts = append(opts, WithCloseSocket())
 	return Client(conn, opts...), nil
 }
 
@@ -148,6 +150,7 @@ func Client(conn *net.UDPConn, opts ...DialOption) *client.ClientConn {
 		l,
 		addr,
 		cfg.maxMessageSize,
+		cfg.closeSocket,
 	)
 	cc := client.NewClientConn(session,
 		observationTokenHandler, observatioRequests, cfg.transmissionNStart, cfg.transmissionAcknowledgeTimeout, cfg.transmissionMaxRetransmit,
