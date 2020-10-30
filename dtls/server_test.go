@@ -123,7 +123,7 @@ func createDTLSConfig(ctx context.Context) (serverConfig *piondtls.Config, clien
 }
 
 func TestServer_SetContextValueWithPKI(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second*3600)
 	defer cancel()
 	serverCgf, clientCgf, clientSerial, err := createDTLSConfig(ctx)
 	require.NoError(t, err)

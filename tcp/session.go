@@ -41,7 +41,7 @@ type Session struct {
 	onClose []EventFunc
 
 	cancel context.CancelFunc
-	ctx    context.Context
+	ctx    atomic.Value
 
 	errSendCSM error
 }
@@ -65,7 +65,6 @@ func NewSession(
 	}
 
 	s := &Session{
-		ctx:                             ctx,
 		cancel:                          cancel,
 		connection:                      connection,
 		handler:                         handler,
@@ -80,6 +79,8 @@ func NewSession(
 		disableTCPSignalMessageCSM:      disableTCPSignalMessageCSM,
 		closeSocket:                     closeSocket,
 	}
+	s.ctx.Store(&ctx)
+
 	if !disableTCPSignalMessageCSM {
 		err := s.sendCSM()
 		if err != nil {
@@ -93,11 +94,12 @@ func NewSession(
 func (s *Session) SetContextValue(key interface{}, val interface{}) {
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
-	s.ctx = context.WithValue(s.ctx, key, val)
+	ctx := context.WithValue(s.Context(), key, val)
+	s.ctx.Store(&ctx)
 }
 
 func (s *Session) Done() <-chan struct{} {
-	return s.ctx.Done()
+	return s.Context().Done()
 }
 
 func (s *Session) AddOnClose(f EventFunc) {
@@ -134,7 +136,7 @@ func (s *Session) Sequence() uint64 {
 }
 
 func (s *Session) Context() context.Context {
-	return s.ctx
+	return *s.ctx.Load().(*context.Context)
 }
 
 func (s *Session) PeerMaxMessageSize() uint32 {
@@ -245,7 +247,7 @@ func (s *Session) processBuffer(buffer *bytes.Buffer, cc *ClientConn) error {
 		if n != hdr.TotalLen {
 			return fmt.Errorf("invalid data: %w", err)
 		}
-		req := pool.AcquireMessage(s.ctx)
+		req := pool.AcquireMessage(s.Context())
 		_, err = req.Unmarshal(msgRaw)
 		if err != nil {
 			pool.ReleaseMessage(req)
@@ -253,7 +255,7 @@ func (s *Session) processBuffer(buffer *bytes.Buffer, cc *ClientConn) error {
 		}
 		req.SetSequence(s.Sequence())
 		s.goPool(func() {
-			origResp := pool.AcquireMessage(s.ctx)
+			origResp := pool.AcquireMessage(s.Context())
 			origResp.SetToken(req.Token())
 			w := NewResponseWriter(origResp, cc, req.Options())
 			s.Handle(w, req)
@@ -286,7 +288,7 @@ func (s *Session) sendCSM() error {
 	if err != nil {
 		return fmt.Errorf("cannot get token: %w", err)
 	}
-	req := pool.AcquireMessage(s.ctx)
+	req := pool.AcquireMessage(s.Context())
 	defer pool.ReleaseMessage(req)
 	req.SetCode(codes.CSM)
 	req.SetToken(token)
@@ -319,7 +321,7 @@ func (s *Session) Run(cc *ClientConn) (err error) {
 		if err != nil {
 			return err
 		}
-		readLen, err := s.connection.ReadWithContext(s.ctx, readBuf)
+		readLen, err := s.connection.ReadWithContext(s.Context(), readBuf)
 		if err != nil {
 			return err
 		}
