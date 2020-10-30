@@ -31,6 +31,7 @@ type Session interface {
 	WriteMessage(req *pool.Message) error
 	Run(cc *ClientConn) error
 	AddOnClose(f EventFunc)
+	SetContextValue(key interface{}, val interface{})
 }
 
 // ClientConn represents a virtual connection to a conceptual endpoint, to perform COAPs commands.
@@ -91,6 +92,10 @@ func NewClientConn(
 		errors:                errors,
 		getMID:                getMID,
 	}
+}
+
+func (cc *ClientConn) Session() Session {
+	return cc.session
 }
 
 // Close closes connection without wait of ends Run function.

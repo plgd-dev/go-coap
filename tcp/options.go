@@ -189,6 +189,9 @@ func (o OnNewClientConnOpt) apply(opts *serverOptions) {
 }
 
 // WithOnNewClientConn server's notify about new client connection.
+//
+// Note: Calling `tlscon.Close()` is forbidden, and `tlscon` should be treated as a
+// "read-only" parameter, mainly used to get the peer certificate from the underlining connection
 func WithOnNewClientConn(onNewClientConn OnNewClientConnFunc) OnNewClientConnOpt {
 	return OnNewClientConnOpt{
 		onNewClientConn: onNewClientConn,

@@ -90,6 +90,12 @@ func NewSession(
 	return s
 }
 
+func (s *Session) SetContextValue(key interface{}, val interface{}) {
+	s.mutex.Lock()
+	defer s.mutex.Unlock()
+	s.ctx = context.WithValue(s.ctx, key, val)
+}
+
 func (s *Session) Done() <-chan struct{} {
 	return s.ctx.Done()
 }

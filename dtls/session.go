@@ -78,6 +78,12 @@ func (s *Session) Context() context.Context {
 	return s.ctx
 }
 
+func (s *Session) SetContextValue(key interface{}, val interface{}) {
+	s.mutex.Lock()
+	defer s.mutex.Unlock()
+	s.ctx = context.WithValue(s.ctx, key, val)
+}
+
 func (s *Session) WriteMessage(req *pool.Message) error {
 	data, err := req.Marshal()
 	if err != nil {
