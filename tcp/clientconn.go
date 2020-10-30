@@ -191,6 +191,10 @@ func NewClientConn(session *Session, observationTokenHandler *HandlerContainer, 
 	}
 }
 
+func (cc *ClientConn) Session() *Session {
+	return cc.session
+}
+
 // Close closes connection without wait of ends Run function.
 func (cc *ClientConn) Close() error {
 	return cc.session.Close()

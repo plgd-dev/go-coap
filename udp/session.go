@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 	"sync"
+	"sync/atomic"
 
 	coapNet "github.com/plgd-dev/go-coap/v2/net"
 	"github.com/plgd-dev/go-coap/v2/udp/client"
@@ -23,7 +24,7 @@ type Session struct {
 	onClose []EventFunc
 
 	cancel context.CancelFunc
-	ctx    context.Context
+	ctx    atomic.Value
 }
 
 func NewSession(
@@ -34,18 +35,26 @@ func NewSession(
 	closeSocket bool,
 ) *Session {
 	ctx, cancel := context.WithCancel(ctx)
-	return &Session{
-		ctx:            ctx,
+	s := &Session{
 		cancel:         cancel,
 		connection:     connection,
 		raddr:          raddr,
 		maxMessageSize: maxMessageSize,
 		closeSocket:    closeSocket,
 	}
+	s.ctx.Store(&ctx)
+	return s
+}
+
+func (s *Session) SetContextValue(key interface{}, val interface{}) {
+	s.mutex.Lock()
+	defer s.mutex.Unlock()
+	ctx := context.WithValue(s.Context(), key, val)
+	s.ctx.Store(&ctx)
 }
 
 func (s *Session) Done() <-chan struct{} {
-	return s.ctx.Done()
+	return s.Context().Done()
 }
 
 func (s *Session) AddOnClose(f EventFunc) {
@@ -78,7 +87,7 @@ func (s *Session) Close() error {
 }
 
 func (s *Session) Context() context.Context {
-	return s.ctx
+	return *s.ctx.Load().(*context.Context)
 }
 
 func (s *Session) WriteMessage(req *pool.Message) error {
@@ -103,7 +112,7 @@ func (s *Session) Run(cc *client.ClientConn) (err error) {
 	m := make([]byte, s.maxMessageSize)
 	for {
 		buf := m
-		n, _, err := s.connection.ReadWithContext(s.ctx, buf)
+		n, _, err := s.connection.ReadWithContext(s.Context(), buf)
 		if err != nil {
 			return err
 		}

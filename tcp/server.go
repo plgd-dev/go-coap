@@ -2,6 +2,7 @@ package tcp
 
 import (
 	"context"
+	"crypto/tls"
 	"fmt"
 	"net"
 	"sync"
@@ -34,7 +35,11 @@ type GoPoolFunc = func(func()) error
 
 type BlockwiseFactoryFunc = func(getSendedRequest func(token message.Token) (blockwise.Message, bool)) *blockwise.BlockWise
 
-type OnNewClientConnFunc = func(cc *ClientConn)
+// OnNewClientConnFunc is the callback for new connections.
+//
+// Note: Calling `tlscon.Close()` is forbidden, and `tlscon` should be treated as a
+// "read-only" parameter, mainly used to get the peer certificate from the underlining connection
+type OnNewClientConnFunc = func(cc *ClientConn, tlscon *tls.Conn)
 
 var defaultServerOptions = serverOptions{
 	ctx:            context.Background(),
@@ -55,7 +60,7 @@ var defaultServerOptions = serverOptions{
 	blockwiseEnable:          true,
 	blockwiseSZX:             blockwise.SZX1024,
 	blockwiseTransferTimeout: time.Second * 3,
-	onNewClientConn:          func(cc *ClientConn) {},
+	onNewClientConn:          func(cc *ClientConn, tlscon *tls.Conn) {},
 	heartBeat:                time.Millisecond * 100,
 }
 
@@ -189,7 +194,11 @@ func (s *Server) Serve(l Listener) error {
 			wg.Add(1)
 			cc := s.createClientConn(coapNet.NewConn(rw, coapNet.WithHeartBeat(s.heartBeat)))
 			if s.onNewClientConn != nil {
-				s.onNewClientConn(cc)
+				if tlscon, ok := rw.(*tls.Conn); ok {
+					s.onNewClientConn(cc, tlscon)
+				} else {
+					s.onNewClientConn(cc, nil)
+				}
 			}
 			go func() {
 				defer wg.Done()
