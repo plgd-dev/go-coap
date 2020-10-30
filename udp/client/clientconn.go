@@ -524,3 +524,8 @@ func (cc *ClientConn) Process(datagram []byte) error {
 func (cc *ClientConn) Client() *Client {
 	return NewClient(cc)
 }
+
+// SetContextValue stores the value associated with key to context of connection.
+func (cc *ClientConn) SetContextValue(key interface{}, val interface{}) {
+	cc.session.SetContextValue(key, val)
+}

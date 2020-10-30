@@ -25,7 +25,7 @@ func onNewClientConn(cc *client.ClientConn, dtlsConn *piondtls.Conn) {
 	if err != nil {
 		log.Fatal(err)
 	}
-	cc.Session().SetContextValue("client-cert", clientCert)
+	cc.SetContextValue("client-cert", clientCert)
 	cc.AddOnClose(func() {
 		log.Println("closed connection")
 	})

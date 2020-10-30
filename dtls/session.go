@@ -80,6 +80,7 @@ func (s *Session) Context() context.Context {
 	return *s.ctx.Load().(*context.Context)
 }
 
+// SetContextValue stores the value associated with key to context of connection.
 func (s *Session) SetContextValue(key interface{}, val interface{}) {
 	s.mutex.Lock()
 	defer s.mutex.Unlock()

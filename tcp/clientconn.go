@@ -441,3 +441,8 @@ func (cc *ClientConn) Client() *ClientTCP {
 func (cc *ClientConn) Sequence() uint64 {
 	return cc.session.Sequence()
 }
+
+// SetContextValue stores the value associated with key to context of connection.
+func (cc *ClientConn) SetContextValue(key interface{}, val interface{}) {
+	cc.session.SetContextValue(key, val)
+}

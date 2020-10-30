@@ -123,7 +123,7 @@ func TestServer_SetContextValueWithPKI(t *testing.T) {
 		// set connection context certificate
 		clientCert := tlscon.ConnectionState().PeerCertificates[0]
 		require.NoError(t, err)
-		cc.Session().SetContextValue("client-cert", clientCert)
+		cc.SetContextValue("client-cert", clientCert)
 	}
 	handle := func(w *tcp.ResponseWriter, r *pool.Message) {
 		// get certificate from connection context
