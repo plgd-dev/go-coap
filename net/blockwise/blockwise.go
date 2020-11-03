@@ -676,6 +676,7 @@ func (b *BlockWise) processReceivedMessage(w ResponseWriter, r Message, maxSzx S
 
 	tokenStr := token.String()
 	cachedReceivedMessageGuard, ok := b.receivingMessagesCache.Get(tokenStr)
+	var msgGuard *messageGuard
 	if !ok {
 		if szx > maxSzx {
 			szx = maxSzx
@@ -693,23 +694,26 @@ func (b *BlockWise) processReceivedMessage(w ResponseWriter, r Message, maxSzx S
 		cachedReceivedMessage.ResetOptionsTo(r.Options())
 		cachedReceivedMessage.SetToken(r.Token())
 		cachedReceivedMessage.SetSequence(r.Sequence())
-		cachedReceivedMessageGuard = newRequestGuard(cachedReceivedMessage)
-		err := b.receivingMessagesCache.Add(tokenStr, cachedReceivedMessageGuard, cache.DefaultExpiration)
+		cachedReceivedMessage.SetBody(memfile.New(make([]byte, 0, 1024)))
+		msgGuard = newRequestGuard(cachedReceivedMessage)
+		msgGuard.Lock()
+		defer msgGuard.Unlock()
+		err := b.receivingMessagesCache.Add(tokenStr, msgGuard, cache.DefaultExpiration)
 		// request was already stored in cache, silently
 		if err != nil {
 			return fmt.Errorf("request was already stored in cache")
 		}
-		cachedReceivedMessage.SetBody(memfile.New(make([]byte, 0, 1024)))
+	} else {
+		msgGuard = cachedReceivedMessageGuard.(*messageGuard)
+		msgGuard.Lock()
+		defer msgGuard.Unlock()
 	}
-	messageGuard := cachedReceivedMessageGuard.(*messageGuard)
 	defer func(err *error) {
 		if *err != nil {
 			b.receivingMessagesCache.Delete(tokenStr)
 		}
 	}(&err)
-	messageGuard.Lock()
-	defer messageGuard.Unlock()
-	cachedReceivedMessage := messageGuard.request
+	cachedReceivedMessage := msgGuard.request
 	rETAG, errETAG := r.GetOptionBytes(message.ETag)
 	cachedReceivedMessageETAG, errCachedReceivedMessageETAG := cachedReceivedMessage.GetOptionBytes(message.ETag)
 	switch {
@@ -721,7 +725,11 @@ func (b *BlockWise) processReceivedMessage(w ResponseWriter, r Message, maxSzx S
 		return fmt.Errorf("received message ETAG(%v) is not equal to cached received message ETAG(%v)", rETAG, cachedReceivedMessageETAG)
 	}
 
-	payloadFile := cachedReceivedMessage.Body().(*memfile.File)
+	payloadFile, ok := cachedReceivedMessage.Body().(*memfile.File)
+	if !ok {
+		return fmt.Errorf("invalid body type(%T) stored in receivingMessagesCache", cachedReceivedMessage.Body())
+	}
+
 	off := num * szx.Size()
 	payloadSize, err := cachedReceivedMessage.BodySize()
 	if err != nil {
