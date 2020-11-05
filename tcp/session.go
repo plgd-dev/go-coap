@@ -18,6 +18,9 @@ import (
 type EventFunc func()
 
 type Session struct {
+	// This field needs to be the first in the struct to ensure proper word alignment on 32-bit platforms.
+	// See: https://golang.org/pkg/sync/atomic/#pkg-note-BUG
+	sequence              uint64
 	connection *coapNet.Conn
 
 	maxMessageSize                  int
@@ -29,7 +32,6 @@ type Session struct {
 	errors                          ErrorFunc
 	closeSocket                     bool
 
-	sequence              uint64
 	tokenHandlerContainer *HandlerContainer
 	midHandlerContainer   *HandlerContainer
 	handler               HandlerFunc

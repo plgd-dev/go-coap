@@ -36,6 +36,9 @@ type Session interface {
 
 // ClientConn represents a virtual connection to a conceptual endpoint, to perform COAPs commands.
 type ClientConn struct {
+	// This field needs to be the first in the struct to ensure proper word alignment on 32-bit platforms.
+	// See: https://golang.org/pkg/sync/atomic/#pkg-note-BUG
+	sequence              uint64
 	session                        Session
 	handler                        HandlerFunc
 	observationTokenHandler        *HandlerContainer
@@ -51,7 +54,6 @@ type ClientConn struct {
 
 	tokenHandlerContainer *HandlerContainer
 	midHandlerContainer   *HandlerContainer
-	sequence              uint64
 }
 
 // NewClientConn creates connection over session and observation.
