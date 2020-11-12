@@ -114,6 +114,9 @@ func bwCreateHandlerFunc(observatioRequests *kitSync.Map) func(token message.Tok
 			d.SetMessageID(r.MessageID())
 			return d
 		})
+		if !ok {
+			return nil, ok
+		}
 		bwMessage := msg.(blockwise.Message)
 		return bwMessage, ok
 	}
