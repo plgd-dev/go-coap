@@ -600,7 +600,7 @@ func TestClientConn_Ping(t *testing.T) {
 	err = cc.Ping(ctx)
 	require.NoError(t, err)
 
-	ctx, cancel = context.WithTimeout(context.Background(), time.Microsecond*1)
+	ctx, cancel = context.WithTimeout(context.Background(), time.Nanosecond*200)
 	defer cancel()
 	err = cc.Ping(ctx)
 	require.Error(t, err)
