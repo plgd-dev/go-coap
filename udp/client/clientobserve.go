@@ -5,9 +5,11 @@ import (
 	"fmt"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/plgd-dev/go-coap/v2/message"
 	"github.com/plgd-dev/go-coap/v2/message/codes"
+	"github.com/plgd-dev/go-coap/v2/net/observation"
 	"github.com/plgd-dev/go-coap/v2/udp/message/pool"
 )
 
@@ -18,6 +20,7 @@ type Observation struct {
 	obsSequence uint32
 	etag        []byte
 	cc          *ClientConn
+	lastEvent   time.Time
 
 	mutex sync.Mutex
 }
@@ -72,16 +75,18 @@ func (o *Observation) wantBeNotified(r *pool.Message) bool {
 	if err != nil {
 		return true
 	}
+	now := time.Now()
 
 	o.mutex.Lock()
 	defer o.mutex.Unlock()
-	//obs starts with 0, after that check obsSequence
-	if obsSequence != 0 && o.obsSequence > obsSequence {
-		return false
-	}
-	o.obsSequence = obsSequence
 
-	return true
+	if observation.ValidSequenceNumber(o.obsSequence, obsSequence, o.lastEvent, now) {
+		o.obsSequence = obsSequence
+		o.lastEvent = now
+		return true
+	}
+
+	return false
 }
 
 // Observe subscribes for every change of resource on path.
