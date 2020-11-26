@@ -1,0 +1,36 @@
+# This is a basic workflow to help you get started with Actions
+
+name: Test
+
+# Controls when the action will run.
+on:
+  pull_request:
+
+# A workflow run is made up of one or more jobs that can run sequentially or in parallel
+jobs:
+  # This workflow contains a single job called "build"
+  test:
+    # The type of runner that the job will run on
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest, macOS-latest]
+
+    # Steps represent a sequence of tasks that will be executed as part of the job
+    steps:
+      - name: Set up Go 1.15
+        uses: actions/setup-go@v2
+        with:
+          go-version: ^1.15
+     
+      # Checks-out your repository under $GITHUB_WORKSPACE, so your job can access it
+      - name: Checkout
+        uses: actions/checkout@v2
+
+      # Runs a single command using the runners shell
+      - name: Run a build
+        run: go build ./...
+      
+      # Runs a single command using the runners shell
+      - name: Run a test
+        run: go test -race ./... -covermode=atomic -coverprofile=./coverage.txt
