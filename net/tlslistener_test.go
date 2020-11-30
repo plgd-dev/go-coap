@@ -127,6 +127,87 @@ func TestTLSListener_AcceptWithContext(t *testing.T) {
 	}
 }
 
+func TestTLSListener_CheckForInfinitLoop(t *testing.T) {
+	ctxCanceled, ctxCancel := context.WithCancel(context.Background())
+	ctxCancel()
+
+	type args struct {
+		ctx context.Context
+	}
+	tests := []struct {
+		name    string
+		args    args
+		wantErr bool
+	}{
+		{
+			name: "valid",
+			args: args{
+				ctx: context.Background(),
+			},
+		},
+		{
+			name: "cancelled",
+			args: args{
+				ctx: ctxCanceled,
+			},
+			wantErr: true,
+		},
+	}
+
+	dir, err := ioutil.TempDir("", "gotesttmp")
+	assert.NoError(t, err)
+	defer os.RemoveAll(dir)
+	config := SetTLSConfig(t)
+
+	listener, err := NewTLSListener("tcp", "127.0.0.1:", config, WithHeartBeat(time.Millisecond*100))
+	require.NoError(t, err)
+	defer listener.Close()
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+	defer wg.Wait()
+	go func() {
+		defer wg.Done()
+		for i := 0; i < len(tests); i++ {
+			time.Sleep(time.Millisecond * 200)
+			cert, err := tls.X509KeyPair(CertPEMBlock, KeyPEMBlock)
+			require.NoError(t, err)
+			func() {
+				conn, err := net.Dial("tcp", listener.Addr().String())
+				if err != nil {
+					return
+				}
+				tls.Client(conn, &tls.Config{
+					InsecureSkipVerify: true,
+					Certificates:       []tls.Certificate{cert},
+					VerifyPeerCertificate: func(rawCerts [][]byte, verifiedChains [][]*x509.Certificate) error {
+						conn.Close()
+						return nil
+					},
+				})
+			}()
+		}
+	}()
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			con, err := listener.AcceptWithContext(tt.args.ctx)
+			if tt.wantErr {
+				assert.Error(t, err)
+			} else {
+				require.NoError(t, err)
+				b := make([]byte, 1024)
+				c := NewConn(con, WithHeartBeat(time.Second))
+				_, err = c.ReadWithContext(context.Background(), b)
+				assert.Error(t, err)
+				assert.Contains(t, err.Error(), "i/o timeout")
+				err = con.Close()
+				assert.NoError(t, err)
+			}
+		})
+	}
+}
+
 var (
 	CertPEMBlock = []byte(`-----BEGIN CERTIFICATE-----
 MIIBkzCCATegAwIBAgIUF399tsbWkMnMF6NWt6j/MbUIZvUwDAYIKoZIzj0EAwIF

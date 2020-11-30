@@ -250,7 +250,7 @@ func (c *UDPConn) Close() error {
 	return c.connection.Close()
 }
 
-func (c *UDPConn) writeToAddr(ctx context.Context, heartBeat time.Duration, multicastHopLimit int, iface net.Interface, srcAddr net.Addr, port string, raddr *net.UDPAddr, buffer []byte) error {
+func (c *UDPConn) writeToAddr(deadline time.Time, multicastHopLimit int, iface net.Interface, srcAddr net.Addr, port string, raddr *net.UDPAddr, buffer []byte) error {
 	netType := "udp4"
 	if IsIPv6(raddr.IP) {
 		netType = "udp6"
@@ -274,7 +274,7 @@ func (c *UDPConn) writeToAddr(ctx context.Context, heartBeat time.Duration, mult
 		return err
 	}
 	p.SetMulticastHopLimit(multicastHopLimit)
-	err := p.SetWriteDeadline(time.Now().Add(heartBeat))
+	err := p.SetWriteDeadline(deadline)
 	if err != nil {
 		return fmt.Errorf("cannot write multicast with context: cannot set write deadline for connection: %w", err)
 	}
@@ -322,9 +322,10 @@ LOOP:
 		port := addr[len(addr)-1]
 
 		for _, ifaceAddr := range ifaceAddrs {
-			err = c.writeToAddr(ctx, c.heartBeat, hopLimit, iface, ifaceAddr, port, raddr, buffer)
+			deadline := time.Now().Add(c.heartBeat)
+			err = c.writeToAddr(deadline, hopLimit, iface, ifaceAddr, port, raddr, buffer)
 			if err != nil {
-				if isTemporary(err) {
+				if isTemporary(err, deadline) {
 					continue LOOP
 				}
 				if c.errors != nil {
@@ -351,13 +352,14 @@ func (c *UDPConn) WriteWithContext(ctx context.Context, raddr *net.UDPAddr, buff
 			return ctx.Err()
 		default:
 		}
-		err := c.connection.SetWriteDeadline(time.Now().Add(c.heartBeat))
+		deadline := time.Now().Add(c.heartBeat)
+		err := c.connection.SetWriteDeadline(deadline)
 		if err != nil {
 			return fmt.Errorf("cannot set write deadline for udp connection: %w", err)
 		}
 		n, err := WriteToUDP(c.connection, raddr, buffer[written:])
 		if err != nil {
-			if isTemporary(err) {
+			if isTemporary(err, deadline) {
 				continue
 			}
 			return fmt.Errorf("cannot write to udp connection: %w", err)
@@ -376,14 +378,15 @@ func (c *UDPConn) ReadWithContext(ctx context.Context, buffer []byte) (int, *net
 			return -1, nil, ctx.Err()
 		default:
 		}
-		err := c.connection.SetReadDeadline(time.Now().Add(c.heartBeat))
+		deadline := time.Now().Add(c.heartBeat)
+		err := c.connection.SetReadDeadline(deadline)
 		if err != nil {
 			return -1, nil, fmt.Errorf("cannot set read deadline for udp connection: %w", err)
 		}
 		n, s, err := c.connection.ReadFromUDP(buffer)
 		if err != nil {
 			// check context in regular intervals and then resume listening
-			if isTemporary(err) {
+			if isTemporary(err, deadline) {
 				continue
 			}
 			return -1, nil, fmt.Errorf("cannot read from udp connection: %w", ctx.Err())

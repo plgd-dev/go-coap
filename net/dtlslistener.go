@@ -122,14 +122,15 @@ func (l *DTLSListener) AcceptWithContext(ctx context.Context) (net.Conn, error) 
 		if atomic.LoadUint32(&l.closed) == 1 {
 			return nil, ErrListenerIsClosed
 		}
-		err := l.SetDeadline(time.Now().Add(l.heartBeat))
+		deadline := time.Now().Add(l.heartBeat)
+		err := l.SetDeadline(deadline)
 		if err != nil {
 			return nil, fmt.Errorf("cannot set deadline to accept connection: %w", err)
 		}
 		rw, err := l.Accept()
 		if err != nil {
 			// check context in regular intervals and then resume listening
-			if isTemporary(err) {
+			if isTemporary(err, deadline) {
 				continue
 			}
 			return nil, fmt.Errorf("cannot accept connection: %w", err)

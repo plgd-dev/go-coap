@@ -77,14 +77,15 @@ func (c *Conn) WriteWithContext(ctx context.Context, data []byte) error {
 			return ctx.Err()
 		default:
 		}
-		err := c.connection.SetWriteDeadline(time.Now().Add(c.heartBeat))
+		deadline := time.Now().Add(c.heartBeat)
+		err := c.connection.SetWriteDeadline(deadline)
 		if err != nil {
 			return fmt.Errorf("cannot set write deadline for connection: %w", err)
 		}
 		n, err := c.connection.Write(data[written:])
 
 		if err != nil {
-			if isTemporary(err) {
+			if isTemporary(err, deadline) {
 				continue
 			}
 			return fmt.Errorf("cannot write to connection: %w", err)
@@ -119,13 +120,14 @@ func (c *Conn) ReadWithContext(ctx context.Context, buffer []byte) (int, error) 
 		default:
 		}
 
-		err := c.connection.SetReadDeadline(time.Now().Add(c.heartBeat))
+		deadline := time.Now().Add(c.heartBeat)
+		err := c.connection.SetReadDeadline(deadline)
 		if err != nil {
 			return -1, fmt.Errorf("cannot set read deadline for connection: %w", err)
 		}
 		n, err := c.readBuffer.Read(buffer)
 		if err != nil {
-			if isTemporary(err) {
+			if isTemporary(err, deadline) {
 				continue
 			}
 			return -1, fmt.Errorf("cannot read from connection: %w", err)
