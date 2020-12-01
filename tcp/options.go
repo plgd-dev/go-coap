@@ -3,6 +3,7 @@ package tcp
 import (
 	"context"
 	"crypto/tls"
+	"net"
 	"time"
 
 	"github.com/plgd-dev/go-coap/v2/net/blockwise"
@@ -259,4 +260,22 @@ func (o CloseSocketOpt) applyDial(opts *dialOptions) {
 // WithCloseSocket closes socket at the close connection.
 func WithCloseSocket() CloseSocketOpt {
 	return CloseSocketOpt{}
+}
+
+// DialerOpt dialer option.
+type DialerOpt struct {
+	dialer *net.Dialer
+}
+
+func (o DialerOpt) applyDial(opts *dialOptions) {
+	if o.dialer != nil {
+		opts.dialer = o.dialer
+	}
+}
+
+// WithDialer set dialer for dial.
+func WithDialer(dialer *net.Dialer) DialerOpt {
+	return DialerOpt{
+		dialer: dialer,
+	}
 }
