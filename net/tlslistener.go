@@ -60,13 +60,14 @@ func (l *TLSListener) AcceptWithContext(ctx context.Context) (net.Conn, error) {
 		if atomic.LoadUint32(&l.closed) == 1 {
 			return nil, ErrListenerIsClosed
 		}
-		err := l.SetDeadline(time.Now().Add(l.heartBeat))
+		deadline := time.Now().Add(l.heartBeat)
+		err := l.SetDeadline(deadline)
 		if err != nil {
 			return nil, fmt.Errorf("cannot set deadline to accept connection: %w", err)
 		}
 		rw, err := l.listener.Accept()
 		if err != nil {
-			if isTemporary(err) {
+			if isTemporary(err, deadline) {
 				continue
 			}
 			return nil, fmt.Errorf("cannot accept connection: %w", err)
