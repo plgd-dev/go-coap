@@ -38,10 +38,7 @@ func NewObservationHandler(obsertionTokenHandler *HandlerContainer, next Handler
 
 func (o *Observation) cleanUp() {
 	o.cc.observationTokenHandler.Pop(o.token)
-	registeredRequest, ok := o.cc.observationRequests.PullOut(o.token.String())
-	if ok {
-		pool.ReleaseMessage(registeredRequest.(*pool.Message))
-	}
+	o.cc.observationRequests.PullOut(o.token.String())
 }
 
 // Cancel remove observation from server. For recreate observation use Observe.
@@ -89,6 +86,7 @@ func (cc *ClientConn) Observe(ctx context.Context, path string, observeFunc func
 	if err != nil {
 		return nil, fmt.Errorf("cannot create observe request: %w", err)
 	}
+	defer pool.ReleaseMessage(req)
 	token := req.Token()
 	req.SetObserve(0)
 	o := &Observation{
@@ -99,7 +97,19 @@ func (cc *ClientConn) Observe(ctx context.Context, path string, observeFunc func
 	}
 	respCodeChan := make(chan codes.Code, 1)
 	waitForReponse := uint32(1)
-	cc.observationRequests.Store(token.String(), req)
+
+	options, err := req.Options().Clone()
+	if err != nil {
+		return nil, fmt.Errorf("cannot clone options: %w", err)
+	}
+
+	obs := message.Message{
+		Context: req.Context(),
+		Token:   req.Token(),
+		Code:    req.Code(),
+		Options: options,
+	}
+	cc.observationRequests.Store(token.String(), obs)
 	err = o.cc.observationTokenHandler.Insert(token.String(), func(w *ResponseWriter, r *pool.Message) {
 		code := r.Code()
 		if atomic.CompareAndSwapUint32(&waitForReponse, 1, 0) {
