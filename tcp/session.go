@@ -20,7 +20,7 @@ type EventFunc func()
 type Session struct {
 	// This field needs to be the first in the struct to ensure proper word alignment on 32-bit platforms.
 	// See: https://golang.org/pkg/sync/atomic/#pkg-note-BUG
-	sequence              uint64
+	sequence   uint64
 	connection *coapNet.Conn
 
 	maxMessageSize                  int
@@ -242,19 +242,27 @@ func (s *Session) processBuffer(buffer *bytes.Buffer, cc *ClientConn) error {
 		if buffer.Len() < hdr.TotalLen {
 			return nil
 		}
-		msgRaw := make([]byte, hdr.TotalLen)
-		n, err := buffer.Read(msgRaw)
-		if err != nil {
-			return fmt.Errorf("cannot read full: %w", err)
-		}
-		if n != hdr.TotalLen {
-			return fmt.Errorf("invalid data: %w", err)
-		}
 		req := pool.AcquireMessage(s.Context())
-		_, err = req.Unmarshal(msgRaw)
+		readed, err := req.Unmarshal(buffer.Bytes()[:hdr.TotalLen])
 		if err != nil {
 			pool.ReleaseMessage(req)
 			return fmt.Errorf("cannot unmarshal with header: %w", err)
+		}
+		if readed == buffer.Len() {
+			// buffer is empty so reset it
+			buffer.Reset()
+		} else {
+			// rewind to next message
+			trimmed := 0
+			for trimmed != readed {
+				b := make([]byte, 4096)
+				max := 4096
+				if readed-trimmed < max {
+					max = readed - trimmed
+				}
+				v, _ := buffer.Read(b[:max])
+				trimmed += v
+			}
 		}
 		req.SetSequence(s.Sequence())
 		s.goPool(func() {
