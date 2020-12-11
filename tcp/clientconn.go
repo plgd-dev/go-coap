@@ -106,14 +106,14 @@ func bwReleaseMessage(m blockwise.Message) {
 	pool.ReleaseMessage(m.(*pool.Message))
 }
 
-func bwCreateHandlerFunc(observatioRequests *kitSync.Map) func(token message.Token) (blockwise.Message, bool) {
+func bwCreateHandlerFunc(observationRequests *kitSync.Map) func(token message.Token) (blockwise.Message, bool) {
 	return func(token message.Token) (blockwise.Message, bool) {
-		msg, ok := observatioRequests.LoadWithFunc(token.String(), func(v interface{}) interface{} {
-			r := v.(*pool.Message)
-			d := pool.AcquireMessage(r.Context())
-			d.ResetOptionsTo(r.Options())
-			d.SetCode(r.Code())
-			d.SetToken(r.Token())
+		msg, ok := observationRequests.LoadWithFunc(token.String(), func(v interface{}) interface{} {
+			r := v.(message.Message)
+			d := pool.AcquireMessage(r.Context)
+			d.ResetOptionsTo(r.Options)
+			d.SetCode(r.Code)
+			d.SetToken(r.Token)
 			return d
 		})
 		if !ok {
@@ -134,7 +134,7 @@ func Client(conn net.Conn, opts ...DialOption) *ClientConn {
 		cfg.errors = func(error) {}
 	}
 
-	observatioRequests := kitSync.NewMap()
+	observationRequests := kitSync.NewMap()
 	var blockWise *blockwise.BlockWise
 	if cfg.blockwiseEnable {
 		blockWise = blockwise.NewBlockWise(
@@ -143,7 +143,7 @@ func Client(conn net.Conn, opts ...DialOption) *ClientConn {
 			cfg.blockwiseTransferTimeout,
 			cfg.errors,
 			false,
-			bwCreateHandlerFunc(observatioRequests),
+			bwCreateHandlerFunc(observationRequests),
 		)
 	}
 
@@ -162,7 +162,7 @@ func Client(conn net.Conn, opts ...DialOption) *ClientConn {
 		cfg.disableTCPSignalMessageCSM,
 		cfg.closeSocket,
 	)
-	cc := NewClientConn(session, observationTokenHandler, observatioRequests)
+	cc := NewClientConn(session, observationTokenHandler, observationRequests)
 
 	go func() {
 		err := cc.Run()
