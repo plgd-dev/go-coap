@@ -13,18 +13,6 @@ import (
 	"github.com/plgd-dev/go-coap/v2/tcp/message/pool"
 )
 
-//Observation represents subscription to resource on the server
-type Observation struct {
-	token       message.Token
-	path        string
-	obsSequence uint32
-	etag        []byte
-	cc          *ClientConn
-	lastEvent   time.Time
-
-	mutex sync.Mutex
-}
-
 func NewObservationHandler(obsertionTokenHandler *HandlerContainer, next HandlerFunc) HandlerFunc {
 	return func(w *ResponseWriter, r *pool.Message) {
 		v, err := obsertionTokenHandler.Get(r.Token())
@@ -33,6 +21,48 @@ func NewObservationHandler(obsertionTokenHandler *HandlerContainer, next Handler
 			return
 		}
 		v(w, r)
+	}
+}
+
+//Observation represents subscription to resource on the server
+type Observation struct {
+	token        message.Token
+	path         string
+	cc           *ClientConn
+	observeFunc  func(req *pool.Message)
+	respCodeChan chan codes.Code
+
+	obsSequence uint32
+	etag        []byte
+	lastEvent   time.Time
+	mutex       sync.Mutex
+
+	waitForReponse uint32
+}
+
+func newObservation(token message.Token, path string, cc *ClientConn, observeFunc func(req *pool.Message), respCodeChan chan codes.Code) *Observation {
+	return &Observation{
+		token:          token,
+		path:           path,
+		obsSequence:    0,
+		cc:             cc,
+		waitForReponse: 1,
+		respCodeChan:   respCodeChan,
+		observeFunc:    observeFunc,
+	}
+}
+
+func (o *Observation) handler(w *ResponseWriter, r *pool.Message) {
+	code := r.Code()
+	if atomic.CompareAndSwapUint32(&o.waitForReponse, 1, 0) {
+		select {
+		case o.respCodeChan <- code:
+		default:
+		}
+		o.respCodeChan = nil
+	}
+	if o.wantBeNotified(r) {
+		o.observeFunc(r)
 	}
 }
 
@@ -89,14 +119,9 @@ func (cc *ClientConn) Observe(ctx context.Context, path string, observeFunc func
 	defer pool.ReleaseMessage(req)
 	token := req.Token()
 	req.SetObserve(0)
-	o := &Observation{
-		token:       token,
-		path:        path,
-		obsSequence: 0,
-		cc:          cc,
-	}
+
 	respCodeChan := make(chan codes.Code, 1)
-	waitForReponse := uint32(1)
+	o := newObservation(token, path, cc, observeFunc, respCodeChan)
 
 	options, err := req.Options().Clone()
 	if err != nil {
@@ -110,18 +135,7 @@ func (cc *ClientConn) Observe(ctx context.Context, path string, observeFunc func
 		Options: options,
 	}
 	cc.observationRequests.Store(token.String(), obs)
-	err = o.cc.observationTokenHandler.Insert(token.String(), func(w *ResponseWriter, r *pool.Message) {
-		code := r.Code()
-		if atomic.CompareAndSwapUint32(&waitForReponse, 1, 0) {
-			select {
-			case respCodeChan <- code:
-			default:
-			}
-		}
-		if o.wantBeNotified(r) {
-			observeFunc(r)
-		}
-	})
+	err = o.cc.observationTokenHandler.Insert(token.String(), o.handler)
 	defer func(err *error) {
 		if *err != nil {
 			o.cleanUp()
