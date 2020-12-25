@@ -55,6 +55,15 @@ func TestClientConn_Get(t *testing.T) {
 			wantPayload:       []byte("b"),
 		},
 		{
+			name: "ok-empty",
+			args: args{
+				path: "/empty",
+			},
+			wantCode:          codes.Content,
+			wantContentFormat: &message.TextPlain,
+			wantPayload:       []byte(nil),
+		},
+		{
 			name: "notfound",
 			args: args{
 				path: "/c",
@@ -79,6 +88,14 @@ func TestClientConn_Get(t *testing.T) {
 	m.Handle("/b", mux.HandlerFunc(func(w mux.ResponseWriter, r *mux.Message) {
 		assert.Equal(t, codes.GET, r.Code)
 		err := w.SetResponse(codes.Content, message.TextPlain, bytes.NewReader([]byte("b")))
+		require.NoError(t, err)
+		require.NotEmpty(t, w.Client())
+	}))
+	m.Handle("/empty", mux.HandlerFunc(func(w mux.ResponseWriter, r *mux.Message) {
+		assert.Equal(t, codes.GET, r.Code)
+		// Calling SetResponse was failing with an EOF error when the reader is empty
+		// https://github.com/plgd-dev/go-coap/issues/157
+		err := w.SetResponse(codes.Content, message.TextPlain, bytes.NewReader([]byte{}))
 		require.NoError(t, err)
 		require.NotEmpty(t, w.Client())
 	}))
@@ -112,12 +129,19 @@ func TestClientConn_Get(t *testing.T) {
 			assert.Greater(t, got.Sequence(), uint64(0))
 			if tt.wantContentFormat != nil {
 				ct, err := got.ContentFormat()
-				require.NoError(t, err)
-				require.Equal(t, *tt.wantContentFormat, ct)
+				assert.NoError(t, err)
+				assert.Equal(t, *tt.wantContentFormat, ct)
+			}
+			if tt.wantPayload != nil {
 				buf := bytes.NewBuffer(nil)
-				_, err = buf.ReadFrom(got.Body())
-				require.NoError(t, err)
+				if got.Body() != nil {
+					_, err = buf.ReadFrom(got.Body())
+					require.NoError(t, err)
+				}
+
 				require.Equal(t, tt.wantPayload, buf.Bytes())
+			} else {
+				require.Nil(t, got.Body())
 			}
 		})
 	}
