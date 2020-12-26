@@ -8,6 +8,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/patrickmn/go-cache"
 	"github.com/plgd-dev/go-coap/v2/message"
 	"github.com/plgd-dev/go-coap/v2/net/blockwise"
 
@@ -38,7 +39,7 @@ type Session interface {
 type ClientConn struct {
 	// This field needs to be the first in the struct to ensure proper word alignment on 32-bit platforms.
 	// See: https://golang.org/pkg/sync/atomic/#pkg-note-BUG
-	sequence              uint64
+	sequence                       uint64
 	session                        Session
 	handler                        HandlerFunc
 	observationTokenHandler        *HandlerContainer
@@ -51,6 +52,8 @@ type ClientConn struct {
 	goPool                         GoPoolFunc
 	errors                         ErrorFunc
 	getMID                         GetMIDFunc
+	responseMsgCache               *cache.Cache
+	msgIdMutex                     *MutexMap
 
 	tokenHandlerContainer *HandlerContainer
 	midHandlerContainer   *HandlerContainer
@@ -93,6 +96,9 @@ func NewClientConn(
 		goPool:                goPool,
 		errors:                errors,
 		getMID:                getMID,
+		// EXCHANGE_LIFETIME = 247
+		responseMsgCache: cache.New(247*time.Second, 60*time.Second),
+		msgIdMutex:       NewMutexMap(),
 	}
 }
 
@@ -111,8 +117,7 @@ func (cc *ClientConn) do(req *pool.Message) (*pool.Message, error) {
 		return nil, fmt.Errorf("invalid token")
 	}
 
-	req.SetMessageID(cc.getMID())
-	req.SetType(udpMessage.Confirmable)
+	// MessageID & Type is set in cc.writeMessage below
 
 	respChan := make(chan *pool.Message, 1)
 	err := cc.tokenHandlerContainer.Insert(token, func(w *ResponseWriter, r *pool.Message) {
@@ -468,6 +473,29 @@ func (cc *ClientConn) Sequence() uint64 {
 	return atomic.AddUint64(&cc.sequence, 1)
 }
 
+func (cc *ClientConn) addResponseToCache(resp *pool.Message) error {
+	marshaledResp, err := resp.Marshal()
+	if err != nil {
+		return err
+	}
+	cacheMsg := make([]byte, len(marshaledResp))
+	copy(cacheMsg, marshaledResp)
+	cc.responseMsgCache.SetDefault(fmt.Sprintf("%d", resp.MessageID()), cacheMsg)
+	return nil
+}
+
+func (cc *ClientConn) getResponseFromCache(mid uint16, resp *pool.Message) (bool, error) {
+	cachedResp, _ := cc.responseMsgCache.Get(fmt.Sprintf("%d", mid))
+	if rawMsg, ok := cachedResp.([]byte); ok {
+		_, err := resp.Unmarshal(rawMsg)
+		if err != nil {
+			return false, err
+		}
+		return true, nil
+	}
+	return false, nil
+}
+
 func (cc *ClientConn) Process(datagram []byte) error {
 	if cc.session.MaxMessageSize() >= 0 && len(datagram) > cc.session.MaxMessageSize() {
 		return fmt.Errorf("max message size(%v) was exceeded %v", cc.session.MaxMessageSize(), len(datagram))
@@ -479,13 +507,40 @@ func (cc *ClientConn) Process(datagram []byte) error {
 		return err
 	}
 	req.SetSequence(cc.Sequence())
+
 	cc.goPool(func() {
+		reqMid := req.MessageID()
+
+		// The same message ID can not be handled concurrently
+		// for deduplication to work
+		l := cc.msgIdMutex.Lock(reqMid)
+		defer l.Unlock()
+
 		origResp := pool.AcquireMessage(cc.Context())
 		origResp.SetToken(req.Token())
 		w := NewResponseWriter(origResp, cc, req.Options())
-		typ := req.Type()
-		mid := req.MessageID()
+
+		if ok, err := cc.getResponseFromCache(req.MessageID(), w.response); ok {
+			defer pool.ReleaseMessage(w.response)
+			if !req.IsHijacked() {
+				pool.ReleaseMessage(req)
+			}
+			err = cc.session.WriteMessage(w.response)
+			if err != nil {
+				cc.Close()
+				cc.errors(fmt.Errorf("cannot write response: %w", err))
+				return
+			}
+			return
+		} else if err != nil {
+			cc.Close()
+			cc.errors(fmt.Errorf("cannot unmarshal response from cache: %w", err))
+			return
+		}
+
+		reqType := req.Type()
 		cc.handle(w, req)
+
 		defer pool.ReleaseMessage(w.response)
 		if !req.IsHijacked() {
 			pool.ReleaseMessage(req)
@@ -493,10 +548,10 @@ func (cc *ClientConn) Process(datagram []byte) error {
 		if w.response.IsModified() {
 			switch {
 			case w.response.Type() == udpMessage.Reset:
-				w.response.SetMessageID(mid)
-			case typ == udpMessage.Confirmable:
+				w.response.SetMessageID(reqMid)
+			case reqType == udpMessage.Confirmable:
 				w.response.SetType(udpMessage.Acknowledgement)
-				w.response.SetMessageID(mid)
+				w.response.SetMessageID(reqMid)
 			default:
 				w.response.SetType(udpMessage.NonConfirmable)
 				w.response.SetMessageID(cc.getMID())
@@ -507,17 +562,24 @@ func (cc *ClientConn) Process(datagram []byte) error {
 				cc.errors(fmt.Errorf("cannot write response: %w", err))
 				return
 			}
-		} else if typ == udpMessage.Confirmable {
+		} else if reqType == udpMessage.Confirmable {
 			w.response.Reset()
 			w.response.SetCode(codes.Empty)
 			w.response.SetType(udpMessage.Acknowledgement)
-			w.response.SetMessageID(mid)
+			w.response.SetMessageID(reqMid)
 			err := cc.session.WriteMessage(w.response)
 			if err != nil {
 				cc.Close()
 				cc.errors(fmt.Errorf("cannot write ack reponse: %w", err))
 				return
 			}
+		}
+
+		err = cc.addResponseToCache(w.response)
+		if err != nil {
+			cc.Close()
+			cc.errors(fmt.Errorf("cannot cache response: %w", err))
+			return
 		}
 	})
 	return nil
