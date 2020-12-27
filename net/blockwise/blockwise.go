@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	udpPool "github.com/plgd-dev/go-coap/v2/udp/message/pool"
 	"io"
 	"sync"
 	"time"
@@ -214,11 +215,21 @@ func bufferSize(szx SZX, maxMessageSize int) int64 {
 	return (int64(maxMessageSize) / szx.Size()) * szx.Size()
 }
 
+func setTypeFrom(to Message, from Message) {
+	if udpTo, ok := to.(*udpPool.Message); ok {
+		if udpFrom, ok := from.(*udpPool.Message); ok {
+			udpTo.SetType(udpFrom.Type())
+		}
+	}
+}
+
 func (b *BlockWise) newSendRequestMessage(r Message) Message {
 	req := b.acquireMessage(r.Context())
 	req.SetCode(r.Code())
 	req.SetToken(r.Token())
 	req.ResetOptionsTo(r.Options())
+	setTypeFrom(req, r)
+
 	return req
 }
 
@@ -757,6 +768,7 @@ func (b *BlockWise) processReceivedMessage(w ResponseWriter, r Message, maxSzx S
 		cachedReceivedMessage.Remove(blockType)
 		cachedReceivedMessage.Remove(sizeType)
 		cachedReceivedMessage.SetCode(r.Code())
+		setTypeFrom(cachedReceivedMessage, r)
 		if !bytes.Equal(cachedReceivedMessage.Token(), token) {
 			b.bwSendedRequest.Delete(tokenStr)
 		}

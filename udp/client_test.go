@@ -27,6 +27,7 @@ func TestClientConn_Get(t *testing.T) {
 	type args struct {
 		path string
 		opts message.Options
+		typ  udpMessage.Type
 	}
 	tests := []struct {
 		name              string
@@ -49,6 +50,16 @@ func TestClientConn_Get(t *testing.T) {
 			name: "ok-b",
 			args: args{
 				path: "/b",
+			},
+			wantCode:          codes.Content,
+			wantContentFormat: &message.TextPlain,
+			wantPayload:       []byte("b"),
+		},
+		{
+			name: "ok-b-non",
+			args: args{
+				path: "/b-non",
+				typ:  udpMessage.NonConfirmable,
 			},
 			wantCode:          codes.Content,
 			wantContentFormat: &message.TextPlain,
@@ -84,12 +95,21 @@ func TestClientConn_Get(t *testing.T) {
 		err := w.SetResponse(codes.BadRequest, message.TextPlain, bytes.NewReader(make([]byte, 5330)))
 		require.NoError(t, err)
 		require.NotEmpty(t, w.Client())
+		require.True(t, r.IsConfirmable)
 	}))
 	m.Handle("/b", mux.HandlerFunc(func(w mux.ResponseWriter, r *mux.Message) {
 		assert.Equal(t, codes.GET, r.Code)
 		err := w.SetResponse(codes.Content, message.TextPlain, bytes.NewReader([]byte("b")))
 		require.NoError(t, err)
 		require.NotEmpty(t, w.Client())
+		assert.True(t, r.IsConfirmable)
+	}))
+	m.Handle("/b-non", mux.HandlerFunc(func(w mux.ResponseWriter, r *mux.Message) {
+		assert.Equal(t, codes.GET, r.Code)
+		err := w.SetResponse(codes.Content, message.TextPlain, bytes.NewReader([]byte("b")))
+		require.NoError(t, err)
+		require.NotEmpty(t, w.Client())
+		assert.False(t, r.IsConfirmable)
 	}))
 	m.Handle("/empty", mux.HandlerFunc(func(w mux.ResponseWriter, r *mux.Message) {
 		assert.Equal(t, codes.GET, r.Code)
@@ -98,6 +118,7 @@ func TestClientConn_Get(t *testing.T) {
 		err := w.SetResponse(codes.Content, message.TextPlain, bytes.NewReader([]byte{}))
 		require.NoError(t, err)
 		require.NotEmpty(t, w.Client())
+		assert.True(t, r.IsConfirmable)
 	}))
 
 	s := NewServer(WithMux(m))
@@ -118,7 +139,13 @@ func TestClientConn_Get(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second*3600)
 			defer cancel()
-			got, err := cc.Get(ctx, tt.args.path, tt.args.opts...)
+
+			req, err := client.NewGetRequest(ctx, tt.args.path, tt.args.opts...)
+			require.NoError(t, err)
+
+			req.SetType(tt.args.typ)
+
+			got, err := cc.Do(req)
 			if tt.wantErr {
 				require.Error(t, err)
 				return
@@ -159,6 +186,7 @@ func TestClientConn_Get_SeparateMessage(t *testing.T) {
 		go func() {
 			time.Sleep(time.Second * 1)
 			assert.Equal(t, codes.GET, r.Code)
+			assert.True(t, r.IsConfirmable)
 			customResp := message.Message{
 				Code:    codes.Content,
 				Token:   r.Token,
@@ -284,6 +312,7 @@ func TestClientConn_Post(t *testing.T) {
 				err = w.SetResponse(codes.BadRequest, message.TextPlain, bytes.NewReader(make([]byte, 5330)))
 				require.NoError(t, err)
 				require.NotEmpty(t, w.Client())
+				assert.True(t, r.IsConfirmable)
 			}))
 			m.Handle("/b", mux.HandlerFunc(func(w mux.ResponseWriter, r *mux.Message) {
 				assert.Equal(t, codes.POST, r.Code)
@@ -296,6 +325,7 @@ func TestClientConn_Post(t *testing.T) {
 				err = w.SetResponse(codes.Content, message.TextPlain, bytes.NewReader([]byte("b")))
 				require.NoError(t, err)
 				require.NotEmpty(t, w.Client())
+				assert.True(t, r.IsConfirmable)
 			}))
 
 			s := NewServer(WithMux(m))
@@ -403,6 +433,7 @@ func TestClientConn_Put(t *testing.T) {
 				err = w.SetResponse(codes.BadRequest, message.TextPlain, bytes.NewReader(make([]byte, 5330)))
 				require.NoError(t, err)
 				require.NotEmpty(t, w.Client())
+				assert.True(t, r.IsConfirmable)
 			}))
 			m.Handle("/b", mux.HandlerFunc(func(w mux.ResponseWriter, r *mux.Message) {
 				assert.Equal(t, codes.PUT, r.Code)
@@ -415,6 +446,7 @@ func TestClientConn_Put(t *testing.T) {
 				err = w.SetResponse(codes.Content, message.TextPlain, bytes.NewReader([]byte("b")))
 				require.NoError(t, err)
 				require.NotEmpty(t, w.Client())
+				assert.True(t, r.IsConfirmable)
 			}))
 
 			s := NewServer(WithMux(m))
@@ -505,12 +537,14 @@ func TestClientConn_Delete(t *testing.T) {
 		err := w.SetResponse(codes.BadRequest, message.TextPlain, bytes.NewReader(make([]byte, 5330)))
 		require.NoError(t, err)
 		require.NotEmpty(t, w.Client())
+		assert.True(t, r.IsConfirmable)
 	}))
 	m.Handle("/b", mux.HandlerFunc(func(w mux.ResponseWriter, r *mux.Message) {
 		assert.Equal(t, codes.DELETE, r.Code)
 		err := w.SetResponse(codes.Deleted, message.TextPlain, bytes.NewReader([]byte("b")))
 		require.NoError(t, err)
 		require.NotEmpty(t, w.Client())
+		assert.True(t, r.IsConfirmable)
 	}))
 
 	s := NewServer(WithMux(m))

@@ -117,9 +117,6 @@ func (cc *ClientConn) do(req *pool.Message) (*pool.Message, error) {
 		return nil, fmt.Errorf("invalid token")
 	}
 
-	req.SetMessageID(cc.getMID())
-	req.SetType(udpMessage.Confirmable)
-
 	respChan := make(chan *pool.Message, 1)
 	err := cc.tokenHandlerContainer.Insert(token, func(w *ResponseWriter, r *pool.Message) {
 		r.Hijack()
@@ -164,25 +161,34 @@ func (cc *ClientConn) Do(req *pool.Message) (*pool.Message, error) {
 
 func (cc *ClientConn) writeMessage(req *pool.Message) error {
 	req.SetMessageID(cc.getMID())
-	req.SetType(udpMessage.Confirmable)
 	respChan := make(chan struct{})
-	err := cc.midHandlerContainer.Insert(req.MessageID(), func(w *ResponseWriter, r *pool.Message) {
-		close(respChan)
-		if r.IsSeparate() {
-			// separate message - just accept
-			return
-		}
-		cc.handleBW(w, r)
-	})
-	if err != nil {
-		return fmt.Errorf("cannot insert mid handler: %w", err)
-	}
-	defer cc.midHandlerContainer.Pop(req.MessageID())
 
-	err = cc.session.WriteMessage(req)
+	// Only confirmable messages ever match an message ID
+	if req.Type() == udpMessage.Confirmable {
+		err := cc.midHandlerContainer.Insert(req.MessageID(), func(w *ResponseWriter, r *pool.Message) {
+			close(respChan)
+			if r.IsSeparate() {
+				// separate message - just accept
+				return
+			}
+			cc.handleBW(w, r)
+		})
+		if err != nil {
+			return fmt.Errorf("cannot insert mid handler: %w", err)
+		}
+		defer cc.midHandlerContainer.Pop(req.MessageID())
+	}
+
+	err := cc.session.WriteMessage(req)
 	if err != nil {
 		return fmt.Errorf("cannot write request: %w", err)
 	}
+	if req.Type() != udpMessage.Confirmable {
+		// If the request is not confirmable, we do not need to wait for a response
+		// and skip retransmissions
+		close(respChan)
+	}
+
 	for i := 0; i < cc.transmissionMaxRetransmit; i++ {
 		select {
 		case <-respChan:
@@ -253,7 +259,7 @@ func newCommonRequest(ctx context.Context, code codes.Code, path string, opts ..
 	req.SetToken(token)
 	req.ResetOptionsTo(opts)
 	req.SetPath(path)
-	req.SetType(udpMessage.NonConfirmable)
+	req.SetType(udpMessage.Confirmable)
 	return req, nil
 }
 
@@ -519,6 +525,10 @@ func (cc *ClientConn) Process(datagram []byte) error {
 
 		origResp := pool.AcquireMessage(cc.Context())
 		origResp.SetToken(req.Token())
+		// If a request is sent in a Non-confirmable message, then the response
+		// is sent using a new Non-confirmable message, although the server may
+		// instead send a Confirmable message.
+		origResp.SetType(req.Type())
 		w := NewResponseWriter(origResp, cc, req.Options())
 
 		if ok, err := cc.getResponseFromCache(req.MessageID(), w.response); ok {
@@ -540,6 +550,7 @@ func (cc *ClientConn) Process(datagram []byte) error {
 		}
 
 		reqType := req.Type()
+		origResp.SetModified(false)
 		cc.handle(w, req)
 
 		defer pool.ReleaseMessage(w.response)

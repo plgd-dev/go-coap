@@ -66,6 +66,11 @@ func (r *Message) IsModified() bool {
 	return r.isModified || r.Message.IsModified()
 }
 
+func (r *Message) SetModified(b bool) {
+	r.isModified = b
+	r.Message.SetModified(b)
+}
+
 func (r *Message) Unmarshal(data []byte) (int, error) {
 	r.Reset()
 	if len(r.rawData) < len(data) {
