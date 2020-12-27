@@ -279,6 +279,10 @@ func (r *Message) IsModified() bool {
 	return r.isModified
 }
 
+func (r *Message) SetModified(b bool) {
+	r.isModified = b
+}
+
 func (r *Message) String() string {
 	return r.msg.String()
 }
