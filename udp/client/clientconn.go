@@ -59,6 +59,18 @@ type ClientConn struct {
 	midHandlerContainer   *HandlerContainer
 }
 
+func (cc *ClientConn) SetTransmissionNStart(d time.Duration) {
+	cc.transmissionNStart = d
+}
+
+func (cc *ClientConn) SetTransmissionAcknowledgeTimeout(d time.Duration) {
+	cc.transmissionAcknowledgeTimeout = d
+}
+
+func (cc *ClientConn) SetTransmissionMaxRetransmit(d int) {
+	cc.transmissionMaxRetransmit = d
+}
+
 // NewClientConn creates connection over session and observation.
 func NewClientConn(
 	session Session,
