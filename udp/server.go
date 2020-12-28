@@ -56,6 +56,7 @@ var defaultServerOptions = serverOptions{
 		return nil
 	},
 	keepalive:                      keepalive.New(),
+	inactivityMonitor:              newInactivityMonitor(),
 	blockwiseEnable:                true,
 	blockwiseSZX:                   blockwise.SZX1024,
 	blockwiseTransferTimeout:       time.Second * 3,
@@ -73,6 +74,7 @@ type serverOptions struct {
 	errors                         ErrorFunc
 	goPool                         GoPoolFunc
 	keepalive                      *keepalive.KeepAlive
+	inactivityMonitor              *inactivityMonitor
 	net                            string
 	blockwiseSZX                   blockwise.SZX
 	blockwiseEnable                bool
@@ -90,6 +92,7 @@ type Server struct {
 	errors                         ErrorFunc
 	goPool                         GoPoolFunc
 	keepalive                      *keepalive.KeepAlive
+	inactivityMonitor              *inactivityMonitor
 	blockwiseSZX                   blockwise.SZX
 	blockwiseEnable                bool
 	blockwiseTransferTimeout       time.Duration
@@ -137,6 +140,7 @@ func NewServer(opt ...ServerOption) *Server {
 		errors:                         opts.errors,
 		goPool:                         opts.goPool,
 		keepalive:                      opts.keepalive,
+		inactivityMonitor:              opts.inactivityMonitor,
 		blockwiseSZX:                   opts.blockwiseSZX,
 		blockwiseEnable:                opts.blockwiseEnable,
 		blockwiseTransferTimeout:       opts.blockwiseTransferTimeout,
@@ -212,6 +216,18 @@ func (s *Server) Serve(l *coapNet.UDPConn) error {
 					}
 				}()
 			}
+
+			if s.inactivityMonitor != nil {
+				wg.Add(1)
+				go func() {
+					defer wg.Done()
+					err := s.inactivityMonitor.Run(cc)
+					if err != nil {
+						s.errors(err)
+					}
+				}()
+			}
+
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
