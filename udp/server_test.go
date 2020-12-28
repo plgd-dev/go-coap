@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"net"
+	"runtime"
 	"sync"
 	"testing"
 	"time"
@@ -139,37 +140,119 @@ func TestServer_Discover(t *testing.T) {
 }
 
 func TestServer_CleanUpConns(t *testing.T) {
+	runtime.GC()
+	var initialGoCnt = runtime.NumGoroutine()
+
+	var wg sync.WaitGroup
+	// Container func for defers
+	func() {
+		ld, err := coapNet.NewListenUDP("udp4", "")
+		require.NoError(t, err)
+		defer ld.Close()
+
+		var checkCloseWg sync.WaitGroup
+		defer checkCloseWg.Wait()
+		sd := udp.NewServer(udp.WithOnNewClientConn(func(cc *client.ClientConn) {
+			checkCloseWg.Add(1)
+			cc.AddOnClose(func() {
+				checkCloseWg.Done()
+			})
+		}))
+		defer sd.Stop()
+
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			err := sd.Serve(ld)
+			require.NoError(t, err)
+		}()
+
+		cc, err := udp.Dial(ld.LocalAddr().String())
+		require.NoError(t, err)
+		checkCloseWg.Add(1)
+		cc.AddOnClose(func() {
+			checkCloseWg.Done()
+		})
+		defer cc.Close()
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		err = cc.Ping(ctx)
+		require.NoError(t, err)
+
+	}()
+	wg.Wait()
+	runtime.GC()
+	time.Sleep(10 * time.Millisecond)
+	if !assert.Equal(t, initialGoCnt, runtime.NumGoroutine()) {
+		printStacktrace(t)
+	}
+}
+
+func TestServer_InactiveMonitor(t *testing.T) {
+	inactivityDetected := false
+
 	ld, err := coapNet.NewListenUDP("udp4", "")
 	require.NoError(t, err)
 	defer ld.Close()
 
 	var checkCloseWg sync.WaitGroup
 	defer checkCloseWg.Wait()
-	sd := udp.NewServer(udp.WithOnNewClientConn(func(cc *client.ClientConn) {
-		checkCloseWg.Add(1)
-		cc.AddOnClose(func() {
-			checkCloseWg.Done()
-		})
-	}))
-	defer sd.Stop()
+	sd := udp.NewServer(
+		udp.WithOnNewClientConn(func(cc *client.ClientConn) {
+			checkCloseWg.Add(1)
+			cc.AddOnClose(func() {
+				checkCloseWg.Done()
+			})
+		}),
+		udp.WithKeepAlive(nil),
+		udp.WithInactivityMonitor(100*time.Millisecond, func(cc *client.ClientConn) {
+			require.False(t, inactivityDetected)
+			inactivityDetected = true
+			cc.Close()
+		}),
+	)
 
-	var wg sync.WaitGroup
-	wg.Add(1)
+	var serverWg sync.WaitGroup
+	defer func() {
+		sd.Stop()
+		serverWg.Wait()
+	}()
+	serverWg.Add(1)
 	go func() {
-		defer wg.Done()
+		defer serverWg.Done()
 		err := sd.Serve(ld)
 		require.NoError(t, err)
 	}()
 
-	cc, err := udp.Dial(ld.LocalAddr().String())
+	cc, err := udp.Dial(
+		ld.LocalAddr().String(),
+		udp.WithKeepAlive(nil),
+	)
 	require.NoError(t, err)
 	checkCloseWg.Add(1)
 	cc.AddOnClose(func() {
 		checkCloseWg.Done()
 	})
-	defer cc.Close()
+
+	// send ping to create serverside connection
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 	err = cc.Ping(ctx)
 	require.NoError(t, err)
+
+	err = cc.Ping(ctx)
+	require.NoError(t, err)
+
+	cc.Close()
+
+	checkCloseWg.Wait()
+	require.True(t, inactivityDetected)
+}
+
+func printStacktrace(t *testing.T) {
+	buf := make([]byte, 1<<20)
+
+	stacklen := runtime.Stack(buf, true)
+	t.Logf("Number goRoutines: %d\n", runtime.NumGoroutine())
+	t.Logf("*** goroutine dump...\n%s\n*** end\n", buf[:stacklen])
 }

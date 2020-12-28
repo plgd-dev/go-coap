@@ -427,7 +427,7 @@ func (cc *ClientConn) Ping(ctx context.Context) error {
 	return fmt.Errorf("unexpected response(%v)", resp)
 }
 
-// Run reads and process requests from a connection, until the connection is not closed.
+// Run reads and process requests from a connection, until the connection is closed.
 func (cc *ClientConn) Run() error {
 	return cc.session.Run(cc)
 }
@@ -529,6 +529,7 @@ func (cc *ClientConn) getResponseFromCache(mid uint16, resp *pool.Message) (bool
 }
 
 func (cc *ClientConn) Process(datagram []byte) error {
+	cc.lastActivity = time.Now()
 	if cc.session.MaxMessageSize() >= 0 && len(datagram) > cc.session.MaxMessageSize() {
 		return fmt.Errorf("max message size(%v) was exceeded %v", cc.session.MaxMessageSize(), len(datagram))
 	}
@@ -629,4 +630,8 @@ func (cc *ClientConn) Client() *Client {
 // SetContextValue stores the value associated with key to context of connection.
 func (cc *ClientConn) SetContextValue(key interface{}, val interface{}) {
 	cc.session.SetContextValue(key, val)
+}
+
+func (cc *ClientConn) LastActivity() time.Time {
+	return cc.lastActivity
 }
