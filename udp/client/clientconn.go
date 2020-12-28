@@ -117,7 +117,8 @@ func (cc *ClientConn) do(req *pool.Message) (*pool.Message, error) {
 		return nil, fmt.Errorf("invalid token")
 	}
 
-	// MessageID & Type is set in cc.writeMessage below
+	req.SetMessageID(cc.getMID())
+	req.SetType(udpMessage.Confirmable)
 
 	respChan := make(chan *pool.Message, 1)
 	err := cc.tokenHandlerContainer.Insert(token, func(w *ResponseWriter, r *pool.Message) {
