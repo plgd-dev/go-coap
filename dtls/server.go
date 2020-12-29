@@ -3,7 +3,6 @@ package dtls
 import (
 	"context"
 	"fmt"
-	"github.com/plgd-dev/go-coap/v2/udp"
 	"net"
 	"sync"
 	"time"
@@ -14,6 +13,7 @@ import (
 	coapNet "github.com/plgd-dev/go-coap/v2/net"
 	"github.com/plgd-dev/go-coap/v2/net/blockwise"
 	"github.com/plgd-dev/go-coap/v2/net/keepalive"
+	"github.com/plgd-dev/go-coap/v2/net/monitor/inactivity"
 	"github.com/plgd-dev/go-coap/v2/udp/client"
 	udpMessage "github.com/plgd-dev/go-coap/v2/udp/message"
 	"github.com/plgd-dev/go-coap/v2/udp/message/pool"
@@ -63,7 +63,7 @@ var defaultServerOptions = serverOptions{
 		return nil
 	},
 	keepalive:                      keepalive.New(),
-	inactivityMonitor:              udp.NewInactivityMonitor(10*time.Minute, closeClientConn),
+	inactivityMonitor:              inactivity.NewInactivityMonitor(10*time.Minute, inactivity.CloseClientConn),
 	blockwiseEnable:                true,
 	blockwiseSZX:                   blockwise.SZX1024,
 	blockwiseTransferTimeout:       time.Second * 5,
@@ -82,7 +82,7 @@ type serverOptions struct {
 	errors                         ErrorFunc
 	goPool                         GoPoolFunc
 	keepalive                      *keepalive.KeepAlive
-	inactivityMonitor              InactivityMonitor
+	inactivityMonitor              inactivity.Monitor
 	net                            string
 	blockwiseSZX                   blockwise.SZX
 	blockwiseEnable                bool
@@ -107,7 +107,7 @@ type Server struct {
 	errors                         ErrorFunc
 	goPool                         GoPoolFunc
 	keepalive                      *keepalive.KeepAlive
-	inactivityMonitor              InactivityMonitor
+	inactivityMonitor              inactivity.Monitor
 	blockwiseSZX                   blockwise.SZX
 	blockwiseEnable                bool
 	blockwiseTransferTimeout       time.Duration

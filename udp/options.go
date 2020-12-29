@@ -7,6 +7,7 @@ import (
 
 	"github.com/plgd-dev/go-coap/v2/net/blockwise"
 	"github.com/plgd-dev/go-coap/v2/net/keepalive"
+	"github.com/plgd-dev/go-coap/v2/net/monitor/inactivity"
 )
 
 // HandlerFuncOpt handler function option.
@@ -121,7 +122,7 @@ func WithKeepAlive(keepalive *keepalive.KeepAlive) KeepAliveOpt {
 
 // InactivityMonitorOpt notifies when a connection was inactive for a given duration.
 type InactivityMonitorOpt struct {
-	inactivityMonitor InactivityMonitor
+	inactivityMonitor inactivity.Monitor
 }
 
 func (o InactivityMonitorOpt) apply(opts *serverOptions) {
@@ -129,9 +130,9 @@ func (o InactivityMonitorOpt) apply(opts *serverOptions) {
 }
 
 // WithInactivityMonitor set deadline's for read/write operations over client connection.
-func WithInactivityMonitor(interval time.Duration, onInactive OnInactiveFunc) InactivityMonitorOpt {
+func WithInactivityMonitor(interval time.Duration, onInactive inactivity.OnInactiveFunc) InactivityMonitorOpt {
 	return InactivityMonitorOpt{
-		inactivityMonitor: NewInactivityMonitor(interval, onInactive),
+		inactivityMonitor: inactivity.NewInactivityMonitor(interval, onInactive),
 	}
 }
 
