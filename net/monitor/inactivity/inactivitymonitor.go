@@ -1,16 +1,21 @@
-package udp
+package inactivity
 
 import (
-	"github.com/plgd-dev/go-coap/v2/udp/client"
+	"context"
 	"sync/atomic"
 	"time"
 )
 
-type OnInactiveFunc func(cc *client.ClientConn)
-
-type InactivityMonitor interface {
-	Run(cc *client.ClientConn) error
+type Monitor interface {
+	Run(cc ClientConn) error
 	Notify()
+}
+
+type OnInactiveFunc func(cc ClientConn)
+
+type ClientConn interface {
+	Context() context.Context
+	Close() error
 }
 
 type inactivityMonitor struct {
@@ -31,18 +36,18 @@ func (m *inactivityMonitor) LastActivity() time.Time {
 	return time.Time{}
 }
 
-func closeClientConn(cc *client.ClientConn) {
+func CloseClientConn(cc ClientConn) {
 	cc.Close()
 }
 
-func NewInactivityMonitor(interval time.Duration, onInactive OnInactiveFunc) InactivityMonitor {
+func NewInactivityMonitor(interval time.Duration, onInactive OnInactiveFunc) Monitor {
 	return &inactivityMonitor{
 		inactiveInterval: interval,
 		onInactive:       onInactive,
 	}
 }
 
-func (m *inactivityMonitor) Run(cc *client.ClientConn) error {
+func (m *inactivityMonitor) Run(cc ClientConn) error {
 	if m.onInactive == nil || m.inactiveInterval == time.Duration(0) {
 		return nil
 	}

@@ -12,6 +12,7 @@ import (
 	"github.com/plgd-dev/go-coap/v2/message"
 	"github.com/plgd-dev/go-coap/v2/message/codes"
 	coapNet "github.com/plgd-dev/go-coap/v2/net"
+	"github.com/plgd-dev/go-coap/v2/net/monitor/inactivity"
 	"github.com/plgd-dev/go-coap/v2/udp"
 	"github.com/plgd-dev/go-coap/v2/udp/client"
 	"github.com/plgd-dev/go-coap/v2/udp/message/pool"
@@ -205,7 +206,7 @@ func TestServer_InactiveMonitor(t *testing.T) {
 			})
 		}),
 		udp.WithKeepAlive(nil),
-		udp.WithInactivityMonitor(100*time.Millisecond, func(cc *client.ClientConn) {
+		udp.WithInactivityMonitor(100*time.Millisecond, func(cc inactivity.ClientConn) {
 			require.False(t, inactivityDetected)
 			inactivityDetected = true
 			cc.Close()
