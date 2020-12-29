@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	udpPool "github.com/plgd-dev/go-coap/v2/udp/message/pool"
 	"io"
 	"sync"
 	"time"
@@ -15,6 +14,7 @@ import (
 	"github.com/patrickmn/go-cache"
 	"github.com/plgd-dev/go-coap/v2/message"
 	"github.com/plgd-dev/go-coap/v2/message/codes"
+	udpMessage "github.com/plgd-dev/go-coap/v2/udp/message"
 )
 
 // Block Opion value is represented: https://tools.ietf.org/html/rfc7959#section-2.2
@@ -114,6 +114,13 @@ type Message interface {
 	SetBody(r io.ReadSeeker)
 	SetSequence(uint64)
 	String() string
+}
+
+// hasType enables access to message.Type for supported messages
+// Since only UDP messages have a type
+type hasType interface {
+	Type() udpMessage.Type
+	SetType(t udpMessage.Type)
 }
 
 // EncodeBlockOption encodes block values to coap option.
@@ -216,8 +223,8 @@ func bufferSize(szx SZX, maxMessageSize int) int64 {
 }
 
 func setTypeFrom(to Message, from Message) {
-	if udpTo, ok := to.(*udpPool.Message); ok {
-		if udpFrom, ok := from.(*udpPool.Message); ok {
+	if udpTo, ok := to.(hasType); ok {
+		if udpFrom, ok := from.(hasType); ok {
 			udpTo.SetType(udpFrom.Type())
 		}
 	}

@@ -11,6 +11,7 @@ import (
 	"github.com/dsnet/golib/memfile"
 	"github.com/plgd-dev/go-coap/v2/message"
 	"github.com/plgd-dev/go-coap/v2/message/codes"
+	udpMessage "github.com/plgd-dev/go-coap/v2/udp/message"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -164,6 +165,13 @@ func (r *testmessage) BodySize() (int64, error) {
 		return 0, err
 	}
 	return size, nil
+}
+
+func (r *testmessage) Type() udpMessage.Type {
+	return udpMessage.Confirmable
+}
+
+func (r *testmessage) SetType(t udpMessage.Type) {
 }
 
 func acquireMessage(ctx context.Context) Message {

@@ -1,12 +1,12 @@
 package client
 
 import (
-	udp "github.com/plgd-dev/go-coap/v2/udp/message"
 	"io"
 
 	"github.com/plgd-dev/go-coap/v2/message"
 	"github.com/plgd-dev/go-coap/v2/message/codes"
 	"github.com/plgd-dev/go-coap/v2/mux"
+	udpMessage "github.com/plgd-dev/go-coap/v2/udp/message"
 	"github.com/plgd-dev/go-coap/v2/udp/message/pool"
 )
 
@@ -22,7 +22,7 @@ func HandlerFuncToMux(m mux.Handler) HandlerFunc {
 		m.ServeCOAP(muxw, &mux.Message{
 			Message:        muxr,
 			SequenceNumber: r.Sequence(),
-			IsConfirmable:  r.Type() == udp.Confirmable,
+			IsConfirmable:  r.Type() == udpMessage.Confirmable,
 		})
 	}
 	return h
