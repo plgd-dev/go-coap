@@ -3,23 +3,21 @@ package dtls
 import (
 	"context"
 	"fmt"
+	"github.com/plgd-dev/go-coap/v2/udp"
 	"net"
 	"sync"
 	"time"
 
 	"github.com/pion/dtls/v2"
 	"github.com/plgd-dev/go-coap/v2/message"
-	"github.com/plgd-dev/go-coap/v2/net/blockwise"
-	kitSync "github.com/plgd-dev/kit/sync"
-
-	"github.com/plgd-dev/go-coap/v2/net/keepalive"
-
 	"github.com/plgd-dev/go-coap/v2/message/codes"
+	coapNet "github.com/plgd-dev/go-coap/v2/net"
+	"github.com/plgd-dev/go-coap/v2/net/blockwise"
+	"github.com/plgd-dev/go-coap/v2/net/keepalive"
 	"github.com/plgd-dev/go-coap/v2/udp/client"
 	udpMessage "github.com/plgd-dev/go-coap/v2/udp/message"
 	"github.com/plgd-dev/go-coap/v2/udp/message/pool"
-
-	coapNet "github.com/plgd-dev/go-coap/v2/net"
+	kitSync "github.com/plgd-dev/kit/sync"
 )
 
 // A ServerOption sets options such as credentials, codec and keepalive parameters, etc.
@@ -45,6 +43,10 @@ type OnNewClientConnFunc = func(cc *client.ClientConn, dtlsConn *dtls.Conn)
 
 type GetMIDFunc = func() uint16
 
+func closeClientConn(cc *client.ClientConn) {
+	cc.Close()
+}
+
 var defaultServerOptions = serverOptions{
 	ctx:            context.Background(),
 	maxMessageSize: 64 * 1024,
@@ -61,6 +63,7 @@ var defaultServerOptions = serverOptions{
 		return nil
 	},
 	keepalive:                      keepalive.New(),
+	inactivityMonitor:              udp.NewInactivityMonitor(10*time.Minute, closeClientConn),
 	blockwiseEnable:                true,
 	blockwiseSZX:                   blockwise.SZX1024,
 	blockwiseTransferTimeout:       time.Second * 5,
@@ -79,6 +82,7 @@ type serverOptions struct {
 	errors                         ErrorFunc
 	goPool                         GoPoolFunc
 	keepalive                      *keepalive.KeepAlive
+	inactivityMonitor              InactivityMonitor
 	net                            string
 	blockwiseSZX                   blockwise.SZX
 	blockwiseEnable                bool
@@ -103,6 +107,7 @@ type Server struct {
 	errors                         ErrorFunc
 	goPool                         GoPoolFunc
 	keepalive                      *keepalive.KeepAlive
+	inactivityMonitor              InactivityMonitor
 	blockwiseSZX                   blockwise.SZX
 	blockwiseEnable                bool
 	blockwiseTransferTimeout       time.Duration
@@ -143,6 +148,7 @@ func NewServer(opt ...ServerOption) *Server {
 		errors:                         opts.errors,
 		goPool:                         opts.goPool,
 		keepalive:                      opts.keepalive,
+		inactivityMonitor:              opts.inactivityMonitor,
 		blockwiseSZX:                   opts.blockwiseSZX,
 		blockwiseEnable:                opts.blockwiseEnable,
 		blockwiseTransferTimeout:       opts.blockwiseTransferTimeout,
@@ -235,6 +241,16 @@ func (s *Server) Serve(l Listener) error {
 					}
 				}()
 			}
+			if s.inactivityMonitor != nil {
+				wg.Add(1)
+				go func() {
+					defer wg.Done()
+					err := s.inactivityMonitor.Run(cc)
+					if err != nil {
+						s.errors(err)
+					}
+				}()
+			}
 		}
 	}
 }
@@ -278,6 +294,7 @@ func (s *Server) createClientConn(connection *coapNet.Conn) *client.ClientConn {
 		s.goPool,
 		s.errors,
 		s.getMID,
+		s.inactivityMonitor,
 	)
 
 	return cc

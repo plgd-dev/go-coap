@@ -56,7 +56,7 @@ var defaultServerOptions = serverOptions{
 		return nil
 	},
 	keepalive:                      keepalive.New(),
-	inactivityMonitor:              newInactivityMonitor(),
+	inactivityMonitor:              NewInactivityMonitor(10*time.Minute, closeClientConn),
 	blockwiseEnable:                true,
 	blockwiseSZX:                   blockwise.SZX1024,
 	blockwiseTransferTimeout:       time.Second * 3,
@@ -74,7 +74,7 @@ type serverOptions struct {
 	errors                         ErrorFunc
 	goPool                         GoPoolFunc
 	keepalive                      *keepalive.KeepAlive
-	inactivityMonitor              *inactivityMonitor
+	inactivityMonitor              InactivityMonitor
 	net                            string
 	blockwiseSZX                   blockwise.SZX
 	blockwiseEnable                bool
@@ -92,7 +92,7 @@ type Server struct {
 	errors                         ErrorFunc
 	goPool                         GoPoolFunc
 	keepalive                      *keepalive.KeepAlive
-	inactivityMonitor              *inactivityMonitor
+	inactivityMonitor              InactivityMonitor
 	blockwiseSZX                   blockwise.SZX
 	blockwiseEnable                bool
 	blockwiseTransferTimeout       time.Duration
@@ -321,6 +321,7 @@ func (s *Server) getOrCreateClientConn(UDPConn *coapNet.UDPConn, raddr *net.UDPA
 			s.goPool,
 			s.errors,
 			s.getMID,
+			s.inactivityMonitor,
 		)
 		cc.AddOnClose(func() {
 			s.connsMutex.Lock()
