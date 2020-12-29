@@ -3,6 +3,7 @@ package client
 import (
 	"context"
 	"fmt"
+	atomicTypes "go.uber.org/atomic"
 	"io"
 	"net"
 	"sync/atomic"
@@ -39,36 +40,45 @@ type Session interface {
 type ClientConn struct {
 	// This field needs to be the first in the struct to ensure proper word alignment on 32-bit platforms.
 	// See: https://golang.org/pkg/sync/atomic/#pkg-note-BUG
-	sequence                       uint64
-	session                        Session
-	handler                        HandlerFunc
-	observationTokenHandler        *HandlerContainer
-	observationRequests            *kitSync.Map
-	transmissionNStart             time.Duration
-	transmissionAcknowledgeTimeout time.Duration
-	transmissionMaxRetransmit      int
-	blockwiseSZX                   blockwise.SZX
-	blockWise                      *blockwise.BlockWise
-	goPool                         GoPoolFunc
-	errors                         ErrorFunc
-	getMID                         GetMIDFunc
-	responseMsgCache               *cache.Cache
-	msgIdMutex                     *MutexMap
+	sequence                uint64
+	session                 Session
+	handler                 HandlerFunc
+	observationTokenHandler *HandlerContainer
+	observationRequests     *kitSync.Map
+	transmission            *Transmission
+	blockwiseSZX            blockwise.SZX
+	blockWise               *blockwise.BlockWise
+	goPool                  GoPoolFunc
+	errors                  ErrorFunc
+	getMID                  GetMIDFunc
+	responseMsgCache        *cache.Cache
+	msgIdMutex              *MutexMap
 
 	tokenHandlerContainer *HandlerContainer
 	midHandlerContainer   *HandlerContainer
 }
 
-func (cc *ClientConn) SetTransmissionNStart(d time.Duration) {
-	cc.transmissionNStart = d
+// Transmission is a threadsafe container for transmission related parameters
+type Transmission struct {
+	nStart             *atomicTypes.Duration
+	acknowledgeTimeout *atomicTypes.Duration
+	maxRetransmit      *atomicTypes.Int32
 }
 
-func (cc *ClientConn) SetTransmissionAcknowledgeTimeout(d time.Duration) {
-	cc.transmissionAcknowledgeTimeout = d
+func (t *Transmission) SetTransmissionNStart(d time.Duration) {
+	t.nStart.Store(d)
 }
 
-func (cc *ClientConn) SetTransmissionMaxRetransmit(d int) {
-	cc.transmissionMaxRetransmit = d
+func (t *Transmission) SetTransmissionAcknowledgeTimeout(d time.Duration) {
+	t.acknowledgeTimeout.Store(d)
+}
+
+func (t *Transmission) SetTransmissionMaxRetransmit(d int32) {
+	t.maxRetransmit.Store(d)
+}
+
+func (cc *ClientConn) Transmission() *Transmission {
+	return cc.transmission
 }
 
 // NewClientConn creates connection over session and observation.
@@ -93,15 +103,17 @@ func NewClientConn(
 		getMID = udpMessage.GetMID
 	}
 	return &ClientConn{
-		session:                        session,
-		observationTokenHandler:        observationTokenHandler,
-		observationRequests:            observationRequests,
-		transmissionNStart:             transmissionNStart,
-		transmissionAcknowledgeTimeout: transmissionAcknowledgeTimeout,
-		transmissionMaxRetransmit:      transmissionMaxRetransmit,
-		handler:                        handler,
-		blockwiseSZX:                   blockwiseSZX,
-		blockWise:                      blockWise,
+		session:                 session,
+		observationTokenHandler: observationTokenHandler,
+		observationRequests:     observationRequests,
+		transmission: &Transmission{
+			atomicTypes.NewDuration(transmissionNStart),
+			atomicTypes.NewDuration(transmissionAcknowledgeTimeout),
+			atomicTypes.NewInt32(int32(transmissionMaxRetransmit)),
+		},
+		handler:      handler,
+		blockwiseSZX: blockwiseSZX,
+		blockWise:    blockWise,
 
 		tokenHandlerContainer: NewHandlerContainer(),
 		midHandlerContainer:   NewHandlerContainer(),
@@ -201,7 +213,8 @@ func (cc *ClientConn) writeMessage(req *pool.Message) error {
 		close(respChan)
 	}
 
-	for i := 0; i < cc.transmissionMaxRetransmit; i++ {
+	maxRetransmit := cc.transmission.maxRetransmit.Load()
+	for i := int32(0); i < maxRetransmit; i++ {
 		select {
 		case <-respChan:
 			return nil
@@ -209,13 +222,13 @@ func (cc *ClientConn) writeMessage(req *pool.Message) error {
 			return req.Context().Err()
 		case <-cc.Context().Done():
 			return fmt.Errorf("connection was closed: %w", cc.Context().Err())
-		case <-time.After(cc.transmissionAcknowledgeTimeout):
+		case <-time.After(cc.transmission.acknowledgeTimeout.Load()):
 			select {
 			case <-req.Context().Done():
 				return req.Context().Err()
 			case <-cc.session.Context().Done():
 				return fmt.Errorf("connection was closed: %w", cc.Context().Err())
-			case <-time.After(cc.transmissionNStart):
+			case <-time.After(cc.transmission.nStart.Load()):
 				err = cc.session.WriteMessage(req)
 				if err != nil {
 					return fmt.Errorf("cannot write request: %w", err)
@@ -223,7 +236,7 @@ func (cc *ClientConn) writeMessage(req *pool.Message) error {
 			}
 		}
 	}
-	return fmt.Errorf("timeout: retransmision(%v) was exhausted", cc.transmissionMaxRetransmit)
+	return fmt.Errorf("timeout: retransmision(%v) was exhausted", cc.transmission.maxRetransmit.Load())
 }
 
 // WriteMessage sends an coap message.
