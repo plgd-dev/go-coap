@@ -161,6 +161,8 @@ func Client(conn *dtls.Conn, opts ...DialOption) *client.ClientConn {
 		cfg.goPool,
 		cfg.errors,
 		cfg.getMID,
+		// The client does not support activity monitoring yet
+		nil,
 	)
 
 	go func() {

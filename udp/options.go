@@ -121,7 +121,7 @@ func WithKeepAlive(keepalive *keepalive.KeepAlive) KeepAliveOpt {
 
 // InactivityMonitorOpt notifies when a connection was inactive for a given duration.
 type InactivityMonitorOpt struct {
-	inactivityMonitor *inactivityMonitor
+	inactivityMonitor InactivityMonitor
 }
 
 func (o InactivityMonitorOpt) apply(opts *serverOptions) {
@@ -131,7 +131,7 @@ func (o InactivityMonitorOpt) apply(opts *serverOptions) {
 // WithInactivityMonitor set deadline's for read/write operations over client connection.
 func WithInactivityMonitor(interval time.Duration, onInactive OnInactiveFunc) InactivityMonitorOpt {
 	return InactivityMonitorOpt{
-		inactivityMonitor: &inactivityMonitor{interval, onInactive},
+		inactivityMonitor: NewInactivityMonitor(interval, onInactive),
 	}
 }
 
