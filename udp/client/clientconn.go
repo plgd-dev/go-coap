@@ -156,7 +156,10 @@ func (cc *ClientConn) do(req *pool.Message) (*pool.Message, error) {
 	respChan := make(chan *pool.Message, 1)
 	err := cc.tokenHandlerContainer.Insert(token, func(w *ResponseWriter, r *pool.Message) {
 		r.Hijack()
-		respChan <- r
+		select {
+		case respChan <- r:
+		default:
+		}
 	})
 	if err != nil {
 		return nil, fmt.Errorf("cannot add token handler: %w", err)
@@ -265,7 +268,10 @@ func (cc *ClientConn) doWithMID(req *pool.Message) (*pool.Message, error) {
 	respChan := make(chan *pool.Message, 1)
 	err := cc.midHandlerContainer.Insert(req.MessageID(), func(w *ResponseWriter, r *pool.Message) {
 		r.Hijack()
-		respChan <- r
+		select {
+		case respChan <- r:
+		default:
+		}
 	})
 	if err != nil {
 		return nil, fmt.Errorf("cannot insert mid handler: %w", err)
