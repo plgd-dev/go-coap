@@ -175,11 +175,11 @@ func (s *Session) handleBlockwise(w *ResponseWriter, r *pool.Message) {
 	s.handler(w, r)
 }
 
-func (s *Session) handleSignals(w *ResponseWriter, r *pool.Message) {
+func (s *Session) handleSignals(r *pool.Message) bool {
 	switch r.Code() {
 	case codes.CSM:
 		if s.disablePeerTCPSignalMessageCSMs {
-			return
+			return true
 		}
 		if size, err := r.GetOptionUint32(coapTCP.MaxMessageSize); err == nil {
 			atomic.StoreUint32(&s.peerMaxMessageSize, size)
@@ -187,25 +187,25 @@ func (s *Session) handleSignals(w *ResponseWriter, r *pool.Message) {
 		if r.HasOption(coapTCP.BlockWiseTransfer) {
 			atomic.StoreUint32(&s.peerBlockWiseTranferEnabled, 1)
 		}
-		return
+		return true
 	case codes.Ping:
 		if r.HasOption(coapTCP.Custody) {
 			//TODO
 		}
-		s.sendPong(w, r)
-		return
+		s.sendPong(r.Token())
+		return true
 	case codes.Release:
 		if r.HasOption(coapTCP.AlternativeAddress) {
 			//TODO
 		}
-		return
+		return true
 	case codes.Abort:
 		if r.HasOption(coapTCP.BadCSMOption) {
 			//TODO
 		}
-		return
+		return true
 	}
-	s.handleBlockwise(w, r)
+	return false
 }
 
 type bwResponseWriter struct {
@@ -222,7 +222,7 @@ func (b *bwResponseWriter) SetMessage(m blockwise.Message) {
 }
 
 func (s *Session) Handle(w *ResponseWriter, r *pool.Message) {
-	s.handleSignals(w, r)
+	s.handleBlockwise(w, r)
 }
 
 func (s *Session) TokenHandler() *HandlerContainer {
@@ -265,6 +265,9 @@ func (s *Session) processBuffer(buffer *bytes.Buffer, cc *ClientConn) error {
 			}
 		}
 		req.SetSequence(s.Sequence())
+		if s.handleSignals(req) {
+			continue
+		}
 		s.goPool(func() {
 			origResp := pool.AcquireMessage(s.Context())
 			origResp.SetToken(req.Token())
@@ -306,8 +309,12 @@ func (s *Session) sendCSM() error {
 	return s.WriteMessage(req)
 }
 
-func (s *Session) sendPong(w *ResponseWriter, r *pool.Message) {
-	w.SetResponse(codes.Pong, message.TextPlain, nil)
+func (s *Session) sendPong(token message.Token) error {
+	req := pool.AcquireMessage(s.Context())
+	defer pool.ReleaseMessage(req)
+	req.SetCode(codes.Pong)
+	req.SetToken(token)
+	return s.WriteMessage(req)
 }
 
 // Run reads and process requests from a connection, until the connection is not closed.
