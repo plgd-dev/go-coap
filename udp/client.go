@@ -129,6 +129,11 @@ func Client(conn *net.UDPConn, opts ...DialOption) *client.ClientConn {
 	if cfg.errors == nil {
 		cfg.errors = func(error) {}
 	}
+	errors := cfg.errors
+	cfg.errors = func(err error) {
+		errors(fmt.Errorf("udp: %v: %w", conn.RemoteAddr(), err))
+	}
+
 	addr, _ := conn.RemoteAddr().(*net.UDPAddr)
 	observatioRequests := kitSync.NewMap()
 	var blockWise *blockwise.BlockWise
