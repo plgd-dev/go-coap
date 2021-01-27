@@ -3,6 +3,7 @@ package client_test
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"io/ioutil"
@@ -72,7 +73,7 @@ func TestClientConn_Deduplication(t *testing.T) {
 			return 1
 		}),
 		udp.WithErrors(func(err error) {
-			if err != context.Canceled {
+			if !errors.Is(err, context.Canceled) {
 				require.NoError(t, err)
 			}
 		}),
@@ -155,7 +156,7 @@ func TestClientConn_DeduplicationRetransmission(t *testing.T) {
 
 	cc, err := udp.Dial(l.LocalAddr().String(),
 		udp.WithErrors(func(err error) {
-			if err != context.Canceled {
+			if !errors.Is(err, context.Canceled) {
 				require.NoError(t, err)
 			}
 		}),

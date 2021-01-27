@@ -131,11 +131,13 @@ func NewServer(opt ...ServerOption) *Server {
 	serverStartedChan := make(chan struct{})
 
 	return &Server{
-		ctx:                            ctx,
-		cancel:                         cancel,
-		handler:                        opts.handler,
-		maxMessageSize:                 opts.maxMessageSize,
-		errors:                         opts.errors,
+		ctx:            ctx,
+		cancel:         cancel,
+		handler:        opts.handler,
+		maxMessageSize: opts.maxMessageSize,
+		errors: func(err error) {
+			opts.errors(fmt.Errorf("udp: %w", err))
+		},
 		goPool:                         opts.goPool,
 		keepalive:                      opts.keepalive,
 		inactivityMonitor:              opts.inactivityMonitor,
@@ -210,7 +212,7 @@ func (s *Server) Serve(l *coapNet.UDPConn) error {
 					defer wg.Done()
 					err := s.keepalive.Run(cc)
 					if err != nil {
-						s.errors(err)
+						s.errors(fmt.Errorf("%v: %w", cc.RemoteAddr(), err))
 					}
 				}()
 			}
@@ -221,7 +223,7 @@ func (s *Server) Serve(l *coapNet.UDPConn) error {
 					defer wg.Done()
 					err := s.inactivityMonitor.Run(cc)
 					if err != nil {
-						s.errors(err)
+						s.errors(fmt.Errorf("%v: %w", cc.RemoteAddr(), err))
 					}
 				}()
 			}
@@ -235,7 +237,7 @@ func (s *Server) Serve(l *coapNet.UDPConn) error {
 		err = cc.Process(buf)
 		if err != nil {
 			cc.Close()
-			s.errors(err)
+			s.errors(fmt.Errorf("%v: %w", cc.RemoteAddr(), err))
 		}
 	}
 }

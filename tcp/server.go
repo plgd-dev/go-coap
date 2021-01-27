@@ -116,11 +116,13 @@ func NewServer(opt ...ServerOption) *Server {
 	ctx, cancel := context.WithCancel(opts.ctx)
 
 	return &Server{
-		ctx:                             ctx,
-		cancel:                          cancel,
-		handler:                         opts.handler,
-		maxMessageSize:                  opts.maxMessageSize,
-		errors:                          opts.errors,
+		ctx:            ctx,
+		cancel:         cancel,
+		handler:        opts.handler,
+		maxMessageSize: opts.maxMessageSize,
+		errors: func(err error) {
+			opts.errors(fmt.Errorf("tcp: %w", err))
+		},
 		goPool:                          opts.goPool,
 		keepalive:                       opts.keepalive,
 		blockwiseSZX:                    opts.blockwiseSZX,
@@ -204,7 +206,7 @@ func (s *Server) Serve(l Listener) error {
 				defer wg.Done()
 				err := cc.Run()
 				if err != nil {
-					s.errors(err)
+					s.errors(fmt.Errorf("%v: %w", cc.RemoteAddr(), err))
 				}
 			}()
 			if s.keepalive != nil {
@@ -213,7 +215,7 @@ func (s *Server) Serve(l Listener) error {
 					defer wg.Done()
 					err := s.keepalive.Run(cc)
 					if err != nil {
-						s.errors(err)
+						s.errors(fmt.Errorf("%v: %w", cc.RemoteAddr(), err))
 					}
 				}()
 			}

@@ -175,7 +175,7 @@ func (s *Session) handleBlockwise(w *ResponseWriter, r *pool.Message) {
 	s.handler(w, r)
 }
 
-func (s *Session) handleSignals(r *pool.Message) bool {
+func (s *Session) handleSignals(r *pool.Message, cc *ClientConn) bool {
 	switch r.Code() {
 	case codes.CSM:
 		if s.disablePeerTCPSignalMessageCSMs {
@@ -204,6 +204,9 @@ func (s *Session) handleSignals(r *pool.Message) bool {
 			//TODO
 		}
 		return true
+	case codes.Pong:
+		s.processReq(r, cc)
+		return true
 	}
 	return false
 }
@@ -227,6 +230,24 @@ func (s *Session) Handle(w *ResponseWriter, r *pool.Message) {
 
 func (s *Session) TokenHandler() *HandlerContainer {
 	return s.tokenHandlerContainer
+}
+
+func (s *Session) processReq(req *pool.Message, cc *ClientConn) {
+	origResp := pool.AcquireMessage(s.Context())
+	origResp.SetToken(req.Token())
+	w := NewResponseWriter(origResp, cc, req.Options())
+	s.Handle(w, req)
+	defer pool.ReleaseMessage(w.response)
+	if !req.IsHijacked() {
+		pool.ReleaseMessage(req)
+	}
+	if w.response.IsModified() {
+		err := s.WriteMessage(w.response)
+		if err != nil {
+			s.Close()
+			s.errors(fmt.Errorf("cannot write response to %v: %w", s.connection.RemoteAddr(), err))
+		}
+	}
 }
 
 func (s *Session) processBuffer(buffer *bytes.Buffer, cc *ClientConn) error {
@@ -265,25 +286,11 @@ func (s *Session) processBuffer(buffer *bytes.Buffer, cc *ClientConn) error {
 			}
 		}
 		req.SetSequence(s.Sequence())
-		if s.handleSignals(req) {
+		if s.handleSignals(req, cc) {
 			continue
 		}
 		s.goPool(func() {
-			origResp := pool.AcquireMessage(s.Context())
-			origResp.SetToken(req.Token())
-			w := NewResponseWriter(origResp, cc, req.Options())
-			s.Handle(w, req)
-			defer pool.ReleaseMessage(w.response)
-			if !req.IsHijacked() {
-				pool.ReleaseMessage(req)
-			}
-			if w.response.IsModified() {
-				err := s.WriteMessage(w.response)
-				if err != nil {
-					s.Close()
-					s.errors(fmt.Errorf("cannot write response: %w", err))
-				}
-			}
+			s.processReq(req, cc)
 		})
 	}
 	return nil

@@ -133,6 +133,10 @@ func Client(conn net.Conn, opts ...DialOption) *ClientConn {
 	if cfg.errors == nil {
 		cfg.errors = func(error) {}
 	}
+	errors := cfg.errors
+	cfg.errors = func(err error) {
+		errors(fmt.Errorf("tcp: %w", err))
+	}
 
 	observationRequests := kitSync.NewMap()
 	var blockWise *blockwise.BlockWise
@@ -167,14 +171,14 @@ func Client(conn net.Conn, opts ...DialOption) *ClientConn {
 	go func() {
 		err := cc.Run()
 		if err != nil {
-			cfg.errors(err)
+			cfg.errors(fmt.Errorf("%v: %w", cc.RemoteAddr(), err))
 		}
 	}()
 	if cfg.keepalive != nil {
 		go func() {
 			err := cfg.keepalive.Run(cc)
 			if err != nil {
-				cfg.errors(err)
+				cfg.errors(fmt.Errorf("%v: %w", cc.RemoteAddr(), err))
 			}
 		}()
 	}

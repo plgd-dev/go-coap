@@ -131,6 +131,10 @@ func Client(conn *dtls.Conn, opts ...DialOption) *client.ClientConn {
 	if cfg.errors == nil {
 		cfg.errors = func(error) {}
 	}
+	errors := cfg.errors
+	cfg.errors = func(err error) {
+		errors(fmt.Errorf("dtls: %v: %w", conn.RemoteAddr(), err))
+	}
 
 	observatioRequests := kitSync.NewMap()
 	var blockWise *blockwise.BlockWise
