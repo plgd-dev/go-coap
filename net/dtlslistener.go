@@ -23,6 +23,7 @@ type DTLSListener struct {
 	wg        sync.WaitGroup
 	doneCh    chan struct{}
 	connCh    chan connData
+	onTimeout func() error
 
 	cancel context.CancelFunc
 	mutex  sync.Mutex
@@ -57,6 +58,7 @@ var defaultDTLSListenerOptions = dtlsListenerOptions{
 
 type dtlsListenerOptions struct {
 	heartBeat time.Duration
+	onTimeout func() error
 }
 
 // A DTLSListenerOption sets options such as heartBeat parameters, etc.
@@ -131,6 +133,12 @@ func (l *DTLSListener) AcceptWithContext(ctx context.Context) (net.Conn, error) 
 		if err != nil {
 			// check context in regular intervals and then resume listening
 			if isTemporary(err, deadline) {
+				if l.onTimeout != nil {
+					err := l.onTimeout()
+					if err != nil {
+						return nil, fmt.Errorf("cannot accept connection : on timeout returns error: %w", err)
+					}
+				}
 				continue
 			}
 			return nil, fmt.Errorf("cannot accept connection: %w", err)

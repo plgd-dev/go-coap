@@ -6,14 +6,14 @@ import (
 	"time"
 )
 
-type Monitor interface {
-	Run(cc ClientConn) error
+type Monitor = interface {
+	CheckInactivity(cc ClientConn)
 	Notify()
 }
 
-type OnInactiveFunc func(cc ClientConn)
+type OnInactiveFunc = func(cc ClientConn)
 
-type ClientConn interface {
+type ClientConn = interface {
 	Context() context.Context
 	Close() error
 }
@@ -41,32 +41,19 @@ func CloseClientConn(cc ClientConn) {
 }
 
 func NewInactivityMonitor(interval time.Duration, onInactive OnInactiveFunc) Monitor {
-	return &inactivityMonitor{
+	m := &inactivityMonitor{
 		inactiveInterval: interval,
 		onInactive:       onInactive,
 	}
+	m.Notify()
+	return m
 }
 
-func (m *inactivityMonitor) Run(cc ClientConn) error {
+func (m *inactivityMonitor) CheckInactivity(cc ClientConn) {
 	if m.onInactive == nil || m.inactiveInterval == time.Duration(0) {
-		return nil
+		return
 	}
-
-	ticker := time.NewTicker(time.Second)
-	defer ticker.Stop()
-
-	for {
-		timeout := time.Until(m.LastActivity().Add(m.inactiveInterval))
-		if timeout <= 0 {
-			timeout = m.inactiveInterval
-		}
-		select {
-		case <-time.After(timeout):
-			if time.Since(m.LastActivity()) >= m.inactiveInterval {
-				m.onInactive(cc)
-			}
-		case <-cc.Context().Done():
-			return nil
-		}
+	if time.Until(m.LastActivity().Add(m.inactiveInterval)) <= 0 {
+		m.onInactive(cc)
 	}
 }

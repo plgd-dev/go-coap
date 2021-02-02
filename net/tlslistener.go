@@ -15,6 +15,7 @@ type TLSListener struct {
 	listener  net.Listener
 	heartBeat time.Duration
 	closed    uint32
+	onTimeout func() error
 }
 
 var defaultTLSListenerOptions = tlsListenerOptions{
@@ -23,6 +24,7 @@ var defaultTLSListenerOptions = tlsListenerOptions{
 
 type tlsListenerOptions struct {
 	heartBeat time.Duration
+	onTimeout func() error
 }
 
 // A TLSListenerOption sets options such as heartBeat parameters, etc.
@@ -68,6 +70,12 @@ func (l *TLSListener) AcceptWithContext(ctx context.Context) (net.Conn, error) {
 		rw, err := l.listener.Accept()
 		if err != nil {
 			if isTemporary(err, deadline) {
+				if l.onTimeout != nil {
+					err := l.onTimeout()
+					if err != nil {
+						return nil, fmt.Errorf("cannot accept connection : on timeout returns error: %w", err)
+					}
+				}
 				continue
 			}
 			return nil, fmt.Errorf("cannot accept connection: %w", err)

@@ -37,10 +37,6 @@ type Session interface {
 	SetContextValue(key interface{}, val interface{})
 }
 
-type Notifier interface {
-	Notify()
-}
-
 // ClientConn represents a virtual connection to a conceptual endpoint, to perform COAPs commands.
 type ClientConn struct {
 	// This field needs to be the first in the struct to ensure proper word alignment on 32-bit platforms.
@@ -58,7 +54,6 @@ type ClientConn struct {
 	getMID                  GetMIDFunc
 	responseMsgCache        *cache.Cache
 	msgIdMutex              *MutexMap
-	activityMonitor         Notifier
 
 	tokenHandlerContainer *HandlerContainer
 	midHandlerContainer   *HandlerContainer
@@ -101,16 +96,12 @@ func NewClientConn(
 	goPool GoPoolFunc,
 	errors ErrorFunc,
 	getMID GetMIDFunc,
-	activityMonitor Notifier,
 ) *ClientConn {
 	if errors == nil {
 		errors = func(error) {}
 	}
 	if getMID == nil {
 		getMID = udpMessage.GetMID
-	}
-	if activityMonitor == nil {
-		activityMonitor = &nilNotifier{}
 	}
 
 	return &ClientConn{
@@ -134,7 +125,6 @@ func NewClientConn(
 		// EXCHANGE_LIFETIME = 247
 		responseMsgCache: cache.New(247*time.Second, 60*time.Second),
 		msgIdMutex:       NewMutexMap(),
-		activityMonitor:  activityMonitor,
 	}
 }
 
@@ -547,7 +537,6 @@ func (cc *ClientConn) getResponseFromCache(mid uint16, resp *pool.Message) (bool
 }
 
 func (cc *ClientConn) Process(datagram []byte) error {
-	cc.activityMonitor.Notify()
 	if cc.session.MaxMessageSize() >= 0 && len(datagram) > cc.session.MaxMessageSize() {
 		return fmt.Errorf("max message size(%v) was exceeded %v", cc.session.MaxMessageSize(), len(datagram))
 	}
@@ -560,7 +549,6 @@ func (cc *ClientConn) Process(datagram []byte) error {
 	req.SetSequence(cc.Sequence())
 
 	cc.goPool(func() {
-		defer cc.activityMonitor.Notify()
 		reqMid := req.MessageID()
 
 		// The same message ID can not be handled concurrently
