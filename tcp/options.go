@@ -133,6 +133,12 @@ func (o InactivityMonitorOpt) apply(opts *serverOptions) {
 	}
 }
 
+func (o InactivityMonitorOpt) applyDial(opts *dialOptions) {
+	opts.createInactivityMonitor = func() inactivity.Monitor {
+		return inactivity.NewInactivityMonitor(o.duration, o.onInactive)
+	}
+}
+
 // WithInactivityMonitor set deadline's for read operations over client connection.
 func WithInactivityMonitor(duration time.Duration, onInactive inactivity.OnInactiveFunc) InactivityMonitorOpt {
 	return InactivityMonitorOpt{
