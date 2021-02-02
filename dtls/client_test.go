@@ -7,6 +7,7 @@ import (
 	"io"
 	"io/ioutil"
 	"log"
+	"runtime"
 	"sync"
 	"testing"
 	"time"
@@ -647,6 +648,9 @@ func TestClientConn_HandeShakeFailure(t *testing.T) {
 
 func TestClient_InactiveMonitor(t *testing.T) {
 	inactivityDetected := false
+	defer func() {
+		runtime.GC()
+	}()
 
 	srvCtx, srvCancel := context.WithTimeout(context.Background(), time.Second*3600)
 	defer srvCancel()

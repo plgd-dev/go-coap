@@ -6,6 +6,7 @@ import (
 	"crypto/tls"
 	"io"
 	"io/ioutil"
+	"runtime"
 	"sync"
 	"testing"
 	"time"
@@ -483,6 +484,9 @@ func TestClientConn_Ping(t *testing.T) {
 
 func TestClient_InactiveMonitor(t *testing.T) {
 	inactivityDetected := false
+	defer func() {
+		runtime.GC()
+	}()
 
 	ld, err := coapNet.NewTCPListener("tcp", "")
 	require.NoError(t, err)

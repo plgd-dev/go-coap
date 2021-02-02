@@ -7,6 +7,7 @@ import (
 	"io"
 	"io/ioutil"
 	"log"
+	"runtime"
 	"sync"
 	"testing"
 	"time"
@@ -615,6 +616,9 @@ func TestClientConn_Ping(t *testing.T) {
 
 func TestClient_InactiveMonitor(t *testing.T) {
 	inactivityDetected := false
+	defer func() {
+		runtime.GC()
+	}()
 
 	ld, err := coapNet.NewListenUDP("udp4", "")
 	require.NoError(t, err)
