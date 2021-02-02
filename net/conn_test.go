@@ -12,7 +12,7 @@ import (
 func TestConn_WriteWithContext(t *testing.T) {
 	ctxCanceled, ctxCancel := context.WithCancel(context.Background())
 	ctxCancel()
-	helloWorld := []byte("hello world")
+	helloWorld := make([]byte, 1024*1024*256)
 
 	type args struct {
 		ctx  context.Context
