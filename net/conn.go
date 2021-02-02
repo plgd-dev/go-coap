@@ -86,6 +86,9 @@ func (c *Conn) WriteWithContext(ctx context.Context, data []byte) error {
 
 		if err != nil {
 			if isTemporary(err, deadline) {
+				if n > 0 {
+					written += n
+				}
 				continue
 			}
 			return fmt.Errorf("cannot write to connection: %w", err)
