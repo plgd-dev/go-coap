@@ -7,11 +7,13 @@ import (
 	"io"
 	"io/ioutil"
 	"log"
+	"runtime"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/plgd-dev/go-coap/v2/mux"
+	"github.com/plgd-dev/go-coap/v2/net/monitor/inactivity"
 
 	"github.com/plgd-dev/go-coap/v2/message"
 	"github.com/plgd-dev/go-coap/v2/message/codes"
@@ -610,4 +612,63 @@ func TestClientConn_Ping(t *testing.T) {
 	defer cancel()
 	err = cc.Ping(ctx)
 	require.NoError(t, err)
+}
+
+func TestClient_InactiveMonitor(t *testing.T) {
+	inactivityDetected := false
+	defer func() {
+		runtime.GC()
+	}()
+
+	ld, err := coapNet.NewListenUDP("udp4", "")
+	require.NoError(t, err)
+	defer ld.Close()
+
+	var checkCloseWg sync.WaitGroup
+	defer checkCloseWg.Wait()
+	sd := NewServer(
+		WithKeepAlive(nil),
+	)
+
+	var serverWg sync.WaitGroup
+	defer func() {
+		sd.Stop()
+		serverWg.Wait()
+	}()
+	serverWg.Add(1)
+	go func() {
+		defer serverWg.Done()
+		err := sd.Serve(ld)
+		require.NoError(t, err)
+	}()
+
+	cc, err := Dial(
+		ld.LocalAddr().String(),
+		WithKeepAlive(nil),
+		WithInactivityMonitor(100*time.Millisecond, func(cc inactivity.ClientConn) {
+			require.False(t, inactivityDetected)
+			inactivityDetected = true
+			cc.Close()
+		}),
+	)
+	require.NoError(t, err)
+	checkCloseWg.Add(1)
+	cc.AddOnClose(func() {
+		checkCloseWg.Done()
+	})
+
+	// send ping to create serverside connection
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	err = cc.Ping(ctx)
+	require.NoError(t, err)
+
+	err = cc.Ping(ctx)
+	require.NoError(t, err)
+
+	// wait for fire inactivity
+	time.Sleep(time.Second * 2)
+
+	checkCloseWg.Wait()
+	require.True(t, inactivityDetected)
 }

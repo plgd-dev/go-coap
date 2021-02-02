@@ -62,8 +62,10 @@ var defaultServerOptions = serverOptions{
 		}()
 		return nil
 	},
-	keepalive:                      keepalive.New(),
-	inactivityMonitor:              inactivity.NewInactivityMonitor(10*time.Minute, inactivity.CloseClientConn),
+	keepalive: keepalive.New(),
+	createInactivityMonitor: func() inactivity.Monitor {
+		return inactivity.NewInactivityMonitor(10*time.Minute, inactivity.CloseClientConn)
+	},
 	blockwiseEnable:                true,
 	blockwiseSZX:                   blockwise.SZX1024,
 	blockwiseTransferTimeout:       time.Second * 5,
@@ -82,7 +84,7 @@ type serverOptions struct {
 	errors                         ErrorFunc
 	goPool                         GoPoolFunc
 	keepalive                      *keepalive.KeepAlive
-	inactivityMonitor              inactivity.Monitor
+	createInactivityMonitor        func() inactivity.Monitor
 	net                            string
 	blockwiseSZX                   blockwise.SZX
 	blockwiseEnable                bool
@@ -107,7 +109,7 @@ type Server struct {
 	errors                         ErrorFunc
 	goPool                         GoPoolFunc
 	keepalive                      *keepalive.KeepAlive
-	inactivityMonitor              inactivity.Monitor
+	createInactivityMonitor        func() inactivity.Monitor
 	blockwiseSZX                   blockwise.SZX
 	blockwiseEnable                bool
 	blockwiseTransferTimeout       time.Duration
@@ -140,6 +142,12 @@ func NewServer(opt ...ServerOption) *Server {
 		opts.getMID = udpMessage.GetMID
 	}
 
+	if opts.createInactivityMonitor == nil {
+		opts.createInactivityMonitor = func() inactivity.Monitor {
+			return inactivity.NewNilMonitor()
+		}
+	}
+
 	return &Server{
 		ctx:            ctx,
 		cancel:         cancel,
@@ -150,7 +158,7 @@ func NewServer(opt ...ServerOption) *Server {
 		},
 		goPool:                         opts.goPool,
 		keepalive:                      opts.keepalive,
-		inactivityMonitor:              opts.inactivityMonitor,
+		createInactivityMonitor:        opts.createInactivityMonitor,
 		blockwiseSZX:                   opts.blockwiseSZX,
 		blockwiseEnable:                opts.blockwiseEnable,
 		blockwiseTransferTimeout:       opts.blockwiseTransferTimeout,
@@ -221,7 +229,16 @@ func (s *Server) Serve(l Listener) error {
 		}
 		if rw != nil {
 			wg.Add(1)
-			cc := s.createClientConn(coapNet.NewConn(rw, coapNet.WithHeartBeat(s.heartBeat)))
+			var cc *client.ClientConn
+			monitor := s.createInactivityMonitor()
+			opts := []coapNet.ConnOption{
+				coapNet.WithHeartBeat(s.heartBeat),
+				coapNet.WithOnReadTimeout(func() error {
+					monitor.CheckInactivity(cc)
+					return nil
+				}),
+			}
+			cc = s.createClientConn(coapNet.NewConn(rw, opts...), monitor)
 			if s.onNewClientConn != nil {
 				dtlsConn := rw.(*dtls.Conn)
 				s.onNewClientConn(cc, dtlsConn)
@@ -243,16 +260,6 @@ func (s *Server) Serve(l Listener) error {
 					}
 				}()
 			}
-			if s.inactivityMonitor != nil {
-				wg.Add(1)
-				go func() {
-					defer wg.Done()
-					err := s.inactivityMonitor.Run(cc)
-					if err != nil {
-						s.errors(fmt.Errorf("%v: %w", cc.RemoteAddr(), err))
-					}
-				}()
-			}
 		}
 	}
 }
@@ -262,7 +269,7 @@ func (s *Server) Stop() {
 	s.cancel()
 }
 
-func (s *Server) createClientConn(connection *coapNet.Conn) *client.ClientConn {
+func (s *Server) createClientConn(connection *coapNet.Conn, monitor inactivity.Monitor) *client.ClientConn {
 	var blockWise *blockwise.BlockWise
 	if s.blockwiseEnable {
 		blockWise = blockwise.NewBlockWise(
@@ -296,7 +303,7 @@ func (s *Server) createClientConn(connection *coapNet.Conn) *client.ClientConn {
 		s.goPool,
 		s.errors,
 		s.getMID,
-		s.inactivityMonitor,
+		monitor,
 	)
 
 	return cc

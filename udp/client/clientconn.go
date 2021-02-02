@@ -547,7 +547,6 @@ func (cc *ClientConn) getResponseFromCache(mid uint16, resp *pool.Message) (bool
 }
 
 func (cc *ClientConn) Process(datagram []byte) error {
-	cc.activityMonitor.Notify()
 	if cc.session.MaxMessageSize() >= 0 && len(datagram) > cc.session.MaxMessageSize() {
 		return fmt.Errorf("max message size(%v) was exceeded %v", cc.session.MaxMessageSize(), len(datagram))
 	}
@@ -558,7 +557,7 @@ func (cc *ClientConn) Process(datagram []byte) error {
 		return err
 	}
 	req.SetSequence(cc.Sequence())
-
+	cc.activityMonitor.Notify()
 	cc.goPool(func() {
 		defer cc.activityMonitor.Notify()
 		reqMid := req.MessageID()

@@ -11,6 +11,7 @@ import (
 	"github.com/plgd-dev/go-coap/v2/message/codes"
 	coapNet "github.com/plgd-dev/go-coap/v2/net"
 	"github.com/plgd-dev/go-coap/v2/net/blockwise"
+	"github.com/plgd-dev/go-coap/v2/net/monitor/inactivity"
 	coapTCP "github.com/plgd-dev/go-coap/v2/tcp/message"
 	"github.com/plgd-dev/go-coap/v2/tcp/message/pool"
 )
@@ -31,6 +32,7 @@ type Session struct {
 	goPool                          GoPoolFunc
 	errors                          ErrorFunc
 	closeSocket                     bool
+	inactivityMonitor               Notifier
 
 	tokenHandlerContainer *HandlerContainer
 	midHandlerContainer   *HandlerContainer
@@ -60,10 +62,14 @@ func NewSession(
 	disablePeerTCPSignalMessageCSMs bool,
 	disableTCPSignalMessageCSM bool,
 	closeSocket bool,
+	inactivityMonitor Notifier,
 ) *Session {
 	ctx, cancel := context.WithCancel(ctx)
 	if errors == nil {
 		errors = func(error) {}
+	}
+	if inactivityMonitor == nil {
+		inactivityMonitor = inactivity.NewNilMonitor()
 	}
 
 	s := &Session{
@@ -80,6 +86,7 @@ func NewSession(
 		disablePeerTCPSignalMessageCSMs: disablePeerTCPSignalMessageCSMs,
 		disableTCPSignalMessageCSM:      disableTCPSignalMessageCSM,
 		closeSocket:                     closeSocket,
+		inactivityMonitor:               inactivityMonitor,
 	}
 	s.ctx.Store(&ctx)
 
@@ -286,6 +293,7 @@ func (s *Session) processBuffer(buffer *bytes.Buffer, cc *ClientConn) error {
 			}
 		}
 		req.SetSequence(s.Sequence())
+		s.inactivityMonitor.Notify()
 		if s.handleSignals(req, cc) {
 			continue
 		}

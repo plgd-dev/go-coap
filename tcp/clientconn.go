@@ -11,6 +11,7 @@ import (
 	"github.com/plgd-dev/go-coap/v2/message"
 	"github.com/plgd-dev/go-coap/v2/net/blockwise"
 	"github.com/plgd-dev/go-coap/v2/net/keepalive"
+	"github.com/plgd-dev/go-coap/v2/net/monitor/inactivity"
 	"github.com/plgd-dev/go-coap/v2/tcp/message/pool"
 
 	"github.com/plgd-dev/go-coap/v2/message/codes"
@@ -43,6 +44,9 @@ var defaultDialOptions = dialOptions{
 	blockwiseSZX:             blockwise.SZX1024,
 	blockwiseEnable:          true,
 	blockwiseTransferTimeout: time.Second * 3,
+	createInactivityMonitor: func() inactivity.Monitor {
+		return inactivity.NewNilMonitor()
+	},
 }
 
 type dialOptions struct {
@@ -62,11 +66,16 @@ type dialOptions struct {
 	disableTCPSignalMessageCSM      bool
 	tlsCfg                          *tls.Config
 	closeSocket                     bool
+	createInactivityMonitor         func() inactivity.Monitor
 }
 
 // A DialOption sets options such as credentials, keepalive parameters, etc.
 type DialOption interface {
 	applyDial(*dialOptions)
+}
+
+type Notifier interface {
+	Notify()
 }
 
 // ClientConn represents a virtual connection to a conceptual endpoint, to perform COAPs commands.
@@ -75,6 +84,7 @@ type ClientConn struct {
 	session                 *Session
 	observationTokenHandler *HandlerContainer
 	observationRequests     *kitSync.Map
+	activityMonitor         Notifier
 }
 
 // Dial creates a client connection to the given target.
@@ -133,6 +143,11 @@ func Client(conn net.Conn, opts ...DialOption) *ClientConn {
 	if cfg.errors == nil {
 		cfg.errors = func(error) {}
 	}
+	if cfg.createInactivityMonitor == nil {
+		cfg.createInactivityMonitor = func() inactivity.Monitor {
+			return inactivity.NewNilMonitor()
+		}
+	}
 	errors := cfg.errors
 	cfg.errors = func(err error) {
 		errors(fmt.Errorf("tcp: %w", err))
@@ -152,8 +167,12 @@ func Client(conn net.Conn, opts ...DialOption) *ClientConn {
 	}
 
 	observationTokenHandler := NewHandlerContainer()
-
-	l := coapNet.NewConn(conn, coapNet.WithHeartBeat(cfg.heartBeat))
+	monitor := cfg.createInactivityMonitor()
+	var cc *ClientConn
+	l := coapNet.NewConn(conn, coapNet.WithHeartBeat(cfg.heartBeat), coapNet.WithOnReadTimeout(func() error {
+		monitor.CheckInactivity(cc)
+		return nil
+	}))
 	session := NewSession(cfg.ctx,
 		l,
 		NewObservationHandler(observationTokenHandler, cfg.handler),
@@ -165,8 +184,9 @@ func Client(conn net.Conn, opts ...DialOption) *ClientConn {
 		cfg.disablePeerTCPSignalMessageCSMs,
 		cfg.disableTCPSignalMessageCSM,
 		cfg.closeSocket,
+		monitor,
 	)
-	cc := NewClientConn(session, observationTokenHandler, observationRequests)
+	cc = NewClientConn(session, observationTokenHandler, observationRequests)
 
 	go func() {
 		err := cc.Run()

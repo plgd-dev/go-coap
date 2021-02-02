@@ -13,8 +13,11 @@ import (
 //
 // Multiple goroutines may invoke methods on a Conn simultaneously.
 type Conn struct {
-	heartBeat  time.Duration
-	connection net.Conn
+	heartBeat      time.Duration
+	connection     net.Conn
+	onReadTimeout  func() error
+	onWriteTimeout func() error
+
 	readBuffer *bufio.Reader
 	lock       sync.Mutex
 }
@@ -24,7 +27,9 @@ var defaultConnOptions = connOptions{
 }
 
 type connOptions struct {
-	heartBeat time.Duration
+	heartBeat      time.Duration
+	onReadTimeout  func() error
+	onWriteTimeout func() error
 }
 
 // A ConnOption sets options such as heartBeat, errors parameters, etc.
@@ -39,9 +44,11 @@ func NewConn(c net.Conn, opts ...ConnOption) *Conn {
 		o.applyConn(&cfg)
 	}
 	connection := Conn{
-		connection: c,
-		heartBeat:  cfg.heartBeat,
-		readBuffer: bufio.NewReaderSize(c, 2048),
+		connection:     c,
+		heartBeat:      cfg.heartBeat,
+		readBuffer:     bufio.NewReaderSize(c, 2048),
+		onReadTimeout:  cfg.onReadTimeout,
+		onWriteTimeout: cfg.onWriteTimeout,
 	}
 	return &connection
 }
@@ -89,6 +96,12 @@ func (c *Conn) WriteWithContext(ctx context.Context, data []byte) error {
 				if n > 0 {
 					written += n
 				}
+				if c.onWriteTimeout != nil {
+					err := c.onWriteTimeout()
+					if err != nil {
+						return fmt.Errorf("cannot write to connection: on timeout returns error: %w", err)
+					}
+				}
 				continue
 			}
 			return fmt.Errorf("cannot write to connection: %w", err)
@@ -131,6 +144,12 @@ func (c *Conn) ReadWithContext(ctx context.Context, buffer []byte) (int, error) 
 		n, err := c.readBuffer.Read(buffer)
 		if err != nil {
 			if isTemporary(err, deadline) {
+				if c.onReadTimeout != nil {
+					err := c.onReadTimeout()
+					if err != nil {
+						return -1, fmt.Errorf("cannot read from connection: on timeout returns error: %w", err)
+					}
+				}
 				continue
 			}
 			return -1, fmt.Errorf("cannot read from connection: %w", err)

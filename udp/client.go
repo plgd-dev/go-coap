@@ -9,6 +9,7 @@ import (
 	"github.com/plgd-dev/go-coap/v2/message"
 	"github.com/plgd-dev/go-coap/v2/net/blockwise"
 	"github.com/plgd-dev/go-coap/v2/net/keepalive"
+	"github.com/plgd-dev/go-coap/v2/net/monitor/inactivity"
 	kitSync "github.com/plgd-dev/kit/sync"
 
 	"github.com/plgd-dev/go-coap/v2/message/codes"
@@ -47,6 +48,9 @@ var defaultDialOptions = dialOptions{
 	transmissionAcknowledgeTimeout: time.Second * 2,
 	transmissionMaxRetransmit:      4,
 	getMID:                         udpMessage.GetMID,
+	createInactivityMonitor: func() inactivity.Monitor {
+		return inactivity.NewNilMonitor()
+	},
 }
 
 type dialOptions struct {
@@ -67,6 +71,7 @@ type dialOptions struct {
 	transmissionMaxRetransmit      int
 	getMID                         GetMIDFunc
 	closeSocket                    bool
+	createInactivityMonitor        func() inactivity.Monitor
 }
 
 // A DialOption sets options such as credentials, keepalive parameters, etc.
@@ -129,6 +134,12 @@ func Client(conn *net.UDPConn, opts ...DialOption) *client.ClientConn {
 	if cfg.errors == nil {
 		cfg.errors = func(error) {}
 	}
+	if cfg.createInactivityMonitor == nil {
+		cfg.createInactivityMonitor = func() inactivity.Monitor {
+			return inactivity.NewNilMonitor()
+		}
+	}
+
 	errors := cfg.errors
 	cfg.errors = func(err error) {
 		errors(fmt.Errorf("udp: %v: %w", conn.RemoteAddr(), err))
@@ -149,15 +160,19 @@ func Client(conn *net.UDPConn, opts ...DialOption) *client.ClientConn {
 	}
 
 	observationTokenHandler := client.NewHandlerContainer()
-
-	l := coapNet.NewUDPConn(cfg.net, conn, coapNet.WithHeartBeat(cfg.heartBeat), coapNet.WithErrors(cfg.errors))
+	monitor := cfg.createInactivityMonitor()
+	var cc *client.ClientConn
+	l := coapNet.NewUDPConn(cfg.net, conn, coapNet.WithHeartBeat(cfg.heartBeat), coapNet.WithErrors(cfg.errors), coapNet.WithOnReadTimeout(func() error {
+		monitor.CheckInactivity(cc)
+		return nil
+	}))
 	session := NewSession(cfg.ctx,
 		l,
 		addr,
 		cfg.maxMessageSize,
 		cfg.closeSocket,
 	)
-	cc := client.NewClientConn(session,
+	cc = client.NewClientConn(session,
 		observationTokenHandler, observatioRequests, cfg.transmissionNStart, cfg.transmissionAcknowledgeTimeout, cfg.transmissionMaxRetransmit,
 		client.NewObservationHandler(observationTokenHandler, cfg.handler),
 		cfg.blockwiseSZX,
@@ -165,8 +180,7 @@ func Client(conn *net.UDPConn, opts ...DialOption) *client.ClientConn {
 		cfg.goPool,
 		cfg.errors,
 		cfg.getMID,
-		// The client does not support activity monitoring yet
-		nil,
+		monitor,
 	)
 
 	go func() {
