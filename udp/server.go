@@ -129,6 +129,12 @@ func NewServer(opt ...ServerOption) *Server {
 		opts.getMID = udpMessage.GetMID
 	}
 
+	if opts.createInactivityMonitor == nil {
+		opts.createInactivityMonitor = func() inactivity.Monitor {
+			return inactivity.NewNilMonitor()
+		}
+	}
+
 	ctx, cancel := context.WithCancel(opts.ctx)
 	serverStartedChan := make(chan struct{})
 
@@ -191,13 +197,11 @@ func (s *Server) Serve(l *coapNet.UDPConn) error {
 	m := make([]byte, s.maxMessageSize)
 	var wg sync.WaitGroup
 
-	if s.createInactivityMonitor != nil {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			s.handleInactivityMonitors()
-		}()
-	}
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		s.handleInactivityMonitors()
+	}()
 
 	for {
 		buf := m
@@ -234,8 +238,6 @@ func (s *Server) Serve(l *coapNet.UDPConn) error {
 			cc.Close()
 			s.errors(fmt.Errorf("%v: %w", cc.RemoteAddr(), err))
 		}
-		monitor := getInactivityMonitor(cc)
-		monitor.Notify()
 	}
 }
 
@@ -353,6 +355,7 @@ func (s *Server) getOrCreateClientConn(UDPConn *coapNet.UDPConn, raddr *net.UDPA
 			s.maxMessageSize,
 			false,
 		)
+		monitor := s.createInactivityMonitor()
 		cc = client.NewClientConn(
 			session,
 			obsHandler,
@@ -373,8 +376,9 @@ func (s *Server) getOrCreateClientConn(UDPConn *coapNet.UDPConn, raddr *net.UDPA
 			s.goPool,
 			s.errors,
 			s.getMID,
+			monitor,
 		)
-		cc.SetContextValue(inactivityMonitorKey, s.createInactivityMonitor())
+		cc.SetContextValue(inactivityMonitorKey, monitor)
 		cc.SetContextValue(closeKey, func() {
 			session.close()
 		})

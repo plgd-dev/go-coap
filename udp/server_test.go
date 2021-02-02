@@ -230,6 +230,9 @@ func TestServer_InactiveMonitor(t *testing.T) {
 	err = cc.Ping(ctx)
 	require.NoError(t, err)
 
+	// wait for fire inactivity
+	time.Sleep(time.Second * 2)
+
 	cc.Close()
 
 	checkCloseWg.Wait()

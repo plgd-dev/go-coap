@@ -69,12 +69,17 @@ type DialOption interface {
 	applyDial(*dialOptions)
 }
 
+type Notifier interface {
+	Notify()
+}
+
 // ClientConn represents a virtual connection to a conceptual endpoint, to perform COAPs commands.
 type ClientConn struct {
 	noCopy
 	session                 *Session
 	observationTokenHandler *HandlerContainer
 	observationRequests     *kitSync.Map
+	activityMonitor         Notifier
 }
 
 // Dial creates a client connection to the given target.
@@ -165,6 +170,7 @@ func Client(conn net.Conn, opts ...DialOption) *ClientConn {
 		cfg.disablePeerTCPSignalMessageCSMs,
 		cfg.disableTCPSignalMessageCSM,
 		cfg.closeSocket,
+		nil,
 	)
 	cc := NewClientConn(session, observationTokenHandler, observationRequests)
 

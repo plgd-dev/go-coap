@@ -165,6 +165,7 @@ func Client(conn *net.UDPConn, opts ...DialOption) *client.ClientConn {
 		cfg.goPool,
 		cfg.errors,
 		cfg.getMID,
+		nil,
 	)
 
 	go func() {

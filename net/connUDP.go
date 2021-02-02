@@ -181,8 +181,15 @@ func NewUDPConn(network string, c *net.UDPConn, opts ...UDPOption) *UDPConn {
 		packetConn = newPacketConnIPv4(ipv4.NewPacketConn(c))
 	}
 
-	connection := UDPConn{network: network, connection: c, heartBeat: cfg.heartBeat, packetConn: packetConn, errors: cfg.errors}
-	return &connection
+	return &UDPConn{
+		network:        network,
+		connection:     c,
+		heartBeat:      cfg.heartBeat,
+		packetConn:     packetConn,
+		errors:         cfg.errors,
+		onReadTimeout:  cfg.onReadTimeout,
+		onWriteTimeout: cfg.onWriteTimeout,
+	}
 }
 
 // LocalAddr returns the local network address. The Addr returned is shared by all invocations of LocalAddr, so do not modify it.

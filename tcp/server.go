@@ -10,6 +10,7 @@ import (
 
 	"github.com/plgd-dev/go-coap/v2/message"
 	"github.com/plgd-dev/go-coap/v2/net/blockwise"
+	"github.com/plgd-dev/go-coap/v2/net/monitor/inactivity"
 	"github.com/plgd-dev/go-coap/v2/tcp/message/pool"
 	kitSync "github.com/plgd-dev/kit/sync"
 
@@ -71,6 +72,7 @@ type serverOptions struct {
 	errors                          ErrorFunc
 	goPool                          GoPoolFunc
 	keepalive                       *keepalive.KeepAlive
+	createInactivityMonitor         func() inactivity.Monitor
 	blockwiseSZX                    blockwise.SZX
 	blockwiseEnable                 bool
 	blockwiseTransferTimeout        time.Duration
@@ -92,6 +94,7 @@ type Server struct {
 	errors                          ErrorFunc
 	goPool                          GoPoolFunc
 	keepalive                       *keepalive.KeepAlive
+	createInactivityMonitor         func() inactivity.Monitor
 	blockwiseSZX                    blockwise.SZX
 	blockwiseEnable                 bool
 	blockwiseTransferTimeout        time.Duration
@@ -115,6 +118,12 @@ func NewServer(opt ...ServerOption) *Server {
 
 	ctx, cancel := context.WithCancel(opts.ctx)
 
+	if opts.createInactivityMonitor == nil {
+		opts.createInactivityMonitor = func() inactivity.Monitor {
+			return inactivity.NewNilMonitor()
+		}
+	}
+
 	return &Server{
 		ctx:            ctx,
 		cancel:         cancel,
@@ -132,6 +141,7 @@ func NewServer(opt ...ServerOption) *Server {
 		disablePeerTCPSignalMessageCSMs: opts.disablePeerTCPSignalMessageCSMs,
 		disableTCPSignalMessageCSM:      opts.disableTCPSignalMessageCSM,
 		onNewClientConn:                 opts.onNewClientConn,
+		createInactivityMonitor:         opts.createInactivityMonitor,
 	}
 }
 
@@ -194,7 +204,16 @@ func (s *Server) Serve(l Listener) error {
 		}
 		if rw != nil {
 			wg.Add(1)
-			cc := s.createClientConn(coapNet.NewConn(rw, coapNet.WithHeartBeat(s.heartBeat)))
+			var cc *ClientConn
+			monitor := s.createInactivityMonitor()
+			opts := []coapNet.ConnOption{
+				coapNet.WithHeartBeat(s.heartBeat),
+				coapNet.WithOnReadTimeout(func() error {
+					monitor.CheckInactivity(cc)
+					return nil
+				}),
+			}
+			cc = s.createClientConn(coapNet.NewConn(rw, opts...), monitor)
 			if s.onNewClientConn != nil {
 				if tlscon, ok := rw.(*tls.Conn); ok {
 					s.onNewClientConn(cc, tlscon)
@@ -228,7 +247,7 @@ func (s *Server) Stop() {
 	s.cancel()
 }
 
-func (s *Server) createClientConn(connection *coapNet.Conn) *ClientConn {
+func (s *Server) createClientConn(connection *coapNet.Conn, monitor inactivity.Monitor) *ClientConn {
 	var blockWise *blockwise.BlockWise
 	if s.blockwiseEnable {
 		blockWise = blockwise.NewBlockWise(
@@ -248,7 +267,15 @@ func (s *Server) createClientConn(connection *coapNet.Conn) *ClientConn {
 			s.ctx,
 			connection,
 			NewObservationHandler(obsHandler, s.handler),
-			s.maxMessageSize, s.goPool, s.errors, s.blockwiseSZX, blockWise, s.disablePeerTCPSignalMessageCSMs, s.disableTCPSignalMessageCSM, true),
+			s.maxMessageSize,
+			s.goPool,
+			s.errors,
+			s.blockwiseSZX,
+			blockWise,
+			s.disablePeerTCPSignalMessageCSMs,
+			s.disableTCPSignalMessageCSM,
+			true,
+			monitor),
 		obsHandler, kitSync.NewMap(),
 	)
 

@@ -14,6 +14,7 @@ import (
 	"github.com/plgd-dev/go-coap/v2/message"
 	"github.com/plgd-dev/go-coap/v2/message/codes"
 	coapNet "github.com/plgd-dev/go-coap/v2/net"
+	"github.com/plgd-dev/go-coap/v2/net/monitor/inactivity"
 	"github.com/plgd-dev/go-coap/v2/tcp"
 	"github.com/plgd-dev/go-coap/v2/tcp/message/pool"
 	"github.com/stretchr/testify/require"
@@ -145,4 +146,67 @@ func TestServer_SetContextValueWithPKI(t *testing.T) {
 
 	_, err = cc.Get(ctx, "/")
 	require.NoError(t, err)
+}
+
+func TestServer_InactiveMonitor(t *testing.T) {
+	inactivityDetected := false
+
+	ld, err := coapNet.NewTCPListener("tcp", "")
+	require.NoError(t, err)
+	defer ld.Close()
+
+	var checkCloseWg sync.WaitGroup
+	defer checkCloseWg.Wait()
+	sd := tcp.NewServer(
+		tcp.WithOnNewClientConn(func(cc *tcp.ClientConn, tlscon *tls.Conn) {
+			checkCloseWg.Add(1)
+			cc.AddOnClose(func() {
+				checkCloseWg.Done()
+			})
+		}),
+		tcp.WithKeepAlive(nil),
+		tcp.WithInactivityMonitor(100*time.Millisecond, func(cc inactivity.ClientConn) {
+			require.False(t, inactivityDetected)
+			inactivityDetected = true
+			cc.Close()
+		}),
+	)
+
+	var serverWg sync.WaitGroup
+	defer func() {
+		sd.Stop()
+		serverWg.Wait()
+	}()
+	serverWg.Add(1)
+	go func() {
+		defer serverWg.Done()
+		err := sd.Serve(ld)
+		require.NoError(t, err)
+	}()
+
+	cc, err := tcp.Dial(
+		ld.Addr().String(),
+		tcp.WithKeepAlive(nil),
+	)
+	require.NoError(t, err)
+	checkCloseWg.Add(1)
+	cc.AddOnClose(func() {
+		checkCloseWg.Done()
+	})
+
+	// send ping to create serverside connection
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	err = cc.Ping(ctx)
+	require.NoError(t, err)
+
+	err = cc.Ping(ctx)
+	require.NoError(t, err)
+
+	time.Sleep(time.Millisecond * 300)
+
+	cc.Close()
+
+	checkCloseWg.Wait()
+	require.True(t, inactivityDetected)
 }

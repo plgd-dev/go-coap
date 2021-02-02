@@ -44,9 +44,11 @@ func NewConn(c net.Conn, opts ...ConnOption) *Conn {
 		o.applyConn(&cfg)
 	}
 	connection := Conn{
-		connection: c,
-		heartBeat:  cfg.heartBeat,
-		readBuffer: bufio.NewReaderSize(c, 2048),
+		connection:     c,
+		heartBeat:      cfg.heartBeat,
+		readBuffer:     bufio.NewReaderSize(c, 2048),
+		onReadTimeout:  cfg.onReadTimeout,
+		onWriteTimeout: cfg.onWriteTimeout,
 	}
 	return &connection
 }

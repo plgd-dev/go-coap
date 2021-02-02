@@ -19,8 +19,8 @@ type ClientConn = interface {
 }
 
 type inactivityMonitor struct {
-	inactiveInterval time.Duration
-	onInactive       OnInactiveFunc
+	duration   time.Duration
+	onInactive OnInactiveFunc
 	// lastActivity stores time.Time
 	lastActivity atomic.Value
 }
@@ -40,20 +40,33 @@ func CloseClientConn(cc ClientConn) {
 	cc.Close()
 }
 
-func NewInactivityMonitor(interval time.Duration, onInactive OnInactiveFunc) Monitor {
+func NewInactivityMonitor(duration time.Duration, onInactive OnInactiveFunc) Monitor {
 	m := &inactivityMonitor{
-		inactiveInterval: interval,
-		onInactive:       onInactive,
+		duration:   duration,
+		onInactive: onInactive,
 	}
 	m.Notify()
 	return m
 }
 
 func (m *inactivityMonitor) CheckInactivity(cc ClientConn) {
-	if m.onInactive == nil || m.inactiveInterval == time.Duration(0) {
+	if m.onInactive == nil || m.duration == time.Duration(0) {
 		return
 	}
-	if time.Until(m.LastActivity().Add(m.inactiveInterval)) <= 0 {
+	if time.Until(m.LastActivity().Add(m.duration)) <= 0 {
 		m.onInactive(cc)
 	}
+}
+
+type nilMonitor struct {
+}
+
+func (m *nilMonitor) CheckInactivity(cc ClientConn) {
+}
+
+func (m *nilMonitor) Notify() {
+}
+
+func NewNilMonitor() Monitor {
+	return &nilMonitor{}
 }

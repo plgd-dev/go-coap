@@ -128,14 +128,14 @@ type InactivityMonitorOpt struct {
 
 func (o InactivityMonitorOpt) apply(opts *serverOptions) {
 	opts.createInactivityMonitor = func() inactivity.Monitor {
-		return inactivity.NewInactivityMonitor(o.interval, o.onInactive)
+		return inactivity.NewInactivityMonitor(o.duration, o.onInactive)
 	}
 }
 
 // WithInactivityMonitor set deadline's for read operations over client connection.
 func WithInactivityMonitor(duration time.Duration, onInactive inactivity.OnInactiveFunc) InactivityMonitorOpt {
 	return InactivityMonitorOpt{
-		interval:   interval,
+		duration:   duration,
 		onInactive: onInactive,
 	}
 }
