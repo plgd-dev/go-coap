@@ -221,7 +221,7 @@ func TestServer_InactiveMonitor(t *testing.T) {
 	err = cc.Ping(ctx)
 	require.NoError(t, err)
 
-	time.Sleep(time.Millisecond * 300)
+	time.Sleep(time.Second * 2)
 
 	cc.Close()
 
