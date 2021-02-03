@@ -10,7 +10,6 @@ import (
 
 	"github.com/plgd-dev/go-coap/v2/message"
 	"github.com/plgd-dev/go-coap/v2/net/blockwise"
-	"github.com/plgd-dev/go-coap/v2/net/keepalive"
 	"github.com/plgd-dev/go-coap/v2/net/monitor/inactivity"
 	"github.com/plgd-dev/go-coap/v2/tcp/message/pool"
 
@@ -39,13 +38,15 @@ var defaultDialOptions = dialOptions{
 		return nil
 	},
 	dialer:                   &net.Dialer{Timeout: time.Second * 3},
-	keepalive:                keepalive.New(),
 	net:                      "tcp",
 	blockwiseSZX:             blockwise.SZX1024,
 	blockwiseEnable:          true,
 	blockwiseTransferTimeout: time.Second * 3,
 	createInactivityMonitor: func() inactivity.Monitor {
-		return inactivity.NewNilMonitor()
+		keepalive := inactivity.NewKeepAlive(3, inactivity.CloseClientConn, func(cc inactivity.ClientConn, receivePong func()) (func(), error) {
+			return cc.(*ClientConn).AsyncPing(receivePong)
+		})
+		return inactivity.NewInactivityMonitor(time.Second*2, keepalive.OnInactive)
 	},
 }
 
@@ -57,7 +58,6 @@ type dialOptions struct {
 	errors                          ErrorFunc
 	goPool                          GoPoolFunc
 	dialer                          *net.Dialer
-	keepalive                       *keepalive.KeepAlive
 	net                             string
 	blockwiseSZX                    blockwise.SZX
 	blockwiseEnable                 bool
@@ -194,14 +194,6 @@ func Client(conn net.Conn, opts ...DialOption) *ClientConn {
 			cfg.errors(fmt.Errorf("%v: %w", cc.RemoteAddr(), err))
 		}
 	}()
-	if cfg.keepalive != nil {
-		go func() {
-			err := cfg.keepalive.Run(cc)
-			if err != nil {
-				cfg.errors(fmt.Errorf("%v: %w", cc.RemoteAddr(), err))
-			}
-		}()
-	}
 
 	return cc
 }
@@ -425,23 +417,53 @@ func (cc *ClientConn) Context() context.Context {
 //
 // Use ctx to set timeout.
 func (cc *ClientConn) Ping(ctx context.Context) error {
-	token, err := message.GetToken()
-	if err != nil {
-		return fmt.Errorf("cannot get token: %w", err)
+	resp := make(chan bool, 1)
+	receivedPong := func() {
+		select {
+		case resp <- true:
+		default:
+		}
 	}
-	req := pool.AcquireMessage(ctx)
-	req.SetToken(token)
-	req.SetCode(codes.Ping)
-	defer pool.ReleaseMessage(req)
-	resp, err := cc.Do(req)
+	cancel, err := cc.AsyncPing(receivedPong)
 	if err != nil {
 		return err
 	}
-	defer pool.ReleaseMessage(resp)
-	if resp.Code() == codes.Pong {
+	defer cancel()
+	select {
+	case <-resp:
 		return nil
+	case <-ctx.Done():
+		return ctx.Err()
 	}
-	return fmt.Errorf("unexpected code(%v)", resp.Code())
+}
+
+// AsyncPing sends ping and receivedPong will be called when pong arrives. It returns cancellation of ping operation.
+func (cc *ClientConn) AsyncPing(receivedPong func()) (func(), error) {
+	token, err := message.GetToken()
+	if err != nil {
+		return nil, fmt.Errorf("cannot get token: %w", err)
+	}
+	req := pool.AcquireMessage(cc.Context())
+	req.SetToken(token)
+	req.SetCode(codes.Ping)
+	defer pool.ReleaseMessage(req)
+
+	err = cc.session.TokenHandler().Insert(token, func(w *ResponseWriter, r *pool.Message) {
+		if r.Code() == codes.Pong {
+			receivedPong()
+		}
+	})
+	if err != nil {
+		return nil, fmt.Errorf("cannot add token handler: %w", err)
+	}
+	err = cc.session.WriteMessage(req)
+	if err != nil {
+		cc.session.TokenHandler().Pop(token)
+		return nil, fmt.Errorf("cannot write request: %w", err)
+	}
+	return func() {
+		cc.session.TokenHandler().Pop(token)
+	}, nil
 }
 
 // Run reads and process requests from a connection, until the connection is not closed.

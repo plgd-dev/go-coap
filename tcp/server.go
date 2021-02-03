@@ -14,8 +14,6 @@ import (
 	"github.com/plgd-dev/go-coap/v2/tcp/message/pool"
 	kitSync "github.com/plgd-dev/kit/sync"
 
-	"github.com/plgd-dev/go-coap/v2/net/keepalive"
-
 	"github.com/plgd-dev/go-coap/v2/message/codes"
 
 	coapNet "github.com/plgd-dev/go-coap/v2/net"
@@ -57,12 +55,17 @@ var defaultServerOptions = serverOptions{
 		}()
 		return nil
 	},
-	keepalive:                keepalive.New(),
 	blockwiseEnable:          true,
 	blockwiseSZX:             blockwise.SZX1024,
 	blockwiseTransferTimeout: time.Second * 3,
 	onNewClientConn:          func(cc *ClientConn, tlscon *tls.Conn) {},
 	heartBeat:                time.Millisecond * 100,
+	createInactivityMonitor: func() inactivity.Monitor {
+		keepalive := inactivity.NewKeepAlive(3, inactivity.CloseClientConn, func(cc inactivity.ClientConn, receivePong func()) (func(), error) {
+			return cc.(*ClientConn).AsyncPing(receivePong)
+		})
+		return inactivity.NewInactivityMonitor(time.Second*2, keepalive.OnInactive)
+	},
 }
 
 type serverOptions struct {
@@ -71,7 +74,6 @@ type serverOptions struct {
 	handler                         HandlerFunc
 	errors                          ErrorFunc
 	goPool                          GoPoolFunc
-	keepalive                       *keepalive.KeepAlive
 	createInactivityMonitor         func() inactivity.Monitor
 	blockwiseSZX                    blockwise.SZX
 	blockwiseEnable                 bool
@@ -93,7 +95,6 @@ type Server struct {
 	handler                         HandlerFunc
 	errors                          ErrorFunc
 	goPool                          GoPoolFunc
-	keepalive                       *keepalive.KeepAlive
 	createInactivityMonitor         func() inactivity.Monitor
 	blockwiseSZX                    blockwise.SZX
 	blockwiseEnable                 bool
@@ -133,7 +134,6 @@ func NewServer(opt ...ServerOption) *Server {
 			opts.errors(fmt.Errorf("tcp: %w", err))
 		},
 		goPool:                          opts.goPool,
-		keepalive:                       opts.keepalive,
 		blockwiseSZX:                    opts.blockwiseSZX,
 		blockwiseEnable:                 opts.blockwiseEnable,
 		blockwiseTransferTimeout:        opts.blockwiseTransferTimeout,
@@ -228,16 +228,6 @@ func (s *Server) Serve(l Listener) error {
 					s.errors(fmt.Errorf("%v: %w", cc.RemoteAddr(), err))
 				}
 			}()
-			if s.keepalive != nil {
-				wg.Add(1)
-				go func() {
-					defer wg.Done()
-					err := s.keepalive.Run(cc)
-					if err != nil {
-						s.errors(fmt.Errorf("%v: %w", cc.RemoteAddr(), err))
-					}
-				}()
-			}
 		}
 	}
 }

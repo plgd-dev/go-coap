@@ -670,7 +670,6 @@ func TestClient_InactiveMonitor(t *testing.T) {
 				checkCloseWg.Done()
 			})
 		}),
-		dtls.WithKeepAlive(nil),
 	)
 
 	var serverWg sync.WaitGroup
@@ -686,7 +685,6 @@ func TestClient_InactiveMonitor(t *testing.T) {
 	}()
 
 	cc, err := dtls.Dial(ld.Addr().String(), clientCgf,
-		dtls.WithKeepAlive(nil),
 		dtls.WithInactivityMonitor(100*time.Millisecond, func(cc inactivity.ClientConn) {
 			require.False(t, inactivityDetected)
 			inactivityDetected = true
@@ -711,6 +709,68 @@ func TestClient_InactiveMonitor(t *testing.T) {
 	time.Sleep(time.Second * 2)
 
 	cc.Close()
+
+	checkCloseWg.Wait()
+	require.True(t, inactivityDetected)
+}
+
+func TestClient_KeepAliveMonitor(t *testing.T) {
+	inactivityDetected := false
+
+	srvCtx, srvCancel := context.WithTimeout(context.Background(), time.Second*3600)
+	defer srvCancel()
+	serverCgf, clientCgf, _, err := createDTLSConfig(srvCtx)
+	require.NoError(t, err)
+
+	ld, err := coapNet.NewDTLSListener("udp4", "", serverCgf)
+	require.NoError(t, err)
+	defer ld.Close()
+
+	var checkCloseWg sync.WaitGroup
+	defer checkCloseWg.Wait()
+	sd := dtls.NewServer(
+		dtls.WithOnNewClientConn(func(cc *client.ClientConn, tlscon *piondtls.Conn) {
+			checkCloseWg.Add(1)
+			cc.AddOnClose(func() {
+				checkCloseWg.Done()
+			})
+		}),
+		dtls.WithInactivityMonitor(time.Millisecond*10, func(cc inactivity.ClientConn) {
+			time.Sleep(time.Millisecond * 500)
+		}),
+	)
+
+	var serverWg sync.WaitGroup
+	defer func() {
+		sd.Stop()
+		serverWg.Wait()
+	}()
+	serverWg.Add(1)
+	go func() {
+		defer serverWg.Done()
+		err := sd.Serve(ld)
+		require.NoError(t, err)
+	}()
+
+	cc, err := dtls.Dial(
+		ld.Addr().String(),
+		clientCgf,
+		dtls.WithKeepAlive(3, 100*time.Millisecond, func(cc inactivity.ClientConn) {
+			require.False(t, inactivityDetected)
+			inactivityDetected = true
+			cc.Close()
+		}),
+	)
+	require.NoError(t, err)
+	checkCloseWg.Add(1)
+	cc.AddOnClose(func() {
+		checkCloseWg.Done()
+	})
+
+	// send ping to create serverside connection
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	cc.Ping(ctx)
 
 	checkCloseWg.Wait()
 	require.True(t, inactivityDetected)

@@ -53,7 +53,7 @@ func TestClientConn_Observe(t *testing.T) {
 			var wg sync.WaitGroup
 			defer wg.Wait()
 
-			s := NewServer(WithKeepAlive(nil), WithHandlerFunc(func(w *ResponseWriter, r *pool.Message) {
+			s := NewServer(WithHandlerFunc(func(w *ResponseWriter, r *pool.Message) {
 				switch r.Code() {
 				case codes.PUT, codes.POST, codes.DELETE:
 					w.SetResponse(codes.NotFound, message.TextPlain, nil)
@@ -114,7 +114,7 @@ func TestClientConn_Observe(t *testing.T) {
 				require.NoError(t, err)
 			}()
 
-			cc, err := Dial(l.Addr().String(), WithKeepAlive(nil))
+			cc, err := Dial(l.Addr().String())
 			require.NoError(t, err)
 			defer cc.Close()
 

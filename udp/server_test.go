@@ -191,7 +191,6 @@ func TestServer_InactiveMonitor(t *testing.T) {
 				checkCloseWg.Done()
 			})
 		}),
-		udp.WithKeepAlive(nil),
 		udp.WithInactivityMonitor(100*time.Millisecond, func(cc inactivity.ClientConn) {
 			require.False(t, inactivityDetected)
 			inactivityDetected = true
@@ -213,7 +212,6 @@ func TestServer_InactiveMonitor(t *testing.T) {
 
 	cc, err := udp.Dial(
 		ld.LocalAddr().String(),
-		udp.WithKeepAlive(nil),
 	)
 	require.NoError(t, err)
 	checkCloseWg.Add(1)
@@ -234,6 +232,63 @@ func TestServer_InactiveMonitor(t *testing.T) {
 	time.Sleep(time.Second * 2)
 
 	cc.Close()
+
+	checkCloseWg.Wait()
+	require.True(t, inactivityDetected)
+}
+
+func TestServer_KeepAliveMonitor(t *testing.T) {
+	inactivityDetected := false
+
+	ld, err := coapNet.NewListenUDP("udp4", "")
+	require.NoError(t, err)
+	defer ld.Close()
+
+	var checkCloseWg sync.WaitGroup
+	defer checkCloseWg.Wait()
+	sd := udp.NewServer(
+		udp.WithOnNewClientConn(func(cc *client.ClientConn) {
+			checkCloseWg.Add(1)
+			cc.AddOnClose(func() {
+				checkCloseWg.Done()
+			})
+		}),
+		udp.WithKeepAlive(3, 100*time.Millisecond, func(cc inactivity.ClientConn) {
+			require.False(t, inactivityDetected)
+			inactivityDetected = true
+			cc.Close()
+		}),
+	)
+
+	var serverWg sync.WaitGroup
+	defer func() {
+		sd.Stop()
+		serverWg.Wait()
+	}()
+	serverWg.Add(1)
+	go func() {
+		defer serverWg.Done()
+		err := sd.Serve(ld)
+		require.NoError(t, err)
+	}()
+
+	cc, err := udp.Dial(
+		ld.LocalAddr().String(),
+		udp.WithInactivityMonitor(time.Millisecond*10, func(cc inactivity.ClientConn) {
+			time.Sleep(time.Millisecond * 500)
+			cc.Close()
+		}),
+	)
+	require.NoError(t, err)
+	checkCloseWg.Add(1)
+	cc.AddOnClose(func() {
+		checkCloseWg.Done()
+	})
+
+	// send ping to create serverside connection
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	cc.Ping(ctx)
 
 	checkCloseWg.Wait()
 	require.True(t, inactivityDetected)
