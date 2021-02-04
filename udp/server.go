@@ -11,7 +11,6 @@ import (
 	"github.com/plgd-dev/go-coap/v2/message/codes"
 	coapNet "github.com/plgd-dev/go-coap/v2/net"
 	"github.com/plgd-dev/go-coap/v2/net/blockwise"
-	"github.com/plgd-dev/go-coap/v2/net/keepalive"
 	"github.com/plgd-dev/go-coap/v2/net/monitor/inactivity"
 	"github.com/plgd-dev/go-coap/v2/udp/client"
 	udpMessage "github.com/plgd-dev/go-coap/v2/udp/message"
@@ -53,9 +52,8 @@ var defaultServerOptions = serverOptions{
 		}()
 		return nil
 	},
-	keepalive: keepalive.New(),
 	createInactivityMonitor: func() inactivity.Monitor {
-		return inactivity.NewInactivityMonitor(10*time.Minute, inactivity.CloseClientConn)
+		return inactivity.NewNilMonitor()
 	},
 	blockwiseEnable:                true,
 	blockwiseSZX:                   blockwise.SZX1024,
@@ -73,7 +71,6 @@ type serverOptions struct {
 	handler                        HandlerFunc
 	errors                         ErrorFunc
 	goPool                         GoPoolFunc
-	keepalive                      *keepalive.KeepAlive
 	createInactivityMonitor        func() inactivity.Monitor
 	net                            string
 	blockwiseSZX                   blockwise.SZX
@@ -91,7 +88,6 @@ type Server struct {
 	handler                        HandlerFunc
 	errors                         ErrorFunc
 	goPool                         GoPoolFunc
-	keepalive                      *keepalive.KeepAlive
 	createInactivityMonitor        func() inactivity.Monitor
 	blockwiseSZX                   blockwise.SZX
 	blockwiseEnable                bool
@@ -147,7 +143,6 @@ func NewServer(opt ...ServerOption) *Server {
 			opts.errors(fmt.Errorf("udp: %w", err))
 		},
 		goPool:                         opts.goPool,
-		keepalive:                      opts.keepalive,
 		createInactivityMonitor:        opts.createInactivityMonitor,
 		blockwiseSZX:                   opts.blockwiseSZX,
 		blockwiseEnable:                opts.blockwiseEnable,
@@ -221,16 +216,6 @@ func (s *Server) Serve(l *coapNet.UDPConn) error {
 		if created {
 			if s.onNewClientConn != nil {
 				s.onNewClientConn(cc)
-			}
-			if s.keepalive != nil {
-				wg.Add(1)
-				go func() {
-					defer wg.Done()
-					err := s.keepalive.Run(cc)
-					if err != nil {
-						s.errors(fmt.Errorf("%v: %w", cc.RemoteAddr(), err))
-					}
-				}()
 			}
 		}
 		err = cc.Process(buf)

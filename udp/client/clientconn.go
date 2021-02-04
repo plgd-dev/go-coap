@@ -429,20 +429,50 @@ func (cc *ClientConn) Context() context.Context {
 //
 // Use ctx to set timeout.
 func (cc *ClientConn) Ping(ctx context.Context) error {
-	req := pool.AcquireMessage(ctx)
-	defer pool.ReleaseMessage(req)
-	req.SetType(udpMessage.Confirmable)
-	req.SetCode(codes.Empty)
-	req.SetMessageID(cc.getMID())
-	resp, err := cc.doWithMID(req)
+	resp := make(chan bool, 1)
+	receivedPong := func() {
+		select {
+		case resp <- true:
+		default:
+		}
+	}
+	cancel, err := cc.AsyncPing(receivedPong)
 	if err != nil {
 		return err
 	}
-	defer pool.ReleaseMessage(resp)
-	if resp.Type() == udpMessage.Reset || resp.Type() == udpMessage.Acknowledgement {
+	defer cancel()
+	select {
+	case <-resp:
 		return nil
+	case <-ctx.Done():
+		return ctx.Err()
 	}
-	return fmt.Errorf("unexpected response(%v)", resp)
+}
+
+// AsyncPing sends ping and receivedPong will be called when pong arrives. It returns cancellation of ping operation.
+func (cc *ClientConn) AsyncPing(receivedPong func()) (func(), error) {
+	req := pool.AcquireMessage(cc.Context())
+	defer pool.ReleaseMessage(req)
+	req.SetType(udpMessage.Confirmable)
+	req.SetCode(codes.Empty)
+	mid := cc.getMID()
+	req.SetMessageID(mid)
+	err := cc.midHandlerContainer.Insert(mid, func(w *ResponseWriter, r *pool.Message) {
+		if r.Type() == udpMessage.Reset || r.Type() == udpMessage.Acknowledgement {
+			receivedPong()
+		}
+	})
+	if err != nil {
+		return nil, fmt.Errorf("cannot insert mid handler: %w", err)
+	}
+	err = cc.session.WriteMessage(req)
+	if err != nil {
+		cc.midHandlerContainer.Pop(mid)
+		return nil, fmt.Errorf("cannot write request: %w", err)
+	}
+	return func() {
+		cc.midHandlerContainer.Pop(mid)
+	}, nil
 }
 
 // Run reads and process requests from a connection, until the connection is closed.

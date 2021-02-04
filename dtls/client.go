@@ -9,7 +9,6 @@ import (
 	"github.com/pion/dtls/v2"
 	"github.com/plgd-dev/go-coap/v2/message"
 	"github.com/plgd-dev/go-coap/v2/net/blockwise"
-	"github.com/plgd-dev/go-coap/v2/net/keepalive"
 	"github.com/plgd-dev/go-coap/v2/net/monitor/inactivity"
 
 	"github.com/plgd-dev/go-coap/v2/message/codes"
@@ -40,7 +39,6 @@ var defaultDialOptions = dialOptions{
 		return nil
 	},
 	dialer:                         &net.Dialer{Timeout: time.Second * 3},
-	keepalive:                      keepalive.New(),
 	net:                            "udp",
 	blockwiseSZX:                   blockwise.SZX1024,
 	blockwiseEnable:                true,
@@ -62,7 +60,6 @@ type dialOptions struct {
 	errors                         ErrorFunc
 	goPool                         GoPoolFunc
 	dialer                         *net.Dialer
-	keepalive                      *keepalive.KeepAlive
 	net                            string
 	blockwiseSZX                   blockwise.SZX
 	blockwiseEnable                bool
@@ -189,14 +186,6 @@ func Client(conn *dtls.Conn, opts ...DialOption) *client.ClientConn {
 			cfg.errors(err)
 		}
 	}()
-	if cfg.keepalive != nil {
-		go func() {
-			err := cfg.keepalive.Run(cc)
-			if err != nil {
-				cfg.errors(err)
-			}
-		}()
-	}
 
 	return cc
 }

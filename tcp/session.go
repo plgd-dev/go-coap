@@ -212,7 +212,10 @@ func (s *Session) handleSignals(r *pool.Message, cc *ClientConn) bool {
 		}
 		return true
 	case codes.Pong:
-		s.processReq(r, cc)
+		h, err := s.tokenHandlerContainer.Pop(r.Token())
+		if err == nil {
+			s.processReq(r, cc, h)
+		}
 		return true
 	}
 	return false
@@ -239,11 +242,11 @@ func (s *Session) TokenHandler() *HandlerContainer {
 	return s.tokenHandlerContainer
 }
 
-func (s *Session) processReq(req *pool.Message, cc *ClientConn) {
+func (s *Session) processReq(req *pool.Message, cc *ClientConn, handler func(w *ResponseWriter, r *pool.Message)) {
 	origResp := pool.AcquireMessage(s.Context())
 	origResp.SetToken(req.Token())
 	w := NewResponseWriter(origResp, cc, req.Options())
-	s.Handle(w, req)
+	handler(w, req)
 	defer pool.ReleaseMessage(w.response)
 	if !req.IsHijacked() {
 		pool.ReleaseMessage(req)
@@ -298,7 +301,7 @@ func (s *Session) processBuffer(buffer *bytes.Buffer, cc *ClientConn) error {
 			continue
 		}
 		s.goPool(func() {
-			s.processReq(req, cc)
+			s.processReq(req, cc, s.Handle)
 		})
 	}
 	return nil

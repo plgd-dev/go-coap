@@ -501,7 +501,6 @@ func TestClient_InactiveMonitor(t *testing.T) {
 				checkCloseWg.Done()
 			})
 		}),
-		WithKeepAlive(nil),
 	)
 
 	var serverWg sync.WaitGroup
@@ -518,7 +517,6 @@ func TestClient_InactiveMonitor(t *testing.T) {
 
 	cc, err := Dial(
 		ld.Addr().String(),
-		WithKeepAlive(nil),
 		WithInactivityMonitor(100*time.Millisecond, func(cc inactivity.ClientConn) {
 			require.False(t, inactivityDetected)
 			inactivityDetected = true
@@ -543,6 +541,62 @@ func TestClient_InactiveMonitor(t *testing.T) {
 	time.Sleep(time.Second * 2)
 
 	cc.Close()
+
+	checkCloseWg.Wait()
+	require.True(t, inactivityDetected)
+}
+
+func TestClient_KeepAliveMonitor(t *testing.T) {
+	inactivityDetected := false
+
+	ld, err := coapNet.NewTCPListener("tcp", "")
+	require.NoError(t, err)
+	defer ld.Close()
+
+	var checkCloseWg sync.WaitGroup
+	defer checkCloseWg.Wait()
+	sd := NewServer(
+		WithOnNewClientConn(func(cc *ClientConn, tlscon *tls.Conn) {
+			checkCloseWg.Add(1)
+			cc.AddOnClose(func() {
+				checkCloseWg.Done()
+			})
+		}),
+		WithInactivityMonitor(time.Millisecond*10, func(cc inactivity.ClientConn) {
+			time.Sleep(time.Millisecond * 500)
+		}),
+	)
+
+	var serverWg sync.WaitGroup
+	defer func() {
+		sd.Stop()
+		serverWg.Wait()
+	}()
+	serverWg.Add(1)
+	go func() {
+		defer serverWg.Done()
+		err := sd.Serve(ld)
+		require.NoError(t, err)
+	}()
+
+	cc, err := Dial(
+		ld.Addr().String(),
+		WithKeepAlive(3, 100*time.Millisecond, func(cc inactivity.ClientConn) {
+			require.False(t, inactivityDetected)
+			inactivityDetected = true
+			cc.Close()
+		}),
+	)
+	require.NoError(t, err)
+	checkCloseWg.Add(1)
+	cc.AddOnClose(func() {
+		checkCloseWg.Done()
+	})
+
+	// send ping to create serverside connection
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	cc.Ping(ctx)
 
 	checkCloseWg.Wait()
 	require.True(t, inactivityDetected)
