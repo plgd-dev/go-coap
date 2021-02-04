@@ -9,16 +9,16 @@ type KeepAlive struct {
 	sendToken uint64
 	numFails  uint32
 
-	limitFails uint32
+	maxRetries uint32
 	onInactive OnInactiveFunc
 
 	sendPing   func(cc ClientConn, receivePong func()) (func(), error)
 	cancelPing func()
 }
 
-func NewKeepAlive(limitFails uint32, onInactive OnInactiveFunc, sendPing func(cc ClientConn, receivePong func()) (func(), error)) *KeepAlive {
+func NewKeepAlive(maxRetries uint32, onInactive OnInactiveFunc, sendPing func(cc ClientConn, receivePong func()) (func(), error)) *KeepAlive {
 	return &KeepAlive{
-		limitFails: limitFails,
+		maxRetries: maxRetries,
 		sendPing:   sendPing,
 		onInactive: onInactive,
 	}
@@ -30,7 +30,7 @@ func (m *KeepAlive) OnInactive(cc ClientConn) {
 		m.cancelPing()
 		m.cancelPing = nil
 	}
-	if v >= m.limitFails {
+	if v >= m.maxRetries {
 		m.onInactive(cc)
 		return
 	}

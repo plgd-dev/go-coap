@@ -104,34 +104,34 @@ func WithGoPool(goPool GoPoolFunc) GoPoolOpt {
 
 // KeepAliveOpt keepalive option.
 type KeepAliveOpt struct {
-	limitFails uint32
-	duration   time.Duration
+	maxRetries uint32
+	timeout    time.Duration
 	onInactive inactivity.OnInactiveFunc
 }
 
 func (o KeepAliveOpt) apply(opts *serverOptions) {
 	opts.createInactivityMonitor = func() inactivity.Monitor {
-		keepalive := inactivity.NewKeepAlive(o.limitFails, o.onInactive, func(cc inactivity.ClientConn, receivePong func()) (func(), error) {
+		keepalive := inactivity.NewKeepAlive(o.maxRetries, o.onInactive, func(cc inactivity.ClientConn, receivePong func()) (func(), error) {
 			return cc.(*client.ClientConn).AsyncPing(receivePong)
 		})
-		return inactivity.NewInactivityMonitor(o.duration, keepalive.OnInactive)
+		return inactivity.NewInactivityMonitor(o.timeout, keepalive.OnInactive)
 	}
 }
 
 func (o KeepAliveOpt) applyDial(opts *dialOptions) {
 	opts.createInactivityMonitor = func() inactivity.Monitor {
-		keepalive := inactivity.NewKeepAlive(o.limitFails, o.onInactive, func(cc inactivity.ClientConn, receivePong func()) (func(), error) {
+		keepalive := inactivity.NewKeepAlive(o.maxRetries, o.onInactive, func(cc inactivity.ClientConn, receivePong func()) (func(), error) {
 			return cc.(*client.ClientConn).AsyncPing(receivePong)
 		})
-		return inactivity.NewInactivityMonitor(o.duration, keepalive.OnInactive)
+		return inactivity.NewInactivityMonitor(o.timeout, keepalive.OnInactive)
 	}
 }
 
 // WithKeepAlive monitoring's client connection's.
-func WithKeepAlive(limitFails uint32, duration time.Duration, onInactive inactivity.OnInactiveFunc) KeepAliveOpt {
+func WithKeepAlive(maxRetries uint32, timeout time.Duration, onInactive inactivity.OnInactiveFunc) KeepAliveOpt {
 	return KeepAliveOpt{
-		limitFails: limitFails,
-		duration:   duration,
+		maxRetries: maxRetries,
+		timeout:    timeout,
 		onInactive: onInactive,
 	}
 }

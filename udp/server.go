@@ -53,7 +53,7 @@ var defaultServerOptions = serverOptions{
 		return nil
 	},
 	createInactivityMonitor: func() inactivity.Monitor {
-		return inactivity.NewInactivityMonitor(10*time.Minute, inactivity.CloseClientConn)
+		return inactivity.NewNilMonitor()
 	},
 	blockwiseEnable:                true,
 	blockwiseSZX:                   blockwise.SZX1024,

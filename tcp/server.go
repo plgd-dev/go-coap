@@ -61,10 +61,7 @@ var defaultServerOptions = serverOptions{
 	onNewClientConn:          func(cc *ClientConn, tlscon *tls.Conn) {},
 	heartBeat:                time.Millisecond * 100,
 	createInactivityMonitor: func() inactivity.Monitor {
-		keepalive := inactivity.NewKeepAlive(3, inactivity.CloseClientConn, func(cc inactivity.ClientConn, receivePong func()) (func(), error) {
-			return cc.(*ClientConn).AsyncPing(receivePong)
-		})
-		return inactivity.NewInactivityMonitor(time.Second*2, keepalive.OnInactive)
+		return inactivity.NewNilMonitor()
 	},
 }
 
