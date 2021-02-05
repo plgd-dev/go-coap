@@ -759,16 +759,23 @@ func (b *BlockWise) processReceivedMessage(w ResponseWriter, r Message, maxSzx S
 		if err != nil {
 			return fmt.Errorf("cannot seek to off(%v) of cached request: %w", off, err)
 		}
-		_, err = r.Body().Seek(0, io.SeekStart)
-		if err != nil {
-			return fmt.Errorf("cannot seek to start of request: %w", err)
+		if r.Body() != nil {
+			_, err = r.Body().Seek(0, io.SeekStart)
+			if err != nil {
+				return fmt.Errorf("cannot seek to start of request: %w", err)
+			}
+			written, err := io.Copy(payloadFile, r.Body())
+			if err != nil {
+				return fmt.Errorf("cannot copy to cached request: %w", err)
+			}
+			payloadSize = copyn + written
+		} else {
+			payloadSize = copyn
 		}
-		written, err := io.Copy(payloadFile, r.Body())
+		err = payloadFile.Truncate(payloadSize)
 		if err != nil {
-			return fmt.Errorf("cannot copy to cached request: %w", err)
+			return fmt.Errorf("cannot truncate cached request: %w", err)
 		}
-		payloadSize = copyn + written
-
 	}
 	if !more {
 		b.receivingMessagesCache.Delete(tokenStr)
