@@ -736,9 +736,13 @@ func (b *BlockWise) processReceivedMessage(w ResponseWriter, r Message, maxSzx S
 	cachedReceivedMessageETAG, errCachedReceivedMessageETAG := cachedReceivedMessage.GetOptionBytes(message.ETag)
 	switch {
 	case errETAG == nil && errCachedReceivedMessageETAG != nil:
-		return fmt.Errorf("received message doesn't contains ETAG but cached received message contains it(%v)", cachedReceivedMessageETAG)
+		if len(cachedReceivedMessageETAG) > 0 { // make sure there is an etag there
+			return fmt.Errorf("received message doesn't contains ETAG but cached received message contains it(%v)", cachedReceivedMessageETAG)
+		}
 	case errETAG != nil && errCachedReceivedMessageETAG == nil:
-		return fmt.Errorf("received message contains ETAG(%v) but cached received message doesn't", rETAG)
+		if len(rETAG) > 0 { // make sure there is an etag there
+			return fmt.Errorf("received message contains ETAG(%v) but cached received message doesn't", rETAG)
+		}
 	case !bytes.Equal(rETAG, cachedReceivedMessageETAG):
 		return fmt.Errorf("received message ETAG(%v) is not equal to cached received message ETAG(%v)", rETAG, cachedReceivedMessageETAG)
 	}
