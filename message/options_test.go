@@ -220,7 +220,7 @@ func TestRemoveBytesOption(t *testing.T) {
 
 func TestPathOption(t *testing.T) {
 	options := make(Options, 0, 10)
-	path := "a/b/c"
+	path := "/a/b/c"
 	buf := make([]byte, 256)
 	options, bufLen, err := options.SetPath(buf, path)
 	if err != nil {
