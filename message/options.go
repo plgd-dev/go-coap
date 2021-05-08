@@ -50,15 +50,14 @@ func (options Options) path(buf []byte) (int, error) {
 		needed += len(options[i].Value)
 		needed++
 	}
-	needed--
+
 	if len(buf) < needed {
 		return needed, ErrTooSmall
 	}
 	for i := firstIdx; i < lastIdx; i++ {
-		if i != firstIdx {
-			buf[0] = '/'
-			buf = buf[1:]
-		}
+		buf[0] = '/'
+		buf = buf[1:]
+
 		copy(buf, options[i].Value)
 		buf = buf[len(options[i].Value):]
 	}
