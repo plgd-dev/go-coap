@@ -27,6 +27,13 @@ func TestMux(t *testing.T) {
 			vars:         map[string]string{},
 		},
 		{
+			title:        "Path route with pattern no constraints, match",
+			path:         "/111/222/333",
+			pathTemplate: "/111/{v1}/333",
+			shouldMatch:  true,
+			vars:         map[string]string{"v1": "222"},
+		},
+		{
 			title:        "Path route with pattern, match",
 			path:         "/111/222/333",
 			pathTemplate: "/111/{v1:[0-9]{3}}/333",
