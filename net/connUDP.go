@@ -267,6 +267,9 @@ func (c *UDPConn) WriteMulticast(ctx context.Context, raddr *net.UDPAddr, hopLim
 	defer c.lock.Unlock()
 LOOP:
 	for _, iface := range ifaces {
+		if iface.Flags&net.FlagMulticast == 0 {
+			continue
+		}
 		ifaceAddrs, err := iface.Addrs()
 		if err != nil {
 			continue
