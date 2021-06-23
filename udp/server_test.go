@@ -135,7 +135,7 @@ func TestServer_Discover(t *testing.T) {
 	err = sd.Discover(ctx, multicastAddr, path, recv.process)
 	require.NoError(t, err)
 	got := recv.pop()
-	assert.Greater(t, len(got), 1)
+	assert.Greater(t, len(got), 0)
 	assert.Equal(t, codes.BadRequest, got[0].Code())
 }
 
