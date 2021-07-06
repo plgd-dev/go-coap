@@ -23,18 +23,18 @@ type MulticastOption interface {
 }
 
 // Discover sends GET to multicast address and wait for responses until context timeouts or server shutdown.
-func (s *Server) Discover(ctx context.Context, multicastAddr, path string, receiverFunc func(cc *client.ClientConn, resp *pool.Message), opts ...MulticastOption) error {
+func (s *Server) Discover(ctx context.Context, address, path string, receiverFunc func(cc *client.ClientConn, resp *pool.Message), opts ...MulticastOption) error {
 	req, err := client.NewGetRequest(ctx, path)
 	if err != nil {
 		return fmt.Errorf("cannot create discover request: %w", err)
 	}
 	req.SetMessageID(s.getMID())
 	defer pool.ReleaseMessage(req)
-	return s.DiscoveryRequest(req, multicastAddr, receiverFunc, opts...)
+	return s.DiscoveryRequest(req, address, receiverFunc, opts...)
 }
 
 // DiscoveryRequest sends request to multicast addressand wait for responses until request timeouts or server shutdown.
-func (s *Server) DiscoveryRequest(req *pool.Message, multicastAddr string, receiverFunc func(cc *client.ClientConn, resp *pool.Message), opts ...MulticastOption) error {
+func (s *Server) DiscoveryRequest(req *pool.Message, address string, receiverFunc func(cc *client.ClientConn, resp *pool.Message), opts ...MulticastOption) error {
 	token := req.Token()
 	if len(token) == 0 {
 		return fmt.Errorf("invalid token")
@@ -47,13 +47,11 @@ func (s *Server) DiscoveryRequest(req *pool.Message, multicastAddr string, recei
 	if c == nil {
 		return fmt.Errorf("server doesn't serve connection")
 	}
-	addr, err := net.ResolveUDPAddr(c.Network(), multicastAddr)
+	addr, err := net.ResolveUDPAddr(c.Network(), address)
 	if err != nil {
 		return fmt.Errorf("cannot resolve address: %w", err)
 	}
-	if !addr.IP.IsMulticast() {
-		return fmt.Errorf("invalid multicast address")
-	}
+
 	data, err := req.Marshal()
 	if err != nil {
 		return fmt.Errorf("cannot marshal req: %w", err)
@@ -68,10 +66,18 @@ func (s *Server) DiscoveryRequest(req *pool.Message, multicastAddr string, recei
 	}
 	defer s.multicastHandler.Pop(token)
 
-	err = c.WriteMulticast(req.Context(), addr, cfg.hopLimit, data)
-	if err != nil {
-		return err
+	if addr.IP.IsMulticast() {
+		err = c.WriteMulticast(req.Context(), addr, cfg.hopLimit, data)
+		if err != nil {
+			return err
+		}
+	} else {
+		err = c.WriteWithContext(req.Context(), addr, data)
+		if err != nil {
+			return err
+		}
 	}
+
 	select {
 	case <-req.Context().Done():
 		return nil
