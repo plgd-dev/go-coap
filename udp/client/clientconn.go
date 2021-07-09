@@ -57,6 +57,7 @@ type ClientConn struct {
 	goPool                  GoPoolFunc
 	errors                  ErrorFunc
 	responseMsgCache        *cache.Cache
+	msgIdMutex              *MutexMap
 	activityMonitor         Notifier
 	deduplicateMesssages    *cache.Cache
 
@@ -133,6 +134,7 @@ func NewClientConn(
 		msgID:                 uint32(msgID),
 		// EXCHANGE_LIFETIME = 247
 		responseMsgCache:     cache.New(247*time.Second, 60*time.Second),
+		msgIdMutex:           NewMutexMap(),
 		deduplicateMesssages: cache.New(247*time.Second, 60*time.Second),
 		activityMonitor:      activityMonitor,
 	}
@@ -634,6 +636,12 @@ func (cc *ClientConn) Process(datagram []byte) error {
 	cc.goPool(func() {
 		defer cc.activityMonitor.Notify()
 		reqMid := req.MessageID()
+
+		// The same message ID can not be handled concurrently
+		// for deduplication to work
+		l := cc.msgIdMutex.Lock(reqMid)
+		defer l.Unlock()
+
 		origResp := pool.AcquireMessage(cc.Context())
 		origResp.SetToken(req.Token())
 		// If a request is sent in a Non-confirmable message, then the response
