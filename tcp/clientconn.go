@@ -273,7 +273,7 @@ func (cc *ClientConn) WriteMessage(req *pool.Message) error {
 	if !cc.session.PeerBlockWiseTransferEnabled() || cc.session.blockWise == nil {
 		return cc.writeMessage(req)
 	}
-	return cc.session.blockWise.WriteMessage(req, cc.session.blockwiseSZX, cc.session.maxMessageSize, func(bwreq blockwise.Message) error {
+	return cc.session.blockWise.WriteMessage(cc.RemoteAddr(), req, cc.session.blockwiseSZX, cc.session.maxMessageSize, func(bwreq blockwise.Message) error {
 		return cc.writeMessage(bwreq.(*pool.Message))
 	})
 }

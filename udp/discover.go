@@ -6,6 +6,7 @@ import (
 	"net"
 
 	"github.com/plgd-dev/go-coap/v2/udp/client"
+	"github.com/plgd-dev/go-coap/v2/udp/message"
 	"github.com/plgd-dev/go-coap/v2/udp/message/pool"
 )
 
@@ -29,6 +30,7 @@ func (s *Server) Discover(ctx context.Context, multicastAddr, path string, recei
 		return fmt.Errorf("cannot create discover request: %w", err)
 	}
 	req.SetMessageID(s.getMID())
+	req.SetType(message.NonConfirmable)
 	defer pool.ReleaseMessage(req)
 	return s.DiscoveryRequest(req, multicastAddr, receiverFunc, opts...)
 }

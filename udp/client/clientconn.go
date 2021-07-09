@@ -259,7 +259,7 @@ func (cc *ClientConn) WriteMessage(req *pool.Message) error {
 	if cc.blockWise == nil {
 		return cc.writeMessage(req)
 	}
-	return cc.blockWise.WriteMessage(req, cc.blockwiseSZX, cc.session.MaxMessageSize(), func(bwreq blockwise.Message) error {
+	return cc.blockWise.WriteMessage(cc.RemoteAddr(), req, cc.blockwiseSZX, cc.session.MaxMessageSize(), func(bwreq blockwise.Message) error {
 		return cc.writeMessage(bwreq.(*pool.Message))
 	})
 }
@@ -504,6 +504,10 @@ func (b *bwResponseWriter) Message() blockwise.Message {
 func (b *bwResponseWriter) SetMessage(m blockwise.Message) {
 	pool.ReleaseMessage(b.w.response)
 	b.w.response = m.(*pool.Message)
+}
+
+func (b *bwResponseWriter) RemoteAddr() net.Addr {
+	return b.w.cc.RemoteAddr()
 }
 
 func (cc *ClientConn) handleBW(w *ResponseWriter, r *pool.Message) {

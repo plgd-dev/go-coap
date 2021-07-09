@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"net"
 	"sync"
 	"time"
 
@@ -91,6 +92,7 @@ func (s SZX) Size() int64 {
 type ResponseWriter interface {
 	Message() Message
 	SetMessage(Message)
+	RemoteAddr() net.Addr
 }
 
 // Message defines message interface for blockwise transfer.
@@ -346,9 +348,10 @@ func (b *BlockWise) Do(r Message, maxSzx SZX, maxMessageSize int, do func(req Me
 type writeMessageResponse struct {
 	request        Message
 	releaseMessage func(Message)
+	remoteAddr     net.Addr
 }
 
-func NewWriteRequestResponse(request Message, acquireMessage func(context.Context) Message, releaseMessage func(Message)) *writeMessageResponse {
+func NewWriteRequestResponse(remoteAddr net.Addr, request Message, acquireMessage func(context.Context) Message, releaseMessage func(Message)) *writeMessageResponse {
 	req := acquireMessage(request.Context())
 	req.SetCode(request.Code())
 	req.SetToken(request.Token())
@@ -357,6 +360,7 @@ func NewWriteRequestResponse(request Message, acquireMessage func(context.Contex
 	return &writeMessageResponse{
 		request:        req,
 		releaseMessage: releaseMessage,
+		remoteAddr:     remoteAddr,
 	}
 }
 
@@ -369,8 +373,12 @@ func (w *writeMessageResponse) Message() Message {
 	return w.request
 }
 
+func (w *writeMessageResponse) RemoteAddr() net.Addr {
+	return w.remoteAddr
+}
+
 // WriteMessage sends an coap message via blockwise transfer.
-func (b *BlockWise) WriteMessage(request Message, maxSZX SZX, maxMessageSize int, writeMessage func(r Message) error) error {
+func (b *BlockWise) WriteMessage(remoteAddr net.Addr, request Message, maxSZX SZX, maxMessageSize int, writeMessage func(r Message) error) error {
 	req := b.newSendRequestMessage(request)
 	tokenStr := req.Token().String()
 	b.bwSendedRequest.Store(tokenStr, req)
@@ -379,7 +387,7 @@ func (b *BlockWise) WriteMessage(request Message, maxSZX SZX, maxMessageSize int
 		return fmt.Errorf("cannot encode start sending message block option(%v,%v,%v): %w", maxSZX, 0, true, err)
 	}
 
-	w := NewWriteRequestResponse(request, b.acquireMessage, b.releaseMessage)
+	w := NewWriteRequestResponse(remoteAddr, request, b.acquireMessage, b.releaseMessage)
 	err = b.startSendingMessage(w, maxSZX, maxMessageSize, startSendingMessageBlock)
 	if err != nil {
 		return fmt.Errorf("cannot start writing request: %w", err)
@@ -658,10 +666,8 @@ func (b *BlockWise) processReceivedMessage(w ResponseWriter, r Message, maxSzx S
 		next(w, r)
 		return nil
 	}
-
 	block, err := r.GetOptionUint32(blockType)
 	if err != nil {
-
 		next(w, r)
 		return nil
 	}
@@ -701,10 +707,10 @@ func (b *BlockWise) processReceivedMessage(w ResponseWriter, r Message, maxSzx S
 		}
 		// first request must have 0
 		if num != 0 {
-			return fmt.Errorf("token %v, invalid %v(%v), expected 0", []byte(token), blockType, num)
+			return fmt.Errorf("(%v) token %v, invalid %v(%v), expected 0", w.RemoteAddr(), []byte(token), blockType, num)
 		}
 		// if there is no more then just forward req to next handler
-		if more == false {
+		if !more {
 			next(w, r)
 			return nil
 		}
@@ -744,7 +750,7 @@ func (b *BlockWise) processReceivedMessage(w ResponseWriter, r Message, maxSzx S
 			return fmt.Errorf("received message contains ETAG(%v) but cached received message doesn't", rETAG)
 		}
 	case !bytes.Equal(rETAG, cachedReceivedMessageETAG):
-		return fmt.Errorf("received message ETAG(%v) is not equal to cached received message ETAG(%v)", rETAG, cachedReceivedMessageETAG)
+		return fmt.Errorf("(%v) received message ETAG(%v) is not equal to cached received message ETAG(%v)", w.RemoteAddr(), rETAG, cachedReceivedMessageETAG)
 	}
 
 	payloadFile, ok := cachedReceivedMessage.Body().(*memfile.File)
