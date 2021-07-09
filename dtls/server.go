@@ -2,6 +2,7 @@ package dtls
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"sync"
@@ -150,6 +151,10 @@ func NewServer(opt ...ServerOption) *Server {
 		handler:        opts.handler,
 		maxMessageSize: opts.maxMessageSize,
 		errors: func(err error) {
+			if errors.Is(err, context.Canceled) {
+				// this error was produced by cancellation context - don't report it.
+				return
+			}
 			opts.errors(fmt.Errorf("dtls: %w", err))
 		},
 		goPool:                         opts.goPool,

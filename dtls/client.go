@@ -2,6 +2,7 @@ package dtls
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"time"
@@ -138,9 +139,13 @@ func Client(conn *dtls.Conn, opts ...DialOption) *client.ClientConn {
 			return inactivity.NewNilMonitor()
 		}
 	}
-	errors := cfg.errors
+	errorsFunc := cfg.errors
 	cfg.errors = func(err error) {
-		errors(fmt.Errorf("dtls: %v: %w", conn.RemoteAddr(), err))
+		if errors.Is(err, context.Canceled) {
+			// this error was produced by cancellation context - don't report it.
+			return
+		}
+		errorsFunc(fmt.Errorf("dtls: %v: %w", conn.RemoteAddr(), err))
 	}
 
 	observatioRequests := kitSync.NewMap()

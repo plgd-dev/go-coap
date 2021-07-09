@@ -3,6 +3,7 @@ package tcp
 import (
 	"context"
 	"crypto/tls"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -145,9 +146,13 @@ func Client(conn net.Conn, opts ...DialOption) *ClientConn {
 			return inactivity.NewNilMonitor()
 		}
 	}
-	errors := cfg.errors
+	errorsFunc := cfg.errors
 	cfg.errors = func(err error) {
-		errors(fmt.Errorf("tcp: %w", err))
+		if errors.Is(err, context.Canceled) {
+			// this error was produced by cancellation context - don't report it.
+			return
+		}
+		errorsFunc(fmt.Errorf("tcp: %w", err))
 	}
 
 	observationRequests := kitSync.NewMap()

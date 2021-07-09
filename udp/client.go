@@ -2,6 +2,7 @@ package udp
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"time"
@@ -137,9 +138,13 @@ func Client(conn *net.UDPConn, opts ...DialOption) *client.ClientConn {
 		}
 	}
 
-	errors := cfg.errors
+	errorsFunc := cfg.errors
 	cfg.errors = func(err error) {
-		errors(fmt.Errorf("udp: %v: %w", conn.RemoteAddr(), err))
+		if errors.Is(err, context.Canceled) {
+			// this error was produced by cancellation context - don't report it.
+			return
+		}
+		errorsFunc(fmt.Errorf("udp: %v: %w", conn.RemoteAddr(), err))
 	}
 
 	addr, _ := conn.RemoteAddr().(*net.UDPAddr)
