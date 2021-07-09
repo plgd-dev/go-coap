@@ -57,8 +57,8 @@ type ClientConn struct {
 	errors                  ErrorFunc
 	getMID                  GetMIDFunc
 	responseMsgCache        *cache.Cache
-	msgIdMutex              *MutexMap
 	activityMonitor         Notifier
+	deduplicateMesssages    *cache.Cache
 
 	tokenHandlerContainer *HandlerContainer
 	midHandlerContainer   *HandlerContainer
@@ -132,9 +132,9 @@ func NewClientConn(
 		errors:                errors,
 		getMID:                getMID,
 		// EXCHANGE_LIFETIME = 247
-		responseMsgCache: cache.New(247*time.Second, 60*time.Second),
-		msgIdMutex:       NewMutexMap(),
-		activityMonitor:  activityMonitor,
+		responseMsgCache:     cache.New(247*time.Second, 60*time.Second),
+		deduplicateMesssages: cache.New(247*time.Second, 60*time.Second),
+		activityMonitor:      activityMonitor,
 	}
 }
 
@@ -580,6 +580,11 @@ func (cc *ClientConn) getResponseFromCache(mid uint16, resp *pool.Message) (bool
 	return false, nil
 }
 
+func (cc *ClientConn) isDuplicate(msgID uint16) bool {
+	err := cc.deduplicateMesssages.Add(fmt.Sprintf("%v", msgID), true, cache.DefaultExpiration)
+	return err != nil
+}
+
 func (cc *ClientConn) Process(datagram []byte) error {
 	if cc.session.MaxMessageSize() >= 0 && len(datagram) > cc.session.MaxMessageSize() {
 		return fmt.Errorf("max message size(%v) was exceeded %v", cc.session.MaxMessageSize(), len(datagram))
@@ -592,15 +597,12 @@ func (cc *ClientConn) Process(datagram []byte) error {
 	}
 	req.SetSequence(cc.Sequence())
 	cc.activityMonitor.Notify()
+	if cc.isDuplicate(req.MessageID()) {
+		return nil
+	}
 	cc.goPool(func() {
 		defer cc.activityMonitor.Notify()
 		reqMid := req.MessageID()
-
-		// The same message ID can not be handled concurrently
-		// for deduplication to work
-		l := cc.msgIdMutex.Lock(reqMid)
-		defer l.Unlock()
-
 		origResp := pool.AcquireMessage(cc.Context())
 		origResp.SetToken(req.Token())
 		// If a request is sent in a Non-confirmable message, then the response
