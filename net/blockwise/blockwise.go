@@ -634,9 +634,15 @@ func (b *BlockWise) startSendingMessage(w ResponseWriter, maxSZX SZX, maxMessage
 		// https://tools.ietf.org/html/rfc7959#section-2.6 - we don't need store it because client will be get values via GET.
 		return nil
 	}
-	err = b.sendingMessagesCache.Add(sendingMessage.Token().String(), newRequestGuard(sendingMessage), cache.DefaultExpiration)
+	expire := cache.DefaultExpiration
+	deadline, ok := sendingMessage.Context().Deadline()
+	if ok {
+		expire = time.Until(deadline)
+	}
+
+	err = b.sendingMessagesCache.Add(sendingMessage.Token().String(), newRequestGuard(sendingMessage), expire)
 	if err != nil {
-		return fmt.Errorf("cannot add to response cachce: %w", err)
+		return fmt.Errorf("cannot add to response cache: %w", err)
 	}
 	return nil
 }
@@ -676,8 +682,13 @@ func (b *BlockWise) processReceivedMessage(w ResponseWriter, r Message, maxSzx S
 		return fmt.Errorf("cannot decode block option: %w", err)
 	}
 	sendedRequest := b.getSendedRequest(token)
+	expire := cache.DefaultExpiration
 	if sendedRequest != nil {
 		defer b.releaseMessage(sendedRequest)
+		deadline, ok := sendedRequest.Context().Deadline()
+		if ok {
+			expire = time.Until(deadline)
+		}
 	}
 	if blockType == message.Block2 && sendedRequest == nil {
 		return fmt.Errorf("cannot request body without paired request")
@@ -691,6 +702,8 @@ func (b *BlockWise) processReceivedMessage(w ResponseWriter, r Message, maxSzx S
 		if err != nil {
 			return fmt.Errorf("cannot get token for create GET request: %w", err)
 		}
+		expire = cache.DefaultExpiration // context of observation can be expired.
+
 		bwSendedRequest := b.acquireMessage(sendedRequest.Context())
 		bwSendedRequest.SetCode(sendedRequest.Code())
 		bwSendedRequest.SetToken(token)
@@ -722,7 +735,7 @@ func (b *BlockWise) processReceivedMessage(w ResponseWriter, r Message, maxSzx S
 		msgGuard = newRequestGuard(cachedReceivedMessage)
 		msgGuard.Lock()
 		defer msgGuard.Unlock()
-		err := b.receivingMessagesCache.Add(tokenStr, msgGuard, cache.DefaultExpiration)
+		err := b.receivingMessagesCache.Add(tokenStr, msgGuard, expire)
 		// request was already stored in cache, silently
 		if err != nil {
 			return fmt.Errorf("request was already stored in cache")
