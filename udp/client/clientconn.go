@@ -56,10 +56,10 @@ type ClientConn struct {
 	blockWise               *blockwise.BlockWise
 	goPool                  GoPoolFunc
 	errors                  ErrorFunc
+	getMID                  GetMIDFunc
 	responseMsgCache        *cache.Cache
 	msgIdMutex              *MutexMap
 	activityMonitor         Notifier
-	deduplicateMesssages    *cache.Cache
 
 	tokenHandlerContainer *HandlerContainer
 	midHandlerContainer   *HandlerContainer
@@ -107,11 +107,8 @@ func NewClientConn(
 	if errors == nil {
 		errors = func(error) {}
 	}
-	var msgID uint16
 	if getMID == nil {
-		msgID = udpMessage.RandMID()
-	} else {
-		msgID = getMID() - 0xffff/2
+		getMID = udpMessage.GetMID
 	}
 
 	return &ClientConn{
@@ -131,21 +128,16 @@ func NewClientConn(
 		midHandlerContainer:   NewHandlerContainer(),
 		goPool:                goPool,
 		errors:                errors,
-		msgID:                 uint32(msgID),
+		getMID:                getMID,
 		// EXCHANGE_LIFETIME = 247
-		responseMsgCache:     cache.New(247*time.Second, 60*time.Second),
-		msgIdMutex:           NewMutexMap(),
-		deduplicateMesssages: cache.New(247*time.Second, 60*time.Second),
-		activityMonitor:      activityMonitor,
+		responseMsgCache: cache.New(247*time.Second, 60*time.Second),
+		msgIdMutex:       NewMutexMap(),
+		activityMonitor:  activityMonitor,
 	}
 }
 
 func (cc *ClientConn) Session() Session {
 	return cc.session
-}
-
-func (cc *ClientConn) getMID() uint16 {
-	return uint16(atomic.AddUint32(&cc.msgID, 1))
 }
 
 // Close closes connection without wait of ends Run function.
@@ -586,37 +578,6 @@ func (cc *ClientConn) getResponseFromCache(mid uint16, resp *pool.Message) (bool
 	return false, nil
 }
 
-func (cc *ClientConn) CheckMsgID(code codes.Code, msgID uint16) {
-	switch code {
-	case codes.DELETE:
-	case codes.POST:
-	case codes.GET:
-	case codes.PUT:
-	default:
-		return
-	}
-	sendMsgID := atomic.LoadUint32(&cc.msgID)
-	if msgID > uint16(sendMsgID) {
-		if msgID-uint16(sendMsgID) <= uint16(0xffff)/4 {
-			for !atomic.CompareAndSwapUint32(&cc.msgID, sendMsgID, sendMsgID+0xffff/2) {
-				sendMsgID = atomic.LoadUint32(&cc.msgID)
-			}
-		}
-	}
-	if uint16(sendMsgID) > msgID {
-		if uint16(sendMsgID)-msgID <= uint16(0xffff)/4 {
-			for !atomic.CompareAndSwapUint32(&cc.msgID, sendMsgID, sendMsgID+0xffff/2) {
-				sendMsgID = atomic.LoadUint32(&cc.msgID)
-			}
-		}
-	}
-}
-
-func (cc *ClientConn) isDuplicate(msgID uint16) bool {
-	err := cc.deduplicateMesssages.Add(fmt.Sprintf("%v", msgID), true, cache.DefaultExpiration)
-	return err != nil
-}
-
 func (cc *ClientConn) Process(datagram []byte) error {
 	if cc.session.MaxMessageSize() >= 0 && len(datagram) > cc.session.MaxMessageSize() {
 		return fmt.Errorf("max message size(%v) was exceeded %v", cc.session.MaxMessageSize(), len(datagram))
@@ -629,10 +590,6 @@ func (cc *ClientConn) Process(datagram []byte) error {
 	}
 	req.SetSequence(cc.Sequence())
 	cc.activityMonitor.Notify()
-	cc.CheckMsgID(req.Code(), req.MessageID())
-	if req.Type() != udpMessage.Confirmable && cc.isDuplicate(req.MessageID()) {
-		return nil
-	}
 	cc.goPool(func() {
 		defer cc.activityMonitor.Notify()
 		reqMid := req.MessageID()
