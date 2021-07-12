@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"net"
 	"testing"
 	"time"
 
@@ -26,6 +27,10 @@ func (r *responseWriter) Message() Message {
 
 func (r *responseWriter) SetMessage(resp Message) {
 	r.resp = resp
+}
+
+func (r *responseWriter) RemoteAddr() net.Addr {
+	return nil
 }
 
 func newResponseWriter(r Message) *responseWriter {
@@ -632,7 +637,9 @@ func TestBlockWise_Writetestmessage(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := sender.WriteMessage(tt.args.r, tt.args.szx, int(tt.args.maxMessageSize), tt.args.writetestmessage)
+			addr, err := net.ResolveTCPAddr("tcp", "localhost:1")
+			require.NoError(t, err)
+			err = sender.WriteMessage(addr, tt.args.r, tt.args.szx, int(tt.args.maxMessageSize), tt.args.writetestmessage)
 			if tt.wantErr {
 				assert.Error(t, err)
 				return

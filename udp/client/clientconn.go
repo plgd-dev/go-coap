@@ -46,6 +46,7 @@ type ClientConn struct {
 	// This field needs to be the first in the struct to ensure proper word alignment on 32-bit platforms.
 	// See: https://golang.org/pkg/sync/atomic/#pkg-note-BUG
 	sequence                uint64
+	msgID                   uint32
 	session                 Session
 	handler                 HandlerFunc
 	observationTokenHandler *HandlerContainer
@@ -108,9 +109,6 @@ func NewClientConn(
 	}
 	if getMID == nil {
 		getMID = udpMessage.GetMID
-	}
-	if activityMonitor == nil {
-		activityMonitor = &nilNotifier{}
 	}
 
 	return &ClientConn{
@@ -251,7 +249,7 @@ func (cc *ClientConn) writeMessage(req *pool.Message) error {
 			}
 		}
 	}
-	return fmt.Errorf("timeout: retransmision(%v) was exhausted", cc.transmission.maxRetransmit.Load())
+	return fmt.Errorf("timeout: retransmission(%v) was exhausted", cc.transmission.maxRetransmit.Load())
 }
 
 // WriteMessage sends an coap message.
@@ -259,7 +257,7 @@ func (cc *ClientConn) WriteMessage(req *pool.Message) error {
 	if cc.blockWise == nil {
 		return cc.writeMessage(req)
 	}
-	return cc.blockWise.WriteMessage(req, cc.blockwiseSZX, cc.session.MaxMessageSize(), func(bwreq blockwise.Message) error {
+	return cc.blockWise.WriteMessage(cc.RemoteAddr(), req, cc.blockwiseSZX, cc.session.MaxMessageSize(), func(bwreq blockwise.Message) error {
 		return cc.writeMessage(bwreq.(*pool.Message))
 	})
 }
@@ -504,6 +502,10 @@ func (b *bwResponseWriter) Message() blockwise.Message {
 func (b *bwResponseWriter) SetMessage(m blockwise.Message) {
 	pool.ReleaseMessage(b.w.response)
 	b.w.response = m.(*pool.Message)
+}
+
+func (b *bwResponseWriter) RemoteAddr() net.Addr {
+	return b.w.cc.RemoteAddr()
 }
 
 func (cc *ClientConn) handleBW(w *ResponseWriter, r *pool.Message) {

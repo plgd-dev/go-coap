@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"net"
 	"sync"
 	"sync/atomic"
 
@@ -232,6 +233,10 @@ func (b *bwResponseWriter) Message() blockwise.Message {
 func (b *bwResponseWriter) SetMessage(m blockwise.Message) {
 	pool.ReleaseMessage(b.w.response)
 	b.w.response = m.(*pool.Message)
+}
+
+func (b *bwResponseWriter) RemoteAddr() net.Addr {
+	return b.w.cc.RemoteAddr()
 }
 
 func (s *Session) Handle(w *ResponseWriter, r *pool.Message) {
