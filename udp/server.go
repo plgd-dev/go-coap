@@ -14,6 +14,7 @@ import (
 	"github.com/plgd-dev/go-coap/v2/net/blockwise"
 	"github.com/plgd-dev/go-coap/v2/net/monitor/inactivity"
 	"github.com/plgd-dev/go-coap/v2/udp/client"
+	udpMessage "github.com/plgd-dev/go-coap/v2/udp/message"
 	"github.com/plgd-dev/go-coap/v2/udp/message/pool"
 	kitSync "github.com/plgd-dev/kit/sync"
 )
@@ -35,7 +36,7 @@ type BlockwiseFactoryFunc = func(getSendedRequest func(token message.Token) (blo
 
 type OnNewClientConnFunc = func(cc *client.ClientConn)
 
-type GetMIDFactoryFunc = func() func() uint16
+type GetMIDFunc = func() uint16
 
 var defaultServerOptions = serverOptions{
 	ctx:            context.Background(),
@@ -62,7 +63,7 @@ var defaultServerOptions = serverOptions{
 	transmissionNStart:             time.Second,
 	transmissionAcknowledgeTimeout: time.Second * 2,
 	transmissionMaxRetransmit:      4,
-	getMID:                         defaultGetMID,
+	getMID:                         udpMessage.GetMID,
 }
 
 type serverOptions struct {
@@ -80,7 +81,7 @@ type serverOptions struct {
 	transmissionNStart             time.Duration
 	transmissionAcknowledgeTimeout time.Duration
 	transmissionMaxRetransmit      int
-	getMID                         GetMIDFactoryFunc
+	getMID                         GetMIDFunc
 }
 
 type Server struct {
@@ -96,7 +97,7 @@ type Server struct {
 	transmissionNStart             time.Duration
 	transmissionAcknowledgeTimeout time.Duration
 	transmissionMaxRetransmit      int
-	getMID                         GetMIDFactoryFunc
+	getMID                         GetMIDFunc
 
 	conns             map[string]*client.ClientConn
 	connsMutex        sync.Mutex
@@ -122,7 +123,7 @@ func NewServer(opt ...ServerOption) *Server {
 	}
 
 	if opts.getMID == nil {
-		opts.getMID = defaultGetMID
+		opts.getMID = udpMessage.GetMID
 	}
 
 	if opts.createInactivityMonitor == nil {

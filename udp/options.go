@@ -264,22 +264,22 @@ func WithTransmission(transmissionNStart time.Duration,
 	}
 }
 
-// GetMIDFactoryOpt get message ID option.
-type GetMIDFactoryOpt struct {
-	getMID GetMIDFactoryFunc
+// GetMIDOpt get message ID option.
+type GetMIDOpt struct {
+	getMID GetMIDFunc
 }
 
-func (o GetMIDFactoryOpt) apply(opts *serverOptions) {
+func (o GetMIDOpt) apply(opts *serverOptions) {
 	opts.getMID = o.getMID
 }
 
-func (o GetMIDFactoryOpt) applyDial(opts *dialOptions) {
+func (o GetMIDOpt) applyDial(opts *dialOptions) {
 	opts.getMID = o.getMID
 }
 
-// WithGetMIDFactory allows to set own getMID function to server/client.
-func WithGetMIDFactory(getMID GetMIDFactoryFunc) GetMIDFactoryOpt {
-	return GetMIDFactoryOpt{getMID: getMID}
+// WithGetMID allows to set own getMID function to server/client.
+func WithGetMID(getMID GetMIDFunc) GetMIDOpt {
+	return GetMIDOpt{getMID: getMID}
 }
 
 // CloseSocketOpt close socket option.

@@ -68,9 +68,9 @@ func TestClientConn_Deduplication(t *testing.T) {
 	}()
 
 	cc, err := udp.Dial(l.LocalAddr().String(),
-		udp.WithGetMIDFactory(func() func() uint16 {
+		udp.WithGetMID(func() uint16 {
 			// Static message ID to simulate retransmission
-			return func() uint16 { return 1 }
+			return 1
 		}),
 		udp.WithErrors(func(err error) {
 			if !errors.Is(err, context.Canceled) {
