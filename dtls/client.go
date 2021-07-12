@@ -47,7 +47,7 @@ var defaultDialOptions = dialOptions{
 	transmissionNStart:             time.Second,
 	transmissionAcknowledgeTimeout: time.Second * 2,
 	transmissionMaxRetransmit:      4,
-	getMID:                         udpMessage.GetMID,
+	getMID:                         func() func() uint16 { return udpMessage.GetMID },
 	createInactivityMonitor: func() inactivity.Monitor {
 		return inactivity.NewNilMonitor()
 	},
@@ -68,7 +68,7 @@ type dialOptions struct {
 	transmissionNStart             time.Duration
 	transmissionAcknowledgeTimeout time.Duration
 	transmissionMaxRetransmit      int
-	getMID                         GetMIDFunc
+	getMID                         GetMIDFactoryFunc
 	closeSocket                    bool
 	createInactivityMonitor        func() inactivity.Monitor
 }

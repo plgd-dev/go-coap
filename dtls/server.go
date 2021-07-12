@@ -41,7 +41,11 @@ type BlockwiseFactoryFunc = func(getSendedRequest func(token message.Token) (blo
 // "read-only" parameter, mainly used to get the peer certificate from the underlining connection
 type OnNewClientConnFunc = func(cc *client.ClientConn, dtlsConn *dtls.Conn)
 
-type GetMIDFunc = func() uint16
+type GetMIDFactoryFunc = func() func() uint16
+
+var defaultGetMID = func() func() uint16 {
+	return udpMessage.GetMID
+}
 
 func closeClientConn(cc *client.ClientConn) {
 	cc.Close()
@@ -73,7 +77,7 @@ var defaultServerOptions = serverOptions{
 	transmissionNStart:             time.Second,
 	transmissionAcknowledgeTimeout: time.Second * 2,
 	transmissionMaxRetransmit:      4,
-	getMID:                         udpMessage.GetMID,
+	getMID:                         defaultGetMID,
 }
 
 type serverOptions struct {
@@ -92,7 +96,7 @@ type serverOptions struct {
 	transmissionNStart             time.Duration
 	transmissionAcknowledgeTimeout time.Duration
 	transmissionMaxRetransmit      int
-	getMID                         GetMIDFunc
+	getMID                         GetMIDFactoryFunc
 }
 
 // Listener defined used by coap
@@ -115,7 +119,7 @@ type Server struct {
 	transmissionNStart             time.Duration
 	transmissionAcknowledgeTimeout time.Duration
 	transmissionMaxRetransmit      int
-	getMID                         GetMIDFunc
+	getMID                         GetMIDFactoryFunc
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -136,7 +140,7 @@ func NewServer(opt ...ServerOption) *Server {
 	}
 
 	if opts.getMID == nil {
-		opts.getMID = udpMessage.GetMID
+		opts.getMID = defaultGetMID
 	}
 
 	if opts.createInactivityMonitor == nil {

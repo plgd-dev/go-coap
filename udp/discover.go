@@ -29,7 +29,8 @@ func (s *Server) Discover(ctx context.Context, multicastAddr, path string, recei
 	if err != nil {
 		return fmt.Errorf("cannot create discover request: %w", err)
 	}
-	req.SetMessageID(s.getMID())
+	mid := s.getMID()()
+	req.SetMessageID(mid)
 	req.SetType(message.NonConfirmable)
 	defer pool.ReleaseMessage(req)
 	return s.DiscoveryRequest(req, multicastAddr, receiverFunc, opts...)
