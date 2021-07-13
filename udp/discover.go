@@ -23,8 +23,10 @@ type MulticastOption interface {
 	apply(*multicastOptions)
 }
 
-// Discover sends GET to multicast address and wait for responses until context timeouts or server shutdown.
-func (s *Server) Discover(ctx context.Context, multicastAddr, path string, receiverFunc func(cc *client.ClientConn, resp *pool.Message), opts ...MulticastOption) error {
+// Discover sends GET to multicast or unicast address and waits for responses until context timeouts or server shutdown.
+// For unicast there is a difference against the Dial. The Dial is connection-oriented and it means that, if you send a request to an address, the peer must send the response from the same
+// address where was request sent. For Discover it allows the client to send a response from another address where was request send.
+func (s *Server) Discover(ctx context.Context, address, path string, receiverFunc func(cc *client.ClientConn, resp *pool.Message), opts ...MulticastOption) error {
 	req, err := client.NewGetRequest(ctx, path)
 	if err != nil {
 		return fmt.Errorf("cannot create discover request: %w", err)
@@ -32,11 +34,13 @@ func (s *Server) Discover(ctx context.Context, multicastAddr, path string, recei
 	req.SetMessageID(s.getMID())
 	req.SetType(message.NonConfirmable)
 	defer pool.ReleaseMessage(req)
-	return s.DiscoveryRequest(req, multicastAddr, receiverFunc, opts...)
+	return s.DiscoveryRequest(req, address, receiverFunc, opts...)
 }
 
-// DiscoveryRequest sends request to multicast addressand wait for responses until request timeouts or server shutdown.
-func (s *Server) DiscoveryRequest(req *pool.Message, multicastAddr string, receiverFunc func(cc *client.ClientConn, resp *pool.Message), opts ...MulticastOption) error {
+// DiscoveryRequest sends request to multicast/unicast address and wait for responses until request timeouts or server shutdown.
+// For unicast there is a difference against the Dial. The Dial is connection-oriented and it means that, if you send a request to an address, the peer must send the response from the same
+// address where was request sent. For Discover it allows the client to send a response from another address where was request send.
+func (s *Server) DiscoveryRequest(req *pool.Message, address string, receiverFunc func(cc *client.ClientConn, resp *pool.Message), opts ...MulticastOption) error {
 	token := req.Token()
 	if len(token) == 0 {
 		return fmt.Errorf("invalid token")
@@ -49,13 +53,11 @@ func (s *Server) DiscoveryRequest(req *pool.Message, multicastAddr string, recei
 	if c == nil {
 		return fmt.Errorf("server doesn't serve connection")
 	}
-	addr, err := net.ResolveUDPAddr(c.Network(), multicastAddr)
+	addr, err := net.ResolveUDPAddr(c.Network(), address)
 	if err != nil {
 		return fmt.Errorf("cannot resolve address: %w", err)
 	}
-	if !addr.IP.IsMulticast() {
-		return fmt.Errorf("invalid multicast address")
-	}
+
 	data, err := req.Marshal()
 	if err != nil {
 		return fmt.Errorf("cannot marshal req: %w", err)
@@ -70,10 +72,18 @@ func (s *Server) DiscoveryRequest(req *pool.Message, multicastAddr string, recei
 	}
 	defer s.multicastHandler.Pop(token)
 
-	err = c.WriteMulticast(req.Context(), addr, cfg.hopLimit, data)
-	if err != nil {
-		return err
+	if addr.IP.IsMulticast() {
+		err = c.WriteMulticast(req.Context(), addr, cfg.hopLimit, data)
+		if err != nil {
+			return err
+		}
+	} else {
+		err = c.WriteWithContext(req.Context(), addr, data)
+		if err != nil {
+			return err
+		}
 	}
+
 	select {
 	case <-req.Context().Done():
 		return nil
