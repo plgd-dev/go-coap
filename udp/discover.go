@@ -22,7 +22,9 @@ type MulticastOption interface {
 	apply(*multicastOptions)
 }
 
-// Discover sends GET to multicast address and wait for responses until context timeouts or server shutdown.
+// Discover sends GET to multicast or unicast address and waits for responses until context timeouts or server shutdown.
+// For unicast there is a difference against the Dial. The Dial is connection-oriented and it means that, if you send a request to an address, the peer must send the response from the same
+// address where was request sent. For Discover it allows the client to send a response from another address where was request send.
 func (s *Server) Discover(ctx context.Context, address, path string, receiverFunc func(cc *client.ClientConn, resp *pool.Message), opts ...MulticastOption) error {
 	req, err := client.NewGetRequest(ctx, path)
 	if err != nil {
@@ -33,7 +35,9 @@ func (s *Server) Discover(ctx context.Context, address, path string, receiverFun
 	return s.DiscoveryRequest(req, address, receiverFunc, opts...)
 }
 
-// DiscoveryRequest sends request to multicast addressand wait for responses until request timeouts or server shutdown.
+// DiscoveryRequest sends request to multicast/unicast address and wait for responses until request timeouts or server shutdown.
+// For unicast there is a difference against the Dial. The Dial is connection-oriented and it means that, if you send a request to an address, the peer must send the response from the same
+// address where was request sent. For Discover it allows the client to send a response from another address where was request send.
 func (s *Server) DiscoveryRequest(req *pool.Message, address string, receiverFunc func(cc *client.ClientConn, resp *pool.Message), opts ...MulticastOption) error {
 	token := req.Token()
 	if len(token) == 0 {
