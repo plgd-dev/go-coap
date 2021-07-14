@@ -24,7 +24,7 @@ var (
 
 type Message struct {
 	*pool.Message
-	messageID uint16
+	messageID *uint16
 	typ       udp.Type
 
 	//local vars
@@ -38,7 +38,7 @@ type Message struct {
 // Reset clear message for next reuse
 func (r *Message) Reset() {
 	r.Message.Reset()
-	r.messageID = 0
+	r.messageID = nil
 	r.typ = udp.NonConfirmable
 	if cap(r.rawData) > maxMessageBufferSize {
 		r.rawData = make([]byte, 256)
@@ -54,12 +54,23 @@ func (r *Message) Context() context.Context {
 }
 
 func (r *Message) SetMessageID(mid uint16) {
-	r.messageID = mid
+	r.messageID = &mid
 	r.isModified = true
 }
 
+func (r *Message) UpsertMessageID(mid uint16) uint16 {
+	if r.messageID != nil {
+		return *r.messageID
+	}
+	r.messageID = &mid
+	return mid
+}
+
 func (r *Message) MessageID() uint16 {
-	return r.messageID
+	if r.messageID == nil {
+		panic("messageID is not set")
+	}
+	return *r.messageID
 }
 
 func (r *Message) SetType(typ udp.Type) {
@@ -98,7 +109,7 @@ func (r *Message) Unmarshal(data []byte) (int, error) {
 	r.Message.SetToken(m.Token)
 	r.Message.ResetOptionsTo(m.Options)
 	r.typ = m.Type
-	r.messageID = m.MessageID
+	r.messageID = &m.MessageID
 	if len(m.Payload) > 0 {
 		r.Message.SetBody(bytes.NewReader(m.Payload))
 	}
@@ -110,7 +121,7 @@ func (r *Message) Marshal() ([]byte, error) {
 		Code:      r.Code(),
 		Token:     r.Message.Token(),
 		Options:   r.Message.Options(),
-		MessageID: r.messageID,
+		MessageID: r.MessageID(),
 		Type:      r.typ,
 	}
 	payload, err := r.ReadBody()

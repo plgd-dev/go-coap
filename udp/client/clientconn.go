@@ -56,7 +56,6 @@ type ClientConn struct {
 	blockWise               *blockwise.BlockWise
 	goPool                  GoPoolFunc
 	errors                  ErrorFunc
-	getMID                  GetMIDFunc
 	responseMsgCache        *cache.Cache
 	msgIdMutex              *MutexMap
 	activityMonitor         Notifier
@@ -112,6 +111,7 @@ func NewClientConn(
 	}
 
 	return &ClientConn{
+		msgID:                   uint32(getMID() - 0xffff/2),
 		session:                 session,
 		observationTokenHandler: observationTokenHandler,
 		observationRequests:     observationRequests,
@@ -128,7 +128,6 @@ func NewClientConn(
 		midHandlerContainer:   NewHandlerContainer(),
 		goPool:                goPool,
 		errors:                errors,
-		getMID:                getMID,
 		// EXCHANGE_LIFETIME = 247
 		responseMsgCache: cache.New(247*time.Second, 60*time.Second),
 		msgIdMutex:       NewMutexMap(),
@@ -138,6 +137,10 @@ func NewClientConn(
 
 func (cc *ClientConn) Session() Session {
 	return cc.session
+}
+
+func (cc *ClientConn) getMID() uint16 {
+	return uint16(atomic.AddUint32(&cc.msgID, 1))
 }
 
 // Close closes connection without wait of ends Run function.
@@ -185,10 +188,17 @@ func (cc *ClientConn) do(req *pool.Message) (*pool.Message, error) {
 // Caller is responsible to release request and response.
 func (cc *ClientConn) Do(req *pool.Message) (*pool.Message, error) {
 	if cc.blockWise == nil {
+		req.UpsertMessageID(cc.getMID())
 		return cc.do(req)
 	}
 	bwresp, err := cc.blockWise.Do(req, cc.blockwiseSZX, cc.session.MaxMessageSize(), func(bwreq blockwise.Message) (blockwise.Message, error) {
-		return cc.do(bwreq.(*pool.Message))
+		req := bwreq.(*pool.Message)
+		if req.Options().HasOption(message.Block1) || req.Options().HasOption(message.Block2) {
+			req.SetMessageID(cc.getMID())
+		} else {
+			req.UpsertMessageID(cc.getMID())
+		}
+		return cc.do(req)
 	})
 	if err != nil {
 		return nil, err
@@ -197,7 +207,6 @@ func (cc *ClientConn) Do(req *pool.Message) (*pool.Message, error) {
 }
 
 func (cc *ClientConn) writeMessage(req *pool.Message) error {
-	req.SetMessageID(cc.getMID())
 	respChan := make(chan struct{})
 
 	// Only confirmable messages ever match an message ID
@@ -255,39 +264,18 @@ func (cc *ClientConn) writeMessage(req *pool.Message) error {
 // WriteMessage sends an coap message.
 func (cc *ClientConn) WriteMessage(req *pool.Message) error {
 	if cc.blockWise == nil {
+		req.UpsertMessageID(cc.getMID())
 		return cc.writeMessage(req)
 	}
 	return cc.blockWise.WriteMessage(cc.RemoteAddr(), req, cc.blockwiseSZX, cc.session.MaxMessageSize(), func(bwreq blockwise.Message) error {
-		return cc.writeMessage(bwreq.(*pool.Message))
-	})
-}
-
-func (cc *ClientConn) doWithMID(req *pool.Message) (*pool.Message, error) {
-	respChan := make(chan *pool.Message, 1)
-	err := cc.midHandlerContainer.Insert(req.MessageID(), func(w *ResponseWriter, r *pool.Message) {
-		r.Hijack()
-		select {
-		case respChan <- r:
-		default:
+		req := bwreq.(*pool.Message)
+		if req.Options().HasOption(message.Block1) || req.Options().HasOption(message.Block2) {
+			req.SetMessageID(cc.getMID())
+		} else {
+			req.UpsertMessageID(cc.getMID())
 		}
+		return cc.writeMessage(req)
 	})
-	if err != nil {
-		return nil, fmt.Errorf("cannot insert mid handler: %w", err)
-	}
-	defer cc.midHandlerContainer.Pop(req.MessageID())
-	err = cc.session.WriteMessage(req)
-	if err != nil {
-		return nil, fmt.Errorf("cannot write request: %w", err)
-	}
-
-	select {
-	case <-req.Context().Done():
-		return nil, req.Context().Err()
-	case <-cc.session.Context().Done():
-		return nil, fmt.Errorf("connection was closed: %w", cc.session.Context().Err())
-	case resp := <-respChan:
-		return resp, nil
-	}
 }
 
 func newCommonRequest(ctx context.Context, code codes.Code, path string, opts ...message.Option) (*pool.Message, error) {
@@ -578,6 +566,14 @@ func (cc *ClientConn) getResponseFromCache(mid uint16, resp *pool.Message) (bool
 	return false, nil
 }
 
+// CheckMyMessageID compare client msgID against peer messageID and if it is near < 0xffff/4 then incrase msgID.
+// When msgIDs met it can cause issue because cache can send message to which doesn't bellows to request.
+func (cc *ClientConn) CheckMyMessageID(req *pool.Message) {
+	if req.Type() == udpMessage.Confirmable && req.MessageID()-uint16(atomic.LoadUint32(&cc.msgID)) < 0xffff/4 {
+		atomic.AddUint32(&cc.msgID, 0xffff/2)
+	}
+}
+
 func (cc *ClientConn) Process(datagram []byte) error {
 	if cc.session.MaxMessageSize() >= 0 && len(datagram) > cc.session.MaxMessageSize() {
 		return fmt.Errorf("max message size(%v) was exceeded %v", cc.session.MaxMessageSize(), len(datagram))
@@ -589,6 +585,7 @@ func (cc *ClientConn) Process(datagram []byte) error {
 		return err
 	}
 	req.SetSequence(cc.Sequence())
+	cc.CheckMyMessageID(req)
 	cc.activityMonitor.Notify()
 	cc.goPool(func() {
 		defer cc.activityMonitor.Notify()
@@ -606,11 +603,17 @@ func (cc *ClientConn) Process(datagram []byte) error {
 		// instead send a Confirmable message.
 		origResp.SetType(req.Type())
 		w := NewResponseWriter(origResp, cc, req.Options())
-
 		if ok, err := cc.getResponseFromCache(req.MessageID(), w.response); ok {
 			defer pool.ReleaseMessage(w.response)
 			if !req.IsHijacked() {
-				pool.ReleaseMessage(req)
+				defer pool.ReleaseMessage(req)
+			}
+			if req.Type() == udpMessage.Confirmable {
+				w.response.SetType(udpMessage.Acknowledgement)
+				w.response.SetMessageID(reqMid)
+			} else {
+				w.response.SetType(udpMessage.NonConfirmable)
+				w.response.SetMessageID(cc.getMID())
 			}
 			err = cc.session.WriteMessage(w.response)
 			if err != nil {
@@ -633,15 +636,13 @@ func (cc *ClientConn) Process(datagram []byte) error {
 		if !req.IsHijacked() {
 			pool.ReleaseMessage(req)
 		}
-		if w.response.IsModified() {
-			switch {
-			case w.response.Type() == udpMessage.Reset:
-				w.response.SetMessageID(reqMid)
-			case reqType == udpMessage.Confirmable:
+
+		if w.response.IsModified() && (w.response.Type() == udpMessage.Reset || w.response.Code() == codes.Empty) {
+			// handle pong and reset message
+			if reqType == udpMessage.Confirmable {
 				w.response.SetType(udpMessage.Acknowledgement)
 				w.response.SetMessageID(reqMid)
-			default:
-				w.response.SetType(udpMessage.NonConfirmable)
+			} else {
 				w.response.SetMessageID(cc.getMID())
 			}
 			err := cc.session.WriteMessage(w.response)
@@ -650,24 +651,46 @@ func (cc *ClientConn) Process(datagram []byte) error {
 				cc.errors(fmt.Errorf("cannot write response: %w", err))
 				return
 			}
+			return
 		} else if reqType == udpMessage.Confirmable {
-			w.response.Reset()
-			w.response.SetCode(codes.Empty)
-			w.response.SetType(udpMessage.Acknowledgement)
-			w.response.SetMessageID(reqMid)
-			err := cc.session.WriteMessage(w.response)
+			// send separate message to confirm received message.
+			separateMessage := pool.AcquireMessage(cc.Context())
+			defer pool.ReleaseMessage(separateMessage)
+			separateMessage.SetCode(codes.Empty)
+			separateMessage.SetType(udpMessage.Acknowledgement)
+			separateMessage.SetMessageID(reqMid)
+			err := cc.session.WriteMessage(separateMessage)
 			if err != nil {
 				cc.Close()
 				cc.errors(fmt.Errorf("cannot write ack reponse: %w", err))
 				return
 			}
 		}
+		if !w.response.IsModified() {
+			// don't send response
+			return
+		}
 
-		err = cc.addResponseToCache(w.response)
+		// send message with confirmation
+		w.response.SetType(udpMessage.Confirmable)
+		w.response.SetMessageID(cc.getMID())
+		err := cc.writeMessage(w.response)
 		if err != nil {
 			cc.Close()
-			cc.errors(fmt.Errorf("cannot cache response: %w", err))
+			cc.errors(fmt.Errorf("cannot write response: %w", err))
 			return
+		}
+
+		if reqType == udpMessage.Confirmable || reqType == udpMessage.NonConfirmable {
+			// store message to cache
+			w.response.SetMessageID(reqMid)
+			w.response.SetType(reqType)
+			err = cc.addResponseToCache(w.response)
+			if err != nil {
+				cc.Close()
+				cc.errors(fmt.Errorf("cannot cache response: %w", err))
+				return
+			}
 		}
 	})
 	return nil

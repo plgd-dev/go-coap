@@ -2,37 +2,152 @@ package main
 
 import (
 	"context"
+	"flag"
+	"fmt"
 	"log"
+	"os"
+	"runtime"
+	"runtime/pprof"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/plgd-dev/go-coap/v2/net"
 	"github.com/plgd-dev/go-coap/v2/udp"
 	"github.com/plgd-dev/go-coap/v2/udp/client"
+	"github.com/plgd-dev/go-coap/v2/udp/message"
 	"github.com/plgd-dev/go-coap/v2/udp/message/pool"
 )
 
+// https://blog.packagecloud.io/eng/2016/06/22/monitoring-tuning-linux-networking-stack-receiving-data/#monitoring-network-data-processing
+// For monitoring of dropping and interuption process packet
+// cat /proc/net/softnet_stat
+//   The first value, sd->processed, is the number of network frames processed. This can be more than the total number of network frames received if you are using ethernet bonding. There are cases where the ethernet bonding driver will trigger network data to be re-processed, which would increment the sd->processed count more than once for the same packet.
+//   The second value, sd->dropped, is the number of network frames dropped because there was no room on the processing queue. (increasing backlog: sudo sysctl -w net.core.netdev_max_backlog=2000)
+//   The third value, sd->time_squeeze, is (as we saw) the number of times the net_rx_action loop terminated because the budget was consumed or the time limit was reached, but more work could have been. Increasing the budget as explained earlier can help reduce this. (sudo sysctl -w net.core.netdev_budget=9600)
+//   Others are not interesting
+// Increase the maximum receive buffer size for socket by setting a sysctl. sudo sysctl -w net.core.rmem_max=8388608
+// Adjust the default initial receive buffer size for socket  by setting a sysctl. sudo sysctl -w net.core.rmem_default=8388608
+// Increase the maximum write buffer size for socket by setting a sysctl. sudo sysctl -w net.core.wmem_max=8388608
+// Adjust the default initial receive buffer size for socket  by setting a sysctl. sudo sysctl -w net.core.wmem_default=8388608
+
+var cpuprofile = flag.String("cpuprofile", "", "write cpu profile to `file`")
+var memprofile = flag.String("memprofile", "", "write memory profile to `file`")
+var numDevs = flag.Int("numdevices", 1000, "devices")
+
 func main() {
-	l, err := net.NewListenUDP("udp4", "")
+	flag.Parse()
+	if *cpuprofile != "" {
+		f, err := os.Create(*cpuprofile)
+		if err != nil {
+			log.Fatal("could not create CPU profile: ", err)
+		}
+		defer f.Close() // error handling omitted for example
+		if err := pprof.StartCPUProfile(f); err != nil {
+			log.Fatal("could not start CPU profile: ", err)
+		}
+		defer pprof.StopCPUProfile()
+	}
+
+	// ... rest of the program ...
+
+	if *memprofile != "" {
+		f, err := os.Create(*memprofile)
+		if err != nil {
+			log.Fatal("could not create memory profile: ", err)
+		}
+		defer f.Close() // error handling omitted for example
+		runtime.GC()    // get up-to-date statistics
+		if err := pprof.WriteHeapProfile(f); err != nil {
+			log.Fatal("could not write memory profile: ", err)
+		}
+	}
+
+	l, err := net.NewListenUDP("udp4", "", net.WithHeartBeat(time.Second*60))
 	if err != nil {
 		log.Println(err)
 		return
 	}
 	defer l.Close()
-	s := udp.NewServer()
-	defer s.Stop()
-	go func() {
-		err := s.Serve(l)
+
+	stable := 0
+	minTimeout := time.Second * 10
+	timeout := minTimeout
+
+	var previousDuplicit sync.Map
+	d := func() {
+		s := udp.NewServer(udp.WithTransmission(time.Second, timeout/2, 2))
+		var wg sync.WaitGroup
+		defer wg.Wait()
+		defer s.Stop()
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			s.Serve(l)
+		}()
+		ctx, cancel := context.WithTimeout(context.Background(), timeout)
+		defer cancel()
+
+		var numDevices uint32
+		var numDuplicit uint32
+
+		var duplicit sync.Map
+
+		req, err := client.NewGetRequest(ctx, "/oic/res") /* msg.Option{
+			ID:    msg.URIQuery,
+			Value: []byte("rt=oic.wk.d"),
+		}*/
+		if err != nil {
+			panic(fmt.Errorf("cannot create discover request: %w", err))
+		}
+		req.SetMessageID(message.GetMID())
+		req.SetType(message.NonConfirmable)
+		defer pool.ReleaseMessage(req)
+
+		err = s.DiscoveryRequest(req, "224.0.1.187:5683", func(cc *client.ClientConn, resp *pool.Message) {
+			_, loaded := duplicit.LoadOrStore(cc.RemoteAddr().String(), true)
+			if loaded {
+				atomic.AddUint32(&numDuplicit, 1)
+			} else {
+				atomic.AddUint32(&numDevices, 1)
+				//log.Printf("discovered %v: %+v", cc.RemoteAddr(), resp.Message)
+			}
+		})
+
+		log.Printf("Number of devices %v, Number of duplicit responses %v\n", numDevices, numDuplicit)
+
+		previousNum := uint32(0)
+		previousDuplicit.Range(func(key, value interface{}) bool {
+			_, ok := duplicit.Load(key)
+			if !ok {
+				fmt.Printf("device %v is lost\n", key)
+			}
+			previousNum++
+			return true
+		})
+
+		previousDuplicit = duplicit
+
+		if int(numDevices) != *numDevs && previousNum != numDevices {
+			timeout += time.Second
+			stable = 0
+			fmt.Printf("inc timeout to %v\n", timeout)
+		} else {
+			stable++
+		}
+		if stable == 10 {
+			timeout -= time.Millisecond * 500
+			if timeout < minTimeout {
+				timeout = minTimeout
+			}
+			fmt.Printf("dec timeout to %v\n", timeout)
+			stable = 0
+		}
 		if err != nil {
 			log.Println(err)
 		}
-	}()
-
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-	defer cancel()
-	err = s.Discover(ctx, "224.0.1.187:5683", "/oic/res", func(cc *client.ClientConn, resp *pool.Message) {
-		log.Printf("discovered %v: %+v", cc.RemoteAddr(), resp.Message)
-	})
-	if err != nil {
-		log.Println(err)
+	}
+	for {
+		d()
 	}
 }
