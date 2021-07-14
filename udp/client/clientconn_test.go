@@ -68,10 +68,6 @@ func TestClientConn_Deduplication(t *testing.T) {
 	}()
 
 	cc, err := udp.Dial(l.LocalAddr().String(),
-		udp.WithGetMID(func() uint16 {
-			// Static message ID to simulate retransmission
-			return 1
-		}),
 		udp.WithErrors(func(err error) {
 			if !errors.Is(err, context.Canceled) {
 				require.NoError(t, err)
@@ -91,6 +87,7 @@ func TestClientConn_Deduplication(t *testing.T) {
 
 	// Same request, executed twice (needs the same token)
 	getReq, err := client.NewGetRequest(ctx, "/count")
+	getReq.SetMessageID(1)
 
 	require.NoError(t, err)
 	got, err = cc.Do(getReq)
