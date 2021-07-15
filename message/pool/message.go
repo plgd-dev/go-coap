@@ -45,6 +45,14 @@ func (r *Message) Reset() {
 	r.isModified = false
 }
 
+func (r *Message) Path() (string, error) {
+	return r.msg.Options.Path()
+}
+
+func (r *Message) Queries() ([]string, error) {
+	return r.msg.Options.Queries()
+}
+
 func (r *Message) Remove(opt message.OptionID) {
 	r.msg.Options = r.msg.Options.Remove(opt)
 	r.isModified = true
