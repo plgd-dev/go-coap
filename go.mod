@@ -7,6 +7,7 @@ require (
 	github.com/plgd-dev/kit v0.0.0-20200819113605-d5fcf3e94f63
 	github.com/stretchr/testify v1.5.1
 	golang.org/x/net v0.0.0-20200506145744-7e3656a0809f
+	golang.org/x/sync v0.0.0-20210220032951-036812b2e83c
 )
 
 go 1.13

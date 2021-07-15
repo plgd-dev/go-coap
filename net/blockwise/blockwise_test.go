@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"sync"
 	"testing"
 	"time"
 
@@ -40,6 +41,14 @@ type testmessage struct {
 	options  message.Options
 	payload  io.ReadSeeker
 	sequence uint64
+}
+
+func (r *testmessage) Queries() ([]string, error) {
+	return r.options.Queries()
+}
+
+func (r *testmessage) Path() (string, error) {
+	return r.options.Path()
 }
 
 func (r *testmessage) String() string {
@@ -414,6 +423,89 @@ func TestBlockWise_Do(t *testing.T) {
 			}
 			require.NoError(t, err)
 			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+func TestBlockWise_Parallel(t *testing.T) {
+	sender := NewBlockWise(acquireMessage, releaseMessage, time.Second*3600, func(err error) { t.Log(err) }, true, nil)
+	receiver := NewBlockWise(acquireMessage, releaseMessage, time.Second*3600, func(err error) { t.Log(err) }, true, nil)
+	type args struct {
+		r              Message
+		szx            SZX
+		maxMessageSize int64
+		do             func(req Message) (Message, error)
+	}
+	tests := []struct {
+		name    string
+		args    args
+		want    Message
+		wantErr bool
+	}{
+		{
+			name: "SZX16-SZX1024",
+			args: args{
+				r: &testmessage{
+					ctx:     context.Background(),
+					token:   []byte{2},
+					options: message.Options{message.Option{ID: message.URIPath, Value: []byte("abc")}},
+					code:    codes.POST,
+					payload: bytes.NewReader(make([]byte, 20000)),
+				},
+				szx:            SZX16,
+				maxMessageSize: SZX16.Size(),
+				do: makeDo(t, sender, receiver, SZX16, int(SZX16.Size()), SZX1024, int(SZX1024.Size()), func(w ResponseWriter, r Message) {
+					require.Equal(t, &testmessage{
+						ctx:     context.Background(),
+						token:   []byte{2},
+						options: message.Options{message.Option{ID: message.URIPath, Value: []byte("abc")}},
+						code:    codes.POST,
+						payload: memfile.New(make([]byte, 20000))}, r)
+					w.SetMessage(
+						&testmessage{
+							ctx:     context.Background(),
+							token:   r.Token(),
+							code:    codes.Changed,
+							payload: bytes.NewReader(make([]byte, 30000)),
+						},
+					)
+				}),
+			},
+			want: &testmessage{
+				ctx:     context.Background(),
+				token:   []byte{2},
+				code:    codes.Changed,
+				payload: memfile.New(make([]byte, 30000)),
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var wg sync.WaitGroup
+			defer wg.Wait()
+			bodysize, err := tt.args.r.BodySize()
+			require.NoError(t, err)
+			for i := 0; i < 8; i++ {
+				wg.Add(1)
+				go func() {
+					defer wg.Done()
+					r := &testmessage{
+						ctx:     tt.args.r.Context(),
+						token:   tt.args.r.Token(),
+						options: tt.args.r.Options(),
+						code:    tt.args.r.Code(),
+						payload: bytes.NewReader(make([]byte, bodysize)),
+					}
+					got, err := sender.Do(r, tt.args.szx, int(tt.args.maxMessageSize), tt.args.do)
+					if tt.wantErr {
+						assert.Error(t, err)
+						return
+					}
+					require.NoError(t, err)
+					assert.Equal(t, tt.want, got)
+				}()
+			}
 		})
 	}
 }
