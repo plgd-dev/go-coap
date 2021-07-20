@@ -73,7 +73,6 @@ type serverOptions struct {
 	errors                         ErrorFunc
 	goPool                         GoPoolFunc
 	createInactivityMonitor        func() inactivity.Monitor
-	net                            string
 	blockwiseSZX                   blockwise.SZX
 	blockwiseEnable                bool
 	blockwiseTransferTimeout       time.Duration

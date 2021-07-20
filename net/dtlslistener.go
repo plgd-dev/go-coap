@@ -162,13 +162,11 @@ func (l *DTLSListener) Accept() (net.Conn, error) {
 	}
 
 	if deadline.IsZero() {
-		select {
-		case d := <-l.connCh:
-			if d.err != nil {
-				return nil, d.err
-			}
-			return d.conn, nil
+		d := <-l.connCh
+		if d.err != nil {
+			return nil, d.err
 		}
+		return d.conn, nil
 	}
 
 	select {
@@ -177,7 +175,7 @@ func (l *DTLSListener) Accept() (net.Conn, error) {
 			return nil, d.err
 		}
 		return d.conn, nil
-	case <-time.After(deadline.Sub(time.Now())):
+	case <-time.After(time.Until(deadline)):
 		return nil, fmt.Errorf(ioTimeout)
 	}
 }
