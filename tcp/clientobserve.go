@@ -33,7 +33,6 @@ type Observation struct {
 	respCodeChan chan codes.Code
 
 	obsSequence uint32
-	etag        []byte
 	lastEvent   time.Time
 	mutex       sync.Mutex
 

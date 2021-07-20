@@ -82,7 +82,6 @@ type ClientConn struct {
 	session                 *Session
 	observationTokenHandler *HandlerContainer
 	observationRequests     *kitSync.Map
-	activityMonitor         Notifier
 }
 
 // Dial creates a client connection to the given target.

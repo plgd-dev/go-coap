@@ -558,7 +558,7 @@ func (options Options) Clone() (Options, error) {
 	opts, used, err := opts.ResetOptionsTo(buf, options)
 	if err == ErrTooSmall {
 		buf = append(buf, make([]byte, used-len(buf))...)
-		opts, used, err = opts.ResetOptionsTo(buf, options)
+		opts, _, err = opts.ResetOptionsTo(buf, options)
 	}
 	if err != nil {
 		return nil, err

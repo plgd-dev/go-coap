@@ -43,10 +43,6 @@ type OnNewClientConnFunc = func(cc *client.ClientConn, dtlsConn *dtls.Conn)
 
 type GetMIDFunc = func() uint16
 
-func closeClientConn(cc *client.ClientConn) {
-	cc.Close()
-}
-
 var defaultServerOptions = serverOptions{
 	ctx:            context.Background(),
 	maxMessageSize: 64 * 1024,
@@ -83,7 +79,6 @@ type serverOptions struct {
 	errors                         ErrorFunc
 	goPool                         GoPoolFunc
 	createInactivityMonitor        func() inactivity.Monitor
-	net                            string
 	blockwiseSZX                   blockwise.SZX
 	blockwiseEnable                bool
 	blockwiseTransferTimeout       time.Duration

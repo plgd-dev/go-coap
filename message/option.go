@@ -243,13 +243,13 @@ func extendOpt(opt int) (int, int) {
 func marshalOptionHeaderExt(buf []byte, opt, ext int) (int, error) {
 	switch opt {
 	case ExtendOptionByteCode:
-		if buf != nil && len(buf) > 0 {
+		if len(buf) > 0 {
 			buf[0] = byte(ext)
 			return 1, nil
 		}
 		return 1, ErrTooSmall
 	case ExtendOptionWordCode:
-		if buf != nil && len(buf) > 1 {
+		if len(buf) > 1 {
 			binary.BigEndian.PutUint16(buf, uint16(ext))
 			return 2, nil
 		}
@@ -264,7 +264,7 @@ func marshalOptionHeader(buf []byte, delta, length int) (int, error) {
 	d, dx := extendOpt(delta)
 	l, lx := extendOpt(length)
 
-	if buf != nil && len(buf) > 0 {
+	if len(buf) > 0 {
 		buf[0] = byte(d<<4) | byte(l)
 		size++
 	} else {
