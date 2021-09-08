@@ -173,6 +173,7 @@ func Client(conn *net.UDPConn, opts ...DialOption) *client.ClientConn {
 		addr,
 		cfg.maxMessageSize,
 		cfg.closeSocket,
+		context.Background(),
 	)
 	cc = client.NewClientConn(session,
 		observationTokenHandler, observatioRequests, cfg.transmissionNStart, cfg.transmissionAcknowledgeTimeout, cfg.transmissionMaxRetransmit,

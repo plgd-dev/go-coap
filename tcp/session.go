@@ -49,6 +49,7 @@ type Session struct {
 	ctx    atomic.Value
 
 	errSendCSM error
+	done       chan struct{}
 }
 
 func NewSession(
@@ -88,6 +89,7 @@ func NewSession(
 		disableTCPSignalMessageCSM:      disableTCPSignalMessageCSM,
 		closeSocket:                     closeSocket,
 		inactivityMonitor:               inactivityMonitor,
+		done:                            make(chan struct{}),
 	}
 	s.ctx.Store(&ctx)
 
@@ -109,8 +111,9 @@ func (s *Session) SetContextValue(key interface{}, val interface{}) {
 	s.ctx.Store(&ctx)
 }
 
+// Done signalizes that connection is not more processed.
 func (s *Session) Done() <-chan struct{} {
-	return s.Context().Done()
+	return s.done
 }
 
 func (s *Session) AddOnClose(f EventFunc) {
@@ -128,6 +131,7 @@ func (s *Session) popOnClose() []EventFunc {
 }
 
 func (s *Session) close() error {
+	defer close(s.done)
 	for _, f := range s.popOnClose() {
 		f()
 	}

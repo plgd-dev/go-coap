@@ -24,6 +24,8 @@ type Session struct {
 
 	cancel context.CancelFunc
 	ctx    atomic.Value
+
+	done chan struct{}
 }
 
 func NewSession(
@@ -38,13 +40,15 @@ func NewSession(
 		connection:     connection,
 		maxMessageSize: maxMessageSize,
 		closeSocket:    closeSocket,
+		done:           make(chan struct{}),
 	}
 	s.ctx.Store(&ctx)
 	return s
 }
 
+// Done signalizes that connection is not more processed.
 func (s *Session) Done() <-chan struct{} {
-	return s.Context().Done()
+	return s.done
 }
 
 func (s *Session) AddOnClose(f EventFunc) {
@@ -62,6 +66,7 @@ func (s *Session) popOnClose() []EventFunc {
 }
 
 func (s *Session) close() error {
+	defer close(s.done)
 	for _, f := range s.popOnClose() {
 		f()
 	}

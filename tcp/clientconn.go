@@ -496,3 +496,8 @@ func (cc *ClientConn) Sequence() uint64 {
 func (cc *ClientConn) SetContextValue(key interface{}, val interface{}) {
 	cc.session.SetContextValue(key, val)
 }
+
+// Done signalizes that connection is not more processed.
+func (cc *ClientConn) Done() <-chan struct{} {
+	return cc.session.Done()
+}

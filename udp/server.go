@@ -109,6 +109,8 @@ type Server struct {
 
 	listen      *coapNet.UDPConn
 	listenMutex sync.Mutex
+	doneCtx     context.Context
+	doneCancel  context.CancelFunc
 }
 
 func NewServer(opt ...ServerOption) *Server {
@@ -133,6 +135,8 @@ func NewServer(opt ...ServerOption) *Server {
 
 	ctx, cancel := context.WithCancel(opts.ctx)
 	serverStartedChan := make(chan struct{})
+
+	doneCtx, doneCancel := context.WithCancel(context.Background())
 
 	return &Server{
 		ctx:            ctx,
@@ -159,6 +163,8 @@ func NewServer(opt ...ServerOption) *Server {
 		transmissionAcknowledgeTimeout: opts.transmissionAcknowledgeTimeout,
 		transmissionMaxRetransmit:      opts.transmissionMaxRetransmit,
 		getMID:                         opts.getMID,
+		doneCtx:                        doneCtx,
+		doneCancel:                     doneCancel,
 
 		conns: make(map[string]*client.ClientConn),
 	}
@@ -187,6 +193,7 @@ func (s *Server) Serve(l *coapNet.UDPConn) error {
 
 	defer func() {
 		s.closeSessions()
+		s.doneCancel()
 		s.listenMutex.Lock()
 		defer s.listenMutex.Unlock()
 		s.listen = nil
@@ -343,6 +350,7 @@ func (s *Server) getOrCreateClientConn(UDPConn *coapNet.UDPConn, raddr *net.UDPA
 			raddr,
 			s.maxMessageSize,
 			false,
+			s.doneCtx,
 		)
 		monitor := s.createInactivityMonitor()
 		cc = client.NewClientConn(

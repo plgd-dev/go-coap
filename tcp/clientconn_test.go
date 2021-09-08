@@ -93,7 +93,10 @@ func TestClientConn_Get(t *testing.T) {
 
 	cc, err := Dial(l.Addr().String())
 	require.NoError(t, err)
-	defer cc.Close()
+	defer func() {
+		cc.Close()
+		<-cc.Done()
+	}()
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -214,7 +217,10 @@ func TestClientConn_Post(t *testing.T) {
 
 			cc, err := Dial(l.Addr().String())
 			require.NoError(t, err)
-			defer cc.Close()
+			defer func() {
+				cc.Close()
+				<-cc.Done()
+			}()
 
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second*3600)
 			defer cancel()
@@ -333,7 +339,10 @@ func TestClientConn_Put(t *testing.T) {
 
 			cc, err := Dial(l.Addr().String())
 			require.NoError(t, err)
-			defer cc.Close()
+			defer func() {
+				cc.Close()
+				<-cc.Done()
+			}()
 
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second*3600)
 			defer cancel()
@@ -429,7 +438,10 @@ func TestClientConn_Delete(t *testing.T) {
 
 	cc, err := Dial(l.Addr().String())
 	require.NoError(t, err)
-	defer cc.Close()
+	defer func() {
+		cc.Close()
+		<-cc.Done()
+	}()
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -474,7 +486,10 @@ func TestClientConn_Ping(t *testing.T) {
 
 	cc, err := Dial(l.Addr().String())
 	require.NoError(t, err)
-	defer cc.Close()
+	defer func() {
+		cc.Close()
+		<-cc.Done()
+	}()
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond*200)
 	defer cancel()
@@ -541,6 +556,7 @@ func TestClient_InactiveMonitor(t *testing.T) {
 	time.Sleep(time.Second * 2)
 
 	cc.Close()
+	<-cc.Done()
 
 	checkCloseWg.Wait()
 	require.True(t, inactivityDetected)

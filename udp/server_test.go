@@ -168,7 +168,10 @@ func TestServer_CleanUpConns(t *testing.T) {
 	cc.AddOnClose(func() {
 		checkCloseWg.Done()
 	})
-	defer cc.Close()
+	defer func() {
+		cc.Close()
+		<-cc.Done()
+	}()
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 	err = cc.Ping(ctx)
@@ -232,6 +235,7 @@ func TestServer_InactiveMonitor(t *testing.T) {
 	time.Sleep(time.Second * 2)
 
 	cc.Close()
+	<-cc.Done()
 
 	checkCloseWg.Wait()
 	require.True(t, inactivityDetected)
