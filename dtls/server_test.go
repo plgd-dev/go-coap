@@ -60,11 +60,12 @@ func TestServer_CleanUpConns(t *testing.T) {
 	cc.AddOnClose(func() {
 		checkCloseWg.Done()
 	})
-	defer cc.Close()
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 	err = cc.Ping(ctx)
 	require.NoError(t, err)
+	cc.Close()
+	<-cc.Done()
 }
 
 func createDTLSConfig(ctx context.Context) (serverConfig *piondtls.Config, clientConfig *piondtls.Config, clientSerial *big.Int, err error) {
@@ -156,10 +157,11 @@ func TestServer_SetContextValueWithPKI(t *testing.T) {
 
 	cc, err := dtls.Dial(ld.Addr().String(), clientCgf)
 	require.NoError(t, err)
-	defer cc.Close()
 
 	_, err = cc.Get(ctx, "/")
 	require.NoError(t, err)
+	cc.Close()
+	<-cc.Done()
 }
 
 func TestServer_InactiveMonitor(t *testing.T) {
@@ -221,6 +223,7 @@ func TestServer_InactiveMonitor(t *testing.T) {
 	time.Sleep(time.Second * 2)
 
 	cc.Close()
+	<-cc.Done()
 
 	checkCloseWg.Wait()
 	require.True(t, inactivityDetected)

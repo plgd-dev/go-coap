@@ -51,7 +51,10 @@ func TestServer_CleanUpConns(t *testing.T) {
 	cc.AddOnClose(func() {
 		checkCloseWg.Done()
 	})
-	defer cc.Close()
+	defer func() {
+		cc.Close()
+		<-cc.Done()
+	}()
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 	err = cc.Ping(ctx)
@@ -142,7 +145,10 @@ func TestServer_SetContextValueWithPKI(t *testing.T) {
 
 	cc, err := tcp.Dial(ld.Addr().String(), tcp.WithTLS(clientCgf))
 	require.NoError(t, err)
-	defer cc.Close()
+	defer func() {
+		cc.Close()
+		<-cc.Done()
+	}()
 
 	_, err = cc.Get(ctx, "/")
 	require.NoError(t, err)
@@ -204,6 +210,7 @@ func TestServer_InactiveMonitor(t *testing.T) {
 	time.Sleep(time.Second * 2)
 
 	cc.Close()
+	<-cc.Done()
 
 	checkCloseWg.Wait()
 	require.True(t, inactivityDetected)

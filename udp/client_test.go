@@ -135,7 +135,10 @@ func TestClientConn_Get(t *testing.T) {
 
 	cc, err := Dial(l.LocalAddr().String())
 	require.NoError(t, err)
-	defer cc.Close()
+	defer func() {
+		cc.Close()
+		<-cc.Done()
+	}()
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -230,7 +233,10 @@ func TestClientConn_Get_SeparateMessage(t *testing.T) {
 		assert.NoError(t, fmt.Errorf("none msg expected comes: %+v", r))
 	}))
 	require.NoError(t, err)
-	defer cc.Close()
+	defer func() {
+		cc.Close()
+		<-cc.Done()
+	}()
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*3600)
 	defer cancel()
@@ -342,7 +348,10 @@ func TestClientConn_Post(t *testing.T) {
 
 			cc, err := Dial(l.LocalAddr().String())
 			require.NoError(t, err)
-			defer cc.Close()
+			defer func() {
+				cc.Close()
+				<-cc.Done()
+			}()
 
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second*3600)
 			defer cancel()
@@ -463,7 +472,10 @@ func TestClientConn_Put(t *testing.T) {
 
 			cc, err := Dial(l.LocalAddr().String())
 			require.NoError(t, err)
-			defer cc.Close()
+			defer func() {
+				cc.Close()
+				<-cc.Done()
+			}()
 
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second*3600)
 			defer cancel()
@@ -561,7 +573,10 @@ func TestClientConn_Delete(t *testing.T) {
 
 	cc, err := Dial(l.LocalAddr().String())
 	require.NoError(t, err)
-	defer cc.Close()
+	defer func() {
+		cc.Close()
+		<-cc.Done()
+	}()
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -606,7 +621,10 @@ func TestClientConn_Ping(t *testing.T) {
 
 	cc, err := Dial(l.LocalAddr().String())
 	require.NoError(t, err)
-	defer cc.Close()
+	defer func() {
+		cc.Close()
+		<-cc.Done()
+	}()
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond*200)
 	defer cancel()
