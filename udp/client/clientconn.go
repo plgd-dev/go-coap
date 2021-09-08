@@ -35,6 +35,7 @@ type Session interface {
 	Run(cc *ClientConn) error
 	AddOnClose(f EventFunc)
 	SetContextValue(key interface{}, val interface{})
+	Done() <-chan struct{}
 }
 
 type Notifier interface {
@@ -703,4 +704,9 @@ func (cc *ClientConn) Client() *Client {
 // SetContextValue stores the value associated with key to context of connection.
 func (cc *ClientConn) SetContextValue(key interface{}, val interface{}) {
 	cc.session.SetContextValue(key, val)
+}
+
+// Done signalizes that connection is not more processed.
+func (cc *ClientConn) Done() <-chan struct{} {
+	return cc.session.Done()
 }

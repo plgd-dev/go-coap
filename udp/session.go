@@ -25,6 +25,9 @@ type Session struct {
 
 	cancel context.CancelFunc
 	ctx    atomic.Value
+
+	doneCtx    context.Context
+	doneCancel context.CancelFunc
 }
 
 func NewSession(
@@ -33,14 +36,19 @@ func NewSession(
 	raddr *net.UDPAddr,
 	maxMessageSize int,
 	closeSocket bool,
+	doneCtx context.Context,
 ) *Session {
 	ctx, cancel := context.WithCancel(ctx)
+
+	doneCtx, doneCancel := context.WithCancel(ctx)
 	s := &Session{
 		cancel:         cancel,
 		connection:     connection,
 		raddr:          raddr,
 		maxMessageSize: maxMessageSize,
 		closeSocket:    closeSocket,
+		doneCtx:        doneCtx,
+		doneCancel:     doneCancel,
 	}
 	s.ctx.Store(&ctx)
 	return s
@@ -54,8 +62,9 @@ func (s *Session) SetContextValue(key interface{}, val interface{}) {
 	s.ctx.Store(&ctx)
 }
 
+// Done signalizes that connection is not more processed.
 func (s *Session) Done() <-chan struct{} {
-	return s.Context().Done()
+	return s.doneCtx.Done()
 }
 
 func (s *Session) AddOnClose(f EventFunc) {
@@ -73,6 +82,7 @@ func (s *Session) popOnClose() []EventFunc {
 }
 
 func (s *Session) close() error {
+	defer s.doneCancel()
 	for _, f := range s.popOnClose() {
 		f()
 	}

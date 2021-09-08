@@ -122,3 +122,8 @@ func (c *ClientTCP) Sequence() uint64 {
 func (c *ClientTCP) ClientConn() interface{} {
 	return c.cc
 }
+
+// Done signalizes that connection is not more processed.
+func (c *ClientTCP) Done() <-chan struct{} {
+	return c.cc.Done()
+}
