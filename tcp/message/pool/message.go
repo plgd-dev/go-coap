@@ -133,6 +133,7 @@ func ReleaseMessage(req *Message) {
 	}
 	atomic.AddInt32(&currentMessagesInPool, 1)
 	req.Reset()
+	req.ctx = nil
 	messagePool.Put(req)
 }
 
