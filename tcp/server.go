@@ -13,7 +13,7 @@ import (
 	"github.com/plgd-dev/go-coap/v2/net/blockwise"
 	"github.com/plgd-dev/go-coap/v2/net/monitor/inactivity"
 	"github.com/plgd-dev/go-coap/v2/tcp/message/pool"
-	kitSync "github.com/plgd-dev/kit/sync"
+	kitSync "github.com/plgd-dev/kit/v2/sync"
 
 	"github.com/plgd-dev/go-coap/v2/message/codes"
 

@@ -3,7 +3,7 @@ package blockwise
 import (
 	"fmt"
 
-	kitSync "github.com/plgd-dev/kit/sync"
+	kitSync "github.com/plgd-dev/kit/v2/sync"
 )
 
 func messageToGuardTransferKey(msg Message) string {
