@@ -726,6 +726,7 @@ func (b *BlockWise) processReceivedMessage(w ResponseWriter, r Message, maxSzx S
 		cachedReceivedMessage.SetToken(r.Token())
 		cachedReceivedMessage.SetSequence(r.Sequence())
 		cachedReceivedMessage.SetBody(memfile.New(make([]byte, 0, 1024)))
+		cachedReceivedMessage.SetCode(r.Code())
 		msgGuard = newRequestGuard(cachedReceivedMessage)
 		err := msgGuard.Acquire(cachedReceivedMessage.Context(), 1)
 		if err != nil {
@@ -815,7 +816,6 @@ func (b *BlockWise) processReceivedMessage(w ResponseWriter, r Message, maxSzx S
 			b.receivingMessagesCache.Delete(tokenStr)
 			cachedReceivedMessage.Remove(blockType)
 			cachedReceivedMessage.Remove(sizeType)
-			cachedReceivedMessage.SetCode(r.Code())
 			setTypeFrom(cachedReceivedMessage, r)
 			if !bytes.Equal(cachedReceivedMessage.Token(), token) {
 				b.bwSendedRequest.deleteByToken(tokenStr)
@@ -839,6 +839,8 @@ func (b *BlockWise) processReceivedMessage(w ResponseWriter, r Message, maxSzx S
 		sendMessage.ResetOptionsTo(sendedRequest.Options())
 		sendMessage.SetCode(sendedRequest.Code())
 		sendMessage.Remove(message.Observe)
+		sendMessage.Remove(message.Block1)
+		sendMessage.Remove(message.Size1)
 	} else {
 		sendMessage.SetCode(codes.Continue)
 	}
