@@ -33,6 +33,7 @@ func NewObservationHandler(obsertionTokenHandler *HandlerContainer, next Handler
 type Observation struct {
 	token        message.Token
 	path         string
+	queryOptions message.Options
 	cc           *ClientConn
 	observeFunc  func(req *pool.Message)
 	respCodeChan chan codes.Code
@@ -45,10 +46,11 @@ type Observation struct {
 	waitForReponse uint32
 }
 
-func newObservation(token message.Token, path string, cc *ClientConn, observeFunc func(req *pool.Message), respCodeChan chan codes.Code) *Observation {
+func newObservation(token message.Token, path string, queryOptions message.Options, cc *ClientConn, observeFunc func(req *pool.Message), respCodeChan chan codes.Code) *Observation {
 	return &Observation{
 		token:          token,
 		path:           path,
+		queryOptions:   queryOptions,
 		obsSequence:    0,
 		cc:             cc,
 		waitForReponse: 1,
@@ -82,7 +84,7 @@ func (o *Observation) handler(w *ResponseWriter, r *pool.Message) {
 // Cancel remove observation from server. For recreate observation use Observe.
 func (o *Observation) Cancel(ctx context.Context) error {
 	o.cleanUp()
-	req, err := NewGetRequest(ctx, o.path)
+	req, err := NewGetRequest(ctx, o.path, o.queryOptions...)
 	if err != nil {
 		return fmt.Errorf("cannot cancel observation request: %w", err)
 	}
@@ -123,12 +125,22 @@ func (o *Observation) wantBeNotified(r *pool.Message) bool {
 func (cc *ClientConn) Observe(ctx context.Context, path string, observeFunc func(req *pool.Message), opts ...message.Option) (*Observation, error) {
 	req, err := NewGetRequest(ctx, path, opts...)
 	if err != nil {
-		return nil, fmt.Errorf("cannot create observe request: %w", err)
+		return nil, err
 	}
 	token := req.Token()
 	req.SetObserve(0)
+	queryOpts := make(message.Options, 0)
+	for _, o := range req.Options() {
+		if o.ID == message.URIQuery {
+			queryOpts = append(queryOpts, o)
+		}
+	}
+	queryOpts, err = queryOpts.Clone()
+	if err != nil {
+		return nil, err
+	}
 	respCodeChan := make(chan codes.Code, 1)
-	o := newObservation(token, path, cc, observeFunc, respCodeChan)
+	o := newObservation(token, path, queryOpts, cc, observeFunc, respCodeChan)
 
 	cc.observationRequests.Store(token.String(), req)
 	err = o.cc.observationTokenHandler.Insert(token.String(), o.handler)

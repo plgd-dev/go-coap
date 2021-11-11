@@ -563,5 +563,8 @@ func (options Options) Clone() (Options, error) {
 	if err != nil {
 		return nil, err
 	}
+	if len(opts) == 0 {
+		return nil, nil
+	}
 	return opts, nil
 }
