@@ -663,8 +663,8 @@ func (cc *ClientConn) Process(datagram []byte) error {
 				return
 			}
 			return
-		} else if reqType == udpMessage.Confirmable {
-			// send separate message to confirm received message.
+		} else if reqType == udpMessage.Confirmable && !w.response.IsModified() {
+			// send message to confirm received message, if response is not modified
 			separateMessage := cc.AcquireMessage(cc.Context())
 			defer cc.ReleaseMessage(separateMessage)
 			separateMessage.SetCode(codes.Empty)
@@ -682,9 +682,13 @@ func (cc *ClientConn) Process(datagram []byte) error {
 			return
 		}
 
-		// send message with confirmation
+		// send piggybacked response
 		w.response.SetType(udpMessage.Confirmable)
 		w.response.SetMessageID(cc.getMID())
+		if reqType == udpMessage.Confirmable {
+			w.response.SetType(udpMessage.Acknowledgement)
+			w.response.SetMessageID(reqMid)
+		}
 		err := cc.writeMessage(w.response)
 		if err != nil {
 			cc.Close()
