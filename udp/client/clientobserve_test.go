@@ -132,6 +132,116 @@ func TestClientConn_Observe(t *testing.T) {
 			require.NoError(t, err)
 			<-obs.done
 			err = got.Cancel(ctx)
+			require.NoError(t, err)
+		})
+	}
+}
+
+func TestClientConnObserveNotSupported(t *testing.T) {
+	type args struct {
+		path    string
+		payload []byte
+	}
+	tests := []struct {
+		name    string
+		args    args
+		wantErr bool
+	}{
+		{
+			name: "10bytes",
+			args: args{
+				path:    "/tmp",
+				payload: make([]byte, 10),
+			},
+		},
+		{
+			name: "5000bytes",
+			args: args{
+				path:    "/tmp",
+				payload: make([]byte, 5000),
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			l, err := coapNet.NewListenUDP("udp", "")
+			require.NoError(t, err)
+			defer l.Close()
+			var wg sync.WaitGroup
+			defer wg.Wait()
+
+			s := udp.NewServer(udp.WithHandlerFunc(func(w *client.ResponseWriter, r *pool.Message) {
+				switch r.Code() {
+				case codes.PUT, codes.POST, codes.DELETE:
+					w.SetResponse(codes.NotFound, message.TextPlain, nil)
+				case codes.GET:
+				default:
+					return
+				}
+				obs, err := r.Observe()
+				if err != nil {
+					err := w.SetResponse(codes.Content, message.TextPlain, bytes.NewReader(tt.args.payload))
+					require.NoError(t, err)
+					return
+				}
+				require.NoError(t, err)
+				require.NotNil(t, w.ClientConn())
+				token := r.Token()
+				switch obs {
+				case 0:
+					cc := w.ClientConn()
+					tmpPay := make([]byte, len(tt.args.payload))
+					copy(tmpPay, tt.args.payload)
+					p := bytes.NewReader(tt.args.payload)
+					etag, err := message.GetETag(p)
+					require.NoError(t, err)
+					req := pool.AcquireMessage(cc.Context())
+					defer pool.ReleaseMessage(req)
+					req.SetCode(codes.Content)
+					req.SetContentFormat(message.TextPlain)
+					req.SetBody(p)
+					req.SetETag(etag)
+					req.SetToken(token)
+					err = cc.WriteMessage(req)
+					require.NoError(t, err)
+				default:
+					err := w.SetResponse(codes.BadRequest, message.TextPlain, nil)
+					require.NoError(t, err)
+				}
+			}))
+			defer s.Stop()
+
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				err := s.Serve(l)
+				require.NoError(t, err)
+			}()
+
+			cc, err := udp.Dial(l.LocalAddr().String())
+			require.NoError(t, err)
+			defer cc.Close()
+
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
+			defer cancel()
+			obs := &observer{
+				t:                        t,
+				done:                     make(chan bool, 1),
+				numEvents:                1,
+				observeOptionNotRequired: true,
+			}
+			got, err := cc.Observe(ctx, tt.args.path, obs.observe)
+			if tt.wantErr {
+				require.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
+			<-obs.done
+			require.True(t, got.Canceled())
+			err = got.Cancel(ctx)
+			require.NoError(t, err)
+			// to send acknowledge response
+			time.Sleep(time.Millisecond * 100)
 		})
 	}
 }
@@ -159,8 +269,9 @@ type observer struct {
 	t    require.TestingT
 	msgs []*pool.Message
 	sync.Mutex
-	done      chan bool
-	numEvents int
+	done                     chan bool
+	numEvents                int
+	observeOptionNotRequired bool
 }
 
 func (o *observer) observe(req *pool.Message) {
@@ -168,6 +279,10 @@ func (o *observer) observe(req *pool.Message) {
 	o.Lock()
 	defer o.Unlock()
 	o.msgs = append(o.msgs, req)
+	if o.observeOptionNotRequired {
+		o.done <- true
+		return
+	}
 	obs, err := req.Observe()
 	require.NoError(o.t, err)
 	if obs > uint32(o.numEvents) {

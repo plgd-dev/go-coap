@@ -10,6 +10,7 @@ import (
 
 type Observation = interface {
 	Cancel(ctx context.Context) error
+	Canceled() bool
 }
 
 type Client interface {
