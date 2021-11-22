@@ -1,4 +1,11 @@
 {
+    "go.testFlags": [
+        "-race",
+        "-v",
+        "-cover",
+        "-p",
+        "1",
+    ],
     "go.testEnvVars": {
      //   "GOFLAGS":"-mod=vendor",
     },

@@ -24,13 +24,18 @@ func NewObservationHandler(obsertionTokenHandler *HandlerContainer, next Handler
 	}
 }
 
+type respObservationMessage struct {
+	code         codes.Code
+	notSupported bool
+}
+
 //Observation represents subscription to resource on the server
 type Observation struct {
-	token        message.Token
-	path         string
-	cc           *ClientConn
-	observeFunc  func(req *pool.Message)
-	respCodeChan chan codes.Code
+	token               message.Token
+	path                string
+	cc                  *ClientConn
+	observeFunc         func(req *pool.Message)
+	respObservationChan chan respObservationMessage
 
 	obsSequence uint32
 	lastEvent   time.Time
@@ -39,40 +44,53 @@ type Observation struct {
 	waitForReponse uint32
 }
 
-func newObservation(token message.Token, path string, cc *ClientConn, observeFunc func(req *pool.Message), respCodeChan chan codes.Code) *Observation {
+func (o *Observation) Canceled() bool {
+	_, ok := o.cc.observationRequests.Load(o.token.String())
+	return !ok
+}
+
+func newObservation(token message.Token, path string, cc *ClientConn, observeFunc func(req *pool.Message), respObservationChan chan respObservationMessage) *Observation {
 	return &Observation{
-		token:          token,
-		path:           path,
-		obsSequence:    0,
-		cc:             cc,
-		waitForReponse: 1,
-		respCodeChan:   respCodeChan,
-		observeFunc:    observeFunc,
+		token:               token,
+		path:                path,
+		obsSequence:         0,
+		cc:                  cc,
+		waitForReponse:      1,
+		respObservationChan: respObservationChan,
+		observeFunc:         observeFunc,
 	}
 }
 
 func (o *Observation) handler(w *ResponseWriter, r *pool.Message) {
 	code := r.Code()
+	notSupported := !r.HasOption(message.Observe)
 	if atomic.CompareAndSwapUint32(&o.waitForReponse, 1, 0) {
 		select {
-		case o.respCodeChan <- code:
+		case o.respObservationChan <- respObservationMessage{
+			code:         code,
+			notSupported: notSupported,
+		}:
 		default:
 		}
-		o.respCodeChan = nil
+		o.respObservationChan = nil
 	}
 	if o.wantBeNotified(r) {
 		o.observeFunc(r)
 	}
 }
 
-func (o *Observation) cleanUp() {
+func (o *Observation) cleanUp() bool {
 	o.cc.observationTokenHandler.Pop(o.token)
-	o.cc.observationRequests.PullOut(o.token.String())
+	_, ok := o.cc.observationRequests.PullOut(o.token.String())
+	return ok
 }
 
 // Cancel remove observation from server. For recreate observation use Observe.
 func (o *Observation) Cancel(ctx context.Context) error {
-	o.cleanUp()
+	if !o.cleanUp() {
+		// observation was already cleanup
+		return nil
+	}
 	req, err := NewGetRequest(ctx, o.path)
 	if err != nil {
 		return fmt.Errorf("cannot cancel observation request: %w", err)
@@ -119,8 +137,8 @@ func (cc *ClientConn) Observe(ctx context.Context, path string, observeFunc func
 	token := req.Token()
 	req.SetObserve(0)
 
-	respCodeChan := make(chan codes.Code, 1)
-	o := newObservation(token, path, cc, observeFunc, respCodeChan)
+	respObservationChan := make(chan respObservationMessage, 1)
+	o := newObservation(token, path, cc, observeFunc, respObservationChan)
 
 	options, err := req.Options().Clone()
 	if err != nil {
@@ -155,10 +173,13 @@ func (cc *ClientConn) Observe(ctx context.Context, path string, observeFunc func
 	case <-cc.Context().Done():
 		err = fmt.Errorf("connection was closed: %w", cc.Context().Err())
 		return nil, err
-	case respCode := <-respCodeChan:
-		if respCode != codes.Content {
-			err = fmt.Errorf("unexpected return code(%v)", respCode)
+	case respObservationMessage := <-respObservationChan:
+		if respObservationMessage.code != codes.Content {
+			err = fmt.Errorf("unexpected return code(%v)", respObservationMessage.code)
 			return nil, err
+		}
+		if respObservationMessage.notSupported {
+			o.cleanUp()
 		}
 		return o, nil
 	}
