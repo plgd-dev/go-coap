@@ -4,7 +4,6 @@ import (
 	"context"
 	"net"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 )
@@ -40,7 +39,7 @@ func TestConn_WriteWithContext(t *testing.T) {
 		},
 	}
 
-	listener, err := NewTCPListener("tcp", "127.0.0.1:", WithHeartBeat(time.Millisecond*100))
+	listener, err := NewTCPListener("tcp", "127.0.0.1:")
 	assert.NoError(t, err)
 	defer listener.Close()
 	ctx, cancel := context.WithCancel(context.Background())
@@ -52,7 +51,7 @@ func TestConn_WriteWithContext(t *testing.T) {
 			if err != nil {
 				return
 			}
-			c := NewConn(conn, WithHeartBeat(time.Millisecond*10))
+			c := NewConn(conn)
 			b := make([]byte, len(helloWorld))
 			_ = c.ReadFullWithContext(ctx, b)
 			c.Close()
@@ -63,7 +62,7 @@ func TestConn_WriteWithContext(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			tcpConn, err := net.Dial("tcp", listener.Addr().String())
 			assert.NoError(t, err)
-			c := NewConn(tcpConn, WithHeartBeat(time.Millisecond*100))
+			c := NewConn(tcpConn)
 			defer c.Close()
 
 			c.LocalAddr()

@@ -6,6 +6,7 @@ import (
 	"net"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"golang.org/x/net/ipv4"
@@ -16,13 +17,11 @@ import (
 //
 // Multiple goroutines may invoke methods on a UDPConn simultaneously.
 type UDPConn struct {
-	heartBeat      time.Duration
-	connection     *net.UDPConn
-	packetConn     packetConn
-	errors         func(err error)
-	network        string
-	onReadTimeout  func() error
-	onWriteTimeout func() error
+	connection *net.UDPConn
+	packetConn packetConn
+	errors     func(err error)
+	network    string
+	closed     uint32
 
 	lock sync.Mutex
 }
@@ -141,17 +140,11 @@ func IsIPv6(addr net.IP) bool {
 }
 
 var defaultUDPConnOptions = udpConnOptions{
-	heartBeat: time.Millisecond * 200,
-	errors: func(err error) {
-		fmt.Println(err)
-	},
+	errors: func(err error) {},
 }
 
 type udpConnOptions struct {
-	heartBeat      time.Duration
-	errors         func(err error)
-	onReadTimeout  func() error
-	onWriteTimeout func() error
+	errors func(err error)
 }
 
 func NewListenUDP(network, addr string, opts ...UDPOption) (*UDPConn, error) {
@@ -182,13 +175,10 @@ func NewUDPConn(network string, c *net.UDPConn, opts ...UDPOption) *UDPConn {
 	}
 
 	return &UDPConn{
-		network:        network,
-		connection:     c,
-		heartBeat:      cfg.heartBeat,
-		packetConn:     packetConn,
-		errors:         cfg.errors,
-		onReadTimeout:  cfg.onReadTimeout,
-		onWriteTimeout: cfg.onWriteTimeout,
+		network:    network,
+		connection: c,
+		packetConn: packetConn,
+		errors:     cfg.errors,
 	}
 }
 
@@ -209,10 +199,13 @@ func (c *UDPConn) Network() string {
 
 // Close closes the connection.
 func (c *UDPConn) Close() error {
+	if !atomic.CompareAndSwapUint32(&c.closed, 0, 1) {
+		return nil
+	}
 	return c.connection.Close()
 }
 
-func (c *UDPConn) writeToAddr(deadline time.Time, multicastHopLimit int, iface net.Interface, srcAddr net.Addr, port string, raddr *net.UDPAddr, buffer []byte) error {
+func (c *UDPConn) writeToAddr(multicastHopLimit int, iface net.Interface, srcAddr net.Addr, port string, raddr *net.UDPAddr, buffer []byte) error {
 	netType := "udp4"
 	if IsIPv6(raddr.IP) {
 		netType = "udp6"
@@ -236,15 +229,14 @@ func (c *UDPConn) writeToAddr(deadline time.Time, multicastHopLimit int, iface n
 		return err
 	}
 	p.SetMulticastHopLimit(multicastHopLimit)
-	err := p.SetWriteDeadline(deadline)
-	if err != nil {
-		return fmt.Errorf("cannot write multicast with context: cannot set write deadline for connection: %w", err)
-	}
 	ip := net.ParseIP(addr)
 	if ip == nil {
 		return fmt.Errorf("cannot parse ip (%v) for iface %v", ip, iface.Name)
 	}
-	_, err = p.WriteTo(buffer, &ControlMessage{
+	if atomic.LoadUint32(&c.closed) == 1 {
+		return ErrConnectionIsClosed
+	}
+	_, err := p.WriteTo(buffer, &ControlMessage{
 		Src:     ip,
 		IfIndex: iface.Index,
 	}, raddr)
@@ -265,7 +257,6 @@ func (c *UDPConn) WriteMulticast(ctx context.Context, raddr *net.UDPAddr, hopLim
 	}
 	c.lock.Lock()
 	defer c.lock.Unlock()
-LOOP:
 	for _, iface := range ifaces {
 		if iface.Flags&net.FlagMulticast == 0 {
 			continue
@@ -287,18 +278,8 @@ LOOP:
 		port := addr[len(addr)-1]
 
 		for _, ifaceAddr := range ifaceAddrs {
-			deadline := time.Now().Add(c.heartBeat)
-			err = c.writeToAddr(deadline, hopLimit, iface, ifaceAddr, port, raddr, buffer)
+			err = c.writeToAddr(hopLimit, iface, ifaceAddr, port, raddr, buffer)
 			if err != nil {
-				if isTemporary(err, deadline) {
-					if c.onWriteTimeout != nil {
-						err := c.onWriteTimeout()
-						if err != nil {
-							return fmt.Errorf("cannot write multicast to %v: on timeout returns error: %w", iface.Name, err)
-						}
-					}
-					continue LOOP
-				}
 				if c.errors != nil {
 					c.errors(fmt.Errorf("cannot write multicast to %v: %w", iface.Name, err))
 				}
@@ -314,34 +295,20 @@ func (c *UDPConn) WriteWithContext(ctx context.Context, raddr *net.UDPAddr, buff
 		return fmt.Errorf("cannot write with context: invalid raddr")
 	}
 
-	written := 0
-	c.lock.Lock()
-	defer c.lock.Unlock()
-	for written < len(buffer) {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		default:
-		}
-		deadline := time.Now().Add(c.heartBeat)
-		err := c.connection.SetWriteDeadline(deadline)
-		if err != nil {
-			return fmt.Errorf("cannot set write deadline for udp connection: %w", err)
-		}
-		n, err := WriteToUDP(c.connection, raddr, buffer[written:])
-		if err != nil {
-			if isTemporary(err, deadline) {
-				if c.onWriteTimeout != nil {
-					err := c.onWriteTimeout()
-					if err != nil {
-						return fmt.Errorf("cannot write to udp connection: on timeout returns error: %w", err)
-					}
-				}
-				continue
-			}
-			return fmt.Errorf("cannot write to udp connection: %w", err)
-		}
-		written += n
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+	}
+	if atomic.LoadUint32(&c.closed) == 1 {
+		return ErrConnectionIsClosed
+	}
+	n, err := WriteToUDP(c.connection, raddr, buffer)
+	if err != nil {
+		return err
+	}
+	if n != len(buffer) {
+		return ErrWriteInterrupted
 	}
 
 	return nil
@@ -355,23 +322,11 @@ func (c *UDPConn) ReadWithContext(ctx context.Context, buffer []byte) (int, *net
 			return -1, nil, ctx.Err()
 		default:
 		}
-		deadline := time.Now().Add(c.heartBeat)
-		err := c.connection.SetReadDeadline(deadline)
-		if err != nil {
-			return -1, nil, fmt.Errorf("cannot set read deadline for udp connection: %w", err)
+		if atomic.LoadUint32(&c.closed) == 1 {
+			return -1, nil, ErrConnectionIsClosed
 		}
 		n, s, err := c.connection.ReadFromUDP(buffer)
 		if err != nil {
-			// check context in regular intervals and then resume listening
-			if isTemporary(err, deadline) {
-				if c.onReadTimeout != nil {
-					err := c.onReadTimeout()
-					if err != nil {
-						return -1, nil, fmt.Errorf("cannot read from udp connection: on timeout returns error: %w", err)
-					}
-				}
-				continue
-			}
 			return -1, nil, fmt.Errorf("cannot read from udp connection: %w", err)
 		}
 		return n, s, err

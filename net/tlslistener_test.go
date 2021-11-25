@@ -81,7 +81,7 @@ func TestTLSListener_AcceptWithContext(t *testing.T) {
 	defer os.RemoveAll(dir)
 	config := SetTLSConfig(t)
 
-	listener, err := NewTLSListener("tcp", "127.0.0.1:", config, WithHeartBeat(time.Millisecond*100))
+	listener, err := NewTLSListener("tcp", "127.0.0.1:", config)
 	require.NoError(t, err)
 	defer listener.Close()
 
@@ -159,7 +159,7 @@ func TestTLSListener_CheckForInfinitLoop(t *testing.T) {
 	defer os.RemoveAll(dir)
 	config := SetTLSConfig(t)
 
-	listener, err := NewTLSListener("tcp", "127.0.0.1:", config, WithHeartBeat(time.Millisecond*100))
+	listener, err := NewTLSListener("tcp", "127.0.0.1:", config)
 	require.NoError(t, err)
 	defer listener.Close()
 
@@ -197,7 +197,7 @@ func TestTLSListener_CheckForInfinitLoop(t *testing.T) {
 			} else {
 				require.NoError(t, err)
 				b := make([]byte, 1024)
-				c := NewConn(con, WithHeartBeat(time.Second))
+				c := NewConn(con)
 				_, err = c.ReadWithContext(context.Background(), b)
 				assert.Error(t, err)
 				assert.Contains(t, err.Error(), "i/o timeout")
