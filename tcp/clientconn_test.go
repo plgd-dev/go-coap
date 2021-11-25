@@ -13,6 +13,7 @@ import (
 
 	"github.com/plgd-dev/go-coap/v2/mux"
 	"github.com/plgd-dev/go-coap/v2/net/monitor/inactivity"
+	"github.com/plgd-dev/go-coap/v2/pkg/runner/periodic"
 
 	"github.com/plgd-dev/go-coap/v2/message"
 	"github.com/plgd-dev/go-coap/v2/message/codes"
@@ -21,7 +22,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestClientConn_Get(t *testing.T) {
+func TestClientConnGet(t *testing.T) {
 	type args struct {
 		path string
 		opts message.Options
@@ -122,7 +123,7 @@ func TestClientConn_Get(t *testing.T) {
 	}
 }
 
-func TestClientConn_Post(t *testing.T) {
+func TestClientConnPost(t *testing.T) {
 	type args struct {
 		path          string
 		contentFormat message.MediaType
@@ -244,7 +245,7 @@ func TestClientConn_Post(t *testing.T) {
 	}
 }
 
-func TestClientConn_Put(t *testing.T) {
+func TestClientConnPut(t *testing.T) {
 	type args struct {
 		path          string
 		contentFormat message.MediaType
@@ -366,7 +367,7 @@ func TestClientConn_Put(t *testing.T) {
 	}
 }
 
-func TestClientConn_Delete(t *testing.T) {
+func TestClientConnDelete(t *testing.T) {
 	type args struct {
 		path string
 		opts message.Options
@@ -467,7 +468,7 @@ func TestClientConn_Delete(t *testing.T) {
 	}
 }
 
-func TestClientConn_Ping(t *testing.T) {
+func TestClientConnPing(t *testing.T) {
 	l, err := coapNet.NewTCPListener("tcp", "")
 	require.NoError(t, err)
 	defer l.Close()
@@ -497,7 +498,7 @@ func TestClientConn_Ping(t *testing.T) {
 	require.NoError(t, err)
 }
 
-func TestClient_InactiveMonitor(t *testing.T) {
+func TestClientInactiveMonitor(t *testing.T) {
 	inactivityDetected := false
 	defer func() {
 		runtime.GC()
@@ -562,12 +563,15 @@ func TestClient_InactiveMonitor(t *testing.T) {
 	require.True(t, inactivityDetected)
 }
 
-func TestClient_KeepAliveMonitor(t *testing.T) {
+func TestClientKeepAliveMonitor(t *testing.T) {
 	inactivityDetected := false
 
 	ld, err := coapNet.NewTCPListener("tcp", "")
 	require.NoError(t, err)
 	defer ld.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second*8)
+	defer cancel()
 
 	var checkCloseWg sync.WaitGroup
 	defer checkCloseWg.Wait()
@@ -577,8 +581,6 @@ func TestClient_KeepAliveMonitor(t *testing.T) {
 			cc.AddOnClose(func() {
 				checkCloseWg.Done()
 			})
-		}),
-		WithInactivityMonitor(time.Millisecond*10, func(cc inactivity.ClientConn) {
 			time.Sleep(time.Millisecond * 500)
 		}),
 	)
@@ -602,6 +604,7 @@ func TestClient_KeepAliveMonitor(t *testing.T) {
 			inactivityDetected = true
 			cc.Close()
 		}),
+		WithPeriodicRunner(periodic.New(ctx.Done(), time.Millisecond*100)),
 	)
 	require.NoError(t, err)
 	checkCloseWg.Add(1)
@@ -610,7 +613,7 @@ func TestClient_KeepAliveMonitor(t *testing.T) {
 	})
 
 	// send ping to create serverside connection
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	ctx, cancel = context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 	cc.Ping(ctx)
 

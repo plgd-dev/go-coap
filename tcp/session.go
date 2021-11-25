@@ -33,7 +33,7 @@ type Session struct {
 	goPool                          GoPoolFunc
 	errors                          ErrorFunc
 	closeSocket                     bool
-	inactivityMonitor               Notifier
+	inactivityMonitor               inactivity.Monitor
 
 	tokenHandlerContainer *HandlerContainer
 	midHandlerContainer   *HandlerContainer
@@ -64,7 +64,7 @@ func NewSession(
 	disablePeerTCPSignalMessageCSMs bool,
 	disableTCPSignalMessageCSM bool,
 	closeSocket bool,
-	inactivityMonitor Notifier,
+	inactivityMonitor inactivity.Monitor,
 ) *Session {
 	ctx, cancel := context.WithCancel(ctx)
 	if errors == nil {
@@ -143,6 +143,9 @@ func (s *Session) close() error {
 
 func (s *Session) Close() error {
 	s.cancel()
+	if s.closeSocket {
+		return s.connection.Close()
+	}
 	return nil
 }
 

@@ -3,7 +3,6 @@ package client_test
 import (
 	"bytes"
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"io/ioutil"
@@ -34,7 +33,7 @@ func bodyToBytes(t *testing.T, r io.Reader) []byte {
 	return buf.Bytes()
 }
 
-func TestClientConn_Deduplication(t *testing.T) {
+func TestClientConnDeduplication(t *testing.T) {
 
 	l, err := coapNet.NewListenUDP("udp", "")
 	require.NoError(t, err)
@@ -69,9 +68,7 @@ func TestClientConn_Deduplication(t *testing.T) {
 
 	cc, err := udp.Dial(l.LocalAddr().String(),
 		udp.WithErrors(func(err error) {
-			if !errors.Is(err, context.Canceled) {
-				require.NoError(t, err)
-			}
+			require.NoError(t, err)
 		}),
 	)
 	require.NoError(t, err)
@@ -110,7 +107,7 @@ func TestClientConn_Deduplication(t *testing.T) {
 
 }
 
-func TestClientConn_DeduplicationRetransmission(t *testing.T) {
+func TestClientConnDeduplicationRetransmission(t *testing.T) {
 
 	l, err := coapNet.NewListenUDP("udp", "")
 	require.NoError(t, err)
@@ -153,9 +150,7 @@ func TestClientConn_DeduplicationRetransmission(t *testing.T) {
 
 	cc, err := udp.Dial(l.LocalAddr().String(),
 		udp.WithErrors(func(err error) {
-			if !errors.Is(err, context.Canceled) {
-				require.NoError(t, err)
-			}
+			require.NoError(t, err)
 		}),
 		udp.WithTransmission(20*time.Millisecond, 100*time.Millisecond, 50),
 	)
@@ -192,7 +187,7 @@ func TestClientConn_DeduplicationRetransmission(t *testing.T) {
 
 }
 
-func TestClientConn_Get(t *testing.T) {
+func TestClientConnGet(t *testing.T) {
 	type args struct {
 		path string
 		opts message.Options
@@ -290,7 +285,7 @@ func TestClientConn_Get(t *testing.T) {
 	}
 }
 
-func TestClientConn_Get_SeparateMessage(t *testing.T) {
+func TestClientConnGetSeparateMessage(t *testing.T) {
 	l, err := coapNet.NewListenUDP("udp", "")
 	require.NoError(t, err)
 	defer l.Close()
@@ -358,7 +353,7 @@ func TestClientConn_Get_SeparateMessage(t *testing.T) {
 
 }
 
-func TestClientConn_Post(t *testing.T) {
+func TestClientConnPost(t *testing.T) {
 	type args struct {
 		path          string
 		contentFormat message.MediaType
@@ -477,7 +472,7 @@ func TestClientConn_Post(t *testing.T) {
 	}
 }
 
-func TestClientConn_Put(t *testing.T) {
+func TestClientConnPut(t *testing.T) {
 	type args struct {
 		path          string
 		contentFormat message.MediaType
@@ -596,7 +591,7 @@ func TestClientConn_Put(t *testing.T) {
 	}
 }
 
-func TestClientConn_Delete(t *testing.T) {
+func TestClientConnDelete(t *testing.T) {
 	type args struct {
 		path string
 		opts message.Options
@@ -694,7 +689,7 @@ func TestClientConn_Delete(t *testing.T) {
 	}
 }
 
-func TestClientConn_Ping(t *testing.T) {
+func TestClientConnPing(t *testing.T) {
 	l, err := coapNet.NewListenUDP("udp", "")
 	require.NoError(t, err)
 	defer l.Close()

@@ -12,15 +12,22 @@ import (
 //
 // Multiple goroutines may invoke methods on a Conn simultaneously.
 type Conn struct {
-	connection net.Conn
-	closed     uint32
-	lock       sync.Mutex
+	connection       net.Conn
+	closed           uint32
+	handshakeContext func(ctx context.Context) error
+	lock             sync.Mutex
 }
 
 // NewConn creates connection over net.Conn.
 func NewConn(c net.Conn) *Conn {
 	connection := Conn{
 		connection: c,
+	}
+
+	if v, ok := c.(interface {
+		HandshakeContext(ctx context.Context) error
+	}); ok {
+		connection.handshakeContext = v.HandshakeContext
 	}
 
 	return &connection
@@ -49,8 +56,22 @@ func (c *Conn) Close() error {
 	return c.connection.Close()
 }
 
+func (c *Conn) handshake(ctx context.Context) error {
+	if c.handshakeContext != nil {
+		err := c.handshakeContext(ctx)
+		if err != nil {
+			c.Close()
+			return err
+		}
+	}
+	return nil
+}
+
 // WriteWithContext writes data with context.
 func (c *Conn) WriteWithContext(ctx context.Context, data []byte) error {
+	if err := c.handshake(ctx); err != nil {
+		return err
+	}
 	written := 0
 	c.lock.Lock()
 	defer c.lock.Unlock()
@@ -87,19 +108,16 @@ func (c *Conn) ReadFullWithContext(ctx context.Context, buffer []byte) error {
 
 // ReadWithContext reads stream with context.
 func (c *Conn) ReadWithContext(ctx context.Context, buffer []byte) (int, error) {
-	for {
-		select {
-		case <-ctx.Done():
-			return -1, ctx.Err()
-		default:
-		}
-		if atomic.LoadUint32(&c.closed) == 1 {
-			return -1, ErrConnectionIsClosed
-		}
-		n, err := c.connection.Read(buffer)
-		if err != nil {
-			return -1, err
-		}
-		return n, err
+	select {
+	case <-ctx.Done():
+		return -1, ctx.Err()
+	default:
 	}
+	if atomic.LoadUint32(&c.closed) == 1 {
+		return -1, ErrConnectionIsClosed
+	}
+	if err := c.handshake(ctx); err != nil {
+		return -1, err
+	}
+	return c.connection.Read(buffer)
 }

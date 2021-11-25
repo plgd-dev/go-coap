@@ -15,12 +15,13 @@ import (
 	"github.com/plgd-dev/go-coap/v2/message/codes"
 	coapNet "github.com/plgd-dev/go-coap/v2/net"
 	"github.com/plgd-dev/go-coap/v2/net/monitor/inactivity"
+	"github.com/plgd-dev/go-coap/v2/pkg/runner/periodic"
 	"github.com/plgd-dev/go-coap/v2/tcp"
 	"github.com/plgd-dev/go-coap/v2/tcp/message/pool"
 	"github.com/stretchr/testify/require"
 )
 
-func TestServer_CleanUpConns(t *testing.T) {
+func TestServerCleanUpConns(t *testing.T) {
 	ld, err := coapNet.NewTCPListener("tcp4", "")
 	require.NoError(t, err)
 	defer ld.Close()
@@ -112,7 +113,7 @@ func createTLSConfig(ctx context.Context) (serverConfig *tls.Config, clientConfi
 	return
 }
 
-func TestServer_SetContextValueWithPKI(t *testing.T) {
+func TestServerSetContextValueWithPKI(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 	serverCgf, clientCgf, clientSerial, err := createTLSConfig(ctx)
@@ -154,7 +155,7 @@ func TestServer_SetContextValueWithPKI(t *testing.T) {
 	require.NoError(t, err)
 }
 
-func TestServer_InactiveMonitor(t *testing.T) {
+func TestServerInactiveMonitor(t *testing.T) {
 	inactivityDetected := false
 
 	ld, err := coapNet.NewTCPListener("tcp", "")
@@ -216,12 +217,15 @@ func TestServer_InactiveMonitor(t *testing.T) {
 	require.True(t, inactivityDetected)
 }
 
-func TestServer_KeepAliveMonitor(t *testing.T) {
+func TestServerKeepAliveMonitor(t *testing.T) {
 	inactivityDetected := false
 
 	ld, err := coapNet.NewTCPListener("tcp", "")
 	require.NoError(t, err)
 	defer ld.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second*8)
+	defer cancel()
 
 	var checkCloseWg sync.WaitGroup
 	defer checkCloseWg.Wait()
@@ -237,6 +241,7 @@ func TestServer_KeepAliveMonitor(t *testing.T) {
 			inactivityDetected = true
 			cc.Close()
 		}),
+		tcp.WithPeriodicRunner(periodic.New(ctx.Done(), time.Millisecond*100)),
 	)
 
 	var serverWg sync.WaitGroup
@@ -253,10 +258,13 @@ func TestServer_KeepAliveMonitor(t *testing.T) {
 
 	cc, err := tcp.Dial(
 		ld.Addr().String(),
-		tcp.WithInactivityMonitor(time.Millisecond*10, func(cc inactivity.ClientConn) {
+		tcp.WithGoPool(func(f func()) error {
 			time.Sleep(time.Millisecond * 500)
+			f()
+			return nil
 		}),
 	)
+
 	require.NoError(t, err)
 	checkCloseWg.Add(1)
 	cc.AddOnClose(func() {
@@ -264,9 +272,10 @@ func TestServer_KeepAliveMonitor(t *testing.T) {
 	})
 
 	// send ping to create serverside connection
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	ctx, cancel = context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	cc.Ping(ctx)
+	_, err = cc.Get(ctx, "/tmp")
+	require.NoError(t, err)
 
 	checkCloseWg.Wait()
 	require.True(t, inactivityDetected)

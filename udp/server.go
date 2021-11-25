@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net"
+	"strings"
 	"sync"
 	"time"
 
@@ -13,6 +15,8 @@ import (
 	coapNet "github.com/plgd-dev/go-coap/v2/net"
 	"github.com/plgd-dev/go-coap/v2/net/blockwise"
 	"github.com/plgd-dev/go-coap/v2/net/monitor/inactivity"
+	"github.com/plgd-dev/go-coap/v2/pkg/cache"
+	"github.com/plgd-dev/go-coap/v2/pkg/runner/periodic"
 	"github.com/plgd-dev/go-coap/v2/udp/client"
 	udpMessage "github.com/plgd-dev/go-coap/v2/udp/message"
 	"github.com/plgd-dev/go-coap/v2/udp/message/pool"
@@ -64,6 +68,13 @@ var defaultServerOptions = serverOptions{
 	transmissionAcknowledgeTimeout: time.Second * 2,
 	transmissionMaxRetransmit:      4,
 	getMID:                         udpMessage.GetMID,
+	periodicRunner: func(f func(now time.Time) bool) {
+		go func() {
+			for f(time.Now()) {
+				time.Sleep(time.Second)
+			}
+		}()
+	},
 }
 
 type serverOptions struct {
@@ -81,6 +92,7 @@ type serverOptions struct {
 	transmissionAcknowledgeTimeout time.Duration
 	transmissionMaxRetransmit      int
 	getMID                         GetMIDFunc
+	periodicRunner                 periodic.Func
 }
 
 type Server struct {
@@ -107,10 +119,12 @@ type Server struct {
 	multicastRequests *kitSync.Map
 	multicastHandler  *client.HandlerContainer
 
-	listen      *coapNet.UDPConn
-	listenMutex sync.Mutex
-	doneCtx     context.Context
-	doneCancel  context.CancelFunc
+	listen         *coapNet.UDPConn
+	listenMutex    sync.Mutex
+	doneCtx        context.Context
+	doneCancel     context.CancelFunc
+	cache          *cache.Cache
+	periodicRunner periodic.Func
 }
 
 func NewServer(opt ...ServerOption) *Server {
@@ -144,7 +158,7 @@ func NewServer(opt ...ServerOption) *Server {
 		handler:        opts.handler,
 		maxMessageSize: opts.maxMessageSize,
 		errors: func(err error) {
-			if errors.Is(err, context.Canceled) {
+			if errors.Is(err, context.Canceled) || errors.Is(err, io.EOF) || strings.Contains(err.Error(), "use of closed network connection") {
 				// this error was produced by cancellation context - don't report it.
 				return
 			}
@@ -163,8 +177,10 @@ func NewServer(opt ...ServerOption) *Server {
 		transmissionAcknowledgeTimeout: opts.transmissionAcknowledgeTimeout,
 		transmissionMaxRetransmit:      opts.transmissionMaxRetransmit,
 		getMID:                         opts.getMID,
+		periodicRunner:                 opts.periodicRunner,
 		doneCtx:                        doneCtx,
 		doneCancel:                     doneCancel,
+		cache:                          cache.NewCache(),
 
 		conns: make(map[string]*client.ClientConn),
 	}
@@ -203,11 +219,11 @@ func (s *Server) Serve(l *coapNet.UDPConn) error {
 	m := make([]byte, s.maxMessageSize)
 	var wg sync.WaitGroup
 
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		s.handleInactivityMonitors()
-	}()
+	s.periodicRunner(func(now time.Time) bool {
+		s.handleInactivityMonitors(now)
+		s.cache.HandleExpiredElements(now)
+		return s.ctx.Err() == nil
+	})
 
 	for {
 		buf := m
@@ -240,6 +256,7 @@ func (s *Server) Serve(l *coapNet.UDPConn) error {
 // Stop stops server without wait of ends Serve function.
 func (s *Server) Stop() {
 	s.cancel()
+	s.conn().Close()
 	s.closeSessions()
 }
 
@@ -283,28 +300,18 @@ func (s *Server) getClientConns() []*client.ClientConn {
 	return conns
 }
 
-func (s *Server) handleInactivityMonitors() {
-	ticker := time.NewTicker(time.Second)
-	defer ticker.Stop()
-
-	for {
+func (s *Server) handleInactivityMonitors(now time.Time) {
+	for _, cc := range s.getClientConns() {
 		select {
-		case <-ticker.C:
-			for _, cc := range s.getClientConns() {
-				select {
-				case <-cc.Context().Done():
-					close := getClose(cc)
-					if close != nil {
-						close()
-					}
-					continue
-				default:
-					monitor := getInactivityMonitor(cc)
-					monitor.CheckInactivity(cc)
-				}
+		case <-cc.Context().Done():
+			close := getClose(cc)
+			if close != nil {
+				close()
 			}
-		case <-s.ctx.Done():
-			return
+			continue
+		default:
+			monitor := getInactivityMonitor(cc)
+			monitor.CheckInactivity(cc)
 		}
 	}
 }
@@ -374,6 +381,7 @@ func (s *Server) getOrCreateClientConn(UDPConn *coapNet.UDPConn, raddr *net.UDPA
 			s.errors,
 			s.getMID,
 			monitor,
+			s.cache,
 		)
 		cc.SetContextValue(inactivityMonitorKey, monitor)
 		cc.SetContextValue(closeKey, func() {

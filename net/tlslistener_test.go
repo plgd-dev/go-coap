@@ -49,7 +49,7 @@ func SetTLSConfig(t *testing.T) *tls.Config {
 	return &tlsConfig
 }
 
-func TestTLSListener_AcceptWithContext(t *testing.T) {
+func TestTLSListenerAcceptWithContext(t *testing.T) {
 	ctxCanceled, ctxCancel := context.WithCancel(context.Background())
 	ctxCancel()
 
@@ -127,7 +127,7 @@ func TestTLSListener_AcceptWithContext(t *testing.T) {
 	}
 }
 
-func TestTLSListener_CheckForInfinitLoop(t *testing.T) {
+func TestTLSListenerCheckForInfinitLoop(t *testing.T) {
 	ctxCanceled, ctxCancel := context.WithCancel(context.Background())
 	ctxCancel()
 
@@ -177,7 +177,7 @@ func TestTLSListener_CheckForInfinitLoop(t *testing.T) {
 				if err != nil {
 					return
 				}
-				tls.Client(conn, &tls.Config{
+				tlsConn := tls.Client(conn, &tls.Config{
 					InsecureSkipVerify: true,
 					Certificates:       []tls.Certificate{cert},
 					VerifyPeerCertificate: func(rawCerts [][]byte, verifiedChains [][]*x509.Certificate) error {
@@ -185,6 +185,10 @@ func TestTLSListener_CheckForInfinitLoop(t *testing.T) {
 						return nil
 					},
 				})
+				ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond*300)
+				defer cancel()
+				err = tlsConn.HandshakeContext(ctx)
+				require.Error(t, err)
 			}()
 		}
 	}()
@@ -200,9 +204,9 @@ func TestTLSListener_CheckForInfinitLoop(t *testing.T) {
 				c := NewConn(con)
 				_, err = c.ReadWithContext(context.Background(), b)
 				assert.Error(t, err)
-				assert.Contains(t, err.Error(), "i/o timeout")
+				assert.Contains(t, err.Error(), "EOF")
 				err = con.Close()
-				assert.NoError(t, err)
+				assert.Error(t, err)
 			}
 		})
 	}

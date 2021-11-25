@@ -14,6 +14,8 @@ import (
 	coapNet "github.com/plgd-dev/go-coap/v2/net"
 	"github.com/plgd-dev/go-coap/v2/net/blockwise"
 	"github.com/plgd-dev/go-coap/v2/net/monitor/inactivity"
+	"github.com/plgd-dev/go-coap/v2/pkg/cache"
+	"github.com/plgd-dev/go-coap/v2/pkg/runner/periodic"
 	"github.com/plgd-dev/go-coap/v2/udp/client"
 	udpMessage "github.com/plgd-dev/go-coap/v2/udp/message"
 	"github.com/plgd-dev/go-coap/v2/udp/message/pool"
@@ -70,6 +72,13 @@ var defaultServerOptions = serverOptions{
 	transmissionAcknowledgeTimeout: time.Second * 2,
 	transmissionMaxRetransmit:      4,
 	getMID:                         udpMessage.GetMID,
+	periodicRunner: func(f func(now time.Time) bool) {
+		go func() {
+			for f(time.Now()) {
+				time.Sleep(time.Second)
+			}
+		}()
+	},
 }
 
 type serverOptions struct {
@@ -88,6 +97,7 @@ type serverOptions struct {
 	transmissionAcknowledgeTimeout time.Duration
 	transmissionMaxRetransmit      int
 	getMID                         GetMIDFunc
+	periodicRunner                 periodic.Func
 }
 
 // Listener defined used by coap
@@ -111,6 +121,8 @@ type Server struct {
 	transmissionAcknowledgeTimeout time.Duration
 	transmissionMaxRetransmit      int
 	getMID                         GetMIDFunc
+	periodicRunner                 periodic.Func
+	cache                          *cache.Cache
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -163,6 +175,8 @@ func NewServer(opt ...ServerOption) *Server {
 		transmissionAcknowledgeTimeout: opts.transmissionAcknowledgeTimeout,
 		transmissionMaxRetransmit:      opts.transmissionMaxRetransmit,
 		getMID:                         opts.getMID,
+		periodicRunner:                 opts.periodicRunner,
+		cache:                          cache.NewCache(),
 	}
 }
 
@@ -197,6 +211,23 @@ func (s *Server) checkAcceptError(err error) (bool, error) {
 	}
 }
 
+func handleInactivityMonitors(now time.Time, connections *sync.Map) {
+	m := make(map[interface{}]*client.ClientConn)
+	connections.Range(func(key, value interface{}) bool {
+		m[key] = value.(*client.ClientConn)
+		return true
+	})
+
+	for _, cc := range m {
+		select {
+		case <-cc.Context().Done():
+			continue
+		default:
+			cc.InactivityMonitor().CheckInactivity(cc)
+		}
+	}
+}
+
 func (s *Server) Serve(l Listener) error {
 	if s.blockwiseSZX > blockwise.SZX1024 {
 		return fmt.Errorf("invalid blockwiseSZX")
@@ -213,6 +244,13 @@ func (s *Server) Serve(l Listener) error {
 
 	var wg sync.WaitGroup
 	defer wg.Wait()
+
+	var connections sync.Map
+	s.periodicRunner(func(now time.Time) bool {
+		handleInactivityMonitors(now, &connections)
+		return s.ctx.Err() == nil
+	})
+
 	for {
 		rw, err := l.AcceptWithContext(s.ctx)
 		ok, err := s.checkAcceptError(err)
@@ -226,20 +264,15 @@ func (s *Server) Serve(l Listener) error {
 			wg.Add(1)
 			var cc *client.ClientConn
 			monitor := s.createInactivityMonitor()
-			opts := []coapNet.ConnOption{
-				coapNet.WithHeartBeat(s.heartBeat),
-				coapNet.WithOnReadTimeout(func() error {
-					monitor.CheckInactivity(cc)
-					return nil
-				}),
-			}
-			cc = s.createClientConn(coapNet.NewConn(rw, opts...), monitor)
+			cc = s.createClientConn(coapNet.NewConn(rw), monitor)
 			if s.onNewClientConn != nil {
 				dtlsConn := rw.(*dtls.Conn)
 				s.onNewClientConn(cc, dtlsConn)
 			}
 			go func() {
 				defer wg.Done()
+				connections.Store(cc.RemoteAddr().String(), cc)
+				defer connections.Delete(cc.RemoteAddr().String())
 				err := cc.Run()
 				if err != nil {
 					s.errors(fmt.Errorf("%v: %w", cc.RemoteAddr(), err))
@@ -252,6 +285,12 @@ func (s *Server) Serve(l Listener) error {
 // Stop stops server without wait of ends Serve function.
 func (s *Server) Stop() {
 	s.cancel()
+	s.listenMutex.Lock()
+	l := s.listen
+	defer s.listenMutex.Unlock()
+	if l != nil {
+		l.Close()
+	}
 }
 
 func (s *Server) createClientConn(connection *coapNet.Conn, monitor inactivity.Monitor) *client.ClientConn {
@@ -289,6 +328,7 @@ func (s *Server) createClientConn(connection *coapNet.Conn, monitor inactivity.M
 		s.errors,
 		s.getMID,
 		monitor,
+		s.cache,
 	)
 
 	return cc

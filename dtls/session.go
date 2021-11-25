@@ -78,6 +78,9 @@ func (s *Session) close() error {
 
 func (s *Session) Close() error {
 	s.cancel()
+	if s.closeSocket {
+		return s.connection.Close()
+	}
 	return nil
 }
 

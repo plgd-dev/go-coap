@@ -63,7 +63,7 @@ func main() {
 		}
 	}
 
-	l, err := net.NewListenUDP("udp4", "", net.WithHeartBeat(time.Second*60))
+	l, err := net.NewListenUDP("udp4", "")
 	if err != nil {
 		log.Println(err)
 		return

@@ -5,13 +5,16 @@ import (
 	"crypto/tls"
 	"errors"
 	"fmt"
+	"io"
 	"net"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/plgd-dev/go-coap/v2/message"
 	"github.com/plgd-dev/go-coap/v2/net/blockwise"
 	"github.com/plgd-dev/go-coap/v2/net/monitor/inactivity"
+	"github.com/plgd-dev/go-coap/v2/pkg/runner/periodic"
 	"github.com/plgd-dev/go-coap/v2/tcp/message/pool"
 	kitSync "github.com/plgd-dev/kit/v2/sync"
 
@@ -60,9 +63,15 @@ var defaultServerOptions = serverOptions{
 	blockwiseSZX:             blockwise.SZX1024,
 	blockwiseTransferTimeout: time.Second * 3,
 	onNewClientConn:          func(cc *ClientConn, tlscon *tls.Conn) {},
-	heartBeat:                time.Millisecond * 100,
 	createInactivityMonitor: func() inactivity.Monitor {
 		return inactivity.NewNilMonitor()
+	},
+	periodicRunner: func(f func(now time.Time) bool) {
+		go func() {
+			for f(time.Now()) {
+				time.Sleep(time.Second)
+			}
+		}()
 	},
 }
 
@@ -77,9 +86,9 @@ type serverOptions struct {
 	blockwiseEnable                 bool
 	blockwiseTransferTimeout        time.Duration
 	onNewClientConn                 OnNewClientConnFunc
-	heartBeat                       time.Duration
 	disablePeerTCPSignalMessageCSMs bool
 	disableTCPSignalMessageCSM      bool
+	periodicRunner                  periodic.Func
 }
 
 // Listener defined used by coap
@@ -98,9 +107,9 @@ type Server struct {
 	blockwiseEnable                 bool
 	blockwiseTransferTimeout        time.Duration
 	onNewClientConn                 OnNewClientConnFunc
-	heartBeat                       time.Duration
 	disablePeerTCPSignalMessageCSMs bool
 	disableTCPSignalMessageCSM      bool
+	periodicRunner                  periodic.Func
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -129,7 +138,7 @@ func NewServer(opt ...ServerOption) *Server {
 		handler:        opts.handler,
 		maxMessageSize: opts.maxMessageSize,
 		errors: func(err error) {
-			if errors.Is(err, context.Canceled) {
+			if errors.Is(err, context.Canceled) || errors.Is(err, io.EOF) || strings.Contains(err.Error(), "use of closed network connection") {
 				// this error was produced by cancellation context - don't report it.
 				return
 			}
@@ -139,11 +148,11 @@ func NewServer(opt ...ServerOption) *Server {
 		blockwiseSZX:                    opts.blockwiseSZX,
 		blockwiseEnable:                 opts.blockwiseEnable,
 		blockwiseTransferTimeout:        opts.blockwiseTransferTimeout,
-		heartBeat:                       opts.heartBeat,
 		disablePeerTCPSignalMessageCSMs: opts.disablePeerTCPSignalMessageCSMs,
 		disableTCPSignalMessageCSM:      opts.disableTCPSignalMessageCSM,
 		onNewClientConn:                 opts.onNewClientConn,
 		createInactivityMonitor:         opts.createInactivityMonitor,
+		periodicRunner:                  opts.periodicRunner,
 	}
 }
 
@@ -178,6 +187,23 @@ func (s *Server) checkAcceptError(err error) (bool, error) {
 	}
 }
 
+func handleInactivityMonitors(now time.Time, connections *sync.Map) {
+	m := make(map[interface{}]*ClientConn)
+	connections.Range(func(key, value interface{}) bool {
+		m[key] = value.(*ClientConn)
+		return true
+	})
+
+	for _, cc := range m {
+		select {
+		case <-cc.Context().Done():
+			continue
+		default:
+			cc.Session().inactivityMonitor.CheckInactivity(cc)
+		}
+	}
+}
+
 func (s *Server) Serve(l Listener) error {
 	if s.blockwiseSZX > blockwise.SZXBERT {
 		return fmt.Errorf("invalid blockwiseSZX")
@@ -195,6 +221,13 @@ func (s *Server) Serve(l Listener) error {
 	}()
 	var wg sync.WaitGroup
 	defer wg.Wait()
+
+	var connections sync.Map
+	s.periodicRunner(func(now time.Time) bool {
+		handleInactivityMonitors(now, &connections)
+		return s.ctx.Err() == nil
+	})
+
 	for {
 		rw, err := l.AcceptWithContext(s.ctx)
 		ok, err := s.checkAcceptError(err)
@@ -210,14 +243,7 @@ func (s *Server) Serve(l Listener) error {
 				defer wg.Done()
 				var cc *ClientConn
 				monitor := s.createInactivityMonitor()
-				opts := []coapNet.ConnOption{
-					coapNet.WithHeartBeat(s.heartBeat),
-					coapNet.WithOnReadTimeout(func() error {
-						monitor.CheckInactivity(cc)
-						return nil
-					}),
-				}
-				cc = s.createClientConn(coapNet.NewConn(rw, opts...), monitor)
+				cc = s.createClientConn(coapNet.NewConn(rw), monitor)
 				if s.onNewClientConn != nil {
 					if tlscon, ok := rw.(*tls.Conn); ok {
 						s.onNewClientConn(cc, tlscon)
@@ -225,7 +251,10 @@ func (s *Server) Serve(l Listener) error {
 						s.onNewClientConn(cc, nil)
 					}
 				}
+				connections.Store(cc.RemoteAddr().String(), cc)
+				defer connections.Delete(cc.RemoteAddr().String())
 				err := cc.Run()
+
 				if err != nil {
 					s.errors(fmt.Errorf("%v: %w", cc.RemoteAddr(), err))
 				}
@@ -237,6 +266,7 @@ func (s *Server) Serve(l Listener) error {
 // Stop stops server without wait of ends Serve function.
 func (s *Server) Stop() {
 	s.cancel()
+	s.listen.Close()
 }
 
 func (s *Server) createClientConn(connection *coapNet.Conn, monitor inactivity.Monitor) *ClientConn {

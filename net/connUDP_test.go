@@ -12,7 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestUDPConn_WriteWithContext(t *testing.T) {
+func TestUDPConnWriteWithContext(t *testing.T) {
 	peerAddr := "127.0.0.1:2154"
 	b, err := net.ResolveUDPAddr("udp", peerAddr)
 	require.NoError(t, err)
@@ -86,7 +86,7 @@ func TestUDPConn_WriteWithContext(t *testing.T) {
 	}
 }
 
-func TestUDPConn_writeMulticastWithContext(t *testing.T) {
+func TestUDPConnwriteMulticastWithContext(t *testing.T) {
 	peerAddr := "224.0.1.187:5683"
 	b, err := net.ResolveUDPAddr("udp4", peerAddr)
 	require.NoError(t, err)

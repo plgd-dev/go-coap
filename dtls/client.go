@@ -11,6 +11,8 @@ import (
 	"github.com/plgd-dev/go-coap/v2/message"
 	"github.com/plgd-dev/go-coap/v2/net/blockwise"
 	"github.com/plgd-dev/go-coap/v2/net/monitor/inactivity"
+	"github.com/plgd-dev/go-coap/v2/pkg/cache"
+	"github.com/plgd-dev/go-coap/v2/pkg/runner/periodic"
 
 	"github.com/plgd-dev/go-coap/v2/message/codes"
 	coapNet "github.com/plgd-dev/go-coap/v2/net"
@@ -51,6 +53,13 @@ var defaultDialOptions = dialOptions{
 	createInactivityMonitor: func() inactivity.Monitor {
 		return inactivity.NewNilMonitor()
 	},
+	periodicRunner: func(f func(now time.Time) bool) {
+		go func() {
+			for f(time.Now()) {
+				time.Sleep(time.Second)
+			}
+		}()
+	},
 }
 
 type dialOptions struct {
@@ -71,6 +80,7 @@ type dialOptions struct {
 	getMID                         GetMIDFunc
 	closeSocket                    bool
 	createInactivityMonitor        func() inactivity.Monitor
+	periodicRunner                 periodic.Func
 }
 
 // A DialOption sets options such as credentials, keepalive parameters, etc.
@@ -164,10 +174,7 @@ func Client(conn *dtls.Conn, opts ...DialOption) *client.ClientConn {
 	observationTokenHandler := client.NewHandlerContainer()
 	monitor := cfg.createInactivityMonitor()
 	var cc *client.ClientConn
-	l := coapNet.NewConn(conn, coapNet.WithHeartBeat(cfg.heartBeat), coapNet.WithOnReadTimeout(func() error {
-		monitor.CheckInactivity(cc)
-		return nil
-	}))
+	l := coapNet.NewConn(conn)
 	session := NewSession(cfg.ctx,
 		l,
 		cfg.maxMessageSize,
@@ -183,7 +190,13 @@ func Client(conn *dtls.Conn, opts ...DialOption) *client.ClientConn {
 		cfg.getMID,
 		// The client does not support activity monitoring yet
 		monitor,
+		cache.NewCache(),
 	)
+
+	cfg.periodicRunner(func(now time.Time) bool {
+		monitor.CheckInactivity(cc)
+		return cc.Context().Err() == nil
+	})
 
 	go func() {
 		err := cc.Run()

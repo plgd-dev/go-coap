@@ -8,7 +8,7 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func TestConn_WriteWithContext(t *testing.T) {
+func TestConnWriteWithContext(t *testing.T) {
 	ctxCanceled, ctxCancel := context.WithCancel(context.Background())
 	ctxCancel()
 	helloWorld := make([]byte, 1024*1024*256)

@@ -18,12 +18,13 @@ import (
 	"github.com/plgd-dev/go-coap/v2/message/codes"
 	coapNet "github.com/plgd-dev/go-coap/v2/net"
 	"github.com/plgd-dev/go-coap/v2/net/monitor/inactivity"
+	"github.com/plgd-dev/go-coap/v2/pkg/runner/periodic"
 	"github.com/plgd-dev/go-coap/v2/udp/client"
 	"github.com/plgd-dev/go-coap/v2/udp/message/pool"
 	"github.com/stretchr/testify/require"
 )
 
-func TestServer_CleanUpConns(t *testing.T) {
+func TestServerCleanUpConns(t *testing.T) {
 	dtlsCfg := &piondtls.Config{
 		PSK: func(hint []byte) ([]byte, error) {
 			fmt.Printf("Hint: %s \n", hint)
@@ -124,7 +125,7 @@ func createDTLSConfig(ctx context.Context) (serverConfig *piondtls.Config, clien
 	return
 }
 
-func TestServer_SetContextValueWithPKI(t *testing.T) {
+func TestServerSetContextValueWithPKI(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*3600)
 	defer cancel()
 	serverCgf, clientCgf, clientSerial, err := createDTLSConfig(ctx)
@@ -164,7 +165,7 @@ func TestServer_SetContextValueWithPKI(t *testing.T) {
 	<-cc.Done()
 }
 
-func TestServer_InactiveMonitor(t *testing.T) {
+func TestServerInactiveMonitor(t *testing.T) {
 	inactivityDetected := false
 
 	srvCtx, srvCancel := context.WithTimeout(context.Background(), time.Second*3600)
@@ -229,12 +230,12 @@ func TestServer_InactiveMonitor(t *testing.T) {
 	require.True(t, inactivityDetected)
 }
 
-func TestServer_KeepAliveMonitor(t *testing.T) {
+func TestServerKeepAliveMonitor(t *testing.T) {
 	inactivityDetected := false
 
-	srvCtx, srvCancel := context.WithTimeout(context.Background(), time.Second*3600)
-	defer srvCancel()
-	serverCgf, clientCgf, _, err := createDTLSConfig(srvCtx)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second*8)
+	defer cancel()
+	serverCgf, clientCgf, _, err := createDTLSConfig(ctx)
 	require.NoError(t, err)
 
 	ld, err := coapNet.NewDTLSListener("udp4", "", serverCgf)
@@ -255,6 +256,7 @@ func TestServer_KeepAliveMonitor(t *testing.T) {
 			inactivityDetected = true
 			cc.Close()
 		}),
+		dtls.WithPeriodicRunner(periodic.New(ctx.Done(), time.Millisecond*10)),
 	)
 
 	var serverWg sync.WaitGroup
@@ -272,8 +274,10 @@ func TestServer_KeepAliveMonitor(t *testing.T) {
 	cc, err := dtls.Dial(
 		ld.Addr().String(),
 		clientCgf,
-		dtls.WithInactivityMonitor(time.Millisecond*10, func(cc inactivity.ClientConn) {
+		dtls.WithGoPool(func(f func()) error {
 			time.Sleep(time.Millisecond * 500)
+			f()
+			return nil
 		}),
 	)
 	require.NoError(t, err)
@@ -283,7 +287,7 @@ func TestServer_KeepAliveMonitor(t *testing.T) {
 	})
 
 	// send ping to create serverside connection
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	ctx, cancel = context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 	cc.Ping(ctx)
 
