@@ -7,11 +7,13 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"strings"
 	"time"
 
 	"github.com/plgd-dev/go-coap/v2/message"
 	"github.com/plgd-dev/go-coap/v2/net/blockwise"
 	"github.com/plgd-dev/go-coap/v2/net/monitor/inactivity"
+	"github.com/plgd-dev/go-coap/v2/pkg/runner/periodic"
 	"github.com/plgd-dev/go-coap/v2/tcp/message/pool"
 
 	"github.com/plgd-dev/go-coap/v2/message/codes"
@@ -22,7 +24,6 @@ import (
 var defaultDialOptions = dialOptions{
 	ctx:            context.Background(),
 	maxMessageSize: 64 * 1024,
-	heartBeat:      time.Millisecond * 100,
 	handler: func(w *ResponseWriter, r *pool.Message) {
 		switch r.Code() {
 		case codes.POST, codes.PUT, codes.GET, codes.DELETE:
@@ -46,12 +47,18 @@ var defaultDialOptions = dialOptions{
 	createInactivityMonitor: func() inactivity.Monitor {
 		return inactivity.NewNilMonitor()
 	},
+	periodicRunner: func(f func(now time.Time) bool) {
+		go func() {
+			for f(time.Now()) {
+				time.Sleep(time.Second)
+			}
+		}()
+	},
 }
 
 type dialOptions struct {
 	ctx                             context.Context
 	maxMessageSize                  int
-	heartBeat                       time.Duration
 	handler                         HandlerFunc
 	errors                          ErrorFunc
 	goPool                          GoPoolFunc
@@ -65,6 +72,7 @@ type dialOptions struct {
 	tlsCfg                          *tls.Config
 	closeSocket                     bool
 	createInactivityMonitor         func() inactivity.Monitor
+	periodicRunner                  periodic.Func
 }
 
 // A DialOption sets options such as credentials, keepalive parameters, etc.
@@ -147,7 +155,7 @@ func Client(conn net.Conn, opts ...DialOption) *ClientConn {
 	}
 	errorsFunc := cfg.errors
 	cfg.errors = func(err error) {
-		if errors.Is(err, context.Canceled) {
+		if errors.Is(err, context.Canceled) || errors.Is(err, io.EOF) || strings.Contains(err.Error(), "use of closed network connection") {
 			// this error was produced by cancellation context - don't report it.
 			return
 		}
@@ -167,13 +175,9 @@ func Client(conn net.Conn, opts ...DialOption) *ClientConn {
 		)
 	}
 
-	observationTokenHandler := NewHandlerContainer()
+	l := coapNet.NewConn(conn)
 	monitor := cfg.createInactivityMonitor()
-	var cc *ClientConn
-	l := coapNet.NewConn(conn, coapNet.WithHeartBeat(cfg.heartBeat), coapNet.WithOnReadTimeout(func() error {
-		monitor.CheckInactivity(cc)
-		return nil
-	}))
+	observationTokenHandler := NewHandlerContainer()
 	session := NewSession(cfg.ctx,
 		l,
 		NewObservationHandler(observationTokenHandler, cfg.handler),
@@ -187,7 +191,12 @@ func Client(conn net.Conn, opts ...DialOption) *ClientConn {
 		cfg.closeSocket,
 		monitor,
 	)
-	cc = NewClientConn(session, observationTokenHandler, observationRequests)
+	cc := NewClientConn(session, observationTokenHandler, observationRequests)
+
+	cfg.periodicRunner(func(now time.Time) bool {
+		monitor.CheckInactivity(cc)
+		return cc.Context().Err() == nil
+	})
 
 	go func() {
 		err := cc.Run()

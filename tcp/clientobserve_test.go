@@ -14,7 +14,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestClientConn_Observe(t *testing.T) {
+func TestClientConnObserve(t *testing.T) {
 	type args struct {
 		path      string
 		payload   []byte
@@ -245,7 +245,7 @@ func TestClientConnObserveNotSupported(t *testing.T) {
 }
 
 /*
-func TestClientConn_ObserveIotivityLite(t *testing.T) {
+func TestClientConnObserveIotivityLite(t *testing.T) {
 	cc, err := Dial("10.112.112.10:60956")
 	require.NoError(t, err)
 	defer cc.Close()

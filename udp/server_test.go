@@ -40,7 +40,7 @@ func (m *mcastreceiver) pop() []*pool.Message {
 }
 
 /*
-func TestServer_DiscoverIotivity(t *testing.T) {
+func TestServerDiscoverIotivity(t *testing.T) {
 	timeout := time.Millisecond * 500
 	multicastAddr := "224.0.1.187:5683"
 	path := "/oic/res"
@@ -75,7 +75,7 @@ func TestServer_DiscoverIotivity(t *testing.T) {
 }
 */
 
-func TestServer_Discover(t *testing.T) {
+func TestServerDiscover(t *testing.T) {
 	timeout := time.Millisecond * 500
 	multicastAddr := "224.0.1.187:5684"
 	path := "/oic/res"
@@ -139,7 +139,7 @@ func TestServer_Discover(t *testing.T) {
 	assert.Equal(t, codes.BadRequest, got[0].Code())
 }
 
-func TestServer_CleanUpConns(t *testing.T) {
+func TestServerCleanUpConns(t *testing.T) {
 	ld, err := coapNet.NewListenUDP("udp4", "")
 	require.NoError(t, err)
 	defer ld.Close()
@@ -178,7 +178,7 @@ func TestServer_CleanUpConns(t *testing.T) {
 	require.NoError(t, err)
 }
 
-func TestServer_InactiveMonitor(t *testing.T) {
+func TestServerInactiveMonitor(t *testing.T) {
 	inactivityDetected := false
 
 	ld, err := coapNet.NewListenUDP("udp4", "")
@@ -241,7 +241,7 @@ func TestServer_InactiveMonitor(t *testing.T) {
 	require.True(t, inactivityDetected)
 }
 
-func TestServer_KeepAliveMonitor(t *testing.T) {
+func TestServerKeepAliveMonitor(t *testing.T) {
 	inactivityDetected := false
 
 	ld, err := coapNet.NewListenUDP("udp4", "")

@@ -62,7 +62,14 @@ func (l *DTLSListener) AcceptWithContext(ctx context.Context) (net.Conn, error) 
 	if atomic.LoadUint32(&l.closed) == 1 {
 		return nil, ErrListenerIsClosed
 	}
-	return l.listener.Accept()
+	c, err := l.listener.Accept()
+	if err != nil {
+		return nil, err
+	}
+	if c == nil {
+		return nil, nil
+	}
+	return c, nil
 }
 
 // Accept waits for a generic Conn.

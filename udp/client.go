@@ -4,12 +4,16 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net"
+	"strings"
 	"time"
 
 	"github.com/plgd-dev/go-coap/v2/message"
 	"github.com/plgd-dev/go-coap/v2/net/blockwise"
 	"github.com/plgd-dev/go-coap/v2/net/monitor/inactivity"
+	"github.com/plgd-dev/go-coap/v2/pkg/cache"
+	"github.com/plgd-dev/go-coap/v2/pkg/runner/periodic"
 	kitSync "github.com/plgd-dev/kit/v2/sync"
 
 	"github.com/plgd-dev/go-coap/v2/message/codes"
@@ -23,6 +27,7 @@ var defaultDialOptions = dialOptions{
 	ctx:            context.Background(),
 	maxMessageSize: 64 * 1024,
 	heartBeat:      time.Millisecond * 100,
+
 	handler: func(w *client.ResponseWriter, r *pool.Message) {
 		switch r.Code() {
 		case codes.POST, codes.PUT, codes.GET, codes.DELETE:
@@ -37,6 +42,13 @@ var defaultDialOptions = dialOptions{
 			f()
 		}()
 		return nil
+	},
+	periodicRunner: func(f func(now time.Time) bool) {
+		go func() {
+			for f(time.Now()) {
+				time.Sleep(time.Second)
+			}
+		}()
 	},
 	dialer:                         &net.Dialer{Timeout: time.Second * 3},
 	net:                            "udp",
@@ -70,6 +82,7 @@ type dialOptions struct {
 	getMID                         GetMIDFunc
 	closeSocket                    bool
 	createInactivityMonitor        func() inactivity.Monitor
+	periodicRunner                 periodic.Func
 }
 
 // A DialOption sets options such as credentials, keepalive parameters, etc.
@@ -140,7 +153,7 @@ func Client(conn *net.UDPConn, opts ...DialOption) *client.ClientConn {
 
 	errorsFunc := cfg.errors
 	cfg.errors = func(err error) {
-		if errors.Is(err, context.Canceled) {
+		if errors.Is(err, context.Canceled) || errors.Is(err, io.EOF) || strings.Contains(err.Error(), "use of closed network connection") {
 			// this error was produced by cancellation context - don't report it.
 			return
 		}
@@ -163,11 +176,8 @@ func Client(conn *net.UDPConn, opts ...DialOption) *client.ClientConn {
 
 	observationTokenHandler := client.NewHandlerContainer()
 	monitor := cfg.createInactivityMonitor()
-	var cc *client.ClientConn
-	l := coapNet.NewUDPConn(cfg.net, conn, coapNet.WithHeartBeat(cfg.heartBeat), coapNet.WithErrors(cfg.errors), coapNet.WithOnReadTimeout(func() error {
-		monitor.CheckInactivity(cc)
-		return nil
-	}))
+	cache := cache.NewCache()
+	l := coapNet.NewUDPConn(cfg.net, conn, coapNet.WithErrors(cfg.errors))
 	session := NewSession(cfg.ctx,
 		l,
 		addr,
@@ -175,7 +185,7 @@ func Client(conn *net.UDPConn, opts ...DialOption) *client.ClientConn {
 		cfg.closeSocket,
 		context.Background(),
 	)
-	cc = client.NewClientConn(session,
+	cc := client.NewClientConn(session,
 		observationTokenHandler, observatioRequests, cfg.transmissionNStart, cfg.transmissionAcknowledgeTimeout, cfg.transmissionMaxRetransmit,
 		client.NewObservationHandler(observationTokenHandler, cfg.handler),
 		cfg.blockwiseSZX,
@@ -184,7 +194,13 @@ func Client(conn *net.UDPConn, opts ...DialOption) *client.ClientConn {
 		cfg.errors,
 		cfg.getMID,
 		monitor,
+		cache,
 	)
+	cfg.periodicRunner(func(now time.Time) bool {
+		monitor.CheckInactivity(cc)
+		cache.HandleExpiredElements(now)
+		return cc.Context().Err() == nil
+	})
 
 	go func() {
 		err := cc.Run()

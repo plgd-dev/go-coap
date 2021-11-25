@@ -16,6 +16,7 @@ import (
 	"github.com/plgd-dev/go-coap/v2/dtls"
 	"github.com/plgd-dev/go-coap/v2/mux"
 	"github.com/plgd-dev/go-coap/v2/net/monitor/inactivity"
+	"github.com/plgd-dev/go-coap/v2/pkg/runner/periodic"
 	"github.com/plgd-dev/go-coap/v2/udp/client"
 	udpMessage "github.com/plgd-dev/go-coap/v2/udp/message"
 	"github.com/plgd-dev/go-coap/v2/udp/message/pool"
@@ -27,7 +28,9 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestClientConn_Get(t *testing.T) {
+const Timeout = time.Second * 8
+
+func TestClientConnGet(t *testing.T) {
 	type args struct {
 		path string
 		opts message.Options
@@ -133,7 +136,7 @@ func TestClientConn_Get(t *testing.T) {
 	}
 }
 
-func TestClientConn_Get_SeparateMessage(t *testing.T) {
+func TestClientConn_GetSeparateMessage(t *testing.T) {
 	dtlsCfg := &piondtls.Config{
 		PSK: func(hint []byte) ([]byte, error) {
 			fmt.Printf("Hint: %s \n", hint)
@@ -208,7 +211,7 @@ func TestClientConn_Get_SeparateMessage(t *testing.T) {
 	assert.Equal(t, codes.Content, resp.Code())
 }
 
-func TestClientConn_Post(t *testing.T) {
+func TestClientConnPost(t *testing.T) {
 	type args struct {
 		path          string
 		contentFormat message.MediaType
@@ -335,7 +338,7 @@ func TestClientConn_Post(t *testing.T) {
 	}
 }
 
-func TestClientConn_Put(t *testing.T) {
+func TestClientConnPut(t *testing.T) {
 	type args struct {
 		path          string
 		contentFormat message.MediaType
@@ -462,7 +465,7 @@ func TestClientConn_Put(t *testing.T) {
 	}
 }
 
-func TestClientConn_Delete(t *testing.T) {
+func TestClientConnDelete(t *testing.T) {
 	type args struct {
 		path string
 		opts message.Options
@@ -571,7 +574,7 @@ func TestClientConn_Delete(t *testing.T) {
 	}
 }
 
-func TestClientConn_Ping(t *testing.T) {
+func TestClientConnPing(t *testing.T) {
 	dtlsCfg := &piondtls.Config{
 		PSK: func(hint []byte) ([]byte, error) {
 			fmt.Printf("Hint: %s \n", hint)
@@ -609,7 +612,7 @@ func TestClientConn_Ping(t *testing.T) {
 	require.NoError(t, err)
 }
 
-func TestClientConn_HandeShakeFailure(t *testing.T) {
+func TestClientConnHandeShakeFailure(t *testing.T) {
 	dtlsCfg := &piondtls.Config{
 		PSK: func(hint []byte) ([]byte, error) {
 			fmt.Printf("Hint: %s \n", hint)
@@ -652,7 +655,7 @@ func TestClientConn_HandeShakeFailure(t *testing.T) {
 	require.Error(t, err)
 }
 
-func TestClient_InactiveMonitor(t *testing.T) {
+func TestClientInactiveMonitor(t *testing.T) {
 	inactivityDetected := false
 	defer func() {
 		runtime.GC()
@@ -721,12 +724,12 @@ func TestClient_InactiveMonitor(t *testing.T) {
 	require.True(t, inactivityDetected)
 }
 
-func TestClient_KeepAliveMonitor(t *testing.T) {
+func TestClientKeepAliveMonitor(t *testing.T) {
 	inactivityDetected := false
 
-	srvCtx, srvCancel := context.WithTimeout(context.Background(), time.Second*3600)
-	defer srvCancel()
-	serverCgf, clientCgf, _, err := createDTLSConfig(srvCtx)
+	ctx, cancel := context.WithTimeout(context.Background(), Timeout)
+	defer cancel()
+	serverCgf, clientCgf, _, err := createDTLSConfig(ctx)
 	require.NoError(t, err)
 
 	ld, err := coapNet.NewDTLSListener("udp4", "", serverCgf)
@@ -742,8 +745,10 @@ func TestClient_KeepAliveMonitor(t *testing.T) {
 				checkCloseWg.Done()
 			})
 		}),
-		dtls.WithInactivityMonitor(time.Millisecond*10, func(cc inactivity.ClientConn) {
+		dtls.WithGoPool(func(f func()) error {
 			time.Sleep(time.Millisecond * 500)
+			f()
+			return nil
 		}),
 	)
 
@@ -767,6 +772,7 @@ func TestClient_KeepAliveMonitor(t *testing.T) {
 			inactivityDetected = true
 			cc.Close()
 		}),
+		dtls.WithPeriodicRunner(periodic.New(ctx.Done(), time.Millisecond*10)),
 	)
 	require.NoError(t, err)
 	checkCloseWg.Add(1)
@@ -775,7 +781,7 @@ func TestClient_KeepAliveMonitor(t *testing.T) {
 	})
 
 	// send ping to create serverside connection
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	ctx, cancel = context.WithTimeout(ctx, time.Second)
 	defer cancel()
 	cc.Ping(ctx)
 

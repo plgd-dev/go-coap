@@ -231,7 +231,7 @@ func makeDo(t *testing.T, sender, receiver *BlockWise, senderMaxSZX SZX, senderM
 	}
 }
 
-func TestBlockWise_Do(t *testing.T) {
+func TestBlockWiseDo(t *testing.T) {
 	sender := NewBlockWise(acquireMessage, releaseMessage, time.Second*3600, func(err error) { t.Log(err) }, true, nil)
 	receiver := NewBlockWise(acquireMessage, releaseMessage, time.Second*3600, func(err error) { t.Log(err) }, true, nil)
 	type args struct {
@@ -440,7 +440,7 @@ func TestBlockWise_Do(t *testing.T) {
 	}
 }
 
-func TestBlockWise_Parallel(t *testing.T) {
+func TestBlockWiseParallel(t *testing.T) {
 	sender := NewBlockWise(acquireMessage, releaseMessage, time.Second*3600, func(err error) { t.Log(err) }, true, nil)
 	receiver := NewBlockWise(acquireMessage, releaseMessage, time.Second*3600, func(err error) { t.Log(err) }, true, nil)
 	type args struct {
@@ -649,7 +649,7 @@ func makeWriteReq(t *testing.T, sender, receiver *BlockWise, senderMaxSZX SZX, s
 	}
 }
 
-func TestBlockWise_Writetestmessage(t *testing.T) {
+func TestBlockWiseWritetestmessage(t *testing.T) {
 	sender := NewBlockWise(acquireMessage, releaseMessage, time.Second*3600, func(err error) { t.Log(err) }, true, nil)
 	receiver := NewBlockWise(acquireMessage, releaseMessage, time.Second*3600, func(err error) { t.Log(err) }, true, nil)
 	type args struct {

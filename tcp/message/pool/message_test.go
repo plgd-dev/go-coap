@@ -12,7 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func Test_ConvertTo(t *testing.T) {
+func TestConvertTo(t *testing.T) {
 	msg := pool.AcquireMessage(context.Background())
 	_, err := msg.Unmarshal([]byte{35, byte(codes.GET), 0x1, 0x2, 0x3, 0xff, 0x1})
 	require.NoError(t, err)

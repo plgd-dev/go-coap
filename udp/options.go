@@ -7,6 +7,7 @@ import (
 
 	"github.com/plgd-dev/go-coap/v2/net/blockwise"
 	"github.com/plgd-dev/go-coap/v2/net/monitor/inactivity"
+	"github.com/plgd-dev/go-coap/v2/pkg/runner/periodic"
 	"github.com/plgd-dev/go-coap/v2/udp/client"
 )
 
@@ -176,18 +177,22 @@ func WithNetwork(net string) NetOpt {
 	return NetOpt{net: net}
 }
 
-// HeartBeatOpt heatbeat of read/write operations over connection.
-type HeartBeatOpt struct {
-	heartbeat time.Duration
+// PeriodicRunnerOpt function which is executed in every ticks
+type PeriodicRunnerOpt struct {
+	periodicRunner periodic.Func
 }
 
-func (o HeartBeatOpt) applyDial(opts *dialOptions) {
-	opts.heartBeat = o.heartbeat
+func (o PeriodicRunnerOpt) applyDial(opts *dialOptions) {
+	opts.periodicRunner = o.periodicRunner
 }
 
-// WithHeartBeat set deadline's for read/write operations over client connection.
-func WithHeartBeat(heartbeat time.Duration) HeartBeatOpt {
-	return HeartBeatOpt{heartbeat: heartbeat}
+func (o PeriodicRunnerOpt) apply(opts *serverOptions) {
+	opts.periodicRunner = o.periodicRunner
+}
+
+// WithPeriodicRunner set function which is executed in every ticks.
+func WithPeriodicRunner(periodicRunner periodic.Func) PeriodicRunnerOpt {
+	return PeriodicRunnerOpt{periodicRunner: periodicRunner}
 }
 
 // BlockwiseOpt network option.

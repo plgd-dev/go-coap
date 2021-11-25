@@ -16,14 +16,14 @@ func TestJSONUnmarshal(t *testing.T) {
 	require.Equal(t, want, got)
 }
 
-func TestUnmarshalJSON_NilReceiver(t *testing.T) {
+func TestUnmarshalJSONNilReceiver(t *testing.T) {
 	var got *Code
 	in := GET.String()
 	err := got.UnmarshalJSON([]byte(in))
 	require.Error(t, err)
 }
 
-func TestUnmarshalJSON_UnknownInput(t *testing.T) {
+func TestUnmarshalJSONUnknownInput(t *testing.T) {
 	var got Code
 	for _, in := range [][]byte{[]byte(""), []byte("xxx"), []byte("Code(17)"), nil} {
 		err := got.UnmarshalJSON([]byte(in))
@@ -31,7 +31,7 @@ func TestUnmarshalJSON_UnknownInput(t *testing.T) {
 	}
 }
 
-func TestUnmarshalJSON_MarshalUnmarshal(t *testing.T) {
+func TestUnmarshalJSONMarshalUnmarshal(t *testing.T) {
 	for i := 0; i < _maxCode; i++ {
 		var cUnMarshaled Code
 		c := Code(i)

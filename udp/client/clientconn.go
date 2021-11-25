@@ -8,17 +8,18 @@ import (
 	"sync/atomic"
 	"time"
 
-	atomicTypes "go.uber.org/atomic"
-
-	"github.com/patrickmn/go-cache"
 	"github.com/plgd-dev/go-coap/v2/message"
-	"github.com/plgd-dev/go-coap/v2/net/blockwise"
-
 	"github.com/plgd-dev/go-coap/v2/message/codes"
+	"github.com/plgd-dev/go-coap/v2/net/blockwise"
+	"github.com/plgd-dev/go-coap/v2/net/monitor/inactivity"
+	"github.com/plgd-dev/go-coap/v2/pkg/cache"
 	udpMessage "github.com/plgd-dev/go-coap/v2/udp/message"
 	"github.com/plgd-dev/go-coap/v2/udp/message/pool"
 	kitSync "github.com/plgd-dev/kit/v2/sync"
+	atomicTypes "go.uber.org/atomic"
 )
+
+const ExchangeLifetime = 247 * time.Second
 
 type HandlerFunc = func(*ResponseWriter, *pool.Message)
 type ErrorFunc = func(error)
@@ -38,10 +39,6 @@ type Session interface {
 	Done() <-chan struct{}
 }
 
-type Notifier interface {
-	Notify()
-}
-
 // ClientConn represents a virtual connection to a conceptual endpoint, to perform COAPs commands.
 type ClientConn struct {
 	// This field needs to be the first in the struct to ensure proper word alignment on 32-bit platforms.
@@ -59,7 +56,7 @@ type ClientConn struct {
 	errors                  ErrorFunc
 	responseMsgCache        *cache.Cache
 	msgIdMutex              *MutexMap
-	activityMonitor         Notifier
+	inactivityMonitor       inactivity.Monitor
 
 	tokenHandlerContainer *HandlerContainer
 	midHandlerContainer   *HandlerContainer
@@ -102,7 +99,8 @@ func NewClientConn(
 	goPool GoPoolFunc,
 	errors ErrorFunc,
 	getMID GetMIDFunc,
-	activityMonitor Notifier,
+	inactivityMonitor inactivity.Monitor,
+	responseMsgCache *cache.Cache,
 ) *ClientConn {
 	if errors == nil {
 		errors = func(error) {}
@@ -129,10 +127,9 @@ func NewClientConn(
 		midHandlerContainer:   NewHandlerContainer(),
 		goPool:                goPool,
 		errors:                errors,
-		// EXCHANGE_LIFETIME = 247
-		responseMsgCache: cache.New(247*time.Second, 60*time.Second),
-		msgIdMutex:       NewMutexMap(),
-		activityMonitor:  activityMonitor,
+		msgIdMutex:            NewMutexMap(),
+		responseMsgCache:      responseMsgCache,
+		inactivityMonitor:     inactivityMonitor,
 	}
 }
 
@@ -544,6 +541,10 @@ func (cc *ClientConn) Sequence() uint64 {
 	return atomic.AddUint64(&cc.sequence, 1)
 }
 
+func (cc *ClientConn) responseMsgCacheID(msgID uint16) string {
+	return fmt.Sprintf("resp-%v-%d", cc.RemoteAddr(), msgID)
+}
+
 func (cc *ClientConn) addResponseToCache(resp *pool.Message) error {
 	marshaledResp, err := resp.Marshal()
 	if err != nil {
@@ -551,13 +552,16 @@ func (cc *ClientConn) addResponseToCache(resp *pool.Message) error {
 	}
 	cacheMsg := make([]byte, len(marshaledResp))
 	copy(cacheMsg, marshaledResp)
-	cc.responseMsgCache.SetDefault(fmt.Sprintf("%d", resp.MessageID()), cacheMsg)
+	cc.responseMsgCache.LoadOrStore(cc.responseMsgCacheID(resp.MessageID()), cache.NewElement(cacheMsg, time.Now().Add(ExchangeLifetime), nil))
 	return nil
 }
 
 func (cc *ClientConn) getResponseFromCache(mid uint16, resp *pool.Message) (bool, error) {
-	cachedResp, _ := cc.responseMsgCache.Get(fmt.Sprintf("%d", mid))
-	if rawMsg, ok := cachedResp.([]byte); ok {
+	cachedResp := cc.responseMsgCache.Load(cc.responseMsgCacheID(mid))
+	if cachedResp == nil {
+		return false, nil
+	}
+	if rawMsg, ok := cachedResp.Data().([]byte); ok {
 		_, err := resp.Unmarshal(rawMsg)
 		if err != nil {
 			return false, err
@@ -575,6 +579,10 @@ func (cc *ClientConn) CheckMyMessageID(req *pool.Message) {
 	}
 }
 
+func (cc *ClientConn) InactivityMonitor() inactivity.Monitor {
+	return cc.inactivityMonitor
+}
+
 func (cc *ClientConn) Process(datagram []byte) error {
 	if cc.session.MaxMessageSize() >= 0 && len(datagram) > cc.session.MaxMessageSize() {
 		return fmt.Errorf("max message size(%v) was exceeded %v", cc.session.MaxMessageSize(), len(datagram))
@@ -587,9 +595,9 @@ func (cc *ClientConn) Process(datagram []byte) error {
 	}
 	req.SetSequence(cc.Sequence())
 	cc.CheckMyMessageID(req)
-	cc.activityMonitor.Notify()
+	cc.inactivityMonitor.Notify()
 	cc.goPool(func() {
-		defer cc.activityMonitor.Notify()
+		defer cc.inactivityMonitor.Notify()
 		reqMid := req.MessageID()
 
 		// The same message ID can not be handled concurrently
