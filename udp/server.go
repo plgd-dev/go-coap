@@ -71,7 +71,7 @@ var defaultServerOptions = serverOptions{
 	periodicRunner: func(f func(now time.Time) bool) {
 		go func() {
 			for f(time.Now()) {
-				time.Sleep(time.Second)
+				time.Sleep(4 * time.Second)
 			}
 		}()
 	},
@@ -287,7 +287,6 @@ func (s *Server) conn() *coapNet.UDPConn {
 	return s.listen
 }
 
-const inactivityMonitorKey = "gocoapInactivityMonitor"
 const closeKey = "gocoapCloseConnection"
 
 func (s *Server) getClientConns() []*client.ClientConn {
@@ -310,18 +309,10 @@ func (s *Server) handleInactivityMonitors(now time.Time) {
 			}
 			continue
 		default:
-			monitor := getInactivityMonitor(cc)
-			monitor.CheckInactivity(cc)
+			cc.InactivityMonitor().CheckInactivity(cc)
+			cc.BlockwiseTransfer().HandleExpiredElements(now)
 		}
 	}
-}
-
-func getInactivityMonitor(cc *client.ClientConn) inactivity.Monitor {
-	v := cc.Context().Value(inactivityMonitorKey)
-	if v == nil {
-		return nil
-	}
-	return v.(inactivity.Monitor)
 }
 
 func getClose(cc *client.ClientConn) func() {
@@ -383,7 +374,6 @@ func (s *Server) getOrCreateClientConn(UDPConn *coapNet.UDPConn, raddr *net.UDPA
 			monitor,
 			s.cache,
 		)
-		cc.SetContextValue(inactivityMonitorKey, monitor)
 		cc.SetContextValue(closeKey, func() {
 			session.close()
 		})

@@ -583,6 +583,7 @@ func TestClientKeepAliveMonitor(t *testing.T) {
 			})
 			time.Sleep(time.Millisecond * 500)
 		}),
+		WithPeriodicRunner(periodic.New(ctx.Done(), time.Millisecond*10)),
 	)
 
 	var serverWg sync.WaitGroup

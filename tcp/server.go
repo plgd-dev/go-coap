@@ -69,7 +69,7 @@ var defaultServerOptions = serverOptions{
 	periodicRunner: func(f func(now time.Time) bool) {
 		go func() {
 			for f(time.Now()) {
-				time.Sleep(time.Second)
+				time.Sleep(4 * time.Second)
 			}
 		}()
 	},
@@ -200,6 +200,7 @@ func handleInactivityMonitors(now time.Time, connections *sync.Map) {
 			continue
 		default:
 			cc.Session().inactivityMonitor.CheckInactivity(cc)
+			cc.Session().blockWise.HandleExpiredElements(now)
 		}
 	}
 }

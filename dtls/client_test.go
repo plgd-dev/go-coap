@@ -750,6 +750,7 @@ func TestClientKeepAliveMonitor(t *testing.T) {
 			f()
 			return nil
 		}),
+		dtls.WithPeriodicRunner(periodic.New(ctx.Done(), time.Millisecond*10)),
 	)
 
 	var serverWg sync.WaitGroup

@@ -137,6 +137,10 @@ func (cc *ClientConn) Session() Session {
 	return cc.session
 }
 
+func (cc *ClientConn) BlockwiseTransfer() *blockwise.BlockWise {
+	return cc.blockWise
+}
+
 func (cc *ClientConn) getMID() uint16 {
 	return uint16(atomic.AddUint32(&cc.msgID, 1))
 }

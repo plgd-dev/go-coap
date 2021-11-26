@@ -56,7 +56,7 @@ var defaultDialOptions = dialOptions{
 	periodicRunner: func(f func(now time.Time) bool) {
 		go func() {
 			for f(time.Now()) {
-				time.Sleep(time.Second)
+				time.Sleep(4 * time.Second)
 			}
 		}()
 	},
@@ -195,6 +195,7 @@ func Client(conn *dtls.Conn, opts ...DialOption) *client.ClientConn {
 
 	cfg.periodicRunner(func(now time.Time) bool {
 		monitor.CheckInactivity(cc)
+		cc.BlockwiseTransfer().HandleExpiredElements(now)
 		return cc.Context().Err() == nil
 	})
 
