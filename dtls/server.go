@@ -224,7 +224,9 @@ func handleInactivityMonitors(now time.Time, connections *sync.Map) {
 			continue
 		default:
 			cc.InactivityMonitor().CheckInactivity(cc)
-			cc.BlockwiseTransfer().HandleExpiredElements(now)
+			if cc.BlockwiseTransfer() != nil {
+				cc.BlockwiseTransfer().HandleExpiredElements(now)
+			}
 		}
 	}
 }

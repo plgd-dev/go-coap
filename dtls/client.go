@@ -195,7 +195,9 @@ func Client(conn *dtls.Conn, opts ...DialOption) *client.ClientConn {
 
 	cfg.periodicRunner(func(now time.Time) bool {
 		monitor.CheckInactivity(cc)
-		cc.BlockwiseTransfer().HandleExpiredElements(now)
+		if cc.BlockwiseTransfer() != nil {
+			cc.BlockwiseTransfer().HandleExpiredElements(now)
+		}
 		return cc.Context().Err() == nil
 	})
 
