@@ -29,7 +29,7 @@ func (e *Element) Data() interface{} {
 
 func NewElement(data interface{}, validUntil time.Time, onExpire func(d interface{})) *Element {
 	if onExpire == nil {
-		onExpire = defaultOnExpire
+		onExpire = DefaultOnExpire
 	}
 	return &Element{data: data, validUntil: validUntil, onExpire: onExpire}
 }

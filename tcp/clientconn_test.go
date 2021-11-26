@@ -6,7 +6,6 @@ import (
 	"crypto/tls"
 	"io"
 	"io/ioutil"
-	"runtime"
 	"sync"
 	"testing"
 	"time"
@@ -500,9 +499,8 @@ func TestClientConnPing(t *testing.T) {
 
 func TestClientInactiveMonitor(t *testing.T) {
 	inactivityDetected := false
-	defer func() {
-		runtime.GC()
-	}()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second*8)
+	defer cancel()
 
 	ld, err := coapNet.NewTCPListener("tcp", "")
 	require.NoError(t, err)
@@ -517,6 +515,7 @@ func TestClientInactiveMonitor(t *testing.T) {
 				checkCloseWg.Done()
 			})
 		}),
+		WithPeriodicRunner(periodic.New(ctx.Done(), time.Millisecond*10)),
 	)
 
 	var serverWg sync.WaitGroup
@@ -538,6 +537,7 @@ func TestClientInactiveMonitor(t *testing.T) {
 			inactivityDetected = true
 			cc.Close()
 		}),
+		WithPeriodicRunner(periodic.New(ctx.Done(), time.Millisecond*10)),
 	)
 	require.NoError(t, err)
 	checkCloseWg.Add(1)
@@ -546,7 +546,7 @@ func TestClientInactiveMonitor(t *testing.T) {
 	})
 
 	// send ping to create serverside connection
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	ctx, cancel = context.WithTimeout(ctx, time.Second)
 	defer cancel()
 	err = cc.Ping(ctx)
 	require.NoError(t, err)

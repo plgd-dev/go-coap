@@ -7,7 +7,6 @@ import (
 	"io"
 	"io/ioutil"
 	"log"
-	"runtime"
 	"sync"
 	"testing"
 	"time"
@@ -657,13 +656,10 @@ func TestClientConnHandeShakeFailure(t *testing.T) {
 
 func TestClientInactiveMonitor(t *testing.T) {
 	inactivityDetected := false
-	defer func() {
-		runtime.GC()
-	}()
 
-	srvCtx, srvCancel := context.WithTimeout(context.Background(), time.Second*3600)
-	defer srvCancel()
-	serverCgf, clientCgf, _, err := createDTLSConfig(srvCtx)
+	ctx, cancel := context.WithTimeout(context.Background(), Timeout)
+	defer cancel()
+	serverCgf, clientCgf, _, err := createDTLSConfig(ctx)
 	require.NoError(t, err)
 
 	ld, err := coapNet.NewDTLSListener("udp4", "", serverCgf)
@@ -679,6 +675,7 @@ func TestClientInactiveMonitor(t *testing.T) {
 				checkCloseWg.Done()
 			})
 		}),
+		dtls.WithPeriodicRunner(periodic.New(ctx.Done(), time.Millisecond*10)),
 	)
 
 	var serverWg sync.WaitGroup
@@ -699,6 +696,7 @@ func TestClientInactiveMonitor(t *testing.T) {
 			inactivityDetected = true
 			cc.Close()
 		}),
+		dtls.WithPeriodicRunner(periodic.New(ctx.Done(), time.Millisecond*10)),
 	)
 	require.NoError(t, err)
 	checkCloseWg.Add(1)
@@ -707,7 +705,7 @@ func TestClientInactiveMonitor(t *testing.T) {
 	})
 
 	// send ping to create serverside connection
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	ctx, cancel = context.WithTimeout(ctx, time.Second)
 	defer cancel()
 	err = cc.Ping(ctx)
 	require.NoError(t, err)

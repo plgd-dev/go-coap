@@ -645,7 +645,9 @@ func TestClientInactiveMonitor(t *testing.T) {
 
 	var checkCloseWg sync.WaitGroup
 	defer checkCloseWg.Wait()
-	sd := NewServer()
+	sd := NewServer(
+		WithPeriodicRunner(periodic.New(ctx.Done(), time.Millisecond*10)),
+	)
 
 	var serverWg sync.WaitGroup
 	defer func() {
