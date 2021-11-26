@@ -18,10 +18,10 @@ jobs:
 
     # Steps represent a sequence of tasks that will be executed as part of the job
     steps:
-      - name: Set up Go 1.15
+      - name: Set up Go 1.17
         uses: actions/setup-go@v2
         with:
-          go-version: ^1.15
+          go-version: ^1.17
      
       # Checks-out your repository under $GITHUB_WORKSPACE, so your job can access it
       - name: Checkout
@@ -33,4 +33,4 @@ jobs:
       
       # Runs a single command using the runners shell, -p1 for `race: limit on 8128 simultaneously alive goroutines is exceeded, dying` at macos
       - name: Run a test
-        run: go test -race -p 1  ./... -covermode=atomic -coverprofile=./coverage.txt
+        run: go test -race -p 1  ./... -coverpkg=./... -covermode=atomic -coverprofile=./coverage.txt
