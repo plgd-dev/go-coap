@@ -4,7 +4,7 @@ name: Test
 
 # Controls when the action will run.
 on:
-  pull_request:
+  push:
 
 # A workflow run is made up of one or more jobs that can run sequentially or in parallel
 jobs:
@@ -33,4 +33,8 @@ jobs:
       
       # Runs a single command using the runners shell, -p1 for `race: limit on 8128 simultaneously alive goroutines is exceeded, dying` at macos
       - name: Run a test
-        run: go test -race -p 1  ./... -coverpkg=./... -covermode=atomic -coverprofile=./coverage.txt
+        run: go test -v -race -p 1  ./... -coverpkg=./... -covermode=atomic -coverprofile=./coverage.txt
+
+      - name: Publish the coverage
+        if: ${{ matrix.os }} == 'ubuntu-latest'
+        run: bash <(curl -s https://codecov.io/bash)
