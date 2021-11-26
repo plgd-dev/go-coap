@@ -140,7 +140,9 @@ func IsIPv6(addr net.IP) bool {
 }
 
 var defaultUDPConnOptions = udpConnOptions{
-	errors: func(err error) {},
+	errors: func(err error) {
+		// don't log any error from fails for multicast requests
+	},
 }
 
 type udpConnOptions struct {
