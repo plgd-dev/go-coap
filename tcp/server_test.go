@@ -158,6 +158,9 @@ func TestServerSetContextValueWithPKI(t *testing.T) {
 func TestServerInactiveMonitor(t *testing.T) {
 	inactivityDetected := false
 
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second*8)
+	defer cancel()
+
 	ld, err := coapNet.NewTCPListener("tcp", "")
 	require.NoError(t, err)
 	defer ld.Close()
@@ -176,6 +179,7 @@ func TestServerInactiveMonitor(t *testing.T) {
 			inactivityDetected = true
 			cc.Close()
 		}),
+		tcp.WithPeriodicRunner(periodic.New(ctx.Done(), time.Millisecond*10)),
 	)
 
 	var serverWg sync.WaitGroup
@@ -200,7 +204,7 @@ func TestServerInactiveMonitor(t *testing.T) {
 	})
 
 	// send ping to create serverside connection
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	ctx, cancel = context.WithTimeout(ctx, time.Second)
 	defer cancel()
 	err = cc.Ping(ctx)
 	require.NoError(t, err)

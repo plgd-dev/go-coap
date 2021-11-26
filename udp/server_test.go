@@ -12,6 +12,7 @@ import (
 	"github.com/plgd-dev/go-coap/v2/message/codes"
 	coapNet "github.com/plgd-dev/go-coap/v2/net"
 	"github.com/plgd-dev/go-coap/v2/net/monitor/inactivity"
+	"github.com/plgd-dev/go-coap/v2/pkg/runner/periodic"
 	"github.com/plgd-dev/go-coap/v2/udp"
 	"github.com/plgd-dev/go-coap/v2/udp/client"
 	"github.com/plgd-dev/go-coap/v2/udp/message/pool"
@@ -181,6 +182,9 @@ func TestServerCleanUpConns(t *testing.T) {
 func TestServerInactiveMonitor(t *testing.T) {
 	inactivityDetected := false
 
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second*8)
+	defer cancel()
+
 	ld, err := coapNet.NewListenUDP("udp4", "")
 	require.NoError(t, err)
 	defer ld.Close()
@@ -199,6 +203,7 @@ func TestServerInactiveMonitor(t *testing.T) {
 			inactivityDetected = true
 			cc.Close()
 		}),
+		udp.WithPeriodicRunner(periodic.New(ctx.Done(), time.Millisecond*10)),
 	)
 
 	var serverWg sync.WaitGroup
@@ -223,7 +228,7 @@ func TestServerInactiveMonitor(t *testing.T) {
 	})
 
 	// send ping to create serverside connection
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	ctx, cancel = context.WithTimeout(ctx, time.Second)
 	defer cancel()
 	err = cc.Ping(ctx)
 	require.NoError(t, err)
@@ -248,6 +253,9 @@ func TestServerKeepAliveMonitor(t *testing.T) {
 	require.NoError(t, err)
 	defer ld.Close()
 
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second*8)
+	defer cancel()
+
 	var checkCloseWg sync.WaitGroup
 	defer checkCloseWg.Wait()
 	sd := udp.NewServer(
@@ -262,6 +270,7 @@ func TestServerKeepAliveMonitor(t *testing.T) {
 			inactivityDetected = true
 			cc.Close()
 		}),
+		udp.WithPeriodicRunner(periodic.New(ctx.Done(), time.Millisecond*10)),
 	)
 
 	var serverWg sync.WaitGroup
@@ -282,6 +291,7 @@ func TestServerKeepAliveMonitor(t *testing.T) {
 			time.Sleep(time.Millisecond * 500)
 			cc.Close()
 		}),
+		udp.WithPeriodicRunner(periodic.New(ctx.Done(), time.Millisecond*10)),
 	)
 	require.NoError(t, err)
 	checkCloseWg.Add(1)
@@ -290,7 +300,7 @@ func TestServerKeepAliveMonitor(t *testing.T) {
 	})
 
 	// send ping to create serverside connection
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	ctx, cancel = context.WithTimeout(ctx, time.Second)
 	defer cancel()
 	cc.Ping(ctx)
 

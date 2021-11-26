@@ -168,9 +168,9 @@ func TestServerSetContextValueWithPKI(t *testing.T) {
 func TestServerInactiveMonitor(t *testing.T) {
 	inactivityDetected := false
 
-	srvCtx, srvCancel := context.WithTimeout(context.Background(), time.Second*3600)
-	defer srvCancel()
-	serverCgf, clientCgf, _, err := createDTLSConfig(srvCtx)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second*8)
+	defer cancel()
+	serverCgf, clientCgf, _, err := createDTLSConfig(ctx)
 	require.NoError(t, err)
 
 	ld, err := coapNet.NewDTLSListener("udp4", "", serverCgf)
@@ -191,6 +191,7 @@ func TestServerInactiveMonitor(t *testing.T) {
 			inactivityDetected = true
 			cc.Close()
 		}),
+		dtls.WithPeriodicRunner(periodic.New(ctx.Done(), time.Millisecond*10)),
 	)
 
 	var serverWg sync.WaitGroup
@@ -213,7 +214,7 @@ func TestServerInactiveMonitor(t *testing.T) {
 	})
 
 	// send ping to create serverside connection
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	ctx, cancel = context.WithTimeout(ctx, time.Second)
 	defer cancel()
 	err = cc.Ping(ctx)
 	require.NoError(t, err)

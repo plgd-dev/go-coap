@@ -11,9 +11,9 @@ import (
 	"golang.org/x/sync/semaphore"
 
 	"github.com/dsnet/golib/memfile"
-	"github.com/patrickmn/go-cache"
 	"github.com/plgd-dev/go-coap/v2/message"
 	"github.com/plgd-dev/go-coap/v2/message/codes"
+	"github.com/plgd-dev/go-coap/v2/pkg/cache"
 	udpMessage "github.com/plgd-dev/go-coap/v2/udp/message"
 )
 
@@ -175,6 +175,7 @@ type BlockWise struct {
 	errors                      func(error)
 	autoCleanUpResponseCache    bool
 	getSendedRequestFromOutside func(token message.Token) (Message, bool)
+	expiration                  time.Duration
 
 	bwSendedRequest *senderRequestMap
 }
@@ -201,26 +202,19 @@ func NewBlockWise(
 	autoCleanUpResponseCache bool,
 	getSendedRequestFromOutside func(token message.Token) (Message, bool),
 ) *BlockWise {
-	receivingMessagesCache := cache.New(expiration, expiration)
-	bwSendedRequest := newSenderRequestMap()
-	receivingMessagesCache.OnEvicted(func(tokenstr string, v interface{}) {
-		if v == nil {
-			return
-		}
-		bwSendedRequest.deleteByToken(tokenstr)
-	})
 	if getSendedRequestFromOutside == nil {
 		getSendedRequestFromOutside = func(token message.Token) (Message, bool) { return nil, false }
 	}
 	return &BlockWise{
 		acquireMessage:              acquireMessage,
 		releaseMessage:              releaseMessage,
-		receivingMessagesCache:      receivingMessagesCache,
-		sendingMessagesCache:        cache.New(expiration, expiration),
+		receivingMessagesCache:      cache.NewCache(),
+		sendingMessagesCache:        cache.NewCache(),
 		errors:                      errors,
 		autoCleanUpResponseCache:    autoCleanUpResponseCache,
 		getSendedRequestFromOutside: getSendedRequestFromOutside,
-		bwSendedRequest:             bwSendedRequest,
+		bwSendedRequest:             newSenderRequestMap(),
+		expiration:                  expiration,
 	}
 }
 
@@ -229,6 +223,12 @@ func bufferSize(szx SZX, maxMessageSize int) int64 {
 		return szx.Size()
 	}
 	return (int64(maxMessageSize) / szx.Size()) * szx.Size()
+}
+
+// HandleExpiredElements iterates over caches and remove expired items.
+func (b *BlockWise) HandleExpiredElements(now time.Time) {
+	b.receivingMessagesCache.HandleExpiredElements(now)
+	b.sendingMessagesCache.HandleExpiredElements(now)
 }
 
 // Do sends an coap message and returns an coap response via blockwise transfer.
@@ -494,9 +494,10 @@ func (b *BlockWise) Handle(w ResponseWriter, r Message, maxSZX SZX, maxMessageSi
 		return
 	}
 	tokenStr := token.String()
-	v, ok := b.sendingMessagesCache.Get(tokenStr)
 
-	if !ok {
+	sendingMessageCached := b.sendingMessagesCache.Load(tokenStr)
+
+	if sendingMessageCached == nil {
 		err := b.handleReceivedMessage(w, r, maxSZX, maxMessageSize, next)
 		if err != nil {
 			b.sendEntityIncomplete(w, token)
@@ -504,7 +505,7 @@ func (b *BlockWise) Handle(w ResponseWriter, r Message, maxSZX SZX, maxMessageSi
 		}
 		return
 	}
-	more, err := b.continueSendingMessage(w, r, maxSZX, maxMessageSize, v.(*messageGuard))
+	more, err := b.continueSendingMessage(w, r, maxSZX, maxMessageSize, sendingMessageCached.Data().(*messageGuard))
 	if err != nil {
 		b.sendingMessagesCache.Delete(tokenStr)
 		b.errors(fmt.Errorf("continueSendingMessage(%v): %w", r, err))
@@ -629,15 +630,15 @@ func (b *BlockWise) startSendingMessage(w ResponseWriter, maxSZX SZX, maxMessage
 		// https://tools.ietf.org/html/rfc7959#section-2.6 - we don't need store it because client will be get values via GET.
 		return nil
 	}
-	expire := cache.DefaultExpiration
+	expire := time.Now().Add(b.expiration)
 	deadline, ok := sendingMessage.Context().Deadline()
 	if ok {
-		expire = time.Until(deadline)
+		expire = deadline
 	}
 
-	err = b.sendingMessagesCache.Add(sendingMessage.Token().String(), newRequestGuard(sendingMessage), expire)
-	if err != nil {
-		return fmt.Errorf("cannot add to response cache: %w", err)
+	_, loaded := b.sendingMessagesCache.LoadOrStore(sendingMessage.Token().String(), cache.NewElement(newRequestGuard(sendingMessage), expire, nil))
+	if loaded {
+		return fmt.Errorf("cannot add to sending message cache: message with token %v already exist", sendingMessage.Token().String())
 	}
 	return nil
 }
@@ -680,12 +681,12 @@ func (b *BlockWise) processReceivedMessage(w ResponseWriter, r Message, maxSzx S
 		return fmt.Errorf("cannot decode block option: %w", err)
 	}
 	sendedRequest := b.getSendedRequest(token)
-	expire := cache.DefaultExpiration
+	expire := time.Now().Add(b.expiration)
 	if sendedRequest != nil {
 		defer b.releaseMessage(sendedRequest)
 		deadline, ok := sendedRequest.Context().Deadline()
 		if ok {
-			expire = time.Until(deadline)
+			expire = deadline
 		}
 	}
 	if blockType == message.Block2 && sendedRequest == nil {
@@ -700,7 +701,7 @@ func (b *BlockWise) processReceivedMessage(w ResponseWriter, r Message, maxSzx S
 		if err != nil {
 			return fmt.Errorf("cannot get token for create GET request: %w", err)
 		}
-		expire = cache.DefaultExpiration // context of observation can be expired.
+		expire = time.Now().Add(b.expiration) // context of observation can be expired.
 		bwSendedRequest := b.newSendRequestMessage(sendedRequest, true)
 		bwSendedRequest.SetToken(token)
 		err := b.bwSendedRequest.store(bwSendedRequest)
@@ -710,9 +711,13 @@ func (b *BlockWise) processReceivedMessage(w ResponseWriter, r Message, maxSzx S
 	}
 
 	tokenStr := token.String()
-	cachedReceivedMessageGuard, ok := b.receivingMessagesCache.Get(tokenStr)
+	var cachedReceivedMessageGuard interface{}
+	e := b.receivingMessagesCache.Load(tokenStr)
+	if e != nil {
+		cachedReceivedMessageGuard = e.Data()
+	}
 	var msgGuard *messageGuard
-	if !ok || cachedReceivedMessageGuard == nil {
+	if cachedReceivedMessageGuard == nil {
 		if szx > maxSzx {
 			szx = maxSzx
 		}
@@ -733,11 +738,16 @@ func (b *BlockWise) processReceivedMessage(w ResponseWriter, r Message, maxSzx S
 			return fmt.Errorf("processReceivedMessage: cannot lock message: %v", err)
 		}
 		defer msgGuard.Release(1)
-		err = b.receivingMessagesCache.Add(tokenStr, msgGuard, expire)
+		element, loaded := b.receivingMessagesCache.LoadOrStore(tokenStr, cache.NewElement(msgGuard, expire, func(d interface{}) {
+			if d == nil {
+				return
+			}
+			b.bwSendedRequest.deleteByToken(tokenStr)
+		}))
 		// request was already stored in cache, silently
-		if err != nil {
-			cachedReceivedMessageGuard, ok := b.receivingMessagesCache.Get(tokenStr)
-			if ok {
+		if loaded {
+			cachedReceivedMessageGuard = element.Data()
+			if cachedReceivedMessageGuard != nil {
 				msgGuard = cachedReceivedMessageGuard.(*messageGuard)
 				err := msgGuard.Acquire(cachedReceivedMessage.Context(), 1)
 				if err != nil {
@@ -812,7 +822,6 @@ func (b *BlockWise) processReceivedMessage(w ResponseWriter, r Message, maxSzx S
 			return fmt.Errorf("cannot truncate cached request: %w", err)
 		}
 		if !more {
-			b.receivingMessagesCache.Replace(tokenStr, nil, 0)
 			b.receivingMessagesCache.Delete(tokenStr)
 			cachedReceivedMessage.Remove(blockType)
 			cachedReceivedMessage.Remove(sizeType)
