@@ -200,7 +200,9 @@ func handleInactivityMonitors(now time.Time, connections *sync.Map) {
 			continue
 		default:
 			cc.Session().inactivityMonitor.CheckInactivity(cc)
-			cc.Session().blockWise.HandleExpiredElements(now)
+			if cc.Session().blockWise != nil {
+				cc.Session().blockWise.HandleExpiredElements(now)
+			}
 		}
 	}
 }

@@ -195,7 +195,9 @@ func Client(conn net.Conn, opts ...DialOption) *ClientConn {
 
 	cfg.periodicRunner(func(now time.Time) bool {
 		monitor.CheckInactivity(cc)
-		cc.Session().blockWise.HandleExpiredElements(now)
+		if cc.Session().blockWise != nil {
+			cc.Session().blockWise.HandleExpiredElements(now)
+		}
 		return cc.Context().Err() == nil
 	})
 
