@@ -36,5 +36,5 @@ jobs:
         run: go test -v -race -p 1  ./... -coverpkg=./... -covermode=atomic -coverprofile=./coverage.txt
 
       - name: Publish the coverage
-        if: ${{ matrix.os }} == 'ubuntu-latest'
+        if: startsWith(matrix.os,'ubuntu')
         run: bash <(curl -s https://codecov.io/bash)
