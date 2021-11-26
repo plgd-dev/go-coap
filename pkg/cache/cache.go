@@ -6,7 +6,9 @@ import (
 	kitSync "github.com/plgd-dev/kit/v2/sync"
 )
 
-func defaultOnExpire(d interface{}) {}
+func DefaultOnExpire(d interface{}) {
+	// for nothing on expire
+}
 
 type Element struct {
 	data       interface{}
