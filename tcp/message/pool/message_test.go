@@ -13,12 +13,13 @@ import (
 )
 
 func TestConvertTo(t *testing.T) {
-	msg := pool.AcquireMessage(context.Background())
+	messagePool := pool.New(0, 0)
+	msg := messagePool.AcquireMessage(context.Background())
 	_, err := msg.Unmarshal([]byte{35, byte(codes.GET), 0x1, 0x2, 0x3, 0xff, 0x1})
 	require.NoError(t, err)
 	a, _ := pool.ConvertTo(msg)
 	require.NoError(t, err)
-	pool.ReleaseMessage(msg)
+	messagePool.ReleaseMessage(msg)
 	var wg sync.WaitGroup
 	wg.Add(1)
 	go func() {
@@ -27,7 +28,7 @@ func TestConvertTo(t *testing.T) {
 		assert.NoError(t, err)
 		assert.Equal(t, []byte{1}, buf)
 	}()
-	msg = pool.AcquireMessage(context.Background())
+	msg = messagePool.AcquireMessage(context.Background())
 	_, err = msg.Unmarshal([]byte{35, byte(codes.GET), 0x1, 0x2, 0x3, 0xff, 0x2})
 	require.NoError(t, err)
 	wg.Wait()

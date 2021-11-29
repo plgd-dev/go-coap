@@ -7,7 +7,7 @@ import (
 )
 
 type Monitor = interface {
-	CheckInactivity(cc ClientConn)
+	CheckInactivity(now time.Time, cc ClientConn)
 	Notify()
 }
 
@@ -49,11 +49,11 @@ func NewInactivityMonitor(duration time.Duration, onInactive OnInactiveFunc) Mon
 	return m
 }
 
-func (m *inactivityMonitor) CheckInactivity(cc ClientConn) {
+func (m *inactivityMonitor) CheckInactivity(now time.Time, cc ClientConn) {
 	if m.onInactive == nil || m.duration == time.Duration(0) {
 		return
 	}
-	if time.Until(m.LastActivity().Add(m.duration)) <= 0 {
+	if now.After(m.LastActivity().Add(m.duration)) {
 		m.onInactive(cc)
 	}
 }
@@ -61,7 +61,7 @@ func (m *inactivityMonitor) CheckInactivity(cc ClientConn) {
 type nilMonitor struct {
 }
 
-func (m *nilMonitor) CheckInactivity(cc ClientConn) {
+func (m *nilMonitor) CheckInactivity(now time.Time, cc ClientConn) {
 }
 
 func (m *nilMonitor) Notify() {

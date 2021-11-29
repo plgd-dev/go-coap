@@ -225,10 +225,10 @@ func bufferSize(szx SZX, maxMessageSize int) int64 {
 	return (int64(maxMessageSize) / szx.Size()) * szx.Size()
 }
 
-// HandleExpiredElements iterates over caches and remove expired items.
-func (b *BlockWise) HandleExpiredElements(now time.Time) {
-	b.receivingMessagesCache.HandleExpiredElements(now)
-	b.sendingMessagesCache.HandleExpiredElements(now)
+// CheckExpirations iterates over caches and remove expired items.
+func (b *BlockWise) CheckExpirations(now time.Time) {
+	b.receivingMessagesCache.CheckExpirations(now)
+	b.sendingMessagesCache.CheckExpirations(now)
 }
 
 // Do sends an coap message and returns an coap response via blockwise transfer.

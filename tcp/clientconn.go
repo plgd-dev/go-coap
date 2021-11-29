@@ -54,6 +54,8 @@ var defaultDialOptions = dialOptions{
 			}
 		}()
 	},
+	connectionCacheSize: 2048,
+	messagePool:         pool.New(1024, 2048),
 }
 
 type dialOptions struct {
@@ -73,6 +75,8 @@ type dialOptions struct {
 	closeSocket                     bool
 	createInactivityMonitor         func() inactivity.Monitor
 	periodicRunner                  periodic.Func
+	connectionCacheSize             uint16
+	messagePool                     *pool.Pool
 }
 
 // A DialOption sets options such as credentials, keepalive parameters, etc.
@@ -113,19 +117,23 @@ func Dial(target string, opts ...DialOption) (*ClientConn, error) {
 	return Client(conn, opts...), nil
 }
 
-func bwAcquireMessage(ctx context.Context) blockwise.Message {
-	return pool.AcquireMessage(ctx)
+func bwCreateAcquireMessage(messagePool *pool.Pool) func(ctx context.Context) blockwise.Message {
+	return func(ctx context.Context) blockwise.Message {
+		return messagePool.AcquireMessage(ctx)
+	}
 }
 
-func bwReleaseMessage(m blockwise.Message) {
-	pool.ReleaseMessage(m.(*pool.Message))
+func bwCreateReleaseMessage(messagePool *pool.Pool) func(m blockwise.Message) {
+	return func(m blockwise.Message) {
+		messagePool.ReleaseMessage(m.(*pool.Message))
+	}
 }
 
-func bwCreateHandlerFunc(observationRequests *kitSync.Map) func(token message.Token) (blockwise.Message, bool) {
+func bwCreateHandlerFunc(messagePool *pool.Pool, observationRequests *kitSync.Map) func(token message.Token) (blockwise.Message, bool) {
 	return func(token message.Token) (blockwise.Message, bool) {
 		msg, ok := observationRequests.LoadWithFunc(token.String(), func(v interface{}) interface{} {
 			r := v.(message.Message)
-			d := pool.AcquireMessage(r.Context)
+			d := messagePool.AcquireMessage(r.Context)
 			d.ResetOptionsTo(r.Options)
 			d.SetCode(r.Code)
 			d.SetToken(r.Token)
@@ -153,6 +161,9 @@ func Client(conn net.Conn, opts ...DialOption) *ClientConn {
 			return inactivity.NewNilMonitor()
 		}
 	}
+	if cfg.messagePool == nil {
+		cfg.messagePool = pool.New(0, 0)
+	}
 	errorsFunc := cfg.errors
 	cfg.errors = func(err error) {
 		if errors.Is(err, context.Canceled) || errors.Is(err, io.EOF) || strings.Contains(err.Error(), "use of closed network connection") {
@@ -166,12 +177,12 @@ func Client(conn net.Conn, opts ...DialOption) *ClientConn {
 	var blockWise *blockwise.BlockWise
 	if cfg.blockwiseEnable {
 		blockWise = blockwise.NewBlockWise(
-			bwAcquireMessage,
-			bwReleaseMessage,
+			bwCreateAcquireMessage(cfg.messagePool),
+			bwCreateReleaseMessage(cfg.messagePool),
 			cfg.blockwiseTransferTimeout,
 			cfg.errors,
 			false,
-			bwCreateHandlerFunc(observationRequests),
+			bwCreateHandlerFunc(cfg.messagePool, observationRequests),
 		)
 	}
 
@@ -190,14 +201,13 @@ func Client(conn net.Conn, opts ...DialOption) *ClientConn {
 		cfg.disableTCPSignalMessageCSM,
 		cfg.closeSocket,
 		monitor,
+		cfg.connectionCacheSize,
+		cfg.messagePool,
 	)
 	cc := NewClientConn(session, observationTokenHandler, observationRequests)
 
 	cfg.periodicRunner(func(now time.Time) bool {
-		monitor.CheckInactivity(cc)
-		if cc.Session().blockWise != nil {
-			cc.Session().blockWise.HandleExpiredElements(now)
-		}
+		cc.CheckExpirations(now)
 		return cc.Context().Err() == nil
 	})
 
@@ -294,12 +304,12 @@ func (cc *ClientConn) WriteMessage(req *pool.Message) error {
 	})
 }
 
-func newCommonRequest(ctx context.Context, code codes.Code, path string, opts ...message.Option) (*pool.Message, error) {
+func newCommonRequest(ctx context.Context, messagePool *pool.Pool, code codes.Code, path string, opts ...message.Option) (*pool.Message, error) {
 	token, err := message.GetToken()
 	if err != nil {
 		return nil, fmt.Errorf("cannot get token: %w", err)
 	}
-	req := pool.AcquireMessage(ctx)
+	req := messagePool.AcquireMessage(ctx)
 	req.SetCode(code)
 	req.SetToken(token)
 	req.ResetOptionsTo(opts)
@@ -310,8 +320,8 @@ func newCommonRequest(ctx context.Context, code codes.Code, path string, opts ..
 // NewGetRequest creates get request.
 //
 // Use ctx to set timeout.
-func NewGetRequest(ctx context.Context, path string, opts ...message.Option) (*pool.Message, error) {
-	return newCommonRequest(ctx, codes.GET, path, opts...)
+func NewGetRequest(ctx context.Context, messagePool *pool.Pool, path string, opts ...message.Option) (*pool.Message, error) {
+	return newCommonRequest(ctx, messagePool, codes.GET, path, opts...)
 }
 
 // Get issues a GET to the specified path.
@@ -321,11 +331,11 @@ func NewGetRequest(ctx context.Context, path string, opts ...message.Option) (*p
 // An error is returned if by failure to speak COAP (such as a network connectivity problem).
 // Any status code doesn't cause an error.
 func (cc *ClientConn) Get(ctx context.Context, path string, opts ...message.Option) (*pool.Message, error) {
-	req, err := NewGetRequest(ctx, path, opts...)
+	req, err := NewGetRequest(ctx, cc.session.messagePool, path, opts...)
 	if err != nil {
 		return nil, fmt.Errorf("cannot create get request: %w", err)
 	}
-	defer pool.ReleaseMessage(req)
+	defer cc.session.messagePool.ReleaseMessage(req)
 	return cc.Do(req)
 }
 
@@ -337,8 +347,8 @@ func (cc *ClientConn) Get(ctx context.Context, path string, opts ...message.Opti
 // Any status code doesn't cause an error.
 //
 // If payload is nil then content format is not used.
-func NewPostRequest(ctx context.Context, path string, contentFormat message.MediaType, payload io.ReadSeeker, opts ...message.Option) (*pool.Message, error) {
-	req, err := newCommonRequest(ctx, codes.POST, path, opts...)
+func NewPostRequest(ctx context.Context, messagePool *pool.Pool, path string, contentFormat message.MediaType, payload io.ReadSeeker, opts ...message.Option) (*pool.Message, error) {
+	req, err := newCommonRequest(ctx, messagePool, codes.POST, path, opts...)
 	if err != nil {
 		return nil, err
 	}
@@ -358,11 +368,11 @@ func NewPostRequest(ctx context.Context, path string, contentFormat message.Medi
 //
 // If payload is nil then content format is not used.
 func (cc *ClientConn) Post(ctx context.Context, path string, contentFormat message.MediaType, payload io.ReadSeeker, opts ...message.Option) (*pool.Message, error) {
-	req, err := NewPostRequest(ctx, path, contentFormat, payload, opts...)
+	req, err := NewPostRequest(ctx, cc.session.messagePool, path, contentFormat, payload, opts...)
 	if err != nil {
 		return nil, fmt.Errorf("cannot create post request: %w", err)
 	}
-	defer pool.ReleaseMessage(req)
+	defer cc.session.messagePool.ReleaseMessage(req)
 	return cc.Do(req)
 }
 
@@ -371,8 +381,8 @@ func (cc *ClientConn) Post(ctx context.Context, path string, contentFormat messa
 // Use ctx to set timeout.
 //
 // If payload is nil then content format is not used.
-func NewPutRequest(ctx context.Context, path string, contentFormat message.MediaType, payload io.ReadSeeker, opts ...message.Option) (*pool.Message, error) {
-	req, err := newCommonRequest(ctx, codes.PUT, path, opts...)
+func NewPutRequest(ctx context.Context, messagePool *pool.Pool, path string, contentFormat message.MediaType, payload io.ReadSeeker, opts ...message.Option) (*pool.Message, error) {
+	req, err := newCommonRequest(ctx, messagePool, codes.PUT, path, opts...)
 	if err != nil {
 		return nil, err
 	}
@@ -392,30 +402,30 @@ func NewPutRequest(ctx context.Context, path string, contentFormat message.Media
 //
 // If payload is nil then content format is not used.
 func (cc *ClientConn) Put(ctx context.Context, path string, contentFormat message.MediaType, payload io.ReadSeeker, opts ...message.Option) (*pool.Message, error) {
-	req, err := NewPutRequest(ctx, path, contentFormat, payload, opts...)
+	req, err := NewPutRequest(ctx, cc.session.messagePool, path, contentFormat, payload, opts...)
 	if err != nil {
 		return nil, fmt.Errorf("cannot create put request: %w", err)
 	}
-	defer pool.ReleaseMessage(req)
+	defer cc.session.messagePool.ReleaseMessage(req)
 	return cc.Do(req)
 }
 
 // NewDeleteRequest creates delete request.
 //
 // Use ctx to set timeout.
-func NewDeleteRequest(ctx context.Context, path string, opts ...message.Option) (*pool.Message, error) {
-	return newCommonRequest(ctx, codes.DELETE, path, opts...)
+func NewDeleteRequest(ctx context.Context, messagePool *pool.Pool, path string, opts ...message.Option) (*pool.Message, error) {
+	return newCommonRequest(ctx, messagePool, codes.DELETE, path, opts...)
 }
 
 // Delete deletes the resource identified by the request path.
 //
 // Use ctx to set timeout.
 func (cc *ClientConn) Delete(ctx context.Context, path string, opts ...message.Option) (*pool.Message, error) {
-	req, err := NewDeleteRequest(ctx, path, opts...)
+	req, err := NewDeleteRequest(ctx, cc.session.messagePool, path, opts...)
 	if err != nil {
 		return nil, fmt.Errorf("cannot create delete request: %w", err)
 	}
-	defer pool.ReleaseMessage(req)
+	defer cc.session.messagePool.ReleaseMessage(req)
 	return cc.Do(req)
 }
 
@@ -456,10 +466,10 @@ func (cc *ClientConn) AsyncPing(receivedPong func()) (func(), error) {
 	if err != nil {
 		return nil, fmt.Errorf("cannot get token: %w", err)
 	}
-	req := pool.AcquireMessage(cc.Context())
+	req := cc.session.messagePool.AcquireMessage(cc.Context())
 	req.SetToken(token)
 	req.SetCode(codes.Ping)
-	defer pool.ReleaseMessage(req)
+	defer cc.session.messagePool.ReleaseMessage(req)
 
 	err = cc.session.TokenHandler().Insert(token, func(w *ResponseWriter, r *pool.Message) {
 		if r.Code() == codes.Pong {
@@ -512,4 +522,17 @@ func (cc *ClientConn) SetContextValue(key interface{}, val interface{}) {
 // Done signalizes that connection is not more processed.
 func (cc *ClientConn) Done() <-chan struct{} {
 	return cc.session.Done()
+}
+
+// CheckExpirations checks and remove expired items from caches.
+func (cc *ClientConn) CheckExpirations(now time.Time) {
+	cc.session.CheckExpirations(now, cc)
+}
+
+func (cc *ClientConn) AcquireMessage(ctx context.Context) *pool.Message {
+	return cc.session.messagePool.AcquireMessage(ctx)
+}
+
+func (cc *ClientConn) ReleaseMessage(m *pool.Message) {
+	cc.session.messagePool.ReleaseMessage(m)
 }

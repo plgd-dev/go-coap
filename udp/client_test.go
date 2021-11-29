@@ -704,9 +704,9 @@ func TestClientKeepAliveMonitor(t *testing.T) {
 
 	var checkCloseWg sync.WaitGroup
 	defer checkCloseWg.Wait()
+	checkCloseWg.Add(2)
 	sd := NewServer(
 		WithOnNewClientConn(func(cc *client.ClientConn) {
-			checkCloseWg.Add(1)
 			cc.AddOnClose(func() {
 				checkCloseWg.Done()
 			})
@@ -744,7 +744,6 @@ func TestClientKeepAliveMonitor(t *testing.T) {
 		WithPeriodicRunner(periodic.New(ctx.Done(), time.Millisecond*10)),
 	)
 	require.NoError(t, err)
-	checkCloseWg.Add(1)
 	cc.AddOnClose(func() {
 		checkCloseWg.Done()
 	})

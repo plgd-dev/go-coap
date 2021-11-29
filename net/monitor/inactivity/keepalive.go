@@ -6,7 +6,6 @@ import (
 
 type KeepAlive struct {
 	pongToken uint64
-	sendToken uint64
 	numFails  uint32
 
 	maxRetries uint32

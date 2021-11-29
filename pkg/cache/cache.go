@@ -76,7 +76,7 @@ func (c *Cache) Delete(key interface{}) {
 	c.data.Delete(key)
 }
 
-func (c *Cache) HandleExpiredElements(now time.Time) {
+func (c *Cache) CheckExpirations(now time.Time) {
 	m := make(map[interface{}]*Element)
 	c.data.Range(func(key, value interface{}) bool {
 		m[key] = value.(*Element)

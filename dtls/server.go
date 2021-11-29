@@ -223,10 +223,7 @@ func handleInactivityMonitors(now time.Time, connections *sync.Map) {
 		case <-cc.Context().Done():
 			continue
 		default:
-			cc.InactivityMonitor().CheckInactivity(cc)
-			if cc.BlockwiseTransfer() != nil {
-				cc.BlockwiseTransfer().HandleExpiredElements(now)
-			}
+			cc.CheckExpirations(now)
 		}
 	}
 }
