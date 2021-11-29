@@ -38,3 +38,10 @@ jobs:
       - name: Publish the coverage
         if: startsWith(matrix.os,'ubuntu')
         run: bash <(curl -s https://codecov.io/bash)
+      
+      - name: SonarCloud Scan
+        if: startsWith(matrix.os,'ubuntu')
+        uses: SonarSource/sonarcloud-github-action@master
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}

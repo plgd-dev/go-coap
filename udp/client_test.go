@@ -14,6 +14,7 @@ import (
 	"github.com/plgd-dev/go-coap/v2/mux"
 	"github.com/plgd-dev/go-coap/v2/net/monitor/inactivity"
 	"github.com/plgd-dev/go-coap/v2/pkg/runner/periodic"
+	"golang.org/x/sync/semaphore"
 
 	"github.com/plgd-dev/go-coap/v2/message"
 	"github.com/plgd-dev/go-coap/v2/message/codes"
@@ -702,17 +703,12 @@ func TestClientKeepAliveMonitor(t *testing.T) {
 	require.NoError(t, err)
 	defer ld.Close()
 
-	var checkCloseWg sync.WaitGroup
-	defer checkCloseWg.Wait()
-	checkCloseWg.Add(2)
+	checkCloseWg := semaphore.NewWeighted(2)
+	err = checkCloseWg.Acquire(ctx, 2)
+	require.NoError(t, err)
 	sd := NewServer(
 		WithOnNewClientConn(func(cc *client.ClientConn) {
-			cc.AddOnClose(func() {
-				checkCloseWg.Done()
-			})
-		}),
-		WithInactivityMonitor(time.Millisecond*10, func(cc inactivity.ClientConn) {
-			cc.Close()
+			checkCloseWg.Release(1)
 		}),
 		WithGoPool(func(f func()) error {
 			time.Sleep(time.Millisecond * 500)
@@ -745,7 +741,7 @@ func TestClientKeepAliveMonitor(t *testing.T) {
 	)
 	require.NoError(t, err)
 	cc.AddOnClose(func() {
-		checkCloseWg.Done()
+		checkCloseWg.Release(1)
 	})
 
 	// send ping to create serverside connection
@@ -753,6 +749,7 @@ func TestClientKeepAliveMonitor(t *testing.T) {
 	defer cancel()
 	cc.Ping(ctx)
 
-	checkCloseWg.Wait()
+	err = checkCloseWg.Acquire(ctx, 2)
+	require.NoError(t, err)
 	require.True(t, inactivityDetected)
 }
