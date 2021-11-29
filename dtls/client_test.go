@@ -201,7 +201,7 @@ func TestClientConnGetSeparateMessage(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*3600)
 	defer cancel()
 
-	req, err := client.NewGetRequest(ctx, "/a")
+	req, err := client.NewGetRequest(ctx, pool.New(0, 0), "/a")
 	require.NoError(t, err)
 	req.SetType(udpMessage.Confirmable)
 	req.SetMessageID(udpMessage.GetMID())

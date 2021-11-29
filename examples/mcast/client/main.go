@@ -73,10 +73,11 @@ func main() {
 	stable := 0
 	minTimeout := time.Second * 10
 	timeout := minTimeout
+	messagePool := pool.New(1024, 1600)
 
 	var previousDuplicit sync.Map
 	d := func() {
-		s := udp.NewServer(udp.WithTransmission(time.Second, timeout/2, 2))
+		s := udp.NewServer(udp.WithTransmission(time.Second, timeout/2, 2), udp.WithMessagePool(messagePool))
 		var wg sync.WaitGroup
 		defer wg.Wait()
 		defer s.Stop()
@@ -93,7 +94,7 @@ func main() {
 
 		var duplicit sync.Map
 
-		req, err := client.NewGetRequest(ctx, "/oic/res") /* msg.Option{
+		req, err := client.NewGetRequest(ctx, messagePool, "/oic/res") /* msg.Option{
 			ID:    msg.URIQuery,
 			Value: []byte("rt=oic.wk.d"),
 		}*/
@@ -102,7 +103,7 @@ func main() {
 		}
 		req.SetMessageID(message.GetMID())
 		req.SetType(message.NonConfirmable)
-		defer pool.ReleaseMessage(req)
+		defer messagePool.ReleaseMessage(req)
 
 		err = s.DiscoveryRequest(req, "224.0.1.187:5683", func(cc *client.ClientConn, resp *pool.Message) {
 			_, loaded := duplicit.LoadOrStore(cc.RemoteAddr().String(), true)
