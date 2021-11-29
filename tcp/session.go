@@ -7,6 +7,7 @@ import (
 	"net"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/plgd-dev/go-coap/v2/message"
 	"github.com/plgd-dev/go-coap/v2/message/codes"
@@ -34,6 +35,8 @@ type Session struct {
 	errors                          ErrorFunc
 	closeSocket                     bool
 	inactivityMonitor               inactivity.Monitor
+	connectionCacheSize             uint16
+	messagePool                     *pool.Pool
 
 	tokenHandlerContainer *HandlerContainer
 	midHandlerContainer   *HandlerContainer
@@ -65,6 +68,8 @@ func NewSession(
 	disableTCPSignalMessageCSM bool,
 	closeSocket bool,
 	inactivityMonitor inactivity.Monitor,
+	connectionCacheSize uint16,
+	messagePool *pool.Pool,
 ) *Session {
 	ctx, cancel := context.WithCancel(ctx)
 	if errors == nil {
@@ -90,6 +95,8 @@ func NewSession(
 		closeSocket:                     closeSocket,
 		inactivityMonitor:               inactivityMonitor,
 		done:                            make(chan struct{}),
+		connectionCacheSize:             connectionCacheSize,
+		messagePool:                     messagePool,
 	}
 	s.ctx.Store(&ctx)
 
@@ -238,7 +245,7 @@ func (b *bwResponseWriter) Message() blockwise.Message {
 }
 
 func (b *bwResponseWriter) SetMessage(m blockwise.Message) {
-	pool.ReleaseMessage(b.w.response)
+	b.w.cc.session.messagePool.ReleaseMessage(b.w.response)
 	b.w.response = m.(*pool.Message)
 }
 
@@ -255,13 +262,13 @@ func (s *Session) TokenHandler() *HandlerContainer {
 }
 
 func (s *Session) processReq(req *pool.Message, cc *ClientConn, handler func(w *ResponseWriter, r *pool.Message)) {
-	origResp := pool.AcquireMessage(s.Context())
+	origResp := s.messagePool.AcquireMessage(s.Context())
 	origResp.SetToken(req.Token())
 	w := NewResponseWriter(origResp, cc, req.Options())
 	handler(w, req)
-	defer pool.ReleaseMessage(w.response)
+	defer s.messagePool.ReleaseMessage(w.response)
 	if !req.IsHijacked() {
-		pool.ReleaseMessage(req)
+		s.messagePool.ReleaseMessage(req)
 	}
 	if w.response.IsModified() {
 		err := s.WriteMessage(w.response)
@@ -285,10 +292,10 @@ func (s *Session) processBuffer(buffer *bytes.Buffer, cc *ClientConn) error {
 		if buffer.Len() < hdr.TotalLen {
 			return nil
 		}
-		req := pool.AcquireMessage(s.Context())
+		req := s.messagePool.AcquireMessage(s.Context())
 		readed, err := req.Unmarshal(buffer.Bytes()[:hdr.TotalLen])
 		if err != nil {
-			pool.ReleaseMessage(req)
+			s.messagePool.ReleaseMessage(req)
 			return fmt.Errorf("cannot unmarshal with header: %w", err)
 		}
 		if readed == buffer.Len() {
@@ -336,16 +343,16 @@ func (s *Session) sendCSM() error {
 	if err != nil {
 		return fmt.Errorf("cannot get token: %w", err)
 	}
-	req := pool.AcquireMessage(s.Context())
-	defer pool.ReleaseMessage(req)
+	req := s.messagePool.AcquireMessage(s.Context())
+	defer s.messagePool.ReleaseMessage(req)
 	req.SetCode(codes.CSM)
 	req.SetToken(token)
 	return s.WriteMessage(req)
 }
 
 func (s *Session) sendPong(token message.Token) error {
-	req := pool.AcquireMessage(s.Context())
-	defer pool.ReleaseMessage(req)
+	req := s.messagePool.AcquireMessage(s.Context())
+	defer s.messagePool.ReleaseMessage(req)
 	req.SetCode(codes.Pong)
 	req.SetToken(token)
 	return s.WriteMessage(req)
@@ -366,12 +373,15 @@ func (s *Session) Run(cc *ClientConn) (err error) {
 	if s.errSendCSM != nil {
 		return s.errSendCSM
 	}
-	buffer := bytes.NewBuffer(make([]byte, 0, 1024))
-	readBuf := make([]byte, 1024)
+	buffer := bytes.NewBuffer(make([]byte, 0, s.connectionCacheSize))
+	readBuf := make([]byte, s.connectionCacheSize)
 	for {
 		err = s.processBuffer(buffer, cc)
 		if err != nil {
 			return err
+		}
+		if buffer.Len() == 0 && buffer.Cap() > int(s.connectionCacheSize) {
+			buffer = bytes.NewBuffer(make([]byte, 0, s.connectionCacheSize))
 		}
 		readLen, err := s.connection.ReadWithContext(s.Context(), readBuf)
 		if err != nil {
@@ -380,5 +390,13 @@ func (s *Session) Run(cc *ClientConn) (err error) {
 		if readLen > 0 {
 			buffer.Write(readBuf[:readLen])
 		}
+	}
+}
+
+// CheckExpirations checks and remove expired items from caches.
+func (s *Session) CheckExpirations(now time.Time, cc *ClientConn) {
+	s.inactivityMonitor.CheckInactivity(now, cc)
+	if s.blockWise != nil {
+		s.blockWise.CheckExpirations(now)
 	}
 }

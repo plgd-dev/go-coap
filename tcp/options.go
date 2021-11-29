@@ -9,6 +9,7 @@ import (
 	"github.com/plgd-dev/go-coap/v2/net/blockwise"
 	"github.com/plgd-dev/go-coap/v2/net/monitor/inactivity"
 	"github.com/plgd-dev/go-coap/v2/pkg/runner/periodic"
+	"github.com/plgd-dev/go-coap/v2/tcp/message/pool"
 )
 
 // HandlerFuncOpt handler function option.
@@ -320,5 +321,45 @@ func (o DialerOpt) applyDial(opts *dialOptions) {
 func WithDialer(dialer *net.Dialer) DialerOpt {
 	return DialerOpt{
 		dialer: dialer,
+	}
+}
+
+// ConnectionCacheOpt network option.
+type ConnectionCacheSizeOpt struct {
+	connectionCacheSize uint16
+}
+
+func (o ConnectionCacheSizeOpt) apply(opts *serverOptions) {
+	opts.connectionCacheSize = o.connectionCacheSize
+}
+
+func (o ConnectionCacheSizeOpt) applyDial(opts *dialOptions) {
+	opts.connectionCacheSize = o.connectionCacheSize
+}
+
+// WithConnectionCacheSize configure's maximum size of cache of read buffer.
+func WithConnectionCacheSize(connectionCacheSize uint16) ConnectionCacheSizeOpt {
+	return ConnectionCacheSizeOpt{
+		connectionCacheSize: connectionCacheSize,
+	}
+}
+
+// ConnectionCacheOpt network option.
+type MessagePoolOpt struct {
+	messagePool *pool.Pool
+}
+
+func (o MessagePoolOpt) apply(opts *serverOptions) {
+	opts.messagePool = o.messagePool
+}
+
+func (o MessagePoolOpt) applyDial(opts *dialOptions) {
+	opts.messagePool = o.messagePool
+}
+
+// WithMessagePool configure's message pool for acquire/releasing coap messages
+func WithMessagePool(messagePool *pool.Pool) MessagePoolOpt {
+	return MessagePoolOpt{
+		messagePool: messagePool,
 	}
 }

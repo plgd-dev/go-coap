@@ -73,6 +73,8 @@ var defaultServerOptions = serverOptions{
 			}
 		}()
 	},
+	connectionCacheSize: 2 * 1024,
+	messagePool:         pool.New(1024, 2048),
 }
 
 type serverOptions struct {
@@ -89,6 +91,8 @@ type serverOptions struct {
 	disablePeerTCPSignalMessageCSMs bool
 	disableTCPSignalMessageCSM      bool
 	periodicRunner                  periodic.Func
+	connectionCacheSize             uint16
+	messagePool                     *pool.Pool
 }
 
 // Listener defined used by coap
@@ -110,6 +114,8 @@ type Server struct {
 	disablePeerTCPSignalMessageCSMs bool
 	disableTCPSignalMessageCSM      bool
 	periodicRunner                  periodic.Func
+	connectionCacheSize             uint16
+	messagePool                     *pool.Pool
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -130,6 +136,9 @@ func NewServer(opt ...ServerOption) *Server {
 		opts.createInactivityMonitor = func() inactivity.Monitor {
 			return inactivity.NewNilMonitor()
 		}
+	}
+	if opts.messagePool == nil {
+		opts.messagePool = pool.New(0, 0)
 	}
 
 	return &Server{
@@ -153,6 +162,8 @@ func NewServer(opt ...ServerOption) *Server {
 		onNewClientConn:                 opts.onNewClientConn,
 		createInactivityMonitor:         opts.createInactivityMonitor,
 		periodicRunner:                  opts.periodicRunner,
+		connectionCacheSize:             opts.connectionCacheSize,
+		messagePool:                     opts.messagePool,
 	}
 }
 
@@ -199,10 +210,7 @@ func handleInactivityMonitors(now time.Time, connections *sync.Map) {
 		case <-cc.Context().Done():
 			continue
 		default:
-			cc.Session().inactivityMonitor.CheckInactivity(cc)
-			if cc.Session().blockWise != nil {
-				cc.Session().blockWise.HandleExpiredElements(now)
-			}
+			cc.CheckExpirations(now)
 		}
 	}
 }
@@ -276,8 +284,8 @@ func (s *Server) createClientConn(connection *coapNet.Conn, monitor inactivity.M
 	var blockWise *blockwise.BlockWise
 	if s.blockwiseEnable {
 		blockWise = blockwise.NewBlockWise(
-			bwAcquireMessage,
-			bwReleaseMessage,
+			bwCreateAcquireMessage(s.messagePool),
+			bwCreateReleaseMessage(s.messagePool),
 			s.blockwiseTransferTimeout,
 			s.errors,
 			false,
@@ -300,7 +308,10 @@ func (s *Server) createClientConn(connection *coapNet.Conn, monitor inactivity.M
 			s.disablePeerTCPSignalMessageCSMs,
 			s.disableTCPSignalMessageCSM,
 			true,
-			monitor),
+			monitor,
+			s.connectionCacheSize,
+			s.messagePool,
+		),
 		obsHandler, kitSync.NewMap(),
 	)
 

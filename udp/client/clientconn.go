@@ -137,10 +137,6 @@ func (cc *ClientConn) Session() Session {
 	return cc.session
 }
 
-func (cc *ClientConn) BlockwiseTransfer() *blockwise.BlockWise {
-	return cc.blockWise
-}
-
 func (cc *ClientConn) getMID() uint16 {
 	return uint16(atomic.AddUint32(&cc.msgID, 1))
 }
@@ -583,10 +579,6 @@ func (cc *ClientConn) CheckMyMessageID(req *pool.Message) {
 	}
 }
 
-func (cc *ClientConn) InactivityMonitor() inactivity.Monitor {
-	return cc.inactivityMonitor
-}
-
 func (cc *ClientConn) Process(datagram []byte) error {
 	if cc.session.MaxMessageSize() >= 0 && len(datagram) > cc.session.MaxMessageSize() {
 		return fmt.Errorf("max message size(%v) was exceeded %v", cc.session.MaxMessageSize(), len(datagram))
@@ -721,4 +713,12 @@ func (cc *ClientConn) SetContextValue(key interface{}, val interface{}) {
 // Done signalizes that connection is not more processed.
 func (cc *ClientConn) Done() <-chan struct{} {
 	return cc.session.Done()
+}
+
+// CheckExpirations checks and remove expired items from caches.
+func (cc *ClientConn) CheckExpirations(now time.Time) {
+	cc.inactivityMonitor.CheckInactivity(now, cc)
+	if cc.blockWise != nil {
+		cc.blockWise.CheckExpirations(now)
+	}
 }

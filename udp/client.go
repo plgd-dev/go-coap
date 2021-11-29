@@ -197,11 +197,7 @@ func Client(conn *net.UDPConn, opts ...DialOption) *client.ClientConn {
 		cache,
 	)
 	cfg.periodicRunner(func(now time.Time) bool {
-		monitor.CheckInactivity(cc)
-		cache.HandleExpiredElements(now)
-		if cc.BlockwiseTransfer() != nil {
-			cc.BlockwiseTransfer().HandleExpiredElements(now)
-		}
+		cc.CheckExpirations(now)
 		return cc.Context().Err() == nil
 	})
 

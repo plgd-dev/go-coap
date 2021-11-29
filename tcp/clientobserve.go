@@ -91,18 +91,18 @@ func (o *Observation) Cancel(ctx context.Context) error {
 		// observation was already cleanup
 		return nil
 	}
-	req, err := NewGetRequest(ctx, o.path)
+	req, err := NewGetRequest(ctx, o.cc.session.messagePool, o.path)
 	if err != nil {
 		return fmt.Errorf("cannot cancel observation request: %w", err)
 	}
-	defer pool.ReleaseMessage(req)
+	defer o.cc.session.messagePool.ReleaseMessage(req)
 	req.SetObserve(1)
 	req.SetToken(o.token)
 	resp, err := o.cc.Do(req)
 	if err != nil {
 		return err
 	}
-	defer pool.ReleaseMessage(resp)
+	defer o.cc.session.messagePool.ReleaseMessage(resp)
 	if resp.Code() != codes.Content {
 		return fmt.Errorf("unexpected return code(%v)", resp.Code())
 	}
@@ -129,11 +129,11 @@ func (o *Observation) wantBeNotified(r *pool.Message) bool {
 
 // Observe subscribes for every change of resource on path.
 func (cc *ClientConn) Observe(ctx context.Context, path string, observeFunc func(req *pool.Message), opts ...message.Option) (*Observation, error) {
-	req, err := NewGetRequest(ctx, path, opts...)
+	req, err := NewGetRequest(ctx, cc.session.messagePool, path, opts...)
 	if err != nil {
 		return nil, fmt.Errorf("cannot create observe request: %w", err)
 	}
-	defer pool.ReleaseMessage(req)
+	defer cc.session.messagePool.ReleaseMessage(req)
 	token := req.Token()
 	req.SetObserve(0)
 

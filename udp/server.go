@@ -221,7 +221,7 @@ func (s *Server) Serve(l *coapNet.UDPConn) error {
 
 	s.periodicRunner(func(now time.Time) bool {
 		s.handleInactivityMonitors(now)
-		s.cache.HandleExpiredElements(now)
+		s.cache.CheckExpirations(now)
 		return s.ctx.Err() == nil
 	})
 
@@ -309,10 +309,7 @@ func (s *Server) handleInactivityMonitors(now time.Time) {
 			}
 			continue
 		default:
-			cc.InactivityMonitor().CheckInactivity(cc)
-			if cc.BlockwiseTransfer() != nil {
-				cc.BlockwiseTransfer().HandleExpiredElements(now)
-			}
+			cc.CheckExpirations(now)
 		}
 	}
 }
