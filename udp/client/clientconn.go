@@ -57,6 +57,7 @@ type ClientConn struct {
 	responseMsgCache        *cache.Cache
 	msgIdMutex              *MutexMap
 	inactivityMonitor       inactivity.Monitor
+	messagePool             *pool.Pool
 
 	tokenHandlerContainer *HandlerContainer
 	midHandlerContainer   *HandlerContainer
@@ -101,6 +102,7 @@ func NewClientConn(
 	getMID GetMIDFunc,
 	inactivityMonitor inactivity.Monitor,
 	responseMsgCache *cache.Cache,
+	messagePool *pool.Pool,
 ) *ClientConn {
 	if errors == nil {
 		errors = func(error) {}
@@ -130,6 +132,7 @@ func NewClientConn(
 		msgIdMutex:            NewMutexMap(),
 		responseMsgCache:      responseMsgCache,
 		inactivityMonitor:     inactivityMonitor,
+		messagePool:           messagePool,
 	}
 }
 
@@ -276,12 +279,12 @@ func (cc *ClientConn) WriteMessage(req *pool.Message) error {
 	})
 }
 
-func newCommonRequest(ctx context.Context, code codes.Code, path string, opts ...message.Option) (*pool.Message, error) {
+func newCommonRequest(ctx context.Context, messagePool *pool.Pool, code codes.Code, path string, opts ...message.Option) (*pool.Message, error) {
 	token, err := message.GetToken()
 	if err != nil {
 		return nil, fmt.Errorf("cannot get token: %w", err)
 	}
-	req := pool.AcquireMessage(ctx)
+	req := messagePool.AcquireMessage(ctx)
 	req.SetCode(code)
 	req.SetToken(token)
 	req.ResetOptionsTo(opts)
@@ -293,8 +296,8 @@ func newCommonRequest(ctx context.Context, code codes.Code, path string, opts ..
 // NewGetRequest creates get request.
 //
 // Use ctx to set timeout.
-func NewGetRequest(ctx context.Context, path string, opts ...message.Option) (*pool.Message, error) {
-	return newCommonRequest(ctx, codes.GET, path, opts...)
+func NewGetRequest(ctx context.Context, messagePool *pool.Pool, path string, opts ...message.Option) (*pool.Message, error) {
+	return newCommonRequest(ctx, messagePool, codes.GET, path, opts...)
 }
 
 // Get issues a GET to the specified path.
@@ -304,11 +307,11 @@ func NewGetRequest(ctx context.Context, path string, opts ...message.Option) (*p
 // An error is returned if by failure to speak COAP (such as a network connectivity problem).
 // Any status code doesn't cause an error.
 func (cc *ClientConn) Get(ctx context.Context, path string, opts ...message.Option) (*pool.Message, error) {
-	req, err := NewGetRequest(ctx, path, opts...)
+	req, err := NewGetRequest(ctx, cc.messagePool, path, opts...)
 	if err != nil {
 		return nil, fmt.Errorf("cannot create get request: %w", err)
 	}
-	defer pool.ReleaseMessage(req)
+	defer cc.ReleaseMessage(req)
 	return cc.Do(req)
 }
 
@@ -320,8 +323,8 @@ func (cc *ClientConn) Get(ctx context.Context, path string, opts ...message.Opti
 // Any status code doesn't cause an error.
 //
 // If payload is nil then content format is not used.
-func NewPostRequest(ctx context.Context, path string, contentFormat message.MediaType, payload io.ReadSeeker, opts ...message.Option) (*pool.Message, error) {
-	req, err := newCommonRequest(ctx, codes.POST, path, opts...)
+func NewPostRequest(ctx context.Context, messagePool *pool.Pool, path string, contentFormat message.MediaType, payload io.ReadSeeker, opts ...message.Option) (*pool.Message, error) {
+	req, err := newCommonRequest(ctx, messagePool, codes.POST, path, opts...)
 	if err != nil {
 		return nil, err
 	}
@@ -341,11 +344,11 @@ func NewPostRequest(ctx context.Context, path string, contentFormat message.Medi
 //
 // If payload is nil then content format is not used.
 func (cc *ClientConn) Post(ctx context.Context, path string, contentFormat message.MediaType, payload io.ReadSeeker, opts ...message.Option) (*pool.Message, error) {
-	req, err := NewPostRequest(ctx, path, contentFormat, payload, opts...)
+	req, err := NewPostRequest(ctx, cc.messagePool, path, contentFormat, payload, opts...)
 	if err != nil {
 		return nil, fmt.Errorf("cannot create post request: %w", err)
 	}
-	defer pool.ReleaseMessage(req)
+	defer cc.ReleaseMessage(req)
 	return cc.Do(req)
 }
 
@@ -354,8 +357,8 @@ func (cc *ClientConn) Post(ctx context.Context, path string, contentFormat messa
 // Use ctx to set timeout.
 //
 // If payload is nil then content format is not used.
-func NewPutRequest(ctx context.Context, path string, contentFormat message.MediaType, payload io.ReadSeeker, opts ...message.Option) (*pool.Message, error) {
-	req, err := newCommonRequest(ctx, codes.PUT, path, opts...)
+func NewPutRequest(ctx context.Context, messagePool *pool.Pool, path string, contentFormat message.MediaType, payload io.ReadSeeker, opts ...message.Option) (*pool.Message, error) {
+	req, err := newCommonRequest(ctx, messagePool, codes.PUT, path, opts...)
 	if err != nil {
 		return nil, err
 	}
@@ -375,30 +378,30 @@ func NewPutRequest(ctx context.Context, path string, contentFormat message.Media
 //
 // If payload is nil then content format is not used.
 func (cc *ClientConn) Put(ctx context.Context, path string, contentFormat message.MediaType, payload io.ReadSeeker, opts ...message.Option) (*pool.Message, error) {
-	req, err := NewPutRequest(ctx, path, contentFormat, payload, opts...)
+	req, err := NewPutRequest(ctx, cc.messagePool, path, contentFormat, payload, opts...)
 	if err != nil {
 		return nil, fmt.Errorf("cannot create put request: %w", err)
 	}
-	defer pool.ReleaseMessage(req)
+	defer cc.ReleaseMessage(req)
 	return cc.Do(req)
 }
 
 // NewDeleteRequest creates delete request.
 //
 // Use ctx to set timeout.
-func NewDeleteRequest(ctx context.Context, path string, opts ...message.Option) (*pool.Message, error) {
-	return newCommonRequest(ctx, codes.DELETE, path, opts...)
+func NewDeleteRequest(ctx context.Context, messagePool *pool.Pool, path string, opts ...message.Option) (*pool.Message, error) {
+	return newCommonRequest(ctx, messagePool, codes.DELETE, path, opts...)
 }
 
 // Delete deletes the resource identified by the request path.
 //
 // Use ctx to set timeout.
 func (cc *ClientConn) Delete(ctx context.Context, path string, opts ...message.Option) (*pool.Message, error) {
-	req, err := NewDeleteRequest(ctx, path, opts...)
+	req, err := NewDeleteRequest(ctx, cc.messagePool, path, opts...)
 	if err != nil {
 		return nil, fmt.Errorf("cannot create delete request: %w", err)
 	}
-	defer pool.ReleaseMessage(req)
+	defer cc.ReleaseMessage(req)
 	return cc.Do(req)
 }
 
@@ -435,8 +438,8 @@ func (cc *ClientConn) Ping(ctx context.Context) error {
 
 // AsyncPing sends ping and receivedPong will be called when pong arrives. It returns cancellation of ping operation.
 func (cc *ClientConn) AsyncPing(receivedPong func()) (func(), error) {
-	req := pool.AcquireMessage(cc.Context())
-	defer pool.ReleaseMessage(req)
+	req := cc.AcquireMessage(cc.Context())
+	defer cc.ReleaseMessage(req)
 	req.SetType(udpMessage.Confirmable)
 	req.SetCode(codes.Empty)
 	mid := cc.getMID()
@@ -486,7 +489,7 @@ func (b *bwResponseWriter) Message() blockwise.Message {
 }
 
 func (b *bwResponseWriter) SetMessage(m blockwise.Message) {
-	pool.ReleaseMessage(b.w.response)
+	b.w.cc.ReleaseMessage(b.w.response)
 	b.w.response = m.(*pool.Message)
 }
 
@@ -583,10 +586,10 @@ func (cc *ClientConn) Process(datagram []byte) error {
 	if cc.session.MaxMessageSize() >= 0 && len(datagram) > cc.session.MaxMessageSize() {
 		return fmt.Errorf("max message size(%v) was exceeded %v", cc.session.MaxMessageSize(), len(datagram))
 	}
-	req := pool.AcquireMessage(cc.Context())
+	req := cc.AcquireMessage(cc.Context())
 	_, err := req.Unmarshal(datagram)
 	if err != nil {
-		pool.ReleaseMessage(req)
+		cc.ReleaseMessage(req)
 		return err
 	}
 	req.SetSequence(cc.Sequence())
@@ -601,7 +604,7 @@ func (cc *ClientConn) Process(datagram []byte) error {
 		l := cc.msgIdMutex.Lock(reqMid)
 		defer l.Unlock()
 
-		origResp := pool.AcquireMessage(cc.Context())
+		origResp := cc.AcquireMessage(cc.Context())
 		origResp.SetToken(req.Token())
 		// If a request is sent in a Non-confirmable message, then the response
 		// is sent using a new Non-confirmable message, although the server may
@@ -609,9 +612,9 @@ func (cc *ClientConn) Process(datagram []byte) error {
 		origResp.SetType(req.Type())
 		w := NewResponseWriter(origResp, cc, req.Options())
 		if ok, err := cc.getResponseFromCache(req.MessageID(), w.response); ok {
-			defer pool.ReleaseMessage(w.response)
+			defer cc.ReleaseMessage(w.response)
 			if !req.IsHijacked() {
-				defer pool.ReleaseMessage(req)
+				defer cc.ReleaseMessage(req)
 			}
 			if req.Type() == udpMessage.Confirmable {
 				w.response.SetType(udpMessage.Acknowledgement)
@@ -637,9 +640,9 @@ func (cc *ClientConn) Process(datagram []byte) error {
 		origResp.SetModified(false)
 		cc.handle(w, req)
 
-		defer pool.ReleaseMessage(w.response)
+		defer cc.ReleaseMessage(w.response)
 		if !req.IsHijacked() {
-			pool.ReleaseMessage(req)
+			cc.ReleaseMessage(req)
 		}
 
 		if w.response.IsModified() && (w.response.Type() == udpMessage.Reset || w.response.Code() == codes.Empty) {
@@ -659,8 +662,8 @@ func (cc *ClientConn) Process(datagram []byte) error {
 			return
 		} else if reqType == udpMessage.Confirmable {
 			// send separate message to confirm received message.
-			separateMessage := pool.AcquireMessage(cc.Context())
-			defer pool.ReleaseMessage(separateMessage)
+			separateMessage := cc.AcquireMessage(cc.Context())
+			defer cc.ReleaseMessage(separateMessage)
 			separateMessage.SetCode(codes.Empty)
 			separateMessage.SetType(udpMessage.Acknowledgement)
 			separateMessage.SetMessageID(reqMid)
@@ -721,4 +724,12 @@ func (cc *ClientConn) CheckExpirations(now time.Time) {
 	if cc.blockWise != nil {
 		cc.blockWise.CheckExpirations(now)
 	}
+}
+
+func (cc *ClientConn) AcquireMessage(ctx context.Context) *pool.Message {
+	return cc.messagePool.AcquireMessage(ctx)
+}
+
+func (cc *ClientConn) ReleaseMessage(m *pool.Message) {
+	cc.messagePool.ReleaseMessage(m)
 }

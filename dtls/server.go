@@ -79,6 +79,7 @@ var defaultServerOptions = serverOptions{
 			}
 		}()
 	},
+	messagePool: pool.New(1024, 1600),
 }
 
 type serverOptions struct {
@@ -98,6 +99,7 @@ type serverOptions struct {
 	transmissionMaxRetransmit      int
 	getMID                         GetMIDFunc
 	periodicRunner                 periodic.Func
+	messagePool                    *pool.Pool
 }
 
 // Listener defined used by coap
@@ -123,6 +125,7 @@ type Server struct {
 	getMID                         GetMIDFunc
 	periodicRunner                 periodic.Func
 	cache                          *cache.Cache
+	messagePool                    *pool.Pool
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -151,6 +154,9 @@ func NewServer(opt ...ServerOption) *Server {
 			return inactivity.NewNilMonitor()
 		}
 	}
+	if opts.messagePool == nil {
+		opts.messagePool = pool.New(0, 0)
+	}
 
 	return &Server{
 		ctx:            ctx,
@@ -177,6 +183,7 @@ func NewServer(opt ...ServerOption) *Server {
 		getMID:                         opts.getMID,
 		periodicRunner:                 opts.periodicRunner,
 		cache:                          cache.NewCache(),
+		messagePool:                    opts.messagePool,
 	}
 }
 
@@ -297,8 +304,8 @@ func (s *Server) createClientConn(connection *coapNet.Conn, monitor inactivity.M
 	var blockWise *blockwise.BlockWise
 	if s.blockwiseEnable {
 		blockWise = blockwise.NewBlockWise(
-			bwAcquireMessage,
-			bwReleaseMessage,
+			bwCreateAcquireMessage(s.messagePool),
+			bwCreateReleaseMessage(s.messagePool),
 			s.blockwiseTransferTimeout,
 			s.errors,
 			false,
@@ -329,6 +336,7 @@ func (s *Server) createClientConn(connection *coapNet.Conn, monitor inactivity.M
 		s.getMID,
 		monitor,
 		s.cache,
+		s.messagePool,
 	)
 
 	return cc

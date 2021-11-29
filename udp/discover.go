@@ -27,13 +27,13 @@ type MulticastOption interface {
 // For unicast there is a difference against the Dial. The Dial is connection-oriented and it means that, if you send a request to an address, the peer must send the response from the same
 // address where was request sent. For Discover it allows the client to send a response from another address where was request send.
 func (s *Server) Discover(ctx context.Context, address, path string, receiverFunc func(cc *client.ClientConn, resp *pool.Message), opts ...MulticastOption) error {
-	req, err := client.NewGetRequest(ctx, path)
+	req, err := client.NewGetRequest(ctx, s.messagePool, path)
 	if err != nil {
 		return fmt.Errorf("cannot create discover request: %w", err)
 	}
 	req.SetMessageID(s.getMID())
 	req.SetType(message.NonConfirmable)
-	defer pool.ReleaseMessage(req)
+	defer s.messagePool.ReleaseMessage(req)
 	return s.DiscoveryRequest(req, address, receiverFunc, opts...)
 }
 

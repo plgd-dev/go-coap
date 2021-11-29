@@ -75,6 +75,7 @@ var defaultServerOptions = serverOptions{
 			}
 		}()
 	},
+	messagePool: pool.New(1024, 1600),
 }
 
 type serverOptions struct {
@@ -93,6 +94,7 @@ type serverOptions struct {
 	transmissionMaxRetransmit      int
 	getMID                         GetMIDFunc
 	periodicRunner                 periodic.Func
+	messagePool                    *pool.Pool
 }
 
 type Server struct {
@@ -125,6 +127,7 @@ type Server struct {
 	doneCancel     context.CancelFunc
 	cache          *cache.Cache
 	periodicRunner periodic.Func
+	messagePool    *pool.Pool
 }
 
 func NewServer(opt ...ServerOption) *Server {
@@ -145,6 +148,9 @@ func NewServer(opt ...ServerOption) *Server {
 		opts.createInactivityMonitor = func() inactivity.Monitor {
 			return inactivity.NewNilMonitor()
 		}
+	}
+	if opts.messagePool == nil {
+		opts.messagePool = pool.New(0, 0)
 	}
 
 	ctx, cancel := context.WithCancel(opts.ctx)
@@ -181,6 +187,7 @@ func NewServer(opt ...ServerOption) *Server {
 		doneCtx:                        doneCtx,
 		doneCancel:                     doneCancel,
 		cache:                          cache.NewCache(),
+		messagePool:                    opts.messagePool,
 
 		conns: make(map[string]*client.ClientConn),
 	}
@@ -332,12 +339,12 @@ func (s *Server) getOrCreateClientConn(UDPConn *coapNet.UDPConn, raddr *net.UDPA
 		var blockWise *blockwise.BlockWise
 		if s.blockwiseEnable {
 			blockWise = blockwise.NewBlockWise(
-				bwAcquireMessage,
-				bwReleaseMessage,
+				bwCreateAcquireMessage(s.messagePool),
+				bwCreateReleaseMessage(s.messagePool),
 				s.blockwiseTransferTimeout,
 				s.errors,
 				false,
-				bwCreateHandlerFunc(s.multicastRequests),
+				bwCreateHandlerFunc(s.messagePool, s.multicastRequests),
 			)
 		}
 		obsHandler := client.NewHandlerContainer()
@@ -372,6 +379,7 @@ func (s *Server) getOrCreateClientConn(UDPConn *coapNet.UDPConn, raddr *net.UDPA
 			s.getMID,
 			monitor,
 			s.cache,
+			s.messagePool,
 		)
 		cc.SetContextValue(closeKey, func() {
 			session.close()

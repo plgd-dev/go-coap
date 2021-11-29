@@ -60,6 +60,7 @@ var defaultDialOptions = dialOptions{
 			}
 		}()
 	},
+	messagePool: pool.New(1024, 1600),
 }
 
 type dialOptions struct {
@@ -81,6 +82,7 @@ type dialOptions struct {
 	closeSocket                    bool
 	createInactivityMonitor        func() inactivity.Monitor
 	periodicRunner                 periodic.Func
+	messagePool                    *pool.Pool
 }
 
 // A DialOption sets options such as credentials, keepalive parameters, etc.
@@ -108,19 +110,23 @@ func Dial(target string, dtlsCfg *dtls.Config, opts ...DialOption) (*client.Clie
 	return Client(conn, opts...), nil
 }
 
-func bwAcquireMessage(ctx context.Context) blockwise.Message {
-	return pool.AcquireMessage(ctx)
+func bwCreateAcquireMessage(messagePool *pool.Pool) func(ctx context.Context) blockwise.Message {
+	return func(ctx context.Context) blockwise.Message {
+		return messagePool.AcquireMessage(ctx)
+	}
 }
 
-func bwReleaseMessage(m blockwise.Message) {
-	pool.ReleaseMessage(m.(*pool.Message))
+func bwCreateReleaseMessage(messagePool *pool.Pool) func(m blockwise.Message) {
+	return func(m blockwise.Message) {
+		messagePool.ReleaseMessage(m.(*pool.Message))
+	}
 }
 
-func bwCreateHandlerFunc(observatioRequests *kitSync.Map) func(token message.Token) (blockwise.Message, bool) {
+func bwCreateHandlerFunc(messagePool *pool.Pool, observatioRequests *kitSync.Map) func(token message.Token) (blockwise.Message, bool) {
 	return func(token message.Token) (blockwise.Message, bool) {
 		msg, ok := observatioRequests.LoadWithFunc(token.String(), func(v interface{}) interface{} {
 			r := v.(*pool.Message)
-			d := pool.AcquireMessage(r.Context())
+			d := messagePool.AcquireMessage(r.Context())
 			d.ResetOptionsTo(r.Options())
 			d.SetCode(r.Code())
 			d.SetToken(r.Token())
@@ -149,6 +155,9 @@ func Client(conn *dtls.Conn, opts ...DialOption) *client.ClientConn {
 			return inactivity.NewNilMonitor()
 		}
 	}
+	if cfg.messagePool == nil {
+		cfg.messagePool = pool.New(0, 0)
+	}
 	errorsFunc := cfg.errors
 	cfg.errors = func(err error) {
 		if errors.Is(err, context.Canceled) {
@@ -162,12 +171,12 @@ func Client(conn *dtls.Conn, opts ...DialOption) *client.ClientConn {
 	var blockWise *blockwise.BlockWise
 	if cfg.blockwiseEnable {
 		blockWise = blockwise.NewBlockWise(
-			bwAcquireMessage,
-			bwReleaseMessage,
+			bwCreateAcquireMessage(cfg.messagePool),
+			bwCreateReleaseMessage(cfg.messagePool),
 			cfg.blockwiseTransferTimeout,
 			cfg.errors,
 			false,
-			bwCreateHandlerFunc(observatioRequests),
+			bwCreateHandlerFunc(cfg.messagePool, observatioRequests),
 		)
 	}
 
@@ -191,6 +200,7 @@ func Client(conn *dtls.Conn, opts ...DialOption) *client.ClientConn {
 		// The client does not support activity monitoring yet
 		monitor,
 		cache.NewCache(),
+		cfg.messagePool,
 	)
 
 	cfg.periodicRunner(func(now time.Time) bool {

@@ -71,7 +71,7 @@ func (o *Observation) cleanUp() bool {
 	o.cc.observationTokenHandler.Pop(o.token)
 	registeredRequest, ok := o.cc.observationRequests.PullOut(o.token.String())
 	if ok {
-		pool.ReleaseMessage(registeredRequest.(*pool.Message))
+		o.cc.ReleaseMessage(registeredRequest.(*pool.Message))
 	}
 	return ok
 }
@@ -100,18 +100,18 @@ func (o *Observation) Cancel(ctx context.Context) error {
 		// observation was already cleanup
 		return nil
 	}
-	req, err := NewGetRequest(ctx, o.path)
+	req, err := NewGetRequest(ctx, o.cc.messagePool, o.path)
 	if err != nil {
 		return fmt.Errorf("cannot cancel observation request: %w", err)
 	}
-	defer pool.ReleaseMessage(req)
+	defer o.cc.ReleaseMessage(req)
 	req.SetObserve(1)
 	req.SetToken(o.token)
 	resp, err := o.cc.Do(req)
 	if err != nil {
 		return err
 	}
-	defer pool.ReleaseMessage(resp)
+	defer o.cc.ReleaseMessage(resp)
 	if resp.Code() != codes.Content {
 		return fmt.Errorf("unexpected return code(%v)", resp.Code())
 	}
@@ -140,7 +140,7 @@ func (o *Observation) wantBeNotified(r *pool.Message) bool {
 // Observe subscribes for every change of resource on path. It can return canceled observation and it happens when resource doesn't support observation.
 // This is detected when the first notification doesn't contains observe option.
 func (cc *ClientConn) Observe(ctx context.Context, path string, observeFunc func(msg *pool.Message), opts ...message.Option) (*Observation, error) {
-	req, err := NewGetRequest(ctx, path, opts...)
+	req, err := NewGetRequest(ctx, cc.messagePool, path, opts...)
 	if err != nil {
 		return nil, fmt.Errorf("cannot create observe request: %w", err)
 	}

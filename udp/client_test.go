@@ -148,7 +148,7 @@ func TestClientConnGet(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second*3600)
 			defer cancel()
 
-			req, err := client.NewGetRequest(ctx, tt.args.path, tt.args.opts...)
+			req, err := client.NewGetRequest(ctx, pool.New(0, 0), tt.args.path, tt.args.opts...)
 			require.NoError(t, err)
 
 			req.SetType(tt.args.typ)
@@ -243,7 +243,7 @@ func TestClientConnGetSeparateMessage(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*3600)
 	defer cancel()
 
-	req, err := client.NewGetRequest(ctx, "/a")
+	req, err := client.NewGetRequest(ctx, pool.New(0, 0), "/a")
 	require.NoError(t, err)
 	req.SetType(udpMessage.Confirmable)
 	req.SetMessageID(udpMessage.GetMID())
@@ -628,7 +628,7 @@ func TestClientConnPing(t *testing.T) {
 		<-cc.Done()
 	}()
 
-	ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond*200)
+	ctx, cancel := context.WithTimeout(context.Background(), Timeout)
 	defer cancel()
 	err = cc.Ping(ctx)
 	require.NoError(t, err)
