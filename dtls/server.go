@@ -294,7 +294,8 @@ func (s *Server) Stop() {
 	s.cancel()
 	s.listenMutex.Lock()
 	l := s.listen
-	defer s.listenMutex.Unlock()
+	s.listen = nil
+	s.listenMutex.Unlock()
 	if l != nil {
 		l.Close()
 	}
