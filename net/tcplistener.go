@@ -4,13 +4,14 @@ import (
 	"context"
 	"fmt"
 	"net"
-	"sync/atomic"
+
+	"go.uber.org/atomic"
 )
 
 // TCPListener is a TCP network listener that provides accept with context.
 type TCPListener struct {
 	listener *net.TCPListener
-	closed   uint32
+	closed   atomic.Bool
 }
 
 func newNetTCPListen(network string, addr string) (*net.TCPListener, error) {
@@ -43,7 +44,7 @@ func (l *TCPListener) AcceptWithContext(ctx context.Context) (net.Conn, error) {
 		return nil, ctx.Err()
 	default:
 	}
-	if atomic.LoadUint32(&l.closed) == 1 {
+	if l.closed.Load() {
 		return nil, ErrListenerIsClosed
 	}
 	return l.listener.Accept()
@@ -56,7 +57,7 @@ func (l *TCPListener) Accept() (net.Conn, error) {
 
 // Close closes the connection.
 func (l *TCPListener) Close() error {
-	if !atomic.CompareAndSwapUint32(&l.closed, 0, 1) {
+	if !l.closed.CAS(false, true) {
 		return nil
 	}
 	return l.listener.Close()

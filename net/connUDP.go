@@ -6,8 +6,9 @@ import (
 	"net"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
+
+	"go.uber.org/atomic"
 
 	"golang.org/x/net/ipv4"
 	"golang.org/x/net/ipv6"
@@ -21,7 +22,7 @@ type UDPConn struct {
 	packetConn packetConn
 	errors     func(err error)
 	network    string
-	closed     uint32
+	closed     atomic.Bool
 
 	lock sync.Mutex
 }
@@ -201,7 +202,7 @@ func (c *UDPConn) Network() string {
 
 // Close closes the connection.
 func (c *UDPConn) Close() error {
-	if !atomic.CompareAndSwapUint32(&c.closed, 0, 1) {
+	if !c.closed.CAS(false, true) {
 		return nil
 	}
 	return c.connection.Close()
@@ -235,7 +236,7 @@ func (c *UDPConn) writeToAddr(multicastHopLimit int, iface net.Interface, srcAdd
 	if ip == nil {
 		return fmt.Errorf("cannot parse ip (%v) for iface %v", ip, iface.Name)
 	}
-	if atomic.LoadUint32(&c.closed) == 1 {
+	if c.closed.Load() {
 		return ErrConnectionIsClosed
 	}
 	_, err := p.WriteTo(buffer, &ControlMessage{
@@ -302,7 +303,7 @@ func (c *UDPConn) WriteWithContext(ctx context.Context, raddr *net.UDPAddr, buff
 		return ctx.Err()
 	default:
 	}
-	if atomic.LoadUint32(&c.closed) == 1 {
+	if c.closed.Load() {
 		return ErrConnectionIsClosed
 	}
 	n, err := WriteToUDP(c.connection, raddr, buffer)
@@ -324,7 +325,7 @@ func (c *UDPConn) ReadWithContext(ctx context.Context, buffer []byte) (int, *net
 			return -1, nil, ctx.Err()
 		default:
 		}
-		if atomic.LoadUint32(&c.closed) == 1 {
+		if c.closed.Load() {
 			return -1, nil, ErrConnectionIsClosed
 		}
 		n, s, err := c.connection.ReadFromUDP(buffer)

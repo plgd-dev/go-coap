@@ -19,6 +19,7 @@ import (
 	atomicTypes "go.uber.org/atomic"
 )
 
+// https://datatracker.ietf.org/doc/html/rfc7252#section-4.8.2
 const ExchangeLifetime = 247 * time.Second
 
 type HandlerFunc = func(*ResponseWriter, *pool.Message)
