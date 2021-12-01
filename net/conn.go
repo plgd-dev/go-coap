@@ -5,7 +5,8 @@ import (
 	"fmt"
 	"net"
 	"sync"
-	"sync/atomic"
+
+	"go.uber.org/atomic"
 )
 
 // Conn is a generic stream-oriented network connection that provides Read/Write with context.
@@ -13,7 +14,7 @@ import (
 // Multiple goroutines may invoke methods on a Conn simultaneously.
 type Conn struct {
 	connection       net.Conn
-	closed           uint32
+	closed           atomic.Bool
 	handshakeContext func(ctx context.Context) error
 	lock             sync.Mutex
 }
@@ -50,7 +51,7 @@ func (c *Conn) RemoteAddr() net.Addr {
 
 // Close closes the connection.
 func (c *Conn) Close() error {
-	if !atomic.CompareAndSwapUint32(&c.closed, 0, 1) {
+	if !c.closed.CAS(false, true) {
 		return nil
 	}
 	return c.connection.Close()
@@ -81,7 +82,7 @@ func (c *Conn) WriteWithContext(ctx context.Context, data []byte) error {
 			return ctx.Err()
 		default:
 		}
-		if atomic.LoadUint32(&c.closed) == 1 {
+		if c.closed.Load() {
 			return ErrConnectionIsClosed
 		}
 		n, err := c.connection.Write(data[written:])
@@ -113,7 +114,7 @@ func (c *Conn) ReadWithContext(ctx context.Context, buffer []byte) (int, error) 
 		return -1, ctx.Err()
 	default:
 	}
-	if atomic.LoadUint32(&c.closed) == 1 {
+	if c.closed.Load() {
 		return -1, ErrConnectionIsClosed
 	}
 	if err := c.handshake(ctx); err != nil {

@@ -4,8 +4,9 @@ import (
 	"context"
 	"fmt"
 	"net"
-	"sync/atomic"
 	"time"
+
+	"go.uber.org/atomic"
 
 	dtls "github.com/pion/dtls/v2"
 )
@@ -18,7 +19,7 @@ type connData struct {
 // DTLSListener is a DTLS listener that provides accept with context.
 type DTLSListener struct {
 	listener net.Listener
-	closed   uint32
+	closed   atomic.Bool
 }
 
 // NewDTLSListener creates dtls listener.
@@ -38,7 +39,7 @@ func NewDTLSListener(network string, addr string, dtlsCfg *dtls.Config) (*DTLSLi
 	}
 	dtlsCfg.ConnectContextMaker = func() (context.Context, func()) {
 		ctx, cancel := connectContextMaker()
-		if atomic.LoadUint32(&l.closed) > 0 {
+		if l.closed.Load() {
 			cancel()
 		}
 		return ctx, cancel
@@ -59,7 +60,7 @@ func (l *DTLSListener) AcceptWithContext(ctx context.Context) (net.Conn, error) 
 		return nil, ctx.Err()
 	default:
 	}
-	if atomic.LoadUint32(&l.closed) == 1 {
+	if l.closed.Load() {
 		return nil, ErrListenerIsClosed
 	}
 	c, err := l.listener.Accept()
@@ -79,7 +80,7 @@ func (l *DTLSListener) Accept() (net.Conn, error) {
 
 // Close closes the connection.
 func (l *DTLSListener) Close() error {
-	if !atomic.CompareAndSwapUint32(&l.closed, 0, 1) {
+	if !l.closed.CAS(false, true) {
 		return nil
 	}
 	return l.listener.Close()

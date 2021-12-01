@@ -5,14 +5,15 @@ import (
 	"crypto/tls"
 	"fmt"
 	"net"
-	"sync/atomic"
+
+	"go.uber.org/atomic"
 )
 
 // TLSListener is a TLS listener that provides accept with context.
 type TLSListener struct {
 	tcp      *net.TCPListener
 	listener net.Listener
-	closed   uint32
+	closed   atomic.Bool
 }
 
 // NewTLSListener creates tcp listener.
@@ -36,7 +37,7 @@ func (l *TLSListener) AcceptWithContext(ctx context.Context) (net.Conn, error) {
 		return nil, ctx.Err()
 	default:
 	}
-	if atomic.LoadUint32(&l.closed) == 1 {
+	if l.closed.Load() {
 		return nil, ErrListenerIsClosed
 	}
 	rw, err := l.listener.Accept()
@@ -53,7 +54,7 @@ func (l *TLSListener) Accept() (net.Conn, error) {
 
 // Close closes the connection.
 func (l *TLSListener) Close() error {
-	if !atomic.CompareAndSwapUint32(&l.closed, 0, 1) {
+	if !l.closed.CAS(false, true) {
 		return nil
 	}
 	return l.listener.Close()
