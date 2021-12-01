@@ -89,3 +89,11 @@ func (c *Cache) CheckExpirations(now time.Time) {
 		}
 	}
 }
+
+func (c *Cache) PullOutAll() map[interface{}]interface{} {
+	res := make(map[interface{}]interface{})
+	for key, value := range c.data.PullOutAll() {
+		res[key] = value.(*Element).Data()
+	}
+	return res
+}
