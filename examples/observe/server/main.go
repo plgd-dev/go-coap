@@ -54,8 +54,8 @@ func sendResponse(cc mux.Client, token []byte, subded time.Time, obs int64) erro
 
 func periodicTransmitter(cc mux.Client, token []byte) {
 	subded := time.Now()
-	obs := int64(2)
-	for {
+
+	for obs := int64(2); ; obs++ {
 		err := sendResponse(cc, token, subded, obs)
 		if err != nil {
 			log.Printf("Error on transmitter, stopping: %v", err)
