@@ -14,6 +14,7 @@ import (
 	"github.com/plgd-dev/go-coap/v2/message"
 	"github.com/plgd-dev/go-coap/v2/net/blockwise"
 	"github.com/plgd-dev/go-coap/v2/net/monitor/inactivity"
+	"github.com/plgd-dev/go-coap/v2/pkg/connections"
 	"github.com/plgd-dev/go-coap/v2/pkg/runner/periodic"
 	"github.com/plgd-dev/go-coap/v2/tcp/message/pool"
 	kitSync "github.com/plgd-dev/kit/v2/sync"
@@ -198,23 +199,6 @@ func (s *Server) checkAcceptError(err error) (bool, error) {
 	}
 }
 
-func handleInactivityMonitors(now time.Time, connections *sync.Map) {
-	m := make(map[interface{}]*ClientConn)
-	connections.Range(func(key, value interface{}) bool {
-		m[key] = value.(*ClientConn)
-		return true
-	})
-
-	for _, cc := range m {
-		select {
-		case <-cc.Context().Done():
-			continue
-		default:
-			cc.CheckExpirations(now)
-		}
-	}
-}
-
 func (s *Server) Serve(l Listener) error {
 	if s.blockwiseSZX > blockwise.SZXBERT {
 		return fmt.Errorf("invalid blockwiseSZX")
@@ -233,11 +217,12 @@ func (s *Server) Serve(l Listener) error {
 	var wg sync.WaitGroup
 	defer wg.Wait()
 
-	var connections sync.Map
+	connections := connections.New()
 	s.periodicRunner(func(now time.Time) bool {
-		handleInactivityMonitors(now, &connections)
+		connections.CheckExpirations(now)
 		return s.ctx.Err() == nil
 	})
+	defer connections.Close()
 
 	for {
 		rw, err := l.AcceptWithContext(s.ctx)
@@ -262,8 +247,8 @@ func (s *Server) Serve(l Listener) error {
 						s.onNewClientConn(cc, nil)
 					}
 				}
-				connections.Store(cc.RemoteAddr().String(), cc)
-				defer connections.Delete(cc.RemoteAddr().String())
+				connections.Store(cc)
+				defer connections.Delete(cc)
 				err := cc.Run()
 
 				if err != nil {
