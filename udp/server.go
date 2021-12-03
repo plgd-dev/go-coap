@@ -263,7 +263,12 @@ func (s *Server) Serve(l *coapNet.UDPConn) error {
 // Stop stops server without wait of ends Serve function.
 func (s *Server) Stop() {
 	s.cancel()
-	s.conn().Close()
+	s.listenMutex.Lock()
+	l := s.listen
+	s.listenMutex.Unlock()
+	if l != nil {
+		l.Close()
+	}
 	s.closeSessions()
 }
 
