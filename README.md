@@ -8,7 +8,7 @@
 [![GitHub stars](https://img.shields.io/github/stars/plgd-dev/go-coap)](https://github.com/plgd-dev/go-coap/stargazers)
 [![GitHub license](https://img.shields.io/github/license/plgd-dev/go-coap)](https://github.com/plgd-dev/go-coap/blob/master/LICENSE)
 [![GoDoc](https://godoc.org/github.com/plgd-dev/go-coap?status.svg)](https://godoc.org/github.com/plgd-dev/go-coap)
-[![Sourcegraph](https://sourcegraph.com/github.com/plgd-dev/go-coap/-/badge.svg)](https://sourcegraph.com/github.com/plgd-dev/go-coap?badge)
+[![Quality Gate Status](https://sonarcloud.io/api/project_badges/measure?project=plgd-dev_go-coap&metric=alert_status)](https://sonarcloud.io/summary/new_code?id=plgd-dev_go-coap)
 
 # Go-CoAP
 
