@@ -19,6 +19,7 @@ import (
 	"github.com/plgd-dev/go-coap/v2/tcp"
 	"github.com/plgd-dev/go-coap/v2/tcp/message/pool"
 	"github.com/stretchr/testify/require"
+	"golang.org/x/sync/semaphore"
 )
 
 func TestServerCleanUpConns(t *testing.T) {
@@ -231,13 +232,13 @@ func TestServerKeepAliveMonitor(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*8)
 	defer cancel()
 
-	var checkCloseWg sync.WaitGroup
-	defer checkCloseWg.Wait()
+	checkCloseWg := semaphore.NewWeighted(2)
+	err = checkCloseWg.Acquire(ctx, 2)
+	require.NoError(t, err)
 	sd := tcp.NewServer(
 		tcp.WithOnNewClientConn(func(cc *tcp.ClientConn, tlscon *tls.Conn) {
-			checkCloseWg.Add(1)
 			cc.AddOnClose(func() {
-				checkCloseWg.Done()
+				checkCloseWg.Release(1)
 			})
 		}),
 		tcp.WithKeepAlive(3, 100*time.Millisecond, func(cc inactivity.ClientConn) {
@@ -268,19 +269,18 @@ func TestServerKeepAliveMonitor(t *testing.T) {
 			return nil
 		}),
 	)
-
 	require.NoError(t, err)
-	checkCloseWg.Add(1)
 	cc.AddOnClose(func() {
-		checkCloseWg.Done()
+		checkCloseWg.Release(1)
 	})
 
 	// send ping to create serverside connection
-	ctx, cancel = context.WithTimeout(context.Background(), time.Second)
+	reqCtx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	_, err = cc.Get(ctx, "/tmp")
+	_, err = cc.Get(reqCtx, "/tmp")
 	require.NoError(t, err)
 
-	checkCloseWg.Wait()
+	err = checkCloseWg.Acquire(ctx, 2)
+	require.NoError(t, err)
 	require.True(t, inactivityDetected)
 }
