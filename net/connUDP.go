@@ -18,10 +18,10 @@ import (
 //
 // Multiple goroutines may invoke methods on a UDPConn simultaneously.
 type UDPConn struct {
-	connection *net.UDPConn
 	packetConn packetConn
-	errors     func(err error)
 	network    string
+	connection *net.UDPConn
+	errors     func(err error)
 	closed     atomic.Bool
 
 	lock sync.Mutex

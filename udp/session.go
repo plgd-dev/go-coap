@@ -15,19 +15,20 @@ import (
 type EventFunc = func()
 
 type Session struct {
-	connection     *coapNet.UDPConn
-	raddr          *net.UDPAddr
-	maxMessageSize int
-	closeSocket    bool
-
-	mutex   sync.Mutex
 	onClose []EventFunc
 
-	cancel context.CancelFunc
-	ctx    atomic.Value
+	ctx atomic.Value
 
 	doneCtx    context.Context
+	connection *coapNet.UDPConn
 	doneCancel context.CancelFunc
+
+	cancel         context.CancelFunc
+	raddr          *net.UDPAddr
+	maxMessageSize int
+
+	mutex       sync.Mutex
+	closeSocket bool
 }
 
 func NewSession(

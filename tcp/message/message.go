@@ -94,12 +94,11 @@ var signalAbortOptionDefs = map[message.OptionID]message.OptionDef{
 // TcpMessage is a CoAP MessageBase that can encode itself for Message
 // transport.
 type Message struct {
-	Code codes.Code
-
 	Token   []byte
 	Payload []byte
 
 	Options message.Options //Options must be sorted by ID
+	Code    codes.Code
 }
 
 func (m Message) Size() (int, error) {
@@ -230,9 +229,9 @@ func (m Message) MarshalTo(buf []byte) (int, error) {
 
 type MessageHeader struct {
 	Token     []byte
-	Code      codes.Code
 	HeaderLen int
 	TotalLen  int
+	Code      codes.Code
 }
 
 // Unmarshal infers information about a Message CoAP message from the first

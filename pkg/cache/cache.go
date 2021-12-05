@@ -11,8 +11,8 @@ func DefaultOnExpire(d interface{}) {
 }
 
 type Element struct {
-	data       interface{}
 	validUntil time.Time
+	data       interface{}
 	onExpire   func(d interface{})
 }
 

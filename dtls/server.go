@@ -85,22 +85,22 @@ var defaultServerOptions = serverOptions{
 
 type serverOptions struct {
 	ctx                            context.Context
-	maxMessageSize                 int
+	blockwiseTransferTimeout       time.Duration
 	handler                        HandlerFunc
 	errors                         ErrorFunc
 	goPool                         GoPoolFunc
 	createInactivityMonitor        func() inactivity.Monitor
-	blockwiseSZX                   blockwise.SZX
-	blockwiseEnable                bool
-	blockwiseTransferTimeout       time.Duration
+	periodicRunner                 periodic.Func
+	getMID                         GetMIDFunc
+	maxMessageSize                 int
 	onNewClientConn                OnNewClientConnFunc
 	heartBeat                      time.Duration
 	transmissionNStart             time.Duration
 	transmissionAcknowledgeTimeout time.Duration
 	transmissionMaxRetransmit      int
-	getMID                         GetMIDFunc
-	periodicRunner                 periodic.Func
 	messagePool                    *pool.Pool
+	blockwiseEnable                bool
+	blockwiseSZX                   blockwise.SZX
 }
 
 // Listener defined used by coap
@@ -110,13 +110,15 @@ type Listener interface {
 }
 
 type Server struct {
-	maxMessageSize                 int
-	handler                        HandlerFunc
-	errors                         ErrorFunc
-	goPool                         GoPoolFunc
-	createInactivityMonitor        func() inactivity.Monitor
-	blockwiseSZX                   blockwise.SZX
-	blockwiseEnable                bool
+	listen Listener
+
+	ctx                     context.Context
+	maxMessageSize          int
+	goPool                  GoPoolFunc
+	createInactivityMonitor func() inactivity.Monitor
+	errors                  ErrorFunc
+	cancel                  context.CancelFunc
+
 	blockwiseTransferTimeout       time.Duration
 	onNewClientConn                OnNewClientConnFunc
 	heartBeat                      time.Duration
@@ -128,11 +130,10 @@ type Server struct {
 	cache                          *cache.Cache
 	messagePool                    *pool.Pool
 
-	ctx    context.Context
-	cancel context.CancelFunc
-
-	listen      Listener
-	listenMutex sync.Mutex
+	handler         HandlerFunc
+	listenMutex     sync.Mutex
+	blockwiseEnable bool
+	blockwiseSZX    blockwise.SZX
 }
 
 func NewServer(opt ...ServerOption) *Server {

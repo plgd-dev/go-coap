@@ -80,31 +80,31 @@ var defaultServerOptions = serverOptions{
 
 type serverOptions struct {
 	ctx                            context.Context
-	maxMessageSize                 int
+	blockwiseTransferTimeout       time.Duration
 	handler                        HandlerFunc
 	errors                         ErrorFunc
 	goPool                         GoPoolFunc
 	createInactivityMonitor        func() inactivity.Monitor
-	blockwiseSZX                   blockwise.SZX
-	blockwiseEnable                bool
-	blockwiseTransferTimeout       time.Duration
+	periodicRunner                 periodic.Func
+	getMID                         GetMIDFunc
+	maxMessageSize                 int
 	onNewClientConn                OnNewClientConnFunc
 	transmissionNStart             time.Duration
 	transmissionAcknowledgeTimeout time.Duration
 	transmissionMaxRetransmit      int
-	getMID                         GetMIDFunc
-	periodicRunner                 periodic.Func
 	messagePool                    *pool.Pool
+	blockwiseEnable                bool
+	blockwiseSZX                   blockwise.SZX
 }
 
 type Server struct {
+	doneCtx                        context.Context
+	ctx                            context.Context
 	maxMessageSize                 int
-	handler                        HandlerFunc
-	errors                         ErrorFunc
 	goPool                         GoPoolFunc
 	createInactivityMonitor        func() inactivity.Monitor
-	blockwiseSZX                   blockwise.SZX
-	blockwiseEnable                bool
+	periodicRunner                 periodic.Func
+	cache                          *cache.Cache
 	blockwiseTransferTimeout       time.Duration
 	onNewClientConn                OnNewClientConnFunc
 	transmissionNStart             time.Duration
@@ -112,22 +112,23 @@ type Server struct {
 	transmissionMaxRetransmit      int
 	getMID                         GetMIDFunc
 
-	conns             map[string]*client.ClientConn
-	connsMutex        sync.Mutex
-	ctx               context.Context
+	errors            ErrorFunc
+	doneCancel        context.CancelFunc
+	handler           HandlerFunc
 	cancel            context.CancelFunc
 	serverStartedChan chan struct{}
 
 	multicastRequests *kitSync.Map
 	multicastHandler  *client.HandlerContainer
 
-	listen         *coapNet.UDPConn
-	listenMutex    sync.Mutex
-	doneCtx        context.Context
-	doneCancel     context.CancelFunc
-	cache          *cache.Cache
-	periodicRunner periodic.Func
-	messagePool    *pool.Pool
+	listen *coapNet.UDPConn
+
+	conns           map[string]*client.ClientConn
+	messagePool     *pool.Pool
+	connsMutex      sync.Mutex
+	listenMutex     sync.Mutex
+	blockwiseEnable bool
+	blockwiseSZX    blockwise.SZX
 }
 
 func NewServer(opt ...ServerOption) *Server {

@@ -127,9 +127,9 @@ const (
 )
 
 type OptionDef struct {
-	ValueFormat ValueFormat
 	MinLen      int
 	MaxLen      int
+	ValueFormat ValueFormat
 }
 
 var CoapOptionDefs = map[OptionID]OptionDef{
@@ -308,8 +308,8 @@ func marshalOptionHeader(buf []byte, delta, length int) (int, error) {
 }
 
 type Option struct {
-	ID    OptionID
 	Value []byte
+	ID    OptionID
 }
 
 func (o Option) MarshalValue(buf []byte) (int, error) {

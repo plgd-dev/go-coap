@@ -42,26 +42,27 @@ type Session interface {
 
 // ClientConn represents a virtual connection to a conceptual endpoint, to perform COAPs commands.
 type ClientConn struct {
+	session           Session
+	inactivityMonitor inactivity.Monitor
 	// This field needs to be the first in the struct to ensure proper word alignment on 32-bit platforms.
 	// See: https://golang.org/pkg/sync/atomic/#pkg-note-BUG
 	sequence                uint64
-	msgID                   uint32
-	session                 Session
 	handler                 HandlerFunc
 	observationTokenHandler *HandlerContainer
 	observationRequests     *kitSync.Map
 	transmission            *Transmission
-	blockwiseSZX            blockwise.SZX
-	blockWise               *blockwise.BlockWise
-	goPool                  GoPoolFunc
-	errors                  ErrorFunc
-	responseMsgCache        *cache.Cache
-	msgIdMutex              *MutexMap
-	inactivityMonitor       inactivity.Monitor
 	messagePool             *pool.Pool
+
+	blockWise        *blockwise.BlockWise
+	goPool           GoPoolFunc
+	errors           ErrorFunc
+	responseMsgCache *cache.Cache
+	msgIdMutex       *MutexMap
 
 	tokenHandlerContainer *HandlerContainer
 	midHandlerContainer   *HandlerContainer
+	msgID                 uint32
+	blockwiseSZX          blockwise.SZX
 }
 
 // Transmission is a threadsafe container for transmission related parameters

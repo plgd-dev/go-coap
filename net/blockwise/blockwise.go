@@ -173,16 +173,16 @@ type BlockWise struct {
 	receivingMessagesCache      *cache.Cache
 	sendingMessagesCache        *cache.Cache
 	errors                      func(error)
-	autoCleanUpResponseCache    bool
 	getSendedRequestFromOutside func(token message.Token) (Message, bool)
 	expiration                  time.Duration
 
-	bwSendedRequest *senderRequestMap
+	bwSendedRequest          *senderRequestMap
+	autoCleanUpResponseCache bool
 }
 
 type messageGuard struct {
-	*semaphore.Weighted
 	Message
+	*semaphore.Weighted
 }
 
 func newRequestGuard(request Message) *messageGuard {
@@ -337,8 +337,8 @@ func (b *BlockWise) Do(r Message, maxSzx SZX, maxMessageSize int, do func(req Me
 
 type writeMessageResponse struct {
 	request        Message
-	releaseMessage func(Message)
 	remoteAddr     net.Addr
+	releaseMessage func(Message)
 }
 
 func NewWriteRequestResponse(remoteAddr net.Addr, request Message, acquireMessage func(context.Context) Message, releaseMessage func(Message)) *writeMessageResponse {

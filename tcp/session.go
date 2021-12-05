@@ -21,38 +21,43 @@ import (
 type EventFunc func()
 
 type Session struct {
-	// This field needs to be the first in the struct to ensure proper word alignment on 32-bit platforms.
-	// See: https://golang.org/pkg/sync/atomic/#pkg-note-BUG
-	sequence   uint64
-	connection *coapNet.Conn
-
-	maxMessageSize                  int
-	peerMaxMessageSize              uint32
-	peerBlockWiseTranferEnabled     uint32
-	disablePeerTCPSignalMessageCSMs bool
-	disableTCPSignalMessageCSM      bool
-	goPool                          GoPoolFunc
-	errors                          ErrorFunc
-	closeSocket                     bool
-	inactivityMonitor               inactivity.Monitor
-	connectionCacheSize             uint16
-	messagePool                     *pool.Pool
-
-	tokenHandlerContainer *HandlerContainer
-	midHandlerContainer   *HandlerContainer
-	handler               HandlerFunc
-
-	blockwiseSZX blockwise.SZX
-	blockWise    *blockwise.BlockWise
-
-	mutex   sync.Mutex
 	onClose []EventFunc
 
-	cancel context.CancelFunc
-	ctx    atomic.Value
+	ctx atomic.Value
 
-	errSendCSM error
-	done       chan struct{}
+	inactivityMonitor inactivity.Monitor
+
+	errSendCSM          error
+	midHandlerContainer *HandlerContainer
+
+	cancel context.CancelFunc
+
+	maxMessageSize int
+	goPool         GoPoolFunc
+	errors         ErrorFunc
+	blockWise      *blockwise.BlockWise
+
+	connection *coapNet.Conn
+
+	handler HandlerFunc
+
+	messagePool *pool.Pool
+
+	tokenHandlerContainer *HandlerContainer
+	// This field needs to be the first in the struct to ensure proper word alignment on 32-bit platforms.
+	// See: https://golang.org/pkg/sync/atomic/#pkg-note-BUG
+	sequence uint64
+	done     chan struct{}
+
+	mutex                           sync.Mutex
+	peerBlockWiseTranferEnabled     uint32
+	peerMaxMessageSize              uint32
+	connectionCacheSize             uint16
+	disableTCPSignalMessageCSM      bool
+	disablePeerTCPSignalMessageCSMs bool
+
+	blockwiseSZX blockwise.SZX
+	closeSocket  bool
 }
 
 func NewSession(

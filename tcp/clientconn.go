@@ -59,24 +59,24 @@ var defaultDialOptions = dialOptions{
 }
 
 type dialOptions struct {
+	net                             string
 	ctx                             context.Context
 	maxMessageSize                  int
 	handler                         HandlerFunc
-	errors                          ErrorFunc
 	goPool                          GoPoolFunc
 	dialer                          *net.Dialer
-	net                             string
-	blockwiseSZX                    blockwise.SZX
-	blockwiseEnable                 bool
-	blockwiseTransferTimeout        time.Duration
-	disablePeerTCPSignalMessageCSMs bool
-	disableTCPSignalMessageCSM      bool
 	tlsCfg                          *tls.Config
-	closeSocket                     bool
-	createInactivityMonitor         func() inactivity.Monitor
 	periodicRunner                  periodic.Func
-	connectionCacheSize             uint16
+	createInactivityMonitor         func() inactivity.Monitor
+	errors                          ErrorFunc
+	blockwiseTransferTimeout        time.Duration
 	messagePool                     *pool.Pool
+	connectionCacheSize             uint16
+	disablePeerTCPSignalMessageCSMs bool
+	closeSocket                     bool
+	blockwiseEnable                 bool
+	blockwiseSZX                    blockwise.SZX
+	disableTCPSignalMessageCSM      bool
 }
 
 // A DialOption sets options such as credentials, keepalive parameters, etc.

@@ -15,10 +15,10 @@ func messageToGuardTransferKey(msg Message) string {
 }
 
 type senderRequest struct {
-	*messageGuard
 	transferKey string
-	lock        bool
-	release     func()
+	*messageGuard
+	release func()
+	lock    bool
 }
 
 func setTypeFrom(to Message, from Message) {

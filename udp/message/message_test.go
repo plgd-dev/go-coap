@@ -173,7 +173,7 @@ func TestUnmarshalMessage(t *testing.T) {
 		Code:    codes.GET,
 		Payload: []byte{0x1},
 		Token:   []byte{0x1, 0x2, 0x3},
-		Options: []message.Option{{11, []byte{97}}, {11, []byte{98}}, {11, []byte{99}}, {11, []byte{100}}, {11, []byte{101}}, {12, []byte{}}},
+		Options: []message.Option{{ID: 11, Value: []byte{97}}, {ID: 11, Value: []byte{98}}, {ID: 11, Value: []byte{99}}, {ID: 11, Value: []byte{100}}, {ID: 11, Value: []byte{101}}, {ID: 12, Value: []byte{}}},
 	})
 
 }

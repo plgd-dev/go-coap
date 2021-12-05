@@ -80,20 +80,20 @@ var defaultServerOptions = serverOptions{
 
 type serverOptions struct {
 	ctx                             context.Context
-	maxMessageSize                  int
+	onNewClientConn                 OnNewClientConnFunc
 	handler                         HandlerFunc
 	errors                          ErrorFunc
 	goPool                          GoPoolFunc
 	createInactivityMonitor         func() inactivity.Monitor
-	blockwiseSZX                    blockwise.SZX
-	blockwiseEnable                 bool
+	periodicRunner                  periodic.Func
+	maxMessageSize                  int
 	blockwiseTransferTimeout        time.Duration
-	onNewClientConn                 OnNewClientConnFunc
+	messagePool                     *pool.Pool
+	connectionCacheSize             uint16
 	disablePeerTCPSignalMessageCSMs bool
 	disableTCPSignalMessageCSM      bool
-	periodicRunner                  periodic.Func
-	connectionCacheSize             uint16
-	messagePool                     *pool.Pool
+	blockwiseSZX                    blockwise.SZX
+	blockwiseEnable                 bool
 }
 
 // Listener defined used by coap
@@ -103,26 +103,27 @@ type Listener interface {
 }
 
 type Server struct {
-	maxMessageSize                  int
-	handler                         HandlerFunc
-	errors                          ErrorFunc
-	goPool                          GoPoolFunc
-	createInactivityMonitor         func() inactivity.Monitor
-	blockwiseSZX                    blockwise.SZX
-	blockwiseEnable                 bool
-	blockwiseTransferTimeout        time.Duration
-	onNewClientConn                 OnNewClientConnFunc
-	disablePeerTCPSignalMessageCSMs bool
-	disableTCPSignalMessageCSM      bool
-	periodicRunner                  periodic.Func
-	connectionCacheSize             uint16
-	messagePool                     *pool.Pool
-
-	ctx    context.Context
-	cancel context.CancelFunc
+	ctx context.Context
 
 	listen      Listener
-	listenMutex sync.Mutex
+	messagePool *pool.Pool
+
+	handler HandlerFunc
+	errors  ErrorFunc
+	goPool  GoPoolFunc
+	cancel  context.CancelFunc
+
+	blockwiseTransferTimeout        time.Duration
+	onNewClientConn                 OnNewClientConnFunc
+	maxMessageSize                  int
+	createInactivityMonitor         func() inactivity.Monitor
+	periodicRunner                  periodic.Func
+	listenMutex                     sync.Mutex
+	connectionCacheSize             uint16
+	disableTCPSignalMessageCSM      bool
+	blockwiseEnable                 bool
+	blockwiseSZX                    blockwise.SZX
+	disablePeerTCPSignalMessageCSMs bool
 }
 
 func NewServer(opt ...ServerOption) *Server {
