@@ -64,13 +64,13 @@ func newObservation(token message.Token, path string, cc *ClientConn, observeFun
 }
 
 func (o *Observation) Canceled() bool {
-	_, ok := o.cc.observationRequests.Load(o.token.String())
+	_, ok := o.cc.observationRequests.Load(o.token.Hash())
 	return !ok
 }
 
 func (o *Observation) cleanUp() bool {
 	o.cc.observationTokenHandler.Pop(o.token)
-	registeredRequest, ok := o.cc.observationRequests.PullOut(o.token.String())
+	registeredRequest, ok := o.cc.observationRequests.PullOut(o.token.Hash())
 	if ok {
 		o.cc.ReleaseMessage(registeredRequest.(*pool.Message))
 	}
@@ -150,8 +150,8 @@ func (cc *ClientConn) Observe(ctx context.Context, path string, observeFunc func
 	respObservationChan := make(chan respObservationMessage, 1)
 	o := newObservation(token, path, cc, observeFunc, respObservationChan)
 
-	cc.observationRequests.Store(token.String(), req)
-	err = o.cc.observationTokenHandler.Insert(token.String(), o.handler)
+	cc.observationRequests.Store(token.Hash(), req)
+	err = o.cc.observationTokenHandler.Insert(token.Hash(), o.handler)
 	defer func(err *error) {
 		if *err != nil {
 			o.cleanUp()

@@ -10,6 +10,6 @@ func TestGetToken(t *testing.T) {
 	token, err := GetToken()
 	require.NoError(t, err)
 	require.NotEmpty(t, token)
-	require.NotEmpty(t, token.String())
+	require.NotEqual(t, 0, token.Hash())
 
 }

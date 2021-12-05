@@ -246,7 +246,7 @@ func (b *BlockWise) Do(r Message, maxSzx SZX, maxMessageSize int, do func(req Me
 	if err != nil {
 		return nil, fmt.Errorf("cannot store sended request %v: %v", req.String(), err)
 	}
-	defer b.bwSendedRequest.deleteByToken(req.Token().String())
+	defer b.bwSendedRequest.deleteByToken(req.Token().Hash())
 	if r.Body() == nil {
 		return do(r)
 	}
@@ -468,7 +468,7 @@ func (b *BlockWise) RemoveFromResponseCache(token message.Token) {
 	if len(token) == 0 {
 		return
 	}
-	b.sendingMessagesCache.Delete(token.String())
+	b.sendingMessagesCache.Delete(token.Hash())
 }
 
 func (b *BlockWise) sendEntityIncomplete(w ResponseWriter, token message.Token) {
@@ -493,7 +493,7 @@ func (b *BlockWise) Handle(w ResponseWriter, r Message, maxSZX SZX, maxMessageSi
 		}
 		return
 	}
-	tokenStr := token.String()
+	tokenStr := token.Hash()
 
 	sendingMessageCached := b.sendingMessagesCache.Load(tokenStr)
 
@@ -636,15 +636,15 @@ func (b *BlockWise) startSendingMessage(w ResponseWriter, maxSZX SZX, maxMessage
 		expire = deadline
 	}
 
-	_, loaded := b.sendingMessagesCache.LoadOrStore(sendingMessage.Token().String(), cache.NewElement(newRequestGuard(sendingMessage), expire, nil))
+	_, loaded := b.sendingMessagesCache.LoadOrStore(sendingMessage.Token().Hash(), cache.NewElement(newRequestGuard(sendingMessage), expire, nil))
 	if loaded {
-		return fmt.Errorf("cannot add to sending message cache: message with token %v already exist", sendingMessage.Token().String())
+		return fmt.Errorf("cannot add to sending message cache: message with token %v already exist", sendingMessage.Token().Hash())
 	}
 	return nil
 }
 
 func (b *BlockWise) getSendedRequest(token message.Token) Message {
-	req := b.bwSendedRequest.loadByTokenWithFunc(token.String(), func(v *senderRequest) interface{} {
+	req := b.bwSendedRequest.loadByTokenWithFunc(token.Hash(), func(v *senderRequest) interface{} {
 		req := b.acquireMessage(v.Context())
 		req.SetCode(v.Code())
 		req.SetToken(v.Token())
@@ -710,7 +710,7 @@ func (b *BlockWise) processReceivedMessage(w ResponseWriter, r Message, maxSzx S
 		}
 	}
 
-	tokenStr := token.String()
+	tokenStr := token.Hash()
 	var cachedReceivedMessageGuard interface{}
 	e := b.receivingMessagesCache.Load(tokenStr)
 	if e != nil {

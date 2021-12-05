@@ -62,8 +62,8 @@ func (s *Server) DiscoveryRequest(req *pool.Message, address string, receiverFun
 	if err != nil {
 		return fmt.Errorf("cannot marshal req: %w", err)
 	}
-	s.multicastRequests.Store(token.String(), req)
-	defer s.multicastRequests.Delete(token.String())
+	s.multicastRequests.Store(token.Hash(), req)
+	defer s.multicastRequests.Delete(token.Hash())
 	err = s.multicastHandler.Insert(token, func(w *client.ResponseWriter, r *pool.Message) {
 		receiverFunc(w.ClientConn(), r)
 	})

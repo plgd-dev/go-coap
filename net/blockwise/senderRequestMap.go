@@ -61,7 +61,7 @@ func newSenderRequestMap() *senderRequestMap {
 
 func (m *senderRequestMap) store(req *senderRequest) error {
 	if !req.lock {
-		m.byToken.Store(req.Token().String(), req)
+		m.byToken.Store(req.Token().Hash(), req)
 		return nil
 	}
 	for {
@@ -76,7 +76,7 @@ func (m *senderRequestMap) store(req *senderRequest) error {
 			return fmt.Errorf("cannot lock message: %v", err)
 		}
 		if !loaded {
-			m.byToken.Store(req.Token().String(), req)
+			m.byToken.Store(req.Token().Hash(), req)
 			return nil
 		}
 		p := v.(*senderRequest)
@@ -88,7 +88,7 @@ func (m *senderRequestMap) store(req *senderRequest) error {
 	}
 }
 
-func (m *senderRequestMap) loadByTokenWithFunc(token string, onload func(value *senderRequest) interface{}) interface{} {
+func (m *senderRequestMap) loadByTokenWithFunc(token uint64, onload func(value *senderRequest) interface{}) interface{} {
 	v, ok := m.byToken.LoadWithFunc(token, func(value interface{}) interface{} {
 		v := value.(*senderRequest)
 		return onload(v)
@@ -99,7 +99,7 @@ func (m *senderRequestMap) loadByTokenWithFunc(token string, onload func(value *
 	return nil
 }
 
-func (m *senderRequestMap) deleteByToken(token string) {
+func (m *senderRequestMap) deleteByToken(token uint64) {
 	v, ok := m.byToken.PullOut(token)
 	if !ok {
 		return

@@ -125,7 +125,7 @@ func bwCreateReleaseMessage(messagePool *pool.Pool) func(m blockwise.Message) {
 
 func bwCreateHandlerFunc(messagePool *pool.Pool, observatioRequests *kitSync.Map) func(token message.Token) (blockwise.Message, bool) {
 	return func(token message.Token) (blockwise.Message, bool) {
-		msg, ok := observatioRequests.LoadWithFunc(token.String(), func(v interface{}) interface{} {
+		msg, ok := observatioRequests.LoadWithFunc(token.Hash(), func(v interface{}) interface{} {
 			r := v.(*pool.Message)
 			d := messagePool.AcquireMessage(r.Context())
 			d.ResetOptionsTo(r.Options())

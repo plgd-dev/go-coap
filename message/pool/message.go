@@ -157,7 +157,7 @@ func (r *Message) AddOptionBytes(opt message.OptionID, value []byte) {
 	}
 	n := copy(r.valueBuffer, value)
 	v := r.valueBuffer[:n]
-	r.msg.Options = r.msg.Options.Add(message.Option{opt, v})
+	r.msg.Options = r.msg.Options.Add(message.Option{ID: opt, Value: v})
 	r.valueBuffer = r.valueBuffer[n:]
 	r.isModified = true
 }

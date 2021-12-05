@@ -46,7 +46,7 @@ type Observation struct {
 }
 
 func (o *Observation) Canceled() bool {
-	_, ok := o.cc.observationRequests.Load(o.token.String())
+	_, ok := o.cc.observationRequests.Load(o.token.Hash())
 	return !ok
 }
 
@@ -82,7 +82,7 @@ func (o *Observation) handler(w *ResponseWriter, r *pool.Message) {
 
 func (o *Observation) cleanUp() bool {
 	o.cc.observationTokenHandler.Pop(o.token)
-	_, ok := o.cc.observationRequests.PullOut(o.token.String())
+	_, ok := o.cc.observationRequests.PullOut(o.token.Hash())
 	return ok
 }
 
@@ -152,8 +152,8 @@ func (cc *ClientConn) Observe(ctx context.Context, path string, observeFunc func
 		Code:    req.Code(),
 		Options: options,
 	}
-	cc.observationRequests.Store(token.String(), obs)
-	err = o.cc.observationTokenHandler.Insert(token.String(), o.handler)
+	cc.observationRequests.Store(token.Hash(), obs)
+	err = o.cc.observationTokenHandler.Insert(token.Hash(), o.handler)
 	defer func(err *error) {
 		if *err != nil {
 			o.cleanUp()
