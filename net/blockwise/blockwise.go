@@ -218,7 +218,7 @@ func NewBlockWise(
 	}
 }
 
-func bufferSize(szx SZX, maxMessageSize int) int64 {
+func bufferSize(szx SZX, maxMessageSize uint32) int64 {
 	if szx < SZXBERT {
 		return szx.Size()
 	}
@@ -232,7 +232,7 @@ func (b *BlockWise) CheckExpirations(now time.Time) {
 }
 
 // Do sends an coap message and returns an coap response via blockwise transfer.
-func (b *BlockWise) Do(r Message, maxSzx SZX, maxMessageSize int, do func(req Message) (Message, error)) (Message, error) {
+func (b *BlockWise) Do(r Message, maxSzx SZX, maxMessageSize uint32, do func(req Message) (Message, error)) (Message, error) {
 	if maxSzx > SZXBERT {
 		return nil, fmt.Errorf("invalid szx")
 	}
@@ -368,7 +368,7 @@ func (w *writeMessageResponse) RemoteAddr() net.Addr {
 }
 
 // WriteMessage sends an coap message via blockwise transfer.
-func (b *BlockWise) WriteMessage(remoteAddr net.Addr, request Message, maxSZX SZX, maxMessageSize int, writeMessage func(r Message) error) error {
+func (b *BlockWise) WriteMessage(remoteAddr net.Addr, request Message, maxSZX SZX, maxMessageSize uint32, writeMessage func(r Message) error) error {
 	req := b.newSendRequestMessage(request, false)
 	err := b.bwSendedRequest.store(req)
 	if err != nil {
@@ -400,7 +400,7 @@ func fitSZX(r Message, blockType message.OptionID, maxSZX SZX) SZX {
 	return maxSZX
 }
 
-func (b *BlockWise) handleSendingMessage(w ResponseWriter, sendingMessage Message, maxSZX SZX, maxMessageSize int, token []byte, block uint32) (bool, error) {
+func (b *BlockWise) handleSendingMessage(w ResponseWriter, sendingMessage Message, maxSZX SZX, maxMessageSize uint32, token []byte, block uint32) (bool, error) {
 	blockType := message.Block2
 	sizeType := message.Size2
 	switch sendingMessage.Code() {
@@ -479,7 +479,7 @@ func (b *BlockWise) sendEntityIncomplete(w ResponseWriter, token message.Token) 
 }
 
 // Handle middleware which constructs COAP request from blockwise transfer and send COAP response via blockwise.
-func (b *BlockWise) Handle(w ResponseWriter, r Message, maxSZX SZX, maxMessageSize int, next func(w ResponseWriter, r Message)) {
+func (b *BlockWise) Handle(w ResponseWriter, r Message, maxSZX SZX, maxMessageSize uint32, next func(w ResponseWriter, r Message)) {
 	if maxSZX > SZXBERT {
 		panic("invalid maxSZX")
 	}
@@ -516,7 +516,7 @@ func (b *BlockWise) Handle(w ResponseWriter, r Message, maxSZX SZX, maxMessageSi
 	}
 }
 
-func (b *BlockWise) handleReceivedMessage(w ResponseWriter, r Message, maxSZX SZX, maxMessageSize int, next func(w ResponseWriter, r Message)) error {
+func (b *BlockWise) handleReceivedMessage(w ResponseWriter, r Message, maxSZX SZX, maxMessageSize uint32, next func(w ResponseWriter, r Message)) error {
 	startSendingMessageBlock, err := EncodeBlockOption(maxSZX, 0, true)
 	if err != nil {
 		return fmt.Errorf("cannot encode start sending message block option(%v,%v,%v): %w", maxSZX, 0, true, err)
@@ -555,7 +555,7 @@ func (b *BlockWise) handleReceivedMessage(w ResponseWriter, r Message, maxSZX SZ
 	return b.startSendingMessage(w, maxSZX, maxMessageSize, startSendingMessageBlock)
 }
 
-func (b *BlockWise) continueSendingMessage(w ResponseWriter, r Message, maxSZX SZX, maxMessageSize int, messageGuard *messageGuard) (bool, error) {
+func (b *BlockWise) continueSendingMessage(w ResponseWriter, r Message, maxSZX SZX, maxMessageSize uint32, messageGuard *messageGuard) (bool, error) {
 	err := messageGuard.Acquire(r.Context(), 1)
 	if err != nil {
 		return false, fmt.Errorf("continueSendingMessage: cannot lock message: %v", err)
@@ -607,7 +607,7 @@ func isObserveResponse(msg Message) bool {
 	return false
 }
 
-func (b *BlockWise) startSendingMessage(w ResponseWriter, maxSZX SZX, maxMessageSize int, block uint32) error {
+func (b *BlockWise) startSendingMessage(w ResponseWriter, maxSZX SZX, maxMessageSize uint32, block uint32) error {
 	payloadSize, err := w.Message().BodySize()
 	if err != nil {
 		return fmt.Errorf("cannot get size of payload: %w", err)

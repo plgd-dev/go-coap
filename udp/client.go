@@ -68,20 +68,20 @@ var defaultDialOptions = dialOptions{
 type dialOptions struct {
 	net                            string
 	ctx                            context.Context
-	messagePool                    *pool.Pool
+	getMID                         GetMIDFunc
 	handler                        HandlerFunc
 	errors                         ErrorFunc
 	goPool                         GoPoolFunc
 	dialer                         *net.Dialer
 	heartBeat                      time.Duration
 	periodicRunner                 periodic.Func
-	maxMessageSize                 int
+	messagePool                    *pool.Pool
 	blockwiseTransferTimeout       time.Duration
 	transmissionNStart             time.Duration
 	transmissionAcknowledgeTimeout time.Duration
-	transmissionMaxRetransmit      int
-	getMID                         GetMIDFunc
 	createInactivityMonitor        func() inactivity.Monitor
+	maxMessageSize                 uint32
+	transmissionMaxRetransmit      uint32
 	closeSocket                    bool
 	blockwiseSZX                   blockwise.SZX
 	blockwiseEnable                bool

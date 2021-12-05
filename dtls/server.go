@@ -85,20 +85,20 @@ var defaultServerOptions = serverOptions{
 
 type serverOptions struct {
 	ctx                            context.Context
-	blockwiseTransferTimeout       time.Duration
+	messagePool                    *pool.Pool
 	handler                        HandlerFunc
 	errors                         ErrorFunc
 	goPool                         GoPoolFunc
 	createInactivityMonitor        func() inactivity.Monitor
 	periodicRunner                 periodic.Func
 	getMID                         GetMIDFunc
-	maxMessageSize                 int
+	blockwiseTransferTimeout       time.Duration
 	onNewClientConn                OnNewClientConnFunc
 	heartBeat                      time.Duration
 	transmissionNStart             time.Duration
 	transmissionAcknowledgeTimeout time.Duration
-	transmissionMaxRetransmit      int
-	messagePool                    *pool.Pool
+	maxMessageSize                 uint32
+	transmissionMaxRetransmit      uint32
 	blockwiseEnable                bool
 	blockwiseSZX                   blockwise.SZX
 }
@@ -113,27 +113,28 @@ type Server struct {
 	listen Listener
 
 	ctx                     context.Context
-	maxMessageSize          int
+	cache                   *cache.Cache
 	goPool                  GoPoolFunc
 	createInactivityMonitor func() inactivity.Monitor
 	errors                  ErrorFunc
 	cancel                  context.CancelFunc
 
-	blockwiseTransferTimeout       time.Duration
-	onNewClientConn                OnNewClientConnFunc
-	heartBeat                      time.Duration
-	transmissionNStart             time.Duration
+	blockwiseTransferTimeout time.Duration
+	onNewClientConn          OnNewClientConnFunc
+	heartBeat                time.Duration
+
+	handler                        HandlerFunc
 	transmissionAcknowledgeTimeout time.Duration
-	transmissionMaxRetransmit      int
-	getMID                         GetMIDFunc
-	periodicRunner                 periodic.Func
-	cache                          *cache.Cache
 	messagePool                    *pool.Pool
 
-	handler         HandlerFunc
-	listenMutex     sync.Mutex
-	blockwiseEnable bool
-	blockwiseSZX    blockwise.SZX
+	getMID                    GetMIDFunc
+	periodicRunner            periodic.Func
+	transmissionNStart        time.Duration
+	listenMutex               sync.Mutex
+	transmissionMaxRetransmit uint32
+	maxMessageSize            uint32
+	blockwiseEnable           bool
+	blockwiseSZX              blockwise.SZX
 }
 
 func NewServer(opt ...ServerOption) *Server {

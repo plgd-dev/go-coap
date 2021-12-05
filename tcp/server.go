@@ -80,15 +80,15 @@ var defaultServerOptions = serverOptions{
 
 type serverOptions struct {
 	ctx                             context.Context
-	onNewClientConn                 OnNewClientConnFunc
+	messagePool                     *pool.Pool
 	handler                         HandlerFunc
 	errors                          ErrorFunc
 	goPool                          GoPoolFunc
 	createInactivityMonitor         func() inactivity.Monitor
 	periodicRunner                  periodic.Func
-	maxMessageSize                  int
+	onNewClientConn                 OnNewClientConnFunc
 	blockwiseTransferTimeout        time.Duration
-	messagePool                     *pool.Pool
+	maxMessageSize                  uint32
 	connectionCacheSize             uint16
 	disablePeerTCPSignalMessageCSMs bool
 	disableTCPSignalMessageCSM      bool
@@ -103,22 +103,24 @@ type Listener interface {
 }
 
 type Server struct {
-	ctx context.Context
+	listen Listener
+	ctx    context.Context
 
-	listen      Listener
+	cancel context.CancelFunc
+
 	messagePool *pool.Pool
 
-	handler HandlerFunc
-	errors  ErrorFunc
-	goPool  GoPoolFunc
-	cancel  context.CancelFunc
+	errors ErrorFunc
+	goPool GoPoolFunc
 
-	blockwiseTransferTimeout        time.Duration
-	onNewClientConn                 OnNewClientConnFunc
-	maxMessageSize                  int
+	blockwiseTransferTimeout time.Duration
+	onNewClientConn          OnNewClientConnFunc
+
+	handler                         HandlerFunc
 	createInactivityMonitor         func() inactivity.Monitor
 	periodicRunner                  periodic.Func
 	listenMutex                     sync.Mutex
+	maxMessageSize                  uint32
 	connectionCacheSize             uint16
 	disableTCPSignalMessageCSM      bool
 	blockwiseEnable                 bool

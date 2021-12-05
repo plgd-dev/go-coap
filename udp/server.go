@@ -80,27 +80,29 @@ var defaultServerOptions = serverOptions{
 
 type serverOptions struct {
 	ctx                            context.Context
+	messagePool                    *pool.Pool
 	blockwiseTransferTimeout       time.Duration
-	handler                        HandlerFunc
 	errors                         ErrorFunc
 	goPool                         GoPoolFunc
 	createInactivityMonitor        func() inactivity.Monitor
 	periodicRunner                 periodic.Func
 	getMID                         GetMIDFunc
-	maxMessageSize                 int
+	handler                        HandlerFunc
 	onNewClientConn                OnNewClientConnFunc
 	transmissionNStart             time.Duration
 	transmissionAcknowledgeTimeout time.Duration
-	transmissionMaxRetransmit      int
-	messagePool                    *pool.Pool
+	maxMessageSize                 uint32
+	transmissionMaxRetransmit      uint32
 	blockwiseEnable                bool
 	blockwiseSZX                   blockwise.SZX
 }
 
 type Server struct {
-	doneCtx                        context.Context
-	ctx                            context.Context
-	maxMessageSize                 int
+	doneCtx context.Context
+	ctx     context.Context
+
+	listen *coapNet.UDPConn
+
 	goPool                         GoPoolFunc
 	createInactivityMonitor        func() inactivity.Monitor
 	periodicRunner                 periodic.Func
@@ -109,10 +111,11 @@ type Server struct {
 	onNewClientConn                OnNewClientConnFunc
 	transmissionNStart             time.Duration
 	transmissionAcknowledgeTimeout time.Duration
-	transmissionMaxRetransmit      int
-	getMID                         GetMIDFunc
 
-	errors            ErrorFunc
+	conns  map[string]*client.ClientConn
+	getMID GetMIDFunc
+
+	messagePool       *pool.Pool
 	doneCancel        context.CancelFunc
 	handler           HandlerFunc
 	cancel            context.CancelFunc
@@ -121,14 +124,13 @@ type Server struct {
 	multicastRequests *kitSync.Map
 	multicastHandler  *client.HandlerContainer
 
-	listen *coapNet.UDPConn
-
-	conns           map[string]*client.ClientConn
-	messagePool     *pool.Pool
-	connsMutex      sync.Mutex
-	listenMutex     sync.Mutex
-	blockwiseEnable bool
-	blockwiseSZX    blockwise.SZX
+	errors                    ErrorFunc
+	connsMutex                sync.Mutex
+	listenMutex               sync.Mutex
+	transmissionMaxRetransmit uint32
+	maxMessageSize            uint32
+	blockwiseEnable           bool
+	blockwiseSZX              blockwise.SZX
 }
 
 func NewServer(opt ...ServerOption) *Server {

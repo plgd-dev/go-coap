@@ -23,11 +23,12 @@ type Session struct {
 	connection *coapNet.UDPConn
 	doneCancel context.CancelFunc
 
-	cancel         context.CancelFunc
-	raddr          *net.UDPAddr
-	maxMessageSize int
+	cancel context.CancelFunc
+	raddr  *net.UDPAddr
 
-	mutex       sync.Mutex
+	mutex          sync.Mutex
+	maxMessageSize uint32
+
 	closeSocket bool
 }
 
@@ -35,7 +36,7 @@ func NewSession(
 	ctx context.Context,
 	connection *coapNet.UDPConn,
 	raddr *net.UDPAddr,
-	maxMessageSize int,
+	maxMessageSize uint32,
 	closeSocket bool,
 	doneCtx context.Context,
 ) *Session {
@@ -139,7 +140,7 @@ func (s *Session) Run(cc *client.ClientConn) (err error) {
 	}
 }
 
-func (s *Session) MaxMessageSize() int {
+func (s *Session) MaxMessageSize() uint32 {
 	return s.maxMessageSize
 }
 

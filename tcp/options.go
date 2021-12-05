@@ -50,7 +50,7 @@ func WithContext(ctx context.Context) ContextOpt {
 
 // MaxMessageSizeOpt handler function option.
 type MaxMessageSizeOpt struct {
-	maxMessageSize int
+	maxMessageSize uint32
 }
 
 func (o MaxMessageSizeOpt) apply(opts *serverOptions) {
@@ -62,7 +62,7 @@ func (o MaxMessageSizeOpt) applyDial(opts *dialOptions) {
 }
 
 // WithMaxMessageSize limit size of processed message.
-func WithMaxMessageSize(maxMessageSize int) MaxMessageSizeOpt {
+func WithMaxMessageSize(maxMessageSize uint32) MaxMessageSizeOpt {
 	return MaxMessageSizeOpt{maxMessageSize: maxMessageSize}
 }
 

@@ -59,18 +59,18 @@ var defaultDialOptions = dialOptions{
 }
 
 type dialOptions struct {
-	net                             string
 	ctx                             context.Context
-	maxMessageSize                  int
-	handler                         HandlerFunc
+	net                             string
+	blockwiseTransferTimeout        time.Duration
+	messagePool                     *pool.Pool
 	goPool                          GoPoolFunc
 	dialer                          *net.Dialer
 	tlsCfg                          *tls.Config
 	periodicRunner                  periodic.Func
 	createInactivityMonitor         func() inactivity.Monitor
+	handler                         HandlerFunc
 	errors                          ErrorFunc
-	blockwiseTransferTimeout        time.Duration
-	messagePool                     *pool.Pool
+	maxMessageSize                  uint32
 	connectionCacheSize             uint16
 	disablePeerTCPSignalMessageCSMs bool
 	closeSocket                     bool

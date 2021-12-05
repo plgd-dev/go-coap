@@ -31,7 +31,7 @@ type GetMIDFunc = func() uint16
 type Session interface {
 	Context() context.Context
 	Close() error
-	MaxMessageSize() int
+	MaxMessageSize() uint32
 	RemoteAddr() net.Addr
 	WriteMessage(req *pool.Message) error
 	Run(cc *ClientConn) error
@@ -44,16 +44,17 @@ type Session interface {
 type ClientConn struct {
 	session           Session
 	inactivityMonitor inactivity.Monitor
-	// This field needs to be the first in the struct to ensure proper word alignment on 32-bit platforms.
-	// See: https://golang.org/pkg/sync/atomic/#pkg-note-BUG
-	sequence                uint64
+
+	blockWise               *blockwise.BlockWise
 	handler                 HandlerFunc
 	observationTokenHandler *HandlerContainer
 	observationRequests     *kitSync.Map
 	transmission            *Transmission
 	messagePool             *pool.Pool
 
-	blockWise        *blockwise.BlockWise
+	// This field needs to be the first in the struct to ensure proper word alignment on 32-bit platforms.
+	// See: https://golang.org/pkg/sync/atomic/#pkg-note-BUG
+	sequence         uint64
 	goPool           GoPoolFunc
 	errors           ErrorFunc
 	responseMsgCache *cache.Cache
@@ -95,7 +96,7 @@ func NewClientConn(
 	observationRequests *kitSync.Map,
 	transmissionNStart time.Duration,
 	transmissionAcknowledgeTimeout time.Duration,
-	transmissionMaxRetransmit int,
+	transmissionMaxRetransmit uint32,
 	handler HandlerFunc,
 	blockwiseSZX blockwise.SZX,
 	blockWise *blockwise.BlockWise,
@@ -585,7 +586,7 @@ func (cc *ClientConn) CheckMyMessageID(req *pool.Message) {
 }
 
 func (cc *ClientConn) Process(datagram []byte) error {
-	if cc.session.MaxMessageSize() >= 0 && len(datagram) > cc.session.MaxMessageSize() {
+	if uint32(len(datagram)) > cc.session.MaxMessageSize() {
 		return fmt.Errorf("max message size(%v) was exceeded %v", cc.session.MaxMessageSize(), len(datagram))
 	}
 	req := cc.AcquireMessage(cc.Context())

@@ -50,7 +50,7 @@ func WithContext(ctx context.Context) ContextOpt {
 
 // MaxMessageSizeOpt handler function option.
 type MaxMessageSizeOpt struct {
-	maxMessageSize int
+	maxMessageSize uint32
 }
 
 func (o MaxMessageSizeOpt) apply(opts *serverOptions) {
@@ -62,7 +62,7 @@ func (o MaxMessageSizeOpt) applyDial(opts *dialOptions) {
 }
 
 // WithMaxMessageSize limit size of processed message.
-func WithMaxMessageSize(maxMessageSize int) MaxMessageSizeOpt {
+func WithMaxMessageSize(maxMessageSize uint32) MaxMessageSizeOpt {
 	return MaxMessageSizeOpt{maxMessageSize: maxMessageSize}
 }
 
@@ -244,7 +244,7 @@ func WithOnNewClientConn(onNewClientConn OnNewClientConnFunc) OnNewClientConnOpt
 type TransmissionOpt struct {
 	transmissionNStart             time.Duration
 	transmissionAcknowledgeTimeout time.Duration
-	transmissionMaxRetransmit      int
+	transmissionMaxRetransmit      uint32
 }
 
 func (o TransmissionOpt) apply(opts *serverOptions) {
@@ -262,7 +262,7 @@ func (o TransmissionOpt) applyDial(opts *dialOptions) {
 // WithTransmission set options for (re)transmission for Confirmable message-s.
 func WithTransmission(transmissionNStart time.Duration,
 	transmissionAcknowledgeTimeout time.Duration,
-	transmissionMaxRetransmit int) TransmissionOpt {
+	transmissionMaxRetransmit uint32) TransmissionOpt {
 	return TransmissionOpt{
 		transmissionNStart:             transmissionNStart,
 		transmissionAcknowledgeTimeout: transmissionAcknowledgeTimeout,

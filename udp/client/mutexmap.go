@@ -14,8 +14,8 @@ type MutexMap struct {
 type mutexMapEntry struct {
 	key interface{} // key in ma
 	m   *MutexMap   // point back to MutexMap, so we can synchronize removing this mutexMapEntry when cnt==0
-	cnt int         // reference count
 	el  sync.Mutex  // entry-specific lock
+	cnt uint16      // reference count
 }
 
 // Unlocker provides an Unlock method to release the lock.

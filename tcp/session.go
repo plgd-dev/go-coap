@@ -27,29 +27,32 @@ type Session struct {
 
 	inactivityMonitor inactivity.Monitor
 
-	errSendCSM          error
-	midHandlerContainer *HandlerContainer
+	errSendCSM error
+	// This field needs to be the first in the struct to ensure proper word alignment on 32-bit platforms.
+	// See: https://golang.org/pkg/sync/atomic/#pkg-note-BUG
+	sequence uint64
 
 	cancel context.CancelFunc
 
-	maxMessageSize int
-	goPool         GoPoolFunc
-	errors         ErrorFunc
-	blockWise      *blockwise.BlockWise
+	done chan struct{}
+
+	goPool    GoPoolFunc
+	errors    ErrorFunc
+	blockWise *blockwise.BlockWise
 
 	connection *coapNet.Conn
 
 	handler HandlerFunc
 
-	messagePool *pool.Pool
+	midHandlerContainer *HandlerContainer
 
 	tokenHandlerContainer *HandlerContainer
-	// This field needs to be the first in the struct to ensure proper word alignment on 32-bit platforms.
-	// See: https://golang.org/pkg/sync/atomic/#pkg-note-BUG
-	sequence uint64
-	done     chan struct{}
 
-	mutex                           sync.Mutex
+	messagePool *pool.Pool
+
+	mutex sync.Mutex
+
+	maxMessageSize                  uint32
 	peerBlockWiseTranferEnabled     uint32
 	peerMaxMessageSize              uint32
 	connectionCacheSize             uint16
@@ -64,7 +67,7 @@ func NewSession(
 	ctx context.Context,
 	connection *coapNet.Conn,
 	handler HandlerFunc,
-	maxMessageSize int,
+	maxMessageSize uint32,
 	goPool GoPoolFunc,
 	errors ErrorFunc,
 	blockwiseSZX blockwise.SZX,
@@ -291,10 +294,10 @@ func (s *Session) processBuffer(buffer *bytes.Buffer, cc *ClientConn) error {
 		if err == message.ErrShortRead {
 			return nil
 		}
-		if s.maxMessageSize >= 0 && hdr.TotalLen > s.maxMessageSize {
+		if hdr.TotalLen > s.maxMessageSize {
 			return fmt.Errorf("max message size(%v) was exceeded %v", s.maxMessageSize, hdr.TotalLen)
 		}
-		if buffer.Len() < hdr.TotalLen {
+		if uint32(buffer.Len()) < hdr.TotalLen {
 			return nil
 		}
 		req := s.messagePool.AcquireMessage(s.Context())
