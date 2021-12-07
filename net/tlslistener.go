@@ -11,8 +11,8 @@ import (
 
 // TLSListener is a TLS listener that provides accept with context.
 type TLSListener struct {
-	tcp      *net.TCPListener
 	listener net.Listener
+	tcp      *net.TCPListener
 	closed   atomic.Bool
 }
 

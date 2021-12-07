@@ -21,45 +21,53 @@ import (
 type EventFunc func()
 
 type Session struct {
-	// This field needs to be the first in the struct to ensure proper word alignment on 32-bit platforms.
-	// See: https://golang.org/pkg/sync/atomic/#pkg-note-BUG
-	sequence   uint64
-	connection *coapNet.Conn
-
-	maxMessageSize                  int
-	peerMaxMessageSize              uint32
-	peerBlockWiseTranferEnabled     uint32
-	disablePeerTCPSignalMessageCSMs bool
-	disableTCPSignalMessageCSM      bool
-	goPool                          GoPoolFunc
-	errors                          ErrorFunc
-	closeSocket                     bool
-	inactivityMonitor               inactivity.Monitor
-	connectionCacheSize             uint16
-	messagePool                     *pool.Pool
-
-	tokenHandlerContainer *HandlerContainer
-	midHandlerContainer   *HandlerContainer
-	handler               HandlerFunc
-
-	blockwiseSZX blockwise.SZX
-	blockWise    *blockwise.BlockWise
-
-	mutex   sync.Mutex
 	onClose []EventFunc
 
-	cancel context.CancelFunc
-	ctx    atomic.Value
+	ctx atomic.Value
+
+	inactivityMonitor inactivity.Monitor
 
 	errSendCSM error
-	done       chan struct{}
+	// This field needs to be the first in the struct to ensure proper word alignment on 32-bit platforms.
+	// See: https://golang.org/pkg/sync/atomic/#pkg-note-BUG
+	sequence uint64
+
+	cancel context.CancelFunc
+
+	done chan struct{}
+
+	goPool    GoPoolFunc
+	errors    ErrorFunc
+	blockWise *blockwise.BlockWise
+
+	connection *coapNet.Conn
+
+	handler HandlerFunc
+
+	midHandlerContainer *HandlerContainer
+
+	tokenHandlerContainer *HandlerContainer
+
+	messagePool *pool.Pool
+
+	mutex sync.Mutex
+
+	maxMessageSize                  uint32
+	peerBlockWiseTranferEnabled     uint32
+	peerMaxMessageSize              uint32
+	connectionCacheSize             uint16
+	disableTCPSignalMessageCSM      bool
+	disablePeerTCPSignalMessageCSMs bool
+
+	blockwiseSZX blockwise.SZX
+	closeSocket  bool
 }
 
 func NewSession(
 	ctx context.Context,
 	connection *coapNet.Conn,
 	handler HandlerFunc,
-	maxMessageSize int,
+	maxMessageSize uint32,
 	goPool GoPoolFunc,
 	errors ErrorFunc,
 	blockwiseSZX blockwise.SZX,
@@ -286,10 +294,10 @@ func (s *Session) processBuffer(buffer *bytes.Buffer, cc *ClientConn) error {
 		if err == message.ErrShortRead {
 			return nil
 		}
-		if s.maxMessageSize >= 0 && hdr.TotalLen > s.maxMessageSize {
+		if hdr.TotalLen > s.maxMessageSize {
 			return fmt.Errorf("max message size(%v) was exceeded %v", s.maxMessageSize, hdr.TotalLen)
 		}
-		if buffer.Len() < hdr.TotalLen {
+		if uint32(buffer.Len()) < hdr.TotalLen {
 			return nil
 		}
 		req := s.messagePool.AcquireMessage(s.Context())

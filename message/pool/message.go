@@ -2,26 +2,20 @@ package pool
 
 import (
 	"io"
-	"sync"
 	"sync/atomic"
 
 	"github.com/plgd-dev/go-coap/v2/message"
 	"github.com/plgd-dev/go-coap/v2/message/codes"
 )
 
-var (
-	messagePool sync.Pool
-)
-
 type Message struct {
 	msg             message.Message
+	isModified      bool
+	hijacked        uint32
 	valueBuffer     []byte
 	origValueBuffer []byte
-
-	payload    io.ReadSeeker
-	sequence   uint64
-	hijacked   uint32
-	isModified bool
+	payload         io.ReadSeeker
+	sequence        uint64
 }
 
 func NewMessage() *Message {
@@ -157,7 +151,7 @@ func (r *Message) AddOptionBytes(opt message.OptionID, value []byte) {
 	}
 	n := copy(r.valueBuffer, value)
 	v := r.valueBuffer[:n]
-	r.msg.Options = r.msg.Options.Add(message.Option{opt, v})
+	r.msg.Options = r.msg.Options.Add(message.Option{ID: opt, Value: v})
 	r.valueBuffer = r.valueBuffer[n:]
 	r.isModified = true
 }

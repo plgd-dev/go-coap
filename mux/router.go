@@ -35,10 +35,10 @@ func (f HandlerFunc) ServeCOAP(w ResponseWriter, r *Message) {
 // with same name.
 // Router is also safe for concurrent access from multiple goroutines.
 type Router struct {
+	middlewares    []MiddlewareFunc
+	defaultHandler Handler
 	z              map[string]muxEntry
 	m              *sync.RWMutex
-	defaultHandler Handler
-	middlewares    []MiddlewareFunc
 }
 
 type muxEntry struct {

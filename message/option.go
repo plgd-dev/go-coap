@@ -127,9 +127,9 @@ const (
 )
 
 type OptionDef struct {
+	MinLen      uint32
+	MaxLen      uint32
 	ValueFormat ValueFormat
-	MinLen      int
-	MaxLen      int
 }
 
 var CoapOptionDefs = map[OptionID]OptionDef{
@@ -308,8 +308,8 @@ func marshalOptionHeader(buf []byte, delta, length int) (int, error) {
 }
 
 type Option struct {
-	ID    OptionID
 	Value []byte
+	ID    OptionID
 }
 
 func (o Option) MarshalValue(buf []byte) (int, error) {
@@ -416,7 +416,7 @@ func (o *Option) Unmarshal(data []byte, optionDefs map[OptionID]OptionDef, Optio
 			// Skip unrecognized options (RFC7252 section 5.4.1)
 			return len(data), nil
 		}
-		if len(data) < def.MinLen || len(data) > def.MaxLen {
+		if uint32(len(data)) < def.MinLen || uint32(len(data)) > def.MaxLen {
 			// Skip options with illegal value length (RFC7252 section 5.4.3)
 			return len(data), nil
 		}

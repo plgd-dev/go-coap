@@ -20,7 +20,7 @@ func TestClientConnObserve(t *testing.T) {
 	type args struct {
 		path      string
 		payload   []byte
-		numEvents int
+		numEvents uint32
 	}
 	tests := []struct {
 		name    string
@@ -72,7 +72,7 @@ func TestClientConnObserve(t *testing.T) {
 				switch obs {
 				case 0:
 					cc := w.ClientConn()
-					for i := 0; i < tt.args.numEvents; i++ {
+					for i := uint32(0); i < tt.args.numEvents; i++ {
 						tmpPay := make([]byte, len(tt.args.payload))
 						copy(tmpPay, tt.args.payload)
 						if len(tmpPay) > 0 {
@@ -270,7 +270,7 @@ type observer struct {
 	msgs []*pool.Message
 	sync.Mutex
 	done                     chan bool
-	numEvents                int
+	numEvents                uint32
 	observeOptionNotRequired bool
 }
 

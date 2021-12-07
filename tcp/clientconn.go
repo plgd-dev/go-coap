@@ -60,23 +60,23 @@ var defaultDialOptions = dialOptions{
 
 type dialOptions struct {
 	ctx                             context.Context
-	maxMessageSize                  int
-	handler                         HandlerFunc
-	errors                          ErrorFunc
+	net                             string
+	blockwiseTransferTimeout        time.Duration
+	messagePool                     *pool.Pool
 	goPool                          GoPoolFunc
 	dialer                          *net.Dialer
-	net                             string
-	blockwiseSZX                    blockwise.SZX
-	blockwiseEnable                 bool
-	blockwiseTransferTimeout        time.Duration
-	disablePeerTCPSignalMessageCSMs bool
-	disableTCPSignalMessageCSM      bool
 	tlsCfg                          *tls.Config
-	closeSocket                     bool
-	createInactivityMonitor         func() inactivity.Monitor
 	periodicRunner                  periodic.Func
+	createInactivityMonitor         func() inactivity.Monitor
+	handler                         HandlerFunc
+	errors                          ErrorFunc
+	maxMessageSize                  uint32
 	connectionCacheSize             uint16
-	messagePool                     *pool.Pool
+	disablePeerTCPSignalMessageCSMs bool
+	closeSocket                     bool
+	blockwiseEnable                 bool
+	blockwiseSZX                    blockwise.SZX
+	disableTCPSignalMessageCSM      bool
 }
 
 // A DialOption sets options such as credentials, keepalive parameters, etc.
@@ -131,7 +131,7 @@ func bwCreateReleaseMessage(messagePool *pool.Pool) func(m blockwise.Message) {
 
 func bwCreateHandlerFunc(messagePool *pool.Pool, observationRequests *kitSync.Map) func(token message.Token) (blockwise.Message, bool) {
 	return func(token message.Token) (blockwise.Message, bool) {
-		msg, ok := observationRequests.LoadWithFunc(token.String(), func(v interface{}) interface{} {
+		msg, ok := observationRequests.LoadWithFunc(token.Hash(), func(v interface{}) interface{} {
 			r := v.(message.Message)
 			d := messagePool.AcquireMessage(r.Context)
 			d.ResetOptionsTo(r.Options)

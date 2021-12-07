@@ -64,25 +64,25 @@ var defaultDialOptions = dialOptions{
 }
 
 type dialOptions struct {
+	net                            string
 	ctx                            context.Context
-	maxMessageSize                 int
-	heartBeat                      time.Duration
+	getMID                         GetMIDFunc
 	handler                        HandlerFunc
 	errors                         ErrorFunc
 	goPool                         GoPoolFunc
 	dialer                         *net.Dialer
-	net                            string
-	blockwiseSZX                   blockwise.SZX
-	blockwiseEnable                bool
+	heartBeat                      time.Duration
+	periodicRunner                 periodic.Func
+	messagePool                    *pool.Pool
 	blockwiseTransferTimeout       time.Duration
 	transmissionNStart             time.Duration
 	transmissionAcknowledgeTimeout time.Duration
-	transmissionMaxRetransmit      int
-	getMID                         GetMIDFunc
-	closeSocket                    bool
 	createInactivityMonitor        func() inactivity.Monitor
-	periodicRunner                 periodic.Func
-	messagePool                    *pool.Pool
+	maxMessageSize                 uint32
+	transmissionMaxRetransmit      uint32
+	closeSocket                    bool
+	blockwiseSZX                   blockwise.SZX
+	blockwiseEnable                bool
 }
 
 // A DialOption sets options such as credentials, keepalive parameters, etc.
@@ -124,7 +124,7 @@ func bwCreateReleaseMessage(messagePool *pool.Pool) func(m blockwise.Message) {
 
 func bwCreateHandlerFunc(messagePool *pool.Pool, observatioRequests *kitSync.Map) func(token message.Token) (blockwise.Message, bool) {
 	return func(token message.Token) (blockwise.Message, bool) {
-		msg, ok := observatioRequests.LoadWithFunc(token.String(), func(v interface{}) interface{} {
+		msg, ok := observatioRequests.LoadWithFunc(token.Hash(), func(v interface{}) interface{} {
 			r := v.(*pool.Message)
 			d := messagePool.AcquireMessage(r.Context())
 			d.ResetOptionsTo(r.Options())

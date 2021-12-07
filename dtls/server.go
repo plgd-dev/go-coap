@@ -85,22 +85,22 @@ var defaultServerOptions = serverOptions{
 
 type serverOptions struct {
 	ctx                            context.Context
-	maxMessageSize                 int
+	messagePool                    *pool.Pool
 	handler                        HandlerFunc
 	errors                         ErrorFunc
 	goPool                         GoPoolFunc
 	createInactivityMonitor        func() inactivity.Monitor
-	blockwiseSZX                   blockwise.SZX
-	blockwiseEnable                bool
+	periodicRunner                 periodic.Func
+	getMID                         GetMIDFunc
 	blockwiseTransferTimeout       time.Duration
 	onNewClientConn                OnNewClientConnFunc
 	heartBeat                      time.Duration
 	transmissionNStart             time.Duration
 	transmissionAcknowledgeTimeout time.Duration
-	transmissionMaxRetransmit      int
-	getMID                         GetMIDFunc
-	periodicRunner                 periodic.Func
-	messagePool                    *pool.Pool
+	maxMessageSize                 uint32
+	transmissionMaxRetransmit      uint32
+	blockwiseEnable                bool
+	blockwiseSZX                   blockwise.SZX
 }
 
 // Listener defined used by coap
@@ -110,29 +110,31 @@ type Listener interface {
 }
 
 type Server struct {
-	maxMessageSize                 int
+	listen Listener
+
+	ctx                     context.Context
+	cache                   *cache.Cache
+	goPool                  GoPoolFunc
+	createInactivityMonitor func() inactivity.Monitor
+	errors                  ErrorFunc
+	cancel                  context.CancelFunc
+
+	blockwiseTransferTimeout time.Duration
+	onNewClientConn          OnNewClientConnFunc
+	heartBeat                time.Duration
+
 	handler                        HandlerFunc
-	errors                         ErrorFunc
-	goPool                         GoPoolFunc
-	createInactivityMonitor        func() inactivity.Monitor
-	blockwiseSZX                   blockwise.SZX
-	blockwiseEnable                bool
-	blockwiseTransferTimeout       time.Duration
-	onNewClientConn                OnNewClientConnFunc
-	heartBeat                      time.Duration
-	transmissionNStart             time.Duration
 	transmissionAcknowledgeTimeout time.Duration
-	transmissionMaxRetransmit      int
-	getMID                         GetMIDFunc
-	periodicRunner                 periodic.Func
-	cache                          *cache.Cache
 	messagePool                    *pool.Pool
 
-	ctx    context.Context
-	cancel context.CancelFunc
-
-	listen      Listener
-	listenMutex sync.Mutex
+	getMID                    GetMIDFunc
+	periodicRunner            periodic.Func
+	transmissionNStart        time.Duration
+	listenMutex               sync.Mutex
+	transmissionMaxRetransmit uint32
+	maxMessageSize            uint32
+	blockwiseEnable           bool
+	blockwiseSZX              blockwise.SZX
 }
 
 func NewServer(opt ...ServerOption) *Server {

@@ -14,14 +14,16 @@ import (
 )
 
 type Message struct {
-	*pool.Message
 
 	//local vars
 	rawData        []byte
 	rawMarshalData []byte
-	rawMaxSize     uint16
 
-	ctx        context.Context
+	ctx context.Context
+	*pool.Message
+
+	rawMaxSize uint16
+
 	isModified bool
 }
 
@@ -96,9 +98,9 @@ func (r *Message) Marshal() ([]byte, error) {
 
 type Pool struct {
 	messagePool           sync.Pool
+	currentMessagesInPool int64
 	maxNumMessages        uint32
 	maxMessageBufferSize  uint16
-	currentMessagesInPool int64
 }
 
 func New(maxNumMessages uint32, maxMessageBufferSize uint16) *Pool {

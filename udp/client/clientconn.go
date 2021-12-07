@@ -31,7 +31,7 @@ type GetMIDFunc = func() uint16
 type Session interface {
 	Context() context.Context
 	Close() error
-	MaxMessageSize() int
+	MaxMessageSize() uint32
 	RemoteAddr() net.Addr
 	WriteMessage(req *pool.Message) error
 	Run(cc *ClientConn) error
@@ -42,26 +42,28 @@ type Session interface {
 
 // ClientConn represents a virtual connection to a conceptual endpoint, to perform COAPs commands.
 type ClientConn struct {
-	// This field needs to be the first in the struct to ensure proper word alignment on 32-bit platforms.
-	// See: https://golang.org/pkg/sync/atomic/#pkg-note-BUG
-	sequence                uint64
-	msgID                   uint32
-	session                 Session
+	session           Session
+	inactivityMonitor inactivity.Monitor
+
+	blockWise               *blockwise.BlockWise
 	handler                 HandlerFunc
 	observationTokenHandler *HandlerContainer
 	observationRequests     *kitSync.Map
 	transmission            *Transmission
-	blockwiseSZX            blockwise.SZX
-	blockWise               *blockwise.BlockWise
-	goPool                  GoPoolFunc
-	errors                  ErrorFunc
-	responseMsgCache        *cache.Cache
-	msgIdMutex              *MutexMap
-	inactivityMonitor       inactivity.Monitor
 	messagePool             *pool.Pool
+
+	// This field needs to be the first in the struct to ensure proper word alignment on 32-bit platforms.
+	// See: https://golang.org/pkg/sync/atomic/#pkg-note-BUG
+	sequence         uint64
+	goPool           GoPoolFunc
+	errors           ErrorFunc
+	responseMsgCache *cache.Cache
+	msgIdMutex       *MutexMap
 
 	tokenHandlerContainer *HandlerContainer
 	midHandlerContainer   *HandlerContainer
+	msgID                 uint32
+	blockwiseSZX          blockwise.SZX
 }
 
 // Transmission is a threadsafe container for transmission related parameters
@@ -94,7 +96,7 @@ func NewClientConn(
 	observationRequests *kitSync.Map,
 	transmissionNStart time.Duration,
 	transmissionAcknowledgeTimeout time.Duration,
-	transmissionMaxRetransmit int,
+	transmissionMaxRetransmit uint32,
 	handler HandlerFunc,
 	blockwiseSZX blockwise.SZX,
 	blockWise *blockwise.BlockWise,
@@ -584,7 +586,7 @@ func (cc *ClientConn) CheckMyMessageID(req *pool.Message) {
 }
 
 func (cc *ClientConn) Process(datagram []byte) error {
-	if cc.session.MaxMessageSize() >= 0 && len(datagram) > cc.session.MaxMessageSize() {
+	if uint32(len(datagram)) > cc.session.MaxMessageSize() {
 		return fmt.Errorf("max message size(%v) was exceeded %v", cc.session.MaxMessageSize(), len(datagram))
 	}
 	req := cc.AcquireMessage(cc.Context())

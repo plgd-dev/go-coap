@@ -19,10 +19,10 @@ type ClientConn = interface {
 }
 
 type inactivityMonitor struct {
-	duration   time.Duration
-	onInactive OnInactiveFunc
 	// lastActivity stores time.Time
 	lastActivity atomic.Value
+	duration     time.Duration
+	onInactive   OnInactiveFunc
 }
 
 func (m *inactivityMonitor) Notify() {

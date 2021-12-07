@@ -50,7 +50,7 @@ func WithContext(ctx context.Context) ContextOpt {
 
 // MaxMessageSizeOpt handler function option.
 type MaxMessageSizeOpt struct {
-	maxMessageSize int
+	maxMessageSize uint32
 }
 
 func (o MaxMessageSizeOpt) apply(opts *serverOptions) {
@@ -62,7 +62,7 @@ func (o MaxMessageSizeOpt) applyDial(opts *dialOptions) {
 }
 
 // WithMaxMessageSize limit size of processed message.
-func WithMaxMessageSize(maxMessageSize int) MaxMessageSizeOpt {
+func WithMaxMessageSize(maxMessageSize uint32) MaxMessageSizeOpt {
 	return MaxMessageSizeOpt{maxMessageSize: maxMessageSize}
 }
 
@@ -106,9 +106,9 @@ func WithGoPool(goPool GoPoolFunc) GoPoolOpt {
 
 // KeepAliveOpt keepalive option.
 type KeepAliveOpt struct {
-	maxRetries uint32
 	timeout    time.Duration
 	onInactive inactivity.OnInactiveFunc
+	maxRetries uint32
 }
 
 func (o KeepAliveOpt) apply(opts *serverOptions) {
@@ -198,9 +198,9 @@ func WithPeriodicRunner(periodicRunner periodic.Func) PeriodicRunnerOpt {
 
 // BlockwiseOpt network option.
 type BlockwiseOpt struct {
+	transferTimeout time.Duration
 	enable          bool
 	szx             blockwise.SZX
-	transferTimeout time.Duration
 }
 
 func (o BlockwiseOpt) apply(opts *serverOptions) {

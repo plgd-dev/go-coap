@@ -15,26 +15,28 @@ import (
 type EventFunc = func()
 
 type Session struct {
-	connection     *coapNet.UDPConn
-	raddr          *net.UDPAddr
-	maxMessageSize int
-	closeSocket    bool
-
-	mutex   sync.Mutex
 	onClose []EventFunc
 
-	cancel context.CancelFunc
-	ctx    atomic.Value
+	ctx atomic.Value
 
 	doneCtx    context.Context
+	connection *coapNet.UDPConn
 	doneCancel context.CancelFunc
+
+	cancel context.CancelFunc
+	raddr  *net.UDPAddr
+
+	mutex          sync.Mutex
+	maxMessageSize uint32
+
+	closeSocket bool
 }
 
 func NewSession(
 	ctx context.Context,
 	connection *coapNet.UDPConn,
 	raddr *net.UDPAddr,
-	maxMessageSize int,
+	maxMessageSize uint32,
 	closeSocket bool,
 	doneCtx context.Context,
 ) *Session {
@@ -138,7 +140,7 @@ func (s *Session) Run(cc *client.ClientConn) (err error) {
 	}
 }
 
-func (s *Session) MaxMessageSize() int {
+func (s *Session) MaxMessageSize() uint32 {
 	return s.maxMessageSize
 }
 

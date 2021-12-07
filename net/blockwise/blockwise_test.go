@@ -203,7 +203,7 @@ func releaseMessage(r Message) {
 	req.ctx = nil
 }
 
-func makeDo(t *testing.T, sender, receiver *BlockWise, senderMaxSZX SZX, senderMaxMessageSize int, receiverMaxSZX SZX, receiverMaxMessageSize int, next func(ResponseWriter, Message)) func(Message) (Message, error) {
+func makeDo(t *testing.T, sender, receiver *BlockWise, senderMaxSZX SZX, senderMaxMessageSize uint32, receiverMaxSZX SZX, receiverMaxMessageSize uint32, next func(ResponseWriter, Message)) func(Message) (Message, error) {
 	return func(req Message) (Message, error) {
 		c := make(chan Message)
 		go func() {
@@ -258,7 +258,7 @@ func TestBlockWiseDo(t *testing.T) {
 				},
 				szx:            SZX16,
 				maxMessageSize: SZX16.Size(),
-				do: makeDo(t, sender, receiver, SZX16, int(SZX16.Size()), SZX16, int(SZX16.Size()), func(w ResponseWriter, r Message) {
+				do: makeDo(t, sender, receiver, SZX16, uint32(SZX16.Size()), SZX16, uint32(SZX16.Size()), func(w ResponseWriter, r Message) {
 					require.Equal(t, &testmessage{
 						ctx:     context.Background(),
 						token:   []byte{2},
@@ -294,7 +294,7 @@ func TestBlockWiseDo(t *testing.T) {
 				},
 				szx:            SZX16,
 				maxMessageSize: SZX16.Size(),
-				do: makeDo(t, sender, receiver, SZX16, int(SZX16.Size()), SZX1024, int(SZX1024.Size()), func(w ResponseWriter, r Message) {
+				do: makeDo(t, sender, receiver, SZX16, uint32(SZX16.Size()), SZX1024, uint32(SZX1024.Size()), func(w ResponseWriter, r Message) {
 					require.Equal(t, &testmessage{
 						ctx:     context.Background(),
 						token:   []byte{2},
@@ -330,7 +330,7 @@ func TestBlockWiseDo(t *testing.T) {
 				},
 				szx:            SZXBERT,
 				maxMessageSize: SZXBERT.Size() * 2,
-				do: makeDo(t, sender, receiver, SZXBERT, int(SZXBERT.Size()*2), SZXBERT, int(SZXBERT.Size()*5), func(w ResponseWriter, r Message) {
+				do: makeDo(t, sender, receiver, SZXBERT, uint32(SZXBERT.Size()*2), SZXBERT, uint32(SZXBERT.Size()*5), func(w ResponseWriter, r Message) {
 					require.Equal(t, &testmessage{
 						ctx:     context.Background(),
 						token:   []byte{'B', 'E', 'R', 'T'},
@@ -366,7 +366,7 @@ func TestBlockWiseDo(t *testing.T) {
 				},
 				szx:            SZX16,
 				maxMessageSize: SZX16.Size(),
-				do: makeDo(t, sender, receiver, SZX16, int(SZX16.Size()), SZX16, int(SZX16.Size()), func(w ResponseWriter, r Message) {
+				do: makeDo(t, sender, receiver, SZX16, uint32(SZX16.Size()), SZX16, uint32(SZX16.Size()), func(w ResponseWriter, r Message) {
 					require.Equal(t, &testmessage{
 						ctx:     context.Background(),
 						token:   []byte{2},
@@ -401,7 +401,7 @@ func TestBlockWiseDo(t *testing.T) {
 				},
 				szx:            SZX16,
 				maxMessageSize: SZX16.Size(),
-				do: makeDo(t, sender, receiver, SZX16, int(SZX16.Size()), SZX16, int(SZX16.Size()), func(w ResponseWriter, r Message) {
+				do: makeDo(t, sender, receiver, SZX16, uint32(SZX16.Size()), SZX16, uint32(SZX16.Size()), func(w ResponseWriter, r Message) {
 					require.Equal(t, &testmessage{
 						ctx:     context.Background(),
 						token:   []byte{2},
@@ -429,7 +429,7 @@ func TestBlockWiseDo(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := sender.Do(tt.args.r, tt.args.szx, int(tt.args.maxMessageSize), tt.args.do)
+			got, err := sender.Do(tt.args.r, tt.args.szx, uint32(tt.args.maxMessageSize), tt.args.do)
 			if tt.wantErr {
 				assert.Error(t, err)
 				return
@@ -467,7 +467,7 @@ func TestBlockWiseParallel(t *testing.T) {
 				},
 				szx:            SZX16,
 				maxMessageSize: SZX16.Size(),
-				do: makeDo(t, sender, receiver, SZX16, int(SZX16.Size()), SZX1024, int(SZX1024.Size()), func(w ResponseWriter, r Message) {
+				do: makeDo(t, sender, receiver, SZX16, uint32(SZX16.Size()), SZX1024, uint32(SZX1024.Size()), func(w ResponseWriter, r Message) {
 					require.Equal(t, &testmessage{
 						ctx:     context.Background(),
 						token:   []byte{2},
@@ -510,7 +510,7 @@ func TestBlockWiseParallel(t *testing.T) {
 						code:    tt.args.r.Code(),
 						payload: bytes.NewReader(make([]byte, bodysize)),
 					}
-					got, err := sender.Do(r, tt.args.szx, int(tt.args.maxMessageSize), tt.args.do)
+					got, err := sender.Do(r, tt.args.szx, uint32(tt.args.maxMessageSize), tt.args.do)
 					if tt.wantErr {
 						assert.Error(t, err)
 						return
@@ -610,7 +610,7 @@ func TestDecodeBlockOption(t *testing.T) {
 	}
 }
 
-func makeWriteReq(t *testing.T, sender, receiver *BlockWise, senderMaxSZX SZX, senderMaxMessageSize int, receiverMaxSZX SZX, receiverMaxMessageSize int, next func(ResponseWriter, Message)) func(Message) error {
+func makeWriteReq(t *testing.T, sender, receiver *BlockWise, senderMaxSZX SZX, senderMaxMessageSize uint32, receiverMaxSZX SZX, receiverMaxMessageSize uint32, next func(ResponseWriter, Message)) func(Message) error {
 	return func(req Message) error {
 		c := make(chan bool, 1)
 		go func() {
@@ -676,7 +676,7 @@ func TestBlockWiseWritetestmessage(t *testing.T) {
 				},
 				szx:            SZX16,
 				maxMessageSize: SZX16.Size(),
-				writetestmessage: makeWriteReq(t, sender, receiver, SZX16, int(SZX16.Size()), SZX16, int(SZX16.Size()), func(w ResponseWriter, r Message) {
+				writetestmessage: makeWriteReq(t, sender, receiver, SZX16, uint32(SZX16.Size()), SZX16, uint32(SZX16.Size()), func(w ResponseWriter, r Message) {
 					require.NoError(t, fmt.Errorf("not expected received message: %+v", r))
 				}),
 			},
@@ -693,7 +693,7 @@ func TestBlockWiseWritetestmessage(t *testing.T) {
 				},
 				szx:            SZX16,
 				maxMessageSize: SZX16.Size(),
-				writetestmessage: makeWriteReq(t, sender, receiver, SZX16, int(SZX16.Size()), SZX1024, int(SZX1024.Size()), func(w ResponseWriter, r Message) {
+				writetestmessage: makeWriteReq(t, sender, receiver, SZX16, uint32(SZX16.Size()), SZX1024, uint32(SZX1024.Size()), func(w ResponseWriter, r Message) {
 					require.Equal(t, &testmessage{
 						ctx:     context.Background(),
 						token:   []byte{2},
@@ -715,7 +715,7 @@ func TestBlockWiseWritetestmessage(t *testing.T) {
 				},
 				szx:            SZXBERT,
 				maxMessageSize: SZXBERT.Size() * 2,
-				writetestmessage: makeWriteReq(t, sender, receiver, SZXBERT, int(SZXBERT.Size()*2), SZXBERT, int(SZXBERT.Size()*5), func(w ResponseWriter, r Message) {
+				writetestmessage: makeWriteReq(t, sender, receiver, SZXBERT, uint32(SZXBERT.Size()*2), SZXBERT, uint32(SZXBERT.Size()*5), func(w ResponseWriter, r Message) {
 					require.Equal(t, &testmessage{
 						ctx:     context.Background(),
 						token:   []byte{'B', 'E', 'R', 'T'},
@@ -731,7 +731,7 @@ func TestBlockWiseWritetestmessage(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			addr, err := net.ResolveTCPAddr("tcp", "localhost:1")
 			require.NoError(t, err)
-			err = sender.WriteMessage(addr, tt.args.r, tt.args.szx, int(tt.args.maxMessageSize), tt.args.writetestmessage)
+			err = sender.WriteMessage(addr, tt.args.r, tt.args.szx, uint32(tt.args.maxMessageSize), tt.args.writetestmessage)
 			if tt.wantErr {
 				assert.Error(t, err)
 				return

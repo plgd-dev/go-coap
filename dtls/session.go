@@ -15,23 +15,26 @@ import (
 type EventFunc = func()
 
 type Session struct {
-	connection     *coapNet.Conn
-	maxMessageSize int
-	closeSocket    bool
-
-	mutex   sync.Mutex
 	onClose []EventFunc
 
-	cancel context.CancelFunc
-	ctx    atomic.Value
+	ctx atomic.Value
+
+	cancel     context.CancelFunc
+	connection *coapNet.Conn
 
 	done chan struct{}
+
+	mutex sync.Mutex
+
+	maxMessageSize uint32
+
+	closeSocket bool
 }
 
 func NewSession(
 	ctx context.Context,
 	connection *coapNet.Conn,
-	maxMessageSize int,
+	maxMessageSize uint32,
 	closeSocket bool,
 ) *Session {
 	ctx, cancel := context.WithCancel(ctx)
@@ -108,7 +111,7 @@ func (s *Session) WriteMessage(req *pool.Message) error {
 	return err
 }
 
-func (s *Session) MaxMessageSize() int {
+func (s *Session) MaxMessageSize() uint32 {
 	return s.maxMessageSize
 }
 

@@ -37,15 +37,16 @@ type respObservationMessage struct {
 //Observation represents subscription to resource on the server
 type Observation struct {
 	token               message.Token
+	lastEvent           time.Time
+	etag                []byte
 	path                string
 	cc                  *ClientConn
 	observeFunc         func(req *pool.Message)
 	respObservationChan chan respObservationMessage
 
+	mutex sync.Mutex
+
 	obsSequence uint32
-	etag        []byte
-	lastEvent   time.Time
-	mutex       sync.Mutex
 
 	waitForReponse uint32
 }
@@ -63,13 +64,13 @@ func newObservation(token message.Token, path string, cc *ClientConn, observeFun
 }
 
 func (o *Observation) Canceled() bool {
-	_, ok := o.cc.observationRequests.Load(o.token.String())
+	_, ok := o.cc.observationRequests.Load(o.token.Hash())
 	return !ok
 }
 
 func (o *Observation) cleanUp() bool {
 	o.cc.observationTokenHandler.Pop(o.token)
-	registeredRequest, ok := o.cc.observationRequests.PullOut(o.token.String())
+	registeredRequest, ok := o.cc.observationRequests.PullOut(o.token.Hash())
 	if ok {
 		o.cc.ReleaseMessage(registeredRequest.(*pool.Message))
 	}
@@ -149,8 +150,8 @@ func (cc *ClientConn) Observe(ctx context.Context, path string, observeFunc func
 	respObservationChan := make(chan respObservationMessage, 1)
 	o := newObservation(token, path, cc, observeFunc, respObservationChan)
 
-	cc.observationRequests.Store(token.String(), req)
-	err = o.cc.observationTokenHandler.Insert(token.String(), o.handler)
+	cc.observationRequests.Store(token.Hash(), req)
+	err = o.cc.observationTokenHandler.Insert(token.Hash(), o.handler)
 	defer func(err *error) {
 		if *err != nil {
 			o.cleanUp()
