@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net"
+	"strings"
 	"sync"
 	"time"
 
@@ -167,8 +169,8 @@ func NewServer(opt ...ServerOption) *Server {
 		handler:        opts.handler,
 		maxMessageSize: opts.maxMessageSize,
 		errors: func(err error) {
-			if errors.Is(err, context.Canceled) {
-				// this error was produced by cancellation context - don't report it.
+			if errors.Is(err, context.Canceled) || errors.Is(err, io.EOF) || strings.Contains(err.Error(), "use of closed network connection") {
+				// this error was produced by cancellation context or closing connection.
 				return
 			}
 			opts.errors(fmt.Errorf("dtls: %w", err))

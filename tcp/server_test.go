@@ -270,9 +270,14 @@ func TestServerKeepAliveMonitor(t *testing.T) {
 		}),
 	)
 	require.NoError(t, err)
-	cc.AddOnClose(func() {
-		checkCloseWg.Release(1)
-	})
+	go func() {
+		select {
+		case <-cc.Done():
+			checkCloseWg.Release(1)
+		case <-ctx.Done():
+			return
+		}
+	}()
 
 	// send ping to create serverside connection
 	reqCtx, cancel := context.WithTimeout(context.Background(), time.Second)
