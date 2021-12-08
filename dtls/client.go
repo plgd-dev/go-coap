@@ -163,7 +163,7 @@ func Client(conn *dtls.Conn, opts ...DialOption) *client.ClientConn {
 	errorsFunc := cfg.errors
 	cfg.errors = func(err error) {
 		if errors.Is(err, context.Canceled) || errors.Is(err, io.EOF) || strings.Contains(err.Error(), "use of closed network connection") {
-			// this error was produced by cancellation context - don't report it.
+			// this error was produced by cancellation context or closing connection.
 			return
 		}
 		errorsFunc(fmt.Errorf("dtls: %v: %w", conn.RemoteAddr(), err))
