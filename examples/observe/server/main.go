@@ -33,7 +33,7 @@ func sendResponse(cc mux.Client, token []byte, subded time.Time, obs int64) erro
 	opts, n, err := opts.SetContentFormat(buf, message.TextPlain)
 	if err == message.ErrTooSmall {
 		buf = append(buf, make([]byte, n)...)
-		opts, n, err = opts.SetContentFormat(buf, message.TextPlain)
+		opts, _, err = opts.SetContentFormat(buf, message.TextPlain)
 	}
 	if err != nil {
 		return fmt.Errorf("cannot set content format to response: %w", err)
@@ -42,7 +42,7 @@ func sendResponse(cc mux.Client, token []byte, subded time.Time, obs int64) erro
 		opts, n, err = opts.SetObserve(buf, uint32(obs))
 		if err == message.ErrTooSmall {
 			buf = append(buf, make([]byte, n)...)
-			opts, n, err = opts.SetObserve(buf, uint32(obs))
+			opts, _, err = opts.SetObserve(buf, uint32(obs))
 		}
 		if err != nil {
 			return fmt.Errorf("cannot set options to response: %w", err)

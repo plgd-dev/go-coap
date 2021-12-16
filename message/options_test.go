@@ -76,12 +76,10 @@ func TestETAG(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, opts, newOpts)
 	require.Equal(t, 1, n)
-	buf = buf[1:]
 
 	etag, err := newOpts.GetBytes(ETag)
 	require.NoError(t, err)
 	require.Equal(t, opts[0].Value, etag)
-
 }
 
 func TestSetPath(t *testing.T) {
@@ -217,7 +215,7 @@ func TestRemoveBytesOption(t *testing.T) {
 	options = testRemoveBytesOption(t, options, 99, 5)
 	options = testRemoveBytesOption(t, options, 0, 3)
 	options = testAddBytesOption(t, options, Option{ID: 2, Value: []byte("5")}, 1)
-	options = testRemoveBytesOption(t, options, 2, 3)
+	testRemoveBytesOption(t, options, 2, 3)
 }
 
 func TestPathOption(t *testing.T) {
