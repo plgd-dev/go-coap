@@ -14,7 +14,7 @@ import (
 	"github.com/plgd-dev/go-coap/v2/udp/message/pool"
 )
 
-func ExampleGet() {
+func ExampleClientConn_Get() {
 	conn, err := udp.Dial("pluggedin.cloud:5683")
 	if err != nil {
 		log.Fatal(err)
@@ -33,7 +33,7 @@ func ExampleGet() {
 	fmt.Printf("%v", data)
 }
 
-func ExampleServe() {
+func ExampleServer_Serve() {
 	l, err := net.NewListenUDP("udp", "0.0.0.0:5683")
 	if err != nil {
 		log.Fatal(err)
@@ -44,7 +44,7 @@ func ExampleServe() {
 	log.Fatal(s.Serve(l))
 }
 
-func ExampleDiscovery() {
+func ExampleServer_Discover() {
 	l, err := net.NewListenUDP("udp", "")
 	if err != nil {
 		log.Fatal(err)

@@ -11,7 +11,7 @@ import (
 	"github.com/plgd-dev/go-coap/v2/tcp"
 )
 
-func ExampleGet() {
+func ExampleClientConn_Get() {
 	conn, err := tcp.Dial("pluggedin.cloud:5683")
 	if err != nil {
 		log.Fatal(err)
@@ -30,7 +30,7 @@ func ExampleGet() {
 	fmt.Printf("%v", data)
 }
 
-func ExampleServe() {
+func ExampleServer_Serve() {
 	l, err := net.NewTCPListener("tcp", "0.0.0.0:5683")
 	if err != nil {
 		log.Fatal(err)
