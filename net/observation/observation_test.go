@@ -22,7 +22,7 @@ func TestValidSequenceNumber(t *testing.T) {
 		{
 			name: "(1 << 25)-1, 0, now-1s, now",
 			args: args{
-				old:             (1 << 25)-1,
+				old:             (1 << 25) - 1,
 				new:             0,
 				lastEventOccurs: time.Now().Add(-time.Second),
 				now:             time.Now(),
@@ -81,7 +81,7 @@ func TestValidSequenceNumber(t *testing.T) {
 			name: "0, 1 << 23+1, now-1s, now",
 			args: args{
 				old:             0,
-				new:             1 << 23+1,
+				new:             1<<23 + 1,
 				lastEventOccurs: time.Now().Add(-time.Second),
 				now:             time.Now(),
 			},

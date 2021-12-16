@@ -445,6 +445,9 @@ func (b *BlockWise) handleSendingMessage(w ResponseWriter, sendingMessage Messag
 			err = nil
 		}
 	}
+	if err != nil {
+		return false, fmt.Errorf("cannot read response: %w", err)
+	}
 
 	buf = buf[:readed]
 	sendMessage.SetBody(bytes.NewReader(buf))
@@ -573,8 +576,8 @@ func (b *BlockWise) continueSendingMessage(w ResponseWriter, r Message, maxSZX S
 		return false, fmt.Errorf("cannot get %v option: %w", blockType, err)
 	}
 	if blockType == message.Block1 {
-		// num just acknowlege position we need to set block to next block.
-		szx, num, more, err := DecodeBlockOption(block)
+		// returned blockNumber just acknowledges position we need to set block to the next block.
+		szx, _, more, err := DecodeBlockOption(block)
 		if err != nil {
 			return false, fmt.Errorf("cannot decode %v(%v) option: %w", blockType, block, err)
 		}
@@ -582,7 +585,7 @@ func (b *BlockWise) continueSendingMessage(w ResponseWriter, r Message, maxSZX S
 		if err != nil {
 			return false, fmt.Errorf("cannot get current position of seek: %w", err)
 		}
-		num = off / szx.Size()
+		num := off / szx.Size()
 		block, err = EncodeBlockOption(szx, num, more)
 		if err != nil {
 			return false, fmt.Errorf("cannot encode %v(%v, %v, %v) option: %w", blockType, szx, num, more, err)

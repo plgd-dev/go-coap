@@ -36,11 +36,10 @@ func TestMarshalMessage(t *testing.T) {
 		t.Fatalf("Cannot set uri")
 	}
 	bufOptionsUsed = bufOptionsUsed[enc:]
-	options, enc, err = options.SetContentFormat(bufOptionsUsed, coap.TextPlain)
+	options, _, err = options.SetContentFormat(bufOptionsUsed, coap.TextPlain)
 	if err != nil {
 		t.Fatalf("Cannot set content format")
 	}
-	bufOptionsUsed = bufOptionsUsed[enc:]
 
 	testMarshalMessage(t, Message{
 		Code:    codes.GET,
@@ -73,8 +72,7 @@ func BenchmarkMarshalMessage(b *testing.B) {
 	options, enc, _ = options.SetPath(bufOptionsUsed, "/a/b/c/d/e")
 	bufOptionsUsed = bufOptionsUsed[enc:]
 
-	options, enc, _ = options.SetContentFormat(bufOptionsUsed, coap.TextPlain)
-	bufOptionsUsed = bufOptionsUsed[enc:]
+	options, _, _ = options.SetContentFormat(bufOptionsUsed, coap.TextPlain)
 	msg := Message{
 		Code:    codes.GET,
 		Payload: []byte{0x1},
