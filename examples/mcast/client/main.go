@@ -75,7 +75,7 @@ func main() {
 	timeout := minTimeout
 	messagePool := pool.New(1024, 1600)
 
-	var previousDuplicit sync.Map
+	var previousDuplicit *sync.Map
 	d := func() {
 		s := udp.NewServer(udp.WithTransmission(time.Second, timeout/2, 2), udp.WithMessagePool(messagePool))
 		var wg sync.WaitGroup
@@ -127,7 +127,7 @@ func main() {
 			return true
 		})
 
-		previousDuplicit = duplicit
+		previousDuplicit = &duplicit
 
 		if int(numDevices) != *numDevs && previousNum != numDevices {
 			timeout += time.Second
