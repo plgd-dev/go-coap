@@ -166,13 +166,12 @@ func TestClientConnGetSeparateMessage(t *testing.T) {
 			opts, used, err := customResp.Options.SetContentFormat(optsBuf, message.TextPlain)
 			if err == message.ErrTooSmall {
 				optsBuf = append(optsBuf, make([]byte, used)...)
-				opts, used, err = customResp.Options.SetContentFormat(optsBuf, message.TextPlain)
+				opts, _, err = customResp.Options.SetContentFormat(optsBuf, message.TextPlain)
 			}
 			if err != nil {
 				log.Printf("cannot set options to response: %v", err)
 				return
 			}
-			optsBuf = optsBuf[:used]
 			customResp.Options = opts
 
 			err = w.Client().WriteMessage(&customResp)

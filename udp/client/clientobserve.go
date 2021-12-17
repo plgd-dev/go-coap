@@ -37,7 +37,6 @@ type respObservationMessage struct {
 //Observation represents subscription to resource on the server
 type Observation struct {
 	token               message.Token
-	etag                []byte
 	path                string
 	cc                  *ClientConn
 	observeFunc         func(req *pool.Message)

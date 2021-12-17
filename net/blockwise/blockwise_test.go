@@ -224,10 +224,8 @@ func makeDo(t *testing.T, sender, receiver *BlockWise, senderMaxSZX SZX, senderM
 				roReq = senderResp.Message()
 			}
 		}()
-		select {
-		case resp := <-c:
-			return resp, nil
-		}
+		resp := <-c
+		return resp, nil
 	}
 }
 
@@ -642,10 +640,8 @@ func makeWriteReq(t *testing.T, sender, receiver *BlockWise, senderMaxSZX SZX, s
 				roReq = senderResp.Message()
 			}
 		}()
-		select {
-		case <-c:
-			return nil
-		}
+		<-c
+		return nil
 	}
 }
 

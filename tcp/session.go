@@ -219,20 +219,20 @@ func (s *Session) handleSignals(r *pool.Message, cc *ClientConn) bool {
 		}
 		return true
 	case codes.Ping:
-		if r.HasOption(coapTCP.Custody) {
-			//TODO
-		}
+		// if r.HasOption(coapTCP.Custody) {
+		//TODO
+		// }
 		s.sendPong(r.Token())
 		return true
 	case codes.Release:
-		if r.HasOption(coapTCP.AlternativeAddress) {
-			//TODO
-		}
+		// if r.HasOption(coapTCP.AlternativeAddress) {
+		//TODO
+		// }
 		return true
 	case codes.Abort:
-		if r.HasOption(coapTCP.BadCSMOption) {
-			//TODO
-		}
+		// if r.HasOption(coapTCP.BadCSMOption) {
+		//TODO
+		// }
 		return true
 	case codes.Pong:
 		h, err := s.tokenHandlerContainer.Pop(r.Token())
