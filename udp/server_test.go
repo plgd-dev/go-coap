@@ -51,7 +51,10 @@ func TestServerDiscoverIotivity(t *testing.T) {
 
 	ld, err := coapNet.NewListenUDP("udp4", "")
 	require.NoError(t, err)
-	defer ld.Close()
+	defer func() {
+		err := ld.Close()
+		require.NoError(t, err)
+	}()
 
 	sd := NewServer()
 	defer sd.Stop()
@@ -83,7 +86,10 @@ func TestServerDiscover(t *testing.T) {
 
 	l, err := coapNet.NewListenUDP("udp4", multicastAddr)
 	require.NoError(t, err)
-	defer l.Close()
+	defer func() {
+		err := l.Close()
+		require.NoError(t, err)
+	}()
 
 	ifaces, err := net.Interfaces()
 	require.NoError(t, err)
@@ -104,7 +110,8 @@ func TestServerDiscover(t *testing.T) {
 	defer wg.Wait()
 
 	s := udp.NewServer(udp.WithHandlerFunc(func(w *client.ResponseWriter, r *pool.Message) {
-		w.SetResponse(codes.BadRequest, message.TextPlain, bytes.NewReader(make([]byte, 5330)))
+		err := w.SetResponse(codes.BadRequest, message.TextPlain, bytes.NewReader(make([]byte, 5330)))
+		require.NoError(t, err)
 		require.NotNil(t, w.ClientConn())
 	}))
 	defer s.Stop()
@@ -118,7 +125,10 @@ func TestServerDiscover(t *testing.T) {
 
 	ld, err := coapNet.NewListenUDP("udp4", "")
 	require.NoError(t, err)
-	defer ld.Close()
+	defer func() {
+		err := ld.Close()
+		require.NoError(t, err)
+	}()
 
 	sd := udp.NewServer()
 	defer sd.Stop()
@@ -143,7 +153,10 @@ func TestServerDiscover(t *testing.T) {
 func TestServerCleanUpConns(t *testing.T) {
 	ld, err := coapNet.NewListenUDP("udp4", "")
 	require.NoError(t, err)
-	defer ld.Close()
+	defer func() {
+		err := ld.Close()
+		require.NoError(t, err)
+	}()
 
 	var checkCloseWg sync.WaitGroup
 	defer checkCloseWg.Wait()
@@ -170,7 +183,8 @@ func TestServerCleanUpConns(t *testing.T) {
 		checkCloseWg.Done()
 	})
 	defer func() {
-		cc.Close()
+		err := cc.Close()
+		require.NoError(t, err)
 		<-cc.Done()
 	}()
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
@@ -187,7 +201,10 @@ func TestServerInactiveMonitor(t *testing.T) {
 
 	ld, err := coapNet.NewListenUDP("udp4", "")
 	require.NoError(t, err)
-	defer ld.Close()
+	defer func() {
+		err := ld.Close()
+		require.NoError(t, err)
+	}()
 
 	var checkCloseWg sync.WaitGroup
 	defer checkCloseWg.Wait()
@@ -201,7 +218,8 @@ func TestServerInactiveMonitor(t *testing.T) {
 		udp.WithInactivityMonitor(100*time.Millisecond, func(cc inactivity.ClientConn) {
 			require.False(t, inactivityDetected)
 			inactivityDetected = true
-			cc.Close()
+			err := cc.Close()
+			require.NoError(t, err)
 		}),
 		udp.WithPeriodicRunner(periodic.New(ctx.Done(), time.Millisecond*10)),
 	)
@@ -239,7 +257,8 @@ func TestServerInactiveMonitor(t *testing.T) {
 	// wait for fire inactivity
 	time.Sleep(time.Second * 2)
 
-	cc.Close()
+	err = cc.Close()
+	require.NoError(t, err)
 	<-cc.Done()
 
 	checkCloseWg.Wait()
@@ -251,7 +270,10 @@ func TestServerKeepAliveMonitor(t *testing.T) {
 
 	ld, err := coapNet.NewListenUDP("udp4", "")
 	require.NoError(t, err)
-	defer ld.Close()
+	defer func() {
+		err := ld.Close()
+		require.NoError(t, err)
+	}()
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*8)
 	defer cancel()
@@ -268,7 +290,8 @@ func TestServerKeepAliveMonitor(t *testing.T) {
 		udp.WithKeepAlive(3, 100*time.Millisecond, func(cc inactivity.ClientConn) {
 			require.False(t, inactivityDetected)
 			inactivityDetected = true
-			cc.Close()
+			err := cc.Close()
+			require.NoError(t, err)
 		}),
 		udp.WithPeriodicRunner(periodic.New(ctx.Done(), time.Millisecond*10)),
 	)
@@ -289,7 +312,8 @@ func TestServerKeepAliveMonitor(t *testing.T) {
 		ld.LocalAddr().String(),
 		udp.WithInactivityMonitor(time.Millisecond*10, func(cc inactivity.ClientConn) {
 			time.Sleep(time.Millisecond * 500)
-			cc.Close()
+			err := cc.Close()
+			require.NoError(t, err)
 		}),
 		udp.WithPeriodicRunner(periodic.New(ctx.Done(), time.Millisecond*10)),
 	)
@@ -302,7 +326,8 @@ func TestServerKeepAliveMonitor(t *testing.T) {
 	// send ping to create serverside connection
 	ctx, cancel = context.WithTimeout(ctx, time.Second)
 	defer cancel()
-	cc.Ping(ctx)
+	err = cc.Ping(ctx)
+	require.NoError(t, err)
 
 	checkCloseWg.Wait()
 	require.True(t, inactivityDetected)

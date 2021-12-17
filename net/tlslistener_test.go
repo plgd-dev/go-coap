@@ -78,12 +78,18 @@ func TestTLSListenerAcceptWithContext(t *testing.T) {
 
 	dir, err := ioutil.TempDir("", "gotesttmp")
 	assert.NoError(t, err)
-	defer os.RemoveAll(dir)
+	defer func() {
+		err := os.RemoveAll(dir)
+		assert.NoError(t, err)
+	}()
 	config := SetTLSConfig(t)
 
 	listener, err := NewTLSListener("tcp", "127.0.0.1:", config)
 	require.NoError(t, err)
-	defer listener.Close()
+	defer func() {
+		err := listener.Close()
+		assert.NoError(t, err)
+	}()
 
 	var wg sync.WaitGroup
 	wg.Add(1)
@@ -106,7 +112,8 @@ func TestTLSListenerAcceptWithContext(t *testing.T) {
 			}
 			_, err = c.Write([]byte("hello"))
 			assert.NoError(t, err)
-			c.Close()
+			err = c.Close()
+			assert.NoError(t, err)
 		}
 	}()
 
@@ -156,12 +163,18 @@ func TestTLSListenerCheckForInfinitLoop(t *testing.T) {
 
 	dir, err := ioutil.TempDir("", "gotesttmp")
 	assert.NoError(t, err)
-	defer os.RemoveAll(dir)
+	defer func() {
+		err := os.RemoveAll(dir)
+		assert.NoError(t, err)
+	}()
 	config := SetTLSConfig(t)
 
 	listener, err := NewTLSListener("tcp", "127.0.0.1:", config)
 	require.NoError(t, err)
-	defer listener.Close()
+	defer func() {
+		err := listener.Close()
+		assert.NoError(t, err)
+	}()
 
 	var wg sync.WaitGroup
 	wg.Add(1)
@@ -181,7 +194,8 @@ func TestTLSListenerCheckForInfinitLoop(t *testing.T) {
 					InsecureSkipVerify: true,
 					Certificates:       []tls.Certificate{cert},
 					VerifyPeerCertificate: func(rawCerts [][]byte, verifiedChains [][]*x509.Certificate) error {
-						conn.Close()
+						err := conn.Close()
+						require.NoError(t, err)
 						return nil
 					},
 				})
@@ -198,16 +212,16 @@ func TestTLSListenerCheckForInfinitLoop(t *testing.T) {
 			con, err := listener.AcceptWithContext(tt.args.ctx)
 			if tt.wantErr {
 				assert.Error(t, err)
-			} else {
-				require.NoError(t, err)
-				b := make([]byte, 1024)
-				c := NewConn(con)
-				_, err = c.ReadWithContext(context.Background(), b)
-				assert.Error(t, err)
-				assert.Contains(t, err.Error(), "EOF")
-				err = con.Close()
-				assert.Error(t, err)
+				return
 			}
+			require.NoError(t, err)
+			b := make([]byte, 1024)
+			c := NewConn(con)
+			_, err = c.ReadWithContext(context.Background(), b)
+			assert.Error(t, err)
+			assert.Contains(t, err.Error(), "EOF")
+			err = con.Close()
+			assert.Error(t, err)
 		})
 	}
 }
