@@ -31,7 +31,9 @@ jobs:
         run: |
           export PATH=${PATH}:`go env GOPATH`/bin
           go install github.com/kisielk/errcheck@latest
-          errcheck ./... || echo "errcheck detected unhandled errors"
+          if errcheck ./... | grep -v 'example'; then\
+            echo "errcheck detected unhandled errors";\
+          fi
 
       - name: Install and run gocyclo
         run: |
