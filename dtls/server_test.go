@@ -35,7 +35,10 @@ func TestServerCleanUpConns(t *testing.T) {
 	}
 	ld, err := coapNet.NewDTLSListener("udp4", "", dtlsCfg)
 	require.NoError(t, err)
-	defer ld.Close()
+	defer func() {
+		err := ld.Close()
+		require.NoError(t, err)
+	}()
 
 	var checkCloseWg sync.WaitGroup
 	defer checkCloseWg.Wait()
@@ -65,7 +68,8 @@ func TestServerCleanUpConns(t *testing.T) {
 	defer cancel()
 	err = cc.Ping(ctx)
 	require.NoError(t, err)
-	cc.Close()
+	err = cc.Close()
+	require.NoError(t, err)
 	<-cc.Done()
 }
 
@@ -133,7 +137,10 @@ func TestServerSetContextValueWithPKI(t *testing.T) {
 
 	ld, err := coapNet.NewDTLSListener("udp4", "", serverCgf)
 	require.NoError(t, err)
-	defer ld.Close()
+	defer func() {
+		err := ld.Close()
+		require.NoError(t, err)
+	}()
 
 	onNewConn := func(cc *client.ClientConn, dtlsConn *piondtls.Conn) {
 		// set connection context certificate
@@ -146,7 +153,8 @@ func TestServerSetContextValueWithPKI(t *testing.T) {
 		clientCert := r.Context().Value("client-cert").(*x509.Certificate)
 		require.Equal(t, clientCert.SerialNumber, clientSerial)
 		require.NotNil(t, clientCert)
-		w.SetResponse(codes.Content, message.TextPlain, bytes.NewReader([]byte("done")))
+		err := w.SetResponse(codes.Content, message.TextPlain, bytes.NewReader([]byte("done")))
+		require.NoError(t, err)
 	}
 
 	sd := dtls.NewServer(dtls.WithHandlerFunc(handle), dtls.WithOnNewClientConn(onNewConn))
@@ -161,7 +169,8 @@ func TestServerSetContextValueWithPKI(t *testing.T) {
 
 	_, err = cc.Get(ctx, "/")
 	require.NoError(t, err)
-	cc.Close()
+	err = cc.Close()
+	require.NoError(t, err)
 	<-cc.Done()
 }
 
@@ -175,7 +184,10 @@ func TestServerInactiveMonitor(t *testing.T) {
 
 	ld, err := coapNet.NewDTLSListener("udp4", "", serverCgf)
 	require.NoError(t, err)
-	defer ld.Close()
+	defer func() {
+		err := ld.Close()
+		require.NoError(t, err)
+	}()
 
 	var checkCloseWg sync.WaitGroup
 	defer checkCloseWg.Wait()
@@ -189,7 +201,8 @@ func TestServerInactiveMonitor(t *testing.T) {
 		dtls.WithInactivityMonitor(100*time.Millisecond, func(cc inactivity.ClientConn) {
 			require.False(t, inactivityDetected)
 			inactivityDetected = true
-			cc.Close()
+			err := cc.Close()
+			require.NoError(t, err)
 		}),
 		dtls.WithPeriodicRunner(periodic.New(ctx.Done(), time.Millisecond*10)),
 	)
@@ -224,7 +237,8 @@ func TestServerInactiveMonitor(t *testing.T) {
 
 	time.Sleep(time.Second * 2)
 
-	cc.Close()
+	err = cc.Close()
+	require.NoError(t, err)
 	<-cc.Done()
 
 	checkCloseWg.Wait()
@@ -241,7 +255,10 @@ func TestServerKeepAliveMonitor(t *testing.T) {
 
 	ld, err := coapNet.NewDTLSListener("udp4", "", serverCgf)
 	require.NoError(t, err)
-	defer ld.Close()
+	defer func() {
+		err := ld.Close()
+		require.NoError(t, err)
+	}()
 
 	var checkCloseWg sync.WaitGroup
 	defer checkCloseWg.Wait()
@@ -255,7 +272,8 @@ func TestServerKeepAliveMonitor(t *testing.T) {
 		dtls.WithKeepAlive(3, 100*time.Millisecond, func(cc inactivity.ClientConn) {
 			require.False(t, inactivityDetected)
 			inactivityDetected = true
-			cc.Close()
+			err := cc.Close()
+			require.NoError(t, err)
 		}),
 		dtls.WithPeriodicRunner(periodic.New(ctx.Done(), time.Millisecond*10)),
 	)
@@ -290,7 +308,8 @@ func TestServerKeepAliveMonitor(t *testing.T) {
 	// send ping to create serverside connection
 	ctx, cancel = context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	cc.Ping(ctx)
+	err = cc.Ping(ctx)
+	require.NoError(t, err)
 
 	checkCloseWg.Wait()
 	require.True(t, inactivityDetected)

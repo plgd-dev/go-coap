@@ -37,7 +37,10 @@ func TestClientConnDeduplication(t *testing.T) {
 
 	l, err := coapNet.NewListenUDP("udp", "")
 	require.NoError(t, err)
-	defer l.Close()
+	defer func() {
+		err := l.Close()
+		require.NoError(t, err)
+	}()
 	var wg sync.WaitGroup
 	defer wg.Wait()
 
@@ -46,13 +49,14 @@ func TestClientConnDeduplication(t *testing.T) {
 	cnt := int32(0)
 	// The response counts up with every get
 	// so we can check if the handler is only called once per message ID
-	m.Handle("/count", mux.HandlerFunc(func(w mux.ResponseWriter, r *mux.Message) {
+	err = m.Handle("/count", mux.HandlerFunc(func(w mux.ResponseWriter, r *mux.Message) {
 		assert.Equal(t, codes.GET, r.Code)
 		atomic.AddInt32(&cnt, 1)
 		err := w.SetResponse(codes.Content, message.AppOctets, bytes.NewReader([]byte{byte(cnt)}))
 		require.NoError(t, err)
 		require.NotEmpty(t, w.Client())
 	}))
+	require.NoError(t, err)
 
 	s := udp.NewServer(udp.WithMux(m),
 		udp.WithErrors(func(err error) {
@@ -72,7 +76,10 @@ func TestClientConnDeduplication(t *testing.T) {
 		}),
 	)
 	require.NoError(t, err)
-	defer cc.Close()
+	defer func() {
+		err := cc.Close()
+		require.NoError(t, err)
+	}()
 
 	// Setup done - Run Tests
 
@@ -104,14 +111,16 @@ func TestClientConnDeduplication(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, message.AppOctets, ct)
 	require.Equal(t, []byte{1}, bodyToBytes(t, got.Body()))
-
 }
 
 func TestClientConnDeduplicationRetransmission(t *testing.T) {
 
 	l, err := coapNet.NewListenUDP("udp", "")
 	require.NoError(t, err)
-	defer l.Close()
+	defer func() {
+		err := l.Close()
+		require.NoError(t, err)
+	}()
 	var wg sync.WaitGroup
 	defer wg.Wait()
 
@@ -121,7 +130,7 @@ func TestClientConnDeduplicationRetransmission(t *testing.T) {
 	// The response counts up with every get
 	// so we can check if the handler is only called once per message ID
 	once := sync.Once{}
-	m.Handle("/count", mux.HandlerFunc(func(w mux.ResponseWriter, r *mux.Message) {
+	err = m.Handle("/count", mux.HandlerFunc(func(w mux.ResponseWriter, r *mux.Message) {
 		assert.Equal(t, codes.GET, r.Code)
 		atomic.AddInt32(&cnt, 1)
 		err := w.SetResponse(codes.Content, message.AppOctets, bytes.NewReader([]byte{byte(cnt)}))
@@ -132,8 +141,8 @@ func TestClientConnDeduplicationRetransmission(t *testing.T) {
 		once.Do(func() {
 			<-time.After(200 * time.Millisecond)
 		})
-
 	}))
+	require.NoError(t, err)
 
 	s := udp.NewServer(udp.WithMux(m),
 		udp.WithErrors(func(err error) {
@@ -155,7 +164,10 @@ func TestClientConnDeduplicationRetransmission(t *testing.T) {
 		udp.WithTransmission(20*time.Millisecond, 100*time.Millisecond, 50),
 	)
 	require.NoError(t, err)
-	defer cc.Close()
+	defer func() {
+		err := cc.Close()
+		require.NoError(t, err)
+	}()
 
 	// Setup done - Run Tests
 
@@ -184,7 +196,6 @@ func TestClientConnDeduplicationRetransmission(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, message.AppOctets, ct)
 	require.Equal(t, []byte{2}, bodyToBytes(t, got.Body()))
-
 }
 
 func TestClientConnGet(t *testing.T) {
@@ -229,23 +240,28 @@ func TestClientConnGet(t *testing.T) {
 
 	l, err := coapNet.NewListenUDP("udp", "")
 	require.NoError(t, err)
-	defer l.Close()
+	defer func() {
+		err := l.Close()
+		require.NoError(t, err)
+	}()
 	var wg sync.WaitGroup
 	defer wg.Wait()
 
 	m := mux.NewRouter()
-	m.Handle("/a", mux.HandlerFunc(func(w mux.ResponseWriter, r *mux.Message) {
+	err = m.Handle("/a", mux.HandlerFunc(func(w mux.ResponseWriter, r *mux.Message) {
 		assert.Equal(t, codes.GET, r.Code)
 		err := w.SetResponse(codes.BadRequest, message.TextPlain, bytes.NewReader(make([]byte, 5330)))
 		require.NoError(t, err)
 		require.NotEmpty(t, w.Client())
 	}))
-	m.Handle("/b", mux.HandlerFunc(func(w mux.ResponseWriter, r *mux.Message) {
+	require.NoError(t, err)
+	err = m.Handle("/b", mux.HandlerFunc(func(w mux.ResponseWriter, r *mux.Message) {
 		assert.Equal(t, codes.GET, r.Code)
 		err := w.SetResponse(codes.Content, message.TextPlain, bytes.NewReader([]byte("b")))
 		require.NoError(t, err)
 		require.NotEmpty(t, w.Client())
 	}))
+	require.NoError(t, err)
 
 	s := udp.NewServer(udp.WithMux(m))
 	defer s.Stop()
@@ -259,7 +275,10 @@ func TestClientConnGet(t *testing.T) {
 
 	cc, err := udp.Dial(l.LocalAddr().String())
 	require.NoError(t, err)
-	defer cc.Close()
+	defer func() {
+		err := cc.Close()
+		require.NoError(t, err)
+	}()
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -288,12 +307,15 @@ func TestClientConnGet(t *testing.T) {
 func TestClientConnGetSeparateMessage(t *testing.T) {
 	l, err := coapNet.NewListenUDP("udp", "")
 	require.NoError(t, err)
-	defer l.Close()
+	defer func() {
+		err := l.Close()
+		require.NoError(t, err)
+	}()
 	var wg sync.WaitGroup
 	defer wg.Wait()
 
 	m := mux.NewRouter()
-	m.Handle("/a", mux.HandlerFunc(func(w mux.ResponseWriter, r *mux.Message) {
+	err = m.Handle("/a", mux.HandlerFunc(func(w mux.ResponseWriter, r *mux.Message) {
 		go func() {
 			time.Sleep(time.Second * 1)
 			assert.Equal(t, codes.GET, r.Code)
@@ -322,6 +344,7 @@ func TestClientConnGetSeparateMessage(t *testing.T) {
 			}
 		}()
 	}))
+	require.NoError(t, err)
 
 	s := udp.NewServer(udp.WithMux(m))
 	defer s.Stop()
@@ -337,7 +360,10 @@ func TestClientConnGetSeparateMessage(t *testing.T) {
 		assert.NoError(t, fmt.Errorf("none msg expected comes: %+v", r))
 	}))
 	require.NoError(t, err)
-	defer cc.Close()
+	defer func() {
+		err := cc.Close()
+		require.NoError(t, err)
+	}()
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*3600)
 	defer cancel()
@@ -349,7 +375,6 @@ func TestClientConnGetSeparateMessage(t *testing.T) {
 	resp, err := cc.Do(req)
 	require.NoError(t, err)
 	assert.Equal(t, codes.Content, resp.Code())
-
 }
 
 func TestClientConnPost(t *testing.T) {
@@ -404,12 +429,15 @@ func TestClientConnPost(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			l, err := coapNet.NewListenUDP("udp", "")
 			require.NoError(t, err)
-			defer l.Close()
+			defer func() {
+				err := l.Close()
+				require.NoError(t, err)
+			}()
 			var wg sync.WaitGroup
 			defer wg.Wait()
 
 			m := mux.NewRouter()
-			m.Handle("/a", mux.HandlerFunc(func(w mux.ResponseWriter, r *mux.Message) {
+			err = m.Handle("/a", mux.HandlerFunc(func(w mux.ResponseWriter, r *mux.Message) {
 				assert.Equal(t, codes.POST, r.Code)
 				ct, err := r.Options.GetUint32(message.ContentFormat)
 				require.NoError(t, err)
@@ -422,7 +450,8 @@ func TestClientConnPost(t *testing.T) {
 				require.NoError(t, err)
 				require.NotEmpty(t, w.Client())
 			}))
-			m.Handle("/b", mux.HandlerFunc(func(w mux.ResponseWriter, r *mux.Message) {
+			require.NoError(t, err)
+			err = m.Handle("/b", mux.HandlerFunc(func(w mux.ResponseWriter, r *mux.Message) {
 				assert.Equal(t, codes.POST, r.Code)
 				ct, err := r.Options.GetUint32(message.ContentFormat)
 				require.NoError(t, err)
@@ -434,6 +463,7 @@ func TestClientConnPost(t *testing.T) {
 				require.NoError(t, err)
 				require.NotEmpty(t, w.Client())
 			}))
+			require.NoError(t, err)
 
 			s := udp.NewServer(udp.WithMux(m))
 			defer s.Stop()
@@ -447,7 +477,10 @@ func TestClientConnPost(t *testing.T) {
 
 			cc, err := udp.Dial(l.LocalAddr().String())
 			require.NoError(t, err)
-			defer cc.Close()
+			defer func() {
+				err := cc.Close()
+				require.NoError(t, err)
+			}()
 
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second*3600)
 			defer cancel()
@@ -523,12 +556,15 @@ func TestClientConnPut(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			l, err := coapNet.NewListenUDP("udp", "")
 			require.NoError(t, err)
-			defer l.Close()
+			defer func() {
+				err := l.Close()
+				require.NoError(t, err)
+			}()
 			var wg sync.WaitGroup
 			defer wg.Wait()
 
 			m := mux.NewRouter()
-			m.Handle("/a", mux.HandlerFunc(func(w mux.ResponseWriter, r *mux.Message) {
+			err = m.Handle("/a", mux.HandlerFunc(func(w mux.ResponseWriter, r *mux.Message) {
 				assert.Equal(t, codes.PUT, r.Code)
 				ct, err := r.Options.GetUint32(message.ContentFormat)
 				require.NoError(t, err)
@@ -541,7 +577,8 @@ func TestClientConnPut(t *testing.T) {
 				require.NoError(t, err)
 				require.NotEmpty(t, w.Client())
 			}))
-			m.Handle("/b", mux.HandlerFunc(func(w mux.ResponseWriter, r *mux.Message) {
+			require.NoError(t, err)
+			err = m.Handle("/b", mux.HandlerFunc(func(w mux.ResponseWriter, r *mux.Message) {
 				assert.Equal(t, codes.PUT, r.Code)
 				ct, err := r.Options.GetUint32(message.ContentFormat)
 				require.NoError(t, err)
@@ -553,6 +590,7 @@ func TestClientConnPut(t *testing.T) {
 				require.NoError(t, err)
 				require.NotEmpty(t, w.Client())
 			}))
+			require.NoError(t, err)
 
 			s := udp.NewServer(udp.WithMux(m))
 			defer s.Stop()
@@ -566,7 +604,10 @@ func TestClientConnPut(t *testing.T) {
 
 			cc, err := udp.Dial(l.LocalAddr().String())
 			require.NoError(t, err)
-			defer cc.Close()
+			defer func() {
+				err := cc.Close()
+				require.NoError(t, err)
+			}()
 
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second*3600)
 			defer cancel()
@@ -632,23 +673,28 @@ func TestClientConnDelete(t *testing.T) {
 
 	l, err := coapNet.NewListenUDP("udp", "")
 	require.NoError(t, err)
-	defer l.Close()
+	defer func() {
+		err := l.Close()
+		require.NoError(t, err)
+	}()
 	var wg sync.WaitGroup
 	defer wg.Wait()
 
 	m := mux.NewRouter()
-	m.Handle("/a", mux.HandlerFunc(func(w mux.ResponseWriter, r *mux.Message) {
+	err = m.Handle("/a", mux.HandlerFunc(func(w mux.ResponseWriter, r *mux.Message) {
 		assert.Equal(t, codes.DELETE, r.Code)
 		err := w.SetResponse(codes.BadRequest, message.TextPlain, bytes.NewReader(make([]byte, 5330)))
 		require.NoError(t, err)
 		require.NotEmpty(t, w.Client())
 	}))
-	m.Handle("/b", mux.HandlerFunc(func(w mux.ResponseWriter, r *mux.Message) {
+	require.NoError(t, err)
+	err = m.Handle("/b", mux.HandlerFunc(func(w mux.ResponseWriter, r *mux.Message) {
 		assert.Equal(t, codes.DELETE, r.Code)
 		err := w.SetResponse(codes.Deleted, message.TextPlain, bytes.NewReader([]byte("b")))
 		require.NoError(t, err)
 		require.NotEmpty(t, w.Client())
 	}))
+	require.NoError(t, err)
 
 	s := udp.NewServer(udp.WithMux(m))
 	defer s.Stop()
@@ -662,7 +708,10 @@ func TestClientConnDelete(t *testing.T) {
 
 	cc, err := udp.Dial(l.LocalAddr().String())
 	require.NoError(t, err)
-	defer cc.Close()
+	defer func() {
+		err := cc.Close()
+		require.NoError(t, err)
+	}()
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -691,7 +740,10 @@ func TestClientConnDelete(t *testing.T) {
 func TestClientConnPing(t *testing.T) {
 	l, err := coapNet.NewListenUDP("udp", "")
 	require.NoError(t, err)
-	defer l.Close()
+	defer func() {
+		err := l.Close()
+		require.NoError(t, err)
+	}()
 	var wg sync.WaitGroup
 	defer wg.Wait()
 
@@ -707,7 +759,10 @@ func TestClientConnPing(t *testing.T) {
 
 	cc, err := udp.Dial(l.LocalAddr().String())
 	require.NoError(t, err)
-	defer cc.Close()
+	defer func() {
+		err := cc.Close()
+		require.NoError(t, err)
+	}()
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond*200)
 	defer cancel()

@@ -25,7 +25,10 @@ import (
 func TestServerCleanUpConns(t *testing.T) {
 	ld, err := coapNet.NewTCPListener("tcp4", "")
 	require.NoError(t, err)
-	defer ld.Close()
+	defer func() {
+		err := ld.Close()
+		require.NoError(t, err)
+	}()
 
 	var checkCloseWg sync.WaitGroup
 	defer checkCloseWg.Wait()
@@ -54,7 +57,8 @@ func TestServerCleanUpConns(t *testing.T) {
 		checkCloseWg.Done()
 	})
 	defer func() {
-		cc.Close()
+		err := cc.Close()
+		require.NoError(t, err)
 		<-cc.Done()
 	}()
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
@@ -122,7 +126,10 @@ func TestServerSetContextValueWithPKI(t *testing.T) {
 
 	ld, err := coapNet.NewTLSListener("tcp4", "", serverCgf)
 	require.NoError(t, err)
-	defer ld.Close()
+	defer func() {
+		err := ld.Close()
+		require.NoError(t, err)
+	}()
 
 	onNewConn := func(cc *tcp.ClientConn, tlscon *tls.Conn) {
 		require.NotNil(t, tlscon)
@@ -135,7 +142,8 @@ func TestServerSetContextValueWithPKI(t *testing.T) {
 		clientCert := r.Context().Value("client-cert").(*x509.Certificate)
 		require.Equal(t, clientCert.SerialNumber, clientSerial)
 		require.NotNil(t, clientCert)
-		w.SetResponse(codes.Content, message.TextPlain, bytes.NewReader([]byte("done")))
+		err := w.SetResponse(codes.Content, message.TextPlain, bytes.NewReader([]byte("done")))
+		require.NoError(t, err)
 	}
 
 	sd := tcp.NewServer(tcp.WithHandlerFunc(handle), tcp.WithOnNewClientConn(onNewConn))
@@ -148,7 +156,8 @@ func TestServerSetContextValueWithPKI(t *testing.T) {
 	cc, err := tcp.Dial(ld.Addr().String(), tcp.WithTLS(clientCgf))
 	require.NoError(t, err)
 	defer func() {
-		cc.Close()
+		err := cc.Close()
+		require.NoError(t, err)
 		<-cc.Done()
 	}()
 
@@ -164,7 +173,10 @@ func TestServerInactiveMonitor(t *testing.T) {
 
 	ld, err := coapNet.NewTCPListener("tcp", "")
 	require.NoError(t, err)
-	defer ld.Close()
+	defer func() {
+		err := ld.Close()
+		require.NoError(t, err)
+	}()
 
 	var checkCloseWg sync.WaitGroup
 	defer checkCloseWg.Wait()
@@ -178,7 +190,8 @@ func TestServerInactiveMonitor(t *testing.T) {
 		tcp.WithInactivityMonitor(100*time.Millisecond, func(cc inactivity.ClientConn) {
 			require.False(t, inactivityDetected)
 			inactivityDetected = true
-			cc.Close()
+			err := cc.Close()
+			require.NoError(t, err)
 		}),
 		tcp.WithPeriodicRunner(periodic.New(ctx.Done(), time.Millisecond*10)),
 	)
@@ -215,7 +228,8 @@ func TestServerInactiveMonitor(t *testing.T) {
 
 	time.Sleep(time.Second * 2)
 
-	cc.Close()
+	err = cc.Close()
+	require.NoError(t, err)
 	<-cc.Done()
 
 	checkCloseWg.Wait()
@@ -227,7 +241,10 @@ func TestServerKeepAliveMonitor(t *testing.T) {
 
 	ld, err := coapNet.NewTCPListener("tcp", "")
 	require.NoError(t, err)
-	defer ld.Close()
+	defer func() {
+		err := ld.Close()
+		require.NoError(t, err)
+	}()
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*8)
 	defer cancel()
@@ -244,7 +261,8 @@ func TestServerKeepAliveMonitor(t *testing.T) {
 		tcp.WithKeepAlive(3, 100*time.Millisecond, func(cc inactivity.ClientConn) {
 			require.False(t, inactivityDetected)
 			inactivityDetected = true
-			cc.Close()
+			err := cc.Close()
+			require.NoError(t, err)
 		}),
 		tcp.WithPeriodicRunner(periodic.New(ctx.Done(), time.Millisecond*100)),
 	)
