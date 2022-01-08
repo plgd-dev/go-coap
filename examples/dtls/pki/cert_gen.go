@@ -44,6 +44,9 @@ func GenerateCA() (ca *x509.Certificate, cert, key []byte, priv *ecdsa.PrivateKe
 
 	serialNumberLimit := new(big.Int).Lsh(big.NewInt(1), 128)
 	serialNumber, err := rand.Int(sequentialBytes(128), serialNumberLimit)
+	if err != nil {
+		return
+	}
 
 	ca = &x509.Certificate{
 		NotBefore:    notBefore,

@@ -22,15 +22,22 @@ jobs:
         uses: actions/setup-go@v2
         with:
           go-version: ^1.17
-     
+
       # Checks-out your repository under $GITHUB_WORKSPACE, so your job can access it
       - name: Checkout
+        if: ${{!startsWith(matrix.os, 'ubuntu')}}
         uses: actions/checkout@v2
+
+      - name: Full checkout
+        if: startsWith(matrix.os,'ubuntu')
+        uses: actions/checkout@v2
+        with:
+          fetch-depth: 0 # Full clone for SonarCloud
 
       # Runs a single command using the runners shell
       - name: Run a build
         run: go build ./...
-      
+
       # Runs a single command using the runners shell, -p1 for `race: limit on 8128 simultaneously alive goroutines is exceeded, dying` at macos
       - name: Run a test
         run: go test -v -race -p 1  ./... -coverpkg=./... -covermode=atomic -coverprofile=./coverage.txt
@@ -38,7 +45,7 @@ jobs:
       - name: Publish the coverage
         if: startsWith(matrix.os,'ubuntu')
         run: bash <(curl -s https://codecov.io/bash)
-      
+
       - name: SonarCloud Scan
         if: startsWith(matrix.os,'ubuntu')
         uses: SonarSource/sonarcloud-github-action@master
