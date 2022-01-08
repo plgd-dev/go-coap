@@ -327,7 +327,7 @@ func (b *BlockWise) Do(r Message, maxSzx SZX, maxMessageSize uint32, do func(req
 			return resp, fmt.Errorf("cannot decode block option of bw response: %w", err)
 		}
 		if num != newNum {
-			return resp, fmt.Errorf("unexpected of acknowleged seqencenumber(%v != %v)", num, newNum)
+			return resp, fmt.Errorf("unexpected value of acknowledged sequence number(%v != %v)", num, newNum)
 		}
 
 		num = num + newSzx.Size()/szx.Size()

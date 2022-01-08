@@ -4,13 +4,13 @@ import (
 	"context"
 	"fmt"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/plgd-dev/go-coap/v2/message"
 	"github.com/plgd-dev/go-coap/v2/message/codes"
 	"github.com/plgd-dev/go-coap/v2/net/observation"
 	"github.com/plgd-dev/go-coap/v2/udp/message/pool"
+	"go.uber.org/atomic"
 )
 
 func NewObservationHandler(obsertionTokenHandler *HandlerContainer, next HandlerFunc) HandlerFunc {
@@ -48,7 +48,7 @@ type Observation struct {
 
 	obsSequence uint32
 
-	waitForReponse uint32
+	waitForResponse atomic.Bool
 }
 
 func newObservation(token message.Token, path string, cc *ClientConn, observeFunc func(req *pool.Message), respObservationChan chan respObservationMessage) *Observation {
@@ -57,7 +57,7 @@ func newObservation(token message.Token, path string, cc *ClientConn, observeFun
 		path:                path,
 		obsSequence:         0,
 		cc:                  cc,
-		waitForReponse:      1,
+		waitForResponse:     *atomic.NewBool(true),
 		respObservationChan: respObservationChan,
 		observeFunc:         observeFunc,
 	}
@@ -80,7 +80,7 @@ func (o *Observation) cleanUp() bool {
 func (o *Observation) handler(w *ResponseWriter, r *pool.Message) {
 	code := r.Code()
 	notSupported := !r.HasOption(message.Observe)
-	if atomic.CompareAndSwapUint32(&o.waitForReponse, 1, 0) {
+	if o.waitForResponse.CAS(true, false) {
 		select {
 		case o.respObservationChan <- respObservationMessage{
 			code:         code,

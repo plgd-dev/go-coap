@@ -415,7 +415,7 @@ func (cc *ClientConn) Context() context.Context {
 	return cc.session.Context()
 }
 
-// Ping issues a PING to the client and waits for PONG reponse.
+// Ping issues a PING to the client and waits for PONG response.
 //
 // Use ctx to set timeout.
 func (cc *ClientConn) Ping(ctx context.Context) error {
@@ -673,7 +673,7 @@ func (cc *ClientConn) Process(datagram []byte) error {
 			err := cc.session.WriteMessage(separateMessage)
 			if err != nil {
 				cc.Close()
-				cc.errors(fmt.Errorf("cannot write ack reponse: %w", err))
+				cc.errors(fmt.Errorf("cannot write ack response: %w", err))
 				return
 			}
 		}

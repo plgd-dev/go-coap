@@ -23,7 +23,7 @@ type Unlocker interface {
 	Unlock()
 }
 
-// NewMutexMap returns an initalized MutexMap.
+// NewMutexMap returns an initialized MutexMap.
 func NewMutexMap() *MutexMap {
 	return &MutexMap{ma: make(map[interface{}]*mutexMapEntry)}
 }
