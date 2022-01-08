@@ -436,7 +436,7 @@ func (cc *ClientConn) Context() context.Context {
 	return cc.session.Context()
 }
 
-// Ping issues a PING to the client and waits for PONG reponse.
+// Ping issues a PING to the client and waits for PONG response.
 //
 // Use ctx to set timeout.
 func (cc *ClientConn) Ping(ctx context.Context) error {
