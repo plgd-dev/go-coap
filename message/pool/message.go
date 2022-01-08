@@ -11,8 +11,8 @@ import (
 
 type Message struct {
 	msg             message.Message
-	isModified      bool
 	hijacked        atomic.Bool
+	isModified      bool
 	valueBuffer     []byte
 	origValueBuffer []byte
 	payload         io.ReadSeeker

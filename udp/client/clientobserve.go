@@ -37,18 +37,16 @@ type respObservationMessage struct {
 //Observation represents subscription to resource on the server
 type Observation struct {
 	token               message.Token
-	lastEvent           time.Time
 	etag                []byte
 	path                string
 	cc                  *ClientConn
 	observeFunc         func(req *pool.Message)
 	respObservationChan chan respObservationMessage
+	waitForResponse     atomic.Bool
 
-	mutex sync.Mutex
-
-	obsSequence uint32
-
-	waitForResponse atomic.Bool
+	mutex       sync.Mutex
+	obsSequence uint32    // guarded by mutex
+	lastEvent   time.Time // guarded by mutex
 }
 
 func newObservation(token message.Token, path string, cc *ClientConn, observeFunc func(req *pool.Message), respObservationChan chan respObservationMessage) *Observation {
