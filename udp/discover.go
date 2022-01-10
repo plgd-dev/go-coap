@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 
+	coapNet "github.com/plgd-dev/go-coap/v2/net"
 	"github.com/plgd-dev/go-coap/v2/udp/client"
 	"github.com/plgd-dev/go-coap/v2/udp/message/pool"
 )
@@ -14,12 +15,44 @@ var defaultMulticastOptions = multicastOptions{
 }
 
 type multicastOptions struct {
-	hopLimit int
+	hopLimit          int
+	controlMessage    *coapNet.ControlMessage
+	useControlMessage bool
 }
 
 // A MulticastOption sets options such as hop limit, etc.
 type MulticastOption interface {
 	apply(*multicastOptions)
+}
+
+type HopLimitOption struct {
+	hopLimit int
+}
+
+func (o HopLimitOption) apply(opts *multicastOptions) {
+	opts.hopLimit = o.hopLimit
+}
+
+func WithHopLimit(hopLimit int) HopLimitOption {
+	return HopLimitOption{
+		hopLimit: hopLimit,
+	}
+}
+
+type ControlMessageOption struct {
+	controlMessage *coapNet.ControlMessage
+}
+
+func (o ControlMessageOption) apply(opts *multicastOptions) {
+	opts.controlMessage = o.controlMessage
+	opts.useControlMessage = true
+}
+
+// WithControlMessage uses directly interface and ip to send a multicast. If controlMessage is nil, it uses default interface and default ip defined by os.
+func WithControlMessage(controlMessage *coapNet.ControlMessage) ControlMessageOption {
+	return ControlMessageOption{
+		controlMessage: controlMessage,
+	}
 }
 
 // Discover sends GET to multicast or unicast address and waits for responses until context timeouts or server shutdown.
@@ -71,9 +104,16 @@ func (s *Server) DiscoveryRequest(req *pool.Message, address string, receiverFun
 	defer s.multicastHandler.Pop(token)
 
 	if addr.IP.IsMulticast() {
-		err = c.WriteMulticast(req.Context(), addr, cfg.hopLimit, data)
-		if err != nil {
-			return err
+		if cfg.useControlMessage {
+			err = c.WriteTo(req.Context(), addr, cfg.hopLimit, cfg.controlMessage, data)
+			if err != nil {
+				return err
+			}
+		} else {
+			err = c.WriteMulticast(req.Context(), addr, cfg.hopLimit, data)
+			if err != nil {
+				return err
+			}
 		}
 	} else {
 		err = c.WriteWithContext(req.Context(), addr, data)
