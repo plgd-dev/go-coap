@@ -2,6 +2,7 @@ package mux
 
 import (
 	"errors"
+	"fmt"
 	"io"
 	"sync"
 
@@ -24,6 +25,8 @@ type Handler interface {
 // Handler object that calls f.
 type HandlerFunc func(w ResponseWriter, r *Message)
 
+type ErrorFunc = func(error)
+
 // ServeCOAP calls f(w, r).
 func (f HandlerFunc) ServeCOAP(w ResponseWriter, r *Message) {
 	f(w, r)
@@ -35,10 +38,12 @@ func (f HandlerFunc) ServeCOAP(w ResponseWriter, r *Message) {
 // with same name.
 // Router is also safe for concurrent access from multiple goroutines.
 type Router struct {
-	middlewares    []MiddlewareFunc
-	defaultHandler Handler
-	z              map[string]muxEntry
+	middlewares []MiddlewareFunc
+	errors      ErrorFunc
+
 	m              *sync.RWMutex
+	defaultHandler Handler             // guarded by m
+	z              map[string]muxEntry // guarded by m
 }
 
 type muxEntry struct {
@@ -48,14 +53,21 @@ type muxEntry struct {
 
 // NewRouter allocates and returns a new Router.
 func NewRouter() *Router {
-	return &Router{
-		z:           make(map[string]muxEntry),
-		m:           new(sync.RWMutex),
+	router := &Router{
 		middlewares: make([]MiddlewareFunc, 0, 2),
-		defaultHandler: HandlerFunc(func(w ResponseWriter, r *Message) {
-			w.SetResponse(codes.NotFound, message.TextPlain, nil)
-		}),
+		errors: func(err error) {
+			fmt.Println(err)
+		},
+
+		m: new(sync.RWMutex),
+		z: make(map[string]muxEntry),
 	}
+	router.defaultHandler = HandlerFunc(func(w ResponseWriter, m *Message) {
+		if err := w.SetResponse(codes.NotFound, message.TextPlain, nil); err != nil {
+			router.errors(fmt.Errorf("router handler: cannot set response: %w", err))
+		}
+	})
+	return router
 }
 
 // Does path match pattern?
@@ -119,13 +131,15 @@ func (r *Router) Handle(pattern string, handler Handler) error {
 // DefaultHandle set default handler to the Router
 func (r *Router) DefaultHandle(handler Handler) {
 	r.m.Lock()
+	defer r.m.Unlock()
 	r.defaultHandler = handler
-	r.m.Unlock()
 }
 
 // HandleFunc adds a handler function to the Router for pattern.
 func (r *Router) HandleFunc(pattern string, handler func(w ResponseWriter, r *Message)) {
-	r.Handle(pattern, HandlerFunc(handler))
+	if err := r.Handle(pattern, HandlerFunc(handler)); err != nil {
+		r.errors(fmt.Errorf("cannot handle pattern(%v): %w", pattern, err))
+	}
 }
 
 // DefaultHandleFunc set a default handler function to the Router.
@@ -161,7 +175,9 @@ func (r *Router) ServeCOAP(w ResponseWriter, req *Message) {
 	}
 	h, _ := r.match(path)
 	if h == nil {
+		r.m.Lock()
 		h = r.defaultHandler
+		r.m.Unlock()
 	}
 	if h == nil {
 		return
