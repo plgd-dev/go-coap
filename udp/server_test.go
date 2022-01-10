@@ -138,6 +138,70 @@ func TestServer_Discover(t *testing.T) {
 	assert.Equal(t, codes.BadRequest, got[0].Code())
 }
 
+func TestServer_DiscoverWithControlMessage(t *testing.T) {
+	timeout := time.Millisecond * 500
+	multicastAddr := "224.0.1.187:5684"
+	path := "/oic/res"
+
+	l, err := coapNet.NewListenUDP("udp4", multicastAddr)
+	require.NoError(t, err)
+	defer l.Close()
+
+	ifaces, err := net.Interfaces()
+	require.NoError(t, err)
+
+	a, err := net.ResolveUDPAddr("udp4", multicastAddr)
+	require.NoError(t, err)
+
+	for _, iface := range ifaces {
+		err := l.JoinGroup(&iface, a)
+		if err != nil {
+			t.Logf("cannot JoinGroup(%v, %v): %v", iface, a, err)
+		}
+	}
+	err = l.SetMulticastLoopback(true)
+	require.NoError(t, err)
+
+	var wg sync.WaitGroup
+	defer wg.Wait()
+
+	s := udp.NewServer(udp.WithHandlerFunc(func(w *client.ResponseWriter, r *pool.Message) {
+		w.SetResponse(codes.BadRequest, message.TextPlain, bytes.NewReader(make([]byte, 5330)))
+		require.NotNil(t, w.ClientConn())
+	}))
+	defer s.Stop()
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		err := s.Serve(l)
+		require.NoError(t, err)
+	}()
+
+	ld, err := coapNet.NewListenUDP("udp4", "")
+	require.NoError(t, err)
+	defer ld.Close()
+
+	sd := udp.NewServer()
+	defer sd.Stop()
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		err := sd.Serve(ld)
+		require.NoError(t, err)
+	}()
+
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	recv := &mcastreceiver{}
+	err = sd.Discover(ctx, multicastAddr, path, recv.process, udp.WithControlMessage(nil))
+	require.NoError(t, err)
+	got := recv.pop()
+	assert.Greater(t, len(got), 0)
+	assert.Equal(t, codes.BadRequest, got[0].Code())
+}
+
 func TestServer_CleanUpConns(t *testing.T) {
 	ld, err := coapNet.NewListenUDP("udp4", "")
 	require.NoError(t, err)

@@ -250,6 +250,30 @@ func (c *UDPConn) Close() error {
 	return c.connection.Close()
 }
 
+func (c *UDPConn) WriteTo(ctx context.Context, raddr *net.UDPAddr, multicastHopLimit int, controlMessage *ControlMessage, data []byte) error {
+	netType := "udp4"
+	if IsIPv6(raddr.IP) {
+		netType = "udp6"
+	}
+	var p packetConn
+	if netType == "udp4" {
+		p = newPacketConnIPv4(ipv4.NewPacketConn(c.connection))
+	} else {
+		p = newPacketConnIPv6(ipv6.NewPacketConn(c.connection))
+	}
+
+	p.SetMulticastHopLimit(multicastHopLimit)
+	deadline, ok := ctx.Deadline()
+	if ok {
+		err := p.SetWriteDeadline(deadline)
+		if err != nil {
+			return fmt.Errorf("cannot write multicast with context: cannot set write deadline for connection: %w", err)
+		}
+	}
+	_, err := p.WriteTo(data, controlMessage, raddr)
+	return err
+}
+
 func (c *UDPConn) writeToAddr(deadline time.Time, multicastHopLimit int, iface net.Interface, srcAddr net.Addr, port string, raddr *net.UDPAddr, buffer []byte) error {
 	netType := "udp4"
 	if IsIPv6(raddr.IP) {
