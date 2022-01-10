@@ -21,42 +21,47 @@ import (
 	kitSync "github.com/plgd-dev/kit/v2/sync"
 )
 
-var defaultDialOptions = dialOptions{
-	ctx:            context.Background(),
-	maxMessageSize: 64 * 1024,
-	handler: func(w *ResponseWriter, r *pool.Message) {
+var defaultDialOptions = func() dialOptions {
+	opts := dialOptions{
+		ctx:            context.Background(),
+		maxMessageSize: 64 * 1024,
+		errors: func(err error) {
+			fmt.Println(err)
+		},
+		goPool: func(f func()) error {
+			go func() {
+				f()
+			}()
+			return nil
+		},
+		dialer:                   &net.Dialer{Timeout: time.Second * 3},
+		net:                      "tcp",
+		blockwiseSZX:             blockwise.SZX1024,
+		blockwiseEnable:          true,
+		blockwiseTransferTimeout: time.Second * 3,
+		createInactivityMonitor: func() inactivity.Monitor {
+			return inactivity.NewNilMonitor()
+		},
+		periodicRunner: func(f func(now time.Time) bool) {
+			go func() {
+				for f(time.Now()) {
+					time.Sleep(4 * time.Second)
+				}
+			}()
+		},
+		connectionCacheSize: 2048,
+		messagePool:         pool.New(1024, 2048),
+	}
+	opts.handler = func(w *ResponseWriter, r *pool.Message) {
 		switch r.Code() {
 		case codes.POST, codes.PUT, codes.GET, codes.DELETE:
-			w.SetResponse(codes.NotFound, message.TextPlain, nil)
-		}
-	},
-	errors: func(err error) {
-		fmt.Println(err)
-	},
-	goPool: func(f func()) error {
-		go func() {
-			f()
-		}()
-		return nil
-	},
-	dialer:                   &net.Dialer{Timeout: time.Second * 3},
-	net:                      "tcp",
-	blockwiseSZX:             blockwise.SZX1024,
-	blockwiseEnable:          true,
-	blockwiseTransferTimeout: time.Second * 3,
-	createInactivityMonitor: func() inactivity.Monitor {
-		return inactivity.NewNilMonitor()
-	},
-	periodicRunner: func(f func(now time.Time) bool) {
-		go func() {
-			for f(time.Now()) {
-				time.Sleep(4 * time.Second)
+			if err := w.SetResponse(codes.NotFound, message.TextPlain, nil); err != nil {
+				opts.errors(fmt.Errorf("client handler: cannot set response: %w", err))
 			}
-		}()
-	},
-	connectionCacheSize: 2048,
-	messagePool:         pool.New(1024, 2048),
-}
+		}
+	}
+	return opts
+}()
 
 type dialOptions struct {
 	ctx                             context.Context
@@ -255,7 +260,11 @@ func (cc *ClientConn) do(req *pool.Message) (*pool.Message, error) {
 	if err != nil {
 		return nil, fmt.Errorf("cannot add token handler: %w", err)
 	}
-	defer cc.session.TokenHandler().Pop(token)
+	defer func() {
+		if _, err := cc.session.TokenHandler().Pop(token); err != nil && !errors.Is(err, ErrKeyNotExists) {
+			cc.session.errors(fmt.Errorf("cannot remove token handler: %w", err))
+		}
+	}()
 	err = cc.session.WriteMessage(req)
 	if err != nil {
 		return nil, fmt.Errorf("cannot write request: %w", err)
@@ -479,14 +488,17 @@ func (cc *ClientConn) AsyncPing(receivedPong func()) (func(), error) {
 	if err != nil {
 		return nil, fmt.Errorf("cannot add token handler: %w", err)
 	}
+	removeTokenHandler := func() {
+		if _, err := cc.session.TokenHandler().Pop(token); err != nil && !errors.Is(err, ErrKeyNotExists) {
+			cc.session.errors(fmt.Errorf("cannot remove token handler: %w", err))
+		}
+	}
 	err = cc.session.WriteMessage(req)
 	if err != nil {
-		cc.session.TokenHandler().Pop(token)
+		removeTokenHandler()
 		return nil, fmt.Errorf("cannot write request: %w", err)
 	}
-	return func() {
-		cc.session.TokenHandler().Pop(token)
-	}, nil
+	return removeTokenHandler, nil
 }
 
 // Run reads and process requests from a connection, until the connection is not closed.
