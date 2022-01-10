@@ -145,15 +145,12 @@ func (s *Session) popOnClose() []EventFunc {
 	return tmp
 }
 
-func (s *Session) close() error {
+func (s *Session) closeAndStop() error {
 	defer close(s.done)
 	for _, f := range s.popOnClose() {
 		f()
 	}
-	if s.closeSocket {
-		return s.connection.Close()
-	}
-	return nil
+	return s.Close()
 }
 
 func (s *Session) Close() error {
@@ -222,7 +219,9 @@ func (s *Session) handleSignals(r *pool.Message, cc *ClientConn) bool {
 		// if r.HasOption(coapTCP.Custody) {
 		//TODO
 		// }
-		s.sendPong(r.Token())
+		if err := s.sendPong(r.Token()); err != nil && !coapNet.IsConnectionBrokenError(err) {
+			s.errors(fmt.Errorf("cannot handle ping signal: %w", err))
+		}
 		return true
 	case codes.Release:
 		// if r.HasOption(coapTCP.AlternativeAddress) {
@@ -281,7 +280,9 @@ func (s *Session) processReq(req *pool.Message, cc *ClientConn, handler func(w *
 	if w.response.IsModified() {
 		err := s.WriteMessage(w.response)
 		if err != nil {
-			s.Close()
+			if errClose := s.Close(); errClose != nil {
+				s.errors(fmt.Errorf("cannot close connection: %w", errClose))
+			}
 			s.errors(fmt.Errorf("cannot write response to %v: %w", s.connection.RemoteAddr(), err))
 		}
 	}
@@ -327,9 +328,12 @@ func (s *Session) processBuffer(buffer *bytes.Buffer, cc *ClientConn) error {
 		if s.handleSignals(req, cc) {
 			continue
 		}
-		s.goPool(func() {
+		err = s.goPool(func() {
 			s.processReq(req, cc, s.Handle)
 		})
+		if err != nil {
+			return fmt.Errorf("cannot spawn go routine: %w", err)
+		}
 	}
 	return nil
 }
@@ -366,14 +370,17 @@ func (s *Session) sendPong(token message.Token) error {
 	return s.WriteMessage(req)
 }
 
+func shrinkBufferIfNecessary(buffer *bytes.Buffer, maxCap uint16) *bytes.Buffer {
+	if buffer.Len() == 0 && buffer.Cap() > int(maxCap) {
+		buffer = bytes.NewBuffer(make([]byte, 0, maxCap))
+	}
+	return buffer
+}
+
 // Run reads and process requests from a connection, until the connection is not closed.
 func (s *Session) Run(cc *ClientConn) (err error) {
 	defer func() {
-		err1 := s.Close()
-		if err == nil {
-			err = err1
-		}
-		err1 = s.close()
+		err1 := s.closeAndStop()
 		if err == nil {
 			err = err1
 		}
@@ -388,11 +395,12 @@ func (s *Session) Run(cc *ClientConn) (err error) {
 		if err != nil {
 			return err
 		}
-		if buffer.Len() == 0 && buffer.Cap() > int(s.connectionCacheSize) {
-			buffer = bytes.NewBuffer(make([]byte, 0, s.connectionCacheSize))
-		}
+		buffer = shrinkBufferIfNecessary(buffer, s.connectionCacheSize)
 		readLen, err := s.connection.ReadWithContext(s.Context(), readBuf)
 		if err != nil {
+			if coapNet.IsConnectionBrokenError(err) { // other side closed the connection, ignore the error and return
+				return nil
+			}
 			return fmt.Errorf("cannot read from connection: %w", err)
 		}
 		if readLen > 0 {

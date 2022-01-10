@@ -45,38 +45,43 @@ type BlockwiseFactoryFunc = func(getSendedRequest func(token message.Token) (blo
 // "read-only" parameter, mainly used to get the peer certificate from the underlining connection
 type OnNewClientConnFunc = func(cc *ClientConn, tlscon *tls.Conn)
 
-var defaultServerOptions = serverOptions{
-	ctx:            context.Background(),
-	maxMessageSize: 64 * 1024,
-	handler: func(w *ResponseWriter, r *pool.Message) {
-		w.SetResponse(codes.NotFound, message.TextPlain, nil)
-	},
-	errors: func(err error) {
-		fmt.Println(err)
-	},
-	goPool: func(f func()) error {
-		go func() {
-			f()
-		}()
-		return nil
-	},
-	blockwiseEnable:          true,
-	blockwiseSZX:             blockwise.SZX1024,
-	blockwiseTransferTimeout: time.Second * 3,
-	onNewClientConn:          func(cc *ClientConn, tlscon *tls.Conn) {},
-	createInactivityMonitor: func() inactivity.Monitor {
-		return inactivity.NewNilMonitor()
-	},
-	periodicRunner: func(f func(now time.Time) bool) {
-		go func() {
-			for f(time.Now()) {
-				time.Sleep(4 * time.Second)
-			}
-		}()
-	},
-	connectionCacheSize: 2 * 1024,
-	messagePool:         pool.New(1024, 2048),
-}
+var defaultServerOptions = func() serverOptions {
+	opts := serverOptions{
+		ctx:            context.Background(),
+		maxMessageSize: 64 * 1024,
+		errors: func(err error) {
+			fmt.Println(err)
+		},
+		goPool: func(f func()) error {
+			go func() {
+				f()
+			}()
+			return nil
+		},
+		blockwiseEnable:          true,
+		blockwiseSZX:             blockwise.SZX1024,
+		blockwiseTransferTimeout: time.Second * 3,
+		onNewClientConn:          func(cc *ClientConn, tlscon *tls.Conn) {},
+		createInactivityMonitor: func() inactivity.Monitor {
+			return inactivity.NewNilMonitor()
+		},
+		periodicRunner: func(f func(now time.Time) bool) {
+			go func() {
+				for f(time.Now()) {
+					time.Sleep(4 * time.Second)
+				}
+			}()
+		},
+		connectionCacheSize: 2 * 1024,
+		messagePool:         pool.New(1024, 2048),
+	}
+	opts.handler = func(w *ResponseWriter, r *pool.Message) {
+		if err := w.SetResponse(codes.NotFound, message.TextPlain, nil); err != nil {
+			opts.errors(fmt.Errorf("server handler: cannot set response: %w", err))
+		}
+	}
+	return opts
+}()
 
 type serverOptions struct {
 	ctx                             context.Context
@@ -145,18 +150,22 @@ func NewServer(opt ...ServerOption) *Server {
 		opts.messagePool = pool.New(0, 0)
 	}
 
+	errorsFunc := opts.errors
+	// assign updated func to opts.errors so opts.handler also uses the updated error handler
+	opts.errors = func(err error) {
+		if errors.Is(err, context.Canceled) || errors.Is(err, io.EOF) || strings.Contains(err.Error(), "use of closed network connection") {
+			// this error was produced by cancellation context or closing connection.
+			return
+		}
+		errorsFunc(fmt.Errorf("tcp: %w", err))
+	}
+
 	return &Server{
-		ctx:            ctx,
-		cancel:         cancel,
-		handler:        opts.handler,
-		maxMessageSize: opts.maxMessageSize,
-		errors: func(err error) {
-			if errors.Is(err, context.Canceled) || errors.Is(err, io.EOF) || strings.Contains(err.Error(), "use of closed network connection") {
-				// this error was produced by cancellation context or closing connection.
-				return
-			}
-			opts.errors(fmt.Errorf("tcp: %w", err))
-		},
+		ctx:                             ctx,
+		cancel:                          cancel,
+		handler:                         opts.handler,
+		maxMessageSize:                  opts.maxMessageSize,
+		errors:                          opts.errors,
 		goPool:                          opts.goPool,
 		blockwiseSZX:                    opts.blockwiseSZX,
 		blockwiseEnable:                 opts.blockwiseEnable,
@@ -265,7 +274,9 @@ func (s *Server) Serve(l Listener) error {
 // Stop stops server without wait of ends Serve function.
 func (s *Server) Stop() {
 	s.cancel()
-	s.listen.Close()
+	if err := s.listen.Close(); err != nil {
+		s.errors(fmt.Errorf("cannot close listener: %w", err))
+	}
 }
 
 func (s *Server) createClientConn(connection *coapNet.Conn, monitor inactivity.Monitor) *ClientConn {
