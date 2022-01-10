@@ -48,42 +48,47 @@ type OnNewClientConnFunc = func(cc *client.ClientConn, dtlsConn *dtls.Conn)
 
 type GetMIDFunc = func() uint16
 
-var defaultServerOptions = serverOptions{
-	ctx:            context.Background(),
-	maxMessageSize: 64 * 1024,
-	handler: func(w *client.ResponseWriter, r *pool.Message) {
-		w.SetResponse(codes.NotFound, message.TextPlain, nil)
-	},
-	errors: func(err error) {
-		fmt.Println(err)
-	},
-	goPool: func(f func()) error {
-		go func() {
-			f()
-		}()
-		return nil
-	},
-	createInactivityMonitor: func() inactivity.Monitor {
-		return inactivity.NewNilMonitor()
-	},
-	blockwiseEnable:                true,
-	blockwiseSZX:                   blockwise.SZX1024,
-	blockwiseTransferTimeout:       time.Second * 5,
-	onNewClientConn:                func(cc *client.ClientConn, dtlsConn *dtls.Conn) {},
-	heartBeat:                      time.Millisecond * 100,
-	transmissionNStart:             time.Second,
-	transmissionAcknowledgeTimeout: time.Second * 2,
-	transmissionMaxRetransmit:      4,
-	getMID:                         udpMessage.GetMID,
-	periodicRunner: func(f func(now time.Time) bool) {
-		go func() {
-			for f(time.Now()) {
-				time.Sleep(4 * time.Second)
-			}
-		}()
-	},
-	messagePool: pool.New(1024, 1600),
-}
+var defaultServerOptions = func() serverOptions {
+	opts := serverOptions{
+		ctx:            context.Background(),
+		maxMessageSize: 64 * 1024,
+		errors: func(err error) {
+			fmt.Println(err)
+		},
+		goPool: func(f func()) error {
+			go func() {
+				f()
+			}()
+			return nil
+		},
+		createInactivityMonitor: func() inactivity.Monitor {
+			return inactivity.NewNilMonitor()
+		},
+		blockwiseEnable:                true,
+		blockwiseSZX:                   blockwise.SZX1024,
+		blockwiseTransferTimeout:       time.Second * 5,
+		onNewClientConn:                func(cc *client.ClientConn, dtlsConn *dtls.Conn) {},
+		heartBeat:                      time.Millisecond * 100,
+		transmissionNStart:             time.Second,
+		transmissionAcknowledgeTimeout: time.Second * 2,
+		transmissionMaxRetransmit:      4,
+		getMID:                         udpMessage.GetMID,
+		periodicRunner: func(f func(now time.Time) bool) {
+			go func() {
+				for f(time.Now()) {
+					time.Sleep(4 * time.Second)
+				}
+			}()
+		},
+		messagePool: pool.New(1024, 1600),
+	}
+	opts.handler = func(w *client.ResponseWriter, m *pool.Message) {
+		if err := w.SetResponse(codes.NotFound, message.TextPlain, nil); err != nil {
+			opts.errors(fmt.Errorf("server handler: cannot set response: %w", err))
+		}
+	}
+	return opts
+}()
 
 type serverOptions struct {
 	ctx                            context.Context
@@ -163,18 +168,22 @@ func NewServer(opt ...ServerOption) *Server {
 		opts.messagePool = pool.New(0, 0)
 	}
 
+	errorsFunc := opts.errors
+	// assign updated func to opts.errors so opts.handler also uses the updated error handler
+	opts.errors = func(err error) {
+		if errors.Is(err, context.Canceled) || errors.Is(err, io.EOF) || strings.Contains(err.Error(), "use of closed network connection") {
+			// this error was produced by cancellation context or closing connection.
+			return
+		}
+		errorsFunc(fmt.Errorf("dtls: %w", err))
+	}
+
 	return &Server{
-		ctx:            ctx,
-		cancel:         cancel,
-		handler:        opts.handler,
-		maxMessageSize: opts.maxMessageSize,
-		errors: func(err error) {
-			if errors.Is(err, context.Canceled) || errors.Is(err, io.EOF) || strings.Contains(err.Error(), "use of closed network connection") {
-				// this error was produced by cancellation context or closing connection.
-				return
-			}
-			opts.errors(fmt.Errorf("dtls: %w", err))
-		},
+		ctx:                            ctx,
+		cancel:                         cancel,
+		handler:                        opts.handler,
+		maxMessageSize:                 opts.maxMessageSize,
+		errors:                         opts.errors,
 		goPool:                         opts.goPool,
 		createInactivityMonitor:        opts.createInactivityMonitor,
 		blockwiseSZX:                   opts.blockwiseSZX,
@@ -286,7 +295,9 @@ func (s *Server) Stop() {
 	s.listen = nil
 	s.listenMutex.Unlock()
 	if l != nil {
-		l.Close()
+		if err := l.Close(); err != nil {
+			s.errors(fmt.Errorf("cannot close listener: %w", err))
+		}
 	}
 }
 
