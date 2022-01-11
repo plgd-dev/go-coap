@@ -3,6 +3,7 @@ package net
 import (
 	"context"
 	"fmt"
+	"github.com/plgd-dev/go-coap/v2/udp/generic"
 	"net"
 	"sync"
 	"time"
@@ -224,20 +225,28 @@ func (c *UDPConn) writeToAddr(iface *net.Interface, src *net.IP, multicastHopLim
 	if c.closed.Load() {
 		return ErrConnectionIsClosed
 	}
-	if err := p.SetMulticastInterface(iface); err != nil {
-		return err
+	if iface != nil {
+		if err := p.SetMulticastInterface(iface); err != nil {
+			return err
+		}
 	}
 	if err := p.SetMulticastHopLimit(multicastHopLimit); err != nil {
 		return err
 	}
-	_, err := p.WriteTo(buffer, &ControlMessage{
-		Src:     pktSrc,
-		IfIndex: iface.Index,
-	}, raddr)
+
+	var err error
+	if iface != nil || src != nil {
+		_, err = p.WriteTo(buffer, &ControlMessage{
+			Src:     pktSrc,
+			IfIndex: iface.Index,
+		}, raddr)
+	} else {
+		_, err = p.WriteTo(buffer, nil, raddr)
+	}
 	return err
 }
 
-func (c *UDPConn) WriteMulticast(ctx context.Context, raddr *net.UDPAddr, iface *net.Interface, src *net.IP, hopLimit int, buffer []byte) error {
+func (c *UDPConn) WriteMulticast(ctx context.Context, raddr *net.UDPAddr, opt generic.MulticastOptions, buffer []byte) error {
 	if raddr == nil {
 		return fmt.Errorf("cannot write multicast with context: invalid raddr")
 	}
@@ -245,7 +254,11 @@ func (c *UDPConn) WriteMulticast(ctx context.Context, raddr *net.UDPAddr, iface 
 		return fmt.Errorf("cannot write multicast with context: invalid destination address")
 	}
 
-	if iface == nil {
+	var err error
+	var ifname string
+
+	switch opt.IFaceMode {
+	case generic.MulticastAllInterface:
 		// send multicast to all interfaces by recursively calling ourselves with each
 		ifaces, err := net.Interfaces()
 		if err != nil {
@@ -253,17 +266,25 @@ func (c *UDPConn) WriteMulticast(ctx context.Context, raddr *net.UDPAddr, iface 
 		}
 
 		for _, iface := range ifaces {
-			err := c.WriteMulticast(ctx, raddr, &iface, src, hopLimit, buffer)
+			specificOpt := opt
+			specificOpt.Iface = iface
+			specificOpt.IFaceMode = generic.MulticastSpecificInterface
+			err = c.WriteMulticast(ctx, raddr, specificOpt, buffer)
 			if err != nil {
 				return err
 			}
 		}
 		return nil
+	case generic.MulticastAnyInterface:
+		ifname = "any"
+		err = c.writeToAddr(nil, opt.Source, opt.HopLimit, raddr, buffer)
+	case generic.MulticastSpecificInterface:
+		ifname = opt.Iface.Name
+		err = c.writeToAddr(&opt.Iface, opt.Source, opt.HopLimit, raddr, buffer)
 	}
-	err := c.writeToAddr(iface, src, hopLimit, raddr, buffer)
 	if err != nil {
 		if c.errors != nil {
-			c.errors(fmt.Errorf("cannot write multicast to %v: %w", iface.Name, err))
+			c.errors(fmt.Errorf("cannot write multicast to %v: %w", ifname, err))
 		}
 	}
 	return nil

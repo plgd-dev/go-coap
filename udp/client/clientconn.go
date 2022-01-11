@@ -35,7 +35,7 @@ type Session interface {
 	MaxMessageSize() uint32
 	RemoteAddr() net.Addr
 	WriteMessage(req *pool.Message) error
-	WriteMulticastMessage(req *pool.Message, iface *net.Interface, src *net.IP, hoplimit int) error
+	WriteMulticastMessage(req *pool.Message, options generic.MulticastOptions) error
 	Run(cc *ClientConn) error
 	AddOnClose(f EventFunc)
 	SetContextValue(key interface{}, val interface{})
@@ -301,7 +301,7 @@ func (cc *ClientConn) WriteMulticastMessage(req *pool.Message, options ...generi
 	}
 	req.SetMessageID(cc.getMID())
 
-	err := cc.session.WriteMulticastMessage(req, mcOptions.Iface, mcOptions.Source, mcOptions.HopLimit)
+	err := cc.session.WriteMulticastMessage(req, mcOptions)
 	if err != nil {
 		return fmt.Errorf("cannot write request: %w", err)
 	}

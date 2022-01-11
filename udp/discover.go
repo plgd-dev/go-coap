@@ -61,7 +61,7 @@ func (s *Server) DiscoveryRequest(req *pool.Message, address string, receiverFun
 	defer s.multicastHandler.Pop(token)
 
 	if addr.IP.IsMulticast() {
-		err = c.WriteMulticast(req.Context(), addr, cfg.Iface, cfg.Source, cfg.HopLimit, data)
+		err = c.WriteMulticast(req.Context(), addr, cfg, data)
 		if err != nil {
 			return err
 		}
