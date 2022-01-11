@@ -701,7 +701,7 @@ func (b *BlockWise) messageFromReceivedCache(w ResponseWriter, r Message, szx, m
 		msgGuard = cachedReceivedMessageGuard.(*messageGuard)
 		err := msgGuard.Acquire(msgGuard.Context(), 1)
 		if err != nil {
-			return nil, 0, fmt.Errorf("handlerReceivedCache: cannot lock message: %v", err)
+			return nil, 0, fmt.Errorf("messageFromReceivedCache: cannot lock message: %v", err)
 		}
 		defer msgGuard.Release(1)
 
@@ -725,7 +725,7 @@ func (b *BlockWise) messageFromReceivedCache(w ResponseWriter, r Message, szx, m
 	msgGuard = newRequestGuard(cachedReceivedMessage)
 	err := msgGuard.Acquire(cachedReceivedMessage.Context(), 1)
 	if err != nil {
-		return nil, 0, fmt.Errorf("handlerReceivedCache: cannot lock message: %v", err)
+		return nil, 0, fmt.Errorf("messageFromReceivedCache: cannot lock message: %v", err)
 	}
 	defer msgGuard.Release(1)
 	element, loaded := b.receivingMessagesCache.LoadOrStore(tokenStr, cache.NewElement(msgGuard, expire, func(d interface{}) {
@@ -741,7 +741,7 @@ func (b *BlockWise) messageFromReceivedCache(w ResponseWriter, r Message, szx, m
 			msgGuard = cachedReceivedMessageGuard.(*messageGuard)
 			err := msgGuard.Acquire(cachedReceivedMessage.Context(), 1)
 			if err != nil {
-				return nil, 0, fmt.Errorf("handlerReceivedCache: cannot lock message: %v", err)
+				return nil, 0, fmt.Errorf("messageFromReceivedCache: cannot lock message: %v", err)
 			}
 			defer msgGuard.Release(1)
 		} else {
