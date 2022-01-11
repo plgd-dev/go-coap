@@ -172,7 +172,7 @@ func (cc *ClientConn) do(req *pool.Message) (*pool.Message, error) {
 		if err != nil {
 			return nil, fmt.Errorf("cannot add token handler: %w", err)
 		}
-		defer cc.tokenHandlerContainer.Pop(token)
+		defer func() { _, _ = cc.tokenHandlerContainer.Pop(token) }()
 	} else {
 		close(respChan)
 	}
@@ -234,7 +234,7 @@ func (cc *ClientConn) writeMessage(req *pool.Message) error {
 		if err != nil {
 			return fmt.Errorf("cannot insert mid handler: %w", err)
 		}
-		defer cc.midHandlerContainer.Pop(req.MessageID())
+		defer func() { _, _ = cc.midHandlerContainer.Pop(req.MessageID()) }()
 	}
 
 	err := cc.session.WriteMessage(req)
@@ -483,11 +483,11 @@ func (cc *ClientConn) AsyncPing(receivedPong func()) (func(), error) {
 	}
 	err = cc.session.WriteMessage(req)
 	if err != nil {
-		cc.midHandlerContainer.Pop(mid)
+		_, _ = cc.midHandlerContainer.Pop(mid)
 		return nil, fmt.Errorf("cannot write request: %w", err)
 	}
 	return func() {
-		cc.midHandlerContainer.Pop(mid)
+		_, _ = cc.midHandlerContainer.Pop(mid)
 	}, nil
 }
 
@@ -506,7 +506,7 @@ func (cc *ClientConn) RemoteAddr() net.Addr {
 }
 
 func (cc *ClientConn) sendPong(w *ResponseWriter, r *pool.Message) {
-	w.SetResponse(codes.Empty, message.TextPlain, nil)
+	_ = w.SetResponse(codes.Empty, message.TextPlain, nil)
 }
 
 type bwResponseWriter struct {
@@ -624,7 +624,7 @@ func (cc *ClientConn) Process(datagram []byte) error {
 	req.SetSequence(cc.Sequence())
 	cc.CheckMyMessageID(req)
 	cc.inactivityMonitor.Notify()
-	cc.goPool(func() {
+	_ = cc.goPool(func() {
 		defer cc.inactivityMonitor.Notify()
 		reqMid := req.MessageID()
 
