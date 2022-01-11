@@ -114,6 +114,14 @@ func (s *Session) WriteMessage(req *pool.Message) error {
 	return s.connection.WriteWithContext(req.Context(), s.raddr, data)
 }
 
+func (s *Session) WriteMulticastMessage(req *pool.Message, iface *net.Interface, src *net.IP, hoplimit int) error {
+	data, err := req.Marshal()
+	if err != nil {
+		return fmt.Errorf("cannot marshal: %w", err)
+	}
+	return s.connection.WriteMulticast(req.Context(), s.raddr, iface, src, hoplimit, data)
+}
+
 func (s *Session) Run(cc *client.ClientConn) (err error) {
 	defer func() {
 		err1 := s.Close()
