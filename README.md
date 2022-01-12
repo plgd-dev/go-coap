@@ -2,7 +2,6 @@
 
 [![Build Status](https://travis-ci.com/plgd-dev/go-coap.svg?branch=master)](https://travis-ci.com/plgd-dev/go-coap)
 [![codecov](https://codecov.io/gh/plgd-dev/go-coap/branch/master/graph/badge.svg)](https://codecov.io/gh/plgd-dev/go-coap)
-<!-- [![Go Report](https://goreportcard.com/badge/github.com/plgd-dev/go-coap)](https://goreportcard.com/report/github.com/plgd-dev/go-coap) -->
 [![FOSSA Status](https://app.fossa.io/api/projects/git%2Bgithub.com%2Fplgd-dev%2Fgo-coap.svg?type=shield)](https://app.fossa.io/projects/git%2Bgithub.com%2Fplgd-dev%2Fgo-coap?ref=badge_shield)
 [![sponsors](https://opencollective.com/go-coap/sponsors/badge.svg)](https://opencollective.com/go-coap#sponsors)
 [![contributors](https://img.shields.io/github/contributors/plgd-dev/go-coap)](https://github.com/plgd-dev/go-coap/graphs/contributors)
@@ -10,6 +9,7 @@
 [![GitHub license](https://img.shields.io/github/license/plgd-dev/go-coap)](https://github.com/plgd-dev/go-coap/blob/master/LICENSE)
 [![GoDoc](https://godoc.org/github.com/plgd-dev/go-coap?status.svg)](https://godoc.org/github.com/plgd-dev/go-coap)
 [![Quality Gate Status](https://sonarcloud.io/api/project_badges/measure?project=plgd-dev_go-coap&metric=alert_status)](https://sonarcloud.io/summary/new_code?id=plgd-dev_go-coap)
+<!-- [![Go Report](https://goreportcard.com/badge/github.com/plgd-dev/go-coap)](https://goreportcard.com/report/github.com/plgd-dev/go-coap) -->
 
 The Constrained Application Protocol (CoAP) is a specialized web transfer protocol for use with constrained nodes and constrained networks in the Internet of Things.
 The protocol is designed for machine-to-machine (M2M) applications such as smart energy and building automation.
