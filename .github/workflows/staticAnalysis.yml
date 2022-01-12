@@ -1,21 +1,20 @@
 # Run static analysis checks
 name: Static Analysis
 
-on:
-  push:
-  pull_request:
-    branches:
-      - master
-
+on: [pull_request]
 jobs:
   analysis:
     runs-on: ubuntu-20.04
 
     steps:
-      - uses: actions/checkout@v2
-      - uses: actions/setup-go@v2
+      - name: Checkout
+        uses: actions/checkout@v2
+
+      - name: Set up Go 1.17
+        uses: actions/setup-go@v2
         with:
           go-version: "^1.17" # The Go version to download (if necessary) and use.
+
       - run: go version
 
       - name: Run go vet
