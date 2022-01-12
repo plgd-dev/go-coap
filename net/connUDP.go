@@ -231,7 +231,9 @@ func (c *UDPConn) writeToAddr(multicastHopLimit int, iface net.Interface, srcAdd
 	if err := p.SetMulticastInterface(&iface); err != nil {
 		return err
 	}
-	p.SetMulticastHopLimit(multicastHopLimit)
+	if err := p.SetMulticastHopLimit(multicastHopLimit); err != nil {
+		return err
+	}
 	ip := net.ParseIP(addr)
 	if ip == nil {
 		return fmt.Errorf("cannot parse ip (%v) for iface %v", ip, iface.Name)
