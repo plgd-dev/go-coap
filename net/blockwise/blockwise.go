@@ -793,7 +793,9 @@ func (b *BlockWise) processReceivedMessage(w ResponseWriter, r Message, maxSzx S
 	case !bytes.Equal(rETAG, cachedReceivedMessageETAG):
 		// ETAG was changed - drop data and set new ETAG
 		cachedReceivedMessage.SetOptionBytes(message.ETag, rETAG)
-		payloadFile.Truncate(0)
+		if err := payloadFile.Truncate(0); err != nil {
+			return fmt.Errorf("cannot truncate cached request: %w", err)
+		}
 	}
 
 	off := num * szx.Size()
