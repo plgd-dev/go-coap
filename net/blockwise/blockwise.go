@@ -688,8 +688,8 @@ func (b *BlockWise) handleObserveResponse(r, sendedRequest Message, expire time.
 	return token, expire, nil
 }
 
-func (b *BlockWise) messageFromReceivedCache(w ResponseWriter, r Message, szx, maxSzx SZX, next func(w ResponseWriter, r Message),
-	more bool, tokenStr uint64, expire time.Time) (Message, SZX, error) {
+func (b *BlockWise) messageFromReceivedCache(r Message, szx, maxSzx SZX, more bool,
+	tokenStr uint64, expire time.Time) (Message, SZX, error) {
 	var cachedReceivedMessageGuard interface{}
 	e := b.receivingMessagesCache.Load(tokenStr)
 	if e != nil {
@@ -711,11 +711,12 @@ func (b *BlockWise) messageFromReceivedCache(w ResponseWriter, r Message, szx, m
 	if szx > maxSzx {
 		szx = maxSzx
 	}
+
 	// if there is no more then just forward req to next handler
 	if !more {
-		next(w, r)
 		return nil, 0, nil
 	}
+
 	cachedReceivedMessage := b.acquireMessage(r.Context())
 	cachedReceivedMessage.ResetOptionsTo(r.Options())
 	cachedReceivedMessage.SetToken(r.Token())
@@ -823,9 +824,15 @@ func (b *BlockWise) processReceivedMessage(w ResponseWriter, r Message, maxSzx S
 	}
 
 	tokenStr := token.Hash()
-	cachedReceivedMessage, szx, err := b.messageFromReceivedCache(w, r, szx, maxSzx, next, more, tokenStr, expire)
+	cachedReceivedMessage, szx, err := b.messageFromReceivedCache(r, szx, maxSzx, more, tokenStr, expire)
 	if err != nil {
 		return err
+	}
+
+	// if there is no more or cachedReceivedMessage then just forward req to next handler
+	if !more && cachedReceivedMessage == nil {
+		next(w, r)
+		return nil
 	}
 
 	defer func(err *error) {
