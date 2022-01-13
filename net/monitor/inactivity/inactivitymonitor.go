@@ -35,8 +35,9 @@ func (m *inactivityMonitor) LastActivity() time.Time {
 	return time.Time{}
 }
 
-func CloseClientConn(cc ClientConn) error {
-	return cc.Close()
+func CloseClientConn(cc ClientConn) {
+	// call cc.Close() directly to check and handle error if necessary
+	_ = cc.Close()
 }
 
 func NewInactivityMonitor(duration time.Duration, onInactive OnInactiveFunc) Monitor {
