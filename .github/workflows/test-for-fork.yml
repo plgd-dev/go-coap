@@ -5,9 +5,9 @@ name: Test for forked repository
 on: [pull_request]
 
 jobs:
-  test:
+  test-for-fork:
     # Run only for forked repository
-    if: github.repository_owner != 'plgd-dev'
+    if: github.event.pull_request.head.repo.full_name != github.repository
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
@@ -21,7 +21,6 @@ jobs:
 
       # Checks-out repository under $GITHUB_WORKSPACE
       - name: Checkout
-        if: ${{!startsWith(matrix.os, 'ubuntu')}}
         uses: actions/checkout@v2
 
       # Build everything
