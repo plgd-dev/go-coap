@@ -681,8 +681,10 @@ func TestClientInactiveMonitor(t *testing.T) {
 		require.NoError(t, err)
 	}()
 
-	var checkCloseWg sync.WaitGroup
-	defer checkCloseWg.Wait()
+	checkClose := semaphore.NewWeighted(1)
+	err = checkClose.Acquire(ctx, 1)
+	require.NoError(t, err)
+
 	sd := NewServer(
 		WithPeriodicRunner(periodic.New(ctx.Done(), time.Millisecond*10)),
 	)
@@ -710,15 +712,14 @@ func TestClientInactiveMonitor(t *testing.T) {
 		WithPeriodicRunner(periodic.New(ctx.Done(), time.Millisecond*100)),
 	)
 	require.NoError(t, err)
-	checkCloseWg.Add(1)
 	cc.AddOnClose(func() {
-		checkCloseWg.Done()
+		checkClose.Release(1)
 	})
 
 	// send ping to create serverside connection
-	ctx, cancel = context.WithTimeout(ctx, time.Second)
+	ctxPing, cancel := context.WithTimeout(ctx, time.Second)
 	defer cancel()
-	err = cc.Ping(ctx)
+	err = cc.Ping(ctxPing)
 	require.NoError(t, err)
 
 	err = cc.Ping(ctx)
@@ -727,7 +728,8 @@ func TestClientInactiveMonitor(t *testing.T) {
 	// wait for fire inactivity
 	time.Sleep(time.Second * 2)
 
-	checkCloseWg.Wait()
+	err = checkClose.Acquire(ctx, 1)
+	require.NoError(t, err)
 	require.True(t, inactivityDetected)
 }
 
@@ -744,12 +746,12 @@ func TestClientKeepAliveMonitor(t *testing.T) {
 		require.NoError(t, err)
 	}()
 
-	checkCloseWg := semaphore.NewWeighted(2)
-	err = checkCloseWg.Acquire(ctx, 2)
+	checkClose := semaphore.NewWeighted(2)
+	err = checkClose.Acquire(ctx, 2)
 	require.NoError(t, err)
 	sd := NewServer(
 		WithOnNewClientConn(func(cc *client.ClientConn) {
-			checkCloseWg.Release(1)
+			checkClose.Release(1)
 		}),
 		WithGoPool(func(f func()) error {
 			time.Sleep(time.Millisecond * 500)
@@ -783,16 +785,16 @@ func TestClientKeepAliveMonitor(t *testing.T) {
 	)
 	require.NoError(t, err)
 	cc.AddOnClose(func() {
-		checkCloseWg.Release(1)
+		checkClose.Release(1)
 	})
 
 	// send ping to create serverside connection
-	ctx, cancel = context.WithTimeout(ctx, time.Second)
+	ctxPing, cancel := context.WithTimeout(ctx, time.Second)
 	defer cancel()
-	err = cc.Ping(ctx)
+	err = cc.Ping(ctxPing)
 	require.Error(t, err)
 
-	err = checkCloseWg.Acquire(ctx, 2)
+	err = checkClose.Acquire(ctx, 2)
 	require.NoError(t, err)
 	require.True(t, inactivityDetected)
 }

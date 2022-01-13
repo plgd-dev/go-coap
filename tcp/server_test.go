@@ -30,14 +30,21 @@ func TestServerCleanUpConns(t *testing.T) {
 		require.NoError(t, err)
 	}()
 
-	var checkCloseWg sync.WaitGroup
-	defer checkCloseWg.Wait()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second*8)
+	defer cancel()
+
+	checkClose := semaphore.NewWeighted(2)
+	err = checkClose.Acquire(ctx, 2)
+	require.NoError(t, err)
+	defer func() {
+		err = checkClose.Acquire(ctx, 2)
+		require.NoError(t, err)
+	}()
+
 	sd := tcp.NewServer(tcp.WithOnNewClientConn(func(cc *tcp.ClientConn, tlsconn *tls.Conn) {
 		require.Nil(t, tlsconn) // tcp without tls
-
-		checkCloseWg.Add(1)
 		cc.AddOnClose(func() {
-			checkCloseWg.Done()
+			checkClose.Release(1)
 		})
 	}))
 	defer sd.Stop()
@@ -52,18 +59,17 @@ func TestServerCleanUpConns(t *testing.T) {
 
 	cc, err := tcp.Dial(ld.Addr().String())
 	require.NoError(t, err)
-	checkCloseWg.Add(1)
 	cc.AddOnClose(func() {
-		checkCloseWg.Done()
+		checkClose.Release(1)
 	})
 	defer func() {
 		err := cc.Close()
 		require.NoError(t, err)
 		<-cc.Done()
 	}()
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	ctxPing, cancel := context.WithTimeout(ctx, time.Second)
 	defer cancel()
-	err = cc.Ping(ctx)
+	err = cc.Ping(ctxPing)
 	require.NoError(t, err)
 }
 
@@ -178,13 +184,14 @@ func TestServerInactiveMonitor(t *testing.T) {
 		require.NoError(t, err)
 	}()
 
-	var checkCloseWg sync.WaitGroup
-	defer checkCloseWg.Wait()
+	checkClose := semaphore.NewWeighted(2)
+	err = checkClose.Acquire(ctx, 2)
+	require.NoError(t, err)
+
 	sd := tcp.NewServer(
 		tcp.WithOnNewClientConn(func(cc *tcp.ClientConn, tlscon *tls.Conn) {
-			checkCloseWg.Add(1)
 			cc.AddOnClose(func() {
-				checkCloseWg.Done()
+				checkClose.Release(1)
 			})
 		}),
 		tcp.WithInactivityMonitor(100*time.Millisecond, func(cc inactivity.ClientConn) {
@@ -212,18 +219,17 @@ func TestServerInactiveMonitor(t *testing.T) {
 		ld.Addr().String(),
 	)
 	require.NoError(t, err)
-	checkCloseWg.Add(1)
 	cc.AddOnClose(func() {
-		checkCloseWg.Done()
+		checkClose.Release(1)
 	})
 
 	// send ping to create serverside connection
-	ctx, cancel = context.WithTimeout(ctx, time.Second)
+	ctxPing, cancel := context.WithTimeout(ctx, time.Second)
 	defer cancel()
-	err = cc.Ping(ctx)
+	err = cc.Ping(ctxPing)
 	require.NoError(t, err)
 
-	err = cc.Ping(ctx)
+	err = cc.Ping(ctxPing)
 	require.NoError(t, err)
 
 	time.Sleep(time.Second * 2)
@@ -232,7 +238,8 @@ func TestServerInactiveMonitor(t *testing.T) {
 	require.NoError(t, err)
 	<-cc.Done()
 
-	checkCloseWg.Wait()
+	err = checkClose.Acquire(ctx, 2)
+	require.NoError(t, err)
 	require.True(t, inactivityDetected)
 }
 
@@ -249,13 +256,13 @@ func TestServerKeepAliveMonitor(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*8)
 	defer cancel()
 
-	checkCloseWg := semaphore.NewWeighted(2)
-	err = checkCloseWg.Acquire(ctx, 2)
+	checkClose := semaphore.NewWeighted(2)
+	err = checkClose.Acquire(ctx, 2)
 	require.NoError(t, err)
 	sd := tcp.NewServer(
 		tcp.WithOnNewClientConn(func(cc *tcp.ClientConn, tlscon *tls.Conn) {
 			cc.AddOnClose(func() {
-				checkCloseWg.Release(1)
+				checkClose.Release(1)
 			})
 		}),
 		tcp.WithKeepAlive(3, 100*time.Millisecond, func(cc inactivity.ClientConn) {
@@ -291,7 +298,7 @@ func TestServerKeepAliveMonitor(t *testing.T) {
 	go func() {
 		select {
 		case <-cc.Done():
-			checkCloseWg.Release(1)
+			checkClose.Release(1)
 		case <-ctx.Done():
 			return
 		}
@@ -303,7 +310,7 @@ func TestServerKeepAliveMonitor(t *testing.T) {
 	_, err = cc.Get(reqCtx, "/tmp")
 	require.NoError(t, err)
 
-	err = checkCloseWg.Acquire(ctx, 2)
+	err = checkClose.Acquire(ctx, 2)
 	require.NoError(t, err)
 	require.True(t, inactivityDetected)
 }

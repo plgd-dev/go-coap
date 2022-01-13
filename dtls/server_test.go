@@ -22,6 +22,7 @@ import (
 	"github.com/plgd-dev/go-coap/v2/udp/client"
 	"github.com/plgd-dev/go-coap/v2/udp/message/pool"
 	"github.com/stretchr/testify/require"
+	"golang.org/x/sync/semaphore"
 )
 
 func TestServerCleanUpConns(t *testing.T) {
@@ -39,13 +40,19 @@ func TestServerCleanUpConns(t *testing.T) {
 		err := ld.Close()
 		require.NoError(t, err)
 	}()
+	ctx, cancel := context.WithTimeout(context.Background(), Timeout)
+	defer cancel()
 
-	var checkCloseWg sync.WaitGroup
-	defer checkCloseWg.Wait()
+	checkClose := semaphore.NewWeighted(2)
+	err = checkClose.Acquire(ctx, 2)
+	require.NoError(t, err)
+	defer func() {
+		err = checkClose.Acquire(ctx, 2)
+		require.NoError(t, err)
+	}()
 	sd := dtls.NewServer(dtls.WithOnNewClientConn(func(cc *client.ClientConn, dtlsConn *piondtls.Conn) {
-		checkCloseWg.Add(1)
 		cc.AddOnClose(func() {
-			checkCloseWg.Done()
+			checkClose.Release(1)
 		})
 	}))
 	defer sd.Stop()
@@ -60,13 +67,12 @@ func TestServerCleanUpConns(t *testing.T) {
 
 	cc, err := dtls.Dial(ld.Addr().String(), dtlsCfg)
 	require.NoError(t, err)
-	checkCloseWg.Add(1)
 	cc.AddOnClose(func() {
-		checkCloseWg.Done()
+		checkClose.Release(1)
 	})
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	ctxPing, cancel := context.WithTimeout(ctx, time.Second)
 	defer cancel()
-	err = cc.Ping(ctx)
+	err = cc.Ping(ctxPing)
 	require.NoError(t, err)
 	err = cc.Close()
 	require.NoError(t, err)
@@ -189,13 +195,13 @@ func TestServerInactiveMonitor(t *testing.T) {
 		require.NoError(t, err)
 	}()
 
-	var checkCloseWg sync.WaitGroup
-	defer checkCloseWg.Wait()
+	checkClose := semaphore.NewWeighted(2)
+	err = checkClose.Acquire(ctx, 2)
+	require.NoError(t, err)
 	sd := dtls.NewServer(
 		dtls.WithOnNewClientConn(func(cc *client.ClientConn, dtlsConn *piondtls.Conn) {
-			checkCloseWg.Add(1)
 			cc.AddOnClose(func() {
-				checkCloseWg.Done()
+				checkClose.Release(1)
 			})
 		}),
 		dtls.WithInactivityMonitor(100*time.Millisecond, func(cc inactivity.ClientConn) {
@@ -221,9 +227,8 @@ func TestServerInactiveMonitor(t *testing.T) {
 
 	cc, err := dtls.Dial(ld.Addr().String(), clientCgf)
 	require.NoError(t, err)
-	checkCloseWg.Add(1)
 	cc.AddOnClose(func() {
-		checkCloseWg.Done()
+		checkClose.Release(1)
 	})
 
 	// send ping to create serverside connection
@@ -241,7 +246,8 @@ func TestServerInactiveMonitor(t *testing.T) {
 	require.NoError(t, err)
 	<-cc.Done()
 
-	checkCloseWg.Wait()
+	err = checkClose.Acquire(ctx, 2)
+	require.NoError(t, err)
 	require.True(t, inactivityDetected)
 }
 
@@ -260,13 +266,14 @@ func TestServerKeepAliveMonitor(t *testing.T) {
 		require.NoError(t, err)
 	}()
 
-	var checkCloseWg sync.WaitGroup
-	defer checkCloseWg.Wait()
+	checkClose := semaphore.NewWeighted(2)
+	err = checkClose.Acquire(ctx, 2)
+	require.NoError(t, err)
+
 	sd := dtls.NewServer(
 		dtls.WithOnNewClientConn(func(cc *client.ClientConn, tlscon *piondtls.Conn) {
-			checkCloseWg.Add(1)
 			cc.AddOnClose(func() {
-				checkCloseWg.Done()
+				checkClose.Release(1)
 			})
 		}),
 		dtls.WithKeepAlive(3, 100*time.Millisecond, func(cc inactivity.ClientConn) {
@@ -300,17 +307,17 @@ func TestServerKeepAliveMonitor(t *testing.T) {
 		}),
 	)
 	require.NoError(t, err)
-	checkCloseWg.Add(1)
 	cc.AddOnClose(func() {
-		checkCloseWg.Done()
+		checkClose.Release(1)
 	})
 
 	// send ping to create serverside connection
-	ctx, cancel = context.WithTimeout(context.Background(), time.Second)
+	ctxPing, cancel := context.WithTimeout(ctx, time.Second)
 	defer cancel()
-	err = cc.Ping(ctx)
+	err = cc.Ping(ctxPing)
 	require.NoError(t, err)
 
-	checkCloseWg.Wait()
+	err = checkClose.Acquire(ctx, 2)
+	require.NoError(t, err)
 	require.True(t, inactivityDetected)
 }

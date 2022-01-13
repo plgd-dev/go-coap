@@ -13,6 +13,7 @@ import (
 	"github.com/plgd-dev/go-coap/v2/mux"
 	"github.com/plgd-dev/go-coap/v2/net/monitor/inactivity"
 	"github.com/plgd-dev/go-coap/v2/pkg/runner/periodic"
+	"golang.org/x/sync/semaphore"
 
 	"github.com/plgd-dev/go-coap/v2/message"
 	"github.com/plgd-dev/go-coap/v2/message/codes"
@@ -537,13 +538,14 @@ func TestClientInactiveMonitor(t *testing.T) {
 		require.NoError(t, err)
 	}()
 
-	var checkCloseWg sync.WaitGroup
-	defer checkCloseWg.Wait()
+	checkClose := semaphore.NewWeighted(2)
+	err = checkClose.Acquire(ctx, 2)
+	require.NoError(t, err)
+
 	sd := NewServer(
 		WithOnNewClientConn(func(cc *ClientConn, tlscon *tls.Conn) {
-			checkCloseWg.Add(1)
 			cc.AddOnClose(func() {
-				checkCloseWg.Done()
+				checkClose.Release(1)
 			})
 		}),
 		WithPeriodicRunner(periodic.New(ctx.Done(), time.Millisecond*10)),
@@ -572,15 +574,14 @@ func TestClientInactiveMonitor(t *testing.T) {
 		WithPeriodicRunner(periodic.New(ctx.Done(), time.Millisecond*10)),
 	)
 	require.NoError(t, err)
-	checkCloseWg.Add(1)
 	cc.AddOnClose(func() {
-		checkCloseWg.Done()
+		checkClose.Release(1)
 	})
 
 	// send ping to create serverside connection
-	ctx, cancel = context.WithTimeout(ctx, time.Second)
+	ctxPing, cancel := context.WithTimeout(ctx, time.Second)
 	defer cancel()
-	err = cc.Ping(ctx)
+	err = cc.Ping(ctxPing)
 	require.NoError(t, err)
 
 	err = cc.Ping(ctx)
@@ -592,7 +593,8 @@ func TestClientInactiveMonitor(t *testing.T) {
 	require.NoError(t, err)
 	<-cc.Done()
 
-	checkCloseWg.Wait()
+	err = checkClose.Acquire(ctx, 2)
+	require.NoError(t, err)
 	require.True(t, inactivityDetected)
 }
 
@@ -609,13 +611,14 @@ func TestClientKeepAliveMonitor(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*8)
 	defer cancel()
 
-	var checkCloseWg sync.WaitGroup
-	defer checkCloseWg.Wait()
+	checkClose := semaphore.NewWeighted(2)
+	err = checkClose.Acquire(ctx, 2)
+	require.NoError(t, err)
+
 	sd := NewServer(
 		WithOnNewClientConn(func(cc *ClientConn, tlscon *tls.Conn) {
-			checkCloseWg.Add(1)
 			cc.AddOnClose(func() {
-				checkCloseWg.Done()
+				checkClose.Release(1)
 			})
 			time.Sleep(time.Millisecond * 500)
 		}),
@@ -645,9 +648,8 @@ func TestClientKeepAliveMonitor(t *testing.T) {
 		WithPeriodicRunner(periodic.New(ctx.Done(), time.Millisecond*100)),
 	)
 	require.NoError(t, err)
-	checkCloseWg.Add(1)
 	cc.AddOnClose(func() {
-		checkCloseWg.Done()
+		checkClose.Release(1)
 	})
 
 	// send ping to create serverside connection
@@ -656,6 +658,7 @@ func TestClientKeepAliveMonitor(t *testing.T) {
 	err = cc.Ping(ctx)
 	require.Error(t, err)
 
-	checkCloseWg.Wait()
+	err = checkClose.Acquire(ctx, 2)
+	require.NoError(t, err)
 	require.True(t, inactivityDetected)
 }
