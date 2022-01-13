@@ -150,6 +150,11 @@ func NewServer(opt ...ServerOption) *Server {
 		opts.messagePool = pool.New(0, 0)
 	}
 
+	if opts.errors == nil {
+		opts.errors = func(error) {
+			// NO-OP
+		}
+	}
 	errorsFunc := opts.errors
 	// assign updated func to opts.errors so opts.handler also uses the updated error handler
 	opts.errors = func(err error) {
@@ -184,7 +189,7 @@ func (s *Server) checkAndSetListener(l Listener) error {
 	s.listenMutex.Lock()
 	defer s.listenMutex.Unlock()
 	if s.listen != nil {
-		return fmt.Errorf("server already serve listener")
+		return fmt.Errorf("server already serves listener")
 	}
 	s.listen = l
 	return nil
