@@ -1,13 +1,12 @@
 # Workflow to run tests, publish coverage to codecov and run SonarCloud scan
 name: Test
 
-# Run on push to whatever branch
+# Run on push to whatever branch (push only runs for main repository, for forked repository look
+# in test-for-fork.yml)
 on: [push]
 
 jobs:
   test:
-    # Run only from original (non-forked) repository
-    if: github.repository_owner == 'plgd-dev'
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
