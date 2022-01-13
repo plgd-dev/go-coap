@@ -17,7 +17,9 @@ func TestMutexMap(t *testing.T) {
 	_ = m
 
 	keyCount := 20
-	iCount := 10000
+	// currently for the race detector the max number of simultaneous goroutines is 8128
+	// so the iCount value must be <= 8128
+	iCount := 5000
 	out := make(chan string, iCount*2)
 
 	// run a bunch of concurrent requests for various keys,
