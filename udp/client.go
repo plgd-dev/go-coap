@@ -23,47 +23,52 @@ import (
 	"github.com/plgd-dev/go-coap/v2/udp/message/pool"
 )
 
-var defaultDialOptions = dialOptions{
-	ctx:            context.Background(),
-	maxMessageSize: 64 * 1024,
-	heartBeat:      time.Millisecond * 100,
+var defaultDialOptions = func() dialOptions {
+	opts := dialOptions{
+		ctx:            context.Background(),
+		maxMessageSize: 64 * 1024,
+		heartBeat:      time.Millisecond * 100,
 
-	handler: func(w *client.ResponseWriter, r *pool.Message) {
+		errors: func(err error) {
+			fmt.Println(err)
+		},
+		goPool: func(f func()) error {
+			go func() {
+				f()
+			}()
+			return nil
+		},
+		periodicRunner: func(f func(now time.Time) bool) {
+			go func() {
+				for f(time.Now()) {
+					time.Sleep(4 * time.Second)
+				}
+			}()
+		},
+		dialer:                         &net.Dialer{Timeout: time.Second * 3},
+		net:                            "udp",
+		blockwiseSZX:                   blockwise.SZX1024,
+		blockwiseEnable:                true,
+		blockwiseTransferTimeout:       time.Second * 3,
+		transmissionNStart:             time.Second,
+		transmissionAcknowledgeTimeout: time.Second * 2,
+		transmissionMaxRetransmit:      4,
+		getMID:                         udpMessage.GetMID,
+		createInactivityMonitor: func() inactivity.Monitor {
+			return inactivity.NewNilMonitor()
+		},
+		messagePool: pool.New(1024, 1600),
+	}
+	opts.handler = func(w *client.ResponseWriter, r *pool.Message) {
 		switch r.Code() {
 		case codes.POST, codes.PUT, codes.GET, codes.DELETE:
-			w.SetResponse(codes.NotFound, message.TextPlain, nil)
-		}
-	},
-	errors: func(err error) {
-		fmt.Println(err)
-	},
-	goPool: func(f func()) error {
-		go func() {
-			f()
-		}()
-		return nil
-	},
-	periodicRunner: func(f func(now time.Time) bool) {
-		go func() {
-			for f(time.Now()) {
-				time.Sleep(4 * time.Second)
+			if err := w.SetResponse(codes.NotFound, message.TextPlain, nil); err != nil {
+				opts.errors(fmt.Errorf("udp client: cannot set response: %w", err))
 			}
-		}()
-	},
-	dialer:                         &net.Dialer{Timeout: time.Second * 3},
-	net:                            "udp",
-	blockwiseSZX:                   blockwise.SZX1024,
-	blockwiseEnable:                true,
-	blockwiseTransferTimeout:       time.Second * 3,
-	transmissionNStart:             time.Second,
-	transmissionAcknowledgeTimeout: time.Second * 2,
-	transmissionMaxRetransmit:      4,
-	getMID:                         udpMessage.GetMID,
-	createInactivityMonitor: func() inactivity.Monitor {
-		return inactivity.NewNilMonitor()
-	},
-	messagePool: pool.New(1024, 1600),
-}
+		}
+	}
+	return opts
+}()
 
 type dialOptions struct {
 	net                            string

@@ -3,6 +3,7 @@ package udp
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"io/ioutil"
@@ -225,7 +226,7 @@ func TestClientConnGetSeparateMessage(t *testing.T) {
 			customResp.Options = opts
 
 			err = w.Client().WriteMessage(&customResp)
-			if err != nil {
+			if err != nil && !errors.Is(err, context.Canceled) {
 				log.Printf("cannot set response: %v", err)
 			}
 		}()

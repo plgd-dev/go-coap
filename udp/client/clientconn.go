@@ -147,7 +147,7 @@ func (cc *ClientConn) getMID() uint16 {
 	return uint16(atomic.AddUint32(&cc.msgID, 1))
 }
 
-// Close closes connection without wait of ends Run function.
+// Close closes connection without waiting for the end of the Run function.
 func (cc *ClientConn) Close() error {
 	return cc.session.Close()
 }
@@ -169,7 +169,9 @@ func (cc *ClientConn) do(req *pool.Message) (*pool.Message, error) {
 	if err != nil {
 		return nil, fmt.Errorf("cannot add token handler: %w", err)
 	}
-	defer cc.tokenHandlerContainer.Pop(token)
+	defer func() {
+		_, _ = cc.tokenHandlerContainer.Pop(token)
+	}()
 	err = cc.writeMessage(req)
 	if err != nil {
 		return nil, fmt.Errorf("cannot write request: %w", err)
@@ -226,7 +228,9 @@ func (cc *ClientConn) writeMessage(req *pool.Message) error {
 		if err != nil {
 			return fmt.Errorf("cannot insert mid handler: %w", err)
 		}
-		defer cc.midHandlerContainer.Pop(req.MessageID())
+		defer func() {
+			_, _ = cc.midHandlerContainer.Pop(req.MessageID())
+		}()
 	}
 
 	err := cc.session.WriteMessage(req)
@@ -455,14 +459,15 @@ func (cc *ClientConn) AsyncPing(receivedPong func()) (func(), error) {
 	if err != nil {
 		return nil, fmt.Errorf("cannot insert mid handler: %w", err)
 	}
+	removeMidHandler := func() {
+		_, _ = cc.midHandlerContainer.Pop(mid)
+	}
 	err = cc.session.WriteMessage(req)
 	if err != nil {
-		cc.midHandlerContainer.Pop(mid)
+		removeMidHandler()
 		return nil, fmt.Errorf("cannot write request: %w", err)
 	}
-	return func() {
-		cc.midHandlerContainer.Pop(mid)
-	}, nil
+	return removeMidHandler, nil
 }
 
 // Run reads and process requests from a connection, until the connection is closed.
@@ -480,7 +485,9 @@ func (cc *ClientConn) RemoteAddr() net.Addr {
 }
 
 func (cc *ClientConn) sendPong(w *ResponseWriter, r *pool.Message) {
-	w.SetResponse(codes.Empty, message.TextPlain, nil)
+	if err := w.SetResponse(codes.Empty, message.TextPlain, nil); err != nil {
+		cc.errors(fmt.Errorf("cannot send pong response: %w", err))
+	}
 }
 
 type bwResponseWriter struct {
@@ -595,10 +602,15 @@ func (cc *ClientConn) Process(datagram []byte) error {
 		cc.ReleaseMessage(req)
 		return err
 	}
+	closeConnection := func() {
+		if errClose := cc.Close(); errClose != nil {
+			cc.errors(fmt.Errorf("cannot close connection: %w", errClose))
+		}
+	}
 	req.SetSequence(cc.Sequence())
 	cc.CheckMyMessageID(req)
 	cc.inactivityMonitor.Notify()
-	cc.goPool(func() {
+	err = cc.goPool(func() {
 		defer cc.inactivityMonitor.Notify()
 		reqMid := req.MessageID()
 
@@ -628,13 +640,13 @@ func (cc *ClientConn) Process(datagram []byte) error {
 			}
 			err = cc.session.WriteMessage(w.response)
 			if err != nil {
-				cc.Close()
+				closeConnection()
 				cc.errors(fmt.Errorf("cannot write response: %w", err))
 				return
 			}
 			return
 		} else if err != nil {
-			cc.Close()
+			closeConnection()
 			cc.errors(fmt.Errorf("cannot unmarshal response from cache: %w", err))
 			return
 		}
@@ -658,7 +670,7 @@ func (cc *ClientConn) Process(datagram []byte) error {
 			}
 			err := cc.session.WriteMessage(w.response)
 			if err != nil {
-				cc.Close()
+				closeConnection()
 				cc.errors(fmt.Errorf("cannot write response: %w", err))
 				return
 			}
@@ -672,7 +684,7 @@ func (cc *ClientConn) Process(datagram []byte) error {
 			separateMessage.SetMessageID(reqMid)
 			err := cc.session.WriteMessage(separateMessage)
 			if err != nil {
-				cc.Close()
+				closeConnection()
 				cc.errors(fmt.Errorf("cannot write ack response: %w", err))
 			}
 			return
@@ -691,7 +703,7 @@ func (cc *ClientConn) Process(datagram []byte) error {
 		}
 		err := cc.writeMessage(w.response)
 		if err != nil {
-			cc.Close()
+			closeConnection()
 			cc.errors(fmt.Errorf("cannot write response: %w", err))
 			return
 		}
@@ -702,12 +714,16 @@ func (cc *ClientConn) Process(datagram []byte) error {
 			w.response.SetType(reqType)
 			err = cc.addResponseToCache(w.response)
 			if err != nil {
-				cc.Close()
+				closeConnection()
 				cc.errors(fmt.Errorf("cannot cache response: %w", err))
 				return
 			}
 		}
 	})
+	if err != nil {
+		cc.ReleaseMessage(req)
+		return err
+	}
 	return nil
 }
 
