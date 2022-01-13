@@ -674,8 +674,8 @@ func (cc *ClientConn) Process(datagram []byte) error {
 			if err != nil {
 				cc.Close()
 				cc.errors(fmt.Errorf("cannot write ack response: %w", err))
-				return
 			}
+			return
 		}
 		if !w.response.IsModified() {
 			// don't send response
