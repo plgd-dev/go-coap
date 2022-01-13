@@ -42,41 +42,46 @@ type OnNewClientConnFunc = func(cc *client.ClientConn)
 
 type GetMIDFunc = func() uint16
 
-var defaultServerOptions = serverOptions{
-	ctx:            context.Background(),
-	maxMessageSize: 64 * 1024,
-	handler: func(w *client.ResponseWriter, r *pool.Message) {
-		w.SetResponse(codes.NotFound, message.TextPlain, nil)
-	},
-	errors: func(err error) {
-		fmt.Println(err)
-	},
-	goPool: func(f func()) error {
-		go func() {
-			f()
-		}()
-		return nil
-	},
-	createInactivityMonitor: func() inactivity.Monitor {
-		return inactivity.NewNilMonitor()
-	},
-	blockwiseEnable:                true,
-	blockwiseSZX:                   blockwise.SZX1024,
-	blockwiseTransferTimeout:       time.Second * 3,
-	onNewClientConn:                func(cc *client.ClientConn) {},
-	transmissionNStart:             time.Second,
-	transmissionAcknowledgeTimeout: time.Second * 2,
-	transmissionMaxRetransmit:      4,
-	getMID:                         udpMessage.GetMID,
-	periodicRunner: func(f func(now time.Time) bool) {
-		go func() {
-			for f(time.Now()) {
-				time.Sleep(4 * time.Second)
-			}
-		}()
-	},
-	messagePool: pool.New(1024, 1600),
-}
+var defaultServerOptions = func() serverOptions {
+	opts := serverOptions{
+		ctx:            context.Background(),
+		maxMessageSize: 64 * 1024,
+		errors: func(err error) {
+			fmt.Println(err)
+		},
+		goPool: func(f func()) error {
+			go func() {
+				f()
+			}()
+			return nil
+		},
+		createInactivityMonitor: func() inactivity.Monitor {
+			return inactivity.NewNilMonitor()
+		},
+		blockwiseEnable:                true,
+		blockwiseSZX:                   blockwise.SZX1024,
+		blockwiseTransferTimeout:       time.Second * 3,
+		onNewClientConn:                func(cc *client.ClientConn) {},
+		transmissionNStart:             time.Second,
+		transmissionAcknowledgeTimeout: time.Second * 2,
+		transmissionMaxRetransmit:      4,
+		getMID:                         udpMessage.GetMID,
+		periodicRunner: func(f func(now time.Time) bool) {
+			go func() {
+				for f(time.Now()) {
+					time.Sleep(4 * time.Second)
+				}
+			}()
+		},
+		messagePool: pool.New(1024, 1600),
+	}
+	opts.handler = func(w *client.ResponseWriter, r *pool.Message) {
+		if err := w.SetResponse(codes.NotFound, message.TextPlain, nil); err != nil {
+			opts.errors(fmt.Errorf("udp server: cannot set response: %w", err))
+		}
+	}
+	return opts
+}()
 
 type serverOptions struct {
 	ctx                            context.Context
@@ -140,7 +145,9 @@ func NewServer(opt ...ServerOption) *Server {
 	}
 
 	if opts.errors == nil {
-		opts.errors = func(error) {}
+		opts.errors = func(error) {
+			// NO-OP
+		}
 	}
 
 	if opts.getMID == nil {
@@ -207,6 +214,12 @@ func (s *Server) checkAndSetListener(l *coapNet.UDPConn) error {
 	return nil
 }
 
+func (s *Server) closeConnection(cc *client.ClientConn) {
+	if err := cc.Close(); err != nil {
+		s.errors(fmt.Errorf("cannot close connection: %w", err))
+	}
+}
+
 func (s *Server) Serve(l *coapNet.UDPConn) error {
 	if s.blockwiseSZX > blockwise.SZX1024 {
 		return fmt.Errorf("invalid blockwiseSZX")
@@ -257,7 +270,7 @@ func (s *Server) Serve(l *coapNet.UDPConn) error {
 		}
 		err = cc.Process(buf)
 		if err != nil {
-			cc.Close()
+			s.closeConnection(cc)
 			s.errors(fmt.Errorf("%v: %w", cc.RemoteAddr(), err))
 		}
 	}
@@ -270,7 +283,9 @@ func (s *Server) Stop() {
 	l := s.listen
 	s.listenMutex.Unlock()
 	if l != nil {
-		l.Close()
+		if errClose := l.Close(); errClose != nil {
+			s.errors(fmt.Errorf("cannot close listener: %w", errClose))
+		}
 	}
 	s.closeSessions()
 }
@@ -281,7 +296,7 @@ func (s *Server) closeSessions() {
 	s.conns = make(map[string]*client.ClientConn)
 	s.connsMutex.Unlock()
 	for _, cc := range conns {
-		cc.Close()
+		s.closeConnection(cc)
 		close := getClose(cc)
 		if close != nil {
 			close()
@@ -390,7 +405,9 @@ func (s *Server) getOrCreateClientConn(UDPConn *coapNet.UDPConn, raddr *net.UDPA
 			s.messagePool,
 		)
 		cc.SetContextValue(closeKey, func() {
-			session.close()
+			if err := session.close(); err != nil {
+				s.errors(fmt.Errorf("cannot close session: %w", err))
+			}
 		})
 		cc.AddOnClose(func() {
 			s.connsMutex.Lock()

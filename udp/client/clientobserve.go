@@ -66,7 +66,9 @@ func (o *Observation) Canceled() bool {
 }
 
 func (o *Observation) cleanUp() bool {
-	o.cc.observationTokenHandler.Pop(o.token)
+	// we can ignore err during cleanUp, if err != nil then some other
+	// part of code already removed the handler for the token
+	_, _ = o.cc.observationTokenHandler.Pop(o.token)
 	registeredRequest, ok := o.cc.observationRequests.PullOut(o.token.Hash())
 	if ok {
 		o.cc.ReleaseMessage(registeredRequest.(*pool.Message))
