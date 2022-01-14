@@ -614,7 +614,8 @@ func (cc *ClientConn) processReq(req *pool.Message, w *ResponseWriter) error {
 	w.response.SetModified(false)
 	cc.handle(w, req)
 
-	if w.response.IsModified() && (w.response.Type() == udpMessage.Reset || w.response.Code() == codes.Empty) {
+	switch {
+	case w.response.IsModified() && (w.response.Type() == udpMessage.Reset || w.response.Code() == codes.Empty):
 		// handle pong and reset message
 		if reqType == udpMessage.Confirmable {
 			w.response.SetType(udpMessage.Acknowledgement)
@@ -623,7 +624,7 @@ func (cc *ClientConn) processReq(req *pool.Message, w *ResponseWriter) error {
 			w.response.SetMessageID(cc.getMID())
 		}
 		return nil
-	} else if reqType == udpMessage.Confirmable && !w.response.IsModified() {
+	case reqType == udpMessage.Confirmable && !w.response.IsModified():
 		// send message to separate(confirm received) message, if response is not modified
 		w.response.SetCode(codes.Empty)
 		w.response.SetType(udpMessage.Acknowledgement)
@@ -634,8 +635,7 @@ func (cc *ClientConn) processReq(req *pool.Message, w *ResponseWriter) error {
 			return fmt.Errorf("cannot cache response: %w", err)
 		}
 		return nil
-	}
-	if !w.response.IsModified() {
+	case !w.response.IsModified():
 		// don't send response
 		return nil
 	}

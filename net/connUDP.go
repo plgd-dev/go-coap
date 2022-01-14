@@ -315,7 +315,38 @@ func (c *UDPConn) writeMulticastWithInterface(ctx context.Context, raddr *net.UD
 	return fmt.Errorf("%v", errors)
 }
 
-func (c *UDPConn) writeMulticast(ctx context.Context, raddr *net.UDPAddr, buffer []byte, opt MulticastOptions) error {
+func (c *UDPConn) writeMulticastToAllInterfaces(ctx context.Context, raddr *net.UDPAddr, buffer []byte, opt MulticastOptions) error {
+	ifaces, err := net.Interfaces()
+	if err != nil {
+		return fmt.Errorf("cannot get interfaces for multicast connection: %w", err)
+	}
+
+	var errors []error
+	for _, iface := range ifaces {
+		if iface.Flags&net.FlagMulticast == 0 {
+			continue
+		}
+		if iface.Flags&net.FlagUp != net.FlagUp {
+			continue
+		}
+		specificOpt := opt
+		specificOpt.Iface = &iface
+		specificOpt.IFaceMode = MulticastSpecificInterface
+		err = c.writeMulticastWithInterface(ctx, raddr, buffer, specificOpt)
+		if err != nil {
+			errors = append(errors, err)
+		}
+	}
+	if errors == nil {
+		return nil
+	}
+	if len(errors) == 1 {
+		return errors[0]
+	}
+	return fmt.Errorf("%v", errors)
+}
+
+func (c *UDPConn) validateMulticast(ctx context.Context, raddr *net.UDPAddr, buffer []byte, opt MulticastOptions) error {
 	select {
 	case <-ctx.Done():
 		return ctx.Err()
@@ -330,38 +361,21 @@ func (c *UDPConn) writeMulticast(ctx context.Context, raddr *net.UDPAddr, buffer
 	if opt.Source != nil && IsIPv6(*opt.Source) && !IsIPv6(raddr.IP) {
 		return fmt.Errorf("cannot write multicast with context: invalid source address(%v) for destination(%v)", opt.Source, raddr.IP)
 	}
+	return nil
+}
+
+func (c *UDPConn) writeMulticast(ctx context.Context, raddr *net.UDPAddr, buffer []byte, opt MulticastOptions) error {
+	err := c.validateMulticast(ctx, raddr, buffer, opt)
+	if err != nil {
+		return err
+	}
 
 	switch opt.IFaceMode {
 	case MulticastAllInterface:
-		// send multicast to all interfaces by recursively calling ourselves with each
-		ifaces, err := net.Interfaces()
+		err := c.writeMulticastToAllInterfaces(ctx, raddr, buffer, opt)
 		if err != nil {
-			return fmt.Errorf("cannot write multicast with context: cannot get interfaces for multicast connection: %w", err)
+			return fmt.Errorf("cannot write multicast to all interfaces: %w", err)
 		}
-
-		var errors []error
-		for _, iface := range ifaces {
-			if iface.Flags&net.FlagMulticast == 0 {
-				continue
-			}
-			if iface.Flags&net.FlagUp != net.FlagUp {
-				continue
-			}
-			specificOpt := opt
-			specificOpt.Iface = &iface
-			specificOpt.IFaceMode = MulticastSpecificInterface
-			err = c.writeMulticastWithInterface(ctx, raddr, buffer, specificOpt)
-			if err != nil {
-				errors = append(errors, err)
-			}
-		}
-		if errors == nil {
-			return nil
-		}
-		if len(errors) == 1 {
-			return errors[0]
-		}
-		return fmt.Errorf("%v", errors)
 	case MulticastAnyInterface:
 		err := c.writeToAddr(nil, opt.Source, opt.HopLimit, raddr, buffer)
 		if err != nil {
