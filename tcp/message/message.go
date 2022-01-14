@@ -185,25 +185,27 @@ func (m Message) MarshalTo(buf []byte) (int, error) {
 	hdrLen := 1 + len(extLenBytes) + len(m.Token) + 1
 	hdrOff := 0
 
+	copyToHdr := func(offset int, data []byte) int {
+		if len(data) > 0 {
+			copy(hdr[hdrOff:hdrOff+len(data)], data)
+			offset += len(data)
+		}
+		return offset
+	}
+
 	// Length and TKL nibbles.
 	hdr[hdrOff] = uint8(0xf&len(m.Token)) | (lenNib << 4)
 	hdrOff++
 
 	// Extended length, if present.
-	if len(extLenBytes) > 0 {
-		copy(hdr[hdrOff:hdrOff+len(extLenBytes)], extLenBytes)
-		hdrOff += len(extLenBytes)
-	}
+	hdrOff = copyToHdr(hdrOff, extLenBytes)
 
 	// Code.
 	hdr[hdrOff] = byte(m.Code)
 	hdrOff++
 
 	// Token.
-	if len(m.Token) > 0 {
-		copy(hdr[hdrOff:hdrOff+len(m.Token)], m.Token)
-		hdrOff += len(m.Token)
-	}
+	copyToHdr(hdrOff, m.Token)
 
 	bufLen = bufLen + hdrLen
 	if len(buf) < bufLen {

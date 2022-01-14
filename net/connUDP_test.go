@@ -53,14 +53,20 @@ func TestUDPConnWriteWithContext(t *testing.T) {
 	l1, err := net.ListenUDP("udp", a)
 	require.NoError(t, err)
 	c1 := NewUDPConn("udp", l1, WithErrors(func(err error) { t.Log(err) }))
-	defer c1.Close()
+	defer func() {
+		err := c1.Close()
+		require.NoError(t, err)
+	}()
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
 	l2, err := net.ListenUDP("udp", b)
 	require.NoError(t, err)
 	c2 := NewUDPConn("udp", l2, WithErrors(func(err error) { t.Log(err) }))
-	defer c2.Close()
+	defer func() {
+		err := c2.Close()
+		require.NoError(t, err)
+	}()
 
 	go func() {
 		b := make([]byte, 1024)
@@ -130,7 +136,10 @@ func TestUDPConnwriteMulticastWithContext(t *testing.T) {
 	l2, err := net.ListenUDP("udp4", c)
 	require.NoError(t, err)
 	c2 := NewUDPConn("udp", l2, WithErrors(func(err error) { t.Log(err) }))
-	defer c2.Close()
+	defer func() {
+		err := c2.Close()
+		require.NoError(t, err)
+	}()
 	ifaces, err := net.Interfaces()
 	require.NoError(t, err)
 	for _, iface := range ifaces {
@@ -149,7 +158,10 @@ func TestUDPConnwriteMulticastWithContext(t *testing.T) {
 	l1, err := net.ListenUDP("udp4", a)
 	require.NoError(t, err)
 	c1 := NewUDPConn("udp", l1, WithErrors(func(err error) { t.Log(err) }))
-	defer c1.Close()
+	defer func() {
+		err := c1.Close()
+		require.NoError(t, err)
+	}()
 	require.NoError(t, err)
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*3)
 	defer cancel()

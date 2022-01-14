@@ -22,6 +22,7 @@ import (
 	"github.com/plgd-dev/go-coap/v2/udp/client"
 	"github.com/plgd-dev/go-coap/v2/udp/message/pool"
 	"github.com/stretchr/testify/require"
+	"golang.org/x/sync/semaphore"
 )
 
 func TestServerCleanUpConns(t *testing.T) {
@@ -35,14 +36,23 @@ func TestServerCleanUpConns(t *testing.T) {
 	}
 	ld, err := coapNet.NewDTLSListener("udp4", "", dtlsCfg)
 	require.NoError(t, err)
-	defer ld.Close()
+	defer func() {
+		err := ld.Close()
+		require.NoError(t, err)
+	}()
+	ctx, cancel := context.WithTimeout(context.Background(), Timeout)
+	defer cancel()
 
-	var checkCloseWg sync.WaitGroup
-	defer checkCloseWg.Wait()
+	checkClose := semaphore.NewWeighted(2)
+	err = checkClose.Acquire(ctx, 2)
+	require.NoError(t, err)
+	defer func() {
+		err = checkClose.Acquire(ctx, 2)
+		require.NoError(t, err)
+	}()
 	sd := dtls.NewServer(dtls.WithOnNewClientConn(func(cc *client.ClientConn, dtlsConn *piondtls.Conn) {
-		checkCloseWg.Add(1)
 		cc.AddOnClose(func() {
-			checkCloseWg.Done()
+			checkClose.Release(1)
 		})
 	}))
 	defer sd.Stop()
@@ -57,15 +67,15 @@ func TestServerCleanUpConns(t *testing.T) {
 
 	cc, err := dtls.Dial(ld.Addr().String(), dtlsCfg)
 	require.NoError(t, err)
-	checkCloseWg.Add(1)
 	cc.AddOnClose(func() {
-		checkCloseWg.Done()
+		checkClose.Release(1)
 	})
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	ctxPing, cancel := context.WithTimeout(ctx, time.Second)
 	defer cancel()
-	err = cc.Ping(ctx)
+	err = cc.Ping(ctxPing)
 	require.NoError(t, err)
-	cc.Close()
+	err = cc.Close()
+	require.NoError(t, err)
 	<-cc.Done()
 }
 
@@ -133,7 +143,10 @@ func TestServerSetContextValueWithPKI(t *testing.T) {
 
 	ld, err := coapNet.NewDTLSListener("udp4", "", serverCgf)
 	require.NoError(t, err)
-	defer ld.Close()
+	defer func() {
+		err := ld.Close()
+		require.NoError(t, err)
+	}()
 
 	onNewConn := func(cc *client.ClientConn, dtlsConn *piondtls.Conn) {
 		// set connection context certificate
@@ -146,7 +159,8 @@ func TestServerSetContextValueWithPKI(t *testing.T) {
 		clientCert := r.Context().Value("client-cert").(*x509.Certificate)
 		require.Equal(t, clientCert.SerialNumber, clientSerial)
 		require.NotNil(t, clientCert)
-		w.SetResponse(codes.Content, message.TextPlain, bytes.NewReader([]byte("done")))
+		err := w.SetResponse(codes.Content, message.TextPlain, bytes.NewReader([]byte("done")))
+		require.NoError(t, err)
 	}
 
 	sd := dtls.NewServer(dtls.WithHandlerFunc(handle), dtls.WithOnNewClientConn(onNewConn))
@@ -161,7 +175,8 @@ func TestServerSetContextValueWithPKI(t *testing.T) {
 
 	_, err = cc.Get(ctx, "/")
 	require.NoError(t, err)
-	cc.Close()
+	err = cc.Close()
+	require.NoError(t, err)
 	<-cc.Done()
 }
 
@@ -175,21 +190,25 @@ func TestServerInactiveMonitor(t *testing.T) {
 
 	ld, err := coapNet.NewDTLSListener("udp4", "", serverCgf)
 	require.NoError(t, err)
-	defer ld.Close()
+	defer func() {
+		err := ld.Close()
+		require.NoError(t, err)
+	}()
 
-	var checkCloseWg sync.WaitGroup
-	defer checkCloseWg.Wait()
+	checkClose := semaphore.NewWeighted(2)
+	err = checkClose.Acquire(ctx, 2)
+	require.NoError(t, err)
 	sd := dtls.NewServer(
 		dtls.WithOnNewClientConn(func(cc *client.ClientConn, dtlsConn *piondtls.Conn) {
-			checkCloseWg.Add(1)
 			cc.AddOnClose(func() {
-				checkCloseWg.Done()
+				checkClose.Release(1)
 			})
 		}),
 		dtls.WithInactivityMonitor(100*time.Millisecond, func(cc inactivity.ClientConn) {
 			require.False(t, inactivityDetected)
 			inactivityDetected = true
-			cc.Close()
+			err := cc.Close()
+			require.NoError(t, err)
 		}),
 		dtls.WithPeriodicRunner(periodic.New(ctx.Done(), time.Millisecond*10)),
 	)
@@ -208,9 +227,8 @@ func TestServerInactiveMonitor(t *testing.T) {
 
 	cc, err := dtls.Dial(ld.Addr().String(), clientCgf)
 	require.NoError(t, err)
-	checkCloseWg.Add(1)
 	cc.AddOnClose(func() {
-		checkCloseWg.Done()
+		checkClose.Release(1)
 	})
 
 	// send ping to create serverside connection
@@ -224,10 +242,12 @@ func TestServerInactiveMonitor(t *testing.T) {
 
 	time.Sleep(time.Second * 2)
 
-	cc.Close()
+	err = cc.Close()
+	require.NoError(t, err)
 	<-cc.Done()
 
-	checkCloseWg.Wait()
+	err = checkClose.Acquire(ctx, 2)
+	require.NoError(t, err)
 	require.True(t, inactivityDetected)
 }
 
@@ -241,21 +261,26 @@ func TestServerKeepAliveMonitor(t *testing.T) {
 
 	ld, err := coapNet.NewDTLSListener("udp4", "", serverCgf)
 	require.NoError(t, err)
-	defer ld.Close()
+	defer func() {
+		err := ld.Close()
+		require.NoError(t, err)
+	}()
 
-	var checkCloseWg sync.WaitGroup
-	defer checkCloseWg.Wait()
+	checkClose := semaphore.NewWeighted(2)
+	err = checkClose.Acquire(ctx, 2)
+	require.NoError(t, err)
+
 	sd := dtls.NewServer(
 		dtls.WithOnNewClientConn(func(cc *client.ClientConn, tlscon *piondtls.Conn) {
-			checkCloseWg.Add(1)
 			cc.AddOnClose(func() {
-				checkCloseWg.Done()
+				checkClose.Release(1)
 			})
 		}),
 		dtls.WithKeepAlive(3, 100*time.Millisecond, func(cc inactivity.ClientConn) {
 			require.False(t, inactivityDetected)
 			inactivityDetected = true
-			cc.Close()
+			err := cc.Close()
+			require.NoError(t, err)
 		}),
 		dtls.WithPeriodicRunner(periodic.New(ctx.Done(), time.Millisecond*10)),
 	)
@@ -282,16 +307,17 @@ func TestServerKeepAliveMonitor(t *testing.T) {
 		}),
 	)
 	require.NoError(t, err)
-	checkCloseWg.Add(1)
 	cc.AddOnClose(func() {
-		checkCloseWg.Done()
+		checkClose.Release(1)
 	})
 
 	// send ping to create serverside connection
-	ctx, cancel = context.WithTimeout(context.Background(), time.Second)
+	ctxPing, cancel := context.WithTimeout(ctx, time.Second)
 	defer cancel()
-	cc.Ping(ctx)
+	err = cc.Ping(ctxPing)
+	require.NoError(t, err)
 
-	checkCloseWg.Wait()
+	err = checkClose.Acquire(ctx, 2)
+	require.NoError(t, err)
 	require.True(t, inactivityDetected)
 }

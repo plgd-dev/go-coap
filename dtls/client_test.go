@@ -3,6 +3,7 @@ package dtls_test
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"io/ioutil"
@@ -13,18 +14,18 @@ import (
 
 	piondtls "github.com/pion/dtls/v2"
 	"github.com/plgd-dev/go-coap/v2/dtls"
+	"github.com/plgd-dev/go-coap/v2/message"
+	"github.com/plgd-dev/go-coap/v2/message/codes"
 	"github.com/plgd-dev/go-coap/v2/mux"
+	coapNet "github.com/plgd-dev/go-coap/v2/net"
 	"github.com/plgd-dev/go-coap/v2/net/monitor/inactivity"
 	"github.com/plgd-dev/go-coap/v2/pkg/runner/periodic"
 	"github.com/plgd-dev/go-coap/v2/udp/client"
 	udpMessage "github.com/plgd-dev/go-coap/v2/udp/message"
 	"github.com/plgd-dev/go-coap/v2/udp/message/pool"
-
-	"github.com/plgd-dev/go-coap/v2/message"
-	"github.com/plgd-dev/go-coap/v2/message/codes"
-	coapNet "github.com/plgd-dev/go-coap/v2/net"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"golang.org/x/sync/semaphore"
 )
 
 const Timeout = time.Second * 8
@@ -79,23 +80,28 @@ func TestClientConnGet(t *testing.T) {
 	}
 	l, err := coapNet.NewDTLSListener("udp", "", dtlsCfg)
 	require.NoError(t, err)
-	defer l.Close()
+	defer func() {
+		err := l.Close()
+		require.NoError(t, err)
+	}()
 	var wg sync.WaitGroup
 	defer wg.Wait()
 
 	m := mux.NewRouter()
-	m.Handle("/a", mux.HandlerFunc(func(w mux.ResponseWriter, r *mux.Message) {
+	err = m.Handle("/a", mux.HandlerFunc(func(w mux.ResponseWriter, r *mux.Message) {
 		assert.Equal(t, codes.GET, r.Code)
 		err := w.SetResponse(codes.BadRequest, message.TextPlain, bytes.NewReader(make([]byte, 5330)))
 		require.NoError(t, err)
 		require.NotEmpty(t, w.Client())
 	}))
-	m.Handle("/b", mux.HandlerFunc(func(w mux.ResponseWriter, r *mux.Message) {
+	require.NoError(t, err)
+	err = m.Handle("/b", mux.HandlerFunc(func(w mux.ResponseWriter, r *mux.Message) {
 		assert.Equal(t, codes.GET, r.Code)
 		err := w.SetResponse(codes.Content, message.TextPlain, bytes.NewReader([]byte("b")))
 		require.NoError(t, err)
 		require.NotEmpty(t, w.Client())
 	}))
+	require.NoError(t, err)
 
 	s := dtls.NewServer(dtls.WithMux(m))
 	defer s.Stop()
@@ -109,7 +115,10 @@ func TestClientConnGet(t *testing.T) {
 
 	cc, err := dtls.Dial(l.Addr().String(), dtlsCfg)
 	require.NoError(t, err)
-	defer cc.Close()
+	defer func() {
+		err := cc.Close()
+		require.NoError(t, err)
+	}()
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -146,12 +155,15 @@ func TestClientConnGetSeparateMessage(t *testing.T) {
 	}
 	l, err := coapNet.NewDTLSListener("udp", "", dtlsCfg)
 	require.NoError(t, err)
-	defer l.Close()
+	defer func() {
+		err := l.Close()
+		require.NoError(t, err)
+	}()
 	var wg sync.WaitGroup
 	defer wg.Wait()
 
 	m := mux.NewRouter()
-	m.Handle("/a", mux.HandlerFunc(func(w mux.ResponseWriter, r *mux.Message) {
+	err = m.Handle("/a", mux.HandlerFunc(func(w mux.ResponseWriter, r *mux.Message) {
 		go func() {
 			time.Sleep(time.Second * 1)
 			assert.Equal(t, codes.GET, r.Code)
@@ -166,21 +178,21 @@ func TestClientConnGetSeparateMessage(t *testing.T) {
 			opts, used, err := customResp.Options.SetContentFormat(optsBuf, message.TextPlain)
 			if err == message.ErrTooSmall {
 				optsBuf = append(optsBuf, make([]byte, used)...)
-				opts, used, err = customResp.Options.SetContentFormat(optsBuf, message.TextPlain)
+				opts, _, err = customResp.Options.SetContentFormat(optsBuf, message.TextPlain)
 			}
 			if err != nil {
 				log.Printf("cannot set options to response: %v", err)
 				return
 			}
-			optsBuf = optsBuf[:used]
 			customResp.Options = opts
 
 			err = w.Client().WriteMessage(&customResp)
-			if err != nil {
+			if err != nil && !errors.Is(err, context.Canceled) {
 				log.Printf("cannot set response: %v", err)
 			}
 		}()
 	}))
+	require.NoError(t, err)
 
 	s := dtls.NewServer(dtls.WithMux(m))
 	defer s.Stop()
@@ -196,7 +208,10 @@ func TestClientConnGetSeparateMessage(t *testing.T) {
 		assert.NoError(t, fmt.Errorf("none msg expected comes: %+v", r))
 	}))
 	require.NoError(t, err)
-	defer cc.Close()
+	defer func() {
+		err := cc.Close()
+		require.NoError(t, err)
+	}()
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*3600)
 	defer cancel()
@@ -270,12 +285,15 @@ func TestClientConnPost(t *testing.T) {
 			}
 			l, err := coapNet.NewDTLSListener("udp", "", dtlsCfg)
 			require.NoError(t, err)
-			defer l.Close()
+			defer func() {
+				err := l.Close()
+				require.NoError(t, err)
+			}()
 			var wg sync.WaitGroup
 			defer wg.Wait()
 
 			m := mux.NewRouter()
-			m.Handle("/a", mux.HandlerFunc(func(w mux.ResponseWriter, r *mux.Message) {
+			err = m.Handle("/a", mux.HandlerFunc(func(w mux.ResponseWriter, r *mux.Message) {
 				assert.Equal(t, codes.POST, r.Code)
 				ct, err := r.Options.GetUint32(message.ContentFormat)
 				require.NoError(t, err)
@@ -288,7 +306,8 @@ func TestClientConnPost(t *testing.T) {
 				require.NoError(t, err)
 				require.NotEmpty(t, w.Client())
 			}))
-			m.Handle("/b", mux.HandlerFunc(func(w mux.ResponseWriter, r *mux.Message) {
+			require.NoError(t, err)
+			err = m.Handle("/b", mux.HandlerFunc(func(w mux.ResponseWriter, r *mux.Message) {
 				assert.Equal(t, codes.POST, r.Code)
 				ct, err := r.Options.GetUint32(message.ContentFormat)
 				require.NoError(t, err)
@@ -300,6 +319,7 @@ func TestClientConnPost(t *testing.T) {
 				require.NoError(t, err)
 				require.NotEmpty(t, w.Client())
 			}))
+			require.NoError(t, err)
 
 			s := dtls.NewServer(dtls.WithMux(m))
 			defer s.Stop()
@@ -313,7 +333,10 @@ func TestClientConnPost(t *testing.T) {
 
 			cc, err := dtls.Dial(l.Addr().String(), dtlsCfg)
 			require.NoError(t, err)
-			defer cc.Close()
+			defer func() {
+				err := cc.Close()
+				require.NoError(t, err)
+			}()
 
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second*3600)
 			defer cancel()
@@ -397,12 +420,15 @@ func TestClientConnPut(t *testing.T) {
 			}
 			l, err := coapNet.NewDTLSListener("udp", "", dtlsCfg)
 			require.NoError(t, err)
-			defer l.Close()
+			defer func() {
+				err := l.Close()
+				require.NoError(t, err)
+			}()
 			var wg sync.WaitGroup
 			defer wg.Wait()
 
 			m := mux.NewRouter()
-			m.Handle("/a", mux.HandlerFunc(func(w mux.ResponseWriter, r *mux.Message) {
+			err = m.Handle("/a", mux.HandlerFunc(func(w mux.ResponseWriter, r *mux.Message) {
 				assert.Equal(t, codes.PUT, r.Code)
 				ct, err := r.Options.GetUint32(message.ContentFormat)
 				require.NoError(t, err)
@@ -415,7 +441,8 @@ func TestClientConnPut(t *testing.T) {
 				require.NoError(t, err)
 				require.NotEmpty(t, w.Client())
 			}))
-			m.Handle("/b", mux.HandlerFunc(func(w mux.ResponseWriter, r *mux.Message) {
+			require.NoError(t, err)
+			err = m.Handle("/b", mux.HandlerFunc(func(w mux.ResponseWriter, r *mux.Message) {
 				assert.Equal(t, codes.PUT, r.Code)
 				ct, err := r.Options.GetUint32(message.ContentFormat)
 				require.NoError(t, err)
@@ -427,6 +454,7 @@ func TestClientConnPut(t *testing.T) {
 				require.NoError(t, err)
 				require.NotEmpty(t, w.Client())
 			}))
+			require.NoError(t, err)
 
 			s := dtls.NewServer(dtls.WithMux(m))
 			defer s.Stop()
@@ -440,7 +468,10 @@ func TestClientConnPut(t *testing.T) {
 
 			cc, err := dtls.Dial(l.Addr().String(), dtlsCfg)
 			require.NoError(t, err)
-			defer cc.Close()
+			defer func() {
+				err := cc.Close()
+				require.NoError(t, err)
+			}()
 
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second*3600)
 			defer cancel()
@@ -514,23 +545,28 @@ func TestClientConnDelete(t *testing.T) {
 	}
 	l, err := coapNet.NewDTLSListener("udp", "", dtlsCfg)
 	require.NoError(t, err)
-	defer l.Close()
+	defer func() {
+		err := l.Close()
+		require.NoError(t, err)
+	}()
 	var wg sync.WaitGroup
 	defer wg.Wait()
 
 	m := mux.NewRouter()
-	m.Handle("/a", mux.HandlerFunc(func(w mux.ResponseWriter, r *mux.Message) {
+	err = m.Handle("/a", mux.HandlerFunc(func(w mux.ResponseWriter, r *mux.Message) {
 		assert.Equal(t, codes.DELETE, r.Code)
 		err := w.SetResponse(codes.BadRequest, message.TextPlain, bytes.NewReader(make([]byte, 5330)))
 		require.NoError(t, err)
 		require.NotEmpty(t, w.Client())
 	}))
-	m.Handle("/b", mux.HandlerFunc(func(w mux.ResponseWriter, r *mux.Message) {
+	require.NoError(t, err)
+	err = m.Handle("/b", mux.HandlerFunc(func(w mux.ResponseWriter, r *mux.Message) {
 		assert.Equal(t, codes.DELETE, r.Code)
 		err := w.SetResponse(codes.Deleted, message.TextPlain, bytes.NewReader([]byte("b")))
 		require.NoError(t, err)
 		require.NotEmpty(t, w.Client())
 	}))
+	require.NoError(t, err)
 
 	s := dtls.NewServer(dtls.WithMux(m))
 	defer s.Stop()
@@ -545,7 +581,8 @@ func TestClientConnDelete(t *testing.T) {
 	cc, err := dtls.Dial(l.Addr().String(), dtlsCfg)
 	require.NoError(t, err)
 	defer func() {
-		cc.Close()
+		err := cc.Close()
+		require.NoError(t, err)
 		<-cc.Done()
 	}()
 
@@ -584,7 +621,10 @@ func TestClientConnPing(t *testing.T) {
 	}
 	l, err := coapNet.NewDTLSListener("udp", "", dtlsCfg)
 	require.NoError(t, err)
-	defer l.Close()
+	defer func() {
+		err := l.Close()
+		require.NoError(t, err)
+	}()
 	var wg sync.WaitGroup
 	defer wg.Wait()
 
@@ -601,7 +641,8 @@ func TestClientConnPing(t *testing.T) {
 	cc, err := dtls.Dial(l.Addr().String(), dtlsCfg)
 	require.NoError(t, err)
 	defer func() {
-		cc.Close()
+		err := cc.Close()
+		require.NoError(t, err)
 		<-cc.Done()
 	}()
 
@@ -625,7 +666,10 @@ func TestClientConnHandeShakeFailure(t *testing.T) {
 	}
 	l, err := coapNet.NewDTLSListener("udp", "", dtlsCfg)
 	require.NoError(t, err)
-	defer l.Close()
+	defer func() {
+		err := l.Close()
+		require.NoError(t, err)
+	}()
 	var wg sync.WaitGroup
 	defer wg.Wait()
 
@@ -664,15 +708,18 @@ func TestClientInactiveMonitor(t *testing.T) {
 
 	ld, err := coapNet.NewDTLSListener("udp4", "", serverCgf)
 	require.NoError(t, err)
-	defer ld.Close()
+	defer func() {
+		err := ld.Close()
+		require.NoError(t, err)
+	}()
 
-	var checkCloseWg sync.WaitGroup
-	defer checkCloseWg.Wait()
+	checkClose := semaphore.NewWeighted(2)
+	err = checkClose.Acquire(ctx, 2)
+	require.NoError(t, err)
 	sd := dtls.NewServer(
 		dtls.WithOnNewClientConn(func(cc *client.ClientConn, dtlsConn *piondtls.Conn) {
-			checkCloseWg.Add(1)
 			cc.AddOnClose(func() {
-				checkCloseWg.Done()
+				checkClose.Release(1)
 			})
 		}),
 		dtls.WithPeriodicRunner(periodic.New(ctx.Done(), time.Millisecond*10)),
@@ -694,14 +741,14 @@ func TestClientInactiveMonitor(t *testing.T) {
 		dtls.WithInactivityMonitor(100*time.Millisecond, func(cc inactivity.ClientConn) {
 			require.False(t, inactivityDetected)
 			inactivityDetected = true
-			cc.Close()
+			err := cc.Close()
+			require.NoError(t, err)
 		}),
 		dtls.WithPeriodicRunner(periodic.New(ctx.Done(), time.Millisecond*10)),
 	)
 	require.NoError(t, err)
-	checkCloseWg.Add(1)
 	cc.AddOnClose(func() {
-		checkCloseWg.Done()
+		checkClose.Release(1)
 	})
 
 	// send ping to create serverside connection
@@ -715,10 +762,12 @@ func TestClientInactiveMonitor(t *testing.T) {
 
 	time.Sleep(time.Second * 2)
 
-	cc.Close()
+	err = cc.Close()
+	require.NoError(t, err)
 	<-cc.Done()
 
-	checkCloseWg.Wait()
+	err = checkClose.Acquire(ctx, 2)
+	require.NoError(t, err)
 	require.True(t, inactivityDetected)
 }
 
@@ -732,15 +781,18 @@ func TestClientKeepAliveMonitor(t *testing.T) {
 
 	ld, err := coapNet.NewDTLSListener("udp4", "", serverCgf)
 	require.NoError(t, err)
-	defer ld.Close()
+	defer func() {
+		err := ld.Close()
+		require.NoError(t, err)
+	}()
 
-	var checkCloseWg sync.WaitGroup
-	defer checkCloseWg.Wait()
+	checkClose := semaphore.NewWeighted(2)
+	err = checkClose.Acquire(ctx, 2)
+	require.NoError(t, err)
 	sd := dtls.NewServer(
 		dtls.WithOnNewClientConn(func(cc *client.ClientConn, tlscon *piondtls.Conn) {
-			checkCloseWg.Add(1)
 			cc.AddOnClose(func() {
-				checkCloseWg.Done()
+				checkClose.Release(1)
 			})
 		}),
 		dtls.WithGoPool(func(f func()) error {
@@ -769,21 +821,23 @@ func TestClientKeepAliveMonitor(t *testing.T) {
 		dtls.WithKeepAlive(3, 100*time.Millisecond, func(cc inactivity.ClientConn) {
 			require.False(t, inactivityDetected)
 			inactivityDetected = true
-			cc.Close()
+			err := cc.Close()
+			require.NoError(t, err)
 		}),
 		dtls.WithPeriodicRunner(periodic.New(ctx.Done(), time.Millisecond*10)),
 	)
 	require.NoError(t, err)
-	checkCloseWg.Add(1)
 	cc.AddOnClose(func() {
-		checkCloseWg.Done()
+		checkClose.Release(1)
 	})
 
 	// send ping to create serverside connection
-	ctx, cancel = context.WithTimeout(ctx, time.Second)
+	ctxPing, cancel := context.WithTimeout(ctx, time.Second)
 	defer cancel()
-	cc.Ping(ctx)
+	err = cc.Ping(ctxPing)
+	require.Error(t, err)
 
-	checkCloseWg.Wait()
+	err = checkClose.Acquire(ctx, 2)
+	require.NoError(t, err)
 	require.True(t, inactivityDetected)
 }

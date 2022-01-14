@@ -1,0 +1,32 @@
+# Workflow to run tests for PRs from forked repository
+name: Test for forked repository
+
+# Run on push to whatever branch
+on: [pull_request]
+
+jobs:
+  test-for-fork:
+    # Run only for forked repository
+    if: github.event.pull_request.head.repo.full_name != github.repository
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest, macOS-latest]
+
+    steps:
+      - name: Set up Go 1.17
+        uses: actions/setup-go@v2
+        with:
+          go-version: ^1.17
+
+      # Checks-out repository under $GITHUB_WORKSPACE
+      - name: Checkout
+        uses: actions/checkout@v2
+
+      # Build everything
+      - name: Run a build
+        run: go build ./...
+
+      # Runs a single command using the runners shell, -p1 for `race: limit on 8128 simultaneously alive goroutines is exceeded, dying` at macos
+      - name: Run a test
+        run: go test -v -race -p 1  ./... -coverpkg=./... -covermode=atomic -coverprofile=./coverage.txt

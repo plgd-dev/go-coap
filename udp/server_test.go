@@ -18,6 +18,7 @@ import (
 	"github.com/plgd-dev/go-coap/v2/udp/message/pool"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"golang.org/x/sync/semaphore"
 )
 
 type mcastreceiver struct {
@@ -51,7 +52,10 @@ func TestServerDiscoverIotivity(t *testing.T) {
 
 	ld, err := coapNet.NewListenUDP("udp4", "")
 	require.NoError(t, err)
-	defer ld.Close()
+	defer func() {
+		err := ld.Close()
+		require.NoError(t, err)
+	}()
 
 	sd := NewServer()
 	defer sd.Stop()
@@ -83,7 +87,10 @@ func TestServerDiscover(t *testing.T) {
 
 	l, err := coapNet.NewListenUDP("udp4", multicastAddr)
 	require.NoError(t, err)
-	defer l.Close()
+	defer func() {
+		err := l.Close()
+		require.NoError(t, err)
+	}()
 
 	ifaces, err := net.Interfaces()
 	require.NoError(t, err)
@@ -104,7 +111,8 @@ func TestServerDiscover(t *testing.T) {
 	defer wg.Wait()
 
 	s := udp.NewServer(udp.WithHandlerFunc(func(w *client.ResponseWriter, r *pool.Message) {
-		w.SetResponse(codes.BadRequest, message.TextPlain, bytes.NewReader(make([]byte, 5330)))
+		err := w.SetResponse(codes.BadRequest, message.TextPlain, bytes.NewReader(make([]byte, 5330)))
+		require.NoError(t, err)
 		require.NotNil(t, w.ClientConn())
 	}))
 	defer s.Stop()
@@ -118,7 +126,10 @@ func TestServerDiscover(t *testing.T) {
 
 	ld, err := coapNet.NewListenUDP("udp4", "")
 	require.NoError(t, err)
-	defer ld.Close()
+	defer func() {
+		err := ld.Close()
+		require.NoError(t, err)
+	}()
 
 	sd := udp.NewServer()
 	defer sd.Stop()
@@ -141,16 +152,26 @@ func TestServerDiscover(t *testing.T) {
 }
 
 func TestServerCleanUpConns(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second*5)
+	defer cancel()
 	ld, err := coapNet.NewListenUDP("udp4", "")
 	require.NoError(t, err)
-	defer ld.Close()
+	defer func() {
+		err := ld.Close()
+		require.NoError(t, err)
+	}()
 
-	var checkCloseWg sync.WaitGroup
-	defer checkCloseWg.Wait()
+	checkClose := semaphore.NewWeighted(2)
+	err = checkClose.Acquire(ctx, 2)
+	require.NoError(t, err)
+	defer func() {
+		err = checkClose.Acquire(ctx, 2)
+		require.NoError(t, err)
+	}()
+
 	sd := udp.NewServer(udp.WithOnNewClientConn(func(cc *client.ClientConn) {
-		checkCloseWg.Add(1)
 		cc.AddOnClose(func() {
-			checkCloseWg.Done()
+			checkClose.Release(1)
 		})
 	}))
 	defer sd.Stop()
@@ -165,16 +186,14 @@ func TestServerCleanUpConns(t *testing.T) {
 
 	cc, err := udp.Dial(ld.LocalAddr().String())
 	require.NoError(t, err)
-	checkCloseWg.Add(1)
 	cc.AddOnClose(func() {
-		checkCloseWg.Done()
+		checkClose.Release(1)
 	})
 	defer func() {
-		cc.Close()
+		err := cc.Close()
+		require.NoError(t, err)
 		<-cc.Done()
 	}()
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-	defer cancel()
 	err = cc.Ping(ctx)
 	require.NoError(t, err)
 }
@@ -187,21 +206,25 @@ func TestServerInactiveMonitor(t *testing.T) {
 
 	ld, err := coapNet.NewListenUDP("udp4", "")
 	require.NoError(t, err)
-	defer ld.Close()
+	defer func() {
+		err := ld.Close()
+		require.NoError(t, err)
+	}()
 
-	var checkCloseWg sync.WaitGroup
-	defer checkCloseWg.Wait()
+	checkClose := semaphore.NewWeighted(2)
+	err = checkClose.Acquire(ctx, 2)
+	require.NoError(t, err)
 	sd := udp.NewServer(
 		udp.WithOnNewClientConn(func(cc *client.ClientConn) {
-			checkCloseWg.Add(1)
 			cc.AddOnClose(func() {
-				checkCloseWg.Done()
+				checkClose.Release(1)
 			})
 		}),
 		udp.WithInactivityMonitor(100*time.Millisecond, func(cc inactivity.ClientConn) {
 			require.False(t, inactivityDetected)
 			inactivityDetected = true
-			cc.Close()
+			err := cc.Close()
+			require.NoError(t, err)
 		}),
 		udp.WithPeriodicRunner(periodic.New(ctx.Done(), time.Millisecond*10)),
 	)
@@ -222,27 +245,28 @@ func TestServerInactiveMonitor(t *testing.T) {
 		ld.LocalAddr().String(),
 	)
 	require.NoError(t, err)
-	checkCloseWg.Add(1)
 	cc.AddOnClose(func() {
-		checkCloseWg.Done()
+		checkClose.Release(1)
 	})
 
 	// send ping to create serverside connection
-	ctx, cancel = context.WithTimeout(ctx, time.Second)
+	ctxPing, cancel := context.WithTimeout(ctx, time.Second)
 	defer cancel()
-	err = cc.Ping(ctx)
+	err = cc.Ping(ctxPing)
 	require.NoError(t, err)
 
-	err = cc.Ping(ctx)
+	err = cc.Ping(ctxPing)
 	require.NoError(t, err)
 
 	// wait for fire inactivity
 	time.Sleep(time.Second * 2)
 
-	cc.Close()
+	err = cc.Close()
+	require.NoError(t, err)
 	<-cc.Done()
 
-	checkCloseWg.Wait()
+	err = checkClose.Acquire(ctx, 2)
+	require.NoError(t, err)
 	require.True(t, inactivityDetected)
 }
 
@@ -251,24 +275,28 @@ func TestServerKeepAliveMonitor(t *testing.T) {
 
 	ld, err := coapNet.NewListenUDP("udp4", "")
 	require.NoError(t, err)
-	defer ld.Close()
+	defer func() {
+		err := ld.Close()
+		require.NoError(t, err)
+	}()
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*8)
 	defer cancel()
 
-	var checkCloseWg sync.WaitGroup
-	defer checkCloseWg.Wait()
+	checkClose := semaphore.NewWeighted(2)
+	err = checkClose.Acquire(ctx, 2)
+	require.NoError(t, err)
 	sd := udp.NewServer(
 		udp.WithOnNewClientConn(func(cc *client.ClientConn) {
-			checkCloseWg.Add(1)
 			cc.AddOnClose(func() {
-				checkCloseWg.Done()
+				checkClose.Release(1)
 			})
 		}),
 		udp.WithKeepAlive(3, 100*time.Millisecond, func(cc inactivity.ClientConn) {
 			require.False(t, inactivityDetected)
 			inactivityDetected = true
-			cc.Close()
+			err := cc.Close()
+			require.NoError(t, err)
 		}),
 		udp.WithPeriodicRunner(periodic.New(ctx.Done(), time.Millisecond*10)),
 	)
@@ -289,21 +317,23 @@ func TestServerKeepAliveMonitor(t *testing.T) {
 		ld.LocalAddr().String(),
 		udp.WithInactivityMonitor(time.Millisecond*10, func(cc inactivity.ClientConn) {
 			time.Sleep(time.Millisecond * 500)
-			cc.Close()
+			err := cc.Close()
+			require.NoError(t, err)
 		}),
 		udp.WithPeriodicRunner(periodic.New(ctx.Done(), time.Millisecond*10)),
 	)
 	require.NoError(t, err)
-	checkCloseWg.Add(1)
 	cc.AddOnClose(func() {
-		checkCloseWg.Done()
+		checkClose.Release(1)
 	})
 
 	// send ping to create serverside connection
 	ctx, cancel = context.WithTimeout(ctx, time.Second)
 	defer cancel()
-	cc.Ping(ctx)
+	err = cc.Ping(ctx)
+	require.NoError(t, err)
 
-	checkCloseWg.Wait()
+	err = checkClose.Acquire(ctx, 2)
+	require.NoError(t, err)
 	require.True(t, inactivityDetected)
 }

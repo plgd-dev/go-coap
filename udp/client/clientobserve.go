@@ -4,13 +4,13 @@ import (
 	"context"
 	"fmt"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/plgd-dev/go-coap/v2/message"
 	"github.com/plgd-dev/go-coap/v2/message/codes"
 	"github.com/plgd-dev/go-coap/v2/net/observation"
 	"github.com/plgd-dev/go-coap/v2/udp/message/pool"
+	"go.uber.org/atomic"
 )
 
 func NewObservationHandler(obsertionTokenHandler *HandlerContainer, next HandlerFunc) HandlerFunc {
@@ -37,18 +37,15 @@ type respObservationMessage struct {
 //Observation represents subscription to resource on the server
 type Observation struct {
 	token               message.Token
-	lastEvent           time.Time
-	etag                []byte
 	path                string
 	cc                  *ClientConn
 	observeFunc         func(req *pool.Message)
 	respObservationChan chan respObservationMessage
+	waitForResponse     atomic.Bool
 
-	mutex sync.Mutex
-
-	obsSequence uint32
-
-	waitForReponse uint32
+	mutex       sync.Mutex
+	obsSequence uint32    // guarded by mutex
+	lastEvent   time.Time // guarded by mutex
 }
 
 func newObservation(token message.Token, path string, cc *ClientConn, observeFunc func(req *pool.Message), respObservationChan chan respObservationMessage) *Observation {
@@ -57,7 +54,7 @@ func newObservation(token message.Token, path string, cc *ClientConn, observeFun
 		path:                path,
 		obsSequence:         0,
 		cc:                  cc,
-		waitForReponse:      1,
+		waitForResponse:     *atomic.NewBool(true),
 		respObservationChan: respObservationChan,
 		observeFunc:         observeFunc,
 	}
@@ -69,7 +66,9 @@ func (o *Observation) Canceled() bool {
 }
 
 func (o *Observation) cleanUp() bool {
-	o.cc.observationTokenHandler.Pop(o.token)
+	// we can ignore err during cleanUp, if err != nil then some other
+	// part of code already removed the handler for the token
+	_, _ = o.cc.observationTokenHandler.Pop(o.token)
 	registeredRequest, ok := o.cc.observationRequests.PullOut(o.token.Hash())
 	if ok {
 		o.cc.ReleaseMessage(registeredRequest.(*pool.Message))
@@ -80,7 +79,7 @@ func (o *Observation) cleanUp() bool {
 func (o *Observation) handler(w *ResponseWriter, r *pool.Message) {
 	code := r.Code()
 	notSupported := !r.HasOption(message.Observe)
-	if atomic.CompareAndSwapUint32(&o.waitForReponse, 1, 0) {
+	if o.waitForResponse.CAS(true, false) {
 		select {
 		case o.respObservationChan <- respObservationMessage{
 			code:         code,

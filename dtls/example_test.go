@@ -12,7 +12,7 @@ import (
 	"github.com/plgd-dev/go-coap/v2/net"
 )
 
-func ExampleGet() {
+func ExampleClientConn_Get() {
 	dtlsCfg := &piondtls.Config{
 		PSK: func(hint []byte) ([]byte, error) {
 			fmt.Printf("Hint: %s \n", hint)
@@ -39,7 +39,7 @@ func ExampleGet() {
 	fmt.Printf("%v", data)
 }
 
-func ExampleServe() {
+func ExampleServer_Serve() {
 	dtlsCfg := &piondtls.Config{
 		PSK: func(hint []byte) ([]byte, error) {
 			fmt.Printf("Hint: %s \n", hint)

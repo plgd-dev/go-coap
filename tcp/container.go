@@ -1,10 +1,16 @@
 package tcp
 
 import (
-	"fmt"
+	"errors"
 	"sync"
 
 	"github.com/plgd-dev/go-coap/v2/message"
+)
+
+var (
+	ErrKeyAlreadyExists = errors.New("key already exists")
+
+	ErrKeyNotExists = errors.New("key does not exist")
 )
 
 // HandlerContainer for regirstration handlers by key
@@ -27,8 +33,8 @@ func (s *HandlerContainer) Insert(key interface{}, handler HandlerFunc) error {
 	}
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
-	if s.datas[key] != nil {
-		return fmt.Errorf("key already exist")
+	if _, keyExists := s.datas[key]; keyExists {
+		return ErrKeyAlreadyExists
 	}
 	s.datas[key] = handler
 	return nil
@@ -41,9 +47,9 @@ func (s *HandlerContainer) Get(key interface{}) (HandlerFunc, error) {
 	}
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
-	v := s.datas[key]
-	if v == nil {
-		return nil, fmt.Errorf("key not exist")
+	v, keyExists := s.datas[key]
+	if !keyExists {
+		return nil, ErrKeyNotExists
 	}
 	return v, nil
 }
@@ -55,9 +61,9 @@ func (s *HandlerContainer) Pop(key interface{}) (HandlerFunc, error) {
 	}
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
-	v := s.datas[key]
-	if v == nil {
-		return nil, fmt.Errorf("key not exist")
+	v, keyExists := s.datas[key]
+	if !keyExists {
+		return nil, ErrKeyNotExists
 	}
 	delete(s.datas, key)
 	return v, nil

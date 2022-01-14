@@ -317,21 +317,19 @@ func (c *UDPConn) WriteWithContext(ctx context.Context, raddr *net.UDPAddr, buff
 
 // ReadWithContext reads packet with context.
 func (c *UDPConn) ReadWithContext(ctx context.Context, buffer []byte) (int, *net.UDPAddr, error) {
-	for {
-		select {
-		case <-ctx.Done():
-			return -1, nil, ctx.Err()
-		default:
-		}
-		if c.closed.Load() {
-			return -1, nil, ErrConnectionIsClosed
-		}
-		n, s, err := c.connection.ReadFromUDP(buffer)
-		if err != nil {
-			return -1, nil, fmt.Errorf("cannot read from udp connection: %w", err)
-		}
-		return n, s, err
+	select {
+	case <-ctx.Done():
+		return -1, nil, ctx.Err()
+	default:
 	}
+	if c.closed.Load() {
+		return -1, nil, ErrConnectionIsClosed
+	}
+	n, s, err := c.connection.ReadFromUDP(buffer)
+	if err != nil {
+		return -1, nil, fmt.Errorf("cannot read from udp connection: %w", err)
+	}
+	return n, s, err
 }
 
 // SetMulticastLoopback sets whether transmitted multicast packets

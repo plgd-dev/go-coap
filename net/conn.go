@@ -60,10 +60,14 @@ func (c *Conn) Close() error {
 func (c *Conn) handshake(ctx context.Context) error {
 	if c.handshakeContext != nil {
 		err := c.handshakeContext(ctx)
-		if err != nil {
-			c.Close()
+		if err == nil {
+			return nil
+		}
+		errClose := c.Close()
+		if errClose == nil {
 			return err
 		}
+		return fmt.Errorf("%v", []error{err, errClose})
 	}
 	return nil
 }

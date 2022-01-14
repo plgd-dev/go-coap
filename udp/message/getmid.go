@@ -3,8 +3,14 @@ package message
 import (
 	"crypto/rand"
 	"encoding/binary"
+	mathRand "math/rand"
 	"sync/atomic"
+	"time"
 )
+
+func init() {
+	mathRand.Seed(time.Now().UnixNano())
+}
 
 var msgID = uint32(RandMID())
 
@@ -15,6 +21,10 @@ func GetMID() uint16 {
 
 func RandMID() uint16 {
 	b := make([]byte, 4)
-	rand.Read(b)
+	_, err := rand.Read(b)
+	if err != nil {
+		// fallback to cryptographically insecure pseudo-random generator
+		return uint16(mathRand.Uint32() >> 16)
+	}
 	return uint16(binary.BigEndian.Uint32(b))
 }

@@ -11,11 +11,6 @@ import (
 	dtls "github.com/pion/dtls/v2"
 )
 
-type connData struct {
-	conn net.Conn
-	err  error
-}
-
 // DTLSListener is a DTLS listener that provides accept with context.
 type DTLSListener struct {
 	listener net.Listener

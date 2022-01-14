@@ -43,7 +43,7 @@ func NewSession(
 ) *Session {
 	ctx, cancel := context.WithCancel(ctx)
 
-	doneCtx, doneCancel := context.WithCancel(ctx)
+	doneCtx, doneCancel := context.WithCancel(doneCtx)
 	s := &Session{
 		cancel:         cancel,
 		connection:     connection,

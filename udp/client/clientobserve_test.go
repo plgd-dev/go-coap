@@ -48,14 +48,18 @@ func TestClientConnObserve(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			l, err := coapNet.NewListenUDP("udp", "")
 			require.NoError(t, err)
-			defer l.Close()
+			defer func() {
+				err := l.Close()
+				require.NoError(t, err)
+			}()
 			var wg sync.WaitGroup
 			defer wg.Wait()
 
 			s := udp.NewServer(udp.WithHandlerFunc(func(w *client.ResponseWriter, r *pool.Message) {
 				switch r.Code() {
 				case codes.PUT, codes.POST, codes.DELETE:
-					w.SetResponse(codes.NotFound, message.TextPlain, nil)
+					err := w.SetResponse(codes.NotFound, message.TextPlain, nil)
+					require.NoError(t, err)
 				case codes.GET:
 				default:
 					return
@@ -115,7 +119,10 @@ func TestClientConnObserve(t *testing.T) {
 
 			cc, err := udp.Dial(l.LocalAddr().String())
 			require.NoError(t, err)
-			defer cc.Close()
+			defer func() {
+				err := cc.Close()
+				require.NoError(t, err)
+			}()
 
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
 			defer cancel()
@@ -166,14 +173,18 @@ func TestClientConnObserveNotSupported(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			l, err := coapNet.NewListenUDP("udp", "")
 			require.NoError(t, err)
-			defer l.Close()
+			defer func() {
+				err := l.Close()
+				require.NoError(t, err)
+			}()
 			var wg sync.WaitGroup
 			defer wg.Wait()
 
 			s := udp.NewServer(udp.WithHandlerFunc(func(w *client.ResponseWriter, r *pool.Message) {
 				switch r.Code() {
 				case codes.PUT, codes.POST, codes.DELETE:
-					w.SetResponse(codes.NotFound, message.TextPlain, nil)
+					err := w.SetResponse(codes.NotFound, message.TextPlain, nil)
+					require.NoError(t, err)
 				case codes.GET:
 				default:
 					return
@@ -220,7 +231,10 @@ func TestClientConnObserveNotSupported(t *testing.T) {
 
 			cc, err := udp.Dial(l.LocalAddr().String())
 			require.NoError(t, err)
-			defer cc.Close()
+			defer func() {
+				err := cc.Close()
+				require.NoError(t, err)
+			}()
 
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
 			defer cancel()
@@ -250,7 +264,10 @@ func TestClientConnObserveNotSupported(t *testing.T) {
 func TestClientConnObserveIotivityLite(t *testing.T) {
 	cc, err := Dial("10.112.112.10:60956")
 	require.NoError(t, err)
-	defer cc.Close()
+	defer func() {
+		err := cc.Close()
+		require.NoError(t, err)
+	}()
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*2)
 	defer cancel()

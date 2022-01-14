@@ -327,7 +327,7 @@ func (b *BlockWise) Do(r Message, maxSzx SZX, maxMessageSize uint32, do func(req
 			return resp, fmt.Errorf("cannot decode block option of bw response: %w", err)
 		}
 		if num != newNum {
-			return resp, fmt.Errorf("unexpected of acknowleged seqencenumber(%v != %v)", num, newNum)
+			return resp, fmt.Errorf("unexpected value of acknowledged sequence number(%v != %v)", num, newNum)
 		}
 
 		num = num + newSzx.Size()/szx.Size()
@@ -444,6 +444,9 @@ func (b *BlockWise) handleSendingMessage(w ResponseWriter, sendingMessage Messag
 		if offSeek+int64(readed) == payloadSize {
 			err = nil
 		}
+	}
+	if err != nil {
+		return false, fmt.Errorf("cannot read response: %w", err)
 	}
 
 	buf = buf[:readed]
@@ -573,8 +576,8 @@ func (b *BlockWise) continueSendingMessage(w ResponseWriter, r Message, maxSZX S
 		return false, fmt.Errorf("cannot get %v option: %w", blockType, err)
 	}
 	if blockType == message.Block1 {
-		// num just acknowlege position we need to set block to next block.
-		szx, num, more, err := DecodeBlockOption(block)
+		// returned blockNumber just acknowledges position we need to set block to the next block.
+		szx, _, more, err := DecodeBlockOption(block)
 		if err != nil {
 			return false, fmt.Errorf("cannot decode %v(%v) option: %w", blockType, block, err)
 		}
@@ -582,7 +585,7 @@ func (b *BlockWise) continueSendingMessage(w ResponseWriter, r Message, maxSZX S
 		if err != nil {
 			return false, fmt.Errorf("cannot get current position of seek: %w", err)
 		}
-		num = off / szx.Size()
+		num := off / szx.Size()
 		block, err = EncodeBlockOption(szx, num, more)
 		if err != nil {
 			return false, fmt.Errorf("cannot encode %v(%v, %v, %v) option: %w", blockType, szx, num, more, err)
@@ -790,7 +793,9 @@ func (b *BlockWise) processReceivedMessage(w ResponseWriter, r Message, maxSzx S
 	case !bytes.Equal(rETAG, cachedReceivedMessageETAG):
 		// ETAG was changed - drop data and set new ETAG
 		cachedReceivedMessage.SetOptionBytes(message.ETag, rETAG)
-		payloadFile.Truncate(0)
+		if err := payloadFile.Truncate(0); err != nil {
+			return fmt.Errorf("cannot truncate cached request: %w", err)
+		}
 	}
 
 	off := num * szx.Size()

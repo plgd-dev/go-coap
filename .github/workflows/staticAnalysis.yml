@@ -1,0 +1,59 @@
+# Run static analysis checks
+name: Static Analysis
+
+on: [pull_request]
+jobs:
+  analysis:
+    runs-on: ubuntu-20.04
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v2
+
+      - name: Set up Go 1.17
+        uses: actions/setup-go@v2
+        with:
+          go-version: "^1.17" # The Go version to download (if necessary) and use.
+
+      - run: go version
+
+      - name: Run go vet
+        run: go vet ./...
+
+      - name: Install and run ineffassign
+        run: |
+          export PATH=${PATH}:`go env GOPATH`/bin
+          go install github.com/gordonklaus/ineffassign@latest
+          ineffassign ./...
+
+      - name: Install and run errcheck
+        run: |
+          export PATH=${PATH}:`go env GOPATH`/bin
+          go install github.com/kisielk/errcheck@latest
+          if errcheck ./... | grep -v 'example'; then\
+            exit 1;\
+          fi
+
+      - name: Install and run gocyclo
+        run: |
+          export PATH=${PATH}:`go env GOPATH`/bin
+          go install github.com/fzipp/gocyclo/cmd/gocyclo@latest
+          gocyclo -over 15 -ignore ".pb(.gw)?.go$|_test.go$|wsproxy" . || echo "gocyclo detected too complex functions"
+
+      - name: Install and run misspell
+        run: |
+          # check misspelling in all files in repository
+          export PATH=${PATH}:`go env GOPATH`/bin
+          go install github.com/client9/misspell/cmd/misspell@latest
+          find . -type f -exec misspell {} \;
+
+      - name: Install and run aligncheck
+        run: |
+          go get -u gitlab.com/opennota/check/cmd/aligncheck@latest
+          aligncheck ./...
+
+      - name: Install and run structslop
+        run: |
+          export PATH=${PATH}:`go env GOPATH`/bin
+          go install github.com/orijtech/structslop/cmd/structslop@latest
+          structslop ./...

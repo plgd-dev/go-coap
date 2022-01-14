@@ -1,17 +1,18 @@
 package pool
 
 import (
+	"fmt"
 	"io"
-	"sync/atomic"
 
 	"github.com/plgd-dev/go-coap/v2/message"
 	"github.com/plgd-dev/go-coap/v2/message/codes"
+	"go.uber.org/atomic"
 )
 
 type Message struct {
 	msg             message.Message
+	hijacked        atomic.Bool
 	isModified      bool
-	hijacked        uint32
 	valueBuffer     []byte
 	origValueBuffer []byte
 	payload         io.ReadSeeker
@@ -75,6 +76,9 @@ func (r *Message) ResetOptionsTo(in message.Options) {
 		r.valueBuffer = append(r.valueBuffer, make([]byte, used)...)
 		opts, used, err = r.msg.Options.ResetOptionsTo(r.valueBuffer, in)
 	}
+	if err != nil {
+		panic(fmt.Errorf("cannot reset options to: %w", err))
+	}
 	r.msg.Options = opts
 	r.valueBuffer = r.valueBuffer[used:]
 	if len(in) > 0 {
@@ -92,6 +96,9 @@ func (r *Message) SetPath(p string) {
 	if err == message.ErrTooSmall {
 		r.valueBuffer = append(r.valueBuffer, make([]byte, used)...)
 		opts, used, err = r.msg.Options.SetPath(r.valueBuffer, p)
+	}
+	if err != nil {
+		panic(fmt.Errorf("cannot set path: %w", err))
 	}
 	r.msg.Options = opts
 	r.valueBuffer = r.valueBuffer[used:]
@@ -129,6 +136,9 @@ func (r *Message) SetOptionString(opt message.OptionID, value string) {
 		r.valueBuffer = append(r.valueBuffer, make([]byte, used)...)
 		opts, used, err = r.msg.Options.SetString(r.valueBuffer, opt, value)
 	}
+	if err != nil {
+		panic(fmt.Errorf("cannot set string option: %w", err))
+	}
 	r.msg.Options = opts
 	r.valueBuffer = r.valueBuffer[used:]
 	r.isModified = true
@@ -139,6 +149,9 @@ func (r *Message) AddOptionString(opt message.OptionID, value string) {
 	if err == message.ErrTooSmall {
 		r.valueBuffer = append(r.valueBuffer, make([]byte, used)...)
 		opts, used, err = r.msg.Options.AddString(r.valueBuffer, opt, value)
+	}
+	if err != nil {
+		panic(fmt.Errorf("cannot add string option: %w", err))
 	}
 	r.msg.Options = opts
 	r.valueBuffer = r.valueBuffer[used:]
@@ -177,6 +190,9 @@ func (r *Message) SetOptionUint32(opt message.OptionID, value uint32) {
 		r.valueBuffer = append(r.valueBuffer, make([]byte, used)...)
 		opts, used, err = r.msg.Options.SetUint32(r.valueBuffer, opt, value)
 	}
+	if err != nil {
+		panic(fmt.Errorf("cannot set uint32 option: %w", err))
+	}
 	r.msg.Options = opts
 	r.valueBuffer = r.valueBuffer[used:]
 	r.isModified = true
@@ -187,6 +203,9 @@ func (r *Message) AddOptionUint32(opt message.OptionID, value uint32) {
 	if err == message.ErrTooSmall {
 		r.valueBuffer = append(r.valueBuffer, make([]byte, used)...)
 		opts, used, err = r.msg.Options.AddUint32(r.valueBuffer, opt, value)
+	}
+	if err != nil {
+		panic(fmt.Errorf("cannot add uint32 option: %w", err))
 	}
 	r.msg.Options = opts
 	r.valueBuffer = r.valueBuffer[used:]
@@ -270,11 +289,11 @@ func (r *Message) Sequence() uint64 {
 }
 
 func (r *Message) Hijack() {
-	atomic.StoreUint32(&r.hijacked, 1)
+	r.hijacked.Store(true)
 }
 
 func (r *Message) IsHijacked() bool {
-	return atomic.LoadUint32(&r.hijacked) == 1
+	return r.hijacked.Load()
 }
 
 func (r *Message) IsModified() bool {
@@ -311,7 +330,8 @@ func (r *Message) ReadBody() ([]byte, error) {
 	n, err := io.ReadFull(r.Body(), payload)
 	if (err == io.ErrUnexpectedEOF || err == io.EOF) && int64(n) == size {
 		err = nil
-	} else if err != nil {
+	}
+	if err != nil {
 		return nil, err
 	}
 	return payload[:n], nil

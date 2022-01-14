@@ -1,44 +1,49 @@
-# This is a basic workflow to help you get started with Actions
-
+# Workflow to run tests, publish coverage to codecov and run SonarCloud scan
 name: Test
 
-# Controls when the action will run.
-on:
-  push:
+# Run on push to whatever branch (push only runs for main repository, for forked repository look
+# in test-for-fork.yml)
+on: [push]
 
-# A workflow run is made up of one or more jobs that can run sequentially or in parallel
 jobs:
-  # This workflow contains a single job called "build"
   test:
-    # The type of runner that the job will run on
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
         os: [ubuntu-latest, windows-latest, macOS-latest]
 
-    # Steps represent a sequence of tasks that will be executed as part of the job
     steps:
       - name: Set up Go 1.17
         uses: actions/setup-go@v2
         with:
           go-version: ^1.17
-     
-      # Checks-out your repository under $GITHUB_WORKSPACE, so your job can access it
+
+      # Checks-out repository under $GITHUB_WORKSPACE
       - name: Checkout
+        if: ${{!startsWith(matrix.os, 'ubuntu')}}
         uses: actions/checkout@v2
 
-      # Runs a single command using the runners shell
+      # Checks-out repository under $GITHUB_WORKSPACE with tags and history (needed by "SonarCloud Scan" step)
+      - name: Full checkout
+        if: startsWith(matrix.os,'ubuntu')
+        uses: actions/checkout@v2
+        with:
+          fetch-depth: 0 # Full clone for SonarCloud
+
+      # Build everything
       - name: Run a build
         run: go build ./...
-      
+
       # Runs a single command using the runners shell, -p1 for `race: limit on 8128 simultaneously alive goroutines is exceeded, dying` at macos
       - name: Run a test
         run: go test -v -race -p 1  ./... -coverpkg=./... -covermode=atomic -coverprofile=./coverage.txt
 
+      # Skip this step when running from forked repository (no write privileges)
       - name: Publish the coverage
         if: startsWith(matrix.os,'ubuntu')
         run: bash <(curl -s https://codecov.io/bash)
-      
+
+      # Skip this step when running from forked repository (no access to ${{ secrets }})
       - name: SonarCloud Scan
         if: startsWith(matrix.os,'ubuntu')
         uses: SonarSource/sonarcloud-github-action@master

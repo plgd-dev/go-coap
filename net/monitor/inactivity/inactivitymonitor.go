@@ -19,7 +19,6 @@ type ClientConn = interface {
 }
 
 type inactivityMonitor struct {
-	// lastActivity stores time.Time
 	lastActivity atomic.Value
 	duration     time.Duration
 	onInactive   OnInactiveFunc
@@ -37,7 +36,8 @@ func (m *inactivityMonitor) LastActivity() time.Time {
 }
 
 func CloseClientConn(cc ClientConn) {
-	cc.Close()
+	// call cc.Close() directly to check and handle error if necessary
+	_ = cc.Close()
 }
 
 func NewInactivityMonitor(duration time.Duration, onInactive OnInactiveFunc) Monitor {
