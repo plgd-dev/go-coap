@@ -34,10 +34,6 @@ func (s *Server) DiscoveryRequest(req *pool.Message, address string, receiverFun
 	if len(token) == 0 {
 		return fmt.Errorf("invalid token")
 	}
-	cfg := coapNet.DefaultMulticastOptions()
-	for _, o := range opts {
-		cfg.Apply(o)
-	}
 	c := s.conn()
 	if c == nil {
 		return fmt.Errorf("server doesn't serve connection")
