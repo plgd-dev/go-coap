@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/plgd-dev/go-coap/v2/udp/generic"
 	"net"
 	"sync"
 	"sync/atomic"
@@ -112,7 +113,7 @@ func (s *Session) WriteMessage(req *pool.Message) error {
 	return err
 }
 
-func (s *Session) WriteMulticastMessage(_ *pool.Message, _ *net.Interface, _ *net.IP, _ int) error {
+func (s *Session) WriteMulticastMessage(_ *pool.Message, _ generic.MulticastOptions) error {
 	return errors.New("multicast messages not implemented for DTLS")
 }
 
