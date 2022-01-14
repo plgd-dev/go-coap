@@ -3,6 +3,7 @@ package udp
 import (
 	"context"
 	"fmt"
+	"github.com/plgd-dev/go-coap/v2/udp/generic"
 	"net"
 
 	"github.com/plgd-dev/go-coap/v2/udp/client"
@@ -10,23 +11,10 @@ import (
 	"github.com/plgd-dev/go-coap/v2/udp/message/pool"
 )
 
-var defaultMulticastOptions = multicastOptions{
-	hopLimit: 2,
-}
-
-type multicastOptions struct {
-	hopLimit int
-}
-
-// A MulticastOption sets options such as hop limit, etc.
-type MulticastOption interface {
-	apply(*multicastOptions)
-}
-
 // Discover sends GET to multicast or unicast address and waits for responses until context timeouts or server shutdown.
 // For unicast there is a difference against the Dial. The Dial is connection-oriented and it means that, if you send a request to an address, the peer must send the response from the same
 // address where was request sent. For Discover it allows the client to send a response from another address where was request send.
-func (s *Server) Discover(ctx context.Context, address, path string, receiverFunc func(cc *client.ClientConn, resp *pool.Message), opts ...MulticastOption) error {
+func (s *Server) Discover(ctx context.Context, address, path string, receiverFunc func(cc *client.ClientConn, resp *pool.Message), opts ...generic.MulticastOption) error {
 	req, err := client.NewGetRequest(ctx, s.messagePool, path)
 	if err != nil {
 		return fmt.Errorf("cannot create discover request: %w", err)
@@ -40,14 +28,14 @@ func (s *Server) Discover(ctx context.Context, address, path string, receiverFun
 // DiscoveryRequest sends request to multicast/unicast address and wait for responses until request timeouts or server shutdown.
 // For unicast there is a difference against the Dial. The Dial is connection-oriented and it means that, if you send a request to an address, the peer must send the response from the same
 // address where was request sent. For Discover it allows the client to send a response from another address where was request send.
-func (s *Server) DiscoveryRequest(req *pool.Message, address string, receiverFunc func(cc *client.ClientConn, resp *pool.Message), opts ...MulticastOption) error {
+func (s *Server) DiscoveryRequest(req *pool.Message, address string, receiverFunc func(cc *client.ClientConn, resp *pool.Message), opts ...generic.MulticastOption) error {
 	token := req.Token()
 	if len(token) == 0 {
 		return fmt.Errorf("invalid token")
 	}
-	cfg := defaultMulticastOptions
+	cfg := generic.DefaultMulticastOptions()
 	for _, o := range opts {
-		o.apply(&cfg)
+		cfg.Apply(o)
 	}
 	c := s.conn()
 	if c == nil {
@@ -75,7 +63,7 @@ func (s *Server) DiscoveryRequest(req *pool.Message, address string, receiverFun
 	}()
 
 	if addr.IP.IsMulticast() {
-		err = c.WriteMulticast(req.Context(), addr, cfg.hopLimit, data)
+		err = c.WriteMulticast(req.Context(), addr, cfg, data)
 		if err != nil {
 			return err
 		}

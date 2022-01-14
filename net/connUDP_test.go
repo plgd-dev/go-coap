@@ -182,7 +182,7 @@ func TestUDPConnwriteMulticastWithContext(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err = c1.WriteMulticast(tt.args.ctx, tt.args.udpCtx, 2, tt.args.buffer)
+			err = c1.WriteMulticast(tt.args.ctx, tt.args.udpCtx, nil, nil, 2, tt.args.buffer)
 
 			c1.LocalAddr()
 			c1.RemoteAddr()

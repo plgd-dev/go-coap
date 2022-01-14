@@ -3,8 +3,8 @@ package net
 import (
 	"context"
 	"fmt"
+	"github.com/plgd-dev/go-coap/v2/udp/generic"
 	"net"
-	"strings"
 	"sync"
 	"time"
 
@@ -208,47 +208,45 @@ func (c *UDPConn) Close() error {
 	return c.connection.Close()
 }
 
-func (c *UDPConn) writeToAddr(multicastHopLimit int, iface net.Interface, srcAddr net.Addr, port string, raddr *net.UDPAddr, buffer []byte) error {
-	netType := "udp4"
-	if IsIPv6(raddr.IP) {
-		netType = "udp6"
-	}
-	addrMask := srcAddr.String()
-	addr := strings.Split(addrMask, "/")[0]
-	if strings.Contains(addr, ":") && netType == "udp4" {
-		return nil
-	}
-	if !strings.Contains(addr, ":") && netType == "udp6" {
-		return nil
-	}
+func (c *UDPConn) writeToAddr(iface *net.Interface, src *net.IP, multicastHopLimit int, raddr *net.UDPAddr, buffer []byte) error {
+	var pktSrc net.IP
 	var p packetConn
-	if netType == "udp4" {
-		p = newPacketConnIPv4(ipv4.NewPacketConn(c.connection))
-	} else {
+	if IsIPv6(raddr.IP) {
 		p = newPacketConnIPv6(ipv6.NewPacketConn(c.connection))
+		pktSrc = net.IPv6zero
+	} else {
+		p = newPacketConnIPv4(ipv4.NewPacketConn(c.connection))
+		pktSrc = net.IPv4zero
+	}
+	if src != nil {
+		pktSrc = *src
 	}
 
-	if err := p.SetMulticastInterface(&iface); err != nil {
-		return err
+	if c.closed.Load() {
+		return ErrConnectionIsClosed
+	}
+	if iface != nil {
+		if err := p.SetMulticastInterface(iface); err != nil {
+			return err
+		}
 	}
 	if err := p.SetMulticastHopLimit(multicastHopLimit); err != nil {
 		return err
 	}
-	ip := net.ParseIP(addr)
-	if ip == nil {
-		return fmt.Errorf("cannot parse ip (%v) for iface %v", ip, iface.Name)
+
+	var err error
+	if iface != nil || src != nil {
+		_, err = p.WriteTo(buffer, &ControlMessage{
+			Src:     pktSrc,
+			IfIndex: iface.Index,
+		}, raddr)
+	} else {
+		_, err = p.WriteTo(buffer, nil, raddr)
 	}
-	if c.closed.Load() {
-		return ErrConnectionIsClosed
-	}
-	_, err := p.WriteTo(buffer, &ControlMessage{
-		Src:     ip,
-		IfIndex: iface.Index,
-	}, raddr)
 	return err
 }
 
-func (c *UDPConn) WriteMulticast(ctx context.Context, raddr *net.UDPAddr, hopLimit int, buffer []byte) error {
+func (c *UDPConn) WriteMulticast(ctx context.Context, raddr *net.UDPAddr, opt generic.MulticastOptions, buffer []byte) error {
 	if raddr == nil {
 		return fmt.Errorf("cannot write multicast with context: invalid raddr")
 	}
@@ -256,39 +254,37 @@ func (c *UDPConn) WriteMulticast(ctx context.Context, raddr *net.UDPAddr, hopLim
 		return fmt.Errorf("cannot write multicast with context: invalid destination address")
 	}
 
-	ifaces, err := net.Interfaces()
-	if err != nil {
-		return fmt.Errorf("cannot write multicast with context: cannot get interfaces for multicast connection: %w", err)
-	}
-	c.lock.Lock()
-	defer c.lock.Unlock()
-	for _, iface := range ifaces {
-		if iface.Flags&net.FlagMulticast == 0 {
-			continue
-		}
-		ifaceAddrs, err := iface.Addrs()
+	var err error
+	var ifname string
+
+	switch opt.IFaceMode {
+	case generic.MulticastAllInterface:
+		// send multicast to all interfaces by recursively calling ourselves with each
+		ifaces, err := net.Interfaces()
 		if err != nil {
-			continue
-		}
-		if len(ifaceAddrs) == 0 {
-			continue
-		}
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		default:
+			return fmt.Errorf("cannot write multicast with context: cannot get interfaces for multicast connection: %w", err)
 		}
 
-		addr := strings.Split(c.connection.LocalAddr().String(), ":")
-		port := addr[len(addr)-1]
-
-		for _, ifaceAddr := range ifaceAddrs {
-			err = c.writeToAddr(hopLimit, iface, ifaceAddr, port, raddr, buffer)
+		for _, iface := range ifaces {
+			specificOpt := opt
+			specificOpt.Iface = iface
+			specificOpt.IFaceMode = generic.MulticastSpecificInterface
+			err = c.WriteMulticast(ctx, raddr, specificOpt, buffer)
 			if err != nil {
-				if c.errors != nil {
-					c.errors(fmt.Errorf("cannot write multicast to %v: %w", iface.Name, err))
-				}
+				return err
 			}
+		}
+		return nil
+	case generic.MulticastAnyInterface:
+		ifname = "any"
+		err = c.writeToAddr(nil, opt.Source, opt.HopLimit, raddr, buffer)
+	case generic.MulticastSpecificInterface:
+		ifname = opt.Iface.Name
+		err = c.writeToAddr(&opt.Iface, opt.Source, opt.HopLimit, raddr, buffer)
+	}
+	if err != nil {
+		if c.errors != nil {
+			c.errors(fmt.Errorf("cannot write multicast to %v: %w", ifname, err))
 		}
 	}
 	return nil

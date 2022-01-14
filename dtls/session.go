@@ -2,6 +2,7 @@ package dtls
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"sync"
@@ -109,6 +110,10 @@ func (s *Session) WriteMessage(req *pool.Message) error {
 		return fmt.Errorf("cannot write to connection: %w", err)
 	}
 	return err
+}
+
+func (s *Session) WriteMulticastMessage(_ *pool.Message, _ *net.Interface, _ *net.IP, _ int) error {
+	return errors.New("multicast messages not implemented for DTLS")
 }
 
 func (s *Session) MaxMessageSize() uint32 {
