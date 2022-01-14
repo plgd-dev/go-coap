@@ -3,7 +3,6 @@ package client
 import (
 	"context"
 	"fmt"
-	"github.com/plgd-dev/go-coap/v2/udp/generic"
 	"io"
 	"net"
 	"sync/atomic"
@@ -35,7 +34,6 @@ type Session interface {
 	MaxMessageSize() uint32
 	RemoteAddr() net.Addr
 	WriteMessage(req *pool.Message) error
-	WriteMulticastMessage(req *pool.Message, options generic.MulticastOptions) error
 	Run(cc *ClientConn) error
 	AddOnClose(f EventFunc)
 	SetContextValue(key interface{}, val interface{})
@@ -161,20 +159,15 @@ func (cc *ClientConn) do(req *pool.Message) (*pool.Message, error) {
 	}
 
 	respChan := make(chan *pool.Message, 1)
-	if req.Type() == udpMessage.Confirmable {
-		err := cc.tokenHandlerContainer.Insert(token, func(w *ResponseWriter, r *pool.Message) {
-			r.Hijack()
-			select {
-			case respChan <- r:
-			default:
-			}
-		})
-		if err != nil {
-			return nil, fmt.Errorf("cannot add token handler: %w", err)
+	err := cc.tokenHandlerContainer.Insert(token, func(w *ResponseWriter, r *pool.Message) {
+		r.Hijack()
+		select {
+		case respChan <- r:
+		default:
 		}
-		defer func() { _, _ = cc.tokenHandlerContainer.Pop(token) }()
-	} else {
-		close(respChan)
+	})
+	if err != nil {
+		return nil, fmt.Errorf("cannot add token handler: %w", err)
 	}
 	defer func() {
 		_, _ = cc.tokenHandlerContainer.Pop(token)
@@ -204,10 +197,8 @@ func (cc *ClientConn) Do(req *pool.Message) (*pool.Message, error) {
 		req.UpsertMessageID(cc.getMID())
 		return cc.do(req)
 	}
-	msgType := req.Type()
 	bwresp, err := cc.blockWise.Do(req, cc.blockwiseSZX, cc.session.MaxMessageSize(), func(bwreq blockwise.Message) (blockwise.Message, error) {
 		req := bwreq.(*pool.Message)
-		req.SetType(msgType)
 		if req.Options().HasOption(message.Block1) || req.Options().HasOption(message.Block2) {
 			req.SetMessageID(cc.getMID())
 		} else {
@@ -293,24 +284,6 @@ func (cc *ClientConn) WriteMessage(req *pool.Message) error {
 		}
 		return cc.writeMessage(req)
 	})
-}
-
-func (cc *ClientConn) WriteMulticastMessage(req *pool.Message, options ...generic.MulticastOption) error {
-	mcOptions := generic.DefaultMulticastOptions()
-	for _, o := range options {
-		mcOptions.Apply(o)
-	}
-
-	if req.Type() == udpMessage.Confirmable {
-		return fmt.Errorf("multicast messages cannot be confirmable")
-	}
-	req.SetMessageID(cc.getMID())
-
-	err := cc.session.WriteMulticastMessage(req, mcOptions)
-	if err != nil {
-		return fmt.Errorf("cannot write request: %w", err)
-	}
-	return nil
 }
 
 func newCommonRequest(ctx context.Context, messagePool *pool.Pool, code codes.Code, path string, opts ...message.Option) (*pool.Message, error) {
