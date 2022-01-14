@@ -144,6 +144,9 @@ func (r *Message) IsSeparate() bool {
 }
 
 func (r *Message) String() string {
+	if r == nil {
+		return "nil"
+	}
 	return fmt.Sprintf("Type: %v, MID: %v, %s", r.Type(), r.MessageID(), r.Message.String())
 }
 
