@@ -10,6 +10,7 @@ import (
 
 	"github.com/plgd-dev/go-coap/v2/message"
 	"github.com/plgd-dev/go-coap/v2/message/codes"
+	coapNet "github.com/plgd-dev/go-coap/v2/net"
 	"github.com/plgd-dev/go-coap/v2/net/blockwise"
 	"github.com/plgd-dev/go-coap/v2/net/monitor/inactivity"
 	"github.com/plgd-dev/go-coap/v2/pkg/cache"
@@ -34,6 +35,7 @@ type Session interface {
 	MaxMessageSize() uint32
 	RemoteAddr() net.Addr
 	WriteMessage(req *pool.Message) error
+	WriteMulticastMessage(req *pool.Message, opts ...coapNet.MulticastOption) error
 	Run(cc *ClientConn) error
 	AddOnClose(f EventFunc)
 	SetContextValue(key interface{}, val interface{})
@@ -755,4 +757,16 @@ func (cc *ClientConn) AcquireMessage(ctx context.Context) *pool.Message {
 
 func (cc *ClientConn) ReleaseMessage(m *pool.Message) {
 	cc.messagePool.ReleaseMessage(m)
+}
+
+func (cc *ClientConn) WriteMulticastMessage(req *pool.Message, options ...coapNet.MulticastOption) error {
+	if req.Type() == udpMessage.Confirmable {
+		return fmt.Errorf("multicast messages cannot be confirmable")
+	}
+	req.SetMessageID(cc.getMID())
+	err := cc.session.WriteMulticastMessage(req, options...)
+	if err != nil {
+		return fmt.Errorf("cannot write request: %w", err)
+	}
+	return nil
 }

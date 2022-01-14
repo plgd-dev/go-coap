@@ -3,7 +3,6 @@ package udp
 import (
 	"context"
 	"fmt"
-	"github.com/plgd-dev/go-coap/v2/udp/generic"
 	"net"
 	"sync"
 	"sync/atomic"
@@ -115,12 +114,12 @@ func (s *Session) WriteMessage(req *pool.Message) error {
 	return s.connection.WriteWithContext(req.Context(), s.raddr, data)
 }
 
-func (s *Session) WriteMulticastMessage(req *pool.Message, options generic.MulticastOptions) error {
+func (s *Session) WriteMulticastMessage(req *pool.Message, opts ...coapNet.MulticastOption) error {
 	data, err := req.Marshal()
 	if err != nil {
 		return fmt.Errorf("cannot marshal: %w", err)
 	}
-	return s.connection.WriteMulticast(req.Context(), s.raddr, options, data)
+	return s.connection.WriteMulticast(req.Context(), s.raddr, data, opts...)
 }
 
 func (s *Session) Run(cc *client.ClientConn) (err error) {

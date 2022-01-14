@@ -93,7 +93,7 @@ func TestUDPConnWriteWithContext(t *testing.T) {
 }
 
 func TestUDPConnwriteMulticastWithContext(t *testing.T) {
-	peerAddr := "224.0.1.187:5683"
+	peerAddr := "224.0.1.187:9999"
 	b, err := net.ResolveUDPAddr("udp4", peerAddr)
 	require.NoError(t, err)
 
@@ -101,10 +101,22 @@ func TestUDPConnwriteMulticastWithContext(t *testing.T) {
 	ctxCancel()
 	payload := []byte("hello world")
 
+	ifs, err := net.Interfaces()
+	require.NoError(t, err)
+	var iface net.Interface
+	for _, i := range ifs {
+		if i.Flags&net.FlagMulticast == net.FlagMulticast && i.Flags&net.FlagUp == net.FlagUp {
+			iface = i
+			break
+		}
+	}
+	require.NotEmpty(t, iface)
+
 	type args struct {
 		ctx    context.Context
 		udpCtx *net.UDPAddr
 		buffer []byte
+		opts   []MulticastOption
 	}
 	tests := []struct {
 		name    string
@@ -112,11 +124,30 @@ func TestUDPConnwriteMulticastWithContext(t *testing.T) {
 		wantErr bool
 	}{
 		{
-			name: "valid",
+			name: "valid all interfaces",
 			args: args{
 				ctx:    context.Background(),
 				udpCtx: b,
 				buffer: payload,
+				opts:   []MulticastOption{WithAllMulticastInterface()},
+			},
+		},
+		{
+			name: "valid any interface",
+			args: args{
+				ctx:    context.Background(),
+				udpCtx: b,
+				buffer: payload,
+				opts:   []MulticastOption{WithAnyMulticastInterface()},
+			},
+		},
+		{
+			name: "valid first interface",
+			args: args{
+				ctx:    context.Background(),
+				udpCtx: b,
+				buffer: payload,
+				opts:   []MulticastOption{WithMulticastInterface(iface)},
 			},
 		},
 		{
@@ -182,8 +213,7 @@ func TestUDPConnwriteMulticastWithContext(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err = c1.WriteMulticast(tt.args.ctx, tt.args.udpCtx, nil, nil, 2, tt.args.buffer)
-
+			err = c1.WriteMulticast(tt.args.ctx, tt.args.udpCtx, tt.args.buffer, tt.args.opts...)
 			c1.LocalAddr()
 			c1.RemoteAddr()
 

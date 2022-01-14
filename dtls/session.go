@@ -112,7 +112,7 @@ func (s *Session) WriteMessage(req *pool.Message) error {
 	return err
 }
 
-func (s *Session) WriteMulticastMessage(_ *pool.Message, _ *net.Interface, _ *net.IP, _ int) error {
+func (s *Session) WriteMulticastMessage(req *pool.Message, opts ...coapNet.MulticastOption) error {
 	return errors.New("multicast messages not implemented for DTLS")
 }
 
