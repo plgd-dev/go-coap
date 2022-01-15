@@ -604,7 +604,6 @@ func (cc *ClientConn) processReq(req *pool.Message, w *ResponseWriter) error {
 	defer l.Unlock()
 
 	if ok, err := cc.getResponseFromCache(req.MessageID(), w.response); ok {
-		fmt.Printf("ClientConn.Process.processReq.AAA: req %v resp %v\n", req, w.response)
 		return nil
 	} else if err != nil {
 		return fmt.Errorf("cannot unmarshal response from cache: %w", err)
