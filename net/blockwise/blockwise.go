@@ -561,7 +561,7 @@ func (b *BlockWise) handleReceivedMessage(w ResponseWriter, r Message, maxSZX SZ
 func (b *BlockWise) continueSendingMessage(w ResponseWriter, r Message, maxSZX SZX, maxMessageSize uint32, messageGuard *messageGuard) (bool, error) {
 	err := messageGuard.Acquire(r.Context(), 1)
 	if err != nil {
-		return false, fmt.Errorf("continueSendingMessage: cannot lock message: %v", err)
+		return false, fmt.Errorf("cannot lock message: %v", err)
 	}
 	defer messageGuard.Release(1)
 	resp := messageGuard.Message

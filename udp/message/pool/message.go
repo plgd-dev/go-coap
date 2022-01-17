@@ -144,7 +144,14 @@ func (r *Message) IsSeparate() bool {
 }
 
 func (r *Message) String() string {
-	return fmt.Sprintf("Type: %v, MID: %v, %s", r.Type(), r.MessageID(), r.Message.String())
+	if r == nil {
+		return "nil"
+	}
+	mid := "nil"
+	if r.messageID != nil {
+		mid = fmt.Sprint(*r.messageID)
+	}
+	return fmt.Sprintf("Type: %v, MID: %v, %s", r.Type(), mid, r.Message.String())
 }
 
 type Pool struct {

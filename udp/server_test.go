@@ -16,7 +16,6 @@ import (
 	"github.com/plgd-dev/go-coap/v2/udp"
 	"github.com/plgd-dev/go-coap/v2/udp/client"
 	"github.com/plgd-dev/go-coap/v2/udp/message/pool"
-	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/sync/semaphore"
 )
@@ -81,8 +80,47 @@ func TestServerDiscoverIotivity(t *testing.T) {
 */
 
 func TestServerDiscover(t *testing.T) {
+	ifs, err := net.Interfaces()
+	require.NoError(t, err)
+	var iface net.Interface
+	for _, i := range ifs {
+		if i.Flags&net.FlagMulticast == net.FlagMulticast && i.Flags&net.FlagUp == net.FlagUp {
+			iface = i
+			break
+		}
+	}
+	require.NotEmpty(t, iface)
+
+	type args struct {
+		opts []coapNet.MulticastOption
+	}
+	tests := []struct {
+		name    string
+		args    args
+		wantErr bool
+	}{
+		{
+			name: "valid any interface",
+			args: args{
+				opts: []coapNet.MulticastOption{coapNet.WithAnyMulticastInterface()},
+			},
+		},
+		{
+			name: "valid first interface",
+			args: args{
+				opts: []coapNet.MulticastOption{coapNet.WithMulticastInterface(iface)},
+			},
+		},
+		{
+			name: "valid all interfaces",
+			args: args{
+				opts: []coapNet.MulticastOption{coapNet.WithAllMulticastInterface()},
+			},
+		},
+	}
+
 	timeout := time.Millisecond * 500
-	multicastAddr := "224.0.1.187:5684"
+	multicastAddr := "224.0.1.187:9999"
 	path := "/oic/res"
 
 	l, err := coapNet.NewListenUDP("udp4", multicastAddr)
@@ -141,14 +179,18 @@ func TestServerDiscover(t *testing.T) {
 		require.NoError(t, err)
 	}()
 
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
-	defer cancel()
-	recv := &mcastreceiver{}
-	err = sd.Discover(ctx, multicastAddr, path, recv.process)
-	require.NoError(t, err)
-	got := recv.pop()
-	assert.Greater(t, len(got), 0)
-	assert.Equal(t, codes.BadRequest, got[0].Code())
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), timeout)
+			defer cancel()
+			recv := &mcastreceiver{}
+			err = sd.Discover(ctx, multicastAddr, path, recv.process, tt.args.opts...)
+			require.NoError(t, err)
+			got := recv.pop()
+			require.Greater(t, len(got), 0)
+			require.Equal(t, codes.BadRequest, got[0].Code())
+		})
+	}
 }
 
 func TestServerCleanUpConns(t *testing.T) {
