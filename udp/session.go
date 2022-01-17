@@ -114,6 +114,9 @@ func (s *Session) WriteMessage(req *pool.Message) error {
 	return s.connection.WriteWithContext(req.Context(), s.raddr, data)
 }
 
+// WriteMulticastMessage sends multicast to the remote multicast address.
+// By default it is sent over all network interfaces and all compatible source IP addresses with hop limit 1.
+// Via opts you can specify the network interface, source IP address, and hop limit.
 func (s *Session) WriteMulticastMessage(req *pool.Message, opts ...coapNet.MulticastOption) error {
 	data, err := req.Marshal()
 	if err != nil {

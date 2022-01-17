@@ -273,6 +273,9 @@ func convAddrsToIps(ifaceAddrs []net.Addr) []net.IP {
 	return ips
 }
 
+// WriteMulticast sends multicast to the remote multicast address.
+// By default it is sent over all network interfaces and all compatible source IP addresses with hop limit 1.
+// Via opts you can specify the network interface, source IP address, and hop limit.
 func (c *UDPConn) WriteMulticast(ctx context.Context, raddr *net.UDPAddr, buffer []byte, opts ...MulticastOption) error {
 	opt := MulticastOptions{
 		HopLimit: 1,

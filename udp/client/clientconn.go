@@ -35,6 +35,9 @@ type Session interface {
 	MaxMessageSize() uint32
 	RemoteAddr() net.Addr
 	WriteMessage(req *pool.Message) error
+	// WriteMulticast sends multicast to the remote multicast address.
+	// By default it is sent over all network interfaces and all compatible source IP addresses with hop limit 1.
+	// Via opts you can specify the network interface, source IP address, and hop limit.
 	WriteMulticastMessage(req *pool.Message, opts ...coapNet.MulticastOption) error
 	Run(cc *ClientConn) error
 	AddOnClose(f EventFunc)
@@ -736,6 +739,9 @@ func (cc *ClientConn) ReleaseMessage(m *pool.Message) {
 	cc.messagePool.ReleaseMessage(m)
 }
 
+// WriteMulticastMessage sends multicast to the remote multicast address.
+// By default it is sent over all network interfaces and all compatible source IP addresses with hop limit 1.
+// Via opts you can specify the network interface, source IP address, and hop limit.
 func (cc *ClientConn) WriteMulticastMessage(req *pool.Message, options ...coapNet.MulticastOption) error {
 	if req.Type() == udpMessage.Confirmable {
 		return fmt.Errorf("multicast messages cannot be confirmable")

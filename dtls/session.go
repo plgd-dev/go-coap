@@ -112,6 +112,8 @@ func (s *Session) WriteMessage(req *pool.Message) error {
 	return err
 }
 
+// WriteMulticastMessage sends multicast to the remote multicast address.
+// Currently it is not implemented - is is just satisfy golang udp/client/Session interface.
 func (s *Session) WriteMulticastMessage(req *pool.Message, opts ...coapNet.MulticastOption) error {
 	return errors.New("multicast messages not implemented for DTLS")
 }
