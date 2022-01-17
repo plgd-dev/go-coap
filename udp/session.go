@@ -114,6 +114,18 @@ func (s *Session) WriteMessage(req *pool.Message) error {
 	return s.connection.WriteWithContext(req.Context(), s.raddr, data)
 }
 
+// WriteMulticastMessage sends multicast to the remote multicast address.
+// By default it is sent over all network interfaces and all compatible source IP addresses with hop limit 1.
+// Via opts you can specify the network interface, source IP address, and hop limit.
+func (s *Session) WriteMulticastMessage(req *pool.Message, address *net.UDPAddr, opts ...coapNet.MulticastOption) error {
+	data, err := req.Marshal()
+	if err != nil {
+		return fmt.Errorf("cannot marshal: %w", err)
+	}
+
+	return s.connection.WriteMulticast(req.Context(), address, data, opts...)
+}
+
 func (s *Session) Run(cc *client.ClientConn) (err error) {
 	defer func() {
 		err1 := s.Close()
@@ -146,4 +158,8 @@ func (s *Session) MaxMessageSize() uint32 {
 
 func (s *Session) RemoteAddr() net.Addr {
 	return s.raddr
+}
+
+func (s *Session) LocalAddr() net.Addr {
+	return s.connection.LocalAddr()
 }

@@ -516,6 +516,10 @@ func (cc *ClientConn) RemoteAddr() net.Addr {
 	return cc.session.connection.RemoteAddr()
 }
 
+func (cc *ClientConn) LocalAddr() net.Addr {
+	return cc.session.connection.LocalAddr()
+}
+
 // Client get instance which implements mux.Client.
 func (cc *ClientConn) Client() *ClientTCP {
 	return NewClientTCP(cc)

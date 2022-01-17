@@ -10,6 +10,7 @@ import (
 
 	"github.com/plgd-dev/go-coap/v2/message"
 	"github.com/plgd-dev/go-coap/v2/message/codes"
+	coapNet "github.com/plgd-dev/go-coap/v2/net"
 	"github.com/plgd-dev/go-coap/v2/net/blockwise"
 	"github.com/plgd-dev/go-coap/v2/net/monitor/inactivity"
 	"github.com/plgd-dev/go-coap/v2/pkg/cache"
@@ -33,7 +34,12 @@ type Session interface {
 	Close() error
 	MaxMessageSize() uint32
 	RemoteAddr() net.Addr
+	LocalAddr() net.Addr
 	WriteMessage(req *pool.Message) error
+	// WriteMulticast sends multicast to the remote multicast address.
+	// By default it is sent over all network interfaces and all compatible source IP addresses with hop limit 1.
+	// Via opts you can specify the network interface, source IP address, and hop limit.
+	WriteMulticastMessage(req *pool.Message, address *net.UDPAddr, opts ...coapNet.MulticastOption) error
 	Run(cc *ClientConn) error
 	AddOnClose(f EventFunc)
 	SetContextValue(key interface{}, val interface{})
@@ -484,6 +490,10 @@ func (cc *ClientConn) RemoteAddr() net.Addr {
 	return cc.session.RemoteAddr()
 }
 
+func (cc *ClientConn) LocalAddr() net.Addr {
+	return cc.session.LocalAddr()
+}
+
 func (cc *ClientConn) sendPong(w *ResponseWriter, r *pool.Message) {
 	if err := w.SetResponse(codes.Empty, message.TextPlain, nil); err != nil {
 		cc.errors(fmt.Errorf("cannot send pong response: %w", err))
@@ -755,4 +765,20 @@ func (cc *ClientConn) AcquireMessage(ctx context.Context) *pool.Message {
 
 func (cc *ClientConn) ReleaseMessage(m *pool.Message) {
 	cc.messagePool.ReleaseMessage(m)
+}
+
+// WriteMulticastMessage sends multicast to the remote multicast address.
+// By default it is sent over all network interfaces and all compatible source IP addresses with hop limit 1.
+// Via opts you can specify the network interface, source IP address, and hop limit.
+func (cc *ClientConn) WriteMulticastMessage(req *pool.Message, address *net.UDPAddr, options ...coapNet.MulticastOption) error {
+	if req.Type() == udpMessage.Confirmable {
+		return fmt.Errorf("multicast messages cannot be confirmable")
+	}
+	req.SetMessageID(cc.getMID())
+
+	err := cc.session.WriteMulticastMessage(req, address, options...)
+	if err != nil {
+		return fmt.Errorf("cannot write request: %w", err)
+	}
+	return nil
 }
