@@ -40,6 +40,7 @@ type MulticastOptions struct {
 	IFaceMode MulticastInterfaceMode
 	Iface     *net.Interface
 	Source    *net.IP
+	Target    *net.UDPAddr
 	HopLimit  int
 }
 
@@ -101,4 +102,15 @@ func (m MulticastSourceOpt) applyMC(o *MulticastOptions) {
 }
 func WithMulticastSource(source net.IP) MulticastOption {
 	return &MulticastSourceOpt{source: source}
+}
+
+type MulticastTargetOpt struct {
+	target net.UDPAddr
+}
+
+func (m MulticastTargetOpt) applyMC(o *MulticastOptions) {
+	o.Target = &m.target
+}
+func WithMulticastTarget(target net.UDPAddr) MulticastOption {
+	return &MulticastTargetOpt{target: target}
 }

@@ -373,6 +373,11 @@ func (c *UDPConn) writeMulticast(ctx context.Context, raddr *net.UDPAddr, buffer
 		return err
 	}
 
+	if opt.Target != nil {
+		// Overwrite target
+		raddr = opt.Target
+	}
+
 	switch opt.IFaceMode {
 	case MulticastAllInterface:
 		err := c.writeMulticastToAllInterfaces(ctx, raddr, buffer, opt)
