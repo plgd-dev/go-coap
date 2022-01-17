@@ -2,6 +2,7 @@ package dtls
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"sync"
@@ -111,12 +112,22 @@ func (s *Session) WriteMessage(req *pool.Message) error {
 	return err
 }
 
+// WriteMulticastMessage sends multicast to the remote multicast address.
+// Currently it is not implemented - is is just satisfy golang udp/client/Session interface.
+func (s *Session) WriteMulticastMessage(req *pool.Message, address *net.UDPAddr, opts ...coapNet.MulticastOption) error {
+	return errors.New("multicast messages not implemented for DTLS")
+}
+
 func (s *Session) MaxMessageSize() uint32 {
 	return s.maxMessageSize
 }
 
 func (s *Session) RemoteAddr() net.Addr {
 	return s.connection.RemoteAddr()
+}
+
+func (s *Session) LocalAddr() net.Addr {
+	return s.connection.LocalAddr()
 }
 
 // Run reads and process requests from a connection, until the connection is not closed.
