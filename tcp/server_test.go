@@ -265,7 +265,7 @@ func TestServerKeepAliveMonitor(t *testing.T) {
 				checkClose.Release(1)
 			})
 		}),
-		tcp.WithKeepAlive(3, 100*time.Millisecond, func(cc inactivity.ClientConn) {
+		tcp.WithKeepAlive(3, 200*time.Millisecond, func(cc inactivity.ClientConn) {
 			require.False(t, inactivityDetected)
 			inactivityDetected = true
 			err := cc.Close()
@@ -289,7 +289,7 @@ func TestServerKeepAliveMonitor(t *testing.T) {
 	cc, err := tcp.Dial(
 		ld.Addr().String(),
 		tcp.WithGoPool(func(f func()) error {
-			time.Sleep(time.Millisecond * 500)
+			time.Sleep(time.Second * 2)
 			f()
 			return nil
 		}),
@@ -308,7 +308,7 @@ func TestServerKeepAliveMonitor(t *testing.T) {
 	reqCtx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 	_, err = cc.Get(reqCtx, "/tmp")
-	require.NoError(t, err)
+	require.Error(t, err)
 
 	err = checkClose.Acquire(ctx, 2)
 	require.NoError(t, err)

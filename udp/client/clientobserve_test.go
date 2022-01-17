@@ -215,6 +215,7 @@ func TestClientConnObserveNotSupported(t *testing.T) {
 					req.SetToken(token)
 					err = cc.WriteMessage(req)
 					require.NoError(t, err)
+					t.Logf("response was send %v", len(tt.args.payload))
 				default:
 					err := w.SetResponse(codes.BadRequest, message.TextPlain, nil)
 					require.NoError(t, err)
