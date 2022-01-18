@@ -195,6 +195,14 @@ func (s *Server) checkAndSetListener(l Listener) error {
 	return nil
 }
 
+func (s *Server) popListener() Listener {
+	s.listenMutex.Lock()
+	defer s.listenMutex.Unlock()
+	l := s.listen
+	s.listen = nil
+	return l
+}
+
 func (s *Server) checkAcceptError(err error) (bool, error) {
 	if err == nil {
 		return true, nil
@@ -225,11 +233,8 @@ func (s *Server) Serve(l Listener) error {
 	if err != nil {
 		return err
 	}
-
 	defer func() {
-		s.listenMutex.Lock()
-		defer s.listenMutex.Unlock()
-		s.listen = nil
+		s.Stop()
 	}()
 	var wg sync.WaitGroup
 	defer wg.Wait()
@@ -279,7 +284,11 @@ func (s *Server) Serve(l Listener) error {
 // Stop stops server without wait of ends Serve function.
 func (s *Server) Stop() {
 	s.cancel()
-	if err := s.listen.Close(); err != nil {
+	l := s.popListener()
+	if l == nil {
+		return
+	}
+	if err := l.Close(); err != nil {
 		s.errors(fmt.Errorf("cannot close listener: %w", err))
 	}
 }
