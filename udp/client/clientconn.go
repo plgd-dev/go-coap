@@ -627,12 +627,12 @@ func sendJustAcknowledgeMessage(reqType udpMessage.Type, w *ResponseWriter) bool
 	return reqType == udpMessage.Confirmable && !w.response.IsModified()
 }
 
-func (cc *ClientConn) processResponse(req *pool.Message, w *ResponseWriter) error {
+func (cc *ClientConn) processResponse(reqType udpMessage.Type, reqMessageID uint16, w *ResponseWriter) error {
 	switch {
 	case isPongOrResetResponse(w):
-		if req.Type() == udpMessage.Confirmable {
+		if reqType == udpMessage.Confirmable {
 			w.response.SetType(udpMessage.Acknowledgement)
-			w.response.SetMessageID(req.MessageID())
+			w.response.SetMessageID(reqMessageID)
 		} else {
 			if w.response.Type() != udpMessage.Reset {
 				w.response.SetType(udpMessage.NonConfirmable)
@@ -640,11 +640,11 @@ func (cc *ClientConn) processResponse(req *pool.Message, w *ResponseWriter) erro
 			w.response.SetMessageID(cc.getMID())
 		}
 		return nil
-	case sendJustAcknowledgeMessage(req.Type(), w):
+	case sendJustAcknowledgeMessage(reqType, w):
 		// send message to separate(confirm received) message, if response is not modified
 		w.response.SetCode(codes.Empty)
 		w.response.SetType(udpMessage.Acknowledgement)
-		w.response.SetMessageID(req.MessageID())
+		w.response.SetMessageID(reqMessageID)
 		w.response.SetToken(nil)
 		err := cc.addResponseToCache(w.response)
 		if err != nil {
@@ -659,11 +659,11 @@ func (cc *ClientConn) processResponse(req *pool.Message, w *ResponseWriter) erro
 	// send piggybacked response
 	w.response.SetType(udpMessage.Confirmable)
 	w.response.SetMessageID(cc.getMID())
-	if req.Type() == udpMessage.Confirmable {
+	if reqType == udpMessage.Confirmable {
 		w.response.SetType(udpMessage.Acknowledgement)
-		w.response.SetMessageID(req.MessageID())
+		w.response.SetMessageID(reqMessageID)
 	}
-	if req.Type() == udpMessage.Confirmable || req.Type() == udpMessage.NonConfirmable {
+	if reqType == udpMessage.Confirmable || reqType == udpMessage.NonConfirmable {
 		err := cc.addResponseToCache(w.response)
 		if err != nil {
 			return fmt.Errorf("cannot cache response: %w", err)
@@ -688,9 +688,11 @@ func (cc *ClientConn) processReq(req *pool.Message, w *ResponseWriter) error {
 	}
 
 	w.response.SetModified(false)
+	reqType := req.Type()
+	reqMessageID := req.MessageID()
 	cc.handle(w, req)
 
-	return cc.processResponse(req, w)
+	return cc.processResponse(reqType, reqMessageID, w)
 }
 
 func (cc *ClientConn) Process(datagram []byte) error {
