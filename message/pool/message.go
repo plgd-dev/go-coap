@@ -19,8 +19,10 @@ type Message struct {
 	sequence        uint64
 }
 
+const valueBufferSize = 256
+
 func NewMessage() *Message {
-	valueBuffer := make([]byte, 256)
+	valueBuffer := make([]byte, valueBufferSize)
 	return &Message{
 		msg: message.Message{
 			Options: make(message.Options, 0, 16),
@@ -90,19 +92,39 @@ func (r *Message) Options() message.Options {
 	return r.msg.Options
 }
 
-func (r *Message) SetPath(p string) {
+// SetPath stores the given path within URI-Path options.
+//
+// The value is stored by the algorithm described in RFC7252 and
+// using the internal buffer. If the path is too long, but valid
+// (URI-Path segments must have maximal length of 255) the internal
+// buffer is expanded.
+// If the path is too long, but not valid then the function returns
+// ErrInvalidValueLength error.
+func (r *Message) SetPath(p string) error {
 	opts, used, err := r.msg.Options.SetPath(r.valueBuffer, p)
-
-	if err == message.ErrTooSmall {
-		r.valueBuffer = append(r.valueBuffer, make([]byte, used)...)
+	for err == message.ErrTooSmall {
+		// double the length and try again
+		expandBy := len(r.valueBuffer)
+		if expandBy < valueBufferSize {
+			expandBy = valueBufferSize
+		}
+		r.valueBuffer = append(r.valueBuffer, make([]byte, expandBy)...)
 		opts, used, err = r.msg.Options.SetPath(r.valueBuffer, p)
 	}
 	if err != nil {
-		panic(fmt.Errorf("cannot set path: %w", err))
+		return fmt.Errorf("cannot set path: %w", err)
 	}
 	r.msg.Options = opts
 	r.valueBuffer = r.valueBuffer[used:]
 	r.isModified = true
+	return nil
+}
+
+// MustSetPath calls SetPath and panics if it returns an error.
+func (r *Message) MustSetPath(p string) {
+	if err := r.SetPath(p); err != nil {
+		panic(err)
+	}
 }
 
 func (r *Message) Code() codes.Code {

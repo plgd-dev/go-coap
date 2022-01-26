@@ -322,7 +322,10 @@ func newCommonRequest(ctx context.Context, messagePool *pool.Pool, code codes.Co
 	req.SetCode(code)
 	req.SetToken(token)
 	req.ResetOptionsTo(opts)
-	req.SetPath(path)
+	if err := req.SetPath(path); err != nil {
+		messagePool.ReleaseMessage(req)
+		return nil, err
+	}
 	return req, nil
 }
 

@@ -27,7 +27,11 @@ func (options Options) SetPath(buf []byte, path string) (Options, int, error) {
 	for start := 0; start < len(path); {
 		subPath := path[start:]
 		end := strings.Index(subPath, "/")
-		if end <= 0 {
+		if end == 0 {
+			start = start + 1
+			continue
+		}
+		if end < 0 {
 			end = len(subPath)
 		}
 		data := buf[encoded:]
