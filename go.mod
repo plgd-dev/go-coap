@@ -4,7 +4,7 @@ go 1.17
 
 require (
 	github.com/dsnet/golib/memfile v1.0.0
-	github.com/pion/dtls/v2 v2.0.13
+	github.com/pion/dtls/v2 v2.1.1-0.20220126030326-7d92e05b5065
 	github.com/plgd-dev/kit/v2 v2.0.0-20211006190727-057b33161b90
 	github.com/stretchr/testify v1.7.0
 	go.uber.org/atomic v1.9.0
