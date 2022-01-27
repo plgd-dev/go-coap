@@ -9,6 +9,30 @@ type Options []Option
 
 const maxPathValue = 255
 
+// Get the size of the buffer required to store path in URI-Path options.
+//
+// If the path cannot be stored an error is returned.
+func GetPathBufferSize(path string) (int, error) {
+	size := 0
+	for start := 0; start < len(path); {
+		subPath := path[start:]
+		segmentSize := strings.Index(subPath, "/")
+		if segmentSize == 0 {
+			start = start + 1
+			continue
+		}
+		if segmentSize < 0 {
+			segmentSize = len(subPath)
+		}
+		if segmentSize > maxPathValue {
+			return -1, ErrInvalidValueLength
+		}
+		size = size + segmentSize
+		start = start + segmentSize + 1
+	}
+	return size, nil
+}
+
 // SetPath splits path by '/' to URIPath options and copy it to buffer.
 //
 // Return's modified options, number of used buf bytes and error if occurs.
@@ -22,6 +46,13 @@ func (options Options) SetPath(buf []byte, path string) (Options, int, error) {
 	o := options.Remove(URIPath)
 	if path[0] == '/' {
 		path = path[1:]
+	}
+	requiredSize, err := GetPathBufferSize(path)
+	if err != nil {
+		return options, -1, err
+	}
+	if requiredSize > len(buf) {
+		return options, -1, ErrTooSmall
 	}
 	encoded := 0
 	for start := 0; start < len(path); {
