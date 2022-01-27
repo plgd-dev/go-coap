@@ -1,10 +1,11 @@
 package message
 
 import (
+	"strings"
 	"testing"
 
+	"github.com/plgd-dev/go-coap/v2/test/net"
 	"github.com/stretchr/testify/assert"
-
 	"github.com/stretchr/testify/require"
 )
 
@@ -82,6 +83,79 @@ func TestETAG(t *testing.T) {
 	require.Equal(t, opts[0].Value, etag)
 }
 
+func TestGetPathBufferSize(t *testing.T) {
+	type args struct {
+		p string
+	}
+	tests := []struct {
+		name    string
+		args    args
+		wantErr bool
+		want    string
+	}{
+		{
+			name: "Empty",
+			args: args{p: ""},
+		},
+		{
+			name: "Empty (slash)",
+			args: args{p: "/"},
+		},
+		{
+			name: "Empty (multiple slashes)",
+			args: args{p: "//////////"},
+		},
+		{
+			name:    "Invalid string",
+			args:    args{p: strings.Repeat("a", maxPathValue+1)},
+			wantErr: true,
+		},
+		{
+			name: "Basic path",
+			args: args{p: "/a/b/c"},
+			want: "/a/b/c",
+		},
+		{
+			name: "Bath with duplicit slashes",
+			args: args{p: "/aaa///bbbbbbbbbbbbbb//ccccc/"},
+			want: "/aaaa/bbbbbbbbbbbbbb/ccccc",
+		},
+		{
+			name: "Path without first slash",
+			args: args{p: "aaaaaaaaaaaaa/bbbbb/ccccccccccccccccccccccccccccccccc/"},
+			want: "/aaaaaaaaaaaaa/bbbbb/ccccccccccccccccccccccccccccccccc",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			size, err := GetPathBufferSize(tt.args.p)
+			if tt.wantErr {
+				require.Error(t, err)
+				return
+			}
+			options := make(Options, 0, 10)
+			_, used, err := options.SetPath(make([]byte, len(tt.args.p)), tt.args.p)
+			require.NoError(t, err)
+			require.Equal(t, used, size)
+		})
+	}
+}
+
+func TestGetPathBufferSizeLongPaths(t *testing.T) {
+	var maxURIPathLen = int(CoapOptionDefs[URIPath].MaxLen)
+
+	for i := 8; i < 16; i++ {
+		options := make(Options, 0, 10)
+		path := net.RandomValidURLString(i<<i, maxURIPathLen)
+		size, err := GetPathBufferSize(path)
+		require.NoError(t, err)
+		_, used, err := options.SetPath(make([]byte, len(path)), path)
+		require.NoError(t, err)
+		require.Equal(t, used, size)
+	}
+}
+
 func TestSetPath(t *testing.T) {
 	options := make(Options, 0, 10)
 	options, _, err := options.SetPath(make([]byte, 32), "/light/2")
@@ -127,7 +201,6 @@ func TestFindPositonBytesOption(t *testing.T) {
 	options = append(options, Options{{ID: 60}}...)
 	testFindPositionBytesOption(t, options, 27, false, 8)
 	testFindPositionBytesOption(t, options, 60, false, -1)
-
 }
 
 func TestSetBytesOption(t *testing.T) {

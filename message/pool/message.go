@@ -102,11 +102,10 @@ func (r *Message) Options() message.Options {
 // ErrInvalidValueLength error.
 func (r *Message) SetPath(p string) error {
 	opts, used, err := r.msg.Options.SetPath(r.valueBuffer, p)
-	for err == message.ErrTooSmall {
-		// double the length and try again
-		expandBy := len(r.valueBuffer)
-		if expandBy < valueBufferSize {
-			expandBy = valueBufferSize
+	if err == message.ErrTooSmall {
+		expandBy, errSize := message.GetPathBufferSize(p)
+		if errSize != nil {
+			return fmt.Errorf("cannot calculate buffer size for path: %w", errSize)
 		}
 		r.valueBuffer = append(r.valueBuffer, make([]byte, expandBy)...)
 		opts, used, err = r.msg.Options.SetPath(r.valueBuffer, p)
