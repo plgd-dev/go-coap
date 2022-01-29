@@ -190,3 +190,73 @@ func TestMessageAddQuery(t *testing.T) {
 		})
 	}
 }
+
+func TestMessageETag(t *testing.T) {
+	msg := pool.NewMessage()
+	require.False(t, msg.HasOption(message.ETag))
+	_, err := msg.GetETag()
+	require.Error(t, err)
+
+	etag := []byte{13, 37}
+	msg.SetETag(etag)
+	value, err := msg.GetETag()
+	require.NoError(t, err)
+	require.Equal(t, etag, value)
+
+	msg.Remove(message.ETag)
+	require.False(t, msg.HasOption(message.ETag))
+	_, err = msg.GetETag()
+	require.Error(t, err)
+
+	maxETagPathLen := int(message.CoapOptionDefs[message.ETag].MaxLen)
+	etag = make([]byte, 0)
+	for i := 1; i <= maxETagPathLen; i++ {
+		etag = append(etag, byte(i))
+		msg.SetETag(etag)
+	}
+	value, err = msg.GetETag()
+	require.NoError(t, err)
+	require.Equal(t, etag, value)
+}
+
+func TestMessageSetETag(t *testing.T) {
+	maxETagPathLen := int(message.CoapOptionDefs[message.ETag].MaxLen)
+
+	type args struct {
+		value []byte
+	}
+	tests := []struct {
+		name string
+		args args
+	}{
+		{
+			name: "Empty ETag",
+		},
+		{
+			name: "Basic ETag",
+			args: args{
+				value: []byte{13, 37},
+			},
+		},
+		{
+			name: "Long ETag",
+			args: args{
+				value: []byte(strings.Repeat("a", maxETagPathLen+1)),
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			msg := pool.NewMessage()
+			msg.SetETag(tt.args.value)
+
+			value, err := msg.ETag()
+			require.NoError(t, err)
+			if len(tt.args.value) == 0 {
+				require.Empty(t, value)
+				return
+			}
+			require.Equal(t, tt.args.value, value)
+		})
+	}
+}
