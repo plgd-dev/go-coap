@@ -152,7 +152,7 @@ func NewServer(opt ...ServerOption) *Server {
 
 	if opts.errors == nil {
 		opts.errors = func(error) {
-			// NO-OP
+			// default no-op
 		}
 	}
 	errorsFunc := opts.errors

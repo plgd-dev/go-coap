@@ -115,7 +115,9 @@ func NewClientConn(
 	messagePool *pool.Pool,
 ) *ClientConn {
 	if errors == nil {
-		errors = func(error) {}
+		errors = func(error) {
+			// default no-op
+		}
 	}
 	if getMID == nil {
 		getMID = udpMessage.GetMID
