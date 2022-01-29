@@ -169,15 +169,15 @@ func DecodeBlockOption(blockVal uint32) (szx SZX, blockNumber int64, moreBlocksF
 }
 
 type BlockWise struct {
-	acquireMessage              func(ctx context.Context) Message
-	releaseMessage              func(Message)
-	receivingMessagesCache      *cache.Cache
-	sendingMessagesCache        *cache.Cache
-	errors                      func(error)
-	getSendedRequestFromOutside func(token message.Token) (Message, bool)
-	expiration                  time.Duration
+	acquireMessage            func(ctx context.Context) Message
+	releaseMessage            func(Message)
+	receivingMessagesCache    *cache.Cache
+	sendingMessagesCache      *cache.Cache
+	errors                    func(error)
+	getSentRequestFromOutside func(token message.Token) (Message, bool)
+	expiration                time.Duration
 
-	bwSendedRequest          *senderRequestMap
+	bwSentRequest            *senderRequestMap
 	autoCleanUpResponseCache bool
 }
 
@@ -194,29 +194,37 @@ func newRequestGuard(request Message) *messageGuard {
 }
 
 // NewBlockWise provides blockwise.
-// getSendedRequestFromOutside must returns a copy of request which will be released by function releaseMessage after use.
+// getSentRequestFromOutside must returns a copy of request which will be released by function releaseMessage after use.
 func NewBlockWise(
 	acquireMessage func(ctx context.Context) Message,
 	releaseMessage func(Message),
 	expiration time.Duration,
 	errors func(error),
 	autoCleanUpResponseCache bool,
-	getSendedRequestFromOutside func(token message.Token) (Message, bool),
+	getSentRequestFromOutside func(token message.Token) (Message, bool),
 ) *BlockWise {
-	if getSendedRequestFromOutside == nil {
-		getSendedRequestFromOutside = func(token message.Token) (Message, bool) { return nil, false }
+	if getSentRequestFromOutside == nil {
+		getSentRequestFromOutside = func(token message.Token) (Message, bool) { return nil, false }
 	}
 	return &BlockWise{
-		acquireMessage:              acquireMessage,
-		releaseMessage:              releaseMessage,
-		receivingMessagesCache:      cache.NewCache(),
-		sendingMessagesCache:        cache.NewCache(),
-		errors:                      errors,
-		autoCleanUpResponseCache:    autoCleanUpResponseCache,
-		getSendedRequestFromOutside: getSendedRequestFromOutside,
-		bwSendedRequest:             newSenderRequestMap(),
-		expiration:                  expiration,
+		acquireMessage:            acquireMessage,
+		releaseMessage:            releaseMessage,
+		receivingMessagesCache:    cache.NewCache(),
+		sendingMessagesCache:      cache.NewCache(),
+		errors:                    errors,
+		autoCleanUpResponseCache:  autoCleanUpResponseCache,
+		getSentRequestFromOutside: getSentRequestFromOutside,
+		bwSentRequest:             newSenderRequestMap(),
+		expiration:                expiration,
 	}
+}
+
+func (b *BlockWise) storeSentRequest(req *senderRequest) error {
+	err := b.bwSentRequest.store(req)
+	if err != nil {
+		return fmt.Errorf("cannot store sent request %v: %w", req.String(), err)
+	}
+	return nil
 }
 
 func bufferSize(szx SZX, maxMessageSize uint32) int64 {
@@ -232,10 +240,6 @@ func (b *BlockWise) CheckExpirations(now time.Time) {
 	b.sendingMessagesCache.CheckExpirations(now)
 }
 
-func cannotStoreRequestError(req *senderRequest, err error) error {
-	return fmt.Errorf("cannot store sent request %v: %w", req.String(), err)
-}
-
 // Do sends an coap message and returns an coap response via blockwise transfer.
 func (b *BlockWise) Do(r Message, maxSzx SZX, maxMessageSize uint32, do func(req Message) (Message, error)) (Message, error) {
 	if maxSzx > SZXBERT {
@@ -245,13 +249,13 @@ func (b *BlockWise) Do(r Message, maxSzx SZX, maxMessageSize uint32, do func(req
 		return nil, fmt.Errorf("invalid token")
 	}
 
-	req := b.newSendRequestMessage(r, true)
+	req := b.newSentRequestMessage(r, true)
 	defer req.release()
-	err := b.bwSendedRequest.store(req)
+	err := b.storeSentRequest(req)
 	if err != nil {
-		return nil, cannotStoreRequestError(req, err)
+		return nil, err
 	}
-	defer b.bwSendedRequest.deleteByToken(req.Token().Hash())
+	defer b.bwSentRequest.deleteByToken(req.Token().Hash())
 	if r.Body() == nil {
 		return do(r)
 	}
@@ -374,10 +378,10 @@ func (w *writeMessageResponse) RemoteAddr() net.Addr {
 
 // WriteMessage sends an coap message via blockwise transfer.
 func (b *BlockWise) WriteMessage(remoteAddr net.Addr, request Message, maxSZX SZX, maxMessageSize uint32, writeMessage func(r Message) error) error {
-	req := b.newSendRequestMessage(request, false)
-	err := b.bwSendedRequest.store(req)
+	req := b.newSentRequestMessage(request, false)
+	err := b.storeSentRequest(req)
 	if err != nil {
-		return cannotStoreRequestError(req, err)
+		return fmt.Errorf("cannot write message: %w", err)
 	}
 	startSendingMessageBlock, err := EncodeBlockOption(maxSZX, 0, true)
 	if err != nil {
@@ -650,8 +654,8 @@ func (b *BlockWise) startSendingMessage(w ResponseWriter, maxSZX SZX, maxMessage
 	return nil
 }
 
-func (b *BlockWise) getSendedRequest(token message.Token) Message {
-	req := b.bwSendedRequest.loadByTokenWithFunc(token.Hash(), func(v *senderRequest) interface{} {
+func (b *BlockWise) getSentRequest(token message.Token) Message {
+	req := b.bwSentRequest.loadByTokenWithFunc(token.Hash(), func(v *senderRequest) interface{} {
 		req := b.acquireMessage(v.Context())
 		req.SetCode(v.Code())
 		req.SetToken(v.Token())
@@ -661,7 +665,7 @@ func (b *BlockWise) getSendedRequest(token message.Token) Message {
 	if req != nil {
 		return req.(Message)
 	}
-	globalRequest, ok := b.getSendedRequestFromOutside(token)
+	globalRequest, ok := b.getSentRequestFromOutside(token)
 	if ok {
 		return globalRequest
 	}
@@ -687,21 +691,21 @@ func (b *BlockWise) processReceivedMessage(w ResponseWriter, r Message, maxSzx S
 	if err != nil {
 		return fmt.Errorf("cannot decode block option: %w", err)
 	}
-	sendedRequest := b.getSendedRequest(token)
+	sentRequest := b.getSentRequest(token)
 	expire := time.Now().Add(b.expiration)
-	if sendedRequest != nil {
-		defer b.releaseMessage(sendedRequest)
-		deadline, ok := sendedRequest.Context().Deadline()
+	if sentRequest != nil {
+		defer b.releaseMessage(sentRequest)
+		deadline, ok := sentRequest.Context().Deadline()
 		if ok {
 			expire = deadline
 		}
 	}
-	if blockType == message.Block2 && sendedRequest == nil {
+	if blockType == message.Block2 && sentRequest == nil {
 		return fmt.Errorf("cannot request body without paired request")
 	}
 	if isObserveResponse(r) {
 		// https://tools.ietf.org/html/rfc7959#section-2.6 - performs GET with new token.
-		if sendedRequest == nil {
+		if sentRequest == nil {
 			return fmt.Errorf("observation is not registered")
 		}
 		token, err = message.GetToken()
@@ -709,11 +713,10 @@ func (b *BlockWise) processReceivedMessage(w ResponseWriter, r Message, maxSzx S
 			return fmt.Errorf("cannot get token for create GET request: %w", err)
 		}
 		expire = time.Now().Add(b.expiration) // context of observation can be expired.
-		bwSentRequest := b.newSendRequestMessage(sendedRequest, true)
+		bwSentRequest := b.newSentRequestMessage(sentRequest, true)
 		bwSentRequest.SetToken(token)
-		err := b.bwSendedRequest.store(bwSentRequest)
-		if err != nil {
-			return cannotStoreRequestError(bwSentRequest, err)
+		if err := b.storeSentRequest(bwSentRequest); err != nil {
+			return fmt.Errorf("cannot process message: %w", err)
 		}
 	}
 
@@ -752,7 +755,7 @@ func (b *BlockWise) processReceivedMessage(w ResponseWriter, r Message, maxSzx S
 			if d == nil {
 				return
 			}
-			b.bwSendedRequest.deleteByToken(tokenStr)
+			b.bwSentRequest.deleteByToken(tokenStr)
 		}))
 		// request was already stored in cache, silently
 		if loaded {
@@ -839,7 +842,7 @@ func (b *BlockWise) processReceivedMessage(w ResponseWriter, r Message, maxSzx S
 			cachedReceivedMessage.Remove(sizeType)
 			setTypeFrom(cachedReceivedMessage, r)
 			if !bytes.Equal(cachedReceivedMessage.Token(), token) {
-				b.bwSendedRequest.deleteByToken(tokenStr)
+				b.bwSentRequest.deleteByToken(tokenStr)
 			}
 			_, err := cachedReceivedMessage.Body().Seek(0, io.SeekStart)
 			if err != nil {
@@ -857,8 +860,8 @@ func (b *BlockWise) processReceivedMessage(w ResponseWriter, r Message, maxSzx S
 	sendMessage.SetToken(token)
 	if blockType == message.Block2 {
 		num = payloadSize / szx.Size()
-		sendMessage.ResetOptionsTo(sendedRequest.Options())
-		sendMessage.SetCode(sendedRequest.Code())
+		sendMessage.ResetOptionsTo(sentRequest.Options())
+		sendMessage.SetCode(sentRequest.Code())
 		sendMessage.Remove(message.Observe)
 		sendMessage.Remove(message.Block1)
 		sendMessage.Remove(message.Size1)
