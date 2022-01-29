@@ -224,6 +224,25 @@ func (s *Server) checkAcceptError(err error) (bool, error) {
 	}
 }
 
+func (s *Server) serveConnection(connections *connections.Connections, rw net.Conn) {
+	var cc *ClientConn
+	monitor := s.createInactivityMonitor()
+	cc = s.createClientConn(coapNet.NewConn(rw), monitor)
+	if s.onNewClientConn != nil {
+		if tlscon, ok := rw.(*tls.Conn); ok {
+			s.onNewClientConn(cc, tlscon)
+		} else {
+			s.onNewClientConn(cc, nil)
+		}
+	}
+	connections.Store(cc)
+	defer connections.Delete(cc)
+
+	if err := cc.Run(); err != nil {
+		s.errors(fmt.Errorf("%v: %w", cc.RemoteAddr(), err))
+	}
+}
+
 func (s *Server) Serve(l Listener) error {
 	if s.blockwiseSZX > blockwise.SZXBERT {
 		return fmt.Errorf("invalid blockwiseSZX")
@@ -255,29 +274,14 @@ func (s *Server) Serve(l Listener) error {
 		if !ok {
 			return nil
 		}
-		if rw != nil {
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
-				var cc *ClientConn
-				monitor := s.createInactivityMonitor()
-				cc = s.createClientConn(coapNet.NewConn(rw), monitor)
-				if s.onNewClientConn != nil {
-					if tlscon, ok := rw.(*tls.Conn); ok {
-						s.onNewClientConn(cc, tlscon)
-					} else {
-						s.onNewClientConn(cc, nil)
-					}
-				}
-				connections.Store(cc)
-				defer connections.Delete(cc)
-				err := cc.Run()
-
-				if err != nil {
-					s.errors(fmt.Errorf("%v: %w", cc.RemoteAddr(), err))
-				}
-			}()
+		if rw == nil {
+			continue
 		}
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			s.serveConnection(connections, rw)
+		}()
 	}
 }
 
