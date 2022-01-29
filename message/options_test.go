@@ -10,7 +10,7 @@ import (
 )
 
 func testFindPositionBytesOption(t *testing.T, options Options, id OptionID, prepend bool, expectedIdx int) int {
-	prepIdx, idx := options.findPositon(id)
+	prepIdx, idx := options.findPosition(id)
 	if prepend {
 		assert.Equal(t, expectedIdx, prepIdx)
 	} else {

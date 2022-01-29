@@ -1,6 +1,7 @@
 package pool_test
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/plgd-dev/go-coap/v2/message"
@@ -137,6 +138,55 @@ func TestMessageMustSetPath(t *testing.T) {
 			path, err := msg.Path()
 			require.NoError(t, err)
 			require.Equal(t, tt.want, path)
+		})
+	}
+}
+
+func TestMessageAddQuery(t *testing.T) {
+	type args struct {
+		queries []string
+	}
+	tests := []struct {
+		name    string
+		args    args
+		wantErr bool
+	}{
+		{
+			name:    "Empty query",
+			wantErr: true,
+		},
+		{
+			name: "Single query",
+			args: args{
+				queries: []string{"a"},
+			},
+		},
+		{
+			name: "Multiple queries",
+			args: args{
+				queries: []string{"ab", "cdef", "ghijklmn"},
+			},
+		},
+		{
+			name: "Long query",
+			args: args{
+				queries: []string{strings.Repeat("q", 4096)},
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			msg := pool.NewMessage()
+			for _, q := range tt.args.queries {
+				msg.AddQuery(q)
+			}
+			queries, err := msg.Queries()
+			if tt.wantErr {
+				require.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, tt.args.queries, queries)
 		})
 	}
 }
