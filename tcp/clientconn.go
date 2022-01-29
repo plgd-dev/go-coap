@@ -158,7 +158,9 @@ func Client(conn net.Conn, opts ...DialOption) *ClientConn {
 		o.applyDial(&cfg)
 	}
 	if cfg.errors == nil {
-		cfg.errors = func(error) {}
+		cfg.errors = func(error) {
+			// default no-op
+		}
 	}
 	if cfg.createInactivityMonitor == nil {
 		cfg.createInactivityMonitor = func() inactivity.Monitor {
