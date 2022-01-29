@@ -37,7 +37,7 @@ type ErrorFunc = func(error)
 
 type GoPoolFunc = func(func()) error
 
-type BlockwiseFactoryFunc = func(getSendedRequest func(token message.Token) (blockwise.Message, bool)) *blockwise.BlockWise
+type BlockwiseFactoryFunc = func(getSentRequest func(token message.Token) (blockwise.Message, bool)) *blockwise.BlockWise
 
 // OnNewClientConnFunc is the callback for new connections.
 //

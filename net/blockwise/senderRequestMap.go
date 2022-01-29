@@ -29,7 +29,7 @@ func setTypeFrom(to Message, from Message) {
 	}
 }
 
-func (b *BlockWise) newSendRequestMessage(r Message, lock bool) *senderRequest {
+func (b *BlockWise) newSentRequestMessage(r Message, lock bool) *senderRequest {
 	req := b.acquireMessage(r.Context())
 	req.SetCode(r.Code())
 	req.SetToken(r.Token())
