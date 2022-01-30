@@ -4,6 +4,7 @@ package net
 import (
 	"math/rand"
 	"regexp"
+	"strings"
 	"time"
 )
 
@@ -67,7 +68,11 @@ func RandomValidURLString(n, maxSegmentLen int) string {
 }
 
 // NormalizeURLPath replace repeated '/' characters with a single '/' character
+// and remove ending '/'.
 func NormalizeURLPath(s string) string {
+	if len(s) == 0 {
+		return s
+	}
 	space := regexp.MustCompile("/+")
-	return space.ReplaceAllString(s, "/")
+	return strings.TrimSuffix(space.ReplaceAllString(s, "/"), "/")
 }

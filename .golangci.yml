@@ -63,7 +63,6 @@ linters:
     - predeclared      # find code that shadows one of Go's predeclared identifiers
     # - revive           # golint replacement, finds style mistakes
     - staticcheck      # Staticcheck is a go vet on steroids, applying a ton of static analysis checks
-    - structcheck      # Finds unused struct fields
     - stylecheck       # Stylecheck is a replacement for golint
     # - tenv             # tenv is analyzer that detects using os.Setenv instead of t.Setenv since Go1.17
     # - tparallel        # tparallel detects inappropriate usage of t.Parallel() method in your Go test codes
@@ -93,6 +92,7 @@ linters:
     - promlinter       # Check Prometheus metrics naming via promlint
     - rowserrcheck     # checks whether Err of rows is checked successfully
     - sqlclosecheck    # Checks that sql.Rows and sql.Stmt are closed.
+    - structcheck      # Finds unused struct fields
     - tagliatelle      # Checks the struct tags.
     - testpackage      # linter that makes you use a separate _test package
     - thelper          # thelper detects golang test helpers without t.Helper() call and checks the consistency of test helpers
