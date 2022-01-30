@@ -136,8 +136,17 @@ func (r *Message) SetCode(code codes.Code) {
 	r.isModified = true
 }
 
-func (r *Message) SetETag(value []byte) {
+// SetETag insert/update ETag option.
+//
+// Option definition:
+// 	- format: opaque, length: 1-8, repeatable
+func (r *Message) SetETag(value []byte) error {
+	def := message.CoapOptionDefs[message.ETag]
+	if len(value) < int(def.MinLen) || len(value) > int(def.MaxLen) {
+		return message.ErrInvalidValueLength
+	}
 	r.SetOptionBytes(message.ETag, value)
+	return nil
 }
 
 func (r *Message) ETag() ([]byte, error) {
