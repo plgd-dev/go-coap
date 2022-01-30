@@ -198,7 +198,8 @@ func TestMessageETag(t *testing.T) {
 	require.Error(t, err)
 
 	etag := []byte{13, 37}
-	msg.SetETag(etag)
+	err = msg.SetETag(etag)
+	require.NoError(t, err)
 	value, err := msg.ETag()
 	require.NoError(t, err)
 	require.Equal(t, etag, value)
@@ -212,7 +213,8 @@ func TestMessageETag(t *testing.T) {
 	etag = make([]byte, 0)
 	for i := 1; i <= maxETagPathLen; i++ {
 		etag = append(etag, byte(i))
-		msg.SetETag(etag)
+		err = msg.SetETag(etag)
+		require.NoError(t, err)
 	}
 	value, err = msg.ETag()
 	require.NoError(t, err)
@@ -226,11 +228,13 @@ func TestMessageSetETag(t *testing.T) {
 		value []byte
 	}
 	tests := []struct {
-		name string
-		args args
+		name    string
+		args    args
+		wantErr bool
 	}{
 		{
-			name: "Empty ETag",
+			name:    "Empty ETag",
+			wantErr: true,
 		},
 		{
 			name: "Basic ETag",
@@ -243,19 +247,19 @@ func TestMessageSetETag(t *testing.T) {
 			args: args{
 				value: []byte(strings.Repeat("a", maxETagPathLen+1)),
 			},
+			wantErr: true,
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			msg := pool.NewMessage()
-			msg.SetETag(tt.args.value)
-
-			value, err := msg.ETag()
-			require.NoError(t, err)
-			if len(tt.args.value) == 0 {
-				require.Empty(t, value)
+			err := msg.SetETag(tt.args.value)
+			if tt.wantErr {
+				require.Error(t, err)
 				return
 			}
+			value, err := msg.ETag()
+			require.NoError(t, err)
 			require.Equal(t, tt.args.value, value)
 		})
 	}
