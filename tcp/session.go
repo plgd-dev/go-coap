@@ -291,6 +291,26 @@ func (s *Session) processReq(req *pool.Message, cc *ClientConn, handler func(w *
 	}
 }
 
+func seekBufferToNextMessage(buffer *bytes.Buffer, msgSize int) *bytes.Buffer {
+	if msgSize == buffer.Len() {
+		// buffer is empty so reset it
+		buffer.Reset()
+		return buffer
+	}
+	// rewind to next message
+	trimmed := 0
+	for trimmed != msgSize {
+		b := make([]byte, 4096)
+		max := 4096
+		if msgSize-trimmed < max {
+			max = msgSize - trimmed
+		}
+		v, _ := buffer.Read(b[:max])
+		trimmed += v
+	}
+	return buffer
+}
+
 func (s *Session) processBuffer(buffer *bytes.Buffer, cc *ClientConn) error {
 	for buffer.Len() > 0 {
 		var hdr coapTCP.MessageHeader
@@ -305,27 +325,12 @@ func (s *Session) processBuffer(buffer *bytes.Buffer, cc *ClientConn) error {
 			return nil
 		}
 		req := s.messagePool.AcquireMessage(s.Context())
-		readed, err := req.Unmarshal(buffer.Bytes()[:hdr.TotalLen])
+		read, err := req.Unmarshal(buffer.Bytes()[:hdr.TotalLen])
 		if err != nil {
 			s.messagePool.ReleaseMessage(req)
 			return fmt.Errorf("cannot unmarshal with header: %w", err)
 		}
-		if readed == buffer.Len() {
-			// buffer is empty so reset it
-			buffer.Reset()
-		} else {
-			// rewind to next message
-			trimmed := 0
-			for trimmed != readed {
-				b := make([]byte, 4096)
-				max := 4096
-				if readed-trimmed < max {
-					max = readed - trimmed
-				}
-				v, _ := buffer.Read(b[:max])
-				trimmed += v
-			}
-		}
+		buffer = seekBufferToNextMessage(buffer, read)
 		req.SetSequence(s.Sequence())
 		s.inactivityMonitor.Notify()
 		if s.handleSignals(req, cc) {
