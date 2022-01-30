@@ -194,18 +194,18 @@ func TestMessageAddQuery(t *testing.T) {
 func TestMessageETag(t *testing.T) {
 	msg := pool.NewMessage()
 	require.False(t, msg.HasOption(message.ETag))
-	_, err := msg.GetETag()
+	_, err := msg.ETag()
 	require.Error(t, err)
 
 	etag := []byte{13, 37}
 	msg.SetETag(etag)
-	value, err := msg.GetETag()
+	value, err := msg.ETag()
 	require.NoError(t, err)
 	require.Equal(t, etag, value)
 
 	msg.Remove(message.ETag)
 	require.False(t, msg.HasOption(message.ETag))
-	_, err = msg.GetETag()
+	_, err = msg.ETag()
 	require.Error(t, err)
 
 	maxETagPathLen := int(message.CoapOptionDefs[message.ETag].MaxLen)
@@ -214,7 +214,7 @@ func TestMessageETag(t *testing.T) {
 		etag = append(etag, byte(i))
 		msg.SetETag(etag)
 	}
-	value, err = msg.GetETag()
+	value, err = msg.ETag()
 	require.NoError(t, err)
 	require.Equal(t, etag, value)
 }

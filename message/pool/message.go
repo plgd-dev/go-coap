@@ -140,7 +140,7 @@ func (r *Message) SetETag(value []byte) {
 	r.SetOptionBytes(message.ETag, value)
 }
 
-func (r *Message) GetETag() ([]byte, error) {
+func (r *Message) ETag() ([]byte, error) {
 	return r.GetOptionBytes(message.ETag)
 }
 
@@ -264,10 +264,6 @@ func (r *Message) SetAccept(contentFormat message.MediaType) {
 func (r *Message) Accept() (message.MediaType, error) {
 	v, err := r.GetOptionUint32(message.Accept)
 	return message.MediaType(v), err
-}
-
-func (r *Message) ETag() ([]byte, error) {
-	return r.GetOptionBytes(message.ETag)
 }
 
 func (r *Message) BodySize() (int64, error) {
