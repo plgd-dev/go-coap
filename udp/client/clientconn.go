@@ -155,7 +155,11 @@ func (cc *ClientConn) getMID() uint16 {
 
 // Close closes connection without waiting for the end of the Run function.
 func (cc *ClientConn) Close() error {
-	return cc.session.Close()
+	err := cc.session.Close()
+	if coapNet.IsCancelOrCloseError(err) {
+		return nil
+	}
+	return err
 }
 
 func (cc *ClientConn) do(req *pool.Message) (*pool.Message, error) {
