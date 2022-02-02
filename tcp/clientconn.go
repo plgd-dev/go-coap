@@ -241,7 +241,7 @@ func (cc *ClientConn) Session() *Session {
 // Close closes connection without wait of ends Run function.
 func (cc *ClientConn) Close() error {
 	err := cc.session.Close()
-	if coapNet.IsCancelOrCloseError(err) {
+	if errors.Is(err, net.ErrClosed) {
 		return nil
 	}
 	return err

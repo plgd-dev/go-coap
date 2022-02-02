@@ -2,6 +2,7 @@ package client
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -156,7 +157,7 @@ func (cc *ClientConn) getMID() uint16 {
 // Close closes connection without waiting for the end of the Run function.
 func (cc *ClientConn) Close() error {
 	err := cc.session.Close()
-	if coapNet.IsCancelOrCloseError(err) {
+	if errors.Is(err, net.ErrClosed) {
 		return nil
 	}
 	return err

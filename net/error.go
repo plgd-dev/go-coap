@@ -4,7 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
-	"strings"
+	"net"
 )
 
 var ErrListenerIsClosed = io.EOF
@@ -15,7 +15,7 @@ func IsCancelOrCloseError(err error) bool {
 	if err == nil {
 		return false
 	}
-	if errors.Is(err, context.Canceled) || errors.Is(err, io.EOF) || strings.Contains(err.Error(), "use of closed network connection") {
+	if errors.Is(err, context.Canceled) || errors.Is(err, io.EOF) || errors.Is(err, net.ErrClosed) {
 		// this error was produced by cancellation context or closing connection.
 		return true
 	}
