@@ -2,11 +2,8 @@ package dtls
 
 import (
 	"context"
-	"errors"
 	"fmt"
-	"io"
 	"net"
-	"strings"
 	"time"
 
 	"github.com/pion/dtls/v2"
@@ -166,7 +163,7 @@ func Client(conn *dtls.Conn, opts ...DialOption) *client.ClientConn {
 	}
 	errorsFunc := cfg.errors
 	cfg.errors = func(err error) {
-		if errors.Is(err, context.Canceled) || errors.Is(err, io.EOF) || strings.Contains(err.Error(), "use of closed network connection") {
+		if coapNet.IsCancelOrCloseError(err) {
 			// this error was produced by cancellation context or closing connection.
 			return
 		}

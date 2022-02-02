@@ -2,11 +2,8 @@ package udp
 
 import (
 	"context"
-	"errors"
 	"fmt"
-	"io"
 	"net"
-	"strings"
 	"time"
 
 	"github.com/plgd-dev/go-coap/v2/message"
@@ -167,7 +164,7 @@ func Client(conn *net.UDPConn, opts ...DialOption) *client.ClientConn {
 
 	errorsFunc := cfg.errors
 	cfg.errors = func(err error) {
-		if errors.Is(err, context.Canceled) || errors.Is(err, io.EOF) || strings.Contains(err.Error(), "use of closed network connection") {
+		if coapNet.IsCancelOrCloseError(err) {
 			// this error was produced by cancellation context or closing connection.
 			return
 		}

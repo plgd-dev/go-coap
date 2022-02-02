@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"net"
-	"strings"
 	"time"
 
 	"github.com/plgd-dev/go-coap/v2/message"
@@ -171,7 +170,7 @@ func Client(conn net.Conn, opts ...DialOption) *ClientConn {
 	}
 	errorsFunc := cfg.errors
 	cfg.errors = func(err error) {
-		if errors.Is(err, context.Canceled) || errors.Is(err, io.EOF) || strings.Contains(err.Error(), "use of closed network connection") {
+		if coapNet.IsCancelOrCloseError(err) {
 			// this error was produced by cancellation context or closing connection.
 			return
 		}
@@ -241,7 +240,11 @@ func (cc *ClientConn) Session() *Session {
 
 // Close closes connection without wait of ends Run function.
 func (cc *ClientConn) Close() error {
-	return cc.session.Close()
+	err := cc.session.Close()
+	if errors.Is(err, net.ErrClosed) {
+		return nil
+	}
+	return err
 }
 
 func (cc *ClientConn) do(req *pool.Message) (*pool.Message, error) {
