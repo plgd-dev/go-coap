@@ -72,7 +72,7 @@ func Errorf(msg *message.Message, format string, a ...interface{}) Status {
 }
 
 // FromError returns a Status representing err if it was produced from this
-// package or has a method `COAPError() *Status`. Otherwise, ok is false and a
+// package or has a method `COAPError() Status`. Otherwise, ok is false and a
 // Status is returned with codes.Unknown and the original error message.
 func FromError(err error) (s Status, ok bool) {
 	if err == nil {
@@ -81,9 +81,9 @@ func FromError(err error) (s Status, ok bool) {
 		}, true
 	}
 	if se, ok := err.(interface {
-		COAPStatus() Status
+		COAPError() Status
 	}); ok {
-		return se.COAPStatus(), true
+		return se.COAPError(), true
 	}
 	return Status{
 		code: Unknown,
