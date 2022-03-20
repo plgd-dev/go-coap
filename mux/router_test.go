@@ -122,6 +122,11 @@ func testRoute(t *testing.T, router *mux.Router, test routeTest) {
 			t.Errorf("(%v) Vars not equal: expected %v, got %v", test.title, vars, routeParams.Vars)
 			return
 		}
+
+		if routeParams.PathTemplate != test.pathTemplate {
+			t.Errorf("(%v) PathTemplate not equal: expected %v, got %v", test.title, test.pathTemplate, test.pathTemplate)
+			return
+		}
 	}
 
 }
