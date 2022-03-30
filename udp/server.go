@@ -258,7 +258,7 @@ func (s *Server) Serve(l *coapNet.UDPConn) error {
 			case <-s.ctx.Done():
 				return nil
 			default:
-				if errors.Is(err, context.Canceled) || errors.Is(err, io.EOF) || strings.Contains(err.Error(), "use of closed network connection") {
+				if coapNet.IsCancelOrCloseError(err) {
 					return nil
 				}
 				return err
