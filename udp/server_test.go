@@ -379,3 +379,52 @@ func TestServerKeepAliveMonitor(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, inactivityDetected)
 }
+
+func TestServerNewClient(t *testing.T) {
+	newServer := func(l *coapNet.UDPConn) (*udp.Server, func()) {
+		var wg sync.WaitGroup
+		s := udp.NewServer()
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			err := s.Serve(l)
+			require.NoError(t, err)
+		}()
+		return s, func() {
+			s.Stop()
+			wg.Wait()
+		}
+	}
+
+	l, err := coapNet.NewListenUDP("udp", "[::1]:0")
+	require.NoError(t, err)
+	defer func() {
+		err := l.Close()
+		require.NoError(t, err)
+	}()
+	_, server0Shutdown := newServer(l)
+	defer server0Shutdown()
+
+	l1, err := coapNet.NewListenUDP("udp", "[::1]:0")
+	require.NoError(t, err)
+	defer func() {
+		err := l1.Close()
+		require.NoError(t, err)
+	}()
+
+	s1, server1shutdown := newServer(l1)
+	defer server1shutdown()
+
+	peer, err := net.ResolveUDPAddr("udp", l.LocalAddr().String())
+	require.NoError(t, err)
+
+	time.Sleep(time.Second)
+
+	cc, err := s1.NewClientConn(peer)
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second*1)
+	defer cancel()
+	err = cc.Ping(ctx)
+	require.NoError(t, err)
+}
