@@ -4,11 +4,11 @@ go 1.17
 
 require (
 	github.com/dsnet/golib/memfile v1.0.0
-	github.com/pion/dtls/v2 v2.1.1
+	github.com/pion/dtls/v2 v2.1.3
 	github.com/plgd-dev/kit/v2 v2.0.0-20211006190727-057b33161b90
-	github.com/stretchr/testify v1.7.0
+	github.com/stretchr/testify v1.7.1
 	go.uber.org/atomic v1.9.0
-	golang.org/x/net v0.0.0-20220127200216-cd36cc0744dd
+	golang.org/x/net v0.0.0-20220325170049-de3da57026de
 	golang.org/x/sync v0.0.0-20210220032951-036812b2e83c
 )
 
