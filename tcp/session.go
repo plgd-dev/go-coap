@@ -145,12 +145,11 @@ func (s *Session) popOnClose() []EventFunc {
 	return tmp
 }
 
-func (s *Session) closeAndStop() error {
+func (s *Session) shutdown() {
 	defer close(s.done)
 	for _, f := range s.popOnClose() {
 		f()
 	}
-	return s.Close()
 }
 
 func (s *Session) Close() error {
@@ -380,10 +379,11 @@ func shrinkBufferIfNecessary(buffer *bytes.Buffer, maxCap uint16) *bytes.Buffer 
 // Run reads and process requests from a connection, until the connection is not closed.
 func (s *Session) Run(cc *ClientConn) (err error) {
 	defer func() {
-		err1 := s.closeAndStop()
+		err1 := s.Close()
 		if err == nil {
 			err = err1
 		}
+		s.shutdown()
 	}()
 	if s.errSendCSM != nil {
 		return s.errSendCSM
