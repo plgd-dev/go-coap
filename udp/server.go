@@ -407,9 +407,10 @@ func (s *Server) getOrCreateClientConn(UDPConn *coapNet.UDPConn, raddr *net.UDPA
 			s.messagePool,
 		)
 		cc.SetContextValue(closeKey, func() {
-			if err := session.close(); err != nil {
+			if err := session.Close(); err != nil {
 				s.errors(fmt.Errorf("cannot close session: %w", err))
 			}
+			session.shutdown()
 		})
 		cc.AddOnClose(func() {
 			s.connsMutex.Lock()
