@@ -2,7 +2,7 @@ package net
 
 import "net"
 
-// A UDPOption sets options such as heartBeat, errors parameters, etc.
+// A UDPOption sets options such as errors parameters, etc.
 type UDPOption interface {
 	applyUDP(*udpConnOptions)
 }
