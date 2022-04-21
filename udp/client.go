@@ -24,7 +24,6 @@ var defaultDialOptions = func() dialOptions {
 	opts := dialOptions{
 		ctx:            context.Background(),
 		maxMessageSize: 64 * 1024,
-		heartBeat:      time.Millisecond * 100,
 
 		errors: func(err error) {
 			fmt.Println(err)
@@ -75,7 +74,6 @@ type dialOptions struct {
 	errors                         ErrorFunc
 	goPool                         GoPoolFunc
 	dialer                         *net.Dialer
-	heartBeat                      time.Duration
 	periodicRunner                 periodic.Func
 	messagePool                    *pool.Pool
 	blockwiseTransferTimeout       time.Duration

@@ -68,7 +68,6 @@ var defaultServerOptions = func() serverOptions {
 		blockwiseSZX:                   blockwise.SZX1024,
 		blockwiseTransferTimeout:       time.Second * 5,
 		onNewClientConn:                func(cc *client.ClientConn, dtlsConn *dtls.Conn) {},
-		heartBeat:                      time.Millisecond * 100,
 		transmissionNStart:             time.Second,
 		transmissionAcknowledgeTimeout: time.Second * 2,
 		transmissionMaxRetransmit:      4,
@@ -101,7 +100,6 @@ type serverOptions struct {
 	getMID                         GetMIDFunc
 	blockwiseTransferTimeout       time.Duration
 	onNewClientConn                OnNewClientConnFunc
-	heartBeat                      time.Duration
 	transmissionNStart             time.Duration
 	transmissionAcknowledgeTimeout time.Duration
 	maxMessageSize                 uint32
@@ -128,7 +126,6 @@ type Server struct {
 
 	blockwiseTransferTimeout time.Duration
 	onNewClientConn          OnNewClientConnFunc
-	heartBeat                time.Duration
 
 	handler                        HandlerFunc
 	transmissionAcknowledgeTimeout time.Duration
@@ -190,7 +187,6 @@ func NewServer(opt ...ServerOption) *Server {
 		blockwiseEnable:                opts.blockwiseEnable,
 		blockwiseTransferTimeout:       opts.blockwiseTransferTimeout,
 		onNewClientConn:                opts.onNewClientConn,
-		heartBeat:                      opts.heartBeat,
 		transmissionNStart:             opts.transmissionNStart,
 		transmissionAcknowledgeTimeout: opts.transmissionAcknowledgeTimeout,
 		transmissionMaxRetransmit:      opts.transmissionMaxRetransmit,
