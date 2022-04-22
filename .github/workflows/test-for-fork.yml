@@ -14,10 +14,10 @@ jobs:
         os: [ubuntu-latest, windows-latest, macOS-latest]
 
     steps:
-      - name: Set up Go 1.17
+      - name: Set up Go 1.18
         uses: actions/setup-go@v3
         with:
-          go-version: ^1.17
+          go-version: ^1.18
 
       # Checks-out repository under $GITHUB_WORKSPACE
       - name: Checkout
