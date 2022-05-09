@@ -150,11 +150,11 @@ func (p *Pool) ReleaseMessage(req *Message) {
 }
 
 // ConvertFrom converts common message to pool message.
-func (pool *Pool) ConvertFrom(m *message.Message) (*Message, error) {
+func (p *Pool) ConvertFrom(m *message.Message) (*Message, error) {
 	if m.Context == nil {
 		return nil, fmt.Errorf("invalid context")
 	}
-	r := pool.AcquireMessage(m.Context)
+	r := p.AcquireMessage(m.Context)
 	r.SetCode(m.Code)
 	r.ResetOptionsTo(m.Options)
 	r.SetBody(m.Body)

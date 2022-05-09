@@ -11,5 +11,4 @@ func TestGetToken(t *testing.T) {
 	require.NoError(t, err)
 	require.NotEmpty(t, token)
 	require.NotEqual(t, 0, token.Hash())
-
 }

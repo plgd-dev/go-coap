@@ -257,7 +257,6 @@ func filterAddressesByNetwork(network string, ifaceAddrs []net.Addr) []net.Addr 
 		filtered = append(filtered, srcAddr)
 	}
 	return filtered
-
 }
 
 func convAddrsToIps(ifaceAddrs []net.Addr) []net.IP {
@@ -303,7 +302,8 @@ func (c *UDPConn) writeMulticastWithInterface(ctx context.Context, raddr *net.UD
 	}
 	var errors []error
 	for _, ip := range convAddrsToIps(filterAddressesByNetwork(netType, ifaceAddrs)) {
-		opt.Source = &ip
+		ipAddr := ip
+		opt.Source = &ipAddr
 		err = c.writeToAddr(opt.Iface, opt.Source, opt.HopLimit, raddr, buffer)
 		if err != nil {
 			errors = append(errors, err)

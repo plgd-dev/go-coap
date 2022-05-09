@@ -2,6 +2,7 @@ package message
 
 import (
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"strconv"
 )
@@ -279,9 +280,9 @@ func marshalOptionHeader(buf []byte, delta, length int) (int, error) {
 		lenBuf, err = marshalOptionHeaderExt(buf[size:], d, dx)
 	}
 
-	switch err {
-	case nil:
-	case ErrTooSmall:
+	switch {
+	case err == nil:
+	case errors.Is(err, ErrTooSmall):
 		buf = nil
 	default:
 		return -1, err
@@ -293,9 +294,9 @@ func marshalOptionHeader(buf []byte, delta, length int) (int, error) {
 	} else {
 		lenBuf, err = marshalOptionHeaderExt(buf[size:], l, lx)
 	}
-	switch err {
-	case nil:
-	case ErrTooSmall:
+	switch {
+	case err == nil:
+	case errors.Is(err, ErrTooSmall):
 		buf = nil
 	default:
 		return -1, err
@@ -353,17 +354,17 @@ func (o Option) Marshal(buf []byte, previousID OptionID) (int, error) {
 	delta := int(o.ID) - int(previousID)
 
 	lenBuf, err := o.MarshalValue(nil)
-	switch err {
-	case ErrTooSmall, nil:
+	switch {
+	case err == nil, errors.Is(err, ErrTooSmall):
 	default:
 		return -1, err
 	}
 
 	//header marshal
 	lenBuf, err = marshalOptionHeader(buf, delta, lenBuf)
-	switch err {
-	case nil:
-	case ErrTooSmall:
+	switch {
+	case err == nil:
+	case errors.Is(err, ErrTooSmall):
 		buf = nil
 	default:
 		return -1, err
@@ -376,9 +377,9 @@ func (o Option) Marshal(buf []byte, previousID OptionID) (int, error) {
 		lenBuf, err = o.MarshalValue(buf[length:])
 	}
 
-	switch err {
-	case nil:
-	case ErrTooSmall:
+	switch {
+	case err == nil:
+	case errors.Is(err, ErrTooSmall):
 		buf = nil
 	default:
 		return -1, err

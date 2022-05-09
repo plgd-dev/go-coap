@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"log"
 
@@ -31,7 +32,7 @@ func handleB(w mux.ResponseWriter, r *mux.Message) {
 	}
 	optsBuf := make([]byte, 32)
 	opts, used, err := customResp.Options.SetContentFormat(optsBuf, message.TextPlain)
-	if err == message.ErrTooSmall {
+	if errors.Is(err, message.ErrTooSmall) {
 		optsBuf = append(optsBuf, make([]byte, used)...)
 		opts, _, err = customResp.Options.SetContentFormat(optsBuf, message.TextPlain)
 	}

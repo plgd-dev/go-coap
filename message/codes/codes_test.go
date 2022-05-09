@@ -26,7 +26,7 @@ func TestUnmarshalJSONNilReceiver(t *testing.T) {
 func TestUnmarshalJSONUnknownInput(t *testing.T) {
 	var got Code
 	for _, in := range [][]byte{[]byte(""), []byte("xxx"), []byte("Code(17)"), nil} {
-		err := got.UnmarshalJSON([]byte(in))
+		err := got.UnmarshalJSON(in)
 		require.Error(t, err)
 	}
 }

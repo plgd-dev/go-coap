@@ -10,7 +10,6 @@ import (
 )
 
 func TestMutexMap(t *testing.T) {
-
 	r := rand.New(rand.NewSource(42))
 
 	m := NewMutexMap()
@@ -70,7 +69,6 @@ func TestMutexMap(t *testing.T) {
 	if t.Failed() {
 		t.Logf("Failed, outLists: %#v", outLists)
 	}
-
 }
 
 func BenchmarkM(b *testing.B) {

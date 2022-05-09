@@ -65,8 +65,7 @@ func (r *testmessage) String() string {
 	}
 	cf, err := r.options.ContentFormat()
 	if err == nil {
-		mt := message.MediaType(cf)
-		buf = fmt.Sprintf("%s, Format: %v", buf, mt)
+		buf = fmt.Sprintf("%s, Format: %v", buf, cf)
 	}
 	queries, err := r.options.Queries()
 	if err == nil {

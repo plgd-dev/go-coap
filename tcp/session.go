@@ -3,6 +3,7 @@ package tcp
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"sync"
@@ -291,7 +292,7 @@ func (s *Session) processBuffer(buffer *bytes.Buffer, cc *ClientConn) error {
 	for buffer.Len() > 0 {
 		var hdr coapTCP.MessageHeader
 		err := hdr.Unmarshal(buffer.Bytes())
-		if err == message.ErrShortRead {
+		if errors.Is(err, message.ErrShortRead) {
 			return nil
 		}
 		if hdr.TotalLen > s.maxMessageSize {

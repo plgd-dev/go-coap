@@ -207,11 +207,11 @@ func (s *Server) checkAcceptError(err error) (bool, error) {
 	if err == nil {
 		return true, nil
 	}
-	switch err {
-	case coapNet.ErrListenerIsClosed:
+	switch {
+	case errors.Is(err, coapNet.ErrListenerIsClosed):
 		s.Stop()
 		return false, nil
-	case context.DeadlineExceeded, context.Canceled:
+	case errors.Is(err, context.DeadlineExceeded), errors.Is(err, context.Canceled):
 		select {
 		case <-s.ctx.Done():
 		default:

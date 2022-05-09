@@ -215,7 +215,7 @@ func TestClientConnGetSeparateMessage(t *testing.T) {
 			}
 			optsBuf := make([]byte, 32)
 			opts, used, err := customResp.Options.SetContentFormat(optsBuf, message.TextPlain)
-			if err == message.ErrTooSmall {
+			if errors.Is(err, message.ErrTooSmall) {
 				optsBuf = append(optsBuf, make([]byte, used)...)
 				opts, _, err = customResp.Options.SetContentFormat(optsBuf, message.TextPlain)
 			}
@@ -263,7 +263,6 @@ func TestClientConnGetSeparateMessage(t *testing.T) {
 	resp, err := cc.Do(req)
 	require.NoError(t, err)
 	assert.Equal(t, codes.Content, resp.Code())
-
 }
 
 func TestClientConnPost(t *testing.T) {

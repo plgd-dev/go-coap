@@ -80,7 +80,6 @@ func TestMarshalMessage(t *testing.T) {
 }
 
 func TestUnmarshalMessage(t *testing.T) {
-
 	testUnmarshalMessage(t, Message{Options: make(message.Options, 0, 32)}, []byte{88, 128, 107, 170, 134, 237, 158, 132, 150, 19, 19, 159, 72, 20, 210, 14, 23, 231, 160, 183, 145, 128, 177, 14, 82, 20, 210, 255}, Message{
 		Code:      codes.BadRequest,
 		Token:     []byte{0x86, 0xed, 0x9e, 0x84, 0x96, 0x13, 0x13, 0x9f},
@@ -174,7 +173,6 @@ func TestUnmarshalMessage(t *testing.T) {
 		Token:   []byte{0x1, 0x2, 0x3},
 		Options: []message.Option{{ID: 11, Value: []byte{97}}, {ID: 11, Value: []byte{98}}, {ID: 11, Value: []byte{99}}, {ID: 11, Value: []byte{100}}, {ID: 11, Value: []byte{101}}, {ID: 12, Value: []byte{}}},
 	})
-
 }
 
 func BenchmarkMarshalMessage(b *testing.B) {
@@ -198,7 +196,6 @@ func BenchmarkMarshalMessage(b *testing.B) {
 
 	b.ResetTimer()
 	for i := uint32(0); i < uint32(b.N); i++ {
-
 		_, err := msg.MarshalTo(buffer)
 		if err != nil {
 			b.Fatalf("cannot marshal")

@@ -1,6 +1,7 @@
 package message
 
 import (
+	"errors"
 	"strings"
 )
 
@@ -122,7 +123,7 @@ func (options Options) path(buf []byte, id OptionID) (int, error) {
 func (options Options) Path() (string, error) {
 	buf := make([]byte, 32)
 	m, err := options.path(buf, URIPath)
-	if err == ErrTooSmall {
+	if errors.Is(err, ErrTooSmall) {
 		buf = append(buf, make([]byte, m)...)
 		m, err = options.path(buf, URIPath)
 	}
@@ -139,7 +140,7 @@ func (options Options) Path() (string, error) {
 func (options Options) LocationPath() (string, error) {
 	buf := make([]byte, 32)
 	m, err := options.path(buf, LocationPath)
-	if err == ErrTooSmall {
+	if errors.Is(err, ErrTooSmall) {
 		buf = append(buf, make([]byte, m)...)
 		m, err = options.path(buf, LocationPath)
 	}
@@ -277,7 +278,7 @@ func (options Options) GetStrings(id OptionID, r []string) (int, error) {
 func (options Options) Queries() ([]string, error) {
 	q := make([]string, 4)
 	n, err := options.GetStrings(URIQuery, q)
-	if err == ErrTooSmall {
+	if errors.Is(err, ErrTooSmall) {
 		q = append(q, make([]string, n-len(q))...)
 		n, err = options.GetStrings(URIQuery, q)
 	}
@@ -309,7 +310,7 @@ func (options Options) GetBytess(id OptionID, r [][]byte) (int, error) {
 //
 // Return's modified options, number of used buf bytes and error if occurs.
 func (options Options) AddUint32(buf []byte, id OptionID, value uint32) (Options, int, error) {
-	enc, err := EncodeUint32(buf, uint32(value))
+	enc, err := EncodeUint32(buf, value)
 	if err != nil {
 		return options, enc, err
 	}
@@ -321,7 +322,7 @@ func (options Options) AddUint32(buf []byte, id OptionID, value uint32) (Options
 //
 // Return's modified options, number of used buf bytes and error if occurs.
 func (options Options) SetUint32(buf []byte, id OptionID, value uint32) (Options, int, error) {
-	enc, err := EncodeUint32(buf, uint32(value))
+	enc, err := EncodeUint32(buf, value)
 	if err != nil {
 		return options, enc, err
 	}
@@ -505,7 +506,6 @@ func (options Options) Marshal(buf []byte) (int, error) {
 	length := 0
 
 	for _, o := range options {
-
 		//return coap.error but calculate length
 		if length > len(buf) {
 			buf = nil
@@ -521,9 +521,9 @@ func (options Options) Marshal(buf []byte) (int, error) {
 		}
 		previousID = o.ID
 
-		switch err {
-		case nil:
-		case ErrTooSmall:
+		switch {
+		case err == nil:
+		case errors.Is(err, ErrTooSmall):
 			buf = nil
 		default:
 			return -1, err
@@ -624,7 +624,7 @@ func (options Options) Clone() (Options, error) {
 	opts := make(Options, 0, len(options))
 	buf := make([]byte, 64)
 	opts, used, err := opts.ResetOptionsTo(buf, options)
-	if err == ErrTooSmall {
+	if errors.Is(err, ErrTooSmall) {
 		buf = append(buf, make([]byte, used-len(buf))...)
 		opts, _, err = opts.ResetOptionsTo(buf, options)
 	}

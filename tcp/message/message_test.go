@@ -83,7 +83,6 @@ func BenchmarkMarshalMessage(b *testing.B) {
 
 	b.ResetTimer()
 	for i := uint32(0); i < uint32(b.N); i++ {
-
 		_, err := msg.MarshalTo(buffer)
 		if err != nil {
 			b.Fatalf("cannot marshal")

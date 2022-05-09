@@ -53,7 +53,7 @@ func RandomValidURLString(n, maxSegmentLen int) string {
 	index := 0
 	for {
 		remainder := n - index
-		if remainder < int(maxSegmentLen) {
+		if remainder < maxSegmentLen {
 			break
 		}
 		shift := uint8(rand.Int63() >> 55)

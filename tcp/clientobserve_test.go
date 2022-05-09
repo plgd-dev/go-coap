@@ -91,7 +91,7 @@ func TestClientConnObserve(t *testing.T) {
 						defer cc.ReleaseMessage(req)
 						req.SetCode(codes.Content)
 						req.SetContentFormat(message.TextPlain)
-						req.SetObserve(uint32(i) + 2)
+						req.SetObserve(i + 2)
 						req.SetBody(p)
 						req.SetETag(etag)
 						req.SetToken(token)
@@ -300,7 +300,7 @@ func (o *observer) observe(req *pool.Message) {
 	}
 	obs, err := req.Observe()
 	require.NoError(o.t, err)
-	if obs > uint32(o.numEvents) {
+	if obs > o.numEvents {
 		select {
 		case o.done <- true:
 		default:
