@@ -2,6 +2,7 @@ package message
 
 import (
 	"encoding/binary"
+	"errors"
 	"hash/crc64"
 	"io"
 )
@@ -24,7 +25,7 @@ func GetETag(r io.ReadSeeker) ([]byte, error) {
 	for {
 		bufR := buf
 		n, err := r.Read(bufR)
-		if err == io.EOF {
+		if errors.Is(err, io.EOF) {
 			break
 		}
 		if err != nil {

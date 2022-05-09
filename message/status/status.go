@@ -2,6 +2,7 @@ package status
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/plgd-dev/go-coap/v2/message"
@@ -80,10 +81,11 @@ func FromError(err error) (s Status, ok bool) {
 			code: OK,
 		}, true
 	}
-	if se, ok := err.(interface {
+	var coapError interface {
 		COAPError() Status
-	}); ok {
-		return se.COAPError(), true
+	}
+	if errors.As(err, &coapError) {
+		return coapError.COAPError(), true
 	}
 	return Status{
 		code: Unknown,
@@ -105,10 +107,11 @@ func Code(err error) codes.Code {
 	if err == nil {
 		return OK
 	}
-	if se, ok := err.(interface {
+	var coapError interface {
 		COAPError() Status
-	}); ok {
-		return se.COAPError().Code()
+	}
+	if errors.As(err, &coapError) {
+		return coapError.COAPError().Code()
 	}
 	return Unknown
 }
@@ -117,17 +120,17 @@ func Code(err error) codes.Code {
 // Status with codes.OK if err is nil, or a Status with codes.Unknown if err is
 // non-nil and not a context error.
 func FromContextError(err error) Status {
-	switch err {
-	case nil:
+	switch {
+	case err == nil:
 		return Status{
 			code: OK,
 		}
-	case context.DeadlineExceeded:
+	case errors.Is(err, context.DeadlineExceeded):
 		return Status{
 			code: Timeout,
 			err:  err,
 		}
-	case context.Canceled:
+	case errors.Is(err, context.Canceled):
 		return Status{
 			code: Canceled,
 			err:  err,

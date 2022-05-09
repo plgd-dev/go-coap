@@ -65,7 +65,7 @@ type ClientConn struct {
 	goPool           GoPoolFunc
 	errors           ErrorFunc
 	responseMsgCache *cache.Cache
-	msgIdMutex       *MutexMap
+	msgIDMutex       *MutexMap
 
 	tokenHandlerContainer *HandlerContainer
 	midHandlerContainer   *HandlerContainer
@@ -139,7 +139,7 @@ func NewClientConn(
 		midHandlerContainer:   NewHandlerContainer(),
 		goPool:                goPool,
 		errors:                errors,
-		msgIdMutex:            NewMutexMap(),
+		msgIDMutex:            NewMutexMap(),
 		responseMsgCache:      responseMsgCache,
 		inactivityMonitor:     inactivityMonitor,
 		messagePool:           messagePool,
@@ -686,7 +686,7 @@ func (cc *ClientConn) processReq(req *pool.Message, w *ResponseWriter) error {
 
 	// The same message ID can not be handled concurrently
 	// for deduplication to work
-	l := cc.msgIdMutex.Lock(reqMid)
+	l := cc.msgIDMutex.Lock(reqMid)
 	defer l.Unlock()
 
 	if ok, err := cc.checkResponseCache(req, w); err != nil {

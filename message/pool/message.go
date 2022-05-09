@@ -1,6 +1,7 @@
 package pool
 
 import (
+	"errors"
 	"fmt"
 	"io"
 
@@ -74,7 +75,7 @@ func (r *Message) SetToken(token message.Token) {
 
 func (r *Message) ResetOptionsTo(in message.Options) {
 	opts, used, err := r.msg.Options.ResetOptionsTo(r.valueBuffer, in)
-	if err == message.ErrTooSmall {
+	if errors.Is(err, message.ErrTooSmall) {
 		r.valueBuffer = append(r.valueBuffer, make([]byte, used)...)
 		opts, used, err = r.msg.Options.ResetOptionsTo(r.valueBuffer, in)
 	}
@@ -102,7 +103,7 @@ func (r *Message) Options() message.Options {
 // ErrInvalidValueLength error.
 func (r *Message) SetPath(p string) error {
 	opts, used, err := r.msg.Options.SetPath(r.valueBuffer, p)
-	if err == message.ErrTooSmall {
+	if errors.Is(err, message.ErrTooSmall) {
 		expandBy, errSize := message.GetPathBufferSize(p)
 		if errSize != nil {
 			return fmt.Errorf("cannot calculate buffer size for path: %w", errSize)
@@ -153,7 +154,7 @@ func (r *Message) GetOptionUint32(id message.OptionID) (uint32, error) {
 
 func (r *Message) SetOptionString(opt message.OptionID, value string) {
 	opts, used, err := r.msg.Options.SetString(r.valueBuffer, opt, value)
-	if err == message.ErrTooSmall {
+	if errors.Is(err, message.ErrTooSmall) {
 		r.valueBuffer = append(r.valueBuffer, make([]byte, used)...)
 		opts, used, err = r.msg.Options.SetString(r.valueBuffer, opt, value)
 	}
@@ -167,7 +168,7 @@ func (r *Message) SetOptionString(opt message.OptionID, value string) {
 
 func (r *Message) AddOptionString(opt message.OptionID, value string) {
 	opts, used, err := r.msg.Options.AddString(r.valueBuffer, opt, value)
-	if err == message.ErrTooSmall {
+	if errors.Is(err, message.ErrTooSmall) {
 		r.valueBuffer = append(r.valueBuffer, make([]byte, used)...)
 		opts, used, err = r.msg.Options.AddString(r.valueBuffer, opt, value)
 	}
@@ -207,7 +208,7 @@ func (r *Message) GetOptionBytes(id message.OptionID) ([]byte, error) {
 
 func (r *Message) SetOptionUint32(opt message.OptionID, value uint32) {
 	opts, used, err := r.msg.Options.SetUint32(r.valueBuffer, opt, value)
-	if err == message.ErrTooSmall {
+	if errors.Is(err, message.ErrTooSmall) {
 		r.valueBuffer = append(r.valueBuffer, make([]byte, used)...)
 		opts, used, err = r.msg.Options.SetUint32(r.valueBuffer, opt, value)
 	}
@@ -221,7 +222,7 @@ func (r *Message) SetOptionUint32(opt message.OptionID, value uint32) {
 
 func (r *Message) AddOptionUint32(opt message.OptionID, value uint32) {
 	opts, used, err := r.msg.Options.AddUint32(r.valueBuffer, opt, value)
-	if err == message.ErrTooSmall {
+	if errors.Is(err, message.ErrTooSmall) {
 		r.valueBuffer = append(r.valueBuffer, make([]byte, used)...)
 		opts, used, err = r.msg.Options.AddUint32(r.valueBuffer, opt, value)
 	}
@@ -349,7 +350,7 @@ func (r *Message) ReadBody() ([]byte, error) {
 		payload = make([]byte, size)
 	}
 	n, err := io.ReadFull(r.Body(), payload)
-	if (err == io.ErrUnexpectedEOF || err == io.EOF) && int64(n) == size {
+	if (errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, io.EOF)) && int64(n) == size {
 		err = nil
 	}
 	if err != nil {

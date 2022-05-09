@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"log"
 	"time"
@@ -31,7 +32,7 @@ func sendResponse(cc mux.Client, token []byte, subded time.Time, obs int64) erro
 	var opts message.Options
 	var buf []byte
 	opts, n, err := opts.SetContentFormat(buf, message.TextPlain)
-	if err == message.ErrTooSmall {
+	if errors.Is(err, message.ErrTooSmall) {
 		buf = append(buf, make([]byte, n)...)
 		opts, _, err = opts.SetContentFormat(buf, message.TextPlain)
 	}
@@ -41,7 +42,7 @@ func sendResponse(cc mux.Client, token []byte, subded time.Time, obs int64) erro
 	buf = buf[n:]
 	if obs >= 0 {
 		opts, n, err = opts.SetObserve(buf, uint32(obs))
-		if err == message.ErrTooSmall {
+		if errors.Is(err, message.ErrTooSmall) {
 			buf = append(buf, make([]byte, n)...)
 			opts, _, err = opts.SetObserve(buf, uint32(obs))
 		}

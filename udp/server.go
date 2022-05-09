@@ -299,9 +299,8 @@ func (s *Server) closeSessions() {
 	s.connsMutex.Unlock()
 	for _, cc := range conns {
 		s.closeConnection(cc)
-		close := getClose(cc)
-		if close != nil {
-			close()
+		if closeFn := getClose(cc); closeFn != nil {
+			closeFn()
 		}
 	}
 }
@@ -335,9 +334,8 @@ func (s *Server) handleInactivityMonitors(now time.Time) {
 	for _, cc := range s.getClientConns() {
 		select {
 		case <-cc.Context().Done():
-			close := getClose(cc)
-			if close != nil {
-				close()
+			if closeFn := getClose(cc); closeFn != nil {
+				closeFn()
 			}
 			continue
 		default:

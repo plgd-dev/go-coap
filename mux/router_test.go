@@ -92,9 +92,7 @@ func TestMux(t *testing.T) {
 }
 
 func testRegexp(t *testing.T, router *mux.Router, test routeTest) {
-
 	route := router.GetRoute(test.pathTemplate)
-
 	if route == nil {
 		t.Errorf("(%v) GetRoute: expected to find route %v", test.title, test.pathTemplate)
 		return
@@ -128,7 +126,6 @@ func testRoute(t *testing.T, router *mux.Router, test routeTest) {
 			return
 		}
 	}
-
 }
 
 // stringMapEqual checks the equality of two string maps
