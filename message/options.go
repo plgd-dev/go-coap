@@ -9,7 +9,7 @@ type Options []Option
 
 const maxPathValue = 255
 
-// Get the size of the buffer required to store path in URI-Path options.
+// GetPathBufferSize gets the size of the buffer required to store path in URI-Path options.
 //
 // If the path cannot be stored an error is returned.
 func GetPathBufferSize(path string) (int, error) {
