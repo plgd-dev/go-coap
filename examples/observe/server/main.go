@@ -38,6 +38,7 @@ func sendResponse(cc mux.Client, token []byte, subded time.Time, obs int64) erro
 	if err != nil {
 		return fmt.Errorf("cannot set content format to response: %w", err)
 	}
+	buf = buf[n:]
 	if obs >= 0 {
 		opts, n, err = opts.SetObserve(buf, uint32(obs))
 		if err == message.ErrTooSmall {
