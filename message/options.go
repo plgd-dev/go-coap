@@ -33,17 +33,11 @@ func GetPathBufferSize(path string) (int, error) {
 	return size, nil
 }
 
-// SetPath splits path by '/' to URIPath options and copy it to buffer.
-//
-// Return's modified options, number of used buf bytes and error if occurs.
-//
-// @note the url encoded into URIHost, URIPort, URIPath is expected to be
-// absolute (https://www.rfc-editor.org/rfc/rfc7252.txt)
-func (options Options) SetPath(buf []byte, path string) (Options, int, error) {
+func setPath(options Options, optionID OptionID, buf []byte, path string) (Options, int, error) {
 	if len(path) == 0 {
 		return options, 0, nil
 	}
-	o := options.Remove(URIPath)
+	o := options.Remove(optionID)
 	if path[0] == '/' {
 		path = path[1:]
 	}
@@ -68,7 +62,7 @@ func (options Options) SetPath(buf []byte, path string) (Options, int, error) {
 		data := buf[encoded:]
 		var enc int
 		var err error
-		o, enc, err = o.AddString(data, URIPath, subPath[:end])
+		o, enc, err = o.AddString(data, optionID, subPath[:end])
 		if err != nil {
 			return o, -1, err
 		}
@@ -78,8 +72,28 @@ func (options Options) SetPath(buf []byte, path string) (Options, int, error) {
 	return o, encoded, nil
 }
 
-func (options Options) path(buf []byte) (int, error) {
-	firstIdx, lastIdx, err := options.Find(URIPath)
+// SetPath splits path by '/' to URIPath options and copies it to buffer.
+//
+// Return's modified options, number of used buf bytes and error if occurs.
+//
+// @note the url encoded into URIHost, URIPort, URIPath is expected to be
+// absolute (https://www.rfc-editor.org/rfc/rfc7252.txt)
+func (options Options) SetPath(buf []byte, path string) (Options, int, error) {
+	return setPath(options, URIPath, buf, path)
+}
+
+// SetLocationPath splits path by '/' to LocationPath options and copies it to buffer.
+//
+// Return's modified options, number of used buf bytes and error if occurs.
+//
+// @note the url encoded into LocationPath is expected to be
+// absolute (https://www.rfc-editor.org/rfc/rfc7252.txt)
+func (options Options) SetLocationPath(buf []byte, path string) (Options, int, error) {
+	return setPath(options, LocationPath, buf, path)
+}
+
+func (options Options) path(buf []byte, id OptionID) (int, error) {
+	firstIdx, lastIdx, err := options.Find(id)
 	if err != nil {
 		return -1, err
 	}
@@ -107,10 +121,27 @@ func (options Options) path(buf []byte) (int, error) {
 // Return's number of used buf bytes or error when occurs.
 func (options Options) Path() (string, error) {
 	buf := make([]byte, 32)
-	m, err := options.path(buf)
+	m, err := options.path(buf, URIPath)
 	if err == ErrTooSmall {
 		buf = append(buf, make([]byte, m)...)
-		m, err = options.path(buf)
+		m, err = options.path(buf, URIPath)
+	}
+	if err != nil {
+		return "", err
+	}
+	buf = buf[:m]
+	return string(buf), nil
+}
+
+// LocationPath joins Location-Path options by '/' to the buf.
+//
+// Return's number of used buf bytes or error when occurs.
+func (options Options) LocationPath() (string, error) {
+	buf := make([]byte, 32)
+	m, err := options.path(buf, LocationPath)
+	if err == ErrTooSmall {
+		buf = append(buf, make([]byte, m)...)
+		m, err = options.path(buf, LocationPath)
 	}
 	if err != nil {
 		return "", err

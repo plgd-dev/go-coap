@@ -176,6 +176,36 @@ func TestSetPath(t *testing.T) {
 	require.Equal(t, options, uoptions)
 }
 
+func TestLocationPath(t *testing.T) {
+	options := Options{
+		{ID: LocationPath, Value: []byte("foo")},
+		{ID: LocationPath, Value: []byte("bar")},
+	}
+	path, err := options.LocationPath()
+	require.NoError(t, err)
+	require.Equal(t, "/foo/bar", path)
+}
+
+func TestSetLocationPath(t *testing.T) {
+	options := make(Options, 0, 10)
+	options, _, err := options.SetLocationPath(make([]byte, 32), "/light/2")
+	require.NoError(t, err)
+	require.Equal(t, Options{
+		{ID: LocationPath, Value: []byte("light")},
+		{ID: LocationPath, Value: []byte("2")},
+	}, options)
+
+	marshaled := make([]byte, 128)
+	n, err := options.Marshal(marshaled)
+	require.NoError(t, err)
+	marshaled = marshaled[:n]
+	uoptions := make(Options, 0, 10)
+	un, err := uoptions.Unmarshal(marshaled, CoapOptionDefs)
+	require.NoError(t, err)
+	require.Equal(t, n, un)
+	require.Equal(t, options, uoptions)
+}
+
 func TestFindPositonBytesOption(t *testing.T) {
 	options := make(Options, 0, 10)
 	testFindPositionBytesOption(t, options, 3, true, -1)
