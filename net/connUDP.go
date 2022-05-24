@@ -337,6 +337,10 @@ func (c *UDPConn) writeMulticastToAllInterfaces(ctx context.Context, raddr *net.
 		specificOpt.IFaceMode = MulticastSpecificInterface
 		err = c.writeMulticastWithInterface(ctx, raddr, buffer, specificOpt)
 		if err != nil {
+			if opt.InterfaceError != nil {
+				opt.InterfaceError(&iface, err)
+				continue
+			}
 			errors = append(errors, err)
 		}
 	}
@@ -387,6 +391,10 @@ func (c *UDPConn) writeMulticast(ctx context.Context, raddr *net.UDPAddr, buffer
 	case MulticastSpecificInterface:
 		err := c.writeMulticastWithInterface(ctx, raddr, buffer, opt)
 		if err != nil {
+			if opt.InterfaceError != nil {
+				opt.InterfaceError(opt.Iface, err)
+				return nil
+			}
 			return fmt.Errorf("cannot write multicast to %v: %w", opt.Iface.Name, err)
 		}
 	}
