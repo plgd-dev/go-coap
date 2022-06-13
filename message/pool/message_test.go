@@ -191,6 +191,80 @@ func TestMessageAddQuery(t *testing.T) {
 	}
 }
 
+func TestMessageAddETags(t *testing.T) {
+	msg := pool.NewMessage()
+	err := msg.AddETag([]byte{})
+	require.Error(t, err)
+
+	opts := make([][]byte, 2)
+	opts[0] = []byte{13, 37}
+	opts[1] = []byte{14, 42}
+	err = msg.AddETag(opts[0])
+	require.NoError(t, err)
+	err = msg.AddETag(opts[1])
+	require.NoError(t, err)
+
+	maxETagPathLen := int(message.CoapOptionDefs[message.ETag].MaxLen)
+	err = msg.AddETag([]byte(strings.Repeat("a", maxETagPathLen+1)))
+	require.Error(t, err)
+
+	buf := make([][]byte, 0)
+	n, err := msg.ETags(buf)
+	require.Error(t, err)
+	buf = make([][]byte, n)
+	n, err = msg.ETags(buf)
+	require.NoError(t, err)
+	require.Equal(t, len(opts), n)
+	for i, v := range opts {
+		t.Logf("verifying index: %v", i)
+		require.Equal(t, v, buf[i])
+	}
+}
+
+func TestMessageSetETag(t *testing.T) {
+	maxETagPathLen := int(message.CoapOptionDefs[message.ETag].MaxLen)
+
+	type args struct {
+		value []byte
+	}
+	tests := []struct {
+		name    string
+		args    args
+		wantErr bool
+	}{
+		{
+			name:    "Empty ETag",
+			wantErr: true,
+		},
+		{
+			name: "Basic ETag",
+			args: args{
+				value: []byte{13, 37},
+			},
+		},
+		{
+			name: "Too long ETag",
+			args: args{
+				value: []byte(strings.Repeat("a", maxETagPathLen+1)),
+			},
+			wantErr: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			msg := pool.NewMessage()
+			err := msg.SetETag(tt.args.value)
+			if tt.wantErr {
+				require.Error(t, err)
+				return
+			}
+			value, err := msg.ETag()
+			require.NoError(t, err)
+			require.Equal(t, tt.args.value, value)
+		})
+	}
+}
+
 func TestMessageETag(t *testing.T) {
 	msg := pool.NewMessage()
 	require.False(t, msg.HasOption(message.ETag))
@@ -219,48 +293,4 @@ func TestMessageETag(t *testing.T) {
 	value, err = msg.ETag()
 	require.NoError(t, err)
 	require.Equal(t, etag, value)
-}
-
-func TestMessageSetETag(t *testing.T) {
-	maxETagPathLen := int(message.CoapOptionDefs[message.ETag].MaxLen)
-
-	type args struct {
-		value []byte
-	}
-	tests := []struct {
-		name    string
-		args    args
-		wantErr bool
-	}{
-		{
-			name:    "Empty ETag",
-			wantErr: true,
-		},
-		{
-			name: "Basic ETag",
-			args: args{
-				value: []byte{13, 37},
-			},
-		},
-		{
-			name: "Long ETag",
-			args: args{
-				value: []byte(strings.Repeat("a", maxETagPathLen+1)),
-			},
-			wantErr: true,
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			msg := pool.NewMessage()
-			err := msg.SetETag(tt.args.value)
-			if tt.wantErr {
-				require.Error(t, err)
-				return
-			}
-			value, err := msg.ETag()
-			require.NoError(t, err)
-			require.Equal(t, tt.args.value, value)
-		})
-	}
 }
