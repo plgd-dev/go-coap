@@ -241,6 +241,15 @@ func extendOpt(opt int) (int, int) {
 	return opt, ext
 }
 
+// VerifyOptLen checks whether valueLen is within (min, max) length limits for given option.
+func VerifyOptLen(optID OptionID, valueLen int) bool {
+	def := CoapOptionDefs[optID]
+	if valueLen < int(def.MinLen) || valueLen > int(def.MaxLen) {
+		return false
+	}
+	return true
+}
+
 func marshalOptionHeaderExt(buf []byte, opt, ext int) (int, error) {
 	switch opt {
 	case ExtendOptionByteCode:

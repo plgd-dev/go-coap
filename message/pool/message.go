@@ -136,21 +136,39 @@ func (r *Message) SetCode(code codes.Code) {
 	r.isModified = true
 }
 
-// SetETag insert/update ETag option.
+// AddETag appends value to existing ETags.
 //
 // Option definition:
 // 	- format: opaque, length: 1-8, repeatable
+func (r *Message) AddETag(value []byte) error {
+	if !message.VerifyOptLen(message.ETag, len(value)) {
+		return message.ErrInvalidValueLength
+	}
+	r.AddOptionBytes(message.ETag, value)
+	return nil
+}
+
+// SetETag inserts/replaces ETag option(s).
+//
+// After a successful call only a single ETag value will remain.
 func (r *Message) SetETag(value []byte) error {
-	def := message.CoapOptionDefs[message.ETag]
-	if len(value) < int(def.MinLen) || len(value) > int(def.MaxLen) {
+	if !message.VerifyOptLen(message.ETag, len(value)) {
 		return message.ErrInvalidValueLength
 	}
 	r.SetOptionBytes(message.ETag, value)
 	return nil
 }
 
+// ETag returns first ETag value
 func (r *Message) ETag() ([]byte, error) {
 	return r.GetOptionBytes(message.ETag)
+}
+
+// ETags returns all ETag values
+//
+// Writes ETag values to output array, returns number of written values or error.
+func (r *Message) ETags(b [][]byte) (int, error) {
+	return r.GetOptionAllBytes(message.ETag, b)
 }
 
 func (r *Message) AddQuery(query string) {
@@ -211,8 +229,14 @@ func (r *Message) SetOptionBytes(opt message.OptionID, value []byte) {
 	r.isModified = true
 }
 
+// GetOptionBytes gets bytes of the first option with given ID.
 func (r *Message) GetOptionBytes(id message.OptionID) ([]byte, error) {
 	return r.msg.Options.GetBytes(id)
+}
+
+// GetOptionAllBytes gets array of bytes of all options with given ID.
+func (r *Message) GetOptionAllBytes(id message.OptionID, b [][]byte) (int, error) {
+	return r.msg.Options.GetBytess(id, b)
 }
 
 func (r *Message) SetOptionUint32(opt message.OptionID, value uint32) {

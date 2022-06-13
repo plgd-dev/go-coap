@@ -7,7 +7,7 @@ import (
 	"io"
 )
 
-// GetETag calculate ETag from payload via CRC64
+// GetETag calculates ETag from payload via CRC64
 func GetETag(r io.ReadSeeker) ([]byte, error) {
 	if r == nil {
 		return make([]byte, 8), nil
