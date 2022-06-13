@@ -22,6 +22,10 @@ import (
 type EventFunc func()
 
 type Session struct {
+	// This field needs to be the first in the struct to ensure proper word alignment on 32-bit platforms.
+	// See: https://golang.org/pkg/sync/atomic/#pkg-note-BUG
+	sequence uint64
+
 	onClose []EventFunc
 
 	ctx atomic.Value
@@ -29,9 +33,6 @@ type Session struct {
 	inactivityMonitor inactivity.Monitor
 
 	errSendCSM error
-	// This field needs to be the first in the struct to ensure proper word alignment on 32-bit platforms.
-	// See: https://golang.org/pkg/sync/atomic/#pkg-note-BUG
-	sequence uint64
 
 	cancel context.CancelFunc
 
