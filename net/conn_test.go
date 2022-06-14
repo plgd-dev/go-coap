@@ -68,8 +68,8 @@ func TestConnWriteWithContext(t *testing.T) {
 			assert.NoError(t, err)
 			c := NewConn(tcpConn)
 			defer func() {
-				err := c.Close()
-				assert.NoError(t, err)
+				errC := c.Close()
+				assert.NoError(t, errC)
 			}()
 
 			c.LocalAddr()

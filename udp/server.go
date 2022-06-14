@@ -285,8 +285,8 @@ func (s *Server) Stop() {
 	s.cancel()
 	l := s.getListener()
 	if l != nil {
-		if errClose := l.Close(); errClose != nil {
-			s.errors(fmt.Errorf("cannot close listener: %w", errClose))
+		if errC := l.Close(); errC != nil {
+			s.errors(fmt.Errorf("cannot close listener: %w", errC))
 		}
 	}
 	s.closeSessions()

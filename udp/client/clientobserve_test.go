@@ -49,8 +49,8 @@ func TestClientConnObserve(t *testing.T) {
 			l, err := coapNet.NewListenUDP("udp", "")
 			require.NoError(t, err)
 			defer func() {
-				err := l.Close()
-				require.NoError(t, err)
+				errC := l.Close()
+				require.NoError(t, errC)
 			}()
 			var wg sync.WaitGroup
 			defer wg.Wait()
@@ -58,19 +58,19 @@ func TestClientConnObserve(t *testing.T) {
 			s := udp.NewServer(udp.WithHandlerFunc(func(w *client.ResponseWriter, r *pool.Message) {
 				switch r.Code() {
 				case codes.PUT, codes.POST, codes.DELETE:
-					err := w.SetResponse(codes.NotFound, message.TextPlain, nil)
-					require.NoError(t, err)
+					errS := w.SetResponse(codes.NotFound, message.TextPlain, nil)
+					require.NoError(t, errS)
 				case codes.GET:
 				default:
 					return
 				}
-				obs, err := r.Observe()
-				if err != nil {
-					err := w.SetResponse(codes.Content, message.TextPlain, bytes.NewReader(tt.args.payload))
-					require.NoError(t, err)
+				obs, errO := r.Observe()
+				if errO != nil {
+					errS := w.SetResponse(codes.Content, message.TextPlain, bytes.NewReader(tt.args.payload))
+					require.NoError(t, errS)
 					return
 				}
-				require.NoError(t, err)
+				require.NoError(t, errO)
 				require.NotNil(t, w.ClientConn())
 				token := r.Token()
 				switch obs {
@@ -87,26 +87,26 @@ func TestClientConnObserve(t *testing.T) {
 							}
 						}
 						p := bytes.NewReader(tt.args.payload)
-						etag, err := message.GetETag(p)
-						require.NoError(t, err)
+						etag, errE := message.GetETag(p)
+						require.NoError(t, errE)
 						req := cc.AcquireMessage(cc.Context())
 						defer cc.ReleaseMessage(req)
 						req.SetCode(codes.Content)
 						req.SetContentFormat(message.TextPlain)
 						req.SetObserve(i + 2)
 						req.SetBody(p)
-						err = req.SetETag(etag)
-						require.NoError(t, err)
+						errE = req.SetETag(etag)
+						require.NoError(t, errE)
 						req.SetToken(token)
-						err = cc.WriteMessage(req)
-						require.NoError(t, err)
+						errW := cc.WriteMessage(req)
+						require.NoError(t, errW)
 					}
 				case 1:
-					err := w.SetResponse(codes.Content, message.TextPlain, bytes.NewReader([]byte("close")))
-					require.NoError(t, err)
+					errS := w.SetResponse(codes.Content, message.TextPlain, bytes.NewReader([]byte("close")))
+					require.NoError(t, errS)
 				default:
-					err := w.SetResponse(codes.BadRequest, message.TextPlain, nil)
-					require.NoError(t, err)
+					errS := w.SetResponse(codes.BadRequest, message.TextPlain, nil)
+					require.NoError(t, errS)
 				}
 			}))
 			defer s.Stop()
@@ -114,15 +114,15 @@ func TestClientConnObserve(t *testing.T) {
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
-				err := s.Serve(l)
-				require.NoError(t, err)
+				errS := s.Serve(l)
+				require.NoError(t, errS)
 			}()
 
 			cc, err := udp.Dial(l.LocalAddr().String())
 			require.NoError(t, err)
 			defer func() {
-				err := cc.Close()
-				require.NoError(t, err)
+				errC := cc.Close()
+				require.NoError(t, errC)
 			}()
 
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
@@ -175,8 +175,8 @@ func TestClientConnObserveNotSupported(t *testing.T) {
 			l, err := coapNet.NewListenUDP("udp", "")
 			require.NoError(t, err)
 			defer func() {
-				err := l.Close()
-				require.NoError(t, err)
+				errC := l.Close()
+				require.NoError(t, errC)
 			}()
 			var wg sync.WaitGroup
 			defer wg.Wait()
@@ -184,19 +184,19 @@ func TestClientConnObserveNotSupported(t *testing.T) {
 			s := udp.NewServer(udp.WithHandlerFunc(func(w *client.ResponseWriter, r *pool.Message) {
 				switch r.Code() {
 				case codes.PUT, codes.POST, codes.DELETE:
-					err := w.SetResponse(codes.NotFound, message.TextPlain, nil)
-					require.NoError(t, err)
+					errS := w.SetResponse(codes.NotFound, message.TextPlain, nil)
+					require.NoError(t, errS)
 				case codes.GET:
 				default:
 					return
 				}
-				obs, err := r.Observe()
-				if err != nil {
-					err := w.SetResponse(codes.Content, message.TextPlain, bytes.NewReader(tt.args.payload))
-					require.NoError(t, err)
+				obs, errO := r.Observe()
+				if errO != nil {
+					errS := w.SetResponse(codes.Content, message.TextPlain, bytes.NewReader(tt.args.payload))
+					require.NoError(t, errS)
 					return
 				}
-				require.NoError(t, err)
+				require.NoError(t, errO)
 				require.NotNil(t, w.ClientConn())
 				token := r.Token()
 				switch obs {
@@ -205,22 +205,22 @@ func TestClientConnObserveNotSupported(t *testing.T) {
 					tmpPay := make([]byte, len(tt.args.payload))
 					copy(tmpPay, tt.args.payload)
 					p := bytes.NewReader(tt.args.payload)
-					etag, err := message.GetETag(p)
-					require.NoError(t, err)
+					etag, errE := message.GetETag(p)
+					require.NoError(t, errE)
 					req := cc.AcquireMessage(cc.Context())
 					defer cc.ReleaseMessage(req)
 					req.SetCode(codes.Content)
 					req.SetContentFormat(message.TextPlain)
 					req.SetBody(p)
-					err = req.SetETag(etag)
-					require.NoError(t, err)
+					errE = req.SetETag(etag)
+					require.NoError(t, errE)
 					req.SetToken(token)
-					err = cc.WriteMessage(req)
-					require.NoError(t, err)
+					errW := cc.WriteMessage(req)
+					require.NoError(t, errW)
 					t.Logf("response was send %v", len(tt.args.payload))
 				default:
-					err := w.SetResponse(codes.BadRequest, message.TextPlain, nil)
-					require.NoError(t, err)
+					errS := w.SetResponse(codes.BadRequest, message.TextPlain, nil)
+					require.NoError(t, errS)
 				}
 			}))
 			defer s.Stop()
@@ -228,15 +228,15 @@ func TestClientConnObserveNotSupported(t *testing.T) {
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
-				err := s.Serve(l)
-				require.NoError(t, err)
+				errS := s.Serve(l)
+				require.NoError(t, errS)
 			}()
 
 			cc, err := udp.Dial(l.LocalAddr().String())
 			require.NoError(t, err)
 			defer func() {
-				err := cc.Close()
-				require.NoError(t, err)
+				errC := cc.Close()
+				require.NoError(t, errC)
 			}()
 
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
@@ -268,8 +268,8 @@ func TestClientConnObserveIotivityLite(t *testing.T) {
 	cc, err := Dial("10.112.112.10:60956")
 	require.NoError(t, err)
 	defer func() {
-		err := cc.Close()
-		require.NoError(t, err)
+		errC := cc.Close()
+		require.NoError(t, errC)
 	}()
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*2)

@@ -58,17 +58,17 @@ func ExampleServer_Discover() {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		err := s.Serve(l)
-		if err != nil {
-			log.Println(err)
+		errS := s.Serve(l)
+		if errS != nil {
+			log.Println(errS)
 		}
 	}()
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 	err = s.Discover(ctx, "224.0.1.187:5683", "/oic/res", func(cc *client.ClientConn, res *pool.Message) {
-		data, err := ioutil.ReadAll(res.Body())
-		if err != nil {
-			log.Fatal(err)
+		data, errR := ioutil.ReadAll(res.Body())
+		if errR != nil {
+			log.Fatal(errR)
 		}
 		fmt.Printf("%v", data)
 	})

@@ -1,15 +1,8 @@
 linters-settings:
   govet:
-    # check-shadowing: true
-    check-shadowing: false
-  exhaustive:
-    default-signifies-exhaustive: true
-  gomodguard:
-    blocked:
-      modules:
-        - github.com/pkg/errors:
-            recommendations:
-            - errors
+    check-shadowing: true
+  gocyclo:
+    min-complexity: 15
 
 linters:
   enable:
@@ -22,7 +15,7 @@ linters:
     - depguard         # Go linter that checks if package imports are in a list of acceptable packages
     # - dogsled          # Checks assignments with too many blank identifiers (e.g. x, _, _, _, := f())
     # - dupl             # Tool for code clone detection
-    # - durationcheck    # check for two durations multiplied together
+    - durationcheck    # check for two durations multiplied together
     - errcheck         # Errcheck is a program for checking for unchecked errors in go programs. These unchecked errors can be critical bugs in some cases
     - errchkjson       # Checks types passed to the json encoding functions. Reports unsupported types and optionally reports occations, where the check for the returned error can be omitted.
     # - errname          # Checks that sentinel errors are prefixed with the `Err` and error types are suffixed with the `Error`.
@@ -31,7 +24,7 @@ linters:
     - exportloopref    # checks for pointers to enclosing loop variables
     # - forbidigo        # Forbids identifiers
     # - forcetypeassert  # finds forced type assertions
-    # - gci              # Gci control golang package import order and make it always deterministic.
+    - gci              # Gci control golang package import order and make it always deterministic.
     # - gochecknoglobals # Checks that no globals are present in Go code
     # - gochecknoinits   # Checks that no init functions are present in Go code
     # - gocognit         # Computes and checks the cognitive complexity of functions
@@ -69,7 +62,7 @@ linters:
     - typecheck        # Like the front-end of a Go compiler, parses and type-checks Go code
     - unconvert        # Remove unnecessary type conversions
     # - unparam          # Reports unused function parameters
-    # - unused           # Checks Go code for unused constants, variables, functions and types
+    - unused           # Checks Go code for unused constants, variables, functions and types
     - varcheck         # Finds unused global variables and constants
     # - wastedassign     # wastedassign finds wasted assignment statements
     - whitespace       # Tool for detection of leading and trailing whitespace

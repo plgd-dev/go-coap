@@ -187,13 +187,13 @@ func (s *Session) handleBlockwise(w *ResponseWriter, r *pool.Message) {
 		}
 		s.blockWise.Handle(&bwr, r, s.blockwiseSZX, s.maxMessageSize, func(bw blockwise.ResponseWriter, br blockwise.Message) {
 			h, err := s.tokenHandlerContainer.Pop(r.Token())
-			w := bw.(*bwResponseWriter).w
-			r := br.(*pool.Message)
+			rw := bw.(*bwResponseWriter).w
+			m := br.(*pool.Message)
 			if err == nil {
-				h(w, r)
+				h(rw, m)
 				return
 			}
-			s.handler(w, r)
+			s.handler(rw, m)
 		})
 		return
 	}
@@ -283,8 +283,8 @@ func (s *Session) processReq(req *pool.Message, cc *ClientConn, handler func(w *
 	if w.response.IsModified() {
 		err := s.WriteMessage(w.response)
 		if err != nil {
-			if errClose := s.Close(); errClose != nil {
-				s.errors(fmt.Errorf("cannot close connection: %w", errClose))
+			if errC := s.Close(); errC != nil {
+				s.errors(fmt.Errorf("cannot close connection: %w", errC))
 			}
 			s.errors(fmt.Errorf("cannot write response to %v: %w", s.connection.RemoteAddr(), err))
 		}

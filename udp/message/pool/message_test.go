@@ -24,8 +24,8 @@ func TestConvertTo(t *testing.T) {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		buf, err := ioutil.ReadAll(a.Body)
-		assert.NoError(t, err)
+		buf, errR := ioutil.ReadAll(a.Body)
+		assert.NoError(t, errR)
 		assert.Equal(t, []byte{1}, buf)
 	}()
 	msg = messagePool.AcquireMessage(context.Background())

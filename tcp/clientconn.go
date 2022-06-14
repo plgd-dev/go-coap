@@ -10,13 +10,12 @@ import (
 	"time"
 
 	"github.com/plgd-dev/go-coap/v2/message"
+	"github.com/plgd-dev/go-coap/v2/message/codes"
+	coapNet "github.com/plgd-dev/go-coap/v2/net"
 	"github.com/plgd-dev/go-coap/v2/net/blockwise"
 	"github.com/plgd-dev/go-coap/v2/net/monitor/inactivity"
 	"github.com/plgd-dev/go-coap/v2/pkg/runner/periodic"
 	"github.com/plgd-dev/go-coap/v2/tcp/message/pool"
-
-	"github.com/plgd-dev/go-coap/v2/message/codes"
-	coapNet "github.com/plgd-dev/go-coap/v2/net"
 	kitSync "github.com/plgd-dev/kit/v2/sync"
 )
 
@@ -255,14 +254,13 @@ func (cc *ClientConn) do(req *pool.Message) (*pool.Message, error) {
 		return nil, fmt.Errorf("invalid token")
 	}
 	respChan := make(chan *pool.Message, 1)
-	err := cc.session.TokenHandler().Insert(token, func(w *ResponseWriter, r *pool.Message) {
+	if err := cc.session.TokenHandler().Insert(token, func(w *ResponseWriter, r *pool.Message) {
 		r.Hijack()
 		select {
 		case respChan <- r:
 		default:
 		}
-	})
-	if err != nil {
+	}); err != nil {
 		return nil, fmt.Errorf("cannot add token handler: %w", err)
 	}
 	defer func() {
@@ -270,8 +268,7 @@ func (cc *ClientConn) do(req *pool.Message) (*pool.Message, error) {
 			cc.session.errors(fmt.Errorf("cannot remove token handler: %w", err))
 		}
 	}()
-	err = cc.session.WriteMessage(req)
-	if err != nil {
+	if err := cc.session.WriteMessage(req); err != nil {
 		return nil, fmt.Errorf("cannot write request: %w", err)
 	}
 
@@ -497,8 +494,8 @@ func (cc *ClientConn) AsyncPing(receivedPong func()) (func(), error) {
 		return nil, fmt.Errorf("cannot add token handler: %w", err)
 	}
 	removeTokenHandler := func() {
-		if _, err := cc.session.TokenHandler().Pop(token); err != nil && !errors.Is(err, ErrKeyNotExists) {
-			cc.session.errors(fmt.Errorf("cannot remove token handler: %w", err))
+		if _, errT := cc.session.TokenHandler().Pop(token); errT != nil && !errors.Is(errT, ErrKeyNotExists) {
+			cc.session.errors(fmt.Errorf("cannot remove token handler: %w", errT))
 		}
 	}
 	err = cc.session.WriteMessage(req)

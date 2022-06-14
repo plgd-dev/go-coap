@@ -24,12 +24,12 @@ func GetETag(r io.ReadSeeker) ([]byte, error) {
 	buf := make([]byte, 4096)
 	for {
 		bufR := buf
-		n, err := r.Read(bufR)
-		if errors.Is(err, io.EOF) {
+		n, errR := r.Read(bufR)
+		if errors.Is(errR, io.EOF) {
 			break
 		}
-		if err != nil {
-			return nil, err
+		if errR != nil {
+			return nil, errR
 		}
 		bufR = bufR[:n]
 		c64.Write(bufR)

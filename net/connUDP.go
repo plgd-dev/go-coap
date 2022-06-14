@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"go.uber.org/atomic"
-
 	"golang.org/x/net/ipv4"
 	"golang.org/x/net/ipv6"
 )
@@ -166,18 +165,17 @@ func NewUDPConn(network string, c *net.UDPConn, opts ...UDPOption) *UDPConn {
 		o.applyUDP(&cfg)
 	}
 
-	var packetConn packetConn
-
+	var pc packetConn
 	if IsIPv6(c.LocalAddr().(*net.UDPAddr).IP) {
-		packetConn = newPacketConnIPv6(ipv6.NewPacketConn(c))
+		pc = newPacketConnIPv6(ipv6.NewPacketConn(c))
 	} else {
-		packetConn = newPacketConnIPv4(ipv4.NewPacketConn(c))
+		pc = newPacketConnIPv4(ipv4.NewPacketConn(c))
 	}
 
 	return &UDPConn{
 		network:    network,
 		connection: c,
-		packetConn: packetConn,
+		packetConn: pc,
 		errors:     cfg.errors,
 	}
 }
