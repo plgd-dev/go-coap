@@ -3,10 +3,9 @@ package message
 import (
 	"testing"
 
-	"github.com/stretchr/testify/require"
-
 	"github.com/plgd-dev/go-coap/v2/message"
 	"github.com/plgd-dev/go-coap/v2/message/codes"
+	"github.com/stretchr/testify/require"
 )
 
 func testMarshalMessage(t *testing.T, msg Message, buf []byte, expectedOut []byte) {
@@ -181,7 +180,6 @@ func BenchmarkMarshalMessage(b *testing.B) {
 	bufOptionsUsed := bufOptions
 
 	enc := 0
-
 	options, enc, _ = options.SetPath(bufOptionsUsed, "/a/b/c/d/e")
 	bufOptionsUsed = bufOptionsUsed[enc:]
 

@@ -52,8 +52,8 @@ func TestServerDiscoverIotivity(t *testing.T) {
 	ld, err := coapNet.NewListenUDP("udp4", "")
 	require.NoError(t, err)
 	defer func() {
-		err := ld.Close()
-		require.NoError(t, err)
+		errC := ld.Close()
+		require.NoError(t, errC)
 	}()
 
 	sd := NewServer()
@@ -62,8 +62,8 @@ func TestServerDiscoverIotivity(t *testing.T) {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		err := sd.Serve(ld)
-		require.NoError(t, err)
+		errS := sd.Serve(ld)
+		require.NoError(t, errS)
 	}()
 
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
@@ -126,8 +126,8 @@ func TestServerDiscover(t *testing.T) {
 	l, err := coapNet.NewListenUDP("udp4", multicastAddr)
 	require.NoError(t, err)
 	defer func() {
-		err := l.Close()
-		require.NoError(t, err)
+		errC := l.Close()
+		require.NoError(t, errC)
 	}()
 
 	ifaces, err := net.Interfaces()
@@ -137,9 +137,9 @@ func TestServerDiscover(t *testing.T) {
 	require.NoError(t, err)
 
 	for _, iface := range ifaces {
-		err := l.JoinGroup(&iface, a)
-		if err != nil {
-			t.Logf("cannot JoinGroup(%v, %v): %v", iface, a, err)
+		errJ := l.JoinGroup(&iface, a)
+		if errJ != nil {
+			t.Logf("cannot JoinGroup(%v, %v): %v", iface, a, errJ)
 		}
 	}
 	err = l.SetMulticastLoopback(true)
@@ -149,8 +149,8 @@ func TestServerDiscover(t *testing.T) {
 	defer wg.Wait()
 
 	s := udp.NewServer(udp.WithHandlerFunc(func(w *client.ResponseWriter, r *pool.Message) {
-		err := w.SetResponse(codes.BadRequest, message.TextPlain, bytes.NewReader(make([]byte, 5330)))
-		require.NoError(t, err)
+		errS := w.SetResponse(codes.BadRequest, message.TextPlain, bytes.NewReader(make([]byte, 5330)))
+		require.NoError(t, errS)
 		require.NotNil(t, w.ClientConn())
 	}))
 	defer s.Stop()
@@ -158,15 +158,15 @@ func TestServerDiscover(t *testing.T) {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		err := s.Serve(l)
-		require.NoError(t, err)
+		errS := s.Serve(l)
+		require.NoError(t, errS)
 	}()
 
 	ld, err := coapNet.NewListenUDP("udp4", "")
 	require.NoError(t, err)
 	defer func() {
-		err := ld.Close()
-		require.NoError(t, err)
+		errC := ld.Close()
+		require.NoError(t, errC)
 	}()
 
 	sd := udp.NewServer()
@@ -175,8 +175,8 @@ func TestServerDiscover(t *testing.T) {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		err := sd.Serve(ld)
-		require.NoError(t, err)
+		errS := sd.Serve(ld)
+		require.NoError(t, errS)
 	}()
 
 	for _, tt := range tests {
@@ -199,16 +199,16 @@ func TestServerCleanUpConns(t *testing.T) {
 	ld, err := coapNet.NewListenUDP("udp4", "")
 	require.NoError(t, err)
 	defer func() {
-		err := ld.Close()
-		require.NoError(t, err)
+		errC := ld.Close()
+		require.NoError(t, errC)
 	}()
 
 	checkClose := semaphore.NewWeighted(2)
 	err = checkClose.Acquire(ctx, 2)
 	require.NoError(t, err)
 	defer func() {
-		err = checkClose.Acquire(ctx, 2)
-		require.NoError(t, err)
+		errA := checkClose.Acquire(ctx, 2)
+		require.NoError(t, errA)
 	}()
 
 	sd := udp.NewServer(udp.WithOnNewClientConn(func(cc *client.ClientConn) {
@@ -222,8 +222,8 @@ func TestServerCleanUpConns(t *testing.T) {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		err := sd.Serve(ld)
-		require.NoError(t, err)
+		errS := sd.Serve(ld)
+		require.NoError(t, errS)
 	}()
 
 	cc, err := udp.Dial(ld.LocalAddr().String())
@@ -232,8 +232,8 @@ func TestServerCleanUpConns(t *testing.T) {
 		checkClose.Release(1)
 	})
 	defer func() {
-		err := cc.Close()
-		require.NoError(t, err)
+		errC := cc.Close()
+		require.NoError(t, errC)
 		<-cc.Done()
 	}()
 	err = cc.Ping(ctx)
@@ -249,8 +249,8 @@ func TestServerInactiveMonitor(t *testing.T) {
 	ld, err := coapNet.NewListenUDP("udp4", "")
 	require.NoError(t, err)
 	defer func() {
-		err := ld.Close()
-		require.NoError(t, err)
+		errC := ld.Close()
+		require.NoError(t, errC)
 	}()
 
 	checkClose := semaphore.NewWeighted(2)
@@ -265,8 +265,8 @@ func TestServerInactiveMonitor(t *testing.T) {
 		udp.WithInactivityMonitor(100*time.Millisecond, func(cc inactivity.ClientConn) {
 			require.False(t, inactivityDetected)
 			inactivityDetected = true
-			err := cc.Close()
-			require.NoError(t, err)
+			errC := cc.Close()
+			require.NoError(t, errC)
 		}),
 		udp.WithPeriodicRunner(periodic.New(ctx.Done(), time.Millisecond*10)),
 	)
@@ -279,8 +279,8 @@ func TestServerInactiveMonitor(t *testing.T) {
 	serverWg.Add(1)
 	go func() {
 		defer serverWg.Done()
-		err := sd.Serve(ld)
-		require.NoError(t, err)
+		errS := sd.Serve(ld)
+		require.NoError(t, errS)
 	}()
 
 	cc, err := udp.Dial(
@@ -318,8 +318,8 @@ func TestServerKeepAliveMonitor(t *testing.T) {
 	ld, err := coapNet.NewListenUDP("udp4", "")
 	require.NoError(t, err)
 	defer func() {
-		err := ld.Close()
-		require.NoError(t, err)
+		errC := ld.Close()
+		require.NoError(t, errC)
 	}()
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*8)
@@ -337,8 +337,8 @@ func TestServerKeepAliveMonitor(t *testing.T) {
 		udp.WithKeepAlive(3, 100*time.Millisecond, func(cc inactivity.ClientConn) {
 			require.False(t, inactivityDetected)
 			inactivityDetected = true
-			err := cc.Close()
-			require.NoError(t, err)
+			errC := cc.Close()
+			require.NoError(t, errC)
 		}),
 		udp.WithPeriodicRunner(periodic.New(ctx.Done(), time.Millisecond*10)),
 	)
@@ -351,16 +351,16 @@ func TestServerKeepAliveMonitor(t *testing.T) {
 	serverWg.Add(1)
 	go func() {
 		defer serverWg.Done()
-		err := sd.Serve(ld)
-		require.NoError(t, err)
+		errS := sd.Serve(ld)
+		require.NoError(t, errS)
 	}()
 
 	cc, err := udp.Dial(
 		ld.LocalAddr().String(),
 		udp.WithInactivityMonitor(time.Millisecond*10, func(cc inactivity.ClientConn) {
 			time.Sleep(time.Millisecond * 500)
-			err := cc.Close()
-			require.NoError(t, err)
+			errC := cc.Close()
+			require.NoError(t, errC)
 		}),
 		udp.WithPeriodicRunner(periodic.New(ctx.Done(), time.Millisecond*10)),
 	)
@@ -387,8 +387,8 @@ func TestServerNewClient(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			err := s.Serve(l)
-			require.NoError(t, err)
+			errS := s.Serve(l)
+			require.NoError(t, errS)
 		}()
 		return s, func() {
 			s.Stop()
@@ -399,8 +399,8 @@ func TestServerNewClient(t *testing.T) {
 	l, err := coapNet.NewListenUDP("udp", "[::1]:0")
 	require.NoError(t, err)
 	defer func() {
-		err := l.Close()
-		require.NoError(t, err)
+		errC := l.Close()
+		require.NoError(t, errC)
 	}()
 	_, server0Shutdown := newServer(l)
 	defer server0Shutdown()
@@ -408,8 +408,8 @@ func TestServerNewClient(t *testing.T) {
 	l1, err := coapNet.NewListenUDP("udp", "[::1]:0")
 	require.NoError(t, err)
 	defer func() {
-		err := l1.Close()
-		require.NoError(t, err)
+		errC := l1.Close()
+		require.NoError(t, errC)
 	}()
 
 	s1, server1shutdown := newServer(l1)

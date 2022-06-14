@@ -11,9 +11,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/stretchr/testify/require"
-
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func SetTLSConfig(t *testing.T) *tls.Config {
@@ -79,8 +78,8 @@ func TestTLSListenerAcceptWithContext(t *testing.T) {
 	dir, err := ioutil.TempDir("", "gotesttmp")
 	assert.NoError(t, err)
 	defer func() {
-		err := os.RemoveAll(dir)
-		assert.NoError(t, err)
+		errR := os.RemoveAll(dir)
+		assert.NoError(t, errR)
 	}()
 	config := SetTLSConfig(t)
 
@@ -164,8 +163,8 @@ func TestTLSListenerCheckForInfinitLoop(t *testing.T) {
 	dir, err := ioutil.TempDir("", "gotesttmp")
 	assert.NoError(t, err)
 	defer func() {
-		err := os.RemoveAll(dir)
-		assert.NoError(t, err)
+		errR := os.RemoveAll(dir)
+		assert.NoError(t, errR)
 	}()
 	config := SetTLSConfig(t)
 
@@ -194,8 +193,8 @@ func TestTLSListenerCheckForInfinitLoop(t *testing.T) {
 					InsecureSkipVerify: true,
 					Certificates:       []tls.Certificate{cert},
 					VerifyPeerCertificate: func(rawCerts [][]byte, verifiedChains [][]*x509.Certificate) error {
-						err := conn.Close()
-						require.NoError(t, err)
+						errC := conn.Close()
+						require.NoError(t, errC)
 						return nil
 					},
 				})

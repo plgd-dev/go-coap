@@ -7,17 +7,16 @@ import (
 	"time"
 
 	"github.com/plgd-dev/go-coap/v2/message"
+	"github.com/plgd-dev/go-coap/v2/message/codes"
+	coapNet "github.com/plgd-dev/go-coap/v2/net"
 	"github.com/plgd-dev/go-coap/v2/net/blockwise"
 	"github.com/plgd-dev/go-coap/v2/net/monitor/inactivity"
 	"github.com/plgd-dev/go-coap/v2/pkg/cache"
 	"github.com/plgd-dev/go-coap/v2/pkg/runner/periodic"
-	kitSync "github.com/plgd-dev/kit/v2/sync"
-
-	"github.com/plgd-dev/go-coap/v2/message/codes"
-	coapNet "github.com/plgd-dev/go-coap/v2/net"
 	"github.com/plgd-dev/go-coap/v2/udp/client"
 	udpMessage "github.com/plgd-dev/go-coap/v2/udp/message"
 	"github.com/plgd-dev/go-coap/v2/udp/message/pool"
+	kitSync "github.com/plgd-dev/kit/v2/sync"
 )
 
 var defaultDialOptions = func() dialOptions {

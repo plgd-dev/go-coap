@@ -9,13 +9,12 @@ import (
 	"net"
 	"time"
 
-	"golang.org/x/sync/semaphore"
-
 	"github.com/dsnet/golib/memfile"
 	"github.com/plgd-dev/go-coap/v2/message"
 	"github.com/plgd-dev/go-coap/v2/message/codes"
 	"github.com/plgd-dev/go-coap/v2/pkg/cache"
 	udpMessage "github.com/plgd-dev/go-coap/v2/udp/message"
+	"golang.org/x/sync/semaphore"
 )
 
 // Block Opion value is represented: https://tools.ietf.org/html/rfc7959#section-2.2
@@ -350,7 +349,7 @@ type writeMessageResponse struct {
 	releaseMessage func(Message)
 }
 
-func NewWriteRequestResponse(remoteAddr net.Addr, request Message, acquireMessage func(context.Context) Message, releaseMessage func(Message)) *writeMessageResponse {
+func newWriteRequestResponse(remoteAddr net.Addr, request Message, acquireMessage func(context.Context) Message, releaseMessage func(Message)) *writeMessageResponse {
 	req := acquireMessage(request.Context())
 	req.SetCode(request.Code())
 	req.SetToken(request.Token())
@@ -388,7 +387,7 @@ func (b *BlockWise) WriteMessage(remoteAddr net.Addr, request Message, maxSZX SZ
 		return fmt.Errorf("cannot encode start sending message block option(%v,%v,%v): %w", maxSZX, 0, true, err)
 	}
 
-	w := NewWriteRequestResponse(remoteAddr, request, b.acquireMessage, b.releaseMessage)
+	w := newWriteRequestResponse(remoteAddr, request, b.acquireMessage, b.releaseMessage)
 	err = b.startSendingMessage(w, maxSZX, maxMessageSize, startSendingMessageBlock)
 	if err != nil {
 		return fmt.Errorf("cannot start writing request: %w", err)
@@ -542,25 +541,25 @@ func (b *BlockWise) handleReceivedMessage(w ResponseWriter, r Message, maxSZX SZ
 		return nil
 	case codes.GET, codes.DELETE:
 		maxSZX = fitSZX(r, message.Block2, maxSZX)
-		block, err := r.GetOptionUint32(message.Block2)
-		if err == nil {
+		block, errG := r.GetOptionUint32(message.Block2)
+		if errG == nil {
 			r.Remove(message.Block2)
 		}
 		next(w, r)
-		if w.Message().Code() == codes.Content && err == nil {
+		if w.Message().Code() == codes.Content && errG == nil {
 			startSendingMessageBlock = block
 		}
 	case codes.POST, codes.PUT:
 		maxSZX = fitSZX(r, message.Block1, maxSZX)
-		err := b.processReceivedMessage(w, r, maxSZX, next, message.Block1, message.Size1)
-		if err != nil {
-			return err
+		errP := b.processReceivedMessage(w, r, maxSZX, next, message.Block1, message.Size1)
+		if errP != nil {
+			return errP
 		}
 	default:
 		maxSZX = fitSZX(r, message.Block2, maxSZX)
-		err = b.processReceivedMessage(w, r, maxSZX, next, message.Block2, message.Size2)
-		if err != nil {
-			return err
+		errP := b.processReceivedMessage(w, r, maxSZX, next, message.Block2, message.Size2)
+		if errP != nil {
+			return errP
 		}
 	}
 	return b.startSendingMessage(w, maxSZX, maxMessageSize, startSendingMessageBlock)
@@ -585,18 +584,18 @@ func (b *BlockWise) continueSendingMessage(w ResponseWriter, r Message, maxSZX S
 	}
 	if blockType == message.Block1 {
 		// returned blockNumber just acknowledges position we need to set block to the next block.
-		szx, _, more, err := DecodeBlockOption(block)
-		if err != nil {
-			return false, fmt.Errorf("cannot decode %v(%v) option: %w", blockType, block, err)
+		szx, _, more, errB := DecodeBlockOption(block)
+		if errB != nil {
+			return false, fmt.Errorf("cannot decode %v(%v) option: %w", blockType, block, errB)
 		}
-		off, err := resp.Body().Seek(0, io.SeekCurrent)
-		if err != nil {
-			return false, fmt.Errorf("cannot get current position of seek: %w", err)
+		off, errB := resp.Body().Seek(0, io.SeekCurrent)
+		if errB != nil {
+			return false, fmt.Errorf("cannot get current position of seek: %w", errB)
 		}
 		num := off / szx.Size()
-		block, err = EncodeBlockOption(szx, num, more)
-		if err != nil {
-			return false, fmt.Errorf("cannot encode %v(%v, %v, %v) option: %w", blockType, szx, num, more, err)
+		block, errB = EncodeBlockOption(szx, num, more)
+		if errB != nil {
+			return false, fmt.Errorf("cannot encode %v(%v, %v, %v) option: %w", blockType, szx, num, more, errB)
 		}
 	}
 	more, err := b.handleSendingMessage(w, resp, maxSZX, maxMessageSize, r.Token(), block)
@@ -715,8 +714,8 @@ func (b *BlockWise) processReceivedMessage(w ResponseWriter, r Message, maxSzx S
 		expire = time.Now().Add(b.expiration) // context of observation can be expired.
 		bwSentRequest := b.newSentRequestMessage(sentRequest, true)
 		bwSentRequest.SetToken(token)
-		if err := b.storeSentRequest(bwSentRequest); err != nil {
-			return fmt.Errorf("cannot process message: %w", err)
+		if errS := b.storeSentRequest(bwSentRequest); errS != nil {
+			return fmt.Errorf("cannot process message: %w", errS)
 		}
 	}
 
@@ -746,9 +745,9 @@ func (b *BlockWise) processReceivedMessage(w ResponseWriter, r Message, maxSzx S
 		cachedReceivedMessage.SetBody(memfile.New(make([]byte, 0, 1024)))
 		cachedReceivedMessage.SetCode(r.Code())
 		msgGuard = newRequestGuard(cachedReceivedMessage)
-		err := msgGuard.Acquire(cachedReceivedMessage.Context(), 1)
-		if err != nil {
-			return cannotLockError(err)
+		errA := msgGuard.Acquire(cachedReceivedMessage.Context(), 1)
+		if errA != nil {
+			return cannotLockError(errA)
 		}
 		defer msgGuard.Release(1)
 		element, loaded := b.receivingMessagesCache.LoadOrStore(tokenStr, cache.NewElement(msgGuard, expire, func(d interface{}) {
@@ -762,9 +761,9 @@ func (b *BlockWise) processReceivedMessage(w ResponseWriter, r Message, maxSzx S
 			cachedReceivedMessageGuard = element.Data()
 			if cachedReceivedMessageGuard != nil {
 				msgGuard = cachedReceivedMessageGuard.(*messageGuard)
-				err := msgGuard.Acquire(cachedReceivedMessage.Context(), 1)
-				if err != nil {
-					return cannotLockError(err)
+				errA := msgGuard.Acquire(cachedReceivedMessage.Context(), 1)
+				if errA != nil {
+					return cannotLockError(errA)
 				}
 				defer msgGuard.Release(1)
 			} else {
@@ -773,9 +772,9 @@ func (b *BlockWise) processReceivedMessage(w ResponseWriter, r Message, maxSzx S
 		}
 	} else {
 		msgGuard = cachedReceivedMessageGuard.(*messageGuard)
-		err := msgGuard.Acquire(msgGuard.Context(), 1)
-		if err != nil {
-			return cannotLockError(err)
+		errA := msgGuard.Acquire(msgGuard.Context(), 1)
+		if errA != nil {
+			return cannotLockError(errA)
 		}
 		defer msgGuard.Release(1)
 	}
@@ -803,8 +802,8 @@ func (b *BlockWise) processReceivedMessage(w ResponseWriter, r Message, maxSzx S
 	case !bytes.Equal(rETAG, cachedReceivedMessageETAG):
 		// ETAG was changed - drop data and set new ETAG
 		cachedReceivedMessage.SetOptionBytes(message.ETag, rETAG)
-		if err := payloadFile.Truncate(0); err != nil {
-			return fmt.Errorf("cannot truncate cached request: %w", err)
+		if errT := payloadFile.Truncate(0); errT != nil {
+			return fmt.Errorf("cannot truncate cached request: %w", errT)
 		}
 	}
 
@@ -815,18 +814,18 @@ func (b *BlockWise) processReceivedMessage(w ResponseWriter, r Message, maxSzx S
 	}
 
 	if off == payloadSize {
-		copyn, err := payloadFile.Seek(off, io.SeekStart)
-		if err != nil {
-			return fmt.Errorf("cannot seek to off(%v) of cached request: %w", off, err)
+		copyn, errS := payloadFile.Seek(off, io.SeekStart)
+		if errS != nil {
+			return fmt.Errorf("cannot seek to off(%v) of cached request: %w", off, errS)
 		}
 		if r.Body() != nil {
-			_, err = r.Body().Seek(0, io.SeekStart)
-			if err != nil {
-				return fmt.Errorf("cannot seek to start of request: %w", err)
+			_, errS = r.Body().Seek(0, io.SeekStart)
+			if errS != nil {
+				return fmt.Errorf("cannot seek to start of request: %w", errS)
 			}
-			written, err := io.Copy(payloadFile, r.Body())
-			if err != nil {
-				return fmt.Errorf("cannot copy to cached request: %w", err)
+			written, errC := io.Copy(payloadFile, r.Body())
+			if errC != nil {
+				return fmt.Errorf("cannot copy to cached request: %w", errC)
 			}
 			payloadSize = copyn + written
 		} else {
@@ -844,9 +843,9 @@ func (b *BlockWise) processReceivedMessage(w ResponseWriter, r Message, maxSzx S
 			if !bytes.Equal(cachedReceivedMessage.Token(), token) {
 				b.bwSentRequest.deleteByToken(tokenStr)
 			}
-			_, err := cachedReceivedMessage.Body().Seek(0, io.SeekStart)
-			if err != nil {
-				return fmt.Errorf("cannot seek to start of cachedReceivedMessage request: %w", err)
+			_, errS := cachedReceivedMessage.Body().Seek(0, io.SeekStart)
+			if errS != nil {
+				return fmt.Errorf("cannot seek to start of cachedReceivedMessage request: %w", errS)
 			}
 			next(w, cachedReceivedMessage)
 			return nil

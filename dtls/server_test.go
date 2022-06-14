@@ -37,8 +37,8 @@ func TestServerCleanUpConns(t *testing.T) {
 	ld, err := coapNet.NewDTLSListener("udp4", "", dtlsCfg)
 	require.NoError(t, err)
 	defer func() {
-		err := ld.Close()
-		require.NoError(t, err)
+		errC := ld.Close()
+		require.NoError(t, errC)
 	}()
 	ctx, cancel := context.WithTimeout(context.Background(), Timeout)
 	defer cancel()
@@ -61,8 +61,8 @@ func TestServerCleanUpConns(t *testing.T) {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		err := sd.Serve(ld)
-		require.NoError(t, err)
+		errS := sd.Serve(ld)
+		require.NoError(t, errS)
 	}()
 
 	cc, err := dtls.Dial(ld.Addr().String(), dtlsCfg)
@@ -144,14 +144,14 @@ func TestServerSetContextValueWithPKI(t *testing.T) {
 	ld, err := coapNet.NewDTLSListener("udp4", "", serverCgf)
 	require.NoError(t, err)
 	defer func() {
-		err := ld.Close()
-		require.NoError(t, err)
+		errC := ld.Close()
+		require.NoError(t, errC)
 	}()
 
 	onNewConn := func(cc *client.ClientConn, dtlsConn *piondtls.Conn) {
 		// set connection context certificate
-		clientCert, err := x509.ParseCertificate(dtlsConn.ConnectionState().PeerCertificates[0])
-		require.NoError(t, err)
+		clientCert, errP := x509.ParseCertificate(dtlsConn.ConnectionState().PeerCertificates[0])
+		require.NoError(t, errP)
 		cc.SetContextValue("client-cert", clientCert)
 	}
 	handle := func(w *client.ResponseWriter, r *pool.Message) {
@@ -159,15 +159,15 @@ func TestServerSetContextValueWithPKI(t *testing.T) {
 		clientCert := r.Context().Value("client-cert").(*x509.Certificate)
 		require.Equal(t, clientCert.SerialNumber, clientSerial)
 		require.NotNil(t, clientCert)
-		err := w.SetResponse(codes.Content, message.TextPlain, bytes.NewReader([]byte("done")))
-		require.NoError(t, err)
+		errH := w.SetResponse(codes.Content, message.TextPlain, bytes.NewReader([]byte("done")))
+		require.NoError(t, errH)
 	}
 
 	sd := dtls.NewServer(dtls.WithHandlerFunc(handle), dtls.WithOnNewClientConn(onNewConn))
 	defer sd.Stop()
 	go func() {
-		err := sd.Serve(ld)
-		require.NoError(t, err)
+		errS := sd.Serve(ld)
+		require.NoError(t, errS)
 	}()
 
 	cc, err := dtls.Dial(ld.Addr().String(), clientCgf)
@@ -191,8 +191,8 @@ func TestServerInactiveMonitor(t *testing.T) {
 	ld, err := coapNet.NewDTLSListener("udp4", "", serverCgf)
 	require.NoError(t, err)
 	defer func() {
-		err := ld.Close()
-		require.NoError(t, err)
+		errC := ld.Close()
+		require.NoError(t, errC)
 	}()
 
 	checkClose := semaphore.NewWeighted(2)
@@ -207,8 +207,8 @@ func TestServerInactiveMonitor(t *testing.T) {
 		dtls.WithInactivityMonitor(100*time.Millisecond, func(cc inactivity.ClientConn) {
 			require.False(t, inactivityDetected)
 			inactivityDetected = true
-			err := cc.Close()
-			require.NoError(t, err)
+			errC := cc.Close()
+			require.NoError(t, errC)
 		}),
 		dtls.WithPeriodicRunner(periodic.New(ctx.Done(), time.Millisecond*10)),
 	)
@@ -221,8 +221,8 @@ func TestServerInactiveMonitor(t *testing.T) {
 	serverWg.Add(1)
 	go func() {
 		defer serverWg.Done()
-		err := sd.Serve(ld)
-		require.NoError(t, err)
+		errS := sd.Serve(ld)
+		require.NoError(t, errS)
 	}()
 
 	cc, err := dtls.Dial(ld.Addr().String(), clientCgf)
@@ -262,8 +262,8 @@ func TestServerKeepAliveMonitor(t *testing.T) {
 	ld, err := coapNet.NewDTLSListener("udp4", "", serverCgf)
 	require.NoError(t, err)
 	defer func() {
-		err := ld.Close()
-		require.NoError(t, err)
+		errC := ld.Close()
+		require.NoError(t, errC)
 	}()
 
 	checkClose := semaphore.NewWeighted(2)
@@ -279,8 +279,8 @@ func TestServerKeepAliveMonitor(t *testing.T) {
 		dtls.WithKeepAlive(3, 100*time.Millisecond, func(cc inactivity.ClientConn) {
 			require.False(t, inactivityDetected)
 			inactivityDetected = true
-			err := cc.Close()
-			require.NoError(t, err)
+			errC := cc.Close()
+			require.NoError(t, errC)
 		}),
 		dtls.WithPeriodicRunner(periodic.New(ctx.Done(), time.Millisecond*10)),
 	)
@@ -293,8 +293,8 @@ func TestServerKeepAliveMonitor(t *testing.T) {
 	serverWg.Add(1)
 	go func() {
 		defer serverWg.Done()
-		err := sd.Serve(ld)
-		require.NoError(t, err)
+		errS := sd.Serve(ld)
+		require.NoError(t, errS)
 	}()
 
 	cc, err := dtls.Dial(

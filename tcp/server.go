@@ -12,16 +12,14 @@ import (
 	"time"
 
 	"github.com/plgd-dev/go-coap/v2/message"
+	"github.com/plgd-dev/go-coap/v2/message/codes"
+	coapNet "github.com/plgd-dev/go-coap/v2/net"
 	"github.com/plgd-dev/go-coap/v2/net/blockwise"
 	"github.com/plgd-dev/go-coap/v2/net/monitor/inactivity"
 	"github.com/plgd-dev/go-coap/v2/pkg/connections"
 	"github.com/plgd-dev/go-coap/v2/pkg/runner/periodic"
 	"github.com/plgd-dev/go-coap/v2/tcp/message/pool"
 	kitSync "github.com/plgd-dev/kit/v2/sync"
-
-	"github.com/plgd-dev/go-coap/v2/message/codes"
-
-	coapNet "github.com/plgd-dev/go-coap/v2/net"
 )
 
 // A ServerOption sets options such as credentials, codec and keepalive parameters, etc.

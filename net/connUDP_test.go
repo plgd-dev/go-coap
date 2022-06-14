@@ -54,8 +54,8 @@ func TestUDPConnWriteWithContext(t *testing.T) {
 	require.NoError(t, err)
 	c1 := NewUDPConn("udp", l1, WithErrors(func(err error) { t.Log(err) }))
 	defer func() {
-		err := c1.Close()
-		require.NoError(t, err)
+		errC := c1.Close()
+		require.NoError(t, errC)
 	}()
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -64,14 +64,14 @@ func TestUDPConnWriteWithContext(t *testing.T) {
 	require.NoError(t, err)
 	c2 := NewUDPConn("udp", l2, WithErrors(func(err error) { t.Log(err) }))
 	defer func() {
-		err := c2.Close()
-		require.NoError(t, err)
+		errC := c2.Close()
+		require.NoError(t, errC)
 	}()
 
 	go func() {
 		b := make([]byte, 1024)
-		_, _, err := c2.ReadWithContext(ctx, b)
-		if err != nil {
+		_, _, errR := c2.ReadWithContext(ctx, b)
+		if errR != nil {
 			return
 		}
 	}()
@@ -168,8 +168,8 @@ func TestUDPConnwriteMulticastWithContext(t *testing.T) {
 	require.NoError(t, err)
 	c2 := NewUDPConn("udp", l2, WithErrors(func(err error) { t.Log(err) }))
 	defer func() {
-		err := c2.Close()
-		require.NoError(t, err)
+		errC := c2.Close()
+		require.NoError(t, errC)
 	}()
 	ifaces, err := net.Interfaces()
 	require.NoError(t, err)
@@ -190,8 +190,8 @@ func TestUDPConnwriteMulticastWithContext(t *testing.T) {
 	require.NoError(t, err)
 	c1 := NewUDPConn("udp", l1, WithErrors(func(err error) { t.Log(err) }))
 	defer func() {
-		err := c1.Close()
-		require.NoError(t, err)
+		errC := c1.Close()
+		require.NoError(t, errC)
 	}()
 	require.NoError(t, err)
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*3)
@@ -201,8 +201,8 @@ func TestUDPConnwriteMulticastWithContext(t *testing.T) {
 	wg.Add(1)
 	go func() {
 		b := make([]byte, 1024)
-		n, _, err := c2.ReadWithContext(ctx, b)
-		assert.NoError(t, err)
+		n, _, errR := c2.ReadWithContext(ctx, b)
+		assert.NoError(t, errR)
 		if n > 0 {
 			b = b[:n]
 			assert.Equal(t, payload, b)
@@ -219,9 +219,9 @@ func TestUDPConnwriteMulticastWithContext(t *testing.T) {
 
 			if tt.wantErr {
 				assert.Error(t, err)
-			} else {
-				assert.NoError(t, err)
+				return
 			}
+			assert.NoError(t, err)
 		})
 	}
 }

@@ -20,32 +20,11 @@ jobs:
       - name: Run go vet
         run: go vet ./...
 
-      - name: Install and run ineffassign
-        run: |
-          export PATH=${PATH}:`go env GOPATH`/bin
-          go install github.com/gordonklaus/ineffassign@latest
-          ineffassign ./...
-
-      - name: Install and run errcheck
-        run: |
-          export PATH=${PATH}:`go env GOPATH`/bin
-          go install github.com/kisielk/errcheck@latest
-          if errcheck ./... | grep -v 'example'; then\
-            exit 1;\
-          fi
-
       - name: Install and run gocyclo
         run: |
           export PATH=${PATH}:`go env GOPATH`/bin
           go install github.com/fzipp/gocyclo/cmd/gocyclo@latest
           gocyclo -over 15 -ignore ".pb(.gw)?.go$|_test.go$|wsproxy" . || echo "gocyclo detected too complex functions"
-
-      - name: Install and run misspell
-        run: |
-          # check misspelling in all files in repository
-          export PATH=${PATH}:`go env GOPATH`/bin
-          go install github.com/client9/misspell/cmd/misspell@latest
-          find . -type f -exec misspell {} \;
 
       # Disable aligncheck until it is compatible with golang v1.18
       # - name: Install and run aligncheck
