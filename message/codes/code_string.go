@@ -26,6 +26,7 @@ var codeToString = map[Code]string{
 	PreconditionFailed:    "PreconditionFailed",
 	RequestEntityTooLarge: "RequestEntityTooLarge",
 	UnsupportedMediaType:  "UnsupportedMediaType",
+	TooManyRequests:       "TooManyRequests",
 	InternalServerError:   "InternalServerError",
 	NotImplemented:        "NotImplemented",
 	BadGateway:            "BadGateway",
