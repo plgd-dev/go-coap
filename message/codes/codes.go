@@ -36,6 +36,7 @@ const (
 	PreconditionFailed      Code = 140
 	RequestEntityTooLarge   Code = 141
 	UnsupportedMediaType    Code = 143
+	TooManyRequests         Code = 145
 	InternalServerError     Code = 160
 	NotImplemented          Code = 161
 	BadGateway              Code = 162
@@ -75,6 +76,7 @@ var strToCode = map[string]Code{
 	`"PreconditionFailed"`:                 PreconditionFailed,
 	`"RequestEntityTooLarge"`:              RequestEntityTooLarge,
 	`"UnsupportedMediaType"`:               UnsupportedMediaType,
+	`"TooManyRequests"`:                    TooManyRequests,
 	`"InternalServerError"`:                InternalServerError,
 	`"NotImplemented"`:                     NotImplemented,
 	`"BadGateway"`:                         BadGateway,
