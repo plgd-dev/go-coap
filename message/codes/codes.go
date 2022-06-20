@@ -45,7 +45,7 @@ const (
 	ProxyingNotSupported    Code = 165
 )
 
-//Signaling Codes for TCP
+// Signaling Codes for TCP
 const (
 	CSM     Code = 225
 	Ping    Code = 226

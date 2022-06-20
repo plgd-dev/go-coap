@@ -33,7 +33,7 @@ func SetTLSConfig(t *testing.T) *tls.Config {
 		RootCAs:      caRootPool,
 
 		GetConfigForClient: func(info *tls.ClientHelloInfo) (*tls.Config, error) {
-			//https://github.com/golang/go/issues/29895
+			// https://github.com/golang/go/issues/29895
 			m := tls.Config{
 				Certificates: []tls.Certificate{cert},
 				ClientAuth:   tls.RequireAnyClientCert,

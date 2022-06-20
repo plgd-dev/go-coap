@@ -98,7 +98,7 @@ type Message struct {
 	Token   []byte
 	Payload []byte
 
-	Options message.Options //Options must be sorted by ID
+	Options message.Options // Options must be sorted by ID
 	Code    codes.Code
 }
 
@@ -153,7 +153,7 @@ func (m Message) MarshalTo(buf []byte) (int, error) {
 
 	payloadLen := len(m.Payload)
 	if payloadLen > 0 {
-		//for separator 0xff
+		// for separator 0xff
 		payloadLen++
 	}
 	optionsLen, err := m.Options.Marshal(nil)

@@ -27,7 +27,8 @@ func TestMarshalMessage(t *testing.T) {
 	testMarshalMessage(t, Message{Code: codes.GET}, buf, []byte{64, byte(codes.GET), 0, 0})
 	testMarshalMessage(t, Message{Code: codes.GET, Payload: []byte{0x1}}, buf, []byte{64, byte(codes.GET), 0, 0, 0xff, 0x1})
 	testMarshalMessage(t, Message{Code: codes.GET, Payload: []byte{0x1}, Token: []byte{0x1, 0x2, 0x3}}, buf, []byte{67, byte(codes.GET), 0, 0, 0x1, 0x2, 0x3, 0xff, 0x1})
-	testMarshalMessage(t, Message{Code: codes.BadRequest,
+	testMarshalMessage(t, Message{
+		Code:      codes.BadRequest,
 		Token:     []byte{0x86, 0xed, 0x9e, 0x84, 0x96, 0x13, 0x13, 0x9f},
 		MessageID: 27562,
 		Type:      NonConfirmable,

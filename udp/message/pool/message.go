@@ -15,8 +15,7 @@ import (
 )
 
 type Message struct {
-
-	//local vars
+	// local vars
 	rawData        []byte
 	rawMarshalData []byte
 

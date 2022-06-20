@@ -14,7 +14,7 @@ type Message struct {
 	Token   message.Token
 	Payload []byte
 
-	Options message.Options //Options must be sorted by ID
+	Options message.Options // Options must be sorted by ID
 	Code    codes.Code
 
 	MessageID uint16
@@ -32,7 +32,7 @@ func (m Message) Size() (int, error) {
 		return -1, err
 	}
 	if payloadLen > 0 {
-		//for separator 0xff
+		// for separator 0xff
 		payloadLen++
 	}
 	size += payloadLen + optionsLen

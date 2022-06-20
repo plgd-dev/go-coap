@@ -29,7 +29,7 @@ type respObservationMessage struct {
 	notSupported bool
 }
 
-//Observation represents subscription to resource on the server
+// Observation represents subscription to resource on the server
 type Observation struct {
 	token               message.Token
 	path                string

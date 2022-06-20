@@ -265,7 +265,8 @@ func (o TransmissionOpt) applyDial(opts *dialOptions) {
 // WithTransmission set options for (re)transmission for Confirmable message-s.
 func WithTransmission(transmissionNStart time.Duration,
 	transmissionAcknowledgeTimeout time.Duration,
-	transmissionMaxRetransmit uint32) TransmissionOpt {
+	transmissionMaxRetransmit uint32,
+) TransmissionOpt {
 	return TransmissionOpt{
 		transmissionNStart:             transmissionNStart,
 		transmissionAcknowledgeTimeout: transmissionAcknowledgeTimeout,
@@ -274,8 +275,7 @@ func WithTransmission(transmissionNStart time.Duration,
 }
 
 // CloseSocketOpt close socket option.
-type CloseSocketOpt struct {
-}
+type CloseSocketOpt struct{}
 
 func (o CloseSocketOpt) applyDial(opts *dialOptions) {
 	opts.closeSocket = true

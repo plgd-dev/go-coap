@@ -87,7 +87,7 @@ func pathMatch(pattern Route, path string) bool {
 // Most-specific (longest) pattern wins
 func (r *Router) Match(path string, routeParams *RouteParams) (matchedRoute *Route, matchedPattern string) {
 	r.m.RLock()
-	var n = 0
+	n := 0
 	for pattern, route := range r.z {
 		if !pathMatch(route, path) {
 			continue

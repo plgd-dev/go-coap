@@ -261,7 +261,8 @@ func TestBlockWiseDo(t *testing.T) {
 						token:   []byte{2},
 						options: message.Options{message.Option{ID: message.URIPath, Value: []byte("abc")}},
 						code:    codes.POST,
-						payload: memfile.New(make([]byte, 128))}, r)
+						payload: memfile.New(make([]byte, 128)),
+					}, r)
 					w.SetMessage(
 						&testmessage{
 							ctx:     context.Background(),
@@ -297,7 +298,8 @@ func TestBlockWiseDo(t *testing.T) {
 						token:   []byte{2},
 						options: message.Options{message.Option{ID: message.URIPath, Value: []byte("abc")}},
 						code:    codes.POST,
-						payload: memfile.New(make([]byte, 128))}, r)
+						payload: memfile.New(make([]byte, 128)),
+					}, r)
 					w.SetMessage(
 						&testmessage{
 							ctx:     context.Background(),
@@ -333,7 +335,8 @@ func TestBlockWiseDo(t *testing.T) {
 						token:   []byte{'B', 'E', 'R', 'T'},
 						options: message.Options{message.Option{ID: message.URIPath, Value: []byte("abc")}},
 						code:    codes.POST,
-						payload: memfile.New(make([]byte, 11111))}, r)
+						payload: memfile.New(make([]byte, 11111)),
+					}, r)
 					w.SetMessage(
 						&testmessage{
 							ctx:     context.Background(),
@@ -369,7 +372,8 @@ func TestBlockWiseDo(t *testing.T) {
 						token:   []byte{2},
 						options: message.Options{message.Option{ID: message.URIPath, Value: []byte("abc")}},
 						code:    codes.PUT,
-						payload: memfile.New(make([]byte, 128))}, r)
+						payload: memfile.New(make([]byte, 128)),
+					}, r)
 					w.SetMessage(
 						&testmessage{
 							ctx:     context.Background(),
@@ -470,7 +474,8 @@ func TestBlockWiseParallel(t *testing.T) {
 						token:   []byte{2},
 						options: message.Options{message.Option{ID: message.URIPath, Value: []byte("abc")}},
 						code:    codes.POST,
-						payload: memfile.New(make([]byte, 20000))}, r)
+						payload: memfile.New(make([]byte, 20000)),
+					}, r)
 					w.SetMessage(
 						&testmessage{
 							ctx:     context.Background(),
@@ -658,7 +663,6 @@ func TestBlockWiseWritetestmessage(t *testing.T) {
 		args    args
 		wantErr bool
 	}{
-
 		{
 			name: "SZX16-SZX16",
 			args: args{
@@ -694,7 +698,8 @@ func TestBlockWiseWritetestmessage(t *testing.T) {
 						token:   []byte{2},
 						options: message.Options{message.Option{ID: message.URIPath, Value: []byte("abc")}},
 						code:    codes.POST,
-						payload: memfile.New(make([]byte, 128))}, r)
+						payload: memfile.New(make([]byte, 128)),
+					}, r)
 				}),
 			},
 		},
@@ -716,7 +721,8 @@ func TestBlockWiseWritetestmessage(t *testing.T) {
 						token:   []byte{'B', 'E', 'R', 'T'},
 						options: message.Options{message.Option{ID: message.URIPath, Value: []byte("abc")}},
 						code:    codes.POST,
-						payload: memfile.New(make([]byte, 11111))}, r)
+						payload: memfile.New(make([]byte, 11111)),
+					}, r)
 				}),
 			},
 		},

@@ -49,21 +49,21 @@ const (
 type SZX uint8
 
 const (
-	//SZX16 block of size 16bytes
+	// SZX16 block of size 16bytes
 	SZX16 SZX = 0
-	//SZX32 block of size 32bytes
+	// SZX32 block of size 32bytes
 	SZX32 SZX = 1
-	//SZX64 block of size 64bytes
+	// SZX64 block of size 64bytes
 	SZX64 SZX = 2
-	//SZX128 block of size 128bytes
+	// SZX128 block of size 128bytes
 	SZX128 SZX = 3
-	//SZX256 block of size 256bytes
+	// SZX256 block of size 256bytes
 	SZX256 SZX = 4
-	//SZX512 block of size 512bytes
+	// SZX512 block of size 512bytes
 	SZX512 SZX = 5
-	//SZX1024 block of size 1024bytes
+	// SZX1024 block of size 1024bytes
 	SZX1024 SZX = 6
-	//SZXBERT block of size n*1024bytes
+	// SZXBERT block of size n*1024bytes
 	SZXBERT SZX = 7
 )
 
@@ -156,11 +156,11 @@ func DecodeBlockOption(blockVal uint32) (szx SZX, blockNumber int64, moreBlocksF
 		return
 	}
 
-	szx = SZX(blockVal & szxMask)                  //masking for the SZX
-	if (blockVal & moreBlocksFollowingMask) != 0 { //masking for the "M"
+	szx = SZX(blockVal & szxMask)                  // masking for the SZX
+	if (blockVal & moreBlocksFollowingMask) != 0 { // masking for the "M"
 		moreBlocksFollowing = true
 	}
-	blockNumber = int64(blockVal) >> 4 //shifting out the SZX and M vals. leaving the block number behind
+	blockNumber = int64(blockVal) >> 4 // shifting out the SZX and M vals. leaving the block number behind
 	if blockNumber > maxBlockNumber {
 		err = ErrBlockNumberExceedLimit
 	}
@@ -599,7 +599,6 @@ func (b *BlockWise) continueSendingMessage(w ResponseWriter, r Message, maxSZX S
 		}
 	}
 	more, err := b.handleSendingMessage(w, resp, maxSZX, maxMessageSize, r.Token(), block)
-
 	if err != nil {
 		return false, fmt.Errorf("handleSendingMessage: %w", err)
 	}

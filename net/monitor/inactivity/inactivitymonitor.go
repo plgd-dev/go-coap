@@ -58,8 +58,7 @@ func (m *inactivityMonitor) CheckInactivity(now time.Time, cc ClientConn) {
 	}
 }
 
-type nilMonitor struct {
-}
+type nilMonitor struct{}
 
 func (m *nilMonitor) CheckInactivity(now time.Time, cc ClientConn) {
 }

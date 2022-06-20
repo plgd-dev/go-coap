@@ -143,7 +143,7 @@ func TestGetPathBufferSize(t *testing.T) {
 }
 
 func TestGetPathBufferSizeLongPaths(t *testing.T) {
-	var maxURIPathLen = int(CoapOptionDefs[URIPath].MaxLen)
+	maxURIPathLen := int(CoapOptionDefs[URIPath].MaxLen)
 
 	for i := 8; i < 16; i++ {
 		options := make(Options, 0, 10)
