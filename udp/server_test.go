@@ -3,6 +3,7 @@ package udp_test
 import (
 	"bytes"
 	"context"
+	"log"
 	"net"
 	"sync"
 	"testing"
@@ -85,10 +86,12 @@ func TestServerDiscoverIotivity(t *testing.T) {
 func TestServerDiscover(t *testing.T) {
 	ifs, err := net.Interfaces()
 	require.NoError(t, err)
+	log.Printf("ifs:%v", ifs)
 	var iface net.Interface
 	for _, i := range ifs {
 		if i.Flags&net.FlagMulticast == net.FlagMulticast && i.Flags&net.FlagUp == net.FlagUp {
 			iface = i
+			log.Printf("first available multicast if:%v", iface)
 			break
 		}
 	}
