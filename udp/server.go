@@ -265,11 +265,15 @@ func (s *Server) Serve(l *coapNet.UDPConn) error {
 			}
 		}
 		buf = buf[:n]
-		cc := s.getClientConn(l, raddr)
+		cc, err := s.getClientConn(l, raddr, true)
+		if err != nil {
+			s.errors(fmt.Errorf("%v: cannot get client connection: %w", cc.RemoteAddr(), err))
+			continue
+		}
 		err = cc.Process(buf)
 		if err != nil {
 			s.closeConnection(cc)
-			s.errors(fmt.Errorf("%v: %w", cc.RemoteAddr(), err))
+			s.errors(fmt.Errorf("%v: cannot process packet: %w", cc.RemoteAddr(), err))
 		}
 	}
 }
@@ -413,27 +417,49 @@ func (s *Server) getOrCreateClientConn(UDPConn *coapNet.UDPConn, raddr *net.UDPA
 		cc.AddOnClose(func() {
 			s.connsMutex.Lock()
 			defer s.connsMutex.Unlock()
-			delete(s.conns, key)
+			if cc == s.conns[key] {
+				delete(s.conns, key)
+			}
 		})
 		s.conns[key] = cc
 	}
 	return cc, created
 }
 
-func (s *Server) getClientConn(l *coapNet.UDPConn, raddr *net.UDPAddr) *client.ClientConn {
+func (s *Server) getClientConn(l *coapNet.UDPConn, raddr *net.UDPAddr, firstTime bool) (*client.ClientConn, error) {
 	cc, created := s.getOrCreateClientConn(l, raddr)
 	if created {
 		if s.onNewClientConn != nil {
 			s.onNewClientConn(cc)
 		}
+	} else {
+		// check if client is not expired now + 10ms  - if so, close it
+		// 10ms - The expected maximum time taken by cc.CheckExpirations and cc.InactivityMonitor().Notify()
+		cc.CheckExpirations(time.Now().Add(10 * time.Millisecond))
+		if cc.Context().Err() == nil {
+			// if client is not closed, extend expiration time
+			cc.InactivityMonitor().Notify()
+		}
 	}
-	return cc
+
+	if cc.Context().Err() != nil {
+		// connection is closed so we need to create new one
+		if closeFn := getClose(cc); closeFn != nil {
+			closeFn()
+		}
+		if firstTime {
+			return s.getClientConn(l, raddr, false)
+		}
+		return nil, fmt.Errorf("connection is closed")
+	}
+	return cc, nil
 }
 
 func (s *Server) NewClientConn(addr *net.UDPAddr) (*client.ClientConn, error) {
 	l := s.getListener()
 	if l == nil {
+		// server is not started/stopped
 		return nil, fmt.Errorf("server is not running")
 	}
-	return s.getClientConn(l, addr), nil
+	return s.getClientConn(l, addr, true)
 }

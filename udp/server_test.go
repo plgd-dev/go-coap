@@ -428,4 +428,12 @@ func TestServerNewClient(t *testing.T) {
 	defer cancel()
 	err = cc.Ping(ctx)
 	require.NoError(t, err)
+	err = cc.Close()
+	require.NoError(t, err)
+
+	// repeat ping - new client should be created
+	cc, err = s1.NewClientConn(peer)
+	require.NoError(t, err)
+	err = cc.Ping(ctx)
+	require.NoError(t, err)
 }
