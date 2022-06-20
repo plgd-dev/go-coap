@@ -244,8 +244,7 @@ func WithOnNewClientConn(onNewClientConn OnNewClientConnFunc) OnNewClientConnOpt
 }
 
 // DisablePeerTCPSignalMessageCSMsOpt coap-tcp csm option.
-type DisablePeerTCPSignalMessageCSMsOpt struct {
-}
+type DisablePeerTCPSignalMessageCSMsOpt struct{}
 
 func (o DisablePeerTCPSignalMessageCSMsOpt) apply(opts *serverOptions) {
 	opts.disablePeerTCPSignalMessageCSMs = true
@@ -261,8 +260,7 @@ func WithDisablePeerTCPSignalMessageCSMs() DisablePeerTCPSignalMessageCSMsOpt {
 }
 
 // DisableTCPSignalMessageCSMOpt coap-tcp csm option.
-type DisableTCPSignalMessageCSMOpt struct {
-}
+type DisableTCPSignalMessageCSMOpt struct{}
 
 func (o DisableTCPSignalMessageCSMOpt) apply(opts *serverOptions) {
 	opts.disableTCPSignalMessageCSM = true
@@ -294,8 +292,7 @@ func WithTLS(cfg *tls.Config) TLSOpt {
 }
 
 // CloseSocketOpt close socket option.
-type CloseSocketOpt struct {
-}
+type CloseSocketOpt struct{}
 
 func (o CloseSocketOpt) applyDial(opts *dialOptions) {
 	opts.closeSocket = true

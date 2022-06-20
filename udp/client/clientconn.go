@@ -24,11 +24,13 @@ import (
 // https://datatracker.ietf.org/doc/html/rfc7252#section-4.8.2
 const ExchangeLifetime = 247 * time.Second
 
-type HandlerFunc = func(*ResponseWriter, *pool.Message)
-type ErrorFunc = func(error)
-type GoPoolFunc = func(func()) error
-type EventFunc = func()
-type GetMIDFunc = func() uint16
+type (
+	HandlerFunc = func(*ResponseWriter, *pool.Message)
+	ErrorFunc   = func(error)
+	GoPoolFunc  = func(func()) error
+	EventFunc   = func()
+	GetMIDFunc  = func() uint16
+)
 
 type Session interface {
 	Context() context.Context

@@ -410,7 +410,7 @@ func (options Options) findPosition(ID OptionID) (minIdx int, maxIdx int) {
 func (options Options) Set(opt Option) Options {
 	idxPre, idxPost := options.findPosition(opt.ID)
 	if idxPre == -1 && idxPost == -1 {
-		//append
+		// append
 		options = append(options[:0], opt)
 		return options
 	}
@@ -444,7 +444,7 @@ func (options Options) Set(opt Option) Options {
 	} else {
 		options = options[:len(options)+1]
 	}
-	//replace + move
+	// replace + move
 	updateIdx := updateTo
 	if updateFrom < updateTo {
 		for i := optsLength; i > updateFrom; i-- {
@@ -506,7 +506,7 @@ func (options Options) Marshal(buf []byte) (int, error) {
 	length := 0
 
 	for _, o := range options {
-		//return coap.error but calculate length
+		// return coap.error but calculate length
 		if length > len(buf) {
 			buf = nil
 		}

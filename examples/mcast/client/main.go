@@ -31,9 +31,11 @@ import (
 // Increase the maximum write buffer size for socket by setting a sysctl. sudo sysctl -w net.core.wmem_max=8388608
 // Adjust the default initial receive buffer size for socket  by setting a sysctl. sudo sysctl -w net.core.wmem_default=8388608
 
-var cpuprofile = flag.String("cpuprofile", "", "write cpu profile to `file`")
-var memprofile = flag.String("memprofile", "", "write memory profile to `file`")
-var numDevs = flag.Int("numdevices", 1000, "devices")
+var (
+	cpuprofile = flag.String("cpuprofile", "", "write cpu profile to `file`")
+	memprofile = flag.String("memprofile", "", "write memory profile to `file`")
+	numDevs    = flag.Int("numdevices", 1000, "devices")
+)
 
 func main() {
 	flag.Parse()
@@ -97,8 +99,7 @@ func main() {
 		req, err := client.NewGetRequest(ctx, messagePool, "/oic/res") /* msg.Option{
 			ID:    msg.URIQuery,
 			Value: []byte("rt=oic.wk.d"),
-		}*/
-		if err != nil {
+		}*/if err != nil {
 			panic(fmt.Errorf("cannot create discover request: %w", err))
 		}
 		req.SetMessageID(message.GetMID())
@@ -111,7 +112,7 @@ func main() {
 				atomic.AddUint32(&numDuplicit, 1)
 			} else {
 				atomic.AddUint32(&numDevices, 1)
-				//log.Printf("discovered %v: %+v", cc.RemoteAddr(), resp.Message)
+				// log.Printf("discovered %v: %+v", cc.RemoteAddr(), resp.Message)
 			}
 		})
 

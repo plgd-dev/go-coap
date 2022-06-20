@@ -172,7 +172,7 @@ func TestClientConnGetSeparateMessage(t *testing.T) {
 				Token:   r.Token,
 				Context: r.Context,
 				Options: make(message.Options, 0, 16),
-				//Body:    bytes.NewReader(make([]byte, 10)),
+				// Body:    bytes.NewReader(make([]byte, 10)),
 			}
 			optsBuf := make([]byte, 32)
 			opts, used, errS := customResp.Options.SetContentFormat(optsBuf, message.TextPlain)

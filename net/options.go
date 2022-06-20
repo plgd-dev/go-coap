@@ -91,6 +91,7 @@ type MulticastHoplimitOpt struct {
 func (m MulticastHoplimitOpt) applyMC(o *MulticastOptions) {
 	o.HopLimit = m.hoplimit
 }
+
 func WithMulticastHoplimit(hoplimit int) MulticastOption {
 	return &MulticastHoplimitOpt{hoplimit: hoplimit}
 }
@@ -102,6 +103,7 @@ type MulticastSourceOpt struct {
 func (m MulticastSourceOpt) applyMC(o *MulticastOptions) {
 	o.Source = &m.source
 }
+
 func WithMulticastSource(source net.IP) MulticastOption {
 	return &MulticastSourceOpt{source: source}
 }

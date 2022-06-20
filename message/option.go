@@ -170,19 +170,19 @@ var (
 	AppOctets         MediaType = 42    // application/octet-stream
 	AppExi            MediaType = 47    // application/exi
 	AppJSON           MediaType = 50    // application/json
-	AppJSONPatch      MediaType = 51    //application/json-patch+json (RFC6902)
-	AppJSONMergePatch MediaType = 52    //application/merge-patch+json (RFC7396)
-	AppCBOR           MediaType = 60    //application/cbor (RFC 7049)
-	AppCWT            MediaType = 61    //application/cwt
-	AppCoseEncrypt    MediaType = 96    //application/cose; cose-type="cose-encrypt" (RFC 8152)
-	AppCoseMac        MediaType = 97    //application/cose; cose-type="cose-mac" (RFC 8152)
-	AppCoseSign       MediaType = 98    //application/cose; cose-type="cose-sign" (RFC 8152)
-	AppCoseKey        MediaType = 101   //application/cose-key (RFC 8152)
-	AppCoseKeySet     MediaType = 102   //application/cose-key-set (RFC 8152)
-	AppCoapGroup      MediaType = 256   //coap-group+json (RFC 7390)
-	AppOcfCbor        MediaType = 10000 //application/vnd.ocf+cbor
-	AppLwm2mTLV       MediaType = 11542 //application/vnd.oma.lwm2m+tlv
-	AppLwm2mJSON      MediaType = 11543 //application/vnd.oma.lwm2m+json
+	AppJSONPatch      MediaType = 51    // application/json-patch+json (RFC6902)
+	AppJSONMergePatch MediaType = 52    // application/merge-patch+json (RFC7396)
+	AppCBOR           MediaType = 60    // application/cbor (RFC 7049)
+	AppCWT            MediaType = 61    // application/cwt
+	AppCoseEncrypt    MediaType = 96    // application/cose; cose-type="cose-encrypt" (RFC 8152)
+	AppCoseMac        MediaType = 97    // application/cose; cose-type="cose-mac" (RFC 8152)
+	AppCoseSign       MediaType = 98    // application/cose; cose-type="cose-sign" (RFC 8152)
+	AppCoseKey        MediaType = 101   // application/cose-key (RFC 8152)
+	AppCoseKeySet     MediaType = 102   // application/cose-key-set (RFC 8152)
+	AppCoapGroup      MediaType = 256   // coap-group+json (RFC 7390)
+	AppOcfCbor        MediaType = 10000 // application/vnd.ocf+cbor
+	AppLwm2mTLV       MediaType = 11542 // application/vnd.oma.lwm2m+tlv
+	AppLwm2mJSON      MediaType = 11543 // application/vnd.oma.lwm2m+json
 )
 
 var mediaTypeToString = map[MediaType]string{
@@ -369,7 +369,7 @@ func (o Option) Marshal(buf []byte, previousID OptionID) (int, error) {
 		return -1, err
 	}
 
-	//header marshal
+	// header marshal
 	lenBuf, err = marshalOptionHeader(buf, delta, lenBuf)
 	switch {
 	case err == nil:

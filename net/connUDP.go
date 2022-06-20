@@ -323,7 +323,8 @@ func (c *UDPConn) writeMulticastToAllInterfaces(ctx context.Context, raddr *net.
 	}
 
 	var errors []error
-	for _, iface := range ifaces {
+	for i := range ifaces {
+		iface := ifaces[i]
 		if iface.Flags&net.FlagMulticast == 0 {
 			continue
 		}

@@ -136,7 +136,8 @@ func TestServerDiscover(t *testing.T) {
 	a, err := net.ResolveUDPAddr("udp4", multicastAddr)
 	require.NoError(t, err)
 
-	for _, iface := range ifaces {
+	for i := range ifaces {
+		iface := ifaces[i]
 		errJ := l.JoinGroup(&iface, a)
 		if errJ != nil {
 			t.Logf("cannot JoinGroup(%v, %v): %v", iface, a, errJ)

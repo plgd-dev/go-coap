@@ -220,7 +220,7 @@ func (s *Session) handleSignals(r *pool.Message, cc *ClientConn) bool {
 		return true
 	case codes.Ping:
 		// if r.HasOption(coapTCP.Custody) {
-		//TODO
+		// TODO
 		// }
 		if err := s.sendPong(r.Token()); err != nil && !coapNet.IsConnectionBrokenError(err) {
 			s.errors(fmt.Errorf("cannot handle ping signal: %w", err))
@@ -228,12 +228,12 @@ func (s *Session) handleSignals(r *pool.Message, cc *ClientConn) bool {
 		return true
 	case codes.Release:
 		// if r.HasOption(coapTCP.AlternativeAddress) {
-		//TODO
+		// TODO
 		// }
 		return true
 	case codes.Abort:
 		// if r.HasOption(coapTCP.BadCSMOption) {
-		//TODO
+		// TODO
 		// }
 		return true
 	case codes.Pong:
