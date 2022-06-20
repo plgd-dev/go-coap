@@ -51,6 +51,10 @@ type Session interface {
 
 // ClientConn represents a virtual connection to a conceptual endpoint, to perform COAPs commands.
 type ClientConn struct {
+	// This field needs to be the first in the struct to ensure proper word alignment on 32-bit platforms.
+	// See: https://golang.org/pkg/sync/atomic/#pkg-note-BUG
+	sequence uint64
+
 	session           Session
 	inactivityMonitor inactivity.Monitor
 
@@ -61,9 +65,6 @@ type ClientConn struct {
 	transmission            *Transmission
 	messagePool             *pool.Pool
 
-	// This field needs to be the first in the struct to ensure proper word alignment on 32-bit platforms.
-	// See: https://golang.org/pkg/sync/atomic/#pkg-note-BUG
-	sequence         uint64
 	goPool           GoPoolFunc
 	errors           ErrorFunc
 	responseMsgCache *cache.Cache
@@ -804,4 +805,8 @@ func (cc *ClientConn) WriteMulticastMessage(req *pool.Message, address *net.UDPA
 		return fmt.Errorf("cannot write request: %w", err)
 	}
 	return nil
+}
+
+func (cc *ClientConn) InactivityMonitor() inactivity.Monitor {
+	return cc.inactivityMonitor
 }

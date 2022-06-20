@@ -1,16 +1,20 @@
 package inactivity
 
 import (
-	"sync/atomic"
+	"unsafe"
+
+	"go.uber.org/atomic"
 )
 
+type cancelPingFunc func()
+
 type KeepAlive struct {
-	pongToken  uint64
+	pongToken  atomic.Uint64
 	onInactive OnInactiveFunc
 
 	sendPing   func(cc ClientConn, receivePong func()) (func(), error)
-	cancelPing func()
-	numFails   uint32
+	cancelPing atomic.UnsafePointer
+	numFails   atomic.Uint32
 
 	maxRetries uint32
 }
@@ -23,32 +27,37 @@ func NewKeepAlive(maxRetries uint32, onInactive OnInactiveFunc, sendPing func(cc
 	}
 }
 
+func (m *KeepAlive) checkCancelPing() {
+	cancelPingPtr := m.cancelPing.Swap(nil)
+	if cancelPingPtr != nil {
+		cancelPing := *(*cancelPingFunc)(cancelPingPtr)
+		cancelPing()
+	}
+}
+
 func (m *KeepAlive) OnInactive(cc ClientConn) {
 	v := m.incrementFails()
-	if m.cancelPing != nil {
-		m.cancelPing()
-		m.cancelPing = nil
-	}
+	m.checkCancelPing()
 	if v > m.maxRetries {
 		m.onInactive(cc)
 		return
 	}
-	pongToken := atomic.AddUint64(&m.pongToken, 1)
+	pongToken := m.pongToken.Add(1)
 	cancel, err := m.sendPing(cc, func() {
-		if atomic.LoadUint64(&m.pongToken) == pongToken {
+		if m.pongToken.Load() == pongToken {
 			m.resetFails()
 		}
 	})
 	if err != nil {
 		return
 	}
-	m.cancelPing = cancel
+	m.cancelPing.Store(unsafe.Pointer(&cancel))
 }
 
 func (m *KeepAlive) incrementFails() uint32 {
-	return atomic.AddUint32(&m.numFails, 1)
+	return m.numFails.Add(1)
 }
 
 func (m *KeepAlive) resetFails() {
-	atomic.StoreUint32(&m.numFails, 0)
+	m.numFails.Store(0)
 }
