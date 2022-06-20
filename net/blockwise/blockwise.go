@@ -670,6 +670,97 @@ func (b *BlockWise) getSentRequest(token message.Token) Message {
 	return nil
 }
 
+func (b *BlockWise) handleObserveResponse(r, sentRequest Message) (message.Token, time.Time, error) {
+	// https://tools.ietf.org/html/rfc7959#section-2.6 - performs GET with new token.
+	if sentRequest == nil {
+		return nil, time.Time{}, fmt.Errorf("observation is not registered")
+	}
+	token, err := message.GetToken()
+	if err != nil {
+		return nil, time.Time{}, fmt.Errorf("cannot get token for create GET request: %w", err)
+	}
+	validUntil := time.Now().Add(b.expiration) // context of observation can be expired.
+	bwSentRequest := b.newSentRequestMessage(sentRequest, true)
+	bwSentRequest.SetToken(token)
+	if errS := b.storeSentRequest(bwSentRequest); errS != nil {
+		return nil, time.Time{}, fmt.Errorf("cannot process message: %w", errS)
+	}
+	return token, validUntil, nil
+}
+
+func (b *BlockWise) getValidUntil(sentRequest Message) time.Time {
+	validUntil := time.Now().Add(b.expiration)
+	if sentRequest != nil {
+		if deadline, ok := sentRequest.Context().Deadline(); ok {
+			return deadline
+		}
+	}
+	return validUntil
+}
+
+func getSzx(szx, maxSzx SZX) SZX {
+	if szx > maxSzx {
+		return maxSzx
+	}
+	return szx
+}
+
+func (b *BlockWise) getPayloadFromCachedReceivedMessage(r, cachedReceivedMessage Message) (*memfile.File, int64, error) {
+	payloadFile, ok := cachedReceivedMessage.Body().(*memfile.File)
+	if !ok {
+		return nil, 0, fmt.Errorf("invalid body type(%T) stored in receivingMessagesCache", cachedReceivedMessage.Body())
+	}
+	rETAG, errETAG := r.GetOptionBytes(message.ETag)
+	cachedReceivedMessageETAG, errCachedReceivedMessageETAG := cachedReceivedMessage.GetOptionBytes(message.ETag)
+	switch {
+	case errETAG == nil && errCachedReceivedMessageETAG != nil:
+		if len(cachedReceivedMessageETAG) > 0 { // make sure there is an etag there
+			return nil, 0, fmt.Errorf("received message doesn't contains ETAG but cached received message contains it(%v)", cachedReceivedMessageETAG)
+		}
+	case errETAG != nil && errCachedReceivedMessageETAG == nil:
+		if len(rETAG) > 0 { // make sure there is an etag there
+			return nil, 0, fmt.Errorf("received message contains ETAG(%v) but cached received message doesn't", rETAG)
+		}
+	case !bytes.Equal(rETAG, cachedReceivedMessageETAG):
+		// ETAG was changed - drop data and set new ETAG
+		cachedReceivedMessage.SetOptionBytes(message.ETag, rETAG)
+		if err := payloadFile.Truncate(0); err != nil {
+			return nil, 0, fmt.Errorf("cannot truncate cached request: %w", err)
+		}
+	}
+
+	payloadSize, err := cachedReceivedMessage.BodySize()
+	if err != nil {
+		return nil, 0, fmt.Errorf("cannot get size of payload: %w", err)
+	}
+	return payloadFile, payloadSize, nil
+}
+
+func copyToPayloadFromOffset(r Message, payloadFile *memfile.File, offset int64) (int64, error) {
+	payloadSize := int64(0)
+	copyn, err := payloadFile.Seek(offset, io.SeekStart)
+	if err != nil {
+		return 0, fmt.Errorf("cannot seek to off(%v) of cached request: %w", offset, err)
+	}
+	written := int64(0)
+	if r.Body() != nil {
+		_, err = r.Body().Seek(0, io.SeekStart)
+		if err != nil {
+			return 0, fmt.Errorf("cannot seek to start of request: %w", err)
+		}
+		written, err = io.Copy(payloadFile, r.Body())
+		if err != nil {
+			return 0, fmt.Errorf("cannot copy to cached request: %w", err)
+		}
+	}
+	payloadSize = copyn + written
+	err = payloadFile.Truncate(payloadSize)
+	if err != nil {
+		return 0, fmt.Errorf("cannot truncate cached request: %w", err)
+	}
+	return payloadSize, nil
+}
+
 func (b *BlockWise) processReceivedMessage(w ResponseWriter, r Message, maxSzx SZX, next func(w ResponseWriter, r Message), blockType message.OptionID, sizeType message.OptionID) error {
 	token := r.Token()
 	if len(token) == 0 {
@@ -690,31 +781,17 @@ func (b *BlockWise) processReceivedMessage(w ResponseWriter, r Message, maxSzx S
 		return fmt.Errorf("cannot decode block option: %w", err)
 	}
 	sentRequest := b.getSentRequest(token)
-	expire := time.Now().Add(b.expiration)
 	if sentRequest != nil {
 		defer b.releaseMessage(sentRequest)
-		deadline, ok := sentRequest.Context().Deadline()
-		if ok {
-			expire = deadline
-		}
 	}
+	validUntil := b.getValidUntil(sentRequest)
 	if blockType == message.Block2 && sentRequest == nil {
 		return fmt.Errorf("cannot request body without paired request")
 	}
 	if isObserveResponse(r) {
-		// https://tools.ietf.org/html/rfc7959#section-2.6 - performs GET with new token.
-		if sentRequest == nil {
-			return fmt.Errorf("observation is not registered")
-		}
-		token, err = message.GetToken()
+		token, validUntil, err = b.handleObserveResponse(r, sentRequest)
 		if err != nil {
-			return fmt.Errorf("cannot get token for create GET request: %w", err)
-		}
-		expire = time.Now().Add(b.expiration) // context of observation can be expired.
-		bwSentRequest := b.newSentRequestMessage(sentRequest, true)
-		bwSentRequest.SetToken(token)
-		if errS := b.storeSentRequest(bwSentRequest); errS != nil {
-			return fmt.Errorf("cannot process message: %w", errS)
+			return fmt.Errorf("cannot process message: %w", err)
 		}
 	}
 
@@ -729,9 +806,7 @@ func (b *BlockWise) processReceivedMessage(w ResponseWriter, r Message, maxSzx S
 	}
 	var msgGuard *messageGuard
 	if cachedReceivedMessageGuard == nil {
-		if szx > maxSzx {
-			szx = maxSzx
-		}
+		szx = getSzx(szx, maxSzx)
 		// if there is no more then just forward req to next handler
 		if !more {
 			next(w, r)
@@ -749,7 +824,7 @@ func (b *BlockWise) processReceivedMessage(w ResponseWriter, r Message, maxSzx S
 			return cannotLockError(errA)
 		}
 		defer msgGuard.Release(1)
-		element, loaded := b.receivingMessagesCache.LoadOrStore(tokenStr, cache.NewElement(msgGuard, expire, func(d interface{}) {
+		element, loaded := b.receivingMessagesCache.LoadOrStore(tokenStr, cache.NewElement(msgGuard, validUntil, func(d interface{}) {
 			if d == nil {
 				return
 			}
@@ -783,56 +858,15 @@ func (b *BlockWise) processReceivedMessage(w ResponseWriter, r Message, maxSzx S
 		}
 	}(&err)
 	cachedReceivedMessage := msgGuard.Message
-	payloadFile, ok := cachedReceivedMessage.Body().(*memfile.File)
-	if !ok {
-		return fmt.Errorf("invalid body type(%T) stored in receivingMessagesCache", cachedReceivedMessage.Body())
-	}
-	rETAG, errETAG := r.GetOptionBytes(message.ETag)
-	cachedReceivedMessageETAG, errCachedReceivedMessageETAG := cachedReceivedMessage.GetOptionBytes(message.ETag)
-	switch {
-	case errETAG == nil && errCachedReceivedMessageETAG != nil:
-		if len(cachedReceivedMessageETAG) > 0 { // make sure there is an etag there
-			return fmt.Errorf("received message doesn't contains ETAG but cached received message contains it(%v)", cachedReceivedMessageETAG)
-		}
-	case errETAG != nil && errCachedReceivedMessageETAG == nil:
-		if len(rETAG) > 0 { // make sure there is an etag there
-			return fmt.Errorf("received message contains ETAG(%v) but cached received message doesn't", rETAG)
-		}
-	case !bytes.Equal(rETAG, cachedReceivedMessageETAG):
-		// ETAG was changed - drop data and set new ETAG
-		cachedReceivedMessage.SetOptionBytes(message.ETag, rETAG)
-		if errT := payloadFile.Truncate(0); errT != nil {
-			return fmt.Errorf("cannot truncate cached request: %w", errT)
-		}
-	}
-
-	off := num * szx.Size()
-	payloadSize, err := cachedReceivedMessage.BodySize()
+	payloadFile, payloadSize, err := b.getPayloadFromCachedReceivedMessage(r, cachedReceivedMessage)
 	if err != nil {
-		return fmt.Errorf("cannot get size of payload: %w", err)
+		return fmt.Errorf("cannot get payload: %w", err)
 	}
-
+	off := num * szx.Size()
 	if off == payloadSize {
-		copyn, errS := payloadFile.Seek(off, io.SeekStart)
-		if errS != nil {
-			return fmt.Errorf("cannot seek to off(%v) of cached request: %w", off, errS)
-		}
-		if r.Body() != nil {
-			_, errS = r.Body().Seek(0, io.SeekStart)
-			if errS != nil {
-				return fmt.Errorf("cannot seek to start of request: %w", errS)
-			}
-			written, errC := io.Copy(payloadFile, r.Body())
-			if errC != nil {
-				return fmt.Errorf("cannot copy to cached request: %w", errC)
-			}
-			payloadSize = copyn + written
-		} else {
-			payloadSize = copyn
-		}
-		err = payloadFile.Truncate(payloadSize)
+		payloadSize, err = copyToPayloadFromOffset(r, payloadFile, off)
 		if err != nil {
-			return fmt.Errorf("cannot truncate cached request: %w", err)
+			return fmt.Errorf("cannot copy data to payload: %w", err)
 		}
 		if !more {
 			b.receivingMessagesCache.Delete(tokenStr)
@@ -850,10 +884,8 @@ func (b *BlockWise) processReceivedMessage(w ResponseWriter, r Message, maxSzx S
 			return nil
 		}
 	}
-	if szx > maxSzx {
-		szx = maxSzx
-	}
 
+	szx = getSzx(szx, maxSzx)
 	sendMessage := b.acquireMessage(r.Context())
 	sendMessage.SetToken(token)
 	if blockType == message.Block2 {
