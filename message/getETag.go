@@ -39,6 +39,6 @@ func GetETag(r io.ReadSeeker) ([]byte, error) {
 		return nil, err
 	}
 	b := make([]byte, 8)
-	binary.LittleEndian.PutUint64(b, c64.Sum64())
+	binary.BigEndian.PutUint64(b, c64.Sum64())
 	return b, nil
 }
