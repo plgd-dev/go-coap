@@ -267,7 +267,7 @@ func (s *Server) Serve(l *coapNet.UDPConn) error {
 		buf = buf[:n]
 		cc, err := s.getClientConn(l, raddr, true)
 		if err != nil {
-			s.errors(fmt.Errorf("%v: cannot get client connection: %w", cc.RemoteAddr(), err))
+			s.errors(fmt.Errorf("%v: cannot get client connection: %w", raddr, err))
 			continue
 		}
 		err = cc.Process(buf)
