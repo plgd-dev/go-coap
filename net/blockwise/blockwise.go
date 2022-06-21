@@ -167,11 +167,13 @@ func DecodeBlockOption(blockVal uint32) (szx SZX, blockNumber int64, moreBlocksF
 	return
 }
 
+type messageCache = cache.Cache[uint64, *messageGuard]
+
 type BlockWise struct {
 	acquireMessage            func(ctx context.Context) Message
 	releaseMessage            func(Message)
-	receivingMessagesCache    *cache.Cache
-	sendingMessagesCache      *cache.Cache
+	receivingMessagesCache    *messageCache
+	sendingMessagesCache      *messageCache
 	errors                    func(error)
 	getSentRequestFromOutside func(token message.Token) (Message, bool)
 	expiration                time.Duration
@@ -208,8 +210,8 @@ func NewBlockWise(
 	return &BlockWise{
 		acquireMessage:            acquireMessage,
 		releaseMessage:            releaseMessage,
-		receivingMessagesCache:    cache.NewCache(),
-		sendingMessagesCache:      cache.NewCache(),
+		receivingMessagesCache:    cache.NewCache[uint64, *messageGuard](),
+		sendingMessagesCache:      cache.NewCache[uint64, *messageGuard](),
 		errors:                    errors,
 		autoCleanUpResponseCache:  autoCleanUpResponseCache,
 		getSentRequestFromOutside: getSentRequestFromOutside,
@@ -506,9 +508,8 @@ func (b *BlockWise) Handle(w ResponseWriter, r Message, maxSZX SZX, maxMessageSi
 	}
 	tokenStr := token.Hash()
 
-	sendingMessageCached := b.sendingMessagesCache.Load(tokenStr)
-
-	if sendingMessageCached == nil {
+	sendingMessageCached, ok := b.sendingMessagesCache.Load(tokenStr)
+	if !ok || sendingMessageCached == nil {
 		err := b.handleReceivedMessage(w, r, maxSZX, maxMessageSize, next)
 		if err != nil {
 			b.sendEntityIncomplete(w, token)
@@ -516,7 +517,7 @@ func (b *BlockWise) Handle(w ResponseWriter, r Message, maxSZX SZX, maxMessageSi
 		}
 		return
 	}
-	more, err := b.continueSendingMessage(w, r, maxSZX, maxMessageSize, sendingMessageCached.Data().(*messageGuard))
+	more, err := b.continueSendingMessage(w, r, maxSZX, maxMessageSize, sendingMessageCached.Data())
 	if err != nil {
 		b.sendingMessagesCache.Delete(tokenStr)
 		b.errors(fmt.Errorf("continueSendingMessage(%v): %w", r, err))
@@ -645,7 +646,7 @@ func (b *BlockWise) startSendingMessage(w ResponseWriter, maxSZX SZX, maxMessage
 		expire = deadline
 	}
 
-	_, loaded := b.sendingMessagesCache.LoadOrStore(sendingMessage.Token().Hash(), cache.NewElement(newRequestGuard(sendingMessage), expire, nil))
+	_, loaded := b.sendingMessagesCache.LoadOrStore(sendingMessage.Token().Hash(), b.sendingMessagesCache.NewElement(newRequestGuard(sendingMessage), expire, nil))
 	if loaded {
 		return fmt.Errorf("cannot add to sending message cache: message with token %v already exist", sendingMessage.Token().Hash())
 	}
@@ -653,15 +654,19 @@ func (b *BlockWise) startSendingMessage(w ResponseWriter, maxSZX SZX, maxMessage
 }
 
 func (b *BlockWise) getSentRequest(token message.Token) Message {
-	req := b.bwSentRequest.loadByTokenWithFunc(token.Hash(), func(v *senderRequest) interface{} {
+	req := b.bwSentRequest.loadByTokenWithFunc(token.Hash(), func(v *senderRequest) *senderRequest {
 		req := b.acquireMessage(v.Context())
+		msg, ok := req.(*senderRequest)
+		if !ok {
+			return nil
+		}
 		req.SetCode(v.Code())
 		req.SetToken(v.Token())
 		req.ResetOptionsTo(v.Options())
-		return req
+		return msg
 	})
 	if req != nil {
-		return req.(Message)
+		return req
 	}
 	globalRequest, ok := b.getSentRequestFromOutside(token)
 	if ok {
@@ -796,9 +801,9 @@ func (b *BlockWise) processReceivedMessage(w ResponseWriter, r Message, maxSzx S
 	}
 
 	tokenStr := token.Hash()
-	var cachedReceivedMessageGuard interface{}
-	e := b.receivingMessagesCache.Load(tokenStr)
-	if e != nil {
+	var cachedReceivedMessageGuard *messageGuard
+	e, ok := b.receivingMessagesCache.Load(tokenStr)
+	if ok && e != nil {
 		cachedReceivedMessageGuard = e.Data()
 	}
 	cannotLockError := func(err error) error {
@@ -824,7 +829,7 @@ func (b *BlockWise) processReceivedMessage(w ResponseWriter, r Message, maxSzx S
 			return cannotLockError(errA)
 		}
 		defer msgGuard.Release(1)
-		element, loaded := b.receivingMessagesCache.LoadOrStore(tokenStr, cache.NewElement(msgGuard, validUntil, func(d interface{}) {
+		element, loaded := b.receivingMessagesCache.LoadOrStore(tokenStr, b.receivingMessagesCache.NewElement(msgGuard, validUntil, func(d *messageGuard) {
 			if d == nil {
 				return
 			}
@@ -834,8 +839,7 @@ func (b *BlockWise) processReceivedMessage(w ResponseWriter, r Message, maxSzx S
 		if loaded {
 			cachedReceivedMessageGuard = element.Data()
 			if cachedReceivedMessageGuard != nil {
-				msgGuard = cachedReceivedMessageGuard.(*messageGuard)
-				errA := msgGuard.Acquire(cachedReceivedMessage.Context(), 1)
+				errA := cachedReceivedMessageGuard.Acquire(cachedReceivedMessage.Context(), 1)
 				if errA != nil {
 					return cannotLockError(errA)
 				}
@@ -845,7 +849,6 @@ func (b *BlockWise) processReceivedMessage(w ResponseWriter, r Message, maxSzx S
 			}
 		}
 	} else {
-		msgGuard = cachedReceivedMessageGuard.(*messageGuard)
 		errA := msgGuard.Acquire(msgGuard.Context(), 1)
 		if errA != nil {
 			return cannotLockError(errA)

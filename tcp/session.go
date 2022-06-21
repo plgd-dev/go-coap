@@ -169,7 +169,7 @@ func (s *Session) Sequence() uint64 {
 }
 
 func (s *Session) Context() context.Context {
-	return *s.ctx.Load().(*context.Context)
+	return *s.ctx.Load().(*context.Context) //nolint:forcetypeassert
 }
 
 func (s *Session) PeerMaxMessageSize() uint32 {
@@ -187,8 +187,8 @@ func (s *Session) handleBlockwise(w *ResponseWriter, r *pool.Message) {
 		}
 		s.blockWise.Handle(&bwr, r, s.blockwiseSZX, s.maxMessageSize, func(bw blockwise.ResponseWriter, br blockwise.Message) {
 			h, err := s.tokenHandlerContainer.Pop(r.Token())
-			rw := bw.(*bwResponseWriter).w
-			m := br.(*pool.Message)
+			rw := bw.(*bwResponseWriter).w //nolint:forcetypeassert
+			m := br.(*pool.Message)        //nolint:forcetypeassert
 			if err == nil {
 				h(rw, m)
 				return
@@ -256,7 +256,7 @@ func (b *bwResponseWriter) Message() blockwise.Message {
 
 func (b *bwResponseWriter) SetMessage(m blockwise.Message) {
 	b.w.cc.session.messagePool.ReleaseMessage(b.w.response)
-	b.w.response = m.(*pool.Message)
+	b.w.response = m.(*pool.Message) //nolint:forcetypeassert
 }
 
 func (b *bwResponseWriter) RemoteAddr() net.Addr {

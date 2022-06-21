@@ -85,7 +85,7 @@ func (s *Session) Close() error {
 }
 
 func (s *Session) Context() context.Context {
-	return *s.ctx.Load().(*context.Context)
+	return *s.ctx.Load().(*context.Context) //nolint:forcetypeassert
 }
 
 // SetContextValue stores the value associated with key to context of connection.

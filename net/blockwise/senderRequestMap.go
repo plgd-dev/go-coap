@@ -3,7 +3,7 @@ package blockwise
 import (
 	"fmt"
 
-	kitSync "github.com/plgd-dev/kit/v2/sync"
+	"github.com/plgd-dev/go-coap/v2/pkg/sync"
 )
 
 func messageToGuardTransferKey(msg Message) string {
@@ -47,14 +47,14 @@ func (b *BlockWise) newSentRequestMessage(r Message, lock bool) *senderRequest {
 }
 
 type senderRequestMap struct {
-	byToken       *kitSync.Map
-	byTransferKey *kitSync.Map
+	byToken       *sync.Map[uint64, *senderRequest]
+	byTransferKey *sync.Map[string, *senderRequest]
 }
 
 func newSenderRequestMap() *senderRequestMap {
 	return &senderRequestMap{
-		byToken:       kitSync.NewMap(),
-		byTransferKey: kitSync.NewMap(),
+		byToken:       sync.NewMap[uint64, *senderRequest](),
+		byTransferKey: sync.NewMap[string, *senderRequest](),
 	}
 }
 
@@ -65,9 +65,9 @@ func (m *senderRequestMap) store(req *senderRequest) error {
 	}
 	for {
 		var err error
-		v, loaded := m.byTransferKey.LoadOrStoreWithFunc(req.transferKey, func(value interface{}) interface{} {
+		v, loaded := m.byTransferKey.LoadOrStoreWithFunc(req.transferKey, func(value *senderRequest) *senderRequest {
 			return value
-		}, func() interface{} {
+		}, func() *senderRequest {
 			err = req.Acquire(req.Context(), 1)
 			return req
 		})
@@ -78,18 +78,16 @@ func (m *senderRequestMap) store(req *senderRequest) error {
 			m.byToken.Store(req.Token().Hash(), req)
 			return nil
 		}
-		p := v.(*senderRequest)
-		err = p.Acquire(req.Context(), 1)
+		err = v.Acquire(req.Context(), 1)
 		if err != nil {
 			return fmt.Errorf("cannot lock message: %w", err)
 		}
-		p.Release(1)
+		v.Release(1)
 	}
 }
 
-func (m *senderRequestMap) loadByTokenWithFunc(token uint64, onload func(value *senderRequest) interface{}) interface{} {
-	v, ok := m.byToken.LoadWithFunc(token, func(value interface{}) interface{} {
-		v := value.(*senderRequest)
+func (m *senderRequestMap) loadByTokenWithFunc(token uint64, onload func(value *senderRequest) *senderRequest) Message {
+	v, ok := m.byToken.LoadWithFunc(token, func(v *senderRequest) *senderRequest {
 		return onload(v)
 	})
 	if ok {
@@ -99,18 +97,16 @@ func (m *senderRequestMap) loadByTokenWithFunc(token uint64, onload func(value *
 }
 
 func (m *senderRequestMap) deleteByToken(token uint64) {
-	v, ok := m.byToken.PullOut(token)
+	req1, ok := m.byToken.PullOut(token)
 	if !ok {
 		return
 	}
-	req := v.(*senderRequest)
-	v1, ok := m.byTransferKey.Load(req.transferKey)
+	req2, ok := m.byTransferKey.Load(req1.transferKey)
 	if !ok {
 		return
 	}
-	req1 := v1.(*senderRequest)
-	if req == req1 {
-		m.byTransferKey.Delete(req.transferKey)
-		req.Release(1)
+	if req1 == req2 {
+		m.byTransferKey.Delete(req1.transferKey)
+		req1.Release(1)
 	}
 }

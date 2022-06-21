@@ -71,7 +71,7 @@ func (o *Observation) cleanUp() bool {
 	_, _ = o.cc.observationTokenHandler.Pop(o.token)
 	registeredRequest, ok := o.cc.observationRequests.PullOut(o.token.Hash())
 	if ok {
-		o.cc.ReleaseMessage(registeredRequest.(*pool.Message))
+		o.cc.ReleaseMessage(registeredRequest)
 	}
 	return ok
 }

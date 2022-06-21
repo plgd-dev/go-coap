@@ -19,10 +19,10 @@ import (
 	"github.com/plgd-dev/go-coap/v2/pkg/cache"
 	"github.com/plgd-dev/go-coap/v2/pkg/connections"
 	"github.com/plgd-dev/go-coap/v2/pkg/runner/periodic"
+	coapSync "github.com/plgd-dev/go-coap/v2/pkg/sync"
 	"github.com/plgd-dev/go-coap/v2/udp/client"
 	udpMessage "github.com/plgd-dev/go-coap/v2/udp/message"
 	"github.com/plgd-dev/go-coap/v2/udp/message/pool"
-	kitSync "github.com/plgd-dev/kit/v2/sync"
 )
 
 // A ServerOption sets options such as credentials, codec and keepalive parameters, etc.
@@ -118,7 +118,7 @@ type Server struct {
 	listen Listener
 
 	ctx                     context.Context
-	cache                   *cache.Cache
+	cache                   *client.ResponseMessageCache
 	goPool                  GoPoolFunc
 	createInactivityMonitor func() inactivity.Monitor
 	errors                  ErrorFunc
@@ -194,7 +194,7 @@ func NewServer(opt ...ServerOption) *Server {
 		transmissionMaxRetransmit:      opts.transmissionMaxRetransmit,
 		getMID:                         opts.getMID,
 		periodicRunner:                 opts.periodicRunner,
-		cache:                          cache.NewCache(),
+		cache:                          cache.NewCache[string, []byte](),
 		messagePool:                    opts.messagePool,
 	}
 }
@@ -280,7 +280,7 @@ func (s *Server) Serve(l Listener) error {
 		monitor := s.createInactivityMonitor()
 		cc = s.createClientConn(coapNet.NewConn(rw), monitor)
 		if s.onNewClientConn != nil {
-			dtlsConn := rw.(*dtls.Conn)
+			dtlsConn := rw.(*dtls.Conn) //nolint:forcetypeassert
 			s.onNewClientConn(cc, dtlsConn)
 		}
 		go func() {
@@ -328,7 +328,7 @@ func (s *Server) createClientConn(connection *coapNet.Conn, monitor inactivity.M
 	cc := client.NewClientConn(
 		session,
 		obsHandler,
-		kitSync.NewMap(),
+		coapSync.NewMap[uint64, *pool.Message](),
 		s.transmissionNStart,
 		s.transmissionAcknowledgeTimeout,
 		s.transmissionMaxRetransmit,

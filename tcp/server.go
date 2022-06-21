@@ -18,8 +18,8 @@ import (
 	"github.com/plgd-dev/go-coap/v2/net/monitor/inactivity"
 	"github.com/plgd-dev/go-coap/v2/pkg/connections"
 	"github.com/plgd-dev/go-coap/v2/pkg/runner/periodic"
+	coapSync "github.com/plgd-dev/go-coap/v2/pkg/sync"
 	"github.com/plgd-dev/go-coap/v2/tcp/message/pool"
-	kitSync "github.com/plgd-dev/kit/v2/sync"
 )
 
 // A ServerOption sets options such as credentials, codec and keepalive parameters, etc.
@@ -327,7 +327,7 @@ func (s *Server) createClientConn(connection *coapNet.Conn, monitor inactivity.M
 			s.connectionCacheSize,
 			s.messagePool,
 		),
-		obsHandler, kitSync.NewMap(),
+		obsHandler, coapSync.NewMap[uint64, message.Message](),
 	)
 
 	return cc

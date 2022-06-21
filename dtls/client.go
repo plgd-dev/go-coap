@@ -14,10 +14,10 @@ import (
 	"github.com/plgd-dev/go-coap/v2/net/monitor/inactivity"
 	"github.com/plgd-dev/go-coap/v2/pkg/cache"
 	"github.com/plgd-dev/go-coap/v2/pkg/runner/periodic"
+	"github.com/plgd-dev/go-coap/v2/pkg/sync"
 	"github.com/plgd-dev/go-coap/v2/udp/client"
 	udpMessage "github.com/plgd-dev/go-coap/v2/udp/message"
 	"github.com/plgd-dev/go-coap/v2/udp/message/pool"
-	kitSync "github.com/plgd-dev/kit/v2/sync"
 )
 
 var defaultDialOptions = func() dialOptions {
@@ -119,26 +119,25 @@ func bwCreateAcquireMessage(messagePool *pool.Pool) func(ctx context.Context) bl
 
 func bwCreateReleaseMessage(messagePool *pool.Pool) func(m blockwise.Message) {
 	return func(m blockwise.Message) {
-		messagePool.ReleaseMessage(m.(*pool.Message))
+		messagePool.ReleaseMessage(m.(*pool.Message)) //nolint:forcetypeassert
 	}
 }
 
-func bwCreateHandlerFunc(messagePool *pool.Pool, observatioRequests *kitSync.Map) func(token message.Token) (blockwise.Message, bool) {
+func bwCreateHandlerFunc(messagePool *pool.Pool, observationRequests *client.RequestsMap) func(token message.Token) (blockwise.Message, bool) {
 	return func(token message.Token) (blockwise.Message, bool) {
-		msg, ok := observatioRequests.LoadWithFunc(token.Hash(), func(v interface{}) interface{} {
-			r := v.(*pool.Message)
-			d := messagePool.AcquireMessage(r.Context())
-			d.ResetOptionsTo(r.Options())
-			d.SetCode(r.Code())
-			d.SetToken(r.Token())
-			d.SetMessageID(r.MessageID())
+		var msg *pool.Message
+		_, ok := observationRequests.LoadWithFunc(token.Hash(), func(v *pool.Message) *pool.Message {
+			d := messagePool.AcquireMessage(v.Context())
+			d.ResetOptionsTo(v.Options())
+			d.SetCode(v.Code())
+			d.SetToken(v.Token())
+			d.SetMessageID(v.MessageID())
 			return d
 		})
 		if !ok {
-			return nil, ok
+			return nil, false
 		}
-		bwMessage := msg.(blockwise.Message)
-		return bwMessage, ok
+		return msg, true
 	}
 }
 
@@ -170,7 +169,7 @@ func Client(conn *dtls.Conn, opts ...DialOption) *client.ClientConn {
 		errorsFunc(fmt.Errorf("dtls: %v: %w", conn.RemoteAddr(), err))
 	}
 
-	observatioRequests := kitSync.NewMap()
+	observationRequests := sync.NewMap[uint64, *pool.Message]()
 	var blockWise *blockwise.BlockWise
 	if cfg.blockwiseEnable {
 		blockWise = blockwise.NewBlockWise(
@@ -179,7 +178,7 @@ func Client(conn *dtls.Conn, opts ...DialOption) *client.ClientConn {
 			cfg.blockwiseTransferTimeout,
 			cfg.errors,
 			false,
-			bwCreateHandlerFunc(cfg.messagePool, observatioRequests),
+			bwCreateHandlerFunc(cfg.messagePool, observationRequests),
 		)
 	}
 
@@ -193,7 +192,7 @@ func Client(conn *dtls.Conn, opts ...DialOption) *client.ClientConn {
 		cfg.closeSocket,
 	)
 	cc = client.NewClientConn(session,
-		observationTokenHandler, observatioRequests, cfg.transmissionNStart, cfg.transmissionAcknowledgeTimeout, cfg.transmissionMaxRetransmit,
+		observationTokenHandler, observationRequests, cfg.transmissionNStart, cfg.transmissionAcknowledgeTimeout, cfg.transmissionMaxRetransmit,
 		client.NewObservationHandler(observationTokenHandler, cfg.handler),
 		cfg.blockwiseSZX,
 		blockWise,
@@ -202,7 +201,7 @@ func Client(conn *dtls.Conn, opts ...DialOption) *client.ClientConn {
 		cfg.getMID,
 		// The client does not support activity monitoring yet
 		monitor,
-		cache.NewCache(),
+		cache.NewCache[string, []byte](),
 		cfg.messagePool,
 	)
 

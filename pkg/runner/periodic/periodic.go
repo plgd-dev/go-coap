@@ -21,12 +21,20 @@ func New(stop <-chan struct{}, tick time.Duration) Func {
 			case <-stop:
 				return
 			}
-			v := make(map[uint64]func(time.Time) bool)
+			values := make(map[uint64]func(time.Time) bool)
 			m.Range(func(key, value interface{}) bool {
-				v[key.(uint64)] = value.(func(time.Time) bool)
+				k, ok := key.(uint64)
+				if !ok {
+					return true
+				}
+				v, ok := value.(func(time.Time) bool)
+				if !ok {
+					return true
+				}
+				values[k] = v
 				return true
 			})
-			for k, f := range v {
+			for k, f := range values {
 				if ok := f(now); !ok {
 					m.Delete(k)
 				}

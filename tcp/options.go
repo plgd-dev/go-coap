@@ -114,7 +114,7 @@ type KeepAliveOpt struct {
 func (o KeepAliveOpt) apply(opts *serverOptions) {
 	opts.createInactivityMonitor = func() inactivity.Monitor {
 		keepalive := inactivity.NewKeepAlive(o.maxRetries, o.onInactive, func(cc inactivity.ClientConn, receivePong func()) (func(), error) {
-			return cc.(*ClientConn).AsyncPing(receivePong)
+			return cc.(*ClientConn).AsyncPing(receivePong) //nolint:forcetypeassert
 		})
 		return inactivity.NewInactivityMonitor(o.timeout/time.Duration(o.maxRetries+1), keepalive.OnInactive)
 	}
@@ -123,7 +123,7 @@ func (o KeepAliveOpt) apply(opts *serverOptions) {
 func (o KeepAliveOpt) applyDial(opts *dialOptions) {
 	opts.createInactivityMonitor = func() inactivity.Monitor {
 		keepalive := inactivity.NewKeepAlive(o.maxRetries, o.onInactive, func(cc inactivity.ClientConn, receivePong func()) (func(), error) {
-			return cc.(*ClientConn).AsyncPing(receivePong)
+			return cc.(*ClientConn).AsyncPing(receivePong) //nolint:forcetypeassert
 		})
 		return inactivity.NewInactivityMonitor(o.timeout/time.Duration(o.maxRetries+1), keepalive.OnInactive)
 	}

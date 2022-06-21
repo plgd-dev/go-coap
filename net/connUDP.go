@@ -166,7 +166,8 @@ func NewUDPConn(network string, c *net.UDPConn, opts ...UDPOption) *UDPConn {
 	}
 
 	var pc packetConn
-	if IsIPv6(c.LocalAddr().(*net.UDPAddr).IP) {
+	addr, ok := c.LocalAddr().(*net.UDPAddr)
+	if ok && IsIPv6(addr.IP) {
 		pc = newPacketConnIPv6(ipv6.NewPacketConn(c))
 	} else {
 		pc = newPacketConnIPv4(ipv4.NewPacketConn(c))

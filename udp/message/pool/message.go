@@ -184,7 +184,7 @@ func (p *Pool) AcquireMessage(ctx context.Context) *Message {
 			ctx:            ctx,
 		}
 	}
-	r := v.(*Message)
+	r := v.(*Message) //nolint:forcetypeassert
 	atomic.AddInt64(&p.currentMessagesInPool, -1)
 	r.ctx = ctx
 	return r

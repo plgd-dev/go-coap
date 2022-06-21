@@ -15,9 +15,9 @@ import (
 	"github.com/plgd-dev/go-coap/v2/net/blockwise"
 	"github.com/plgd-dev/go-coap/v2/net/monitor/inactivity"
 	"github.com/plgd-dev/go-coap/v2/pkg/cache"
+	"github.com/plgd-dev/go-coap/v2/pkg/sync"
 	udpMessage "github.com/plgd-dev/go-coap/v2/udp/message"
 	"github.com/plgd-dev/go-coap/v2/udp/message/pool"
-	kitSync "github.com/plgd-dev/kit/v2/sync"
 	atomicTypes "go.uber.org/atomic"
 )
 
@@ -49,6 +49,11 @@ type Session interface {
 	Done() <-chan struct{}
 }
 
+type (
+	RequestsMap          = sync.Map[uint64, *pool.Message]
+	ResponseMessageCache = cache.Cache[string, []byte]
+)
+
 // ClientConn represents a virtual connection to a conceptual endpoint, to perform COAPs commands.
 type ClientConn struct {
 	// This field needs to be the first in the struct to ensure proper word alignment on 32-bit platforms.
@@ -61,13 +66,13 @@ type ClientConn struct {
 	blockWise               *blockwise.BlockWise
 	handler                 HandlerFunc
 	observationTokenHandler *HandlerContainer
-	observationRequests     *kitSync.Map
+	observationRequests     *RequestsMap
 	transmission            *Transmission
 	messagePool             *pool.Pool
 
 	goPool           GoPoolFunc
 	errors           ErrorFunc
-	responseMsgCache *cache.Cache
+	responseMsgCache *ResponseMessageCache
 	msgIDMutex       *MutexMap
 
 	tokenHandlerContainer *HandlerContainer
@@ -103,7 +108,7 @@ func (cc *ClientConn) Transmission() *Transmission {
 func NewClientConn(
 	session Session,
 	observationTokenHandler *HandlerContainer,
-	observationRequests *kitSync.Map,
+	observationRequests *RequestsMap,
 	transmissionNStart time.Duration,
 	transmissionAcknowledgeTimeout time.Duration,
 	transmissionMaxRetransmit uint32,
@@ -114,7 +119,7 @@ func NewClientConn(
 	errors ErrorFunc,
 	getMID GetMIDFunc,
 	inactivityMonitor inactivity.Monitor,
-	responseMsgCache *cache.Cache,
+	responseMsgCache *ResponseMessageCache,
 	messagePool *pool.Pool,
 ) *ClientConn {
 	if errors == nil {
@@ -214,7 +219,7 @@ func (cc *ClientConn) Do(req *pool.Message) (*pool.Message, error) {
 		return cc.do(req)
 	}
 	bwresp, err := cc.blockWise.Do(req, cc.blockwiseSZX, cc.session.MaxMessageSize(), func(bwreq blockwise.Message) (blockwise.Message, error) {
-		req := bwreq.(*pool.Message)
+		req := bwreq.(*pool.Message) //nolint:forcetypeassert
 		if req.Options().HasOption(message.Block1) || req.Options().HasOption(message.Block2) {
 			req.SetMessageID(cc.getMID())
 		} else {
@@ -225,7 +230,7 @@ func (cc *ClientConn) Do(req *pool.Message) (*pool.Message, error) {
 	if err != nil {
 		return nil, err
 	}
-	return bwresp.(*pool.Message), nil
+	return bwresp.(*pool.Message), nil //nolint:forcetypeassert
 }
 
 func (cc *ClientConn) writeMessage(req *pool.Message) error {
@@ -292,7 +297,7 @@ func (cc *ClientConn) WriteMessage(req *pool.Message) error {
 		return cc.writeMessage(req)
 	}
 	return cc.blockWise.WriteMessage(cc.RemoteAddr(), req, cc.blockwiseSZX, cc.session.MaxMessageSize(), func(bwreq blockwise.Message) error {
-		req := bwreq.(*pool.Message)
+		req := bwreq.(*pool.Message) //nolint:forcetypeassert
 		if req.Options().HasOption(message.Block1) || req.Options().HasOption(message.Block2) {
 			req.SetMessageID(cc.getMID())
 		} else {
@@ -523,7 +528,7 @@ func (b *bwResponseWriter) Message() blockwise.Message {
 
 func (b *bwResponseWriter) SetMessage(m blockwise.Message) {
 	b.w.cc.ReleaseMessage(b.w.response)
-	b.w.response = m.(*pool.Message)
+	b.w.response = m.(*pool.Message) //nolint:forcetypeassert
 }
 
 func (b *bwResponseWriter) RemoteAddr() net.Addr {
@@ -537,8 +542,8 @@ func (cc *ClientConn) handleBW(w *ResponseWriter, m *pool.Message) {
 		}
 		cc.blockWise.Handle(&bwr, m, cc.blockwiseSZX, cc.session.MaxMessageSize(), func(bw blockwise.ResponseWriter, br blockwise.Message) {
 			h, err := cc.tokenHandlerContainer.Pop(m.Token())
-			rw := bw.(*bwResponseWriter).w
-			rm := br.(*pool.Message)
+			rw := bw.(*bwResponseWriter).w //nolint:forcetypeassert
+			rm := br.(*pool.Message)       //nolint:forcetypeassert
 			if err == nil {
 				h(rw, rm)
 				return
@@ -588,23 +593,20 @@ func (cc *ClientConn) addResponseToCache(resp *pool.Message) error {
 	}
 	cacheMsg := make([]byte, len(marshaledResp))
 	copy(cacheMsg, marshaledResp)
-	cc.responseMsgCache.LoadOrStore(cc.responseMsgCacheID(resp.MessageID()), cache.NewElement(cacheMsg, time.Now().Add(ExchangeLifetime), nil))
+	cc.responseMsgCache.LoadOrStore(cc.responseMsgCacheID(resp.MessageID()), cc.responseMsgCache.NewElement(cacheMsg, time.Now().Add(ExchangeLifetime), nil))
 	return nil
 }
 
 func (cc *ClientConn) getResponseFromCache(mid uint16, resp *pool.Message) (bool, error) {
-	cachedResp := cc.responseMsgCache.Load(cc.responseMsgCacheID(mid))
-	if cachedResp == nil {
+	cachedResp, ok := cc.responseMsgCache.Load(cc.responseMsgCacheID(mid))
+	if !ok || cachedResp == nil {
 		return false, nil
 	}
-	if rawMsg, ok := cachedResp.Data().([]byte); ok {
-		_, err := resp.Unmarshal(rawMsg)
-		if err != nil {
-			return false, err
-		}
-		return true, nil
+	_, err := resp.Unmarshal(cachedResp.Data())
+	if err != nil {
+		return false, err
 	}
-	return false, nil
+	return true, nil
 }
 
 // CheckMyMessageID compare client msgID against peer messageID and if it is near < 0xffff/4 then incrase msgID.

@@ -194,7 +194,10 @@ func acquireMessage(ctx context.Context) Message {
 }
 
 func releaseMessage(r Message) {
-	req := r.(*testmessage)
+	req, ok := r.(*testmessage)
+	if !ok {
+		return
+	}
 	req.options = nil
 	req.token = nil
 	req.payload = nil

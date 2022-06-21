@@ -5,7 +5,7 @@ import (
 	"net"
 	"time"
 
-	sync "github.com/plgd-dev/kit/v2/sync"
+	"github.com/plgd-dev/kit/v2/sync"
 )
 
 type Connections struct {
@@ -32,7 +32,11 @@ func (c *Connections) Store(conn Connection) {
 func (c *Connections) copyConnections() []Connection {
 	m := make([]Connection, 0, c.data.Length())
 	c.data.Range(func(key, value interface{}) bool {
-		m = append(m, value.(Connection))
+		con, ok := value.(Connection)
+		if !ok {
+			return true
+		}
+		m = append(m, con)
 		return true
 	})
 	return m

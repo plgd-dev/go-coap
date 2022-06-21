@@ -3,55 +3,64 @@ package cache
 import (
 	"time"
 
-	kitSync "github.com/plgd-dev/kit/v2/sync"
+	"github.com/plgd-dev/go-coap/v2/pkg/sync"
 )
 
-func DefaultOnExpire(d interface{}) {
-	// for nothing on expire
-}
-
-type Element struct {
+type Element[T any] struct {
 	validUntil time.Time
-	data       interface{}
-	onExpire   func(d interface{})
+	data       T
+	onExpire   func(d T)
 }
 
-func (e *Element) IsExpired(now time.Time) bool {
+func newElement[T any](data T, validUntil time.Time, onExpire func(d T)) *Element[T] {
+	if onExpire == nil {
+		onExpire = func(d T) {
+			// NO-OP as default
+		}
+	}
+	return &Element[T]{data: data, validUntil: validUntil, onExpire: onExpire}
+}
+
+func (e *Element[T]) IsExpired(now time.Time) bool {
 	if e.validUntil.IsZero() {
 		return false
 	}
 	return now.After(e.validUntil)
 }
 
-func (e *Element) Data() interface{} {
+func (e *Element[T]) Data() T {
 	return e.data
 }
 
-func NewElement(data interface{}, validUntil time.Time, onExpire func(d interface{})) *Element {
-	if onExpire == nil {
-		onExpire = DefaultOnExpire
-	}
-	return &Element{data: data, validUntil: validUntil, onExpire: onExpire}
+type Cache[K comparable, V any] struct {
+	data sync.Map[K, *Element[V]]
 }
 
-type Cache struct {
-	data kitSync.Map
-}
-
-func NewCache() *Cache {
-	return &Cache{
-		data: *kitSync.NewMap(),
+// NewCache creates a new synchronize map.
+func NewCache[K comparable, V any]() *Cache[K, V] {
+	return &Cache[K, V]{
+		data: *sync.NewMap[K, *Element[V]](),
 	}
 }
 
-func (c *Cache) LoadOrStore(key interface{}, e *Element) (actual *Element, loaded bool) {
+// NewElement creates element that can be stored in the cache.
+func (c *Cache[K, V]) NewElement(data V, validUntil time.Time, onExpire func(d V)) *Element[V] {
+	return newElement(data, validUntil, onExpire)
+}
+
+// LoadOrStore loads or creates a new element for key.
+//
+// If an element for the key exists then this element (oldE) is returned
+// and the loaded value is set to true. Thus a pair of (oldE, true) is returned.
+// If no element for the key exists then a new elem (newE) is stored in the cache
+// and the returned pair is (newE, false).
+func (c *Cache[K, V]) LoadOrStore(key K, e *Element[V]) (actual *Element[V], loaded bool) {
 	now := time.Now()
-	c.data.ReplaceWithFunc(key, func(oldValue interface{}, oldLoaded bool) (newValue interface{}, deleteValue bool) {
+	c.data.ReplaceWithFunc(key, func(oldValue *Element[V], oldLoaded bool) (newValue *Element[V], deleteValue bool) {
 		if oldLoaded {
-			o := oldValue.(*Element)
-			if !o.IsExpired(now) {
-				actual = o
-				return o, false
+			if !oldValue.IsExpired(now) {
+				actual = oldValue
+				return oldValue, false
 			}
 		}
 		actual = e
@@ -60,26 +69,33 @@ func (c *Cache) LoadOrStore(key interface{}, e *Element) (actual *Element, loade
 	return actual, actual != e
 }
 
-func (c *Cache) Load(key interface{}) (actual *Element) {
+// Load loads unexpired element with given key from cache.
+//
+// If an element for key is not found then (nil, false) is returned.
+// If an element for key is found but the element is expired then (nil, true) is returned.
+// If an unexpired element for key is found then (*Element, true) is returned.
+func (c *Cache[K, V]) Load(key K) (element *Element[V], loaded bool) {
 	a, loaded := c.data.Load(key)
 	if !loaded {
-		return nil
+		return nil, false
 	}
-	actual = a.(*Element)
-	if actual.IsExpired(time.Now()) {
-		return nil
+	if a.IsExpired(time.Now()) {
+		return nil, true
 	}
-	return actual
+	return a, true
 }
 
-func (c *Cache) Delete(key interface{}) {
-	c.data.Delete(key)
+// Delete removes the element for given key from the cache.
+func (c *Cache[K, V]) Delete(key K) (deleted bool) {
+	return c.data.Delete(key)
 }
 
-func (c *Cache) CheckExpirations(now time.Time) {
-	m := make(map[interface{}]*Element)
-	c.data.Range(func(key, value interface{}) bool {
-		m[key] = value.(*Element)
+// CheckExpirations iterates over all elements in the cache, checks each for expiration,
+// deletes expired elements from cache and invokes onExpire function on the element.
+func (c *Cache[K, V]) CheckExpirations(now time.Time) {
+	m := make(map[K]*Element[V])
+	c.data.Range(func(key K, value *Element[V]) bool {
+		m[key] = value
 		return true
 	})
 	for k, e := range m {
@@ -90,10 +106,11 @@ func (c *Cache) CheckExpirations(now time.Time) {
 	}
 }
 
-func (c *Cache) PullOutAll() map[interface{}]interface{} {
-	res := make(map[interface{}]interface{})
+// PullOutAll removes all elements from the cache and returns them in a map.
+func (c *Cache[K, V]) PullOutAll() map[K]V {
+	res := make(map[K]V)
 	for key, value := range c.data.PullOutAll() {
-		res[key] = value.(*Element).Data()
+		res[key] = value.Data()
 	}
 	return res
 }

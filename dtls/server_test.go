@@ -156,7 +156,7 @@ func TestServerSetContextValueWithPKI(t *testing.T) {
 	}
 	handle := func(w *client.ResponseWriter, r *pool.Message) {
 		// get certificate from connection context
-		clientCert := r.Context().Value("client-cert").(*x509.Certificate)
+		clientCert := r.Context().Value("client-cert").(*x509.Certificate) //nolint:forcetypeassert
 		require.Equal(t, clientCert.SerialNumber, clientSerial)
 		require.NotNil(t, clientCert)
 		errH := w.SetResponse(codes.Content, message.TextPlain, bytes.NewReader([]byte("done")))
