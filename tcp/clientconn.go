@@ -15,8 +15,8 @@ import (
 	"github.com/plgd-dev/go-coap/v2/net/blockwise"
 	"github.com/plgd-dev/go-coap/v2/net/monitor/inactivity"
 	"github.com/plgd-dev/go-coap/v2/pkg/runner/periodic"
+	"github.com/plgd-dev/go-coap/v2/pkg/sync"
 	"github.com/plgd-dev/go-coap/v2/tcp/message/pool"
-	kitSync "github.com/plgd-dev/kit/v2/sync"
 )
 
 var defaultDialOptions = func() dialOptions {
@@ -91,12 +91,14 @@ type Notifier interface {
 	Notify()
 }
 
+type observationRequestsMap = sync.Map[uint64, message.Message]
+
 // ClientConn represents a virtual connection to a conceptual endpoint, to perform COAPs commands.
 type ClientConn struct {
 	noCopy
 	session                 *Session
 	observationTokenHandler *HandlerContainer
-	observationRequests     *kitSync.Map
+	observationRequests     *observationRequestsMap
 }
 
 // Dial creates a client connection to the given target.
@@ -132,21 +134,21 @@ func bwCreateReleaseMessage(messagePool *pool.Pool) func(m blockwise.Message) {
 	}
 }
 
-func bwCreateHandlerFunc(messagePool *pool.Pool, observationRequests *kitSync.Map) func(token message.Token) (blockwise.Message, bool) {
+func bwCreateHandlerFunc(messagePool *pool.Pool, observationRequests *observationRequestsMap) func(token message.Token) (blockwise.Message, bool) {
 	return func(token message.Token) (blockwise.Message, bool) {
-		msg, ok := observationRequests.LoadWithFunc(token.Hash(), func(v interface{}) interface{} {
-			r := v.(message.Message)
-			d := messagePool.AcquireMessage(r.Context)
-			d.ResetOptionsTo(r.Options)
-			d.SetCode(r.Code)
-			d.SetToken(r.Token)
-			return d
+		var bwMessage *pool.Message
+		_, ok := observationRequests.LoadWithFunc(token.Hash(), func(m message.Message) message.Message {
+			bwMessage = messagePool.AcquireMessage(m.Context)
+			bwMessage.ResetOptionsTo(m.Options)
+			bwMessage.SetCode(m.Code)
+			bwMessage.SetToken(m.Token)
+			return m
 		})
 		if !ok {
-			return nil, ok
+			return nil, false
 		}
-		bwMessage := msg.(blockwise.Message)
-		return bwMessage, ok
+
+		return bwMessage, true
 	}
 }
 
@@ -178,7 +180,7 @@ func Client(conn net.Conn, opts ...DialOption) *ClientConn {
 		errorsFunc(fmt.Errorf("tcp: %w", err))
 	}
 
-	observationRequests := kitSync.NewMap()
+	observationRequests := sync.NewMap[uint64, message.Message]()
 	var blockWise *blockwise.BlockWise
 	if cfg.blockwiseEnable {
 		blockWise = blockwise.NewBlockWise(
@@ -227,7 +229,7 @@ func Client(conn net.Conn, opts ...DialOption) *ClientConn {
 }
 
 // NewClientConn creates connection over session and observation.
-func NewClientConn(session *Session, observationTokenHandler *HandlerContainer, observationRequests *kitSync.Map) *ClientConn {
+func NewClientConn(session *Session, observationTokenHandler *HandlerContainer, observationRequests *observationRequestsMap) *ClientConn {
 	return &ClientConn{
 		session:                 session,
 		observationTokenHandler: observationTokenHandler,

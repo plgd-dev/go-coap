@@ -14,10 +14,10 @@ import (
 	"github.com/plgd-dev/go-coap/v2/net/monitor/inactivity"
 	"github.com/plgd-dev/go-coap/v2/pkg/cache"
 	"github.com/plgd-dev/go-coap/v2/pkg/runner/periodic"
+	"github.com/plgd-dev/go-coap/v2/pkg/sync"
 	"github.com/plgd-dev/go-coap/v2/udp/client"
 	udpMessage "github.com/plgd-dev/go-coap/v2/udp/message"
 	"github.com/plgd-dev/go-coap/v2/udp/message/pool"
-	kitSync "github.com/plgd-dev/kit/v2/sync"
 )
 
 var defaultDialOptions = func() dialOptions {
@@ -123,22 +123,21 @@ func bwCreateReleaseMessage(messagePool *pool.Pool) func(m blockwise.Message) {
 	}
 }
 
-func bwCreateHandlerFunc(messagePool *pool.Pool, observatioRequests *kitSync.Map) func(token message.Token) (blockwise.Message, bool) {
+func bwCreateHandlerFunc(messagePool *pool.Pool, observationRequests *client.RequestsMap) func(token message.Token) (blockwise.Message, bool) {
 	return func(token message.Token) (blockwise.Message, bool) {
-		msg, ok := observatioRequests.LoadWithFunc(token.Hash(), func(v interface{}) interface{} {
-			r := v.(*pool.Message)
-			d := messagePool.AcquireMessage(r.Context())
-			d.ResetOptionsTo(r.Options())
-			d.SetCode(r.Code())
-			d.SetToken(r.Token())
-			d.SetMessageID(r.MessageID())
-			return d
+		var bwMessage *pool.Message
+		_, ok := observationRequests.LoadWithFunc(token.Hash(), func(m *pool.Message) *pool.Message {
+			bwMessage = messagePool.AcquireMessage(m.Context())
+			bwMessage.ResetOptionsTo(m.Options())
+			bwMessage.SetCode(m.Code())
+			bwMessage.SetToken(m.Token())
+			bwMessage.SetMessageID(m.MessageID())
+			return m
 		})
 		if !ok {
-			return nil, ok
+			return nil, false
 		}
-		bwMessage := msg.(blockwise.Message)
-		return bwMessage, ok
+		return bwMessage, true
 	}
 }
 
@@ -170,7 +169,7 @@ func Client(conn *dtls.Conn, opts ...DialOption) *client.ClientConn {
 		errorsFunc(fmt.Errorf("dtls: %v: %w", conn.RemoteAddr(), err))
 	}
 
-	observatioRequests := kitSync.NewMap()
+	observatioRequests := sync.NewMap[uint64, *pool.Message]()
 	var blockWise *blockwise.BlockWise
 	if cfg.blockwiseEnable {
 		blockWise = blockwise.NewBlockWise(

@@ -11,14 +11,14 @@ linters:
     # - bodyclose        # checks whether HTTP response body is closed successfully
     # - contextcheck     # check the function whether use a non-inherited context
     - deadcode         # Finds unused code
-    # - decorder         # check declaration order and count of types, constants, variables and functions
+    - decorder         # check declaration order and count of types, constants, variables and functions
     - depguard         # Go linter that checks if package imports are in a list of acceptable packages
     - dogsled          # Checks assignments with too many blank identifiers (e.g. x, _, _, _, := f())
     - dupl             # Tool for code clone detection
     - durationcheck    # check for two durations multiplied together
     - errcheck         # Errcheck is a program for checking for unchecked errors in go programs. These unchecked errors can be critical bugs in some cases
     - errchkjson       # Checks types passed to the json encoding functions. Reports unsupported types and optionally reports occations, where the check for the returned error can be omitted.
-    # - errname          # Checks that sentinel errors are prefixed with the `Err` and error types are suffixed with the `Error`.
+    - errname          # Checks that sentinel errors are prefixed with the `Err` and error types are suffixed with the `Error`.
     - errorlint        # errorlint is a linter for that can be used to find code that will cause problems with the error wrapping scheme introduced in Go 1.13.
     # - exhaustive       # check exhaustiveness of enum switch statements
     - exportloopref    # checks for pointers to enclosing loop variables
