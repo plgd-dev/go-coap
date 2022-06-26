@@ -17,10 +17,10 @@ import (
 	"github.com/plgd-dev/go-coap/v2/net/monitor/inactivity"
 	"github.com/plgd-dev/go-coap/v2/pkg/cache"
 	"github.com/plgd-dev/go-coap/v2/pkg/runner/periodic"
+	coapSync "github.com/plgd-dev/go-coap/v2/pkg/sync"
 	"github.com/plgd-dev/go-coap/v2/udp/client"
 	udpMessage "github.com/plgd-dev/go-coap/v2/udp/message"
 	"github.com/plgd-dev/go-coap/v2/udp/message/pool"
-	kitSync "github.com/plgd-dev/kit/v2/sync"
 )
 
 // A ServerOption sets options such as credentials, codec and keepalive parameters, etc.
@@ -126,7 +126,7 @@ type Server struct {
 	cancel            context.CancelFunc
 	serverStartedChan chan struct{}
 
-	multicastRequests *kitSync.Map
+	multicastRequests *client.RequestsMap
 	multicastHandler  *client.HandlerContainer
 
 	errors                    ErrorFunc
@@ -186,7 +186,7 @@ func NewServer(opt ...ServerOption) *Server {
 		blockwiseEnable:                opts.blockwiseEnable,
 		blockwiseTransferTimeout:       opts.blockwiseTransferTimeout,
 		multicastHandler:               client.NewHandlerContainer(),
-		multicastRequests:              kitSync.NewMap(),
+		multicastRequests:              coapSync.NewMap[uint64, *pool.Message](),
 		serverStartedChan:              serverStartedChan,
 		onNewClientConn:                opts.onNewClientConn,
 		transmissionNStart:             opts.transmissionNStart,

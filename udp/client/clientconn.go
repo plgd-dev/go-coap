@@ -15,9 +15,9 @@ import (
 	"github.com/plgd-dev/go-coap/v2/net/blockwise"
 	"github.com/plgd-dev/go-coap/v2/net/monitor/inactivity"
 	"github.com/plgd-dev/go-coap/v2/pkg/cache"
+	"github.com/plgd-dev/go-coap/v2/pkg/sync"
 	udpMessage "github.com/plgd-dev/go-coap/v2/udp/message"
 	"github.com/plgd-dev/go-coap/v2/udp/message/pool"
-	kitSync "github.com/plgd-dev/kit/v2/sync"
 	atomicTypes "go.uber.org/atomic"
 )
 
@@ -49,6 +49,8 @@ type Session interface {
 	Done() <-chan struct{}
 }
 
+type RequestsMap = sync.Map[uint64, *pool.Message]
+
 // ClientConn represents a virtual connection to a conceptual endpoint, to perform COAPs commands.
 type ClientConn struct {
 	// This field needs to be the first in the struct to ensure proper word alignment on 32-bit platforms.
@@ -61,7 +63,7 @@ type ClientConn struct {
 	blockWise               *blockwise.BlockWise
 	handler                 HandlerFunc
 	observationTokenHandler *HandlerContainer
-	observationRequests     *kitSync.Map
+	observationRequests     *RequestsMap
 	transmission            *Transmission
 	messagePool             *pool.Pool
 
@@ -103,7 +105,7 @@ func (cc *ClientConn) Transmission() *Transmission {
 func NewClientConn(
 	session Session,
 	observationTokenHandler *HandlerContainer,
-	observationRequests *kitSync.Map,
+	observationRequests *RequestsMap,
 	transmissionNStart time.Duration,
 	transmissionAcknowledgeTimeout time.Duration,
 	transmissionMaxRetransmit uint32,

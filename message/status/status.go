@@ -17,7 +17,7 @@ const (
 )
 
 // Status holds error of coap
-type Status struct {
+type Status struct { //nolint:errname
 	err  error
 	msg  *message.Message
 	code codes.Code
