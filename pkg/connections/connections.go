@@ -2,10 +2,10 @@ package connections
 
 import (
 	"context"
+	"fmt"
 	"net"
+	"sync"
 	"time"
-
-	sync "github.com/plgd-dev/kit/v2/sync"
 )
 
 type Connections struct {
@@ -14,7 +14,7 @@ type Connections struct {
 
 func New() *Connections {
 	return &Connections{
-		data: sync.NewMap(),
+		data: &sync.Map{},
 	}
 }
 
@@ -29,10 +29,23 @@ func (c *Connections) Store(conn Connection) {
 	c.data.Store(conn.RemoteAddr().String(), conn)
 }
 
+func (c *Connections) length() int {
+	var l int
+	c.data.Range(func(k, v interface{}) bool {
+		l++
+		return true
+	})
+	return l
+}
+
 func (c *Connections) copyConnections() []Connection {
-	m := make([]Connection, 0, c.data.Length())
+	m := make([]Connection, 0, c.length())
 	c.data.Range(func(key, value interface{}) bool {
-		m = append(m, value.(Connection))
+		con, ok := value.(Connection)
+		if !ok {
+			panic(fmt.Errorf("invalid type %T in connections map", con))
+		}
+		m = append(m, con)
 		return true
 	})
 	return m
