@@ -653,15 +653,16 @@ func (b *BlockWise) startSendingMessage(w ResponseWriter, maxSZX SZX, maxMessage
 }
 
 func (b *BlockWise) getSentRequest(token message.Token) Message {
-	req := b.bwSentRequest.loadByTokenWithFunc(token.Hash(), func(v *senderRequest) interface{} {
-		req := b.acquireMessage(v.Context())
+	var req Message
+	_, ok := b.bwSentRequest.byToken.LoadWithFunc(token.Hash(), func(v *senderRequest) *senderRequest {
+		req = b.acquireMessage(v.Context())
 		req.SetCode(v.Code())
 		req.SetToken(v.Token())
 		req.ResetOptionsTo(v.Options())
-		return req
+		return v
 	})
-	if req != nil {
-		return req.(Message)
+	if ok {
+		return req
 	}
 	globalRequest, ok := b.getSentRequestFromOutside(token)
 	if ok {
