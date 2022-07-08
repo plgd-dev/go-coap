@@ -11,12 +11,12 @@ import (
 
 	"github.com/plgd-dev/go-coap/v2/message"
 	"github.com/plgd-dev/go-coap/v2/message/codes"
+	"github.com/plgd-dev/go-coap/v2/message/pool"
 	coapNet "github.com/plgd-dev/go-coap/v2/net"
 	"github.com/plgd-dev/go-coap/v2/net/blockwise"
 	"github.com/plgd-dev/go-coap/v2/net/monitor/inactivity"
 	"github.com/plgd-dev/go-coap/v2/pkg/runner/periodic"
 	"github.com/plgd-dev/go-coap/v2/pkg/sync"
-	"github.com/plgd-dev/go-coap/v2/tcp/message/pool"
 )
 
 var defaultDialOptions = func() dialOptions {
@@ -91,7 +91,12 @@ type Notifier interface {
 	Notify()
 }
 
-type observationRequestsMap = sync.Map[uint64, message.Message]
+type observationMessage struct {
+	ctx context.Context
+	message.Message
+}
+
+type observationRequestsMap = sync.Map[uint64, observationMessage]
 
 // ClientConn represents a virtual connection to a conceptual endpoint, to perform COAPs commands.
 type ClientConn struct {
@@ -136,19 +141,27 @@ func bwCreateReleaseMessage(messagePool *pool.Pool) func(m blockwise.Message) {
 
 func bwCreateHandlerFunc(messagePool *pool.Pool, observationRequests *observationRequestsMap) func(token message.Token) (blockwise.Message, bool) {
 	return func(token message.Token) (blockwise.Message, bool) {
-		var bwMessage *pool.Message
-		_, ok := observationRequests.LoadWithFunc(token.Hash(), func(m message.Message) message.Message {
-			bwMessage = messagePool.AcquireMessage(m.Context)
-			bwMessage.ResetOptionsTo(m.Options)
-			bwMessage.SetCode(m.Code)
-			bwMessage.SetToken(m.Token)
-			return m
+		msg, ok := observationRequests.LoadWithFunc(token.Hash(), func(value observationMessage) observationMessage {
+			token := make([]byte, len(value.Token))
+			copy(token, value.Token)
+			opts, _ := value.Options.Clone()
+			return observationMessage{
+				ctx: value.ctx,
+				Message: message.Message{
+					Token:   token,
+					Code:    value.Code,
+					Options: opts,
+				},
+			}
 		})
 		if !ok {
 			return nil, false
 		}
-
-		return bwMessage, true
+		d := messagePool.AcquireMessage(msg.ctx)
+		d.ResetOptionsTo(msg.Options)
+		d.SetCode(msg.Code)
+		d.SetToken(msg.Token)
+		return d, true
 	}
 }
 
@@ -180,7 +193,7 @@ func Client(conn net.Conn, opts ...DialOption) *ClientConn {
 		errorsFunc(fmt.Errorf("tcp: %w", err))
 	}
 
-	observationRequests := sync.NewMap[uint64, message.Message]()
+	observationRequests := sync.NewMap[uint64, observationMessage]()
 	var blockWise *blockwise.BlockWise
 	if cfg.blockwiseEnable {
 		blockWise = blockwise.NewBlockWise(

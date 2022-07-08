@@ -12,6 +12,7 @@ import (
 
 	"github.com/plgd-dev/go-coap/v2/message"
 	"github.com/plgd-dev/go-coap/v2/message/codes"
+	"github.com/plgd-dev/go-coap/v2/message/pool"
 	coapNet "github.com/plgd-dev/go-coap/v2/net"
 	"github.com/plgd-dev/go-coap/v2/net/blockwise"
 	"github.com/plgd-dev/go-coap/v2/net/monitor/inactivity"
@@ -19,8 +20,6 @@ import (
 	"github.com/plgd-dev/go-coap/v2/pkg/runner/periodic"
 	coapSync "github.com/plgd-dev/go-coap/v2/pkg/sync"
 	"github.com/plgd-dev/go-coap/v2/udp/client"
-	udpMessage "github.com/plgd-dev/go-coap/v2/udp/message"
-	"github.com/plgd-dev/go-coap/v2/udp/message/pool"
 )
 
 // A ServerOption sets options such as credentials, codec and keepalive parameters, etc.
@@ -65,7 +64,7 @@ var defaultServerOptions = func() serverOptions {
 		transmissionNStart:             time.Second,
 		transmissionAcknowledgeTimeout: time.Second * 2,
 		transmissionMaxRetransmit:      4,
-		getMID:                         udpMessage.GetMID,
+		getMID:                         message.GetMID,
 		periodicRunner: func(f func(now time.Time) bool) {
 			go func() {
 				for f(time.Now()) {
@@ -151,7 +150,7 @@ func NewServer(opt ...ServerOption) *Server {
 	}
 
 	if opts.getMID == nil {
-		opts.getMID = udpMessage.GetMID
+		opts.getMID = message.GetMID
 	}
 
 	if opts.createInactivityMonitor == nil {

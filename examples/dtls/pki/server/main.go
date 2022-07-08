@@ -36,7 +36,7 @@ func toHexInt(n *big.Int) string {
 }
 
 func handleA(w mux.ResponseWriter, r *mux.Message) {
-	clientCert := r.Context.Value("client-cert").(*x509.Certificate)
+	clientCert := r.Context().Value("client-cert").(*x509.Certificate)
 	log.Println("Serial number:", toHexInt(clientCert.SerialNumber))
 	log.Println("Subject:", clientCert.Subject)
 	log.Println("Email:", clientCert.EmailAddresses)

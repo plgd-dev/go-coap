@@ -5,11 +5,11 @@ import (
 	"net"
 	"time"
 
+	"github.com/plgd-dev/go-coap/v2/message/pool"
 	"github.com/plgd-dev/go-coap/v2/net/blockwise"
 	"github.com/plgd-dev/go-coap/v2/net/monitor/inactivity"
 	"github.com/plgd-dev/go-coap/v2/pkg/runner/periodic"
 	"github.com/plgd-dev/go-coap/v2/udp/client"
-	"github.com/plgd-dev/go-coap/v2/udp/message/pool"
 )
 
 // HandlerFuncOpt handler function option.

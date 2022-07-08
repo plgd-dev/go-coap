@@ -1,9 +1,7 @@
 package message
 
 import (
-	"context"
 	"fmt"
-	"io"
 
 	"github.com/plgd-dev/go-coap/v2/message/codes"
 )
@@ -15,13 +13,17 @@ type Message struct {
 	Token   Token
 	Options Options
 	Code    codes.Code
-	// Context context of request.
-	Context context.Context
-	// Body of message. It is nil for message without body.
-	Body io.ReadSeeker
+	Payload []byte
+
+	// For DTLS and UDP messages
+	MessageID uint16
+	Type      Type
 }
 
 func (r *Message) String() string {
+	if r == nil {
+		return "nil"
+	}
 	buf := fmt.Sprintf("Code: %v, Token: %v", r.Code, r.Token)
 	path, err := r.Options.Path()
 	if err == nil {
@@ -35,5 +37,6 @@ func (r *Message) String() string {
 	if err == nil {
 		buf = fmt.Sprintf("%s, Queries: %+v", buf, queries)
 	}
+	buf = fmt.Sprintf("%s, Type: %v, MessageID: %v", buf, r.Type, r.MessageID)
 	return buf
 }

@@ -13,7 +13,7 @@ import (
 )
 
 func handleMcast(w mux.ResponseWriter, r *mux.Message) {
-	path, err := r.Options.Path()
+	path, err := r.Options().Path()
 	if err != nil {
 		log.Printf("cannot get path: %v", err)
 		return

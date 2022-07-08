@@ -9,8 +9,8 @@ import (
 
 	"github.com/plgd-dev/go-coap/v2/message"
 	"github.com/plgd-dev/go-coap/v2/message/codes"
+	"github.com/plgd-dev/go-coap/v2/message/pool"
 	coapNet "github.com/plgd-dev/go-coap/v2/net"
-	"github.com/plgd-dev/go-coap/v2/tcp/message/pool"
 	"github.com/stretchr/testify/require"
 )
 

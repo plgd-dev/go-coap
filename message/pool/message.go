@@ -1,6 +1,8 @@
 package pool
 
 import (
+	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -10,27 +12,83 @@ import (
 	"go.uber.org/atomic"
 )
 
+type Encoder interface {
+	Size(m message.Message) (int, error)
+	Encode(m message.Message, buf []byte) (int, error)
+}
+
+type Decoder interface {
+	Decode(buf []byte, m *message.Message) (int, error)
+}
+
 type Message struct {
+	// Context context of request.
+	ctx             context.Context
 	msg             message.Message
 	hijacked        atomic.Bool
 	isModified      bool
 	valueBuffer     []byte
 	origValueBuffer []byte
-	payload         io.ReadSeeker
+	body            io.ReadSeeker
 	sequence        uint64
+
+	// local vars
+	bufferUnmarshal []byte
+	bufferMarshal   []byte
 }
 
 const valueBufferSize = 256
 
-func NewMessage() *Message {
+func NewMessage(ctx context.Context) *Message {
 	valueBuffer := make([]byte, valueBufferSize)
 	return &Message{
+		ctx: ctx,
 		msg: message.Message{
 			Options: make(message.Options, 0, 16),
 		},
 		valueBuffer:     valueBuffer,
 		origValueBuffer: valueBuffer,
+		bufferUnmarshal: make([]byte, 256),
+		bufferMarshal:   make([]byte, 256),
 	}
+}
+
+func (r *Message) Context() context.Context {
+	return r.ctx
+}
+
+func (r *Message) SetMessageID(mid uint16) {
+	r.msg.MessageID = mid
+	r.isModified = true
+}
+
+func (r *Message) SetMessage(message message.Message) {
+	r.Reset()
+	r.msg = message
+	if len(message.Payload) > 0 {
+		r.body = bytes.NewReader(message.Payload)
+	}
+	r.isModified = true
+}
+
+func (r *Message) UpsertMessageID(mid uint16) {
+	if r.msg.MessageID != 0 {
+		return
+	}
+	r.msg.MessageID = mid
+}
+
+func (r *Message) MessageID() uint16 {
+	return r.msg.MessageID
+}
+
+func (r *Message) SetType(typ message.Type) {
+	r.msg.Type = typ
+	r.isModified = true
+}
+
+func (r *Message) Type() message.Type {
+	return r.msg.Type
 }
 
 // Reset clear message for next reuse
@@ -38,8 +96,17 @@ func (r *Message) Reset() {
 	r.msg.Token = nil
 	r.msg.Code = codes.Empty
 	r.msg.Options = r.msg.Options[:0]
+	r.msg.MessageID = 0
+	r.msg.Type = message.NonConfirmable
 	r.valueBuffer = r.origValueBuffer
-	r.payload = nil
+	r.body = nil
+	r.isModified = false
+	if cap(r.bufferMarshal) > 1024 {
+		r.bufferMarshal = make([]byte, 256)
+	}
+	if cap(r.bufferUnmarshal) > 1024 {
+		r.bufferUnmarshal = make([]byte, 256)
+	}
 	r.isModified = false
 }
 
@@ -300,22 +367,22 @@ func (r *Message) Accept() (message.MediaType, error) {
 }
 
 func (r *Message) BodySize() (int64, error) {
-	if r.payload == nil {
+	if r.body == nil {
 		return 0, nil
 	}
-	orig, err := r.payload.Seek(0, io.SeekCurrent)
+	orig, err := r.body.Seek(0, io.SeekCurrent)
 	if err != nil {
 		return 0, err
 	}
-	_, err = r.payload.Seek(0, io.SeekStart)
+	_, err = r.body.Seek(0, io.SeekStart)
 	if err != nil {
 		return 0, err
 	}
-	size, err := r.payload.Seek(0, io.SeekEnd)
+	size, err := r.body.Seek(0, io.SeekEnd)
 	if err != nil {
 		return 0, err
 	}
-	_, err = r.payload.Seek(orig, io.SeekStart)
+	_, err = r.body.Seek(orig, io.SeekStart)
 	if err != nil {
 		return 0, err
 	}
@@ -323,12 +390,12 @@ func (r *Message) BodySize() (int64, error) {
 }
 
 func (r *Message) SetBody(s io.ReadSeeker) {
-	r.payload = s
+	r.body = s
 	r.isModified = true
 }
 
 func (r *Message) Body() io.ReadSeeker {
-	return r.payload
+	return r.body
 }
 
 func (r *Message) SetSequence(seq uint64) {
@@ -386,4 +453,55 @@ func (r *Message) ReadBody() ([]byte, error) {
 		return nil, err
 	}
 	return payload[:n], nil
+}
+
+func (r *Message) toMessage() (message.Message, error) {
+	payload, err := r.ReadBody()
+	if err != nil {
+		return message.Message{}, err
+	}
+	m := r.msg
+	m.Payload = payload
+	return m, nil
+}
+
+func (r *Message) MarshalWithEncoder(encoder Encoder) ([]byte, error) {
+	msg, err := r.toMessage()
+	if err != nil {
+		return nil, err
+	}
+	size, err := encoder.Size(msg)
+	if err != nil {
+		return nil, err
+	}
+	if len(r.bufferMarshal) < size {
+		r.bufferMarshal = append(r.bufferMarshal, make([]byte, size-len(r.bufferMarshal))...)
+	}
+	n, err := encoder.Encode(msg, r.bufferMarshal)
+	if err != nil {
+		return nil, err
+	}
+	r.bufferMarshal = r.bufferMarshal[:n]
+	return r.bufferMarshal, nil
+}
+
+func (r *Message) UnmarshalWithDecoder(decoder Decoder, data []byte) (int, error) {
+	if len(r.bufferUnmarshal) < len(data) {
+		r.bufferUnmarshal = append(r.bufferUnmarshal, make([]byte, len(data)-len(r.bufferUnmarshal))...)
+	}
+	copy(r.bufferUnmarshal, data)
+	r.body = nil
+	r.bufferUnmarshal = r.bufferUnmarshal[:len(data)]
+	n, err := decoder.Decode(r.bufferUnmarshal, &r.msg)
+	if err != nil {
+		return n, err
+	}
+	if len(r.msg.Payload) > 0 {
+		r.body = bytes.NewReader(r.msg.Payload)
+	}
+	return n, err
+}
+
+func (r *Message) IsSeparateMessage() bool {
+	return r.Code() == codes.Empty && r.Token() == nil && r.Type() == message.Acknowledgement && len(r.Options()) == 0 && r.Body() == nil
 }

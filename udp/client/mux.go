@@ -5,9 +5,8 @@ import (
 
 	"github.com/plgd-dev/go-coap/v2/message"
 	"github.com/plgd-dev/go-coap/v2/message/codes"
+	"github.com/plgd-dev/go-coap/v2/message/pool"
 	"github.com/plgd-dev/go-coap/v2/mux"
-	udpMessage "github.com/plgd-dev/go-coap/v2/udp/message"
-	"github.com/plgd-dev/go-coap/v2/udp/message/pool"
 )
 
 func HandlerFuncToMux(m mux.Handler) HandlerFunc {
@@ -15,15 +14,9 @@ func HandlerFuncToMux(m mux.Handler) HandlerFunc {
 		muxw := &muxResponseWriter{
 			w: w,
 		}
-		muxr, err := pool.ConvertTo(r)
-		if err != nil {
-			return
-		}
 		m.ServeCOAP(muxw, &mux.Message{
-			Message:        muxr,
-			SequenceNumber: r.Sequence(),
-			IsConfirmable:  r.Type() == udpMessage.Confirmable,
-			RouteParams:    new(mux.RouteParams),
+			Message:     r,
+			RouteParams: new(mux.RouteParams),
 		})
 	}
 	return h
