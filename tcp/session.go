@@ -12,11 +12,11 @@ import (
 
 	"github.com/plgd-dev/go-coap/v2/message"
 	"github.com/plgd-dev/go-coap/v2/message/codes"
+	"github.com/plgd-dev/go-coap/v2/message/pool"
 	coapNet "github.com/plgd-dev/go-coap/v2/net"
 	"github.com/plgd-dev/go-coap/v2/net/blockwise"
 	"github.com/plgd-dev/go-coap/v2/net/monitor/inactivity"
-	coapTCP "github.com/plgd-dev/go-coap/v2/tcp/message"
-	"github.com/plgd-dev/go-coap/v2/tcp/message/pool"
+	"github.com/plgd-dev/go-coap/v2/tcp/coder"
 )
 
 type EventFunc func()
@@ -211,15 +211,15 @@ func (s *Session) handleSignals(r *pool.Message, cc *ClientConn) bool {
 		if s.disablePeerTCPSignalMessageCSMs {
 			return true
 		}
-		if size, err := r.GetOptionUint32(coapTCP.MaxMessageSize); err == nil {
+		if size, err := r.GetOptionUint32(message.TCPMaxMessageSize); err == nil {
 			atomic.StoreUint32(&s.peerMaxMessageSize, size)
 		}
-		if r.HasOption(coapTCP.BlockWiseTransfer) {
+		if r.HasOption(message.TCPBlockWiseTransfer) {
 			atomic.StoreUint32(&s.peerBlockWiseTranferEnabled, 1)
 		}
 		return true
 	case codes.Ping:
-		// if r.HasOption(coapTCP.Custody) {
+		// if r.HasOption(message.TCPCustody) {
 		// TODO
 		// }
 		if err := s.sendPong(r.Token()); err != nil && !coapNet.IsConnectionBrokenError(err) {
@@ -227,12 +227,12 @@ func (s *Session) handleSignals(r *pool.Message, cc *ClientConn) bool {
 		}
 		return true
 	case codes.Release:
-		// if r.HasOption(coapTCP.AlternativeAddress) {
+		// if r.HasOption(message.TCPAlternativeAddress) {
 		// TODO
 		// }
 		return true
 	case codes.Abort:
-		// if r.HasOption(coapTCP.BadCSMOption) {
+		// if r.HasOption(message.TCPBadCSMOption) {
 		// TODO
 		// }
 		return true
@@ -313,19 +313,19 @@ func seekBufferToNextMessage(buffer *bytes.Buffer, msgSize int) *bytes.Buffer {
 
 func (s *Session) processBuffer(buffer *bytes.Buffer, cc *ClientConn) error {
 	for buffer.Len() > 0 {
-		var hdr coapTCP.MessageHeader
-		err := hdr.Unmarshal(buffer.Bytes())
+		var header coder.MessageHeader
+		_, err := coder.DefaultCoder.DecodeHeader(buffer.Bytes(), &header)
 		if errors.Is(err, message.ErrShortRead) {
 			return nil
 		}
-		if hdr.TotalLen > s.maxMessageSize {
-			return fmt.Errorf("max message size(%v) was exceeded %v", s.maxMessageSize, hdr.TotalLen)
+		if header.MessageLength > s.maxMessageSize {
+			return fmt.Errorf("max message size(%v) was exceeded %v", s.maxMessageSize, header.MessageLength)
 		}
-		if uint32(buffer.Len()) < hdr.TotalLen {
+		if uint32(buffer.Len()) < header.MessageLength {
 			return nil
 		}
 		req := s.messagePool.AcquireMessage(s.Context())
-		read, err := req.Unmarshal(buffer.Bytes()[:hdr.TotalLen])
+		read, err := req.UnmarshalWithDecoder(coder.DefaultCoder, buffer.Bytes()[:header.MessageLength])
 		if err != nil {
 			s.messagePool.ReleaseMessage(req)
 			return fmt.Errorf("cannot unmarshal with header: %w", err)
@@ -347,7 +347,7 @@ func (s *Session) processBuffer(buffer *bytes.Buffer, cc *ClientConn) error {
 }
 
 func (s *Session) WriteMessage(req *pool.Message) error {
-	data, err := req.Marshal()
+	data, err := req.MarshalWithEncoder(coder.DefaultCoder)
 	if err != nil {
 		return fmt.Errorf("cannot marshal: %w", err)
 	}

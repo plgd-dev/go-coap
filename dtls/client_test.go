@@ -16,13 +16,12 @@ import (
 	"github.com/plgd-dev/go-coap/v2/dtls"
 	"github.com/plgd-dev/go-coap/v2/message"
 	"github.com/plgd-dev/go-coap/v2/message/codes"
+	"github.com/plgd-dev/go-coap/v2/message/pool"
 	"github.com/plgd-dev/go-coap/v2/mux"
 	coapNet "github.com/plgd-dev/go-coap/v2/net"
 	"github.com/plgd-dev/go-coap/v2/net/monitor/inactivity"
 	"github.com/plgd-dev/go-coap/v2/pkg/runner/periodic"
 	"github.com/plgd-dev/go-coap/v2/udp/client"
-	udpMessage "github.com/plgd-dev/go-coap/v2/udp/message"
-	"github.com/plgd-dev/go-coap/v2/udp/message/pool"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/sync/semaphore"
@@ -89,14 +88,14 @@ func TestClientConnGet(t *testing.T) {
 
 	m := mux.NewRouter()
 	err = m.Handle("/a", mux.HandlerFunc(func(w mux.ResponseWriter, r *mux.Message) {
-		assert.Equal(t, codes.GET, r.Code)
+		assert.Equal(t, codes.GET, r.Code())
 		errS := w.SetResponse(codes.BadRequest, message.TextPlain, bytes.NewReader(make([]byte, 5330)))
 		require.NoError(t, errS)
 		require.NotEmpty(t, w.Client())
 	}))
 	require.NoError(t, err)
 	err = m.Handle("/b", mux.HandlerFunc(func(w mux.ResponseWriter, r *mux.Message) {
-		assert.Equal(t, codes.GET, r.Code)
+		assert.Equal(t, codes.GET, r.Code())
 		errS := w.SetResponse(codes.Content, message.TextPlain, bytes.NewReader([]byte("b")))
 		require.NoError(t, errS)
 		require.NotEmpty(t, w.Client())
@@ -164,13 +163,13 @@ func TestClientConnGetSeparateMessage(t *testing.T) {
 
 	m := mux.NewRouter()
 	err = m.Handle("/a", mux.HandlerFunc(func(w mux.ResponseWriter, r *mux.Message) {
+		r.Hijack()
 		go func() {
 			time.Sleep(time.Second * 1)
-			assert.Equal(t, codes.GET, r.Code)
+			assert.Equal(t, codes.GET, r.Code())
 			customResp := message.Message{
 				Code:    codes.Content,
-				Token:   r.Token,
-				Context: r.Context,
+				Token:   r.Token(),
 				Options: make(message.Options, 0, 16),
 				// Body:    bytes.NewReader(make([]byte, 10)),
 			}
@@ -185,8 +184,9 @@ func TestClientConnGetSeparateMessage(t *testing.T) {
 				return
 			}
 			customResp.Options = opts
-
-			errW := w.Client().WriteMessage(&customResp)
+			resp := pool.NewMessage(r.Context())
+			resp.SetMessage(customResp)
+			errW := w.Client().WriteMessage(resp)
 			if errW != nil && !errors.Is(errW, context.Canceled) {
 				log.Printf("cannot set response: %v", errW)
 			}
@@ -218,8 +218,8 @@ func TestClientConnGetSeparateMessage(t *testing.T) {
 
 	req, err := client.NewGetRequest(ctx, pool.New(0, 0), "/a")
 	require.NoError(t, err)
-	req.SetType(udpMessage.Confirmable)
-	req.SetMessageID(udpMessage.GetMID())
+	req.SetType(message.Confirmable)
+	req.SetMessageID(message.GetMID())
 	resp, err := cc.Do(req)
 	require.NoError(t, err)
 	assert.Equal(t, codes.Content, resp.Code())
@@ -294,11 +294,11 @@ func TestClientConnPost(t *testing.T) {
 
 			m := mux.NewRouter()
 			err = m.Handle("/a", mux.HandlerFunc(func(w mux.ResponseWriter, r *mux.Message) {
-				assert.Equal(t, codes.POST, r.Code)
-				ct, errH := r.Options.GetUint32(message.ContentFormat)
+				assert.Equal(t, codes.POST, r.Code())
+				ct, errH := r.Options().GetUint32(message.ContentFormat)
 				require.NoError(t, errH)
 				assert.Equal(t, message.TextPlain, message.MediaType(ct))
-				buf, errH := ioutil.ReadAll(r.Body)
+				buf, errH := ioutil.ReadAll(r.Body())
 				require.NoError(t, errH)
 				assert.Len(t, buf, 7000)
 
@@ -308,11 +308,11 @@ func TestClientConnPost(t *testing.T) {
 			}))
 			require.NoError(t, err)
 			err = m.Handle("/b", mux.HandlerFunc(func(w mux.ResponseWriter, r *mux.Message) {
-				assert.Equal(t, codes.POST, r.Code)
-				ct, errH := r.Options.GetUint32(message.ContentFormat)
+				assert.Equal(t, codes.POST, r.Code())
+				ct, errH := r.Options().GetUint32(message.ContentFormat)
 				require.NoError(t, errH)
 				assert.Equal(t, message.TextPlain, message.MediaType(ct))
-				buf, errH := ioutil.ReadAll(r.Body)
+				buf, errH := ioutil.ReadAll(r.Body())
 				require.NoError(t, errH)
 				assert.Equal(t, buf, []byte("b-send"))
 				errH = w.SetResponse(codes.Content, message.TextPlain, bytes.NewReader([]byte("b")))
@@ -429,11 +429,11 @@ func TestClientConnPut(t *testing.T) {
 
 			m := mux.NewRouter()
 			err = m.Handle("/a", mux.HandlerFunc(func(w mux.ResponseWriter, r *mux.Message) {
-				assert.Equal(t, codes.PUT, r.Code)
-				ct, errH := r.Options.GetUint32(message.ContentFormat)
+				assert.Equal(t, codes.PUT, r.Code())
+				ct, errH := r.Options().GetUint32(message.ContentFormat)
 				require.NoError(t, errH)
 				assert.Equal(t, message.TextPlain, message.MediaType(ct))
-				buf, errH := ioutil.ReadAll(r.Body)
+				buf, errH := ioutil.ReadAll(r.Body())
 				require.NoError(t, errH)
 				assert.Len(t, buf, 7000)
 
@@ -443,11 +443,11 @@ func TestClientConnPut(t *testing.T) {
 			}))
 			require.NoError(t, err)
 			err = m.Handle("/b", mux.HandlerFunc(func(w mux.ResponseWriter, r *mux.Message) {
-				assert.Equal(t, codes.PUT, r.Code)
-				ct, errH := r.Options.GetUint32(message.ContentFormat)
+				assert.Equal(t, codes.PUT, r.Code())
+				ct, errH := r.Options().GetUint32(message.ContentFormat)
 				require.NoError(t, errH)
 				assert.Equal(t, message.TextPlain, message.MediaType(ct))
-				buf, errH := ioutil.ReadAll(r.Body)
+				buf, errH := ioutil.ReadAll(r.Body())
 				require.NoError(t, errH)
 				assert.Equal(t, buf, []byte("b-send"))
 				errH = w.SetResponse(codes.Content, message.TextPlain, bytes.NewReader([]byte("b")))
@@ -554,14 +554,14 @@ func TestClientConnDelete(t *testing.T) {
 
 	m := mux.NewRouter()
 	err = m.Handle("/a", mux.HandlerFunc(func(w mux.ResponseWriter, r *mux.Message) {
-		assert.Equal(t, codes.DELETE, r.Code)
+		assert.Equal(t, codes.DELETE, r.Code())
 		errH := w.SetResponse(codes.BadRequest, message.TextPlain, bytes.NewReader(make([]byte, 5330)))
 		require.NoError(t, errH)
 		require.NotEmpty(t, w.Client())
 	}))
 	require.NoError(t, err)
 	err = m.Handle("/b", mux.HandlerFunc(func(w mux.ResponseWriter, r *mux.Message) {
-		assert.Equal(t, codes.DELETE, r.Code)
+		assert.Equal(t, codes.DELETE, r.Code())
 		errH := w.SetResponse(codes.Deleted, message.TextPlain, bytes.NewReader([]byte("b")))
 		require.NoError(t, errH)
 		require.NotEmpty(t, w.Client())

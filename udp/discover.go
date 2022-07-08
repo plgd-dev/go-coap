@@ -5,10 +5,11 @@ import (
 	"fmt"
 	"net"
 
+	"github.com/plgd-dev/go-coap/v2/message"
+	"github.com/plgd-dev/go-coap/v2/message/pool"
 	coapNet "github.com/plgd-dev/go-coap/v2/net"
 	"github.com/plgd-dev/go-coap/v2/udp/client"
-	"github.com/plgd-dev/go-coap/v2/udp/message"
-	"github.com/plgd-dev/go-coap/v2/udp/message/pool"
+	"github.com/plgd-dev/go-coap/v2/udp/coder"
 )
 
 // Discover sends GET to multicast or unicast address and waits for responses until context timeouts or server shutdown.
@@ -46,7 +47,7 @@ func (s *Server) DiscoveryRequest(req *pool.Message, address string, receiverFun
 		return fmt.Errorf("cannot resolve address: %w", err)
 	}
 
-	data, err := req.Marshal()
+	data, err := req.MarshalWithEncoder(coder.DefaultCoder)
 	if err != nil {
 		return fmt.Errorf("cannot marshal req: %w", err)
 	}

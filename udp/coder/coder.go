@@ -1,4 +1,4 @@
-package message
+package coder
 
 import (
 	"encoding/binary"
@@ -8,20 +8,11 @@ import (
 	"github.com/plgd-dev/go-coap/v2/message/codes"
 )
 
-// TcpMessage is a CoAP MessageBase that can encode itself for Message
-// transport.
-type Message struct {
-	Token   message.Token
-	Payload []byte
+var DefaultCoder = new(Coder)
 
-	Options message.Options // Options must be sorted by ID
-	Code    codes.Code
+type Coder struct{}
 
-	MessageID uint16
-	Type      Type
-}
-
-func (m Message) Size() (int, error) {
+func (c *Coder) Size(m message.Message) (int, error) {
 	if len(m.Token) > message.MaxTokenSize {
 		return -1, message.ErrInvalidTokenLen
 	}
@@ -39,17 +30,7 @@ func (m Message) Size() (int, error) {
 	return size, nil
 }
 
-func (m Message) Marshal() ([]byte, error) {
-	b := make([]byte, 1024)
-	l, err := m.MarshalTo(b)
-	if errors.Is(err, message.ErrTooSmall) {
-		b = append(b[:0], make([]byte, l)...)
-		l, err = m.MarshalTo(b)
-	}
-	return b[:l], err
-}
-
-func (m Message) MarshalTo(buf []byte) (int, error) {
+func (c *Coder) Encode(m message.Message, buf []byte) (int, error) {
 	/*
 	     0                   1                   2                   3
 	    0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
@@ -63,7 +44,7 @@ func (m Message) MarshalTo(buf []byte) (int, error) {
 	   |1 1 1 1 1 1 1 1|    Payload (if any) ...
 	   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
 	*/
-	size, err := m.Size()
+	size, err := c.Size(m)
 	if err != nil {
 		return -1, err
 	}
@@ -104,7 +85,7 @@ func (m Message) MarshalTo(buf []byte) (int, error) {
 	return size, nil
 }
 
-func (m *Message) Unmarshal(data []byte) (int, error) {
+func (c *Coder) Decode(data []byte, m *message.Message) (int, error) {
 	size := len(data)
 	if size < 4 {
 		return -1, ErrMessageTruncated
@@ -114,7 +95,7 @@ func (m *Message) Unmarshal(data []byte) (int, error) {
 		return -1, ErrMessageInvalidVersion
 	}
 
-	typ := Type((data[0] >> 4) & 0x3)
+	typ := message.Type((data[0] >> 4) & 0x3)
 	tokenLen := int(data[0] & 0xf)
 	if tokenLen > 8 {
 		return -1, message.ErrInvalidTokenLen

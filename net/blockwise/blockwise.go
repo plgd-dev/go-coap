@@ -13,7 +13,6 @@ import (
 	"github.com/plgd-dev/go-coap/v2/message"
 	"github.com/plgd-dev/go-coap/v2/message/codes"
 	"github.com/plgd-dev/go-coap/v2/pkg/cache"
-	udpMessage "github.com/plgd-dev/go-coap/v2/udp/message"
 	"golang.org/x/sync/semaphore"
 )
 
@@ -124,8 +123,8 @@ type Message interface {
 // hasType enables access to message.Type for supported messages
 // Since only UDP messages have a type
 type hasType interface {
-	Type() udpMessage.Type
-	SetType(t udpMessage.Type)
+	Type() message.Type
+	SetType(t message.Type)
 }
 
 // EncodeBlockOption encodes block values to coap option.

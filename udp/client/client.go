@@ -6,8 +6,8 @@ import (
 	"net"
 
 	"github.com/plgd-dev/go-coap/v2/message"
+	"github.com/plgd-dev/go-coap/v2/message/pool"
 	"github.com/plgd-dev/go-coap/v2/mux"
-	"github.com/plgd-dev/go-coap/v2/udp/message/pool"
 )
 
 type Client struct {
@@ -24,40 +24,20 @@ func (c *Client) Ping(ctx context.Context) error {
 	return c.cc.Ping(ctx)
 }
 
-func (c *Client) Delete(ctx context.Context, path string, opts ...message.Option) (*message.Message, error) {
-	resp, err := c.cc.Delete(ctx, path, opts...)
-	if err != nil {
-		return nil, err
-	}
-	defer c.cc.ReleaseMessage(resp)
-	return pool.ConvertTo(resp)
+func (c *Client) Delete(ctx context.Context, path string, opts ...message.Option) (*pool.Message, error) {
+	return c.cc.Delete(ctx, path, opts...)
 }
 
-func (c *Client) Put(ctx context.Context, path string, contentFormat message.MediaType, payload io.ReadSeeker, opts ...message.Option) (*message.Message, error) {
-	resp, err := c.cc.Put(ctx, path, contentFormat, payload, opts...)
-	if err != nil {
-		return nil, err
-	}
-	defer c.cc.ReleaseMessage(resp)
-	return pool.ConvertTo(resp)
+func (c *Client) Put(ctx context.Context, path string, contentFormat message.MediaType, payload io.ReadSeeker, opts ...message.Option) (*pool.Message, error) {
+	return c.cc.Put(ctx, path, contentFormat, payload, opts...)
 }
 
-func (c *Client) Post(ctx context.Context, path string, contentFormat message.MediaType, payload io.ReadSeeker, opts ...message.Option) (*message.Message, error) {
-	resp, err := c.cc.Post(ctx, path, contentFormat, payload, opts...)
-	if err != nil {
-		return nil, err
-	}
-	defer c.cc.ReleaseMessage(resp)
-	return pool.ConvertTo(resp)
+func (c *Client) Post(ctx context.Context, path string, contentFormat message.MediaType, payload io.ReadSeeker, opts ...message.Option) (*pool.Message, error) {
+	return c.cc.Post(ctx, path, contentFormat, payload, opts...)
 }
 
-func (c *Client) Get(ctx context.Context, path string, opts ...message.Option) (*message.Message, error) {
-	resp, err := c.cc.Get(ctx, path, opts...)
-	if err != nil {
-		return nil, err
-	}
-	defer c.cc.ReleaseMessage(resp)
-	return pool.ConvertTo(resp)
+func (c *Client) Get(ctx context.Context, path string, opts ...message.Option) (*pool.Message, error) {
+	return c.cc.Get(ctx, path, opts...)
 }
 
 func (c *Client) Close() error {
@@ -76,41 +56,16 @@ func (c *Client) SetContextValue(key interface{}, val interface{}) {
 	c.cc.Session().SetContextValue(key, val)
 }
 
-func (c *Client) WriteMessage(req *message.Message) error {
-	r, err := c.cc.messagePool.ConvertFrom(req)
-	if err != nil {
-		return err
-	}
-	defer c.cc.ReleaseMessage(r)
-	return c.cc.WriteMessage(r)
+func (c *Client) WriteMessage(req *pool.Message) error {
+	return c.cc.WriteMessage(req)
 }
 
-func (c *Client) Do(req *message.Message) (*message.Message, error) {
-	r, err := c.cc.messagePool.ConvertFrom(req)
-	if err != nil {
-		return nil, err
-	}
-	defer c.cc.ReleaseMessage(r)
-	resp, err := c.cc.Do(r)
-	if err != nil {
-		return nil, err
-	}
-	defer c.cc.ReleaseMessage(resp)
-	return pool.ConvertTo(resp)
+func (c *Client) Do(req *pool.Message) (*pool.Message, error) {
+	return c.cc.Do(req)
 }
 
-func createClientConnObserveHandler(observeFunc func(notification *message.Message)) func(n *pool.Message) {
-	return func(n *pool.Message) {
-		muxn, err := pool.ConvertTo(n)
-		if err != nil {
-			return
-		}
-		observeFunc(muxn)
-	}
-}
-
-func (c *Client) Observe(ctx context.Context, path string, observeFunc func(notification *message.Message), opts ...message.Option) (mux.Observation, error) {
-	return c.cc.Observe(ctx, path, createClientConnObserveHandler(observeFunc), opts...)
+func (c *Client) Observe(ctx context.Context, path string, observeFunc func(notification *pool.Message), opts ...message.Option) (mux.Observation, error) {
+	return c.cc.Observe(ctx, path, observeFunc, opts...)
 }
 
 // Sequence acquires sequence number.
@@ -126,4 +81,12 @@ func (c *Client) ClientConn() interface{} {
 // Done signalizes that connection is not more processed.
 func (c *Client) Done() <-chan struct{} {
 	return c.cc.Done()
+}
+
+func (c *Client) AcquireMessage(ctx context.Context) *pool.Message {
+	return c.cc.AcquireMessage(ctx)
+}
+
+func (c *Client) ReleaseMessage(m *pool.Message) {
+	c.cc.ReleaseMessage(m)
 }

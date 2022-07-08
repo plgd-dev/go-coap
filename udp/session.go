@@ -7,9 +7,10 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"github.com/plgd-dev/go-coap/v2/message/pool"
 	coapNet "github.com/plgd-dev/go-coap/v2/net"
 	"github.com/plgd-dev/go-coap/v2/udp/client"
-	"github.com/plgd-dev/go-coap/v2/udp/message/pool"
+	"github.com/plgd-dev/go-coap/v2/udp/coder"
 )
 
 type EventFunc = func()
@@ -103,7 +104,7 @@ func (s *Session) Context() context.Context {
 }
 
 func (s *Session) WriteMessage(req *pool.Message) error {
-	data, err := req.Marshal()
+	data, err := req.MarshalWithEncoder(coder.DefaultCoder)
 	if err != nil {
 		return fmt.Errorf("cannot marshal: %w", err)
 	}
@@ -114,7 +115,7 @@ func (s *Session) WriteMessage(req *pool.Message) error {
 // By default it is sent over all network interfaces and all compatible source IP addresses with hop limit 1.
 // Via opts you can specify the network interface, source IP address, and hop limit.
 func (s *Session) WriteMulticastMessage(req *pool.Message, address *net.UDPAddr, opts ...coapNet.MulticastOption) error {
-	data, err := req.Marshal()
+	data, err := req.MarshalWithEncoder(coder.DefaultCoder)
 	if err != nil {
 		return fmt.Errorf("cannot marshal: %w", err)
 	}

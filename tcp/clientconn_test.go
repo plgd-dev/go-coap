@@ -72,14 +72,14 @@ func TestClientConnGet(t *testing.T) {
 
 	m := mux.NewRouter()
 	err = m.Handle("/a", mux.HandlerFunc(func(w mux.ResponseWriter, r *mux.Message) {
-		assert.Equal(t, codes.GET, r.Code)
+		assert.Equal(t, codes.GET, r.Code())
 		errH := w.SetResponse(codes.BadRequest, message.TextPlain, bytes.NewReader(make([]byte, 5330)))
 		require.NoError(t, errH)
 		require.NotEmpty(t, w.Client())
 	}))
 	require.NoError(t, err)
 	err = m.Handle("/b", mux.HandlerFunc(func(w mux.ResponseWriter, r *mux.Message) {
-		assert.Equal(t, codes.GET, r.Code)
+		assert.Equal(t, codes.GET, r.Code())
 		errH := w.SetResponse(codes.Content, message.TextPlain, bytes.NewReader([]byte("b")))
 		require.NoError(t, errH)
 		require.NotEmpty(t, w.Client())
@@ -189,11 +189,11 @@ func TestClientConnPost(t *testing.T) {
 
 			m := mux.NewRouter()
 			err = m.Handle("/a", mux.HandlerFunc(func(w mux.ResponseWriter, r *mux.Message) {
-				assert.Equal(t, codes.POST, r.Code)
-				ct, errH := r.Options.GetUint32(message.ContentFormat)
+				assert.Equal(t, codes.POST, r.Code())
+				ct, errH := r.Options().GetUint32(message.ContentFormat)
 				require.NoError(t, errH)
 				assert.Equal(t, message.TextPlain, message.MediaType(ct))
-				buf, errH := ioutil.ReadAll(r.Body)
+				buf, errH := ioutil.ReadAll(r.Body())
 				require.NoError(t, errH)
 				assert.Len(t, buf, 7000)
 
@@ -203,11 +203,11 @@ func TestClientConnPost(t *testing.T) {
 			}))
 			require.NoError(t, err)
 			err = m.Handle("/b", mux.HandlerFunc(func(w mux.ResponseWriter, r *mux.Message) {
-				assert.Equal(t, codes.POST, r.Code)
-				ct, errH := r.Options.GetUint32(message.ContentFormat)
+				assert.Equal(t, codes.POST, r.Code())
+				ct, errH := r.Options().GetUint32(message.ContentFormat)
 				require.NoError(t, errH)
 				assert.Equal(t, message.TextPlain, message.MediaType(ct))
-				buf, errH := ioutil.ReadAll(r.Body)
+				buf, errH := ioutil.ReadAll(r.Body())
 				require.NoError(t, errH)
 				assert.Equal(t, buf, []byte("b-send"))
 				errH = w.SetResponse(codes.Content, message.TextPlain, bytes.NewReader([]byte("b")))
@@ -317,11 +317,11 @@ func TestClientConnPut(t *testing.T) {
 
 			m := mux.NewRouter()
 			err = m.Handle("/a", mux.HandlerFunc(func(w mux.ResponseWriter, r *mux.Message) {
-				assert.Equal(t, codes.PUT, r.Code)
-				ct, errH := r.Options.GetUint32(message.ContentFormat)
+				assert.Equal(t, codes.PUT, r.Code())
+				ct, errH := r.Options().GetUint32(message.ContentFormat)
 				require.NoError(t, errH)
 				assert.Equal(t, message.TextPlain, message.MediaType(ct))
-				buf, errH := ioutil.ReadAll(r.Body)
+				buf, errH := ioutil.ReadAll(r.Body())
 				require.NoError(t, errH)
 				assert.Len(t, buf, 7000)
 
@@ -331,11 +331,11 @@ func TestClientConnPut(t *testing.T) {
 			}))
 			require.NoError(t, err)
 			err = m.Handle("/b", mux.HandlerFunc(func(w mux.ResponseWriter, r *mux.Message) {
-				assert.Equal(t, codes.PUT, r.Code)
-				ct, errH := r.Options.GetUint32(message.ContentFormat)
+				assert.Equal(t, codes.PUT, r.Code())
+				ct, errH := r.Options().GetUint32(message.ContentFormat)
 				require.NoError(t, errH)
 				assert.Equal(t, message.TextPlain, message.MediaType(ct))
-				buf, errH := ioutil.ReadAll(r.Body)
+				buf, errH := ioutil.ReadAll(r.Body())
 				require.NoError(t, errH)
 				assert.Equal(t, buf, []byte("b-send"))
 				errH = w.SetResponse(codes.Content, message.TextPlain, bytes.NewReader([]byte("b")))
@@ -435,14 +435,14 @@ func TestClientConnDelete(t *testing.T) {
 
 	m := mux.NewRouter()
 	err = m.Handle("/a", mux.HandlerFunc(func(w mux.ResponseWriter, r *mux.Message) {
-		assert.Equal(t, codes.DELETE, r.Code)
+		assert.Equal(t, codes.DELETE, r.Code())
 		errH := w.SetResponse(codes.BadRequest, message.TextPlain, bytes.NewReader(make([]byte, 5330)))
 		require.NoError(t, errH)
 		require.NotEmpty(t, w.Client())
 	}))
 	require.NoError(t, err)
 	err = m.Handle("/b", mux.HandlerFunc(func(w mux.ResponseWriter, r *mux.Message) {
-		assert.Equal(t, codes.DELETE, r.Code)
+		assert.Equal(t, codes.DELETE, r.Code())
 		errH := w.SetResponse(codes.Deleted, message.TextPlain, bytes.NewReader([]byte("b")))
 		require.NoError(t, errH)
 		require.NotEmpty(t, w.Client())

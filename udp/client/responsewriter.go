@@ -6,8 +6,7 @@ import (
 	"github.com/plgd-dev/go-coap/v2/message"
 	"github.com/plgd-dev/go-coap/v2/message/codes"
 	"github.com/plgd-dev/go-coap/v2/message/noresponse"
-	udpMessage "github.com/plgd-dev/go-coap/v2/udp/message"
-	"github.com/plgd-dev/go-coap/v2/udp/message/pool"
+	"github.com/plgd-dev/go-coap/v2/message/pool"
 )
 
 // A ResponseWriter interface is used by an COAP handler to construct an COAP response.
@@ -62,5 +61,5 @@ func (r *ResponseWriter) ClientConn() *ClientConn {
 func (r *ResponseWriter) SendReset() {
 	r.response.Reset()
 	r.response.SetCode(codes.Empty)
-	r.response.SetType(udpMessage.Reset)
+	r.response.SetType(message.Reset)
 }

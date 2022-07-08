@@ -11,13 +11,13 @@ import (
 
 	"github.com/plgd-dev/go-coap/v2/message"
 	"github.com/plgd-dev/go-coap/v2/message/codes"
+	"github.com/plgd-dev/go-coap/v2/message/pool"
 	coapNet "github.com/plgd-dev/go-coap/v2/net"
 	"github.com/plgd-dev/go-coap/v2/net/blockwise"
 	"github.com/plgd-dev/go-coap/v2/net/monitor/inactivity"
 	"github.com/plgd-dev/go-coap/v2/pkg/cache"
 	"github.com/plgd-dev/go-coap/v2/pkg/sync"
-	udpMessage "github.com/plgd-dev/go-coap/v2/udp/message"
-	"github.com/plgd-dev/go-coap/v2/udp/message/pool"
+	"github.com/plgd-dev/go-coap/v2/udp/coder"
 	atomicTypes "go.uber.org/atomic"
 )
 
@@ -125,7 +125,7 @@ func NewClientConn(
 		}
 	}
 	if getMID == nil {
-		getMID = udpMessage.GetMID
+		getMID = message.GetMID
 	}
 
 	return &ClientConn{
@@ -234,10 +234,10 @@ func (cc *ClientConn) writeMessage(req *pool.Message) error {
 	respChan := make(chan struct{})
 
 	// Only confirmable messages ever match an message ID
-	if req.Type() == udpMessage.Confirmable {
+	if req.Type() == message.Confirmable {
 		err := cc.midHandlerContainer.Insert(req.MessageID(), func(w *ResponseWriter, r *pool.Message) {
 			close(respChan)
-			if r.IsSeparate() {
+			if r.IsSeparateMessage() {
 				// separate message - just accept
 				return
 			}
@@ -255,7 +255,7 @@ func (cc *ClientConn) writeMessage(req *pool.Message) error {
 	if err != nil {
 		return fmt.Errorf("cannot write request: %w", err)
 	}
-	if req.Type() != udpMessage.Confirmable {
+	if req.Type() != message.Confirmable {
 		// If the request is not confirmable, we do not need to wait for a response
 		// and skip retransmissions
 		close(respChan)
@@ -317,7 +317,7 @@ func newCommonRequest(ctx context.Context, messagePool *pool.Pool, code codes.Co
 		messagePool.ReleaseMessage(req)
 		return nil, err
 	}
-	req.SetType(udpMessage.Confirmable)
+	req.SetType(message.Confirmable)
 	return req, nil
 }
 
@@ -468,12 +468,12 @@ func (cc *ClientConn) Ping(ctx context.Context) error {
 func (cc *ClientConn) AsyncPing(receivedPong func()) (func(), error) {
 	req := cc.AcquireMessage(cc.Context())
 	defer cc.ReleaseMessage(req)
-	req.SetType(udpMessage.Confirmable)
+	req.SetType(message.Confirmable)
 	req.SetCode(codes.Empty)
 	mid := cc.getMID()
 	req.SetMessageID(mid)
 	err := cc.midHandlerContainer.Insert(mid, func(w *ResponseWriter, r *pool.Message) {
-		if r.Type() == udpMessage.Reset || r.Type() == udpMessage.Acknowledgement {
+		if r.Type() == message.Reset || r.Type() == message.Acknowledgement {
 			receivedPong()
 		}
 	})
@@ -558,7 +558,7 @@ func (cc *ClientConn) handleBW(w *ResponseWriter, m *pool.Message) {
 }
 
 func (cc *ClientConn) handle(w *ResponseWriter, r *pool.Message) {
-	if r.Code() == codes.Empty && r.Type() == udpMessage.Confirmable && len(r.Token()) == 0 && len(r.Options()) == 0 && r.Body() == nil {
+	if r.Code() == codes.Empty && r.Type() == message.Confirmable && len(r.Token()) == 0 && len(r.Options()) == 0 && r.Body() == nil {
 		cc.sendPong(w, r)
 		return
 	}
@@ -567,7 +567,7 @@ func (cc *ClientConn) handle(w *ResponseWriter, r *pool.Message) {
 		h(w, r)
 		return
 	}
-	if r.IsSeparate() {
+	if r.IsSeparateMessage() {
 		// msg was processed by token handler - just drop it.
 		return
 	}
@@ -584,7 +584,7 @@ func (cc *ClientConn) responseMsgCacheID(msgID uint16) string {
 }
 
 func (cc *ClientConn) addResponseToCache(resp *pool.Message) error {
-	marshaledResp, err := resp.Marshal()
+	marshaledResp, err := resp.MarshalWithEncoder(coder.DefaultCoder)
 	if err != nil {
 		return err
 	}
@@ -600,7 +600,7 @@ func (cc *ClientConn) getResponseFromCache(mid uint16, resp *pool.Message) (bool
 		return false, nil
 	}
 	if rawMsg, ok := cachedResp.Data().([]byte); ok {
-		_, err := resp.Unmarshal(rawMsg)
+		_, err := resp.UnmarshalWithDecoder(coder.DefaultCoder, rawMsg)
 		if err != nil {
 			return false, err
 		}
@@ -612,19 +612,19 @@ func (cc *ClientConn) getResponseFromCache(mid uint16, resp *pool.Message) (bool
 // CheckMyMessageID compare client msgID against peer messageID and if it is near < 0xffff/4 then incrase msgID.
 // When msgIDs met it can cause issue because cache can send message to which doesn't bellows to request.
 func (cc *ClientConn) CheckMyMessageID(req *pool.Message) {
-	if req.Type() == udpMessage.Confirmable && req.MessageID()-uint16(atomic.LoadUint32(&cc.msgID)) < 0xffff/4 {
+	if req.Type() == message.Confirmable && req.MessageID()-uint16(atomic.LoadUint32(&cc.msgID)) < 0xffff/4 {
 		atomic.AddUint32(&cc.msgID, 0xffff/2)
 	}
 }
 
 func (cc *ClientConn) checkResponseCache(req *pool.Message, w *ResponseWriter) (bool, error) {
-	if req.Type() == udpMessage.Confirmable || req.Type() == udpMessage.NonConfirmable {
+	if req.Type() == message.Confirmable || req.Type() == message.NonConfirmable {
 		if ok, err := cc.getResponseFromCache(req.MessageID(), w.response); ok {
 			w.response.SetMessageID(req.MessageID())
-			w.response.SetType(udpMessage.NonConfirmable)
-			if req.Type() == udpMessage.Confirmable {
+			w.response.SetType(message.NonConfirmable)
+			if req.Type() == message.Confirmable {
 				// req could be changed from NonConfirmation to confirmation message.
-				w.response.SetType(udpMessage.Acknowledgement)
+				w.response.SetType(message.Acknowledgement)
 			}
 			return true, nil
 		} else if err != nil {
@@ -635,22 +635,22 @@ func (cc *ClientConn) checkResponseCache(req *pool.Message, w *ResponseWriter) (
 }
 
 func isPongOrResetResponse(w *ResponseWriter) bool {
-	return w.response.IsModified() && (w.response.Type() == udpMessage.Reset || w.response.Code() == codes.Empty)
+	return w.response.IsModified() && (w.response.Type() == message.Reset || w.response.Code() == codes.Empty)
 }
 
-func sendJustAcknowledgeMessage(reqType udpMessage.Type, w *ResponseWriter) bool {
-	return reqType == udpMessage.Confirmable && !w.response.IsModified()
+func sendJustAcknowledgeMessage(reqType message.Type, w *ResponseWriter) bool {
+	return reqType == message.Confirmable && !w.response.IsModified()
 }
 
-func (cc *ClientConn) processResponse(reqType udpMessage.Type, reqMessageID uint16, w *ResponseWriter) error {
+func (cc *ClientConn) processResponse(reqType message.Type, reqMessageID uint16, w *ResponseWriter) error {
 	switch {
 	case isPongOrResetResponse(w):
-		if reqType == udpMessage.Confirmable {
-			w.response.SetType(udpMessage.Acknowledgement)
+		if reqType == message.Confirmable {
+			w.response.SetType(message.Acknowledgement)
 			w.response.SetMessageID(reqMessageID)
 		} else {
-			if w.response.Type() != udpMessage.Reset {
-				w.response.SetType(udpMessage.NonConfirmable)
+			if w.response.Type() != message.Reset {
+				w.response.SetType(message.NonConfirmable)
 			}
 			w.response.SetMessageID(cc.getMID())
 		}
@@ -658,7 +658,7 @@ func (cc *ClientConn) processResponse(reqType udpMessage.Type, reqMessageID uint
 	case sendJustAcknowledgeMessage(reqType, w):
 		// send message to separate(confirm received) message, if response is not modified
 		w.response.SetCode(codes.Empty)
-		w.response.SetType(udpMessage.Acknowledgement)
+		w.response.SetType(message.Acknowledgement)
 		w.response.SetMessageID(reqMessageID)
 		w.response.SetToken(nil)
 		err := cc.addResponseToCache(w.response)
@@ -672,13 +672,13 @@ func (cc *ClientConn) processResponse(reqType udpMessage.Type, reqMessageID uint
 	}
 
 	// send piggybacked response
-	w.response.SetType(udpMessage.Confirmable)
+	w.response.SetType(message.Confirmable)
 	w.response.SetMessageID(cc.getMID())
-	if reqType == udpMessage.Confirmable {
-		w.response.SetType(udpMessage.Acknowledgement)
+	if reqType == message.Confirmable {
+		w.response.SetType(message.Acknowledgement)
 		w.response.SetMessageID(reqMessageID)
 	}
-	if reqType == udpMessage.Confirmable || reqType == udpMessage.NonConfirmable {
+	if reqType == message.Confirmable || reqType == message.NonConfirmable {
 		err := cc.addResponseToCache(w.response)
 		if err != nil {
 			return fmt.Errorf("cannot cache response: %w", err)
@@ -715,7 +715,7 @@ func (cc *ClientConn) Process(datagram []byte) error {
 		return fmt.Errorf("max message size(%v) was exceeded %v", cc.session.MaxMessageSize(), len(datagram))
 	}
 	req := cc.AcquireMessage(cc.Context())
-	_, err := req.Unmarshal(datagram)
+	_, err := req.UnmarshalWithDecoder(coder.DefaultCoder, datagram)
 	if err != nil {
 		cc.ReleaseMessage(req)
 		return err
@@ -797,7 +797,7 @@ func (cc *ClientConn) ReleaseMessage(m *pool.Message) {
 // By default it is sent over all network interfaces and all compatible source IP addresses with hop limit 1.
 // Via opts you can specify the network interface, source IP address, and hop limit.
 func (cc *ClientConn) WriteMulticastMessage(req *pool.Message, address *net.UDPAddr, options ...coapNet.MulticastOption) error {
-	if req.Type() == udpMessage.Confirmable {
+	if req.Type() == message.Confirmable {
 		return fmt.Errorf("multicast messages cannot be confirmable")
 	}
 	req.SetMessageID(cc.getMID())

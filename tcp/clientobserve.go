@@ -8,8 +8,8 @@ import (
 
 	"github.com/plgd-dev/go-coap/v2/message"
 	"github.com/plgd-dev/go-coap/v2/message/codes"
+	"github.com/plgd-dev/go-coap/v2/message/pool"
 	"github.com/plgd-dev/go-coap/v2/net/observation"
-	"github.com/plgd-dev/go-coap/v2/tcp/message/pool"
 	"go.uber.org/atomic"
 )
 
@@ -165,11 +165,13 @@ func (cc *ClientConn) ObserveRequest(req *pool.Message, observeFunc func(req *po
 		return nil, fmt.Errorf("cannot clone options: %w", err)
 	}
 
-	obs := message.Message{
-		Context: req.Context(),
-		Token:   req.Token(),
-		Code:    req.Code(),
-		Options: options,
+	obs := observationMessage{
+		ctx: req.Context(),
+		Message: message.Message{
+			Token:   req.Token(),
+			Code:    req.Code(),
+			Options: options,
+		},
 	}
 	cc.observationRequests.Store(token.Hash(), obs)
 	err = o.cc.observationTokenHandler.Insert(token.Hash(), o.handler)

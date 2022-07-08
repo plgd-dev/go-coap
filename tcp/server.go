@@ -13,13 +13,13 @@ import (
 
 	"github.com/plgd-dev/go-coap/v2/message"
 	"github.com/plgd-dev/go-coap/v2/message/codes"
+	"github.com/plgd-dev/go-coap/v2/message/pool"
 	coapNet "github.com/plgd-dev/go-coap/v2/net"
 	"github.com/plgd-dev/go-coap/v2/net/blockwise"
 	"github.com/plgd-dev/go-coap/v2/net/monitor/inactivity"
 	"github.com/plgd-dev/go-coap/v2/pkg/connections"
 	"github.com/plgd-dev/go-coap/v2/pkg/runner/periodic"
 	coapSync "github.com/plgd-dev/go-coap/v2/pkg/sync"
-	"github.com/plgd-dev/go-coap/v2/tcp/message/pool"
 )
 
 // A ServerOption sets options such as credentials, codec and keepalive parameters, etc.
@@ -327,7 +327,7 @@ func (s *Server) createClientConn(connection *coapNet.Conn, monitor inactivity.M
 			s.connectionCacheSize,
 			s.messagePool,
 		),
-		obsHandler, coapSync.NewMap[uint64, message.Message](),
+		obsHandler, coapSync.NewMap[uint64, observationMessage](),
 	)
 
 	return cc

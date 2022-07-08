@@ -2,7 +2,6 @@ package main
 
 import (
 	"bytes"
-	"errors"
 	"fmt"
 	"log"
 
@@ -23,29 +22,13 @@ func handleA(w mux.ResponseWriter, r *mux.Message) {
 
 func handleB(w mux.ResponseWriter, r *mux.Message) {
 	log.Printf("got message in handleB:  %+v from %v\n", r, w.Client().RemoteAddr())
-	customResp := message.Message{
-		Code:    codes.Content,
-		Token:   r.Token,
-		Context: r.Context,
-		Options: make(message.Options, 0, 16),
-		Body:    bytes.NewReader([]byte("B hello world")),
-	}
-	optsBuf := make([]byte, 32)
-	opts, used, err := customResp.Options.SetContentFormat(optsBuf, message.TextPlain)
-	if errors.Is(err, message.ErrTooSmall) {
-		optsBuf = append(optsBuf, make([]byte, used)...)
-		opts, _, err = customResp.Options.SetContentFormat(optsBuf, message.TextPlain)
-	}
-	if err != nil {
-		log.Printf("cannot set options to response: %v", err)
-		return
-	}
-	// don't forget to truncate before next use
-	// optsBuf = optsBuf[:used]
-
-	customResp.Options = opts
-
-	err = w.Client().WriteMessage(&customResp)
+	customResp := w.Client().AcquireMessage(r.Context())
+	defer w.Client().ReleaseMessage(customResp)
+	customResp.SetCode(codes.Content)
+	customResp.SetToken(r.Token())
+	customResp.SetContentFormat(message.TextPlain)
+	customResp.SetBody(bytes.NewReader([]byte("B hello world")))
+	err := w.Client().WriteMessage(customResp)
 	if err != nil {
 		log.Printf("cannot set response: %v", err)
 	}

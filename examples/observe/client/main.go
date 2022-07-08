@@ -5,8 +5,8 @@ import (
 	"log"
 	"time"
 
+	"github.com/plgd-dev/go-coap/v2/message/pool"
 	"github.com/plgd-dev/go-coap/v2/udp"
-	"github.com/plgd-dev/go-coap/v2/udp/message/pool"
 )
 
 func main() {

@@ -193,7 +193,7 @@ func (r *Router) GetRoutes() map[string]Route {
 // is sought.
 // If no handler is found a standard NotFound message is returned
 func (r *Router) ServeCOAP(w ResponseWriter, req *Message) {
-	path, err := req.Options.Path()
+	path, err := req.Options().Path()
 	r.m.RLock()
 	defaultHandler := r.defaultHandler
 	r.m.RUnlock()

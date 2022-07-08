@@ -8,9 +8,10 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"github.com/plgd-dev/go-coap/v2/message/pool"
 	coapNet "github.com/plgd-dev/go-coap/v2/net"
 	"github.com/plgd-dev/go-coap/v2/udp/client"
-	"github.com/plgd-dev/go-coap/v2/udp/message/pool"
+	"github.com/plgd-dev/go-coap/v2/udp/coder"
 )
 
 type EventFunc = func()
@@ -97,7 +98,7 @@ func (s *Session) SetContextValue(key interface{}, val interface{}) {
 }
 
 func (s *Session) WriteMessage(req *pool.Message) error {
-	data, err := req.Marshal()
+	data, err := req.MarshalWithEncoder(coder.DefaultCoder)
 	if err != nil {
 		return fmt.Errorf("cannot marshal: %w", err)
 	}

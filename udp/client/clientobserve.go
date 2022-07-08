@@ -8,8 +8,8 @@ import (
 
 	"github.com/plgd-dev/go-coap/v2/message"
 	"github.com/plgd-dev/go-coap/v2/message/codes"
+	"github.com/plgd-dev/go-coap/v2/message/pool"
 	"github.com/plgd-dev/go-coap/v2/net/observation"
-	"github.com/plgd-dev/go-coap/v2/udp/message/pool"
 	"go.uber.org/atomic"
 )
 
