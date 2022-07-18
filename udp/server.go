@@ -16,6 +16,7 @@ import (
 	coapNet "github.com/plgd-dev/go-coap/v2/net"
 	"github.com/plgd-dev/go-coap/v2/net/blockwise"
 	"github.com/plgd-dev/go-coap/v2/net/monitor/inactivity"
+	"github.com/plgd-dev/go-coap/v2/net/responsewriter"
 	"github.com/plgd-dev/go-coap/v2/pkg/cache"
 	"github.com/plgd-dev/go-coap/v2/pkg/runner/periodic"
 	coapSync "github.com/plgd-dev/go-coap/v2/pkg/sync"
@@ -29,7 +30,7 @@ type ServerOption interface {
 
 // The HandlerFunc type is an adapter to allow the use of
 // ordinary functions as COAP handlers.
-type HandlerFunc = func(*client.ResponseWriter, *pool.Message)
+type HandlerFunc = func(*responsewriter.ResponseWriter[*client.ClientConn], *pool.Message)
 
 type ErrorFunc = func(error)
 
@@ -74,7 +75,7 @@ var defaultServerOptions = func() serverOptions {
 		},
 		messagePool: pool.New(1024, 1600),
 	}
-	opts.handler = func(w *client.ResponseWriter, r *pool.Message) {
+	opts.handler = func(w *responsewriter.ResponseWriter[*client.ClientConn], r *pool.Message) {
 		if err := w.SetResponse(codes.NotFound, message.TextPlain, nil); err != nil {
 			opts.errors(fmt.Errorf("udp server: cannot set response: %w", err))
 		}
@@ -390,7 +391,7 @@ func (s *Server) getOrCreateClientConn(UDPConn *coapNet.UDPConn, raddr *net.UDPA
 			s.transmissionNStart,
 			s.transmissionAcknowledgeTimeout,
 			s.transmissionMaxRetransmit,
-			client.NewObservationHandler(obsHandler, func(w *client.ResponseWriter, r *pool.Message) {
+			client.NewObservationHandler(obsHandler, func(w *responsewriter.ResponseWriter[*client.ClientConn], r *pool.Message) {
 				h, ok := s.multicastHandler.Load(r.Token().Hash())
 				if ok {
 					h(w, r)

@@ -15,6 +15,7 @@ import (
 	coapNet "github.com/plgd-dev/go-coap/v2/net"
 	"github.com/plgd-dev/go-coap/v2/net/blockwise"
 	"github.com/plgd-dev/go-coap/v2/net/monitor/inactivity"
+	"github.com/plgd-dev/go-coap/v2/net/responsewriter"
 	"github.com/plgd-dev/go-coap/v2/pkg/cache"
 	coapErrors "github.com/plgd-dev/go-coap/v2/pkg/errors"
 	"github.com/plgd-dev/go-coap/v2/pkg/sync"
@@ -26,7 +27,7 @@ import (
 const ExchangeLifetime = 247 * time.Second
 
 type (
-	HandlerFunc = func(*ResponseWriter, *pool.Message)
+	HandlerFunc = func(*responsewriter.ResponseWriter[*ClientConn], *pool.Message)
 	ErrorFunc   = func(error)
 	GoPoolFunc  = func(func()) error
 	EventFunc   = func()
@@ -178,7 +179,7 @@ func (cc *ClientConn) do(req *pool.Message) (*pool.Message, error) {
 	}
 
 	respChan := make(chan *pool.Message, 1)
-	if _, loaded := cc.tokenHandlerContainer.LoadOrStore(token.Hash(), func(w *ResponseWriter, r *pool.Message) {
+	if _, loaded := cc.tokenHandlerContainer.LoadOrStore(token.Hash(), func(w *responsewriter.ResponseWriter[*ClientConn], r *pool.Message) {
 		r.Hijack()
 		select {
 		case respChan <- r:
@@ -235,7 +236,7 @@ func (cc *ClientConn) writeMessage(req *pool.Message) error {
 
 	// Only confirmable messages ever match an message ID
 	if req.Type() == message.Confirmable {
-		if _, loaded := cc.midHandlerContainer.LoadOrStore(req.MessageID(), func(w *ResponseWriter, r *pool.Message) {
+		if _, loaded := cc.midHandlerContainer.LoadOrStore(req.MessageID(), func(w *responsewriter.ResponseWriter[*ClientConn], r *pool.Message) {
 			close(respChan)
 			if r.IsSeparateMessage() {
 				// separate message - just accept
@@ -478,7 +479,7 @@ func (cc *ClientConn) AsyncPing(receivedPong func()) (func(), error) {
 	req.SetCode(codes.Empty)
 	mid := cc.getMID()
 	req.SetMessageID(mid)
-	if _, loaded := cc.midHandlerContainer.LoadOrStore(mid, func(w *ResponseWriter, r *pool.Message) {
+	if _, loaded := cc.midHandlerContainer.LoadOrStore(mid, func(w *responsewriter.ResponseWriter[*ClientConn], r *pool.Message) {
 		if r.Type() == message.Reset || r.Type() == message.Acknowledgement {
 			receivedPong()
 		}
@@ -513,30 +514,30 @@ func (cc *ClientConn) LocalAddr() net.Addr {
 	return cc.session.LocalAddr()
 }
 
-func (cc *ClientConn) sendPong(w *ResponseWriter, r *pool.Message) {
+func (cc *ClientConn) sendPong(w *responsewriter.ResponseWriter[*ClientConn], r *pool.Message) {
 	if err := w.SetResponse(codes.Empty, message.TextPlain, nil); err != nil {
 		cc.errors(fmt.Errorf("cannot send pong response: %w", err))
 	}
 }
 
 type bwResponseWriter struct {
-	w *ResponseWriter
+	w *responsewriter.ResponseWriter[*ClientConn]
 }
 
 func (b *bwResponseWriter) Message() blockwise.Message {
-	return b.w.response
+	return b.w.Message()
 }
 
 func (b *bwResponseWriter) SetMessage(m blockwise.Message) {
-	b.w.cc.ReleaseMessage(b.w.response)
-	b.w.response = m.(*pool.Message)
+	b.w.ClientConn().ReleaseMessage(b.w.Message())
+	b.w.SetMessage(m.(*pool.Message))
 }
 
 func (b *bwResponseWriter) RemoteAddr() net.Addr {
-	return b.w.cc.RemoteAddr()
+	return b.w.ClientConn().RemoteAddr()
 }
 
-func (cc *ClientConn) handleBW(w *ResponseWriter, m *pool.Message) {
+func (cc *ClientConn) handleBW(w *responsewriter.ResponseWriter[*ClientConn], m *pool.Message) {
 	if cc.blockWise != nil {
 		bwr := bwResponseWriter{
 			w: w,
@@ -559,7 +560,7 @@ func (cc *ClientConn) handleBW(w *ResponseWriter, m *pool.Message) {
 	cc.handler(w, m)
 }
 
-func (cc *ClientConn) handle(w *ResponseWriter, r *pool.Message) {
+func (cc *ClientConn) handle(w *responsewriter.ResponseWriter[*ClientConn], r *pool.Message) {
 	if r.Code() == codes.Empty && r.Type() == message.Confirmable && len(r.Token()) == 0 && len(r.Options()) == 0 && r.Body() == nil {
 		cc.sendPong(w, r)
 		return
@@ -618,14 +619,14 @@ func (cc *ClientConn) CheckMyMessageID(req *pool.Message) {
 	}
 }
 
-func (cc *ClientConn) checkResponseCache(req *pool.Message, w *ResponseWriter) (bool, error) {
+func (cc *ClientConn) checkResponseCache(req *pool.Message, w *responsewriter.ResponseWriter[*ClientConn]) (bool, error) {
 	if req.Type() == message.Confirmable || req.Type() == message.NonConfirmable {
-		if ok, err := cc.getResponseFromCache(req.MessageID(), w.response); ok {
-			w.response.SetMessageID(req.MessageID())
-			w.response.SetType(message.NonConfirmable)
+		if ok, err := cc.getResponseFromCache(req.MessageID(), w.Message()); ok {
+			w.Message().SetMessageID(req.MessageID())
+			w.Message().SetType(message.NonConfirmable)
 			if req.Type() == message.Confirmable {
 				// req could be changed from NonConfirmation to confirmation message.
-				w.response.SetType(message.Acknowledgement)
+				w.Message().SetType(message.Acknowledgement)
 			}
 			return true, nil
 		} else if err != nil {
@@ -635,52 +636,52 @@ func (cc *ClientConn) checkResponseCache(req *pool.Message, w *ResponseWriter) (
 	return false, nil
 }
 
-func isPongOrResetResponse(w *ResponseWriter) bool {
-	return w.response.IsModified() && (w.response.Type() == message.Reset || w.response.Code() == codes.Empty)
+func isPongOrResetResponse(w *responsewriter.ResponseWriter[*ClientConn]) bool {
+	return w.Message().IsModified() && (w.Message().Type() == message.Reset || w.Message().Code() == codes.Empty)
 }
 
-func sendJustAcknowledgeMessage(reqType message.Type, w *ResponseWriter) bool {
-	return reqType == message.Confirmable && !w.response.IsModified()
+func sendJustAcknowledgeMessage(reqType message.Type, w *responsewriter.ResponseWriter[*ClientConn]) bool {
+	return reqType == message.Confirmable && !w.Message().IsModified()
 }
 
-func (cc *ClientConn) processResponse(reqType message.Type, reqMessageID int32, w *ResponseWriter) error {
+func (cc *ClientConn) processResponse(reqType message.Type, reqMessageID int32, w *responsewriter.ResponseWriter[*ClientConn]) error {
 	switch {
 	case isPongOrResetResponse(w):
 		if reqType == message.Confirmable {
-			w.response.SetType(message.Acknowledgement)
-			w.response.SetMessageID(reqMessageID)
+			w.Message().SetType(message.Acknowledgement)
+			w.Message().SetMessageID(reqMessageID)
 		} else {
-			if w.response.Type() != message.Reset {
-				w.response.SetType(message.NonConfirmable)
+			if w.Message().Type() != message.Reset {
+				w.Message().SetType(message.NonConfirmable)
 			}
-			w.response.SetMessageID(cc.getMID())
+			w.Message().SetMessageID(cc.getMID())
 		}
 		return nil
 	case sendJustAcknowledgeMessage(reqType, w):
 		// send message to separate(confirm received) message, if response is not modified
-		w.response.SetCode(codes.Empty)
-		w.response.SetType(message.Acknowledgement)
-		w.response.SetMessageID(reqMessageID)
-		w.response.SetToken(nil)
-		err := cc.addResponseToCache(w.response)
+		w.Message().SetCode(codes.Empty)
+		w.Message().SetType(message.Acknowledgement)
+		w.Message().SetMessageID(reqMessageID)
+		w.Message().SetToken(nil)
+		err := cc.addResponseToCache(w.Message())
 		if err != nil {
 			return fmt.Errorf("cannot cache response: %w", err)
 		}
 		return nil
-	case !w.response.IsModified():
+	case !w.Message().IsModified():
 		// don't send response
 		return nil
 	}
 
 	// send piggybacked response
-	w.response.SetType(message.Confirmable)
-	w.response.SetMessageID(cc.getMID())
+	w.Message().SetType(message.Confirmable)
+	w.Message().SetMessageID(cc.getMID())
 	if reqType == message.Confirmable {
-		w.response.SetType(message.Acknowledgement)
-		w.response.SetMessageID(reqMessageID)
+		w.Message().SetType(message.Acknowledgement)
+		w.Message().SetMessageID(reqMessageID)
 	}
 	if reqType == message.Confirmable || reqType == message.NonConfirmable {
-		err := cc.addResponseToCache(w.response)
+		err := cc.addResponseToCache(w.Message())
 		if err != nil {
 			return fmt.Errorf("cannot cache response: %w", err)
 		}
@@ -688,7 +689,7 @@ func (cc *ClientConn) processResponse(reqType message.Type, reqMessageID int32, 
 	return nil
 }
 
-func (cc *ClientConn) processReq(req *pool.Message, w *ResponseWriter) error {
+func (cc *ClientConn) processReq(req *pool.Message, w *responsewriter.ResponseWriter[*ClientConn]) error {
 	defer cc.inactivityMonitor.Notify()
 	reqMid := req.MessageID()
 
@@ -703,7 +704,7 @@ func (cc *ClientConn) processReq(req *pool.Message, w *ResponseWriter) error {
 		return nil
 	}
 
-	w.response.SetModified(false)
+	w.Message().SetModified(false)
 	reqType := req.Type()
 	reqMessageID := req.MessageID()
 	cc.handle(w, req)
@@ -737,9 +738,9 @@ func (cc *ClientConn) Process(datagram []byte) error {
 		}()
 		resp := cc.AcquireMessage(cc.Context())
 		resp.SetToken(req.Token())
-		w := NewResponseWriter(resp, cc, req.Options())
+		w := responsewriter.New(resp, cc, req.Options())
 		defer func() {
-			cc.ReleaseMessage(w.response)
+			cc.ReleaseMessage(w.Message())
 		}()
 		errP := cc.processReq(req, w)
 		if errP != nil {
@@ -747,11 +748,11 @@ func (cc *ClientConn) Process(datagram []byte) error {
 			cc.errors(fmt.Errorf("cannot write response: %w", errP))
 			return
 		}
-		if !w.response.IsModified() {
+		if !w.Message().IsModified() {
 			// nothing to send
 			return
 		}
-		errW := cc.writeMessage(w.response)
+		errW := cc.writeMessage(w.Message())
 		if errW != nil {
 			closeConnection()
 			cc.errors(fmt.Errorf("cannot write response: %w", errW))

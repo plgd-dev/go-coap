@@ -16,6 +16,7 @@ import (
 	"github.com/plgd-dev/go-coap/v2/message/pool"
 	coapNet "github.com/plgd-dev/go-coap/v2/net"
 	"github.com/plgd-dev/go-coap/v2/net/monitor/inactivity"
+	"github.com/plgd-dev/go-coap/v2/net/responsewriter"
 	"github.com/plgd-dev/go-coap/v2/pkg/runner/periodic"
 	"github.com/plgd-dev/go-coap/v2/tcp"
 	"github.com/stretchr/testify/require"
@@ -143,7 +144,7 @@ func TestServerSetContextValueWithPKI(t *testing.T) {
 		clientCert := tlscon.ConnectionState().PeerCertificates[0]
 		cc.SetContextValue("client-cert", clientCert)
 	}
-	handle := func(w *tcp.ResponseWriter, r *pool.Message) {
+	handle := func(w *responsewriter.ResponseWriter[*tcp.ClientConn], r *pool.Message) {
 		// get certificate from connection context
 		clientCert := r.Context().Value("client-cert").(*x509.Certificate)
 		require.Equal(t, clientCert.SerialNumber, clientSerial)

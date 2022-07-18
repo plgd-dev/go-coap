@@ -8,6 +8,7 @@ import (
 	"github.com/plgd-dev/go-coap/v2/message"
 	"github.com/plgd-dev/go-coap/v2/message/pool"
 	coapNet "github.com/plgd-dev/go-coap/v2/net"
+	"github.com/plgd-dev/go-coap/v2/net/responsewriter"
 	"github.com/plgd-dev/go-coap/v2/pkg/errors"
 	"github.com/plgd-dev/go-coap/v2/udp/client"
 	"github.com/plgd-dev/go-coap/v2/udp/coder"
@@ -54,7 +55,7 @@ func (s *Server) DiscoveryRequest(req *pool.Message, address string, receiverFun
 	}
 	s.multicastRequests.Store(token.Hash(), req)
 	defer s.multicastRequests.Delete(token.Hash())
-	if _, loaded := s.multicastHandler.LoadOrStore(token.Hash(), func(w *client.ResponseWriter, r *pool.Message) {
+	if _, loaded := s.multicastHandler.LoadOrStore(token.Hash(), func(w *responsewriter.ResponseWriter[*client.ClientConn], r *pool.Message) {
 		receiverFunc(w.ClientConn(), r)
 	}); loaded {
 		return errors.ErrKeyAlreadyExists
