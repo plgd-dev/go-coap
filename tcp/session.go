@@ -16,6 +16,7 @@ import (
 	coapNet "github.com/plgd-dev/go-coap/v2/net"
 	"github.com/plgd-dev/go-coap/v2/net/blockwise"
 	"github.com/plgd-dev/go-coap/v2/net/monitor/inactivity"
+	coapSync "github.com/plgd-dev/go-coap/v2/pkg/sync"
 	"github.com/plgd-dev/go-coap/v2/tcp/coder"
 )
 
@@ -46,9 +47,7 @@ type Session struct {
 
 	handler HandlerFunc
 
-	midHandlerContainer *HandlerContainer
-
-	tokenHandlerContainer *HandlerContainer
+	tokenHandlerContainer *coapSync.Map[uint64, HandlerFunc]
 
 	messagePool *pool.Pool
 
@@ -96,8 +95,7 @@ func NewSession(
 		connection:                      connection,
 		handler:                         handler,
 		maxMessageSize:                  maxMessageSize,
-		tokenHandlerContainer:           NewHandlerContainer(),
-		midHandlerContainer:             NewHandlerContainer(),
+		tokenHandlerContainer:           coapSync.NewMap[uint64, func(*ResponseWriter, *pool.Message)](),
 		goPool:                          goPool,
 		errors:                          errors,
 		blockWise:                       blockWise,
@@ -186,10 +184,9 @@ func (s *Session) handleBlockwise(w *ResponseWriter, r *pool.Message) {
 			w: w,
 		}
 		s.blockWise.Handle(&bwr, r, s.blockwiseSZX, s.maxMessageSize, func(bw blockwise.ResponseWriter, br blockwise.Message) {
-			h, err := s.tokenHandlerContainer.Pop(r.Token())
 			rw := bw.(*bwResponseWriter).w
 			m := br.(*pool.Message)
-			if err == nil {
+			if h, ok := s.tokenHandlerContainer.Load(r.Token().Hash()); ok {
 				h(rw, m)
 				return
 			}
@@ -197,8 +194,7 @@ func (s *Session) handleBlockwise(w *ResponseWriter, r *pool.Message) {
 		})
 		return
 	}
-	h, err := s.tokenHandlerContainer.Pop(r.Token())
-	if err == nil {
+	if h, ok := s.tokenHandlerContainer.PullOut(r.Token().Hash()); ok {
 		h(w, r)
 		return
 	}
@@ -237,8 +233,7 @@ func (s *Session) handleSignals(r *pool.Message, cc *ClientConn) bool {
 		// }
 		return true
 	case codes.Pong:
-		h, err := s.tokenHandlerContainer.Pop(r.Token())
-		if err == nil {
+		if h, ok := s.tokenHandlerContainer.PullOut(r.Token().Hash()); ok {
 			s.processReq(r, cc, h)
 		}
 		return true
@@ -267,7 +262,7 @@ func (s *Session) Handle(w *ResponseWriter, r *pool.Message) {
 	s.handleBlockwise(w, r)
 }
 
-func (s *Session) TokenHandler() *HandlerContainer {
+func (s *Session) TokenHandler() *coapSync.Map[uint64, HandlerFunc] {
 	return s.tokenHandlerContainer
 }
 
