@@ -15,16 +15,16 @@ func init() {
 var msgID = uint32(RandMID())
 
 // GetMID generates a message id for UDP-coap
-func GetMID() uint16 {
-	return uint16(atomic.AddUint32(&msgID, 1))
+func GetMID() int32 {
+	return int32(uint16(atomic.AddUint32(&msgID, 1)))
 }
 
-func RandMID() uint16 {
+func RandMID() int32 {
 	b := make([]byte, 4)
 	_, err := rand.Read(b)
 	if err != nil {
 		// fallback to cryptographically insecure pseudo-random generator
-		return uint16(mathRand.Uint32() >> 16) //nolint:gosec
+		return int32(uint16(mathRand.Uint32() >> 16)) //nolint:gosec
 	}
-	return uint16(binary.BigEndian.Uint32(b))
+	return int32(uint16(binary.BigEndian.Uint32(b)))
 }

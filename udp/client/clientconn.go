@@ -29,7 +29,7 @@ type (
 	ErrorFunc   = func(error)
 	GoPoolFunc  = func(func()) error
 	EventFunc   = func()
-	GetMIDFunc  = func() uint16
+	GetMIDFunc  = func() int32
 )
 
 type Session interface {
@@ -157,8 +157,8 @@ func (cc *ClientConn) Session() Session {
 	return cc.session
 }
 
-func (cc *ClientConn) getMID() uint16 {
-	return uint16(atomic.AddUint32(&cc.msgID, 1))
+func (cc *ClientConn) getMID() int32 {
+	return int32(uint16(atomic.AddUint32(&cc.msgID, 1)))
 }
 
 // Close closes connection without waiting for the end of the Run function.
@@ -297,8 +297,10 @@ func (cc *ClientConn) WriteMessage(req *pool.Message) error {
 		req := bwreq.(*pool.Message)
 		if req.Options().HasOption(message.Block1) || req.Options().HasOption(message.Block2) {
 			req.SetMessageID(cc.getMID())
+			req.UpsertType(message.Confirmable)
 		} else {
 			req.UpsertMessageID(cc.getMID())
+			req.UpsertType(message.Confirmable)
 		}
 		return cc.writeMessage(req)
 	})
@@ -312,12 +314,13 @@ func newCommonRequest(ctx context.Context, messagePool *pool.Pool, code codes.Co
 	req := messagePool.AcquireMessage(ctx)
 	req.SetCode(code)
 	req.SetToken(token)
+	req.SetMessageID(message.RandMID())
+	req.SetType(message.Confirmable)
 	req.ResetOptionsTo(opts)
 	if err := req.SetPath(path); err != nil {
 		messagePool.ReleaseMessage(req)
 		return nil, err
 	}
-	req.SetType(message.Confirmable)
 	return req, nil
 }
 
@@ -339,6 +342,7 @@ func (cc *ClientConn) Get(ctx context.Context, path string, opts ...message.Opti
 	if err != nil {
 		return nil, fmt.Errorf("cannot create get request: %w", err)
 	}
+	req.SetMessageID(cc.getMID())
 	defer cc.ReleaseMessage(req)
 	return cc.Do(req)
 }
@@ -376,6 +380,7 @@ func (cc *ClientConn) Post(ctx context.Context, path string, contentFormat messa
 	if err != nil {
 		return nil, fmt.Errorf("cannot create post request: %w", err)
 	}
+	req.SetMessageID(cc.getMID())
 	defer cc.ReleaseMessage(req)
 	return cc.Do(req)
 }
@@ -410,6 +415,7 @@ func (cc *ClientConn) Put(ctx context.Context, path string, contentFormat messag
 	if err != nil {
 		return nil, fmt.Errorf("cannot create put request: %w", err)
 	}
+	req.SetMessageID(cc.getMID())
 	defer cc.ReleaseMessage(req)
 	return cc.Do(req)
 }
@@ -429,6 +435,7 @@ func (cc *ClientConn) Delete(ctx context.Context, path string, opts ...message.O
 	if err != nil {
 		return nil, fmt.Errorf("cannot create delete request: %w", err)
 	}
+	req.SetMessageID(cc.getMID())
 	defer cc.ReleaseMessage(req)
 	return cc.Do(req)
 }
@@ -579,7 +586,7 @@ func (cc *ClientConn) Sequence() uint64 {
 	return atomic.AddUint64(&cc.sequence, 1)
 }
 
-func (cc *ClientConn) responseMsgCacheID(msgID uint16) string {
+func (cc *ClientConn) responseMsgCacheID(msgID int32) string {
 	return fmt.Sprintf("resp-%v-%d", cc.RemoteAddr(), msgID)
 }
 
@@ -594,7 +601,7 @@ func (cc *ClientConn) addResponseToCache(resp *pool.Message) error {
 	return nil
 }
 
-func (cc *ClientConn) getResponseFromCache(mid uint16, resp *pool.Message) (bool, error) {
+func (cc *ClientConn) getResponseFromCache(mid int32, resp *pool.Message) (bool, error) {
 	cachedResp := cc.responseMsgCache.Load(cc.responseMsgCacheID(mid))
 	if cachedResp == nil {
 		return false, nil
@@ -612,7 +619,7 @@ func (cc *ClientConn) getResponseFromCache(mid uint16, resp *pool.Message) (bool
 // CheckMyMessageID compare client msgID against peer messageID and if it is near < 0xffff/4 then incrase msgID.
 // When msgIDs met it can cause issue because cache can send message to which doesn't bellows to request.
 func (cc *ClientConn) CheckMyMessageID(req *pool.Message) {
-	if req.Type() == message.Confirmable && req.MessageID()-uint16(atomic.LoadUint32(&cc.msgID)) < 0xffff/4 {
+	if req.Type() == message.Confirmable && uint16(req.MessageID())-uint16(atomic.LoadUint32(&cc.msgID)) < 0xffff/4 {
 		atomic.AddUint32(&cc.msgID, 0xffff/2)
 	}
 }
@@ -642,7 +649,7 @@ func sendJustAcknowledgeMessage(reqType message.Type, w *ResponseWriter) bool {
 	return reqType == message.Confirmable && !w.response.IsModified()
 }
 
-func (cc *ClientConn) processResponse(reqType message.Type, reqMessageID uint16, w *ResponseWriter) error {
+func (cc *ClientConn) processResponse(reqType message.Type, reqMessageID int32, w *ResponseWriter) error {
 	switch {
 	case isPongOrResetResponse(w):
 		if reqType == message.Confirmable {

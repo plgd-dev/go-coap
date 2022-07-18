@@ -7,9 +7,11 @@ import (
 // Type represents the message type.
 // It's only part of CoAP UDP messages.
 // Reliable transports like TCP do not have a type.
-type Type uint8
+type Type int16
 
 const (
+	// Used for unset
+	Unset Type = -1
 	// Confirmable messages require acknowledgements.
 	Confirmable Type = 0
 	// NonConfirmable messages do not require acknowledgements.
@@ -21,10 +23,11 @@ const (
 )
 
 var typeToString = map[Type]string{
+	Unset:           "Unset",
 	Confirmable:     "Confirmable",
 	NonConfirmable:  "NonConfirmable",
 	Acknowledgement: "Acknowledgement",
-	Reset:           "reset",
+	Reset:           "Reset",
 }
 
 func (t Type) String() string {

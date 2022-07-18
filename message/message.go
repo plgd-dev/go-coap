@@ -16,8 +16,8 @@ type Message struct {
 	Payload []byte
 
 	// For DTLS and UDP messages
-	MessageID uint16
-	Type      Type
+	MessageID int32 // uint16 is valid, all other values are invalid, -1 is used for unset
+	Type      Type  // uint8 is valid, all other values are invalid, -1 is used for unset
 }
 
 func (r *Message) String() string {

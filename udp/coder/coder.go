@@ -3,6 +3,8 @@ package coder
 import (
 	"encoding/binary"
 	"errors"
+	"fmt"
+	"math"
 
 	"github.com/plgd-dev/go-coap/v2/message"
 	"github.com/plgd-dev/go-coap/v2/message/codes"
@@ -44,6 +46,12 @@ func (c *Coder) Encode(m message.Message, buf []byte) (int, error) {
 	   |1 1 1 1 1 1 1 1|    Payload (if any) ...
 	   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
 	*/
+	if m.MessageID < 0 || m.MessageID > math.MaxUint16 {
+		return -1, fmt.Errorf("invalid MessageID(%v)", m.MessageID)
+	}
+	if m.Type < 0 || m.Type > math.MaxUint8 {
+		return -1, fmt.Errorf("invalid Type(%v)", m.Type)
+	}
 	size, err := c.Size(m)
 	if err != nil {
 		return -1, err
@@ -53,7 +61,7 @@ func (c *Coder) Encode(m message.Message, buf []byte) (int, error) {
 	}
 
 	tmpbuf := []byte{0, 0}
-	binary.BigEndian.PutUint16(tmpbuf, m.MessageID)
+	binary.BigEndian.PutUint16(tmpbuf, uint16(m.MessageID))
 
 	buf[0] = (1 << 6) | byte(m.Type)<<4 | byte(0xf&len(m.Token))
 	buf[1] = byte(m.Code)
@@ -127,7 +135,7 @@ func (c *Coder) Decode(data []byte, m *message.Message) (int, error) {
 	m.Code = code
 	m.Token = token
 	m.Type = typ
-	m.MessageID = messageID
+	m.MessageID = int32(messageID)
 
 	return size, nil
 }

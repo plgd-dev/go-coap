@@ -171,6 +171,7 @@ func TestClientConnGetSeparateMessage(t *testing.T) {
 				Code:    codes.Content,
 				Token:   r.Token(),
 				Options: make(message.Options, 0, 16),
+				Type:    message.Confirmable,
 				// Body:    bytes.NewReader(make([]byte, 10)),
 			}
 			optsBuf := make([]byte, 32)
