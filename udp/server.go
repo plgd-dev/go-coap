@@ -39,7 +39,7 @@ type BlockwiseFactoryFunc = func(getSentRequest func(token message.Token) (block
 
 type OnNewClientConnFunc = func(cc *client.ClientConn)
 
-type GetMIDFunc = func() uint16
+type GetMIDFunc = func() int32
 
 var defaultServerOptions = func() serverOptions {
 	opts := serverOptions{

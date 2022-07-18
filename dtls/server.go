@@ -45,7 +45,8 @@ type BlockwiseFactoryFunc = func(getSentRequest func(token message.Token) (block
 // "read-only" parameter, mainly used to get the peer certificate from the underlining connection
 type OnNewClientConnFunc = func(cc *client.ClientConn, dtlsConn *dtls.Conn)
 
-type GetMIDFunc = func() uint16
+// only 0 to 2^16-1 are valid
+type GetMIDFunc = func() int32
 
 var defaultServerOptions = func() serverOptions {
 	opts := serverOptions{

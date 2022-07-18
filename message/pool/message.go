@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 
 	"github.com/plgd-dev/go-coap/v2/message"
 	"github.com/plgd-dev/go-coap/v2/message/codes"
@@ -44,7 +45,9 @@ func NewMessage(ctx context.Context) *Message {
 	return &Message{
 		ctx: ctx,
 		msg: message.Message{
-			Options: make(message.Options, 0, 16),
+			Options:   make(message.Options, 0, 16),
+			MessageID: -1,
+			Type:      message.Unset,
 		},
 		valueBuffer:     valueBuffer,
 		origValueBuffer: valueBuffer,
@@ -57,7 +60,8 @@ func (r *Message) Context() context.Context {
 	return r.ctx
 }
 
-func (r *Message) SetMessageID(mid uint16) {
+// SetMessageID only 0 to 2^16-1 are valid.
+func (r *Message) SetMessageID(mid int32) {
 	r.msg.MessageID = mid
 	r.isModified = true
 }
@@ -71,20 +75,30 @@ func (r *Message) SetMessage(message message.Message) {
 	r.isModified = true
 }
 
-func (r *Message) UpsertMessageID(mid uint16) {
-	if r.msg.MessageID != 0 {
+// UpsertMessageID set value only when origin value is invalid. Only 0 to 2^16-1 values are valid.
+func (r *Message) UpsertMessageID(mid int32) {
+	if r.msg.MessageID >= 0 && r.msg.MessageID < math.MaxUint16 {
 		return
 	}
 	r.msg.MessageID = mid
 }
 
-func (r *Message) MessageID() uint16 {
+// MessageID returns 0 to 2^16-1 otherwise it contains invalid value.
+func (r *Message) MessageID() int32 {
 	return r.msg.MessageID
 }
 
 func (r *Message) SetType(typ message.Type) {
 	r.msg.Type = typ
 	r.isModified = true
+}
+
+// UpsertType set value only when origin value is invalid. Only 0 to 2^8-1 values are valid.
+func (r *Message) UpsertType(typ message.Type) {
+	if r.msg.Type >= 0 && r.msg.MessageID < math.MaxUint8 {
+		return
+	}
+	r.msg.Type = typ
 }
 
 func (r *Message) Type() message.Type {
@@ -96,8 +110,8 @@ func (r *Message) Reset() {
 	r.msg.Token = nil
 	r.msg.Code = codes.Empty
 	r.msg.Options = r.msg.Options[:0]
-	r.msg.MessageID = 0
-	r.msg.Type = message.NonConfirmable
+	r.msg.MessageID = -1
+	r.msg.Type = message.Unset
 	r.valueBuffer = r.origValueBuffer
 	r.body = nil
 	r.isModified = false
