@@ -181,7 +181,7 @@ func Client(conn *dtls.Conn, opts ...DialOption) *client.ClientConn {
 		)
 	}
 
-	observationTokenHandler := client.NewHandlerContainer()
+	observationTokenHandler := sync.NewMap[uint64, HandlerFunc]()
 	monitor := cfg.createInactivityMonitor()
 	var cc *client.ClientConn
 	l := coapNet.NewConn(conn)

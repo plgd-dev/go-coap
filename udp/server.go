@@ -126,7 +126,7 @@ type Server struct {
 	serverStartedChan chan struct{}
 
 	multicastRequests *client.RequestsMap
-	multicastHandler  *client.HandlerContainer
+	multicastHandler  *coapSync.Map[uint64, HandlerFunc]
 
 	errors                    ErrorFunc
 	connsMutex                sync.Mutex
@@ -184,7 +184,7 @@ func NewServer(opt ...ServerOption) *Server {
 		blockwiseSZX:                   opts.blockwiseSZX,
 		blockwiseEnable:                opts.blockwiseEnable,
 		blockwiseTransferTimeout:       opts.blockwiseTransferTimeout,
-		multicastHandler:               client.NewHandlerContainer(),
+		multicastHandler:               coapSync.NewMap[uint64, HandlerFunc](),
 		multicastRequests:              coapSync.NewMap[uint64, *pool.Message](),
 		serverStartedChan:              serverStartedChan,
 		onNewClientConn:                opts.onNewClientConn,
@@ -373,7 +373,7 @@ func (s *Server) getOrCreateClientConn(UDPConn *coapNet.UDPConn, raddr *net.UDPA
 				bwCreateHandlerFunc(s.messagePool, s.multicastRequests),
 			)
 		}
-		obsHandler := client.NewHandlerContainer()
+		obsHandler := coapSync.NewMap[uint64, HandlerFunc]()
 		session := NewSession(
 			s.ctx,
 			UDPConn,
@@ -391,8 +391,8 @@ func (s *Server) getOrCreateClientConn(UDPConn *coapNet.UDPConn, raddr *net.UDPA
 			s.transmissionAcknowledgeTimeout,
 			s.transmissionMaxRetransmit,
 			client.NewObservationHandler(obsHandler, func(w *client.ResponseWriter, r *pool.Message) {
-				h, err := s.multicastHandler.Get(r.Token())
-				if err == nil {
+				h, ok := s.multicastHandler.Load(r.Token().Hash())
+				if ok {
 					h(w, r)
 					return
 				}

@@ -15,6 +15,7 @@ import (
 	coapNet "github.com/plgd-dev/go-coap/v2/net"
 	"github.com/plgd-dev/go-coap/v2/net/blockwise"
 	"github.com/plgd-dev/go-coap/v2/net/monitor/inactivity"
+	coapErrors "github.com/plgd-dev/go-coap/v2/pkg/errors"
 	"github.com/plgd-dev/go-coap/v2/pkg/runner/periodic"
 	"github.com/plgd-dev/go-coap/v2/pkg/sync"
 )
@@ -102,7 +103,7 @@ type observationRequestsMap = sync.Map[uint64, observationMessage]
 type ClientConn struct {
 	noCopy
 	session                 *Session
-	observationTokenHandler *HandlerContainer
+	observationTokenHandler *sync.Map[uint64, HandlerFunc]
 	observationRequests     *observationRequestsMap
 }
 
@@ -208,7 +209,7 @@ func Client(conn net.Conn, opts ...DialOption) *ClientConn {
 
 	l := coapNet.NewConn(conn)
 	monitor := cfg.createInactivityMonitor()
-	observationTokenHandler := NewHandlerContainer()
+	observationTokenHandler := sync.NewMap[uint64, HandlerFunc]()
 	session := NewSession(cfg.ctx,
 		l,
 		NewObservationHandler(observationTokenHandler, cfg.handler),
@@ -242,7 +243,7 @@ func Client(conn net.Conn, opts ...DialOption) *ClientConn {
 }
 
 // NewClientConn creates connection over session and observation.
-func NewClientConn(session *Session, observationTokenHandler *HandlerContainer, observationRequests *observationRequestsMap) *ClientConn {
+func NewClientConn(session *Session, observationTokenHandler *sync.Map[uint64, HandlerFunc], observationRequests *observationRequestsMap) *ClientConn {
 	return &ClientConn{
 		session:                 session,
 		observationTokenHandler: observationTokenHandler,
@@ -269,19 +270,17 @@ func (cc *ClientConn) do(req *pool.Message) (*pool.Message, error) {
 		return nil, fmt.Errorf("invalid token")
 	}
 	respChan := make(chan *pool.Message, 1)
-	if err := cc.session.TokenHandler().Insert(token, func(w *ResponseWriter, r *pool.Message) {
+	if _, loaded := cc.session.TokenHandler().LoadOrStore(token.Hash(), func(w *ResponseWriter, r *pool.Message) {
 		r.Hijack()
 		select {
 		case respChan <- r:
 		default:
 		}
-	}); err != nil {
-		return nil, fmt.Errorf("cannot add token handler: %w", err)
+	}); loaded {
+		return nil, fmt.Errorf("cannot add token handler: %w", coapErrors.ErrKeyAlreadyExists)
 	}
 	defer func() {
-		if _, err := cc.session.TokenHandler().Pop(token); err != nil && !errors.Is(err, ErrKeyNotExists) {
-			cc.session.errors(fmt.Errorf("cannot remove token handler: %w", err))
-		}
+		_, _ = cc.session.TokenHandler().PullOut(token.Hash())
 	}()
 	if err := cc.session.WriteMessage(req); err != nil {
 		return nil, fmt.Errorf("cannot write request: %w", err)
@@ -500,18 +499,15 @@ func (cc *ClientConn) AsyncPing(receivedPong func()) (func(), error) {
 	req.SetCode(codes.Ping)
 	defer cc.session.messagePool.ReleaseMessage(req)
 
-	err = cc.session.TokenHandler().Insert(token, func(w *ResponseWriter, r *pool.Message) {
+	if _, loaded := cc.session.TokenHandler().LoadOrStore(token.Hash(), func(w *ResponseWriter, r *pool.Message) {
 		if r.Code() == codes.Pong {
 			receivedPong()
 		}
-	})
-	if err != nil {
-		return nil, fmt.Errorf("cannot add token handler: %w", err)
+	}); loaded {
+		return nil, fmt.Errorf("cannot add token handler: %w", coapErrors.ErrKeyAlreadyExists)
 	}
 	removeTokenHandler := func() {
-		if _, errT := cc.session.TokenHandler().Pop(token); errT != nil && !errors.Is(errT, ErrKeyNotExists) {
-			cc.session.errors(fmt.Errorf("cannot remove token handler: %w", errT))
-		}
+		_, _ = cc.session.TokenHandler().PullOut(token.Hash())
 	}
 	err = cc.session.WriteMessage(req)
 	if err != nil {

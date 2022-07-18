@@ -10,13 +10,15 @@ import (
 	"github.com/plgd-dev/go-coap/v2/message/codes"
 	"github.com/plgd-dev/go-coap/v2/message/pool"
 	"github.com/plgd-dev/go-coap/v2/net/observation"
+	coapErrors "github.com/plgd-dev/go-coap/v2/pkg/errors"
+	coapSync "github.com/plgd-dev/go-coap/v2/pkg/sync"
 	"go.uber.org/atomic"
 )
 
-func NewObservationHandler(obsertionTokenHandler *HandlerContainer, next HandlerFunc) HandlerFunc {
+func NewObservationHandler(obsertionTokenHandler *coapSync.Map[uint64, HandlerFunc], next HandlerFunc) HandlerFunc {
 	return func(w *ResponseWriter, r *pool.Message) {
-		v, err := obsertionTokenHandler.Get(r.Token())
-		if err == nil {
+		v, ok := obsertionTokenHandler.Load(r.Token().Hash())
+		if ok {
 			v(w, r)
 			return
 		}
@@ -68,7 +70,7 @@ func (o *Observation) Canceled() bool {
 func (o *Observation) cleanUp() bool {
 	// we can ignore err during cleanUp, if err != nil then some other
 	// part of code already removed the handler for the token
-	_, _ = o.cc.observationTokenHandler.Pop(o.token)
+	_, _ = o.cc.observationTokenHandler.PullOut(o.token.Hash())
 	registeredRequest, ok := o.cc.observationRequests.PullOut(o.token.Hash())
 	if ok {
 		o.cc.ReleaseMessage(registeredRequest)
@@ -169,15 +171,15 @@ func (cc *ClientConn) ObserveRequest(req *pool.Message, observeFunc func(req *po
 	}
 	respObservationChan := make(chan respObservationMessage, 1)
 	o := newObservation(token, path, cc, observeFunc, respObservationChan)
-
-	cc.observationRequests.Store(token.Hash(), req)
-	err = o.cc.observationTokenHandler.Insert(token.Hash(), o.handler)
 	defer func(err *error) {
 		if *err != nil {
 			o.cleanUp()
 		}
 	}(&err)
-	if err != nil {
+	cc.observationRequests.Store(token.Hash(), req)
+	_, loaded := o.cc.observationTokenHandler.LoadOrStore(token.Hash(), o.handler)
+	if loaded {
+		err = coapErrors.ErrKeyAlreadyExists
 		return nil, err
 	}
 

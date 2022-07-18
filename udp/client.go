@@ -182,7 +182,7 @@ func Client(conn *net.UDPConn, opts ...DialOption) *client.ClientConn {
 		)
 	}
 
-	observationTokenHandler := client.NewHandlerContainer()
+	observationTokenHandler := sync.NewMap[uint64, HandlerFunc]()
 	monitor := cfg.createInactivityMonitor()
 	cache := cache.NewCache()
 	l := coapNet.NewUDPConn(cfg.net, conn, coapNet.WithErrors(cfg.errors))

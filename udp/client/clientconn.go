@@ -16,6 +16,7 @@ import (
 	"github.com/plgd-dev/go-coap/v2/net/blockwise"
 	"github.com/plgd-dev/go-coap/v2/net/monitor/inactivity"
 	"github.com/plgd-dev/go-coap/v2/pkg/cache"
+	coapErrors "github.com/plgd-dev/go-coap/v2/pkg/errors"
 	"github.com/plgd-dev/go-coap/v2/pkg/sync"
 	"github.com/plgd-dev/go-coap/v2/udp/coder"
 	atomicTypes "go.uber.org/atomic"
@@ -62,7 +63,7 @@ type ClientConn struct {
 
 	blockWise               *blockwise.BlockWise
 	handler                 HandlerFunc
-	observationTokenHandler *HandlerContainer
+	observationTokenHandler *sync.Map[uint64, HandlerFunc]
 	observationRequests     *RequestsMap
 	transmission            *Transmission
 	messagePool             *pool.Pool
@@ -72,8 +73,8 @@ type ClientConn struct {
 	responseMsgCache *cache.Cache
 	msgIDMutex       *MutexMap
 
-	tokenHandlerContainer *HandlerContainer
-	midHandlerContainer   *HandlerContainer
+	tokenHandlerContainer *sync.Map[uint64, HandlerFunc]
+	midHandlerContainer   *sync.Map[int32, HandlerFunc]
 	msgID                 uint32
 	blockwiseSZX          blockwise.SZX
 }
@@ -104,7 +105,7 @@ func (cc *ClientConn) Transmission() *Transmission {
 // NewClientConn creates connection over session and observation.
 func NewClientConn(
 	session Session,
-	observationTokenHandler *HandlerContainer,
+	observationTokenHandler *sync.Map[uint64, HandlerFunc],
 	observationRequests *RequestsMap,
 	transmissionNStart time.Duration,
 	transmissionAcknowledgeTimeout time.Duration,
@@ -142,8 +143,8 @@ func NewClientConn(
 		blockwiseSZX: blockwiseSZX,
 		blockWise:    blockWise,
 
-		tokenHandlerContainer: NewHandlerContainer(),
-		midHandlerContainer:   NewHandlerContainer(),
+		tokenHandlerContainer: sync.NewMap[uint64, HandlerFunc](),
+		midHandlerContainer:   sync.NewMap[int32, HandlerFunc](),
 		goPool:                goPool,
 		errors:                errors,
 		msgIDMutex:            NewMutexMap(),
@@ -177,20 +178,19 @@ func (cc *ClientConn) do(req *pool.Message) (*pool.Message, error) {
 	}
 
 	respChan := make(chan *pool.Message, 1)
-	err := cc.tokenHandlerContainer.Insert(token, func(w *ResponseWriter, r *pool.Message) {
+	if _, loaded := cc.tokenHandlerContainer.LoadOrStore(token.Hash(), func(w *ResponseWriter, r *pool.Message) {
 		r.Hijack()
 		select {
 		case respChan <- r:
 		default:
 		}
-	})
-	if err != nil {
-		return nil, fmt.Errorf("cannot add token handler: %w", err)
+	}); loaded {
+		return nil, fmt.Errorf("cannot add token(%v) handler: %w", token, coapErrors.ErrKeyAlreadyExists)
 	}
 	defer func() {
-		_, _ = cc.tokenHandlerContainer.Pop(token)
+		_, _ = cc.tokenHandlerContainer.PullOut(token.Hash())
 	}()
-	err = cc.writeMessage(req)
+	err := cc.writeMessage(req)
 	if err != nil {
 		return nil, fmt.Errorf("cannot write request: %w", err)
 	}
@@ -235,19 +235,18 @@ func (cc *ClientConn) writeMessage(req *pool.Message) error {
 
 	// Only confirmable messages ever match an message ID
 	if req.Type() == message.Confirmable {
-		err := cc.midHandlerContainer.Insert(req.MessageID(), func(w *ResponseWriter, r *pool.Message) {
+		if _, loaded := cc.midHandlerContainer.LoadOrStore(req.MessageID(), func(w *ResponseWriter, r *pool.Message) {
 			close(respChan)
 			if r.IsSeparateMessage() {
 				// separate message - just accept
 				return
 			}
 			cc.handleBW(w, r)
-		})
-		if err != nil {
-			return fmt.Errorf("cannot insert mid handler: %w", err)
+		}); loaded {
+			return fmt.Errorf("cannot insert mid(%v) handler: %w", req.MessageID(), coapErrors.ErrKeyAlreadyExists)
 		}
 		defer func() {
-			_, _ = cc.midHandlerContainer.Pop(req.MessageID())
+			_, _ = cc.midHandlerContainer.PullOut(req.MessageID())
 		}()
 	}
 
@@ -479,19 +478,17 @@ func (cc *ClientConn) AsyncPing(receivedPong func()) (func(), error) {
 	req.SetCode(codes.Empty)
 	mid := cc.getMID()
 	req.SetMessageID(mid)
-	err := cc.midHandlerContainer.Insert(mid, func(w *ResponseWriter, r *pool.Message) {
+	if _, loaded := cc.midHandlerContainer.LoadOrStore(mid, func(w *ResponseWriter, r *pool.Message) {
 		if r.Type() == message.Reset || r.Type() == message.Acknowledgement {
 			receivedPong()
 		}
-	})
-	if err != nil {
-		return nil, fmt.Errorf("cannot insert mid handler: %w", err)
+	}); loaded {
+		return nil, fmt.Errorf("cannot insert mid(%v) handler: %w", mid, coapErrors.ErrKeyAlreadyExists)
 	}
 	removeMidHandler := func() {
-		_, _ = cc.midHandlerContainer.Pop(mid)
+		_, _ = cc.midHandlerContainer.PullOut(mid)
 	}
-	err = cc.session.WriteMessage(req)
-	if err != nil {
+	if err := cc.session.WriteMessage(req); err != nil {
 		removeMidHandler()
 		return nil, fmt.Errorf("cannot write request: %w", err)
 	}
@@ -545,10 +542,9 @@ func (cc *ClientConn) handleBW(w *ResponseWriter, m *pool.Message) {
 			w: w,
 		}
 		cc.blockWise.Handle(&bwr, m, cc.blockwiseSZX, cc.session.MaxMessageSize(), func(bw blockwise.ResponseWriter, br blockwise.Message) {
-			h, err := cc.tokenHandlerContainer.Pop(m.Token())
 			rw := bw.(*bwResponseWriter).w
 			rm := br.(*pool.Message)
-			if err == nil {
+			if h, ok := cc.tokenHandlerContainer.PullOut(m.Token().Hash()); ok {
 				h(rw, rm)
 				return
 			}
@@ -556,8 +552,7 @@ func (cc *ClientConn) handleBW(w *ResponseWriter, m *pool.Message) {
 		})
 		return
 	}
-	h, err := cc.tokenHandlerContainer.Pop(m.Token())
-	if err == nil {
+	if h, ok := cc.tokenHandlerContainer.PullOut(m.Token().Hash()); ok {
 		h(w, m)
 		return
 	}
@@ -569,8 +564,7 @@ func (cc *ClientConn) handle(w *ResponseWriter, r *pool.Message) {
 		cc.sendPong(w, r)
 		return
 	}
-	h, err := cc.midHandlerContainer.Pop(r.MessageID())
-	if err == nil {
+	if h, ok := cc.midHandlerContainer.PullOut(r.MessageID()); ok {
 		h(w, r)
 		return
 	}

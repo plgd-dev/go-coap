@@ -318,7 +318,7 @@ func (s *Server) createClientConn(connection *coapNet.Conn, monitor inactivity.M
 			},
 		)
 	}
-	obsHandler := client.NewHandlerContainer()
+	observationTokenHandler := coapSync.NewMap[uint64, HandlerFunc]()
 	session := NewSession(
 		s.ctx,
 		connection,
@@ -327,12 +327,12 @@ func (s *Server) createClientConn(connection *coapNet.Conn, monitor inactivity.M
 	)
 	cc := client.NewClientConn(
 		session,
-		obsHandler,
+		observationTokenHandler,
 		coapSync.NewMap[uint64, *pool.Message](),
 		s.transmissionNStart,
 		s.transmissionAcknowledgeTimeout,
 		s.transmissionMaxRetransmit,
-		client.NewObservationHandler(obsHandler, s.handler),
+		client.NewObservationHandler(observationTokenHandler, s.handler),
 		s.blockwiseSZX,
 		blockWise,
 		s.goPool,

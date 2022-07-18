@@ -309,7 +309,7 @@ func (s *Server) createClientConn(connection *coapNet.Conn, monitor inactivity.M
 			},
 		)
 	}
-	obsHandler := NewHandlerContainer()
+	obsHandler := coapSync.NewMap[uint64, HandlerFunc]()
 	cc := NewClientConn(
 		NewSession(
 			s.ctx,
