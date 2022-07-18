@@ -1,4 +1,4 @@
-package client
+package responsewriter
 
 import (
 	"io"
@@ -10,27 +10,27 @@ import (
 )
 
 // A ResponseWriter interface is used by an COAP handler to construct an COAP response.
-type ResponseWriter struct {
+type ResponseWriter[Client any] struct {
 	noResponseValue *uint32
 	response        *pool.Message
-	cc              *ClientConn
+	cc              Client
 }
 
-func NewResponseWriter(response *pool.Message, cc *ClientConn, requestOptions message.Options) *ResponseWriter {
+func New[Client any](response *pool.Message, cc Client, requestOptions message.Options) *ResponseWriter[Client] {
 	var noResponseValue *uint32
 	v, err := requestOptions.GetUint32(message.NoResponse)
 	if err == nil {
 		noResponseValue = &v
 	}
 
-	return &ResponseWriter{
+	return &ResponseWriter[Client]{
 		response:        response,
 		cc:              cc,
 		noResponseValue: noResponseValue,
 	}
 }
 
-func (r *ResponseWriter) SetResponse(code codes.Code, contentFormat message.MediaType, d io.ReadSeeker, opts ...message.Option) error {
+func (r *ResponseWriter[Client]) SetResponse(code codes.Code, contentFormat message.MediaType, d io.ReadSeeker, opts ...message.Option) error {
 	if r.noResponseValue != nil {
 		err := noresponse.IsNoResponseCode(code, *r.noResponseValue)
 		if err != nil {
@@ -54,11 +54,19 @@ func (r *ResponseWriter) SetResponse(code codes.Code, contentFormat message.Medi
 	return nil
 }
 
-func (r *ResponseWriter) ClientConn() *ClientConn {
+func (r *ResponseWriter[Client]) SetMessage(m *pool.Message) {
+	r.response = m
+}
+
+func (r *ResponseWriter[Client]) Message() *pool.Message {
+	return r.response
+}
+
+func (r *ResponseWriter[Client]) ClientConn() Client {
 	return r.cc
 }
 
-func (r *ResponseWriter) SendReset() {
+func (r *ResponseWriter[Client]) SendReset() {
 	r.response.Reset()
 	r.response.SetCode(codes.Empty)
 	r.response.SetType(message.Reset)

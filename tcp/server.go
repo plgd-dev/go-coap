@@ -17,6 +17,7 @@ import (
 	coapNet "github.com/plgd-dev/go-coap/v2/net"
 	"github.com/plgd-dev/go-coap/v2/net/blockwise"
 	"github.com/plgd-dev/go-coap/v2/net/monitor/inactivity"
+	"github.com/plgd-dev/go-coap/v2/net/responsewriter"
 	"github.com/plgd-dev/go-coap/v2/pkg/connections"
 	"github.com/plgd-dev/go-coap/v2/pkg/runner/periodic"
 	coapSync "github.com/plgd-dev/go-coap/v2/pkg/sync"
@@ -29,7 +30,7 @@ type ServerOption interface {
 
 // The HandlerFunc type is an adapter to allow the use of
 // ordinary functions as COAP handlers.
-type HandlerFunc = func(*ResponseWriter, *pool.Message)
+type HandlerFunc = func(*responsewriter.ResponseWriter[*ClientConn], *pool.Message)
 
 type ErrorFunc = func(error)
 
@@ -73,7 +74,7 @@ var defaultServerOptions = func() serverOptions {
 		connectionCacheSize: 2 * 1024,
 		messagePool:         pool.New(1024, 2048),
 	}
-	opts.handler = func(w *ResponseWriter, r *pool.Message) {
+	opts.handler = func(w *responsewriter.ResponseWriter[*ClientConn], r *pool.Message) {
 		if err := w.SetResponse(codes.NotFound, message.TextPlain, nil); err != nil {
 			opts.errors(fmt.Errorf("server handler: cannot set response: %w", err))
 		}

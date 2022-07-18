@@ -11,6 +11,7 @@ import (
 	"github.com/plgd-dev/go-coap/v2/message/codes"
 	"github.com/plgd-dev/go-coap/v2/message/pool"
 	coapNet "github.com/plgd-dev/go-coap/v2/net"
+	"github.com/plgd-dev/go-coap/v2/net/responsewriter"
 	"github.com/stretchr/testify/require"
 )
 
@@ -53,7 +54,7 @@ func TestClientConnObserve(t *testing.T) {
 			var wg sync.WaitGroup
 			defer wg.Wait()
 
-			s := NewServer(WithHandlerFunc(func(w *ResponseWriter, r *pool.Message) {
+			s := NewServer(WithHandlerFunc(func(w *responsewriter.ResponseWriter[*ClientConn], r *pool.Message) {
 				switch r.Code() {
 				case codes.PUT, codes.POST, codes.DELETE:
 					errS := w.SetResponse(codes.NotFound, message.TextPlain, nil)
@@ -179,7 +180,7 @@ func TestClientConnObserveNotSupported(t *testing.T) {
 			var wg sync.WaitGroup
 			defer wg.Wait()
 
-			s := NewServer(WithHandlerFunc(func(w *ResponseWriter, r *pool.Message) {
+			s := NewServer(WithHandlerFunc(func(w *responsewriter.ResponseWriter[*ClientConn], r *pool.Message) {
 				switch r.Code() {
 				case codes.PUT, codes.POST, codes.DELETE:
 					errS := w.SetResponse(codes.NotFound, message.TextPlain, nil)

@@ -15,6 +15,7 @@ import (
 	coapNet "github.com/plgd-dev/go-coap/v2/net"
 	"github.com/plgd-dev/go-coap/v2/net/blockwise"
 	"github.com/plgd-dev/go-coap/v2/net/monitor/inactivity"
+	"github.com/plgd-dev/go-coap/v2/net/responsewriter"
 	coapErrors "github.com/plgd-dev/go-coap/v2/pkg/errors"
 	"github.com/plgd-dev/go-coap/v2/pkg/runner/periodic"
 	"github.com/plgd-dev/go-coap/v2/pkg/sync"
@@ -51,7 +52,7 @@ var defaultDialOptions = func() dialOptions {
 		connectionCacheSize: 2048,
 		messagePool:         pool.New(1024, 2048),
 	}
-	opts.handler = func(w *ResponseWriter, r *pool.Message) {
+	opts.handler = func(w *responsewriter.ResponseWriter[*ClientConn], r *pool.Message) {
 		switch r.Code() {
 		case codes.POST, codes.PUT, codes.GET, codes.DELETE:
 			if err := w.SetResponse(codes.NotFound, message.TextPlain, nil); err != nil {
@@ -270,7 +271,7 @@ func (cc *ClientConn) do(req *pool.Message) (*pool.Message, error) {
 		return nil, fmt.Errorf("invalid token")
 	}
 	respChan := make(chan *pool.Message, 1)
-	if _, loaded := cc.session.TokenHandler().LoadOrStore(token.Hash(), func(w *ResponseWriter, r *pool.Message) {
+	if _, loaded := cc.session.TokenHandler().LoadOrStore(token.Hash(), func(w *responsewriter.ResponseWriter[*ClientConn], r *pool.Message) {
 		r.Hijack()
 		select {
 		case respChan <- r:
@@ -499,7 +500,7 @@ func (cc *ClientConn) AsyncPing(receivedPong func()) (func(), error) {
 	req.SetCode(codes.Ping)
 	defer cc.session.messagePool.ReleaseMessage(req)
 
-	if _, loaded := cc.session.TokenHandler().LoadOrStore(token.Hash(), func(w *ResponseWriter, r *pool.Message) {
+	if _, loaded := cc.session.TokenHandler().LoadOrStore(token.Hash(), func(w *responsewriter.ResponseWriter[*ClientConn], r *pool.Message) {
 		if r.Code() == codes.Pong {
 			receivedPong()
 		}

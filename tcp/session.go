@@ -16,6 +16,7 @@ import (
 	coapNet "github.com/plgd-dev/go-coap/v2/net"
 	"github.com/plgd-dev/go-coap/v2/net/blockwise"
 	"github.com/plgd-dev/go-coap/v2/net/monitor/inactivity"
+	"github.com/plgd-dev/go-coap/v2/net/responsewriter"
 	coapSync "github.com/plgd-dev/go-coap/v2/pkg/sync"
 	"github.com/plgd-dev/go-coap/v2/tcp/coder"
 )
@@ -95,7 +96,7 @@ func NewSession(
 		connection:                      connection,
 		handler:                         handler,
 		maxMessageSize:                  maxMessageSize,
-		tokenHandlerContainer:           coapSync.NewMap[uint64, func(*ResponseWriter, *pool.Message)](),
+		tokenHandlerContainer:           coapSync.NewMap[uint64, func(*responsewriter.ResponseWriter[*ClientConn], *pool.Message)](),
 		goPool:                          goPool,
 		errors:                          errors,
 		blockWise:                       blockWise,
@@ -178,7 +179,7 @@ func (s *Session) PeerBlockWiseTransferEnabled() bool {
 	return atomic.LoadUint32(&s.peerBlockWiseTranferEnabled) == 1
 }
 
-func (s *Session) handleBlockwise(w *ResponseWriter, r *pool.Message) {
+func (s *Session) handleBlockwise(w *responsewriter.ResponseWriter[*ClientConn], r *pool.Message) {
 	if s.blockWise != nil && s.PeerBlockWiseTransferEnabled() {
 		bwr := bwResponseWriter{
 			w: w,
@@ -242,23 +243,23 @@ func (s *Session) handleSignals(r *pool.Message, cc *ClientConn) bool {
 }
 
 type bwResponseWriter struct {
-	w *ResponseWriter
+	w *responsewriter.ResponseWriter[*ClientConn]
 }
 
 func (b *bwResponseWriter) Message() blockwise.Message {
-	return b.w.response
+	return b.w.Message()
 }
 
 func (b *bwResponseWriter) SetMessage(m blockwise.Message) {
-	b.w.cc.session.messagePool.ReleaseMessage(b.w.response)
-	b.w.response = m.(*pool.Message)
+	b.w.ClientConn().ReleaseMessage(b.w.Message())
+	b.w.SetMessage(m.(*pool.Message))
 }
 
 func (b *bwResponseWriter) RemoteAddr() net.Addr {
-	return b.w.cc.RemoteAddr()
+	return b.w.ClientConn().RemoteAddr()
 }
 
-func (s *Session) Handle(w *ResponseWriter, r *pool.Message) {
+func (s *Session) Handle(w *responsewriter.ResponseWriter[*ClientConn], r *pool.Message) {
 	s.handleBlockwise(w, r)
 }
 
@@ -266,17 +267,17 @@ func (s *Session) TokenHandler() *coapSync.Map[uint64, HandlerFunc] {
 	return s.tokenHandlerContainer
 }
 
-func (s *Session) processReq(req *pool.Message, cc *ClientConn, handler func(w *ResponseWriter, r *pool.Message)) {
+func (s *Session) processReq(req *pool.Message, cc *ClientConn, handler func(w *responsewriter.ResponseWriter[*ClientConn], r *pool.Message)) {
 	origResp := s.messagePool.AcquireMessage(s.Context())
 	origResp.SetToken(req.Token())
-	w := NewResponseWriter(origResp, cc, req.Options())
+	w := responsewriter.New(origResp, cc, req.Options())
 	handler(w, req)
-	defer s.messagePool.ReleaseMessage(w.response)
+	defer s.messagePool.ReleaseMessage(w.Message())
 	if !req.IsHijacked() {
 		s.messagePool.ReleaseMessage(req)
 	}
-	if w.response.IsModified() {
-		err := s.WriteMessage(w.response)
+	if w.Message().IsModified() {
+		err := s.WriteMessage(w.Message())
 		if err != nil {
 			if errC := s.Close(); errC != nil {
 				s.errors(fmt.Errorf("cannot close connection: %w", errC))

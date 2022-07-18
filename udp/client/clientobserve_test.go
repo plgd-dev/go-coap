@@ -11,6 +11,7 @@ import (
 	"github.com/plgd-dev/go-coap/v2/message/codes"
 	"github.com/plgd-dev/go-coap/v2/message/pool"
 	coapNet "github.com/plgd-dev/go-coap/v2/net"
+	"github.com/plgd-dev/go-coap/v2/net/responsewriter"
 	"github.com/plgd-dev/go-coap/v2/udp"
 	"github.com/plgd-dev/go-coap/v2/udp/client"
 	"github.com/stretchr/testify/require"
@@ -55,7 +56,7 @@ func TestClientConnObserve(t *testing.T) {
 			var wg sync.WaitGroup
 			defer wg.Wait()
 
-			s := udp.NewServer(udp.WithHandlerFunc(func(w *client.ResponseWriter, r *pool.Message) {
+			s := udp.NewServer(udp.WithHandlerFunc(func(w *responsewriter.ResponseWriter[*client.ClientConn], r *pool.Message) {
 				switch r.Code() {
 				case codes.PUT, codes.POST, codes.DELETE:
 					errS := w.SetResponse(codes.NotFound, message.TextPlain, nil)
@@ -181,7 +182,7 @@ func TestClientConnObserveNotSupported(t *testing.T) {
 			var wg sync.WaitGroup
 			defer wg.Wait()
 
-			s := udp.NewServer(udp.WithHandlerFunc(func(w *client.ResponseWriter, r *pool.Message) {
+			s := udp.NewServer(udp.WithHandlerFunc(func(w *responsewriter.ResponseWriter[*client.ClientConn], r *pool.Message) {
 				switch r.Code() {
 				case codes.PUT, codes.POST, codes.DELETE:
 					errS := w.SetResponse(codes.NotFound, message.TextPlain, nil)

@@ -7,10 +7,11 @@ import (
 	"github.com/plgd-dev/go-coap/v2/message/codes"
 	"github.com/plgd-dev/go-coap/v2/message/pool"
 	"github.com/plgd-dev/go-coap/v2/mux"
+	"github.com/plgd-dev/go-coap/v2/net/responsewriter"
 )
 
 func HandlerFuncToMux(m mux.Handler) HandlerFunc {
-	h := func(w *ResponseWriter, r *pool.Message) {
+	h := func(w *responsewriter.ResponseWriter[*ClientConn], r *pool.Message) {
 		muxw := &muxResponseWriter{
 			w: w,
 		}
@@ -23,7 +24,7 @@ func HandlerFuncToMux(m mux.Handler) HandlerFunc {
 }
 
 type muxResponseWriter struct {
-	w *ResponseWriter
+	w *responsewriter.ResponseWriter[*ClientConn]
 }
 
 func (w *muxResponseWriter) SetResponse(code codes.Code, contentFormat message.MediaType, d io.ReadSeeker, opts ...message.Option) error {

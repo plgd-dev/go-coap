@@ -12,6 +12,7 @@ import (
 	coapNet "github.com/plgd-dev/go-coap/v2/net"
 	"github.com/plgd-dev/go-coap/v2/net/blockwise"
 	"github.com/plgd-dev/go-coap/v2/net/monitor/inactivity"
+	"github.com/plgd-dev/go-coap/v2/net/responsewriter"
 	"github.com/plgd-dev/go-coap/v2/pkg/cache"
 	"github.com/plgd-dev/go-coap/v2/pkg/runner/periodic"
 	"github.com/plgd-dev/go-coap/v2/pkg/sync"
@@ -53,7 +54,7 @@ var defaultDialOptions = func() dialOptions {
 		},
 		messagePool: pool.New(1024, 1600),
 	}
-	opts.handler = func(w *client.ResponseWriter, r *pool.Message) {
+	opts.handler = func(w *responsewriter.ResponseWriter[*client.ClientConn], r *pool.Message) {
 		switch r.Code() {
 		case codes.POST, codes.PUT, codes.GET, codes.DELETE:
 			if err := w.SetResponse(codes.NotFound, message.TextPlain, nil); err != nil {

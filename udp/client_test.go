@@ -18,6 +18,7 @@ import (
 	"github.com/plgd-dev/go-coap/v2/mux"
 	coapNet "github.com/plgd-dev/go-coap/v2/net"
 	"github.com/plgd-dev/go-coap/v2/net/monitor/inactivity"
+	"github.com/plgd-dev/go-coap/v2/net/responsewriter"
 	"github.com/plgd-dev/go-coap/v2/pkg/runner/periodic"
 	"github.com/plgd-dev/go-coap/v2/udp/client"
 	"github.com/stretchr/testify/assert"
@@ -242,7 +243,7 @@ func TestClientConnGetSeparateMessage(t *testing.T) {
 		require.NoError(t, errS)
 	}()
 
-	cc, err := Dial(l.LocalAddr().String(), WithHandlerFunc(func(w *client.ResponseWriter, r *pool.Message) {
+	cc, err := Dial(l.LocalAddr().String(), WithHandlerFunc(func(w *responsewriter.ResponseWriter[*client.ClientConn], r *pool.Message) {
 		assert.NoError(t, fmt.Errorf("none msg expected comes: %+v", r))
 	}))
 	require.NoError(t, err)

@@ -10,13 +10,14 @@ import (
 	"github.com/plgd-dev/go-coap/v2/message/codes"
 	"github.com/plgd-dev/go-coap/v2/message/pool"
 	"github.com/plgd-dev/go-coap/v2/net/observation"
+	"github.com/plgd-dev/go-coap/v2/net/responsewriter"
 	"github.com/plgd-dev/go-coap/v2/pkg/errors"
 	coapSync "github.com/plgd-dev/go-coap/v2/pkg/sync"
 	"go.uber.org/atomic"
 )
 
 func NewObservationHandler(observationTokenHandler *coapSync.Map[uint64, HandlerFunc], next HandlerFunc) HandlerFunc {
-	return func(w *ResponseWriter, r *pool.Message) {
+	return func(w *responsewriter.ResponseWriter[*ClientConn], r *pool.Message) {
 		if v, ok := observationTokenHandler.Load(r.Token().Hash()); ok {
 			v(w, r)
 			return
@@ -61,7 +62,7 @@ func newObservation(token message.Token, path string, cc *ClientConn, observeFun
 	}
 }
 
-func (o *Observation) handler(w *ResponseWriter, r *pool.Message) {
+func (o *Observation) handler(w *responsewriter.ResponseWriter[*ClientConn], r *pool.Message) {
 	code := r.Code()
 	notSupported := !r.HasOption(message.Observe)
 	if o.waitForResponse.CAS(true, false) {
