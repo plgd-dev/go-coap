@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"net"
-	"sync/atomic"
 	"time"
 
 	"github.com/plgd-dev/go-coap/v2/message"
@@ -21,7 +20,7 @@ import (
 	coapErrors "github.com/plgd-dev/go-coap/v2/pkg/errors"
 	"github.com/plgd-dev/go-coap/v2/pkg/sync"
 	"github.com/plgd-dev/go-coap/v2/udp/coder"
-	atomicTypes "go.uber.org/atomic"
+	"go.uber.org/atomic"
 )
 
 // https://datatracker.ietf.org/doc/html/rfc7252#section-4.8.2
@@ -58,7 +57,7 @@ type RequestsMap = sync.Map[uint64, *pool.Message]
 type ClientConn struct {
 	// This field needs to be the first in the struct to ensure proper word alignment on 32-bit platforms.
 	// See: https://golang.org/pkg/sync/atomic/#pkg-note-BUG
-	sequence uint64
+	sequence atomic.Uint64
 
 	session           Session
 	inactivityMonitor inactivity.Monitor
@@ -75,15 +74,15 @@ type ClientConn struct {
 
 	tokenHandlerContainer *sync.Map[uint64, HandlerFunc]
 	midHandlerContainer   *sync.Map[int32, HandlerFunc]
-	msgID                 uint32
+	msgID                 atomic.Uint32
 	blockwiseSZX          blockwise.SZX
 }
 
 // Transmission is a threadsafe container for transmission related parameters
 type Transmission struct {
-	nStart             *atomicTypes.Duration
-	acknowledgeTimeout *atomicTypes.Duration
-	maxRetransmit      *atomicTypes.Int32
+	nStart             *atomic.Duration
+	acknowledgeTimeout *atomic.Duration
+	maxRetransmit      *atomic.Int32
 }
 
 func (t *Transmission) SetTransmissionNStart(d time.Duration) {
@@ -128,12 +127,11 @@ func NewClientConn(
 	}
 
 	cc := ClientConn{
-		msgID:   uint32(getMID() - 0xffff/2),
 		session: session,
 		transmission: &Transmission{
-			atomicTypes.NewDuration(transmissionNStart),
-			atomicTypes.NewDuration(transmissionAcknowledgeTimeout),
-			atomicTypes.NewInt32(int32(transmissionMaxRetransmit)),
+			atomic.NewDuration(transmissionNStart),
+			atomic.NewDuration(transmissionAcknowledgeTimeout),
+			atomic.NewInt32(int32(transmissionMaxRetransmit)),
 		},
 		blockwiseSZX: blockwiseSZX,
 
@@ -146,6 +144,7 @@ func NewClientConn(
 		inactivityMonitor:     inactivityMonitor,
 		messagePool:           messagePool,
 	}
+	cc.msgID.Store(uint32(getMID() - 0xffff/2))
 	cc.blockWise = createBlockWise(&cc)
 	cc.observationHandler = observation.NewHandler(&cc, handler)
 	return &cc
@@ -156,7 +155,7 @@ func (cc *ClientConn) Session() Session {
 }
 
 func (cc *ClientConn) GetMessageID() int32 {
-	return int32(uint16(atomic.AddUint32(&cc.msgID, 1)))
+	return int32(uint16(cc.msgID.Inc()))
 }
 
 // Close closes connection without waiting for the end of the Run function.
@@ -616,7 +615,7 @@ func (cc *ClientConn) handle(w *responsewriter.ResponseWriter[*ClientConn], r *p
 
 // Sequence acquires sequence number.
 func (cc *ClientConn) Sequence() uint64 {
-	return atomic.AddUint64(&cc.sequence, 1)
+	return cc.sequence.Add(1)
 }
 
 func (cc *ClientConn) responseMsgCacheID(msgID int32) string {
@@ -652,8 +651,8 @@ func (cc *ClientConn) getResponseFromCache(mid int32, resp *pool.Message) (bool,
 // CheckMyMessageID compare client msgID against peer messageID and if it is near < 0xffff/4 then incrase msgID.
 // When msgIDs met it can cause issue because cache can send message to which doesn't bellows to request.
 func (cc *ClientConn) CheckMyMessageID(req *pool.Message) {
-	if req.Type() == message.Confirmable && uint16(req.MessageID())-uint16(atomic.LoadUint32(&cc.msgID)) < 0xffff/4 {
-		atomic.AddUint32(&cc.msgID, 0xffff/2)
+	if req.Type() == message.Confirmable && uint16(req.MessageID())-uint16(cc.msgID.Load()) < 0xffff/4 {
+		cc.msgID.Add(0xffff / 2)
 	}
 }
 
@@ -801,10 +800,6 @@ func (cc *ClientConn) Process(datagram []byte) error {
 		return err
 	}
 	return nil
-}
-
-func (cc *ClientConn) Client() *Client {
-	return NewClient(cc)
 }
 
 // SetContextValue stores the value associated with key to context of connection.

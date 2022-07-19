@@ -133,7 +133,6 @@ func TestClientConnDeduplicationRetransmission(t *testing.T) {
 		atomic.AddInt32(&cnt, 1)
 		errH := w.SetResponse(codes.Content, message.AppOctets, bytes.NewReader([]byte{byte(cnt)}))
 		require.NoError(t, errH)
-		require.NotEmpty(t, w.Client())
 
 		// Only one delay to trigger retransmissions
 		once.Do(func() {

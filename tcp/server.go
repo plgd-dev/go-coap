@@ -29,7 +29,7 @@ type ServerOption interface {
 
 // The HandlerFunc type is an adapter to allow the use of
 // ordinary functions as COAP handlers.
-type HandlerFunc = func(*responsewriter.ResponseWriter[*ClientConn], *pool.Message)
+type HandlerFunc func(*responsewriter.ResponseWriter[*ClientConn], *pool.Message)
 
 type ErrorFunc = func(error)
 

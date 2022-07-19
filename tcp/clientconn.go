@@ -213,7 +213,7 @@ func Client(conn net.Conn, opts ...DialOption) *ClientConn {
 // NewClientConn creates connection over session and observation.
 func NewClientConn(ctx context.Context,
 	connection *coapNet.Conn,
-	handler HandlerFunc,
+	handler func(*responsewriter.ResponseWriter[*ClientConn], *pool.Message),
 	maxMessageSize uint32,
 	goPool GoPoolFunc,
 	errors ErrorFunc,
@@ -571,11 +571,6 @@ func (cc *ClientConn) RemoteAddr() net.Addr {
 
 func (cc *ClientConn) LocalAddr() net.Addr {
 	return cc.session.connection.LocalAddr()
-}
-
-// Client get instance which implements mux.Client.
-func (cc *ClientConn) Client() *ClientTCP {
-	return NewClientTCP(cc)
 }
 
 // Sequence acquires sequence number.

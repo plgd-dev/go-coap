@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"net"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/plgd-dev/go-coap/v2/message"
@@ -19,6 +18,7 @@ import (
 	"github.com/plgd-dev/go-coap/v2/net/responsewriter"
 	coapSync "github.com/plgd-dev/go-coap/v2/pkg/sync"
 	"github.com/plgd-dev/go-coap/v2/tcp/coder"
+	"go.uber.org/atomic"
 )
 
 type EventFunc func()
@@ -26,7 +26,7 @@ type EventFunc func()
 type Session struct {
 	// This field needs to be the first in the struct to ensure proper word alignment on 32-bit platforms.
 	// See: https://golang.org/pkg/sync/atomic/#pkg-note-BUG
-	sequence uint64
+	sequence atomic.Uint64
 
 	onClose []EventFunc
 
@@ -55,8 +55,8 @@ type Session struct {
 	mutex sync.Mutex
 
 	maxMessageSize                  uint32
-	peerBlockWiseTranferEnabled     uint32
-	peerMaxMessageSize              uint32
+	peerBlockWiseTranferEnabled     atomic.Bool
+	peerMaxMessageSize              atomic.Uint32
 	connectionCacheSize             uint16
 	disableTCPSignalMessageCSM      bool
 	disablePeerTCPSignalMessageCSMs bool
@@ -96,7 +96,7 @@ func NewSession(
 		connection:                      connection,
 		handler:                         handler,
 		maxMessageSize:                  maxMessageSize,
-		tokenHandlerContainer:           coapSync.NewMap[uint64, func(*responsewriter.ResponseWriter[*ClientConn], *pool.Message)](),
+		tokenHandlerContainer:           coapSync.NewMap[uint64, HandlerFunc](),
 		goPool:                          goPool,
 		errors:                          errors,
 		blockWise:                       blockWise,
@@ -164,7 +164,7 @@ func (s *Session) Close() error {
 }
 
 func (s *Session) Sequence() uint64 {
-	return atomic.AddUint64(&s.sequence, 1)
+	return s.sequence.Inc()
 }
 
 func (s *Session) Context() context.Context {
@@ -172,11 +172,11 @@ func (s *Session) Context() context.Context {
 }
 
 func (s *Session) PeerMaxMessageSize() uint32 {
-	return atomic.LoadUint32(&s.peerMaxMessageSize)
+	return s.peerMaxMessageSize.Load()
 }
 
 func (s *Session) PeerBlockWiseTransferEnabled() bool {
-	return atomic.LoadUint32(&s.peerBlockWiseTranferEnabled) == 1
+	return s.peerBlockWiseTranferEnabled.Load()
 }
 
 func (s *Session) handleBlockwise(w *responsewriter.ResponseWriter[*ClientConn], r *pool.Message) {
@@ -209,10 +209,10 @@ func (s *Session) handleSignals(r *pool.Message, cc *ClientConn) bool {
 			return true
 		}
 		if size, err := r.GetOptionUint32(message.TCPMaxMessageSize); err == nil {
-			atomic.StoreUint32(&s.peerMaxMessageSize, size)
+			s.peerMaxMessageSize.Store(size)
 		}
 		if r.HasOption(message.TCPBlockWiseTransfer) {
-			atomic.StoreUint32(&s.peerBlockWiseTranferEnabled, 1)
+			s.peerBlockWiseTranferEnabled.Store(true)
 		}
 		return true
 	case codes.Ping:

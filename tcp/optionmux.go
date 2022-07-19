@@ -33,5 +33,5 @@ func (w *muxResponseWriter) SetResponse(code codes.Code, contentFormat message.M
 }
 
 func (w *muxResponseWriter) Client() mux.Client {
-	return w.w.ClientConn().Client()
+	return w.w.ClientConn()
 }
