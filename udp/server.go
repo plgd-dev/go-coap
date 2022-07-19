@@ -363,18 +363,21 @@ func (s *Server) getOrCreateClientConn(UDPConn *coapNet.UDPConn, raddr *net.UDPA
 	cc = s.conns[key]
 	if cc == nil {
 		created = true
-		var blockWise *blockwise.BlockWise
-		if s.blockwiseEnable {
-			blockWise = blockwise.NewBlockWise(
-				bwCreateAcquireMessage(s.messagePool),
-				bwCreateReleaseMessage(s.messagePool),
-				s.blockwiseTransferTimeout,
-				s.errors,
-				false,
-				bwCreateHandlerFunc(s.messagePool, s.multicastRequests),
-			)
+		createBlockWise := func(cc *client.ClientConn) *blockwise.BlockWise {
+			return nil
 		}
-		obsHandler := coapSync.NewMap[uint64, HandlerFunc]()
+		if s.blockwiseEnable {
+			createBlockWise = func(cc *client.ClientConn) *blockwise.BlockWise {
+				return blockwise.NewBlockWise(
+					bwCreateAcquireMessage(s.messagePool),
+					bwCreateReleaseMessage(s.messagePool),
+					s.blockwiseTransferTimeout,
+					s.errors,
+					false,
+					bwCreateHandlerFunc(s.messagePool, s.multicastRequests),
+				)
+			}
+		}
 		session := NewSession(
 			s.ctx,
 			UDPConn,
@@ -386,21 +389,19 @@ func (s *Server) getOrCreateClientConn(UDPConn *coapNet.UDPConn, raddr *net.UDPA
 		monitor := s.createInactivityMonitor()
 		cc = client.NewClientConn(
 			session,
-			obsHandler,
-			s.multicastRequests,
 			s.transmissionNStart,
 			s.transmissionAcknowledgeTimeout,
 			s.transmissionMaxRetransmit,
-			client.NewObservationHandler(obsHandler, func(w *responsewriter.ResponseWriter[*client.ClientConn], r *pool.Message) {
+			func(w *responsewriter.ResponseWriter[*client.ClientConn], r *pool.Message) {
 				h, ok := s.multicastHandler.Load(r.Token().Hash())
 				if ok {
 					h(w, r)
 					return
 				}
 				s.handler(w, r)
-			}),
+			},
 			s.blockwiseSZX,
-			blockWise,
+			createBlockWise,
 			s.goPool,
 			s.errors,
 			s.getMID,

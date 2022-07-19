@@ -95,7 +95,7 @@ func (r *Message) SetType(typ message.Type) {
 
 // UpsertType set value only when origin value is invalid. Only 0 to 2^8-1 values are valid.
 func (r *Message) UpsertType(typ message.Type) {
-	if r.msg.Type >= 0 && r.msg.MessageID < math.MaxUint8 {
+	if r.msg.Type >= 0 && r.msg.Type < math.MaxUint8 {
 		return
 	}
 	r.msg.Type = typ

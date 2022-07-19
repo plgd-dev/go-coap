@@ -16,7 +16,6 @@ import (
 	"github.com/plgd-dev/go-coap/v2/net/responsewriter"
 	"github.com/plgd-dev/go-coap/v2/pkg/cache"
 	"github.com/plgd-dev/go-coap/v2/pkg/runner/periodic"
-	"github.com/plgd-dev/go-coap/v2/pkg/sync"
 	"github.com/plgd-dev/go-coap/v2/udp/client"
 )
 
@@ -123,24 +122,6 @@ func bwCreateReleaseMessage(messagePool *pool.Pool) func(m blockwise.Message) {
 	}
 }
 
-func bwCreateHandlerFunc(messagePool *pool.Pool, observationRequests *client.RequestsMap) func(token message.Token) (blockwise.Message, bool) {
-	return func(token message.Token) (blockwise.Message, bool) {
-		var bwMessage *pool.Message
-		_, ok := observationRequests.LoadWithFunc(token.Hash(), func(m *pool.Message) *pool.Message {
-			bwMessage = messagePool.AcquireMessage(m.Context())
-			bwMessage.ResetOptionsTo(m.Options())
-			bwMessage.SetCode(m.Code())
-			bwMessage.SetToken(m.Token())
-			bwMessage.SetMessageID(m.MessageID())
-			return m
-		})
-		if !ok {
-			return nil, false
-		}
-		return bwMessage, true
-	}
-}
-
 // Client creates client over dtls connection.
 func Client(conn *dtls.Conn, opts ...DialOption) *client.ClientConn {
 	cfg := defaultDialOptions
@@ -169,20 +150,22 @@ func Client(conn *dtls.Conn, opts ...DialOption) *client.ClientConn {
 		errorsFunc(fmt.Errorf("dtls: %v: %w", conn.RemoteAddr(), err))
 	}
 
-	observatioRequests := sync.NewMap[uint64, *pool.Message]()
-	var blockWise *blockwise.BlockWise
+	createBlockWise := func(cc *client.ClientConn) *blockwise.BlockWise {
+		return nil
+	}
 	if cfg.blockwiseEnable {
-		blockWise = blockwise.NewBlockWise(
-			bwCreateAcquireMessage(cfg.messagePool),
-			bwCreateReleaseMessage(cfg.messagePool),
-			cfg.blockwiseTransferTimeout,
-			cfg.errors,
-			false,
-			bwCreateHandlerFunc(cfg.messagePool, observatioRequests),
-		)
+		createBlockWise = func(cc *client.ClientConn) *blockwise.BlockWise {
+			return blockwise.NewBlockWise(
+				bwCreateAcquireMessage(cfg.messagePool),
+				bwCreateReleaseMessage(cfg.messagePool),
+				cfg.blockwiseTransferTimeout,
+				cfg.errors,
+				false,
+				cc.GetObservationRequest,
+			)
+		}
 	}
 
-	observationTokenHandler := sync.NewMap[uint64, HandlerFunc]()
 	monitor := cfg.createInactivityMonitor()
 	var cc *client.ClientConn
 	l := coapNet.NewConn(conn)
@@ -192,10 +175,10 @@ func Client(conn *dtls.Conn, opts ...DialOption) *client.ClientConn {
 		cfg.closeSocket,
 	)
 	cc = client.NewClientConn(session,
-		observationTokenHandler, observatioRequests, cfg.transmissionNStart, cfg.transmissionAcknowledgeTimeout, cfg.transmissionMaxRetransmit,
-		client.NewObservationHandler(observationTokenHandler, cfg.handler),
+		cfg.transmissionNStart, cfg.transmissionAcknowledgeTimeout, cfg.transmissionMaxRetransmit,
+		cfg.handler,
 		cfg.blockwiseSZX,
-		blockWise,
+		createBlockWise,
 		cfg.goPool,
 		cfg.errors,
 		cfg.getMID,

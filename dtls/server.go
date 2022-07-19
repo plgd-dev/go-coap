@@ -21,7 +21,6 @@ import (
 	"github.com/plgd-dev/go-coap/v2/pkg/cache"
 	"github.com/plgd-dev/go-coap/v2/pkg/connections"
 	"github.com/plgd-dev/go-coap/v2/pkg/runner/periodic"
-	coapSync "github.com/plgd-dev/go-coap/v2/pkg/sync"
 	"github.com/plgd-dev/go-coap/v2/udp/client"
 )
 
@@ -306,20 +305,23 @@ func (s *Server) Stop() {
 }
 
 func (s *Server) createClientConn(connection *coapNet.Conn, monitor inactivity.Monitor) *client.ClientConn {
-	var blockWise *blockwise.BlockWise
-	if s.blockwiseEnable {
-		blockWise = blockwise.NewBlockWise(
-			bwCreateAcquireMessage(s.messagePool),
-			bwCreateReleaseMessage(s.messagePool),
-			s.blockwiseTransferTimeout,
-			s.errors,
-			false,
-			func(token message.Token) (blockwise.Message, bool) {
-				return nil, false
-			},
-		)
+	createBlockWise := func(cc *client.ClientConn) *blockwise.BlockWise {
+		return nil
 	}
-	observationTokenHandler := coapSync.NewMap[uint64, HandlerFunc]()
+	if s.blockwiseEnable {
+		createBlockWise = func(cc *client.ClientConn) *blockwise.BlockWise {
+			return blockwise.NewBlockWise(
+				bwCreateAcquireMessage(s.messagePool),
+				bwCreateReleaseMessage(s.messagePool),
+				s.blockwiseTransferTimeout,
+				s.errors,
+				false,
+				func(token message.Token) (blockwise.Message, bool) {
+					return nil, false
+				},
+			)
+		}
+	}
 	session := NewSession(
 		s.ctx,
 		connection,
@@ -328,14 +330,12 @@ func (s *Server) createClientConn(connection *coapNet.Conn, monitor inactivity.M
 	)
 	cc := client.NewClientConn(
 		session,
-		observationTokenHandler,
-		coapSync.NewMap[uint64, *pool.Message](),
 		s.transmissionNStart,
 		s.transmissionAcknowledgeTimeout,
 		s.transmissionMaxRetransmit,
-		client.NewObservationHandler(observationTokenHandler, s.handler),
+		s.handler,
 		s.blockwiseSZX,
-		blockWise,
+		createBlockWise,
 		s.goPool,
 		s.errors,
 		s.getMID,
