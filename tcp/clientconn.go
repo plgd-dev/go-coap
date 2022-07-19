@@ -360,7 +360,7 @@ func (cc *ClientConn) Get(ctx context.Context, path string, opts ...message.Opti
 	if err != nil {
 		return nil, fmt.Errorf("cannot create get request: %w", err)
 	}
-	defer cc.session.messagePool.ReleaseMessage(req)
+	defer cc.ReleaseMessage(req)
 	return cc.Do(req)
 }
 
@@ -437,7 +437,7 @@ func (cc *ClientConn) Post(ctx context.Context, path string, contentFormat messa
 	if err != nil {
 		return nil, fmt.Errorf("cannot create post request: %w", err)
 	}
-	defer cc.session.messagePool.ReleaseMessage(req)
+	defer cc.ReleaseMessage(req)
 	return cc.Do(req)
 }
 
@@ -471,7 +471,7 @@ func (cc *ClientConn) Put(ctx context.Context, path string, contentFormat messag
 	if err != nil {
 		return nil, fmt.Errorf("cannot create put request: %w", err)
 	}
-	defer cc.session.messagePool.ReleaseMessage(req)
+	defer cc.ReleaseMessage(req)
 	return cc.Do(req)
 }
 
@@ -490,7 +490,7 @@ func (cc *ClientConn) Delete(ctx context.Context, path string, opts ...message.O
 	if err != nil {
 		return nil, fmt.Errorf("cannot create delete request: %w", err)
 	}
-	defer cc.session.messagePool.ReleaseMessage(req)
+	defer cc.ReleaseMessage(req)
 	return cc.Do(req)
 }
 
@@ -534,7 +534,7 @@ func (cc *ClientConn) AsyncPing(receivedPong func()) (func(), error) {
 	req := cc.session.messagePool.AcquireMessage(cc.Context())
 	req.SetToken(token)
 	req.SetCode(codes.Ping)
-	defer cc.session.messagePool.ReleaseMessage(req)
+	defer cc.ReleaseMessage(req)
 
 	if _, loaded := cc.session.TokenHandler().LoadOrStore(token.Hash(), func(w *responsewriter.ResponseWriter[*ClientConn], r *pool.Message) {
 		if r.Code() == codes.Pong {
@@ -566,11 +566,11 @@ func (cc *ClientConn) AddOnClose(f EventFunc) {
 
 // RemoteAddr gets remote address.
 func (cc *ClientConn) RemoteAddr() net.Addr {
-	return cc.session.connection.RemoteAddr()
+	return cc.session.RemoteAddr()
 }
 
 func (cc *ClientConn) LocalAddr() net.Addr {
-	return cc.session.connection.LocalAddr()
+	return cc.session.LocalAddr()
 }
 
 // Sequence acquires sequence number.
@@ -594,9 +594,9 @@ func (cc *ClientConn) CheckExpirations(now time.Time) {
 }
 
 func (cc *ClientConn) AcquireMessage(ctx context.Context) *pool.Message {
-	return cc.session.messagePool.AcquireMessage(ctx)
+	return cc.session.AcquireMessage(ctx)
 }
 
 func (cc *ClientConn) ReleaseMessage(m *pool.Message) {
-	cc.session.messagePool.ReleaseMessage(m)
+	cc.session.ReleaseMessage(m)
 }

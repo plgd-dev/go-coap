@@ -26,43 +26,29 @@ type EventFunc func()
 type Session struct {
 	// This field needs to be the first in the struct to ensure proper word alignment on 32-bit platforms.
 	// See: https://golang.org/pkg/sync/atomic/#pkg-note-BUG
-	sequence atomic.Uint64
-
-	onClose []EventFunc
-
-	ctx atomic.Value
-
-	inactivityMonitor inactivity.Monitor
-
-	errSendCSM error
-
-	cancel context.CancelFunc
-
-	done chan struct{}
-
-	goPool    GoPoolFunc
-	errors    ErrorFunc
-	blockWise *blockwise.BlockWise
-
-	connection *coapNet.Conn
-
-	handler HandlerFunc
-
-	tokenHandlerContainer *coapSync.Map[uint64, HandlerFunc]
-
-	messagePool *pool.Pool
-
-	mutex sync.Mutex
-
+	sequence                        atomic.Uint64
+	onClose                         []EventFunc
+	ctx                             atomic.Value
+	inactivityMonitor               inactivity.Monitor
+	errSendCSM                      error
+	cancel                          context.CancelFunc
+	done                            chan struct{}
+	goPool                          GoPoolFunc
+	errors                          ErrorFunc
+	blockWise                       *blockwise.BlockWise
+	connection                      *coapNet.Conn
+	handler                         HandlerFunc
+	tokenHandlerContainer           *coapSync.Map[uint64, HandlerFunc]
+	messagePool                     *pool.Pool
+	mutex                           sync.Mutex
 	maxMessageSize                  uint32
 	peerBlockWiseTranferEnabled     atomic.Bool
 	peerMaxMessageSize              atomic.Uint32
 	connectionCacheSize             uint16
 	disableTCPSignalMessageCSM      bool
 	disablePeerTCPSignalMessageCSMs bool
-
-	blockwiseSZX blockwise.SZX
-	closeSocket  bool
+	blockwiseSZX                    blockwise.SZX
+	closeSocket                     bool
 }
 
 func NewSession(
@@ -420,4 +406,21 @@ func (s *Session) CheckExpirations(now time.Time, cc *ClientConn) {
 	if s.blockWise != nil {
 		s.blockWise.CheckExpirations(now)
 	}
+}
+
+func (s *Session) AcquireMessage(ctx context.Context) *pool.Message {
+	return s.messagePool.AcquireMessage(ctx)
+}
+
+func (s *Session) ReleaseMessage(m *pool.Message) {
+	s.messagePool.ReleaseMessage(m)
+}
+
+// RemoteAddr gets remote address.
+func (s *Session) RemoteAddr() net.Addr {
+	return s.connection.RemoteAddr()
+}
+
+func (s *Session) LocalAddr() net.Addr {
+	return s.connection.LocalAddr()
 }

@@ -207,9 +207,7 @@ func (cc *ClientConn) do(req *pool.Message) (*pool.Message, error) {
 //
 // Caller is responsible to release request and response.
 func (cc *ClientConn) Do(req *pool.Message) (*pool.Message, error) {
-	req.UpsertType(message.Confirmable)
 	if cc.blockWise == nil {
-		req.UpsertMessageID(cc.GetMessageID())
 		return cc.do(req)
 	}
 	bwresp, err := cc.blockWise.Do(req, cc.blockwiseSZX, cc.session.MaxMessageSize(), func(bwreq blockwise.Message) (blockwise.Message, error) {
@@ -217,7 +215,6 @@ func (cc *ClientConn) Do(req *pool.Message) (*pool.Message, error) {
 		if req.Options().HasOption(message.Block1) || req.Options().HasOption(message.Block2) {
 			req.SetMessageID(cc.GetMessageID())
 		}
-		req.UpsertMessageID(cc.GetMessageID())
 		return cc.do(req)
 	})
 	if err != nil {
@@ -228,6 +225,8 @@ func (cc *ClientConn) Do(req *pool.Message) (*pool.Message, error) {
 
 func (cc *ClientConn) writeMessage(req *pool.Message) error {
 	respChan := make(chan struct{})
+	req.UpsertType(message.Confirmable)
+	req.UpsertMessageID(cc.GetMessageID())
 
 	// Only confirmable messages ever match an message ID
 	if req.Type() == message.Confirmable {
@@ -285,17 +284,12 @@ func (cc *ClientConn) writeMessage(req *pool.Message) error {
 // WriteMessage sends an coap message.
 func (cc *ClientConn) WriteMessage(req *pool.Message) error {
 	if cc.blockWise == nil {
-		req.UpsertMessageID(cc.GetMessageID())
 		return cc.writeMessage(req)
 	}
 	return cc.blockWise.WriteMessage(cc.RemoteAddr(), req, cc.blockwiseSZX, cc.session.MaxMessageSize(), func(bwreq blockwise.Message) error {
 		req := bwreq.(*pool.Message)
 		if req.Options().HasOption(message.Block1) || req.Options().HasOption(message.Block2) {
 			req.SetMessageID(cc.GetMessageID())
-			req.UpsertType(message.Confirmable)
-		} else {
-			req.UpsertMessageID(cc.GetMessageID())
-			req.UpsertType(message.Confirmable)
 		}
 		return cc.writeMessage(req)
 	})
@@ -309,8 +303,6 @@ func newCommonRequest(ctx context.Context, messagePool *pool.Pool, code codes.Co
 	req := messagePool.AcquireMessage(ctx)
 	req.SetCode(code)
 	req.SetToken(token)
-	req.SetMessageID(message.RandMID())
-	req.SetType(message.Confirmable)
 	req.ResetOptionsTo(opts)
 	if err := req.SetPath(path); err != nil {
 		messagePool.ReleaseMessage(req)
