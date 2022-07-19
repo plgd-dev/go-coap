@@ -20,7 +20,6 @@ import (
 	"github.com/plgd-dev/go-coap/v2/net/responsewriter"
 	"github.com/plgd-dev/go-coap/v2/pkg/connections"
 	"github.com/plgd-dev/go-coap/v2/pkg/runner/periodic"
-	coapSync "github.com/plgd-dev/go-coap/v2/pkg/sync"
 )
 
 // A ServerOption sets options such as credentials, codec and keepalive parameters, etc.
@@ -297,38 +296,38 @@ func (s *Server) Stop() {
 }
 
 func (s *Server) createClientConn(connection *coapNet.Conn, monitor inactivity.Monitor) *ClientConn {
-	var blockWise *blockwise.BlockWise
-	if s.blockwiseEnable {
-		blockWise = blockwise.NewBlockWise(
-			bwCreateAcquireMessage(s.messagePool),
-			bwCreateReleaseMessage(s.messagePool),
-			s.blockwiseTransferTimeout,
-			s.errors,
-			false,
-			func(token message.Token) (blockwise.Message, bool) {
-				return nil, false
-			},
-		)
+	createBlockWise := func(cc *ClientConn) *blockwise.BlockWise {
+		return nil
 	}
-	obsHandler := coapSync.NewMap[uint64, HandlerFunc]()
+	if s.blockwiseEnable {
+		createBlockWise = func(cc *ClientConn) *blockwise.BlockWise {
+			return blockwise.NewBlockWise(
+				bwCreateAcquireMessage(s.messagePool),
+				bwCreateReleaseMessage(s.messagePool),
+				s.blockwiseTransferTimeout,
+				s.errors,
+				false,
+				func(token message.Token) (blockwise.Message, bool) {
+					return nil, false
+				},
+			)
+		}
+	}
 	cc := NewClientConn(
-		NewSession(
-			s.ctx,
-			connection,
-			NewObservationHandler(obsHandler, s.handler),
-			s.maxMessageSize,
-			s.goPool,
-			s.errors,
-			s.blockwiseSZX,
-			blockWise,
-			s.disablePeerTCPSignalMessageCSMs,
-			s.disableTCPSignalMessageCSM,
-			true,
-			monitor,
-			s.connectionCacheSize,
-			s.messagePool,
-		),
-		obsHandler, coapSync.NewMap[uint64, observationMessage](),
+		s.ctx,
+		connection,
+		s.handler,
+		s.maxMessageSize,
+		s.goPool,
+		s.errors,
+		s.blockwiseSZX,
+		createBlockWise,
+		s.disablePeerTCPSignalMessageCSMs,
+		s.disableTCPSignalMessageCSM,
+		true,
+		monitor,
+		s.connectionCacheSize,
+		s.messagePool,
 	)
 
 	return cc

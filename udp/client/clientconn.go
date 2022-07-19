@@ -15,6 +15,7 @@ import (
 	coapNet "github.com/plgd-dev/go-coap/v2/net"
 	"github.com/plgd-dev/go-coap/v2/net/blockwise"
 	"github.com/plgd-dev/go-coap/v2/net/monitor/inactivity"
+	"github.com/plgd-dev/go-coap/v2/net/observation"
 	"github.com/plgd-dev/go-coap/v2/net/responsewriter"
 	"github.com/plgd-dev/go-coap/v2/pkg/cache"
 	coapErrors "github.com/plgd-dev/go-coap/v2/pkg/errors"
@@ -62,12 +63,10 @@ type ClientConn struct {
 	session           Session
 	inactivityMonitor inactivity.Monitor
 
-	blockWise               *blockwise.BlockWise
-	handler                 HandlerFunc
-	observationTokenHandler *sync.Map[uint64, HandlerFunc]
-	observationRequests     *RequestsMap
-	transmission            *Transmission
-	messagePool             *pool.Pool
+	blockWise          *blockwise.BlockWise
+	observationHandler *observation.Handler[*ClientConn]
+	transmission       *Transmission
+	messagePool        *pool.Pool
 
 	goPool           GoPoolFunc
 	errors           ErrorFunc
@@ -106,14 +105,12 @@ func (cc *ClientConn) Transmission() *Transmission {
 // NewClientConn creates connection over session and observation.
 func NewClientConn(
 	session Session,
-	observationTokenHandler *sync.Map[uint64, HandlerFunc],
-	observationRequests *RequestsMap,
 	transmissionNStart time.Duration,
 	transmissionAcknowledgeTimeout time.Duration,
 	transmissionMaxRetransmit uint32,
 	handler HandlerFunc,
 	blockwiseSZX blockwise.SZX,
-	blockWise *blockwise.BlockWise,
+	createBlockWise func(cc *ClientConn) *blockwise.BlockWise,
 	goPool GoPoolFunc,
 	errors ErrorFunc,
 	getMID GetMIDFunc,
@@ -130,19 +127,15 @@ func NewClientConn(
 		getMID = message.GetMID
 	}
 
-	return &ClientConn{
-		msgID:                   uint32(getMID() - 0xffff/2),
-		session:                 session,
-		observationTokenHandler: observationTokenHandler,
-		observationRequests:     observationRequests,
+	cc := ClientConn{
+		msgID:   uint32(getMID() - 0xffff/2),
+		session: session,
 		transmission: &Transmission{
 			atomicTypes.NewDuration(transmissionNStart),
 			atomicTypes.NewDuration(transmissionAcknowledgeTimeout),
 			atomicTypes.NewInt32(int32(transmissionMaxRetransmit)),
 		},
-		handler:      handler,
 		blockwiseSZX: blockwiseSZX,
-		blockWise:    blockWise,
 
 		tokenHandlerContainer: sync.NewMap[uint64, HandlerFunc](),
 		midHandlerContainer:   sync.NewMap[int32, HandlerFunc](),
@@ -153,13 +146,16 @@ func NewClientConn(
 		inactivityMonitor:     inactivityMonitor,
 		messagePool:           messagePool,
 	}
+	cc.blockWise = createBlockWise(&cc)
+	cc.observationHandler = observation.NewHandler(&cc, handler)
+	return &cc
 }
 
 func (cc *ClientConn) Session() Session {
 	return cc.session
 }
 
-func (cc *ClientConn) getMID() int32 {
+func (cc *ClientConn) GetMessageID() int32 {
 	return int32(uint16(atomic.AddUint32(&cc.msgID, 1)))
 }
 
@@ -212,17 +208,17 @@ func (cc *ClientConn) do(req *pool.Message) (*pool.Message, error) {
 //
 // Caller is responsible to release request and response.
 func (cc *ClientConn) Do(req *pool.Message) (*pool.Message, error) {
+	req.UpsertType(message.Confirmable)
 	if cc.blockWise == nil {
-		req.UpsertMessageID(cc.getMID())
+		req.UpsertMessageID(cc.GetMessageID())
 		return cc.do(req)
 	}
 	bwresp, err := cc.blockWise.Do(req, cc.blockwiseSZX, cc.session.MaxMessageSize(), func(bwreq blockwise.Message) (blockwise.Message, error) {
 		req := bwreq.(*pool.Message)
 		if req.Options().HasOption(message.Block1) || req.Options().HasOption(message.Block2) {
-			req.SetMessageID(cc.getMID())
-		} else {
-			req.UpsertMessageID(cc.getMID())
+			req.SetMessageID(cc.GetMessageID())
 		}
+		req.UpsertMessageID(cc.GetMessageID())
 		return cc.do(req)
 	})
 	if err != nil {
@@ -290,16 +286,16 @@ func (cc *ClientConn) writeMessage(req *pool.Message) error {
 // WriteMessage sends an coap message.
 func (cc *ClientConn) WriteMessage(req *pool.Message) error {
 	if cc.blockWise == nil {
-		req.UpsertMessageID(cc.getMID())
+		req.UpsertMessageID(cc.GetMessageID())
 		return cc.writeMessage(req)
 	}
 	return cc.blockWise.WriteMessage(cc.RemoteAddr(), req, cc.blockwiseSZX, cc.session.MaxMessageSize(), func(bwreq blockwise.Message) error {
 		req := bwreq.(*pool.Message)
 		if req.Options().HasOption(message.Block1) || req.Options().HasOption(message.Block2) {
-			req.SetMessageID(cc.getMID())
+			req.SetMessageID(cc.GetMessageID())
 			req.UpsertType(message.Confirmable)
 		} else {
-			req.UpsertMessageID(cc.getMID())
+			req.UpsertMessageID(cc.GetMessageID())
 			req.UpsertType(message.Confirmable)
 		}
 		return cc.writeMessage(req)
@@ -342,9 +338,51 @@ func (cc *ClientConn) Get(ctx context.Context, path string, opts ...message.Opti
 	if err != nil {
 		return nil, fmt.Errorf("cannot create get request: %w", err)
 	}
-	req.SetMessageID(cc.getMID())
+	req.SetMessageID(cc.GetMessageID())
 	defer cc.ReleaseMessage(req)
 	return cc.Do(req)
+}
+
+// NewObserveRequest creates observe request.
+//
+// Use ctx to set timeout.
+func NewObserveRequest(ctx context.Context, messagePool *pool.Pool, path string, opts ...message.Option) (*pool.Message, error) {
+	req, err := NewGetRequest(ctx, messagePool, path, opts...)
+	if err != nil {
+		return nil, fmt.Errorf("cannot create observe request: %w", err)
+	}
+	req.SetObserve(0)
+	return req, nil
+}
+
+type Observation = interface {
+	Cancel(ctx context.Context) error
+	Canceled() bool
+}
+
+// Observe subscribes for every change of resource on path.
+func (cc *ClientConn) Observe(ctx context.Context, path string, observeFunc func(req *pool.Message), opts ...message.Option) (Observation, error) {
+	req, err := NewObserveRequest(ctx, cc.messagePool, path, opts...)
+	if err != nil {
+		return nil, err
+	}
+	req.SetMessageID(cc.GetMessageID())
+	defer cc.ReleaseMessage(req)
+	return cc.observationHandler.NewObservation(req, observeFunc)
+}
+
+func (cc *ClientConn) GetObservationRequest(token message.Token) (blockwise.Message, bool) {
+	obs, ok := cc.observationHandler.GetObservation(token.Hash())
+	if !ok {
+		return nil, false
+	}
+	req := obs.Request()
+	msg := cc.AcquireMessage(cc.Context())
+	msg.ResetOptionsTo(req.Options)
+	msg.SetCode(req.Code)
+	msg.SetToken(req.Token)
+	msg.SetMessageID(req.MessageID)
+	return msg, true
 }
 
 // NewPostRequest creates post request.
@@ -380,7 +418,7 @@ func (cc *ClientConn) Post(ctx context.Context, path string, contentFormat messa
 	if err != nil {
 		return nil, fmt.Errorf("cannot create post request: %w", err)
 	}
-	req.SetMessageID(cc.getMID())
+	req.SetMessageID(cc.GetMessageID())
 	defer cc.ReleaseMessage(req)
 	return cc.Do(req)
 }
@@ -415,7 +453,7 @@ func (cc *ClientConn) Put(ctx context.Context, path string, contentFormat messag
 	if err != nil {
 		return nil, fmt.Errorf("cannot create put request: %w", err)
 	}
-	req.SetMessageID(cc.getMID())
+	req.SetMessageID(cc.GetMessageID())
 	defer cc.ReleaseMessage(req)
 	return cc.Do(req)
 }
@@ -435,7 +473,7 @@ func (cc *ClientConn) Delete(ctx context.Context, path string, opts ...message.O
 	if err != nil {
 		return nil, fmt.Errorf("cannot create delete request: %w", err)
 	}
-	req.SetMessageID(cc.getMID())
+	req.SetMessageID(cc.GetMessageID())
 	defer cc.ReleaseMessage(req)
 	return cc.Do(req)
 }
@@ -477,7 +515,7 @@ func (cc *ClientConn) AsyncPing(receivedPong func()) (func(), error) {
 	defer cc.ReleaseMessage(req)
 	req.SetType(message.Confirmable)
 	req.SetCode(codes.Empty)
-	mid := cc.getMID()
+	mid := cc.GetMessageID()
 	req.SetMessageID(mid)
 	if _, loaded := cc.midHandlerContainer.LoadOrStore(mid, func(w *responsewriter.ResponseWriter[*ClientConn], r *pool.Message) {
 		if r.Type() == message.Reset || r.Type() == message.Acknowledgement {
@@ -549,7 +587,7 @@ func (cc *ClientConn) handleBW(w *responsewriter.ResponseWriter[*ClientConn], m 
 				h(rw, rm)
 				return
 			}
-			cc.handler(rw, rm)
+			cc.observationHandler.Handle(rw, rm)
 		})
 		return
 	}
@@ -557,7 +595,7 @@ func (cc *ClientConn) handleBW(w *responsewriter.ResponseWriter[*ClientConn], m 
 		h(w, m)
 		return
 	}
-	cc.handler(w, m)
+	cc.observationHandler.Handle(w, m)
 }
 
 func (cc *ClientConn) handle(w *responsewriter.ResponseWriter[*ClientConn], r *pool.Message) {
@@ -654,7 +692,7 @@ func (cc *ClientConn) processResponse(reqType message.Type, reqMessageID int32, 
 			if w.Message().Type() != message.Reset {
 				w.Message().SetType(message.NonConfirmable)
 			}
-			w.Message().SetMessageID(cc.getMID())
+			w.Message().SetMessageID(cc.GetMessageID())
 		}
 		return nil
 	case sendJustAcknowledgeMessage(reqType, w):
@@ -675,7 +713,7 @@ func (cc *ClientConn) processResponse(reqType message.Type, reqMessageID int32, 
 
 	// send piggybacked response
 	w.Message().SetType(message.Confirmable)
-	w.Message().SetMessageID(cc.getMID())
+	w.Message().SetMessageID(cc.GetMessageID())
 	if reqType == message.Confirmable {
 		w.Message().SetType(message.Acknowledgement)
 		w.Message().SetMessageID(reqMessageID)
@@ -802,7 +840,7 @@ func (cc *ClientConn) WriteMulticastMessage(req *pool.Message, address *net.UDPA
 	if req.Type() == message.Confirmable {
 		return fmt.Errorf("multicast messages cannot be confirmable")
 	}
-	req.SetMessageID(cc.getMID())
+	req.SetMessageID(cc.GetMessageID())
 
 	err := cc.session.WriteMulticastMessage(req, address, options...)
 	if err != nil {

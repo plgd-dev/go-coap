@@ -15,10 +15,10 @@ import (
 	coapNet "github.com/plgd-dev/go-coap/v2/net"
 	"github.com/plgd-dev/go-coap/v2/net/blockwise"
 	"github.com/plgd-dev/go-coap/v2/net/monitor/inactivity"
+	"github.com/plgd-dev/go-coap/v2/net/observation"
 	"github.com/plgd-dev/go-coap/v2/net/responsewriter"
 	coapErrors "github.com/plgd-dev/go-coap/v2/pkg/errors"
 	"github.com/plgd-dev/go-coap/v2/pkg/runner/periodic"
-	"github.com/plgd-dev/go-coap/v2/pkg/sync"
 )
 
 var defaultDialOptions = func() dialOptions {
@@ -93,19 +93,11 @@ type Notifier interface {
 	Notify()
 }
 
-type observationMessage struct {
-	ctx context.Context
-	message.Message
-}
-
-type observationRequestsMap = sync.Map[uint64, observationMessage]
-
 // ClientConn represents a virtual connection to a conceptual endpoint, to perform COAPs commands.
 type ClientConn struct {
 	noCopy
-	session                 *Session
-	observationTokenHandler *sync.Map[uint64, HandlerFunc]
-	observationRequests     *observationRequestsMap
+	session            *Session
+	observationHandler *observation.Handler[*ClientConn]
 }
 
 // Dial creates a client connection to the given target.
@@ -141,32 +133,6 @@ func bwCreateReleaseMessage(messagePool *pool.Pool) func(m blockwise.Message) {
 	}
 }
 
-func bwCreateHandlerFunc(messagePool *pool.Pool, observationRequests *observationRequestsMap) func(token message.Token) (blockwise.Message, bool) {
-	return func(token message.Token) (blockwise.Message, bool) {
-		msg, ok := observationRequests.LoadWithFunc(token.Hash(), func(value observationMessage) observationMessage {
-			token := make([]byte, len(value.Token))
-			copy(token, value.Token)
-			opts, _ := value.Options.Clone()
-			return observationMessage{
-				ctx: value.ctx,
-				Message: message.Message{
-					Token:   token,
-					Code:    value.Code,
-					Options: opts,
-				},
-			}
-		})
-		if !ok {
-			return nil, false
-		}
-		d := messagePool.AcquireMessage(msg.ctx)
-		d.ResetOptionsTo(msg.Options)
-		d.SetCode(msg.Code)
-		d.SetToken(msg.Token)
-		return d, true
-	}
-}
-
 // Client creates client over tcp/tcp-tls connection.
 func Client(conn net.Conn, opts ...DialOption) *ClientConn {
 	cfg := defaultDialOptions
@@ -195,30 +161,32 @@ func Client(conn net.Conn, opts ...DialOption) *ClientConn {
 		errorsFunc(fmt.Errorf("tcp: %w", err))
 	}
 
-	observationRequests := sync.NewMap[uint64, observationMessage]()
-	var blockWise *blockwise.BlockWise
+	createBlockWise := func(cc *ClientConn) *blockwise.BlockWise {
+		return nil
+	}
 	if cfg.blockwiseEnable {
-		blockWise = blockwise.NewBlockWise(
-			bwCreateAcquireMessage(cfg.messagePool),
-			bwCreateReleaseMessage(cfg.messagePool),
-			cfg.blockwiseTransferTimeout,
-			cfg.errors,
-			false,
-			bwCreateHandlerFunc(cfg.messagePool, observationRequests),
-		)
+		createBlockWise = func(cc *ClientConn) *blockwise.BlockWise {
+			return blockwise.NewBlockWise(
+				bwCreateAcquireMessage(cfg.messagePool),
+				bwCreateReleaseMessage(cfg.messagePool),
+				cfg.blockwiseTransferTimeout,
+				cfg.errors,
+				false,
+				cc.getObservationRequest,
+			)
+		}
 	}
 
 	l := coapNet.NewConn(conn)
 	monitor := cfg.createInactivityMonitor()
-	observationTokenHandler := sync.NewMap[uint64, HandlerFunc]()
-	session := NewSession(cfg.ctx,
+	cc := NewClientConn(cfg.ctx,
 		l,
-		NewObservationHandler(observationTokenHandler, cfg.handler),
+		cfg.handler,
 		cfg.maxMessageSize,
 		cfg.goPool,
 		cfg.errors,
 		cfg.blockwiseSZX,
-		blockWise,
+		createBlockWise,
 		cfg.disablePeerTCPSignalMessageCSMs,
 		cfg.disableTCPSignalMessageCSM,
 		cfg.closeSocket,
@@ -226,7 +194,6 @@ func Client(conn net.Conn, opts ...DialOption) *ClientConn {
 		cfg.connectionCacheSize,
 		cfg.messagePool,
 	)
-	cc := NewClientConn(session, observationTokenHandler, observationRequests)
 
 	cfg.periodicRunner(func(now time.Time) bool {
 		cc.CheckExpirations(now)
@@ -244,12 +211,41 @@ func Client(conn net.Conn, opts ...DialOption) *ClientConn {
 }
 
 // NewClientConn creates connection over session and observation.
-func NewClientConn(session *Session, observationTokenHandler *sync.Map[uint64, HandlerFunc], observationRequests *observationRequestsMap) *ClientConn {
-	return &ClientConn{
-		session:                 session,
-		observationTokenHandler: observationTokenHandler,
-		observationRequests:     observationRequests,
-	}
+func NewClientConn(ctx context.Context,
+	connection *coapNet.Conn,
+	handler HandlerFunc,
+	maxMessageSize uint32,
+	goPool GoPoolFunc,
+	errors ErrorFunc,
+	blockwiseSZX blockwise.SZX,
+	createBlockWise func(cc *ClientConn) *blockwise.BlockWise,
+	disablePeerTCPSignalMessageCSMs bool,
+	disableTCPSignalMessageCSM bool,
+	closeSocket bool,
+	inactivityMonitor inactivity.Monitor,
+	connectionCacheSize uint16,
+	messagePool *pool.Pool,
+) *ClientConn {
+	cc := ClientConn{}
+	cc.observationHandler = observation.NewHandler(&cc, handler)
+	blockWise := createBlockWise(&cc)
+	session := NewSession(ctx,
+		connection,
+		cc.observationHandler.Handle,
+		maxMessageSize,
+		goPool,
+		errors,
+		blockwiseSZX,
+		blockWise,
+		disablePeerTCPSignalMessageCSMs,
+		disableTCPSignalMessageCSM,
+		closeSocket,
+		inactivityMonitor,
+		connectionCacheSize,
+		messagePool,
+	)
+	cc.session = session
+	return &cc
 }
 
 func (cc *ClientConn) Session() *Session {
@@ -366,6 +362,46 @@ func (cc *ClientConn) Get(ctx context.Context, path string, opts ...message.Opti
 	}
 	defer cc.session.messagePool.ReleaseMessage(req)
 	return cc.Do(req)
+}
+
+type Observation = interface {
+	Cancel(ctx context.Context) error
+	Canceled() bool
+}
+
+// NewObserveRequest creates observe request.
+//
+// Use ctx to set timeout.
+func NewObserveRequest(ctx context.Context, messagePool *pool.Pool, path string, opts ...message.Option) (*pool.Message, error) {
+	req, err := NewGetRequest(ctx, messagePool, path, opts...)
+	if err != nil {
+		return nil, fmt.Errorf("cannot create observe request: %w", err)
+	}
+	req.SetObserve(0)
+	return req, nil
+}
+
+// Observe subscribes for every change of resource on path.
+func (cc *ClientConn) Observe(ctx context.Context, path string, observeFunc func(req *pool.Message), opts ...message.Option) (Observation, error) {
+	req, err := NewObserveRequest(ctx, cc.session.messagePool, path, opts...)
+	if err != nil {
+		return nil, err
+	}
+	defer cc.ReleaseMessage(req)
+	return cc.observationHandler.NewObservation(req, observeFunc)
+}
+
+func (cc *ClientConn) getObservationRequest(token message.Token) (blockwise.Message, bool) {
+	obs, ok := cc.observationHandler.GetObservation(token.Hash())
+	if !ok {
+		return nil, false
+	}
+	req := obs.Request()
+	msg := cc.AcquireMessage(cc.Context())
+	msg.ResetOptionsTo(req.Options)
+	msg.SetCode(req.Code)
+	msg.SetToken(req.Token)
+	return msg, true
 }
 
 // NewPostRequest creates post request.

@@ -15,7 +15,6 @@ import (
 	"github.com/plgd-dev/go-coap/v2/net/responsewriter"
 	"github.com/plgd-dev/go-coap/v2/pkg/cache"
 	"github.com/plgd-dev/go-coap/v2/pkg/runner/periodic"
-	"github.com/plgd-dev/go-coap/v2/pkg/sync"
 	"github.com/plgd-dev/go-coap/v2/udp/client"
 )
 
@@ -168,22 +167,23 @@ func Client(conn *net.UDPConn, opts ...DialOption) *client.ClientConn {
 		}
 		errorsFunc(fmt.Errorf("udp: %v: %w", conn.RemoteAddr(), err))
 	}
-
 	addr, _ := conn.RemoteAddr().(*net.UDPAddr)
-	observatioRequests := sync.NewMap[uint64, *pool.Message]()
-	var blockWise *blockwise.BlockWise
+	createBlockWise := func(cc *client.ClientConn) *blockwise.BlockWise {
+		return nil
+	}
 	if cfg.blockwiseEnable {
-		blockWise = blockwise.NewBlockWise(
-			bwCreateAcquireMessage(cfg.messagePool),
-			bwCreateReleaseMessage(cfg.messagePool),
-			cfg.blockwiseTransferTimeout,
-			cfg.errors,
-			false,
-			bwCreateHandlerFunc(cfg.messagePool, observatioRequests),
-		)
+		createBlockWise = func(cc *client.ClientConn) *blockwise.BlockWise {
+			return blockwise.NewBlockWise(
+				bwCreateAcquireMessage(cfg.messagePool),
+				bwCreateReleaseMessage(cfg.messagePool),
+				cfg.blockwiseTransferTimeout,
+				cfg.errors,
+				false,
+				cc.GetObservationRequest,
+			)
+		}
 	}
 
-	observationTokenHandler := sync.NewMap[uint64, HandlerFunc]()
 	monitor := cfg.createInactivityMonitor()
 	cache := cache.NewCache()
 	l := coapNet.NewUDPConn(cfg.net, conn, coapNet.WithErrors(cfg.errors))
@@ -195,10 +195,10 @@ func Client(conn *net.UDPConn, opts ...DialOption) *client.ClientConn {
 		context.Background(),
 	)
 	cc := client.NewClientConn(session,
-		observationTokenHandler, observatioRequests, cfg.transmissionNStart, cfg.transmissionAcknowledgeTimeout, cfg.transmissionMaxRetransmit,
-		client.NewObservationHandler(observationTokenHandler, cfg.handler),
+		cfg.transmissionNStart, cfg.transmissionAcknowledgeTimeout, cfg.transmissionMaxRetransmit,
+		cfg.handler,
 		cfg.blockwiseSZX,
-		blockWise,
+		createBlockWise,
 		cfg.goPool,
 		cfg.errors,
 		cfg.getMID,
