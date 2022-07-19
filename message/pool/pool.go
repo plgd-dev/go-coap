@@ -44,11 +44,16 @@ func (p *Pool) AcquireMessage(ctx context.Context) *Message {
 // It is forbidden accessing req and/or its' members after returning
 // it to Message pool.
 func (p *Pool) ReleaseMessage(req *Message) {
-	v := p.currentMessagesInPool.Load()
-	if v >= int64(p.maxNumMessages) {
-		return
+	for {
+		v := p.currentMessagesInPool.Load()
+		if v >= int64(p.maxNumMessages) {
+			return
+		}
+		next := v + 1
+		if p.currentMessagesInPool.CAS(v, next) {
+			break
+		}
 	}
-	p.currentMessagesInPool.Add(1)
 	req.Reset()
 	req.ctx = nil
 	p.messagePool.Put(req)
