@@ -2,6 +2,7 @@ package message
 
 import (
 	"fmt"
+	"math"
 
 	"github.com/plgd-dev/go-coap/v2/message/codes"
 )
@@ -37,6 +38,14 @@ func (r *Message) String() string {
 	if err == nil {
 		buf = fmt.Sprintf("%s, Queries: %+v", buf, queries)
 	}
-	buf = fmt.Sprintf("%s, Type: %v, MessageID: %v", buf, r.Type, r.MessageID)
+	if r.Type >= 0 && r.Type < math.MaxUint8 {
+		buf = fmt.Sprintf("%s, Type: %v", buf, r.Type)
+	}
+	if r.MessageID >= 0 && r.MessageID < math.MaxUint16 {
+		buf = fmt.Sprintf("%s, MessageID: %v", buf, r.MessageID)
+	}
+	if len(r.Payload) > 0 {
+		buf = fmt.Sprintf("%s, PayloadLen: %v", buf, len(r.Payload))
+	}
 	return buf
 }

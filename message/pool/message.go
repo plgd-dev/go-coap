@@ -60,12 +60,6 @@ func (r *Message) Context() context.Context {
 	return r.ctx
 }
 
-// SetMessageID only 0 to 2^16-1 are valid.
-func (r *Message) SetMessageID(mid int32) {
-	r.msg.MessageID = mid
-	r.isModified = true
-}
-
 func (r *Message) SetMessage(message message.Message) {
 	r.Reset()
 	r.msg = message
@@ -75,12 +69,18 @@ func (r *Message) SetMessage(message message.Message) {
 	r.isModified = true
 }
 
+// SetMessageID only 0 to 2^16-1 are valid.
+func (r *Message) SetMessageID(mid int32) {
+	r.msg.MessageID = mid
+	r.isModified = true
+}
+
 // UpsertMessageID set value only when origin value is invalid. Only 0 to 2^16-1 values are valid.
 func (r *Message) UpsertMessageID(mid int32) {
 	if r.msg.MessageID >= 0 && r.msg.MessageID < math.MaxUint16 {
 		return
 	}
-	r.msg.MessageID = mid
+	r.SetMessageID(mid)
 }
 
 // MessageID returns 0 to 2^16-1 otherwise it contains invalid value.
@@ -98,7 +98,7 @@ func (r *Message) UpsertType(typ message.Type) {
 	if r.msg.Type >= 0 && r.msg.Type < math.MaxUint8 {
 		return
 	}
-	r.msg.Type = typ
+	r.SetType(typ)
 }
 
 func (r *Message) Type() message.Type {
