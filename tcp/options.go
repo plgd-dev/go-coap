@@ -8,6 +8,7 @@ import (
 
 	"github.com/plgd-dev/go-coap/v2/message/pool"
 	"github.com/plgd-dev/go-coap/v2/net/blockwise"
+	"github.com/plgd-dev/go-coap/v2/net/client"
 	"github.com/plgd-dev/go-coap/v2/net/monitor/inactivity"
 	"github.com/plgd-dev/go-coap/v2/pkg/runner/periodic"
 )
@@ -359,4 +360,22 @@ func WithMessagePool(messagePool *pool.Pool) MessagePoolOpt {
 	return MessagePoolOpt{
 		messagePool: messagePool,
 	}
+}
+
+// GetTokenOpt token option.
+type GetTokenOpt struct {
+	getToken client.GetTokenFunc
+}
+
+func (o GetTokenOpt) apply(opts *serverOptions) {
+	opts.getToken = o.getToken
+}
+
+func (o GetTokenOpt) applyDial(opts *dialOptions) {
+	opts.getToken = o.getToken
+}
+
+// WithGetToken set function for generating tokens.
+func WithGetToken(getToken client.GetTokenFunc) GetTokenOpt {
+	return GetTokenOpt{getToken: getToken}
 }

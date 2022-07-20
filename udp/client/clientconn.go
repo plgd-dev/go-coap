@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"net"
 	"time"
 
@@ -13,6 +12,7 @@ import (
 	"github.com/plgd-dev/go-coap/v2/message/pool"
 	coapNet "github.com/plgd-dev/go-coap/v2/net"
 	"github.com/plgd-dev/go-coap/v2/net/blockwise"
+	"github.com/plgd-dev/go-coap/v2/net/client"
 	"github.com/plgd-dev/go-coap/v2/net/monitor/inactivity"
 	"github.com/plgd-dev/go-coap/v2/net/observation"
 	"github.com/plgd-dev/go-coap/v2/net/responsewriter"
@@ -59,7 +59,8 @@ type ClientConn struct {
 	// See: https://golang.org/pkg/sync/atomic/#pkg-note-BUG
 	sequence atomic.Uint64
 
-	session           Session
+	session Session
+	*client.Client[*ClientConn]
 	inactivityMonitor inactivity.Monitor
 
 	blockWise          *blockwise.BlockWise[*ClientConn]
@@ -116,6 +117,7 @@ func NewClientConn(
 	inactivityMonitor inactivity.Monitor,
 	responseMsgCache *cache.Cache,
 	messagePool *pool.Pool,
+	getToken client.GetTokenFunc,
 ) *ClientConn {
 	if errors == nil {
 		errors = func(error) {
@@ -124,6 +126,9 @@ func NewClientConn(
 	}
 	if getMID == nil {
 		getMID = message.GetMID
+	}
+	if getToken == nil {
+		getToken = message.GetToken
 	}
 
 	cc := ClientConn{
@@ -147,6 +152,7 @@ func NewClientConn(
 	cc.msgID.Store(uint32(getMID() - 0xffff/2))
 	cc.blockWise = createBlockWise(&cc)
 	cc.observationHandler = observation.NewHandler(&cc, handler)
+	cc.Client = client.New(&cc, cc.observationHandler, getToken)
 	return &cc
 }
 
@@ -293,209 +299,11 @@ func (cc *ClientConn) WriteMessage(req *pool.Message) error {
 	})
 }
 
-func newCommonRequest(ctx context.Context, messagePool *pool.Pool, code codes.Code, path string, opts ...message.Option) (*pool.Message, error) {
-	token, err := message.GetToken()
-	if err != nil {
-		return nil, fmt.Errorf("cannot get token: %w", err)
-	}
-	req := messagePool.AcquireMessage(ctx)
-	req.SetCode(code)
-	req.SetToken(token)
-	req.ResetOptionsTo(opts)
-	if err := req.SetPath(path); err != nil {
-		messagePool.ReleaseMessage(req)
-		return nil, err
-	}
-	return req, nil
-}
-
-// NewGetRequest creates get request.
-//
-// Use ctx to set timeout.
-func NewGetRequest(ctx context.Context, messagePool *pool.Pool, path string, opts ...message.Option) (*pool.Message, error) {
-	return newCommonRequest(ctx, messagePool, codes.GET, path, opts...)
-}
-
-// Get issues a GET to the specified path.
-//
-// Use ctx to set timeout.
-//
-// An error is returned if by failure to speak COAP (such as a network connectivity problem).
-// Any status code doesn't cause an error.
-func (cc *ClientConn) Get(ctx context.Context, path string, opts ...message.Option) (*pool.Message, error) {
-	req, err := NewGetRequest(ctx, cc.messagePool, path, opts...)
-	if err != nil {
-		return nil, fmt.Errorf("cannot create get request: %w", err)
-	}
-	req.SetMessageID(cc.GetMessageID())
-	defer cc.ReleaseMessage(req)
-	return cc.Do(req)
-}
-
-// NewObserveRequest creates observe request.
-//
-// Use ctx to set timeout.
-func NewObserveRequest(ctx context.Context, messagePool *pool.Pool, path string, opts ...message.Option) (*pool.Message, error) {
-	req, err := NewGetRequest(ctx, messagePool, path, opts...)
-	if err != nil {
-		return nil, fmt.Errorf("cannot create observe request: %w", err)
-	}
-	req.SetObserve(0)
-	return req, nil
-}
-
-type Observation = interface {
-	Cancel(ctx context.Context) error
-	Canceled() bool
-}
-
-// Observe subscribes for every change of resource on path.
-func (cc *ClientConn) Observe(ctx context.Context, path string, observeFunc func(req *pool.Message), opts ...message.Option) (Observation, error) {
-	req, err := NewObserveRequest(ctx, cc.messagePool, path, opts...)
-	if err != nil {
-		return nil, err
-	}
-	req.SetMessageID(cc.GetMessageID())
-	defer cc.ReleaseMessage(req)
-	return cc.observationHandler.NewObservation(req, observeFunc)
-}
-
-func (cc *ClientConn) GetObservationRequest(token message.Token) (*pool.Message, bool) {
-	obs, ok := cc.observationHandler.GetObservation(token.Hash())
-	if !ok {
-		return nil, false
-	}
-	req := obs.Request()
-	msg := cc.AcquireMessage(cc.Context())
-	msg.ResetOptionsTo(req.Options)
-	msg.SetCode(req.Code)
-	msg.SetToken(req.Token)
-	msg.SetMessageID(req.MessageID)
-	return msg, true
-}
-
-// NewPostRequest creates post request.
-//
-// Use ctx to set timeout.
-//
-// An error is returned if by failure to speak COAP (such as a network connectivity problem).
-// Any status code doesn't cause an error.
-//
-// If payload is nil then content format is not used.
-func NewPostRequest(ctx context.Context, messagePool *pool.Pool, path string, contentFormat message.MediaType, payload io.ReadSeeker, opts ...message.Option) (*pool.Message, error) {
-	req, err := newCommonRequest(ctx, messagePool, codes.POST, path, opts...)
-	if err != nil {
-		return nil, err
-	}
-	if payload != nil {
-		req.SetContentFormat(contentFormat)
-		req.SetBody(payload)
-	}
-	return req, nil
-}
-
-// Post issues a POST to the specified path.
-//
-// Use ctx to set timeout.
-//
-// An error is returned if by failure to speak COAP (such as a network connectivity problem).
-// Any status code doesn't cause an error.
-//
-// If payload is nil then content format is not used.
-func (cc *ClientConn) Post(ctx context.Context, path string, contentFormat message.MediaType, payload io.ReadSeeker, opts ...message.Option) (*pool.Message, error) {
-	req, err := NewPostRequest(ctx, cc.messagePool, path, contentFormat, payload, opts...)
-	if err != nil {
-		return nil, fmt.Errorf("cannot create post request: %w", err)
-	}
-	req.SetMessageID(cc.GetMessageID())
-	defer cc.ReleaseMessage(req)
-	return cc.Do(req)
-}
-
-// NewPutRequest creates put request.
-//
-// Use ctx to set timeout.
-//
-// If payload is nil then content format is not used.
-func NewPutRequest(ctx context.Context, messagePool *pool.Pool, path string, contentFormat message.MediaType, payload io.ReadSeeker, opts ...message.Option) (*pool.Message, error) {
-	req, err := newCommonRequest(ctx, messagePool, codes.PUT, path, opts...)
-	if err != nil {
-		return nil, err
-	}
-	if payload != nil {
-		req.SetContentFormat(contentFormat)
-		req.SetBody(payload)
-	}
-	return req, nil
-}
-
-// Put issues a PUT to the specified path.
-//
-// Use ctx to set timeout.
-//
-// An error is returned if by failure to speak COAP (such as a network connectivity problem).
-// Any status code doesn't cause an error.
-//
-// If payload is nil then content format is not used.
-func (cc *ClientConn) Put(ctx context.Context, path string, contentFormat message.MediaType, payload io.ReadSeeker, opts ...message.Option) (*pool.Message, error) {
-	req, err := NewPutRequest(ctx, cc.messagePool, path, contentFormat, payload, opts...)
-	if err != nil {
-		return nil, fmt.Errorf("cannot create put request: %w", err)
-	}
-	req.SetMessageID(cc.GetMessageID())
-	defer cc.ReleaseMessage(req)
-	return cc.Do(req)
-}
-
-// NewDeleteRequest creates delete request.
-//
-// Use ctx to set timeout.
-func NewDeleteRequest(ctx context.Context, messagePool *pool.Pool, path string, opts ...message.Option) (*pool.Message, error) {
-	return newCommonRequest(ctx, messagePool, codes.DELETE, path, opts...)
-}
-
-// Delete deletes the resource identified by the request path.
-//
-// Use ctx to set timeout.
-func (cc *ClientConn) Delete(ctx context.Context, path string, opts ...message.Option) (*pool.Message, error) {
-	req, err := NewDeleteRequest(ctx, cc.messagePool, path, opts...)
-	if err != nil {
-		return nil, fmt.Errorf("cannot create delete request: %w", err)
-	}
-	req.SetMessageID(cc.GetMessageID())
-	defer cc.ReleaseMessage(req)
-	return cc.Do(req)
-}
-
 // Context returns the client's context.
 //
 // If connections was closed context is cancelled.
 func (cc *ClientConn) Context() context.Context {
 	return cc.session.Context()
-}
-
-// Ping issues a PING to the client and waits for PONG response.
-//
-// Use ctx to set timeout.
-func (cc *ClientConn) Ping(ctx context.Context) error {
-	resp := make(chan bool, 1)
-	receivedPong := func() {
-		select {
-		case resp <- true:
-		default:
-		}
-	}
-	cancel, err := cc.AsyncPing(receivedPong)
-	if err != nil {
-		return err
-	}
-	defer cancel()
-	select {
-	case <-resp:
-		return nil
-	case <-ctx.Done():
-		return ctx.Err()
-	}
 }
 
 // AsyncPing sends ping and receivedPong will be called when pong arrives. It returns cancellation of ping operation.
@@ -616,9 +424,9 @@ func (cc *ClientConn) getResponseFromCache(mid int32, resp *pool.Message) (bool,
 	return false, nil
 }
 
-// CheckMyMessageID compare client msgID against peer messageID and if it is near < 0xffff/4 then incrase msgID.
+// checkMyMessageID compare client msgID against peer messageID and if it is near < 0xffff/4 then incrase msgID.
 // When msgIDs met it can cause issue because cache can send message to which doesn't bellows to request.
-func (cc *ClientConn) CheckMyMessageID(req *pool.Message) {
+func (cc *ClientConn) checkMyMessageID(req *pool.Message) {
 	if req.Type() == message.Confirmable {
 		for {
 			oldID := cc.msgID.Load()
@@ -742,7 +550,7 @@ func (cc *ClientConn) Process(datagram []byte) error {
 		}
 	}
 	req.SetSequence(cc.Sequence())
-	cc.CheckMyMessageID(req)
+	cc.checkMyMessageID(req)
 	cc.inactivityMonitor.Notify()
 	err = cc.goPool(func() {
 		defer func() {
@@ -812,7 +620,7 @@ func (cc *ClientConn) WriteMulticastMessage(req *pool.Message, address *net.UDPA
 	if req.Type() == message.Confirmable {
 		return fmt.Errorf("multicast messages cannot be confirmable")
 	}
-	req.SetMessageID(cc.GetMessageID())
+	req.UpsertMessageID(cc.GetMessageID())
 
 	err := cc.session.WriteMulticastMessage(req, address, options...)
 	if err != nil {

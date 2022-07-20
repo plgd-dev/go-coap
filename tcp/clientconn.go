@@ -5,7 +5,6 @@ import (
 	"crypto/tls"
 	"errors"
 	"fmt"
-	"io"
 	"net"
 	"time"
 
@@ -14,6 +13,7 @@ import (
 	"github.com/plgd-dev/go-coap/v2/message/pool"
 	coapNet "github.com/plgd-dev/go-coap/v2/net"
 	"github.com/plgd-dev/go-coap/v2/net/blockwise"
+	"github.com/plgd-dev/go-coap/v2/net/client"
 	"github.com/plgd-dev/go-coap/v2/net/monitor/inactivity"
 	"github.com/plgd-dev/go-coap/v2/net/observation"
 	"github.com/plgd-dev/go-coap/v2/net/responsewriter"
@@ -51,6 +51,7 @@ var defaultDialOptions = func() dialOptions {
 		},
 		connectionCacheSize: 2048,
 		messagePool:         pool.New(1024, 2048),
+		getToken:            message.GetToken,
 	}
 	opts.handler = func(w *responsewriter.ResponseWriter[*ClientConn], r *pool.Message) {
 		switch r.Code() {
@@ -75,6 +76,7 @@ type dialOptions struct {
 	createInactivityMonitor         func() inactivity.Monitor
 	handler                         HandlerFunc
 	errors                          ErrorFunc
+	getToken                        client.GetTokenFunc
 	maxMessageSize                  uint32
 	connectionCacheSize             uint16
 	disablePeerTCPSignalMessageCSMs bool
@@ -96,8 +98,8 @@ type Notifier interface {
 // ClientConn represents a virtual connection to a conceptual endpoint, to perform COAPs commands.
 type ClientConn struct {
 	noCopy
-	session            *Session
-	observationHandler *observation.Handler[*ClientConn]
+	*client.Client[*ClientConn]
+	session *Session
 }
 
 // Dial creates a client connection to the given target.
@@ -159,7 +161,7 @@ func Client(conn net.Conn, opts ...DialOption) *ClientConn {
 				cfg.blockwiseTransferTimeout,
 				cfg.errors,
 				false,
-				cc.getObservationRequest,
+				cc.GetObservationRequest,
 			)
 		}
 	}
@@ -180,6 +182,7 @@ func Client(conn net.Conn, opts ...DialOption) *ClientConn {
 		monitor,
 		cfg.connectionCacheSize,
 		cfg.messagePool,
+		cfg.getToken,
 	)
 
 	cfg.periodicRunner(func(now time.Time) bool {
@@ -212,13 +215,18 @@ func NewClientConn(ctx context.Context,
 	inactivityMonitor inactivity.Monitor,
 	connectionCacheSize uint16,
 	messagePool *pool.Pool,
+	getToken client.GetTokenFunc,
 ) *ClientConn {
+	if getToken == nil {
+		getToken = message.GetToken
+	}
 	cc := ClientConn{}
-	cc.observationHandler = observation.NewHandler(&cc, handler)
+	observationHandler := observation.NewHandler(&cc, handler)
+	cc.Client = client.New(&cc, observationHandler, getToken)
 	blockWise := createBlockWise(&cc)
 	session := NewSession(ctx,
 		connection,
-		cc.observationHandler.Handle,
+		observationHandler.Handle,
 		maxMessageSize,
 		goPool,
 		errors,
@@ -309,203 +317,11 @@ func (cc *ClientConn) WriteMessage(req *pool.Message) error {
 	return cc.session.blockWise.WriteMessage(req, cc.session.blockwiseSZX, cc.session.maxMessageSize, cc.writeMessage)
 }
 
-func newCommonRequest(ctx context.Context, messagePool *pool.Pool, code codes.Code, path string, opts ...message.Option) (*pool.Message, error) {
-	token, err := message.GetToken()
-	if err != nil {
-		return nil, fmt.Errorf("cannot get token: %w", err)
-	}
-	req := messagePool.AcquireMessage(ctx)
-	req.SetCode(code)
-	req.SetToken(token)
-	req.ResetOptionsTo(opts)
-	if err := req.SetPath(path); err != nil {
-		messagePool.ReleaseMessage(req)
-		return nil, err
-	}
-	return req, nil
-}
-
-// NewGetRequest creates get request.
-//
-// Use ctx to set timeout.
-func NewGetRequest(ctx context.Context, messagePool *pool.Pool, path string, opts ...message.Option) (*pool.Message, error) {
-	return newCommonRequest(ctx, messagePool, codes.GET, path, opts...)
-}
-
-// Get issues a GET to the specified path.
-//
-// Use ctx to set timeout.
-//
-// An error is returned if by failure to speak COAP (such as a network connectivity problem).
-// Any status code doesn't cause an error.
-func (cc *ClientConn) Get(ctx context.Context, path string, opts ...message.Option) (*pool.Message, error) {
-	req, err := NewGetRequest(ctx, cc.session.messagePool, path, opts...)
-	if err != nil {
-		return nil, fmt.Errorf("cannot create get request: %w", err)
-	}
-	defer cc.ReleaseMessage(req)
-	return cc.Do(req)
-}
-
-type Observation = interface {
-	Cancel(ctx context.Context) error
-	Canceled() bool
-}
-
-// NewObserveRequest creates observe request.
-//
-// Use ctx to set timeout.
-func NewObserveRequest(ctx context.Context, messagePool *pool.Pool, path string, opts ...message.Option) (*pool.Message, error) {
-	req, err := NewGetRequest(ctx, messagePool, path, opts...)
-	if err != nil {
-		return nil, fmt.Errorf("cannot create observe request: %w", err)
-	}
-	req.SetObserve(0)
-	return req, nil
-}
-
-// Observe subscribes for every change of resource on path.
-func (cc *ClientConn) Observe(ctx context.Context, path string, observeFunc func(req *pool.Message), opts ...message.Option) (Observation, error) {
-	req, err := NewObserveRequest(ctx, cc.session.messagePool, path, opts...)
-	if err != nil {
-		return nil, err
-	}
-	defer cc.ReleaseMessage(req)
-	return cc.observationHandler.NewObservation(req, observeFunc)
-}
-
-func (cc *ClientConn) getObservationRequest(token message.Token) (*pool.Message, bool) {
-	obs, ok := cc.observationHandler.GetObservation(token.Hash())
-	if !ok {
-		return nil, false
-	}
-	req := obs.Request()
-	msg := cc.AcquireMessage(cc.Context())
-	msg.ResetOptionsTo(req.Options)
-	msg.SetCode(req.Code)
-	msg.SetToken(req.Token)
-	return msg, true
-}
-
-// NewPostRequest creates post request.
-//
-// Use ctx to set timeout.
-//
-// An error is returned if by failure to speak COAP (such as a network connectivity problem).
-// Any status code doesn't cause an error.
-//
-// If payload is nil then content format is not used.
-func NewPostRequest(ctx context.Context, messagePool *pool.Pool, path string, contentFormat message.MediaType, payload io.ReadSeeker, opts ...message.Option) (*pool.Message, error) {
-	req, err := newCommonRequest(ctx, messagePool, codes.POST, path, opts...)
-	if err != nil {
-		return nil, err
-	}
-	if payload != nil {
-		req.SetContentFormat(contentFormat)
-		req.SetBody(payload)
-	}
-	return req, nil
-}
-
-// Post issues a POST to the specified path.
-//
-// Use ctx to set timeout.
-//
-// An error is returned if by failure to speak COAP (such as a network connectivity problem).
-// Any status code doesn't cause an error.
-//
-// If payload is nil then content format is not used.
-func (cc *ClientConn) Post(ctx context.Context, path string, contentFormat message.MediaType, payload io.ReadSeeker, opts ...message.Option) (*pool.Message, error) {
-	req, err := NewPostRequest(ctx, cc.session.messagePool, path, contentFormat, payload, opts...)
-	if err != nil {
-		return nil, fmt.Errorf("cannot create post request: %w", err)
-	}
-	defer cc.ReleaseMessage(req)
-	return cc.Do(req)
-}
-
-// NewPutRequest creates put request.
-//
-// Use ctx to set timeout.
-//
-// If payload is nil then content format is not used.
-func NewPutRequest(ctx context.Context, messagePool *pool.Pool, path string, contentFormat message.MediaType, payload io.ReadSeeker, opts ...message.Option) (*pool.Message, error) {
-	req, err := newCommonRequest(ctx, messagePool, codes.PUT, path, opts...)
-	if err != nil {
-		return nil, err
-	}
-	if payload != nil {
-		req.SetContentFormat(contentFormat)
-		req.SetBody(payload)
-	}
-	return req, nil
-}
-
-// Put issues a PUT to the specified path.
-//
-// Use ctx to set timeout.
-//
-// An error is returned if by failure to speak COAP (such as a network connectivity problem).
-// Any status code doesn't cause an error.
-//
-// If payload is nil then content format is not used.
-func (cc *ClientConn) Put(ctx context.Context, path string, contentFormat message.MediaType, payload io.ReadSeeker, opts ...message.Option) (*pool.Message, error) {
-	req, err := NewPutRequest(ctx, cc.session.messagePool, path, contentFormat, payload, opts...)
-	if err != nil {
-		return nil, fmt.Errorf("cannot create put request: %w", err)
-	}
-	defer cc.ReleaseMessage(req)
-	return cc.Do(req)
-}
-
-// NewDeleteRequest creates delete request.
-//
-// Use ctx to set timeout.
-func NewDeleteRequest(ctx context.Context, messagePool *pool.Pool, path string, opts ...message.Option) (*pool.Message, error) {
-	return newCommonRequest(ctx, messagePool, codes.DELETE, path, opts...)
-}
-
-// Delete deletes the resource identified by the request path.
-//
-// Use ctx to set timeout.
-func (cc *ClientConn) Delete(ctx context.Context, path string, opts ...message.Option) (*pool.Message, error) {
-	req, err := NewDeleteRequest(ctx, cc.session.messagePool, path, opts...)
-	if err != nil {
-		return nil, fmt.Errorf("cannot create delete request: %w", err)
-	}
-	defer cc.ReleaseMessage(req)
-	return cc.Do(req)
-}
-
 // Context returns the client's context.
 //
 // If connections was closed context is cancelled.
 func (cc *ClientConn) Context() context.Context {
 	return cc.session.Context()
-}
-
-// Ping issues a PING to the client and waits for PONG response.
-//
-// Use ctx to set timeout.
-func (cc *ClientConn) Ping(ctx context.Context) error {
-	resp := make(chan bool, 1)
-	receivedPong := func() {
-		select {
-		case resp <- true:
-		default:
-		}
-	}
-	cancel, err := cc.AsyncPing(receivedPong)
-	if err != nil {
-		return err
-	}
-	defer cancel()
-	select {
-	case <-resp:
-		return nil
-	case <-ctx.Done():
-		return ctx.Err()
-	}
 }
 
 // AsyncPing sends ping and receivedPong will be called when pong arrives. It returns cancellation of ping operation.

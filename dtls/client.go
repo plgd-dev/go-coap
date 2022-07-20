@@ -12,11 +12,12 @@ import (
 	"github.com/plgd-dev/go-coap/v2/message/pool"
 	coapNet "github.com/plgd-dev/go-coap/v2/net"
 	"github.com/plgd-dev/go-coap/v2/net/blockwise"
+	"github.com/plgd-dev/go-coap/v2/net/client"
 	"github.com/plgd-dev/go-coap/v2/net/monitor/inactivity"
 	"github.com/plgd-dev/go-coap/v2/net/responsewriter"
 	"github.com/plgd-dev/go-coap/v2/pkg/cache"
 	"github.com/plgd-dev/go-coap/v2/pkg/runner/periodic"
-	"github.com/plgd-dev/go-coap/v2/udp/client"
+	udpClient "github.com/plgd-dev/go-coap/v2/udp/client"
 )
 
 var defaultDialOptions = func() dialOptions {
@@ -52,8 +53,9 @@ var defaultDialOptions = func() dialOptions {
 			}()
 		},
 		messagePool: pool.New(1024, 1600),
+		getToken:    message.GetToken,
 	}
-	opts.handler = func(w *responsewriter.ResponseWriter[*client.ClientConn], m *pool.Message) {
+	opts.handler = func(w *responsewriter.ResponseWriter[*udpClient.ClientConn], m *pool.Message) {
 		switch m.Code() {
 		case codes.POST, codes.PUT, codes.GET, codes.DELETE:
 			if err := w.SetResponse(codes.NotFound, message.TextPlain, nil); err != nil {
@@ -83,6 +85,7 @@ type dialOptions struct {
 	closeSocket                    bool
 	blockwiseSZX                   blockwise.SZX
 	blockwiseEnable                bool
+	getToken                       client.GetTokenFunc
 }
 
 // A DialOption sets options such as credentials, keepalive parameters, etc.
@@ -91,7 +94,7 @@ type DialOption interface {
 }
 
 // Dial creates a client connection to the given target.
-func Dial(target string, dtlsCfg *dtls.Config, opts ...DialOption) (*client.ClientConn, error) {
+func Dial(target string, dtlsCfg *dtls.Config, opts ...DialOption) (*udpClient.ClientConn, error) {
 	cfg := defaultDialOptions
 	for _, o := range opts {
 		o.applyDial(&cfg)
@@ -111,7 +114,7 @@ func Dial(target string, dtlsCfg *dtls.Config, opts ...DialOption) (*client.Clie
 }
 
 // Client creates client over dtls connection.
-func Client(conn *dtls.Conn, opts ...DialOption) *client.ClientConn {
+func Client(conn *dtls.Conn, opts ...DialOption) *udpClient.ClientConn {
 	cfg := defaultDialOptions
 	for _, o := range opts {
 		o.applyDial(&cfg)
@@ -138,11 +141,11 @@ func Client(conn *dtls.Conn, opts ...DialOption) *client.ClientConn {
 		errorsFunc(fmt.Errorf("dtls: %v: %w", conn.RemoteAddr(), err))
 	}
 
-	createBlockWise := func(cc *client.ClientConn) *blockwise.BlockWise[*client.ClientConn] {
+	createBlockWise := func(cc *udpClient.ClientConn) *blockwise.BlockWise[*udpClient.ClientConn] {
 		return nil
 	}
 	if cfg.blockwiseEnable {
-		createBlockWise = func(cc *client.ClientConn) *blockwise.BlockWise[*client.ClientConn] {
+		createBlockWise = func(cc *udpClient.ClientConn) *blockwise.BlockWise[*udpClient.ClientConn] {
 			return blockwise.New(
 				cc,
 				cfg.blockwiseTransferTimeout,
@@ -154,14 +157,13 @@ func Client(conn *dtls.Conn, opts ...DialOption) *client.ClientConn {
 	}
 
 	monitor := cfg.createInactivityMonitor()
-	var cc *client.ClientConn
 	l := coapNet.NewConn(conn)
 	session := NewSession(cfg.ctx,
 		l,
 		cfg.maxMessageSize,
 		cfg.closeSocket,
 	)
-	cc = client.NewClientConn(session,
+	cc := udpClient.NewClientConn(session,
 		cfg.transmissionNStart, cfg.transmissionAcknowledgeTimeout, cfg.transmissionMaxRetransmit,
 		cfg.handler,
 		cfg.blockwiseSZX,
@@ -173,6 +175,7 @@ func Client(conn *dtls.Conn, opts ...DialOption) *client.ClientConn {
 		monitor,
 		cache.NewCache(),
 		cfg.messagePool,
+		cfg.getToken,
 	)
 
 	cfg.periodicRunner(func(now time.Time) bool {

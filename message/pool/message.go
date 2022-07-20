@@ -519,3 +519,40 @@ func (r *Message) UnmarshalWithDecoder(decoder Decoder, data []byte) (int, error
 func (r *Message) IsSeparateMessage() bool {
 	return r.Code() == codes.Empty && r.Token() == nil && r.Type() == message.Acknowledgement && len(r.Options()) == 0 && r.Body() == nil
 }
+
+func (r *Message) setupCommon(code codes.Code, path string, token message.Token, opts ...message.Option) error {
+	r.SetCode(code)
+	r.SetToken(token)
+	r.ResetOptionsTo(opts)
+	return r.SetPath(path)
+}
+
+func (r *Message) SetupGet(path string, token message.Token, opts ...message.Option) error {
+	return r.setupCommon(codes.GET, path, token, opts...)
+}
+
+func (r *Message) SetupPost(path string, token message.Token, contentFormat message.MediaType, payload io.ReadSeeker, opts ...message.Option) error {
+	if err := r.setupCommon(codes.POST, path, token, opts...); err != nil {
+		return err
+	}
+	if payload != nil {
+		r.SetContentFormat(contentFormat)
+		r.SetBody(payload)
+	}
+	return nil
+}
+
+func (r *Message) SetupPut(path string, token message.Token, contentFormat message.MediaType, payload io.ReadSeeker, opts ...message.Option) error {
+	if err := r.setupCommon(codes.PUT, path, token, opts...); err != nil {
+		return err
+	}
+	if payload != nil {
+		r.SetContentFormat(contentFormat)
+		r.SetBody(payload)
+	}
+	return nil
+}
+
+func (r *Message) SetupDelete(path string, token message.Token, opts ...message.Option) error {
+	return r.setupCommon(codes.DELETE, path, token, opts...)
+}

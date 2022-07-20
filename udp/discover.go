@@ -20,13 +20,18 @@ import (
 // By default it is sent over all network interfaces and all compatible source IP addresses with hop limit 1.
 // Via opts you can specify the network interface, source IP address, and hop limit.
 func (s *Server) Discover(ctx context.Context, address, path string, receiverFunc func(cc *client.ClientConn, resp *pool.Message), opts ...coapNet.MulticastOption) error {
-	req, err := client.NewGetRequest(ctx, s.messagePool, path)
+	token, err := s.getToken()
+	if err != nil {
+		return fmt.Errorf("cannot get token: %w", err)
+	}
+	req := s.messagePool.AcquireMessage(ctx)
+	defer s.messagePool.ReleaseMessage(req)
+	err = req.SetupGet(path, token)
 	if err != nil {
 		return fmt.Errorf("cannot create discover request: %w", err)
 	}
 	req.SetMessageID(s.getMID())
 	req.SetType(message.NonConfirmable)
-	defer s.messagePool.ReleaseMessage(req)
 	return s.DiscoveryRequest(req, address, receiverFunc, opts...)
 }
 

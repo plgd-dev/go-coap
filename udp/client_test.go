@@ -156,7 +156,7 @@ func TestClientConnGet(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second*3600)
 			defer cancel()
 
-			req, err := client.NewGetRequest(ctx, pool.New(0, 0), tt.args.path, tt.args.opts...)
+			req, err := cc.NewGetRequest(ctx, tt.args.path, tt.args.opts...)
 			require.NoError(t, err)
 
 			req.SetType(tt.args.typ)
@@ -256,7 +256,7 @@ func TestClientConnGetSeparateMessage(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*3600)
 	defer cancel()
 
-	req, err := client.NewGetRequest(ctx, pool.New(0, 0), "/a")
+	req, err := cc.NewGetRequest(ctx, "/a")
 	require.NoError(t, err)
 	req.SetType(message.Confirmable)
 	req.SetMessageID(message.GetMID())

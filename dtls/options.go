@@ -7,9 +7,10 @@ import (
 
 	"github.com/plgd-dev/go-coap/v2/message/pool"
 	"github.com/plgd-dev/go-coap/v2/net/blockwise"
+	"github.com/plgd-dev/go-coap/v2/net/client"
 	"github.com/plgd-dev/go-coap/v2/net/monitor/inactivity"
 	"github.com/plgd-dev/go-coap/v2/pkg/runner/periodic"
-	"github.com/plgd-dev/go-coap/v2/udp/client"
+	udpClient "github.com/plgd-dev/go-coap/v2/udp/client"
 )
 
 // HandlerFuncOpt handler function option.
@@ -114,7 +115,7 @@ type KeepAliveOpt struct {
 func (o KeepAliveOpt) apply(opts *serverOptions) {
 	opts.createInactivityMonitor = func() inactivity.Monitor {
 		keepalive := inactivity.NewKeepAlive(o.maxRetries, o.onInactive, func(cc inactivity.ClientConn, receivePong func()) (func(), error) {
-			return cc.(*client.ClientConn).AsyncPing(receivePong)
+			return cc.(*udpClient.ClientConn).AsyncPing(receivePong)
 		})
 		return inactivity.NewInactivityMonitor(o.timeout/time.Duration(o.maxRetries+1), keepalive.OnInactive)
 	}
@@ -123,7 +124,7 @@ func (o KeepAliveOpt) apply(opts *serverOptions) {
 func (o KeepAliveOpt) applyDial(opts *dialOptions) {
 	opts.createInactivityMonitor = func() inactivity.Monitor {
 		keepalive := inactivity.NewKeepAlive(o.maxRetries, o.onInactive, func(cc inactivity.ClientConn, receivePong func()) (func(), error) {
-			return cc.(*client.ClientConn).AsyncPing(receivePong)
+			return cc.(*udpClient.ClientConn).AsyncPing(receivePong)
 		})
 		return inactivity.NewInactivityMonitor(o.timeout/time.Duration(o.maxRetries+1), keepalive.OnInactive)
 	}
@@ -173,7 +174,7 @@ func (o NetOpt) applyDial(opts *dialOptions) {
 	opts.net = o.net
 }
 
-// WithNetwork define's udp version (udp4, udp6, udp) for client.
+// WithNetwork define's udp version (udp4, udp6, udp) for udpClient.
 func WithNetwork(net string) NetOpt {
 	return NetOpt{net: net}
 }
@@ -322,4 +323,22 @@ func WithMessagePool(messagePool *pool.Pool) MessagePoolOpt {
 	return MessagePoolOpt{
 		messagePool: messagePool,
 	}
+}
+
+// GetTokenOpt token option.
+type GetTokenOpt struct {
+	getToken client.GetTokenFunc
+}
+
+func (o GetTokenOpt) apply(opts *serverOptions) {
+	opts.getToken = o.getToken
+}
+
+func (o GetTokenOpt) applyDial(opts *dialOptions) {
+	opts.getToken = o.getToken
+}
+
+// WithGetToken set function for generating tokens.
+func WithGetToken(getToken client.GetTokenFunc) GetTokenOpt {
+	return GetTokenOpt{getToken: getToken}
 }

@@ -104,6 +104,20 @@ func (h *Handler[C]) GetObservation(key uint64) (*Observation[C], bool) {
 	return h.observations.Load(key)
 }
 
+// GetObservationRequest returns observation request for token
+func (h *Handler[C]) GetObservationRequest(token message.Token) (*pool.Message, bool) {
+	obs, ok := h.GetObservation(token.Hash())
+	if !ok {
+		return nil, false
+	}
+	req := obs.Request()
+	msg := h.cc.AcquireMessage(h.cc.Context())
+	msg.ResetOptionsTo(req.Options)
+	msg.SetCode(req.Code)
+	msg.SetToken(req.Token)
+	return msg, true
+}
+
 func (h *Handler[C]) pullOutObservation(key uint64) (*Observation[C], bool) {
 	return h.observations.PullOut(key)
 }
