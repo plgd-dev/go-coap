@@ -17,8 +17,10 @@ import (
 	coapNet "github.com/plgd-dev/go-coap/v2/net"
 	"github.com/plgd-dev/go-coap/v2/net/monitor/inactivity"
 	"github.com/plgd-dev/go-coap/v2/net/responsewriter"
+	"github.com/plgd-dev/go-coap/v2/pkg/options"
 	"github.com/plgd-dev/go-coap/v2/pkg/runner/periodic"
 	"github.com/plgd-dev/go-coap/v2/tcp"
+	"github.com/plgd-dev/go-coap/v2/tcp/client"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/sync/semaphore"
 )
@@ -42,7 +44,7 @@ func TestServerCleanUpConns(t *testing.T) {
 		require.NoError(t, errA)
 	}()
 
-	sd := tcp.NewServer(tcp.WithOnNewClientConn(func(cc *tcp.ClientConn, tlsconn *tls.Conn) {
+	sd := tcp.NewServer(options.WithOnNewClientConn(func(cc *client.ClientConn, tlsconn *tls.Conn) {
 		require.Nil(t, tlsconn) // tcp without tls
 		cc.AddOnClose(func() {
 			checkClose.Release(1)
@@ -138,13 +140,13 @@ func TestServerSetContextValueWithPKI(t *testing.T) {
 		require.NoError(t, errC)
 	}()
 
-	onNewConn := func(cc *tcp.ClientConn, tlscon *tls.Conn) {
+	onNewConn := func(cc *client.ClientConn, tlscon *tls.Conn) {
 		require.NotNil(t, tlscon)
 		// set connection context certificate
 		clientCert := tlscon.ConnectionState().PeerCertificates[0]
 		cc.SetContextValue("client-cert", clientCert)
 	}
-	handle := func(w *responsewriter.ResponseWriter[*tcp.ClientConn], r *pool.Message) {
+	handle := func(w *responsewriter.ResponseWriter[*client.ClientConn], r *pool.Message) {
 		// get certificate from connection context
 		clientCert := r.Context().Value("client-cert").(*x509.Certificate)
 		require.Equal(t, clientCert.SerialNumber, clientSerial)
@@ -153,14 +155,14 @@ func TestServerSetContextValueWithPKI(t *testing.T) {
 		require.NoError(t, errH)
 	}
 
-	sd := tcp.NewServer(tcp.WithHandlerFunc(handle), tcp.WithOnNewClientConn(onNewConn))
+	sd := tcp.NewServer(options.WithHandlerFunc(handle), options.WithOnNewClientConn(onNewConn))
 	defer sd.Stop()
 	go func() {
 		errS := sd.Serve(ld)
 		require.NoError(t, errS)
 	}()
 
-	cc, err := tcp.Dial(ld.Addr().String(), tcp.WithTLS(clientCgf))
+	cc, err := tcp.Dial(ld.Addr().String(), options.WithTLS(clientCgf))
 	require.NoError(t, err)
 	defer func() {
 		errC := cc.Close()
@@ -190,18 +192,18 @@ func TestServerInactiveMonitor(t *testing.T) {
 	require.NoError(t, err)
 
 	sd := tcp.NewServer(
-		tcp.WithOnNewClientConn(func(cc *tcp.ClientConn, tlscon *tls.Conn) {
+		options.WithOnNewClientConn(func(cc *client.ClientConn, tlscon *tls.Conn) {
 			cc.AddOnClose(func() {
 				checkClose.Release(1)
 			})
 		}),
-		tcp.WithInactivityMonitor(100*time.Millisecond, func(cc inactivity.ClientConn) {
+		options.WithInactivityMonitor(100*time.Millisecond, func(cc inactivity.ClientConn) {
 			require.False(t, inactivityDetected)
 			inactivityDetected = true
 			errC := cc.Close()
 			require.NoError(t, errC)
 		}),
-		tcp.WithPeriodicRunner(periodic.New(ctx.Done(), time.Millisecond*10)),
+		options.WithPeriodicRunner(periodic.New(ctx.Done(), time.Millisecond*10)),
 	)
 
 	var serverWg sync.WaitGroup
@@ -261,18 +263,18 @@ func TestServerKeepAliveMonitor(t *testing.T) {
 	err = checkClose.Acquire(ctx, 2)
 	require.NoError(t, err)
 	sd := tcp.NewServer(
-		tcp.WithOnNewClientConn(func(cc *tcp.ClientConn, tlscon *tls.Conn) {
+		options.WithOnNewClientConn(func(cc *client.ClientConn, tlscon *tls.Conn) {
 			cc.AddOnClose(func() {
 				checkClose.Release(1)
 			})
 		}),
-		tcp.WithKeepAlive(3, 200*time.Millisecond, func(cc inactivity.ClientConn) {
+		options.WithKeepAlive(3, 200*time.Millisecond, func(cc inactivity.ClientConn) {
 			require.False(t, inactivityDetected)
 			inactivityDetected = true
 			errC := cc.Close()
 			require.NoError(t, errC)
 		}),
-		tcp.WithPeriodicRunner(periodic.New(ctx.Done(), time.Millisecond*100)),
+		options.WithPeriodicRunner(periodic.New(ctx.Done(), time.Millisecond*100)),
 	)
 
 	var serverWg sync.WaitGroup
@@ -289,7 +291,7 @@ func TestServerKeepAliveMonitor(t *testing.T) {
 
 	cc, err := tcp.Dial(
 		ld.Addr().String(),
-		tcp.WithGoPool(func(f func()) error {
+		options.WithGoPool(func(f func()) error {
 			time.Sleep(time.Second * 2)
 			f()
 			return nil

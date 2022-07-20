@@ -1,4 +1,4 @@
-package tcp
+package client
 
 import (
 	"bytes"
@@ -21,8 +21,6 @@ import (
 	"go.uber.org/atomic"
 )
 
-type EventFunc func()
-
 type Session struct {
 	// This field needs to be the first in the struct to ensure proper word alignment on 32-bit platforms.
 	// See: https://golang.org/pkg/sync/atomic/#pkg-note-BUG
@@ -37,8 +35,8 @@ type Session struct {
 	errors                          ErrorFunc
 	blockWise                       *blockwise.BlockWise[*ClientConn]
 	connection                      *coapNet.Conn
-	handler                         HandlerFunc
-	tokenHandlerContainer           *coapSync.Map[uint64, HandlerFunc]
+	handler                         func(*responsewriter.ResponseWriter[*ClientConn], *pool.Message)
+	tokenHandlerContainer           *coapSync.Map[uint64, func(*responsewriter.ResponseWriter[*ClientConn], *pool.Message)]
 	messagePool                     *pool.Pool
 	mutex                           sync.Mutex
 	maxMessageSize                  uint32

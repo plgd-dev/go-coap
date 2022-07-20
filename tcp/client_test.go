@@ -15,7 +15,9 @@ import (
 	"github.com/plgd-dev/go-coap/v2/mux"
 	coapNet "github.com/plgd-dev/go-coap/v2/net"
 	"github.com/plgd-dev/go-coap/v2/net/monitor/inactivity"
+	"github.com/plgd-dev/go-coap/v2/pkg/options"
 	"github.com/plgd-dev/go-coap/v2/pkg/runner/periodic"
+	"github.com/plgd-dev/go-coap/v2/tcp/client"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/sync/semaphore"
@@ -86,7 +88,7 @@ func TestClientConnGet(t *testing.T) {
 	}))
 	require.NoError(t, err)
 
-	s := NewServer(WithMux(m))
+	s := NewServer(options.WithMux(m))
 	defer s.Stop()
 
 	wg.Add(1)
@@ -216,7 +218,7 @@ func TestClientConnPost(t *testing.T) {
 			}))
 			require.NoError(t, err)
 
-			s := NewServer(WithMux(m))
+			s := NewServer(options.WithMux(m))
 			defer s.Stop()
 
 			wg.Add(1)
@@ -344,7 +346,7 @@ func TestClientConnPut(t *testing.T) {
 			}))
 			require.NoError(t, err)
 
-			s := NewServer(WithMux(m))
+			s := NewServer(options.WithMux(m))
 			defer s.Stop()
 
 			wg.Add(1)
@@ -449,7 +451,7 @@ func TestClientConnDelete(t *testing.T) {
 	}))
 	require.NoError(t, err)
 
-	s := NewServer(WithMux(m))
+	s := NewServer(options.WithMux(m))
 	defer s.Stop()
 
 	wg.Add(1)
@@ -542,12 +544,12 @@ func TestClientInactiveMonitor(t *testing.T) {
 	require.NoError(t, err)
 
 	sd := NewServer(
-		WithOnNewClientConn(func(cc *ClientConn, tlscon *tls.Conn) {
+		options.WithOnNewClientConn(func(cc *client.ClientConn, tlscon *tls.Conn) {
 			cc.AddOnClose(func() {
 				checkClose.Release(1)
 			})
 		}),
-		WithPeriodicRunner(periodic.New(ctx.Done(), time.Millisecond*10)),
+		options.WithPeriodicRunner(periodic.New(ctx.Done(), time.Millisecond*10)),
 	)
 
 	var serverWg sync.WaitGroup
@@ -564,13 +566,13 @@ func TestClientInactiveMonitor(t *testing.T) {
 
 	cc, err := Dial(
 		ld.Addr().String(),
-		WithInactivityMonitor(100*time.Millisecond, func(cc inactivity.ClientConn) {
+		options.WithInactivityMonitor(100*time.Millisecond, func(cc inactivity.ClientConn) {
 			require.False(t, inactivityDetected)
 			inactivityDetected = true
 			errC := cc.Close()
 			require.NoError(t, errC)
 		}),
-		WithPeriodicRunner(periodic.New(ctx.Done(), time.Millisecond*10)),
+		options.WithPeriodicRunner(periodic.New(ctx.Done(), time.Millisecond*10)),
 	)
 	require.NoError(t, err)
 	cc.AddOnClose(func() {
@@ -615,13 +617,13 @@ func TestClientKeepAliveMonitor(t *testing.T) {
 	require.NoError(t, err)
 
 	sd := NewServer(
-		WithOnNewClientConn(func(cc *ClientConn, tlscon *tls.Conn) {
+		options.WithOnNewClientConn(func(cc *client.ClientConn, tlscon *tls.Conn) {
 			cc.AddOnClose(func() {
 				checkClose.Release(1)
 			})
 			time.Sleep(time.Millisecond * 500)
 		}),
-		WithPeriodicRunner(periodic.New(ctx.Done(), time.Millisecond*10)),
+		options.WithPeriodicRunner(periodic.New(ctx.Done(), time.Millisecond*10)),
 	)
 
 	var serverWg sync.WaitGroup
@@ -638,13 +640,13 @@ func TestClientKeepAliveMonitor(t *testing.T) {
 
 	cc, err := Dial(
 		ld.Addr().String(),
-		WithKeepAlive(3, 100*time.Millisecond, func(cc inactivity.ClientConn) {
+		options.WithKeepAlive(3, 100*time.Millisecond, func(cc inactivity.ClientConn) {
 			require.False(t, inactivityDetected)
 			inactivityDetected = true
 			errC := cc.Close()
 			require.NoError(t, errC)
 		}),
-		WithPeriodicRunner(periodic.New(ctx.Done(), time.Millisecond*100)),
+		options.WithPeriodicRunner(periodic.New(ctx.Done(), time.Millisecond*100)),
 	)
 	require.NoError(t, err)
 	cc.AddOnClose(func() {

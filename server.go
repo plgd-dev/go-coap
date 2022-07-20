@@ -9,6 +9,7 @@ import (
 	"github.com/plgd-dev/go-coap/v2/dtls"
 	"github.com/plgd-dev/go-coap/v2/mux"
 	"github.com/plgd-dev/go-coap/v2/net"
+	"github.com/plgd-dev/go-coap/v2/pkg/options"
 	"github.com/plgd-dev/go-coap/v2/tcp"
 	"github.com/plgd-dev/go-coap/v2/udp"
 )
@@ -39,7 +40,7 @@ func ListenAndServe(network string, addr string, handler mux.Handler) (err error
 				err = errC
 			}
 		}()
-		s := tcp.NewServer(tcp.WithMux(handler))
+		s := tcp.NewServer(options.WithMux(handler))
 		return s.Serve(l)
 	default:
 		return fmt.Errorf("invalid network (%v)", network)
@@ -58,7 +59,7 @@ func ListenAndServeTCPTLS(network, addr string, config *tls.Config, handler mux.
 			err = errC
 		}
 	}()
-	s := tcp.NewServer(tcp.WithMux(handler))
+	s := tcp.NewServer(options.WithMux(handler))
 	return s.Serve(l)
 }
 
