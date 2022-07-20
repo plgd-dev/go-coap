@@ -89,7 +89,7 @@ func TestClientConnDeduplication(t *testing.T) {
 	var got *pool.Message
 
 	// Same request, executed twice (needs the same token)
-	getReq, err := client.NewGetRequest(ctx, pool.New(0, 0), "/count")
+	getReq, err := cc.NewGetRequest(ctx, "/count")
 	getReq.SetMessageID(1)
 
 	require.NoError(t, err)
@@ -367,7 +367,7 @@ func TestClientConnGetSeparateMessage(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*3600)
 	defer cancel()
 
-	req, err := client.NewGetRequest(ctx, pool.New(0, 0), "/a")
+	req, err := cc.NewGetRequest(ctx, "/a")
 	require.NoError(t, err)
 	req.SetType(message.Confirmable)
 	req.SetMessageID(message.GetMID())

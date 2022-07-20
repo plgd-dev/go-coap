@@ -94,10 +94,16 @@ func main() {
 
 		var duplicit sync.Map
 
-		req, err := client.NewGetRequest(ctx, messagePool, "/oic/res") /* msg.Option{
+		token, err := message.GetToken()
+		if err != nil {
+			panic(fmt.Errorf("cannot get token: %w", err))
+		}
+		req := messagePool.AcquireMessage(ctx)
+		err = req.SetupGet("/oic/res", token) /* msg.Option{
 			ID:    msg.URIQuery,
 			Value: []byte("rt=oic.wk.d"),
-		}*/if err != nil {
+		}*/
+		if err != nil {
 			panic(fmt.Errorf("cannot create discover request: %w", err))
 		}
 		req.SetMessageID(message.GetMID())

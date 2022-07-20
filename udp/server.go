@@ -15,12 +15,13 @@ import (
 	"github.com/plgd-dev/go-coap/v2/message/pool"
 	coapNet "github.com/plgd-dev/go-coap/v2/net"
 	"github.com/plgd-dev/go-coap/v2/net/blockwise"
+	"github.com/plgd-dev/go-coap/v2/net/client"
 	"github.com/plgd-dev/go-coap/v2/net/monitor/inactivity"
 	"github.com/plgd-dev/go-coap/v2/net/responsewriter"
 	"github.com/plgd-dev/go-coap/v2/pkg/cache"
 	"github.com/plgd-dev/go-coap/v2/pkg/runner/periodic"
 	coapSync "github.com/plgd-dev/go-coap/v2/pkg/sync"
-	"github.com/plgd-dev/go-coap/v2/udp/client"
+	udpClient "github.com/plgd-dev/go-coap/v2/udp/client"
 )
 
 // A ServerOption sets options such as credentials, codec and keepalive parameters, etc.
@@ -30,13 +31,13 @@ type ServerOption interface {
 
 // The HandlerFunc type is an adapter to allow the use of
 // ordinary functions as COAP handlers.
-type HandlerFunc = func(*responsewriter.ResponseWriter[*client.ClientConn], *pool.Message)
+type HandlerFunc = func(*responsewriter.ResponseWriter[*udpClient.ClientConn], *pool.Message)
 
 type ErrorFunc = func(error)
 
 type GoPoolFunc = func(func()) error
 
-type OnNewClientConnFunc = func(cc *client.ClientConn)
+type OnNewClientConnFunc = func(cc *udpClient.ClientConn)
 
 type GetMIDFunc = func() int32
 
@@ -56,10 +57,12 @@ var defaultServerOptions = func() serverOptions {
 		createInactivityMonitor: func() inactivity.Monitor {
 			return inactivity.NewNilMonitor()
 		},
-		blockwiseEnable:                true,
-		blockwiseSZX:                   blockwise.SZX1024,
-		blockwiseTransferTimeout:       time.Second * 3,
-		onNewClientConn:                func(cc *client.ClientConn) {},
+		blockwiseEnable:          true,
+		blockwiseSZX:             blockwise.SZX1024,
+		blockwiseTransferTimeout: time.Second * 3,
+		onNewClientConn: func(cc *udpClient.ClientConn) {
+			// do nothing by default
+		},
 		transmissionNStart:             time.Second,
 		transmissionAcknowledgeTimeout: time.Second * 2,
 		transmissionMaxRetransmit:      4,
@@ -72,8 +75,9 @@ var defaultServerOptions = func() serverOptions {
 			}()
 		},
 		messagePool: pool.New(1024, 1600),
+		getToken:    message.GetToken,
 	}
-	opts.handler = func(w *responsewriter.ResponseWriter[*client.ClientConn], r *pool.Message) {
+	opts.handler = func(w *responsewriter.ResponseWriter[*udpClient.ClientConn], r *pool.Message) {
 		if err := w.SetResponse(codes.NotFound, message.TextPlain, nil); err != nil {
 			opts.errors(fmt.Errorf("udp server: cannot set response: %w", err))
 		}
@@ -98,6 +102,7 @@ type serverOptions struct {
 	transmissionMaxRetransmit      uint32
 	blockwiseEnable                bool
 	blockwiseSZX                   blockwise.SZX
+	getToken                       client.GetTokenFunc
 }
 
 type Server struct {
@@ -115,7 +120,7 @@ type Server struct {
 	transmissionNStart             time.Duration
 	transmissionAcknowledgeTimeout time.Duration
 
-	conns  map[string]*client.ClientConn
+	conns  map[string]*udpClient.ClientConn
 	getMID GetMIDFunc
 
 	messagePool       *pool.Pool
@@ -124,7 +129,7 @@ type Server struct {
 	cancel            context.CancelFunc
 	serverStartedChan chan struct{}
 
-	multicastRequests *client.RequestsMap
+	multicastRequests *udpClient.RequestsMap
 	multicastHandler  *coapSync.Map[uint64, HandlerFunc]
 
 	errors                    ErrorFunc
@@ -134,6 +139,7 @@ type Server struct {
 	maxMessageSize            uint32
 	blockwiseEnable           bool
 	blockwiseSZX              blockwise.SZX
+	getToken                  client.GetTokenFunc
 }
 
 func NewServer(opt ...ServerOption) *Server {
@@ -150,6 +156,10 @@ func NewServer(opt ...ServerOption) *Server {
 
 	if opts.getMID == nil {
 		opts.getMID = message.GetMID
+	}
+
+	if opts.getToken == nil {
+		opts.getToken = message.GetToken
 	}
 
 	if opts.createInactivityMonitor == nil {
@@ -196,8 +206,9 @@ func NewServer(opt ...ServerOption) *Server {
 		doneCancel:                     doneCancel,
 		cache:                          cache.NewCache(),
 		messagePool:                    opts.messagePool,
+		getToken:                       opts.getToken,
 
-		conns: make(map[string]*client.ClientConn),
+		conns: make(map[string]*udpClient.ClientConn),
 	}
 }
 
@@ -212,7 +223,7 @@ func (s *Server) checkAndSetListener(l *coapNet.UDPConn) error {
 	return nil
 }
 
-func (s *Server) closeConnection(cc *client.ClientConn) {
+func (s *Server) closeConnection(cc *udpClient.ClientConn) {
 	if err := cc.Close(); err != nil {
 		s.errors(fmt.Errorf("cannot close connection: %w", err))
 	}
@@ -297,7 +308,7 @@ func (s *Server) Stop() {
 func (s *Server) closeSessions() {
 	s.connsMutex.Lock()
 	conns := s.conns
-	s.conns = make(map[string]*client.ClientConn)
+	s.conns = make(map[string]*udpClient.ClientConn)
 	s.connsMutex.Unlock()
 	for _, cc := range conns {
 		s.closeConnection(cc)
@@ -322,10 +333,10 @@ func (s *Server) conn() *coapNet.UDPConn {
 
 const closeKey = "gocoapCloseConnection"
 
-func (s *Server) getClientConns() []*client.ClientConn {
+func (s *Server) getClientConns() []*udpClient.ClientConn {
 	s.connsMutex.Lock()
 	defer s.connsMutex.Unlock()
-	conns := make([]*client.ClientConn, 0, 32)
+	conns := make([]*udpClient.ClientConn, 0, 32)
 	for _, c := range s.conns {
 		conns = append(conns, c)
 	}
@@ -346,7 +357,7 @@ func (s *Server) handleInactivityMonitors(now time.Time) {
 	}
 }
 
-func getClose(cc *client.ClientConn) func() {
+func getClose(cc *udpClient.ClientConn) func() {
 	v := cc.Context().Value(closeKey)
 	if v == nil {
 		return nil
@@ -354,18 +365,18 @@ func getClose(cc *client.ClientConn) func() {
 	return v.(func())
 }
 
-func (s *Server) getOrCreateClientConn(UDPConn *coapNet.UDPConn, raddr *net.UDPAddr) (cc *client.ClientConn, created bool) {
+func (s *Server) getOrCreateClientConn(UDPConn *coapNet.UDPConn, raddr *net.UDPAddr) (cc *udpClient.ClientConn, created bool) {
 	s.connsMutex.Lock()
 	defer s.connsMutex.Unlock()
 	key := raddr.String()
 	cc = s.conns[key]
 	if cc == nil {
 		created = true
-		createBlockWise := func(cc *client.ClientConn) *blockwise.BlockWise[*client.ClientConn] {
+		createBlockWise := func(cc *udpClient.ClientConn) *blockwise.BlockWise[*udpClient.ClientConn] {
 			return nil
 		}
 		if s.blockwiseEnable {
-			createBlockWise = func(cc *client.ClientConn) *blockwise.BlockWise[*client.ClientConn] {
+			createBlockWise = func(cc *udpClient.ClientConn) *blockwise.BlockWise[*udpClient.ClientConn] {
 				return blockwise.New(
 					cc,
 					s.blockwiseTransferTimeout,
@@ -384,12 +395,12 @@ func (s *Server) getOrCreateClientConn(UDPConn *coapNet.UDPConn, raddr *net.UDPA
 			s.doneCtx,
 		)
 		monitor := s.createInactivityMonitor()
-		cc = client.NewClientConn(
+		cc = udpClient.NewClientConn(
 			session,
 			s.transmissionNStart,
 			s.transmissionAcknowledgeTimeout,
 			s.transmissionMaxRetransmit,
-			func(w *responsewriter.ResponseWriter[*client.ClientConn], r *pool.Message) {
+			func(w *responsewriter.ResponseWriter[*udpClient.ClientConn], r *pool.Message) {
 				h, ok := s.multicastHandler.Load(r.Token().Hash())
 				if ok {
 					h(w, r)
@@ -405,6 +416,7 @@ func (s *Server) getOrCreateClientConn(UDPConn *coapNet.UDPConn, raddr *net.UDPA
 			monitor,
 			s.cache,
 			s.messagePool,
+			s.getToken,
 		)
 		cc.SetContextValue(closeKey, func() {
 			if err := session.Close(); err != nil {
@@ -424,7 +436,7 @@ func (s *Server) getOrCreateClientConn(UDPConn *coapNet.UDPConn, raddr *net.UDPA
 	return cc, created
 }
 
-func (s *Server) getClientConn(l *coapNet.UDPConn, raddr *net.UDPAddr, firstTime bool) (*client.ClientConn, error) {
+func (s *Server) getClientConn(l *coapNet.UDPConn, raddr *net.UDPAddr, firstTime bool) (*udpClient.ClientConn, error) {
 	cc, created := s.getOrCreateClientConn(l, raddr)
 	if created {
 		if s.onNewClientConn != nil {
@@ -453,7 +465,7 @@ func (s *Server) getClientConn(l *coapNet.UDPConn, raddr *net.UDPAddr, firstTime
 	return cc, nil
 }
 
-func (s *Server) NewClientConn(addr *net.UDPAddr) (*client.ClientConn, error) {
+func (s *Server) NewClientConn(addr *net.UDPAddr) (*udpClient.ClientConn, error) {
 	l := s.getListener()
 	if l == nil {
 		// server is not started/stopped

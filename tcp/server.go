@@ -16,6 +16,7 @@ import (
 	"github.com/plgd-dev/go-coap/v2/message/pool"
 	coapNet "github.com/plgd-dev/go-coap/v2/net"
 	"github.com/plgd-dev/go-coap/v2/net/blockwise"
+	"github.com/plgd-dev/go-coap/v2/net/client"
 	"github.com/plgd-dev/go-coap/v2/net/monitor/inactivity"
 	"github.com/plgd-dev/go-coap/v2/net/responsewriter"
 	"github.com/plgd-dev/go-coap/v2/pkg/connections"
@@ -57,7 +58,9 @@ var defaultServerOptions = func() serverOptions {
 		blockwiseEnable:          true,
 		blockwiseSZX:             blockwise.SZX1024,
 		blockwiseTransferTimeout: time.Second * 3,
-		onNewClientConn:          func(cc *ClientConn, tlscon *tls.Conn) {},
+		onNewClientConn: func(cc *ClientConn, tlscon *tls.Conn) {
+			// do nothing by default
+		},
 		createInactivityMonitor: func() inactivity.Monitor {
 			return inactivity.NewNilMonitor()
 		},
@@ -70,6 +73,7 @@ var defaultServerOptions = func() serverOptions {
 		},
 		connectionCacheSize: 2 * 1024,
 		messagePool:         pool.New(1024, 2048),
+		getToken:            message.GetToken,
 	}
 	opts.handler = func(w *responsewriter.ResponseWriter[*ClientConn], r *pool.Message) {
 		if err := w.SetResponse(codes.NotFound, message.TextPlain, nil); err != nil {
@@ -95,6 +99,7 @@ type serverOptions struct {
 	disableTCPSignalMessageCSM      bool
 	blockwiseSZX                    blockwise.SZX
 	blockwiseEnable                 bool
+	getToken                        client.GetTokenFunc
 }
 
 // Listener defined used by coap
@@ -127,6 +132,8 @@ type Server struct {
 	blockwiseEnable                 bool
 	blockwiseSZX                    blockwise.SZX
 	disablePeerTCPSignalMessageCSMs bool
+
+	getToken client.GetTokenFunc
 }
 
 func NewServer(opt ...ServerOption) *Server {
@@ -150,6 +157,9 @@ func NewServer(opt ...ServerOption) *Server {
 		opts.errors = func(error) {
 			// default no-op
 		}
+	}
+	if opts.getToken == nil {
+		opts.getToken = message.GetToken
 	}
 	errorsFunc := opts.errors
 	// assign updated func to opts.errors so opts.handler also uses the updated error handler
@@ -178,6 +188,7 @@ func NewServer(opt ...ServerOption) *Server {
 		periodicRunner:                  opts.periodicRunner,
 		connectionCacheSize:             opts.connectionCacheSize,
 		messagePool:                     opts.messagePool,
+		getToken:                        opts.getToken,
 	}
 }
 
@@ -325,6 +336,7 @@ func (s *Server) createClientConn(connection *coapNet.Conn, monitor inactivity.M
 		monitor,
 		s.connectionCacheSize,
 		s.messagePool,
+		s.getToken,
 	)
 
 	return cc

@@ -16,12 +16,13 @@ import (
 	"github.com/plgd-dev/go-coap/v2/message/pool"
 	coapNet "github.com/plgd-dev/go-coap/v2/net"
 	"github.com/plgd-dev/go-coap/v2/net/blockwise"
+	"github.com/plgd-dev/go-coap/v2/net/client"
 	"github.com/plgd-dev/go-coap/v2/net/monitor/inactivity"
 	"github.com/plgd-dev/go-coap/v2/net/responsewriter"
 	"github.com/plgd-dev/go-coap/v2/pkg/cache"
 	"github.com/plgd-dev/go-coap/v2/pkg/connections"
 	"github.com/plgd-dev/go-coap/v2/pkg/runner/periodic"
-	"github.com/plgd-dev/go-coap/v2/udp/client"
+	udpClient "github.com/plgd-dev/go-coap/v2/udp/client"
 )
 
 // A ServerOption sets options such as credentials, codec and keepalive parameters, etc.
@@ -31,7 +32,7 @@ type ServerOption interface {
 
 // The HandlerFunc type is an adapter to allow the use of
 // ordinary functions as COAP handlers.
-type HandlerFunc = func(*responsewriter.ResponseWriter[*client.ClientConn], *pool.Message)
+type HandlerFunc = func(*responsewriter.ResponseWriter[*udpClient.ClientConn], *pool.Message)
 
 type ErrorFunc = func(error)
 
@@ -41,7 +42,7 @@ type GoPoolFunc = func(func()) error
 //
 // Note: Calling `dtlsConn.Close()` is forbidden, and `dtlsConn` should be treated as a
 // "read-only" parameter, mainly used to get the peer certificate from the underlining connection
-type OnNewClientConnFunc = func(cc *client.ClientConn, dtlsConn *dtls.Conn)
+type OnNewClientConnFunc = func(cc *udpClient.ClientConn, dtlsConn *dtls.Conn)
 
 // only 0 to 2^16-1 are valid
 type GetMIDFunc = func() int32
@@ -62,10 +63,12 @@ var defaultServerOptions = func() serverOptions {
 		createInactivityMonitor: func() inactivity.Monitor {
 			return inactivity.NewNilMonitor()
 		},
-		blockwiseEnable:                true,
-		blockwiseSZX:                   blockwise.SZX1024,
-		blockwiseTransferTimeout:       time.Second * 5,
-		onNewClientConn:                func(cc *client.ClientConn, dtlsConn *dtls.Conn) {},
+		blockwiseEnable:          true,
+		blockwiseSZX:             blockwise.SZX1024,
+		blockwiseTransferTimeout: time.Second * 5,
+		onNewClientConn: func(cc *udpClient.ClientConn, dtlsConn *dtls.Conn) {
+			// do nothing by default
+		},
 		transmissionNStart:             time.Second,
 		transmissionAcknowledgeTimeout: time.Second * 2,
 		transmissionMaxRetransmit:      4,
@@ -78,8 +81,9 @@ var defaultServerOptions = func() serverOptions {
 			}()
 		},
 		messagePool: pool.New(1024, 1600),
+		getToken:    message.GetToken,
 	}
-	opts.handler = func(w *responsewriter.ResponseWriter[*client.ClientConn], m *pool.Message) {
+	opts.handler = func(w *responsewriter.ResponseWriter[*udpClient.ClientConn], m *pool.Message) {
 		if err := w.SetResponse(codes.NotFound, message.TextPlain, nil); err != nil {
 			opts.errors(fmt.Errorf("server handler: cannot set response: %w", err))
 		}
@@ -104,6 +108,7 @@ type serverOptions struct {
 	transmissionMaxRetransmit      uint32
 	blockwiseEnable                bool
 	blockwiseSZX                   blockwise.SZX
+	getToken                       client.GetTokenFunc
 }
 
 // Listener defined used by coap
@@ -137,6 +142,7 @@ type Server struct {
 	maxMessageSize            uint32
 	blockwiseEnable           bool
 	blockwiseSZX              blockwise.SZX
+	getToken                  client.GetTokenFunc
 }
 
 func NewServer(opt ...ServerOption) *Server {
@@ -154,6 +160,10 @@ func NewServer(opt ...ServerOption) *Server {
 
 	if opts.getMID == nil {
 		opts.getMID = message.GetMID
+	}
+
+	if opts.getToken == nil {
+		opts.getToken = message.GetToken
 	}
 
 	if opts.createInactivityMonitor == nil {
@@ -194,6 +204,7 @@ func NewServer(opt ...ServerOption) *Server {
 		periodicRunner:                 opts.periodicRunner,
 		cache:                          cache.NewCache(),
 		messagePool:                    opts.messagePool,
+		getToken:                       opts.getToken,
 	}
 }
 
@@ -228,7 +239,7 @@ func (s *Server) checkAcceptError(err error) (bool, error) {
 	}
 }
 
-func (s *Server) serveConnection(connections *connections.Connections, cc *client.ClientConn) {
+func (s *Server) serveConnection(connections *connections.Connections, cc *udpClient.ClientConn) {
 	connections.Store(cc)
 	defer connections.Delete(cc)
 
@@ -274,7 +285,7 @@ func (s *Server) Serve(l Listener) error {
 			continue
 		}
 		wg.Add(1)
-		var cc *client.ClientConn
+		var cc *udpClient.ClientConn
 		monitor := s.createInactivityMonitor()
 		cc = s.createClientConn(coapNet.NewConn(rw), monitor)
 		if s.onNewClientConn != nil {
@@ -302,12 +313,12 @@ func (s *Server) Stop() {
 	}
 }
 
-func (s *Server) createClientConn(connection *coapNet.Conn, monitor inactivity.Monitor) *client.ClientConn {
-	createBlockWise := func(cc *client.ClientConn) *blockwise.BlockWise[*client.ClientConn] {
+func (s *Server) createClientConn(connection *coapNet.Conn, monitor inactivity.Monitor) *udpClient.ClientConn {
+	createBlockWise := func(cc *udpClient.ClientConn) *blockwise.BlockWise[*udpClient.ClientConn] {
 		return nil
 	}
 	if s.blockwiseEnable {
-		createBlockWise = func(cc *client.ClientConn) *blockwise.BlockWise[*client.ClientConn] {
+		createBlockWise = func(cc *udpClient.ClientConn) *blockwise.BlockWise[*udpClient.ClientConn] {
 			return blockwise.New(
 				cc,
 				s.blockwiseTransferTimeout,
@@ -325,7 +336,7 @@ func (s *Server) createClientConn(connection *coapNet.Conn, monitor inactivity.M
 		s.maxMessageSize,
 		true,
 	)
-	cc := client.NewClientConn(
+	cc := udpClient.NewClientConn(
 		session,
 		s.transmissionNStart,
 		s.transmissionAcknowledgeTimeout,
@@ -339,6 +350,7 @@ func (s *Server) createClientConn(connection *coapNet.Conn, monitor inactivity.M
 		monitor,
 		s.cache,
 		s.messagePool,
+		s.getToken,
 	)
 
 	return cc
