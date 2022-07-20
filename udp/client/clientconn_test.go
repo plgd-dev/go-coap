@@ -53,7 +53,7 @@ func TestClientConnDeduplication(t *testing.T) {
 		atomic.AddInt32(&cnt, 1)
 		errH := w.SetResponse(codes.Content, message.AppOctets, bytes.NewReader([]byte{byte(cnt)}))
 		require.NoError(t, errH)
-		require.NotEmpty(t, w.Client())
+		require.NotEmpty(t, w.ClientConn())
 	}))
 	require.NoError(t, err)
 
@@ -249,14 +249,14 @@ func TestClientConnGet(t *testing.T) {
 		assert.Equal(t, codes.GET, r.Code())
 		errH := w.SetResponse(codes.BadRequest, message.TextPlain, bytes.NewReader(make([]byte, 5330)))
 		require.NoError(t, errH)
-		require.NotEmpty(t, w.Client())
+		require.NotEmpty(t, w.ClientConn())
 	}))
 	require.NoError(t, err)
 	err = m.Handle("/b", mux.HandlerFunc(func(w mux.ResponseWriter, r *mux.Message) {
 		assert.Equal(t, codes.GET, r.Code())
 		errH := w.SetResponse(codes.Content, message.TextPlain, bytes.NewReader([]byte("b")))
 		require.NoError(t, errH)
-		require.NotEmpty(t, w.Client())
+		require.NotEmpty(t, w.ClientConn())
 	}))
 	require.NoError(t, err)
 
@@ -337,7 +337,7 @@ func TestClientConnGetSeparateMessage(t *testing.T) {
 			resp := pool.NewMessage(r.Context())
 			resp.SetMessage(customResp)
 
-			errW := w.Client().WriteMessage(resp)
+			errW := w.ClientConn().WriteMessage(resp)
 			if errW != nil && !errors.Is(errW, context.Canceled) {
 				log.Printf("cannot set response: %v", errW)
 			}
@@ -447,7 +447,7 @@ func TestClientConnPost(t *testing.T) {
 
 				errH = w.SetResponse(codes.BadRequest, message.TextPlain, bytes.NewReader(make([]byte, 5330)))
 				require.NoError(t, errH)
-				require.NotEmpty(t, w.Client())
+				require.NotEmpty(t, w.ClientConn())
 			}))
 			require.NoError(t, err)
 			err = m.Handle("/b", mux.HandlerFunc(func(w mux.ResponseWriter, r *mux.Message) {
@@ -460,7 +460,7 @@ func TestClientConnPost(t *testing.T) {
 				assert.Equal(t, buf, []byte("b-send"))
 				errH = w.SetResponse(codes.Content, message.TextPlain, bytes.NewReader([]byte("b")))
 				require.NoError(t, errH)
-				require.NotEmpty(t, w.Client())
+				require.NotEmpty(t, w.ClientConn())
 			}))
 			require.NoError(t, err)
 
@@ -574,7 +574,7 @@ func TestClientConnPut(t *testing.T) {
 
 				errH = w.SetResponse(codes.BadRequest, message.TextPlain, bytes.NewReader(make([]byte, 5330)))
 				require.NoError(t, errH)
-				require.NotEmpty(t, w.Client())
+				require.NotEmpty(t, w.ClientConn())
 			}))
 			require.NoError(t, err)
 			err = m.Handle("/b", mux.HandlerFunc(func(w mux.ResponseWriter, r *mux.Message) {
@@ -587,7 +587,7 @@ func TestClientConnPut(t *testing.T) {
 				assert.Equal(t, buf, []byte("b-send"))
 				errH = w.SetResponse(codes.Content, message.TextPlain, bytes.NewReader([]byte("b")))
 				require.NoError(t, errH)
-				require.NotEmpty(t, w.Client())
+				require.NotEmpty(t, w.ClientConn())
 			}))
 			require.NoError(t, err)
 
@@ -684,14 +684,14 @@ func TestClientConnDelete(t *testing.T) {
 		assert.Equal(t, codes.DELETE, r.Code())
 		errS := w.SetResponse(codes.BadRequest, message.TextPlain, bytes.NewReader(make([]byte, 5330)))
 		require.NoError(t, errS)
-		require.NotEmpty(t, w.Client())
+		require.NotEmpty(t, w.ClientConn())
 	}))
 	require.NoError(t, err)
 	err = m.Handle("/b", mux.HandlerFunc(func(w mux.ResponseWriter, r *mux.Message) {
 		assert.Equal(t, codes.DELETE, r.Code())
 		errS := w.SetResponse(codes.Deleted, message.TextPlain, bytes.NewReader([]byte("b")))
 		require.NoError(t, errS)
-		require.NotEmpty(t, w.Client())
+		require.NotEmpty(t, w.ClientConn())
 	}))
 	require.NoError(t, err)
 
