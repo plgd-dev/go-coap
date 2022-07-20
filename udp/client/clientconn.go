@@ -62,7 +62,7 @@ type ClientConn struct {
 	session           Session
 	inactivityMonitor inactivity.Monitor
 
-	blockWise          *blockwise.BlockWise
+	blockWise          *blockwise.BlockWise[*ClientConn]
 	observationHandler *observation.Handler[*ClientConn]
 	transmission       *Transmission
 	messagePool        *pool.Pool
@@ -109,7 +109,7 @@ func NewClientConn(
 	transmissionMaxRetransmit uint32,
 	handler HandlerFunc,
 	blockwiseSZX blockwise.SZX,
-	createBlockWise func(cc *ClientConn) *blockwise.BlockWise,
+	createBlockWise func(cc *ClientConn) *blockwise.BlockWise[*ClientConn],
 	goPool GoPoolFunc,
 	errors ErrorFunc,
 	getMID GetMIDFunc,
@@ -210,17 +210,16 @@ func (cc *ClientConn) Do(req *pool.Message) (*pool.Message, error) {
 	if cc.blockWise == nil {
 		return cc.do(req)
 	}
-	bwresp, err := cc.blockWise.Do(req, cc.blockwiseSZX, cc.session.MaxMessageSize(), func(bwreq blockwise.Message) (blockwise.Message, error) {
-		req := bwreq.(*pool.Message)
-		if req.Options().HasOption(message.Block1) || req.Options().HasOption(message.Block2) {
-			req.SetMessageID(cc.GetMessageID())
+	resp, err := cc.blockWise.Do(req, cc.blockwiseSZX, cc.session.MaxMessageSize(), func(bwReq *pool.Message) (*pool.Message, error) {
+		if bwReq.Options().HasOption(message.Block1) || bwReq.Options().HasOption(message.Block2) {
+			bwReq.SetMessageID(cc.GetMessageID())
 		}
-		return cc.do(req)
+		return cc.do(bwReq)
 	})
 	if err != nil {
 		return nil, err
 	}
-	return bwresp.(*pool.Message), nil
+	return resp, nil
 }
 
 func (cc *ClientConn) writeMessage(req *pool.Message) error {
@@ -286,12 +285,11 @@ func (cc *ClientConn) WriteMessage(req *pool.Message) error {
 	if cc.blockWise == nil {
 		return cc.writeMessage(req)
 	}
-	return cc.blockWise.WriteMessage(cc.RemoteAddr(), req, cc.blockwiseSZX, cc.session.MaxMessageSize(), func(bwreq blockwise.Message) error {
-		req := bwreq.(*pool.Message)
-		if req.Options().HasOption(message.Block1) || req.Options().HasOption(message.Block2) {
-			req.SetMessageID(cc.GetMessageID())
+	return cc.blockWise.WriteMessage(req, cc.blockwiseSZX, cc.session.MaxMessageSize(), func(bwReq *pool.Message) error {
+		if bwReq.Options().HasOption(message.Block1) || bwReq.Options().HasOption(message.Block2) {
+			bwReq.SetMessageID(cc.GetMessageID())
 		}
-		return cc.writeMessage(req)
+		return cc.writeMessage(bwReq)
 	})
 }
 
@@ -362,7 +360,7 @@ func (cc *ClientConn) Observe(ctx context.Context, path string, observeFunc func
 	return cc.observationHandler.NewObservation(req, observeFunc)
 }
 
-func (cc *ClientConn) GetObservationRequest(token message.Token) (blockwise.Message, bool) {
+func (cc *ClientConn) GetObservationRequest(token message.Token) (*pool.Message, bool) {
 	obs, ok := cc.observationHandler.GetObservation(token.Hash())
 	if !ok {
 		return nil, false
@@ -549,32 +547,10 @@ func (cc *ClientConn) sendPong(w *responsewriter.ResponseWriter[*ClientConn], r 
 	}
 }
 
-type bwResponseWriter struct {
-	w *responsewriter.ResponseWriter[*ClientConn]
-}
-
-func (b *bwResponseWriter) Message() blockwise.Message {
-	return b.w.Message()
-}
-
-func (b *bwResponseWriter) SetMessage(m blockwise.Message) {
-	b.w.ClientConn().ReleaseMessage(b.w.Message())
-	b.w.SetMessage(m.(*pool.Message))
-}
-
-func (b *bwResponseWriter) RemoteAddr() net.Addr {
-	return b.w.ClientConn().RemoteAddr()
-}
-
 func (cc *ClientConn) handleBW(w *responsewriter.ResponseWriter[*ClientConn], m *pool.Message) {
 	if cc.blockWise != nil {
-		bwr := bwResponseWriter{
-			w: w,
-		}
-		cc.blockWise.Handle(&bwr, m, cc.blockwiseSZX, cc.session.MaxMessageSize(), func(bw blockwise.ResponseWriter, br blockwise.Message) {
-			rw := bw.(*bwResponseWriter).w
-			rm := br.(*pool.Message)
-			if h, ok := cc.tokenHandlerContainer.PullOut(m.Token().Hash()); ok {
+		cc.blockWise.Handle(w, m, cc.blockwiseSZX, cc.session.MaxMessageSize(), func(rw *responsewriter.ResponseWriter[*ClientConn], rm *pool.Message) {
+			if h, ok := cc.tokenHandlerContainer.PullOut(rm.Token().Hash()); ok {
 				h(rw, rm)
 				return
 			}
@@ -776,7 +752,7 @@ func (cc *ClientConn) Process(datagram []byte) error {
 		}()
 		resp := cc.AcquireMessage(cc.Context())
 		resp.SetToken(req.Token())
-		w := responsewriter.New(resp, cc, req.Options())
+		w := responsewriter.New(resp, cc, req.Options()...)
 		defer func() {
 			cc.ReleaseMessage(w.Message())
 		}()

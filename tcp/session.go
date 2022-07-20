@@ -35,7 +35,7 @@ type Session struct {
 	done                            chan struct{}
 	goPool                          GoPoolFunc
 	errors                          ErrorFunc
-	blockWise                       *blockwise.BlockWise
+	blockWise                       *blockwise.BlockWise[*ClientConn]
 	connection                      *coapNet.Conn
 	handler                         HandlerFunc
 	tokenHandlerContainer           *coapSync.Map[uint64, HandlerFunc]
@@ -59,7 +59,7 @@ func NewSession(
 	goPool GoPoolFunc,
 	errors ErrorFunc,
 	blockwiseSZX blockwise.SZX,
-	blockWise *blockwise.BlockWise,
+	blockWise *blockwise.BlockWise[*ClientConn],
 	disablePeerTCPSignalMessageCSMs bool,
 	disableTCPSignalMessageCSM bool,
 	closeSocket bool,
@@ -165,29 +165,6 @@ func (s *Session) PeerBlockWiseTransferEnabled() bool {
 	return s.peerBlockWiseTranferEnabled.Load()
 }
 
-func (s *Session) handleBlockwise(w *responsewriter.ResponseWriter[*ClientConn], r *pool.Message) {
-	if s.blockWise != nil && s.PeerBlockWiseTransferEnabled() {
-		bwr := bwResponseWriter{
-			w: w,
-		}
-		s.blockWise.Handle(&bwr, r, s.blockwiseSZX, s.maxMessageSize, func(bw blockwise.ResponseWriter, br blockwise.Message) {
-			rw := bw.(*bwResponseWriter).w
-			m := br.(*pool.Message)
-			if h, ok := s.tokenHandlerContainer.Load(r.Token().Hash()); ok {
-				h(rw, m)
-				return
-			}
-			s.handler(rw, m)
-		})
-		return
-	}
-	if h, ok := s.tokenHandlerContainer.PullOut(r.Token().Hash()); ok {
-		h(w, r)
-		return
-	}
-	s.handler(w, r)
-}
-
 func (s *Session) handleSignals(r *pool.Message, cc *ClientConn) bool {
 	switch r.Code() {
 	case codes.CSM:
@@ -228,25 +205,24 @@ func (s *Session) handleSignals(r *pool.Message, cc *ClientConn) bool {
 	return false
 }
 
-type bwResponseWriter struct {
-	w *responsewriter.ResponseWriter[*ClientConn]
-}
-
-func (b *bwResponseWriter) Message() blockwise.Message {
-	return b.w.Message()
-}
-
-func (b *bwResponseWriter) SetMessage(m blockwise.Message) {
-	b.w.ClientConn().ReleaseMessage(b.w.Message())
-	b.w.SetMessage(m.(*pool.Message))
-}
-
-func (b *bwResponseWriter) RemoteAddr() net.Addr {
-	return b.w.ClientConn().RemoteAddr()
+func (s *Session) blockwiseHandle(w *responsewriter.ResponseWriter[*ClientConn], r *pool.Message) {
+	if h, ok := s.tokenHandlerContainer.Load(r.Token().Hash()); ok {
+		h(w, r)
+		return
+	}
+	s.handler(w, r)
 }
 
 func (s *Session) Handle(w *responsewriter.ResponseWriter[*ClientConn], r *pool.Message) {
-	s.handleBlockwise(w, r)
+	if s.blockWise != nil && s.PeerBlockWiseTransferEnabled() {
+		s.blockWise.Handle(w, r, s.blockwiseSZX, s.maxMessageSize, s.blockwiseHandle)
+		return
+	}
+	if h, ok := s.tokenHandlerContainer.PullOut(r.Token().Hash()); ok {
+		h(w, r)
+		return
+	}
+	s.handler(w, r)
 }
 
 func (s *Session) TokenHandler() *coapSync.Map[uint64, HandlerFunc] {
@@ -256,7 +232,7 @@ func (s *Session) TokenHandler() *coapSync.Map[uint64, HandlerFunc] {
 func (s *Session) processReq(req *pool.Message, cc *ClientConn, handler func(w *responsewriter.ResponseWriter[*ClientConn], r *pool.Message)) {
 	origResp := s.messagePool.AcquireMessage(s.Context())
 	origResp.SetToken(req.Token())
-	w := responsewriter.New(origResp, cc, req.Options())
+	w := responsewriter.New(origResp, cc, req.Options()...)
 	handler(w, req)
 	defer s.messagePool.ReleaseMessage(w.Message())
 	if !req.IsHijacked() {

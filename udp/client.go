@@ -109,20 +109,8 @@ func Dial(target string, opts ...DialOption) (*client.ClientConn, error) {
 	return Client(conn, opts...), nil
 }
 
-func bwCreateAcquireMessage(messagePool *pool.Pool) func(ctx context.Context) blockwise.Message {
-	return func(ctx context.Context) blockwise.Message {
-		return messagePool.AcquireMessage(ctx)
-	}
-}
-
-func bwCreateReleaseMessage(messagePool *pool.Pool) func(m blockwise.Message) {
-	return func(m blockwise.Message) {
-		messagePool.ReleaseMessage(m.(*pool.Message))
-	}
-}
-
-func bwCreateHandlerFunc(messagePool *pool.Pool, observatioRequests *client.RequestsMap) func(token message.Token) (blockwise.Message, bool) {
-	return func(token message.Token) (blockwise.Message, bool) {
+func bwCreateHandlerFunc(messagePool *pool.Pool, observatioRequests *client.RequestsMap) func(token message.Token) (*pool.Message, bool) {
+	return func(token message.Token) (*pool.Message, bool) {
 		var bwMessage *pool.Message
 		_, ok := observatioRequests.LoadWithFunc(token.Hash(), func(m *pool.Message) *pool.Message {
 			bwMessage = messagePool.AcquireMessage(m.Context())
@@ -168,14 +156,13 @@ func Client(conn *net.UDPConn, opts ...DialOption) *client.ClientConn {
 		errorsFunc(fmt.Errorf("udp: %v: %w", conn.RemoteAddr(), err))
 	}
 	addr, _ := conn.RemoteAddr().(*net.UDPAddr)
-	createBlockWise := func(cc *client.ClientConn) *blockwise.BlockWise {
+	createBlockWise := func(cc *client.ClientConn) *blockwise.BlockWise[*client.ClientConn] {
 		return nil
 	}
 	if cfg.blockwiseEnable {
-		createBlockWise = func(cc *client.ClientConn) *blockwise.BlockWise {
-			return blockwise.NewBlockWise(
-				bwCreateAcquireMessage(cfg.messagePool),
-				bwCreateReleaseMessage(cfg.messagePool),
+		createBlockWise = func(cc *client.ClientConn) *blockwise.BlockWise[*client.ClientConn] {
+			return blockwise.New(
+				cc,
 				cfg.blockwiseTransferTimeout,
 				cfg.errors,
 				false,

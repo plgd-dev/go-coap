@@ -9,21 +9,28 @@ import (
 	"github.com/plgd-dev/go-coap/v2/message/pool"
 )
 
-// A ResponseWriter is used by an COAP handler to construct an COAP response.
-type ResponseWriter[Client any] struct {
-	noResponseValue *uint32
-	response        *pool.Message
-	cc              Client
+type Client interface {
+	ReleaseMessage(msg *pool.Message)
 }
 
-func New[Client any](response *pool.Message, cc Client, requestOptions message.Options) *ResponseWriter[Client] {
+// A ResponseWriter is used by an COAP handler to construct an COAP response.
+type ResponseWriter[C Client] struct {
+	noResponseValue *uint32
+	response        *pool.Message
+	cc              C
+}
+
+func New[C Client](response *pool.Message, cc C, requestOptions ...message.Option) *ResponseWriter[C] {
 	var noResponseValue *uint32
-	v, err := requestOptions.GetUint32(message.NoResponse)
-	if err == nil {
-		noResponseValue = &v
+	if len(requestOptions) > 0 {
+		reqOpts := message.Options(requestOptions)
+		v, err := reqOpts.GetUint32(message.NoResponse)
+		if err == nil {
+			noResponseValue = &v
+		}
 	}
 
-	return &ResponseWriter[Client]{
+	return &ResponseWriter[C]{
 		response:        response,
 		cc:              cc,
 		noResponseValue: noResponseValue,
@@ -31,7 +38,7 @@ func New[Client any](response *pool.Message, cc Client, requestOptions message.O
 }
 
 // SetResponse simplifies the setup of the response for the request. ETags must be set via options. For advanced setup, use Message().
-func (r *ResponseWriter[Client]) SetResponse(code codes.Code, contentFormat message.MediaType, d io.ReadSeeker, opts ...message.Option) error {
+func (r *ResponseWriter[C]) SetResponse(code codes.Code, contentFormat message.MediaType, d io.ReadSeeker, opts ...message.Option) error {
 	if r.noResponseValue != nil {
 		err := noresponse.IsNoResponseCode(code, *r.noResponseValue)
 		if err != nil {
@@ -48,17 +55,18 @@ func (r *ResponseWriter[Client]) SetResponse(code codes.Code, contentFormat mess
 	return nil
 }
 
-// SetMessage replaces the response message. Ensure that Token, MessageID(udp), and Type(udp) messages are paired correctly.
-func (r *ResponseWriter[Client]) SetMessage(m *pool.Message) {
+// SetMessage replaces the response message. The original message was released to the message pool, so don't use it any more. Ensure that Token, MessageID(udp), and Type(udp) messages are paired correctly.
+func (r *ResponseWriter[C]) SetMessage(m *pool.Message) {
+	r.cc.ReleaseMessage(r.response)
 	r.response = m
 }
 
 // Message direct access to the response.
-func (r *ResponseWriter[Client]) Message() *pool.Message {
+func (r *ResponseWriter[C]) Message() *pool.Message {
 	return r.response
 }
 
-// ClientConn peer connection.
-func (r *ResponseWriter[Client]) ClientConn() Client {
+// CConn peer connection.
+func (r *ResponseWriter[C]) ClientConn() C {
 	return r.cc
 }
