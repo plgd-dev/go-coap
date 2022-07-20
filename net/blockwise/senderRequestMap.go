@@ -3,10 +3,11 @@ package blockwise
 import (
 	"fmt"
 
+	"github.com/plgd-dev/go-coap/v2/message/pool"
 	"github.com/plgd-dev/go-coap/v2/pkg/sync"
 )
 
-func messageToGuardTransferKey(msg Message) string {
+func messageToGuardTransferKey(msg *pool.Message) string {
 	code := msg.Code()
 	path, _ := msg.Path()
 	queries, _ := msg.Queries()
@@ -21,16 +22,12 @@ type senderRequest struct {
 	lock    bool
 }
 
-func setTypeFrom(to Message, from Message) {
-	if udpTo, ok := to.(hasType); ok {
-		if udpFrom, ok := from.(hasType); ok {
-			udpTo.SetType(udpFrom.Type())
-		}
-	}
+func setTypeFrom(to *pool.Message, from *pool.Message) {
+	to.SetType(from.Type())
 }
 
-func (b *BlockWise) newSentRequestMessage(r Message, lock bool) *senderRequest {
-	req := b.acquireMessage(r.Context())
+func (b *BlockWise[C]) newSentRequestMessage(r *pool.Message, lock bool) *senderRequest {
+	req := b.cc.AcquireMessage(r.Context())
 	req.SetCode(r.Code())
 	req.SetToken(r.Token())
 	req.ResetOptionsTo(r.Options())
@@ -39,7 +36,7 @@ func (b *BlockWise) newSentRequestMessage(r Message, lock bool) *senderRequest {
 		transferKey:  messageToGuardTransferKey(req),
 		messageGuard: newRequestGuard(req),
 		release: func() {
-			b.releaseMessage(req)
+			b.cc.ReleaseMessage(req)
 		},
 		lock: lock,
 	}

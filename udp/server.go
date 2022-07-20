@@ -36,8 +36,6 @@ type ErrorFunc = func(error)
 
 type GoPoolFunc = func(func()) error
 
-type BlockwiseFactoryFunc = func(getSentRequest func(token message.Token) (blockwise.Message, bool)) *blockwise.BlockWise
-
 type OnNewClientConnFunc = func(cc *client.ClientConn)
 
 type GetMIDFunc = func() int32
@@ -363,14 +361,13 @@ func (s *Server) getOrCreateClientConn(UDPConn *coapNet.UDPConn, raddr *net.UDPA
 	cc = s.conns[key]
 	if cc == nil {
 		created = true
-		createBlockWise := func(cc *client.ClientConn) *blockwise.BlockWise {
+		createBlockWise := func(cc *client.ClientConn) *blockwise.BlockWise[*client.ClientConn] {
 			return nil
 		}
 		if s.blockwiseEnable {
-			createBlockWise = func(cc *client.ClientConn) *blockwise.BlockWise {
-				return blockwise.NewBlockWise(
-					bwCreateAcquireMessage(s.messagePool),
-					bwCreateReleaseMessage(s.messagePool),
+			createBlockWise = func(cc *client.ClientConn) *blockwise.BlockWise[*client.ClientConn] {
+				return blockwise.New(
+					cc,
 					s.blockwiseTransferTimeout,
 					s.errors,
 					false,

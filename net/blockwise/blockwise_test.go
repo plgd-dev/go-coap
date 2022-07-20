@@ -5,7 +5,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"net"
 	"sync"
 	"testing"
 	"time"
@@ -13,31 +12,11 @@ import (
 	"github.com/dsnet/golib/memfile"
 	"github.com/plgd-dev/go-coap/v2/message"
 	"github.com/plgd-dev/go-coap/v2/message/codes"
+	"github.com/plgd-dev/go-coap/v2/message/pool"
+	"github.com/plgd-dev/go-coap/v2/net/responsewriter"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
-
-type responseWriter struct {
-	resp Message
-}
-
-func (r *responseWriter) Message() Message {
-	return r.resp
-}
-
-func (r *responseWriter) SetMessage(resp Message) {
-	r.resp = resp
-}
-
-func (r *responseWriter) RemoteAddr() net.Addr {
-	return nil
-}
-
-func newResponseWriter(r Message) *responseWriter {
-	return &responseWriter{
-		resp: r,
-	}
-}
 
 type testmessage struct {
 	code     codes.Code
@@ -48,171 +27,61 @@ type testmessage struct {
 	sequence uint64
 }
 
-func (r *testmessage) Queries() ([]string, error) {
-	return r.options.Queries()
+func toPoolMessage(m *testmessage) *pool.Message {
+	msg := pool.NewMessage(m.ctx)
+	msg.SetCode(m.code)
+	msg.SetToken(m.token)
+	msg.ResetOptionsTo(m.options)
+	msg.SetBody(m.payload)
+	msg.SetSequence(m.sequence)
+	return msg
 }
 
-func (r *testmessage) Path() (string, error) {
-	return r.options.Path()
-}
-
-func (r *testmessage) String() string {
-	buf := fmt.Sprintf("Code: %v, Token %v", r.code, r.token)
-	path, err := r.options.Path()
-	if err != nil {
-		buf = fmt.Sprintf("%s, Path: %v", buf, path)
+func fromPoolMessage(m *pool.Message) *testmessage {
+	opts := m.Options()
+	if len(opts) == 0 {
+		opts = nil
 	}
-	cf, err := r.options.ContentFormat()
-	if err == nil {
-		buf = fmt.Sprintf("%s, Format: %v", buf, cf)
-	}
-	queries, err := r.options.Queries()
-	if err == nil {
-		buf = fmt.Sprintf("%s, Queries: %+v", buf, queries)
-	}
-	return buf
-}
-
-func (r *testmessage) Context() context.Context {
-	return r.ctx
-}
-
-func (r *testmessage) SetCode(c codes.Code) {
-	r.code = c
-}
-
-func (r *testmessage) Code() codes.Code {
-	return r.code
-}
-
-func (r *testmessage) SetToken(token message.Token) {
-	r.token = token
-}
-
-func (r *testmessage) Token() message.Token {
-	return r.token
-}
-
-func (r *testmessage) SetSequence(s uint64) {
-	r.sequence = s
-}
-
-func (r *testmessage) Sequence() uint64 {
-	return r.sequence
-}
-
-func (r *testmessage) SetOptionUint32(id message.OptionID, value uint32) {
-	opts, _, err := r.options.SetUint32(make([]byte, 4), id, value)
-	r.options = opts
-	if err != nil {
-		panic(err)
-	}
-}
-
-func (r *testmessage) GetOptionUint32(id message.OptionID) (uint32, error) {
-	return r.options.GetUint32(id)
-}
-
-func (r *testmessage) SetOptionBytes(id message.OptionID, value []byte) {
-	opts, _, err := r.options.SetBytes(make([]byte, len(value)), id, value)
-	r.options = opts
-	if err != nil {
-		panic(err)
-	}
-}
-
-func (r *testmessage) GetOptionBytes(id message.OptionID) ([]byte, error) {
-	return r.options.GetBytes(id)
-}
-
-func (r *testmessage) Remove(id message.OptionID) {
-	r.options = r.options.Remove(id)
-	if len(r.options) == 0 {
-		r.options = nil
-	}
-}
-
-func (r *testmessage) ResetOptionsTo(in message.Options) {
-	r.options = r.options[:0]
-	for _, o := range in {
-		v := make([]byte, len(o.Value))
-		copy(v, o.Value)
-		r.options = r.options.Add(message.Option{
-			ID:    o.ID,
-			Value: v,
-		})
-	}
-}
-
-func (r *testmessage) Options() message.Options {
-	return r.options
-}
-
-func (r *testmessage) SetBody(p io.ReadSeeker) {
-	r.payload = p
-}
-
-func (r *testmessage) Body() io.ReadSeeker {
-	return r.payload
-}
-
-func (r *testmessage) BodySize() (int64, error) {
-	if r.payload == nil {
-		return 0, nil
-	}
-	orig, err := r.payload.Seek(0, io.SeekCurrent)
-	if err != nil {
-		return 0, err
-	}
-	_, err = r.payload.Seek(0, io.SeekStart)
-	if err != nil {
-		return 0, err
-	}
-	size, err := r.payload.Seek(0, io.SeekEnd)
-	if err != nil {
-		return 0, err
-	}
-	_, err = r.payload.Seek(orig, io.SeekStart)
-	if err != nil {
-		return 0, err
-	}
-	return size, nil
-}
-
-func (r *testmessage) Type() message.Type {
-	return message.Confirmable
-}
-
-func (r *testmessage) SetType(t message.Type) {
-}
-
-func acquireMessage(ctx context.Context) Message {
 	return &testmessage{
-		ctx: ctx,
+		code:     m.Code(),
+		ctx:      m.Context(),
+		token:    m.Token(),
+		options:  opts,
+		payload:  m.Body(),
+		sequence: m.Sequence(),
 	}
 }
 
-func releaseMessage(r Message) {
-	req := r.(*testmessage)
-	req.options = nil
-	req.token = nil
-	req.payload = nil
-	req.code = 0
-	req.ctx = nil
+type testClient struct {
+	p *pool.Pool
 }
 
-func makeDo(t *testing.T, sender, receiver *BlockWise, senderMaxSZX SZX, senderMaxMessageSize uint32, receiverMaxSZX SZX, receiverMaxMessageSize uint32, next func(ResponseWriter, Message)) func(Message) (Message, error) {
-	return func(req Message) (Message, error) {
-		c := make(chan Message)
+func newTestClient() *testClient {
+	return &testClient{
+		p: pool.New(100, 1024),
+	}
+}
+
+func (c *testClient) AcquireMessage(ctx context.Context) *pool.Message {
+	return c.p.AcquireMessage(ctx)
+}
+
+func (c *testClient) ReleaseMessage(m *pool.Message) {
+	c.p.ReleaseMessage(m)
+}
+
+func makeDo[C Client](t *testing.T, sender, receiver *BlockWise[C], senderMaxSZX SZX, senderMaxMessageSize uint32, receiverMaxSZX SZX, receiverMaxMessageSize uint32, next func(*responsewriter.ResponseWriter[C], *pool.Message)) func(*pool.Message) (*pool.Message, error) {
+	return func(req *pool.Message) (*pool.Message, error) {
+		c := make(chan *pool.Message)
 		go func() {
-			var roReq Message
+			var roReq *pool.Message
 			roReq = req
 			for {
-				var resp Message
-				receiverResp := newResponseWriter(acquireMessage(roReq.Context()))
+				var resp *pool.Message
+				receiverResp := responsewriter.New(receiver.cc.AcquireMessage(roReq.Context()), receiver.cc)
 				receiver.Handle(receiverResp, roReq, senderMaxSZX, senderMaxMessageSize, next)
-				senderResp := newResponseWriter(acquireMessage(roReq.Context()))
-				sender.Handle(senderResp, receiverResp.Message(), receiverMaxSZX, receiverMaxMessageSize, func(w ResponseWriter, r Message) {
+				senderResp := responsewriter.New(sender.cc.AcquireMessage(roReq.Context()), sender.cc)
+				sender.Handle(senderResp, receiverResp.Message(), receiverMaxSZX, receiverMaxMessageSize, func(w *responsewriter.ResponseWriter[C], r *pool.Message) {
 					resp = r
 				})
 				if resp != nil {
@@ -228,18 +97,18 @@ func makeDo(t *testing.T, sender, receiver *BlockWise, senderMaxSZX SZX, senderM
 }
 
 func TestBlockWiseDo(t *testing.T) {
-	sender := NewBlockWise(acquireMessage, releaseMessage, time.Second*3600, func(err error) { t.Log(err) }, true, nil)
-	receiver := NewBlockWise(acquireMessage, releaseMessage, time.Second*3600, func(err error) { t.Log(err) }, true, nil)
+	sender := New(newTestClient(), time.Second*3600, func(err error) { t.Log(err) }, true, nil)
+	receiver := New(newTestClient(), time.Second*3600, func(err error) { t.Log(err) }, true, nil)
 	type args struct {
-		r              Message
+		r              *testmessage
 		szx            SZX
 		maxMessageSize int64
-		do             func(req Message) (Message, error)
+		do             func(req *pool.Message) (*pool.Message, error)
 	}
 	tests := []struct {
 		name    string
 		args    args
-		want    Message
+		want    *testmessage
 		wantErr bool
 	}{
 		{
@@ -254,21 +123,21 @@ func TestBlockWiseDo(t *testing.T) {
 				},
 				szx:            SZX16,
 				maxMessageSize: SZX16.Size(),
-				do: makeDo(t, sender, receiver, SZX16, uint32(SZX16.Size()), SZX16, uint32(SZX16.Size()), func(w ResponseWriter, r Message) {
+				do: makeDo(t, sender, receiver, SZX16, uint32(SZX16.Size()), SZX16, uint32(SZX16.Size()), func(w *responsewriter.ResponseWriter[*testClient], r *pool.Message) {
 					require.Equal(t, &testmessage{
 						ctx:     context.Background(),
 						token:   []byte{2},
 						options: message.Options{message.Option{ID: message.URIPath, Value: []byte("abc")}},
 						code:    codes.POST,
 						payload: memfile.New(make([]byte, 128)),
-					}, r)
+					}, fromPoolMessage(r))
 					w.SetMessage(
-						&testmessage{
+						toPoolMessage(&testmessage{
 							ctx:     context.Background(),
 							token:   r.Token(),
 							code:    codes.Changed,
 							payload: bytes.NewReader(make([]byte, 17)),
-						},
+						}),
 					)
 				}),
 			},
@@ -291,21 +160,21 @@ func TestBlockWiseDo(t *testing.T) {
 				},
 				szx:            SZX16,
 				maxMessageSize: SZX16.Size(),
-				do: makeDo(t, sender, receiver, SZX16, uint32(SZX16.Size()), SZX1024, uint32(SZX1024.Size()), func(w ResponseWriter, r Message) {
+				do: makeDo(t, sender, receiver, SZX16, uint32(SZX16.Size()), SZX1024, uint32(SZX1024.Size()), func(w *responsewriter.ResponseWriter[*testClient], r *pool.Message) {
 					require.Equal(t, &testmessage{
 						ctx:     context.Background(),
 						token:   []byte{2},
 						options: message.Options{message.Option{ID: message.URIPath, Value: []byte("abc")}},
 						code:    codes.POST,
 						payload: memfile.New(make([]byte, 128)),
-					}, r)
+					}, fromPoolMessage(r))
 					w.SetMessage(
-						&testmessage{
+						toPoolMessage(&testmessage{
 							ctx:     context.Background(),
 							token:   r.Token(),
 							code:    codes.Changed,
 							payload: bytes.NewReader(make([]byte, 17)),
-						},
+						}),
 					)
 				}),
 			},
@@ -328,21 +197,21 @@ func TestBlockWiseDo(t *testing.T) {
 				},
 				szx:            SZXBERT,
 				maxMessageSize: SZXBERT.Size() * 2,
-				do: makeDo(t, sender, receiver, SZXBERT, uint32(SZXBERT.Size()*2), SZXBERT, uint32(SZXBERT.Size()*5), func(w ResponseWriter, r Message) {
+				do: makeDo(t, sender, receiver, SZXBERT, uint32(SZXBERT.Size()*2), SZXBERT, uint32(SZXBERT.Size()*5), func(w *responsewriter.ResponseWriter[*testClient], r *pool.Message) {
 					require.Equal(t, &testmessage{
 						ctx:     context.Background(),
 						token:   []byte{'B', 'E', 'R', 'T'},
 						options: message.Options{message.Option{ID: message.URIPath, Value: []byte("abc")}},
 						code:    codes.POST,
 						payload: memfile.New(make([]byte, 11111)),
-					}, r)
+					}, fromPoolMessage(r))
 					w.SetMessage(
-						&testmessage{
+						toPoolMessage(&testmessage{
 							ctx:     context.Background(),
 							token:   r.Token(),
 							code:    codes.Changed,
 							payload: bytes.NewReader(make([]byte, 22222)),
-						},
+						}),
 					)
 				}),
 			},
@@ -365,21 +234,21 @@ func TestBlockWiseDo(t *testing.T) {
 				},
 				szx:            SZX16,
 				maxMessageSize: SZX16.Size(),
-				do: makeDo(t, sender, receiver, SZX16, uint32(SZX16.Size()), SZX16, uint32(SZX16.Size()), func(w ResponseWriter, r Message) {
+				do: makeDo(t, sender, receiver, SZX16, uint32(SZX16.Size()), SZX16, uint32(SZX16.Size()), func(w *responsewriter.ResponseWriter[*testClient], r *pool.Message) {
 					require.Equal(t, &testmessage{
 						ctx:     context.Background(),
 						token:   []byte{2},
 						options: message.Options{message.Option{ID: message.URIPath, Value: []byte("abc")}},
 						code:    codes.PUT,
 						payload: memfile.New(make([]byte, 128)),
-					}, r)
+					}, fromPoolMessage(r))
 					w.SetMessage(
-						&testmessage{
+						toPoolMessage(&testmessage{
 							ctx:     context.Background(),
 							token:   r.Token(),
 							code:    codes.Created,
 							payload: bytes.NewReader(make([]byte, 17)),
-						},
+						}),
 					)
 				}),
 			},
@@ -401,20 +270,20 @@ func TestBlockWiseDo(t *testing.T) {
 				},
 				szx:            SZX16,
 				maxMessageSize: SZX16.Size(),
-				do: makeDo(t, sender, receiver, SZX16, uint32(SZX16.Size()), SZX16, uint32(SZX16.Size()), func(w ResponseWriter, r Message) {
+				do: makeDo(t, sender, receiver, SZX16, uint32(SZX16.Size()), SZX16, uint32(SZX16.Size()), func(w *responsewriter.ResponseWriter[*testClient], r *pool.Message) {
 					require.Equal(t, &testmessage{
 						ctx:     context.Background(),
 						token:   []byte{2},
 						options: message.Options{message.Option{ID: message.URIPath, Value: []byte("abc")}},
 						code:    codes.GET,
-					}, r)
+					}, fromPoolMessage(r))
 					w.SetMessage(
-						&testmessage{
+						toPoolMessage(&testmessage{
 							ctx:     context.Background(),
 							token:   r.Token(),
 							code:    codes.Content,
 							payload: bytes.NewReader(make([]byte, 399)),
-						},
+						}),
 					)
 				}),
 			},
@@ -429,30 +298,30 @@ func TestBlockWiseDo(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := sender.Do(tt.args.r, tt.args.szx, uint32(tt.args.maxMessageSize), tt.args.do)
+			got, err := sender.Do(toPoolMessage(tt.args.r), tt.args.szx, uint32(tt.args.maxMessageSize), tt.args.do)
 			if tt.wantErr {
 				assert.Error(t, err)
 				return
 			}
 			require.NoError(t, err)
-			assert.Equal(t, tt.want, got)
+			assert.Equal(t, tt.want, fromPoolMessage(got))
 		})
 	}
 }
 
 func TestBlockWiseParallel(t *testing.T) {
-	sender := NewBlockWise(acquireMessage, releaseMessage, time.Second*3600, func(err error) { t.Log(err) }, true, nil)
-	receiver := NewBlockWise(acquireMessage, releaseMessage, time.Second*3600, func(err error) { t.Log(err) }, true, nil)
+	sender := New(newTestClient(), time.Second*3600, func(err error) { t.Log(err) }, true, nil)
+	receiver := New(newTestClient(), time.Second*3600, func(err error) { t.Log(err) }, true, nil)
 	type args struct {
-		r              Message
+		r              *testmessage
 		szx            SZX
 		maxMessageSize int64
-		do             func(req Message) (Message, error)
+		do             func(req *pool.Message) (*pool.Message, error)
 	}
 	tests := []struct {
 		name    string
 		args    args
-		want    Message
+		want    *testmessage
 		wantErr bool
 	}{
 		{
@@ -467,21 +336,21 @@ func TestBlockWiseParallel(t *testing.T) {
 				},
 				szx:            SZX16,
 				maxMessageSize: SZX16.Size(),
-				do: makeDo(t, sender, receiver, SZX16, uint32(SZX16.Size()), SZX1024, uint32(SZX1024.Size()), func(w ResponseWriter, r Message) {
+				do: makeDo(t, sender, receiver, SZX16, uint32(SZX16.Size()), SZX1024, uint32(SZX1024.Size()), func(w *responsewriter.ResponseWriter[*testClient], r *pool.Message) {
 					require.Equal(t, &testmessage{
 						ctx:     context.Background(),
 						token:   []byte{2},
 						options: message.Options{message.Option{ID: message.URIPath, Value: []byte("abc")}},
 						code:    codes.POST,
 						payload: memfile.New(make([]byte, 20000)),
-					}, r)
+					}, fromPoolMessage(r))
 					w.SetMessage(
-						&testmessage{
+						toPoolMessage(&testmessage{
 							ctx:     context.Background(),
 							token:   r.Token(),
 							code:    codes.Changed,
 							payload: bytes.NewReader(make([]byte, 30000)),
-						},
+						}),
 					)
 				}),
 			},
@@ -498,26 +367,27 @@ func TestBlockWiseParallel(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			var wg sync.WaitGroup
 			defer wg.Wait()
-			bodysize, err := tt.args.r.BodySize()
+			r := toPoolMessage(tt.args.r)
+			bodysize, err := r.BodySize()
 			require.NoError(t, err)
 			for i := 0; i < 8; i++ {
 				wg.Add(1)
 				go func() {
 					defer wg.Done()
-					r := &testmessage{
-						ctx:     tt.args.r.Context(),
-						token:   tt.args.r.Token(),
-						options: tt.args.r.Options(),
-						code:    tt.args.r.Code(),
+					req := &testmessage{
+						ctx:     r.Context(),
+						token:   r.Token(),
+						options: r.Options(),
+						code:    r.Code(),
 						payload: bytes.NewReader(make([]byte, bodysize)),
 					}
-					got, err := sender.Do(r, tt.args.szx, uint32(tt.args.maxMessageSize), tt.args.do)
+					got, err := sender.Do(toPoolMessage(req), tt.args.szx, uint32(tt.args.maxMessageSize), tt.args.do)
 					if tt.wantErr {
 						assert.Error(t, err)
 						return
 					}
 					require.NoError(t, err)
-					assert.Equal(t, tt.want, got)
+					assert.Equal(t, tt.want, fromPoolMessage(got))
 				}()
 			}
 		})
@@ -611,21 +481,21 @@ func TestDecodeBlockOption(t *testing.T) {
 	}
 }
 
-func makeWriteReq(t *testing.T, sender, receiver *BlockWise, senderMaxSZX SZX, senderMaxMessageSize uint32, receiverMaxSZX SZX, receiverMaxMessageSize uint32, next func(ResponseWriter, Message)) func(Message) error {
-	return func(req Message) error {
+func makeWriteReq[C Client](t *testing.T, sender, receiver *BlockWise[C], senderMaxSZX SZX, senderMaxMessageSize uint32, receiverMaxSZX SZX, receiverMaxMessageSize uint32, next func(*responsewriter.ResponseWriter[C], *pool.Message)) func(*pool.Message) error {
+	return func(req *pool.Message) error {
 		c := make(chan bool, 1)
 		go func() {
-			var roReq Message
+			var roReq *pool.Message
 			roReq = req
 			for {
-				receiverResp := newResponseWriter(acquireMessage(roReq.Context()))
-				receiver.Handle(receiverResp, roReq, senderMaxSZX, senderMaxMessageSize, func(w ResponseWriter, r Message) {
+				receiverResp := responsewriter.New(receiver.cc.AcquireMessage(roReq.Context()), receiver.cc)
+				receiver.Handle(receiverResp, roReq, senderMaxSZX, senderMaxMessageSize, func(w *responsewriter.ResponseWriter[C], r *pool.Message) {
 					defer close(c)
 					next(w, r)
 				})
-				senderResp := newResponseWriter(acquireMessage(roReq.Context()))
+				senderResp := responsewriter.New(sender.cc.AcquireMessage(roReq.Context()), sender.cc)
 				orig := senderResp.Message()
-				sender.Handle(senderResp, receiverResp.Message(), receiverMaxSZX, receiverMaxMessageSize, func(w ResponseWriter, r Message) {
+				sender.Handle(senderResp, receiverResp.Message(), receiverMaxSZX, receiverMaxMessageSize, func(w *responsewriter.ResponseWriter[C], r *pool.Message) {
 				})
 				if orig == senderResp.Message() {
 					select {
@@ -649,13 +519,13 @@ func makeWriteReq(t *testing.T, sender, receiver *BlockWise, senderMaxSZX SZX, s
 }
 
 func TestBlockWiseWritetestmessage(t *testing.T) {
-	sender := NewBlockWise(acquireMessage, releaseMessage, time.Second*3600, func(err error) { t.Log(err) }, true, nil)
-	receiver := NewBlockWise(acquireMessage, releaseMessage, time.Second*3600, func(err error) { t.Log(err) }, true, nil)
+	sender := New(newTestClient(), time.Second*3600, func(err error) { t.Log(err) }, true, nil)
+	receiver := New(newTestClient(), time.Second*3600, func(err error) { t.Log(err) }, true, nil)
 	type args struct {
-		r                Message
+		r                *testmessage
 		szx              SZX
 		maxMessageSize   int64
-		writetestmessage func(req Message) error
+		writetestmessage func(req *pool.Message) error
 	}
 	tests := []struct {
 		name    string
@@ -674,7 +544,7 @@ func TestBlockWiseWritetestmessage(t *testing.T) {
 				},
 				szx:            SZX16,
 				maxMessageSize: SZX16.Size(),
-				writetestmessage: makeWriteReq(t, sender, receiver, SZX16, uint32(SZX16.Size()), SZX16, uint32(SZX16.Size()), func(w ResponseWriter, r Message) {
+				writetestmessage: makeWriteReq(t, sender, receiver, SZX16, uint32(SZX16.Size()), SZX16, uint32(SZX16.Size()), func(w *responsewriter.ResponseWriter[*testClient], r *pool.Message) {
 					require.NoError(t, fmt.Errorf("not expected received message: %+v", r))
 				}),
 			},
@@ -691,14 +561,14 @@ func TestBlockWiseWritetestmessage(t *testing.T) {
 				},
 				szx:            SZX16,
 				maxMessageSize: SZX16.Size(),
-				writetestmessage: makeWriteReq(t, sender, receiver, SZX16, uint32(SZX16.Size()), SZX1024, uint32(SZX1024.Size()), func(w ResponseWriter, r Message) {
+				writetestmessage: makeWriteReq(t, sender, receiver, SZX16, uint32(SZX16.Size()), SZX1024, uint32(SZX1024.Size()), func(w *responsewriter.ResponseWriter[*testClient], r *pool.Message) {
 					require.Equal(t, &testmessage{
 						ctx:     context.Background(),
 						token:   []byte{2},
 						options: message.Options{message.Option{ID: message.URIPath, Value: []byte("abc")}},
 						code:    codes.POST,
 						payload: memfile.New(make([]byte, 128)),
-					}, r)
+					}, fromPoolMessage(r))
 				}),
 			},
 		},
@@ -714,14 +584,14 @@ func TestBlockWiseWritetestmessage(t *testing.T) {
 				},
 				szx:            SZXBERT,
 				maxMessageSize: SZXBERT.Size() * 2,
-				writetestmessage: makeWriteReq(t, sender, receiver, SZXBERT, uint32(SZXBERT.Size()*2), SZXBERT, uint32(SZXBERT.Size()*5), func(w ResponseWriter, r Message) {
+				writetestmessage: makeWriteReq(t, sender, receiver, SZXBERT, uint32(SZXBERT.Size()*2), SZXBERT, uint32(SZXBERT.Size()*5), func(w *responsewriter.ResponseWriter[*testClient], r *pool.Message) {
 					require.Equal(t, &testmessage{
 						ctx:     context.Background(),
 						token:   []byte{'B', 'E', 'R', 'T'},
 						options: message.Options{message.Option{ID: message.URIPath, Value: []byte("abc")}},
 						code:    codes.POST,
 						payload: memfile.New(make([]byte, 11111)),
-					}, r)
+					}, fromPoolMessage(r))
 				}),
 			},
 		},
@@ -729,9 +599,7 @@ func TestBlockWiseWritetestmessage(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			addr, err := net.ResolveTCPAddr("tcp", "localhost:1")
-			require.NoError(t, err)
-			err = sender.WriteMessage(addr, tt.args.r, tt.args.szx, uint32(tt.args.maxMessageSize), tt.args.writetestmessage)
+			err := sender.WriteMessage(toPoolMessage(tt.args.r), tt.args.szx, uint32(tt.args.maxMessageSize), tt.args.writetestmessage)
 			if tt.wantErr {
 				assert.Error(t, err)
 				return

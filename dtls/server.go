@@ -37,8 +37,6 @@ type ErrorFunc = func(error)
 
 type GoPoolFunc = func(func()) error
 
-type BlockwiseFactoryFunc = func(getSentRequest func(token message.Token) (blockwise.Message, bool)) *blockwise.BlockWise
-
 // OnNewClientConnFunc is the callback for new connections.
 //
 // Note: Calling `dtlsConn.Close()` is forbidden, and `dtlsConn` should be treated as a
@@ -305,18 +303,17 @@ func (s *Server) Stop() {
 }
 
 func (s *Server) createClientConn(connection *coapNet.Conn, monitor inactivity.Monitor) *client.ClientConn {
-	createBlockWise := func(cc *client.ClientConn) *blockwise.BlockWise {
+	createBlockWise := func(cc *client.ClientConn) *blockwise.BlockWise[*client.ClientConn] {
 		return nil
 	}
 	if s.blockwiseEnable {
-		createBlockWise = func(cc *client.ClientConn) *blockwise.BlockWise {
-			return blockwise.NewBlockWise(
-				bwCreateAcquireMessage(s.messagePool),
-				bwCreateReleaseMessage(s.messagePool),
+		createBlockWise = func(cc *client.ClientConn) *blockwise.BlockWise[*client.ClientConn] {
+			return blockwise.New(
+				cc,
 				s.blockwiseTransferTimeout,
 				s.errors,
 				false,
-				func(token message.Token) (blockwise.Message, bool) {
+				func(token message.Token) (*pool.Message, bool) {
 					return nil, false
 				},
 			)

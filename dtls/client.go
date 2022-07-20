@@ -110,18 +110,6 @@ func Dial(target string, dtlsCfg *dtls.Config, opts ...DialOption) (*client.Clie
 	return Client(conn, opts...), nil
 }
 
-func bwCreateAcquireMessage(messagePool *pool.Pool) func(ctx context.Context) blockwise.Message {
-	return func(ctx context.Context) blockwise.Message {
-		return messagePool.AcquireMessage(ctx)
-	}
-}
-
-func bwCreateReleaseMessage(messagePool *pool.Pool) func(m blockwise.Message) {
-	return func(m blockwise.Message) {
-		messagePool.ReleaseMessage(m.(*pool.Message))
-	}
-}
-
 // Client creates client over dtls connection.
 func Client(conn *dtls.Conn, opts ...DialOption) *client.ClientConn {
 	cfg := defaultDialOptions
@@ -150,14 +138,13 @@ func Client(conn *dtls.Conn, opts ...DialOption) *client.ClientConn {
 		errorsFunc(fmt.Errorf("dtls: %v: %w", conn.RemoteAddr(), err))
 	}
 
-	createBlockWise := func(cc *client.ClientConn) *blockwise.BlockWise {
+	createBlockWise := func(cc *client.ClientConn) *blockwise.BlockWise[*client.ClientConn] {
 		return nil
 	}
 	if cfg.blockwiseEnable {
-		createBlockWise = func(cc *client.ClientConn) *blockwise.BlockWise {
-			return blockwise.NewBlockWise(
-				bwCreateAcquireMessage(cfg.messagePool),
-				bwCreateReleaseMessage(cfg.messagePool),
+		createBlockWise = func(cc *client.ClientConn) *blockwise.BlockWise[*client.ClientConn] {
+			return blockwise.New(
+				cc,
 				cfg.blockwiseTransferTimeout,
 				cfg.errors,
 				false,

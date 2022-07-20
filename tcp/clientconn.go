@@ -121,18 +121,6 @@ func Dial(target string, opts ...DialOption) (*ClientConn, error) {
 	return Client(conn, opts...), nil
 }
 
-func bwCreateAcquireMessage(messagePool *pool.Pool) func(ctx context.Context) blockwise.Message {
-	return func(ctx context.Context) blockwise.Message {
-		return messagePool.AcquireMessage(ctx)
-	}
-}
-
-func bwCreateReleaseMessage(messagePool *pool.Pool) func(m blockwise.Message) {
-	return func(m blockwise.Message) {
-		messagePool.ReleaseMessage(m.(*pool.Message))
-	}
-}
-
 // Client creates client over tcp/tcp-tls connection.
 func Client(conn net.Conn, opts ...DialOption) *ClientConn {
 	cfg := defaultDialOptions
@@ -161,14 +149,13 @@ func Client(conn net.Conn, opts ...DialOption) *ClientConn {
 		errorsFunc(fmt.Errorf("tcp: %w", err))
 	}
 
-	createBlockWise := func(cc *ClientConn) *blockwise.BlockWise {
+	createBlockWise := func(cc *ClientConn) *blockwise.BlockWise[*ClientConn] {
 		return nil
 	}
 	if cfg.blockwiseEnable {
-		createBlockWise = func(cc *ClientConn) *blockwise.BlockWise {
-			return blockwise.NewBlockWise(
-				bwCreateAcquireMessage(cfg.messagePool),
-				bwCreateReleaseMessage(cfg.messagePool),
+		createBlockWise = func(cc *ClientConn) *blockwise.BlockWise[*ClientConn] {
+			return blockwise.New(
+				cc,
 				cfg.blockwiseTransferTimeout,
 				cfg.errors,
 				false,
@@ -218,7 +205,7 @@ func NewClientConn(ctx context.Context,
 	goPool GoPoolFunc,
 	errors ErrorFunc,
 	blockwiseSZX blockwise.SZX,
-	createBlockWise func(cc *ClientConn) *blockwise.BlockWise,
+	createBlockWise func(cc *ClientConn) *blockwise.BlockWise[*ClientConn],
 	disablePeerTCPSignalMessageCSMs bool,
 	disableTCPSignalMessageCSM bool,
 	closeSocket bool,
@@ -303,13 +290,11 @@ func (cc *ClientConn) Do(req *pool.Message) (*pool.Message, error) {
 	if !cc.session.PeerBlockWiseTransferEnabled() || cc.session.blockWise == nil {
 		return cc.do(req)
 	}
-	bwresp, err := cc.session.blockWise.Do(req, cc.session.blockwiseSZX, cc.session.maxMessageSize, func(bwreq blockwise.Message) (blockwise.Message, error) {
-		return cc.do(bwreq.(*pool.Message))
-	})
+	resp, err := cc.session.blockWise.Do(req, cc.session.blockwiseSZX, cc.session.maxMessageSize, cc.do)
 	if err != nil {
 		return nil, err
 	}
-	return bwresp.(*pool.Message), nil
+	return resp, nil
 }
 
 func (cc *ClientConn) writeMessage(req *pool.Message) error {
@@ -321,9 +306,7 @@ func (cc *ClientConn) WriteMessage(req *pool.Message) error {
 	if !cc.session.PeerBlockWiseTransferEnabled() || cc.session.blockWise == nil {
 		return cc.writeMessage(req)
 	}
-	return cc.session.blockWise.WriteMessage(cc.RemoteAddr(), req, cc.session.blockwiseSZX, cc.session.maxMessageSize, func(bwreq blockwise.Message) error {
-		return cc.writeMessage(bwreq.(*pool.Message))
-	})
+	return cc.session.blockWise.WriteMessage(req, cc.session.blockwiseSZX, cc.session.maxMessageSize, cc.writeMessage)
 }
 
 func newCommonRequest(ctx context.Context, messagePool *pool.Pool, code codes.Code, path string, opts ...message.Option) (*pool.Message, error) {
@@ -391,7 +374,7 @@ func (cc *ClientConn) Observe(ctx context.Context, path string, observeFunc func
 	return cc.observationHandler.NewObservation(req, observeFunc)
 }
 
-func (cc *ClientConn) getObservationRequest(token message.Token) (blockwise.Message, bool) {
+func (cc *ClientConn) getObservationRequest(token message.Token) (*pool.Message, bool) {
 	obs, ok := cc.observationHandler.GetObservation(token.Hash())
 	if !ok {
 		return nil, false
