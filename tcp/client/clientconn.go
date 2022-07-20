@@ -1,8 +1,7 @@
-package tcp
+package client
 
 import (
 	"context"
-	"crypto/tls"
 	"errors"
 	"fmt"
 	"net"
@@ -18,77 +17,19 @@ import (
 	"github.com/plgd-dev/go-coap/v2/net/observation"
 	"github.com/plgd-dev/go-coap/v2/net/responsewriter"
 	coapErrors "github.com/plgd-dev/go-coap/v2/pkg/errors"
-	"github.com/plgd-dev/go-coap/v2/pkg/runner/periodic"
 )
 
-var defaultDialOptions = func() dialOptions {
-	opts := dialOptions{
-		ctx:            context.Background(),
-		maxMessageSize: 64 * 1024,
-		errors: func(err error) {
-			fmt.Println(err)
-		},
-		goPool: func(f func()) error {
-			go func() {
-				f()
-			}()
-			return nil
-		},
-		dialer:                   &net.Dialer{Timeout: time.Second * 3},
-		net:                      "tcp",
-		blockwiseSZX:             blockwise.SZX1024,
-		blockwiseEnable:          true,
-		blockwiseTransferTimeout: time.Second * 3,
-		createInactivityMonitor: func() inactivity.Monitor {
-			return inactivity.NewNilMonitor()
-		},
-		periodicRunner: func(f func(now time.Time) bool) {
-			go func() {
-				for f(time.Now()) {
-					time.Sleep(4 * time.Second)
-				}
-			}()
-		},
-		connectionCacheSize: 2048,
-		messagePool:         pool.New(1024, 2048),
-		getToken:            message.GetToken,
-	}
-	opts.handler = func(w *responsewriter.ResponseWriter[*ClientConn], r *pool.Message) {
-		switch r.Code() {
-		case codes.POST, codes.PUT, codes.GET, codes.DELETE:
-			if err := w.SetResponse(codes.NotFound, message.TextPlain, nil); err != nil {
-				opts.errors(fmt.Errorf("client handler: cannot set response: %w", err))
-			}
-		}
-	}
-	return opts
-}()
-
-type dialOptions struct {
-	ctx                             context.Context
-	net                             string
-	blockwiseTransferTimeout        time.Duration
-	messagePool                     *pool.Pool
-	goPool                          GoPoolFunc
-	dialer                          *net.Dialer
-	tlsCfg                          *tls.Config
-	periodicRunner                  periodic.Func
-	createInactivityMonitor         func() inactivity.Monitor
-	handler                         HandlerFunc
-	errors                          ErrorFunc
-	getToken                        client.GetTokenFunc
-	maxMessageSize                  uint32
-	connectionCacheSize             uint16
-	disablePeerTCPSignalMessageCSMs bool
-	closeSocket                     bool
-	blockwiseEnable                 bool
-	blockwiseSZX                    blockwise.SZX
-	disableTCPSignalMessageCSM      bool
-}
+type (
+	HandlerFunc = func(*responsewriter.ResponseWriter[*ClientConn], *pool.Message)
+	ErrorFunc   = func(error)
+	GoPoolFunc  = func(func()) error
+	EventFunc   = func()
+	GetMIDFunc  = func() int32
+)
 
 // A DialOption sets options such as credentials, keepalive parameters, etc.
-type DialOption interface {
-	applyDial(*dialOptions)
+type Option interface {
+	TCPClientApply(cfg *Config)
 }
 
 type Notifier interface {
@@ -97,118 +38,23 @@ type Notifier interface {
 
 // ClientConn represents a virtual connection to a conceptual endpoint, to perform COAPs commands.
 type ClientConn struct {
-	noCopy
 	*client.Client[*ClientConn]
 	session *Session
 }
 
-// Dial creates a client connection to the given target.
-func Dial(target string, opts ...DialOption) (*ClientConn, error) {
-	cfg := defaultDialOptions
-	for _, o := range opts {
-		o.applyDial(&cfg)
-	}
-
-	var conn net.Conn
-	var err error
-	if cfg.tlsCfg != nil {
-		conn, err = tls.DialWithDialer(cfg.dialer, cfg.net, target, cfg.tlsCfg)
-	} else {
-		conn, err = cfg.dialer.DialContext(cfg.ctx, cfg.net, target)
-	}
-	if err != nil {
-		return nil, err
-	}
-	opts = append(opts, WithCloseSocket())
-	return Client(conn, opts...), nil
-}
-
-// Client creates client over tcp/tcp-tls connection.
-func Client(conn net.Conn, opts ...DialOption) *ClientConn {
-	cfg := defaultDialOptions
-	for _, o := range opts {
-		o.applyDial(&cfg)
-	}
-	if cfg.errors == nil {
-		cfg.errors = func(error) {
-			// default no-op
-		}
-	}
-	if cfg.createInactivityMonitor == nil {
-		cfg.createInactivityMonitor = func() inactivity.Monitor {
-			return inactivity.NewNilMonitor()
-		}
-	}
-	if cfg.messagePool == nil {
-		cfg.messagePool = pool.New(0, 0)
-	}
-	errorsFunc := cfg.errors
-	cfg.errors = func(err error) {
-		if coapNet.IsCancelOrCloseError(err) {
-			// this error was produced by cancellation context or closing connection.
-			return
-		}
-		errorsFunc(fmt.Errorf("tcp: %w", err))
-	}
-
-	createBlockWise := func(cc *ClientConn) *blockwise.BlockWise[*ClientConn] {
-		return nil
-	}
-	if cfg.blockwiseEnable {
-		createBlockWise = func(cc *ClientConn) *blockwise.BlockWise[*ClientConn] {
-			return blockwise.New(
-				cc,
-				cfg.blockwiseTransferTimeout,
-				cfg.errors,
-				false,
-				cc.GetObservationRequest,
-			)
-		}
-	}
-
-	l := coapNet.NewConn(conn)
-	monitor := cfg.createInactivityMonitor()
-	cc := NewClientConn(cfg.ctx,
-		l,
-		cfg.handler,
-		cfg.maxMessageSize,
-		cfg.goPool,
-		cfg.errors,
-		cfg.blockwiseSZX,
-		createBlockWise,
-		cfg.disablePeerTCPSignalMessageCSMs,
-		cfg.disableTCPSignalMessageCSM,
-		cfg.closeSocket,
-		monitor,
-		cfg.connectionCacheSize,
-		cfg.messagePool,
-		cfg.getToken,
-	)
-
-	cfg.periodicRunner(func(now time.Time) bool {
-		cc.CheckExpirations(now)
-		return cc.Context().Err() == nil
-	})
-
-	go func() {
-		err := cc.Run()
-		if err != nil {
-			cfg.errors(fmt.Errorf("%v: %w", cc.RemoteAddr(), err))
-		}
-	}()
-
-	return cc
-}
-
 // NewClientConn creates connection over session and observation.
-func NewClientConn(ctx context.Context,
+func NewClientConn(
 	connection *coapNet.Conn,
+	createBlockWise func(cc *ClientConn) *blockwise.BlockWise[*ClientConn],
+	inactivityMonitor inactivity.Monitor,
+	cfg *Config,
+	/*ctx context.Context,
+
 	handler func(*responsewriter.ResponseWriter[*ClientConn], *pool.Message),
 	maxMessageSize uint32,
 	goPool GoPoolFunc,
 	errors ErrorFunc,
 	blockwiseSZX blockwise.SZX,
-	createBlockWise func(cc *ClientConn) *blockwise.BlockWise[*ClientConn],
 	disablePeerTCPSignalMessageCSMs bool,
 	disableTCPSignalMessageCSM bool,
 	closeSocket bool,
@@ -216,28 +62,28 @@ func NewClientConn(ctx context.Context,
 	connectionCacheSize uint16,
 	messagePool *pool.Pool,
 	getToken client.GetTokenFunc,
-) *ClientConn {
-	if getToken == nil {
-		getToken = message.GetToken
+	*/) *ClientConn {
+	if cfg.GetToken == nil {
+		cfg.GetToken = message.GetToken
 	}
 	cc := ClientConn{}
-	observationHandler := observation.NewHandler(&cc, handler)
-	cc.Client = client.New(&cc, observationHandler, getToken)
+	observationHandler := observation.NewHandler(&cc, cfg.Handler)
+	cc.Client = client.New(&cc, observationHandler, cfg.GetToken)
 	blockWise := createBlockWise(&cc)
-	session := NewSession(ctx,
+	session := NewSession(cfg.Ctx,
 		connection,
 		observationHandler.Handle,
-		maxMessageSize,
-		goPool,
-		errors,
-		blockwiseSZX,
+		cfg.MaxMessageSize,
+		cfg.GoPool,
+		cfg.Errors,
+		cfg.BlockwiseSZX,
 		blockWise,
-		disablePeerTCPSignalMessageCSMs,
-		disableTCPSignalMessageCSM,
-		closeSocket,
+		cfg.DisablePeerTCPSignalMessageCSMs,
+		cfg.DisableTCPSignalMessageCSM,
+		cfg.CloseSocket,
 		inactivityMonitor,
-		connectionCacheSize,
-		messagePool,
+		cfg.ConnectionCacheSize,
+		cfg.MessagePool,
 	)
 	cc.session = session
 	return &cc

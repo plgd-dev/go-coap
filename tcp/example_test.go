@@ -12,7 +12,7 @@ import (
 )
 
 func ExampleClientConn_Get() {
-	conn, err := tcp.Dial("pluggedin.cloud:5683")
+	conn, err := tcp.Dial("try.plgd.cloud:5683")
 	if err != nil {
 		log.Fatal(err)
 	}
