@@ -50,13 +50,13 @@ func periodicTransmitter(cc mux.Client, token []byte) {
 func main() {
 	log.Fatal(coap.ListenAndServe("udp", ":5688",
 		mux.HandlerFunc(func(w mux.ResponseWriter, r *mux.Message) {
-			log.Printf("Got message path=%v: %+v from %v", getPath(r.Options()), r, w.Client().RemoteAddr())
+			log.Printf("Got message path=%v: %+v from %v", getPath(r.Options()), r, w.ClientConn().RemoteAddr())
 			obs, err := r.Options().Observe()
 			switch {
 			case r.Code() == codes.GET && err == nil && obs == 0:
-				go periodicTransmitter(w.Client(), r.Token())
+				go periodicTransmitter(w.ClientConn(), r.Token())
 			case r.Code() == codes.GET:
-				err := sendResponse(w.Client(), r.Token(), time.Now(), -1)
+				err := sendResponse(w.ClientConn(), r.Token(), time.Now(), -1)
 				if err != nil {
 					log.Printf("Error on transmitter: %v", err)
 				}

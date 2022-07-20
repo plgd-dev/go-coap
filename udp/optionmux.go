@@ -7,5 +7,5 @@ import (
 
 // WithMux set's multiplexer for handle requests.
 func WithMux(m mux.Handler) HandlerFuncOpt {
-	return WithHandlerFunc(client.HandlerFuncToMux(m))
+	return WithHandlerFunc(mux.ToHandler[*client.ClientConn](m))
 }

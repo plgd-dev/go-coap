@@ -41,7 +41,7 @@ func handleA(w mux.ResponseWriter, r *mux.Message) {
 	log.Println("Subject:", clientCert.Subject)
 	log.Println("Email:", clientCert.EmailAddresses)
 
-	log.Printf("got message in handleA:  %+v from %v\n", r, w.Client().RemoteAddr())
+	log.Printf("got message in handleA:  %+v from %v\n", r, w.ClientConn().RemoteAddr())
 	err := w.SetResponse(codes.GET, message.TextPlain, bytes.NewReader([]byte("A hello world")))
 	if err != nil {
 		log.Printf("cannot set response: %v", err)
