@@ -8,11 +8,14 @@ import (
 
 	"github.com/plgd-dev/go-coap/v2/message"
 	"github.com/plgd-dev/go-coap/v2/message/codes"
+	"github.com/plgd-dev/go-coap/v2/message/pool"
 )
 
 type ResponseWriter = interface {
 	SetResponse(code codes.Code, contentFormat message.MediaType, d io.ReadSeeker, opts ...message.Option) error
-	Client() Client
+	ClientConn() Client
+	SetMessage(m *pool.Message)
+	Message() *pool.Message
 }
 
 type Handler interface {

@@ -19,7 +19,7 @@ func handleMcast(w mux.ResponseWriter, r *mux.Message) {
 		return
 	}
 
-	log.Printf("Got mcast message: path=%q: from %v", path, w.Client().RemoteAddr())
+	log.Printf("Got mcast message: path=%q: from %v", path, w.ClientConn().RemoteAddr())
 	w.SetResponse(codes.Content, message.TextPlain, bytes.NewReader([]byte("mcast response")))
 }
 
