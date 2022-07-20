@@ -9,7 +9,7 @@ import (
 	"github.com/plgd-dev/go-coap/v2/message/pool"
 )
 
-// A ResponseWriter interface is used by an COAP handler to construct an COAP response.
+// A ResponseWriter is used by an COAP handler to construct an COAP response.
 type ResponseWriter[Client any] struct {
 	noResponseValue *uint32
 	response        *pool.Message
@@ -30,6 +30,7 @@ func New[Client any](response *pool.Message, cc Client, requestOptions message.O
 	}
 }
 
+// SetResponse simplifies the setup of the response for the request. ETags must be set via options. For advanced setup, use Message().
 func (r *ResponseWriter[Client]) SetResponse(code codes.Code, contentFormat message.MediaType, d io.ReadSeeker, opts ...message.Option) error {
 	if r.noResponseValue != nil {
 		err := noresponse.IsNoResponseCode(code, *r.noResponseValue)
@@ -43,31 +44,21 @@ func (r *ResponseWriter[Client]) SetResponse(code codes.Code, contentFormat mess
 	if d != nil {
 		r.response.SetContentFormat(contentFormat)
 		r.response.SetBody(d)
-		if !r.response.HasOption(message.ETag) {
-			etag, err := message.GetETag(d)
-			if err != nil {
-				return err
-			}
-			r.response.SetOptionBytes(message.ETag, etag)
-		}
 	}
 	return nil
 }
 
+// SetMessage replaces the response message. Ensure that Token, MessageID(udp), and Type(udp) messages are paired correctly.
 func (r *ResponseWriter[Client]) SetMessage(m *pool.Message) {
 	r.response = m
 }
 
+// Message direct access to the response.
 func (r *ResponseWriter[Client]) Message() *pool.Message {
 	return r.response
 }
 
+// ClientConn peer connection.
 func (r *ResponseWriter[Client]) ClientConn() Client {
 	return r.cc
-}
-
-func (r *ResponseWriter[Client]) SendReset() {
-	r.response.Reset()
-	r.response.SetCode(codes.Empty)
-	r.response.SetType(message.Reset)
 }
