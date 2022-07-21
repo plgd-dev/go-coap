@@ -1,4 +1,4 @@
-package dtls
+package server
 
 import (
 	"context"
