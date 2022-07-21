@@ -3,6 +3,7 @@ package tcp
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -100,6 +101,9 @@ func TestClientConnObserve(t *testing.T) {
 						require.NoError(t, errE)
 						req.SetToken(token)
 						errW := cc.WriteMessage(req)
+						if errW != nil {
+							fmt.Printf("errW %v\n", errW)
+						}
 						require.NoError(t, errW)
 					}
 				case 1:
