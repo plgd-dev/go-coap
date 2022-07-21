@@ -643,8 +643,17 @@ func (cc *ClientConn) getResponseFromCache(mid int32, resp *pool.Message) (bool,
 // CheckMyMessageID compare client msgID against peer messageID and if it is near < 0xffff/4 then incrase msgID.
 // When msgIDs met it can cause issue because cache can send message to which doesn't bellows to request.
 func (cc *ClientConn) CheckMyMessageID(req *pool.Message) {
-	if req.Type() == message.Confirmable && uint16(req.MessageID())-uint16(cc.msgID.Load()) < 0xffff/4 {
-		cc.msgID.Add(0xffff / 2)
+	if req.Type() == message.Confirmable {
+		for {
+			oldID := cc.msgID.Load()
+			if uint16(req.MessageID())-uint16(cc.msgID.Load()) >= 0xffff/4 {
+				return
+			}
+			newID := oldID + 0xffff/2
+			if cc.msgID.CAS(oldID, newID) {
+				break
+			}
+		}
 	}
 }
 

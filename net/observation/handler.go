@@ -129,9 +129,11 @@ type Observation[C Client] struct {
 	waitForResponse     atomic.Bool
 	observationHandler  *Handler[C]
 
-	mutex       sync.Mutex
-	obsSequence uint32    // guarded by mutex
-	lastEvent   time.Time // guarded by mutex
+	private struct {
+		mutex       sync.Mutex
+		obsSequence uint32    // guarded by mutex
+		lastEvent   time.Time // guarded by mutex
+	}
 }
 
 func (o *Observation[C]) Canceled() bool {
@@ -142,7 +144,6 @@ func (o *Observation[C]) Canceled() bool {
 func newObservation[C Client](req message.Message, observationHandler *Handler[C], observeFunc func(req *pool.Message), respObservationChan chan respObservationMessage) *Observation[C] {
 	return &Observation[C]{
 		req:                 req,
-		obsSequence:         0,
 		waitForResponse:     *atomic.NewBool(true),
 		respObservationChan: respObservationChan,
 		observeFunc:         observeFunc,
@@ -151,13 +152,11 @@ func newObservation[C Client](req message.Message, observationHandler *Handler[C
 }
 
 func (o *Observation[C]) handle(w *responsewriter.ResponseWriter[C], r *pool.Message) {
-	code := r.Code()
-	notSupported := !r.HasOption(message.Observe)
 	if o.waitForResponse.CAS(true, false) {
 		select {
 		case o.respObservationChan <- respObservationMessage{
-			code:         code,
-			notSupported: notSupported,
+			code:         r.Code(),
+			notSupported: !r.HasOption(message.Observe),
 		}:
 		default:
 		}
@@ -218,11 +217,11 @@ func (o *Observation[C]) wantBeNotified(r *pool.Message) bool {
 	}
 	now := time.Now()
 
-	o.mutex.Lock()
-	defer o.mutex.Unlock()
-	if ValidSequenceNumber(o.obsSequence, obsSequence, o.lastEvent, now) {
-		o.obsSequence = obsSequence
-		o.lastEvent = now
+	o.private.mutex.Lock()
+	defer o.private.mutex.Unlock()
+	if ValidSequenceNumber(o.private.obsSequence, obsSequence, o.private.lastEvent, now) {
+		o.private.obsSequence = obsSequence
+		o.private.lastEvent = now
 		return true
 	}
 
