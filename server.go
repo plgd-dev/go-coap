@@ -9,7 +9,7 @@ import (
 	"github.com/plgd-dev/go-coap/v2/dtls"
 	"github.com/plgd-dev/go-coap/v2/mux"
 	"github.com/plgd-dev/go-coap/v2/net"
-	"github.com/plgd-dev/go-coap/v2/pkg/options"
+	"github.com/plgd-dev/go-coap/v2/options"
 	"github.com/plgd-dev/go-coap/v2/tcp"
 	"github.com/plgd-dev/go-coap/v2/udp"
 )
@@ -75,6 +75,6 @@ func ListenAndServeDTLS(network string, addr string, config *piondtls.Config, ha
 			err = errC
 		}
 	}()
-	s := dtls.NewServer(dtls.WithMux(handler))
+	s := dtls.NewServer(options.WithMux(handler))
 	return s.Serve(l)
 }

@@ -39,7 +39,7 @@ func ExampleClientConn_Get() {
 	fmt.Printf("%v", data)
 }
 
-func ExampleServer_Serve() {
+func ExampleServer() {
 	dtlsCfg := &piondtls.Config{
 		PSK: func(hint []byte) ([]byte, error) {
 			fmt.Printf("Hint: %s \n", hint)

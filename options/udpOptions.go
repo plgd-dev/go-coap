@@ -3,6 +3,7 @@ package options
 import (
 	"time"
 
+	dtlsServer "github.com/plgd-dev/go-coap/v2/dtls/server"
 	udpClient "github.com/plgd-dev/go-coap/v2/udp/client"
 	udpServer "github.com/plgd-dev/go-coap/v2/udp/server"
 )
@@ -15,6 +16,12 @@ type TransmissionOpt struct {
 }
 
 func (o TransmissionOpt) UDPServerApply(cfg *udpServer.Config) {
+	cfg.TransmissionNStart = o.transmissionNStart
+	cfg.TransmissionAcknowledgeTimeout = o.transmissionAcknowledgeTimeout
+	cfg.TransmissionMaxRetransmit = o.transmissionMaxRetransmit
+}
+
+func (o TransmissionOpt) DTLSServerApply(cfg *dtlsServer.Config) {
 	cfg.TransmissionNStart = o.transmissionNStart
 	cfg.TransmissionAcknowledgeTimeout = o.transmissionAcknowledgeTimeout
 	cfg.TransmissionMaxRetransmit = o.transmissionMaxRetransmit
