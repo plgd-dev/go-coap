@@ -19,6 +19,7 @@ import (
 	"github.com/plgd-dev/go-coap/v2/mux"
 	coapNet "github.com/plgd-dev/go-coap/v2/net"
 	"github.com/plgd-dev/go-coap/v2/net/responsewriter"
+	"github.com/plgd-dev/go-coap/v2/pkg/options"
 	"github.com/plgd-dev/go-coap/v2/udp"
 	"github.com/plgd-dev/go-coap/v2/udp/client"
 	"github.com/stretchr/testify/assert"
@@ -57,8 +58,8 @@ func TestClientConnDeduplication(t *testing.T) {
 	}))
 	require.NoError(t, err)
 
-	s := udp.NewServer(udp.WithMux(m),
-		udp.WithErrors(func(err error) {
+	s := udp.NewServer(options.WithMux(m),
+		options.WithErrors(func(err error) {
 			require.NoError(t, err)
 		}))
 	defer s.Stop()
@@ -70,7 +71,7 @@ func TestClientConnDeduplication(t *testing.T) {
 	}()
 
 	cc, err := udp.Dial(l.LocalAddr().String(),
-		udp.WithErrors(func(err error) {
+		options.WithErrors(func(err error) {
 			require.NoError(t, err)
 		}),
 	)
@@ -141,8 +142,8 @@ func TestClientConnDeduplicationRetransmission(t *testing.T) {
 	}))
 	require.NoError(t, err)
 
-	s := udp.NewServer(udp.WithMux(m),
-		udp.WithErrors(func(err error) {
+	s := udp.NewServer(options.WithMux(m),
+		options.WithErrors(func(err error) {
 			require.NoError(t, err)
 		}),
 	)
@@ -155,10 +156,10 @@ func TestClientConnDeduplicationRetransmission(t *testing.T) {
 	}()
 
 	cc, err := udp.Dial(l.LocalAddr().String(),
-		udp.WithErrors(func(err error) {
+		options.WithErrors(func(err error) {
 			require.NoError(t, err)
 		}),
-		udp.WithTransmission(20*time.Millisecond, 100*time.Millisecond, 50),
+		options.WithTransmission(20*time.Millisecond, 100*time.Millisecond, 50),
 	)
 	require.NoError(t, err)
 	defer func() {
@@ -260,7 +261,7 @@ func TestClientConnGet(t *testing.T) {
 	}))
 	require.NoError(t, err)
 
-	s := udp.NewServer(udp.WithMux(m))
+	s := udp.NewServer(options.WithMux(m))
 	defer s.Stop()
 
 	wg.Add(1)
@@ -345,7 +346,7 @@ func TestClientConnGetSeparateMessage(t *testing.T) {
 	}))
 	require.NoError(t, err)
 
-	s := udp.NewServer(udp.WithMux(m))
+	s := udp.NewServer(options.WithMux(m))
 	defer s.Stop()
 
 	wg.Add(1)
@@ -355,7 +356,7 @@ func TestClientConnGetSeparateMessage(t *testing.T) {
 		require.NoError(t, errS)
 	}()
 
-	cc, err := udp.Dial(l.LocalAddr().String(), udp.WithHandlerFunc(func(w *responsewriter.ResponseWriter[*client.ClientConn], r *pool.Message) {
+	cc, err := udp.Dial(l.LocalAddr().String(), options.WithHandlerFunc(func(w *responsewriter.ResponseWriter[*client.ClientConn], r *pool.Message) {
 		assert.NoError(t, fmt.Errorf("none msg expected comes: %+v", r))
 	}))
 	require.NoError(t, err)
@@ -464,7 +465,7 @@ func TestClientConnPost(t *testing.T) {
 			}))
 			require.NoError(t, err)
 
-			s := udp.NewServer(udp.WithMux(m))
+			s := udp.NewServer(options.WithMux(m))
 			defer s.Stop()
 
 			wg.Add(1)
@@ -591,7 +592,7 @@ func TestClientConnPut(t *testing.T) {
 			}))
 			require.NoError(t, err)
 
-			s := udp.NewServer(udp.WithMux(m))
+			s := udp.NewServer(options.WithMux(m))
 			defer s.Stop()
 
 			wg.Add(1)
@@ -695,7 +696,7 @@ func TestClientConnDelete(t *testing.T) {
 	}))
 	require.NoError(t, err)
 
-	s := udp.NewServer(udp.WithMux(m))
+	s := udp.NewServer(options.WithMux(m))
 	defer s.Stop()
 
 	wg.Add(1)

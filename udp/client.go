@@ -6,101 +6,28 @@ import (
 	"net"
 	"time"
 
-	"github.com/plgd-dev/go-coap/v2/message"
-	"github.com/plgd-dev/go-coap/v2/message/codes"
 	"github.com/plgd-dev/go-coap/v2/message/pool"
 	coapNet "github.com/plgd-dev/go-coap/v2/net"
 	"github.com/plgd-dev/go-coap/v2/net/blockwise"
-	"github.com/plgd-dev/go-coap/v2/net/client"
 	"github.com/plgd-dev/go-coap/v2/net/monitor/inactivity"
-	"github.com/plgd-dev/go-coap/v2/net/responsewriter"
 	"github.com/plgd-dev/go-coap/v2/pkg/cache"
-	"github.com/plgd-dev/go-coap/v2/pkg/runner/periodic"
-	udpClient "github.com/plgd-dev/go-coap/v2/udp/client"
+	"github.com/plgd-dev/go-coap/v2/pkg/options"
+	"github.com/plgd-dev/go-coap/v2/udp/client"
+	"github.com/plgd-dev/go-coap/v2/udp/server"
 )
-
-var defaultDialOptions = func() dialOptions {
-	opts := dialOptions{
-		ctx:            context.Background(),
-		maxMessageSize: 64 * 1024,
-
-		errors: func(err error) {
-			fmt.Println(err)
-		},
-		goPool: func(f func()) error {
-			go func() {
-				f()
-			}()
-			return nil
-		},
-		periodicRunner: func(f func(now time.Time) bool) {
-			go func() {
-				for f(time.Now()) {
-					time.Sleep(4 * time.Second)
-				}
-			}()
-		},
-		dialer:                         &net.Dialer{Timeout: time.Second * 3},
-		net:                            "udp",
-		blockwiseSZX:                   blockwise.SZX1024,
-		blockwiseEnable:                true,
-		blockwiseTransferTimeout:       time.Second * 3,
-		transmissionNStart:             time.Second,
-		transmissionAcknowledgeTimeout: time.Second * 2,
-		transmissionMaxRetransmit:      4,
-		getMID:                         message.GetMID,
-		createInactivityMonitor: func() inactivity.Monitor {
-			return inactivity.NewNilMonitor()
-		},
-		messagePool: pool.New(1024, 1600),
-		getToken:    message.GetToken,
-	}
-	opts.handler = func(w *responsewriter.ResponseWriter[*udpClient.ClientConn], r *pool.Message) {
-		switch r.Code() {
-		case codes.POST, codes.PUT, codes.GET, codes.DELETE:
-			if err := w.SetResponse(codes.NotFound, message.TextPlain, nil); err != nil {
-				opts.errors(fmt.Errorf("udp client: cannot set response: %w", err))
-			}
-		}
-	}
-	return opts
-}()
-
-type dialOptions struct {
-	net                            string
-	ctx                            context.Context
-	getMID                         GetMIDFunc
-	handler                        HandlerFunc
-	errors                         ErrorFunc
-	goPool                         GoPoolFunc
-	dialer                         *net.Dialer
-	periodicRunner                 periodic.Func
-	messagePool                    *pool.Pool
-	blockwiseTransferTimeout       time.Duration
-	transmissionNStart             time.Duration
-	transmissionAcknowledgeTimeout time.Duration
-	createInactivityMonitor        func() inactivity.Monitor
-	maxMessageSize                 uint32
-	transmissionMaxRetransmit      uint32
-	closeSocket                    bool
-	blockwiseSZX                   blockwise.SZX
-	blockwiseEnable                bool
-	getToken                       client.GetTokenFunc
-}
 
 // A DialOption sets options such as credentials, keepalive parameters, etc.
 type DialOption interface {
-	applyDial(*dialOptions)
+	UDPClientApply(cfg *client.Config)
 }
 
 // Dial creates a client connection to the given target.
-func Dial(target string, opts ...DialOption) (*udpClient.ClientConn, error) {
-	cfg := defaultDialOptions
+func Dial(target string, opts ...DialOption) (*client.ClientConn, error) {
+	cfg := client.DefaultConfig
 	for _, o := range opts {
-		o.applyDial(&cfg)
+		o.UDPClientApply(&cfg)
 	}
-
-	c, err := cfg.dialer.DialContext(cfg.ctx, cfg.net, target)
+	c, err := cfg.Dialer.DialContext(cfg.Ctx, cfg.Net, target)
 	if err != nil {
 		return nil, err
 	}
@@ -108,50 +35,32 @@ func Dial(target string, opts ...DialOption) (*udpClient.ClientConn, error) {
 	if !ok {
 		return nil, fmt.Errorf("unsupported connection type: %T", c)
 	}
-	opts = append(opts, WithCloseSocket())
+	opts = append(opts, options.WithCloseSocket())
 	return Client(conn, opts...), nil
 }
 
-func bwCreateHandlerFunc(messagePool *pool.Pool, observatioRequests *udpClient.RequestsMap) func(token message.Token) (*pool.Message, bool) {
-	return func(token message.Token) (*pool.Message, bool) {
-		var bwMessage *pool.Message
-		_, ok := observatioRequests.LoadWithFunc(token.Hash(), func(m *pool.Message) *pool.Message {
-			bwMessage = messagePool.AcquireMessage(m.Context())
-			bwMessage.ResetOptionsTo(m.Options())
-			bwMessage.SetCode(m.Code())
-			bwMessage.SetToken(m.Token())
-			bwMessage.SetMessageID(m.MessageID())
-			return m
-		})
-		if !ok {
-			return nil, false
-		}
-		return bwMessage, true
-	}
-}
-
 // Client creates client over udp connection.
-func Client(conn *net.UDPConn, opts ...DialOption) *udpClient.ClientConn {
-	cfg := defaultDialOptions
+func Client(conn *net.UDPConn, opts ...DialOption) *client.ClientConn {
+	cfg := client.DefaultConfig
 	for _, o := range opts {
-		o.applyDial(&cfg)
+		o.UDPClientApply(&cfg)
 	}
-	if cfg.errors == nil {
-		cfg.errors = func(error) {
+	if cfg.Errors == nil {
+		cfg.Errors = func(error) {
 			// default no-op
 		}
 	}
-	if cfg.createInactivityMonitor == nil {
-		cfg.createInactivityMonitor = func() inactivity.Monitor {
+	if cfg.CreateInactivityMonitor == nil {
+		cfg.CreateInactivityMonitor = func() inactivity.Monitor {
 			return inactivity.NewNilMonitor()
 		}
 	}
-	if cfg.messagePool == nil {
-		cfg.messagePool = pool.New(0, 0)
+	if cfg.MessagePool == nil {
+		cfg.MessagePool = pool.New(0, 0)
 	}
 
-	errorsFunc := cfg.errors
-	cfg.errors = func(err error) {
+	errorsFunc := cfg.Errors
+	cfg.Errors = func(err error) {
 		if coapNet.IsCancelOrCloseError(err) {
 			// this error was produced by cancellation context or closing connection.
 			return
@@ -159,45 +68,38 @@ func Client(conn *net.UDPConn, opts ...DialOption) *udpClient.ClientConn {
 		errorsFunc(fmt.Errorf("udp: %v: %w", conn.RemoteAddr(), err))
 	}
 	addr, _ := conn.RemoteAddr().(*net.UDPAddr)
-	createBlockWise := func(cc *udpClient.ClientConn) *blockwise.BlockWise[*udpClient.ClientConn] {
+	createBlockWise := func(cc *client.ClientConn) *blockwise.BlockWise[*client.ClientConn] {
 		return nil
 	}
-	if cfg.blockwiseEnable {
-		createBlockWise = func(cc *udpClient.ClientConn) *blockwise.BlockWise[*udpClient.ClientConn] {
+	if cfg.BlockwiseEnable {
+		createBlockWise = func(cc *client.ClientConn) *blockwise.BlockWise[*client.ClientConn] {
 			return blockwise.New(
 				cc,
-				cfg.blockwiseTransferTimeout,
-				cfg.errors,
+				cfg.BlockwiseTransferTimeout,
+				cfg.Errors,
 				false,
 				cc.GetObservationRequest,
 			)
 		}
 	}
 
-	monitor := cfg.createInactivityMonitor()
+	monitor := cfg.CreateInactivityMonitor()
 	cache := cache.NewCache()
-	l := coapNet.NewUDPConn(cfg.net, conn, coapNet.WithErrors(cfg.errors))
-	session := NewSession(cfg.ctx,
+	l := coapNet.NewUDPConn(cfg.Net, conn, coapNet.WithErrors(cfg.Errors))
+	session := server.NewSession(cfg.Ctx,
 		l,
 		addr,
-		cfg.maxMessageSize,
-		cfg.closeSocket,
+		cfg.MaxMessageSize,
+		cfg.CloseSocket,
 		context.Background(),
 	)
-	cc := udpClient.NewClientConn(session,
-		cfg.transmissionNStart, cfg.transmissionAcknowledgeTimeout, cfg.transmissionMaxRetransmit,
-		cfg.handler,
-		cfg.blockwiseSZX,
+	cc := client.NewClientConn(session,
 		createBlockWise,
-		cfg.goPool,
-		cfg.errors,
-		cfg.getMID,
 		monitor,
 		cache,
-		cfg.messagePool,
-		cfg.getToken,
+		&cfg,
 	)
-	cfg.periodicRunner(func(now time.Time) bool {
+	cfg.PeriodicRunner(func(now time.Time) bool {
 		cc.CheckExpirations(now)
 		return cc.Context().Err() == nil
 	})
@@ -205,7 +107,7 @@ func Client(conn *net.UDPConn, opts ...DialOption) *udpClient.ClientConn {
 	go func() {
 		err := cc.Run()
 		if err != nil {
-			cfg.errors(err)
+			cfg.Errors(err)
 		}
 	}()
 

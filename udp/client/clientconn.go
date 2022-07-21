@@ -105,54 +105,45 @@ func (cc *ClientConn) Transmission() *Transmission {
 // NewClientConn creates connection over session and observation.
 func NewClientConn(
 	session Session,
-	transmissionNStart time.Duration,
-	transmissionAcknowledgeTimeout time.Duration,
-	transmissionMaxRetransmit uint32,
-	handler HandlerFunc,
-	blockwiseSZX blockwise.SZX,
 	createBlockWise func(cc *ClientConn) *blockwise.BlockWise[*ClientConn],
-	goPool GoPoolFunc,
-	errors ErrorFunc,
-	getMID GetMIDFunc,
 	inactivityMonitor inactivity.Monitor,
 	responseMsgCache *cache.Cache,
-	messagePool *pool.Pool,
-	getToken client.GetTokenFunc,
+	cfg *Config,
 ) *ClientConn {
-	if errors == nil {
-		errors = func(error) {
+	if cfg.Errors == nil {
+		cfg.Errors = func(error) {
 			// default no-op
 		}
 	}
-	if getMID == nil {
-		getMID = message.GetMID
+	if cfg.GetMID == nil {
+		cfg.GetMID = message.GetMID
 	}
-	if getToken == nil {
-		getToken = message.GetToken
+	if cfg.GetToken == nil {
+		cfg.GetToken = message.GetToken
 	}
 
 	cc := ClientConn{
 		session: session,
 		transmission: &Transmission{
-			atomic.NewDuration(transmissionNStart),
-			atomic.NewDuration(transmissionAcknowledgeTimeout),
-			atomic.NewInt32(int32(transmissionMaxRetransmit)),
+			atomic.NewDuration(cfg.TransmissionNStart),
+			atomic.NewDuration(cfg.TransmissionAcknowledgeTimeout),
+			atomic.NewInt32(int32(cfg.TransmissionMaxRetransmit)),
 		},
-		blockwiseSZX: blockwiseSZX,
+		blockwiseSZX: cfg.BlockwiseSZX,
 
 		tokenHandlerContainer: sync.NewMap[uint64, HandlerFunc](),
 		midHandlerContainer:   sync.NewMap[int32, HandlerFunc](),
-		goPool:                goPool,
-		errors:                errors,
+		goPool:                cfg.GoPool,
+		errors:                cfg.Errors,
 		msgIDMutex:            NewMutexMap(),
 		responseMsgCache:      responseMsgCache,
 		inactivityMonitor:     inactivityMonitor,
-		messagePool:           messagePool,
+		messagePool:           cfg.MessagePool,
 	}
-	cc.msgID.Store(uint32(getMID() - 0xffff/2))
+	cc.msgID.Store(uint32(cfg.GetMID() - 0xffff/2))
 	cc.blockWise = createBlockWise(&cc)
-	cc.observationHandler = observation.NewHandler(&cc, handler)
-	cc.Client = client.New(&cc, cc.observationHandler, getToken)
+	cc.observationHandler = observation.NewHandler(&cc, cfg.Handler)
+	cc.Client = client.New(&cc, cc.observationHandler, cfg.GetToken)
 	return &cc
 }
 

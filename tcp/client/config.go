@@ -67,7 +67,7 @@ type Config struct {
 	MessagePool                     *pool.Pool
 	GoPool                          GoPoolFunc
 	Dialer                          *net.Dialer
-	TlsCfg                          *tls.Config
+	TLSCfg                          *tls.Config
 	PeriodicRunner                  periodic.Func
 	CreateInactivityMonitor         func() inactivity.Monitor
 	Handler                         HandlerFunc

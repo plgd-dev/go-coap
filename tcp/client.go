@@ -14,8 +14,13 @@ import (
 	client "github.com/plgd-dev/go-coap/v2/tcp/client"
 )
 
+// A DialOption sets options such as credentials, keepalive parameters, etc.
+type DialOption interface {
+	TCPClientApply(cfg *client.Config)
+}
+
 // Dial creates a client connection to the given target.
-func Dial(target string, opts ...client.Option) (*client.ClientConn, error) {
+func Dial(target string, opts ...DialOption) (*client.ClientConn, error) {
 	cfg := client.DefaultConfig
 	for _, o := range opts {
 		o.TCPClientApply(&cfg)
@@ -23,8 +28,8 @@ func Dial(target string, opts ...client.Option) (*client.ClientConn, error) {
 
 	var conn net.Conn
 	var err error
-	if cfg.TlsCfg != nil {
-		conn, err = tls.DialWithDialer(cfg.Dialer, cfg.Net, target, cfg.TlsCfg)
+	if cfg.TLSCfg != nil {
+		conn, err = tls.DialWithDialer(cfg.Dialer, cfg.Net, target, cfg.TLSCfg)
 	} else {
 		conn, err = cfg.Dialer.DialContext(cfg.Ctx, cfg.Net, target)
 	}
@@ -36,7 +41,7 @@ func Dial(target string, opts ...client.Option) (*client.ClientConn, error) {
 }
 
 // Client creates client over tcp/tcp-tls connection.
-func Client(conn net.Conn, opts ...client.Option) *client.ClientConn {
+func Client(conn net.Conn, opts ...DialOption) *client.ClientConn {
 	cfg := client.DefaultConfig
 	for _, o := range opts {
 		o.TCPClientApply(&cfg)

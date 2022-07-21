@@ -14,9 +14,11 @@ import (
 	coapNet "github.com/plgd-dev/go-coap/v2/net"
 	"github.com/plgd-dev/go-coap/v2/net/monitor/inactivity"
 	"github.com/plgd-dev/go-coap/v2/net/responsewriter"
+	"github.com/plgd-dev/go-coap/v2/pkg/options"
 	"github.com/plgd-dev/go-coap/v2/pkg/runner/periodic"
 	"github.com/plgd-dev/go-coap/v2/udp"
 	"github.com/plgd-dev/go-coap/v2/udp/client"
+	"github.com/plgd-dev/go-coap/v2/udp/server"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/sync/semaphore"
 )
@@ -150,7 +152,7 @@ func TestServerDiscover(t *testing.T) {
 	var wg sync.WaitGroup
 	defer wg.Wait()
 
-	s := udp.NewServer(udp.WithHandlerFunc(func(w *responsewriter.ResponseWriter[*client.ClientConn], r *pool.Message) {
+	s := udp.NewServer(options.WithHandlerFunc(func(w *responsewriter.ResponseWriter[*client.ClientConn], r *pool.Message) {
 		errS := w.SetResponse(codes.BadRequest, message.TextPlain, bytes.NewReader(make([]byte, 5330)))
 		require.NoError(t, errS)
 		require.NotNil(t, w.ClientConn())
@@ -213,7 +215,7 @@ func TestServerCleanUpConns(t *testing.T) {
 		require.NoError(t, errA)
 	}()
 
-	sd := udp.NewServer(udp.WithOnNewClientConn(func(cc *client.ClientConn) {
+	sd := udp.NewServer(options.WithOnNewClientConn(func(cc *client.ClientConn) {
 		cc.AddOnClose(func() {
 			checkClose.Release(1)
 		})
@@ -259,18 +261,18 @@ func TestServerInactiveMonitor(t *testing.T) {
 	err = checkClose.Acquire(ctx, 2)
 	require.NoError(t, err)
 	sd := udp.NewServer(
-		udp.WithOnNewClientConn(func(cc *client.ClientConn) {
+		options.WithOnNewClientConn(func(cc *client.ClientConn) {
 			cc.AddOnClose(func() {
 				checkClose.Release(1)
 			})
 		}),
-		udp.WithInactivityMonitor(100*time.Millisecond, func(cc inactivity.ClientConn) {
+		options.WithInactivityMonitor(100*time.Millisecond, func(cc inactivity.ClientConn) {
 			require.False(t, inactivityDetected)
 			inactivityDetected = true
 			errC := cc.Close()
 			require.NoError(t, errC)
 		}),
-		udp.WithPeriodicRunner(periodic.New(ctx.Done(), time.Millisecond*10)),
+		options.WithPeriodicRunner(periodic.New(ctx.Done(), time.Millisecond*10)),
 	)
 
 	var serverWg sync.WaitGroup
@@ -331,18 +333,18 @@ func TestServerKeepAliveMonitor(t *testing.T) {
 	err = checkClose.Acquire(ctx, 2)
 	require.NoError(t, err)
 	sd := udp.NewServer(
-		udp.WithOnNewClientConn(func(cc *client.ClientConn) {
+		options.WithOnNewClientConn(func(cc *client.ClientConn) {
 			cc.AddOnClose(func() {
 				checkClose.Release(1)
 			})
 		}),
-		udp.WithKeepAlive(3, 100*time.Millisecond, func(cc inactivity.ClientConn) {
+		options.WithKeepAlive(3, 100*time.Millisecond, func(cc inactivity.ClientConn) {
 			require.False(t, inactivityDetected)
 			inactivityDetected = true
 			errC := cc.Close()
 			require.NoError(t, errC)
 		}),
-		udp.WithPeriodicRunner(periodic.New(ctx.Done(), time.Millisecond*10)),
+		options.WithPeriodicRunner(periodic.New(ctx.Done(), time.Millisecond*10)),
 	)
 
 	var serverWg sync.WaitGroup
@@ -359,12 +361,12 @@ func TestServerKeepAliveMonitor(t *testing.T) {
 
 	cc, err := udp.Dial(
 		ld.LocalAddr().String(),
-		udp.WithInactivityMonitor(time.Millisecond*10, func(cc inactivity.ClientConn) {
+		options.WithInactivityMonitor(time.Millisecond*10, func(cc inactivity.ClientConn) {
 			time.Sleep(time.Millisecond * 500)
 			errC := cc.Close()
 			require.NoError(t, errC)
 		}),
-		udp.WithPeriodicRunner(periodic.New(ctx.Done(), time.Millisecond*10)),
+		options.WithPeriodicRunner(periodic.New(ctx.Done(), time.Millisecond*10)),
 	)
 	require.NoError(t, err)
 	cc.AddOnClose(func() {
@@ -383,7 +385,7 @@ func TestServerKeepAliveMonitor(t *testing.T) {
 }
 
 func TestServerNewClient(t *testing.T) {
-	newServer := func(l *coapNet.UDPConn) (*udp.Server, func()) {
+	newServer := func(l *coapNet.UDPConn) (*server.Server, func()) {
 		var wg sync.WaitGroup
 		s := udp.NewServer()
 		wg.Add(1)

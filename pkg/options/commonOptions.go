@@ -1,0 +1,511 @@
+package options
+
+import (
+	"context"
+	"fmt"
+	"net"
+	"time"
+
+	"github.com/plgd-dev/go-coap/v2/message/pool"
+	"github.com/plgd-dev/go-coap/v2/mux"
+	"github.com/plgd-dev/go-coap/v2/net/blockwise"
+	"github.com/plgd-dev/go-coap/v2/net/client"
+	"github.com/plgd-dev/go-coap/v2/net/monitor/inactivity"
+	"github.com/plgd-dev/go-coap/v2/pkg/runner/periodic"
+	tcpClient "github.com/plgd-dev/go-coap/v2/tcp/client"
+	tcpServer "github.com/plgd-dev/go-coap/v2/tcp/server"
+	udpClient "github.com/plgd-dev/go-coap/v2/udp/client"
+	udpServer "github.com/plgd-dev/go-coap/v2/udp/server"
+)
+
+type Handler interface {
+	tcpClient.HandlerFunc | udpClient.HandlerFunc
+}
+
+// HandlerFuncOpt handler function option.
+type HandlerFuncOpt[H Handler] struct {
+	h H
+}
+
+func (o HandlerFuncOpt[H]) TCPServerApply(cfg *tcpServer.Config) {
+	switch v := any(o.h).(type) {
+	case tcpClient.HandlerFunc:
+		cfg.Handler = v
+	default:
+		var t tcpClient.HandlerFunc
+		panic(fmt.Errorf("invalid HandlerFunc type %T, expected %T", v, t))
+	}
+}
+
+func (o HandlerFuncOpt[H]) TCPClientApply(cfg *tcpClient.Config) {
+	switch v := any(o.h).(type) {
+	case tcpClient.HandlerFunc:
+		cfg.Handler = v
+	default:
+		var t tcpClient.HandlerFunc
+		panic(fmt.Errorf("invalid HandlerFunc type %T, expected %T", v, t))
+	}
+}
+
+func (o HandlerFuncOpt[H]) UDPServerApply(cfg *udpServer.Config) {
+	switch v := any(o.h).(type) {
+	case udpClient.HandlerFunc:
+		cfg.Handler = v
+	default:
+		var t udpClient.HandlerFunc
+		panic(fmt.Errorf("invalid HandlerFunc type %T, expected %T", v, t))
+	}
+}
+
+func (o HandlerFuncOpt[H]) UDPClientApply(cfg *udpClient.Config) {
+	switch v := any(o.h).(type) {
+	case udpClient.HandlerFunc:
+		cfg.Handler = v
+	default:
+		var t udpClient.HandlerFunc
+		panic(fmt.Errorf("invalid HandlerFunc type %T, expected %T", v, t))
+	}
+}
+
+// WithHandlerFunc set handle for handling request's.
+func WithHandlerFunc[H Handler](h H) HandlerFuncOpt[H] {
+	return HandlerFuncOpt[H]{h: h}
+}
+
+// HandlerFuncOpt handler function option.
+type MuxHandlerOpt struct {
+	m mux.Handler
+}
+
+func (o MuxHandlerOpt) TCPServerApply(cfg *tcpServer.Config) {
+	cfg.Handler = mux.ToHandler[*tcpClient.ClientConn](o.m)
+}
+
+func (o MuxHandlerOpt) TCPClientApply(cfg *tcpClient.Config) {
+	cfg.Handler = mux.ToHandler[*tcpClient.ClientConn](o.m)
+}
+
+func (o MuxHandlerOpt) UDPServerApply(cfg *udpServer.Config) {
+	cfg.Handler = mux.ToHandler[*udpClient.ClientConn](o.m)
+}
+
+func (o MuxHandlerOpt) UDPClientApply(cfg *udpClient.Config) {
+	cfg.Handler = mux.ToHandler[*udpClient.ClientConn](o.m)
+}
+
+// WithMux set's multiplexer for handle requests.
+func WithMux(m mux.Handler) MuxHandlerOpt {
+	return MuxHandlerOpt{
+		m: m,
+	}
+}
+
+// ContextOpt handler function option.
+type ContextOpt struct {
+	ctx context.Context
+}
+
+func (o ContextOpt) TCPServerApply(cfg *tcpServer.Config) {
+	cfg.Ctx = o.ctx
+}
+
+func (o ContextOpt) TCPClientApply(cfg *tcpClient.Config) {
+	cfg.Ctx = o.ctx
+}
+
+func (o ContextOpt) UDPServerApply(cfg *udpServer.Config) {
+	cfg.Ctx = o.ctx
+}
+
+func (o ContextOpt) UDPClientApply(cfg *udpClient.Config) {
+	cfg.Ctx = o.ctx
+}
+
+// WithContext set's parent context of server.
+func WithContext(ctx context.Context) ContextOpt {
+	return ContextOpt{ctx: ctx}
+}
+
+// MaxMessageSizeOpt handler function option.
+type MaxMessageSizeOpt struct {
+	maxMessageSize uint32
+}
+
+func (o MaxMessageSizeOpt) TCPServerApply(cfg *tcpServer.Config) {
+	cfg.MaxMessageSize = o.maxMessageSize
+}
+
+func (o MaxMessageSizeOpt) TCPClientApply(cfg *tcpClient.Config) {
+	cfg.MaxMessageSize = o.maxMessageSize
+}
+
+func (o MaxMessageSizeOpt) UDPServerApply(cfg *udpServer.Config) {
+	cfg.MaxMessageSize = o.maxMessageSize
+}
+
+func (o MaxMessageSizeOpt) UDPClientApply(cfg *udpClient.Config) {
+	cfg.MaxMessageSize = o.maxMessageSize
+}
+
+// WithMaxMessageSize limit size of processed message.
+func WithMaxMessageSize(maxMessageSize uint32) MaxMessageSizeOpt {
+	return MaxMessageSizeOpt{maxMessageSize: maxMessageSize}
+}
+
+// ErrorsOpt errors option.
+type ErrorsOpt struct {
+	errors ErrorFunc
+}
+
+func (o ErrorsOpt) TCPServerApply(cfg *tcpServer.Config) {
+	cfg.Errors = o.errors
+}
+
+func (o ErrorsOpt) TCPClientApply(cfg *tcpClient.Config) {
+	cfg.Errors = o.errors
+}
+
+func (o ErrorsOpt) UDPServerApply(cfg *udpServer.Config) {
+	cfg.Errors = o.errors
+}
+
+func (o ErrorsOpt) UDPClientApply(cfg *udpClient.Config) {
+	cfg.Errors = o.errors
+}
+
+// WithErrors set function for logging error.
+func WithErrors(errors ErrorFunc) ErrorsOpt {
+	return ErrorsOpt{errors: errors}
+}
+
+// GoPoolOpt gopool option.
+type GoPoolOpt struct {
+	goPool GoPoolFunc
+}
+
+func (o GoPoolOpt) TCPServerApply(cfg *tcpServer.Config) {
+	cfg.GoPool = o.goPool
+}
+
+func (o GoPoolOpt) TCPClientApply(cfg *tcpClient.Config) {
+	cfg.GoPool = o.goPool
+}
+
+func (o GoPoolOpt) UDPServerApply(cfg *udpServer.Config) {
+	cfg.GoPool = o.goPool
+}
+
+func (o GoPoolOpt) UDPClientApply(cfg *udpClient.Config) {
+	cfg.GoPool = o.goPool
+}
+
+// WithGoPool sets function for managing spawning go routines
+// for handling incoming request's.
+// Eg: https://github.com/panjf2000/ants.
+func WithGoPool(goPool GoPoolFunc) GoPoolOpt {
+	return GoPoolOpt{goPool: goPool}
+}
+
+// KeepAliveOpt keepalive option.
+type KeepAliveOpt struct {
+	timeout    time.Duration
+	onInactive inactivity.OnInactiveFunc
+	maxRetries uint32
+}
+
+func (o KeepAliveOpt) TCPServerApply(cfg *tcpServer.Config) {
+	cfg.CreateInactivityMonitor = func() inactivity.Monitor {
+		keepalive := inactivity.NewKeepAlive(o.maxRetries, o.onInactive, func(cc inactivity.ClientConn, receivePong func()) (func(), error) {
+			return cc.(*tcpClient.ClientConn).AsyncPing(receivePong)
+		})
+		return inactivity.NewInactivityMonitor(o.timeout/time.Duration(o.maxRetries+1), keepalive.OnInactive)
+	}
+}
+
+func (o KeepAliveOpt) TCPClientApply(cfg *tcpClient.Config) {
+	cfg.CreateInactivityMonitor = func() inactivity.Monitor {
+		keepalive := inactivity.NewKeepAlive(o.maxRetries, o.onInactive, func(cc inactivity.ClientConn, receivePong func()) (func(), error) {
+			return cc.(*tcpClient.ClientConn).AsyncPing(receivePong)
+		})
+		return inactivity.NewInactivityMonitor(o.timeout/time.Duration(o.maxRetries+1), keepalive.OnInactive)
+	}
+}
+
+func (o KeepAliveOpt) UDPServerApply(cfg *udpServer.Config) {
+	cfg.CreateInactivityMonitor = func() inactivity.Monitor {
+		keepalive := inactivity.NewKeepAlive(o.maxRetries, o.onInactive, func(cc inactivity.ClientConn, receivePong func()) (func(), error) {
+			return cc.(*udpClient.ClientConn).AsyncPing(receivePong)
+		})
+		return inactivity.NewInactivityMonitor(o.timeout/time.Duration(o.maxRetries+1), keepalive.OnInactive)
+	}
+}
+
+func (o KeepAliveOpt) UDPClientApply(cfg *udpClient.Config) {
+	cfg.CreateInactivityMonitor = func() inactivity.Monitor {
+		keepalive := inactivity.NewKeepAlive(o.maxRetries, o.onInactive, func(cc inactivity.ClientConn, receivePong func()) (func(), error) {
+			return cc.(*udpClient.ClientConn).AsyncPing(receivePong)
+		})
+		return inactivity.NewInactivityMonitor(o.timeout/time.Duration(o.maxRetries+1), keepalive.OnInactive)
+	}
+}
+
+// WithKeepAlive monitoring's client connection's.
+func WithKeepAlive(maxRetries uint32, timeout time.Duration, onInactive inactivity.OnInactiveFunc) KeepAliveOpt {
+	return KeepAliveOpt{
+		maxRetries: maxRetries,
+		timeout:    timeout,
+		onInactive: onInactive,
+	}
+}
+
+// InactivityMonitorOpt notifies when a connection was inactive for a given duration.
+type InactivityMonitorOpt struct {
+	duration   time.Duration
+	onInactive inactivity.OnInactiveFunc
+}
+
+func (o InactivityMonitorOpt) TCPServerApply(cfg *tcpServer.Config) {
+	cfg.CreateInactivityMonitor = func() inactivity.Monitor {
+		return inactivity.NewInactivityMonitor(o.duration, o.onInactive)
+	}
+}
+
+func (o InactivityMonitorOpt) TCPClientApply(cfg *tcpClient.Config) {
+	cfg.CreateInactivityMonitor = func() inactivity.Monitor {
+		return inactivity.NewInactivityMonitor(o.duration, o.onInactive)
+	}
+}
+
+func (o InactivityMonitorOpt) UDPServerApply(cfg *udpServer.Config) {
+	cfg.CreateInactivityMonitor = func() inactivity.Monitor {
+		return inactivity.NewInactivityMonitor(o.duration, o.onInactive)
+	}
+}
+
+func (o InactivityMonitorOpt) UDPClientApply(cfg *udpClient.Config) {
+	cfg.CreateInactivityMonitor = func() inactivity.Monitor {
+		return inactivity.NewInactivityMonitor(o.duration, o.onInactive)
+	}
+}
+
+// WithInactivityMonitor set deadline's for read operations over client connection.
+func WithInactivityMonitor(duration time.Duration, onInactive inactivity.OnInactiveFunc) InactivityMonitorOpt {
+	return InactivityMonitorOpt{
+		duration:   duration,
+		onInactive: onInactive,
+	}
+}
+
+// NetOpt network option.
+type NetOpt struct {
+	net string
+}
+
+func (o NetOpt) TCPClientApply(cfg *tcpClient.Config) {
+	cfg.Net = o.net
+}
+
+func (o NetOpt) UDPClientApply(cfg *udpClient.Config) {
+	cfg.Net = o.net
+}
+
+// WithNetwork define's tcp version (udp4, udp6, tcp) for client.
+func WithNetwork(net string) NetOpt {
+	return NetOpt{net: net}
+}
+
+// PeriodicRunnerOpt function which is executed in every ticks
+type PeriodicRunnerOpt struct {
+	periodicRunner periodic.Func
+}
+
+func (o PeriodicRunnerOpt) TCPClientApply(cfg *tcpClient.Config) {
+	cfg.PeriodicRunner = o.periodicRunner
+}
+
+func (o PeriodicRunnerOpt) TCPServerApply(cfg *tcpServer.Config) {
+	cfg.PeriodicRunner = o.periodicRunner
+}
+
+func (o PeriodicRunnerOpt) UDPClientApply(cfg *udpClient.Config) {
+	cfg.PeriodicRunner = o.periodicRunner
+}
+
+func (o PeriodicRunnerOpt) UDPServerApply(cfg *udpServer.Config) {
+	cfg.PeriodicRunner = o.periodicRunner
+}
+
+// WithPeriodicRunner set function which is executed in every ticks.
+func WithPeriodicRunner(periodicRunner periodic.Func) PeriodicRunnerOpt {
+	return PeriodicRunnerOpt{periodicRunner: periodicRunner}
+}
+
+// BlockwiseOpt network option.
+type BlockwiseOpt struct {
+	transferTimeout time.Duration
+	enable          bool
+	szx             blockwise.SZX
+}
+
+func (o BlockwiseOpt) UDPServerApply(cfg *udpServer.Config) {
+	cfg.BlockwiseEnable = o.enable
+	cfg.BlockwiseSZX = o.szx
+	cfg.BlockwiseTransferTimeout = o.transferTimeout
+}
+
+func (o BlockwiseOpt) UDPClientApply(cfg *udpClient.Config) {
+	cfg.BlockwiseEnable = o.enable
+	cfg.BlockwiseSZX = o.szx
+	cfg.BlockwiseTransferTimeout = o.transferTimeout
+}
+
+func (o BlockwiseOpt) TCPServerApply(cfg *tcpServer.Config) {
+	cfg.BlockwiseEnable = o.enable
+	cfg.BlockwiseSZX = o.szx
+	cfg.BlockwiseTransferTimeout = o.transferTimeout
+}
+
+func (o BlockwiseOpt) TCPClientApply(cfg *tcpClient.Config) {
+	cfg.BlockwiseEnable = o.enable
+	cfg.BlockwiseSZX = o.szx
+	cfg.BlockwiseTransferTimeout = o.transferTimeout
+}
+
+// WithBlockwise configure's blockwise transfer.
+func WithBlockwise(enable bool, szx blockwise.SZX, transferTimeout time.Duration) BlockwiseOpt {
+	return BlockwiseOpt{
+		enable:          enable,
+		szx:             szx,
+		transferTimeout: transferTimeout,
+	}
+}
+
+type OnNewClientConnFunc interface {
+	tcpServer.OnNewClientConnFunc | udpServer.OnNewClientConnFunc
+}
+
+// OnNewClientConnOpt network option.
+type OnNewClientConnOpt[F OnNewClientConnFunc] struct {
+	f F
+}
+
+func (o OnNewClientConnOpt[F]) UDPServerApply(cfg *udpServer.Config) {
+	switch v := any(o.f).(type) {
+	case udpServer.OnNewClientConnFunc:
+		cfg.OnNewClientConn = v
+	default:
+		var t udpServer.OnNewClientConnFunc
+		panic(fmt.Errorf("invalid OnNewClientConnFunc type %T, expected %T", v, t))
+	}
+}
+
+func (o OnNewClientConnOpt[F]) TCPServerApply(cfg *tcpServer.Config) {
+	switch v := any(o.f).(type) {
+	case tcpServer.OnNewClientConnFunc:
+		cfg.OnNewClientConn = v
+	default:
+		var t tcpServer.OnNewClientConnFunc
+		panic(fmt.Errorf("invalid OnNewClientConnFunc type %T, expected %T", v, t))
+	}
+}
+
+// WithOnNewClientConn server's notify about new client connection.
+func WithOnNewClientConn[F OnNewClientConnFunc](onNewClientConn F) OnNewClientConnOpt[F] {
+	return OnNewClientConnOpt[F]{
+		f: onNewClientConn,
+	}
+}
+
+// CloseSocketOpt close socket option.
+type CloseSocketOpt struct{}
+
+func (o CloseSocketOpt) TCPClientApply(cfg *tcpClient.Config) {
+	cfg.CloseSocket = true
+}
+
+func (o CloseSocketOpt) UDPClientApply(cfg *udpClient.Config) {
+	cfg.CloseSocket = true
+}
+
+// WithCloseSocket closes socket at the close connection.
+func WithCloseSocket() CloseSocketOpt {
+	return CloseSocketOpt{}
+}
+
+// DialerOpt dialer option.
+type DialerOpt struct {
+	dialer *net.Dialer
+}
+
+func (o DialerOpt) UDPClientApply(cfg *udpClient.Config) {
+	if o.dialer != nil {
+		cfg.Dialer = o.dialer
+	}
+}
+
+func (o DialerOpt) TCPClientApply(cfg *tcpClient.Config) {
+	if o.dialer != nil {
+		cfg.Dialer = o.dialer
+	}
+}
+
+// WithDialer set dialer for dial.
+func WithDialer(dialer *net.Dialer) DialerOpt {
+	return DialerOpt{
+		dialer: dialer,
+	}
+}
+
+// ConnectionCacheOpt network option.
+type MessagePoolOpt struct {
+	messagePool *pool.Pool
+}
+
+func (o MessagePoolOpt) TCPServerApply(cfg *tcpServer.Config) {
+	cfg.MessagePool = o.messagePool
+}
+
+func (o MessagePoolOpt) TCPClientApply(cfg *tcpClient.Config) {
+	cfg.MessagePool = o.messagePool
+}
+
+func (o MessagePoolOpt) UDPServerApply(cfg *udpServer.Config) {
+	cfg.MessagePool = o.messagePool
+}
+
+func (o MessagePoolOpt) UDPClientApply(cfg *udpClient.Config) {
+	cfg.MessagePool = o.messagePool
+}
+
+// WithMessagePool configure's message pool for acquire/releasing coap messages
+func WithMessagePool(messagePool *pool.Pool) MessagePoolOpt {
+	return MessagePoolOpt{
+		messagePool: messagePool,
+	}
+}
+
+// GetTokenOpt token option.
+type GetTokenOpt struct {
+	getToken client.GetTokenFunc
+}
+
+func (o GetTokenOpt) TCPServerApply(cfg *tcpServer.Config) {
+	cfg.GetToken = o.getToken
+}
+
+func (o GetTokenOpt) TCPClientApply(cfg *tcpClient.Config) {
+	cfg.GetToken = o.getToken
+}
+
+func (o GetTokenOpt) UDPServerApply(cfg *udpServer.Config) {
+	cfg.GetToken = o.getToken
+}
+
+func (o GetTokenOpt) UDPClientApply(cfg *udpClient.Config) {
+	cfg.GetToken = o.getToken
+}
+
+// WithGetToken set function for generating tokens.
+func WithGetToken(getToken client.GetTokenFunc) GetTokenOpt {
+	return GetTokenOpt{getToken: getToken}
+}
