@@ -9,6 +9,7 @@ import (
 	"github.com/plgd-dev/go-coap/v2/message/codes"
 	"github.com/plgd-dev/go-coap/v2/mux"
 	"github.com/plgd-dev/go-coap/v2/net"
+	"github.com/plgd-dev/go-coap/v2/pkg/options"
 	"github.com/plgd-dev/go-coap/v2/udp"
 )
 
@@ -60,7 +61,7 @@ func main() {
 	}
 
 	defer l.Close()
-	s := udp.NewServer(udp.WithMux(m))
+	s := udp.NewServer(options.WithMux(m))
 	defer s.Stop()
 	log.Fatal(s.Serve(l))
 }

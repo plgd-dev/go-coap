@@ -27,11 +27,6 @@ type (
 	GetMIDFunc  = func() int32
 )
 
-// A DialOption sets options such as credentials, keepalive parameters, etc.
-type Option interface {
-	TCPClientApply(cfg *Config)
-}
-
 type Notifier interface {
 	Notify()
 }
@@ -62,7 +57,8 @@ func NewClientConn(
 	connectionCacheSize uint16,
 	messagePool *pool.Pool,
 	getToken client.GetTokenFunc,
-	*/) *ClientConn {
+	*/
+) *ClientConn {
 	if cfg.GetToken == nil {
 		cfg.GetToken = message.GetToken
 	}

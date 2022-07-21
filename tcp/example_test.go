@@ -30,7 +30,7 @@ func ExampleClientConn_Get() {
 	fmt.Printf("%v", data)
 }
 
-func ExampleServer_Serve() {
+func ExampleServer() {
 	l, err := net.NewTCPListener("tcp", "0.0.0.0:5683")
 	if err != nil {
 		log.Fatal(err)

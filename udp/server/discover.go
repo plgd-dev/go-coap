@@ -1,4 +1,4 @@
-package udp
+package server
 
 import (
 	"context"
@@ -20,17 +20,17 @@ import (
 // By default it is sent over all network interfaces and all compatible source IP addresses with hop limit 1.
 // Via opts you can specify the network interface, source IP address, and hop limit.
 func (s *Server) Discover(ctx context.Context, address, path string, receiverFunc func(cc *client.ClientConn, resp *pool.Message), opts ...coapNet.MulticastOption) error {
-	token, err := s.getToken()
+	token, err := s.cfg.GetToken()
 	if err != nil {
 		return fmt.Errorf("cannot get token: %w", err)
 	}
-	req := s.messagePool.AcquireMessage(ctx)
-	defer s.messagePool.ReleaseMessage(req)
+	req := s.cfg.MessagePool.AcquireMessage(ctx)
+	defer s.cfg.MessagePool.ReleaseMessage(req)
 	err = req.SetupGet(path, token)
 	if err != nil {
 		return fmt.Errorf("cannot create discover request: %w", err)
 	}
-	req.SetMessageID(s.getMID())
+	req.SetMessageID(s.cfg.GetMID())
 	req.SetType(message.NonConfirmable)
 	return s.DiscoveryRequest(req, address, receiverFunc, opts...)
 }

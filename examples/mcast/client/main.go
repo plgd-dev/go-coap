@@ -15,6 +15,7 @@ import (
 	"github.com/plgd-dev/go-coap/v2/message"
 	"github.com/plgd-dev/go-coap/v2/message/pool"
 	"github.com/plgd-dev/go-coap/v2/net"
+	"github.com/plgd-dev/go-coap/v2/pkg/options"
 	"github.com/plgd-dev/go-coap/v2/udp"
 	"github.com/plgd-dev/go-coap/v2/udp/client"
 )
@@ -77,7 +78,7 @@ func main() {
 			log.Fatal(err)
 			return
 		}
-		s := udp.NewServer(udp.WithTransmission(time.Second, timeout/2, 2), udp.WithMessagePool(messagePool))
+		s := udp.NewServer(options.WithTransmission(time.Second, timeout/2, 2), options.WithMessagePool(messagePool))
 		var wg sync.WaitGroup
 		defer wg.Wait()
 		defer s.Stop()

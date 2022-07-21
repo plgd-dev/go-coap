@@ -28,7 +28,7 @@ func ListenAndServe(network string, addr string, handler mux.Handler) (err error
 				err = errC
 			}
 		}()
-		s := udp.NewServer(udp.WithMux(handler))
+		s := udp.NewServer(options.WithMux(handler))
 		return s.Serve(l)
 	case "tcp", "tcp4", "tcp6":
 		l, err := net.NewTCPListener(network, addr)

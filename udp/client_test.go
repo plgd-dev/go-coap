@@ -19,6 +19,7 @@ import (
 	coapNet "github.com/plgd-dev/go-coap/v2/net"
 	"github.com/plgd-dev/go-coap/v2/net/monitor/inactivity"
 	"github.com/plgd-dev/go-coap/v2/net/responsewriter"
+	"github.com/plgd-dev/go-coap/v2/pkg/options"
 	"github.com/plgd-dev/go-coap/v2/pkg/runner/periodic"
 	"github.com/plgd-dev/go-coap/v2/udp/client"
 	"github.com/stretchr/testify/assert"
@@ -124,7 +125,7 @@ func TestClientConnGet(t *testing.T) {
 	require.NoError(t, err)
 	err = m.Handle("/empty", mux.HandlerFunc(func(w mux.ResponseWriter, r *mux.Message) {
 		assert.Equal(t, codes.GET, r.Code())
-		// Calling SetResponse was failing with an EOF error when the reader is empty
+		// Calling SetResponse was failing options.With an EOF error when the reader is empty
 		// https://github.com/plgd-dev/go-coap/issues/157
 		errS := w.SetResponse(codes.Content, message.TextPlain, bytes.NewReader([]byte{}))
 		require.NoError(t, errS)
@@ -133,7 +134,7 @@ func TestClientConnGet(t *testing.T) {
 	}))
 	require.NoError(t, err)
 
-	s := NewServer(WithMux(m))
+	s := NewServer(options.WithMux(m))
 	defer s.Stop()
 
 	wg.Add(1)
@@ -233,7 +234,7 @@ func TestClientConnGetSeparateMessage(t *testing.T) {
 	}))
 	require.NoError(t, err)
 
-	s := NewServer(WithMux(m))
+	s := NewServer(options.WithMux(m))
 	defer s.Stop()
 
 	wg.Add(1)
@@ -243,7 +244,7 @@ func TestClientConnGetSeparateMessage(t *testing.T) {
 		require.NoError(t, errS)
 	}()
 
-	cc, err := Dial(l.LocalAddr().String(), WithHandlerFunc(func(w *responsewriter.ResponseWriter[*client.ClientConn], r *pool.Message) {
+	cc, err := Dial(l.LocalAddr().String(), options.WithHandlerFunc(func(w *responsewriter.ResponseWriter[*client.ClientConn], r *pool.Message) {
 		assert.NoError(t, fmt.Errorf("none msg expected comes: %+v", r))
 	}))
 	require.NoError(t, err)
@@ -355,7 +356,7 @@ func TestClientConnPost(t *testing.T) {
 			}))
 			require.NoError(t, err)
 
-			s := NewServer(WithMux(m))
+			s := NewServer(options.WithMux(m))
 			defer s.Stop()
 
 			wg.Add(1)
@@ -485,7 +486,7 @@ func TestClientConnPut(t *testing.T) {
 			}))
 			require.NoError(t, err)
 
-			s := NewServer(WithMux(m))
+			s := NewServer(options.WithMux(m))
 			defer s.Stop()
 
 			wg.Add(1)
@@ -592,7 +593,7 @@ func TestClientConnDelete(t *testing.T) {
 	}))
 	require.NoError(t, err)
 
-	s := NewServer(WithMux(m))
+	s := NewServer(options.WithMux(m))
 	defer s.Stop()
 
 	wg.Add(1)
@@ -686,7 +687,7 @@ func TestClientInactiveMonitor(t *testing.T) {
 	require.NoError(t, err)
 
 	sd := NewServer(
-		WithPeriodicRunner(periodic.New(ctx.Done(), time.Millisecond*10)),
+		options.WithPeriodicRunner(periodic.New(ctx.Done(), time.Millisecond*10)),
 	)
 
 	var serverWg sync.WaitGroup
@@ -703,13 +704,13 @@ func TestClientInactiveMonitor(t *testing.T) {
 
 	cc, err := Dial(
 		ld.LocalAddr().String(),
-		WithInactivityMonitor(100*time.Millisecond, func(cc inactivity.ClientConn) {
+		options.WithInactivityMonitor(100*time.Millisecond, func(cc inactivity.ClientConn) {
 			require.False(t, inactivityDetected)
 			inactivityDetected = true
 			errC := cc.Close()
 			require.NoError(t, errC)
 		}),
-		WithPeriodicRunner(periodic.New(ctx.Done(), time.Millisecond*100)),
+		options.WithPeriodicRunner(periodic.New(ctx.Done(), time.Millisecond*100)),
 	)
 	require.NoError(t, err)
 	cc.AddOnClose(func() {
@@ -750,15 +751,15 @@ func TestClientKeepAliveMonitor(t *testing.T) {
 	err = checkClose.Acquire(ctx, 2)
 	require.NoError(t, err)
 	sd := NewServer(
-		WithOnNewClientConn(func(cc *client.ClientConn) {
+		options.WithOnNewClientConn(func(cc *client.ClientConn) {
 			checkClose.Release(1)
 		}),
-		WithGoPool(func(f func()) error {
+		options.WithGoPool(func(f func()) error {
 			time.Sleep(time.Millisecond * 500)
 			f()
 			return nil
 		}),
-		WithPeriodicRunner(periodic.New(ctx.Done(), time.Millisecond*10)),
+		options.WithPeriodicRunner(periodic.New(ctx.Done(), time.Millisecond*10)),
 	)
 
 	var serverWg sync.WaitGroup
@@ -775,13 +776,13 @@ func TestClientKeepAliveMonitor(t *testing.T) {
 
 	cc, err := Dial(
 		ld.LocalAddr().String(),
-		WithKeepAlive(3, 100*time.Millisecond, func(cc inactivity.ClientConn) {
+		options.WithKeepAlive(3, 100*time.Millisecond, func(cc inactivity.ClientConn) {
 			require.False(t, inactivityDetected)
 			inactivityDetected = true
 			errC := cc.Close()
 			require.NoError(t, errC)
 		}),
-		WithPeriodicRunner(periodic.New(ctx.Done(), time.Millisecond*10)),
+		options.WithPeriodicRunner(periodic.New(ctx.Done(), time.Millisecond*10)),
 	)
 	require.NoError(t, err)
 	cc.AddOnClose(func() {

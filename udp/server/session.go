@@ -1,4 +1,4 @@
-package udp
+package server
 
 import (
 	"context"
