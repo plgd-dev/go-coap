@@ -4,13 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"net"
-	"strings"
 	"sync"
 	"time"
 
-	"github.com/pion/dtls/v2"
 	"github.com/plgd-dev/go-coap/v2/message"
 	"github.com/plgd-dev/go-coap/v2/message/pool"
 	coapNet "github.com/plgd-dev/go-coap/v2/net"
@@ -75,7 +72,7 @@ func New(opt ...Option) *Server {
 	errorsFunc := cfg.Errors
 	// assign updated func to cfg.errors so cfg.handler also uses the updated error handler
 	cfg.Errors = func(err error) {
-		if errors.Is(err, context.Canceled) || errors.Is(err, io.EOF) || strings.Contains(err.Error(), "use of closed network connection") {
+		if coapNet.IsCancelOrCloseError(err) {
 			// this error was produced by cancellation context or closing connection.
 			return
 		}
@@ -171,8 +168,7 @@ func (s *Server) Serve(l Listener) error {
 		monitor := s.cfg.CreateInactivityMonitor()
 		cc = s.createClientConn(coapNet.NewConn(rw), monitor)
 		if s.cfg.OnNewClientConn != nil {
-			dtlsConn := rw.(*dtls.Conn)
-			s.cfg.OnNewClientConn(cc, dtlsConn)
+			s.cfg.OnNewClientConn(cc)
 		}
 		go func() {
 			defer wg.Done()

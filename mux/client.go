@@ -28,6 +28,8 @@ type Client interface {
 	Observe(ctx context.Context, path string, observeFunc func(notification *pool.Message), opts ...message.Option) (Observation, error)
 
 	RemoteAddr() net.Addr
+	// NetConn returns the underlying connection that is wrapped by client. The Conn returned is shared by all invocations of NetConn, so do not modify it.
+	NetConn() net.Conn
 	Context() context.Context
 	SetContextValue(key interface{}, val interface{})
 	WriteMessage(req *pool.Message) error

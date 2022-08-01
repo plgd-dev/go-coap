@@ -43,21 +43,6 @@ func NewClientConn(
 	createBlockWise func(cc *ClientConn) *blockwise.BlockWise[*ClientConn],
 	inactivityMonitor inactivity.Monitor,
 	cfg *Config,
-	/*ctx context.Context,
-
-	handler func(*responsewriter.ResponseWriter[*ClientConn], *pool.Message),
-	maxMessageSize uint32,
-	goPool GoPoolFunc,
-	errors ErrorFunc,
-	blockwiseSZX blockwise.SZX,
-	disablePeerTCPSignalMessageCSMs bool,
-	disableTCPSignalMessageCSM bool,
-	closeSocket bool,
-	inactivityMonitor inactivity.Monitor,
-	connectionCacheSize uint16,
-	messagePool *pool.Pool,
-	getToken client.GetTokenFunc,
-	*/
 ) *ClientConn {
 	if cfg.GetToken == nil {
 		cfg.GetToken = message.GetToken
@@ -240,4 +225,9 @@ func (cc *ClientConn) AcquireMessage(ctx context.Context) *pool.Message {
 
 func (cc *ClientConn) ReleaseMessage(m *pool.Message) {
 	cc.session.ReleaseMessage(m)
+}
+
+// NetConn returns the underlying connection that is wrapped by cc. The Conn returned is shared by all invocations of NetConn, so do not modify it.
+func (cc *ClientConn) NetConn() net.Conn {
+	return cc.session.NetConn()
 }

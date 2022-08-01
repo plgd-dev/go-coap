@@ -40,6 +40,8 @@ type Session interface {
 	MaxMessageSize() uint32
 	RemoteAddr() net.Addr
 	LocalAddr() net.Addr
+	// NetConn returns the underlying connection that is wrapped by Session. The Conn returned is shared by all invocations of NetConn, so do not modify it.
+	NetConn() net.Conn
 	WriteMessage(req *pool.Message) error
 	// WriteMulticast sends multicast to the remote multicast address.
 	// By default it is sent over all network interfaces and all compatible source IP addresses with hop limit 1.
@@ -622,4 +624,9 @@ func (cc *ClientConn) WriteMulticastMessage(req *pool.Message, address *net.UDPA
 
 func (cc *ClientConn) InactivityMonitor() inactivity.Monitor {
 	return cc.inactivityMonitor
+}
+
+// NetConn returns the underlying connection that is wrapped by cc. The Conn returned is shared by all invocations of NetConn, so do not modify it.
+func (cc *ClientConn) NetConn() net.Conn {
+	return cc.session.NetConn()
 }

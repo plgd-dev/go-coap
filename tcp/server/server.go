@@ -2,12 +2,9 @@ package server
 
 import (
 	"context"
-	"crypto/tls"
 	"errors"
 	"fmt"
-	"io"
 	"net"
-	"strings"
 	"sync"
 	"time"
 
@@ -67,7 +64,7 @@ func New(opt ...ServerOption) *Server {
 	errorsFunc := cfg.Errors
 	// assign updated func to opts.errors so opts.handler also uses the updated error handler
 	cfg.Errors = func(err error) {
-		if errors.Is(err, context.Canceled) || errors.Is(err, io.EOF) || strings.Contains(err.Error(), "use of closed network connection") {
+		if coapNet.IsCancelOrCloseError(err) {
 			// this error was produced by cancellation context or closing connection.
 			return
 		}
@@ -125,11 +122,7 @@ func (s *Server) serveConnection(connections *connections.Connections, rw net.Co
 	monitor := s.cfg.CreateInactivityMonitor()
 	cc = s.createClientConn(coapNet.NewConn(rw), monitor)
 	if s.cfg.OnNewClientConn != nil {
-		if tlscon, ok := rw.(*tls.Conn); ok {
-			s.cfg.OnNewClientConn(cc, tlscon)
-		} else {
-			s.cfg.OnNewClientConn(cc, nil)
-		}
+		s.cfg.OnNewClientConn(cc)
 	}
 	connections.Store(cc)
 	defer connections.Delete(cc)

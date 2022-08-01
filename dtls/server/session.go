@@ -150,3 +150,8 @@ func (s *Session) Run(cc *client.ClientConn) (err error) {
 		}
 	}
 }
+
+// NetConn returns the underlying connection that is wrapped by s. The Conn returned is shared by all invocations of NetConn, so do not modify it.
+func (s *Session) NetConn() net.Conn {
+	return s.connection.NetConn()
+}

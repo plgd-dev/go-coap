@@ -52,7 +52,7 @@ func TestServerCleanUpConns(t *testing.T) {
 		err = checkClose.Acquire(ctx, 2)
 		require.NoError(t, err)
 	}()
-	sd := dtls.NewServer(options.WithOnNewClientConn(func(cc *client.ClientConn, dtlsConn *piondtls.Conn) {
+	sd := dtls.NewServer(options.WithOnNewClientConn(func(cc *client.ClientConn) {
 		cc.AddOnClose(func() {
 			checkClose.Release(1)
 		})
@@ -150,7 +150,9 @@ func TestServerSetContextValueWithPKI(t *testing.T) {
 		require.NoError(t, errC)
 	}()
 
-	onNewConn := func(cc *client.ClientConn, dtlsConn *piondtls.Conn) {
+	onNewConn := func(cc *client.ClientConn) {
+		dtlsConn, ok := cc.NetConn().(*piondtls.Conn)
+		require.True(t, ok)
 		// set connection context certificate
 		clientCert, errP := x509.ParseCertificate(dtlsConn.ConnectionState().PeerCertificates[0])
 		require.NoError(t, errP)
@@ -201,7 +203,7 @@ func TestServerInactiveMonitor(t *testing.T) {
 	err = checkClose.Acquire(ctx, 2)
 	require.NoError(t, err)
 	sd := dtls.NewServer(
-		options.WithOnNewClientConn(func(cc *client.ClientConn, dtlsConn *piondtls.Conn) {
+		options.WithOnNewClientConn(func(cc *client.ClientConn) {
 			cc.AddOnClose(func() {
 				checkClose.Release(1)
 			})
@@ -273,7 +275,7 @@ func TestServerKeepAliveMonitor(t *testing.T) {
 	require.NoError(t, err)
 
 	sd := dtls.NewServer(
-		options.WithOnNewClientConn(func(cc *client.ClientConn, tlscon *piondtls.Conn) {
+		options.WithOnNewClientConn(func(cc *client.ClientConn) {
 			cc.AddOnClose(func() {
 				checkClose.Release(1)
 			})
