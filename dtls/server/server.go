@@ -25,10 +25,10 @@ type Listener interface {
 }
 
 type Server struct {
-	ctx    context.Context
-	cancel context.CancelFunc
-	cache  *cache.Cache
-	cfg    *Config
+	ctx              context.Context
+	cancel           context.CancelFunc
+	responseMsgCache *cache.Cache[string, []byte]
+	cfg              *Config
 
 	listenMutex sync.Mutex
 	listen      Listener
@@ -80,10 +80,10 @@ func New(opt ...Option) *Server {
 	}
 
 	return &Server{
-		ctx:    ctx,
-		cancel: cancel,
-		cache:  cache.NewCache(),
-		cfg:    &cfg,
+		ctx:              ctx,
+		cancel:           cancel,
+		responseMsgCache: cache.NewCache[string, []byte](),
+		cfg:              &cfg,
 	}
 }
 
@@ -229,7 +229,7 @@ func (s *Server) createClientConn(connection *coapNet.Conn, monitor udpClient.In
 		session,
 		createBlockWise,
 		monitor,
-		s.cache,
+		s.responseMsgCache,
 		&cfg,
 	)
 

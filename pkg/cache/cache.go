@@ -3,55 +3,54 @@ package cache
 import (
 	"time"
 
-	kitSync "github.com/plgd-dev/kit/v2/sync"
+	"github.com/plgd-dev/go-coap/v3/pkg/sync"
 )
 
-func DefaultOnExpire(d interface{}) {
+func DefaultOnExpire[D any](d D) {
 	// for nothing on expire
 }
 
-type Element struct {
+type Element[D any] struct {
 	validUntil time.Time
-	data       interface{}
-	onExpire   func(d interface{})
+	data       D
+	onExpire   func(d D)
 }
 
-func (e *Element) IsExpired(now time.Time) bool {
+func (e *Element[D]) IsExpired(now time.Time) bool {
 	if e.validUntil.IsZero() {
 		return false
 	}
 	return now.After(e.validUntil)
 }
 
-func (e *Element) Data() interface{} {
+func (e *Element[D]) Data() D {
 	return e.data
 }
 
-func NewElement(data interface{}, validUntil time.Time, onExpire func(d interface{})) *Element {
+func NewElement[D any](data D, validUntil time.Time, onExpire func(d D)) *Element[D] {
 	if onExpire == nil {
-		onExpire = DefaultOnExpire
+		onExpire = DefaultOnExpire[D]
 	}
-	return &Element{data: data, validUntil: validUntil, onExpire: onExpire}
+	return &Element[D]{data: data, validUntil: validUntil, onExpire: onExpire}
 }
 
-type Cache struct {
-	data kitSync.Map
+type Cache[K comparable, D any] struct {
+	data *sync.Map[K, *Element[D]]
 }
 
-func NewCache() *Cache {
-	return &Cache{
-		data: *kitSync.NewMap(),
+func NewCache[K comparable, D any]() *Cache[K, D] {
+	return &Cache[K, D]{
+		data: sync.NewMap[K, *Element[D]](),
 	}
 }
 
-func (c *Cache) LoadOrStore(key interface{}, e *Element) (actual *Element, loaded bool) {
+func (c *Cache[K, D]) LoadOrStore(key K, e *Element[D]) (actual *Element[D], loaded bool) {
 	now := time.Now()
-	c.data.ReplaceWithFunc(key, func(oldValue interface{}, oldLoaded bool) (newValue interface{}, deleteValue bool) {
+	c.data.ReplaceWithFunc(key, func(oldValue *Element[D], oldLoaded bool) (newValue *Element[D], deleteValue bool) {
 		if oldLoaded {
-			o := oldValue.(*Element)
-			if !o.IsExpired(now) {
-				actual = o
-				return o, false
+			if !oldValue.IsExpired(now) {
+				actual = oldValue
+				return oldValue, false
 			}
 		}
 		actual = e
@@ -60,29 +59,23 @@ func (c *Cache) LoadOrStore(key interface{}, e *Element) (actual *Element, loade
 	return actual, actual != e
 }
 
-func (c *Cache) Load(key interface{}) (actual *Element) {
-	a, loaded := c.data.Load(key)
+func (c *Cache[K, D]) Load(key K) (actual *Element[D]) {
+	actual, loaded := c.data.Load(key)
 	if !loaded {
 		return nil
 	}
-	actual = a.(*Element)
 	if actual.IsExpired(time.Now()) {
 		return nil
 	}
 	return actual
 }
 
-func (c *Cache) Delete(key interface{}) {
+func (c *Cache[K, D]) Delete(key K) {
 	c.data.Delete(key)
 }
 
-func (c *Cache) CheckExpirations(now time.Time) {
-	m := make(map[interface{}]*Element)
-	c.data.Range(func(key, value interface{}) bool {
-		m[key] = value.(*Element)
-		return true
-	})
-	for k, e := range m {
+func (c *Cache[K, D]) CheckExpirations(now time.Time) {
+	for k, e := range c.data.CopyData() {
 		if e.IsExpired(now) {
 			c.data.Delete(k)
 			e.onExpire(e.data)
@@ -90,10 +83,6 @@ func (c *Cache) CheckExpirations(now time.Time) {
 	}
 }
 
-func (c *Cache) PullOutAll() map[interface{}]interface{} {
-	res := make(map[interface{}]interface{})
-	for key, value := range c.data.PullOutAll() {
-		res[key] = value.(*Element).Data()
-	}
-	return res
+func (c *Cache[K, D]) PullOutAll() map[K]*Element[D] {
+	return c.data.PullOutAll()
 }
