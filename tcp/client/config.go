@@ -16,9 +16,10 @@ import (
 
 var DefaultConfig = func() Config {
 	opts := Config{
-		Common: config.DefaultCommon(func() inactivity.Monitor {
-			return inactivity.NewNilMonitor()
-		}),
+		Common: config.DefaultCommon(),
+		CreateInactivityMonitor: func() InactivityMonitor {
+			return inactivity.NewNilMonitor[*ClientConn]()
+		},
 		Dialer:              &net.Dialer{Timeout: time.Second * 3},
 		Net:                 "tcp",
 		ConnectionCacheSize: 2048,
@@ -36,6 +37,7 @@ var DefaultConfig = func() Config {
 
 type Config struct {
 	config.Common
+	CreateInactivityMonitor         CreateInactivityMonitorFunc
 	Net                             string
 	Dialer                          *net.Dialer
 	TLSCfg                          *tls.Config

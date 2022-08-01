@@ -45,8 +45,8 @@ func New(opt ...ServerOption) *Server {
 	ctx, cancel := context.WithCancel(cfg.Ctx)
 
 	if cfg.CreateInactivityMonitor == nil {
-		cfg.CreateInactivityMonitor = func() inactivity.Monitor {
-			return inactivity.NewNilMonitor()
+		cfg.CreateInactivityMonitor = func() client.InactivityMonitor {
+			return inactivity.NewNilMonitor[*client.ClientConn]()
 		}
 	}
 	if cfg.MessagePool == nil {
@@ -186,7 +186,7 @@ func (s *Server) Stop() {
 	}
 }
 
-func (s *Server) createClientConn(connection *coapNet.Conn, monitor inactivity.Monitor) *client.ClientConn {
+func (s *Server) createClientConn(connection *coapNet.Conn, monitor client.InactivityMonitor) *client.ClientConn {
 	createBlockWise := func(cc *client.ClientConn) *blockwise.BlockWise[*client.ClientConn] {
 		return nil
 	}

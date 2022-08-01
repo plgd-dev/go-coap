@@ -9,7 +9,6 @@ import (
 	"github.com/plgd-dev/go-coap/v2/message/pool"
 	"github.com/plgd-dev/go-coap/v2/net/blockwise"
 	"github.com/plgd-dev/go-coap/v2/net/client"
-	"github.com/plgd-dev/go-coap/v2/net/monitor/inactivity"
 	"github.com/plgd-dev/go-coap/v2/pkg/runner/periodic"
 )
 
@@ -24,14 +23,13 @@ type Common struct {
 	PeriodicRunner           periodic.Func
 	MessagePool              *pool.Pool
 	GetToken                 client.GetTokenFunc
-	CreateInactivityMonitor  func() inactivity.Monitor
 	MaxMessageSize           uint32
 	BlockwiseTransferTimeout time.Duration
 	BlockwiseSZX             blockwise.SZX
 	BlockwiseEnable          bool
 }
 
-var DefaultCommon = func(createInactivityMonitor func() inactivity.Monitor) Common {
+var DefaultCommon = func() Common {
 	return Common{
 		Ctx:            context.Background(),
 		MaxMessageSize: 64 * 1024,
@@ -47,7 +45,6 @@ var DefaultCommon = func(createInactivityMonitor func() inactivity.Monitor) Comm
 		BlockwiseSZX:             blockwise.SZX1024,
 		BlockwiseEnable:          true,
 		BlockwiseTransferTimeout: time.Second * 3,
-		CreateInactivityMonitor:  createInactivityMonitor,
 		PeriodicRunner: func(f func(now time.Time) bool) {
 			go func() {
 				for f(time.Now()) {

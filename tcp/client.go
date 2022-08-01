@@ -52,8 +52,8 @@ func Client(conn net.Conn, opts ...DialOption) *client.ClientConn {
 		}
 	}
 	if cfg.CreateInactivityMonitor == nil {
-		cfg.CreateInactivityMonitor = func() inactivity.Monitor {
-			return inactivity.NewNilMonitor()
+		cfg.CreateInactivityMonitor = func() client.InactivityMonitor {
+			return inactivity.NewNilMonitor[*client.ClientConn]()
 		}
 	}
 	if cfg.MessagePool == nil {
