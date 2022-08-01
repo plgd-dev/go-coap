@@ -8,9 +8,9 @@ require (
 	github.com/plgd-dev/kit/v2 v2.0.0-20211006190727-057b33161b90
 	github.com/stretchr/testify v1.7.1
 	go.uber.org/atomic v1.9.0
-	golang.org/x/exp v0.0.0-20220613132600-b0d781184e0d
-	golang.org/x/net v0.0.0-20220630215102-69896b714898
-	golang.org/x/sync v0.0.0-20220601150217-0de741cfad7f
+	golang.org/x/exp v0.0.0-20220722155223-a9213eeb770e
+	golang.org/x/net v0.0.0-20220728211354-c7608f3a8462
+	golang.org/x/sync v0.0.0-20220722155255-886fb9371eb4
 )
 
 require (
@@ -19,7 +19,7 @@ require (
 	github.com/pion/transport v0.13.1 // indirect
 	github.com/pion/udp v0.1.1 // indirect
 	github.com/pmezard/go-difflib v1.0.0 // indirect
-	golang.org/x/crypto v0.0.0-20220622213112-05595931fe9d // indirect
-	golang.org/x/sys v0.0.0-20220627191245-f75cf1eec38b // indirect
+	golang.org/x/crypto v0.0.0-20220722155217-630584e8d5aa // indirect
+	golang.org/x/sys v0.0.0-20220731174439-a90be440212d // indirect
 	gopkg.in/yaml.v3 v3.0.0-20200313102051-9f266ea9e77c // indirect
 )
