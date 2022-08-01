@@ -466,3 +466,8 @@ func (c *UDPConn) JoinGroup(ifi *net.Interface, group net.Addr) error {
 func (c *UDPConn) LeaveGroup(ifi *net.Interface, group net.Addr) error {
 	return c.packetConn.LeaveGroup(ifi, group)
 }
+
+// NetConn returns the underlying connection that is wrapped by c. The Conn returned is shared by all invocations of NetConn, so do not modify it.
+func (c *UDPConn) NetConn() net.Conn {
+	return c.connection
+}

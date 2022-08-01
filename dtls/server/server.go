@@ -10,7 +10,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/pion/dtls/v2"
 	"github.com/plgd-dev/go-coap/v2/message"
 	"github.com/plgd-dev/go-coap/v2/message/pool"
 	coapNet "github.com/plgd-dev/go-coap/v2/net"
@@ -171,8 +170,7 @@ func (s *Server) Serve(l Listener) error {
 		monitor := s.cfg.CreateInactivityMonitor()
 		cc = s.createClientConn(coapNet.NewConn(rw), monitor)
 		if s.cfg.OnNewClientConn != nil {
-			dtlsConn := rw.(*dtls.Conn)
-			s.cfg.OnNewClientConn(cc, dtlsConn)
+			s.cfg.OnNewClientConn(cc)
 		}
 		go func() {
 			defer wg.Done()

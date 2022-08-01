@@ -39,8 +39,8 @@ func (c *Conn) LocalAddr() net.Addr {
 	return c.connection.LocalAddr()
 }
 
-// Connection returns the network connection. The Conn returned is shared by all invocations of Connection, so do not modify it.
-func (c *Conn) Connection() net.Conn {
+// NetConn returns the underlying connection that is wrapped by c. The Conn returned is shared by all invocations of Connection, so do not modify it.
+func (c *Conn) NetConn() net.Conn {
 	return c.connection
 }
 

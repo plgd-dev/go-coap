@@ -12,12 +12,17 @@ import (
 	"github.com/plgd-dev/go-coap/v2/net/blockwise"
 	"github.com/plgd-dev/go-coap/v2/net/client"
 	"github.com/plgd-dev/go-coap/v2/net/monitor/inactivity"
+	"github.com/plgd-dev/go-coap/v2/options/config"
 	"github.com/plgd-dev/go-coap/v2/pkg/runner/periodic"
 	tcpClient "github.com/plgd-dev/go-coap/v2/tcp/client"
 	tcpServer "github.com/plgd-dev/go-coap/v2/tcp/server"
 	udpClient "github.com/plgd-dev/go-coap/v2/udp/client"
 	udpServer "github.com/plgd-dev/go-coap/v2/udp/server"
 )
+
+type ErrorFunc = config.ErrorFunc
+
+type GoPoolFunc = config.GoPoolFunc
 
 type Handler interface {
 	tcpClient.HandlerFunc | udpClient.HandlerFunc
@@ -78,7 +83,7 @@ func (o HandlerFuncOpt[H]) UDPClientApply(cfg *udpClient.Config) {
 		cfg.Handler = v
 	default:
 		var t udpClient.HandlerFunc
-		panic(fmt.Errorf("invalid HandlerFunc type %T, expected %T", v, t))
+		panicForInvalidHandlerFunc(v, t)
 	}
 }
 
@@ -441,7 +446,7 @@ func WithBlockwise(enable bool, szx blockwise.SZX, transferTimeout time.Duration
 }
 
 type OnNewClientConnFunc interface {
-	tcpServer.OnNewClientConnFunc | udpServer.OnNewClientConnFunc | dtlsServer.OnNewClientConnFunc
+	tcpServer.OnNewClientConnFunc | udpServer.OnNewClientConnFunc
 }
 
 // OnNewClientConnOpt network option.
@@ -465,10 +470,10 @@ func (o OnNewClientConnOpt[F]) UDPServerApply(cfg *udpServer.Config) {
 
 func (o OnNewClientConnOpt[F]) DTLSServerApply(cfg *dtlsServer.Config) {
 	switch v := any(o.f).(type) {
-	case dtlsServer.OnNewClientConnFunc:
+	case udpServer.OnNewClientConnFunc:
 		cfg.OnNewClientConn = v
 	default:
-		var exp dtlsServer.OnNewClientConnFunc
+		var exp udpServer.OnNewClientConnFunc
 		panicForInvalidOnNewClientConnFunc(v, exp)
 	}
 }

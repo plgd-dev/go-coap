@@ -398,3 +398,8 @@ func (s *Session) RemoteAddr() net.Addr {
 func (s *Session) LocalAddr() net.Addr {
 	return s.connection.LocalAddr()
 }
+
+// NetConn returns the underlying connection that is wrapped by s. The Conn returned is shared by all invocations of NetConn, so do not modify it.
+func (s *Session) NetConn() net.Conn {
+	return s.connection.NetConn()
+}

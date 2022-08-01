@@ -2,7 +2,6 @@ package server
 
 import (
 	"context"
-	"crypto/tls"
 	"errors"
 	"fmt"
 	"io"
@@ -125,11 +124,7 @@ func (s *Server) serveConnection(connections *connections.Connections, rw net.Co
 	monitor := s.cfg.CreateInactivityMonitor()
 	cc = s.createClientConn(coapNet.NewConn(rw), monitor)
 	if s.cfg.OnNewClientConn != nil {
-		if tlscon, ok := rw.(*tls.Conn); ok {
-			s.cfg.OnNewClientConn(cc, tlscon)
-		} else {
-			s.cfg.OnNewClientConn(cc, nil)
-		}
+		s.cfg.OnNewClientConn(cc)
 	}
 	connections.Store(cc)
 	defer connections.Delete(cc)

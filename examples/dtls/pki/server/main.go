@@ -21,7 +21,11 @@ import (
 	"github.com/plgd-dev/go-coap/v2/udp/client"
 )
 
-func onNewClientConn(cc *client.ClientConn, dtlsConn *piondtls.Conn) {
+func onNewClientConn(cc *client.ClientConn) {
+	dtlsConn, ok := cc.NetConn().(*piondtls.Conn)
+	if !ok {
+		log.Fatalf("invalid type %T", cc.NetConn())
+	}
 	clientCert, err := x509.ParseCertificate(dtlsConn.ConnectionState().PeerCertificates[0])
 	if err != nil {
 		log.Fatal(err)

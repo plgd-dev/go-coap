@@ -44,8 +44,9 @@ func TestServerCleanUpConns(t *testing.T) {
 		require.NoError(t, errA)
 	}()
 
-	sd := tcp.NewServer(options.WithOnNewClientConn(func(cc *client.ClientConn, tlsconn *tls.Conn) {
-		require.Nil(t, tlsconn) // tcp without tls
+	sd := tcp.NewServer(options.WithOnNewClientConn(func(cc *client.ClientConn) {
+		_, ok := cc.NetConn().(*tls.Conn)
+		require.False(t, ok) // tcp without tls
 		cc.AddOnClose(func() {
 			checkClose.Release(1)
 		})
@@ -140,8 +141,10 @@ func TestServerSetContextValueWithPKI(t *testing.T) {
 		require.NoError(t, errC)
 	}()
 
-	onNewConn := func(cc *client.ClientConn, tlscon *tls.Conn) {
-		require.NotNil(t, tlscon)
+	onNewConn := func(cc *client.ClientConn) {
+		require.NotNil(t, cc)
+		tlscon, ok := cc.NetConn().(*tls.Conn)
+		require.True(t, ok)
 		// set connection context certificate
 		clientCert := tlscon.ConnectionState().PeerCertificates[0]
 		cc.SetContextValue("client-cert", clientCert)
@@ -192,7 +195,7 @@ func TestServerInactiveMonitor(t *testing.T) {
 	require.NoError(t, err)
 
 	sd := tcp.NewServer(
-		options.WithOnNewClientConn(func(cc *client.ClientConn, tlscon *tls.Conn) {
+		options.WithOnNewClientConn(func(cc *client.ClientConn) {
 			cc.AddOnClose(func() {
 				checkClose.Release(1)
 			})
@@ -263,7 +266,7 @@ func TestServerKeepAliveMonitor(t *testing.T) {
 	err = checkClose.Acquire(ctx, 2)
 	require.NoError(t, err)
 	sd := tcp.NewServer(
-		options.WithOnNewClientConn(func(cc *client.ClientConn, tlscon *tls.Conn) {
+		options.WithOnNewClientConn(func(cc *client.ClientConn) {
 			cc.AddOnClose(func() {
 				checkClose.Release(1)
 			})
