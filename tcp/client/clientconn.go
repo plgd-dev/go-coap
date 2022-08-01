@@ -13,18 +13,23 @@ import (
 	coapNet "github.com/plgd-dev/go-coap/v2/net"
 	"github.com/plgd-dev/go-coap/v2/net/blockwise"
 	"github.com/plgd-dev/go-coap/v2/net/client"
-	"github.com/plgd-dev/go-coap/v2/net/monitor/inactivity"
 	"github.com/plgd-dev/go-coap/v2/net/observation"
 	"github.com/plgd-dev/go-coap/v2/net/responsewriter"
 	coapErrors "github.com/plgd-dev/go-coap/v2/pkg/errors"
 )
 
+type InactivityMonitor interface {
+	Notify()
+	CheckInactivity(now time.Time, cc *ClientConn)
+}
+
 type (
-	HandlerFunc = func(*responsewriter.ResponseWriter[*ClientConn], *pool.Message)
-	ErrorFunc   = func(error)
-	GoPoolFunc  = func(func()) error
-	EventFunc   = func()
-	GetMIDFunc  = func() int32
+	HandlerFunc                 = func(*responsewriter.ResponseWriter[*ClientConn], *pool.Message)
+	ErrorFunc                   = func(error)
+	GoPoolFunc                  = func(func()) error
+	EventFunc                   = func()
+	GetMIDFunc                  = func() int32
+	CreateInactivityMonitorFunc = func() InactivityMonitor
 )
 
 type Notifier interface {
@@ -41,7 +46,7 @@ type ClientConn struct {
 func NewClientConn(
 	connection *coapNet.Conn,
 	createBlockWise func(cc *ClientConn) *blockwise.BlockWise[*ClientConn],
-	inactivityMonitor inactivity.Monitor,
+	inactivityMonitor InactivityMonitor,
 	cfg *Config,
 ) *ClientConn {
 	if cfg.GetToken == nil {

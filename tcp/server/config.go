@@ -10,6 +10,7 @@ import (
 	"github.com/plgd-dev/go-coap/v2/net/monitor/inactivity"
 	"github.com/plgd-dev/go-coap/v2/net/responsewriter"
 	"github.com/plgd-dev/go-coap/v2/options/config"
+	"github.com/plgd-dev/go-coap/v2/tcp/client"
 	tcpClient "github.com/plgd-dev/go-coap/v2/tcp/client"
 )
 
@@ -31,17 +32,18 @@ type OnNewClientConnFunc = func(cc *tcpClient.ClientConn)
 
 var DefaultConfig = func() Config {
 	opts := Config{
-		Common: config.DefaultCommon(func() inactivity.Monitor {
+		Common: config.DefaultCommon(),
+		CreateInactivityMonitor: func() client.InactivityMonitor {
 			maxRetries := uint32(2)
 			timeout := time.Second * 16
-			onInactive := func(cc inactivity.ClientConn) {
+			onInactive := func(cc *client.ClientConn) {
 				_ = cc.Close()
 			}
-			keepalive := inactivity.NewKeepAlive(maxRetries, onInactive, func(cc inactivity.ClientConn, receivePong func()) (func(), error) {
-				return cc.(*tcpClient.ClientConn).AsyncPing(receivePong)
+			keepalive := inactivity.NewKeepAlive(maxRetries, onInactive, func(cc *client.ClientConn, receivePong func()) (func(), error) {
+				return cc.AsyncPing(receivePong)
 			})
 			return inactivity.NewInactivityMonitor(timeout/time.Duration(maxRetries+1), keepalive.OnInactive)
-		}),
+		},
 		OnNewClientConn: func(cc *tcpClient.ClientConn) {
 			// do nothing by default
 		},
@@ -57,6 +59,7 @@ var DefaultConfig = func() Config {
 
 type Config struct {
 	config.Common
+	CreateInactivityMonitor         client.CreateInactivityMonitorFunc
 	Handler                         HandlerFunc
 	OnNewClientConn                 OnNewClientConnFunc
 	ConnectionCacheSize             uint16

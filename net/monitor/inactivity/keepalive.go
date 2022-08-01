@@ -8,26 +8,26 @@ import (
 
 type cancelPingFunc func()
 
-type KeepAlive struct {
+type KeepAlive[C ClientConn] struct {
 	pongToken  atomic.Uint64
-	onInactive OnInactiveFunc
+	onInactive OnInactiveFunc[C]
 
-	sendPing   func(cc ClientConn, receivePong func()) (func(), error)
+	sendPing   func(cc C, receivePong func()) (func(), error)
 	cancelPing atomic.UnsafePointer
 	numFails   atomic.Uint32
 
 	maxRetries uint32
 }
 
-func NewKeepAlive(maxRetries uint32, onInactive OnInactiveFunc, sendPing func(cc ClientConn, receivePong func()) (func(), error)) *KeepAlive {
-	return &KeepAlive{
+func NewKeepAlive[C ClientConn](maxRetries uint32, onInactive OnInactiveFunc[C], sendPing func(cc C, receivePong func()) (func(), error)) *KeepAlive[C] {
+	return &KeepAlive[C]{
 		maxRetries: maxRetries,
 		sendPing:   sendPing,
 		onInactive: onInactive,
 	}
 }
 
-func (m *KeepAlive) checkCancelPing() {
+func (m *KeepAlive[C]) checkCancelPing() {
 	cancelPingPtr := m.cancelPing.Swap(nil)
 	if cancelPingPtr != nil {
 		cancelPing := *(*cancelPingFunc)(cancelPingPtr)
@@ -35,7 +35,7 @@ func (m *KeepAlive) checkCancelPing() {
 	}
 }
 
-func (m *KeepAlive) OnInactive(cc ClientConn) {
+func (m *KeepAlive[C]) OnInactive(cc C) {
 	v := m.incrementFails()
 	m.checkCancelPing()
 	if v > m.maxRetries {
@@ -54,10 +54,10 @@ func (m *KeepAlive) OnInactive(cc ClientConn) {
 	m.cancelPing.Store(unsafe.Pointer(&cancel))
 }
 
-func (m *KeepAlive) incrementFails() uint32 {
+func (m *KeepAlive[C]) incrementFails() uint32 {
 	return m.numFails.Add(1)
 }
 
-func (m *KeepAlive) resetFails() {
+func (m *KeepAlive[C]) resetFails() {
 	m.numFails.Store(0)
 }

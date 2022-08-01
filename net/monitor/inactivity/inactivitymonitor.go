@@ -6,29 +6,24 @@ import (
 	"time"
 )
 
-type Monitor = interface {
-	CheckInactivity(now time.Time, cc ClientConn)
-	Notify()
-}
-
-type OnInactiveFunc = func(cc ClientConn)
+type OnInactiveFunc[C ClientConn] func(cc C)
 
 type ClientConn = interface {
 	Context() context.Context
 	Close() error
 }
 
-type inactivityMonitor struct {
+type InactivityMonitor[C ClientConn] struct {
 	lastActivity atomic.Value
 	duration     time.Duration
-	onInactive   OnInactiveFunc
+	onInactive   OnInactiveFunc[C]
 }
 
-func (m *inactivityMonitor) Notify() {
+func (m *InactivityMonitor[C]) Notify() {
 	m.lastActivity.Store(time.Now())
 }
 
-func (m *inactivityMonitor) LastActivity() time.Time {
+func (m *InactivityMonitor[C]) LastActivity() time.Time {
 	if t, ok := m.lastActivity.Load().(time.Time); ok {
 		return t
 	}
@@ -40,8 +35,8 @@ func CloseClientConn(cc ClientConn) {
 	_ = cc.Close()
 }
 
-func NewInactivityMonitor(duration time.Duration, onInactive OnInactiveFunc) Monitor {
-	m := &inactivityMonitor{
+func NewInactivityMonitor[C ClientConn](duration time.Duration, onInactive OnInactiveFunc[C]) *InactivityMonitor[C] {
+	m := &InactivityMonitor[C]{
 		duration:   duration,
 		onInactive: onInactive,
 	}
@@ -49,7 +44,7 @@ func NewInactivityMonitor(duration time.Duration, onInactive OnInactiveFunc) Mon
 	return m
 }
 
-func (m *inactivityMonitor) CheckInactivity(now time.Time, cc ClientConn) {
+func (m *InactivityMonitor[C]) CheckInactivity(now time.Time, cc C) {
 	if m.onInactive == nil || m.duration == time.Duration(0) {
 		return
 	}
@@ -58,14 +53,14 @@ func (m *inactivityMonitor) CheckInactivity(now time.Time, cc ClientConn) {
 	}
 }
 
-type nilMonitor struct{}
+type NilMonitor[C ClientConn] struct{}
 
-func (m *nilMonitor) CheckInactivity(now time.Time, cc ClientConn) {
+func (m *NilMonitor[C]) CheckInactivity(now time.Time, cc C) {
 }
 
-func (m *nilMonitor) Notify() {
+func (m *NilMonitor[C]) Notify() {
 }
 
-func NewNilMonitor() Monitor {
-	return &nilMonitor{}
+func NewNilMonitor[C ClientConn]() *NilMonitor[C] {
+	return &NilMonitor[C]{}
 }

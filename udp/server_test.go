@@ -12,7 +12,6 @@ import (
 	"github.com/plgd-dev/go-coap/v2/message/codes"
 	"github.com/plgd-dev/go-coap/v2/message/pool"
 	coapNet "github.com/plgd-dev/go-coap/v2/net"
-	"github.com/plgd-dev/go-coap/v2/net/monitor/inactivity"
 	"github.com/plgd-dev/go-coap/v2/net/responsewriter"
 	"github.com/plgd-dev/go-coap/v2/options"
 	"github.com/plgd-dev/go-coap/v2/pkg/runner/periodic"
@@ -266,7 +265,7 @@ func TestServerInactiveMonitor(t *testing.T) {
 				checkClose.Release(1)
 			})
 		}),
-		options.WithInactivityMonitor(100*time.Millisecond, func(cc inactivity.ClientConn) {
+		options.WithInactivityMonitor(100*time.Millisecond, func(cc *client.ClientConn) {
 			require.False(t, inactivityDetected)
 			inactivityDetected = true
 			errC := cc.Close()
@@ -338,7 +337,7 @@ func TestServerKeepAliveMonitor(t *testing.T) {
 				checkClose.Release(1)
 			})
 		}),
-		options.WithKeepAlive(3, 100*time.Millisecond, func(cc inactivity.ClientConn) {
+		options.WithKeepAlive(3, 100*time.Millisecond, func(cc *client.ClientConn) {
 			require.False(t, inactivityDetected)
 			inactivityDetected = true
 			errC := cc.Close()
@@ -361,7 +360,7 @@ func TestServerKeepAliveMonitor(t *testing.T) {
 
 	cc, err := udp.Dial(
 		ld.LocalAddr().String(),
-		options.WithInactivityMonitor(time.Millisecond*10, func(cc inactivity.ClientConn) {
+		options.WithInactivityMonitor(time.Millisecond*10, func(cc *client.ClientConn) {
 			time.Sleep(time.Millisecond * 500)
 			errC := cc.Close()
 			require.NoError(t, errC)

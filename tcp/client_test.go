@@ -13,7 +13,6 @@ import (
 	"github.com/plgd-dev/go-coap/v2/message/codes"
 	"github.com/plgd-dev/go-coap/v2/mux"
 	coapNet "github.com/plgd-dev/go-coap/v2/net"
-	"github.com/plgd-dev/go-coap/v2/net/monitor/inactivity"
 	"github.com/plgd-dev/go-coap/v2/options"
 	"github.com/plgd-dev/go-coap/v2/pkg/runner/periodic"
 	"github.com/plgd-dev/go-coap/v2/tcp/client"
@@ -565,7 +564,7 @@ func TestClientInactiveMonitor(t *testing.T) {
 
 	cc, err := Dial(
 		ld.Addr().String(),
-		options.WithInactivityMonitor(100*time.Millisecond, func(cc inactivity.ClientConn) {
+		options.WithInactivityMonitor(100*time.Millisecond, func(cc *client.ClientConn) {
 			require.False(t, inactivityDetected)
 			inactivityDetected = true
 			errC := cc.Close()
@@ -639,7 +638,7 @@ func TestClientKeepAliveMonitor(t *testing.T) {
 
 	cc, err := Dial(
 		ld.Addr().String(),
-		options.WithKeepAlive(3, 100*time.Millisecond, func(cc inactivity.ClientConn) {
+		options.WithKeepAlive(3, 100*time.Millisecond, func(cc *client.ClientConn) {
 			require.False(t, inactivityDetected)
 			inactivityDetected = true
 			errC := cc.Close()

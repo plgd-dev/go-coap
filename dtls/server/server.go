@@ -61,8 +61,8 @@ func New(opt ...Option) *Server {
 	}
 
 	if cfg.CreateInactivityMonitor == nil {
-		cfg.CreateInactivityMonitor = func() inactivity.Monitor {
-			return inactivity.NewNilMonitor()
+		cfg.CreateInactivityMonitor = func() udpClient.InactivityMonitor {
+			return inactivity.NewNilMonitor[*udpClient.ClientConn]()
 		}
 	}
 	if cfg.MessagePool == nil {
@@ -191,7 +191,7 @@ func (s *Server) Stop() {
 	}
 }
 
-func (s *Server) createClientConn(connection *coapNet.Conn, monitor inactivity.Monitor) *udpClient.ClientConn {
+func (s *Server) createClientConn(connection *coapNet.Conn, monitor udpClient.InactivityMonitor) *udpClient.ClientConn {
 	createBlockWise := func(cc *udpClient.ClientConn) *blockwise.BlockWise[*udpClient.ClientConn] {
 		return nil
 	}

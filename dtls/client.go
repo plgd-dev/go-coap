@@ -64,8 +64,8 @@ func Client(conn *dtls.Conn, opts ...udp.DialOption) *udpClient.ClientConn {
 		}
 	}
 	if cfg.CreateInactivityMonitor == nil {
-		cfg.CreateInactivityMonitor = func() inactivity.Monitor {
-			return inactivity.NewNilMonitor()
+		cfg.CreateInactivityMonitor = func() udpClient.InactivityMonitor {
+			return inactivity.NewNilMonitor[*udpClient.ClientConn]()
 		}
 	}
 	if cfg.MessagePool == nil {

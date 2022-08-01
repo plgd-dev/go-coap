@@ -18,11 +18,11 @@ import (
 	"github.com/plgd-dev/go-coap/v2/message/codes"
 	"github.com/plgd-dev/go-coap/v2/message/pool"
 	coapNet "github.com/plgd-dev/go-coap/v2/net"
-	"github.com/plgd-dev/go-coap/v2/net/monitor/inactivity"
 	"github.com/plgd-dev/go-coap/v2/net/responsewriter"
 	"github.com/plgd-dev/go-coap/v2/options"
 	"github.com/plgd-dev/go-coap/v2/pkg/runner/periodic"
 	"github.com/plgd-dev/go-coap/v2/udp/client"
+	udpClient "github.com/plgd-dev/go-coap/v2/udp/client"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/sync/semaphore"
 )
@@ -208,7 +208,7 @@ func TestServerInactiveMonitor(t *testing.T) {
 				checkClose.Release(1)
 			})
 		}),
-		options.WithInactivityMonitor(100*time.Millisecond, func(cc inactivity.ClientConn) {
+		options.WithInactivityMonitor(100*time.Millisecond, func(cc *udpClient.ClientConn) {
 			require.False(t, inactivityDetected)
 			inactivityDetected = true
 			errC := cc.Close()
@@ -280,7 +280,7 @@ func TestServerKeepAliveMonitor(t *testing.T) {
 				checkClose.Release(1)
 			})
 		}),
-		options.WithKeepAlive(3, 100*time.Millisecond, func(cc inactivity.ClientConn) {
+		options.WithKeepAlive(3, 100*time.Millisecond, func(cc *udpClient.ClientConn) {
 			require.False(t, inactivityDetected)
 			inactivityDetected = true
 			errC := cc.Close()

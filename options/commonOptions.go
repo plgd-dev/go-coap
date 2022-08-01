@@ -246,61 +246,95 @@ func WithGoPool(goPool GoPoolFunc) GoPoolOpt {
 	return GoPoolOpt{goPool: goPool}
 }
 
+type UDPOnInactive = func(cc *udpClient.ClientConn)
+type TCPOnInactive = func(cc *tcpClient.ClientConn)
+
+type OnInactiveFunc interface {
+	UDPOnInactive | TCPOnInactive
+}
+
+func panicForInvalidOnInactiveFunc(t, exp any) {
+	panic(fmt.Errorf("invalid OnInactiveFunc type %T, expected %T", t, exp))
+}
+
 // KeepAliveOpt keepalive option.
-type KeepAliveOpt struct {
+type KeepAliveOpt[C OnInactiveFunc] struct {
 	timeout    time.Duration
-	onInactive inactivity.OnInactiveFunc
+	onInactive C
 	maxRetries uint32
 }
 
-func (o KeepAliveOpt) TCPServerApply(cfg *tcpServer.Config) {
-	cfg.CreateInactivityMonitor = func() inactivity.Monitor {
-		keepalive := inactivity.NewKeepAlive(o.maxRetries, o.onInactive, func(cc inactivity.ClientConn, receivePong func()) (func(), error) {
-			return cc.(*tcpClient.ClientConn).AsyncPing(receivePong)
+func (o KeepAliveOpt[C]) toTCPCreateInactivityMonitor(onInactive TCPOnInactive) func() tcpClient.InactivityMonitor {
+	return func() tcpClient.InactivityMonitor {
+		keepalive := inactivity.NewKeepAlive(o.maxRetries, onInactive, func(cc *tcpClient.ClientConn, receivePong func()) (func(), error) {
+			return cc.AsyncPing(receivePong)
 		})
 		return inactivity.NewInactivityMonitor(o.timeout/time.Duration(o.maxRetries+1), keepalive.OnInactive)
 	}
 }
 
-func (o KeepAliveOpt) TCPClientApply(cfg *tcpClient.Config) {
-	cfg.CreateInactivityMonitor = func() inactivity.Monitor {
-		keepalive := inactivity.NewKeepAlive(o.maxRetries, o.onInactive, func(cc inactivity.ClientConn, receivePong func()) (func(), error) {
-			return cc.(*tcpClient.ClientConn).AsyncPing(receivePong)
+func (o KeepAliveOpt[C]) toUDPCreateInactivityMonitor(onInactive UDPOnInactive) func() udpClient.InactivityMonitor {
+	return func() udpClient.InactivityMonitor {
+		keepalive := inactivity.NewKeepAlive(o.maxRetries, onInactive, func(cc *udpClient.ClientConn, receivePong func()) (func(), error) {
+			return cc.AsyncPing(receivePong)
 		})
 		return inactivity.NewInactivityMonitor(o.timeout/time.Duration(o.maxRetries+1), keepalive.OnInactive)
 	}
 }
 
-func (o KeepAliveOpt) UDPServerApply(cfg *udpServer.Config) {
-	cfg.CreateInactivityMonitor = func() inactivity.Monitor {
-		keepalive := inactivity.NewKeepAlive(o.maxRetries, o.onInactive, func(cc inactivity.ClientConn, receivePong func()) (func(), error) {
-			return cc.(*udpClient.ClientConn).AsyncPing(receivePong)
-		})
-		return inactivity.NewInactivityMonitor(o.timeout/time.Duration(o.maxRetries+1), keepalive.OnInactive)
+func (o KeepAliveOpt[C]) TCPServerApply(cfg *tcpServer.Config) {
+	switch onInactive := any(o.onInactive).(type) {
+	case TCPOnInactive:
+		cfg.CreateInactivityMonitor = o.toTCPCreateInactivityMonitor(onInactive)
+	default:
+		var t TCPOnInactive
+		panicForInvalidOnInactiveFunc(onInactive, t)
 	}
 }
 
-func (o KeepAliveOpt) DTLSServerApply(cfg *dtlsServer.Config) {
-	cfg.CreateInactivityMonitor = func() inactivity.Monitor {
-		keepalive := inactivity.NewKeepAlive(o.maxRetries, o.onInactive, func(cc inactivity.ClientConn, receivePong func()) (func(), error) {
-			return cc.(*udpClient.ClientConn).AsyncPing(receivePong)
-		})
-		return inactivity.NewInactivityMonitor(o.timeout/time.Duration(o.maxRetries+1), keepalive.OnInactive)
+func (o KeepAliveOpt[C]) TCPClientApply(cfg *tcpClient.Config) {
+	switch onInactive := any(o.onInactive).(type) {
+	case TCPOnInactive:
+		cfg.CreateInactivityMonitor = o.toTCPCreateInactivityMonitor(onInactive)
+	default:
+		var t TCPOnInactive
+		panicForInvalidOnInactiveFunc(onInactive, t)
 	}
 }
 
-func (o KeepAliveOpt) UDPClientApply(cfg *udpClient.Config) {
-	cfg.CreateInactivityMonitor = func() inactivity.Monitor {
-		keepalive := inactivity.NewKeepAlive(o.maxRetries, o.onInactive, func(cc inactivity.ClientConn, receivePong func()) (func(), error) {
-			return cc.(*udpClient.ClientConn).AsyncPing(receivePong)
-		})
-		return inactivity.NewInactivityMonitor(o.timeout/time.Duration(o.maxRetries+1), keepalive.OnInactive)
+func (o KeepAliveOpt[C]) UDPServerApply(cfg *udpServer.Config) {
+	switch onInactive := any(o.onInactive).(type) {
+	case UDPOnInactive:
+		cfg.CreateInactivityMonitor = o.toUDPCreateInactivityMonitor(onInactive)
+	default:
+		var t UDPOnInactive
+		panicForInvalidOnInactiveFunc(onInactive, t)
+	}
+}
+
+func (o KeepAliveOpt[C]) DTLSServerApply(cfg *dtlsServer.Config) {
+	switch onInactive := any(o.onInactive).(type) {
+	case UDPOnInactive:
+		cfg.CreateInactivityMonitor = o.toUDPCreateInactivityMonitor(onInactive)
+	default:
+		var t UDPOnInactive
+		panicForInvalidOnInactiveFunc(onInactive, t)
+	}
+}
+
+func (o KeepAliveOpt[C]) UDPClientApply(cfg *udpClient.Config) {
+	switch onInactive := any(o.onInactive).(type) {
+	case UDPOnInactive:
+		cfg.CreateInactivityMonitor = o.toUDPCreateInactivityMonitor(onInactive)
+	default:
+		var t UDPOnInactive
+		panicForInvalidOnInactiveFunc(onInactive, t)
 	}
 }
 
 // WithKeepAlive monitoring's client connection's.
-func WithKeepAlive(maxRetries uint32, timeout time.Duration, onInactive inactivity.OnInactiveFunc) KeepAliveOpt {
-	return KeepAliveOpt{
+func WithKeepAlive[C OnInactiveFunc](maxRetries uint32, timeout time.Duration, onInactive C) KeepAliveOpt[C] {
+	return KeepAliveOpt[C]{
 		maxRetries: maxRetries,
 		timeout:    timeout,
 		onInactive: onInactive,
@@ -308,44 +342,76 @@ func WithKeepAlive(maxRetries uint32, timeout time.Duration, onInactive inactivi
 }
 
 // InactivityMonitorOpt notifies when a connection was inactive for a given duration.
-type InactivityMonitorOpt struct {
+type InactivityMonitorOpt[C OnInactiveFunc] struct {
 	duration   time.Duration
-	onInactive inactivity.OnInactiveFunc
+	onInactive C
 }
 
-func (o InactivityMonitorOpt) TCPServerApply(cfg *tcpServer.Config) {
-	cfg.CreateInactivityMonitor = func() inactivity.Monitor {
-		return inactivity.NewInactivityMonitor(o.duration, o.onInactive)
+func (o InactivityMonitorOpt[C]) toTCPCreateInactivityMonitor(onInactive TCPOnInactive) func() tcpClient.InactivityMonitor {
+	return func() tcpClient.InactivityMonitor {
+		return inactivity.NewInactivityMonitor(o.duration, onInactive)
 	}
 }
 
-func (o InactivityMonitorOpt) TCPClientApply(cfg *tcpClient.Config) {
-	cfg.CreateInactivityMonitor = func() inactivity.Monitor {
-		return inactivity.NewInactivityMonitor(o.duration, o.onInactive)
+func (o InactivityMonitorOpt[C]) toUDPCreateInactivityMonitor(onInactive UDPOnInactive) func() udpClient.InactivityMonitor {
+	return func() udpClient.InactivityMonitor {
+		return inactivity.NewInactivityMonitor(o.duration, onInactive)
 	}
 }
 
-func (o InactivityMonitorOpt) UDPServerApply(cfg *udpServer.Config) {
-	cfg.CreateInactivityMonitor = func() inactivity.Monitor {
-		return inactivity.NewInactivityMonitor(o.duration, o.onInactive)
+func (o InactivityMonitorOpt[C]) TCPServerApply(cfg *tcpServer.Config) {
+	switch onInactive := any(o.onInactive).(type) {
+	case TCPOnInactive:
+		cfg.CreateInactivityMonitor = o.toTCPCreateInactivityMonitor(onInactive)
+	default:
+		var t TCPOnInactive
+		panicForInvalidOnInactiveFunc(onInactive, t)
 	}
 }
 
-func (o InactivityMonitorOpt) DTLSServerApply(cfg *dtlsServer.Config) {
-	cfg.CreateInactivityMonitor = func() inactivity.Monitor {
-		return inactivity.NewInactivityMonitor(o.duration, o.onInactive)
+func (o InactivityMonitorOpt[C]) TCPClientApply(cfg *tcpClient.Config) {
+	switch onInactive := any(o.onInactive).(type) {
+	case TCPOnInactive:
+		cfg.CreateInactivityMonitor = o.toTCPCreateInactivityMonitor(onInactive)
+	default:
+		var t TCPOnInactive
+		panicForInvalidOnInactiveFunc(onInactive, t)
 	}
 }
 
-func (o InactivityMonitorOpt) UDPClientApply(cfg *udpClient.Config) {
-	cfg.CreateInactivityMonitor = func() inactivity.Monitor {
-		return inactivity.NewInactivityMonitor(o.duration, o.onInactive)
+func (o InactivityMonitorOpt[C]) UDPServerApply(cfg *udpServer.Config) {
+	switch onInactive := any(o.onInactive).(type) {
+	case UDPOnInactive:
+		cfg.CreateInactivityMonitor = o.toUDPCreateInactivityMonitor(onInactive)
+	default:
+		var t UDPOnInactive
+		panicForInvalidOnInactiveFunc(onInactive, t)
+	}
+}
+
+func (o InactivityMonitorOpt[C]) DTLSServerApply(cfg *dtlsServer.Config) {
+	switch onInactive := any(o.onInactive).(type) {
+	case UDPOnInactive:
+		cfg.CreateInactivityMonitor = o.toUDPCreateInactivityMonitor(onInactive)
+	default:
+		var t UDPOnInactive
+		panicForInvalidOnInactiveFunc(onInactive, t)
+	}
+}
+
+func (o InactivityMonitorOpt[C]) UDPClientApply(cfg *udpClient.Config) {
+	switch onInactive := any(o.onInactive).(type) {
+	case UDPOnInactive:
+		cfg.CreateInactivityMonitor = o.toUDPCreateInactivityMonitor(onInactive)
+	default:
+		var t UDPOnInactive
+		panicForInvalidOnInactiveFunc(onInactive, t)
 	}
 }
 
 // WithInactivityMonitor set deadline's for read operations over client connection.
-func WithInactivityMonitor(duration time.Duration, onInactive inactivity.OnInactiveFunc) InactivityMonitorOpt {
-	return InactivityMonitorOpt{
+func WithInactivityMonitor[C OnInactiveFunc](duration time.Duration, onInactive C) InactivityMonitorOpt[C] {
+	return InactivityMonitorOpt[C]{
 		duration:   duration,
 		onInactive: onInactive,
 	}
