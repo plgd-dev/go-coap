@@ -105,7 +105,7 @@ func Client(conn *dtls.Conn, opts ...udp.DialOption) *udpClient.ClientConn {
 	cc := udpClient.NewClientConn(session,
 		createBlockWise,
 		monitor,
-		cache.NewCache(),
+		cache.NewCache[string, []byte](),
 		&cfg,
 	)
 

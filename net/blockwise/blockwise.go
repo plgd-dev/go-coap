@@ -135,8 +135,8 @@ type Client interface {
 
 type BlockWise[C Client] struct {
 	cc                        C
-	receivingMessagesCache    *cache.Cache
-	sendingMessagesCache      *cache.Cache
+	receivingMessagesCache    *cache.Cache[uint64, *messageGuard]
+	sendingMessagesCache      *cache.Cache[uint64, *messageGuard]
 	errors                    func(error)
 	getSentRequestFromOutside func(token message.Token) (*pool.Message, bool)
 	expiration                time.Duration
@@ -171,8 +171,8 @@ func New[C Client](
 	}
 	return &BlockWise[C]{
 		cc:                        cc,
-		receivingMessagesCache:    cache.NewCache(),
-		sendingMessagesCache:      cache.NewCache(),
+		receivingMessagesCache:    cache.NewCache[uint64, *messageGuard](),
+		sendingMessagesCache:      cache.NewCache[uint64, *messageGuard](),
 		errors:                    errors,
 		autoCleanUpResponseCache:  autoCleanUpResponseCache,
 		getSentRequestFromOutside: getSentRequestFromOutside,
@@ -456,7 +456,7 @@ func (b *BlockWise[C]) Handle(w *responsewriter.ResponseWriter[C], r *pool.Messa
 		}
 		return
 	}
-	more, err := b.continueSendingMessage(w, r, maxSZX, maxMessageSize, sendingMessageCached.Data().(*messageGuard))
+	more, err := b.continueSendingMessage(w, r, maxSZX, maxMessageSize, sendingMessageCached.Data())
 	if err != nil {
 		b.sendingMessagesCache.Delete(tokenStr)
 		b.errors(fmt.Errorf("continueSendingMessage(%v): %w", r, err))
@@ -737,7 +737,7 @@ func (b *BlockWise[C]) processReceivedMessage(w *responsewriter.ResponseWriter[C
 	}
 
 	tokenStr := token.Hash()
-	var cachedReceivedMessageGuard interface{}
+	var cachedReceivedMessageGuard *messageGuard
 	e := b.receivingMessagesCache.Load(tokenStr)
 	if e != nil {
 		cachedReceivedMessageGuard = e.Data()
@@ -765,7 +765,7 @@ func (b *BlockWise[C]) processReceivedMessage(w *responsewriter.ResponseWriter[C
 			return cannotLockError(errA)
 		}
 		defer msgGuard.Release(1)
-		element, loaded := b.receivingMessagesCache.LoadOrStore(tokenStr, cache.NewElement(msgGuard, validUntil, func(d interface{}) {
+		element, loaded := b.receivingMessagesCache.LoadOrStore(tokenStr, cache.NewElement(msgGuard, validUntil, func(d *messageGuard) {
 			if d == nil {
 				return
 			}
@@ -773,10 +773,9 @@ func (b *BlockWise[C]) processReceivedMessage(w *responsewriter.ResponseWriter[C
 		}))
 		// request was already stored in cache, silently
 		if loaded {
-			cachedReceivedMessageGuard = element.Data()
-			if cachedReceivedMessageGuard != nil {
-				msgGuard = cachedReceivedMessageGuard.(*messageGuard)
-				errA := msgGuard.Acquire(cachedReceivedMessage.Context(), 1)
+			msgGuard = element.Data()
+			if msgGuard != nil {
+				errA := msgGuard.Acquire(msgGuard.Context(), 1)
 				if errA != nil {
 					return cannotLockError(errA)
 				}
@@ -786,7 +785,7 @@ func (b *BlockWise[C]) processReceivedMessage(w *responsewriter.ResponseWriter[C
 			}
 		}
 	} else {
-		msgGuard = cachedReceivedMessageGuard.(*messageGuard)
+		msgGuard = cachedReceivedMessageGuard
 		errA := msgGuard.Acquire(msgGuard.Context(), 1)
 		if errA != nil {
 			return cannotLockError(errA)
