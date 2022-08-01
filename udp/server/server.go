@@ -2,11 +2,8 @@ package server
 
 import (
 	"context"
-	"errors"
 	"fmt"
-	"io"
 	"net"
-	"strings"
 	"sync"
 	"time"
 
@@ -80,7 +77,7 @@ func New(opt ...Option) *Server {
 	doneCtx, doneCancel := context.WithCancel(context.Background())
 	errorsFunc := cfg.Errors
 	cfg.Errors = func(err error) {
-		if errors.Is(err, context.Canceled) || errors.Is(err, io.EOF) || strings.Contains(err.Error(), "use of closed network connection") {
+		if coapNet.IsCancelOrCloseError(err) {
 			// this error was produced by cancellation context or closing connection.
 			return
 		}

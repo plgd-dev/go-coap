@@ -7,10 +7,6 @@ import (
 	tcpServer "github.com/plgd-dev/go-coap/v2/tcp/server"
 )
 
-type ErrorFunc = func(error)
-
-type GoPoolFunc = func(func()) error
-
 // DisablePeerTCPSignalMessageCSMsOpt coap-tcp csm option.
 type DisablePeerTCPSignalMessageCSMsOpt struct{}
 

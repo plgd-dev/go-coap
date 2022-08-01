@@ -3,7 +3,6 @@ package tcp
 import (
 	"bytes"
 	"context"
-	"crypto/tls"
 	"io"
 	"io/ioutil"
 	"sync"
@@ -544,7 +543,7 @@ func TestClientInactiveMonitor(t *testing.T) {
 	require.NoError(t, err)
 
 	sd := NewServer(
-		options.WithOnNewClientConn(func(cc *client.ClientConn, tlscon *tls.Conn) {
+		options.WithOnNewClientConn(func(cc *client.ClientConn) {
 			cc.AddOnClose(func() {
 				checkClose.Release(1)
 			})
@@ -617,7 +616,7 @@ func TestClientKeepAliveMonitor(t *testing.T) {
 	require.NoError(t, err)
 
 	sd := NewServer(
-		options.WithOnNewClientConn(func(cc *client.ClientConn, tlscon *tls.Conn) {
+		options.WithOnNewClientConn(func(cc *client.ClientConn) {
 			cc.AddOnClose(func() {
 				checkClose.Release(1)
 			})

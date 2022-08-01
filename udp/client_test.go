@@ -125,7 +125,7 @@ func TestClientConnGet(t *testing.T) {
 	require.NoError(t, err)
 	err = m.Handle("/empty", mux.HandlerFunc(func(w mux.ResponseWriter, r *mux.Message) {
 		assert.Equal(t, codes.GET, r.Code())
-		// Calling SetResponse was failing options.With an EOF error when the reader is empty
+		// Calling SetResponse was failing with an EOF error when the reader is empty
 		// https://github.com/plgd-dev/go-coap/issues/157
 		errS := w.SetResponse(codes.Content, message.TextPlain, bytes.NewReader([]byte{}))
 		require.NoError(t, errS)

@@ -720,7 +720,7 @@ func TestClientInactiveMonitor(t *testing.T) {
 	err = checkClose.Acquire(ctx, 2)
 	require.NoError(t, err)
 	sd := dtls.NewServer(
-		options.WithOnNewClientConn(func(cc *client.ClientConn, dtlsConn *piondtls.Conn) {
+		options.WithOnNewClientConn(func(cc *client.ClientConn) {
 			cc.AddOnClose(func() {
 				checkClose.Release(1)
 			})
@@ -793,7 +793,7 @@ func TestClientKeepAliveMonitor(t *testing.T) {
 	err = checkClose.Acquire(ctx, 2)
 	require.NoError(t, err)
 	sd := dtls.NewServer(
-		options.WithOnNewClientConn(func(cc *client.ClientConn, tlscon *piondtls.Conn) {
+		options.WithOnNewClientConn(func(cc *client.ClientConn) {
 			cc.AddOnClose(func() {
 				checkClose.Release(1)
 			})
