@@ -8,7 +8,7 @@ require (
 	github.com/plgd-dev/kit/v2 v2.0.0-20211006190727-057b33161b90
 	github.com/stretchr/testify v1.7.1
 	go.uber.org/atomic v1.9.0
-	golang.org/x/exp v0.0.0-20220613132600-b0d781184e0d
+	golang.org/x/exp v0.0.0-20220722155223-a9213eeb770e
 	golang.org/x/net v0.0.0-20220630215102-69896b714898
 	golang.org/x/sync v0.0.0-20220601150217-0de741cfad7f
 )
