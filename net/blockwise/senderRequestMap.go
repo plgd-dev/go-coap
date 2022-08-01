@@ -3,8 +3,8 @@ package blockwise
 import (
 	"fmt"
 
-	"github.com/plgd-dev/go-coap/v2/message/pool"
-	"github.com/plgd-dev/go-coap/v2/pkg/sync"
+	"github.com/plgd-dev/go-coap/v3/message/pool"
+	"github.com/plgd-dev/go-coap/v3/pkg/sync"
 )
 
 func messageToGuardTransferKey(msg *pool.Message) string {

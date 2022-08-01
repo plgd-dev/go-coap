@@ -6,12 +6,12 @@ import (
 	"sync"
 	"time"
 
-	"github.com/plgd-dev/go-coap/v2/message"
-	"github.com/plgd-dev/go-coap/v2/message/codes"
-	"github.com/plgd-dev/go-coap/v2/message/pool"
-	"github.com/plgd-dev/go-coap/v2/net/responsewriter"
-	"github.com/plgd-dev/go-coap/v2/pkg/errors"
-	coapSync "github.com/plgd-dev/go-coap/v2/pkg/sync"
+	"github.com/plgd-dev/go-coap/v3/message"
+	"github.com/plgd-dev/go-coap/v3/message/codes"
+	"github.com/plgd-dev/go-coap/v3/message/pool"
+	"github.com/plgd-dev/go-coap/v3/net/responsewriter"
+	"github.com/plgd-dev/go-coap/v3/pkg/errors"
+	coapSync "github.com/plgd-dev/go-coap/v3/pkg/sync"
 	"go.uber.org/atomic"
 )
 

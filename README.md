@@ -8,7 +8,7 @@
 [![contributors](https://img.shields.io/github/contributors/plgd-dev/go-coap)](https://github.com/plgd-dev/go-coap/graphs/contributors)
 [![GitHub stars](https://img.shields.io/github/stars/plgd-dev/go-coap)](https://github.com/plgd-dev/go-coap/stargazers)
 [![GitHub license](https://img.shields.io/github/license/plgd-dev/go-coap)](https://github.com/plgd-dev/go-coap/blob/master/LICENSE)
-[![GoDoc](https://pkg.go.dev/badge/github.com/plgd-dev/go-coap/v2?utm_source=godoc)](https://pkg.go.dev/github.com/plgd-dev/go-coap/v2?utm_source=godoc)
+[![GoDoc](https://pkg.go.dev/badge/github.com/plgd-dev/go-coap/v3?utm_source=godoc)](https://pkg.go.dev/github.com/plgd-dev/go-coap/v3?utm_source=godoc)
 <!-- [![Go Report](https://goreportcard.com/badge/github.com/plgd-dev/go-coap)](https://goreportcard.com/report/github.com/plgd-dev/go-coap) -->
 
 The Constrained Application Protocol (CoAP) is a specialized web transfer protocol for use with constrained nodes and constrained networks in the Internet of Things.

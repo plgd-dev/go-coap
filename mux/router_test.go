@@ -3,7 +3,7 @@ package mux_test
 import (
 	"testing"
 
-	"github.com/plgd-dev/go-coap/v2/mux"
+	"github.com/plgd-dev/go-coap/v3/mux"
 	"github.com/stretchr/testify/require"
 )
 
