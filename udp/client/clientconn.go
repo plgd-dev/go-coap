@@ -77,7 +77,7 @@ type ClientConn struct {
 
 	goPool           GoPoolFunc
 	errors           ErrorFunc
-	responseMsgCache *cache.Cache
+	responseMsgCache *cache.Cache[string, []byte]
 	msgIDMutex       *MutexMap
 
 	tokenHandlerContainer *sync.Map[uint64, HandlerFunc]
@@ -114,7 +114,7 @@ func NewClientConn(
 	session Session,
 	createBlockWise func(cc *ClientConn) *blockwise.BlockWise[*ClientConn],
 	inactivityMonitor InactivityMonitor,
-	responseMsgCache *cache.Cache,
+	responseMsgCache *cache.Cache[string, []byte],
 	cfg *Config,
 ) *ClientConn {
 	if cfg.Errors == nil {
@@ -412,7 +412,7 @@ func (cc *ClientConn) getResponseFromCache(mid int32, resp *pool.Message) (bool,
 	if cachedResp == nil {
 		return false, nil
 	}
-	if rawMsg, ok := cachedResp.Data().([]byte); ok {
+	if rawMsg := cachedResp.Data(); len(rawMsg) > 0 {
 		_, err := resp.UnmarshalWithDecoder(coder.DefaultCoder, rawMsg)
 		if err != nil {
 			return false, err

@@ -84,7 +84,7 @@ func Client(conn *net.UDPConn, opts ...DialOption) *client.ClientConn {
 	}
 
 	monitor := cfg.CreateInactivityMonitor()
-	cache := cache.NewCache()
+	responseMsgCache := cache.NewCache[string, []byte]()
 	l := coapNet.NewUDPConn(cfg.Net, conn, coapNet.WithErrors(cfg.Errors))
 	session := server.NewSession(cfg.Ctx,
 		l,
@@ -96,7 +96,7 @@ func Client(conn *net.UDPConn, opts ...DialOption) *client.ClientConn {
 	cc := client.NewClientConn(session,
 		createBlockWise,
 		monitor,
-		cache,
+		responseMsgCache,
 		&cfg,
 	)
 	cfg.PeriodicRunner(func(now time.Time) bool {

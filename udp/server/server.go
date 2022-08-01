@@ -26,7 +26,7 @@ type Server struct {
 	serverStartedChan chan struct{}
 	doneCancel        context.CancelFunc
 	cancel            context.CancelFunc
-	cache             *cache.Cache
+	responseMsgCache  *cache.Cache[string, []byte]
 
 	connsMutex sync.Mutex
 	conns      map[string]*client.ClientConn
@@ -91,7 +91,7 @@ func New(opt ...Option) *Server {
 		serverStartedChan: serverStartedChan,
 		doneCtx:           doneCtx,
 		doneCancel:        doneCancel,
-		cache:             cache.NewCache(),
+		responseMsgCache:  cache.NewCache[string, []byte](),
 		conns:             make(map[string]*client.ClientConn),
 
 		cfg: &cfg,
@@ -139,7 +139,7 @@ func (s *Server) Serve(l *coapNet.UDPConn) error {
 
 	s.cfg.PeriodicRunner(func(now time.Time) bool {
 		s.handleInactivityMonitors(now)
-		s.cache.CheckExpirations(now)
+		s.responseMsgCache.CheckExpirations(now)
 		return s.ctx.Err() == nil
 	})
 
@@ -322,7 +322,7 @@ func (s *Server) getOrCreateClientConn(UDPConn *coapNet.UDPConn, raddr *net.UDPA
 			session,
 			createBlockWise,
 			monitor,
-			s.cache,
+			s.responseMsgCache,
 			&cfg,
 		)
 		cc.SetContextValue(closeKey, func() {
