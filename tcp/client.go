@@ -6,12 +6,12 @@ import (
 	"net"
 	"time"
 
-	"github.com/plgd-dev/go-coap/v2/message/pool"
-	coapNet "github.com/plgd-dev/go-coap/v2/net"
-	"github.com/plgd-dev/go-coap/v2/net/blockwise"
-	"github.com/plgd-dev/go-coap/v2/net/monitor/inactivity"
-	"github.com/plgd-dev/go-coap/v2/options"
-	client "github.com/plgd-dev/go-coap/v2/tcp/client"
+	"github.com/plgd-dev/go-coap/v3/message/pool"
+	coapNet "github.com/plgd-dev/go-coap/v3/net"
+	"github.com/plgd-dev/go-coap/v3/net/blockwise"
+	"github.com/plgd-dev/go-coap/v3/net/monitor/inactivity"
+	"github.com/plgd-dev/go-coap/v3/options"
+	client "github.com/plgd-dev/go-coap/v3/tcp/client"
 )
 
 // A DialOption sets options such as credentials, keepalive parameters, etc.

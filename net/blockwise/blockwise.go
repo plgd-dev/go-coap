@@ -9,11 +9,11 @@ import (
 	"time"
 
 	"github.com/dsnet/golib/memfile"
-	"github.com/plgd-dev/go-coap/v2/message"
-	"github.com/plgd-dev/go-coap/v2/message/codes"
-	"github.com/plgd-dev/go-coap/v2/message/pool"
-	"github.com/plgd-dev/go-coap/v2/net/responsewriter"
-	"github.com/plgd-dev/go-coap/v2/pkg/cache"
+	"github.com/plgd-dev/go-coap/v3/message"
+	"github.com/plgd-dev/go-coap/v3/message/codes"
+	"github.com/plgd-dev/go-coap/v3/message/pool"
+	"github.com/plgd-dev/go-coap/v3/net/responsewriter"
+	"github.com/plgd-dev/go-coap/v3/pkg/cache"
 	"golang.org/x/sync/semaphore"
 )
 

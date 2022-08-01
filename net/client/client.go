@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/plgd-dev/go-coap/v2/message"
-	"github.com/plgd-dev/go-coap/v2/message/pool"
-	"github.com/plgd-dev/go-coap/v2/net/observation"
+	"github.com/plgd-dev/go-coap/v3/message"
+	"github.com/plgd-dev/go-coap/v3/message/pool"
+	"github.com/plgd-dev/go-coap/v3/net/observation"
 )
 
 type GetTokenFunc = func() (message.Token, error)
