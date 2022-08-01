@@ -10,7 +10,7 @@ require (
 	go.uber.org/atomic v1.9.0
 	golang.org/x/exp v0.0.0-20220613132600-b0d781184e0d
 	golang.org/x/net v0.0.0-20220630215102-69896b714898
-	golang.org/x/sync v0.0.0-20220601150217-0de741cfad7f
+	golang.org/x/sync v0.0.0-20220722155255-886fb9371eb4
 )
 
 require (
