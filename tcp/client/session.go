@@ -27,7 +27,7 @@ type Session struct {
 	sequence                        atomic.Uint64
 	onClose                         []EventFunc
 	ctx                             atomic.Value
-	inactivityMonitor               inactivity.Monitor
+	inactivityMonitor               InactivityMonitor
 	errSendCSM                      error
 	cancel                          context.CancelFunc
 	done                            chan struct{}
@@ -61,7 +61,7 @@ func NewSession(
 	disablePeerTCPSignalMessageCSMs bool,
 	disableTCPSignalMessageCSM bool,
 	closeSocket bool,
-	inactivityMonitor inactivity.Monitor,
+	inactivityMonitor InactivityMonitor,
 	connectionCacheSize uint16,
 	messagePool *pool.Pool,
 ) *Session {
@@ -72,7 +72,7 @@ func NewSession(
 		}
 	}
 	if inactivityMonitor == nil {
-		inactivityMonitor = inactivity.NewNilMonitor()
+		inactivityMonitor = inactivity.NewNilMonitor[*ClientConn]()
 	}
 
 	s := &Session{

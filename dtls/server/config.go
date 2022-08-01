@@ -28,13 +28,14 @@ type GetMIDFunc = func() int32
 
 var DefaultConfig = func() Config {
 	opts := Config{
-		Common: config.DefaultCommon(func() inactivity.Monitor {
+		Common: config.DefaultCommon(),
+		CreateInactivityMonitor: func() udpClient.InactivityMonitor {
 			timeout := time.Second * 16
-			onInactive := func(cc inactivity.ClientConn) {
+			onInactive := func(cc *udpClient.ClientConn) {
 				_ = cc.Close()
 			}
 			return inactivity.NewInactivityMonitor(timeout, onInactive)
-		}),
+		},
 		OnNewClientConn: func(cc *udpClient.ClientConn) {
 			// do nothing by default
 		},
@@ -53,6 +54,7 @@ var DefaultConfig = func() Config {
 
 type Config struct {
 	config.Common
+	CreateInactivityMonitor        func() udpClient.InactivityMonitor
 	GetMID                         GetMIDFunc
 	Handler                        HandlerFunc
 	OnNewClientConn                OnNewClientConnFunc

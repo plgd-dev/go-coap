@@ -15,9 +15,10 @@ import (
 
 var DefaultConfig = func() Config {
 	opts := Config{
-		Common: config.DefaultCommon(func() inactivity.Monitor {
-			return inactivity.NewNilMonitor()
-		}),
+		Common: config.DefaultCommon(),
+		CreateInactivityMonitor: func() InactivityMonitor {
+			return inactivity.NewNilMonitor[*ClientConn]()
+		},
 		Dialer:                         &net.Dialer{Timeout: time.Second * 3},
 		Net:                            "udp",
 		TransmissionNStart:             time.Second,
@@ -38,6 +39,7 @@ var DefaultConfig = func() Config {
 
 type Config struct {
 	config.Common
+	CreateInactivityMonitor        CreateInactivityMonitorFunc
 	Net                            string
 	GetMID                         GetMIDFunc
 	Handler                        HandlerFunc

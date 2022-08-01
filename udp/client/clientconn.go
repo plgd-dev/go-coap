@@ -13,7 +13,6 @@ import (
 	coapNet "github.com/plgd-dev/go-coap/v2/net"
 	"github.com/plgd-dev/go-coap/v2/net/blockwise"
 	"github.com/plgd-dev/go-coap/v2/net/client"
-	"github.com/plgd-dev/go-coap/v2/net/monitor/inactivity"
 	"github.com/plgd-dev/go-coap/v2/net/observation"
 	"github.com/plgd-dev/go-coap/v2/net/responsewriter"
 	"github.com/plgd-dev/go-coap/v2/pkg/cache"
@@ -27,12 +26,18 @@ import (
 const ExchangeLifetime = 247 * time.Second
 
 type (
-	HandlerFunc = func(*responsewriter.ResponseWriter[*ClientConn], *pool.Message)
-	ErrorFunc   = func(error)
-	GoPoolFunc  = func(func()) error
-	EventFunc   = func()
-	GetMIDFunc  = func() int32
+	HandlerFunc                 = func(*responsewriter.ResponseWriter[*ClientConn], *pool.Message)
+	ErrorFunc                   = func(error)
+	GoPoolFunc                  = func(func()) error
+	EventFunc                   = func()
+	GetMIDFunc                  = func() int32
+	CreateInactivityMonitorFunc = func() InactivityMonitor
 )
+
+type InactivityMonitor interface {
+	Notify()
+	CheckInactivity(now time.Time, cc *ClientConn)
+}
 
 type Session interface {
 	Context() context.Context
@@ -63,7 +68,7 @@ type ClientConn struct {
 
 	session Session
 	*client.Client[*ClientConn]
-	inactivityMonitor inactivity.Monitor
+	inactivityMonitor InactivityMonitor
 
 	blockWise          *blockwise.BlockWise[*ClientConn]
 	observationHandler *observation.Handler[*ClientConn]
@@ -108,7 +113,7 @@ func (cc *ClientConn) Transmission() *Transmission {
 func NewClientConn(
 	session Session,
 	createBlockWise func(cc *ClientConn) *blockwise.BlockWise[*ClientConn],
-	inactivityMonitor inactivity.Monitor,
+	inactivityMonitor InactivityMonitor,
 	responseMsgCache *cache.Cache,
 	cfg *Config,
 ) *ClientConn {
@@ -622,7 +627,7 @@ func (cc *ClientConn) WriteMulticastMessage(req *pool.Message, address *net.UDPA
 	return nil
 }
 
-func (cc *ClientConn) InactivityMonitor() inactivity.Monitor {
+func (cc *ClientConn) InactivityMonitor() InactivityMonitor {
 	return cc.inactivityMonitor
 }
 
