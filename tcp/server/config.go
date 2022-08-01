@@ -4,14 +4,13 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/plgd-dev/go-coap/v2/message"
-	"github.com/plgd-dev/go-coap/v2/message/codes"
-	"github.com/plgd-dev/go-coap/v2/message/pool"
-	"github.com/plgd-dev/go-coap/v2/net/monitor/inactivity"
-	"github.com/plgd-dev/go-coap/v2/net/responsewriter"
-	"github.com/plgd-dev/go-coap/v2/options/config"
-	"github.com/plgd-dev/go-coap/v2/tcp/client"
-	tcpClient "github.com/plgd-dev/go-coap/v2/tcp/client"
+	"github.com/plgd-dev/go-coap/v3/message"
+	"github.com/plgd-dev/go-coap/v3/message/codes"
+	"github.com/plgd-dev/go-coap/v3/message/pool"
+	"github.com/plgd-dev/go-coap/v3/net/monitor/inactivity"
+	"github.com/plgd-dev/go-coap/v3/net/responsewriter"
+	"github.com/plgd-dev/go-coap/v3/options/config"
+	"github.com/plgd-dev/go-coap/v3/tcp/client"
 )
 
 // A ServerOption sets options such as credentials, codec and keepalive parameters, etc.
@@ -21,14 +20,14 @@ type TCPServerOption interface {
 
 // The HandlerFunc type is an adapter to allow the use of
 // ordinary functions as COAP handlers.
-type HandlerFunc = func(*responsewriter.ResponseWriter[*tcpClient.ClientConn], *pool.Message)
+type HandlerFunc = func(*responsewriter.ResponseWriter[*client.ClientConn], *pool.Message)
 
 type ErrorFunc = func(error)
 
 type GoPoolFunc = func(func()) error
 
 // OnNewClientConnFunc is the callback for new connections.
-type OnNewClientConnFunc = func(cc *tcpClient.ClientConn)
+type OnNewClientConnFunc = func(cc *client.ClientConn)
 
 var DefaultConfig = func() Config {
 	opts := Config{
@@ -44,12 +43,12 @@ var DefaultConfig = func() Config {
 			})
 			return inactivity.NewInactivityMonitor(timeout/time.Duration(maxRetries+1), keepalive.OnInactive)
 		},
-		OnNewClientConn: func(cc *tcpClient.ClientConn) {
+		OnNewClientConn: func(cc *client.ClientConn) {
 			// do nothing by default
 		},
 		ConnectionCacheSize: 2 * 1024,
 	}
-	opts.Handler = func(w *responsewriter.ResponseWriter[*tcpClient.ClientConn], r *pool.Message) {
+	opts.Handler = func(w *responsewriter.ResponseWriter[*client.ClientConn], r *pool.Message) {
 		if err := w.SetResponse(codes.NotFound, message.TextPlain, nil); err != nil {
 			opts.Errors(fmt.Errorf("server handler: cannot set response: %w", err))
 		}

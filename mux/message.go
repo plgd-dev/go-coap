@@ -1,6 +1,6 @@
 package mux
 
-import "github.com/plgd-dev/go-coap/v2/message/pool"
+import "github.com/plgd-dev/go-coap/v3/message/pool"
 
 // RouteParams contains all the information related to a route
 type RouteParams struct {

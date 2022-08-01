@@ -6,18 +6,18 @@ import (
 	"net"
 	"time"
 
-	dtlsServer "github.com/plgd-dev/go-coap/v2/dtls/server"
-	"github.com/plgd-dev/go-coap/v2/message/pool"
-	"github.com/plgd-dev/go-coap/v2/mux"
-	"github.com/plgd-dev/go-coap/v2/net/blockwise"
-	"github.com/plgd-dev/go-coap/v2/net/client"
-	"github.com/plgd-dev/go-coap/v2/net/monitor/inactivity"
-	"github.com/plgd-dev/go-coap/v2/options/config"
-	"github.com/plgd-dev/go-coap/v2/pkg/runner/periodic"
-	tcpClient "github.com/plgd-dev/go-coap/v2/tcp/client"
-	tcpServer "github.com/plgd-dev/go-coap/v2/tcp/server"
-	udpClient "github.com/plgd-dev/go-coap/v2/udp/client"
-	udpServer "github.com/plgd-dev/go-coap/v2/udp/server"
+	dtlsServer "github.com/plgd-dev/go-coap/v3/dtls/server"
+	"github.com/plgd-dev/go-coap/v3/message/pool"
+	"github.com/plgd-dev/go-coap/v3/mux"
+	"github.com/plgd-dev/go-coap/v3/net/blockwise"
+	"github.com/plgd-dev/go-coap/v3/net/client"
+	"github.com/plgd-dev/go-coap/v3/net/monitor/inactivity"
+	"github.com/plgd-dev/go-coap/v3/options/config"
+	"github.com/plgd-dev/go-coap/v3/pkg/runner/periodic"
+	tcpClient "github.com/plgd-dev/go-coap/v3/tcp/client"
+	tcpServer "github.com/plgd-dev/go-coap/v3/tcp/server"
+	udpClient "github.com/plgd-dev/go-coap/v3/udp/client"
+	udpServer "github.com/plgd-dev/go-coap/v3/udp/server"
 )
 
 type ErrorFunc = config.ErrorFunc
@@ -246,8 +246,10 @@ func WithGoPool(goPool GoPoolFunc) GoPoolOpt {
 	return GoPoolOpt{goPool: goPool}
 }
 
-type UDPOnInactive = func(cc *udpClient.ClientConn)
-type TCPOnInactive = func(cc *tcpClient.ClientConn)
+type (
+	UDPOnInactive = func(cc *udpClient.ClientConn)
+	TCPOnInactive = func(cc *tcpClient.ClientConn)
+)
 
 type OnInactiveFunc interface {
 	UDPOnInactive | TCPOnInactive

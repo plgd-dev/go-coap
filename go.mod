@@ -1,4 +1,4 @@
-module github.com/plgd-dev/go-coap/v2
+module github.com/plgd-dev/go-coap/v3
 
 go 1.18
 

@@ -7,15 +7,15 @@ import (
 	"net"
 	"time"
 
-	"github.com/plgd-dev/go-coap/v2/message"
-	"github.com/plgd-dev/go-coap/v2/message/codes"
-	"github.com/plgd-dev/go-coap/v2/message/pool"
-	coapNet "github.com/plgd-dev/go-coap/v2/net"
-	"github.com/plgd-dev/go-coap/v2/net/blockwise"
-	"github.com/plgd-dev/go-coap/v2/net/client"
-	"github.com/plgd-dev/go-coap/v2/net/observation"
-	"github.com/plgd-dev/go-coap/v2/net/responsewriter"
-	coapErrors "github.com/plgd-dev/go-coap/v2/pkg/errors"
+	"github.com/plgd-dev/go-coap/v3/message"
+	"github.com/plgd-dev/go-coap/v3/message/codes"
+	"github.com/plgd-dev/go-coap/v3/message/pool"
+	coapNet "github.com/plgd-dev/go-coap/v3/net"
+	"github.com/plgd-dev/go-coap/v3/net/blockwise"
+	"github.com/plgd-dev/go-coap/v3/net/client"
+	"github.com/plgd-dev/go-coap/v3/net/observation"
+	"github.com/plgd-dev/go-coap/v3/net/responsewriter"
+	coapErrors "github.com/plgd-dev/go-coap/v3/pkg/errors"
 )
 
 type InactivityMonitor interface {
