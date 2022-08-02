@@ -38,7 +38,7 @@ func CodeToString(c codes.Code) string {
 }
 
 func (se Status) Error() string {
-	return fmt.Sprintf("coap error: code = %s desc = %v", CodeToString(se.msg.Code), se.err)
+	return fmt.Sprintf("coap error: code = %s desc = %v", CodeToString(se.Code()), se.err)
 }
 
 // Code returns the status code contained in se.
