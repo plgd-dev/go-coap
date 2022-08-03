@@ -10,7 +10,7 @@ import (
 
 // TransmissionOpt transmission options.
 type TransmissionOpt struct {
-	transmissionNStart             time.Duration
+	transmissionNStart             uint32
 	transmissionAcknowledgeTimeout time.Duration
 	transmissionMaxRetransmit      uint32
 }
@@ -34,7 +34,7 @@ func (o TransmissionOpt) UDPClientApply(cfg *udpClient.Config) {
 }
 
 // WithTransmission set options for (re)transmission for Confirmable message-s.
-func WithTransmission(transmissionNStart time.Duration,
+func WithTransmission(transmissionNStart uint32,
 	transmissionAcknowledgeTimeout time.Duration,
 	transmissionMaxRetransmit uint32,
 ) TransmissionOpt {

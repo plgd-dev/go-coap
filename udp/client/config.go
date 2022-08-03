@@ -23,7 +23,7 @@ var DefaultConfig = func() Config {
 		},
 		Dialer:                         &net.Dialer{Timeout: time.Second * 3},
 		Net:                            "udp",
-		TransmissionNStart:             time.Second,
+		TransmissionNStart:             1,
 		TransmissionAcknowledgeTimeout: time.Second * 2,
 		TransmissionMaxRetransmit:      4,
 		GetMID:                         message.GetMID,
@@ -47,7 +47,7 @@ type Config struct {
 	GetMID                         GetMIDFunc
 	Handler                        HandlerFunc
 	Dialer                         *net.Dialer
-	TransmissionNStart             time.Duration
+	TransmissionNStart             uint32
 	TransmissionAcknowledgeTimeout time.Duration
 	TransmissionMaxRetransmit      uint32
 	CloseSocket                    bool

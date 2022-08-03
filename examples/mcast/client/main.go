@@ -78,7 +78,7 @@ func main() {
 			log.Fatal(err)
 			return
 		}
-		s := udp.NewServer(options.WithTransmission(time.Second, timeout/2, 2), options.WithMessagePool(messagePool))
+		s := udp.NewServer(options.WithTransmission(1, timeout/2, 2), options.WithMessagePool(messagePool))
 		var wg sync.WaitGroup
 		defer wg.Wait()
 		defer s.Stop()

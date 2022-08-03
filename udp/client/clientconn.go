@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"net"
 	"time"
 
@@ -17,9 +18,10 @@ import (
 	"github.com/plgd-dev/go-coap/v3/net/responsewriter"
 	"github.com/plgd-dev/go-coap/v3/pkg/cache"
 	coapErrors "github.com/plgd-dev/go-coap/v3/pkg/errors"
-	"github.com/plgd-dev/go-coap/v3/pkg/sync"
+	coapSync "github.com/plgd-dev/go-coap/v3/pkg/sync"
 	"github.com/plgd-dev/go-coap/v3/udp/coder"
 	"go.uber.org/atomic"
+	"golang.org/x/sync/semaphore"
 )
 
 // https://datatracker.ietf.org/doc/html/rfc7252#section-4.8.2
@@ -58,7 +60,7 @@ type Session interface {
 	Done() <-chan struct{}
 }
 
-type RequestsMap = sync.Map[uint64, *pool.Message]
+type RequestsMap = coapSync.Map[uint64, *pool.Message]
 
 // ClientConn represents a virtual connection to a conceptual endpoint, to perform COAPs commands.
 type ClientConn struct {
@@ -80,20 +82,30 @@ type ClientConn struct {
 	responseMsgCache *cache.Cache[string, []byte]
 	msgIDMutex       *MutexMap
 
-	tokenHandlerContainer *sync.Map[uint64, HandlerFunc]
-	midHandlerContainer   *sync.Map[int32, HandlerFunc]
+	tokenHandlerContainer *coapSync.Map[uint64, HandlerFunc]
+	midHandlerContainer   *coapSync.Map[int32, HandlerFunc]
 	msgID                 atomic.Uint32
 	blockwiseSZX          blockwise.SZX
+
+	/*
+		An outstanding interaction is either a CON for which an ACK has not
+		yet been received but is still expected (message layer) or a request
+		for which neither a response nor an Acknowledgment message has yet
+		been received but is still expected (which may both occur at the same
+		time, counting as one outstanding interaction).
+	*/
+	numOutstandingInteraction *semaphore.Weighted
 }
 
 // Transmission is a threadsafe container for transmission related parameters
 type Transmission struct {
-	nStart             *atomic.Duration
+	nStart             *atomic.Uint32
 	acknowledgeTimeout *atomic.Duration
 	maxRetransmit      *atomic.Int32
 }
 
-func (t *Transmission) SetTransmissionNStart(d time.Duration) {
+// SetTransmissionNStart changing the nStart value will only effect requests queued after the change. The requests waiting here already before the change will get unblocked when enough weight has been released.
+func (t *Transmission) SetTransmissionNStart(d uint32) {
 	t.nStart.Store(d)
 }
 
@@ -131,20 +143,21 @@ func NewClientConn(
 	cc := ClientConn{
 		session: session,
 		transmission: &Transmission{
-			atomic.NewDuration(cfg.TransmissionNStart),
+			atomic.NewUint32(cfg.TransmissionNStart),
 			atomic.NewDuration(cfg.TransmissionAcknowledgeTimeout),
 			atomic.NewInt32(int32(cfg.TransmissionMaxRetransmit)),
 		},
 		blockwiseSZX: cfg.BlockwiseSZX,
 
-		tokenHandlerContainer: sync.NewMap[uint64, HandlerFunc](),
-		midHandlerContainer:   sync.NewMap[int32, HandlerFunc](),
-		goPool:                cfg.GoPool,
-		errors:                cfg.Errors,
-		msgIDMutex:            NewMutexMap(),
-		responseMsgCache:      cache.NewCache[string, []byte](),
-		inactivityMonitor:     inactivityMonitor,
-		messagePool:           cfg.MessagePool,
+		tokenHandlerContainer:     coapSync.NewMap[uint64, HandlerFunc](),
+		midHandlerContainer:       coapSync.NewMap[int32, HandlerFunc](),
+		goPool:                    cfg.GoPool,
+		errors:                    cfg.Errors,
+		msgIDMutex:                NewMutexMap(),
+		responseMsgCache:          cache.NewCache[string, []byte](),
+		inactivityMonitor:         inactivityMonitor,
+		messagePool:               cfg.MessagePool,
+		numOutstandingInteraction: semaphore.NewWeighted(math.MaxInt64),
 	}
 	cc.msgID.Store(uint32(cfg.GetMID() - 0xffff/2))
 	cc.blockWise = createBlockWise(&cc)
@@ -225,13 +238,40 @@ func (cc *ClientConn) Do(req *pool.Message) (*pool.Message, error) {
 	return resp, nil
 }
 
+func (cc *ClientConn) releaseOutstandingInteraction() {
+	cc.numOutstandingInteraction.Release(1)
+}
+
+func (cc *ClientConn) acquireOutstandingInteraction(ctx context.Context) error {
+	nStart := cc.Transmission().nStart.Load()
+	if nStart == 0 {
+		return fmt.Errorf("invalid NStart value %v", nStart)
+	}
+	n := math.MaxInt64 - int64(cc.Transmission().nStart.Load()) + 1
+	err := cc.numOutstandingInteraction.Acquire(ctx, n)
+	if err != nil {
+		return err
+	}
+	cc.numOutstandingInteraction.Release(n - 1)
+	return nil
+}
+
 func (cc *ClientConn) writeMessage(req *pool.Message) error {
 	respChan := make(chan struct{})
 	req.UpsertType(message.Confirmable)
 	req.UpsertMessageID(cc.GetMessageID())
 
 	// Only confirmable messages ever match an message ID
-	if req.Type() == message.Confirmable {
+	switch req.Type() {
+	case message.Confirmable:
+		if req.Code() >= codes.GET && req.Code() <= codes.DELETE {
+			if err := cc.acquireOutstandingInteraction(req.Context()); err != nil {
+				return err
+			}
+			defer func() {
+				cc.releaseOutstandingInteraction()
+			}()
+		}
 		if _, loaded := cc.midHandlerContainer.LoadOrStore(req.MessageID(), func(w *responsewriter.ResponseWriter[*ClientConn], r *pool.Message) {
 			close(respChan)
 			if r.IsSeparateMessage() {
@@ -245,6 +285,11 @@ func (cc *ClientConn) writeMessage(req *pool.Message) error {
 		defer func() {
 			_, _ = cc.midHandlerContainer.PullOut(req.MessageID())
 		}()
+	case message.NonConfirmable:
+		/* TODO need to acquireOutstandingInteraction
+		if req.Code() >= codes.GET && req.Code() <= codes.DELETE {
+		}
+		*/
 	}
 
 	err := cc.session.WriteMessage(req)
@@ -267,16 +312,9 @@ func (cc *ClientConn) writeMessage(req *pool.Message) error {
 		case <-cc.Context().Done():
 			return fmt.Errorf("connection was closed: %w", cc.Context().Err())
 		case <-time.After(cc.transmission.acknowledgeTimeout.Load()):
-			select {
-			case <-req.Context().Done():
-				return req.Context().Err()
-			case <-cc.session.Context().Done():
-				return fmt.Errorf("connection was closed: %w", cc.Context().Err())
-			case <-time.After(cc.transmission.nStart.Load()):
-				err = cc.session.WriteMessage(req)
-				if err != nil {
-					return fmt.Errorf("cannot write request: %w", err)
-				}
+			err = cc.session.WriteMessage(req)
+			if err != nil {
+				return fmt.Errorf("cannot write request: %w", err)
 			}
 		}
 	}
