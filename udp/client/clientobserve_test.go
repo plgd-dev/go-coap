@@ -140,6 +140,8 @@ func TestClientConnObserve(t *testing.T) {
 				return
 			}
 			require.NoError(t, err)
+			_, err = cc.Get(ctx, tt.args.path)
+			require.NoError(t, err)
 			<-obs.done
 			err = got.Cancel(ctx)
 			require.NoError(t, err)

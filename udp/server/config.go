@@ -39,7 +39,7 @@ var DefaultConfig = func() Config {
 		OnNewClientConn: func(cc *udpClient.ClientConn) {
 			// do nothing by default
 		},
-		TransmissionNStart:             time.Second,
+		TransmissionNStart:             1,
 		TransmissionAcknowledgeTimeout: time.Second * 2,
 		TransmissionMaxRetransmit:      4,
 		GetMID:                         message.GetMID,
@@ -59,7 +59,7 @@ type Config struct {
 	GetMID                         GetMIDFunc
 	Handler                        HandlerFunc
 	OnNewClientConn                OnNewClientConnFunc
-	TransmissionNStart             time.Duration
+	TransmissionNStart             uint32
 	TransmissionAcknowledgeTimeout time.Duration
 	TransmissionMaxRetransmit      uint32
 	MTU                            uint16

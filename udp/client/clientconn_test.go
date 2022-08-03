@@ -26,6 +26,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+const testNumParallel = 64
+
 func bodyToBytes(t *testing.T, r io.Reader) []byte {
 	t.Helper()
 	buf := bytes.NewBuffer(nil)
@@ -159,7 +161,7 @@ func TestClientConnDeduplicationRetransmission(t *testing.T) {
 		options.WithErrors(func(err error) {
 			require.NoError(t, err)
 		}),
-		options.WithTransmission(20*time.Millisecond, 100*time.Millisecond, 50),
+		options.WithTransmission(1, 100*time.Millisecond, 50),
 	)
 	require.NoError(t, err)
 	defer func() {
@@ -196,7 +198,7 @@ func TestClientConnDeduplicationRetransmission(t *testing.T) {
 	require.Equal(t, []byte{2}, bodyToBytes(t, got.Body()))
 }
 
-func TestClientConnGet(t *testing.T) {
+func testParallelClientConnGet(t *testing.T, numParallel int) {
 	type args struct {
 		path string
 		opts message.Options
@@ -280,26 +282,42 @@ func TestClientConnGet(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			ctx, cancel := context.WithTimeout(context.Background(), time.Second*3600)
-			defer cancel()
-			got, err := cc.Get(ctx, tt.args.path, tt.args.opts...)
-			if tt.wantErr {
-				require.Error(t, err)
-				return
+			var wg sync.WaitGroup
+			wg.Add(numParallel)
+			for i := 0; i < numParallel; i++ {
+				go func() {
+					defer wg.Done()
+					ctx, cancel := context.WithTimeout(context.Background(), time.Second*30)
+					defer cancel()
+					got, err := cc.Get(ctx, tt.args.path, tt.args.opts...)
+					if tt.wantErr {
+						require.Error(t, err)
+						return
+					}
+					require.NoError(t, err)
+					require.Equal(t, tt.wantCode, got.Code())
+					if tt.wantContentFormat != nil {
+						ct, err := got.ContentFormat()
+						require.NoError(t, err)
+						require.Equal(t, *tt.wantContentFormat, ct)
+						buf := bytes.NewBuffer(nil)
+						_, err = buf.ReadFrom(got.Body())
+						require.NoError(t, err)
+						require.Equal(t, tt.wantPayload, buf.Bytes())
+					}
+				}()
 			}
-			require.NoError(t, err)
-			require.Equal(t, tt.wantCode, got.Code())
-			if tt.wantContentFormat != nil {
-				ct, err := got.ContentFormat()
-				require.NoError(t, err)
-				require.Equal(t, *tt.wantContentFormat, ct)
-				buf := bytes.NewBuffer(nil)
-				_, err = buf.ReadFrom(got.Body())
-				require.NoError(t, err)
-				require.Equal(t, tt.wantPayload, buf.Bytes())
-			}
+			wg.Wait()
 		})
 	}
+}
+
+func TestParallelClientConnGet(t *testing.T) {
+	testParallelClientConnGet(t, testNumParallel)
+}
+
+func TestClientConnGet(t *testing.T) {
+	testParallelClientConnGet(t, 1)
 }
 
 func TestClientConnGetSeparateMessage(t *testing.T) {
@@ -365,7 +383,7 @@ func TestClientConnGetSeparateMessage(t *testing.T) {
 		require.NoError(t, errC)
 	}()
 
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second*3600)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second*30)
 	defer cancel()
 
 	req, err := cc.NewGetRequest(ctx, "/a")
@@ -377,7 +395,7 @@ func TestClientConnGetSeparateMessage(t *testing.T) {
 	assert.Equal(t, codes.Content, resp.Code())
 }
 
-func TestClientConnPost(t *testing.T) {
+func testClientConnPost(t *testing.T, numParallel int) {
 	type args struct {
 		path          string
 		contentFormat message.MediaType
@@ -482,156 +500,191 @@ func TestClientConnPost(t *testing.T) {
 				require.NoError(t, errC)
 			}()
 
-			ctx, cancel := context.WithTimeout(context.Background(), time.Second*3600)
-			defer cancel()
-			got, err := cc.Post(ctx, tt.args.path, tt.args.contentFormat, tt.args.payload, tt.args.opts...)
-			if tt.wantErr {
-				require.Error(t, err)
-				return
+			var wgNumParallel sync.WaitGroup
+			wgNumParallel.Add(numParallel)
+			for i := 0; i < numParallel; i++ {
+				go func() {
+					defer wgNumParallel.Done()
+					ctx, cancel := context.WithTimeout(context.Background(), time.Second*30)
+					defer cancel()
+					got, err := cc.Post(ctx, tt.args.path, tt.args.contentFormat, tt.args.payload, tt.args.opts...)
+					if tt.wantErr {
+						require.Error(t, err)
+						return
+					}
+					require.NoError(t, err)
+					require.Equal(t, tt.wantCode, got.Code())
+					if tt.wantContentFormat != nil {
+						ct, err := got.ContentFormat()
+						require.NoError(t, err)
+						require.Equal(t, *tt.wantContentFormat, ct)
+						buf := bytes.NewBuffer(nil)
+						_, err = buf.ReadFrom(got.Body())
+						require.NoError(t, err)
+						require.Equal(t, tt.wantPayload, buf.Bytes())
+					}
+				}()
 			}
+			wgNumParallel.Wait()
+		})
+	}
+}
+
+func TestClientConnPost(t *testing.T) {
+	testClientConnPost(t, 1)
+}
+
+/*
+func TestParallelClientConnPost(t *testing.T) {
+	testClientConnPost(t, testNumParallel)
+}
+*/
+
+func testClientConnPut(t *testing.T, numParallel int) {
+	type args struct {
+		path          string
+		contentFormat message.MediaType
+		payload       io.ReadSeeker
+		opts          message.Options
+	}
+	tests := []struct {
+		name              string
+		args              args
+		wantCode          codes.Code
+		wantContentFormat *message.MediaType
+		wantPayload       interface{}
+		wantErr           bool
+	}{
+		{
+			name: "ok-a",
+			args: args{
+				path:          "/a",
+				contentFormat: message.TextPlain,
+				payload:       bytes.NewReader(make([]byte, 7000)),
+			},
+			wantCode:          codes.BadRequest,
+			wantContentFormat: &message.TextPlain,
+			wantPayload:       make([]byte, 5330),
+		},
+		{
+			name: "ok-b",
+			args: args{
+				path:          "/b",
+				contentFormat: message.TextPlain,
+				payload:       bytes.NewReader([]byte("b-send")),
+			},
+			wantCode:          codes.Content,
+			wantContentFormat: &message.TextPlain,
+			wantPayload:       []byte("b"),
+		},
+		{
+			name: "notfound",
+			args: args{
+				path:          "/c",
+				contentFormat: message.TextPlain,
+				payload:       bytes.NewReader(make([]byte, 21)),
+			},
+			wantCode: codes.NotFound,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			l, err := coapNet.NewListenUDP("udp", "")
 			require.NoError(t, err)
-			require.Equal(t, tt.wantCode, got.Code())
-			if tt.wantContentFormat != nil {
-				ct, err := got.ContentFormat()
-				require.NoError(t, err)
-				require.Equal(t, *tt.wantContentFormat, ct)
-				buf := bytes.NewBuffer(nil)
-				_, err = buf.ReadFrom(got.Body())
-				require.NoError(t, err)
-				require.Equal(t, tt.wantPayload, buf.Bytes())
+			defer func() {
+				errC := l.Close()
+				require.NoError(t, errC)
+			}()
+			var wg sync.WaitGroup
+			defer wg.Wait()
+
+			m := mux.NewRouter()
+			err = m.Handle("/a", mux.HandlerFunc(func(w mux.ResponseWriter, r *mux.Message) {
+				assert.Equal(t, codes.PUT, r.Code())
+				ct, errH := r.Options().GetUint32(message.ContentFormat)
+				require.NoError(t, errH)
+				assert.Equal(t, message.TextPlain, message.MediaType(ct))
+				buf, errH := ioutil.ReadAll(r.Body())
+				require.NoError(t, errH)
+				assert.Len(t, buf, 7000)
+
+				errH = w.SetResponse(codes.BadRequest, message.TextPlain, bytes.NewReader(make([]byte, 5330)))
+				require.NoError(t, errH)
+				require.NotEmpty(t, w.ClientConn())
+			}))
+			require.NoError(t, err)
+			err = m.Handle("/b", mux.HandlerFunc(func(w mux.ResponseWriter, r *mux.Message) {
+				assert.Equal(t, codes.PUT, r.Code())
+				ct, errH := r.Options().GetUint32(message.ContentFormat)
+				require.NoError(t, errH)
+				assert.Equal(t, message.TextPlain, message.MediaType(ct))
+				buf, errH := ioutil.ReadAll(r.Body())
+				require.NoError(t, errH)
+				assert.Equal(t, buf, []byte("b-send"))
+				errH = w.SetResponse(codes.Content, message.TextPlain, bytes.NewReader([]byte("b")))
+				require.NoError(t, errH)
+				require.NotEmpty(t, w.ClientConn())
+			}))
+			require.NoError(t, err)
+
+			s := udp.NewServer(options.WithMux(m))
+			defer s.Stop()
+
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				errS := s.Serve(l)
+				require.NoError(t, errS)
+			}()
+
+			cc, err := udp.Dial(l.LocalAddr().String())
+			require.NoError(t, err)
+			defer func() {
+				errC := cc.Close()
+				require.NoError(t, errC)
+			}()
+			var wgNumParallel sync.WaitGroup
+			wgNumParallel.Add(numParallel)
+			for i := 0; i < numParallel; i++ {
+				go func() {
+					defer wgNumParallel.Done()
+					ctx, cancel := context.WithTimeout(context.Background(), time.Second*30)
+					defer cancel()
+					got, err := cc.Put(ctx, tt.args.path, tt.args.contentFormat, tt.args.payload, tt.args.opts...)
+					if tt.wantErr {
+						require.Error(t, err)
+						return
+					}
+					require.NoError(t, err)
+					require.Equal(t, tt.wantCode, got.Code())
+					if tt.wantContentFormat != nil {
+						ct, err := got.ContentFormat()
+						require.NoError(t, err)
+						require.Equal(t, *tt.wantContentFormat, ct)
+						buf := bytes.NewBuffer(nil)
+						_, err = buf.ReadFrom(got.Body())
+						require.NoError(t, err)
+						require.Equal(t, tt.wantPayload, buf.Bytes())
+					}
+				}()
 			}
+			wgNumParallel.Wait()
 		})
 	}
 }
 
 func TestClientConnPut(t *testing.T) {
-	type args struct {
-		path          string
-		contentFormat message.MediaType
-		payload       io.ReadSeeker
-		opts          message.Options
-	}
-	tests := []struct {
-		name              string
-		args              args
-		wantCode          codes.Code
-		wantContentFormat *message.MediaType
-		wantPayload       interface{}
-		wantErr           bool
-	}{
-		{
-			name: "ok-a",
-			args: args{
-				path:          "/a",
-				contentFormat: message.TextPlain,
-				payload:       bytes.NewReader(make([]byte, 7000)),
-			},
-			wantCode:          codes.BadRequest,
-			wantContentFormat: &message.TextPlain,
-			wantPayload:       make([]byte, 5330),
-		},
-		{
-			name: "ok-b",
-			args: args{
-				path:          "/b",
-				contentFormat: message.TextPlain,
-				payload:       bytes.NewReader([]byte("b-send")),
-			},
-			wantCode:          codes.Content,
-			wantContentFormat: &message.TextPlain,
-			wantPayload:       []byte("b"),
-		},
-		{
-			name: "notfound",
-			args: args{
-				path:          "/c",
-				contentFormat: message.TextPlain,
-				payload:       bytes.NewReader(make([]byte, 21)),
-			},
-			wantCode: codes.NotFound,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			l, err := coapNet.NewListenUDP("udp", "")
-			require.NoError(t, err)
-			defer func() {
-				errC := l.Close()
-				require.NoError(t, errC)
-			}()
-			var wg sync.WaitGroup
-			defer wg.Wait()
-
-			m := mux.NewRouter()
-			err = m.Handle("/a", mux.HandlerFunc(func(w mux.ResponseWriter, r *mux.Message) {
-				assert.Equal(t, codes.PUT, r.Code())
-				ct, errH := r.Options().GetUint32(message.ContentFormat)
-				require.NoError(t, errH)
-				assert.Equal(t, message.TextPlain, message.MediaType(ct))
-				buf, errH := ioutil.ReadAll(r.Body())
-				require.NoError(t, errH)
-				assert.Len(t, buf, 7000)
-
-				errH = w.SetResponse(codes.BadRequest, message.TextPlain, bytes.NewReader(make([]byte, 5330)))
-				require.NoError(t, errH)
-				require.NotEmpty(t, w.ClientConn())
-			}))
-			require.NoError(t, err)
-			err = m.Handle("/b", mux.HandlerFunc(func(w mux.ResponseWriter, r *mux.Message) {
-				assert.Equal(t, codes.PUT, r.Code())
-				ct, errH := r.Options().GetUint32(message.ContentFormat)
-				require.NoError(t, errH)
-				assert.Equal(t, message.TextPlain, message.MediaType(ct))
-				buf, errH := ioutil.ReadAll(r.Body())
-				require.NoError(t, errH)
-				assert.Equal(t, buf, []byte("b-send"))
-				errH = w.SetResponse(codes.Content, message.TextPlain, bytes.NewReader([]byte("b")))
-				require.NoError(t, errH)
-				require.NotEmpty(t, w.ClientConn())
-			}))
-			require.NoError(t, err)
-
-			s := udp.NewServer(options.WithMux(m))
-			defer s.Stop()
-
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
-				errS := s.Serve(l)
-				require.NoError(t, errS)
-			}()
-
-			cc, err := udp.Dial(l.LocalAddr().String())
-			require.NoError(t, err)
-			defer func() {
-				errC := cc.Close()
-				require.NoError(t, errC)
-			}()
-
-			ctx, cancel := context.WithTimeout(context.Background(), time.Second*3600)
-			defer cancel()
-			got, err := cc.Put(ctx, tt.args.path, tt.args.contentFormat, tt.args.payload, tt.args.opts...)
-			if tt.wantErr {
-				require.Error(t, err)
-				return
-			}
-			require.NoError(t, err)
-			require.Equal(t, tt.wantCode, got.Code())
-			if tt.wantContentFormat != nil {
-				ct, err := got.ContentFormat()
-				require.NoError(t, err)
-				require.Equal(t, *tt.wantContentFormat, ct)
-				buf := bytes.NewBuffer(nil)
-				_, err = buf.ReadFrom(got.Body())
-				require.NoError(t, err)
-				require.Equal(t, tt.wantPayload, buf.Bytes())
-			}
-		})
-	}
+	testClientConnPut(t, 1)
 }
 
-func TestClientConnDelete(t *testing.T) {
+/*
+func TestParallelClientConnPut(t *testing.T) {
+	testClientConnPut(t, testNumParallel)
+}
+*/
+
+func testClientConnDelete(t *testing.T, numParallel int) {
 	type args struct {
 		path string
 		opts message.Options
@@ -715,27 +768,45 @@ func TestClientConnDelete(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			ctx, cancel := context.WithTimeout(context.Background(), time.Second*3600)
-			defer cancel()
-			got, err := cc.Delete(ctx, tt.args.path, tt.args.opts...)
-			if tt.wantErr {
-				require.Error(t, err)
-				return
+			var wgNumParallel sync.WaitGroup
+			wgNumParallel.Add(numParallel)
+			for i := 0; i < numParallel; i++ {
+				go func() {
+					defer wgNumParallel.Done()
+					ctx, cancel := context.WithTimeout(context.Background(), time.Second*30)
+					defer cancel()
+					got, err := cc.Delete(ctx, tt.args.path, tt.args.opts...)
+					if tt.wantErr {
+						require.Error(t, err)
+						return
+					}
+					require.NoError(t, err)
+					require.Equal(t, tt.wantCode, got.Code())
+					if tt.wantContentFormat != nil {
+						ct, err := got.ContentFormat()
+						require.NoError(t, err)
+						require.Equal(t, *tt.wantContentFormat, ct)
+						buf := bytes.NewBuffer(nil)
+						_, err = buf.ReadFrom(got.Body())
+						require.NoError(t, err)
+						require.Equal(t, tt.wantPayload, buf.Bytes())
+					}
+				}()
 			}
-			require.NoError(t, err)
-			require.Equal(t, tt.wantCode, got.Code())
-			if tt.wantContentFormat != nil {
-				ct, err := got.ContentFormat()
-				require.NoError(t, err)
-				require.Equal(t, *tt.wantContentFormat, ct)
-				buf := bytes.NewBuffer(nil)
-				_, err = buf.ReadFrom(got.Body())
-				require.NoError(t, err)
-				require.Equal(t, tt.wantPayload, buf.Bytes())
-			}
+			wgNumParallel.Wait()
 		})
 	}
 }
+
+func TestClientConnDelete(t *testing.T) {
+	testClientConnDelete(t, 1)
+}
+
+/*
+func TestParallelClientConnDelete(t *testing.T) {
+	testClientConnDelete(t, testNumParallel)
+}
+*/
 
 func TestClientConnPing(t *testing.T) {
 	l, err := coapNet.NewListenUDP("udp", "")
