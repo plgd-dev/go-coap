@@ -60,6 +60,10 @@ func (r *Message) Context() context.Context {
 	return r.ctx
 }
 
+func (r *Message) SetContext(ctx context.Context) {
+	r.ctx = ctx
+}
+
 func (r *Message) SetMessage(message message.Message) {
 	r.Reset()
 	r.msg = message
