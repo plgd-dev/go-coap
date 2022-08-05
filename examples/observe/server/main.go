@@ -21,7 +21,7 @@ func getPath(opts message.Options) string {
 	return path
 }
 
-func sendResponse(cc mux.Client, token []byte, subded time.Time, obs int64) error {
+func sendResponse(cc mux.ClientConn, token []byte, subded time.Time, obs int64) error {
 	m := cc.AcquireMessage(cc.Context())
 	defer cc.ReleaseMessage(m)
 	m.SetCode(codes.Content)
@@ -34,7 +34,7 @@ func sendResponse(cc mux.Client, token []byte, subded time.Time, obs int64) erro
 	return cc.WriteMessage(m)
 }
 
-func periodicTransmitter(cc mux.Client, token []byte) {
+func periodicTransmitter(cc mux.ClientConn, token []byte) {
 	subded := time.Now()
 
 	for obs := int64(2); ; obs++ {

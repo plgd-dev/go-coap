@@ -16,13 +16,13 @@ import (
 	"github.com/plgd-dev/go-coap/v3/udp/server"
 )
 
-// A DialOption sets options such as credentials, keepalive parameters, etc.
-type DialOption interface {
+// A Option sets options such as credentials, keepalive parameters, etc.
+type Option interface {
 	UDPClientApply(cfg *client.Config)
 }
 
 // Dial creates a client connection to the given target.
-func Dial(target string, opts ...DialOption) (*client.ClientConn, error) {
+func Dial(target string, opts ...Option) (*client.ClientConn, error) {
 	cfg := client.DefaultConfig
 	for _, o := range opts {
 		o.UDPClientApply(&cfg)
@@ -40,7 +40,7 @@ func Dial(target string, opts ...DialOption) (*client.ClientConn, error) {
 }
 
 // Client creates client over udp connection.
-func Client(conn *net.UDPConn, opts ...DialOption) *client.ClientConn {
+func Client(conn *net.UDPConn, opts ...Option) *client.ClientConn {
 	cfg := client.DefaultConfig
 	for _, o := range opts {
 		o.UDPClientApply(&cfg)

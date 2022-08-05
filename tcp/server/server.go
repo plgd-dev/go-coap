@@ -17,8 +17,8 @@ import (
 	"github.com/plgd-dev/go-coap/v3/tcp/client"
 )
 
-// A ServerOption sets options such as credentials, codec and keepalive parameters, etc.
-type ServerOption interface {
+// A Option sets options such as credentials, codec and keepalive parameters, etc.
+type Option interface {
 	TCPServerApply(cfg *Config)
 }
 
@@ -36,7 +36,7 @@ type Server struct {
 	cfg         *Config
 }
 
-func New(opt ...ServerOption) *Server {
+func New(opt ...Option) *Server {
 	cfg := DefaultConfig
 	for _, o := range opt {
 		o.TCPServerApply(&cfg)

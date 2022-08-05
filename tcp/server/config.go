@@ -13,11 +13,6 @@ import (
 	"github.com/plgd-dev/go-coap/v3/tcp/client"
 )
 
-// A ServerOption sets options such as credentials, codec and keepalive parameters, etc.
-type TCPServerOption interface {
-	TCPServerApply(*Config)
-}
-
 // The HandlerFunc type is an adapter to allow the use of
 // ordinary functions as COAP handlers.
 type HandlerFunc = func(*responsewriter.ResponseWriter[*client.ClientConn], *pool.Message)
