@@ -99,6 +99,11 @@ func (c *Client[C]) Observe(ctx context.Context, path string, observeFunc func(r
 		return nil, err
 	}
 	defer c.cc.ReleaseMessage(req)
+	return c.DoObserve(req, observeFunc)
+}
+
+// DoObserve subscribes for every change with request.
+func (c *Client[C]) DoObserve(req *pool.Message, observeFunc func(req *pool.Message), opts ...message.Option) (Observation, error) {
 	return c.observationHandler.NewObservation(req, observeFunc)
 }
 
