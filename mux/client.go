@@ -41,4 +41,5 @@ type ClientConn interface {
 	Sequence() uint64
 	// Done signalizes that connection is not more processed.
 	Done() <-chan struct{}
+	AddOnClose(func())
 }
