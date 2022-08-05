@@ -42,4 +42,10 @@ type ClientConn interface {
 	// Done signalizes that connection is not more processed.
 	Done() <-chan struct{}
 	AddOnClose(func())
+
+	NewGetRequest(ctx context.Context, path string, opts ...message.Option) (*pool.Message, error)
+	NewObserveRequest(ctx context.Context, path string, opts ...message.Option) (*pool.Message, error)
+	NewPutRequest(ctx context.Context, path string, contentFormat message.MediaType, payload io.ReadSeeker, opts ...message.Option) (*pool.Message, error)
+	NewPostRequest(ctx context.Context, path string, contentFormat message.MediaType, payload io.ReadSeeker, opts ...message.Option) (*pool.Message, error)
+	NewDeleteRequest(ctx context.Context, path string, opts ...message.Option) (*pool.Message, error)
 }
