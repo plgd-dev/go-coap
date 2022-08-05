@@ -33,7 +33,7 @@ var DefaultConfig = func() udpClient.Config {
 }()
 
 // Dial creates a client connection to the given target.
-func Dial(target string, dtlsCfg *dtls.Config, opts ...udp.DialOption) (*udpClient.ClientConn, error) {
+func Dial(target string, dtlsCfg *dtls.Config, opts ...udp.Option) (*udpClient.ClientConn, error) {
 	cfg := DefaultConfig
 	for _, o := range opts {
 		o.UDPClientApply(&cfg)
@@ -53,7 +53,7 @@ func Dial(target string, dtlsCfg *dtls.Config, opts ...udp.DialOption) (*udpClie
 }
 
 // Client creates client over dtls connection.
-func Client(conn *dtls.Conn, opts ...udp.DialOption) *udpClient.ClientConn {
+func Client(conn *dtls.Conn, opts ...udp.Option) *udpClient.ClientConn {
 	cfg := DefaultConfig
 	for _, o := range opts {
 		o.UDPClientApply(&cfg)

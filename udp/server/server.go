@@ -37,7 +37,7 @@ type Server struct {
 	cfg *Config
 }
 
-// A ServerOption sets options such as credentials, codec and keepalive parameters, etc.
+// A Option sets options such as credentials, codec and keepalive parameters, etc.
 type Option interface {
 	UDPServerApply(cfg *Config)
 }

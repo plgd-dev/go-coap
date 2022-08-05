@@ -34,7 +34,7 @@ type Server struct {
 	listen      Listener
 }
 
-// A ServerOption sets options such as credentials, codec and keepalive parameters, etc.
+// A Option sets options such as credentials, codec and keepalive parameters, etc.
 type Option interface {
 	DTLSServerApply(cfg *Config)
 }
