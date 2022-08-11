@@ -100,6 +100,7 @@ func Client(conn *dtls.Conn, opts ...udp.Option) *udpClient.ClientConn {
 	session := server.NewSession(cfg.Ctx,
 		l,
 		cfg.MaxMessageSize,
+		cfg.MTU,
 		cfg.CloseSocket,
 	)
 	cc := udpClient.NewClientConn(session,

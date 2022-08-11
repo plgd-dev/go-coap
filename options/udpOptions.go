@@ -44,3 +44,27 @@ func WithTransmission(transmissionNStart time.Duration,
 		transmissionMaxRetransmit:      transmissionMaxRetransmit,
 	}
 }
+
+// MTUOpt transmission options.
+type MTUOpt struct {
+	mtu uint16
+}
+
+func (o MTUOpt) UDPServerApply(cfg *udpServer.Config) {
+	cfg.MTU = o.mtu
+}
+
+func (o MTUOpt) DTLSServerApply(cfg *dtlsServer.Config) {
+	cfg.MTU = o.mtu
+}
+
+func (o MTUOpt) UDPClientApply(cfg *udpClient.Config) {
+	cfg.MTU = o.mtu
+}
+
+// Setup MTU unit
+func WithMTU(mtu uint16) MTUOpt {
+	return MTUOpt{
+		mtu: mtu,
+	}
+}

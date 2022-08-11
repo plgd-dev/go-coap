@@ -90,6 +90,7 @@ func Client(conn *net.UDPConn, opts ...Option) *client.ClientConn {
 		l,
 		addr,
 		cfg.MaxMessageSize,
+		cfg.MTU,
 		cfg.CloseSocket,
 		context.Background(),
 	)
