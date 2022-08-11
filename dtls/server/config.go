@@ -43,6 +43,7 @@ var DefaultConfig = func() Config {
 		TransmissionAcknowledgeTimeout: time.Second * 2,
 		TransmissionMaxRetransmit:      4,
 		GetMID:                         message.GetMID,
+		MTU:                            udpClient.DefaultMTU,
 	}
 	opts.Handler = func(w *responsewriter.ResponseWriter[*udpClient.ClientConn], r *pool.Message) {
 		if err := w.SetResponse(codes.NotFound, message.TextPlain, nil); err != nil {
@@ -61,4 +62,5 @@ type Config struct {
 	TransmissionNStart             time.Duration
 	TransmissionAcknowledgeTimeout time.Duration
 	TransmissionMaxRetransmit      uint32
+	MTU                            uint16
 }

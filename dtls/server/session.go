@@ -30,6 +30,8 @@ type Session struct {
 
 	maxMessageSize uint32
 
+	mtu uint16
+
 	closeSocket bool
 }
 
@@ -37,6 +39,7 @@ func NewSession(
 	ctx context.Context,
 	connection *coapNet.Conn,
 	maxMessageSize uint32,
+	mtu uint16,
 	closeSocket bool,
 ) *Session {
 	ctx, cancel := context.WithCancel(ctx)
@@ -45,6 +48,7 @@ func NewSession(
 		connection:     connection,
 		maxMessageSize: maxMessageSize,
 		closeSocket:    closeSocket,
+		mtu:            mtu,
 		done:           make(chan struct{}),
 	}
 	s.ctx.Store(&ctx)
@@ -136,7 +140,7 @@ func (s *Session) Run(cc *client.ClientConn) (err error) {
 		}
 		s.shutdown()
 	}()
-	m := make([]byte, s.maxMessageSize)
+	m := make([]byte, s.mtu)
 	for {
 		readBuf := m
 		readLen, err := s.connection.ReadWithContext(s.Context(), readBuf)

@@ -295,6 +295,7 @@ func (s *Server) getOrCreateClientConn(UDPConn *coapNet.UDPConn, raddr *net.UDPA
 			UDPConn,
 			raddr,
 			s.cfg.MaxMessageSize,
+			s.cfg.MTU,
 			false,
 			s.doneCtx,
 		)

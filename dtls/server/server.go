@@ -212,6 +212,7 @@ func (s *Server) createClientConn(connection *coapNet.Conn, monitor udpClient.In
 		s.ctx,
 		connection,
 		s.cfg.MaxMessageSize,
+		s.cfg.MTU,
 		true,
 	)
 	cfg := udpClient.DefaultConfig

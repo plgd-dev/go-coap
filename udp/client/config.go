@@ -13,6 +13,8 @@ import (
 	"github.com/plgd-dev/go-coap/v3/options/config"
 )
 
+const DefaultMTU = 1472
+
 var DefaultConfig = func() Config {
 	opts := Config{
 		Common: config.DefaultCommon(),
@@ -25,6 +27,7 @@ var DefaultConfig = func() Config {
 		TransmissionAcknowledgeTimeout: time.Second * 2,
 		TransmissionMaxRetransmit:      4,
 		GetMID:                         message.GetMID,
+		MTU:                            DefaultMTU,
 	}
 	opts.Handler = func(w *responsewriter.ResponseWriter[*ClientConn], r *pool.Message) {
 		switch r.Code() {
@@ -48,4 +51,5 @@ type Config struct {
 	TransmissionAcknowledgeTimeout time.Duration
 	TransmissionMaxRetransmit      uint32
 	CloseSocket                    bool
+	MTU                            uint16
 }

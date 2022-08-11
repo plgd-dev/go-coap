@@ -29,6 +29,7 @@ type Session struct {
 
 	mutex          sync.Mutex
 	maxMessageSize uint32
+	mtu            uint16
 
 	closeSocket bool
 }
@@ -38,6 +39,7 @@ func NewSession(
 	connection *coapNet.UDPConn,
 	raddr *net.UDPAddr,
 	maxMessageSize uint32,
+	mtu uint16,
 	closeSocket bool,
 	doneCtx context.Context,
 ) *Session {
@@ -49,6 +51,7 @@ func NewSession(
 		connection:     connection,
 		raddr:          raddr,
 		maxMessageSize: maxMessageSize,
+		mtu:            mtu,
 		closeSocket:    closeSocket,
 		doneCtx:        doneCtx,
 		doneCancel:     doneCancel,
@@ -131,7 +134,7 @@ func (s *Session) Run(cc *client.ClientConn) (err error) {
 		}
 		s.shutdown()
 	}()
-	m := make([]byte, s.maxMessageSize)
+	m := make([]byte, s.mtu)
 	for {
 		buf := m
 		n, _, err := s.connection.ReadWithContext(s.Context(), buf)
