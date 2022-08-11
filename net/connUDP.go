@@ -136,14 +136,14 @@ func IsIPv6(addr net.IP) bool {
 	return false
 }
 
-var defaultUDPConnOptions = udpConnOptions{
-	errors: func(err error) {
+var DefaultUDPConnConfig = UDPConnConfig{
+	Errors: func(err error) {
 		// don't log any error from fails for multicast requests
 	},
 }
 
-type udpConnOptions struct {
-	errors func(err error)
+type UDPConnConfig struct {
+	Errors func(err error)
 }
 
 func NewListenUDP(network, addr string, opts ...UDPOption) (*UDPConn, error) {
@@ -160,9 +160,9 @@ func NewListenUDP(network, addr string, opts ...UDPOption) (*UDPConn, error) {
 
 // NewUDPConn creates connection over net.UDPConn.
 func NewUDPConn(network string, c *net.UDPConn, opts ...UDPOption) *UDPConn {
-	cfg := defaultUDPConnOptions
+	cfg := DefaultUDPConnConfig
 	for _, o := range opts {
-		o.applyUDP(&cfg)
+		o.ApplyUDP(&cfg)
 	}
 
 	var pc packetConn
@@ -176,7 +176,7 @@ func NewUDPConn(network string, c *net.UDPConn, opts ...UDPOption) *UDPConn {
 		network:    network,
 		connection: c,
 		packetConn: pc,
-		errors:     cfg.errors,
+		errors:     cfg.Errors,
 	}
 }
 

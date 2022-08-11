@@ -4,15 +4,15 @@ import "net"
 
 // A UDPOption sets options such as errors parameters, etc.
 type UDPOption interface {
-	applyUDP(*udpConnOptions)
+	ApplyUDP(*UDPConnConfig)
 }
 
 type ErrorsOpt struct {
 	errors func(err error)
 }
 
-func (h ErrorsOpt) applyUDP(o *udpConnOptions) {
-	o.errors = h.errors
+func (h ErrorsOpt) ApplyUDP(o *UDPConnConfig) {
+	o.Errors = h.errors
 }
 
 func WithErrors(v func(err error)) ErrorsOpt {
@@ -119,4 +119,25 @@ func (m MulticastInterfaceErrorOpt) applyMC(o *MulticastOptions) {
 // WithMulticastInterfaceError sets the callback for interface errors. If it is set error is not propagated as result of WriteMulticast.
 func WithMulticastInterfaceError(interfaceError InterfaceError) MulticastOption {
 	return &MulticastInterfaceErrorOpt{interfaceError: interfaceError}
+}
+
+// A DTLSListenerOption sets options such as gopool.
+type DTLSListenerOption interface {
+	ApplyDTLS(*DTLSListenerConfig)
+}
+
+// GoPoolOpt gopool option.
+type GoPoolOpt struct {
+	goPool GoPoolFunc
+}
+
+func (o GoPoolOpt) ApplyDTLS(cfg *DTLSListenerConfig) {
+	cfg.GoPool = o.goPool
+}
+
+// WithGoPool sets function for managing spawning go routines
+// for handling incoming request's.
+// Eg: https://github.com/panjf2000/ants.
+func WithGoPool(goPool GoPoolFunc) GoPoolOpt {
+	return GoPoolOpt{goPool: goPool}
 }
