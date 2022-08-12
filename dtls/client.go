@@ -14,7 +14,6 @@ import (
 	"github.com/plgd-dev/go-coap/v3/net/monitor/inactivity"
 	"github.com/plgd-dev/go-coap/v3/net/responsewriter"
 	"github.com/plgd-dev/go-coap/v3/options"
-	"github.com/plgd-dev/go-coap/v3/pkg/cache"
 	"github.com/plgd-dev/go-coap/v3/udp"
 	udpClient "github.com/plgd-dev/go-coap/v3/udp/client"
 )
@@ -85,12 +84,14 @@ func Client(conn *dtls.Conn, opts ...udp.Option) *udpClient.ClientConn {
 	}
 	if cfg.BlockwiseEnable {
 		createBlockWise = func(cc *udpClient.ClientConn) *blockwise.BlockWise[*udpClient.ClientConn] {
+			v := cc
 			return blockwise.New(
-				cc,
+				v,
 				cfg.BlockwiseTransferTimeout,
 				cfg.Errors,
-				false,
-				cc.GetObservationRequest,
+				func(token message.Token) (*pool.Message, bool) {
+					return v.GetObservationRequest(token)
+				},
 			)
 		}
 	}
@@ -106,7 +107,6 @@ func Client(conn *dtls.Conn, opts ...udp.Option) *udpClient.ClientConn {
 	cc := udpClient.NewClientConn(session,
 		createBlockWise,
 		monitor,
-		cache.NewCache[string, []byte](),
 		&cfg,
 	)
 

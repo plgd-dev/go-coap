@@ -25,7 +25,7 @@ type ClientConn interface {
 }
 
 type Client[C ClientConn] struct {
-	cc                 C
+	cc                 ClientConn
 	observationHandler *observation.Handler[C]
 	getToken           GetTokenFunc
 }
