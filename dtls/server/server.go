@@ -13,7 +13,6 @@ import (
 	coapNet "github.com/plgd-dev/go-coap/v3/net"
 	"github.com/plgd-dev/go-coap/v3/net/blockwise"
 	"github.com/plgd-dev/go-coap/v3/net/monitor/inactivity"
-	"github.com/plgd-dev/go-coap/v3/pkg/cache"
 	"github.com/plgd-dev/go-coap/v3/pkg/connections"
 	udpClient "github.com/plgd-dev/go-coap/v3/udp/client"
 )
@@ -25,10 +24,9 @@ type Listener interface {
 }
 
 type Server struct {
-	ctx              context.Context
-	cancel           context.CancelFunc
-	responseMsgCache *cache.Cache[string, []byte]
-	cfg              *Config
+	ctx    context.Context
+	cancel context.CancelFunc
+	cfg    *Config
 
 	listenMutex sync.Mutex
 	listen      Listener
@@ -80,10 +78,9 @@ func New(opt ...Option) *Server {
 	}
 
 	return &Server{
-		ctx:              ctx,
-		cancel:           cancel,
-		responseMsgCache: cache.NewCache[string, []byte](),
-		cfg:              &cfg,
+		ctx:    ctx,
+		cancel: cancel,
+		cfg:    &cfg,
 	}
 }
 
@@ -197,13 +194,13 @@ func (s *Server) createClientConn(connection *coapNet.Conn, monitor udpClient.In
 	}
 	if s.cfg.BlockwiseEnable {
 		createBlockWise = func(cc *udpClient.ClientConn) *blockwise.BlockWise[*udpClient.ClientConn] {
+			v := cc
 			return blockwise.New(
-				cc,
+				v,
 				s.cfg.BlockwiseTransferTimeout,
 				s.cfg.Errors,
-				false,
 				func(token message.Token) (*pool.Message, bool) {
-					return nil, false
+					return v.GetObservationRequest(token)
 				},
 			)
 		}
@@ -230,7 +227,6 @@ func (s *Server) createClientConn(connection *coapNet.Conn, monitor udpClient.In
 		session,
 		createBlockWise,
 		monitor,
-		s.responseMsgCache,
 		&cfg,
 	)
 

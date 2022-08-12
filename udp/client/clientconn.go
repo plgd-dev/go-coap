@@ -114,7 +114,6 @@ func NewClientConn(
 	session Session,
 	createBlockWise func(cc *ClientConn) *blockwise.BlockWise[*ClientConn],
 	inactivityMonitor InactivityMonitor,
-	responseMsgCache *cache.Cache[string, []byte],
 	cfg *Config,
 ) *ClientConn {
 	if cfg.Errors == nil {
@@ -143,7 +142,7 @@ func NewClientConn(
 		goPool:                cfg.GoPool,
 		errors:                cfg.Errors,
 		msgIDMutex:            NewMutexMap(),
-		responseMsgCache:      responseMsgCache,
+		responseMsgCache:      cache.NewCache[string, []byte](),
 		inactivityMonitor:     inactivityMonitor,
 		messagePool:           cfg.MessagePool,
 	}
@@ -598,6 +597,7 @@ func (cc *ClientConn) Done() <-chan struct{} {
 // CheckExpirations checks and remove expired items from caches.
 func (cc *ClientConn) CheckExpirations(now time.Time) {
 	cc.inactivityMonitor.CheckInactivity(now, cc)
+	cc.responseMsgCache.CheckExpirations(now)
 	if cc.blockWise != nil {
 		cc.blockWise.CheckExpirations(now)
 	}

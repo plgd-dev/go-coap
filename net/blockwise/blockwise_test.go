@@ -5,7 +5,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"sync"
 	"testing"
 	"time"
 
@@ -80,10 +79,12 @@ func makeDo[C Client](t *testing.T, sender, receiver *BlockWise[C], senderMaxSZX
 				var resp *pool.Message
 				receiverResp := responsewriter.New(receiver.cc.AcquireMessage(roReq.Context()), receiver.cc)
 				receiver.Handle(receiverResp, roReq, senderMaxSZX, senderMaxMessageSize, next)
+				t.Logf("receiver.Handle - receiverResp %v senderResp.Message: %v\n", receiverResp.Message(), roReq)
 				senderResp := responsewriter.New(sender.cc.AcquireMessage(roReq.Context()), sender.cc)
 				sender.Handle(senderResp, receiverResp.Message(), receiverMaxSZX, receiverMaxMessageSize, func(w *responsewriter.ResponseWriter[C], r *pool.Message) {
 					resp = r
 				})
+				t.Logf("sender.Handle - senderResp %v receiverResp.Message: %v\n", senderResp.Message(), receiverResp.Message())
 				if resp != nil {
 					c <- resp
 					return
@@ -97,8 +98,8 @@ func makeDo[C Client](t *testing.T, sender, receiver *BlockWise[C], senderMaxSZX
 }
 
 func TestBlockWiseDo(t *testing.T) {
-	sender := New(newTestClient(), time.Second*3600, func(err error) { t.Log(err) }, true, nil)
-	receiver := New(newTestClient(), time.Second*3600, func(err error) { t.Log(err) }, true, nil)
+	sender := New(newTestClient(), time.Second*3600, func(err error) { t.Log(err) }, nil)
+	receiver := New(newTestClient(), time.Second*3600, func(err error) { t.Log(err) }, nil)
 	type args struct {
 		r              *testmessage
 		szx            SZX
@@ -303,15 +304,20 @@ func TestBlockWiseDo(t *testing.T) {
 				assert.Error(t, err)
 				return
 			}
+			receivingMessagesCache := sender.receivingMessagesCache.PullOutAll()
+			require.Len(t, receivingMessagesCache, 0)
+			sendingMessagesCache := sender.sendingMessagesCache.PullOutAll()
+			require.Len(t, sendingMessagesCache, 0)
 			require.NoError(t, err)
 			assert.Equal(t, tt.want, fromPoolMessage(got))
 		})
 	}
 }
 
+/*
 func TestBlockWiseParallel(t *testing.T) {
-	sender := New(newTestClient(), time.Second*3600, func(err error) { t.Log(err) }, true, nil)
-	receiver := New(newTestClient(), time.Second*3600, func(err error) { t.Log(err) }, true, nil)
+	sender := New(newTestClient(), time.Second*3600, func(err error) { t.Log(err) }, nil)
+	receiver := New(newTestClient(), time.Second*3600, func(err error) { t.Log(err) }, nil)
 	type args struct {
 		r              *testmessage
 		szx            SZX
@@ -393,6 +399,7 @@ func TestBlockWiseParallel(t *testing.T) {
 		})
 	}
 }
+*/
 
 func TestEncodeBlockOption(t *testing.T) {
 	type args struct {
@@ -518,9 +525,9 @@ func makeWriteReq[C Client](t *testing.T, sender, receiver *BlockWise[C], sender
 	}
 }
 
-func TestBlockWiseWritetestmessage(t *testing.T) {
-	sender := New(newTestClient(), time.Second*3600, func(err error) { t.Log(err) }, true, nil)
-	receiver := New(newTestClient(), time.Second*3600, func(err error) { t.Log(err) }, true, nil)
+func TestBlockWiseWriteTestMessage(t *testing.T) {
+	sender := New(newTestClient(), time.Second*3600, func(err error) { t.Log(err) }, nil)
+	receiver := New(newTestClient(), time.Second*3600, func(err error) { t.Log(err) }, nil)
 	type args struct {
 		r                *testmessage
 		szx              SZX

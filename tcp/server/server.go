@@ -196,7 +196,6 @@ func (s *Server) createClientConn(connection *coapNet.Conn, monitor client.Inact
 				cc,
 				s.cfg.BlockwiseTransferTimeout,
 				s.cfg.Errors,
-				false,
 				func(token message.Token) (*pool.Message, bool) {
 					return nil, false
 				},

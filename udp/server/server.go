@@ -251,24 +251,6 @@ func getClose(cc *client.ClientConn) func() {
 	return v.(func())
 }
 
-func bwCreateHandlerFunc(messagePool *pool.Pool, observatioRequests *client.RequestsMap) func(token message.Token) (*pool.Message, bool) {
-	return func(token message.Token) (*pool.Message, bool) {
-		var bwMessage *pool.Message
-		_, ok := observatioRequests.LoadWithFunc(token.Hash(), func(m *pool.Message) *pool.Message {
-			bwMessage = messagePool.AcquireMessage(m.Context())
-			bwMessage.ResetOptionsTo(m.Options())
-			bwMessage.SetCode(m.Code())
-			bwMessage.SetToken(m.Token())
-			bwMessage.SetMessageID(m.MessageID())
-			return m
-		})
-		if !ok {
-			return nil, false
-		}
-		return bwMessage, true
-	}
-}
-
 func (s *Server) getOrCreateClientConn(UDPConn *coapNet.UDPConn, raddr *net.UDPAddr) (cc *client.ClientConn, created bool) {
 	s.connsMutex.Lock()
 	defer s.connsMutex.Unlock()
@@ -281,13 +263,25 @@ func (s *Server) getOrCreateClientConn(UDPConn *coapNet.UDPConn, raddr *net.UDPA
 		}
 		if s.cfg.BlockwiseEnable {
 			createBlockWise = func(cc *client.ClientConn) *blockwise.BlockWise[*client.ClientConn] {
+				v := cc
 				return blockwise.New(
-					cc,
+					v,
 					s.cfg.BlockwiseTransferTimeout,
 					s.cfg.Errors,
-					false,
-					bwCreateHandlerFunc(s.cfg.MessagePool, s.multicastRequests),
-				)
+					func(token message.Token) (*pool.Message, bool) {
+						msg, ok := v.GetObservationRequest(token)
+						if ok {
+							return msg, ok
+						}
+						return s.multicastRequests.LoadWithFunc(token.Hash(), func(m *pool.Message) *pool.Message {
+							msg := v.AcquireMessage(m.Context())
+							msg.ResetOptionsTo(m.Options())
+							msg.SetCode(m.Code())
+							msg.SetToken(m.Token())
+							msg.SetMessageID(m.MessageID())
+							return msg
+						})
+					})
 			}
 		}
 		session := NewSession(
@@ -323,7 +317,6 @@ func (s *Server) getOrCreateClientConn(UDPConn *coapNet.UDPConn, raddr *net.UDPA
 			session,
 			createBlockWise,
 			monitor,
-			s.responseMsgCache,
 			&cfg,
 		)
 		cc.SetContextValue(closeKey, func() {

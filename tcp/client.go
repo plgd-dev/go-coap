@@ -6,6 +6,7 @@ import (
 	"net"
 	"time"
 
+	"github.com/plgd-dev/go-coap/v3/message"
 	"github.com/plgd-dev/go-coap/v3/message/pool"
 	coapNet "github.com/plgd-dev/go-coap/v3/net"
 	"github.com/plgd-dev/go-coap/v3/net/blockwise"
@@ -73,12 +74,14 @@ func Client(conn net.Conn, opts ...Option) *client.ClientConn {
 	}
 	if cfg.BlockwiseEnable {
 		createBlockWise = func(cc *client.ClientConn) *blockwise.BlockWise[*client.ClientConn] {
+			v := cc
 			return blockwise.New(
-				cc,
+				v,
 				cfg.BlockwiseTransferTimeout,
 				cfg.Errors,
-				false,
-				cc.GetObservationRequest,
+				func(token message.Token) (*pool.Message, bool) {
+					return v.GetObservationRequest(token)
+				},
 			)
 		}
 	}

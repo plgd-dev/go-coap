@@ -6,12 +6,12 @@ import (
 	"net"
 	"time"
 
+	"github.com/plgd-dev/go-coap/v3/message"
 	"github.com/plgd-dev/go-coap/v3/message/pool"
 	coapNet "github.com/plgd-dev/go-coap/v3/net"
 	"github.com/plgd-dev/go-coap/v3/net/blockwise"
 	"github.com/plgd-dev/go-coap/v3/net/monitor/inactivity"
 	"github.com/plgd-dev/go-coap/v3/options"
-	"github.com/plgd-dev/go-coap/v3/pkg/cache"
 	"github.com/plgd-dev/go-coap/v3/udp/client"
 	"github.com/plgd-dev/go-coap/v3/udp/server"
 )
@@ -73,18 +73,19 @@ func Client(conn *net.UDPConn, opts ...Option) *client.ClientConn {
 	}
 	if cfg.BlockwiseEnable {
 		createBlockWise = func(cc *client.ClientConn) *blockwise.BlockWise[*client.ClientConn] {
+			v := cc
 			return blockwise.New(
-				cc,
+				v,
 				cfg.BlockwiseTransferTimeout,
 				cfg.Errors,
-				false,
-				cc.GetObservationRequest,
+				func(token message.Token) (*pool.Message, bool) {
+					return v.GetObservationRequest(token)
+				},
 			)
 		}
 	}
 
 	monitor := cfg.CreateInactivityMonitor()
-	responseMsgCache := cache.NewCache[string, []byte]()
 	l := coapNet.NewUDPConn(cfg.Net, conn, coapNet.WithErrors(cfg.Errors))
 	session := server.NewSession(cfg.Ctx,
 		l,
@@ -97,7 +98,6 @@ func Client(conn *net.UDPConn, opts ...Option) *client.ClientConn {
 	cc := client.NewClientConn(session,
 		createBlockWise,
 		monitor,
-		responseMsgCache,
 		&cfg,
 	)
 	cfg.PeriodicRunner(func(now time.Time) bool {
