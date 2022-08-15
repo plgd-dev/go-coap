@@ -4,7 +4,7 @@ go 1.18
 
 require (
 	github.com/dsnet/golib/memfile v1.0.0
-	github.com/pion/dtls/v2 v2.1.5
+	github.com/pion/dtls/v2 v2.1.6-0.20220815090156-a04cfccb23e5
 	github.com/pion/udp v0.1.1
 	github.com/stretchr/testify v1.7.1
 	go.uber.org/atomic v1.9.0
