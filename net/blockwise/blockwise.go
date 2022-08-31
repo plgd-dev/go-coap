@@ -491,6 +491,10 @@ func (b *BlockWise) sendEntityIncomplete(w ResponseWriter, r Message, token mess
 	sendMessage := b.acquireMessage(w.Message().Context())
 	sendMessage.SetCode(codes.RequestEntityIncomplete)
 	sendMessage.SetToken(token)
+	if msg, ok := sendMessage.(hasType); ok {
+		msg.SetType(udpMessage.NonConfirmable)
+	}
+
 	setTypeFrom(sendMessage, r)
 	w.SetMessage(sendMessage)
 }
@@ -900,7 +904,6 @@ func (b *BlockWise) processReceivedMessage(w ResponseWriter, r Message, maxSzx S
 	szx = getSzx(szx, maxSzx)
 	sendMessage := b.acquireMessage(r.Context())
 	sendMessage.SetToken(token)
-	// TODO What to set type to?
 	if blockType == message.Block2 {
 		num = payloadSize / szx.Size()
 		sendMessage.ResetOptionsTo(sentRequest.Options())
