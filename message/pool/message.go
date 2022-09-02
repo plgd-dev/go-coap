@@ -139,7 +139,7 @@ func (r *Message) SetCode(code codes.Code) {
 // AddETag appends value to existing ETags.
 //
 // Option definition:
-// 	- format: opaque, length: 1-8, repeatable
+// - format: opaque, length: 1-8, repeatable
 func (r *Message) AddETag(value []byte) error {
 	if !message.VerifyOptLen(message.ETag, len(value)) {
 		return message.ErrInvalidValueLength

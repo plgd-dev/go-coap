@@ -57,7 +57,7 @@ func (l *TCPListener) Accept() (net.Conn, error) {
 
 // Close closes the connection.
 func (l *TCPListener) Close() error {
-	if !l.closed.CAS(false, true) {
+	if !l.closed.CompareAndSwap(false, true) {
 		return nil
 	}
 	return l.listener.Close()
