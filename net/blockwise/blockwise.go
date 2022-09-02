@@ -316,7 +316,10 @@ func (b *BlockWise) Do(r Message, maxSzx SZX, maxMessageSize uint32, do func(req
 		}
 		block, err = resp.GetOptionUint32(message.Block1)
 		if err != nil {
-			return resp, nil
+			if errors.Is(err, message.ErrOptionNotFound) {
+				return resp, nil
+			}
+			return nil, fmt.Errorf("cannot get Block(optionID=%d) option: %w", message.Block1, err)
 		}
 		switch resp.Code() {
 		case codes.Continue:
@@ -338,7 +341,7 @@ func (b *BlockWise) Do(r Message, maxSzx SZX, maxMessageSize uint32, do func(req
 			return resp, fmt.Errorf("unexpected value of acknowledged sequence number(%v != %v)", num, newNum)
 		}
 
-		num = num + newSzx.Size()/szx.Size()
+		num += newSzx.Size() / szx.Size()
 		szx = newSzx
 	}
 }
@@ -671,7 +674,7 @@ func (b *BlockWise) getSentRequest(token message.Token) Message {
 	return nil
 }
 
-func (b *BlockWise) handleObserveResponse(r, sentRequest Message) (message.Token, time.Time, error) {
+func (b *BlockWise) handleObserveResponse(sentRequest Message) (message.Token, time.Time, error) {
 	// https://tools.ietf.org/html/rfc7959#section-2.6 - performs GET with new token.
 	if sentRequest == nil {
 		return nil, time.Time{}, fmt.Errorf("observation is not registered")
@@ -774,8 +777,11 @@ func (b *BlockWise) processReceivedMessage(w ResponseWriter, r Message, maxSzx S
 	}
 	block, err := r.GetOptionUint32(blockType)
 	if err != nil {
-		next(w, r)
-		return nil
+		if errors.Is(err, message.ErrOptionNotFound) {
+			next(w, r)
+			return nil
+		}
+		return fmt.Errorf("cannot get Block(optionID=%d) option: %w", blockType, err)
 	}
 	szx, num, more, err := DecodeBlockOption(block)
 	if err != nil {
@@ -790,7 +796,7 @@ func (b *BlockWise) processReceivedMessage(w ResponseWriter, r Message, maxSzx S
 		return fmt.Errorf("cannot request body without paired request")
 	}
 	if isObserveResponse(r) {
-		token, validUntil, err = b.handleObserveResponse(r, sentRequest)
+		token, validUntil, err = b.handleObserveResponse(sentRequest)
 		if err != nil {
 			return fmt.Errorf("cannot process message: %w", err)
 		}

@@ -25,7 +25,7 @@ func EncodeUint32(buf []byte, value uint32) (int, error) {
 			return 3, ErrTooSmall
 		}
 		rv := make([]byte, 4)
-		binary.BigEndian.PutUint32(rv[:], value)
+		binary.BigEndian.PutUint32(rv, value)
 		copy(buf, rv[1:])
 		return 3, nil
 	default:

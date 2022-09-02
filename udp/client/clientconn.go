@@ -52,7 +52,7 @@ type Session interface {
 type RequestsMap = sync.Map[uint64, *pool.Message]
 
 // ClientConn represents a virtual connection to a conceptual endpoint, to perform COAPs commands.
-type ClientConn struct {
+type ClientConn struct { //nolint:revive
 	// This field needs to be the first in the struct to ensure proper word alignment on 32-bit platforms.
 	// See: https://golang.org/pkg/sync/atomic/#pkg-note-BUG
 	sequence uint64
@@ -509,7 +509,7 @@ func (cc *ClientConn) LocalAddr() net.Addr {
 	return cc.session.LocalAddr()
 }
 
-func (cc *ClientConn) sendPong(w *ResponseWriter, r *pool.Message) {
+func (cc *ClientConn) sendPong(w *ResponseWriter) {
 	if err := w.SetResponse(codes.Empty, message.TextPlain, nil); err != nil {
 		cc.errors(fmt.Errorf("cannot send pong response: %w", err))
 	}
@@ -559,7 +559,7 @@ func (cc *ClientConn) handleBW(w *ResponseWriter, m *pool.Message) {
 
 func (cc *ClientConn) handle(w *ResponseWriter, r *pool.Message) {
 	if r.Code() == codes.Empty && r.Type() == udpMessage.Confirmable && len(r.Token()) == 0 && len(r.Options()) == 0 && r.Body() == nil {
-		cc.sendPong(w, r)
+		cc.sendPong(w)
 		return
 	}
 	h, err := cc.midHandlerContainer.Pop(r.MessageID())
