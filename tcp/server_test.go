@@ -73,7 +73,7 @@ func TestServerCleanUpConns(t *testing.T) {
 	require.NoError(t, err)
 }
 
-func createTLSConfig(ctx context.Context) (serverConfig *tls.Config, clientConfig *tls.Config, clientSerial *big.Int, err error) {
+func createTLSConfig() (serverConfig *tls.Config, clientConfig *tls.Config, clientSerial *big.Int, err error) {
 	// root cert
 	ca, rootBytes, _, caPriv, err := pki.GenerateCA()
 	if err != nil {
@@ -127,7 +127,7 @@ func createTLSConfig(ctx context.Context) (serverConfig *tls.Config, clientConfi
 func TestServerSetContextValueWithPKI(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	serverCgf, clientCgf, clientSerial, err := createTLSConfig(ctx)
+	serverCgf, clientCgf, clientSerial, err := createTLSConfig()
 	require.NoError(t, err)
 
 	ld, err := coapNet.NewTLSListener("tcp4", "", serverCgf)

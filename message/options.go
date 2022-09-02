@@ -19,7 +19,7 @@ func GetPathBufferSize(path string) (int, error) {
 		subPath := path[start:]
 		segmentSize := strings.Index(subPath, "/")
 		if segmentSize == 0 {
-			start = start + 1
+			start++
 			continue
 		}
 		if segmentSize < 0 {
@@ -28,8 +28,8 @@ func GetPathBufferSize(path string) (int, error) {
 		if segmentSize > maxPathValue {
 			return -1, ErrInvalidValueLength
 		}
-		size = size + segmentSize
-		start = start + segmentSize + 1
+		size += segmentSize
+		start += segmentSize + 1
 	}
 	return size, nil
 }
@@ -54,7 +54,7 @@ func setPath(options Options, optionID OptionID, buf []byte, path string) (Optio
 		subPath := path[start:]
 		end := strings.Index(subPath, "/")
 		if end == 0 {
-			start = start + 1
+			start++
 			continue
 		}
 		if end < 0 {
@@ -68,7 +68,7 @@ func setPath(options Options, optionID OptionID, buf []byte, path string) (Optio
 			return o, -1, err
 		}
 		encoded += enc
-		start = start + end + 1
+		start += end + 1
 	}
 	return o, encoded, nil
 }
@@ -357,8 +357,8 @@ func (options Options) Accept() (MediaType, error) {
 }
 
 // Find returns range of type options. First number is index and second number is index of next option type.
-func (options Options) Find(ID OptionID) (int, int, error) {
-	idxPre, idxPost := options.findPosition(ID)
+func (options Options) Find(id OptionID) (int, int, error) {
+	idxPre, idxPost := options.findPosition(id)
 	if idxPre == -1 && idxPost == 0 {
 		return -1, -1, ErrOptionNotFound
 	}
@@ -368,7 +368,7 @@ func (options Options) Find(ID OptionID) (int, int, error) {
 	if idxPre < idxPost && idxPost-idxPre == 1 {
 		return -1, -1, ErrOptionNotFound
 	}
-	idxPre = idxPre + 1
+	idxPre++
 	if idxPost < 0 {
 		idxPost = len(options)
 	}
@@ -376,7 +376,7 @@ func (options Options) Find(ID OptionID) (int, int, error) {
 }
 
 // findPosition returns opened interval, -1 at means minIdx insert at 0, -1 maxIdx at maxIdx means append.
-func (options Options) findPosition(ID OptionID) (minIdx int, maxIdx int) {
+func (options Options) findPosition(id OptionID) (minIdx int, maxIdx int) {
 	if len(options) == 0 {
 		return -1, 0
 	}
@@ -385,19 +385,19 @@ func (options Options) findPosition(ID OptionID) (minIdx int, maxIdx int) {
 	minIdx = 0
 	for {
 		switch {
-		case ID == options[pivot].ID || (maxIdx-minIdx)/2 == 0:
-			for maxIdx = pivot; maxIdx < len(options) && options[maxIdx].ID <= ID; maxIdx++ {
+		case id == options[pivot].ID || (maxIdx-minIdx)/2 == 0:
+			for maxIdx = pivot; maxIdx < len(options) && options[maxIdx].ID <= id; maxIdx++ {
 			}
 			if maxIdx == len(options) {
 				maxIdx = -1
 			}
-			for minIdx = pivot; minIdx >= 0 && options[minIdx].ID >= ID; minIdx-- {
+			for minIdx = pivot; minIdx >= 0 && options[minIdx].ID >= id; minIdx-- {
 			}
 			return minIdx, maxIdx
-		case ID < options[pivot].ID:
+		case id < options[pivot].ID:
 			maxIdx = pivot
 			pivot = maxIdx - (maxIdx-minIdx)/2
-		case ID > options[pivot].ID:
+		case id > options[pivot].ID:
 			minIdx = pivot
 			pivot = minIdx + (maxIdx-minIdx)/2
 		}
@@ -482,8 +482,8 @@ func (options Options) Add(opt Option) Options {
 }
 
 // Remove removes all options with ID.
-func (options Options) Remove(ID OptionID) Options {
-	idxPre, idxPost, err := options.Find(ID)
+func (options Options) Remove(id OptionID) Options {
+	idxPre, idxPost, err := options.Find(id)
 	if err != nil {
 		return options
 	}
@@ -528,7 +528,7 @@ func (options Options) Marshal(buf []byte) (int, error) {
 		default:
 			return -1, err
 		}
-		length = length + optionLength
+		length += optionLength
 	}
 	if buf == nil {
 		return length, ErrTooSmall

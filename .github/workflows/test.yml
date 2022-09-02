@@ -1,12 +1,21 @@
 # Workflow to run tests, publish coverage to codecov and run SonarCloud scan
 name: Test
 
-# Run on push to whatever branch (push only runs for main repository, for forked repository look
-# in test-for-fork.yml)
-on: [push]
+# Run for events in main repository (for forked repository look in test-for-fork.yml)
+on:
+  push:
+    branches:
+      - master
+  pull_request:
+  workflow_dispatch:
 
 jobs:
   test:
+    # don't run for forks
+    if: github.event_name == 'push' ||
+      (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) ||
+      github.event_name == 'workflow_dispatch'
+
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:

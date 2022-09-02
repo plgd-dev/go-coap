@@ -27,7 +27,8 @@ func TestNoResponse5XXCodes(t *testing.T) {
 
 func TestNoResponseCombinationXXCodes(t *testing.T) {
 	codes := decodeNoResponseOption(18)
-	exp := append(resp2XXCodes, resp5XXCodes...)
+	exp := resp2XXCodes
+	exp = append(exp, resp5XXCodes...)
 	require.Equal(t, exp, codes)
 }
 

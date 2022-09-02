@@ -55,9 +55,7 @@ var defaultServerOptions = func() serverOptions {
 			}()
 			return nil
 		},
-		createInactivityMonitor: func() inactivity.Monitor {
-			return inactivity.NewNilMonitor()
-		},
+		createInactivityMonitor:        inactivity.NewNilMonitor,
 		blockwiseEnable:                true,
 		blockwiseSZX:                   blockwise.SZX1024,
 		blockwiseTransferTimeout:       time.Second * 3,
@@ -155,9 +153,7 @@ func NewServer(opt ...ServerOption) *Server {
 	}
 
 	if opts.createInactivityMonitor == nil {
-		opts.createInactivityMonitor = func() inactivity.Monitor {
-			return inactivity.NewNilMonitor()
-		}
+		opts.createInactivityMonitor = inactivity.NewNilMonitor
 	}
 	if opts.messagePool == nil {
 		opts.messagePool = pool.New(0, 0)
@@ -356,7 +352,7 @@ func getClose(cc *client.ClientConn) func() {
 	return v.(func())
 }
 
-func (s *Server) getOrCreateClientConn(UDPConn *coapNet.UDPConn, raddr *net.UDPAddr) (cc *client.ClientConn, created bool) {
+func (s *Server) getOrCreateClientConn(uc *coapNet.UDPConn, raddr *net.UDPAddr) (cc *client.ClientConn, created bool) {
 	s.connsMutex.Lock()
 	defer s.connsMutex.Unlock()
 	key := raddr.String()
@@ -377,11 +373,11 @@ func (s *Server) getOrCreateClientConn(UDPConn *coapNet.UDPConn, raddr *net.UDPA
 		obsHandler := client.NewHandlerContainer()
 		session := NewSession(
 			s.ctx,
-			UDPConn,
+			s.doneCtx,
+			uc,
 			raddr,
 			s.maxMessageSize,
 			false,
-			s.doneCtx,
 		)
 		monitor := s.createInactivityMonitor()
 		cc = client.NewClientConn(

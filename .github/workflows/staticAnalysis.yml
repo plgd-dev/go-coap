@@ -1,7 +1,10 @@
 # Run static analysis checks
 name: Static Analysis
 
-on: [pull_request]
+on:
+  pull_request:
+  workflow_dispatch:
+
 jobs:
   analysis:
     runs-on: ubuntu-latest

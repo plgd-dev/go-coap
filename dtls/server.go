@@ -61,9 +61,7 @@ var defaultServerOptions = func() serverOptions {
 			}()
 			return nil
 		},
-		createInactivityMonitor: func() inactivity.Monitor {
-			return inactivity.NewNilMonitor()
-		},
+		createInactivityMonitor:        inactivity.NewNilMonitor,
 		blockwiseEnable:                true,
 		blockwiseSZX:                   blockwise.SZX1024,
 		blockwiseTransferTimeout:       time.Second * 5,
@@ -159,9 +157,7 @@ func NewServer(opt ...ServerOption) *Server {
 	}
 
 	if opts.createInactivityMonitor == nil {
-		opts.createInactivityMonitor = func() inactivity.Monitor {
-			return inactivity.NewNilMonitor()
-		}
+		opts.createInactivityMonitor = inactivity.NewNilMonitor
 	}
 	if opts.messagePool == nil {
 		opts.messagePool = pool.New(0, 0)
@@ -209,24 +205,24 @@ func (s *Server) checkAndSetListener(l Listener) error {
 	return nil
 }
 
-func (s *Server) checkAcceptError(err error) (bool, error) {
+func (s *Server) checkAcceptError(err error) bool {
 	if err == nil {
-		return true, nil
+		return true
 	}
 	switch {
 	case errors.Is(err, coapNet.ErrListenerIsClosed):
 		s.Stop()
-		return false, nil
+		return false
 	case errors.Is(err, context.DeadlineExceeded), errors.Is(err, context.Canceled):
 		select {
 		case <-s.ctx.Done():
 		default:
 			s.errors(fmt.Errorf("cannot accept connection: %w", err))
-			return true, nil
+			return true
 		}
-		return false, nil
+		return false
 	default:
-		return true, nil
+		return true
 	}
 }
 
@@ -265,11 +261,7 @@ func (s *Server) Serve(l Listener) error {
 
 	for {
 		rw, err := l.AcceptWithContext(s.ctx)
-		ok, err := s.checkAcceptError(err)
-		if err != nil {
-			return err
-		}
-		if !ok {
+		if ok := s.checkAcceptError(err); !ok {
 			return nil
 		}
 		if rw == nil {

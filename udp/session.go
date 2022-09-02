@@ -34,11 +34,11 @@ type Session struct {
 
 func NewSession(
 	ctx context.Context,
+	doneCtx context.Context,
 	connection *coapNet.UDPConn,
 	raddr *net.UDPAddr,
 	maxMessageSize uint32,
 	closeSocket bool,
-	doneCtx context.Context,
 ) *Session {
 	ctx, cancel := context.WithCancel(ctx)
 

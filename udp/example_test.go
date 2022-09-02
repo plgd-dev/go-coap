@@ -3,7 +3,7 @@ package udp_test
 import (
 	"context"
 	"fmt"
-	"io/ioutil"
+	"io"
 	"log"
 	"sync"
 	"time"
@@ -26,7 +26,7 @@ func ExampleClientConn_Get() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	data, err := ioutil.ReadAll(res.Body())
+	data, err := io.ReadAll(res.Body())
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -66,7 +66,7 @@ func ExampleServer_Discover() {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 	err = s.Discover(ctx, "224.0.1.187:5683", "/oic/res", func(cc *client.ClientConn, res *pool.Message) {
-		data, errR := ioutil.ReadAll(res.Body())
+		data, errR := io.ReadAll(res.Body())
 		if errR != nil {
 			log.Fatal(errR)
 		}

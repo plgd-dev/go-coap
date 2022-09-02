@@ -2,7 +2,7 @@ package pool_test
 
 import (
 	"context"
-	"io/ioutil"
+	"io"
 	"sync"
 	"testing"
 
@@ -24,7 +24,7 @@ func TestConvertTo(t *testing.T) {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		buf, errR := ioutil.ReadAll(a.Body)
+		buf, errR := io.ReadAll(a.Body)
 		assert.NoError(t, errR)
 		assert.Equal(t, []byte{1}, buf)
 	}()

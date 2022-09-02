@@ -42,9 +42,7 @@ var defaultDialOptions = func() dialOptions {
 		transmissionAcknowledgeTimeout: time.Second * 2,
 		transmissionMaxRetransmit:      4,
 		getMID:                         udpMessage.GetMID,
-		createInactivityMonitor: func() inactivity.Monitor {
-			return inactivity.NewNilMonitor()
-		},
+		createInactivityMonitor:        inactivity.NewNilMonitor,
 		periodicRunner: func(f func(now time.Time) bool) {
 			go func() {
 				for f(time.Now()) {
@@ -153,9 +151,7 @@ func Client(conn *dtls.Conn, opts ...DialOption) *client.ClientConn {
 		}
 	}
 	if cfg.createInactivityMonitor == nil {
-		cfg.createInactivityMonitor = func() inactivity.Monitor {
-			return inactivity.NewNilMonitor()
-		}
+		cfg.createInactivityMonitor = inactivity.NewNilMonitor
 	}
 	if cfg.messagePool == nil {
 		cfg.messagePool = pool.New(0, 0)

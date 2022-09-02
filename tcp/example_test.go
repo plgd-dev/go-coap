@@ -3,7 +3,7 @@ package tcp_test
 import (
 	"context"
 	"fmt"
-	"io/ioutil"
+	"io"
 	"log"
 	"time"
 
@@ -23,7 +23,7 @@ func ExampleClientConn_Get() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	data, err := ioutil.ReadAll(res.Body())
+	data, err := io.ReadAll(res.Body())
 	if err != nil {
 		log.Fatal(err)
 	}

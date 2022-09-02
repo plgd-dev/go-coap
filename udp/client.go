@@ -49,10 +49,8 @@ var defaultDialOptions = func() dialOptions {
 		transmissionAcknowledgeTimeout: time.Second * 2,
 		transmissionMaxRetransmit:      4,
 		getMID:                         udpMessage.GetMID,
-		createInactivityMonitor: func() inactivity.Monitor {
-			return inactivity.NewNilMonitor()
-		},
-		messagePool: pool.New(1024, 1600),
+		createInactivityMonitor:        inactivity.NewNilMonitor,
+		messagePool:                    pool.New(1024, 1600),
 	}
 	opts.handler = func(w *client.ResponseWriter, r *pool.Message) {
 		switch r.Code() {
@@ -152,9 +150,7 @@ func Client(conn *net.UDPConn, opts ...DialOption) *client.ClientConn {
 		}
 	}
 	if cfg.createInactivityMonitor == nil {
-		cfg.createInactivityMonitor = func() inactivity.Monitor {
-			return inactivity.NewNilMonitor()
-		}
+		cfg.createInactivityMonitor = inactivity.NewNilMonitor
 	}
 	if cfg.messagePool == nil {
 		cfg.messagePool = pool.New(0, 0)
@@ -188,11 +184,11 @@ func Client(conn *net.UDPConn, opts ...DialOption) *client.ClientConn {
 	cache := cache.NewCache()
 	l := coapNet.NewUDPConn(cfg.net, conn, coapNet.WithErrors(cfg.errors))
 	session := NewSession(cfg.ctx,
+		context.Background(),
 		l,
 		addr,
 		cfg.maxMessageSize,
 		cfg.closeSocket,
-		context.Background(),
 	)
 	cc := client.NewClientConn(session,
 		observationTokenHandler, observatioRequests, cfg.transmissionNStart, cfg.transmissionAcknowledgeTimeout, cfg.transmissionMaxRetransmit,
