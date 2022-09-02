@@ -197,7 +197,7 @@ func (c *UDPConn) Network() string {
 
 // Close closes the connection.
 func (c *UDPConn) Close() error {
-	if !c.closed.CAS(false, true) {
+	if !c.closed.CompareAndSwap(false, true) {
 		return nil
 	}
 	return c.connection.Close()

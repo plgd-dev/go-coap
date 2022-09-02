@@ -63,7 +63,7 @@ func newObservation(token message.Token, path string, cc *ClientConn, observeFun
 func (o *Observation) handler(w *ResponseWriter, r *pool.Message) {
 	code := r.Code()
 	notSupported := !r.HasOption(message.Observe)
-	if o.waitForResponse.CAS(true, false) {
+	if o.waitForResponse.CompareAndSwap(true, false) {
 		select {
 		case o.respObservationChan <- respObservationMessage{
 			code:         code,
