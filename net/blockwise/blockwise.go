@@ -320,6 +320,7 @@ func (b *BlockWise[C]) handleSendingMessage(w *responsewriter.ResponseWriter[C],
 	sendMessage.SetCode(sendingMessage.Code())
 	sendMessage.ResetOptionsTo(sendingMessage.Options())
 	sendMessage.SetToken(token)
+	sendMessage.SetType(sendingMessage.Type())
 	payloadSize, err := sendingMessage.BodySize()
 	if err != nil {
 		return false, fmt.Errorf("cannot get size of payload: %w", err)
@@ -369,6 +370,7 @@ func (b *BlockWise[C]) sendEntityIncomplete(w *responsewriter.ResponseWriter[C],
 	sendMessage := b.cc.AcquireMessage(w.Message().Context())
 	sendMessage.SetCode(codes.RequestEntityIncomplete)
 	sendMessage.SetToken(token)
+	sendMessage.SetType(message.NonConfirmable)
 	w.SetMessage(sendMessage)
 }
 
@@ -531,6 +533,7 @@ func (b *BlockWise[C]) startSendingMessage(w *responsewriter.ResponseWriter[C], 
 	sendingMessage.SetBody(w.Message().Body())
 	sendingMessage.SetCode(w.Message().Code())
 	sendingMessage.SetToken(w.Message().Token())
+	sendingMessage.SetType(w.Message().Type())
 
 	_, err = b.handleSendingMessage(w, sendingMessage, maxSZX, maxMessageSize, sendingMessage.Token(), block)
 	if err != nil {
@@ -561,6 +564,7 @@ func (b *BlockWise[C]) getSentRequest(token message.Token) *pool.Message {
 		req.SetCode(v.Code())
 		req.SetToken(v.Token())
 		req.ResetOptionsTo(v.Options())
+		req.SetType(v.Type())
 		return req
 	}
 	globalRequest, ok := b.getSentRequestFromOutside(token)
