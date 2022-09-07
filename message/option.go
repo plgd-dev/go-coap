@@ -393,7 +393,7 @@ func (o Option) Marshal(buf []byte, previousID OptionID) (int, error) {
 	default:
 		return -1, err
 	}
-	length = length + lenBuf
+	length += lenBuf
 
 	if buf == nil {
 		return length, ErrTooSmall
@@ -420,8 +420,8 @@ func parseExtOpt(data []byte, opt int) (int, int, error) {
 	return processed, opt, nil
 }
 
-func (o *Option) Unmarshal(data []byte, optionDefs map[OptionID]OptionDef, OptionID OptionID) (int, error) {
-	if def, ok := optionDefs[OptionID]; ok {
+func (o *Option) Unmarshal(data []byte, optionDefs map[OptionID]OptionDef, optionID OptionID) (int, error) {
+	if def, ok := optionDefs[optionID]; ok {
 		if def.ValueFormat == ValueUnknown {
 			// Skip unrecognized options (RFC7252 section 5.4.1)
 			return len(data), nil
@@ -431,7 +431,7 @@ func (o *Option) Unmarshal(data []byte, optionDefs map[OptionID]OptionDef, Optio
 			return len(data), nil
 		}
 	}
-	o.ID = OptionID
+	o.ID = optionID
 	proc, err := o.UnmarshalValue(data)
 	if err != nil {
 		return -1, err

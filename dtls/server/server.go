@@ -94,24 +94,24 @@ func (s *Server) checkAndSetListener(l Listener) error {
 	return nil
 }
 
-func (s *Server) checkAcceptError(err error) (bool, error) {
+func (s *Server) checkAcceptError(err error) bool {
 	if err == nil {
-		return true, nil
+		return true
 	}
 	switch {
 	case errors.Is(err, coapNet.ErrListenerIsClosed):
 		s.Stop()
-		return false, nil
+		return false
 	case errors.Is(err, context.DeadlineExceeded), errors.Is(err, context.Canceled):
 		select {
 		case <-s.ctx.Done():
 		default:
 			s.cfg.Errors(fmt.Errorf("cannot accept connection: %w", err))
-			return true, nil
+			return true
 		}
-		return false, nil
+		return false
 	default:
-		return true, nil
+		return true
 	}
 }
 
@@ -150,11 +150,7 @@ func (s *Server) Serve(l Listener) error {
 
 	for {
 		rw, err := l.AcceptWithContext(s.ctx)
-		ok, err := s.checkAcceptError(err)
-		if err != nil {
-			return err
-		}
-		if !ok {
+		if ok := s.checkAcceptError(err); !ok {
 			return nil
 		}
 		if rw == nil {

@@ -283,7 +283,7 @@ func (c *UDPConn) WriteMulticast(ctx context.Context, raddr *net.UDPAddr, buffer
 	return c.writeMulticast(ctx, raddr, buffer, opt)
 }
 
-func (c *UDPConn) writeMulticastWithInterface(ctx context.Context, raddr *net.UDPAddr, buffer []byte, opt MulticastOptions) error {
+func (c *UDPConn) writeMulticastWithInterface(raddr *net.UDPAddr, buffer []byte, opt MulticastOptions) error {
 	if opt.Iface == nil && opt.IFaceMode == MulticastSpecificInterface {
 		return fmt.Errorf("invalid interface")
 	}
@@ -316,7 +316,7 @@ func (c *UDPConn) writeMulticastWithInterface(ctx context.Context, raddr *net.UD
 	return fmt.Errorf("%v", errors)
 }
 
-func (c *UDPConn) writeMulticastToAllInterfaces(ctx context.Context, raddr *net.UDPAddr, buffer []byte, opt MulticastOptions) error {
+func (c *UDPConn) writeMulticastToAllInterfaces(raddr *net.UDPAddr, buffer []byte, opt MulticastOptions) error {
 	ifaces, err := net.Interfaces()
 	if err != nil {
 		return fmt.Errorf("cannot get interfaces for multicast connection: %w", err)
@@ -334,7 +334,7 @@ func (c *UDPConn) writeMulticastToAllInterfaces(ctx context.Context, raddr *net.
 		specificOpt := opt
 		specificOpt.Iface = &iface
 		specificOpt.IFaceMode = MulticastSpecificInterface
-		err = c.writeMulticastWithInterface(ctx, raddr, buffer, specificOpt)
+		err = c.writeMulticastWithInterface(raddr, buffer, specificOpt)
 		if err != nil {
 			if opt.InterfaceError != nil {
 				opt.InterfaceError(&iface, err)
@@ -352,7 +352,7 @@ func (c *UDPConn) writeMulticastToAllInterfaces(ctx context.Context, raddr *net.
 	return fmt.Errorf("%v", errors)
 }
 
-func (c *UDPConn) validateMulticast(ctx context.Context, raddr *net.UDPAddr, buffer []byte, opt MulticastOptions) error {
+func (c *UDPConn) validateMulticast(ctx context.Context, raddr *net.UDPAddr, opt MulticastOptions) error {
 	select {
 	case <-ctx.Done():
 		return ctx.Err()
@@ -371,14 +371,14 @@ func (c *UDPConn) validateMulticast(ctx context.Context, raddr *net.UDPAddr, buf
 }
 
 func (c *UDPConn) writeMulticast(ctx context.Context, raddr *net.UDPAddr, buffer []byte, opt MulticastOptions) error {
-	err := c.validateMulticast(ctx, raddr, buffer, opt)
+	err := c.validateMulticast(ctx, raddr, opt)
 	if err != nil {
 		return err
 	}
 
 	switch opt.IFaceMode {
 	case MulticastAllInterface:
-		err := c.writeMulticastToAllInterfaces(ctx, raddr, buffer, opt)
+		err := c.writeMulticastToAllInterfaces(raddr, buffer, opt)
 		if err != nil {
 			return fmt.Errorf("cannot write multicast to all interfaces: %w", err)
 		}
@@ -388,7 +388,7 @@ func (c *UDPConn) writeMulticast(ctx context.Context, raddr *net.UDPAddr, buffer
 			return fmt.Errorf("cannot write multicast to any: %w", err)
 		}
 	case MulticastSpecificInterface:
-		err := c.writeMulticastWithInterface(ctx, raddr, buffer, opt)
+		err := c.writeMulticastWithInterface(raddr, buffer, opt)
 		if err != nil {
 			if opt.InterfaceError != nil {
 				opt.InterfaceError(opt.Iface, err)

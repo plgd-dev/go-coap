@@ -384,7 +384,7 @@ func (cc *ClientConn) LocalAddr() net.Addr {
 	return cc.session.LocalAddr()
 }
 
-func (cc *ClientConn) sendPong(w *responsewriter.ResponseWriter[*ClientConn], r *pool.Message) {
+func (cc *ClientConn) sendPong(w *responsewriter.ResponseWriter[*ClientConn]) {
 	if err := w.SetResponse(codes.Empty, message.TextPlain, nil); err != nil {
 		cc.errors(fmt.Errorf("cannot send pong response: %w", err))
 	}
@@ -410,7 +410,7 @@ func (cc *ClientConn) handleBW(w *responsewriter.ResponseWriter[*ClientConn], m 
 
 func (cc *ClientConn) handle(w *responsewriter.ResponseWriter[*ClientConn], r *pool.Message) {
 	if r.Code() == codes.Empty && r.Type() == message.Confirmable && len(r.Token()) == 0 && len(r.Options()) == 0 && r.Body() == nil {
-		cc.sendPong(w, r)
+		cc.sendPong(w)
 		return
 	}
 	if h, ok := cc.midHandlerContainer.PullOut(r.MessageID()); ok {

@@ -24,7 +24,7 @@ func RandMID() int32 {
 	_, err := rand.Read(b)
 	if err != nil {
 		// fallback to cryptographically insecure pseudo-random generator
-		return int32(uint16(mathRand.Uint32() >> 16)) //nolint:gosec
+		return int32(uint16(mathRand.Uint32() >> 16))
 	}
 	return int32(uint16(binary.BigEndian.Uint32(b)))
 }

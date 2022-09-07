@@ -251,7 +251,7 @@ func getClose(cc *client.ClientConn) func() {
 	return v.(func())
 }
 
-func (s *Server) getOrCreateClientConn(UDPConn *coapNet.UDPConn, raddr *net.UDPAddr) (cc *client.ClientConn, created bool) {
+func (s *Server) getOrCreateClientConn(udpConn *coapNet.UDPConn, raddr *net.UDPAddr) (cc *client.ClientConn, created bool) {
 	s.connsMutex.Lock()
 	defer s.connsMutex.Unlock()
 	key := raddr.String()
@@ -286,7 +286,7 @@ func (s *Server) getOrCreateClientConn(UDPConn *coapNet.UDPConn, raddr *net.UDPA
 		}
 		session := NewSession(
 			s.ctx,
-			UDPConn,
+			udpConn,
 			raddr,
 			s.cfg.MaxMessageSize,
 			s.cfg.MTU,
