@@ -358,6 +358,7 @@ func newWriteRequestResponse(remoteAddr net.Addr, request Message, acquireMessag
 	req.SetToken(request.Token())
 	req.ResetOptionsTo(request.Options())
 	req.SetBody(request.Body())
+	setTypeFrom(req, request)
 	return &writeMessageResponse{
 		request:        req,
 		releaseMessage: releaseMessage,
@@ -432,6 +433,7 @@ func (b *BlockWise) handleSendingMessage(w ResponseWriter, sendingMessage Messag
 	sendMessage.SetCode(sendingMessage.Code())
 	sendMessage.ResetOptionsTo(sendingMessage.Options())
 	sendMessage.SetToken(token)
+	setTypeFrom(sendMessage, sendingMessage)
 	payloadSize, err := sendingMessage.BodySize()
 	if err != nil {
 		return false, fmt.Errorf("cannot get size of payload: %w", err)
@@ -489,6 +491,9 @@ func (b *BlockWise) sendEntityIncomplete(w ResponseWriter, token message.Token) 
 	sendMessage := b.acquireMessage(w.Message().Context())
 	sendMessage.SetCode(codes.RequestEntityIncomplete)
 	sendMessage.SetToken(token)
+	if msg, ok := sendMessage.(hasType); ok {
+		msg.SetType(udpMessage.NonConfirmable)
+	}
 	w.SetMessage(sendMessage)
 }
 
@@ -633,6 +638,7 @@ func (b *BlockWise) startSendingMessage(w ResponseWriter, maxSZX SZX, maxMessage
 	sendingMessage.SetBody(w.Message().Body())
 	sendingMessage.SetCode(w.Message().Code())
 	sendingMessage.SetToken(w.Message().Token())
+	setTypeFrom(sendingMessage, w.Message())
 
 	_, err = b.handleSendingMessage(w, sendingMessage, maxSZX, maxMessageSize, sendingMessage.Token(), block)
 	if err != nil {
@@ -825,6 +831,7 @@ func (b *BlockWise) processReceivedMessage(w ResponseWriter, r Message, maxSzx S
 		cachedReceivedMessage.SetSequence(r.Sequence())
 		cachedReceivedMessage.SetBody(memfile.New(make([]byte, 0, 1024)))
 		cachedReceivedMessage.SetCode(r.Code())
+		setTypeFrom(cachedReceivedMessage, r)
 		msgGuard = newRequestGuard(cachedReceivedMessage)
 		errA := msgGuard.Acquire(cachedReceivedMessage.Context(), 1)
 		if errA != nil {
