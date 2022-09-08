@@ -487,7 +487,7 @@ func (b *BlockWise) RemoveFromResponseCache(token message.Token) {
 	b.sendingMessagesCache.Delete(token.Hash())
 }
 
-func (b *BlockWise) sendEntityIncomplete(w ResponseWriter, r Message, token message.Token) {
+func (b *BlockWise) sendEntityIncomplete(w ResponseWriter, token message.Token) {
 	sendMessage := b.acquireMessage(w.Message().Context())
 	sendMessage.SetCode(codes.RequestEntityIncomplete)
 	sendMessage.SetToken(token)
@@ -507,7 +507,7 @@ func (b *BlockWise) Handle(w ResponseWriter, r Message, maxSZX SZX, maxMessageSi
 	if len(token) == 0 {
 		err := b.handleReceivedMessage(w, r, maxSZX, maxMessageSize, next)
 		if err != nil {
-			b.sendEntityIncomplete(w, r, token)
+			b.sendEntityIncomplete(w, token)
 			b.errors(fmt.Errorf("handleReceivedMessage(%v): %w", r, err))
 		}
 		return
@@ -519,7 +519,7 @@ func (b *BlockWise) Handle(w ResponseWriter, r Message, maxSZX SZX, maxMessageSi
 	if sendingMessageCached == nil {
 		err := b.handleReceivedMessage(w, r, maxSZX, maxMessageSize, next)
 		if err != nil {
-			b.sendEntityIncomplete(w, r, token)
+			b.sendEntityIncomplete(w, token)
 			b.errors(fmt.Errorf("handleReceivedMessage(%v): %w", r, err))
 		}
 		return
