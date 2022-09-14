@@ -401,13 +401,17 @@ func (b *BlockWise) WriteMessage(remoteAddr net.Addr, request Message, maxSZX SZ
 
 func fitSZX(r Message, blockType message.OptionID, maxSZX SZX) SZX {
 	block, err := r.GetOptionUint32(blockType)
-	if err == nil {
-		szx, _, _, err := DecodeBlockOption(block)
-		if err != nil {
-			if maxSZX > szx {
-				return szx
-			}
-		}
+	if err != nil {
+		return maxSZX
+	}
+
+	szx, _, _, err := DecodeBlockOption(block)
+	if err != nil {
+		return maxSZX
+	}
+
+	if maxSZX > szx {
+		return szx
 	}
 	return maxSZX
 }
