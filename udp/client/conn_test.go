@@ -534,11 +534,9 @@ func TestConnPost(t *testing.T) {
 	testConnPost(t, 1)
 }
 
-/*
 func TestParallelConnPost(t *testing.T) {
 	testConnPost(t, testNumParallel)
 }
-*/
 
 func testConnPut(t *testing.T, numParallel int) {
 	type args struct {
@@ -678,11 +676,9 @@ func TestConnPut(t *testing.T) {
 	testConnPut(t, 1)
 }
 
-/*
 func TestParallelConnPut(t *testing.T) {
 	testConnPut(t, testNumParallel)
 }
-*/
 
 func testConnDelete(t *testing.T, numParallel int) {
 	type args struct {
@@ -802,11 +798,9 @@ func TestConnDelete(t *testing.T) {
 	testConnDelete(t, 1)
 }
 
-/*
 func TestParallelConnDelete(t *testing.T) {
 	testConnDelete(t, testNumParallel)
 }
-*/
 
 func TestConnPing(t *testing.T) {
 	l, err := coapNet.NewListenUDP("udp", "")
