@@ -15,10 +15,11 @@ import (
 	"go.uber.org/atomic"
 )
 
+type DoFunc = func(req *pool.Message) (*pool.Message, error)
+
 type Client interface {
 	Context() context.Context
 	WriteMessage(req *pool.Message) error
-	Do(req *pool.Message) (*pool.Message, error)
 	ReleaseMessage(msg *pool.Message)
 	AcquireMessage(ctx context.Context) *pool.Message
 }
@@ -31,6 +32,7 @@ type Handler[C Client] struct {
 	cc           C
 	observations *coapSync.Map[uint64, *Observation[C]]
 	next         HandlerFunc[C]
+	do           DoFunc
 }
 
 func (h *Handler[C]) Handle(w *responsewriter.ResponseWriter[C], r *pool.Message) {
@@ -122,11 +124,12 @@ func (h *Handler[C]) pullOutObservation(key uint64) (*Observation[C], bool) {
 	return h.observations.PullOut(key)
 }
 
-func NewHandler[C Client](cc C, next HandlerFunc[C]) *Handler[C] {
+func NewHandler[C Client](cc C, next HandlerFunc[C], do DoFunc) *Handler[C] {
 	return &Handler[C]{
 		cc:           cc,
 		observations: coapSync.NewMap[uint64, *Observation[C]](),
 		next:         next,
+		do:           do,
 	}
 }
 
@@ -213,7 +216,7 @@ func (o *Observation[C]) Cancel(ctx context.Context) error {
 		}
 	}
 	req.SetToken(o.req.Token)
-	resp, err := o.client().Do(req)
+	resp, err := o.observationHandler.do(req)
 	if err != nil {
 		return err
 	}

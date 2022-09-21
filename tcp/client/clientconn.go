@@ -13,6 +13,7 @@ import (
 	coapNet "github.com/plgd-dev/go-coap/v3/net"
 	"github.com/plgd-dev/go-coap/v3/net/blockwise"
 	"github.com/plgd-dev/go-coap/v3/net/client"
+	limitparallelrequests "github.com/plgd-dev/go-coap/v3/net/client/limitParallelRequests"
 	"github.com/plgd-dev/go-coap/v3/net/observation"
 	"github.com/plgd-dev/go-coap/v3/net/responsewriter"
 	coapErrors "github.com/plgd-dev/go-coap/v3/pkg/errors"
@@ -39,7 +40,8 @@ type Notifier interface {
 // ClientConn represents a virtual connection to a conceptual endpoint, to perform COAPs commands.
 type ClientConn struct {
 	*client.Client[*ClientConn]
-	session *Session
+	session            *Session
+	observationHandler *observation.Handler[*ClientConn]
 }
 
 // NewClientConn creates connection over session and observation.
@@ -53,12 +55,13 @@ func NewClientConn(
 		cfg.GetToken = message.GetToken
 	}
 	cc := ClientConn{}
-	observationHandler := observation.NewHandler(&cc, cfg.Handler)
-	cc.Client = client.New(&cc, observationHandler, cfg.GetToken)
+	limitParallelRequests := limitparallelrequests.New(cfg.LimitClientParallelRequests, cc.do, cc.doObserve)
+	cc.observationHandler = observation.NewHandler(&cc, cfg.Handler, limitParallelRequests.Do)
+	cc.Client = client.New(&cc, cc.observationHandler, cfg.GetToken, limitParallelRequests)
 	blockWise := createBlockWise(&cc)
 	session := NewSession(cfg.Ctx,
 		connection,
-		observationHandler.Handle,
+		cc.observationHandler.Handle,
 		cfg.MaxMessageSize,
 		cfg.GoPool,
 		cfg.Errors,
@@ -88,7 +91,7 @@ func (cc *ClientConn) Close() error {
 	return err
 }
 
-func (cc *ClientConn) do(req *pool.Message) (*pool.Message, error) {
+func (cc *ClientConn) doInternal(req *pool.Message) (*pool.Message, error) {
 	token := req.Token()
 	if token == nil {
 		return nil, fmt.Errorf("invalid token")
@@ -126,11 +129,11 @@ func (cc *ClientConn) do(req *pool.Message) (*pool.Message, error) {
 // Any status code doesn't cause an error.
 //
 // Caller is responsible to release request and response.
-func (cc *ClientConn) Do(req *pool.Message) (*pool.Message, error) {
+func (cc *ClientConn) do(req *pool.Message) (*pool.Message, error) {
 	if !cc.session.PeerBlockWiseTransferEnabled() || cc.session.blockWise == nil {
-		return cc.do(req)
+		return cc.doInternal(req)
 	}
-	resp, err := cc.session.blockWise.Do(req, cc.session.blockwiseSZX, cc.session.maxMessageSize, cc.do)
+	resp, err := cc.session.blockWise.Do(req, cc.session.blockwiseSZX, cc.session.maxMessageSize, cc.doInternal)
 	if err != nil {
 		return nil, err
 	}
@@ -235,4 +238,9 @@ func (cc *ClientConn) ReleaseMessage(m *pool.Message) {
 // NetConn returns the underlying connection that is wrapped by cc. The Conn returned is shared by all invocations of NetConn, so do not modify it.
 func (cc *ClientConn) NetConn() net.Conn {
 	return cc.session.NetConn()
+}
+
+// DoObserve subscribes for every change with request.
+func (cc *ClientConn) doObserve(req *pool.Message, observeFunc func(req *pool.Message), opts ...message.Option) (client.Observation, error) {
+	return cc.observationHandler.NewObservation(req, observeFunc)
 }

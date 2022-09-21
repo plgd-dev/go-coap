@@ -17,16 +17,17 @@ type ErrorFunc = func(error)
 type GoPoolFunc = func(func()) error
 
 type Common struct {
-	Ctx                      context.Context
-	Errors                   ErrorFunc
-	GoPool                   GoPoolFunc
-	PeriodicRunner           periodic.Func
-	MessagePool              *pool.Pool
-	GetToken                 client.GetTokenFunc
-	MaxMessageSize           uint32
-	BlockwiseTransferTimeout time.Duration
-	BlockwiseSZX             blockwise.SZX
-	BlockwiseEnable          bool
+	Ctx                         context.Context
+	Errors                      ErrorFunc
+	GoPool                      GoPoolFunc
+	PeriodicRunner              periodic.Func
+	MessagePool                 *pool.Pool
+	GetToken                    client.GetTokenFunc
+	MaxMessageSize              uint32
+	BlockwiseTransferTimeout    time.Duration
+	BlockwiseSZX                blockwise.SZX
+	BlockwiseEnable             bool
+	LimitClientParallelRequests int64
 }
 
 var DefaultCommon = func() Common {
@@ -52,7 +53,8 @@ var DefaultCommon = func() Common {
 				}
 			}()
 		},
-		MessagePool: pool.New(1024, 2048),
-		GetToken:    message.GetToken,
+		MessagePool:                 pool.New(1024, 2048),
+		GetToken:                    message.GetToken,
+		LimitClientParallelRequests: 1,
 	}
 }

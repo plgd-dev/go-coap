@@ -664,3 +664,33 @@ func (o GetTokenOpt) UDPClientApply(cfg *udpClient.Config) {
 func WithGetToken(getToken client.GetTokenFunc) GetTokenOpt {
 	return GetTokenOpt{getToken: getToken}
 }
+
+// LimitClientParallelRequestOpt limit's number of parallel requests from client.
+type LimitClientParallelRequestOpt struct {
+	limitClientParallelRequests int64
+}
+
+func (o LimitClientParallelRequestOpt) TCPServerApply(cfg *tcpServer.Config) {
+	cfg.LimitClientParallelRequests = o.limitClientParallelRequests
+}
+
+func (o LimitClientParallelRequestOpt) TCPClientApply(cfg *tcpClient.Config) {
+	cfg.LimitClientParallelRequests = o.limitClientParallelRequests
+}
+
+func (o LimitClientParallelRequestOpt) UDPServerApply(cfg *udpServer.Config) {
+	cfg.LimitClientParallelRequests = o.limitClientParallelRequests
+}
+
+func (o LimitClientParallelRequestOpt) DTLSServerApply(cfg *dtlsServer.Config) {
+	cfg.LimitClientParallelRequests = o.limitClientParallelRequests
+}
+
+func (o LimitClientParallelRequestOpt) UDPClientApply(cfg *udpClient.Config) {
+	cfg.LimitClientParallelRequests = o.limitClientParallelRequests
+}
+
+// WithLimitClientParallelRequestOpt limits number of parallel requests from client. (default: 1)
+func WithLimitClientParallelRequestOpt(limitClientParallelRequests int64) LimitClientParallelRequestOpt {
+	return LimitClientParallelRequestOpt{limitClientParallelRequests: limitClientParallelRequests}
+}

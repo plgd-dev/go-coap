@@ -14,6 +14,7 @@ import (
 	coapNet "github.com/plgd-dev/go-coap/v3/net"
 	"github.com/plgd-dev/go-coap/v3/net/blockwise"
 	"github.com/plgd-dev/go-coap/v3/net/client"
+	limitparallelrequests "github.com/plgd-dev/go-coap/v3/net/client/limitParallelRequests"
 	"github.com/plgd-dev/go-coap/v3/net/observation"
 	"github.com/plgd-dev/go-coap/v3/net/responsewriter"
 	"github.com/plgd-dev/go-coap/v3/pkg/cache"
@@ -161,8 +162,9 @@ func NewClientConn(
 	}
 	cc.msgID.Store(uint32(cfg.GetMID() - 0xffff/2))
 	cc.blockWise = createBlockWise(&cc)
-	cc.observationHandler = observation.NewHandler(&cc, cfg.Handler)
-	cc.Client = client.New(&cc, cc.observationHandler, cfg.GetToken)
+	limitParallelRequests := limitparallelrequests.New(cfg.LimitClientParallelRequests, cc.do, cc.doObserve)
+	cc.observationHandler = observation.NewHandler(&cc, cfg.Handler, limitParallelRequests.Do)
+	cc.Client = client.New(&cc, cc.observationHandler, cfg.GetToken, limitParallelRequests)
 	return &cc
 }
 
@@ -183,7 +185,7 @@ func (cc *ClientConn) Close() error {
 	return err
 }
 
-func (cc *ClientConn) do(req *pool.Message) (*pool.Message, error) {
+func (cc *ClientConn) doInternal(req *pool.Message) (*pool.Message, error) {
 	token := req.Token()
 	if token == nil {
 		return nil, fmt.Errorf("invalid token")
@@ -222,20 +224,25 @@ func (cc *ClientConn) do(req *pool.Message) (*pool.Message, error) {
 // Any status code doesn't cause an error.
 //
 // Caller is responsible to release request and response.
-func (cc *ClientConn) Do(req *pool.Message) (*pool.Message, error) {
+func (cc *ClientConn) do(req *pool.Message) (*pool.Message, error) {
 	if cc.blockWise == nil {
-		return cc.do(req)
+		return cc.doInternal(req)
 	}
 	resp, err := cc.blockWise.Do(req, cc.blockwiseSZX, cc.session.MaxMessageSize(), func(bwReq *pool.Message) (*pool.Message, error) {
 		if bwReq.Options().HasOption(message.Block1) || bwReq.Options().HasOption(message.Block2) {
 			bwReq.SetMessageID(cc.GetMessageID())
 		}
-		return cc.do(bwReq)
+		return cc.doInternal(bwReq)
 	})
 	if err != nil {
 		return nil, err
 	}
 	return resp, nil
+}
+
+// DoObserve subscribes for every change with request.
+func (cc *ClientConn) doObserve(req *pool.Message, observeFunc func(req *pool.Message), opts ...message.Option) (client.Observation, error) {
+	return cc.observationHandler.NewObservation(req, observeFunc)
 }
 
 func (cc *ClientConn) releaseOutstandingInteraction() {

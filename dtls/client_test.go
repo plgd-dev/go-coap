@@ -720,23 +720,29 @@ func TestClientInactiveMonitor(t *testing.T) {
 	require.NoError(t, err)
 	sd := dtls.NewServer(
 		options.WithOnNewClientConn(func(cc *client.ClientConn) {
+			t.Log("server - new connection")
 			cc.AddOnClose(func() {
+				t.Log("server - client is closed")
 				checkClose.Release(1)
 			})
 		}),
 		options.WithPeriodicRunner(periodic.New(ctx.Done(), time.Millisecond*10)),
+		options.WithInactivityMonitor(Timeout/2, func(c *client.ClientConn) {
+			t.Log("server - close for inactivity")
+			_ = c.Close()
+		}),
 	)
 
 	var serverWg sync.WaitGroup
-	defer func() {
-		sd.Stop()
-		serverWg.Wait()
-	}()
 	serverWg.Add(1)
 	go func() {
 		defer serverWg.Done()
 		errS := sd.Serve(ld)
 		require.NoError(t, errS)
+	}()
+	defer func() {
+		sd.Stop()
+		serverWg.Wait()
 	}()
 
 	cc, err := dtls.Dial(ld.Addr().String(), clientCgf,
@@ -750,23 +756,15 @@ func TestClientInactiveMonitor(t *testing.T) {
 	)
 	require.NoError(t, err)
 	cc.AddOnClose(func() {
+		t.Log("client is closed")
 		checkClose.Release(1)
 	})
 
 	// send ping to create serverside connection
-	ctx, cancel = context.WithTimeout(ctx, time.Second)
+	ctxPing, cancel := context.WithTimeout(ctx, time.Second)
 	defer cancel()
-	err = cc.Ping(ctx)
+	err = cc.Ping(ctxPing)
 	require.NoError(t, err)
-
-	err = cc.Ping(ctx)
-	require.NoError(t, err)
-
-	time.Sleep(time.Second * 2)
-
-	err = cc.Close()
-	require.NoError(t, err)
-	<-cc.Done()
 
 	err = checkClose.Acquire(ctx, 2)
 	require.NoError(t, err)
@@ -793,7 +791,9 @@ func TestClientKeepAliveMonitor(t *testing.T) {
 	require.NoError(t, err)
 	sd := dtls.NewServer(
 		options.WithOnNewClientConn(func(cc *client.ClientConn) {
+			t.Log("server - new connection")
 			cc.AddOnClose(func() {
+				t.Log("server - client is closed")
 				checkClose.Release(1)
 			})
 		}),
@@ -803,18 +803,22 @@ func TestClientKeepAliveMonitor(t *testing.T) {
 			return nil
 		}),
 		options.WithPeriodicRunner(periodic.New(ctx.Done(), time.Millisecond*10)),
+		options.WithInactivityMonitor(Timeout/2, func(c *client.ClientConn) {
+			t.Log("server - close for inactivity")
+			_ = c.Close()
+		}),
 	)
 
 	var serverWg sync.WaitGroup
-	defer func() {
-		sd.Stop()
-		serverWg.Wait()
-	}()
 	serverWg.Add(1)
 	go func() {
 		defer serverWg.Done()
 		errS := sd.Serve(ld)
 		require.NoError(t, errS)
+	}()
+	defer func() {
+		sd.Stop()
+		serverWg.Wait()
 	}()
 
 	cc, err := dtls.Dial(
@@ -830,10 +834,11 @@ func TestClientKeepAliveMonitor(t *testing.T) {
 	)
 	require.NoError(t, err)
 	cc.AddOnClose(func() {
+		t.Log("client is closed")
 		checkClose.Release(1)
 	})
 
-	// send ping to create serverside connection
+	// send ping to create server side connection
 	ctxPing, cancel := context.WithTimeout(ctx, time.Second)
 	defer cancel()
 	err = cc.Ping(ctxPing)
