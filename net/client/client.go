@@ -7,19 +7,22 @@ import (
 
 	"github.com/plgd-dev/go-coap/v3/message"
 	"github.com/plgd-dev/go-coap/v3/message/pool"
+	limitparallelrequests "github.com/plgd-dev/go-coap/v3/net/client/limitParallelRequests"
 	"github.com/plgd-dev/go-coap/v3/net/observation"
 )
 
-type GetTokenFunc = func() (message.Token, error)
+type (
+	GetTokenFunc  = func() (message.Token, error)
+	DoFunc        = func(req *pool.Message) (*pool.Message, error)
+	DoObserveFunc = func(req *pool.Message, observeFunc func(req *pool.Message), opts ...message.Option) (Observation, error)
+)
 
 type ClientConn interface {
 	// create message from pool
 	AcquireMessage(ctx context.Context) *pool.Message
 	// return back the message to the pool for next use
 	ReleaseMessage(m *pool.Message)
-
 	WriteMessage(req *pool.Message) error
-	Do(req *pool.Message) (*pool.Message, error)
 	AsyncPing(receivedPong func()) (func(), error)
 	Context() context.Context
 }
@@ -28,13 +31,15 @@ type Client[C ClientConn] struct {
 	cc                 ClientConn
 	observationHandler *observation.Handler[C]
 	getToken           GetTokenFunc
+	*limitparallelrequests.LimitParallelRequests
 }
 
-func New[C ClientConn](cc C, observationHandler *observation.Handler[C], getToken GetTokenFunc) *Client[C] {
+func New[C ClientConn](cc C, observationHandler *observation.Handler[C], getToken GetTokenFunc, limitParallelRequests *limitparallelrequests.LimitParallelRequests) *Client[C] {
 	return &Client[C]{
-		cc:                 cc,
-		observationHandler: observationHandler,
-		getToken:           getToken,
+		cc:                    cc,
+		observationHandler:    observationHandler,
+		getToken:              getToken,
+		LimitParallelRequests: limitParallelRequests,
 	}
 }
 
@@ -72,7 +77,7 @@ func (c *Client[C]) Get(ctx context.Context, path string, opts ...message.Option
 		return nil, fmt.Errorf("cannot create get request: %w", err)
 	}
 	defer c.cc.ReleaseMessage(req)
-	return c.cc.Do(req)
+	return c.Do(req)
 }
 
 type Observation = interface {
@@ -100,11 +105,6 @@ func (c *Client[C]) Observe(ctx context.Context, path string, observeFunc func(r
 	}
 	defer c.cc.ReleaseMessage(req)
 	return c.DoObserve(req, observeFunc)
-}
-
-// DoObserve subscribes for every change with request.
-func (c *Client[C]) DoObserve(req *pool.Message, observeFunc func(req *pool.Message), opts ...message.Option) (Observation, error) {
-	return c.observationHandler.NewObservation(req, observeFunc)
 }
 
 func (c *Client[C]) GetObservationRequest(token message.Token) (*pool.Message, bool) {
@@ -148,7 +148,7 @@ func (c *Client[C]) Post(ctx context.Context, path string, contentFormat message
 		return nil, fmt.Errorf("cannot create post request: %w", err)
 	}
 	defer c.cc.ReleaseMessage(req)
-	return c.cc.Do(req)
+	return c.Do(req)
 }
 
 // NewPutRequest creates put request.
@@ -185,7 +185,7 @@ func (c *Client[C]) Put(ctx context.Context, path string, contentFormat message.
 		return nil, fmt.Errorf("cannot create put request: %w", err)
 	}
 	defer c.cc.ReleaseMessage(req)
-	return c.cc.Do(req)
+	return c.Do(req)
 }
 
 // NewDeleteRequest creates delete request.
@@ -215,7 +215,7 @@ func (c *Client[C]) Delete(ctx context.Context, path string, opts ...message.Opt
 		return nil, fmt.Errorf("cannot create delete request: %w", err)
 	}
 	defer c.cc.ReleaseMessage(req)
-	return c.cc.Do(req)
+	return c.Do(req)
 }
 
 // Ping issues a PING to the client and waits for PONG response.
