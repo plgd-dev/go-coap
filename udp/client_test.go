@@ -23,6 +23,7 @@ import (
 	"github.com/plgd-dev/go-coap/v3/udp/client"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/atomic"
 	"golang.org/x/sync/semaphore"
 )
 
@@ -669,7 +670,7 @@ func TestConnPing(t *testing.T) {
 }
 
 func TestClientInactiveMonitor(t *testing.T) {
-	inactivityDetected := false
+	var inactivityDetected atomic.Bool
 
 	ctx, cancel := context.WithTimeout(context.Background(), Timeout)
 	defer cancel()
@@ -704,8 +705,8 @@ func TestClientInactiveMonitor(t *testing.T) {
 	cc, err := Dial(
 		ld.LocalAddr().String(),
 		options.WithInactivityMonitor(100*time.Millisecond, func(cc *client.Conn) {
-			require.False(t, inactivityDetected)
-			inactivityDetected = true
+			require.False(t, inactivityDetected.Load())
+			inactivityDetected.Store(true)
 			errC := cc.Close()
 			require.NoError(t, errC)
 		}),
@@ -730,11 +731,11 @@ func TestClientInactiveMonitor(t *testing.T) {
 
 	err = checkClose.Acquire(ctx, 1)
 	require.NoError(t, err)
-	require.True(t, inactivityDetected)
+	require.True(t, inactivityDetected.Load())
 }
 
 func TestClientKeepAliveMonitor(t *testing.T) {
-	inactivityDetected := false
+	var inactivityDetected atomic.Bool
 
 	ctx, cancel := context.WithTimeout(context.Background(), Timeout)
 	defer cancel()
@@ -776,8 +777,8 @@ func TestClientKeepAliveMonitor(t *testing.T) {
 	cc, err := Dial(
 		ld.LocalAddr().String(),
 		options.WithKeepAlive(3, 100*time.Millisecond, func(cc *client.Conn) {
-			require.False(t, inactivityDetected)
-			inactivityDetected = true
+			require.False(t, inactivityDetected.Load())
+			inactivityDetected.Store(true)
 			errC := cc.Close()
 			require.NoError(t, errC)
 		}),
@@ -796,5 +797,5 @@ func TestClientKeepAliveMonitor(t *testing.T) {
 
 	err = checkClose.Acquire(ctx, 2)
 	require.NoError(t, err)
-	require.True(t, inactivityDetected)
+	require.True(t, inactivityDetected.Load())
 }

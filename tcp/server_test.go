@@ -21,6 +21,7 @@ import (
 	"github.com/plgd-dev/go-coap/v3/tcp"
 	"github.com/plgd-dev/go-coap/v3/tcp/client"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/atomic"
 	"golang.org/x/sync/semaphore"
 )
 
@@ -177,7 +178,7 @@ func TestServerSetContextValueWithPKI(t *testing.T) {
 }
 
 func TestServerInactiveMonitor(t *testing.T) {
-	inactivityDetected := false
+	var inactivityDetected atomic.Bool
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*8)
 	defer cancel()
@@ -200,8 +201,8 @@ func TestServerInactiveMonitor(t *testing.T) {
 			})
 		}),
 		options.WithInactivityMonitor(100*time.Millisecond, func(cc *client.Conn) {
-			require.False(t, inactivityDetected)
-			inactivityDetected = true
+			require.False(t, inactivityDetected.Load())
+			inactivityDetected.Store(true)
 			errC := cc.Close()
 			require.NoError(t, errC)
 		}),
@@ -245,11 +246,11 @@ func TestServerInactiveMonitor(t *testing.T) {
 
 	err = checkClose.Acquire(ctx, 2)
 	require.NoError(t, err)
-	require.True(t, inactivityDetected)
+	require.True(t, inactivityDetected.Load())
 }
 
 func TestServerKeepAliveMonitor(t *testing.T) {
-	inactivityDetected := false
+	var inactivityDetected atomic.Bool
 
 	ld, err := coapNet.NewTCPListener("tcp", "")
 	require.NoError(t, err)
@@ -271,8 +272,8 @@ func TestServerKeepAliveMonitor(t *testing.T) {
 			})
 		}),
 		options.WithKeepAlive(3, 200*time.Millisecond, func(cc *client.Conn) {
-			require.False(t, inactivityDetected)
-			inactivityDetected = true
+			require.False(t, inactivityDetected.Load())
+			inactivityDetected.Store(true)
 			errC := cc.Close()
 			require.NoError(t, errC)
 		}),
@@ -317,5 +318,5 @@ func TestServerKeepAliveMonitor(t *testing.T) {
 
 	err = checkClose.Acquire(ctx, 2)
 	require.NoError(t, err)
-	require.True(t, inactivityDetected)
+	require.True(t, inactivityDetected.Load())
 }

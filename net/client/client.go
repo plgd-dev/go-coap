@@ -12,9 +12,7 @@ import (
 )
 
 type (
-	GetTokenFunc  = func() (message.Token, error)
-	DoFunc        = func(req *pool.Message) (*pool.Message, error)
-	DoObserveFunc = func(req *pool.Message, observeFunc func(req *pool.Message), opts ...message.Option) (Observation, error)
+	GetTokenFunc = func() (message.Token, error)
 )
 
 type Conn interface {

@@ -691,6 +691,36 @@ func (o LimitClientParallelRequestOpt) UDPClientApply(cfg *udpClient.Config) {
 }
 
 // WithLimitClientParallelRequestOpt limits number of parallel requests from client. (default: 1)
-func WithLimitClientParallelRequestOpt(limitClientParallelRequests int64) LimitClientParallelRequestOpt {
+func WithLimitClientParallelRequest(limitClientParallelRequests int64) LimitClientParallelRequestOpt {
 	return LimitClientParallelRequestOpt{limitClientParallelRequests: limitClientParallelRequests}
+}
+
+// LimitClientEndpointParallelRequestOpt limit's number of parallel requests to endpoint by client.
+type LimitClientEndpointParallelRequestOpt struct {
+	limitClientEndpointParallelRequests int64
+}
+
+func (o LimitClientEndpointParallelRequestOpt) TCPServerApply(cfg *tcpServer.Config) {
+	cfg.LimitClientEndpointParallelRequests = o.limitClientEndpointParallelRequests
+}
+
+func (o LimitClientEndpointParallelRequestOpt) TCPClientApply(cfg *tcpClient.Config) {
+	cfg.LimitClientEndpointParallelRequests = o.limitClientEndpointParallelRequests
+}
+
+func (o LimitClientEndpointParallelRequestOpt) UDPServerApply(cfg *udpServer.Config) {
+	cfg.LimitClientEndpointParallelRequests = o.limitClientEndpointParallelRequests
+}
+
+func (o LimitClientEndpointParallelRequestOpt) DTLSServerApply(cfg *dtlsServer.Config) {
+	cfg.LimitClientEndpointParallelRequests = o.limitClientEndpointParallelRequests
+}
+
+func (o LimitClientEndpointParallelRequestOpt) UDPClientApply(cfg *udpClient.Config) {
+	cfg.LimitClientEndpointParallelRequests = o.limitClientEndpointParallelRequests
+}
+
+// WithLimitClientParallelRequestOpt limits number of parallel requests to endpoint from client. (default: 1)
+func WithLimitClientEndpointParallelRequest(limitClientEndpointParallelRequests int64) LimitClientEndpointParallelRequestOpt {
+	return LimitClientEndpointParallelRequestOpt{limitClientEndpointParallelRequests: limitClientEndpointParallelRequests}
 }

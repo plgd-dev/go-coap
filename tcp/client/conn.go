@@ -55,7 +55,7 @@ func NewConn(
 		cfg.GetToken = message.GetToken
 	}
 	cc := Conn{}
-	limitParallelRequests := limitparallelrequests.New(cfg.LimitClientParallelRequests, cc.do, cc.doObserve)
+	limitParallelRequests := limitparallelrequests.New(cfg.LimitClientParallelRequests, cfg.LimitClientEndpointParallelRequests, cc.do, cc.doObserve)
 	cc.observationHandler = observation.NewHandler(&cc, cfg.Handler, limitParallelRequests.Do)
 	cc.Client = client.New(&cc, cc.observationHandler, cfg.GetToken, limitParallelRequests)
 	blockWise := createBlockWise(&cc)
