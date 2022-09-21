@@ -26,7 +26,7 @@ type Session struct {
 	// See: https://golang.org/pkg/sync/atomic/#pkg-note-BUG
 	sequence                        atomic.Uint64
 	onClose                         []EventFunc
-	ctx                             atomic.Value
+	ctx                             atomic.Value // // TODO: change to atomic.Pointer[context.Context] for go1.19
 	inactivityMonitor               InactivityMonitor
 	errSendCSM                      error
 	cancel                          context.CancelFunc
@@ -152,7 +152,7 @@ func (s *Session) Sequence() uint64 {
 }
 
 func (s *Session) Context() context.Context {
-	return *s.ctx.Load().(*context.Context)
+	return *s.ctx.Load().(*context.Context) //nolint:forcetypeassert
 }
 
 func (s *Session) PeerMaxMessageSize() uint32 {

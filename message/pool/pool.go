@@ -2,6 +2,7 @@ package pool
 
 import (
 	"context"
+	"fmt"
 	"sync"
 
 	"go.uber.org/atomic"
@@ -33,7 +34,10 @@ func (p *Pool) AcquireMessage(ctx context.Context) *Message {
 	if v == nil {
 		return NewMessage(ctx)
 	}
-	r := v.(*Message)
+	r, ok := v.(*Message)
+	if !ok {
+		panic(fmt.Errorf("invalid message type(%T) for pool", v))
+	}
 	p.currentMessagesInPool.Dec()
 	r.ctx = ctx
 	return r

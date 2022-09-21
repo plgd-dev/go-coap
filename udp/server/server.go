@@ -248,10 +248,14 @@ func getClose(cc *client.ClientConn) func() {
 	if v == nil {
 		return nil
 	}
-	return v.(func())
+	closeFn, ok := v.(func())
+	if !ok {
+		panic(fmt.Errorf("invalid type(%T) of context value for key %s", v, closeKey))
+	}
+	return closeFn
 }
 
-func (s *Server) getOrCreateClientConn(UDPConn *coapNet.UDPConn, raddr *net.UDPAddr) (cc *client.ClientConn, created bool) {
+func (s *Server) getOrCreateClientConn(udpConn *coapNet.UDPConn, raddr *net.UDPAddr) (cc *client.ClientConn, created bool) {
 	s.connsMutex.Lock()
 	defer s.connsMutex.Unlock()
 	key := raddr.String()
@@ -286,12 +290,12 @@ func (s *Server) getOrCreateClientConn(UDPConn *coapNet.UDPConn, raddr *net.UDPA
 		}
 		session := NewSession(
 			s.ctx,
-			UDPConn,
+			s.doneCtx,
+			udpConn,
 			raddr,
 			s.cfg.MaxMessageSize,
 			s.cfg.MTU,
 			false,
-			s.doneCtx,
 		)
 		monitor := s.cfg.CreateInactivityMonitor()
 		cfg := client.DefaultConfig

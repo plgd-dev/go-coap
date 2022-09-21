@@ -34,6 +34,30 @@ func (c *Coder) Size(m message.Message) (int, error) {
 	return size, err
 }
 
+func getHeader(messageLength int) (uint8, []byte) {
+	if messageLength < MessageLength13Base {
+		return uint8(messageLength), nil
+	}
+	if messageLength < MessageLength14Base {
+		extLen := messageLength - MessageLength13Base
+		extLenBytes := []byte{uint8(extLen)}
+		return 13, extLenBytes
+	}
+	if messageLength < MessageLength15Base {
+		extLen := messageLength - MessageLength14Base
+		extLenBytes := make([]byte, 2)
+		binary.BigEndian.PutUint16(extLenBytes, uint16(extLen))
+		return 14, extLenBytes
+	}
+	if messageLength < messageMaxLen {
+		extLen := messageLength - MessageLength15Base
+		extLenBytes := make([]byte, 4)
+		binary.BigEndian.PutUint32(extLenBytes, uint32(extLen))
+		return 15, extLenBytes
+	}
+	return 0, nil
+}
+
 func (c *Coder) Encode(m message.Message, buf []byte) (int, error) {
 	/*
 	   A CoAP Message message lomessage.OKs like:
@@ -75,26 +99,7 @@ func (c *Coder) Encode(m message.Message, buf []byte) (int, error) {
 		return -1, err
 	}
 	bufLen := payloadLen + optionsLen
-	var lenNib uint8
-	var extLenBytes []byte
-
-	if bufLen < MessageLength13Base {
-		lenNib = uint8(bufLen)
-	} else if bufLen < MessageLength14Base {
-		lenNib = 13
-		extLen := bufLen - MessageLength13Base
-		extLenBytes = []byte{uint8(extLen)}
-	} else if bufLen < MessageLength15Base {
-		lenNib = 14
-		extLen := bufLen - MessageLength14Base
-		extLenBytes = make([]byte, 2)
-		binary.BigEndian.PutUint16(extLenBytes, uint16(extLen))
-	} else if bufLen < messageMaxLen {
-		lenNib = 15
-		extLen := bufLen - MessageLength15Base
-		extLenBytes = make([]byte, 4)
-		binary.BigEndian.PutUint32(extLenBytes, uint32(extLen))
-	}
+	lenNib, extLenBytes := getHeader(bufLen)
 
 	var hdr [1 + 4 + message.MaxTokenSize + 1]byte
 	hdrLen := 1 + len(extLenBytes) + len(m.Token) + 1
@@ -122,7 +127,7 @@ func (c *Coder) Encode(m message.Message, buf []byte) (int, error) {
 	// Token.
 	copyToHdr(hdrOff, m.Token)
 
-	bufLen = bufLen + hdrLen
+	bufLen += hdrLen
 	if len(buf) < bufLen {
 		return bufLen, message.ErrTooSmall
 	}
@@ -229,7 +234,7 @@ func (c *Coder) DecodeWithHeader(data []byte, header MessageHeader, m *message.M
 	if len(data) > 0 {
 		m.Payload = data
 	}
-	processed = processed + uint32(len(data))
+	processed += uint32(len(data))
 	m.Code = header.Code
 	m.Token = header.Token
 

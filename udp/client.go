@@ -88,12 +88,12 @@ func Client(conn *net.UDPConn, opts ...Option) *client.ClientConn {
 	monitor := cfg.CreateInactivityMonitor()
 	l := coapNet.NewUDPConn(cfg.Net, conn, coapNet.WithErrors(cfg.Errors))
 	session := server.NewSession(cfg.Ctx,
+		context.Background(),
 		l,
 		addr,
 		cfg.MaxMessageSize,
 		cfg.MTU,
 		cfg.CloseSocket,
-		context.Background(),
 	)
 	cc := client.NewClientConn(session,
 		createBlockWise,

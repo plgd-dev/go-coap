@@ -666,7 +666,9 @@ func copyToPayloadFromOffset(r *pool.Message, payloadFile *memfile.File, offset 
 	return payloadSize, nil
 }
 
+//nolint:gocyclo
 func (b *BlockWise[C]) processReceivedMessage(w *responsewriter.ResponseWriter[C], r *pool.Message, maxSzx SZX, next func(w *responsewriter.ResponseWriter[C], r *pool.Message), blockType message.OptionID, sizeType message.OptionID) error {
+	// TODO: lower cyclomatic complexity
 	token := r.Token()
 	if len(token) == 0 {
 		next(w, r)

@@ -88,7 +88,7 @@ func TestMessageSetPathOptionLength(t *testing.T) {
 		outPath, err := msg.Path()
 		require.NoError(t, err)
 		require.Equal(t, net.NormalizeURLPath(inPath), outPath)
-		size = size * 4
+		size *= 4
 	}
 }
 
@@ -103,7 +103,7 @@ func TestMessageSetPathValidLength(t *testing.T) {
 		outPath, err := msg.Path()
 		require.NoError(t, err)
 		require.Equal(t, net.NormalizeURLPath(inPath), outPath)
-		size = size * 4
+		size *= 4
 	}
 }
 
