@@ -165,8 +165,16 @@ func NewUDPConn(network string, c *net.UDPConn, opts ...UDPOption) *UDPConn {
 		o.ApplyUDP(&cfg)
 	}
 
+	laddr := c.LocalAddr()
+	if laddr == nil {
+		panic(fmt.Errorf("invalid UDP connection"))
+	}
+	addr, ok := laddr.(*net.UDPAddr)
+	if !ok {
+		panic(fmt.Errorf("invalid address type(%T), UDP address expected", laddr))
+	}
 	var pc packetConn
-	if IsIPv6(c.LocalAddr().(*net.UDPAddr).IP) {
+	if IsIPv6(addr.IP) {
 		pc = newPacketConnIPv6(ipv6.NewPacketConn(c))
 	} else {
 		pc = newPacketConnIPv4(ipv4.NewPacketConn(c))

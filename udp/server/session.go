@@ -18,7 +18,7 @@ type EventFunc = func()
 type Session struct {
 	onClose []EventFunc
 
-	ctx atomic.Value
+	ctx atomic.Value // TODO: change to atomic.Pointer[context.Context] for go1.19
 
 	doneCtx    context.Context
 	connection *coapNet.UDPConn
@@ -36,12 +36,12 @@ type Session struct {
 
 func NewSession(
 	ctx context.Context,
+	doneCtx context.Context,
 	connection *coapNet.UDPConn,
 	raddr *net.UDPAddr,
 	maxMessageSize uint32,
 	mtu uint16,
 	closeSocket bool,
-	doneCtx context.Context,
 ) *Session {
 	ctx, cancel := context.WithCancel(ctx)
 
@@ -103,7 +103,7 @@ func (s *Session) Close() error {
 }
 
 func (s *Session) Context() context.Context {
-	return *s.ctx.Load().(*context.Context)
+	return *s.ctx.Load().(*context.Context) //nolint:forcetypeassert
 }
 
 func (s *Session) WriteMessage(req *pool.Message) error {

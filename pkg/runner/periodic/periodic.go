@@ -23,7 +23,7 @@ func New(stop <-chan struct{}, tick time.Duration) Func {
 			}
 			v := make(map[uint64]func(time.Time) bool)
 			m.Range(func(key, value interface{}) bool {
-				v[key.(uint64)] = value.(func(time.Time) bool)
+				v[key.(uint64)] = value.(func(time.Time) bool) //nolint:forcetypeassert
 				return true
 			})
 			for k, f := range v {

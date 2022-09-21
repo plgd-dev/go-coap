@@ -256,6 +256,25 @@ func (cc *ClientConn) acquireOutstandingInteraction(ctx context.Context) error {
 	return nil
 }
 
+func (cc *ClientConn) transmitMessage(req *pool.Message, waitForResponseChan chan struct{}) error {
+	maxRetransmit := cc.transmission.maxRetransmit.Load()
+	for i := int32(0); i < maxRetransmit; i++ {
+		select {
+		case <-waitForResponseChan:
+			return nil
+		case <-req.Context().Done():
+			return req.Context().Err()
+		case <-cc.Context().Done():
+			return fmt.Errorf("connection was closed: %w", cc.Context().Err())
+		case <-time.After(cc.transmission.acknowledgeTimeout.Load()):
+			if err := cc.session.WriteMessage(req); err != nil {
+				return err
+			}
+		}
+	}
+	return fmt.Errorf("timeout: retransmission(%v) was exhausted", cc.transmission.maxRetransmit.Load())
+}
+
 func (cc *ClientConn) writeMessage(req *pool.Message) error {
 	respChan := make(chan struct{})
 	req.UpsertType(message.Confirmable)
@@ -292,8 +311,7 @@ func (cc *ClientConn) writeMessage(req *pool.Message) error {
 		*/
 	}
 
-	err := cc.session.WriteMessage(req)
-	if err != nil {
+	if err := cc.session.WriteMessage(req); err != nil {
 		return fmt.Errorf("cannot write request: %w", err)
 	}
 	if req.Type() != message.Confirmable {
@@ -302,23 +320,10 @@ func (cc *ClientConn) writeMessage(req *pool.Message) error {
 		close(respChan)
 	}
 
-	maxRetransmit := cc.transmission.maxRetransmit.Load()
-	for i := int32(0); i < maxRetransmit; i++ {
-		select {
-		case <-respChan:
-			return nil
-		case <-req.Context().Done():
-			return req.Context().Err()
-		case <-cc.Context().Done():
-			return fmt.Errorf("connection was closed: %w", cc.Context().Err())
-		case <-time.After(cc.transmission.acknowledgeTimeout.Load()):
-			err = cc.session.WriteMessage(req)
-			if err != nil {
-				return fmt.Errorf("cannot write request: %w", err)
-			}
-		}
+	if err := cc.transmitMessage(req, respChan); err != nil {
+		return fmt.Errorf("cannot write request: %w", err)
 	}
-	return fmt.Errorf("timeout: retransmission(%v) was exhausted", cc.transmission.maxRetransmit.Load())
+	return nil
 }
 
 // WriteMessage sends an coap message.

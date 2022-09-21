@@ -19,7 +19,7 @@ type EventFunc = func()
 type Session struct {
 	onClose []EventFunc
 
-	ctx atomic.Value
+	ctx atomic.Value // TODO: change to atomic.Pointer[context.Context] for go1.19
 
 	cancel     context.CancelFunc
 	connection *coapNet.Conn
@@ -90,7 +90,7 @@ func (s *Session) Close() error {
 }
 
 func (s *Session) Context() context.Context {
-	return *s.ctx.Load().(*context.Context)
+	return *s.ctx.Load().(*context.Context) //nolint:forcetypeassert
 }
 
 // SetContextValue stores the value associated with key to context of connection.

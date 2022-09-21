@@ -98,11 +98,13 @@ issues:
     - path: _test\.go
       linters:
         - dupl
+        - forcetypeassert
         - gosec
 
     - path: ^test/.*\.go
       linters:
         - dupl
+        - forcetypeassert
         - gosec
 
     - path: example_test\.go

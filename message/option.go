@@ -161,7 +161,7 @@ type MediaType uint16
 
 // Content formats.
 var (
-	TextPlain         MediaType = 0     // text/plain;charset=utf-8
+	TextPlain         MediaType         // text/plain;charset=utf-8
 	AppCoseEncrypt0   MediaType = 16    // application/cose; cose-type="cose-encrypt0" (RFC 8152)
 	AppCoseMac0       MediaType = 17    // application/cose; cose-type="cose-mac0" (RFC 8152)
 	AppCoseSign1      MediaType = 18    // application/cose; cose-type="cose-sign1" (RFC 8152)
