@@ -162,7 +162,7 @@ func NewConn(
 	}
 	cc.msgID.Store(uint32(cfg.GetMID() - 0xffff/2))
 	cc.blockWise = createBlockWise(&cc)
-	limitParallelRequests := limitparallelrequests.New(cfg.LimitClientParallelRequests, cc.do, cc.doObserve)
+	limitParallelRequests := limitparallelrequests.New(cfg.LimitClientParallelRequests, cfg.LimitClientEndpointParallelRequests, cc.do, cc.doObserve)
 	cc.observationHandler = observation.NewHandler(&cc, cfg.Handler, limitParallelRequests.Do)
 	cc.Client = client.New(&cc, cc.observationHandler, cfg.GetToken, limitParallelRequests)
 	return &cc
