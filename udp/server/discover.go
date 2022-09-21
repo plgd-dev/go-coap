@@ -19,7 +19,7 @@ import (
 // address where was request sent. For Discover it allows the client to send a response from another address where was request send.
 // By default it is sent over all network interfaces and all compatible source IP addresses with hop limit 1.
 // Via opts you can specify the network interface, source IP address, and hop limit.
-func (s *Server) Discover(ctx context.Context, address, path string, receiverFunc func(cc *client.ClientConn, resp *pool.Message), opts ...coapNet.MulticastOption) error {
+func (s *Server) Discover(ctx context.Context, address, path string, receiverFunc func(cc *client.Conn, resp *pool.Message), opts ...coapNet.MulticastOption) error {
 	token, err := s.cfg.GetToken()
 	if err != nil {
 		return fmt.Errorf("cannot get token: %w", err)
@@ -40,7 +40,7 @@ func (s *Server) Discover(ctx context.Context, address, path string, receiverFun
 // address where was request sent. For Discover it allows the client to send a response from another address where was request send.
 // By default it is sent over all network interfaces and all compatible source IP addresses with hop limit 1.
 // Via opts you can specify the network interface, source IP address, and hop limit.
-func (s *Server) DiscoveryRequest(req *pool.Message, address string, receiverFunc func(cc *client.ClientConn, resp *pool.Message), opts ...coapNet.MulticastOption) error {
+func (s *Server) DiscoveryRequest(req *pool.Message, address string, receiverFunc func(cc *client.Conn, resp *pool.Message), opts ...coapNet.MulticastOption) error {
 	token := req.Token()
 	if len(token) == 0 {
 		return fmt.Errorf("invalid token")
@@ -60,8 +60,8 @@ func (s *Server) DiscoveryRequest(req *pool.Message, address string, receiverFun
 	}
 	s.multicastRequests.Store(token.Hash(), req)
 	defer s.multicastRequests.Delete(token.Hash())
-	if _, loaded := s.multicastHandler.LoadOrStore(token.Hash(), func(w *responsewriter.ResponseWriter[*client.ClientConn], r *pool.Message) {
-		receiverFunc(w.ClientConn(), r)
+	if _, loaded := s.multicastHandler.LoadOrStore(token.Hash(), func(w *responsewriter.ResponseWriter[*client.Conn], r *pool.Message) {
+		receiverFunc(w.Conn(), r)
 	}); loaded {
 		return errors.ErrKeyAlreadyExists
 	}

@@ -15,14 +15,14 @@ import (
 
 // The HandlerFunc type is an adapter to allow the use of
 // ordinary functions as COAP handlers.
-type HandlerFunc = func(*responsewriter.ResponseWriter[*client.ClientConn], *pool.Message)
+type HandlerFunc = func(*responsewriter.ResponseWriter[*client.Conn], *pool.Message)
 
 type ErrorFunc = func(error)
 
 type GoPoolFunc = func(func()) error
 
-// OnNewClientConnFunc is the callback for new connections.
-type OnNewClientConnFunc = func(cc *client.ClientConn)
+// OnNewConnFunc is the callback for new connections.
+type OnNewConnFunc = func(cc *client.Conn)
 
 var DefaultConfig = func() Config {
 	opts := Config{
@@ -30,20 +30,20 @@ var DefaultConfig = func() Config {
 		CreateInactivityMonitor: func() client.InactivityMonitor {
 			maxRetries := uint32(2)
 			timeout := time.Second * 16
-			onInactive := func(cc *client.ClientConn) {
+			onInactive := func(cc *client.Conn) {
 				_ = cc.Close()
 			}
-			keepalive := inactivity.NewKeepAlive(maxRetries, onInactive, func(cc *client.ClientConn, receivePong func()) (func(), error) {
+			keepalive := inactivity.NewKeepAlive(maxRetries, onInactive, func(cc *client.Conn, receivePong func()) (func(), error) {
 				return cc.AsyncPing(receivePong)
 			})
-			return inactivity.NewInactivityMonitor(timeout/time.Duration(maxRetries+1), keepalive.OnInactive)
+			return inactivity.New(timeout/time.Duration(maxRetries+1), keepalive.OnInactive)
 		},
-		OnNewClientConn: func(cc *client.ClientConn) {
+		OnNewConn: func(cc *client.Conn) {
 			// do nothing by default
 		},
 		ConnectionCacheSize: 2 * 1024,
 	}
-	opts.Handler = func(w *responsewriter.ResponseWriter[*client.ClientConn], r *pool.Message) {
+	opts.Handler = func(w *responsewriter.ResponseWriter[*client.Conn], r *pool.Message) {
 		if err := w.SetResponse(codes.NotFound, message.TextPlain, nil); err != nil {
 			opts.Errors(fmt.Errorf("server handler: cannot set response: %w", err))
 		}
@@ -55,7 +55,7 @@ type Config struct {
 	config.Common
 	CreateInactivityMonitor         client.CreateInactivityMonitorFunc
 	Handler                         HandlerFunc
-	OnNewClientConn                 OnNewClientConnFunc
+	OnNewConn                       OnNewConnFunc
 	ConnectionCacheSize             uint16
 	DisablePeerTCPSignalMessageCSMs bool
 	DisableTCPSignalMessageCSM      bool

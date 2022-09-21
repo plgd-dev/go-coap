@@ -15,14 +15,14 @@ import (
 
 // The HandlerFunc type is an adapter to allow the use of
 // ordinary functions as COAP handlers.
-type HandlerFunc = func(*responsewriter.ResponseWriter[*udpClient.ClientConn], *pool.Message)
+type HandlerFunc = func(*responsewriter.ResponseWriter[*udpClient.Conn], *pool.Message)
 
 type ErrorFunc = func(error)
 
 type GoPoolFunc = func(func()) error
 
-// OnNewClientConnFunc is the callback for new connections.
-type OnNewClientConnFunc = func(cc *udpClient.ClientConn)
+// OnNewConnFunc is the callback for new connections.
+type OnNewConnFunc = func(cc *udpClient.Conn)
 
 type GetMIDFunc = func() int32
 
@@ -31,12 +31,12 @@ var DefaultConfig = func() Config {
 		Common: config.DefaultCommon(),
 		CreateInactivityMonitor: func() udpClient.InactivityMonitor {
 			timeout := time.Second * 16
-			onInactive := func(cc *udpClient.ClientConn) {
+			onInactive := func(cc *udpClient.Conn) {
 				_ = cc.Close()
 			}
-			return inactivity.NewInactivityMonitor(timeout, onInactive)
+			return inactivity.New(timeout, onInactive)
 		},
-		OnNewClientConn: func(cc *udpClient.ClientConn) {
+		OnNewConn: func(cc *udpClient.Conn) {
 			// do nothing by default
 		},
 		TransmissionNStart:             1,
@@ -45,7 +45,7 @@ var DefaultConfig = func() Config {
 		GetMID:                         message.GetMID,
 		MTU:                            udpClient.DefaultMTU,
 	}
-	opts.Handler = func(w *responsewriter.ResponseWriter[*udpClient.ClientConn], r *pool.Message) {
+	opts.Handler = func(w *responsewriter.ResponseWriter[*udpClient.Conn], r *pool.Message) {
 		if err := w.SetResponse(codes.NotFound, message.TextPlain, nil); err != nil {
 			opts.Errors(fmt.Errorf("udp server: cannot set response: %w", err))
 		}
@@ -58,7 +58,7 @@ type Config struct {
 	CreateInactivityMonitor        udpClient.CreateInactivityMonitorFunc
 	GetMID                         GetMIDFunc
 	Handler                        HandlerFunc
-	OnNewClientConn                OnNewClientConnFunc
+	OnNewConn                      OnNewConnFunc
 	TransmissionNStart             uint32
 	TransmissionAcknowledgeTimeout time.Duration
 	TransmissionMaxRetransmit      uint32

@@ -43,7 +43,7 @@ func TestServerCleanUpConns(t *testing.T) {
 		require.NoError(t, errA)
 	}()
 
-	sd := tcp.NewServer(options.WithOnNewClientConn(func(cc *client.ClientConn) {
+	sd := tcp.NewServer(options.WithOnNewConn(func(cc *client.Conn) {
 		_, ok := cc.NetConn().(*tls.Conn)
 		require.False(t, ok) // tcp without tls
 		cc.AddOnClose(func() {
@@ -140,7 +140,7 @@ func TestServerSetContextValueWithPKI(t *testing.T) {
 		require.NoError(t, errC)
 	}()
 
-	onNewConn := func(cc *client.ClientConn) {
+	onNewConn := func(cc *client.Conn) {
 		require.NotNil(t, cc)
 		tlscon, ok := cc.NetConn().(*tls.Conn)
 		require.True(t, ok)
@@ -148,7 +148,7 @@ func TestServerSetContextValueWithPKI(t *testing.T) {
 		clientCert := tlscon.ConnectionState().PeerCertificates[0]
 		cc.SetContextValue("client-cert", clientCert)
 	}
-	handle := func(w *responsewriter.ResponseWriter[*client.ClientConn], r *pool.Message) {
+	handle := func(w *responsewriter.ResponseWriter[*client.Conn], r *pool.Message) {
 		// get certificate from connection context
 		clientCert := r.Context().Value("client-cert").(*x509.Certificate)
 		require.Equal(t, clientCert.SerialNumber, clientSerial)
@@ -157,7 +157,7 @@ func TestServerSetContextValueWithPKI(t *testing.T) {
 		require.NoError(t, errH)
 	}
 
-	sd := tcp.NewServer(options.WithHandlerFunc(handle), options.WithOnNewClientConn(onNewConn))
+	sd := tcp.NewServer(options.WithHandlerFunc(handle), options.WithOnNewConn(onNewConn))
 	defer sd.Stop()
 	go func() {
 		errS := sd.Serve(ld)
@@ -194,12 +194,12 @@ func TestServerInactiveMonitor(t *testing.T) {
 	require.NoError(t, err)
 
 	sd := tcp.NewServer(
-		options.WithOnNewClientConn(func(cc *client.ClientConn) {
+		options.WithOnNewConn(func(cc *client.Conn) {
 			cc.AddOnClose(func() {
 				checkClose.Release(1)
 			})
 		}),
-		options.WithInactivityMonitor(100*time.Millisecond, func(cc *client.ClientConn) {
+		options.WithInactivityMonitor(100*time.Millisecond, func(cc *client.Conn) {
 			require.False(t, inactivityDetected)
 			inactivityDetected = true
 			errC := cc.Close()
@@ -265,12 +265,12 @@ func TestServerKeepAliveMonitor(t *testing.T) {
 	err = checkClose.Acquire(ctx, 2)
 	require.NoError(t, err)
 	sd := tcp.NewServer(
-		options.WithOnNewClientConn(func(cc *client.ClientConn) {
+		options.WithOnNewConn(func(cc *client.Conn) {
 			cc.AddOnClose(func() {
 				checkClose.Release(1)
 			})
 		}),
-		options.WithKeepAlive(3, 200*time.Millisecond, func(cc *client.ClientConn) {
+		options.WithKeepAlive(3, 200*time.Millisecond, func(cc *client.Conn) {
 			require.False(t, inactivityDetected)
 			inactivityDetected = true
 			errC := cc.Close()

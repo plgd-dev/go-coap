@@ -111,7 +111,7 @@ func main() {
 		req.SetType(message.NonConfirmable)
 		defer messagePool.ReleaseMessage(req)
 
-		err = s.DiscoveryRequest(req, "224.0.1.187:5683", func(cc *client.ClientConn, resp *pool.Message) {
+		err = s.DiscoveryRequest(req, "224.0.1.187:5683", func(cc *client.Conn, resp *pool.Message) {
 			_, loaded := duplicit.LoadOrStore(cc.RemoteAddr().String(), true)
 			if loaded {
 				atomic.AddUint32(&numDuplicit, 1)

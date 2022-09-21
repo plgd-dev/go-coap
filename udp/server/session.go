@@ -126,7 +126,7 @@ func (s *Session) WriteMulticastMessage(req *pool.Message, address *net.UDPAddr,
 	return s.connection.WriteMulticast(req.Context(), address, data, opts...)
 }
 
-func (s *Session) Run(cc *client.ClientConn) (err error) {
+func (s *Session) Run(cc *client.Conn) (err error) {
 	defer func() {
 		err1 := s.Close()
 		if err == nil {

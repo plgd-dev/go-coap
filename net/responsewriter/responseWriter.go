@@ -67,6 +67,6 @@ func (r *ResponseWriter[C]) Message() *pool.Message {
 }
 
 // CConn peer connection.
-func (r *ResponseWriter[C]) ClientConn() C {
+func (r *ResponseWriter[C]) Conn() C {
 	return r.cc
 }

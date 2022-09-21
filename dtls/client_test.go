@@ -30,7 +30,7 @@ import (
 
 const Timeout = time.Second * 8
 
-func TestClientConnGet(t *testing.T) {
+func TestConnGet(t *testing.T) {
 	type args struct {
 		path string
 		opts message.Options
@@ -92,14 +92,14 @@ func TestClientConnGet(t *testing.T) {
 		assert.Equal(t, codes.GET, r.Code())
 		errS := w.SetResponse(codes.BadRequest, message.TextPlain, bytes.NewReader(make([]byte, 5330)))
 		require.NoError(t, errS)
-		require.NotEmpty(t, w.ClientConn())
+		require.NotEmpty(t, w.Conn())
 	}))
 	require.NoError(t, err)
 	err = m.Handle("/b", mux.HandlerFunc(func(w mux.ResponseWriter, r *mux.Message) {
 		assert.Equal(t, codes.GET, r.Code())
 		errS := w.SetResponse(codes.Content, message.TextPlain, bytes.NewReader([]byte("b")))
 		require.NoError(t, errS)
-		require.NotEmpty(t, w.ClientConn())
+		require.NotEmpty(t, w.Conn())
 	}))
 	require.NoError(t, err)
 
@@ -144,7 +144,7 @@ func TestClientConnGet(t *testing.T) {
 	}
 }
 
-func TestClientConnGetSeparateMessage(t *testing.T) {
+func TestConnGetSeparateMessage(t *testing.T) {
 	dtlsCfg := &piondtls.Config{
 		PSK: func(hint []byte) ([]byte, error) {
 			fmt.Printf("Hint: %s \n", hint)
@@ -188,7 +188,7 @@ func TestClientConnGetSeparateMessage(t *testing.T) {
 			customResp.Options = opts
 			resp := pool.NewMessage(r.Context())
 			resp.SetMessage(customResp)
-			errW := w.ClientConn().WriteMessage(resp)
+			errW := w.Conn().WriteMessage(resp)
 			if errW != nil && !errors.Is(errW, context.Canceled) {
 				log.Printf("cannot set response: %v", errW)
 			}
@@ -206,7 +206,7 @@ func TestClientConnGetSeparateMessage(t *testing.T) {
 		require.NoError(t, errS)
 	}()
 
-	cc, err := dtls.Dial(l.Addr().String(), dtlsCfg, options.WithHandlerFunc(func(w *responsewriter.ResponseWriter[*client.ClientConn], r *pool.Message) {
+	cc, err := dtls.Dial(l.Addr().String(), dtlsCfg, options.WithHandlerFunc(func(w *responsewriter.ResponseWriter[*client.Conn], r *pool.Message) {
 		assert.NoError(t, fmt.Errorf("none msg expected comes: %+v", r))
 	}))
 	require.NoError(t, err)
@@ -227,7 +227,7 @@ func TestClientConnGetSeparateMessage(t *testing.T) {
 	assert.Equal(t, codes.Content, resp.Code())
 }
 
-func TestClientConnPost(t *testing.T) {
+func TestConnPost(t *testing.T) {
 	type args struct {
 		path          string
 		contentFormat message.MediaType
@@ -306,7 +306,7 @@ func TestClientConnPost(t *testing.T) {
 
 				err = w.SetResponse(codes.BadRequest, message.TextPlain, bytes.NewReader(make([]byte, 5330)))
 				require.NoError(t, err)
-				require.NotEmpty(t, w.ClientConn())
+				require.NotEmpty(t, w.Conn())
 			}))
 			require.NoError(t, err)
 			err = m.Handle("/b", mux.HandlerFunc(func(w mux.ResponseWriter, r *mux.Message) {
@@ -319,7 +319,7 @@ func TestClientConnPost(t *testing.T) {
 				assert.Equal(t, buf, []byte("b-send"))
 				errH = w.SetResponse(codes.Content, message.TextPlain, bytes.NewReader([]byte("b")))
 				require.NoError(t, errH)
-				require.NotEmpty(t, w.ClientConn())
+				require.NotEmpty(t, w.Conn())
 			}))
 			require.NoError(t, err)
 
@@ -362,7 +362,7 @@ func TestClientConnPost(t *testing.T) {
 	}
 }
 
-func TestClientConnPut(t *testing.T) {
+func TestConnPut(t *testing.T) {
 	type args struct {
 		path          string
 		contentFormat message.MediaType
@@ -441,7 +441,7 @@ func TestClientConnPut(t *testing.T) {
 
 				errH = w.SetResponse(codes.BadRequest, message.TextPlain, bytes.NewReader(make([]byte, 5330)))
 				require.NoError(t, errH)
-				require.NotEmpty(t, w.ClientConn())
+				require.NotEmpty(t, w.Conn())
 			}))
 			require.NoError(t, err)
 			err = m.Handle("/b", mux.HandlerFunc(func(w mux.ResponseWriter, r *mux.Message) {
@@ -454,7 +454,7 @@ func TestClientConnPut(t *testing.T) {
 				assert.Equal(t, buf, []byte("b-send"))
 				errH = w.SetResponse(codes.Content, message.TextPlain, bytes.NewReader([]byte("b")))
 				require.NoError(t, errH)
-				require.NotEmpty(t, w.ClientConn())
+				require.NotEmpty(t, w.Conn())
 			}))
 			require.NoError(t, err)
 
@@ -497,7 +497,7 @@ func TestClientConnPut(t *testing.T) {
 	}
 }
 
-func TestClientConnDelete(t *testing.T) {
+func TestConnDelete(t *testing.T) {
 	type args struct {
 		path string
 		opts message.Options
@@ -559,14 +559,14 @@ func TestClientConnDelete(t *testing.T) {
 		assert.Equal(t, codes.DELETE, r.Code())
 		errH := w.SetResponse(codes.BadRequest, message.TextPlain, bytes.NewReader(make([]byte, 5330)))
 		require.NoError(t, errH)
-		require.NotEmpty(t, w.ClientConn())
+		require.NotEmpty(t, w.Conn())
 	}))
 	require.NoError(t, err)
 	err = m.Handle("/b", mux.HandlerFunc(func(w mux.ResponseWriter, r *mux.Message) {
 		assert.Equal(t, codes.DELETE, r.Code())
 		errH := w.SetResponse(codes.Deleted, message.TextPlain, bytes.NewReader([]byte("b")))
 		require.NoError(t, errH)
-		require.NotEmpty(t, w.ClientConn())
+		require.NotEmpty(t, w.Conn())
 	}))
 	require.NoError(t, err)
 
@@ -612,7 +612,7 @@ func TestClientConnDelete(t *testing.T) {
 	}
 }
 
-func TestClientConnPing(t *testing.T) {
+func TestConnPing(t *testing.T) {
 	dtlsCfg := &piondtls.Config{
 		PSK: func(hint []byte) ([]byte, error) {
 			fmt.Printf("Hint: %s \n", hint)
@@ -654,7 +654,7 @@ func TestClientConnPing(t *testing.T) {
 	require.NoError(t, err)
 }
 
-func TestClientConnHandeShakeFailure(t *testing.T) {
+func TestConnHandeShakeFailure(t *testing.T) {
 	dtlsCfg := &piondtls.Config{
 		PSK: func(hint []byte) ([]byte, error) {
 			fmt.Printf("Hint: %s \n", hint)
@@ -719,7 +719,7 @@ func TestClientInactiveMonitor(t *testing.T) {
 	err = checkClose.Acquire(ctx, 2)
 	require.NoError(t, err)
 	sd := dtls.NewServer(
-		options.WithOnNewClientConn(func(cc *client.ClientConn) {
+		options.WithOnNewConn(func(cc *client.Conn) {
 			t.Log("server - new connection")
 			cc.AddOnClose(func() {
 				t.Log("server - client is closed")
@@ -727,7 +727,7 @@ func TestClientInactiveMonitor(t *testing.T) {
 			})
 		}),
 		options.WithPeriodicRunner(periodic.New(ctx.Done(), time.Millisecond*10)),
-		options.WithInactivityMonitor(Timeout/2, func(c *client.ClientConn) {
+		options.WithInactivityMonitor(Timeout/2, func(c *client.Conn) {
 			t.Log("server - close for inactivity")
 			_ = c.Close()
 		}),
@@ -746,7 +746,7 @@ func TestClientInactiveMonitor(t *testing.T) {
 	}()
 
 	cc, err := dtls.Dial(ld.Addr().String(), clientCgf,
-		options.WithInactivityMonitor(100*time.Millisecond, func(cc *client.ClientConn) {
+		options.WithInactivityMonitor(100*time.Millisecond, func(cc *client.Conn) {
 			require.False(t, inactivityDetected)
 			inactivityDetected = true
 			errC := cc.Close()
@@ -790,7 +790,7 @@ func TestClientKeepAliveMonitor(t *testing.T) {
 	err = checkClose.Acquire(ctx, 2)
 	require.NoError(t, err)
 	sd := dtls.NewServer(
-		options.WithOnNewClientConn(func(cc *client.ClientConn) {
+		options.WithOnNewConn(func(cc *client.Conn) {
 			t.Log("server - new connection")
 			cc.AddOnClose(func() {
 				t.Log("server - client is closed")
@@ -803,7 +803,7 @@ func TestClientKeepAliveMonitor(t *testing.T) {
 			return nil
 		}),
 		options.WithPeriodicRunner(periodic.New(ctx.Done(), time.Millisecond*10)),
-		options.WithInactivityMonitor(Timeout/2, func(c *client.ClientConn) {
+		options.WithInactivityMonitor(Timeout/2, func(c *client.Conn) {
 			t.Log("server - close for inactivity")
 			_ = c.Close()
 		}),
@@ -824,7 +824,7 @@ func TestClientKeepAliveMonitor(t *testing.T) {
 	cc, err := dtls.Dial(
 		ld.Addr().String(),
 		clientCgf,
-		options.WithKeepAlive(3, 100*time.Millisecond, func(cc *client.ClientConn) {
+		options.WithKeepAlive(3, 100*time.Millisecond, func(cc *client.Conn) {
 			require.False(t, inactivityDetected)
 			inactivityDetected = true
 			errC := cc.Close()

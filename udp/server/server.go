@@ -29,7 +29,7 @@ type Server struct {
 	responseMsgCache  *cache.Cache[string, []byte]
 
 	connsMutex sync.Mutex
-	conns      map[string]*client.ClientConn
+	conns      map[string]*client.Conn
 
 	listenMutex sync.Mutex
 	listen      *coapNet.UDPConn
@@ -64,7 +64,7 @@ func New(opt ...Option) *Server {
 
 	if cfg.CreateInactivityMonitor == nil {
 		cfg.CreateInactivityMonitor = func() client.InactivityMonitor {
-			return inactivity.NewNilMonitor[*client.ClientConn]()
+			return inactivity.NewNilMonitor[*client.Conn]()
 		}
 	}
 	if cfg.MessagePool == nil {
@@ -92,7 +92,7 @@ func New(opt ...Option) *Server {
 		doneCtx:           doneCtx,
 		doneCancel:        doneCancel,
 		responseMsgCache:  cache.NewCache[string, []byte](),
-		conns:             make(map[string]*client.ClientConn),
+		conns:             make(map[string]*client.Conn),
 
 		cfg: &cfg,
 	}
@@ -109,7 +109,7 @@ func (s *Server) checkAndSetListener(l *coapNet.UDPConn) error {
 	return nil
 }
 
-func (s *Server) closeConnection(cc *client.ClientConn) {
+func (s *Server) closeConnection(cc *client.Conn) {
 	if err := cc.Close(); err != nil {
 		s.cfg.Errors(fmt.Errorf("cannot close connection: %w", err))
 	}
@@ -160,7 +160,7 @@ func (s *Server) Serve(l *coapNet.UDPConn) error {
 			}
 		}
 		buf = buf[:n]
-		cc, err := s.getClientConn(l, raddr, true)
+		cc, err := s.getConn(l, raddr, true)
 		if err != nil {
 			s.cfg.Errors(fmt.Errorf("%v: cannot get client connection: %w", raddr, err))
 			continue
@@ -194,7 +194,7 @@ func (s *Server) Stop() {
 func (s *Server) closeSessions() {
 	s.connsMutex.Lock()
 	conns := s.conns
-	s.conns = make(map[string]*client.ClientConn)
+	s.conns = make(map[string]*client.Conn)
 	s.connsMutex.Unlock()
 	for _, cc := range conns {
 		s.closeConnection(cc)
@@ -219,10 +219,10 @@ func (s *Server) conn() *coapNet.UDPConn {
 
 const closeKey = "gocoapCloseConnection"
 
-func (s *Server) getClientConns() []*client.ClientConn {
+func (s *Server) getConns() []*client.Conn {
 	s.connsMutex.Lock()
 	defer s.connsMutex.Unlock()
-	conns := make([]*client.ClientConn, 0, 32)
+	conns := make([]*client.Conn, 0, 32)
 	for _, c := range s.conns {
 		conns = append(conns, c)
 	}
@@ -230,7 +230,7 @@ func (s *Server) getClientConns() []*client.ClientConn {
 }
 
 func (s *Server) handleInactivityMonitors(now time.Time) {
-	for _, cc := range s.getClientConns() {
+	for _, cc := range s.getConns() {
 		select {
 		case <-cc.Context().Done():
 			if closeFn := getClose(cc); closeFn != nil {
@@ -243,7 +243,7 @@ func (s *Server) handleInactivityMonitors(now time.Time) {
 	}
 }
 
-func getClose(cc *client.ClientConn) func() {
+func getClose(cc *client.Conn) func() {
 	v := cc.Context().Value(closeKey)
 	if v == nil {
 		return nil
@@ -255,18 +255,18 @@ func getClose(cc *client.ClientConn) func() {
 	return closeFn
 }
 
-func (s *Server) getOrCreateClientConn(udpConn *coapNet.UDPConn, raddr *net.UDPAddr) (cc *client.ClientConn, created bool) {
+func (s *Server) getOrCreateConn(udpConn *coapNet.UDPConn, raddr *net.UDPAddr) (cc *client.Conn, created bool) {
 	s.connsMutex.Lock()
 	defer s.connsMutex.Unlock()
 	key := raddr.String()
 	cc = s.conns[key]
 	if cc == nil {
 		created = true
-		createBlockWise := func(cc *client.ClientConn) *blockwise.BlockWise[*client.ClientConn] {
+		createBlockWise := func(cc *client.Conn) *blockwise.BlockWise[*client.Conn] {
 			return nil
 		}
 		if s.cfg.BlockwiseEnable {
-			createBlockWise = func(cc *client.ClientConn) *blockwise.BlockWise[*client.ClientConn] {
+			createBlockWise = func(cc *client.Conn) *blockwise.BlockWise[*client.Conn] {
 				v := cc
 				return blockwise.New(
 					v,
@@ -302,7 +302,7 @@ func (s *Server) getOrCreateClientConn(udpConn *coapNet.UDPConn, raddr *net.UDPA
 		cfg.TransmissionNStart = s.cfg.TransmissionNStart
 		cfg.TransmissionAcknowledgeTimeout = s.cfg.TransmissionAcknowledgeTimeout
 		cfg.TransmissionMaxRetransmit = s.cfg.TransmissionMaxRetransmit
-		cfg.Handler = func(w *responsewriter.ResponseWriter[*client.ClientConn], r *pool.Message) {
+		cfg.Handler = func(w *responsewriter.ResponseWriter[*client.Conn], r *pool.Message) {
 			h, ok := s.multicastHandler.Load(r.Token().Hash())
 			if ok {
 				h(w, r)
@@ -317,7 +317,7 @@ func (s *Server) getOrCreateClientConn(udpConn *coapNet.UDPConn, raddr *net.UDPA
 		cfg.GetToken = s.cfg.GetToken
 		cfg.MessagePool = s.cfg.MessagePool
 
-		cc = client.NewClientConn(
+		cc = client.NewConn(
 			session,
 			createBlockWise,
 			monitor,
@@ -341,11 +341,11 @@ func (s *Server) getOrCreateClientConn(udpConn *coapNet.UDPConn, raddr *net.UDPA
 	return cc, created
 }
 
-func (s *Server) getClientConn(l *coapNet.UDPConn, raddr *net.UDPAddr, firstTime bool) (*client.ClientConn, error) {
-	cc, created := s.getOrCreateClientConn(l, raddr)
+func (s *Server) getConn(l *coapNet.UDPConn, raddr *net.UDPAddr, firstTime bool) (*client.Conn, error) {
+	cc, created := s.getOrCreateConn(l, raddr)
 	if created {
-		if s.cfg.OnNewClientConn != nil {
-			s.cfg.OnNewClientConn(cc)
+		if s.cfg.OnNewConn != nil {
+			s.cfg.OnNewConn(cc)
 		}
 	} else {
 		// check if client is not expired now + 10ms  - if so, close it
@@ -363,18 +363,18 @@ func (s *Server) getClientConn(l *coapNet.UDPConn, raddr *net.UDPAddr, firstTime
 			closeFn()
 		}
 		if firstTime {
-			return s.getClientConn(l, raddr, false)
+			return s.getConn(l, raddr, false)
 		}
 		return nil, fmt.Errorf("connection is closed")
 	}
 	return cc, nil
 }
 
-func (s *Server) NewClientConn(addr *net.UDPAddr) (*client.ClientConn, error) {
+func (s *Server) NewConn(addr *net.UDPAddr) (*client.Conn, error) {
 	l := s.getListener()
 	if l == nil {
 		// server is not started/stopped
 		return nil, fmt.Errorf("server is not running")
 	}
-	return s.getClientConn(l, addr, true)
+	return s.getConn(l, addr, true)
 }

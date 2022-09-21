@@ -22,7 +22,7 @@ type Option interface {
 }
 
 // Dial creates a client connection to the given target.
-func Dial(target string, opts ...Option) (*client.ClientConn, error) {
+func Dial(target string, opts ...Option) (*client.Conn, error) {
 	cfg := client.DefaultConfig
 	for _, o := range opts {
 		o.UDPClientApply(&cfg)
@@ -40,7 +40,7 @@ func Dial(target string, opts ...Option) (*client.ClientConn, error) {
 }
 
 // Client creates client over udp connection.
-func Client(conn *net.UDPConn, opts ...Option) *client.ClientConn {
+func Client(conn *net.UDPConn, opts ...Option) *client.Conn {
 	cfg := client.DefaultConfig
 	for _, o := range opts {
 		o.UDPClientApply(&cfg)
@@ -52,7 +52,7 @@ func Client(conn *net.UDPConn, opts ...Option) *client.ClientConn {
 	}
 	if cfg.CreateInactivityMonitor == nil {
 		cfg.CreateInactivityMonitor = func() client.InactivityMonitor {
-			return inactivity.NewNilMonitor[*client.ClientConn]()
+			return inactivity.NewNilMonitor[*client.Conn]()
 		}
 	}
 	if cfg.MessagePool == nil {
@@ -68,11 +68,11 @@ func Client(conn *net.UDPConn, opts ...Option) *client.ClientConn {
 		errorsFunc(fmt.Errorf("udp: %v: %w", conn.RemoteAddr(), err))
 	}
 	addr, _ := conn.RemoteAddr().(*net.UDPAddr)
-	createBlockWise := func(cc *client.ClientConn) *blockwise.BlockWise[*client.ClientConn] {
+	createBlockWise := func(cc *client.Conn) *blockwise.BlockWise[*client.Conn] {
 		return nil
 	}
 	if cfg.BlockwiseEnable {
-		createBlockWise = func(cc *client.ClientConn) *blockwise.BlockWise[*client.ClientConn] {
+		createBlockWise = func(cc *client.Conn) *blockwise.BlockWise[*client.Conn] {
 			v := cc
 			return blockwise.New(
 				v,
@@ -95,7 +95,7 @@ func Client(conn *net.UDPConn, opts ...Option) *client.ClientConn {
 		cfg.MTU,
 		cfg.CloseSocket,
 	)
-	cc := client.NewClientConn(session,
+	cc := client.NewConn(session,
 		createBlockWise,
 		monitor,
 		&cfg,

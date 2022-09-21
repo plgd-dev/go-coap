@@ -11,7 +11,7 @@ import (
 	"github.com/plgd-dev/go-coap/v3/tcp"
 )
 
-func ExampleClientConn_Get() {
+func ExampleConn_Get() {
 	conn, err := tcp.Dial("try.plgd.cloud:5683")
 	if err != nil {
 		log.Fatal(err)

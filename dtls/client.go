@@ -20,7 +20,7 @@ import (
 
 var DefaultConfig = func() udpClient.Config {
 	cfg := udpClient.DefaultConfig
-	cfg.Handler = func(w *responsewriter.ResponseWriter[*udpClient.ClientConn], r *pool.Message) {
+	cfg.Handler = func(w *responsewriter.ResponseWriter[*udpClient.Conn], r *pool.Message) {
 		switch r.Code() {
 		case codes.POST, codes.PUT, codes.GET, codes.DELETE:
 			if err := w.SetResponse(codes.NotFound, message.TextPlain, nil); err != nil {
@@ -32,7 +32,7 @@ var DefaultConfig = func() udpClient.Config {
 }()
 
 // Dial creates a client connection to the given target.
-func Dial(target string, dtlsCfg *dtls.Config, opts ...udp.Option) (*udpClient.ClientConn, error) {
+func Dial(target string, dtlsCfg *dtls.Config, opts ...udp.Option) (*udpClient.Conn, error) {
 	cfg := DefaultConfig
 	for _, o := range opts {
 		o.UDPClientApply(&cfg)
@@ -52,7 +52,7 @@ func Dial(target string, dtlsCfg *dtls.Config, opts ...udp.Option) (*udpClient.C
 }
 
 // Client creates client over dtls connection.
-func Client(conn *dtls.Conn, opts ...udp.Option) *udpClient.ClientConn {
+func Client(conn *dtls.Conn, opts ...udp.Option) *udpClient.Conn {
 	cfg := DefaultConfig
 	for _, o := range opts {
 		o.UDPClientApply(&cfg)
@@ -64,7 +64,7 @@ func Client(conn *dtls.Conn, opts ...udp.Option) *udpClient.ClientConn {
 	}
 	if cfg.CreateInactivityMonitor == nil {
 		cfg.CreateInactivityMonitor = func() udpClient.InactivityMonitor {
-			return inactivity.NewNilMonitor[*udpClient.ClientConn]()
+			return inactivity.NewNilMonitor[*udpClient.Conn]()
 		}
 	}
 	if cfg.MessagePool == nil {
@@ -79,11 +79,11 @@ func Client(conn *dtls.Conn, opts ...udp.Option) *udpClient.ClientConn {
 		errorsFunc(fmt.Errorf("dtls: %v: %w", conn.RemoteAddr(), err))
 	}
 
-	createBlockWise := func(cc *udpClient.ClientConn) *blockwise.BlockWise[*udpClient.ClientConn] {
+	createBlockWise := func(cc *udpClient.Conn) *blockwise.BlockWise[*udpClient.Conn] {
 		return nil
 	}
 	if cfg.BlockwiseEnable {
-		createBlockWise = func(cc *udpClient.ClientConn) *blockwise.BlockWise[*udpClient.ClientConn] {
+		createBlockWise = func(cc *udpClient.Conn) *blockwise.BlockWise[*udpClient.Conn] {
 			v := cc
 			return blockwise.New(
 				v,
@@ -104,7 +104,7 @@ func Client(conn *dtls.Conn, opts ...udp.Option) *udpClient.ClientConn {
 		cfg.MTU,
 		cfg.CloseSocket,
 	)
-	cc := udpClient.NewClientConn(session,
+	cc := udpClient.NewConn(session,
 		createBlockWise,
 		monitor,
 		&cfg,

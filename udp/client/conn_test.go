@@ -36,7 +36,7 @@ func bodyToBytes(t *testing.T, r io.Reader) []byte {
 	return buf.Bytes()
 }
 
-func TestClientConnDeduplication(t *testing.T) {
+func TestConnDeduplication(t *testing.T) {
 	l, err := coapNet.NewListenUDP("udp", "")
 	require.NoError(t, err)
 	defer func() {
@@ -56,7 +56,7 @@ func TestClientConnDeduplication(t *testing.T) {
 		atomic.AddInt32(&cnt, 1)
 		errH := w.SetResponse(codes.Content, message.AppOctets, bytes.NewReader([]byte{byte(cnt)}))
 		require.NoError(t, errH)
-		require.NotEmpty(t, w.ClientConn())
+		require.NotEmpty(t, w.Conn())
 	}))
 	require.NoError(t, err)
 
@@ -115,7 +115,7 @@ func TestClientConnDeduplication(t *testing.T) {
 	require.Equal(t, []byte{1}, bodyToBytes(t, got.Body()))
 }
 
-func TestClientConnDeduplicationRetransmission(t *testing.T) {
+func TestConnDeduplicationRetransmission(t *testing.T) {
 	l, err := coapNet.NewListenUDP("udp", "")
 	require.NoError(t, err)
 	defer func() {
@@ -198,7 +198,7 @@ func TestClientConnDeduplicationRetransmission(t *testing.T) {
 	require.Equal(t, []byte{2}, bodyToBytes(t, got.Body()))
 }
 
-func testParallelClientConnGet(t *testing.T, numParallel int) {
+func testParallelConnGet(t *testing.T, numParallel int) {
 	type args struct {
 		path string
 		opts message.Options
@@ -252,14 +252,14 @@ func testParallelClientConnGet(t *testing.T, numParallel int) {
 		assert.Equal(t, codes.GET, r.Code())
 		errH := w.SetResponse(codes.BadRequest, message.TextPlain, bytes.NewReader(make([]byte, 5330)))
 		require.NoError(t, errH)
-		require.NotEmpty(t, w.ClientConn())
+		require.NotEmpty(t, w.Conn())
 	}))
 	require.NoError(t, err)
 	err = m.Handle("/b", mux.HandlerFunc(func(w mux.ResponseWriter, r *mux.Message) {
 		assert.Equal(t, codes.GET, r.Code())
 		errH := w.SetResponse(codes.Content, message.TextPlain, bytes.NewReader([]byte("b")))
 		require.NoError(t, errH)
-		require.NotEmpty(t, w.ClientConn())
+		require.NotEmpty(t, w.Conn())
 	}))
 	require.NoError(t, err)
 
@@ -312,15 +312,15 @@ func testParallelClientConnGet(t *testing.T, numParallel int) {
 	}
 }
 
-func TestParallelClientConnGet(t *testing.T) {
-	testParallelClientConnGet(t, testNumParallel)
+func TestParallelConnGet(t *testing.T) {
+	testParallelConnGet(t, testNumParallel)
 }
 
-func TestClientConnGet(t *testing.T) {
-	testParallelClientConnGet(t, 1)
+func TestConnGet(t *testing.T) {
+	testParallelConnGet(t, 1)
 }
 
-func TestClientConnGetSeparateMessage(t *testing.T) {
+func TestConnGetSeparateMessage(t *testing.T) {
 	l, err := coapNet.NewListenUDP("udp", "")
 	require.NoError(t, err)
 	defer func() {
@@ -356,7 +356,7 @@ func TestClientConnGetSeparateMessage(t *testing.T) {
 			resp := pool.NewMessage(r.Context())
 			resp.SetMessage(customResp)
 
-			errW := w.ClientConn().WriteMessage(resp)
+			errW := w.Conn().WriteMessage(resp)
 			if errW != nil && !errors.Is(errW, context.Canceled) {
 				log.Printf("cannot set response: %v", errW)
 			}
@@ -374,7 +374,7 @@ func TestClientConnGetSeparateMessage(t *testing.T) {
 		require.NoError(t, errS)
 	}()
 
-	cc, err := udp.Dial(l.LocalAddr().String(), options.WithHandlerFunc(func(w *responsewriter.ResponseWriter[*client.ClientConn], r *pool.Message) {
+	cc, err := udp.Dial(l.LocalAddr().String(), options.WithHandlerFunc(func(w *responsewriter.ResponseWriter[*client.Conn], r *pool.Message) {
 		assert.NoError(t, fmt.Errorf("none msg expected comes: %+v", r))
 	}))
 	require.NoError(t, err)
@@ -395,7 +395,7 @@ func TestClientConnGetSeparateMessage(t *testing.T) {
 	assert.Equal(t, codes.Content, resp.Code())
 }
 
-func testClientConnPost(t *testing.T, numParallel int) {
+func testConnPost(t *testing.T, numParallel int) {
 	type args struct {
 		path          string
 		contentFormat message.MediaType
@@ -466,7 +466,7 @@ func testClientConnPost(t *testing.T, numParallel int) {
 
 				errH = w.SetResponse(codes.BadRequest, message.TextPlain, bytes.NewReader(make([]byte, 5330)))
 				require.NoError(t, errH)
-				require.NotEmpty(t, w.ClientConn())
+				require.NotEmpty(t, w.Conn())
 			}))
 			require.NoError(t, err)
 			err = m.Handle("/b", mux.HandlerFunc(func(w mux.ResponseWriter, r *mux.Message) {
@@ -479,7 +479,7 @@ func testClientConnPost(t *testing.T, numParallel int) {
 				assert.Equal(t, buf, []byte("b-send"))
 				errH = w.SetResponse(codes.Content, message.TextPlain, bytes.NewReader([]byte("b")))
 				require.NoError(t, errH)
-				require.NotEmpty(t, w.ClientConn())
+				require.NotEmpty(t, w.Conn())
 			}))
 			require.NoError(t, err)
 
@@ -530,17 +530,17 @@ func testClientConnPost(t *testing.T, numParallel int) {
 	}
 }
 
-func TestClientConnPost(t *testing.T) {
-	testClientConnPost(t, 1)
+func TestConnPost(t *testing.T) {
+	testConnPost(t, 1)
 }
 
 /*
-func TestParallelClientConnPost(t *testing.T) {
-	testClientConnPost(t, testNumParallel)
+func TestParallelConnPost(t *testing.T) {
+	testConnPost(t, testNumParallel)
 }
 */
 
-func testClientConnPut(t *testing.T, numParallel int) {
+func testConnPut(t *testing.T, numParallel int) {
 	type args struct {
 		path          string
 		contentFormat message.MediaType
@@ -611,7 +611,7 @@ func testClientConnPut(t *testing.T, numParallel int) {
 
 				errH = w.SetResponse(codes.BadRequest, message.TextPlain, bytes.NewReader(make([]byte, 5330)))
 				require.NoError(t, errH)
-				require.NotEmpty(t, w.ClientConn())
+				require.NotEmpty(t, w.Conn())
 			}))
 			require.NoError(t, err)
 			err = m.Handle("/b", mux.HandlerFunc(func(w mux.ResponseWriter, r *mux.Message) {
@@ -624,7 +624,7 @@ func testClientConnPut(t *testing.T, numParallel int) {
 				assert.Equal(t, buf, []byte("b-send"))
 				errH = w.SetResponse(codes.Content, message.TextPlain, bytes.NewReader([]byte("b")))
 				require.NoError(t, errH)
-				require.NotEmpty(t, w.ClientConn())
+				require.NotEmpty(t, w.Conn())
 			}))
 			require.NoError(t, err)
 
@@ -674,17 +674,17 @@ func testClientConnPut(t *testing.T, numParallel int) {
 	}
 }
 
-func TestClientConnPut(t *testing.T) {
-	testClientConnPut(t, 1)
+func TestConnPut(t *testing.T) {
+	testConnPut(t, 1)
 }
 
 /*
-func TestParallelClientConnPut(t *testing.T) {
-	testClientConnPut(t, testNumParallel)
+func TestParallelConnPut(t *testing.T) {
+	testConnPut(t, testNumParallel)
 }
 */
 
-func testClientConnDelete(t *testing.T, numParallel int) {
+func testConnDelete(t *testing.T, numParallel int) {
 	type args struct {
 		path string
 		opts message.Options
@@ -738,14 +738,14 @@ func testClientConnDelete(t *testing.T, numParallel int) {
 		assert.Equal(t, codes.DELETE, r.Code())
 		errS := w.SetResponse(codes.BadRequest, message.TextPlain, bytes.NewReader(make([]byte, 5330)))
 		require.NoError(t, errS)
-		require.NotEmpty(t, w.ClientConn())
+		require.NotEmpty(t, w.Conn())
 	}))
 	require.NoError(t, err)
 	err = m.Handle("/b", mux.HandlerFunc(func(w mux.ResponseWriter, r *mux.Message) {
 		assert.Equal(t, codes.DELETE, r.Code())
 		errS := w.SetResponse(codes.Deleted, message.TextPlain, bytes.NewReader([]byte("b")))
 		require.NoError(t, errS)
-		require.NotEmpty(t, w.ClientConn())
+		require.NotEmpty(t, w.Conn())
 	}))
 	require.NoError(t, err)
 
@@ -798,17 +798,17 @@ func testClientConnDelete(t *testing.T, numParallel int) {
 	}
 }
 
-func TestClientConnDelete(t *testing.T) {
-	testClientConnDelete(t, 1)
+func TestConnDelete(t *testing.T) {
+	testConnDelete(t, 1)
 }
 
 /*
-func TestParallelClientConnDelete(t *testing.T) {
-	testClientConnDelete(t, testNumParallel)
+func TestParallelConnDelete(t *testing.T) {
+	testConnDelete(t, testNumParallel)
 }
 */
 
-func TestClientConnPing(t *testing.T) {
+func TestConnPing(t *testing.T) {
 	l, err := coapNet.NewListenUDP("udp", "")
 	require.NoError(t, err)
 	defer func() {

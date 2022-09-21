@@ -46,7 +46,7 @@ func New(opt ...Option) *Server {
 
 	if cfg.CreateInactivityMonitor == nil {
 		cfg.CreateInactivityMonitor = func() client.InactivityMonitor {
-			return inactivity.NewNilMonitor[*client.ClientConn]()
+			return inactivity.NewNilMonitor[*client.Conn]()
 		}
 	}
 	if cfg.MessagePool == nil {
@@ -118,11 +118,11 @@ func (s *Server) checkAcceptError(err error) bool {
 }
 
 func (s *Server) serveConnection(connections *connections.Connections, rw net.Conn) {
-	var cc *client.ClientConn
+	var cc *client.Conn
 	monitor := s.cfg.CreateInactivityMonitor()
-	cc = s.createClientConn(coapNet.NewConn(rw), monitor)
-	if s.cfg.OnNewClientConn != nil {
-		s.cfg.OnNewClientConn(cc)
+	cc = s.createConn(coapNet.NewConn(rw), monitor)
+	if s.cfg.OnNewConn != nil {
+		s.cfg.OnNewConn(cc)
 	}
 	connections.Store(cc)
 	defer connections.Delete(cc)
@@ -182,12 +182,12 @@ func (s *Server) Stop() {
 	}
 }
 
-func (s *Server) createClientConn(connection *coapNet.Conn, monitor client.InactivityMonitor) *client.ClientConn {
-	createBlockWise := func(cc *client.ClientConn) *blockwise.BlockWise[*client.ClientConn] {
+func (s *Server) createConn(connection *coapNet.Conn, monitor client.InactivityMonitor) *client.Conn {
+	createBlockWise := func(cc *client.Conn) *blockwise.BlockWise[*client.Conn] {
 		return nil
 	}
 	if s.cfg.BlockwiseEnable {
-		createBlockWise = func(cc *client.ClientConn) *blockwise.BlockWise[*client.ClientConn] {
+		createBlockWise = func(cc *client.Conn) *blockwise.BlockWise[*client.Conn] {
 			return blockwise.New(
 				cc,
 				s.cfg.BlockwiseTransferTimeout,
@@ -211,7 +211,7 @@ func (s *Server) createClientConn(connection *coapNet.Conn, monitor client.Inact
 	cfg.ConnectionCacheSize = s.cfg.ConnectionCacheSize
 	cfg.MessagePool = s.cfg.MessagePool
 	cfg.GetToken = s.cfg.GetToken
-	cc := client.NewClientConn(
+	cc := client.NewConn(
 		connection,
 		createBlockWise,
 		monitor,

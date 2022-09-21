@@ -98,23 +98,23 @@ type MuxHandlerOpt struct {
 }
 
 func (o MuxHandlerOpt) TCPServerApply(cfg *tcpServer.Config) {
-	cfg.Handler = mux.ToHandler[*tcpClient.ClientConn](o.m)
+	cfg.Handler = mux.ToHandler[*tcpClient.Conn](o.m)
 }
 
 func (o MuxHandlerOpt) TCPClientApply(cfg *tcpClient.Config) {
-	cfg.Handler = mux.ToHandler[*tcpClient.ClientConn](o.m)
+	cfg.Handler = mux.ToHandler[*tcpClient.Conn](o.m)
 }
 
 func (o MuxHandlerOpt) UDPServerApply(cfg *udpServer.Config) {
-	cfg.Handler = mux.ToHandler[*udpClient.ClientConn](o.m)
+	cfg.Handler = mux.ToHandler[*udpClient.Conn](o.m)
 }
 
 func (o MuxHandlerOpt) DTLSServerApply(cfg *dtlsServer.Config) {
-	cfg.Handler = mux.ToHandler[*udpClient.ClientConn](o.m)
+	cfg.Handler = mux.ToHandler[*udpClient.Conn](o.m)
 }
 
 func (o MuxHandlerOpt) UDPClientApply(cfg *udpClient.Config) {
-	cfg.Handler = mux.ToHandler[*udpClient.ClientConn](o.m)
+	cfg.Handler = mux.ToHandler[*udpClient.Conn](o.m)
 }
 
 // WithMux set's multiplexer for handle requests.
@@ -247,8 +247,8 @@ func WithGoPool(goPool GoPoolFunc) GoPoolOpt {
 }
 
 type (
-	UDPOnInactive = func(cc *udpClient.ClientConn)
-	TCPOnInactive = func(cc *tcpClient.ClientConn)
+	UDPOnInactive = func(cc *udpClient.Conn)
+	TCPOnInactive = func(cc *tcpClient.Conn)
 )
 
 type OnInactiveFunc interface {
@@ -268,19 +268,19 @@ type KeepAliveOpt[C OnInactiveFunc] struct {
 
 func (o KeepAliveOpt[C]) toTCPCreateInactivityMonitor(onInactive TCPOnInactive) func() tcpClient.InactivityMonitor {
 	return func() tcpClient.InactivityMonitor {
-		keepalive := inactivity.NewKeepAlive(o.maxRetries, onInactive, func(cc *tcpClient.ClientConn, receivePong func()) (func(), error) {
+		keepalive := inactivity.NewKeepAlive(o.maxRetries, onInactive, func(cc *tcpClient.Conn, receivePong func()) (func(), error) {
 			return cc.AsyncPing(receivePong)
 		})
-		return inactivity.NewInactivityMonitor(o.timeout/time.Duration(o.maxRetries+1), keepalive.OnInactive)
+		return inactivity.New(o.timeout/time.Duration(o.maxRetries+1), keepalive.OnInactive)
 	}
 }
 
 func (o KeepAliveOpt[C]) toUDPCreateInactivityMonitor(onInactive UDPOnInactive) func() udpClient.InactivityMonitor {
 	return func() udpClient.InactivityMonitor {
-		keepalive := inactivity.NewKeepAlive(o.maxRetries, onInactive, func(cc *udpClient.ClientConn, receivePong func()) (func(), error) {
+		keepalive := inactivity.NewKeepAlive(o.maxRetries, onInactive, func(cc *udpClient.Conn, receivePong func()) (func(), error) {
 			return cc.AsyncPing(receivePong)
 		})
-		return inactivity.NewInactivityMonitor(o.timeout/time.Duration(o.maxRetries+1), keepalive.OnInactive)
+		return inactivity.New(o.timeout/time.Duration(o.maxRetries+1), keepalive.OnInactive)
 	}
 }
 
@@ -351,13 +351,13 @@ type InactivityMonitorOpt[C OnInactiveFunc] struct {
 
 func (o InactivityMonitorOpt[C]) toTCPCreateInactivityMonitor(onInactive TCPOnInactive) func() tcpClient.InactivityMonitor {
 	return func() tcpClient.InactivityMonitor {
-		return inactivity.NewInactivityMonitor(o.duration, onInactive)
+		return inactivity.New(o.duration, onInactive)
 	}
 }
 
 func (o InactivityMonitorOpt[C]) toUDPCreateInactivityMonitor(onInactive UDPOnInactive) func() udpClient.InactivityMonitor {
 	return func() udpClient.InactivityMonitor {
-		return inactivity.NewInactivityMonitor(o.duration, onInactive)
+		return inactivity.New(o.duration, onInactive)
 	}
 }
 
@@ -513,53 +513,53 @@ func WithBlockwise(enable bool, szx blockwise.SZX, transferTimeout time.Duration
 	}
 }
 
-type OnNewClientConnFunc interface {
-	tcpServer.OnNewClientConnFunc | udpServer.OnNewClientConnFunc
+type OnNewConnFunc interface {
+	tcpServer.OnNewConnFunc | udpServer.OnNewConnFunc
 }
 
-// OnNewClientConnOpt network option.
-type OnNewClientConnOpt[F OnNewClientConnFunc] struct {
+// OnNewConnOpt network option.
+type OnNewConnOpt[F OnNewConnFunc] struct {
 	f F
 }
 
-func panicForInvalidOnNewClientConnFunc(t, exp any) {
-	panic(fmt.Errorf("invalid OnNewClientConnFunc type %T, expected %T", t, exp))
+func panicForInvalidOnNewConnFunc(t, exp any) {
+	panic(fmt.Errorf("invalid OnNewConnFunc type %T, expected %T", t, exp))
 }
 
-func (o OnNewClientConnOpt[F]) UDPServerApply(cfg *udpServer.Config) {
+func (o OnNewConnOpt[F]) UDPServerApply(cfg *udpServer.Config) {
 	switch v := any(o.f).(type) {
-	case udpServer.OnNewClientConnFunc:
-		cfg.OnNewClientConn = v
+	case udpServer.OnNewConnFunc:
+		cfg.OnNewConn = v
 	default:
-		var exp udpServer.OnNewClientConnFunc
-		panicForInvalidOnNewClientConnFunc(v, exp)
+		var exp udpServer.OnNewConnFunc
+		panicForInvalidOnNewConnFunc(v, exp)
 	}
 }
 
-func (o OnNewClientConnOpt[F]) DTLSServerApply(cfg *dtlsServer.Config) {
+func (o OnNewConnOpt[F]) DTLSServerApply(cfg *dtlsServer.Config) {
 	switch v := any(o.f).(type) {
-	case udpServer.OnNewClientConnFunc:
-		cfg.OnNewClientConn = v
+	case udpServer.OnNewConnFunc:
+		cfg.OnNewConn = v
 	default:
-		var exp udpServer.OnNewClientConnFunc
-		panicForInvalidOnNewClientConnFunc(v, exp)
+		var exp udpServer.OnNewConnFunc
+		panicForInvalidOnNewConnFunc(v, exp)
 	}
 }
 
-func (o OnNewClientConnOpt[F]) TCPServerApply(cfg *tcpServer.Config) {
+func (o OnNewConnOpt[F]) TCPServerApply(cfg *tcpServer.Config) {
 	switch v := any(o.f).(type) {
-	case tcpServer.OnNewClientConnFunc:
-		cfg.OnNewClientConn = v
+	case tcpServer.OnNewConnFunc:
+		cfg.OnNewConn = v
 	default:
-		var exp tcpServer.OnNewClientConnFunc
-		panicForInvalidOnNewClientConnFunc(v, exp)
+		var exp tcpServer.OnNewConnFunc
+		panicForInvalidOnNewConnFunc(v, exp)
 	}
 }
 
-// WithOnNewClientConn server's notify about new client connection.
-func WithOnNewClientConn[F OnNewClientConnFunc](onNewClientConn F) OnNewClientConnOpt[F] {
-	return OnNewClientConnOpt[F]{
-		f: onNewClientConn,
+// WithOnNewConn server's notify about new client connection.
+func WithOnNewConn[F OnNewConnFunc](onNewConn F) OnNewConnOpt[F] {
+	return OnNewConnOpt[F]{
+		f: onNewConn,
 	}
 }
 
