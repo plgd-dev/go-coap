@@ -14,7 +14,7 @@ import (
 	"github.com/plgd-dev/go-coap/v3/udp/client"
 )
 
-func ExampleClientConn_Get() {
+func ExampleConn_Get() {
 	conn, err := udp.Dial("pluggedin.cloud:5683")
 	if err != nil {
 		log.Fatal(err)
@@ -65,7 +65,7 @@ func ExampleServer_Discover() {
 	}()
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	err = s.Discover(ctx, "224.0.1.187:5683", "/oic/res", func(cc *client.ClientConn, res *pool.Message) {
+	err = s.Discover(ctx, "224.0.1.187:5683", "/oic/res", func(cc *client.Conn, res *pool.Message) {
 		data, errR := ioutil.ReadAll(res.Body())
 		if errR != nil {
 			log.Fatal(errR)

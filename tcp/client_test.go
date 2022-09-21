@@ -21,7 +21,7 @@ import (
 	"golang.org/x/sync/semaphore"
 )
 
-func TestClientConnGet(t *testing.T) {
+func TestConnGet(t *testing.T) {
 	type args struct {
 		path string
 		opts message.Options
@@ -75,14 +75,14 @@ func TestClientConnGet(t *testing.T) {
 		assert.Equal(t, codes.GET, r.Code())
 		errH := w.SetResponse(codes.BadRequest, message.TextPlain, bytes.NewReader(make([]byte, 5330)))
 		require.NoError(t, errH)
-		require.NotEmpty(t, w.ClientConn())
+		require.NotEmpty(t, w.Conn())
 	}))
 	require.NoError(t, err)
 	err = m.Handle("/b", mux.HandlerFunc(func(w mux.ResponseWriter, r *mux.Message) {
 		assert.Equal(t, codes.GET, r.Code())
 		errH := w.SetResponse(codes.Content, message.TextPlain, bytes.NewReader([]byte("b")))
 		require.NoError(t, errH)
-		require.NotEmpty(t, w.ClientConn())
+		require.NotEmpty(t, w.Conn())
 	}))
 	require.NoError(t, err)
 
@@ -128,7 +128,7 @@ func TestClientConnGet(t *testing.T) {
 	}
 }
 
-func TestClientConnPost(t *testing.T) {
+func TestConnPost(t *testing.T) {
 	type args struct {
 		path          string
 		contentFormat message.MediaType
@@ -199,7 +199,7 @@ func TestClientConnPost(t *testing.T) {
 
 				errH = w.SetResponse(codes.BadRequest, message.TextPlain, bytes.NewReader(make([]byte, 5330)))
 				require.NoError(t, errH)
-				require.NotEmpty(t, w.ClientConn())
+				require.NotEmpty(t, w.Conn())
 			}))
 			require.NoError(t, err)
 			err = m.Handle("/b", mux.HandlerFunc(func(w mux.ResponseWriter, r *mux.Message) {
@@ -212,7 +212,7 @@ func TestClientConnPost(t *testing.T) {
 				assert.Equal(t, buf, []byte("b-send"))
 				errH = w.SetResponse(codes.Content, message.TextPlain, bytes.NewReader([]byte("b")))
 				require.NoError(t, errH)
-				require.NotEmpty(t, w.ClientConn())
+				require.NotEmpty(t, w.Conn())
 			}))
 			require.NoError(t, err)
 
@@ -256,7 +256,7 @@ func TestClientConnPost(t *testing.T) {
 	}
 }
 
-func TestClientConnPut(t *testing.T) {
+func TestConnPut(t *testing.T) {
 	type args struct {
 		path          string
 		contentFormat message.MediaType
@@ -327,7 +327,7 @@ func TestClientConnPut(t *testing.T) {
 
 				errH = w.SetResponse(codes.BadRequest, message.TextPlain, bytes.NewReader(make([]byte, 5330)))
 				require.NoError(t, errH)
-				require.NotEmpty(t, w.ClientConn())
+				require.NotEmpty(t, w.Conn())
 			}))
 			require.NoError(t, err)
 			err = m.Handle("/b", mux.HandlerFunc(func(w mux.ResponseWriter, r *mux.Message) {
@@ -340,7 +340,7 @@ func TestClientConnPut(t *testing.T) {
 				assert.Equal(t, buf, []byte("b-send"))
 				errH = w.SetResponse(codes.Content, message.TextPlain, bytes.NewReader([]byte("b")))
 				require.NoError(t, errH)
-				require.NotEmpty(t, w.ClientConn())
+				require.NotEmpty(t, w.Conn())
 			}))
 			require.NoError(t, err)
 
@@ -384,7 +384,7 @@ func TestClientConnPut(t *testing.T) {
 	}
 }
 
-func TestClientConnDelete(t *testing.T) {
+func TestConnDelete(t *testing.T) {
 	type args struct {
 		path string
 		opts message.Options
@@ -438,14 +438,14 @@ func TestClientConnDelete(t *testing.T) {
 		assert.Equal(t, codes.DELETE, r.Code())
 		errH := w.SetResponse(codes.BadRequest, message.TextPlain, bytes.NewReader(make([]byte, 5330)))
 		require.NoError(t, errH)
-		require.NotEmpty(t, w.ClientConn())
+		require.NotEmpty(t, w.Conn())
 	}))
 	require.NoError(t, err)
 	err = m.Handle("/b", mux.HandlerFunc(func(w mux.ResponseWriter, r *mux.Message) {
 		assert.Equal(t, codes.DELETE, r.Code())
 		errH := w.SetResponse(codes.Deleted, message.TextPlain, bytes.NewReader([]byte("b")))
 		require.NoError(t, errH)
-		require.NotEmpty(t, w.ClientConn())
+		require.NotEmpty(t, w.Conn())
 	}))
 	require.NoError(t, err)
 
@@ -491,7 +491,7 @@ func TestClientConnDelete(t *testing.T) {
 	}
 }
 
-func TestClientConnPing(t *testing.T) {
+func TestConnPing(t *testing.T) {
 	l, err := coapNet.NewTCPListener("tcp", "")
 	require.NoError(t, err)
 	defer func() {
@@ -542,7 +542,7 @@ func TestClientInactiveMonitor(t *testing.T) {
 	require.NoError(t, err)
 
 	sd := NewServer(
-		options.WithOnNewClientConn(func(cc *client.ClientConn) {
+		options.WithOnNewConn(func(cc *client.Conn) {
 			cc.AddOnClose(func() {
 				checkClose.Release(1)
 			})
@@ -564,7 +564,7 @@ func TestClientInactiveMonitor(t *testing.T) {
 
 	cc, err := Dial(
 		ld.Addr().String(),
-		options.WithInactivityMonitor(100*time.Millisecond, func(cc *client.ClientConn) {
+		options.WithInactivityMonitor(100*time.Millisecond, func(cc *client.Conn) {
 			require.False(t, inactivityDetected)
 			inactivityDetected = true
 			errC := cc.Close()
@@ -615,7 +615,7 @@ func TestClientKeepAliveMonitor(t *testing.T) {
 	require.NoError(t, err)
 
 	sd := NewServer(
-		options.WithOnNewClientConn(func(cc *client.ClientConn) {
+		options.WithOnNewConn(func(cc *client.Conn) {
 			cc.AddOnClose(func() {
 				checkClose.Release(1)
 			})
@@ -638,7 +638,7 @@ func TestClientKeepAliveMonitor(t *testing.T) {
 
 	cc, err := Dial(
 		ld.Addr().String(),
-		options.WithKeepAlive(3, 100*time.Millisecond, func(cc *client.ClientConn) {
+		options.WithKeepAlive(3, 100*time.Millisecond, func(cc *client.Conn) {
 			require.False(t, inactivityDetected)
 			inactivityDetected = true
 			errC := cc.Close()

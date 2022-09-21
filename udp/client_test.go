@@ -28,7 +28,7 @@ import (
 
 const Timeout = time.Second * 8
 
-func TestClientConnGet(t *testing.T) {
+func TestConnGet(t *testing.T) {
 	type args struct {
 		path string
 		opts message.Options
@@ -102,7 +102,7 @@ func TestClientConnGet(t *testing.T) {
 		assert.Equal(t, codes.GET, r.Code())
 		errS := w.SetResponse(codes.BadRequest, message.TextPlain, bytes.NewReader(make([]byte, 5330)))
 		require.NoError(t, errS)
-		require.NotEmpty(t, w.ClientConn())
+		require.NotEmpty(t, w.Conn())
 		require.True(t, r.Type() == message.Confirmable)
 	}))
 	require.NoError(t, err)
@@ -110,7 +110,7 @@ func TestClientConnGet(t *testing.T) {
 		assert.Equal(t, codes.GET, r.Code())
 		errS := w.SetResponse(codes.Content, message.TextPlain, bytes.NewReader([]byte("b")))
 		require.NoError(t, errS)
-		require.NotEmpty(t, w.ClientConn())
+		require.NotEmpty(t, w.Conn())
 		assert.True(t, r.Type() == message.Confirmable)
 	}))
 	require.NoError(t, err)
@@ -118,7 +118,7 @@ func TestClientConnGet(t *testing.T) {
 		assert.Equal(t, codes.GET, r.Code())
 		errS := w.SetResponse(codes.Content, message.TextPlain, bytes.NewReader([]byte("b")))
 		require.NoError(t, errS)
-		require.NotEmpty(t, w.ClientConn())
+		require.NotEmpty(t, w.Conn())
 		assert.False(t, r.Type() == message.Confirmable)
 	}))
 	require.NoError(t, err)
@@ -128,7 +128,7 @@ func TestClientConnGet(t *testing.T) {
 		// https://github.com/plgd-dev/go-coap/issues/157
 		errS := w.SetResponse(codes.Content, message.TextPlain, bytes.NewReader([]byte{}))
 		require.NoError(t, errS)
-		require.NotEmpty(t, w.ClientConn())
+		require.NotEmpty(t, w.Conn())
 		assert.True(t, r.Type() == message.Confirmable)
 	}))
 	require.NoError(t, err)
@@ -189,7 +189,7 @@ func TestClientConnGet(t *testing.T) {
 	}
 }
 
-func TestClientConnGetSeparateMessage(t *testing.T) {
+func TestConnGetSeparateMessage(t *testing.T) {
 	l, err := coapNet.NewListenUDP("udp", "")
 	require.NoError(t, err)
 	defer func() {
@@ -225,7 +225,7 @@ func TestClientConnGetSeparateMessage(t *testing.T) {
 			customResp.Options = opts
 			msg := pool.NewMessage(r.Context())
 			msg.SetMessage(customResp)
-			errW := w.ClientConn().WriteMessage(msg)
+			errW := w.Conn().WriteMessage(msg)
 			if errW != nil && !errors.Is(errW, context.Canceled) {
 				log.Printf("cannot set response: %v", errW)
 			}
@@ -243,7 +243,7 @@ func TestClientConnGetSeparateMessage(t *testing.T) {
 		require.NoError(t, errS)
 	}()
 
-	cc, err := Dial(l.LocalAddr().String(), options.WithHandlerFunc(func(w *responsewriter.ResponseWriter[*client.ClientConn], r *pool.Message) {
+	cc, err := Dial(l.LocalAddr().String(), options.WithHandlerFunc(func(w *responsewriter.ResponseWriter[*client.Conn], r *pool.Message) {
 		assert.NoError(t, fmt.Errorf("none msg expected comes: %+v", r))
 	}))
 	require.NoError(t, err)
@@ -265,7 +265,7 @@ func TestClientConnGetSeparateMessage(t *testing.T) {
 	assert.Equal(t, codes.Content, resp.Code())
 }
 
-func TestClientConnPost(t *testing.T) {
+func TestConnPost(t *testing.T) {
 	type args struct {
 		path          string
 		contentFormat message.MediaType
@@ -336,7 +336,7 @@ func TestClientConnPost(t *testing.T) {
 
 				errH = w.SetResponse(codes.BadRequest, message.TextPlain, bytes.NewReader(make([]byte, 5330)))
 				require.NoError(t, errH)
-				require.NotEmpty(t, w.ClientConn())
+				require.NotEmpty(t, w.Conn())
 				assert.True(t, r.Type() == message.Confirmable)
 			}))
 			require.NoError(t, err)
@@ -350,7 +350,7 @@ func TestClientConnPost(t *testing.T) {
 				assert.Equal(t, buf, []byte("b-send"))
 				errH = w.SetResponse(codes.Content, message.TextPlain, bytes.NewReader([]byte("b")))
 				require.NoError(t, errH)
-				require.NotEmpty(t, w.ClientConn())
+				require.NotEmpty(t, w.Conn())
 				assert.True(t, r.Type() == message.Confirmable)
 			}))
 			require.NoError(t, err)
@@ -395,7 +395,7 @@ func TestClientConnPost(t *testing.T) {
 	}
 }
 
-func TestClientConnPut(t *testing.T) {
+func TestConnPut(t *testing.T) {
 	type args struct {
 		path          string
 		contentFormat message.MediaType
@@ -466,7 +466,7 @@ func TestClientConnPut(t *testing.T) {
 
 				errH = w.SetResponse(codes.BadRequest, message.TextPlain, bytes.NewReader(make([]byte, 5330)))
 				require.NoError(t, errH)
-				require.NotEmpty(t, w.ClientConn())
+				require.NotEmpty(t, w.Conn())
 				assert.True(t, r.Type() == message.Confirmable)
 			}))
 			require.NoError(t, err)
@@ -480,7 +480,7 @@ func TestClientConnPut(t *testing.T) {
 				assert.Equal(t, buf, []byte("b-send"))
 				errH = w.SetResponse(codes.Content, message.TextPlain, bytes.NewReader([]byte("b")))
 				require.NoError(t, errH)
-				require.NotEmpty(t, w.ClientConn())
+				require.NotEmpty(t, w.Conn())
 				assert.True(t, r.Type() == message.Confirmable)
 			}))
 			require.NoError(t, err)
@@ -525,7 +525,7 @@ func TestClientConnPut(t *testing.T) {
 	}
 }
 
-func TestClientConnDelete(t *testing.T) {
+func TestConnDelete(t *testing.T) {
 	type args struct {
 		path string
 		opts message.Options
@@ -579,7 +579,7 @@ func TestClientConnDelete(t *testing.T) {
 		assert.Equal(t, codes.DELETE, r.Code())
 		errH := w.SetResponse(codes.BadRequest, message.TextPlain, bytes.NewReader(make([]byte, 5330)))
 		require.NoError(t, errH)
-		require.NotEmpty(t, w.ClientConn())
+		require.NotEmpty(t, w.Conn())
 		assert.True(t, r.Type() == message.Confirmable)
 	}))
 	require.NoError(t, err)
@@ -587,7 +587,7 @@ func TestClientConnDelete(t *testing.T) {
 		assert.Equal(t, codes.DELETE, r.Code())
 		errH := w.SetResponse(codes.Deleted, message.TextPlain, bytes.NewReader([]byte("b")))
 		require.NoError(t, errH)
-		require.NotEmpty(t, w.ClientConn())
+		require.NotEmpty(t, w.Conn())
 		assert.True(t, r.Type() == message.Confirmable)
 	}))
 	require.NoError(t, err)
@@ -634,7 +634,7 @@ func TestClientConnDelete(t *testing.T) {
 	}
 }
 
-func TestClientConnPing(t *testing.T) {
+func TestConnPing(t *testing.T) {
 	l, err := coapNet.NewListenUDP("udp", "")
 	require.NoError(t, err)
 	defer func() {
@@ -703,7 +703,7 @@ func TestClientInactiveMonitor(t *testing.T) {
 
 	cc, err := Dial(
 		ld.LocalAddr().String(),
-		options.WithInactivityMonitor(100*time.Millisecond, func(cc *client.ClientConn) {
+		options.WithInactivityMonitor(100*time.Millisecond, func(cc *client.Conn) {
 			require.False(t, inactivityDetected)
 			inactivityDetected = true
 			errC := cc.Close()
@@ -750,7 +750,7 @@ func TestClientKeepAliveMonitor(t *testing.T) {
 	err = checkClose.Acquire(ctx, 2)
 	require.NoError(t, err)
 	sd := NewServer(
-		options.WithOnNewClientConn(func(cc *client.ClientConn) {
+		options.WithOnNewConn(func(cc *client.Conn) {
 			checkClose.Release(1)
 		}),
 		options.WithGoPool(func(f func()) error {
@@ -775,7 +775,7 @@ func TestClientKeepAliveMonitor(t *testing.T) {
 
 	cc, err := Dial(
 		ld.LocalAddr().String(),
-		options.WithKeepAlive(3, 100*time.Millisecond, func(cc *client.ClientConn) {
+		options.WithKeepAlive(3, 100*time.Millisecond, func(cc *client.Conn) {
 			require.False(t, inactivityDetected)
 			inactivityDetected = true
 			errC := cc.Close()

@@ -29,7 +29,7 @@ import (
 const ExchangeLifetime = 247 * time.Second
 
 type (
-	HandlerFunc                 = func(*responsewriter.ResponseWriter[*ClientConn], *pool.Message)
+	HandlerFunc                 = func(*responsewriter.ResponseWriter[*Conn], *pool.Message)
 	ErrorFunc                   = func(error)
 	GoPoolFunc                  = func(func()) error
 	EventFunc                   = func()
@@ -39,7 +39,7 @@ type (
 
 type InactivityMonitor interface {
 	Notify()
-	CheckInactivity(now time.Time, cc *ClientConn)
+	CheckInactivity(now time.Time, cc *Conn)
 }
 
 type Session interface {
@@ -55,7 +55,7 @@ type Session interface {
 	// By default it is sent over all network interfaces and all compatible source IP addresses with hop limit 1.
 	// Via opts you can specify the network interface, source IP address, and hop limit.
 	WriteMulticastMessage(req *pool.Message, address *net.UDPAddr, opts ...coapNet.MulticastOption) error
-	Run(cc *ClientConn) error
+	Run(cc *Conn) error
 	AddOnClose(f EventFunc)
 	SetContextValue(key interface{}, val interface{})
 	Done() <-chan struct{}
@@ -63,18 +63,18 @@ type Session interface {
 
 type RequestsMap = coapSync.Map[uint64, *pool.Message]
 
-// ClientConn represents a virtual connection to a conceptual endpoint, to perform COAPs commands.
-type ClientConn struct {
+// Conn represents a virtual connection to a conceptual endpoint, to perform COAPs commands.
+type Conn struct {
 	// This field needs to be the first in the struct to ensure proper word alignment on 32-bit platforms.
 	// See: https://golang.org/pkg/sync/atomic/#pkg-note-BUG
 	sequence atomic.Uint64
 
 	session Session
-	*client.Client[*ClientConn]
+	*client.Client[*Conn]
 	inactivityMonitor InactivityMonitor
 
-	blockWise          *blockwise.BlockWise[*ClientConn]
-	observationHandler *observation.Handler[*ClientConn]
+	blockWise          *blockwise.BlockWise[*Conn]
+	observationHandler *observation.Handler[*Conn]
 	transmission       *Transmission
 	messagePool        *pool.Pool
 
@@ -118,17 +118,17 @@ func (t *Transmission) SetTransmissionMaxRetransmit(d int32) {
 	t.maxRetransmit.Store(d)
 }
 
-func (cc *ClientConn) Transmission() *Transmission {
+func (cc *Conn) Transmission() *Transmission {
 	return cc.transmission
 }
 
-// NewClientConn creates connection over session and observation.
-func NewClientConn(
+// NewConn creates connection over session and observation.
+func NewConn(
 	session Session,
-	createBlockWise func(cc *ClientConn) *blockwise.BlockWise[*ClientConn],
+	createBlockWise func(cc *Conn) *blockwise.BlockWise[*Conn],
 	inactivityMonitor InactivityMonitor,
 	cfg *Config,
-) *ClientConn {
+) *Conn {
 	if cfg.Errors == nil {
 		cfg.Errors = func(error) {
 			// default no-op
@@ -141,7 +141,7 @@ func NewClientConn(
 		cfg.GetToken = message.GetToken
 	}
 
-	cc := ClientConn{
+	cc := Conn{
 		session: session,
 		transmission: &Transmission{
 			atomic.NewUint32(cfg.TransmissionNStart),
@@ -168,16 +168,16 @@ func NewClientConn(
 	return &cc
 }
 
-func (cc *ClientConn) Session() Session {
+func (cc *Conn) Session() Session {
 	return cc.session
 }
 
-func (cc *ClientConn) GetMessageID() int32 {
+func (cc *Conn) GetMessageID() int32 {
 	return int32(uint16(cc.msgID.Inc()))
 }
 
 // Close closes connection without waiting for the end of the Run function.
-func (cc *ClientConn) Close() error {
+func (cc *Conn) Close() error {
 	err := cc.session.Close()
 	if errors.Is(err, net.ErrClosed) {
 		return nil
@@ -185,14 +185,14 @@ func (cc *ClientConn) Close() error {
 	return err
 }
 
-func (cc *ClientConn) doInternal(req *pool.Message) (*pool.Message, error) {
+func (cc *Conn) doInternal(req *pool.Message) (*pool.Message, error) {
 	token := req.Token()
 	if token == nil {
 		return nil, fmt.Errorf("invalid token")
 	}
 
 	respChan := make(chan *pool.Message, 1)
-	if _, loaded := cc.tokenHandlerContainer.LoadOrStore(token.Hash(), func(w *responsewriter.ResponseWriter[*ClientConn], r *pool.Message) {
+	if _, loaded := cc.tokenHandlerContainer.LoadOrStore(token.Hash(), func(w *responsewriter.ResponseWriter[*Conn], r *pool.Message) {
 		r.Hijack()
 		select {
 		case respChan <- r:
@@ -224,7 +224,7 @@ func (cc *ClientConn) doInternal(req *pool.Message) (*pool.Message, error) {
 // Any status code doesn't cause an error.
 //
 // Caller is responsible to release request and response.
-func (cc *ClientConn) do(req *pool.Message) (*pool.Message, error) {
+func (cc *Conn) do(req *pool.Message) (*pool.Message, error) {
 	if cc.blockWise == nil {
 		return cc.doInternal(req)
 	}
@@ -241,15 +241,15 @@ func (cc *ClientConn) do(req *pool.Message) (*pool.Message, error) {
 }
 
 // DoObserve subscribes for every change with request.
-func (cc *ClientConn) doObserve(req *pool.Message, observeFunc func(req *pool.Message), opts ...message.Option) (client.Observation, error) {
+func (cc *Conn) doObserve(req *pool.Message, observeFunc func(req *pool.Message), opts ...message.Option) (client.Observation, error) {
 	return cc.observationHandler.NewObservation(req, observeFunc)
 }
 
-func (cc *ClientConn) releaseOutstandingInteraction() {
+func (cc *Conn) releaseOutstandingInteraction() {
 	cc.numOutstandingInteraction.Release(1)
 }
 
-func (cc *ClientConn) acquireOutstandingInteraction(ctx context.Context) error {
+func (cc *Conn) acquireOutstandingInteraction(ctx context.Context) error {
 	nStart := cc.Transmission().nStart.Load()
 	if nStart == 0 {
 		return fmt.Errorf("invalid NStart value %v", nStart)
@@ -263,7 +263,7 @@ func (cc *ClientConn) acquireOutstandingInteraction(ctx context.Context) error {
 	return nil
 }
 
-func (cc *ClientConn) transmitMessage(req *pool.Message, waitForResponseChan chan struct{}) error {
+func (cc *Conn) transmitMessage(req *pool.Message, waitForResponseChan chan struct{}) error {
 	maxRetransmit := cc.transmission.maxRetransmit.Load()
 	for i := int32(0); i < maxRetransmit; i++ {
 		select {
@@ -282,7 +282,7 @@ func (cc *ClientConn) transmitMessage(req *pool.Message, waitForResponseChan cha
 	return fmt.Errorf("timeout: retransmission(%v) was exhausted", cc.transmission.maxRetransmit.Load())
 }
 
-func (cc *ClientConn) writeMessage(req *pool.Message) error {
+func (cc *Conn) writeMessage(req *pool.Message) error {
 	respChan := make(chan struct{})
 	req.UpsertType(message.Confirmable)
 	req.UpsertMessageID(cc.GetMessageID())
@@ -298,7 +298,7 @@ func (cc *ClientConn) writeMessage(req *pool.Message) error {
 				cc.releaseOutstandingInteraction()
 			}()
 		}
-		if _, loaded := cc.midHandlerContainer.LoadOrStore(req.MessageID(), func(w *responsewriter.ResponseWriter[*ClientConn], r *pool.Message) {
+		if _, loaded := cc.midHandlerContainer.LoadOrStore(req.MessageID(), func(w *responsewriter.ResponseWriter[*Conn], r *pool.Message) {
 			close(respChan)
 			if r.IsSeparateMessage() {
 				// separate message - just accept
@@ -334,7 +334,7 @@ func (cc *ClientConn) writeMessage(req *pool.Message) error {
 }
 
 // WriteMessage sends an coap message.
-func (cc *ClientConn) WriteMessage(req *pool.Message) error {
+func (cc *Conn) WriteMessage(req *pool.Message) error {
 	if cc.blockWise == nil {
 		return cc.writeMessage(req)
 	}
@@ -349,19 +349,19 @@ func (cc *ClientConn) WriteMessage(req *pool.Message) error {
 // Context returns the client's context.
 //
 // If connections was closed context is cancelled.
-func (cc *ClientConn) Context() context.Context {
+func (cc *Conn) Context() context.Context {
 	return cc.session.Context()
 }
 
 // AsyncPing sends ping and receivedPong will be called when pong arrives. It returns cancellation of ping operation.
-func (cc *ClientConn) AsyncPing(receivedPong func()) (func(), error) {
+func (cc *Conn) AsyncPing(receivedPong func()) (func(), error) {
 	req := cc.AcquireMessage(cc.Context())
 	defer cc.ReleaseMessage(req)
 	req.SetType(message.Confirmable)
 	req.SetCode(codes.Empty)
 	mid := cc.GetMessageID()
 	req.SetMessageID(mid)
-	if _, loaded := cc.midHandlerContainer.LoadOrStore(mid, func(w *responsewriter.ResponseWriter[*ClientConn], r *pool.Message) {
+	if _, loaded := cc.midHandlerContainer.LoadOrStore(mid, func(w *responsewriter.ResponseWriter[*Conn], r *pool.Message) {
 		if r.Type() == message.Reset || r.Type() == message.Acknowledgement {
 			receivedPong()
 		}
@@ -379,32 +379,32 @@ func (cc *ClientConn) AsyncPing(receivedPong func()) (func(), error) {
 }
 
 // Run reads and process requests from a connection, until the connection is closed.
-func (cc *ClientConn) Run() error {
+func (cc *Conn) Run() error {
 	return cc.session.Run(cc)
 }
 
 // AddOnClose calls function on close connection event.
-func (cc *ClientConn) AddOnClose(f EventFunc) {
+func (cc *Conn) AddOnClose(f EventFunc) {
 	cc.session.AddOnClose(f)
 }
 
-func (cc *ClientConn) RemoteAddr() net.Addr {
+func (cc *Conn) RemoteAddr() net.Addr {
 	return cc.session.RemoteAddr()
 }
 
-func (cc *ClientConn) LocalAddr() net.Addr {
+func (cc *Conn) LocalAddr() net.Addr {
 	return cc.session.LocalAddr()
 }
 
-func (cc *ClientConn) sendPong(w *responsewriter.ResponseWriter[*ClientConn]) {
+func (cc *Conn) sendPong(w *responsewriter.ResponseWriter[*Conn]) {
 	if err := w.SetResponse(codes.Empty, message.TextPlain, nil); err != nil {
 		cc.errors(fmt.Errorf("cannot send pong response: %w", err))
 	}
 }
 
-func (cc *ClientConn) handleBW(w *responsewriter.ResponseWriter[*ClientConn], m *pool.Message) {
+func (cc *Conn) handleBW(w *responsewriter.ResponseWriter[*Conn], m *pool.Message) {
 	if cc.blockWise != nil {
-		cc.blockWise.Handle(w, m, cc.blockwiseSZX, cc.session.MaxMessageSize(), func(rw *responsewriter.ResponseWriter[*ClientConn], rm *pool.Message) {
+		cc.blockWise.Handle(w, m, cc.blockwiseSZX, cc.session.MaxMessageSize(), func(rw *responsewriter.ResponseWriter[*Conn], rm *pool.Message) {
 			if h, ok := cc.tokenHandlerContainer.PullOut(rm.Token().Hash()); ok {
 				h(rw, rm)
 				return
@@ -420,7 +420,7 @@ func (cc *ClientConn) handleBW(w *responsewriter.ResponseWriter[*ClientConn], m 
 	cc.observationHandler.Handle(w, m)
 }
 
-func (cc *ClientConn) handle(w *responsewriter.ResponseWriter[*ClientConn], r *pool.Message) {
+func (cc *Conn) handle(w *responsewriter.ResponseWriter[*Conn], r *pool.Message) {
 	if r.Code() == codes.Empty && r.Type() == message.Confirmable && len(r.Token()) == 0 && len(r.Options()) == 0 && r.Body() == nil {
 		cc.sendPong(w)
 		return
@@ -437,15 +437,15 @@ func (cc *ClientConn) handle(w *responsewriter.ResponseWriter[*ClientConn], r *p
 }
 
 // Sequence acquires sequence number.
-func (cc *ClientConn) Sequence() uint64 {
+func (cc *Conn) Sequence() uint64 {
 	return cc.sequence.Add(1)
 }
 
-func (cc *ClientConn) responseMsgCacheID(msgID int32) string {
+func (cc *Conn) responseMsgCacheID(msgID int32) string {
 	return fmt.Sprintf("resp-%v-%d", cc.RemoteAddr(), msgID)
 }
 
-func (cc *ClientConn) addResponseToCache(resp *pool.Message) error {
+func (cc *Conn) addResponseToCache(resp *pool.Message) error {
 	marshaledResp, err := resp.MarshalWithEncoder(coder.DefaultCoder)
 	if err != nil {
 		return err
@@ -456,7 +456,7 @@ func (cc *ClientConn) addResponseToCache(resp *pool.Message) error {
 	return nil
 }
 
-func (cc *ClientConn) getResponseFromCache(mid int32, resp *pool.Message) (bool, error) {
+func (cc *Conn) getResponseFromCache(mid int32, resp *pool.Message) (bool, error) {
 	cachedResp := cc.responseMsgCache.Load(cc.responseMsgCacheID(mid))
 	if cachedResp == nil {
 		return false, nil
@@ -473,7 +473,7 @@ func (cc *ClientConn) getResponseFromCache(mid int32, resp *pool.Message) (bool,
 
 // checkMyMessageID compare client msgID against peer messageID and if it is near < 0xffff/4 then incrase msgID.
 // When msgIDs met it can cause issue because cache can send message to which doesn't bellows to request.
-func (cc *ClientConn) checkMyMessageID(req *pool.Message) {
+func (cc *Conn) checkMyMessageID(req *pool.Message) {
 	if req.Type() == message.Confirmable {
 		for {
 			oldID := cc.msgID.Load()
@@ -488,7 +488,7 @@ func (cc *ClientConn) checkMyMessageID(req *pool.Message) {
 	}
 }
 
-func (cc *ClientConn) checkResponseCache(req *pool.Message, w *responsewriter.ResponseWriter[*ClientConn]) (bool, error) {
+func (cc *Conn) checkResponseCache(req *pool.Message, w *responsewriter.ResponseWriter[*Conn]) (bool, error) {
 	if req.Type() == message.Confirmable || req.Type() == message.NonConfirmable {
 		if ok, err := cc.getResponseFromCache(req.MessageID(), w.Message()); ok {
 			w.Message().SetMessageID(req.MessageID())
@@ -505,15 +505,15 @@ func (cc *ClientConn) checkResponseCache(req *pool.Message, w *responsewriter.Re
 	return false, nil
 }
 
-func isPongOrResetResponse(w *responsewriter.ResponseWriter[*ClientConn]) bool {
+func isPongOrResetResponse(w *responsewriter.ResponseWriter[*Conn]) bool {
 	return w.Message().IsModified() && (w.Message().Type() == message.Reset || w.Message().Code() == codes.Empty)
 }
 
-func sendJustAcknowledgeMessage(reqType message.Type, w *responsewriter.ResponseWriter[*ClientConn]) bool {
+func sendJustAcknowledgeMessage(reqType message.Type, w *responsewriter.ResponseWriter[*Conn]) bool {
 	return reqType == message.Confirmable && !w.Message().IsModified()
 }
 
-func (cc *ClientConn) processResponse(reqType message.Type, reqMessageID int32, w *responsewriter.ResponseWriter[*ClientConn]) error {
+func (cc *Conn) processResponse(reqType message.Type, reqMessageID int32, w *responsewriter.ResponseWriter[*Conn]) error {
 	switch {
 	case isPongOrResetResponse(w):
 		if reqType == message.Confirmable {
@@ -558,7 +558,7 @@ func (cc *ClientConn) processResponse(reqType message.Type, reqMessageID int32, 
 	return nil
 }
 
-func (cc *ClientConn) processReq(req *pool.Message, w *responsewriter.ResponseWriter[*ClientConn]) error {
+func (cc *Conn) processReq(req *pool.Message, w *responsewriter.ResponseWriter[*Conn]) error {
 	defer cc.inactivityMonitor.Notify()
 	reqMid := req.MessageID()
 
@@ -581,7 +581,7 @@ func (cc *ClientConn) processReq(req *pool.Message, w *responsewriter.ResponseWr
 	return cc.processResponse(reqType, reqMessageID, w)
 }
 
-func (cc *ClientConn) Process(datagram []byte) error {
+func (cc *Conn) Process(datagram []byte) error {
 	if uint32(len(datagram)) > cc.session.MaxMessageSize() {
 		return fmt.Errorf("max message size(%v) was exceeded %v", cc.session.MaxMessageSize(), len(datagram))
 	}
@@ -635,17 +635,17 @@ func (cc *ClientConn) Process(datagram []byte) error {
 }
 
 // SetContextValue stores the value associated with key to context of connection.
-func (cc *ClientConn) SetContextValue(key interface{}, val interface{}) {
+func (cc *Conn) SetContextValue(key interface{}, val interface{}) {
 	cc.session.SetContextValue(key, val)
 }
 
 // Done signalizes that connection is not more processed.
-func (cc *ClientConn) Done() <-chan struct{} {
+func (cc *Conn) Done() <-chan struct{} {
 	return cc.session.Done()
 }
 
 // CheckExpirations checks and remove expired items from caches.
-func (cc *ClientConn) CheckExpirations(now time.Time) {
+func (cc *Conn) CheckExpirations(now time.Time) {
 	cc.inactivityMonitor.CheckInactivity(now, cc)
 	cc.responseMsgCache.CheckExpirations(now)
 	if cc.blockWise != nil {
@@ -653,18 +653,18 @@ func (cc *ClientConn) CheckExpirations(now time.Time) {
 	}
 }
 
-func (cc *ClientConn) AcquireMessage(ctx context.Context) *pool.Message {
+func (cc *Conn) AcquireMessage(ctx context.Context) *pool.Message {
 	return cc.messagePool.AcquireMessage(ctx)
 }
 
-func (cc *ClientConn) ReleaseMessage(m *pool.Message) {
+func (cc *Conn) ReleaseMessage(m *pool.Message) {
 	cc.messagePool.ReleaseMessage(m)
 }
 
 // WriteMulticastMessage sends multicast to the remote multicast address.
 // By default it is sent over all network interfaces and all compatible source IP addresses with hop limit 1.
 // Via opts you can specify the network interface, source IP address, and hop limit.
-func (cc *ClientConn) WriteMulticastMessage(req *pool.Message, address *net.UDPAddr, options ...coapNet.MulticastOption) error {
+func (cc *Conn) WriteMulticastMessage(req *pool.Message, address *net.UDPAddr, options ...coapNet.MulticastOption) error {
 	if req.Type() == message.Confirmable {
 		return fmt.Errorf("multicast messages cannot be confirmable")
 	}
@@ -677,11 +677,11 @@ func (cc *ClientConn) WriteMulticastMessage(req *pool.Message, address *net.UDPA
 	return nil
 }
 
-func (cc *ClientConn) InactivityMonitor() InactivityMonitor {
+func (cc *Conn) InactivityMonitor() InactivityMonitor {
 	return cc.inactivityMonitor
 }
 
 // NetConn returns the underlying connection that is wrapped by cc. The Conn returned is shared by all invocations of NetConn, so do not modify it.
-func (cc *ClientConn) NetConn() net.Conn {
+func (cc *Conn) NetConn() net.Conn {
 	return cc.session.NetConn()
 }

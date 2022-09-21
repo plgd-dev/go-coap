@@ -33,10 +33,10 @@ type Session struct {
 	done                            chan struct{}
 	goPool                          GoPoolFunc
 	errors                          ErrorFunc
-	blockWise                       *blockwise.BlockWise[*ClientConn]
+	blockWise                       *blockwise.BlockWise[*Conn]
 	connection                      *coapNet.Conn
-	handler                         func(*responsewriter.ResponseWriter[*ClientConn], *pool.Message)
-	tokenHandlerContainer           *coapSync.Map[uint64, func(*responsewriter.ResponseWriter[*ClientConn], *pool.Message)]
+	handler                         func(*responsewriter.ResponseWriter[*Conn], *pool.Message)
+	tokenHandlerContainer           *coapSync.Map[uint64, func(*responsewriter.ResponseWriter[*Conn], *pool.Message)]
 	messagePool                     *pool.Pool
 	mutex                           sync.Mutex
 	maxMessageSize                  uint32
@@ -57,7 +57,7 @@ func NewSession(
 	goPool GoPoolFunc,
 	errors ErrorFunc,
 	blockwiseSZX blockwise.SZX,
-	blockWise *blockwise.BlockWise[*ClientConn],
+	blockWise *blockwise.BlockWise[*Conn],
 	disablePeerTCPSignalMessageCSMs bool,
 	disableTCPSignalMessageCSM bool,
 	closeSocket bool,
@@ -72,7 +72,7 @@ func NewSession(
 		}
 	}
 	if inactivityMonitor == nil {
-		inactivityMonitor = inactivity.NewNilMonitor[*ClientConn]()
+		inactivityMonitor = inactivity.NewNilMonitor[*Conn]()
 	}
 
 	s := &Session{
@@ -163,7 +163,7 @@ func (s *Session) PeerBlockWiseTransferEnabled() bool {
 	return s.peerBlockWiseTranferEnabled.Load()
 }
 
-func (s *Session) handleSignals(r *pool.Message, cc *ClientConn) bool {
+func (s *Session) handleSignals(r *pool.Message, cc *Conn) bool {
 	switch r.Code() {
 	case codes.CSM:
 		if s.disablePeerTCPSignalMessageCSMs {
@@ -203,7 +203,7 @@ func (s *Session) handleSignals(r *pool.Message, cc *ClientConn) bool {
 	return false
 }
 
-func (s *Session) blockwiseHandle(w *responsewriter.ResponseWriter[*ClientConn], r *pool.Message) {
+func (s *Session) blockwiseHandle(w *responsewriter.ResponseWriter[*Conn], r *pool.Message) {
 	if h, ok := s.tokenHandlerContainer.Load(r.Token().Hash()); ok {
 		h(w, r)
 		return
@@ -211,7 +211,7 @@ func (s *Session) blockwiseHandle(w *responsewriter.ResponseWriter[*ClientConn],
 	s.handler(w, r)
 }
 
-func (s *Session) Handle(w *responsewriter.ResponseWriter[*ClientConn], r *pool.Message) {
+func (s *Session) Handle(w *responsewriter.ResponseWriter[*Conn], r *pool.Message) {
 	if s.blockWise != nil && s.PeerBlockWiseTransferEnabled() {
 		s.blockWise.Handle(w, r, s.blockwiseSZX, s.maxMessageSize, s.blockwiseHandle)
 		return
@@ -227,7 +227,7 @@ func (s *Session) TokenHandler() *coapSync.Map[uint64, HandlerFunc] {
 	return s.tokenHandlerContainer
 }
 
-func (s *Session) processReq(req *pool.Message, cc *ClientConn, handler func(w *responsewriter.ResponseWriter[*ClientConn], r *pool.Message)) {
+func (s *Session) processReq(req *pool.Message, cc *Conn, handler func(w *responsewriter.ResponseWriter[*Conn], r *pool.Message)) {
 	origResp := s.messagePool.AcquireMessage(s.Context())
 	origResp.SetToken(req.Token())
 	w := responsewriter.New(origResp, cc, req.Options()...)
@@ -267,7 +267,7 @@ func seekBufferToNextMessage(buffer *bytes.Buffer, msgSize int) *bytes.Buffer {
 	return buffer
 }
 
-func (s *Session) processBuffer(buffer *bytes.Buffer, cc *ClientConn) error {
+func (s *Session) processBuffer(buffer *bytes.Buffer, cc *Conn) error {
 	for buffer.Len() > 0 {
 		var header coder.MessageHeader
 		_, err := coder.DefaultCoder.DecodeHeader(buffer.Bytes(), &header)
@@ -342,7 +342,7 @@ func shrinkBufferIfNecessary(buffer *bytes.Buffer, maxCap uint16) *bytes.Buffer 
 }
 
 // Run reads and process requests from a connection, until the connection is not closed.
-func (s *Session) Run(cc *ClientConn) (err error) {
+func (s *Session) Run(cc *Conn) (err error) {
 	defer func() {
 		err1 := s.Close()
 		if err == nil {
@@ -375,7 +375,7 @@ func (s *Session) Run(cc *ClientConn) (err error) {
 }
 
 // CheckExpirations checks and remove expired items from caches.
-func (s *Session) CheckExpirations(now time.Time, cc *ClientConn) {
+func (s *Session) CheckExpirations(now time.Time, cc *Conn) {
 	s.inactivityMonitor.CheckInactivity(now, cc)
 	if s.blockWise != nil {
 		s.blockWise.CheckExpirations(now)

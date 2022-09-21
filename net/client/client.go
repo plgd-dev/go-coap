@@ -17,7 +17,7 @@ type (
 	DoObserveFunc = func(req *pool.Message, observeFunc func(req *pool.Message), opts ...message.Option) (Observation, error)
 )
 
-type ClientConn interface {
+type Conn interface {
 	// create message from pool
 	AcquireMessage(ctx context.Context) *pool.Message
 	// return back the message to the pool for next use
@@ -27,14 +27,14 @@ type ClientConn interface {
 	Context() context.Context
 }
 
-type Client[C ClientConn] struct {
-	cc                 ClientConn
+type Client[C Conn] struct {
+	cc                 Conn
 	observationHandler *observation.Handler[C]
 	getToken           GetTokenFunc
 	*limitparallelrequests.LimitParallelRequests
 }
 
-func New[C ClientConn](cc C, observationHandler *observation.Handler[C], getToken GetTokenFunc, limitParallelRequests *limitparallelrequests.LimitParallelRequests) *Client[C] {
+func New[C Conn](cc C, observationHandler *observation.Handler[C], getToken GetTokenFunc, limitParallelRequests *limitparallelrequests.LimitParallelRequests) *Client[C] {
 	return &Client[C]{
 		cc:                    cc,
 		observationHandler:    observationHandler,

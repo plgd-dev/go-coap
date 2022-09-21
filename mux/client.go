@@ -14,7 +14,7 @@ type Observation = interface {
 	Canceled() bool
 }
 
-type ClientConn interface {
+type Conn interface {
 	// create message from pool
 	AcquireMessage(ctx context.Context) *pool.Message
 	// return back the message to the pool for next use

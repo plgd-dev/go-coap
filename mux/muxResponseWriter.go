@@ -10,7 +10,7 @@ import (
 )
 
 // ToHandler converts mux handler to udp/dtls/tcp handler.
-func ToHandler[C ClientConn](m Handler) func(w *responsewriter.ResponseWriter[C], r *pool.Message) {
+func ToHandler[C Conn](m Handler) func(w *responsewriter.ResponseWriter[C], r *pool.Message) {
 	return func(w *responsewriter.ResponseWriter[C], r *pool.Message) {
 		muxw := &muxResponseWriter[C]{
 			w: w,
@@ -22,7 +22,7 @@ func ToHandler[C ClientConn](m Handler) func(w *responsewriter.ResponseWriter[C]
 	}
 }
 
-type muxResponseWriter[C ClientConn] struct {
+type muxResponseWriter[C Conn] struct {
 	w *responsewriter.ResponseWriter[C]
 }
 
@@ -31,9 +31,9 @@ func (w *muxResponseWriter[C]) SetResponse(code codes.Code, contentFormat messag
 	return w.w.SetResponse(code, contentFormat, d, opts...)
 }
 
-// ClientConn peer connection.
-func (w *muxResponseWriter[C]) ClientConn() ClientConn {
-	return w.w.ClientConn()
+// Conn peer connection.
+func (w *muxResponseWriter[C]) Conn() Conn {
+	return w.w.Conn()
 }
 
 // Message direct access to the response.

@@ -19,7 +19,7 @@ var DefaultConfig = func() Config {
 	opts := Config{
 		Common: config.DefaultCommon(),
 		CreateInactivityMonitor: func() InactivityMonitor {
-			return inactivity.NewNilMonitor[*ClientConn]()
+			return inactivity.NewNilMonitor[*Conn]()
 		},
 		Dialer:                         &net.Dialer{Timeout: time.Second * 3},
 		Net:                            "udp",
@@ -29,7 +29,7 @@ var DefaultConfig = func() Config {
 		GetMID:                         message.GetMID,
 		MTU:                            DefaultMTU,
 	}
-	opts.Handler = func(w *responsewriter.ResponseWriter[*ClientConn], r *pool.Message) {
+	opts.Handler = func(w *responsewriter.ResponseWriter[*Conn], r *pool.Message) {
 		switch r.Code() {
 		case codes.POST, codes.PUT, codes.GET, codes.DELETE:
 			if err := w.SetResponse(codes.NotFound, message.TextPlain, nil); err != nil {

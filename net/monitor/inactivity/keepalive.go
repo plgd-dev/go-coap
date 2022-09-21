@@ -8,7 +8,7 @@ import (
 
 type cancelPingFunc func()
 
-type KeepAlive[C ClientConn] struct {
+type KeepAlive[C Conn] struct {
 	pongToken  atomic.Uint64
 	onInactive OnInactiveFunc[C]
 
@@ -19,7 +19,7 @@ type KeepAlive[C ClientConn] struct {
 	maxRetries uint32
 }
 
-func NewKeepAlive[C ClientConn](maxRetries uint32, onInactive OnInactiveFunc[C], sendPing func(cc C, receivePong func()) (func(), error)) *KeepAlive[C] {
+func NewKeepAlive[C Conn](maxRetries uint32, onInactive OnInactiveFunc[C], sendPing func(cc C, receivePong func()) (func(), error)) *KeepAlive[C] {
 	return &KeepAlive[C]{
 		maxRetries: maxRetries,
 		sendPing:   sendPing,

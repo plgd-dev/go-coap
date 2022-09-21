@@ -13,7 +13,7 @@ import (
 )
 
 func handleA(w mux.ResponseWriter, r *mux.Message) {
-	log.Printf("got message in handleA:  %+v from %v\n", r, w.ClientConn().RemoteAddr())
+	log.Printf("got message in handleA:  %+v from %v\n", r, w.Conn().RemoteAddr())
 	err := w.SetResponse(codes.GET, message.TextPlain, bytes.NewReader([]byte("A hello world")))
 	if err != nil {
 		log.Printf("cannot set response: %v", err)
@@ -21,14 +21,14 @@ func handleA(w mux.ResponseWriter, r *mux.Message) {
 }
 
 func handleB(w mux.ResponseWriter, r *mux.Message) {
-	log.Printf("got message in handleB:  %+v from %v\n", r, w.ClientConn().RemoteAddr())
-	customResp := w.ClientConn().AcquireMessage(r.Context())
-	defer w.ClientConn().ReleaseMessage(customResp)
+	log.Printf("got message in handleB:  %+v from %v\n", r, w.Conn().RemoteAddr())
+	customResp := w.Conn().AcquireMessage(r.Context())
+	defer w.Conn().ReleaseMessage(customResp)
 	customResp.SetCode(codes.Content)
 	customResp.SetToken(r.Token())
 	customResp.SetContentFormat(message.TextPlain)
 	customResp.SetBody(bytes.NewReader([]byte("B hello world")))
-	err := w.ClientConn().WriteMessage(customResp)
+	err := w.Conn().WriteMessage(customResp)
 	if err != nil {
 		log.Printf("cannot set response: %v", err)
 	}

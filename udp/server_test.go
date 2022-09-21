@@ -27,7 +27,7 @@ type mcastreceiver struct {
 	sync.Mutex
 }
 
-func (m *mcastreceiver) process(cc *client.ClientConn, resp *pool.Message) {
+func (m *mcastreceiver) process(cc *client.Conn, resp *pool.Message) {
 	m.Lock()
 	defer m.Unlock()
 	resp.Hijack()
@@ -151,10 +151,10 @@ func TestServerDiscover(t *testing.T) {
 	var wg sync.WaitGroup
 	defer wg.Wait()
 
-	s := udp.NewServer(options.WithHandlerFunc(func(w *responsewriter.ResponseWriter[*client.ClientConn], r *pool.Message) {
+	s := udp.NewServer(options.WithHandlerFunc(func(w *responsewriter.ResponseWriter[*client.Conn], r *pool.Message) {
 		errS := w.SetResponse(codes.BadRequest, message.TextPlain, bytes.NewReader(make([]byte, 5330)))
 		require.NoError(t, errS)
-		require.NotNil(t, w.ClientConn())
+		require.NotNil(t, w.Conn())
 	}))
 	defer s.Stop()
 
@@ -214,7 +214,7 @@ func TestServerCleanUpConns(t *testing.T) {
 		require.NoError(t, errA)
 	}()
 
-	sd := udp.NewServer(options.WithOnNewClientConn(func(cc *client.ClientConn) {
+	sd := udp.NewServer(options.WithOnNewConn(func(cc *client.Conn) {
 		cc.AddOnClose(func() {
 			checkClose.Release(1)
 		})
@@ -260,12 +260,12 @@ func TestServerInactiveMonitor(t *testing.T) {
 	err = checkClose.Acquire(ctx, 2)
 	require.NoError(t, err)
 	sd := udp.NewServer(
-		options.WithOnNewClientConn(func(cc *client.ClientConn) {
+		options.WithOnNewConn(func(cc *client.Conn) {
 			cc.AddOnClose(func() {
 				checkClose.Release(1)
 			})
 		}),
-		options.WithInactivityMonitor(100*time.Millisecond, func(cc *client.ClientConn) {
+		options.WithInactivityMonitor(100*time.Millisecond, func(cc *client.Conn) {
 			require.False(t, inactivityDetected)
 			inactivityDetected = true
 			errC := cc.Close()
@@ -332,12 +332,12 @@ func TestServerKeepAliveMonitor(t *testing.T) {
 	err = checkClose.Acquire(ctx, 2)
 	require.NoError(t, err)
 	sd := udp.NewServer(
-		options.WithOnNewClientConn(func(cc *client.ClientConn) {
+		options.WithOnNewConn(func(cc *client.Conn) {
 			cc.AddOnClose(func() {
 				checkClose.Release(1)
 			})
 		}),
-		options.WithKeepAlive(3, 100*time.Millisecond, func(cc *client.ClientConn) {
+		options.WithKeepAlive(3, 100*time.Millisecond, func(cc *client.Conn) {
 			require.False(t, inactivityDetected)
 			inactivityDetected = true
 			errC := cc.Close()
@@ -360,7 +360,7 @@ func TestServerKeepAliveMonitor(t *testing.T) {
 
 	cc, err := udp.Dial(
 		ld.LocalAddr().String(),
-		options.WithInactivityMonitor(time.Millisecond*10, func(cc *client.ClientConn) {
+		options.WithInactivityMonitor(time.Millisecond*10, func(cc *client.Conn) {
 			time.Sleep(time.Millisecond * 500)
 			errC := cc.Close()
 			require.NoError(t, errC)
@@ -423,7 +423,7 @@ func TestServerNewClient(t *testing.T) {
 
 	time.Sleep(time.Second)
 
-	cc, err := s1.NewClientConn(peer)
+	cc, err := s1.NewConn(peer)
 	require.NoError(t, err)
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*1)
@@ -434,7 +434,7 @@ func TestServerNewClient(t *testing.T) {
 	require.NoError(t, err)
 
 	// repeat ping - new client should be created
-	cc, err = s1.NewClientConn(peer)
+	cc, err = s1.NewConn(peer)
 	require.NoError(t, err)
 	err = cc.Ping(ctx)
 	require.NoError(t, err)

@@ -60,7 +60,7 @@ func New(opt ...Option) *Server {
 
 	if cfg.CreateInactivityMonitor == nil {
 		cfg.CreateInactivityMonitor = func() udpClient.InactivityMonitor {
-			return inactivity.NewNilMonitor[*udpClient.ClientConn]()
+			return inactivity.NewNilMonitor[*udpClient.Conn]()
 		}
 	}
 	if cfg.MessagePool == nil {
@@ -115,7 +115,7 @@ func (s *Server) checkAcceptError(err error) bool {
 	}
 }
 
-func (s *Server) serveConnection(connections *connections.Connections, cc *udpClient.ClientConn) {
+func (s *Server) serveConnection(connections *connections.Connections, cc *udpClient.Conn) {
 	connections.Store(cc)
 	defer connections.Delete(cc)
 
@@ -157,11 +157,11 @@ func (s *Server) Serve(l Listener) error {
 			continue
 		}
 		wg.Add(1)
-		var cc *udpClient.ClientConn
+		var cc *udpClient.Conn
 		monitor := s.cfg.CreateInactivityMonitor()
-		cc = s.createClientConn(coapNet.NewConn(rw), monitor)
-		if s.cfg.OnNewClientConn != nil {
-			s.cfg.OnNewClientConn(cc)
+		cc = s.createConn(coapNet.NewConn(rw), monitor)
+		if s.cfg.OnNewConn != nil {
+			s.cfg.OnNewConn(cc)
 		}
 		go func() {
 			defer wg.Done()
@@ -184,12 +184,12 @@ func (s *Server) Stop() {
 	}
 }
 
-func (s *Server) createClientConn(connection *coapNet.Conn, monitor udpClient.InactivityMonitor) *udpClient.ClientConn {
-	createBlockWise := func(cc *udpClient.ClientConn) *blockwise.BlockWise[*udpClient.ClientConn] {
+func (s *Server) createConn(connection *coapNet.Conn, monitor udpClient.InactivityMonitor) *udpClient.Conn {
+	createBlockWise := func(cc *udpClient.Conn) *blockwise.BlockWise[*udpClient.Conn] {
 		return nil
 	}
 	if s.cfg.BlockwiseEnable {
-		createBlockWise = func(cc *udpClient.ClientConn) *blockwise.BlockWise[*udpClient.ClientConn] {
+		createBlockWise = func(cc *udpClient.Conn) *blockwise.BlockWise[*udpClient.Conn] {
 			v := cc
 			return blockwise.New(
 				v,
@@ -219,7 +219,7 @@ func (s *Server) createClientConn(connection *coapNet.Conn, monitor udpClient.In
 	cfg.GetMID = s.cfg.GetMID
 	cfg.GetToken = s.cfg.GetToken
 	cfg.MessagePool = s.cfg.MessagePool
-	cc := udpClient.NewClientConn(
+	cc := udpClient.NewConn(
 		session,
 		createBlockWise,
 		monitor,

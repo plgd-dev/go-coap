@@ -21,11 +21,11 @@ import (
 
 type InactivityMonitor interface {
 	Notify()
-	CheckInactivity(now time.Time, cc *ClientConn)
+	CheckInactivity(now time.Time, cc *Conn)
 }
 
 type (
-	HandlerFunc                 = func(*responsewriter.ResponseWriter[*ClientConn], *pool.Message)
+	HandlerFunc                 = func(*responsewriter.ResponseWriter[*Conn], *pool.Message)
 	ErrorFunc                   = func(error)
 	GoPoolFunc                  = func(func()) error
 	EventFunc                   = func()
@@ -37,24 +37,24 @@ type Notifier interface {
 	Notify()
 }
 
-// ClientConn represents a virtual connection to a conceptual endpoint, to perform COAPs commands.
-type ClientConn struct {
-	*client.Client[*ClientConn]
+// Conn represents a virtual connection to a conceptual endpoint, to perform COAPs commands.
+type Conn struct {
+	*client.Client[*Conn]
 	session            *Session
-	observationHandler *observation.Handler[*ClientConn]
+	observationHandler *observation.Handler[*Conn]
 }
 
-// NewClientConn creates connection over session and observation.
-func NewClientConn(
+// NewConn creates connection over session and observation.
+func NewConn(
 	connection *coapNet.Conn,
-	createBlockWise func(cc *ClientConn) *blockwise.BlockWise[*ClientConn],
+	createBlockWise func(cc *Conn) *blockwise.BlockWise[*Conn],
 	inactivityMonitor InactivityMonitor,
 	cfg *Config,
-) *ClientConn {
+) *Conn {
 	if cfg.GetToken == nil {
 		cfg.GetToken = message.GetToken
 	}
-	cc := ClientConn{}
+	cc := Conn{}
 	limitParallelRequests := limitparallelrequests.New(cfg.LimitClientParallelRequests, cc.do, cc.doObserve)
 	cc.observationHandler = observation.NewHandler(&cc, cfg.Handler, limitParallelRequests.Do)
 	cc.Client = client.New(&cc, cc.observationHandler, cfg.GetToken, limitParallelRequests)
@@ -78,12 +78,12 @@ func NewClientConn(
 	return &cc
 }
 
-func (cc *ClientConn) Session() *Session {
+func (cc *Conn) Session() *Session {
 	return cc.session
 }
 
 // Close closes connection without wait of ends Run function.
-func (cc *ClientConn) Close() error {
+func (cc *Conn) Close() error {
 	err := cc.session.Close()
 	if errors.Is(err, net.ErrClosed) {
 		return nil
@@ -91,13 +91,13 @@ func (cc *ClientConn) Close() error {
 	return err
 }
 
-func (cc *ClientConn) doInternal(req *pool.Message) (*pool.Message, error) {
+func (cc *Conn) doInternal(req *pool.Message) (*pool.Message, error) {
 	token := req.Token()
 	if token == nil {
 		return nil, fmt.Errorf("invalid token")
 	}
 	respChan := make(chan *pool.Message, 1)
-	if _, loaded := cc.session.TokenHandler().LoadOrStore(token.Hash(), func(w *responsewriter.ResponseWriter[*ClientConn], r *pool.Message) {
+	if _, loaded := cc.session.TokenHandler().LoadOrStore(token.Hash(), func(w *responsewriter.ResponseWriter[*Conn], r *pool.Message) {
 		r.Hijack()
 		select {
 		case respChan <- r:
@@ -129,7 +129,7 @@ func (cc *ClientConn) doInternal(req *pool.Message) (*pool.Message, error) {
 // Any status code doesn't cause an error.
 //
 // Caller is responsible to release request and response.
-func (cc *ClientConn) do(req *pool.Message) (*pool.Message, error) {
+func (cc *Conn) do(req *pool.Message) (*pool.Message, error) {
 	if !cc.session.PeerBlockWiseTransferEnabled() || cc.session.blockWise == nil {
 		return cc.doInternal(req)
 	}
@@ -140,12 +140,12 @@ func (cc *ClientConn) do(req *pool.Message) (*pool.Message, error) {
 	return resp, nil
 }
 
-func (cc *ClientConn) writeMessage(req *pool.Message) error {
+func (cc *Conn) writeMessage(req *pool.Message) error {
 	return cc.session.WriteMessage(req)
 }
 
 // WriteMessage sends an coap message.
-func (cc *ClientConn) WriteMessage(req *pool.Message) error {
+func (cc *Conn) WriteMessage(req *pool.Message) error {
 	if !cc.session.PeerBlockWiseTransferEnabled() || cc.session.blockWise == nil {
 		return cc.writeMessage(req)
 	}
@@ -155,12 +155,12 @@ func (cc *ClientConn) WriteMessage(req *pool.Message) error {
 // Context returns the client's context.
 //
 // If connections was closed context is cancelled.
-func (cc *ClientConn) Context() context.Context {
+func (cc *Conn) Context() context.Context {
 	return cc.session.Context()
 }
 
 // AsyncPing sends ping and receivedPong will be called when pong arrives. It returns cancellation of ping operation.
-func (cc *ClientConn) AsyncPing(receivedPong func()) (func(), error) {
+func (cc *Conn) AsyncPing(receivedPong func()) (func(), error) {
 	token, err := message.GetToken()
 	if err != nil {
 		return nil, fmt.Errorf("cannot get token: %w", err)
@@ -170,7 +170,7 @@ func (cc *ClientConn) AsyncPing(receivedPong func()) (func(), error) {
 	req.SetCode(codes.Ping)
 	defer cc.ReleaseMessage(req)
 
-	if _, loaded := cc.session.TokenHandler().LoadOrStore(token.Hash(), func(w *responsewriter.ResponseWriter[*ClientConn], r *pool.Message) {
+	if _, loaded := cc.session.TokenHandler().LoadOrStore(token.Hash(), func(w *responsewriter.ResponseWriter[*Conn], r *pool.Message) {
 		if r.Code() == codes.Pong {
 			receivedPong()
 		}
@@ -189,58 +189,58 @@ func (cc *ClientConn) AsyncPing(receivedPong func()) (func(), error) {
 }
 
 // Run reads and process requests from a connection, until the connection is not closed.
-func (cc *ClientConn) Run() (err error) {
+func (cc *Conn) Run() (err error) {
 	return cc.session.Run(cc)
 }
 
 // AddOnClose calls function on close connection event.
-func (cc *ClientConn) AddOnClose(f EventFunc) {
+func (cc *Conn) AddOnClose(f EventFunc) {
 	cc.session.AddOnClose(f)
 }
 
 // RemoteAddr gets remote address.
-func (cc *ClientConn) RemoteAddr() net.Addr {
+func (cc *Conn) RemoteAddr() net.Addr {
 	return cc.session.RemoteAddr()
 }
 
-func (cc *ClientConn) LocalAddr() net.Addr {
+func (cc *Conn) LocalAddr() net.Addr {
 	return cc.session.LocalAddr()
 }
 
 // Sequence acquires sequence number.
-func (cc *ClientConn) Sequence() uint64 {
+func (cc *Conn) Sequence() uint64 {
 	return cc.session.Sequence()
 }
 
 // SetContextValue stores the value associated with key to context of connection.
-func (cc *ClientConn) SetContextValue(key interface{}, val interface{}) {
+func (cc *Conn) SetContextValue(key interface{}, val interface{}) {
 	cc.session.SetContextValue(key, val)
 }
 
 // Done signalizes that connection is not more processed.
-func (cc *ClientConn) Done() <-chan struct{} {
+func (cc *Conn) Done() <-chan struct{} {
 	return cc.session.Done()
 }
 
 // CheckExpirations checks and remove expired items from caches.
-func (cc *ClientConn) CheckExpirations(now time.Time) {
+func (cc *Conn) CheckExpirations(now time.Time) {
 	cc.session.CheckExpirations(now, cc)
 }
 
-func (cc *ClientConn) AcquireMessage(ctx context.Context) *pool.Message {
+func (cc *Conn) AcquireMessage(ctx context.Context) *pool.Message {
 	return cc.session.AcquireMessage(ctx)
 }
 
-func (cc *ClientConn) ReleaseMessage(m *pool.Message) {
+func (cc *Conn) ReleaseMessage(m *pool.Message) {
 	cc.session.ReleaseMessage(m)
 }
 
 // NetConn returns the underlying connection that is wrapped by cc. The Conn returned is shared by all invocations of NetConn, so do not modify it.
-func (cc *ClientConn) NetConn() net.Conn {
+func (cc *Conn) NetConn() net.Conn {
 	return cc.session.NetConn()
 }
 
 // DoObserve subscribes for every change with request.
-func (cc *ClientConn) doObserve(req *pool.Message, observeFunc func(req *pool.Message), opts ...message.Option) (client.Observation, error) {
+func (cc *Conn) doObserve(req *pool.Message, observeFunc func(req *pool.Message), opts ...message.Option) (client.Observation, error) {
 	return cc.observationHandler.NewObservation(req, observeFunc)
 }
