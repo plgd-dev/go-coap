@@ -169,7 +169,7 @@ func newObservation[C Client](req message.Message, observationHandler *Handler[C
 }
 
 func (o *Observation[C]) handle(w *responsewriter.ResponseWriter[C], r *pool.Message) {
-	if o.waitForResponse.CAS(true, false) {
+	if o.waitForResponse.CompareAndSwap(true, false) {
 		select {
 		case o.respObservationChan <- respObservationMessage{
 			code:         r.Code(),

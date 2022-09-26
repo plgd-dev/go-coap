@@ -77,7 +77,7 @@ func TestServerDiscoverIotivity(t *testing.T) {
 	got := recv.pop()
 	assert.Greater(t, len(got), 1)
 	assert.Equal(t, codes.Content, got[0].Code())
-	buf, err := ioutil.ReadAll(got[0].Body())
+	buf, err := io.ReadAll(got[0].Body())
 	require.NoError(t, err)
 }
 */

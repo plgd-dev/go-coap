@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
-	"io/ioutil"
 	"net"
 	"os"
 	"sync"
@@ -75,7 +74,7 @@ func TestTLSListenerAcceptWithContext(t *testing.T) {
 		},
 	}
 
-	dir, err := ioutil.TempDir("", "gotesttmp")
+	dir, err := os.MkdirTemp("", "gotesttmp")
 	assert.NoError(t, err)
 	defer func() {
 		errR := os.RemoveAll(dir)
@@ -161,7 +160,7 @@ func TestTLSListenerCheckForInfinitLoop(t *testing.T) {
 		},
 	}
 
-	dir, err := ioutil.TempDir("", "gotesttmp")
+	dir, err := os.MkdirTemp("", "gotesttmp")
 	assert.NoError(t, err)
 	defer func() {
 		errR := os.RemoveAll(dir)

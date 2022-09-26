@@ -117,5 +117,10 @@ issues:
       linters:
         - gosec
 
+    - path: example_test\.go
+      text: "exitAfterDefer"
+      linters:
+        - gocritic
+
 #   # Fix found issues (if it's supported by the linter).
 #   fix: true

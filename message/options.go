@@ -335,12 +335,12 @@ func (options Options) SetContentFormat(buf []byte, contentFormat MediaType) (Op
 	return options.SetUint32(buf, ContentFormat, uint32(contentFormat))
 }
 
-// SetObserve sets ContentFormat option.
+// SetObserve sets Observe option.
 func (options Options) SetObserve(buf []byte, observe uint32) (Options, int, error) {
 	return options.SetUint32(buf, Observe, observe)
 }
 
-// Observe gets observe option.
+// Observe gets Observe option.
 func (options Options) Observe() (uint32, error) {
 	return options.GetUint32(Observe)
 }

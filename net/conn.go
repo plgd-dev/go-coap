@@ -51,7 +51,7 @@ func (c *Conn) RemoteAddr() net.Addr {
 
 // Close closes the connection.
 func (c *Conn) Close() error {
-	if !c.closed.CAS(false, true) {
+	if !c.closed.CompareAndSwap(false, true) {
 		return nil
 	}
 	return c.connection.Close()

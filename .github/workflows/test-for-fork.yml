@@ -1,7 +1,7 @@
 # Workflow to run tests for PRs from forked repository
 name: Test for forked repository
 
-# Run on push to whatever branch
+# Run on pull requests events from forked repository
 on: [pull_request]
 
 jobs:
