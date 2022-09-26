@@ -54,7 +54,7 @@ func (p *Pool) ReleaseMessage(req *Message) {
 			return
 		}
 		next := v + 1
-		if p.currentMessagesInPool.CAS(v, next) {
+		if p.currentMessagesInPool.CompareAndSwap(v, next) {
 			break
 		}
 	}

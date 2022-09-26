@@ -7,7 +7,7 @@ require (
 	github.com/pion/dtls/v2 v2.1.6-0.20220815090156-a04cfccb23e5
 	github.com/pion/udp v0.1.1
 	github.com/stretchr/testify v1.7.1
-	go.uber.org/atomic v1.9.0
+	go.uber.org/atomic v1.10.0
 	golang.org/x/exp v0.0.0-20220613132600-b0d781184e0d
 	golang.org/x/net v0.0.0-20220630215102-69896b714898
 	golang.org/x/sync v0.0.0-20220601150217-0de741cfad7f

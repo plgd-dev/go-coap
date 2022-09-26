@@ -481,7 +481,7 @@ func (cc *Conn) checkMyMessageID(req *pool.Message) {
 				return
 			}
 			newID := oldID + 0xffff/2
-			if cc.msgID.CAS(oldID, newID) {
+			if cc.msgID.CompareAndSwap(oldID, newID) {
 				break
 			}
 		}

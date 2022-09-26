@@ -288,13 +288,17 @@ func (b *BlockWise[C]) WriteMessage(request *pool.Message, maxSZX SZX, maxMessag
 
 func fitSZX(r *pool.Message, blockType message.OptionID, maxSZX SZX) SZX {
 	block, err := r.GetOptionUint32(blockType)
-	if err == nil {
-		szx, _, _, err := DecodeBlockOption(block)
-		if err != nil {
-			if maxSZX > szx {
-				return szx
-			}
-		}
+	if err != nil {
+		return maxSZX
+	}
+
+	szx, _, _, err := DecodeBlockOption(block)
+	if err != nil {
+		return maxSZX
+	}
+
+	if maxSZX > szx {
+		return szx
 	}
 	return maxSZX
 }
@@ -574,7 +578,7 @@ func (b *BlockWise[C]) getSentRequest(token message.Token) *pool.Message {
 	return nil
 }
 
-func (b *BlockWise[C]) handleObserveResponse(r, sentRequest *pool.Message) (message.Token, time.Time, error) {
+func (b *BlockWise[C]) handleObserveResponse(sentRequest *pool.Message) (message.Token, time.Time, error) {
 	// https://tools.ietf.org/html/rfc7959#section-2.6 - performs GET with new token.
 	if sentRequest == nil {
 		return nil, time.Time{}, fmt.Errorf("observation is not registered")
@@ -680,8 +684,11 @@ func (b *BlockWise[C]) processReceivedMessage(w *responsewriter.ResponseWriter[C
 	}
 	block, err := r.GetOptionUint32(blockType)
 	if err != nil {
-		next(w, r)
-		return nil
+		if errors.Is(err, message.ErrOptionNotFound) {
+			next(w, r)
+			return nil
+		}
+		return fmt.Errorf("cannot get Block(optionID=%d) option: %w", blockType, err)
 	}
 	szx, num, more, err := DecodeBlockOption(block)
 	if err != nil {
@@ -696,7 +703,7 @@ func (b *BlockWise[C]) processReceivedMessage(w *responsewriter.ResponseWriter[C
 		return fmt.Errorf("cannot request body without paired request")
 	}
 	if isObserveResponse(r) {
-		token, validUntil, err = b.handleObserveResponse(r, sentRequest)
+		token, validUntil, err = b.handleObserveResponse(sentRequest)
 		if err != nil {
 			return fmt.Errorf("cannot process message: %w", err)
 		}

@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"log"
 	"sync"
 	"sync/atomic"
@@ -460,7 +459,7 @@ func testConnPost(t *testing.T, numParallel int) {
 				ct, errH := r.Options().GetUint32(message.ContentFormat)
 				require.NoError(t, errH)
 				assert.Equal(t, message.TextPlain, message.MediaType(ct))
-				buf, errH := ioutil.ReadAll(r.Body())
+				buf, errH := io.ReadAll(r.Body())
 				require.NoError(t, errH)
 				assert.Len(t, buf, 7000)
 
@@ -474,7 +473,7 @@ func testConnPost(t *testing.T, numParallel int) {
 				ct, errH := r.Options().GetUint32(message.ContentFormat)
 				require.NoError(t, errH)
 				assert.Equal(t, message.TextPlain, message.MediaType(ct))
-				buf, errH := ioutil.ReadAll(r.Body())
+				buf, errH := io.ReadAll(r.Body())
 				require.NoError(t, errH)
 				assert.Equal(t, buf, []byte("b-send"))
 				errH = w.SetResponse(codes.Content, message.TextPlain, bytes.NewReader([]byte("b")))
@@ -603,7 +602,7 @@ func testConnPut(t *testing.T, numParallel int) {
 				ct, errH := r.Options().GetUint32(message.ContentFormat)
 				require.NoError(t, errH)
 				assert.Equal(t, message.TextPlain, message.MediaType(ct))
-				buf, errH := ioutil.ReadAll(r.Body())
+				buf, errH := io.ReadAll(r.Body())
 				require.NoError(t, errH)
 				assert.Len(t, buf, 7000)
 
@@ -617,7 +616,7 @@ func testConnPut(t *testing.T, numParallel int) {
 				ct, errH := r.Options().GetUint32(message.ContentFormat)
 				require.NoError(t, errH)
 				assert.Equal(t, message.TextPlain, message.MediaType(ct))
-				buf, errH := ioutil.ReadAll(r.Body())
+				buf, errH := io.ReadAll(r.Body())
 				require.NoError(t, errH)
 				assert.Equal(t, buf, []byte("b-send"))
 				errH = w.SetResponse(codes.Content, message.TextPlain, bytes.NewReader([]byte("b")))

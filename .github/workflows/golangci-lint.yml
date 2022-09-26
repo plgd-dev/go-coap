@@ -5,7 +5,9 @@ name: Golangci-lint
 # has dozens of linters included.
 # see: https://github.com/golangci/golangci-lint-action
 
-on: [pull_request]
+on:
+  pull_request:
+  workflow_dispatch:
 jobs:
   golangci:
     name: lint
