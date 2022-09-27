@@ -90,6 +90,12 @@ func (c *Cache) CheckExpirations(now time.Time) {
 	}
 }
 
+func (c *Cache) Range(callback func(interface{}, interface{}) bool) {
+	c.data.Range(func(key, value interface{}) bool {
+		return callback(key, value.(*Element).Data())
+	})
+}
+
 func (c *Cache) PullOutAll() map[interface{}]interface{} {
 	res := make(map[interface{}]interface{})
 	for key, value := range c.data.PullOutAll() {
