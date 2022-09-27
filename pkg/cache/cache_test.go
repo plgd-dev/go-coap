@@ -30,7 +30,6 @@ func TestAddElement(t *testing.T) {
 	loadedElem, loaded = cache.LoadOrStore("abcd", elem3)
 	require.True(t, loaded)
 	require.Equal(t, elementToCache3, loadedElem.data)
-
 }
 
 func TestLoadElement(t *testing.T) {
@@ -121,12 +120,11 @@ func TestRangeFunction(t *testing.T) {
 
 	require.Equal(t, foundElements, 2)
 
-	for k, _ := range actualMap {
+	for k := range actualMap {
 		_, contains := actualMap[k]
 		require.True(t, contains)
 		require.Equal(t, expectedMap[k], actualMap[k])
 	}
-
 }
 
 func TestPullOutAllFunction(t *testing.T) {
@@ -148,5 +146,4 @@ func TestPullOutAllFunction(t *testing.T) {
 		return true
 	})
 	require.Equal(t, foundElements, 0)
-
 }
