@@ -121,7 +121,7 @@ func (h *Handler[C]) GetObservationRequest(token message.Token) (*pool.Message, 
 }
 
 func (h *Handler[C]) pullOutObservation(key uint64) (*Observation[C], bool) {
-	return h.observations.PullOut(key)
+	return h.observations.LoadAndDelete(key)
 }
 
 func NewHandler[C Client](cc C, next HandlerFunc[C], do DoFunc) *Handler[C] {

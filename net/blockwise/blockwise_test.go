@@ -304,9 +304,9 @@ func TestBlockWiseDo(t *testing.T) {
 				assert.Error(t, err)
 				return
 			}
-			receivingMessagesCache := sender.receivingMessagesCache.PullOutAll()
+			receivingMessagesCache := sender.receivingMessagesCache.LoadAndDeleteAll()
 			require.Len(t, receivingMessagesCache, 0)
-			sendingMessagesCache := sender.sendingMessagesCache.PullOutAll()
+			sendingMessagesCache := sender.sendingMessagesCache.LoadAndDeleteAll()
 			require.Len(t, sendingMessagesCache, 0)
 			require.NoError(t, err)
 			assert.Equal(t, tt.want, fromPoolMessage(got))

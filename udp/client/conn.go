@@ -202,7 +202,7 @@ func (cc *Conn) doInternal(req *pool.Message) (*pool.Message, error) {
 		return nil, fmt.Errorf("cannot add token(%v) handler: %w", token, coapErrors.ErrKeyAlreadyExists)
 	}
 	defer func() {
-		_, _ = cc.tokenHandlerContainer.PullOut(token.Hash())
+		_, _ = cc.tokenHandlerContainer.LoadAndDelete(token.Hash())
 	}()
 	err := cc.writeMessage(req)
 	if err != nil {
@@ -309,7 +309,7 @@ func (cc *Conn) writeMessage(req *pool.Message) error {
 			return fmt.Errorf("cannot insert mid(%v) handler: %w", req.MessageID(), coapErrors.ErrKeyAlreadyExists)
 		}
 		defer func() {
-			_, _ = cc.midHandlerContainer.PullOut(req.MessageID())
+			_, _ = cc.midHandlerContainer.LoadAndDelete(req.MessageID())
 		}()
 	case message.NonConfirmable:
 		/* TODO need to acquireOutstandingInteraction
@@ -369,7 +369,7 @@ func (cc *Conn) AsyncPing(receivedPong func()) (func(), error) {
 		return nil, fmt.Errorf("cannot insert mid(%v) handler: %w", mid, coapErrors.ErrKeyAlreadyExists)
 	}
 	removeMidHandler := func() {
-		_, _ = cc.midHandlerContainer.PullOut(mid)
+		_, _ = cc.midHandlerContainer.LoadAndDelete(mid)
 	}
 	if err := cc.session.WriteMessage(req); err != nil {
 		removeMidHandler()
@@ -405,7 +405,7 @@ func (cc *Conn) sendPong(w *responsewriter.ResponseWriter[*Conn]) {
 func (cc *Conn) handleBW(w *responsewriter.ResponseWriter[*Conn], m *pool.Message) {
 	if cc.blockWise != nil {
 		cc.blockWise.Handle(w, m, cc.blockwiseSZX, cc.session.MaxMessageSize(), func(rw *responsewriter.ResponseWriter[*Conn], rm *pool.Message) {
-			if h, ok := cc.tokenHandlerContainer.PullOut(rm.Token().Hash()); ok {
+			if h, ok := cc.tokenHandlerContainer.LoadAndDelete(rm.Token().Hash()); ok {
 				h(rw, rm)
 				return
 			}
@@ -413,7 +413,7 @@ func (cc *Conn) handleBW(w *responsewriter.ResponseWriter[*Conn], m *pool.Messag
 		})
 		return
 	}
-	if h, ok := cc.tokenHandlerContainer.PullOut(m.Token().Hash()); ok {
+	if h, ok := cc.tokenHandlerContainer.LoadAndDelete(m.Token().Hash()); ok {
 		h(w, m)
 		return
 	}
@@ -425,7 +425,7 @@ func (cc *Conn) handle(w *responsewriter.ResponseWriter[*Conn], r *pool.Message)
 		cc.sendPong(w)
 		return
 	}
-	if h, ok := cc.midHandlerContainer.PullOut(r.MessageID()); ok {
+	if h, ok := cc.midHandlerContainer.LoadAndDelete(r.MessageID()); ok {
 		h(w, r)
 		return
 	}

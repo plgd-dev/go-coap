@@ -195,7 +195,7 @@ func (s *Session) handleSignals(r *pool.Message, cc *Conn) bool {
 		// }
 		return true
 	case codes.Pong:
-		if h, ok := s.tokenHandlerContainer.PullOut(r.Token().Hash()); ok {
+		if h, ok := s.tokenHandlerContainer.LoadAndDelete(r.Token().Hash()); ok {
 			s.processReq(r, cc, h)
 		}
 		return true
@@ -216,7 +216,7 @@ func (s *Session) Handle(w *responsewriter.ResponseWriter[*Conn], r *pool.Messag
 		s.blockWise.Handle(w, r, s.blockwiseSZX, s.maxMessageSize, s.blockwiseHandle)
 		return
 	}
-	if h, ok := s.tokenHandlerContainer.PullOut(r.Token().Hash()); ok {
+	if h, ok := s.tokenHandlerContainer.LoadAndDelete(r.Token().Hash()); ok {
 		h(w, r)
 		return
 	}
