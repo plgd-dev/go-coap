@@ -185,35 +185,35 @@ func TestDelete(t *testing.T) {
 	require.Equal(t, len(src)-2, m.Length())
 }
 
-func TestPullOut(t *testing.T) {
+func TestLoadAndDelete(t *testing.T) {
 	src := getTestMapContent()
 	m := NewMap[int, string]()
 	for k, v := range src {
 		m.Store(k, v)
 	}
 
-	_, ok := m.PullOut(42)
+	_, ok := m.LoadAndDelete(42)
 	require.False(t, ok)
 
-	v, ok := m.PullOut(2)
+	v, ok := m.LoadAndDelete(2)
 	require.True(t, ok)
 	require.Equal(t, src[2], v)
 	delete(src, 2)
 
-	_, ok = m.PullOutWithFunc(2, func(value string) string {
+	_, ok = m.LoadAndDeleteWithFunc(2, func(value string) string {
 		require.FailNow(t, "unexpected pulled value")
 		return value
 	})
 	require.False(t, ok)
 
-	v, ok = m.PullOutWithFunc(1, func(value string) string {
+	v, ok = m.LoadAndDeleteWithFunc(1, func(value string) string {
 		return value + "-suffix"
 	})
 	require.True(t, ok)
 	require.Equal(t, src[1]+"-suffix", v)
 	delete(src, 1)
 
-	data := m.PullOutAll()
+	data := m.LoadAndDeleteAll()
 	require.Equal(t, 0, m.Length())
 	require.Equal(t, src, data)
 }

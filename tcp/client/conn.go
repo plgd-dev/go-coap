@@ -107,7 +107,7 @@ func (cc *Conn) doInternal(req *pool.Message) (*pool.Message, error) {
 		return nil, fmt.Errorf("cannot add token handler: %w", coapErrors.ErrKeyAlreadyExists)
 	}
 	defer func() {
-		_, _ = cc.session.TokenHandler().PullOut(token.Hash())
+		_, _ = cc.session.TokenHandler().LoadAndDelete(token.Hash())
 	}()
 	if err := cc.session.WriteMessage(req); err != nil {
 		return nil, fmt.Errorf("cannot write request: %w", err)
@@ -178,7 +178,7 @@ func (cc *Conn) AsyncPing(receivedPong func()) (func(), error) {
 		return nil, fmt.Errorf("cannot add token handler: %w", coapErrors.ErrKeyAlreadyExists)
 	}
 	removeTokenHandler := func() {
-		_, _ = cc.session.TokenHandler().PullOut(token.Hash())
+		_, _ = cc.session.TokenHandler().LoadAndDelete(token.Hash())
 	}
 	err = cc.session.WriteMessage(req)
 	if err != nil {

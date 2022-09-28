@@ -66,7 +66,7 @@ func (s *Server) DiscoveryRequest(req *pool.Message, address string, receiverFun
 		return errors.ErrKeyAlreadyExists
 	}
 	defer func() {
-		_, _ = s.multicastHandler.PullOut(token.Hash())
+		_, _ = s.multicastHandler.LoadAndDelete(token.Hash())
 	}()
 
 	if addr.IP.IsMulticast() {
