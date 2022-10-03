@@ -5,27 +5,31 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
+	"go.uber.org/atomic"
 )
 
 func TestAddElement(t *testing.T) {
 	cache := NewCache()
 
 	elementToCache := string("elem")
-	elem := NewElement(elementToCache, time.Now().Add(1*time.Minute), nil)
+	atomTime := atomic.NewTime(time.Now().Add(1 * time.Minute))
+	elem := NewElement(elementToCache, atomTime, nil)
 	loadedElem, loaded := cache.LoadOrStore("abcd", elem)
 
 	require.False(t, loaded)
 	require.Equal(t, elementToCache, loadedElem.data)
 
 	elementToCache2 := string("elem2")
-	elem2 := NewElement(elementToCache2, time.Now().Add(1*time.Minute), nil)
+	atomTime = atomic.NewTime(time.Now().Add(1 * time.Minute))
+	elem2 := NewElement(elementToCache2, atomTime, nil)
 
 	loadedElem2, loaded2 := cache.LoadOrStore("abcdefg", elem2)
 	require.False(t, loaded2)
 	require.Equal(t, elementToCache2, loadedElem2.data)
 
 	elementToCache3 := string("elem")
-	elem3 := NewElement(elementToCache3, time.Now().Add(1*time.Minute), nil)
+	atomTime = atomic.NewTime(time.Now().Add(1 * time.Minute))
+	elem3 := NewElement(elementToCache3, atomTime, nil)
 
 	loadedElem, loaded = cache.LoadOrStore("abcd", elem3)
 	require.True(t, loaded)
@@ -39,7 +43,8 @@ func TestLoadElement(t *testing.T) {
 	require.Nil(t, loadedElem)
 
 	elementToCache := string("elem")
-	elem := NewElement(elementToCache, time.Now().Add(1*time.Minute), nil)
+	atomTime := atomic.NewTime(time.Now().Add(1 * time.Minute))
+	elem := NewElement(elementToCache, atomTime, nil)
 	loadedElem, loaded := cache.LoadOrStore("abcd", elem)
 
 	require.False(t, loaded)
@@ -53,7 +58,8 @@ func TestDeleteElement(t *testing.T) {
 	require.Nil(t, loadedElem)
 
 	elementToCache := string("elem")
-	elem := NewElement(elementToCache, time.Now().Add(1*time.Minute), nil)
+	atomTime := atomic.NewTime(time.Now().Add(1 * time.Minute))
+	elem := NewElement(elementToCache, atomTime, nil)
 	loadedElem, loaded := cache.LoadOrStore("abcd", elem)
 
 	require.False(t, loaded)
@@ -72,13 +78,14 @@ func TestElementExpiration(t *testing.T) {
 	cache := NewCache()
 
 	elementToCache := string("elem")
-	elem := NewElement(elementToCache, time.Now().Add(1*time.Second), func(d interface{}) {
+	atomTime := atomic.NewTime(time.Now().Add(1 * time.Second))
+	elem := NewElement(elementToCache, atomTime, func(d interface{}) {
 		expirationInvoked = true
 	})
 	loadedElem, _ := cache.LoadOrStore("abcd", elem)
 
 	elementToCache = string("elem")
-	elem = NewElement(elementToCache, time.Time{}, nil)
+	elem = NewElement(elementToCache, atomic.NewTime(time.Time{}), nil)
 	cache.LoadOrStore("abcdef", elem)
 
 	require.False(t, expirationInvoked)
@@ -99,11 +106,13 @@ func TestRangeFunction(t *testing.T) {
 	require.Nil(t, loadedElem)
 
 	elementToCache := string("elem")
-	elem := NewElement(elementToCache, time.Now().Add(1*time.Minute), nil)
+	atomTime := atomic.NewTime(time.Now().Add(1 * time.Minute))
+	elem := NewElement(elementToCache, atomTime, nil)
 	cache.LoadOrStore("abcd", elem)
 
 	elementToCache = string("elem2")
-	elem = NewElement(elementToCache, time.Now().Add(1*time.Minute), nil)
+	atomTime = atomic.NewTime(time.Now().Add(1 * time.Minute))
+	elem = NewElement(elementToCache, atomTime, nil)
 	cache.LoadOrStore("abcdef", elem)
 
 	actualMap := make(map[string]string)
@@ -131,11 +140,13 @@ func TestPullOutAllFunction(t *testing.T) {
 	cache := NewCache()
 
 	elementToCache := string("elem")
-	elem := NewElement(elementToCache, time.Now().Add(1*time.Minute), nil)
+	atomTime := atomic.NewTime(time.Now().Add(1 * time.Minute))
+	elem := NewElement(elementToCache, atomTime, nil)
 	cache.LoadOrStore("abcd", elem)
 
 	elementToCache = string("elem2")
-	elem = NewElement(elementToCache, time.Now().Add(1*time.Minute), nil)
+	atomTime = atomic.NewTime(time.Now().Add(1 * time.Minute))
+	elem = NewElement(elementToCache, atomTime, nil)
 	cache.LoadOrStore("abcdef", elem)
 
 	cache.PullOutAll()

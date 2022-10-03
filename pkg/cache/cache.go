@@ -4,6 +4,7 @@ import (
 	"time"
 
 	kitSync "github.com/plgd-dev/kit/v2/sync"
+	"go.uber.org/atomic"
 )
 
 func DefaultOnExpire(d interface{}) {
@@ -11,27 +12,28 @@ func DefaultOnExpire(d interface{}) {
 }
 
 type Element struct {
-	validUntil time.Time
+	ValidUntil *atomic.Time
 	data       interface{}
 	onExpire   func(d interface{})
 }
 
 func (e *Element) IsExpired(now time.Time) bool {
-	if e.validUntil.IsZero() {
+	value := e.ValidUntil.Load()
+	if value.IsZero() {
 		return false
 	}
-	return now.After(e.validUntil)
+	return now.After(value)
 }
 
 func (e *Element) Data() interface{} {
 	return e.data
 }
 
-func NewElement(data interface{}, validUntil time.Time, onExpire func(d interface{})) *Element {
+func NewElement(data interface{}, validUntil *atomic.Time, onExpire func(d interface{})) *Element {
 	if onExpire == nil {
 		onExpire = DefaultOnExpire
 	}
-	return &Element{data: data, validUntil: validUntil, onExpire: onExpire}
+	return &Element{data: data, ValidUntil: validUntil, onExpire: onExpire}
 }
 
 type Cache struct {
