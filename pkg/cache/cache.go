@@ -12,7 +12,7 @@ func DefaultOnExpire(d interface{}) {
 }
 
 type Element struct {
-	ValidUntil *atomic.Time
+	ValidUntil atomic.Time
 	data       interface{}
 	onExpire   func(d interface{})
 }
@@ -29,11 +29,13 @@ func (e *Element) Data() interface{} {
 	return e.data
 }
 
-func NewElement(data interface{}, validUntil *atomic.Time, onExpire func(d interface{})) *Element {
+func NewElement(data interface{}, validUntil time.Time, onExpire func(d interface{})) *Element {
 	if onExpire == nil {
 		onExpire = DefaultOnExpire
 	}
-	return &Element{data: data, ValidUntil: validUntil, onExpire: onExpire}
+	e := &Element{data: data, onExpire: onExpire}
+	e.ValidUntil.Store(validUntil)
+	return e
 }
 
 type Cache struct {

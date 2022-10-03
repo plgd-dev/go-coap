@@ -14,7 +14,6 @@ import (
 	"github.com/plgd-dev/go-coap/v2/message/codes"
 	"github.com/plgd-dev/go-coap/v2/pkg/cache"
 	udpMessage "github.com/plgd-dev/go-coap/v2/udp/message"
-	"go.uber.org/atomic"
 	"golang.org/x/sync/semaphore"
 )
 
@@ -659,7 +658,7 @@ func (b *BlockWise) startSendingMessage(w ResponseWriter, maxSZX SZX, maxMessage
 		expire = deadline
 	}
 
-	_, loaded := b.sendingMessagesCache.LoadOrStore(sendingMessage.Token().Hash(), cache.NewElement(newRequestGuard(sendingMessage), atomic.NewTime(expire), nil))
+	_, loaded := b.sendingMessagesCache.LoadOrStore(sendingMessage.Token().Hash(), cache.NewElement(newRequestGuard(sendingMessage), expire, nil))
 	if loaded {
 		return fmt.Errorf("cannot add to sending message cache: message with token %v already exist", sendingMessage.Token().Hash())
 	}
@@ -843,7 +842,7 @@ func (b *BlockWise) processReceivedMessage(w ResponseWriter, r Message, maxSzx S
 			return cannotLockError(errA)
 		}
 		defer msgGuard.Release(1)
-		element, loaded := b.receivingMessagesCache.LoadOrStore(tokenStr, cache.NewElement(msgGuard, atomic.NewTime(validUntil), func(d interface{}) {
+		element, loaded := b.receivingMessagesCache.LoadOrStore(tokenStr, cache.NewElement(msgGuard, validUntil, func(d interface{}) {
 			if d == nil {
 				return
 			}

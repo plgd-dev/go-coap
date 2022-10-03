@@ -590,7 +590,7 @@ func (cc *ClientConn) addResponseToCache(resp *pool.Message) error {
 	}
 	cacheMsg := make([]byte, len(marshaledResp))
 	copy(cacheMsg, marshaledResp)
-	cc.responseMsgCache.LoadOrStore(cc.responseMsgCacheID(resp.MessageID()), cache.NewElement(cacheMsg, atomicTypes.NewTime(time.Now().Add(ExchangeLifetime)), nil))
+	cc.responseMsgCache.LoadOrStore(cc.responseMsgCacheID(resp.MessageID()), cache.NewElement(cacheMsg, time.Now().Add(ExchangeLifetime), nil))
 	return nil
 }
 
