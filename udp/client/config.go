@@ -17,7 +17,7 @@ const DefaultMTU = 1472
 
 var DefaultConfig = func() Config {
 	opts := Config{
-		Common: config.DefaultCommon(),
+		Common: config.NewCommon[*Conn](),
 		CreateInactivityMonitor: func() InactivityMonitor {
 			return inactivity.NewNilMonitor[*Conn]()
 		},
@@ -41,7 +41,7 @@ var DefaultConfig = func() Config {
 }()
 
 type Config struct {
-	config.Common
+	config.Common[*Conn]
 	CreateInactivityMonitor        CreateInactivityMonitorFunc
 	Net                            string
 	GetMID                         GetMIDFunc

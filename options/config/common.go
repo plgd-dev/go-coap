@@ -9,19 +9,23 @@ import (
 	"github.com/plgd-dev/go-coap/v3/message/pool"
 	"github.com/plgd-dev/go-coap/v3/net/blockwise"
 	"github.com/plgd-dev/go-coap/v3/net/client"
+	"github.com/plgd-dev/go-coap/v3/net/responsewriter"
 	"github.com/plgd-dev/go-coap/v3/pkg/runner/periodic"
 )
 
-type ErrorFunc = func(error)
+type (
+	ErrorFunc                                   = func(error)
+	HandlerFunc[C responsewriter.Client]        func(w *responsewriter.ResponseWriter[C], r *pool.Message)
+	ProcessRequestFunc[C responsewriter.Client] func(req *pool.Message, cc C, handler HandlerFunc[C])
+	GoPoolFunc[C responsewriter.Client]         func(processReqFunc ProcessRequestFunc[C], req *pool.Message, cc C, handler HandlerFunc[C]) error
+)
 
-type GoPoolFunc = func(func()) error
-
-type Common struct {
+type Common[C responsewriter.Client] struct {
 	LimitClientParallelRequests         int64
 	LimitClientEndpointParallelRequests int64
 	Ctx                                 context.Context
 	Errors                              ErrorFunc
-	GoPool                              GoPoolFunc
+	GoPool                              GoPoolFunc[C]
 	PeriodicRunner                      periodic.Func
 	MessagePool                         *pool.Pool
 	GetToken                            client.GetTokenFunc
@@ -31,17 +35,15 @@ type Common struct {
 	BlockwiseEnable                     bool
 }
 
-var DefaultCommon = func() Common {
-	return Common{
+func NewCommon[C responsewriter.Client]() Common[C] {
+	return Common[C]{
 		Ctx:            context.Background(),
 		MaxMessageSize: 64 * 1024,
 		Errors: func(err error) {
 			fmt.Println(err)
 		},
-		GoPool: func(f func()) error {
-			go func() {
-				f()
-			}()
+		GoPool: func(processReqFunc ProcessRequestFunc[C], req *pool.Message, cc C, handler HandlerFunc[C]) error {
+			go processReqFunc(req, cc, handler)
 			return nil
 		},
 		BlockwiseSZX:             blockwise.SZX1024,

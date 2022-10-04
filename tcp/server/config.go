@@ -26,7 +26,7 @@ type OnNewConnFunc = func(cc *client.Conn)
 
 var DefaultConfig = func() Config {
 	opts := Config{
-		Common: config.DefaultCommon(),
+		Common: config.NewCommon[*client.Conn](),
 		CreateInactivityMonitor: func() client.InactivityMonitor {
 			maxRetries := uint32(2)
 			timeout := time.Second * 16
@@ -52,7 +52,7 @@ var DefaultConfig = func() Config {
 }()
 
 type Config struct {
-	config.Common
+	config.Common[*client.Conn]
 	CreateInactivityMonitor         client.CreateInactivityMonitorFunc
 	Handler                         HandlerFunc
 	OnNewConn                       OnNewConnFunc

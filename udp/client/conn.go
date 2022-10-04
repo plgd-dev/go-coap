@@ -17,6 +17,7 @@ import (
 	limitparallelrequests "github.com/plgd-dev/go-coap/v3/net/client/limitParallelRequests"
 	"github.com/plgd-dev/go-coap/v3/net/observation"
 	"github.com/plgd-dev/go-coap/v3/net/responsewriter"
+	"github.com/plgd-dev/go-coap/v3/options/config"
 	"github.com/plgd-dev/go-coap/v3/pkg/cache"
 	coapErrors "github.com/plgd-dev/go-coap/v3/pkg/errors"
 	coapSync "github.com/plgd-dev/go-coap/v3/pkg/sync"
@@ -31,7 +32,7 @@ const ExchangeLifetime = 247 * time.Second
 type (
 	HandlerFunc                 = func(*responsewriter.ResponseWriter[*Conn], *pool.Message)
 	ErrorFunc                   = func(error)
-	GoPoolFunc                  = func(func()) error
+	GoPoolFunc                  = config.GoPoolFunc[*Conn]
 	EventFunc                   = func()
 	GetMIDFunc                  = func() int32
 	CreateInactivityMonitorFunc = func() InactivityMonitor
@@ -558,7 +559,9 @@ func (cc *Conn) processResponse(reqType message.Type, reqMessageID int32, w *res
 	return nil
 }
 
-func (cc *Conn) processReq(req *pool.Message, w *responsewriter.ResponseWriter[*Conn]) error {
+const errFmtWrite = "cannot write response: %w"
+
+func (cc *Conn) handleReq(w *responsewriter.ResponseWriter[*Conn], req *pool.Message) {
 	defer cc.inactivityMonitor.Notify()
 	reqMid := req.MessageID()
 
@@ -568,9 +571,11 @@ func (cc *Conn) processReq(req *pool.Message, w *responsewriter.ResponseWriter[*
 	defer l.Unlock()
 
 	if ok, err := cc.checkResponseCache(req, w); err != nil {
-		return err
+		cc.closeConnection()
+		cc.errors(fmt.Errorf(errFmtWrite, err))
+		return
 	} else if ok {
-		return nil
+		return
 	}
 
 	w.Message().SetModified(false)
@@ -578,7 +583,46 @@ func (cc *Conn) processReq(req *pool.Message, w *responsewriter.ResponseWriter[*
 	reqMessageID := req.MessageID()
 	cc.handle(w, req)
 
-	return cc.processResponse(reqType, reqMessageID, w)
+	err := cc.processResponse(reqType, reqMessageID, w)
+	if err != nil {
+		cc.closeConnection()
+		cc.errors(fmt.Errorf(errFmtWrite, err))
+	}
+}
+
+func (cc *Conn) closeConnection() {
+	if errC := cc.Close(); errC != nil {
+		cc.errors(fmt.Errorf("cannot close connection: %w", errC))
+	}
+}
+
+func processReqWithHandle(req *pool.Message, cc *Conn, handler config.HandlerFunc[*Conn]) {
+	defer func() {
+		if !req.IsHijacked() {
+			cc.ReleaseMessage(req)
+		}
+	}()
+	resp := cc.AcquireMessage(cc.Context())
+	resp.SetToken(req.Token())
+	w := responsewriter.New(resp, cc, req.Options()...)
+	defer func() {
+		cc.ReleaseMessage(w.Message())
+	}()
+	handler(w, req)
+	select {
+	case <-cc.Context().Done():
+		return
+	default:
+	}
+	if !w.Message().IsModified() {
+		// nothing to send
+		return
+	}
+	errW := cc.writeMessage(w.Message())
+	if errW != nil {
+		cc.closeConnection()
+		cc.errors(fmt.Errorf(errFmtWrite, errW))
+	}
 }
 
 func (cc *Conn) Process(datagram []byte) error {
@@ -591,42 +635,10 @@ func (cc *Conn) Process(datagram []byte) error {
 		cc.ReleaseMessage(req)
 		return err
 	}
-	closeConnection := func() {
-		if errC := cc.Close(); errC != nil {
-			cc.errors(fmt.Errorf("cannot close connection: %w", errC))
-		}
-	}
 	req.SetSequence(cc.Sequence())
 	cc.checkMyMessageID(req)
 	cc.inactivityMonitor.Notify()
-	err = cc.goPool(func() {
-		defer func() {
-			if !req.IsHijacked() {
-				cc.ReleaseMessage(req)
-			}
-		}()
-		resp := cc.AcquireMessage(cc.Context())
-		resp.SetToken(req.Token())
-		w := responsewriter.New(resp, cc, req.Options()...)
-		defer func() {
-			cc.ReleaseMessage(w.Message())
-		}()
-		errP := cc.processReq(req, w)
-		if errP != nil {
-			closeConnection()
-			cc.errors(fmt.Errorf("cannot write response: %w", errP))
-			return
-		}
-		if !w.Message().IsModified() {
-			// nothing to send
-			return
-		}
-		errW := cc.writeMessage(w.Message())
-		if errW != nil {
-			closeConnection()
-			cc.errors(fmt.Errorf("cannot write response: %w", errW))
-		}
-	})
+	err = cc.goPool(processReqWithHandle, req, cc, cc.handleReq)
 	if err != nil {
 		cc.ReleaseMessage(req)
 		return err
