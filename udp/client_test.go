@@ -18,6 +18,7 @@ import (
 	coapNet "github.com/plgd-dev/go-coap/v3/net"
 	"github.com/plgd-dev/go-coap/v3/net/responsewriter"
 	"github.com/plgd-dev/go-coap/v3/options"
+	"github.com/plgd-dev/go-coap/v3/options/config"
 	"github.com/plgd-dev/go-coap/v3/pkg/runner/periodic"
 	"github.com/plgd-dev/go-coap/v3/udp/client"
 	"github.com/stretchr/testify/assert"
@@ -753,9 +754,9 @@ func TestClientKeepAliveMonitor(t *testing.T) {
 		options.WithOnNewConn(func(cc *client.Conn) {
 			checkClose.Release(1)
 		}),
-		options.WithGoPool(func(f func()) error {
+		options.WithGoPool(func(processReqFunc config.ProcessRequestFunc[*client.Conn], req *pool.Message, cc *client.Conn, handler config.HandlerFunc[*client.Conn]) error {
 			time.Sleep(time.Millisecond * 500)
-			f()
+			processReqFunc(req, cc, handler)
 			return nil
 		}),
 		options.WithPeriodicRunner(periodic.New(ctx.Done(), time.Millisecond*10)),

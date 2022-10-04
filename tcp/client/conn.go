@@ -16,6 +16,7 @@ import (
 	limitparallelrequests "github.com/plgd-dev/go-coap/v3/net/client/limitParallelRequests"
 	"github.com/plgd-dev/go-coap/v3/net/observation"
 	"github.com/plgd-dev/go-coap/v3/net/responsewriter"
+	"github.com/plgd-dev/go-coap/v3/options/config"
 	coapErrors "github.com/plgd-dev/go-coap/v3/pkg/errors"
 )
 
@@ -27,7 +28,7 @@ type InactivityMonitor interface {
 type (
 	HandlerFunc                 = func(*responsewriter.ResponseWriter[*Conn], *pool.Message)
 	ErrorFunc                   = func(error)
-	GoPoolFunc                  = func(func()) error
+	GoPoolFunc                  = config.GoPoolFunc[*Conn]
 	EventFunc                   = func()
 	GetMIDFunc                  = func() int32
 	CreateInactivityMonitorFunc = func() InactivityMonitor

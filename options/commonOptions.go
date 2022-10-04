@@ -12,6 +12,7 @@ import (
 	"github.com/plgd-dev/go-coap/v3/net/blockwise"
 	"github.com/plgd-dev/go-coap/v3/net/client"
 	"github.com/plgd-dev/go-coap/v3/net/monitor/inactivity"
+	"github.com/plgd-dev/go-coap/v3/net/responsewriter"
 	"github.com/plgd-dev/go-coap/v3/options/config"
 	"github.com/plgd-dev/go-coap/v3/pkg/runner/periodic"
 	tcpClient "github.com/plgd-dev/go-coap/v3/tcp/client"
@@ -21,8 +22,6 @@ import (
 )
 
 type ErrorFunc = config.ErrorFunc
-
-type GoPoolFunc = config.GoPoolFunc
 
 type Handler interface {
 	tcpClient.HandlerFunc | udpClient.HandlerFunc
@@ -215,35 +214,69 @@ func WithErrors(errors ErrorFunc) ErrorsOpt {
 }
 
 // GoPoolOpt gopool option.
-type GoPoolOpt struct {
-	goPool GoPoolFunc
+type GoPoolOpt[C responsewriter.Client] struct {
+	goPool config.GoPoolFunc[C]
 }
 
-func (o GoPoolOpt) TCPServerApply(cfg *tcpServer.Config) {
-	cfg.GoPool = o.goPool
+func panicForInvalidGoPoolFunc(t, exp any) {
+	panic(fmt.Errorf("invalid GoPoolFunc type %T, expected %T", t, exp))
 }
 
-func (o GoPoolOpt) TCPClientApply(cfg *tcpClient.Config) {
-	cfg.GoPool = o.goPool
+func (o GoPoolOpt[C]) TCPServerApply(cfg *tcpServer.Config) {
+	switch v := any(o.goPool).(type) {
+	case config.GoPoolFunc[*tcpClient.Conn]:
+		cfg.GoPool = v
+	default:
+		var t config.GoPoolFunc[*tcpClient.Conn]
+		panicForInvalidGoPoolFunc(v, t)
+	}
 }
 
-func (o GoPoolOpt) UDPServerApply(cfg *udpServer.Config) {
-	cfg.GoPool = o.goPool
+func (o GoPoolOpt[C]) TCPClientApply(cfg *tcpClient.Config) {
+	switch v := any(o.goPool).(type) {
+	case config.GoPoolFunc[*tcpClient.Conn]:
+		cfg.GoPool = v
+	default:
+		var t config.GoPoolFunc[*tcpClient.Conn]
+		panicForInvalidGoPoolFunc(v, t)
+	}
 }
 
-func (o GoPoolOpt) DTLSServerApply(cfg *dtlsServer.Config) {
-	cfg.GoPool = o.goPool
+func (o GoPoolOpt[C]) UDPServerApply(cfg *udpServer.Config) {
+	switch v := any(o.goPool).(type) {
+	case config.GoPoolFunc[*udpClient.Conn]:
+		cfg.GoPool = v
+	default:
+		var t config.GoPoolFunc[*udpClient.Conn]
+		panicForInvalidGoPoolFunc(v, t)
+	}
 }
 
-func (o GoPoolOpt) UDPClientApply(cfg *udpClient.Config) {
-	cfg.GoPool = o.goPool
+func (o GoPoolOpt[C]) DTLSServerApply(cfg *dtlsServer.Config) {
+	switch v := any(o.goPool).(type) {
+	case config.GoPoolFunc[*udpClient.Conn]:
+		cfg.GoPool = v
+	default:
+		var t config.GoPoolFunc[*udpClient.Conn]
+		panicForInvalidGoPoolFunc(v, t)
+	}
+}
+
+func (o GoPoolOpt[C]) UDPClientApply(cfg *udpClient.Config) {
+	switch v := any(o.goPool).(type) {
+	case config.GoPoolFunc[*udpClient.Conn]:
+		cfg.GoPool = v
+	default:
+		var t config.GoPoolFunc[*udpClient.Conn]
+		panicForInvalidGoPoolFunc(v, t)
+	}
 }
 
 // WithGoPool sets function for managing spawning go routines
 // for handling incoming request's.
 // Eg: https://github.com/panjf2000/ants.
-func WithGoPool(goPool GoPoolFunc) GoPoolOpt {
-	return GoPoolOpt{goPool: goPool}
+func WithGoPool[C responsewriter.Client](goPool config.GoPoolFunc[C]) GoPoolOpt[C] {
+	return GoPoolOpt[C]{goPool: goPool}
 }
 
 type (

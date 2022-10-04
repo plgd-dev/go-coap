@@ -19,7 +19,7 @@ type HandlerFunc = func(*responsewriter.ResponseWriter[*udpClient.Conn], *pool.M
 
 type ErrorFunc = func(error)
 
-type GoPoolFunc = func(func()) error
+type GoPoolFunc = config.GoPoolFunc[*udpClient.Conn]
 
 // OnNewConnFunc is the callback for new connections.
 type OnNewConnFunc = func(cc *udpClient.Conn)
@@ -28,7 +28,7 @@ type GetMIDFunc = func() int32
 
 var DefaultConfig = func() Config {
 	opts := Config{
-		Common: config.DefaultCommon(),
+		Common: config.NewCommon[*udpClient.Conn](),
 		CreateInactivityMonitor: func() udpClient.InactivityMonitor {
 			timeout := time.Second * 16
 			onInactive := func(cc *udpClient.Conn) {
@@ -54,7 +54,7 @@ var DefaultConfig = func() Config {
 }()
 
 type Config struct {
-	config.Common
+	config.Common[*udpClient.Conn]
 	CreateInactivityMonitor        udpClient.CreateInactivityMonitorFunc
 	GetMID                         GetMIDFunc
 	Handler                        HandlerFunc

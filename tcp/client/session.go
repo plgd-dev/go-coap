@@ -16,6 +16,7 @@ import (
 	"github.com/plgd-dev/go-coap/v3/net/blockwise"
 	"github.com/plgd-dev/go-coap/v3/net/monitor/inactivity"
 	"github.com/plgd-dev/go-coap/v3/net/responsewriter"
+	"github.com/plgd-dev/go-coap/v3/options/config"
 	coapSync "github.com/plgd-dev/go-coap/v3/pkg/sync"
 	"github.com/plgd-dev/go-coap/v3/tcp/coder"
 	"go.uber.org/atomic"
@@ -227,7 +228,7 @@ func (s *Session) TokenHandler() *coapSync.Map[uint64, HandlerFunc] {
 	return s.tokenHandlerContainer
 }
 
-func (s *Session) processReq(req *pool.Message, cc *Conn, handler func(w *responsewriter.ResponseWriter[*Conn], r *pool.Message)) {
+func (s *Session) processReq(req *pool.Message, cc *Conn, handler config.HandlerFunc[*Conn]) {
 	origResp := s.messagePool.AcquireMessage(s.Context())
 	origResp.SetToken(req.Token())
 	w := responsewriter.New(origResp, cc, req.Options()...)
@@ -292,9 +293,7 @@ func (s *Session) processBuffer(buffer *bytes.Buffer, cc *Conn) error {
 		if s.handleSignals(req, cc) {
 			continue
 		}
-		err = s.goPool(func() {
-			s.processReq(req, cc, s.Handle)
-		})
+		err = s.goPool(s.processReq, req, cc, s.Handle)
 		if err != nil {
 			return fmt.Errorf("cannot spawn go routine: %w", err)
 		}
