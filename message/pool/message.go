@@ -116,6 +116,7 @@ func (r *Message) Reset() {
 	r.msg.Options = r.msg.Options[:0]
 	r.msg.MessageID = -1
 	r.msg.Type = message.Unset
+	r.msg.Payload = nil
 	r.valueBuffer = r.origValueBuffer
 	r.body = nil
 	r.isModified = false
