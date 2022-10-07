@@ -4,6 +4,7 @@ import (
 	"time"
 
 	"github.com/plgd-dev/go-coap/v3/pkg/sync"
+	"go.uber.org/atomic"
 )
 
 func DefaultOnExpire[D any](d D) {
@@ -11,16 +12,17 @@ func DefaultOnExpire[D any](d D) {
 }
 
 type Element[D any] struct {
-	validUntil time.Time
+	ValidUntil atomic.Time
 	data       D
 	onExpire   func(d D)
 }
 
 func (e *Element[D]) IsExpired(now time.Time) bool {
-	if e.validUntil.IsZero() {
+	value := e.ValidUntil.Load()
+	if value.IsZero() {
 		return false
 	}
-	return now.After(e.validUntil)
+	return now.After(value)
 }
 
 func (e *Element[D]) Data() D {
@@ -31,7 +33,9 @@ func NewElement[D any](data D, validUntil time.Time, onExpire func(d D)) *Elemen
 	if onExpire == nil {
 		onExpire = DefaultOnExpire[D]
 	}
-	return &Element[D]{data: data, validUntil: validUntil, onExpire: onExpire}
+	e := &Element[D]{data: data, onExpire: onExpire}
+	e.ValidUntil.Store(validUntil)
+	return e
 }
 
 type Cache[K comparable, D any] struct {
