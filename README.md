@@ -36,6 +36,10 @@ The go-coap provides servers and clients for DTLS, TCP-TLS, UDP, TCP in golang l
 [pion-dtls]: https://github.com/pion/dtls
 [coap-429]: https://datatracker.ietf.org/doc/html/rfc8516
 
+## Requirements
+
+* Go 1.18 or higher
+
 ## Samples
 
 ### Simple
