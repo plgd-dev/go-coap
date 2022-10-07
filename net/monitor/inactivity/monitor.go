@@ -56,9 +56,11 @@ func (m *Monitor[C]) CheckInactivity(now time.Time, cc C) {
 type NilMonitor[C Conn] struct{}
 
 func (m *NilMonitor[C]) CheckInactivity(now time.Time, cc C) {
+	// do nothing
 }
 
 func (m *NilMonitor[C]) Notify() {
+	// do nothing
 }
 
 func NewNilMonitor[C Conn]() *NilMonitor[C] {

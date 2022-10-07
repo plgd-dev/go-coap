@@ -64,6 +64,11 @@ type Session interface {
 
 type RequestsMap = coapSync.Map[uint64, *pool.Message]
 
+const (
+	errFmtWriteRequest  = "cannot write request: %w"
+	errFmtWriteResponse = "cannot write response: %w"
+)
+
 // Conn represents a virtual connection to a conceptual endpoint, to perform COAPs commands.
 type Conn struct {
 	// This field needs to be the first in the struct to ensure proper word alignment on 32-bit platforms.
@@ -207,7 +212,7 @@ func (cc *Conn) doInternal(req *pool.Message) (*pool.Message, error) {
 	}()
 	err := cc.writeMessage(req)
 	if err != nil {
-		return nil, fmt.Errorf("cannot write request: %w", err)
+		return nil, fmt.Errorf(errFmtWriteRequest, err)
 	}
 	select {
 	case <-req.Context().Done():
@@ -320,7 +325,7 @@ func (cc *Conn) writeMessage(req *pool.Message) error {
 	}
 
 	if err := cc.session.WriteMessage(req); err != nil {
-		return fmt.Errorf("cannot write request: %w", err)
+		return fmt.Errorf(errFmtWriteRequest, err)
 	}
 	if req.Type() != message.Confirmable {
 		// If the request is not confirmable, we do not need to wait for a response
@@ -329,7 +334,7 @@ func (cc *Conn) writeMessage(req *pool.Message) error {
 	}
 
 	if err := cc.transmitMessage(req, respChan); err != nil {
-		return fmt.Errorf("cannot write request: %w", err)
+		return fmt.Errorf(errFmtWriteRequest, err)
 	}
 	return nil
 }
@@ -374,7 +379,7 @@ func (cc *Conn) AsyncPing(receivedPong func()) (func(), error) {
 	}
 	if err := cc.session.WriteMessage(req); err != nil {
 		removeMidHandler()
-		return nil, fmt.Errorf("cannot write request: %w", err)
+		return nil, fmt.Errorf(errFmtWriteRequest, err)
 	}
 	return removeMidHandler, nil
 }
@@ -559,8 +564,6 @@ func (cc *Conn) processResponse(reqType message.Type, reqMessageID int32, w *res
 	return nil
 }
 
-const errFmtWrite = "cannot write response: %w"
-
 func (cc *Conn) handleReq(w *responsewriter.ResponseWriter[*Conn], req *pool.Message) {
 	defer cc.inactivityMonitor.Notify()
 	reqMid := req.MessageID()
@@ -572,7 +575,7 @@ func (cc *Conn) handleReq(w *responsewriter.ResponseWriter[*Conn], req *pool.Mes
 
 	if ok, err := cc.checkResponseCache(req, w); err != nil {
 		cc.closeConnection()
-		cc.errors(fmt.Errorf(errFmtWrite, err))
+		cc.errors(fmt.Errorf(errFmtWriteResponse, err))
 		return
 	} else if ok {
 		return
@@ -586,7 +589,7 @@ func (cc *Conn) handleReq(w *responsewriter.ResponseWriter[*Conn], req *pool.Mes
 	err := cc.processResponse(reqType, reqMessageID, w)
 	if err != nil {
 		cc.closeConnection()
-		cc.errors(fmt.Errorf(errFmtWrite, err))
+		cc.errors(fmt.Errorf(errFmtWriteResponse, err))
 	}
 }
 
@@ -621,7 +624,7 @@ func processReqWithHandle(req *pool.Message, cc *Conn, handler config.HandlerFun
 	errW := cc.writeMessage(w.Message())
 	if errW != nil {
 		cc.closeConnection()
-		cc.errors(fmt.Errorf(errFmtWrite, errW))
+		cc.errors(fmt.Errorf(errFmtWriteResponse, errW))
 	}
 }
 
@@ -684,7 +687,7 @@ func (cc *Conn) WriteMulticastMessage(req *pool.Message, address *net.UDPAddr, o
 
 	err := cc.session.WriteMulticastMessage(req, address, options...)
 	if err != nil {
-		return fmt.Errorf("cannot write request: %w", err)
+		return fmt.Errorf(errFmtWriteRequest, err)
 	}
 	return nil
 }
