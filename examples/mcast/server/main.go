@@ -5,21 +5,22 @@ import (
 	"log"
 	gonet "net"
 
-	"github.com/plgd-dev/go-coap/v2/message"
-	"github.com/plgd-dev/go-coap/v2/message/codes"
-	"github.com/plgd-dev/go-coap/v2/mux"
-	"github.com/plgd-dev/go-coap/v2/net"
-	"github.com/plgd-dev/go-coap/v2/udp"
+	"github.com/plgd-dev/go-coap/v3/message"
+	"github.com/plgd-dev/go-coap/v3/message/codes"
+	"github.com/plgd-dev/go-coap/v3/mux"
+	"github.com/plgd-dev/go-coap/v3/net"
+	"github.com/plgd-dev/go-coap/v3/options"
+	"github.com/plgd-dev/go-coap/v3/udp"
 )
 
 func handleMcast(w mux.ResponseWriter, r *mux.Message) {
-	path, err := r.Options.Path()
+	path, err := r.Options().Path()
 	if err != nil {
 		log.Printf("cannot get path: %v", err)
 		return
 	}
 
-	log.Printf("Got mcast message: path=%q: from %v", path, w.Client().RemoteAddr())
+	log.Printf("Got mcast message: path=%q: from %v", path, w.Conn().RemoteAddr())
 	w.SetResponse(codes.Content, message.TextPlain, bytes.NewReader([]byte("mcast response")))
 }
 
@@ -60,7 +61,7 @@ func main() {
 	}
 
 	defer l.Close()
-	s := udp.NewServer(udp.WithMux(m))
+	s := udp.NewServer(options.WithMux(m))
 	defer s.Stop()
 	log.Fatal(s.Serve(l))
 }

@@ -1,36 +1,112 @@
 package pool
 
 import (
+	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"io"
+	"math"
 
-	"github.com/plgd-dev/go-coap/v2/message"
-	"github.com/plgd-dev/go-coap/v2/message/codes"
+	"github.com/plgd-dev/go-coap/v3/message"
+	"github.com/plgd-dev/go-coap/v3/message/codes"
 	"go.uber.org/atomic"
 )
 
+type Encoder interface {
+	Size(m message.Message) (int, error)
+	Encode(m message.Message, buf []byte) (int, error)
+}
+
+type Decoder interface {
+	Decode(buf []byte, m *message.Message) (int, error)
+}
+
 type Message struct {
+	// Context context of request.
+	ctx             context.Context
 	msg             message.Message
 	hijacked        atomic.Bool
 	isModified      bool
 	valueBuffer     []byte
 	origValueBuffer []byte
-	payload         io.ReadSeeker
+	body            io.ReadSeeker
 	sequence        uint64
+
+	// local vars
+	bufferUnmarshal []byte
+	bufferMarshal   []byte
 }
 
 const valueBufferSize = 256
 
-func NewMessage() *Message {
+func NewMessage(ctx context.Context) *Message {
 	valueBuffer := make([]byte, valueBufferSize)
 	return &Message{
+		ctx: ctx,
 		msg: message.Message{
-			Options: make(message.Options, 0, 16),
+			Options:   make(message.Options, 0, 16),
+			MessageID: -1,
+			Type:      message.Unset,
 		},
 		valueBuffer:     valueBuffer,
 		origValueBuffer: valueBuffer,
+		bufferUnmarshal: make([]byte, 256),
+		bufferMarshal:   make([]byte, 256),
 	}
+}
+
+func (r *Message) Context() context.Context {
+	return r.ctx
+}
+
+func (r *Message) SetContext(ctx context.Context) {
+	r.ctx = ctx
+}
+
+func (r *Message) SetMessage(message message.Message) {
+	r.Reset()
+	r.msg = message
+	if len(message.Payload) > 0 {
+		r.body = bytes.NewReader(message.Payload)
+	}
+	r.isModified = true
+}
+
+// SetMessageID only 0 to 2^16-1 are valid.
+func (r *Message) SetMessageID(mid int32) {
+	r.msg.MessageID = mid
+	r.isModified = true
+}
+
+// UpsertMessageID set value only when origin value is invalid. Only 0 to 2^16-1 values are valid.
+func (r *Message) UpsertMessageID(mid int32) {
+	if r.msg.MessageID >= 0 && r.msg.MessageID < math.MaxUint16 {
+		return
+	}
+	r.SetMessageID(mid)
+}
+
+// MessageID returns 0 to 2^16-1 otherwise it contains invalid value.
+func (r *Message) MessageID() int32 {
+	return r.msg.MessageID
+}
+
+func (r *Message) SetType(typ message.Type) {
+	r.msg.Type = typ
+	r.isModified = true
+}
+
+// UpsertType set value only when origin value is invalid. Only 0 to 2^8-1 values are valid.
+func (r *Message) UpsertType(typ message.Type) {
+	if r.msg.Type >= 0 && r.msg.Type < math.MaxUint8 {
+		return
+	}
+	r.SetType(typ)
+}
+
+func (r *Message) Type() message.Type {
+	return r.msg.Type
 }
 
 // Reset clear message for next reuse
@@ -38,8 +114,18 @@ func (r *Message) Reset() {
 	r.msg.Token = nil
 	r.msg.Code = codes.Empty
 	r.msg.Options = r.msg.Options[:0]
+	r.msg.MessageID = -1
+	r.msg.Type = message.Unset
+	r.msg.Payload = nil
 	r.valueBuffer = r.origValueBuffer
-	r.payload = nil
+	r.body = nil
+	r.isModified = false
+	if cap(r.bufferMarshal) > 1024 {
+		r.bufferMarshal = make([]byte, 256)
+	}
+	if cap(r.bufferUnmarshal) > 1024 {
+		r.bufferUnmarshal = make([]byte, 256)
+	}
 	r.isModified = false
 }
 
@@ -300,22 +386,22 @@ func (r *Message) Accept() (message.MediaType, error) {
 }
 
 func (r *Message) BodySize() (int64, error) {
-	if r.payload == nil {
+	if r.body == nil {
 		return 0, nil
 	}
-	orig, err := r.payload.Seek(0, io.SeekCurrent)
+	orig, err := r.body.Seek(0, io.SeekCurrent)
 	if err != nil {
 		return 0, err
 	}
-	_, err = r.payload.Seek(0, io.SeekStart)
+	_, err = r.body.Seek(0, io.SeekStart)
 	if err != nil {
 		return 0, err
 	}
-	size, err := r.payload.Seek(0, io.SeekEnd)
+	size, err := r.body.Seek(0, io.SeekEnd)
 	if err != nil {
 		return 0, err
 	}
-	_, err = r.payload.Seek(orig, io.SeekStart)
+	_, err = r.body.Seek(orig, io.SeekStart)
 	if err != nil {
 		return 0, err
 	}
@@ -323,12 +409,12 @@ func (r *Message) BodySize() (int64, error) {
 }
 
 func (r *Message) SetBody(s io.ReadSeeker) {
-	r.payload = s
+	r.body = s
 	r.isModified = true
 }
 
 func (r *Message) Body() io.ReadSeeker {
-	return r.payload
+	return r.body
 }
 
 func (r *Message) SetSequence(seq uint64) {
@@ -386,4 +472,92 @@ func (r *Message) ReadBody() ([]byte, error) {
 		return nil, err
 	}
 	return payload[:n], nil
+}
+
+func (r *Message) toMessage() (message.Message, error) {
+	payload, err := r.ReadBody()
+	if err != nil {
+		return message.Message{}, err
+	}
+	m := r.msg
+	m.Payload = payload
+	return m, nil
+}
+
+func (r *Message) MarshalWithEncoder(encoder Encoder) ([]byte, error) {
+	msg, err := r.toMessage()
+	if err != nil {
+		return nil, err
+	}
+	size, err := encoder.Size(msg)
+	if err != nil {
+		return nil, err
+	}
+	if len(r.bufferMarshal) < size {
+		r.bufferMarshal = append(r.bufferMarshal, make([]byte, size-len(r.bufferMarshal))...)
+	}
+	n, err := encoder.Encode(msg, r.bufferMarshal)
+	if err != nil {
+		return nil, err
+	}
+	r.bufferMarshal = r.bufferMarshal[:n]
+	return r.bufferMarshal, nil
+}
+
+func (r *Message) UnmarshalWithDecoder(decoder Decoder, data []byte) (int, error) {
+	if len(r.bufferUnmarshal) < len(data) {
+		r.bufferUnmarshal = append(r.bufferUnmarshal, make([]byte, len(data)-len(r.bufferUnmarshal))...)
+	}
+	copy(r.bufferUnmarshal, data)
+	r.body = nil
+	r.bufferUnmarshal = r.bufferUnmarshal[:len(data)]
+	n, err := decoder.Decode(r.bufferUnmarshal, &r.msg)
+	if err != nil {
+		return n, err
+	}
+	if len(r.msg.Payload) > 0 {
+		r.body = bytes.NewReader(r.msg.Payload)
+	}
+	return n, err
+}
+
+func (r *Message) IsSeparateMessage() bool {
+	return r.Code() == codes.Empty && r.Token() == nil && r.Type() == message.Acknowledgement && len(r.Options()) == 0 && r.Body() == nil
+}
+
+func (r *Message) setupCommon(code codes.Code, path string, token message.Token, opts ...message.Option) error {
+	r.SetCode(code)
+	r.SetToken(token)
+	r.ResetOptionsTo(opts)
+	return r.SetPath(path)
+}
+
+func (r *Message) SetupGet(path string, token message.Token, opts ...message.Option) error {
+	return r.setupCommon(codes.GET, path, token, opts...)
+}
+
+func (r *Message) SetupPost(path string, token message.Token, contentFormat message.MediaType, payload io.ReadSeeker, opts ...message.Option) error {
+	if err := r.setupCommon(codes.POST, path, token, opts...); err != nil {
+		return err
+	}
+	if payload != nil {
+		r.SetContentFormat(contentFormat)
+		r.SetBody(payload)
+	}
+	return nil
+}
+
+func (r *Message) SetupPut(path string, token message.Token, contentFormat message.MediaType, payload io.ReadSeeker, opts ...message.Option) error {
+	if err := r.setupCommon(codes.PUT, path, token, opts...); err != nil {
+		return err
+	}
+	if payload != nil {
+		r.SetContentFormat(contentFormat)
+		r.SetBody(payload)
+	}
+	return nil
+}
+
+func (r *Message) SetupDelete(path string, token message.Token, opts ...message.Option) error {
+	return r.setupCommon(codes.DELETE, path, token, opts...)
 }

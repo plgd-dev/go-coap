@@ -1,12 +1,13 @@
 package pool_test
 
 import (
+	"context"
 	"strings"
 	"testing"
 
-	"github.com/plgd-dev/go-coap/v2/message"
-	"github.com/plgd-dev/go-coap/v2/message/pool"
-	"github.com/plgd-dev/go-coap/v2/test/net"
+	"github.com/plgd-dev/go-coap/v3/message"
+	"github.com/plgd-dev/go-coap/v3/message/pool"
+	"github.com/plgd-dev/go-coap/v3/test/net"
 	"github.com/stretchr/testify/require"
 )
 
@@ -53,7 +54,7 @@ func TestMessageSetPath(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			msg := pool.NewMessage()
+			msg := pool.NewMessage(context.Background())
 			err := msg.SetPath(tt.args.p)
 			require.NoError(t, err)
 			path, err := msg.Path()
@@ -76,7 +77,7 @@ func TestMessageSetPathOptionLength(t *testing.T) {
 	size := 4
 	// try strings of length [4, 16, .., 65536]
 	for i := 0; i < 8; i++ {
-		msg := pool.NewMessage()
+		msg := pool.NewMessage(context.Background())
 		inPath := net.RandomURLString(size)
 		wantErr := size-1 > maxURIPathLen // -1 for the starting '/'
 		err := msg.SetPath(inPath)
@@ -95,7 +96,7 @@ func TestMessageSetPathValidLength(t *testing.T) {
 	size := 4
 	// try strings of length [4, 16, .., 65536]
 	for i := 0; i < 8; i++ {
-		msg := pool.NewMessage()
+		msg := pool.NewMessage(context.Background())
 		inPath := net.RandomValidURLString(size, maxURIPathLen)
 		err := msg.SetPath(inPath)
 		require.NoError(t, err)
@@ -133,7 +134,7 @@ func TestMessageMustSetPath(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			msg := pool.NewMessage()
+			msg := pool.NewMessage(context.Background())
 			msg.MustSetPath(tt.args.p)
 			path, err := msg.Path()
 			require.NoError(t, err)
@@ -176,7 +177,7 @@ func TestMessageAddQuery(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			msg := pool.NewMessage()
+			msg := pool.NewMessage(context.Background())
 			for _, q := range tt.args.queries {
 				msg.AddQuery(q)
 			}
@@ -192,7 +193,7 @@ func TestMessageAddQuery(t *testing.T) {
 }
 
 func TestMessageAddETags(t *testing.T) {
-	msg := pool.NewMessage()
+	msg := pool.NewMessage(context.Background())
 	err := msg.AddETag([]byte{})
 	require.Error(t, err)
 
@@ -252,7 +253,7 @@ func TestMessageSetETag(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			msg := pool.NewMessage()
+			msg := pool.NewMessage(context.Background())
 			err := msg.SetETag(tt.args.value)
 			if tt.wantErr {
 				require.Error(t, err)
@@ -266,7 +267,7 @@ func TestMessageSetETag(t *testing.T) {
 }
 
 func TestMessageETag(t *testing.T) {
-	msg := pool.NewMessage()
+	msg := pool.NewMessage(context.Background())
 	require.False(t, msg.HasOption(message.ETag))
 	_, err := msg.ETag()
 	require.Error(t, err)

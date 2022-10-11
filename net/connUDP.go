@@ -136,14 +136,14 @@ func IsIPv6(addr net.IP) bool {
 	return false
 }
 
-var defaultUDPConnOptions = udpConnOptions{
-	errors: func(err error) {
+var DefaultUDPConnConfig = UDPConnConfig{
+	Errors: func(err error) {
 		// don't log any error from fails for multicast requests
 	},
 }
 
-type udpConnOptions struct {
-	errors func(err error)
+type UDPConnConfig struct {
+	Errors func(err error)
 }
 
 func NewListenUDP(network, addr string, opts ...UDPOption) (*UDPConn, error) {
@@ -160,13 +160,21 @@ func NewListenUDP(network, addr string, opts ...UDPOption) (*UDPConn, error) {
 
 // NewUDPConn creates connection over net.UDPConn.
 func NewUDPConn(network string, c *net.UDPConn, opts ...UDPOption) *UDPConn {
-	cfg := defaultUDPConnOptions
+	cfg := DefaultUDPConnConfig
 	for _, o := range opts {
-		o.applyUDP(&cfg)
+		o.ApplyUDP(&cfg)
 	}
 
+	laddr := c.LocalAddr()
+	if laddr == nil {
+		panic(fmt.Errorf("invalid UDP connection"))
+	}
+	addr, ok := laddr.(*net.UDPAddr)
+	if !ok {
+		panic(fmt.Errorf("invalid address type(%T), UDP address expected", laddr))
+	}
 	var pc packetConn
-	if IsIPv6(c.LocalAddr().(*net.UDPAddr).IP) {
+	if IsIPv6(addr.IP) {
 		pc = newPacketConnIPv6(ipv6.NewPacketConn(c))
 	} else {
 		pc = newPacketConnIPv4(ipv4.NewPacketConn(c))
@@ -176,7 +184,7 @@ func NewUDPConn(network string, c *net.UDPConn, opts ...UDPOption) *UDPConn {
 		network:    network,
 		connection: c,
 		packetConn: pc,
-		errors:     cfg.errors,
+		errors:     cfg.Errors,
 	}
 }
 
@@ -465,4 +473,9 @@ func (c *UDPConn) JoinGroup(ifi *net.Interface, group net.Addr) error {
 // regardless of whether the group is any-source group or source-specific group.
 func (c *UDPConn) LeaveGroup(ifi *net.Interface, group net.Addr) error {
 	return c.packetConn.LeaveGroup(ifi, group)
+}
+
+// NetConn returns the underlying connection that is wrapped by c. The Conn returned is shared by all invocations of NetConn, so do not modify it.
+func (c *UDPConn) NetConn() net.Conn {
+	return c.connection
 }

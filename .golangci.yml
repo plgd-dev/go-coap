@@ -22,14 +22,14 @@ linters:
     # - exhaustive       # check exhaustiveness of enum switch statements
     - exportloopref    # checks for pointers to enclosing loop variables
     # - forbidigo        # Forbids identifiers
-    # - forcetypeassert  # finds forced type assertions
+    - forcetypeassert  # finds forced type assertions
     - gci              # Gci control golang package import order and make it always deterministic.
     # - gochecknoglobals # Checks that no globals are present in Go code
     # - gochecknoinits   # Checks that no init functions are present in Go code
     # - gocognit         # Computes and checks the cognitive complexity of functions
     - goconst          # Finds repeated strings that could be replaced by a constant
     - gocritic         # The most opinionated Go source code linter
-    # - gocyclo          # Computes and checks the cyclomatic complexity of functions
+    - gocyclo          # Computes and checks the cyclomatic complexity of functions
     # - godox            # Tool for detection of FIXME, TODO and other comment keywords
     # - goerr113         # Golang linter to check the errors handling expressions
     - gofmt            # Gofmt checks whether code was gofmt-ed. By default this tool runs with -s option to check for code simplification
@@ -98,11 +98,13 @@ issues:
     - path: _test\.go
       linters:
         - dupl
+        - forcetypeassert
         - gosec
 
     - path: ^test/.*\.go
       linters:
         - dupl
+        - forcetypeassert
         - gosec
 
     - path: example_test\.go
@@ -110,10 +112,15 @@ issues:
       linters:
         - gocritic
 
-    - path: udp/message/getmid.go
+    - path: message/getmid.go
       text: "G404: Use of weak random number generator \\(math/rand instead of crypto/rand\\)"
       linters:
-        - gosec  
+        - gosec
+
+    - path: example_test\.go
+      text: "exitAfterDefer"
+      linters:
+        - gocritic
 
 #   # Fix found issues (if it's supported by the linter).
 #   fix: true

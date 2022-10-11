@@ -8,11 +8,11 @@ import (
 	"time"
 
 	piondtls "github.com/pion/dtls/v2"
-	"github.com/plgd-dev/go-coap/v2/dtls"
-	"github.com/plgd-dev/go-coap/v2/net"
+	"github.com/plgd-dev/go-coap/v3/dtls"
+	"github.com/plgd-dev/go-coap/v3/net"
 )
 
-func ExampleClientConn_Get() {
+func ExampleConn_Get() {
 	dtlsCfg := &piondtls.Config{
 		PSK: func(hint []byte) ([]byte, error) {
 			fmt.Printf("Hint: %s \n", hint)
@@ -39,7 +39,7 @@ func ExampleClientConn_Get() {
 	fmt.Printf("%v", data)
 }
 
-func ExampleServer_Serve() {
+func ExampleServer() {
 	dtlsCfg := &piondtls.Config{
 		PSK: func(hint []byte) ([]byte, error) {
 			fmt.Printf("Hint: %s \n", hint)

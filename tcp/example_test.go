@@ -7,12 +7,12 @@ import (
 	"log"
 	"time"
 
-	"github.com/plgd-dev/go-coap/v2/net"
-	"github.com/plgd-dev/go-coap/v2/tcp"
+	"github.com/plgd-dev/go-coap/v3/net"
+	"github.com/plgd-dev/go-coap/v3/tcp"
 )
 
-func ExampleClientConn_Get() {
-	conn, err := tcp.Dial("pluggedin.cloud:5683")
+func ExampleConn_Get() {
+	conn, err := tcp.Dial("try.plgd.cloud:5683")
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -30,7 +30,7 @@ func ExampleClientConn_Get() {
 	fmt.Printf("%v", data)
 }
 
-func ExampleServer_Serve() {
+func ExampleServer() {
 	l, err := net.NewTCPListener("tcp", "0.0.0.0:5683")
 	if err != nil {
 		log.Fatal(err)

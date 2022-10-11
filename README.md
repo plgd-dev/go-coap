@@ -8,7 +8,7 @@
 [![contributors](https://img.shields.io/github/contributors/plgd-dev/go-coap)](https://github.com/plgd-dev/go-coap/graphs/contributors)
 [![GitHub stars](https://img.shields.io/github/stars/plgd-dev/go-coap)](https://github.com/plgd-dev/go-coap/stargazers)
 [![GitHub license](https://img.shields.io/github/license/plgd-dev/go-coap)](https://github.com/plgd-dev/go-coap/blob/master/LICENSE)
-[![GoDoc](https://pkg.go.dev/badge/github.com/plgd-dev/go-coap/v2?utm_source=godoc)](https://pkg.go.dev/github.com/plgd-dev/go-coap/v2?utm_source=godoc)
+[![GoDoc](https://pkg.go.dev/badge/github.com/plgd-dev/go-coap/v3?utm_source=godoc)](https://pkg.go.dev/github.com/plgd-dev/go-coap/v3?utm_source=godoc)
 <!-- [![Go Report](https://goreportcard.com/badge/github.com/plgd-dev/go-coap)](https://goreportcard.com/report/github.com/plgd-dev/go-coap) -->
 
 The Constrained Application Protocol (CoAP) is a specialized web transfer protocol for use with constrained nodes and constrained networks in the Internet of Things.
@@ -36,6 +36,10 @@ The go-coap provides servers and clients for DTLS, TCP-TLS, UDP, TCP in golang l
 [pion-dtls]: https://github.com/pion/dtls
 [coap-429]: https://datatracker.ietf.org/doc/html/rfc8516
 
+## Requirements
+
+* Go 1.18 or higher
+
 ## Samples
 
 ### Simple
@@ -48,7 +52,7 @@ The go-coap provides servers and clients for DTLS, TCP-TLS, UDP, TCP in golang l
     // Middleware function, which will be called for each request.
     func loggingMiddleware(next mux.Handler) mux.Handler {
         return mux.HandlerFunc(func(w mux.ResponseWriter, r *mux.Message) {
-            log.Printf("ClientAddress %v, %v\n", w.Client().RemoteAddr(), r.String())
+            log.Printf("ClientAddress %v, %v\n", w.Conn().RemoteAddr(), r.String())
             next.ServeCOAP(w, r)
         })
     }

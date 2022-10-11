@@ -5,8 +5,8 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/plgd-dev/go-coap/v2/message"
-	"github.com/plgd-dev/go-coap/v2/message/codes"
+	"github.com/plgd-dev/go-coap/v3/message/codes"
+	"github.com/plgd-dev/go-coap/v3/message/pool"
 )
 
 const (
@@ -19,7 +19,7 @@ const (
 // Status holds error of coap
 type Status struct { //nolint:errname
 	err  error
-	msg  *message.Message
+	msg  *pool.Message
 	code codes.Code
 }
 
@@ -44,13 +44,13 @@ func (se Status) Error() string {
 // Code returns the status code contained in se.
 func (se Status) Code() codes.Code {
 	if se.msg != nil {
-		return se.msg.Code
+		return se.msg.Code()
 	}
 	return se.code
 }
 
 // Message returns a coap message.
-func (se Status) Message() *message.Message {
+func (se Status) Message() *pool.Message {
 	return se.msg
 }
 
@@ -60,7 +60,7 @@ func (se Status) COAPError() Status {
 }
 
 // Error returns an error representing c and msg.  If c is OK, returns nil.
-func Error(msg *message.Message, err error) Status {
+func Error(msg *pool.Message, err error) Status {
 	return Status{
 		msg: msg,
 		err: err,
@@ -68,7 +68,7 @@ func Error(msg *message.Message, err error) Status {
 }
 
 // Errorf returns Error(c, fmt.Sprintf(format, a...)).
-func Errorf(msg *message.Message, format string, a ...interface{}) Status {
+func Errorf(msg *pool.Message, format string, a ...interface{}) Status {
 	return Error(msg, fmt.Errorf(format, a...))
 }
 

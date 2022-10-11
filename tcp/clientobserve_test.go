@@ -3,18 +3,22 @@ package tcp
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
 
-	"github.com/plgd-dev/go-coap/v2/message"
-	"github.com/plgd-dev/go-coap/v2/message/codes"
-	coapNet "github.com/plgd-dev/go-coap/v2/net"
-	"github.com/plgd-dev/go-coap/v2/tcp/message/pool"
+	"github.com/plgd-dev/go-coap/v3/message"
+	"github.com/plgd-dev/go-coap/v3/message/codes"
+	"github.com/plgd-dev/go-coap/v3/message/pool"
+	coapNet "github.com/plgd-dev/go-coap/v3/net"
+	"github.com/plgd-dev/go-coap/v3/net/responsewriter"
+	"github.com/plgd-dev/go-coap/v3/options"
+	"github.com/plgd-dev/go-coap/v3/tcp/client"
 	"github.com/stretchr/testify/require"
 )
 
-func TestClientConnObserve(t *testing.T) {
+func TestConnObserve(t *testing.T) {
 	type args struct {
 		path      string
 		payload   []byte
@@ -53,7 +57,7 @@ func TestClientConnObserve(t *testing.T) {
 			var wg sync.WaitGroup
 			defer wg.Wait()
 
-			s := NewServer(WithHandlerFunc(func(w *ResponseWriter, r *pool.Message) {
+			s := NewServer(options.WithHandlerFunc(func(w *responsewriter.ResponseWriter[*client.Conn], r *pool.Message) {
 				switch r.Code() {
 				case codes.PUT, codes.POST, codes.DELETE:
 					errS := w.SetResponse(codes.NotFound, message.TextPlain, nil)
@@ -69,11 +73,11 @@ func TestClientConnObserve(t *testing.T) {
 					return
 				}
 				require.NoError(t, errO)
-				require.NotNil(t, w.ClientConn())
+				require.NotNil(t, w.Conn())
 				token := r.Token()
 				switch obs {
 				case 0:
-					cc := w.ClientConn()
+					cc := w.Conn()
 					for i := uint32(0); i < tt.args.numEvents; i++ {
 						tmpPay := make([]byte, len(tt.args.payload))
 						copy(tmpPay, tt.args.payload)
@@ -97,6 +101,9 @@ func TestClientConnObserve(t *testing.T) {
 						require.NoError(t, errE)
 						req.SetToken(token)
 						errW := cc.WriteMessage(req)
+						if errW != nil {
+							fmt.Printf("errW %v\n", errW)
+						}
 						require.NoError(t, errW)
 					}
 				case 1:
@@ -143,7 +150,7 @@ func TestClientConnObserve(t *testing.T) {
 	}
 }
 
-func TestClientConnObserveNotSupported(t *testing.T) {
+func TestConnObserveNotSupported(t *testing.T) {
 	type args struct {
 		path    string
 		payload []byte
@@ -179,7 +186,7 @@ func TestClientConnObserveNotSupported(t *testing.T) {
 			var wg sync.WaitGroup
 			defer wg.Wait()
 
-			s := NewServer(WithHandlerFunc(func(w *ResponseWriter, r *pool.Message) {
+			s := NewServer(options.WithHandlerFunc(func(w *responsewriter.ResponseWriter[*client.Conn], r *pool.Message) {
 				switch r.Code() {
 				case codes.PUT, codes.POST, codes.DELETE:
 					errS := w.SetResponse(codes.NotFound, message.TextPlain, nil)
@@ -195,11 +202,11 @@ func TestClientConnObserveNotSupported(t *testing.T) {
 					return
 				}
 				require.NoError(t, errO)
-				require.NotNil(t, w.ClientConn())
+				require.NotNil(t, w.Conn())
 				token := r.Token()
 				switch obs {
 				case 0:
-					cc := w.ClientConn()
+					cc := w.Conn()
 					tmpPay := make([]byte, len(tt.args.payload))
 					copy(tmpPay, tt.args.payload)
 					p := bytes.NewReader(tt.args.payload)
@@ -261,7 +268,7 @@ func TestClientConnObserveNotSupported(t *testing.T) {
 }
 
 /*
-func TestClientConnObserveIotivityLite(t *testing.T) {
+func TestConnObserveIotivityLite(t *testing.T) {
 	cc, err := Dial("10.112.112.10:60956")
 	require.NoError(t, err)
 	defer func() {
@@ -271,7 +278,7 @@ func TestClientConnObserveIotivityLite(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*2)
 	defer cancel()
-	obs, err := cc.Observe(ctx, "/light/2", func(cc *ClientConn, req *pool.Message) {
+	obs, err := cc.Observe(ctx, "/light/2", func(cc *Conn, req *pool.Message) {
 		fmt.Printf("observe %+v\n", req)
 	})
 	require.NoError(t, err)

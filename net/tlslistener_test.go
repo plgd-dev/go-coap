@@ -100,7 +100,7 @@ func TestTLSListenerAcceptWithContext(t *testing.T) {
 			require.NoError(t, err)
 
 			c, err := tls.DialWithDialer(&net.Dialer{
-				Timeout: time.Millisecond * 200,
+				Timeout: time.Millisecond * 400,
 			}, "tcp", listener.Addr().String(), &tls.Config{
 				InsecureSkipVerify: true,
 				Certificates:       []tls.Certificate{cert},
@@ -110,6 +110,7 @@ func TestTLSListenerAcceptWithContext(t *testing.T) {
 			}
 			_, err = c.Write([]byte("hello"))
 			assert.NoError(t, err)
+			time.Sleep(time.Millisecond * 200)
 			err = c.Close()
 			assert.NoError(t, err)
 		}

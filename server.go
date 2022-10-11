@@ -6,11 +6,12 @@ import (
 	"fmt"
 
 	piondtls "github.com/pion/dtls/v2"
-	"github.com/plgd-dev/go-coap/v2/dtls"
-	"github.com/plgd-dev/go-coap/v2/mux"
-	"github.com/plgd-dev/go-coap/v2/net"
-	"github.com/plgd-dev/go-coap/v2/tcp"
-	"github.com/plgd-dev/go-coap/v2/udp"
+	"github.com/plgd-dev/go-coap/v3/dtls"
+	"github.com/plgd-dev/go-coap/v3/mux"
+	"github.com/plgd-dev/go-coap/v3/net"
+	"github.com/plgd-dev/go-coap/v3/options"
+	"github.com/plgd-dev/go-coap/v3/tcp"
+	"github.com/plgd-dev/go-coap/v3/udp"
 )
 
 // ListenAndServe Starts a server on address and network specified Invoke handler
@@ -27,7 +28,7 @@ func ListenAndServe(network string, addr string, handler mux.Handler) (err error
 				err = errC
 			}
 		}()
-		s := udp.NewServer(udp.WithMux(handler))
+		s := udp.NewServer(options.WithMux(handler))
 		return s.Serve(l)
 	case "tcp", "tcp4", "tcp6":
 		l, err := net.NewTCPListener(network, addr)
@@ -39,7 +40,7 @@ func ListenAndServe(network string, addr string, handler mux.Handler) (err error
 				err = errC
 			}
 		}()
-		s := tcp.NewServer(tcp.WithMux(handler))
+		s := tcp.NewServer(options.WithMux(handler))
 		return s.Serve(l)
 	default:
 		return fmt.Errorf("invalid network (%v)", network)
@@ -58,7 +59,7 @@ func ListenAndServeTCPTLS(network, addr string, config *tls.Config, handler mux.
 			err = errC
 		}
 	}()
-	s := tcp.NewServer(tcp.WithMux(handler))
+	s := tcp.NewServer(options.WithMux(handler))
 	return s.Serve(l)
 }
 
@@ -74,6 +75,6 @@ func ListenAndServeDTLS(network string, addr string, config *piondtls.Config, ha
 			err = errC
 		}
 	}()
-	s := dtls.NewServer(dtls.WithMux(handler))
+	s := dtls.NewServer(options.WithMux(handler))
 	return s.Serve(l)
 }

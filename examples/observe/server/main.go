@@ -2,15 +2,14 @@ package main
 
 import (
 	"bytes"
-	"errors"
 	"fmt"
 	"log"
 	"time"
 
-	coap "github.com/plgd-dev/go-coap/v2"
-	"github.com/plgd-dev/go-coap/v2/message"
-	"github.com/plgd-dev/go-coap/v2/message/codes"
-	"github.com/plgd-dev/go-coap/v2/mux"
+	coap "github.com/plgd-dev/go-coap/v3"
+	"github.com/plgd-dev/go-coap/v3/message"
+	"github.com/plgd-dev/go-coap/v3/message/codes"
+	"github.com/plgd-dev/go-coap/v3/mux"
 )
 
 func getPath(opts message.Options) string {
@@ -22,39 +21,20 @@ func getPath(opts message.Options) string {
 	return path
 }
 
-func sendResponse(cc mux.Client, token []byte, subded time.Time, obs int64) error {
-	m := message.Message{
-		Code:    codes.Content,
-		Token:   token,
-		Context: cc.Context(),
-		Body:    bytes.NewReader([]byte(fmt.Sprintf("Been running for %v", time.Since(subded)))),
-	}
-	var opts message.Options
-	var buf []byte
-	opts, n, err := opts.SetContentFormat(buf, message.TextPlain)
-	if errors.Is(err, message.ErrTooSmall) {
-		buf = append(buf, make([]byte, n)...)
-		opts, _, err = opts.SetContentFormat(buf, message.TextPlain)
-	}
-	if err != nil {
-		return fmt.Errorf("cannot set content format to response: %w", err)
-	}
-	buf = buf[n:]
+func sendResponse(cc mux.Conn, token []byte, subded time.Time, obs int64) error {
+	m := cc.AcquireMessage(cc.Context())
+	defer cc.ReleaseMessage(m)
+	m.SetCode(codes.Content)
+	m.SetToken(token)
+	m.SetBody(bytes.NewReader([]byte(fmt.Sprintf("Been running for %v", time.Since(subded)))))
+	m.SetContentFormat(message.TextPlain)
 	if obs >= 0 {
-		opts, n, err = opts.SetObserve(buf, uint32(obs))
-		if errors.Is(err, message.ErrTooSmall) {
-			buf = append(buf, make([]byte, n)...)
-			opts, _, err = opts.SetObserve(buf, uint32(obs))
-		}
-		if err != nil {
-			return fmt.Errorf("cannot set options to response: %w", err)
-		}
+		m.SetObserve(uint32(obs))
 	}
-	m.Options = opts
-	return cc.WriteMessage(&m)
+	return cc.WriteMessage(m)
 }
 
-func periodicTransmitter(cc mux.Client, token []byte) {
+func periodicTransmitter(cc mux.Conn, token []byte) {
 	subded := time.Now()
 
 	for obs := int64(2); ; obs++ {
@@ -70,14 +50,13 @@ func periodicTransmitter(cc mux.Client, token []byte) {
 func main() {
 	log.Fatal(coap.ListenAndServe("udp", ":5688",
 		mux.HandlerFunc(func(w mux.ResponseWriter, r *mux.Message) {
-			log.Printf("Got message path=%v: %+v from %v", getPath(r.Options), r, w.Client().RemoteAddr())
-			obs, err := r.Options.Observe()
+			log.Printf("Got message path=%v: %+v from %v", getPath(r.Options()), r, w.Conn().RemoteAddr())
+			obs, err := r.Options().Observe()
 			switch {
-			case r.Code == codes.GET && err == nil && obs == 0:
-				go periodicTransmitter(w.Client(), r.Token)
-			case r.Code == codes.GET:
-				subded := time.Now()
-				err := sendResponse(w.Client(), r.Token, subded, -1)
+			case r.Code() == codes.GET && err == nil && obs == 0:
+				go periodicTransmitter(w.Conn(), r.Token())
+			case r.Code() == codes.GET:
+				err := sendResponse(w.Conn(), r.Token(), time.Now(), -1)
 				if err != nil {
 					log.Printf("Error on transmitter: %v", err)
 				}

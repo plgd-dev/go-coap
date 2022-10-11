@@ -1,129 +1,110 @@
 package tcp
 
 import (
-	"context"
-	"io"
+	"crypto/tls"
+	"fmt"
 	"net"
+	"time"
 
-	"github.com/plgd-dev/go-coap/v2/message"
-	"github.com/plgd-dev/go-coap/v2/mux"
-	"github.com/plgd-dev/go-coap/v2/tcp/message/pool"
+	"github.com/plgd-dev/go-coap/v3/message"
+	"github.com/plgd-dev/go-coap/v3/message/pool"
+	coapNet "github.com/plgd-dev/go-coap/v3/net"
+	"github.com/plgd-dev/go-coap/v3/net/blockwise"
+	"github.com/plgd-dev/go-coap/v3/net/monitor/inactivity"
+	"github.com/plgd-dev/go-coap/v3/options"
+	client "github.com/plgd-dev/go-coap/v3/tcp/client"
 )
 
-type ClientTCP struct {
-	cc *ClientConn
+// A Option sets options such as credentials, keepalive parameters, etc.
+type Option interface {
+	TCPClientApply(cfg *client.Config)
 }
 
-func NewClientTCP(cc *ClientConn) *ClientTCP {
-	return &ClientTCP{
-		cc: cc,
+// Dial creates a client connection to the given target.
+func Dial(target string, opts ...Option) (*client.Conn, error) {
+	cfg := client.DefaultConfig
+	for _, o := range opts {
+		o.TCPClientApply(&cfg)
 	}
-}
 
-func (c *ClientTCP) Ping(ctx context.Context) error {
-	return c.cc.Ping(ctx)
-}
-
-func (c *ClientTCP) Delete(ctx context.Context, path string, opts ...message.Option) (*message.Message, error) {
-	resp, err := c.cc.Delete(ctx, path, opts...)
+	var conn net.Conn
+	var err error
+	if cfg.TLSCfg != nil {
+		conn, err = tls.DialWithDialer(cfg.Dialer, cfg.Net, target, cfg.TLSCfg)
+	} else {
+		conn, err = cfg.Dialer.DialContext(cfg.Ctx, cfg.Net, target)
+	}
 	if err != nil {
 		return nil, err
 	}
-	defer c.cc.session.messagePool.ReleaseMessage(resp)
-	return pool.ConvertTo(resp)
+	opts = append(opts, options.WithCloseSocket())
+	return Client(conn, opts...), nil
 }
 
-func (c *ClientTCP) Put(ctx context.Context, path string, contentFormat message.MediaType, payload io.ReadSeeker, opts ...message.Option) (*message.Message, error) {
-	resp, err := c.cc.Put(ctx, path, contentFormat, payload, opts...)
-	if err != nil {
-		return nil, err
+// Client creates client over tcp/tcp-tls connection.
+func Client(conn net.Conn, opts ...Option) *client.Conn {
+	cfg := client.DefaultConfig
+	for _, o := range opts {
+		o.TCPClientApply(&cfg)
 	}
-	defer c.cc.session.messagePool.ReleaseMessage(resp)
-	return pool.ConvertTo(resp)
-}
-
-func (c *ClientTCP) Post(ctx context.Context, path string, contentFormat message.MediaType, payload io.ReadSeeker, opts ...message.Option) (*message.Message, error) {
-	resp, err := c.cc.Post(ctx, path, contentFormat, payload, opts...)
-	if err != nil {
-		return nil, err
+	if cfg.Errors == nil {
+		cfg.Errors = func(error) {
+			// default no-op
+		}
 	}
-	defer c.cc.session.messagePool.ReleaseMessage(resp)
-	return pool.ConvertTo(resp)
-}
-
-func (c *ClientTCP) Get(ctx context.Context, path string, opts ...message.Option) (*message.Message, error) {
-	resp, err := c.cc.Get(ctx, path, opts...)
-	if err != nil {
-		return nil, err
+	if cfg.CreateInactivityMonitor == nil {
+		cfg.CreateInactivityMonitor = func() client.InactivityMonitor {
+			return inactivity.NewNilMonitor[*client.Conn]()
+		}
 	}
-	defer c.cc.session.messagePool.ReleaseMessage(resp)
-	return pool.ConvertTo(resp)
-}
-
-func (c *ClientTCP) Close() error {
-	return c.cc.Close()
-}
-
-func (c *ClientTCP) RemoteAddr() net.Addr {
-	return c.cc.RemoteAddr()
-}
-
-func (c *ClientTCP) Context() context.Context {
-	return c.cc.Context()
-}
-
-func (c *ClientTCP) SetContextValue(key interface{}, val interface{}) {
-	c.cc.Session().SetContextValue(key, val)
-}
-
-func (c *ClientTCP) WriteMessage(req *message.Message) error {
-	r, err := c.cc.session.messagePool.ConvertFrom(req)
-	if err != nil {
-		return err
+	if cfg.MessagePool == nil {
+		cfg.MessagePool = pool.New(0, 0)
 	}
-	defer c.cc.session.messagePool.ReleaseMessage(r)
-	return c.cc.WriteMessage(r)
-}
-
-func (c *ClientTCP) Do(req *message.Message) (*message.Message, error) {
-	r, err := c.cc.session.messagePool.ConvertFrom(req)
-	if err != nil {
-		return nil, err
-	}
-	defer c.cc.session.messagePool.ReleaseMessage(r)
-	resp, err := c.cc.Do(r)
-	if err != nil {
-		return nil, err
-	}
-	defer c.cc.session.messagePool.ReleaseMessage(resp)
-	return pool.ConvertTo(resp)
-}
-
-func createClientConnObserveHandler(observeFunc func(notification *message.Message)) func(n *pool.Message) {
-	return func(n *pool.Message) {
-		muxn, err := pool.ConvertTo(n)
-		if err != nil {
+	errorsFunc := cfg.Errors
+	cfg.Errors = func(err error) {
+		if coapNet.IsCancelOrCloseError(err) {
+			// this error was produced by cancellation context or closing connection.
 			return
 		}
-		observeFunc(muxn)
+		errorsFunc(fmt.Errorf("tcp: %w", err))
 	}
-}
 
-func (c *ClientTCP) Observe(ctx context.Context, path string, observeFunc func(notification *message.Message), opts ...message.Option) (mux.Observation, error) {
-	return c.cc.Observe(ctx, path, createClientConnObserveHandler(observeFunc), opts...)
-}
+	createBlockWise := func(cc *client.Conn) *blockwise.BlockWise[*client.Conn] {
+		return nil
+	}
+	if cfg.BlockwiseEnable {
+		createBlockWise = func(cc *client.Conn) *blockwise.BlockWise[*client.Conn] {
+			v := cc
+			return blockwise.New(
+				v,
+				cfg.BlockwiseTransferTimeout,
+				cfg.Errors,
+				func(token message.Token) (*pool.Message, bool) {
+					return v.GetObservationRequest(token)
+				},
+			)
+		}
+	}
 
-// Sequence acquires sequence number.
-func (c *ClientTCP) Sequence() uint64 {
-	return c.cc.Sequence()
-}
+	l := coapNet.NewConn(conn)
+	monitor := cfg.CreateInactivityMonitor()
+	cc := client.NewConn(l,
+		createBlockWise,
+		monitor,
+		&cfg,
+	)
 
-// ClientConn get's underlaying client connection.
-func (c *ClientTCP) ClientConn() interface{} {
-	return c.cc
-}
+	cfg.PeriodicRunner(func(now time.Time) bool {
+		cc.CheckExpirations(now)
+		return cc.Context().Err() == nil
+	})
 
-// Done signalizes that connection is not more processed.
-func (c *ClientTCP) Done() <-chan struct{} {
-	return c.cc.Done()
+	go func() {
+		err := cc.Run()
+		if err != nil {
+			cfg.Errors(fmt.Errorf("%v: %w", cc.RemoteAddr(), err))
+		}
+	}()
+
+	return cc
 }

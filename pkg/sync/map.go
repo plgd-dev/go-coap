@@ -66,8 +66,8 @@ func (m *Map[K, V]) Delete(key K) {
 	delete(m.data, key)
 }
 
-// PullOut loads and deletes the value for the key.
-func (m *Map[K, V]) PullOut(key K) (V, bool) {
+// LoadAndDelete loads and deletes the value for the key.
+func (m *Map[K, V]) LoadAndDelete(key K) (V, bool) {
 	m.mutex.Lock()
 	defer m.mutex.Unlock()
 	value, ok := m.data[key]
@@ -75,8 +75,8 @@ func (m *Map[K, V]) PullOut(key K) (V, bool) {
 	return value, ok
 }
 
-// PullOutAll extracts internal map data and replace it with empty map.
-func (m *Map[K, V]) PullOutAll() map[K]V {
+// LoadAndDelete loads and deletes the value for the key.
+func (m *Map[K, V]) LoadAndDeleteAll() map[K]V {
 	m.mutex.Lock()
 	data := m.data
 	m.data = make(map[K]V)
@@ -189,27 +189,27 @@ func (m *Map[K, V]) ReplaceWithFunc(key K, onReplaceFunc func(oldValue V, oldLoa
 
 // DeleteWithFunc removes the key from the map and if a value existed invokes the onDeleteFunc callback on the removed value.
 //
-// The onReplaceFunc callback is invoked under a write lock.
+// The onDeleteFunc callback is invoked under a write lock.
 func (m *Map[K, V]) DeleteWithFunc(key K, onDeleteFunc func(value V)) {
-	m.mutex.Lock()
-	defer m.mutex.Unlock()
-	value, ok := m.data[key]
-	delete(m.data, key)
-	if ok && onDeleteFunc != nil {
+	_, _ = m.LoadAndDeleteWithFunc(key, func(value V) V {
 		onDeleteFunc(value)
-	}
+		return value
+	})
 }
 
-// DeleteWithFunc removes the key from the map and if a value existed invokes the onLoadFunc callback on the removed value.
+// LoadAndDeleteWithFunc removes the key from the map and if a value existed invokes the onLoadFunc callback on the removed and return it.
 //
-// The onReplaceFunc callback is invoked under a write lock.
-func (m *Map[K, V]) PullOutWithFunc(key K, onLoadFunc func(value V) V) (V, bool) {
-	m.mutex.Lock()
-	defer m.mutex.Unlock()
-	value, ok := m.data[key]
-	delete(m.data, key)
-	if ok && onLoadFunc != nil {
-		value = onLoadFunc(value)
-	}
-	return value, ok
+// The onLoadFunc callback is invoked under a write lock.
+func (m *Map[K, V]) LoadAndDeleteWithFunc(key K, onLoadFunc func(value V) V) (V, bool) {
+	var v V
+	var loaded bool
+	m.ReplaceWithFunc(key, func(oldValue V, oldLoaded bool) (newValue V, doDelete bool) {
+		if oldLoaded {
+			loaded = true
+			v = onLoadFunc(oldValue)
+			return v, true
+		}
+		return oldValue, true
+	})
+	return v, loaded
 }

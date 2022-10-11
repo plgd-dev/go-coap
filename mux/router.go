@@ -6,13 +6,16 @@ import (
 	"io"
 	"sync"
 
-	"github.com/plgd-dev/go-coap/v2/message"
-	"github.com/plgd-dev/go-coap/v2/message/codes"
+	"github.com/plgd-dev/go-coap/v3/message"
+	"github.com/plgd-dev/go-coap/v3/message/codes"
+	"github.com/plgd-dev/go-coap/v3/message/pool"
 )
 
 type ResponseWriter = interface {
 	SetResponse(code codes.Code, contentFormat message.MediaType, d io.ReadSeeker, opts ...message.Option) error
-	Client() Client
+	Conn() Conn
+	SetMessage(m *pool.Message)
+	Message() *pool.Message
 }
 
 type Handler interface {
@@ -193,7 +196,7 @@ func (r *Router) GetRoutes() map[string]Route {
 // is sought.
 // If no handler is found a standard NotFound message is returned
 func (r *Router) ServeCOAP(w ResponseWriter, req *Message) {
-	path, err := req.Options.Path()
+	path, err := req.Options().Path()
 	r.m.RLock()
 	defaultHandler := r.defaultHandler
 	r.m.RUnlock()

@@ -8,7 +8,7 @@ import (
 )
 
 func TestAddElement(t *testing.T) {
-	cache := NewCache()
+	cache := NewCache[string, string]()
 
 	elementToCache := string("elem")
 	elem := NewElement(elementToCache, time.Now().Add(1*time.Minute), nil)
@@ -33,7 +33,7 @@ func TestAddElement(t *testing.T) {
 }
 
 func TestLoadElement(t *testing.T) {
-	cache := NewCache()
+	cache := NewCache[string, string]()
 
 	loadedElem := cache.Load("abcd")
 	require.Nil(t, loadedElem)
@@ -47,7 +47,7 @@ func TestLoadElement(t *testing.T) {
 }
 
 func TestDeleteElement(t *testing.T) {
-	cache := NewCache()
+	cache := NewCache[string, string]()
 
 	loadedElem := cache.Load("abcd")
 	require.Nil(t, loadedElem)
@@ -69,10 +69,10 @@ func TestDeleteElement(t *testing.T) {
 
 func TestElementExpiration(t *testing.T) {
 	expirationInvoked := false
-	cache := NewCache()
+	cache := NewCache[string, string]()
 
 	elementToCache := string("elem")
-	elem := NewElement(elementToCache, time.Now().Add(1*time.Second), func(d interface{}) {
+	elem := NewElement(elementToCache, time.Now().Add(1*time.Second), func(d string) {
 		expirationInvoked = true
 	})
 	loadedElem, _ := cache.LoadOrStore("abcd", elem)
@@ -93,7 +93,7 @@ func TestElementExpiration(t *testing.T) {
 }
 
 func TestRangeFunction(t *testing.T) {
-	cache := NewCache()
+	cache := NewCache[string, string]()
 
 	loadedElem := cache.Load("abcd")
 	require.Nil(t, loadedElem)
@@ -112,8 +112,8 @@ func TestRangeFunction(t *testing.T) {
 	expectedMap["abcdef"] = "elem2"
 	foundElements := 0
 
-	cache.Range(func(key, value interface{}) bool {
-		actualMap[key.(string)] = value.(string)
+	cache.Range(func(key string, value *Element[string]) bool {
+		actualMap[key] = value.Data()
 		foundElements++
 		return true
 	})
@@ -128,7 +128,7 @@ func TestRangeFunction(t *testing.T) {
 }
 
 func TestPullOutAllFunction(t *testing.T) {
-	cache := NewCache()
+	cache := NewCache[string, string]()
 
 	elementToCache := string("elem")
 	elem := NewElement(elementToCache, time.Now().Add(1*time.Minute), nil)
@@ -138,10 +138,10 @@ func TestPullOutAllFunction(t *testing.T) {
 	elem = NewElement(elementToCache, time.Now().Add(1*time.Minute), nil)
 	cache.LoadOrStore("abcdef", elem)
 
-	cache.PullOutAll()
+	cache.LoadAndDeleteAll()
 
 	foundElements := 0
-	cache.Range(func(key, value interface{}) bool {
+	cache.Range(func(key string, value *Element[string]) bool {
 		foundElements++
 		return true
 	})

@@ -11,16 +11,21 @@ import (
 	"time"
 
 	piondtls "github.com/pion/dtls/v2"
-	"github.com/plgd-dev/go-coap/v2/dtls"
-	"github.com/plgd-dev/go-coap/v2/examples/dtls/pki"
-	"github.com/plgd-dev/go-coap/v2/message"
-	"github.com/plgd-dev/go-coap/v2/message/codes"
-	"github.com/plgd-dev/go-coap/v2/mux"
-	"github.com/plgd-dev/go-coap/v2/net"
-	"github.com/plgd-dev/go-coap/v2/udp/client"
+	"github.com/plgd-dev/go-coap/v3/dtls"
+	"github.com/plgd-dev/go-coap/v3/examples/dtls/pki"
+	"github.com/plgd-dev/go-coap/v3/message"
+	"github.com/plgd-dev/go-coap/v3/message/codes"
+	"github.com/plgd-dev/go-coap/v3/mux"
+	"github.com/plgd-dev/go-coap/v3/net"
+	"github.com/plgd-dev/go-coap/v3/options"
+	"github.com/plgd-dev/go-coap/v3/udp/client"
 )
 
-func onNewClientConn(cc *client.ClientConn, dtlsConn *piondtls.Conn) {
+func onNewConn(cc *client.Conn) {
+	dtlsConn, ok := cc.NetConn().(*piondtls.Conn)
+	if !ok {
+		log.Fatalf("invalid type %T", cc.NetConn())
+	}
 	clientCert, err := x509.ParseCertificate(dtlsConn.ConnectionState().PeerCertificates[0])
 	if err != nil {
 		log.Fatal(err)
@@ -36,12 +41,12 @@ func toHexInt(n *big.Int) string {
 }
 
 func handleA(w mux.ResponseWriter, r *mux.Message) {
-	clientCert := r.Context.Value("client-cert").(*x509.Certificate)
+	clientCert := r.Context().Value("client-cert").(*x509.Certificate)
 	log.Println("Serial number:", toHexInt(clientCert.SerialNumber))
 	log.Println("Subject:", clientCert.Subject)
 	log.Println("Email:", clientCert.EmailAddresses)
 
-	log.Printf("got message in handleA:  %+v from %v\n", r, w.Client().RemoteAddr())
+	log.Printf("got message in handleA:  %+v from %v\n", r, w.Conn().RemoteAddr())
 	err := w.SetResponse(codes.GET, message.TextPlain, bytes.NewReader([]byte("A hello world")))
 	if err != nil {
 		log.Printf("cannot set response: %v", err)
@@ -67,7 +72,7 @@ func listenAndServeDTLS(network string, addr string, config *piondtls.Config, ha
 		return err
 	}
 	defer l.Close()
-	s := dtls.NewServer(dtls.WithMux(handler), dtls.WithOnNewClientConn(onNewClientConn))
+	s := dtls.NewServer(options.WithMux(handler), options.WithOnNewConn(onNewConn))
 	return s.Serve(l)
 }
 

@@ -12,11 +12,12 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/plgd-dev/go-coap/v2/net"
-	"github.com/plgd-dev/go-coap/v2/udp"
-	"github.com/plgd-dev/go-coap/v2/udp/client"
-	"github.com/plgd-dev/go-coap/v2/udp/message"
-	"github.com/plgd-dev/go-coap/v2/udp/message/pool"
+	"github.com/plgd-dev/go-coap/v3/message"
+	"github.com/plgd-dev/go-coap/v3/message/pool"
+	"github.com/plgd-dev/go-coap/v3/net"
+	"github.com/plgd-dev/go-coap/v3/options"
+	"github.com/plgd-dev/go-coap/v3/udp"
+	"github.com/plgd-dev/go-coap/v3/udp/client"
 )
 
 // https://blog.packagecloud.io/eng/2016/06/22/monitoring-tuning-linux-networking-stack-receiving-data/#monitoring-network-data-processing
@@ -65,13 +66,6 @@ func main() {
 		}
 	}
 
-	l, err := net.NewListenUDP("udp4", "")
-	if err != nil {
-		log.Println(err)
-		return
-	}
-	defer l.Close()
-
 	stable := 0
 	minTimeout := time.Second * 10
 	timeout := minTimeout
@@ -79,7 +73,12 @@ func main() {
 
 	var previousDuplicit *sync.Map
 	d := func() {
-		s := udp.NewServer(udp.WithTransmission(time.Second, timeout/2, 2), udp.WithMessagePool(messagePool))
+		l, err := net.NewListenUDP("udp4", "")
+		if err != nil {
+			log.Fatal(err)
+			return
+		}
+		s := udp.NewServer(options.WithTransmission(1, timeout/2, 2), options.WithMessagePool(messagePool))
 		var wg sync.WaitGroup
 		defer wg.Wait()
 		defer s.Stop()
@@ -96,17 +95,23 @@ func main() {
 
 		var duplicit sync.Map
 
-		req, err := client.NewGetRequest(ctx, messagePool, "/oic/res") /* msg.Option{
+		token, err := message.GetToken()
+		if err != nil {
+			panic(fmt.Errorf("cannot get token: %w", err))
+		}
+		req := messagePool.AcquireMessage(ctx)
+		err = req.SetupGet("/oic/res", token) /* msg.Option{
 			ID:    msg.URIQuery,
 			Value: []byte("rt=oic.wk.d"),
-		}*/if err != nil {
+		}*/
+		if err != nil {
 			panic(fmt.Errorf("cannot create discover request: %w", err))
 		}
 		req.SetMessageID(message.GetMID())
 		req.SetType(message.NonConfirmable)
 		defer messagePool.ReleaseMessage(req)
 
-		err = s.DiscoveryRequest(req, "224.0.1.187:5683", func(cc *client.ClientConn, resp *pool.Message) {
+		err = s.DiscoveryRequest(req, "224.0.1.187:5683", func(cc *client.Conn, resp *pool.Message) {
 			_, loaded := duplicit.LoadOrStore(cc.RemoteAddr().String(), true)
 			if loaded {
 				atomic.AddUint32(&numDuplicit, 1)
@@ -119,14 +124,16 @@ func main() {
 		log.Printf("Number of devices %v, Number of duplicit responses %v\n", numDevices, numDuplicit)
 
 		previousNum := uint32(0)
-		previousDuplicit.Range(func(key, value interface{}) bool {
-			_, ok := duplicit.Load(key)
-			if !ok {
-				fmt.Printf("device %v is lost\n", key)
-			}
-			previousNum++
-			return true
-		})
+		if previousDuplicit != nil {
+			previousDuplicit.Range(func(key, value interface{}) bool {
+				_, ok := duplicit.Load(key)
+				if !ok {
+					fmt.Printf("device %v is lost\n", key)
+				}
+				previousNum++
+				return true
+			})
+		}
 
 		previousDuplicit = &duplicit
 
