@@ -260,85 +260,87 @@ func (s *Server) getOrCreateConn(udpConn *coapNet.UDPConn, raddr *net.UDPAddr) (
 	defer s.connsMutex.Unlock()
 	key := raddr.String()
 	cc = s.conns[key]
-	if cc == nil {
-		created = true
-		createBlockWise := func(cc *client.Conn) *blockwise.BlockWise[*client.Conn] {
-			return nil
-		}
-		if s.cfg.BlockwiseEnable {
-			createBlockWise = func(cc *client.Conn) *blockwise.BlockWise[*client.Conn] {
-				v := cc
-				return blockwise.New(
-					v,
-					s.cfg.BlockwiseTransferTimeout,
-					s.cfg.Errors,
-					func(token message.Token) (*pool.Message, bool) {
-						msg, ok := v.GetObservationRequest(token)
-						if ok {
-							return msg, ok
-						}
-						return s.multicastRequests.LoadWithFunc(token.Hash(), func(m *pool.Message) *pool.Message {
-							msg := v.AcquireMessage(m.Context())
-							msg.ResetOptionsTo(m.Options())
-							msg.SetCode(m.Code())
-							msg.SetToken(m.Token())
-							msg.SetMessageID(m.MessageID())
-							return msg
-						})
-					})
-			}
-		}
-		session := NewSession(
-			s.ctx,
-			s.doneCtx,
-			udpConn,
-			raddr,
-			s.cfg.MaxMessageSize,
-			s.cfg.MTU,
-			false,
-		)
-		monitor := s.cfg.CreateInactivityMonitor()
-		cfg := client.DefaultConfig
-		cfg.TransmissionNStart = s.cfg.TransmissionNStart
-		cfg.TransmissionAcknowledgeTimeout = s.cfg.TransmissionAcknowledgeTimeout
-		cfg.TransmissionMaxRetransmit = s.cfg.TransmissionMaxRetransmit
-		cfg.Handler = func(w *responsewriter.ResponseWriter[*client.Conn], r *pool.Message) {
-			h, ok := s.multicastHandler.Load(r.Token().Hash())
-			if ok {
-				h(w, r)
-				return
-			}
-			s.cfg.Handler(w, r)
-		}
-		cfg.BlockwiseSZX = s.cfg.BlockwiseSZX
-		cfg.GoPool = s.cfg.GoPool
-		cfg.Errors = s.cfg.Errors
-		cfg.GetMID = s.cfg.GetMID
-		cfg.GetToken = s.cfg.GetToken
-		cfg.MessagePool = s.cfg.MessagePool
 
-		cc = client.NewConn(
-			session,
-			createBlockWise,
-			monitor,
-			&cfg,
-		)
-		cc.SetContextValue(closeKey, func() {
-			if err := session.Close(); err != nil {
-				s.cfg.Errors(fmt.Errorf("cannot close session: %w", err))
-			}
-			session.shutdown()
-		})
-		cc.AddOnClose(func() {
-			s.connsMutex.Lock()
-			defer s.connsMutex.Unlock()
-			if cc == s.conns[key] {
-				delete(s.conns, key)
-			}
-		})
-		s.conns[key] = cc
+	if cc != nil {
+		return cc, false
 	}
-	return cc, created
+
+	createBlockWise := func(cc *client.Conn) *blockwise.BlockWise[*client.Conn] {
+		return nil
+	}
+	if s.cfg.BlockwiseEnable {
+		createBlockWise = func(cc *client.Conn) *blockwise.BlockWise[*client.Conn] {
+			v := cc
+			return blockwise.New(
+				v,
+				s.cfg.BlockwiseTransferTimeout,
+				s.cfg.Errors,
+				func(token message.Token) (*pool.Message, bool) {
+					msg, ok := v.GetObservationRequest(token)
+					if ok {
+						return msg, ok
+					}
+					return s.multicastRequests.LoadWithFunc(token.Hash(), func(m *pool.Message) *pool.Message {
+						msg := v.AcquireMessage(m.Context())
+						msg.ResetOptionsTo(m.Options())
+						msg.SetCode(m.Code())
+						msg.SetToken(m.Token())
+						msg.SetMessageID(m.MessageID())
+						return msg
+					})
+				})
+		}
+	}
+	session := NewSession(
+		s.ctx,
+		s.doneCtx,
+		udpConn,
+		raddr,
+		s.cfg.MaxMessageSize,
+		s.cfg.MTU,
+		false,
+	)
+	monitor := s.cfg.CreateInactivityMonitor()
+	cfg := client.DefaultConfig
+	cfg.TransmissionNStart = s.cfg.TransmissionNStart
+	cfg.TransmissionAcknowledgeTimeout = s.cfg.TransmissionAcknowledgeTimeout
+	cfg.TransmissionMaxRetransmit = s.cfg.TransmissionMaxRetransmit
+	cfg.Handler = func(w *responsewriter.ResponseWriter[*client.Conn], r *pool.Message) {
+		h, ok := s.multicastHandler.Load(r.Token().Hash())
+		if ok {
+			h(w, r)
+			return
+		}
+		s.cfg.Handler(w, r)
+	}
+	cfg.BlockwiseSZX = s.cfg.BlockwiseSZX
+	cfg.GoPool = s.cfg.GoPool
+	cfg.Errors = s.cfg.Errors
+	cfg.GetMID = s.cfg.GetMID
+	cfg.GetToken = s.cfg.GetToken
+	cfg.MessagePool = s.cfg.MessagePool
+
+	cc = client.NewConn(
+		session,
+		createBlockWise,
+		monitor,
+		&cfg,
+	)
+	cc.SetContextValue(closeKey, func() {
+		if err := session.Close(); err != nil {
+			s.cfg.Errors(fmt.Errorf("cannot close session: %w", err))
+		}
+		session.shutdown()
+	})
+	cc.AddOnClose(func() {
+		s.connsMutex.Lock()
+		defer s.connsMutex.Unlock()
+		if cc == s.conns[key] {
+			delete(s.conns, key)
+		}
+	})
+	s.conns[key] = cc
+	return cc, true
 }
 
 func (s *Server) getConn(l *coapNet.UDPConn, raddr *net.UDPAddr, firstTime bool) (*client.Conn, error) {
