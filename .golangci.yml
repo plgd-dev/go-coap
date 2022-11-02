@@ -26,7 +26,7 @@ linters:
     - gci              # Gci control golang package import order and make it always deterministic.
     # - gochecknoglobals # Checks that no globals are present in Go code
     # - gochecknoinits   # Checks that no init functions are present in Go code
-    # - gocognit         # Computes and checks the cognitive complexity of functions
+    - gocognit         # Computes and checks the cognitive complexity of functions
     - goconst          # Finds repeated strings that could be replaced by a constant
     - gocritic         # The most opinionated Go source code linter
     - gocyclo          # Computes and checks the cyclomatic complexity of functions
@@ -100,12 +100,16 @@ issues:
         - dupl
         - forcetypeassert
         - gosec
+        - gocyclo
+        - gocognit
 
     - path: ^test/.*\.go
       linters:
         - dupl
         - forcetypeassert
         - gosec
+        - gocyclo
+        - gocognit
 
     - path: example_test\.go
       text: "exitAfterDefer"
@@ -116,11 +120,6 @@ issues:
       text: "G404: Use of weak random number generator \\(math/rand instead of crypto/rand\\)"
       linters:
         - gosec
-
-    - path: example_test\.go
-      text: "exitAfterDefer"
-      linters:
-        - gocritic
 
 #   # Fix found issues (if it's supported by the linter).
 #   fix: true

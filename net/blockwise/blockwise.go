@@ -199,6 +199,10 @@ func (b *BlockWise[C]) cloneMessage(r *pool.Message) *pool.Message {
 	return req
 }
 
+func payloadSizeError(err error) error {
+	return fmt.Errorf("cannot get size of payload: %w", err)
+}
+
 // Do sends an coap message and returns an coap response via blockwise transfer.
 func (b *BlockWise[C]) Do(r *pool.Message, maxSzx SZX, maxMessageSize uint32, do func(req *pool.Message) (*pool.Message, error)) (*pool.Message, error) {
 	if maxSzx > SZXBERT {
@@ -222,7 +226,7 @@ func (b *BlockWise[C]) Do(r *pool.Message, maxSzx SZX, maxMessageSize uint32, do
 	}
 	payloadSize, err := r.BodySize()
 	if err != nil {
-		return nil, fmt.Errorf("cannot get size of payload: %w", err)
+		return nil, payloadSizeError(err)
 	}
 	if payloadSize <= maxSzx.Size() {
 		return do(r)
@@ -327,7 +331,7 @@ func (b *BlockWise[C]) handleSendingMessage(w *responsewriter.ResponseWriter[C],
 	sendMessage.SetType(sendingMessage.Type())
 	payloadSize, err := sendingMessage.BodySize()
 	if err != nil {
-		return false, fmt.Errorf("cannot get size of payload: %w", err)
+		return false, payloadSizeError(err)
 	}
 	offSeek, err := sendingMessage.Body().Seek(off, io.SeekStart)
 	if err != nil {
@@ -440,10 +444,7 @@ func (b *BlockWise[C]) handleReceivedMessage(w *responsewriter.ResponseWriter[C]
 		return fmt.Errorf("cannot encode start sending message block option(%v,%v,%v): %w", maxSZX, 0, true, err)
 	}
 	switch r.Code() {
-	case codes.Empty:
-		next(w, r)
-		return nil
-	case codes.CSM, codes.Ping, codes.Pong, codes.Release, codes.Abort:
+	case codes.Empty, codes.CSM, codes.Ping, codes.Pong, codes.Release, codes.Abort:
 		next(w, r)
 		return nil
 	case codes.GET, codes.DELETE:
@@ -526,7 +527,7 @@ func isObserveResponse(msg *pool.Message) bool {
 func (b *BlockWise[C]) startSendingMessage(w *responsewriter.ResponseWriter[C], maxSZX SZX, maxMessageSize uint32, block uint32) error {
 	payloadSize, err := w.Message().BodySize()
 	if err != nil {
-		return fmt.Errorf("cannot get size of payload: %w", err)
+		return payloadSizeError(err)
 	}
 
 	if payloadSize < maxSZX.Size() {
@@ -640,7 +641,7 @@ func (b *BlockWise[C]) getPayloadFromCachedReceivedMessage(r, cachedReceivedMess
 
 	payloadSize, err := cachedReceivedMessage.BodySize()
 	if err != nil {
-		return nil, 0, fmt.Errorf("cannot get size of payload: %w", err)
+		return nil, 0, payloadSizeError(err)
 	}
 	return payloadFile, payloadSize, nil
 }
@@ -670,7 +671,65 @@ func copyToPayloadFromOffset(r *pool.Message, payloadFile *memfile.File, offset 
 	return payloadSize, nil
 }
 
-//nolint:gocyclo
+func (b *BlockWise[C]) getCachedReceivedMessage(mg *messageGuard, r *pool.Message, tokenStr uint64, validUntil time.Time) (*pool.Message, func(), error) {
+	cannotLockError := func(err error) error {
+		return fmt.Errorf("processReceivedMessage: cannot lock message: %w", err)
+	}
+	if mg != nil {
+		errA := mg.Acquire(mg.Context(), 1)
+		if errA != nil {
+			return nil, nil, cannotLockError(errA)
+		}
+		return mg.Message, func() { mg.Release(1) }, nil
+	}
+	closeFnList := []func(){}
+	appendToClose := func(m *messageGuard) {
+		closeFnList = append(closeFnList, func() {
+			m.Release(1)
+		})
+	}
+	closeFn := func() {
+		for i := range closeFnList {
+			closeFnList[len(closeFnList)-1-i]()
+		}
+	}
+	msg := b.cc.AcquireMessage(r.Context())
+	msg.ResetOptionsTo(r.Options())
+	msg.SetToken(r.Token())
+	msg.SetSequence(r.Sequence())
+	msg.SetBody(memfile.New(make([]byte, 0, 1024)))
+	msg.SetCode(r.Code())
+	mg = newRequestGuard(msg, false)
+	errA := mg.Acquire(mg.Context(), 1)
+	if errA != nil {
+		return nil, nil, cannotLockError(errA)
+	}
+	appendToClose(mg)
+	element, loaded := b.receivingMessagesCache.LoadOrStore(tokenStr, cache.NewElement(mg, validUntil, func(d *messageGuard) {
+		if d == nil {
+			return
+		}
+		b.sendingMessagesCache.Delete(tokenStr)
+	}))
+	// request was already stored in cache, silently
+	if loaded {
+		mg = element.Data()
+		if mg == nil {
+			closeFn()
+			return nil, nil, fmt.Errorf("request was already stored in cache")
+		}
+		errA := mg.Acquire(mg.Context(), 1)
+		if errA != nil {
+			closeFn()
+			return nil, nil, cannotLockError(errA)
+		}
+		appendToClose(mg)
+	}
+
+	return mg.Message, closeFn, nil
+}
+
+//nolint:gocyclo,gocognit
 func (b *BlockWise[C]) processReceivedMessage(w *responsewriter.ResponseWriter[C], r *pool.Message, maxSzx SZX, next func(w *responsewriter.ResponseWriter[C], r *pool.Message), blockType message.OptionID, sizeType message.OptionID) error {
 	// TODO: lower cyclomatic complexity
 	token := r.Token()
@@ -711,14 +770,9 @@ func (b *BlockWise[C]) processReceivedMessage(w *responsewriter.ResponseWriter[C
 
 	tokenStr := token.Hash()
 	var cachedReceivedMessageGuard *messageGuard
-	e := b.receivingMessagesCache.Load(tokenStr)
-	if e != nil {
+	if e := b.receivingMessagesCache.Load(tokenStr); e != nil {
 		cachedReceivedMessageGuard = e.Data()
 	}
-	cannotLockError := func(err error) error {
-		return fmt.Errorf("processReceivedMessage: cannot lock message: %w", err)
-	}
-	var msgGuard *messageGuard
 	if cachedReceivedMessageGuard == nil {
 		szx = getSzx(szx, maxSzx)
 		// if there is no more then just forward req to next handler
@@ -726,51 +780,18 @@ func (b *BlockWise[C]) processReceivedMessage(w *responsewriter.ResponseWriter[C
 			next(w, r)
 			return nil
 		}
-		cachedReceivedMessage := b.cc.AcquireMessage(r.Context())
-		cachedReceivedMessage.ResetOptionsTo(r.Options())
-		cachedReceivedMessage.SetToken(r.Token())
-		cachedReceivedMessage.SetSequence(r.Sequence())
-		cachedReceivedMessage.SetBody(memfile.New(make([]byte, 0, 1024)))
-		cachedReceivedMessage.SetCode(r.Code())
-		msgGuard = newRequestGuard(cachedReceivedMessage, false)
-		errA := msgGuard.Acquire(cachedReceivedMessage.Context(), 1)
-		if errA != nil {
-			return cannotLockError(errA)
-		}
-		defer msgGuard.Release(1)
-		element, loaded := b.receivingMessagesCache.LoadOrStore(tokenStr, cache.NewElement(msgGuard, validUntil, func(d *messageGuard) {
-			if d == nil {
-				return
-			}
-			b.sendingMessagesCache.Delete(tokenStr)
-		}))
-		// request was already stored in cache, silently
-		if loaded {
-			msgGuard = element.Data()
-			if msgGuard != nil {
-				errA := msgGuard.Acquire(msgGuard.Context(), 1)
-				if errA != nil {
-					return cannotLockError(errA)
-				}
-				defer msgGuard.Release(1)
-			} else {
-				return fmt.Errorf("request was already stored in cache")
-			}
-		}
-	} else {
-		msgGuard = cachedReceivedMessageGuard
-		errA := msgGuard.Acquire(msgGuard.Context(), 1)
-		if errA != nil {
-			return cannotLockError(errA)
-		}
-		defer msgGuard.Release(1)
 	}
+	cachedReceivedMessage, closeCachedReceivedMessage, err := b.getCachedReceivedMessage(cachedReceivedMessageGuard, r, tokenStr, validUntil)
+	if err != nil {
+		return err
+	}
+	defer closeCachedReceivedMessage()
+
 	defer func(err *error) {
 		if *err != nil {
 			b.receivingMessagesCache.Delete(tokenStr)
 		}
 	}(&err)
-	cachedReceivedMessage := msgGuard.Message
 	payloadFile, payloadSize, err := b.getPayloadFromCachedReceivedMessage(r, cachedReceivedMessage)
 	if err != nil {
 		return fmt.Errorf("cannot get payload: %w", err)
