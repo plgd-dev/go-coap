@@ -37,26 +37,26 @@ func CodeToString(c codes.Code) string {
 	return c.String()
 }
 
-func (se Status) Error() string {
-	return fmt.Sprintf("coap error: code = %s desc = %v", CodeToString(se.Code()), se.err)
+func (s Status) Error() string {
+	return fmt.Sprintf("coap error: code = %s desc = %v", CodeToString(s.Code()), s.err)
 }
 
-// Code returns the status code contained in se.
-func (se Status) Code() codes.Code {
-	if se.msg != nil {
-		return se.msg.Code()
+// Code returns the status code contained in s.
+func (s Status) Code() codes.Code {
+	if s.msg != nil {
+		return s.msg.Code()
 	}
-	return se.code
+	return s.code
 }
 
 // Message returns a coap message.
-func (se Status) Message() *pool.Message {
-	return se.msg
+func (s Status) Message() *pool.Message {
+	return s.msg
 }
 
 // COAPError just for check interface
-func (se Status) COAPError() Status {
-	return se
+func (s Status) COAPError() Status {
+	return s
 }
 
 // Error returns an error representing c and msg.  If c is OK, returns nil.
@@ -141,4 +141,9 @@ func FromContextError(err error) Status {
 			err:  err,
 		}
 	}
+}
+
+// Unwrap unpacks wrapped errors.
+func (s Status) Unwrap() error {
+	return s.err
 }
