@@ -45,3 +45,15 @@ func TestUnmarshalJSONMarshalUnmarshal(t *testing.T) {
 		require.Equal(t, c, cUnMarshaled)
 	}
 }
+
+func TestCodeToString(t *testing.T) {
+	var strCodes []string
+	for _, val := range codeToString {
+		strCodes = append(strCodes, val)
+	}
+
+	for _, str := range strCodes {
+		_, err := ToCode(str)
+		require.NoError(t, err)
+	}
+}
