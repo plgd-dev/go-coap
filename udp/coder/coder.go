@@ -4,7 +4,6 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
-	"math"
 
 	"github.com/plgd-dev/go-coap/v3/message"
 	"github.com/plgd-dev/go-coap/v3/message/codes"
@@ -46,10 +45,10 @@ func (c *Coder) Encode(m message.Message, buf []byte) (int, error) {
 	   |1 1 1 1 1 1 1 1|    Payload (if any) ...
 	   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
 	*/
-	if m.MessageID < 0 || m.MessageID > math.MaxUint16 {
+	if !message.ValidateMessageID(m.MessageID) {
 		return -1, fmt.Errorf("invalid MessageID(%v)", m.MessageID)
 	}
-	if m.Type < 0 || m.Type > math.MaxUint8 {
+	if !message.ValidateType(m.Type) {
 		return -1, fmt.Errorf("invalid Type(%v)", m.Type)
 	}
 	size, err := c.Size(m)
