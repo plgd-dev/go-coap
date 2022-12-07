@@ -81,7 +81,7 @@ func (r *Message) SetMessageID(mid int32) {
 
 // UpsertMessageID set value only when origin value is invalid. Only 0 to 2^16-1 values are valid.
 func (r *Message) UpsertMessageID(mid int32) {
-	if r.msg.MessageID >= 0 && r.msg.MessageID < math.MaxUint16 {
+	if r.msg.MessageID >= 0 && r.msg.MessageID <= math.MaxUint16 {
 		return
 	}
 	r.SetMessageID(mid)
@@ -99,7 +99,7 @@ func (r *Message) SetType(typ message.Type) {
 
 // UpsertType set value only when origin value is invalid. Only 0 to 2^8-1 values are valid.
 func (r *Message) UpsertType(typ message.Type) {
-	if r.msg.Type >= 0 && r.msg.Type < math.MaxUint8 {
+	if r.msg.Type >= 0 && r.msg.Type <= math.MaxUint8 {
 		return
 	}
 	r.SetType(typ)
