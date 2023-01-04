@@ -9,7 +9,7 @@ require (
 	github.com/stretchr/testify v1.8.0
 	go.uber.org/atomic v1.10.0
 	golang.org/x/exp v0.0.0-20221126150942-6ab00d035af9
-	golang.org/x/net v0.2.0
+	golang.org/x/net v0.5.0
 	golang.org/x/sync v0.1.0
 )
 
@@ -19,6 +19,6 @@ require (
 	github.com/pion/transport v0.14.1 // indirect
 	github.com/pmezard/go-difflib v1.0.0 // indirect
 	golang.org/x/crypto v0.3.0 // indirect
-	golang.org/x/sys v0.2.0 // indirect
+	golang.org/x/sys v0.4.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
