@@ -3,6 +3,7 @@ package message
 import (
 	"crypto/rand"
 	"encoding/binary"
+	"math"
 	mathRand "math/rand"
 	"sync/atomic"
 	"time"
@@ -14,7 +15,7 @@ func init() {
 
 var msgID = uint32(RandMID())
 
-// GetMID generates a message id for UDP-coap
+// GetMID generates a message id for UDP. (0 <= mid <= 65535)
 func GetMID() int32 {
 	return int32(uint16(atomic.AddUint32(&msgID, 1)))
 }
@@ -27,4 +28,9 @@ func RandMID() int32 {
 		return int32(uint16(mathRand.Uint32() >> 16))
 	}
 	return int32(uint16(binary.BigEndian.Uint32(b)))
+}
+
+// ValidateMID validates a message id for UDP. (0 <= mid <= 65535)
+func ValidateMID(mid int32) bool {
+	return mid >= 0 && mid <= math.MaxUint16
 }
