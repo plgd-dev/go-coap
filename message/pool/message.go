@@ -80,7 +80,7 @@ func (r *Message) SetMessageID(mid int32) {
 
 // UpsertMessageID set value only when origin value is invalid. Only 0 to 2^16-1 values are valid.
 func (r *Message) UpsertMessageID(mid int32) {
-	if message.ValidateMessageID(r.msg.MessageID) {
+	if message.ValidateMID(r.msg.MessageID) {
 		return
 	}
 	r.SetMessageID(mid)

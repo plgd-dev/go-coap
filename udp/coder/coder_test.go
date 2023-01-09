@@ -1,6 +1,7 @@
 package coder
 
 import (
+	"math"
 	"testing"
 
 	"github.com/plgd-dev/go-coap/v3/message"
@@ -24,6 +25,27 @@ func testUnmarshalMessage(t *testing.T, msg message.Message, buf []byte, expecte
 
 func TestMarshalMessage(t *testing.T) {
 	buf := make([]byte, 1024)
+
+	// validate messageID
+	_, err := DefaultCoder.Encode(message.Message{MessageID: 0}, buf)
+	require.NoError(t, err)
+	_, err = DefaultCoder.Encode(message.Message{MessageID: -1}, buf)
+	require.Error(t, err)
+	_, err = DefaultCoder.Encode(message.Message{MessageID: math.MaxUint16}, buf)
+	require.NoError(t, err)
+	_, err = DefaultCoder.Encode(message.Message{MessageID: math.MaxUint16 + 1}, buf)
+	require.Error(t, err)
+
+	// validate type
+	_, err = DefaultCoder.Encode(message.Message{Type: 0}, buf)
+	require.NoError(t, err)
+	_, err = DefaultCoder.Encode(message.Message{Type: -1}, buf)
+	require.Error(t, err)
+	_, err = DefaultCoder.Encode(message.Message{Type: math.MaxUint8}, buf)
+	require.NoError(t, err)
+	_, err = DefaultCoder.Encode(message.Message{Type: math.MaxUint8 + 1}, buf)
+	require.Error(t, err)
+
 	testMarshalMessage(t, message.Message{}, buf, []byte{64, 0, 0, 0})
 	testMarshalMessage(t, message.Message{Code: codes.GET}, buf, []byte{64, byte(codes.GET), 0, 0})
 	testMarshalMessage(t, message.Message{Code: codes.GET, Payload: []byte{0x1}}, buf, []byte{64, byte(codes.GET), 0, 0, 0xff, 0x1})
@@ -57,7 +79,7 @@ func TestMarshalMessage(t *testing.T) {
 	bufOptionsUsed := bufOptions
 	options := make(message.Options, 0, 32)
 	enc := 0
-	options, enc, err := options.SetPath(bufOptionsUsed, "/a/b/c/d/e")
+	options, enc, err = options.SetPath(bufOptionsUsed, "/a/b/c/d/e")
 	if err != nil {
 		t.Fatalf("Cannot set uri")
 	}

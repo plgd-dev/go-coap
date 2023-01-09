@@ -30,7 +30,7 @@ func RandMID() int32 {
 	return int32(uint16(binary.BigEndian.Uint32(b)))
 }
 
-// ValidateMessageID validates a message id for UDP. (0 <= mid <= 65535)
-func ValidateMessageID(mid int32) bool {
+// ValidateMID validates a message id for UDP. (0 <= mid <= 65535)
+func ValidateMID(mid int32) bool {
 	return mid >= 0 && mid <= math.MaxUint16
 }

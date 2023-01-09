@@ -40,7 +40,7 @@ func (r *Message) String() string {
 	if ValidateType(r.Type) {
 		buf = fmt.Sprintf("%s, Type: %v", buf, r.Type)
 	}
-	if ValidateMessageID(r.MessageID) {
+	if ValidateMID(r.MessageID) {
 		buf = fmt.Sprintf("%s, MessageID: %v", buf, r.MessageID)
 	}
 	if len(r.Payload) > 0 {

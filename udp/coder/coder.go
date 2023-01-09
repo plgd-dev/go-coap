@@ -45,7 +45,7 @@ func (c *Coder) Encode(m message.Message, buf []byte) (int, error) {
 	   |1 1 1 1 1 1 1 1|    Payload (if any) ...
 	   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
 	*/
-	if !message.ValidateMessageID(m.MessageID) {
+	if !message.ValidateMID(m.MessageID) {
 		return -1, fmt.Errorf("invalid MessageID(%v)", m.MessageID)
 	}
 	if !message.ValidateType(m.Type) {
