@@ -20,6 +20,7 @@ import (
 	"github.com/plgd-dev/go-coap/v3/options/config"
 	"github.com/plgd-dev/go-coap/v3/pkg/cache"
 	coapErrors "github.com/plgd-dev/go-coap/v3/pkg/errors"
+	"github.com/plgd-dev/go-coap/v3/pkg/fn"
 	coapSync "github.com/plgd-dev/go-coap/v3/pkg/sync"
 	"github.com/plgd-dev/go-coap/v3/udp/coder"
 	"go.uber.org/atomic"
@@ -288,21 +289,19 @@ func (cc *Conn) transmitMessage(req *pool.Message, waitForResponseChan chan stru
 	return fmt.Errorf("timeout: retransmission(%v) was exhausted", cc.transmission.maxRetransmit.Load())
 }
 
-func (cc *Conn) writeMessage(req *pool.Message) error {
-	respChan := make(chan struct{})
-	req.UpsertType(message.Confirmable)
-	req.UpsertMessageID(cc.GetMessageID())
+func (cc *Conn) prepareWriteMessage(req *pool.Message, respChan chan struct{}) (func(), error) {
+	var closeFn fn.FuncList
 
 	// Only confirmable messages ever match an message ID
 	switch req.Type() {
 	case message.Confirmable:
 		if req.Code() >= codes.GET && req.Code() <= codes.DELETE {
 			if err := cc.acquireOutstandingInteraction(req.Context()); err != nil {
-				return err
+				return nil, err
 			}
-			defer func() {
+			closeFn.Add(func() {
 				cc.releaseOutstandingInteraction()
-			}()
+			})
 		}
 		if _, loaded := cc.midHandlerContainer.LoadOrStore(req.MessageID(), func(w *responsewriter.ResponseWriter[*Conn], r *pool.Message) {
 			close(respChan)
@@ -312,17 +311,31 @@ func (cc *Conn) writeMessage(req *pool.Message) error {
 			}
 			cc.handleBW(w, r)
 		}); loaded {
-			return fmt.Errorf("cannot insert mid(%v) handler: %w", req.MessageID(), coapErrors.ErrKeyAlreadyExists)
+			closeFn.Execute()
+			return nil, fmt.Errorf("cannot insert mid(%v) handler: %w", req.MessageID(), coapErrors.ErrKeyAlreadyExists)
 		}
-		defer func() {
+		closeFn.Add(func() {
 			_, _ = cc.midHandlerContainer.LoadAndDelete(req.MessageID())
-		}()
+		})
 	case message.NonConfirmable:
 		/* TODO need to acquireOutstandingInteraction
 		if req.Code() >= codes.GET && req.Code() <= codes.DELETE {
 		}
 		*/
 	}
+	return closeFn.ToFunction(), nil
+}
+
+func (cc *Conn) writeMessage(req *pool.Message) error {
+	respChan := make(chan struct{})
+	req.UpsertType(message.Confirmable)
+	req.UpsertMessageID(cc.GetMessageID())
+
+	closeFn, err := cc.prepareWriteMessage(req, respChan)
+	if err != nil {
+		return err
+	}
+	defer closeFn()
 
 	if err := cc.session.WriteMessage(req); err != nil {
 		return fmt.Errorf(errFmtWriteRequest, err)
