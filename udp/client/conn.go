@@ -290,7 +290,7 @@ func (cc *Conn) transmitMessage(req *pool.Message, waitForResponseChan chan stru
 }
 
 func (cc *Conn) prepareWriteMessage(req *pool.Message, respChan chan struct{}) (func(), error) {
-	var closeFn fn.FuncList
+	var closeFns fn.FuncList
 
 	// Only confirmable messages ever match an message ID
 	switch req.Type() {
@@ -299,7 +299,7 @@ func (cc *Conn) prepareWriteMessage(req *pool.Message, respChan chan struct{}) (
 			if err := cc.acquireOutstandingInteraction(req.Context()); err != nil {
 				return nil, err
 			}
-			closeFn.Add(func() {
+			closeFns = append(closeFns, func() {
 				cc.releaseOutstandingInteraction()
 			})
 		}
@@ -311,10 +311,10 @@ func (cc *Conn) prepareWriteMessage(req *pool.Message, respChan chan struct{}) (
 			}
 			cc.handleBW(w, r)
 		}); loaded {
-			closeFn.Execute()
+			closeFns.Execute()
 			return nil, fmt.Errorf("cannot insert mid(%v) handler: %w", req.MessageID(), coapErrors.ErrKeyAlreadyExists)
 		}
-		closeFn.Add(func() {
+		closeFns = append(closeFns, func() {
 			_, _ = cc.midHandlerContainer.LoadAndDelete(req.MessageID())
 		})
 	case message.NonConfirmable:
@@ -323,7 +323,7 @@ func (cc *Conn) prepareWriteMessage(req *pool.Message, respChan chan struct{}) (
 		}
 		*/
 	}
-	return closeFn.ToFunction(), nil
+	return closeFns.ToFunction(), nil
 }
 
 func (cc *Conn) writeMessage(req *pool.Message) error {

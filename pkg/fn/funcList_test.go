@@ -8,17 +8,17 @@ import (
 )
 
 func TestFuncList(t *testing.T) {
-	var fns fn.FuncList
+	fns := make(fn.FuncList, 0, 2)
 
 	counter := 0
 	// functions should execute in reverse order they were added in
 	second := 0
-	fns.Add(func() {
+	fns = append(fns, func() {
 		second = counter
 		counter++
 	})
 	first := 0
-	fns.Add(func() {
+	fns = append(fns, func() {
 		first = counter
 		counter++
 	})
