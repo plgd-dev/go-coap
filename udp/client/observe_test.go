@@ -78,31 +78,33 @@ func TestConnObserve(t *testing.T) {
 				switch obs {
 				case 0:
 					cc := w.Conn()
-					for i := uint32(0); i < tt.args.numEvents; i++ {
-						tmpPay := make([]byte, len(tt.args.payload))
-						copy(tmpPay, tt.args.payload)
-						if len(tmpPay) > 0 {
-							if i == tt.args.numEvents-1 {
-								tmpPay[0] = 0
-							} else {
-								tmpPay[0] = byte(i) + 1
+					go func() {
+						for i := uint32(0); i < tt.args.numEvents; i++ {
+							tmpPay := make([]byte, len(tt.args.payload))
+							copy(tmpPay, tt.args.payload)
+							if len(tmpPay) > 0 {
+								if i == tt.args.numEvents-1 {
+									tmpPay[0] = 0
+								} else {
+									tmpPay[0] = byte(i) + 1
+								}
 							}
+							p := bytes.NewReader(tt.args.payload)
+							etag, errE := message.GetETag(p)
+							require.NoError(t, errE)
+							req := cc.AcquireMessage(cc.Context())
+							defer cc.ReleaseMessage(req)
+							req.SetCode(codes.Content)
+							req.SetContentFormat(message.TextPlain)
+							req.SetObserve(i + 2)
+							req.SetBody(p)
+							errE = req.SetETag(etag)
+							require.NoError(t, errE)
+							req.SetToken(token)
+							errW := cc.WriteMessage(req)
+							require.NoError(t, errW)
 						}
-						p := bytes.NewReader(tt.args.payload)
-						etag, errE := message.GetETag(p)
-						require.NoError(t, errE)
-						req := cc.AcquireMessage(cc.Context())
-						defer cc.ReleaseMessage(req)
-						req.SetCode(codes.Content)
-						req.SetContentFormat(message.TextPlain)
-						req.SetObserve(i + 2)
-						req.SetBody(p)
-						errE = req.SetETag(etag)
-						require.NoError(t, errE)
-						req.SetToken(token)
-						errW := cc.WriteMessage(req)
-						require.NoError(t, errW)
-					}
+					}()
 				case 1:
 					errS := w.SetResponse(codes.Content, message.TextPlain, bytes.NewReader([]byte("close")))
 					require.NoError(t, errS)

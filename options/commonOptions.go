@@ -213,70 +213,67 @@ func WithErrors(errors ErrorFunc) ErrorsOpt {
 	return ErrorsOpt{errors: errors}
 }
 
-// GoPoolOpt gopool option.
-type GoPoolOpt[C responsewriter.Client] struct {
-	goPool config.GoPoolFunc[C]
+// ProcessReceivedMessageOpt gopool option.
+type ProcessReceivedMessageOpt[C responsewriter.Client] struct {
+	ProcessReceivedMessageFunc config.ProcessReceivedMessageFunc[C]
 }
 
-func panicForInvalidGoPoolFunc(t, exp any) {
-	panic(fmt.Errorf("invalid GoPoolFunc type %T, expected %T", t, exp))
+func panicForInvalidProcessReceivedMessageFunc(t, exp any) {
+	panic(fmt.Errorf("invalid ProcessReceivedMessageFunc type %T, expected %T", t, exp))
 }
 
-func (o GoPoolOpt[C]) TCPServerApply(cfg *tcpServer.Config) {
-	switch v := any(o.goPool).(type) {
-	case config.GoPoolFunc[*tcpClient.Conn]:
-		cfg.GoPool = v
+func (o ProcessReceivedMessageOpt[C]) TCPServerApply(cfg *tcpServer.Config) {
+	switch v := any(o.ProcessReceivedMessageFunc).(type) {
+	case config.ProcessReceivedMessageFunc[*tcpClient.Conn]:
+		cfg.ProcessReceivedMessage = v
 	default:
-		var t config.GoPoolFunc[*tcpClient.Conn]
-		panicForInvalidGoPoolFunc(v, t)
+		var t config.ProcessReceivedMessageFunc[*tcpClient.Conn]
+		panicForInvalidProcessReceivedMessageFunc(v, t)
 	}
 }
 
-func (o GoPoolOpt[C]) TCPClientApply(cfg *tcpClient.Config) {
-	switch v := any(o.goPool).(type) {
-	case config.GoPoolFunc[*tcpClient.Conn]:
-		cfg.GoPool = v
+func (o ProcessReceivedMessageOpt[C]) TCPClientApply(cfg *tcpClient.Config) {
+	switch v := any(o.ProcessReceivedMessageFunc).(type) {
+	case config.ProcessReceivedMessageFunc[*tcpClient.Conn]:
+		cfg.ProcessReceivedMessage = v
 	default:
-		var t config.GoPoolFunc[*tcpClient.Conn]
-		panicForInvalidGoPoolFunc(v, t)
+		var t config.ProcessReceivedMessageFunc[*tcpClient.Conn]
+		panicForInvalidProcessReceivedMessageFunc(v, t)
 	}
 }
 
-func (o GoPoolOpt[C]) UDPServerApply(cfg *udpServer.Config) {
-	switch v := any(o.goPool).(type) {
-	case config.GoPoolFunc[*udpClient.Conn]:
-		cfg.GoPool = v
+func (o ProcessReceivedMessageOpt[C]) UDPServerApply(cfg *udpServer.Config) {
+	switch v := any(o.ProcessReceivedMessageFunc).(type) {
+	case config.ProcessReceivedMessageFunc[*udpClient.Conn]:
+		cfg.ProcessReceivedMessage = v
 	default:
-		var t config.GoPoolFunc[*udpClient.Conn]
-		panicForInvalidGoPoolFunc(v, t)
+		var t config.ProcessReceivedMessageFunc[*udpClient.Conn]
+		panicForInvalidProcessReceivedMessageFunc(v, t)
 	}
 }
 
-func (o GoPoolOpt[C]) DTLSServerApply(cfg *dtlsServer.Config) {
-	switch v := any(o.goPool).(type) {
-	case config.GoPoolFunc[*udpClient.Conn]:
-		cfg.GoPool = v
+func (o ProcessReceivedMessageOpt[C]) DTLSServerApply(cfg *dtlsServer.Config) {
+	switch v := any(o.ProcessReceivedMessageFunc).(type) {
+	case config.ProcessReceivedMessageFunc[*udpClient.Conn]:
+		cfg.ProcessReceivedMessage = v
 	default:
-		var t config.GoPoolFunc[*udpClient.Conn]
-		panicForInvalidGoPoolFunc(v, t)
+		var t config.ProcessReceivedMessageFunc[*udpClient.Conn]
+		panicForInvalidProcessReceivedMessageFunc(v, t)
 	}
 }
 
-func (o GoPoolOpt[C]) UDPClientApply(cfg *udpClient.Config) {
-	switch v := any(o.goPool).(type) {
-	case config.GoPoolFunc[*udpClient.Conn]:
-		cfg.GoPool = v
+func (o ProcessReceivedMessageOpt[C]) UDPClientApply(cfg *udpClient.Config) {
+	switch v := any(o.ProcessReceivedMessageFunc).(type) {
+	case config.ProcessReceivedMessageFunc[*udpClient.Conn]:
+		cfg.ProcessReceivedMessage = v
 	default:
-		var t config.GoPoolFunc[*udpClient.Conn]
-		panicForInvalidGoPoolFunc(v, t)
+		var t config.ProcessReceivedMessageFunc[*udpClient.Conn]
+		panicForInvalidProcessReceivedMessageFunc(v, t)
 	}
 }
 
-// WithGoPool sets function for managing spawning go routines
-// for handling incoming request's.
-// Eg: https://github.com/panjf2000/ants.
-func WithGoPool[C responsewriter.Client](goPool config.GoPoolFunc[C]) GoPoolOpt[C] {
-	return GoPoolOpt[C]{goPool: goPool}
+func WithProcessReceivedMessageFunc[C responsewriter.Client](processReceivedMessageFunc config.ProcessReceivedMessageFunc[C]) ProcessReceivedMessageOpt[C] {
+	return ProcessReceivedMessageOpt[C]{ProcessReceivedMessageFunc: processReceivedMessageFunc}
 }
 
 type (

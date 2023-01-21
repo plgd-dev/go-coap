@@ -19,8 +19,6 @@ type HandlerFunc = func(*responsewriter.ResponseWriter[*udpClient.Conn], *pool.M
 
 type ErrorFunc = func(error)
 
-type GoPoolFunc = config.GoPoolFunc[*udpClient.Conn]
-
 // OnNewConnFunc is the callback for new connections.
 type OnNewConnFunc = func(cc *udpClient.Conn)
 

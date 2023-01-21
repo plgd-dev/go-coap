@@ -202,7 +202,6 @@ func (s *Server) createConn(connection *coapNet.Conn, monitor client.InactivityM
 	cfg.Ctx = s.ctx
 	cfg.Handler = s.cfg.Handler
 	cfg.MaxMessageSize = s.cfg.MaxMessageSize
-	cfg.GoPool = s.cfg.GoPool
 	cfg.Errors = s.cfg.Errors
 	cfg.BlockwiseSZX = s.cfg.BlockwiseSZX
 	cfg.DisablePeerTCPSignalMessageCSMs = s.cfg.DisablePeerTCPSignalMessageCSMs
@@ -211,6 +210,8 @@ func (s *Server) createConn(connection *coapNet.Conn, monitor client.InactivityM
 	cfg.ConnectionCacheSize = s.cfg.ConnectionCacheSize
 	cfg.MessagePool = s.cfg.MessagePool
 	cfg.GetToken = s.cfg.GetToken
+	cfg.ProcessReceivedMessage = s.cfg.ProcessReceivedMessage
+	cfg.ReceivedMessageQueueSize = s.cfg.ReceivedMessageQueueSize
 	cc := client.NewConn(
 		connection,
 		createBlockWise,

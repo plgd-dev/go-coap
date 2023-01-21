@@ -6,6 +6,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"math/big"
+	"net"
 	"sync"
 	"testing"
 	"time"
@@ -17,10 +18,10 @@ import (
 	coapNet "github.com/plgd-dev/go-coap/v3/net"
 	"github.com/plgd-dev/go-coap/v3/net/responsewriter"
 	"github.com/plgd-dev/go-coap/v3/options"
-	"github.com/plgd-dev/go-coap/v3/options/config"
 	"github.com/plgd-dev/go-coap/v3/pkg/runner/periodic"
 	"github.com/plgd-dev/go-coap/v3/tcp"
 	"github.com/plgd-dev/go-coap/v3/tcp/client"
+	"github.com/plgd-dev/go-coap/v3/tcp/coder"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/atomic"
 	"golang.org/x/sync/semaphore"
@@ -263,8 +264,8 @@ func TestServerKeepAliveMonitor(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*8)
 	defer cancel()
 
-	checkClose := semaphore.NewWeighted(2)
-	err = checkClose.Acquire(ctx, 2)
+	checkClose := semaphore.NewWeighted(1)
+	err = checkClose.Acquire(ctx, 1)
 	require.NoError(t, err)
 	sd := tcp.NewServer(
 		options.WithOnNewConn(func(cc *client.Conn) {
@@ -272,7 +273,7 @@ func TestServerKeepAliveMonitor(t *testing.T) {
 				checkClose.Release(1)
 			})
 		}),
-		options.WithKeepAlive(3, 200*time.Millisecond, func(cc *client.Conn) {
+		options.WithKeepAlive(3, 500*time.Millisecond, func(cc *client.Conn) {
 			require.False(t, inactivityDetected.Load())
 			inactivityDetected.Store(true)
 			errC := cc.Close()
@@ -293,31 +294,23 @@ func TestServerKeepAliveMonitor(t *testing.T) {
 		require.NoError(t, errS)
 	}()
 
-	cc, err := tcp.Dial(
-		ld.Addr().String(),
-		options.WithGoPool(func(processReqFunc config.ProcessRequestFunc[*client.Conn], req *pool.Message, cc *client.Conn, handler config.HandlerFunc[*client.Conn]) error {
-			time.Sleep(time.Second * 2)
-			processReqFunc(req, cc, handler)
-			return nil
-		}),
-	)
+	cc, err := net.Dial("tcp", ld.Addr().String())
 	require.NoError(t, err)
-	go func() {
-		select {
-		case <-cc.Done():
-			checkClose.Release(1)
-		case <-ctx.Done():
-			return
-		}
+	defer func() {
+		_ = cc.Close()
 	}()
 
-	// send ping to create serverside connection
-	reqCtx, cancel := context.WithTimeout(context.Background(), time.Second)
-	defer cancel()
-	_, err = cc.Get(reqCtx, "/tmp")
-	require.Error(t, err)
+	p := pool.NewMessage(ctx)
+	p.SetCode(codes.GET)
+	err = p.SetPath("/tmp")
+	require.NoError(t, err)
 
-	err = checkClose.Acquire(ctx, 2)
+	data, err := p.MarshalWithEncoder(coder.DefaultCoder)
+	require.NoError(t, err)
+	_, err = cc.Write(data)
+	require.NoError(t, err)
+
+	err = checkClose.Acquire(ctx, 1)
 	require.NoError(t, err)
 	require.True(t, inactivityDetected.Load())
 }

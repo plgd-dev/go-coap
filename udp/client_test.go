@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"sync"
 	"testing"
 	"time"
@@ -18,7 +19,6 @@ import (
 	coapNet "github.com/plgd-dev/go-coap/v3/net"
 	"github.com/plgd-dev/go-coap/v3/net/responsewriter"
 	"github.com/plgd-dev/go-coap/v3/options"
-	"github.com/plgd-dev/go-coap/v3/options/config"
 	"github.com/plgd-dev/go-coap/v3/pkg/runner/periodic"
 	"github.com/plgd-dev/go-coap/v3/udp/client"
 	"github.com/stretchr/testify/assert"
@@ -742,38 +742,30 @@ func TestClientKeepAliveMonitor(t *testing.T) {
 
 	ld, err := coapNet.NewListenUDP("udp4", "")
 	require.NoError(t, err)
+
+	var serverWg sync.WaitGroup
+	serverWg.Add(1)
+	defer serverWg.Wait()
 	defer func() {
 		errC := ld.Close()
 		require.NoError(t, errC)
 	}()
-
-	checkClose := semaphore.NewWeighted(2)
-	err = checkClose.Acquire(ctx, 2)
-	require.NoError(t, err)
-	sd := NewServer(
-		options.WithOnNewConn(func(cc *client.Conn) {
-			checkClose.Release(1)
-		}),
-		options.WithGoPool(func(processReqFunc config.ProcessRequestFunc[*client.Conn], req *pool.Message, cc *client.Conn, handler config.HandlerFunc[*client.Conn]) error {
-			time.Sleep(time.Millisecond * 500)
-			processReqFunc(req, cc, handler)
-			return nil
-		}),
-		options.WithPeriodicRunner(periodic.New(ctx.Done(), time.Millisecond*10)),
-	)
-
-	var serverWg sync.WaitGroup
-	defer func() {
-		sd.Stop()
-		serverWg.Wait()
-	}()
-	serverWg.Add(1)
 	go func() {
 		defer serverWg.Done()
-		errS := sd.Serve(ld)
-		require.NoError(t, errS)
+		for {
+			_, _, errR := ld.ReadWithContext(ctx, make([]byte, 1024))
+			if errR != nil {
+				if errors.Is(errR, net.ErrClosed) {
+					return
+				}
+			}
+			require.NoError(t, errR)
+		}
 	}()
 
+	checkClose := semaphore.NewWeighted(1)
+	err = checkClose.Acquire(ctx, 1)
+	require.NoError(t, err)
 	cc, err := Dial(
 		ld.LocalAddr().String(),
 		options.WithKeepAlive(3, 100*time.Millisecond, func(cc *client.Conn) {
@@ -789,13 +781,13 @@ func TestClientKeepAliveMonitor(t *testing.T) {
 		checkClose.Release(1)
 	})
 
-	// send ping to create serverside connection
+	// send ping to create server side connection
 	ctxPing, cancel := context.WithTimeout(ctx, time.Second)
 	defer cancel()
-	err = cc.Ping(ctxPing)
+	_, err = cc.Get(ctxPing, "/tmp")
 	require.Error(t, err)
 
-	err = checkClose.Acquire(ctx, 2)
+	err = checkClose.Acquire(ctx, 1)
 	require.NoError(t, err)
 	require.True(t, inactivityDetected.Load())
 }

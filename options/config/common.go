@@ -14,10 +14,9 @@ import (
 )
 
 type (
-	ErrorFunc                                   = func(error)
-	HandlerFunc[C responsewriter.Client]        func(w *responsewriter.ResponseWriter[C], r *pool.Message)
-	ProcessRequestFunc[C responsewriter.Client] func(req *pool.Message, cc C, handler HandlerFunc[C])
-	GoPoolFunc[C responsewriter.Client]         func(processReqFunc ProcessRequestFunc[C], req *pool.Message, cc C, handler HandlerFunc[C]) error
+	ErrorFunc                                           = func(error)
+	HandlerFunc[C responsewriter.Client]                func(w *responsewriter.ResponseWriter[C], r *pool.Message)
+	ProcessReceivedMessageFunc[C responsewriter.Client] func(req *pool.Message, cc C, handler HandlerFunc[C])
 )
 
 type Common[C responsewriter.Client] struct {
@@ -25,7 +24,6 @@ type Common[C responsewriter.Client] struct {
 	LimitClientEndpointParallelRequests int64
 	Ctx                                 context.Context
 	Errors                              ErrorFunc
-	GoPool                              GoPoolFunc[C]
 	PeriodicRunner                      periodic.Func
 	MessagePool                         *pool.Pool
 	GetToken                            client.GetTokenFunc
@@ -33,6 +31,8 @@ type Common[C responsewriter.Client] struct {
 	BlockwiseTransferTimeout            time.Duration
 	BlockwiseSZX                        blockwise.SZX
 	BlockwiseEnable                     bool
+	ProcessReceivedMessage              ProcessReceivedMessageFunc[C]
+	ReceivedMessageQueueSize            int
 }
 
 func NewCommon[C responsewriter.Client]() Common[C] {
@@ -41,10 +41,6 @@ func NewCommon[C responsewriter.Client]() Common[C] {
 		MaxMessageSize: 64 * 1024,
 		Errors: func(err error) {
 			fmt.Println(err)
-		},
-		GoPool: func(processReqFunc ProcessRequestFunc[C], req *pool.Message, cc C, handler HandlerFunc[C]) error {
-			go processReqFunc(req, cc, handler)
-			return nil
 		},
 		BlockwiseSZX:             blockwise.SZX1024,
 		BlockwiseEnable:          true,
@@ -60,5 +56,6 @@ func NewCommon[C responsewriter.Client]() Common[C] {
 		GetToken:                            message.GetToken,
 		LimitClientParallelRequests:         1,
 		LimitClientEndpointParallelRequests: 1,
+		ReceivedMessageQueueSize:            16,
 	}
 }

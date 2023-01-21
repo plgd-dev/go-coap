@@ -560,3 +560,14 @@ func (r *Message) SetupPut(path string, token message.Token, contentFormat messa
 func (r *Message) SetupDelete(path string, token message.Token, opts ...message.Option) error {
 	return r.setupCommon(codes.DELETE, path, token, opts...)
 }
+
+func (r *Message) Clone(p *Pool) *Message {
+	msg := p.AcquireMessage(r.Context())
+	msg.SetCode(r.Code())
+	msg.SetToken(r.Token())
+	msg.ResetOptionsTo(r.Options())
+	msg.SetType(r.Type())
+	msg.SetMessageID(r.MessageID())
+	msg.SetBody(r.Body())
+	return msg
+}
