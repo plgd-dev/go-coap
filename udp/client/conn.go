@@ -248,7 +248,6 @@ func processReceivedMessage(req *pool.Message, cc *Conn, handler config.HandlerF
 
 func (cc *Conn) loopOverReceivedMessageQueue(loopDone chan struct{}, reading *atomic.Bool) {
 	for {
-		reading.Store(true)
 		select {
 		case <-loopDone:
 			return
@@ -257,6 +256,7 @@ func (cc *Conn) loopOverReceivedMessageQueue(loopDone chan struct{}, reading *at
 		case req := <-cc.receivedMessageQueue:
 			reading.Store(false)
 			cc.processReceivedMessage(req, cc, cc.handleReq)
+			reading.Store(true)
 		}
 	}
 }
@@ -279,9 +279,6 @@ func (cc *Conn) Close() error {
 }
 
 func (cc *Conn) trySpawnLoopOverReceivedMessageQueue() {
-	if cc.receivedMessageQueueReading.Load() {
-		return
-	}
 	cc.loopOverReceivedMessageQueueMutex.Lock()
 	if cc.receivedMessageQueueReading.Load() {
 		cc.loopOverReceivedMessageQueueMutex.Unlock()

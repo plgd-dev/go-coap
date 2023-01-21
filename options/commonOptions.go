@@ -750,7 +750,37 @@ func (o LimitClientEndpointParallelRequestOpt) UDPClientApply(cfg *udpClient.Con
 	cfg.LimitClientEndpointParallelRequests = o.limitClientEndpointParallelRequests
 }
 
-// WithLimitClientParallelRequestOpt limits number of parallel requests to endpoint from client. (default: 1)
+// WithLimitClientEndpointParallelRequest limits number of parallel requests to endpoint from client. (default: 1)
 func WithLimitClientEndpointParallelRequest(limitClientEndpointParallelRequests int64) LimitClientEndpointParallelRequestOpt {
 	return LimitClientEndpointParallelRequestOpt{limitClientEndpointParallelRequests: limitClientEndpointParallelRequests}
+}
+
+// ReceivedMessageQueueSizeOpt limit's message queue size for received messages.
+type ReceivedMessageQueueSizeOpt struct {
+	receivedMessageQueueSize int
+}
+
+func (o ReceivedMessageQueueSizeOpt) TCPServerApply(cfg *tcpServer.Config) {
+	cfg.ReceivedMessageQueueSize = o.receivedMessageQueueSize
+}
+
+func (o ReceivedMessageQueueSizeOpt) TCPClientApply(cfg *tcpClient.Config) {
+	cfg.ReceivedMessageQueueSize = o.receivedMessageQueueSize
+}
+
+func (o ReceivedMessageQueueSizeOpt) UDPServerApply(cfg *udpServer.Config) {
+	cfg.ReceivedMessageQueueSize = o.receivedMessageQueueSize
+}
+
+func (o ReceivedMessageQueueSizeOpt) DTLSServerApply(cfg *dtlsServer.Config) {
+	cfg.ReceivedMessageQueueSize = o.receivedMessageQueueSize
+}
+
+func (o ReceivedMessageQueueSizeOpt) UDPClientApply(cfg *udpClient.Config) {
+	cfg.ReceivedMessageQueueSize = o.receivedMessageQueueSize
+}
+
+// WithReceivedMessageQueueSize limit's message queue size for received messages. (default: 16)
+func WithReceivedMessageQueueSize(receivedMessageQueueSize int) ReceivedMessageQueueSizeOpt {
+	return ReceivedMessageQueueSizeOpt{receivedMessageQueueSize: receivedMessageQueueSize}
 }
