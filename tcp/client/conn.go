@@ -114,7 +114,9 @@ func (cc *Conn) loopOverReceivedMessageQueue(loopDone chan struct{}, reading *at
 		case req := <-cc.receivedMessageQueue:
 			reading.Store(false)
 			cc.processReceivedMessage(req, cc, cc.handle)
+			cc.loopOverReceivedMessageQueueMutex.Lock()
 			reading.Store(true)
+			cc.loopOverReceivedMessageQueueMutex.Unlock()
 		}
 	}
 }
