@@ -110,13 +110,17 @@ func (m *midElement) Retransmit(now time.Time, acknowledgeTimeout time.Duration)
 	return false
 }
 
-func (m *midElement) GetMessage(cc *Conn) (*pool.Message, bool) {
+func (m *midElement) GetMessage(cc *Conn) (*pool.Message, bool, error) {
 	m.private.Lock()
 	defer m.private.Unlock()
 	if m.private.msg == nil {
-		return nil, false
+		return nil, false, nil
 	}
-	return m.private.msg.Clone(cc.messagePool), true
+	msg, err := m.private.msg.Clone(cc.messagePool)
+	if err != nil {
+		return nil, false, err
+	}
+	return msg, true, nil
 }
 
 // Conn represents a virtual connection to a conceptual endpoint, to perform COAPs commands.
@@ -152,12 +156,7 @@ type Conn struct {
 		time, counting as one outstanding interaction).
 	*/
 	numOutstandingInteraction *semaphore.Weighted
-
-	receivedMessageQueue chan *pool.Message
-
-	loopOverReceivedMessageQueueMutex sync.Mutex
-	loopOverReceivedMessageQueueDone  chan struct{}
-	receivedMessageQueueReading       *atomic.Bool
+	receivedMessageReader     *client.ReceivedMessageReader[*Conn]
 }
 
 // Transmission is a threadsafe container for transmission related parameters
@@ -224,7 +223,6 @@ func NewConn(
 		inactivityMonitor:         inactivityMonitor,
 		messagePool:               cfg.MessagePool,
 		numOutstandingInteraction: semaphore.NewWeighted(math.MaxInt64),
-		receivedMessageQueue:      make(chan *pool.Message, cfg.ReceivedMessageQueueSize),
 	}
 	cc.msgID.Store(uint32(cfg.GetMID() - 0xffff/2))
 	cc.blockWise = createBlockWise(&cc)
@@ -234,11 +232,7 @@ func NewConn(
 	if cc.processReceivedMessage == nil {
 		cc.processReceivedMessage = processReceivedMessage
 	}
-	loopDone := make(chan struct{})
-	receivedMessageQueueReading := atomic.NewBool(true)
-	cc.loopOverReceivedMessageQueueDone = loopDone
-	cc.receivedMessageQueueReading = receivedMessageQueueReading
-	go cc.loopOverReceivedMessageQueue(loopDone, receivedMessageQueueReading)
+	cc.receivedMessageReader = client.NewReceivedMessageReader(&cc, cfg.ReceivedMessageQueueSize)
 	return &cc
 }
 
@@ -246,21 +240,8 @@ func processReceivedMessage(req *pool.Message, cc *Conn, handler config.HandlerF
 	cc.ProcessMessage(req, handler)
 }
 
-func (cc *Conn) loopOverReceivedMessageQueue(loopDone chan struct{}, reading *atomic.Bool) {
-	for {
-		select {
-		case <-loopDone:
-			return
-		case <-cc.Done():
-			return
-		case req := <-cc.receivedMessageQueue:
-			reading.Store(false)
-			cc.processReceivedMessage(req, cc, cc.handleReq)
-			cc.loopOverReceivedMessageQueueMutex.Lock()
-			reading.Store(true)
-			cc.loopOverReceivedMessageQueueMutex.Unlock()
-		}
-	}
+func (cc *Conn) ProcessReceivedMessage(req *pool.Message) {
+	cc.processReceivedMessage(req, cc, cc.handleReq)
 }
 
 func (cc *Conn) Session() Session {
@@ -278,21 +259,6 @@ func (cc *Conn) Close() error {
 		return nil
 	}
 	return err
-}
-
-func (cc *Conn) trySpawnLoopOverReceivedMessageQueue() {
-	cc.loopOverReceivedMessageQueueMutex.Lock()
-	if cc.receivedMessageQueueReading.Load() {
-		cc.loopOverReceivedMessageQueueMutex.Unlock()
-		return
-	}
-	defer cc.loopOverReceivedMessageQueueMutex.Unlock()
-	close(cc.loopOverReceivedMessageQueueDone)
-	loopDone := make(chan struct{})
-	receivedMessageQueueReading := atomic.NewBool(true)
-	cc.loopOverReceivedMessageQueueDone = loopDone
-	cc.receivedMessageQueueReading = receivedMessageQueueReading
-	go cc.loopOverReceivedMessageQueue(loopDone, receivedMessageQueueReading)
 }
 
 func (cc *Conn) doInternal(req *pool.Message) (*pool.Message, error) {
@@ -318,7 +284,7 @@ func (cc *Conn) doInternal(req *pool.Message) (*pool.Message, error) {
 	if err != nil {
 		return nil, fmt.Errorf(errFmtWriteRequest, err)
 	}
-	cc.trySpawnLoopOverReceivedMessageQueue()
+	cc.receivedMessageReader.TryToReplaceLoop()
 	select {
 	case <-req.Context().Done():
 		return nil, req.Context().Err()
@@ -375,7 +341,7 @@ func (cc *Conn) acquireOutstandingInteraction(ctx context.Context) error {
 }
 
 func (cc *Conn) waitForAcknowledge(req *pool.Message, waitForResponseChan chan struct{}) error {
-	cc.trySpawnLoopOverReceivedMessageQueue()
+	cc.receivedMessageReader.TryToReplaceLoop()
 	select {
 	case <-waitForResponseChan:
 		return nil
@@ -392,6 +358,10 @@ func (cc *Conn) prepareWriteMessage(req *pool.Message, handler HandlerFunc) (fun
 	// Only confirmable messages ever match an message ID
 	switch req.Type() {
 	case message.Confirmable:
+		msg, err := req.Clone(cc.messagePool)
+		if err != nil {
+			return nil, fmt.Errorf("cannot clone message: %w", err)
+		}
 		if req.Code() >= codes.GET && req.Code() <= codes.DELETE {
 			if err := cc.acquireOutstandingInteraction(req.Context()); err != nil {
 				return nil, err
@@ -408,7 +378,7 @@ func (cc *Conn) prepareWriteMessage(req *pool.Message, handler HandlerFunc) (fun
 			private: struct {
 				sync.Mutex
 				msg *pool.Message
-			}{msg: req.Clone(cc.messagePool)},
+			}{msg: msg},
 		}); loaded {
 			closeFns.Execute()
 			return nil, fmt.Errorf("cannot insert mid(%v) handler: %w", req.MessageID(), coapErrors.ErrKeyAlreadyExists)
@@ -769,7 +739,7 @@ func (cc *Conn) handleSpecialMessages(r *pool.Message) bool {
 		cc.ProcessMessage(r, cc.handlePong)
 		return true
 	}
-	// it waits for concrete message handler
+	// if waits for concrete message handler
 	if elem, ok := cc.midHandlerContainer.LoadAndDelete(r.MessageID()); ok {
 		elem.ReleaseMessage(cc)
 		resp := cc.AcquireMessage(cc.Context())
@@ -808,7 +778,7 @@ func (cc *Conn) Process(datagram []byte) error {
 		return nil
 	}
 	select {
-	case cc.receivedMessageQueue <- req:
+	case cc.receivedMessageReader.C() <- req:
 	case <-cc.Context().Done():
 	}
 	return nil
@@ -834,7 +804,14 @@ func (cc *Conn) checkMidHandlerContainer(now time.Time, maxRetransmit int32, ack
 	if !value.Retransmit(now, acknowledgeTimeout) {
 		return
 	}
-	if msg, ok := value.GetMessage(cc); ok {
+	msg, ok, err := value.GetMessage(cc)
+	if err != nil {
+		cc.midHandlerContainer.Delete(key)
+		value.ReleaseMessage(cc)
+		cc.errors(fmt.Errorf(errFmtWriteRequest, err))
+		return
+	}
+	if ok {
 		defer cc.ReleaseMessage(msg)
 		err := cc.session.WriteMessage(msg)
 		if err != nil {

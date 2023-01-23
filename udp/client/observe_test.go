@@ -23,6 +23,7 @@ func TestConnObserve(t *testing.T) {
 		path      string
 		payload   []byte
 		numEvents uint32
+		goFunc    func(f func())
 	}
 	tests := []struct {
 		name    string
@@ -43,6 +44,15 @@ func TestConnObserve(t *testing.T) {
 				path:      "/tmp",
 				numEvents: 20,
 				payload:   make([]byte, 5000),
+			},
+		},
+		{
+			name: "5000bytes - in go routine",
+			args: args{
+				path:      "/tmp",
+				numEvents: 20,
+				payload:   make([]byte, 5000),
+				goFunc:    func(f func()) { go f() },
 			},
 		},
 	}
@@ -78,7 +88,7 @@ func TestConnObserve(t *testing.T) {
 				switch obs {
 				case 0:
 					cc := w.Conn()
-					go func() {
+					f := func() {
 						for i := uint32(0); i < tt.args.numEvents; i++ {
 							tmpPay := make([]byte, len(tt.args.payload))
 							copy(tmpPay, tt.args.payload)
@@ -104,7 +114,12 @@ func TestConnObserve(t *testing.T) {
 							errW := cc.WriteMessage(req)
 							require.NoError(t, errW)
 						}
-					}()
+					}
+					if tt.args.goFunc != nil {
+						tt.args.goFunc(f)
+						return
+					}
+					f()
 				case 1:
 					errS := w.SetResponse(codes.Content, message.TextPlain, bytes.NewReader([]byte("close")))
 					require.NoError(t, errS)

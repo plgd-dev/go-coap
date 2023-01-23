@@ -561,13 +561,26 @@ func (r *Message) SetupDelete(path string, token message.Token, opts ...message.
 	return r.setupCommon(codes.DELETE, path, token, opts...)
 }
 
-func (r *Message) Clone(p *Pool) *Message {
+func (r *Message) Clone(p *Pool) (*Message, error) {
 	msg := p.AcquireMessage(r.Context())
 	msg.SetCode(r.Code())
 	msg.SetToken(r.Token())
 	msg.ResetOptionsTo(r.Options())
 	msg.SetType(r.Type())
 	msg.SetMessageID(r.MessageID())
-	msg.SetBody(r.Body())
-	return msg
+	if r.Body() != nil {
+		defer func() {
+			_, _ = r.Body().Seek(0, io.SeekStart)
+		}()
+		buf := bytes.NewBuffer(nil)
+		_, err := io.Copy(buf, r.Body())
+		if err != nil {
+			_, _ = r.Body().Seek(0, io.SeekStart)
+			p.ReleaseMessage(msg)
+			return nil, err
+		}
+		r := bytes.NewReader(buf.Bytes())
+		msg.SetBody(r)
+	}
+	return msg, nil
 }

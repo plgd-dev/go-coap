@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"net"
-	"sync"
 	"time"
 
 	"github.com/plgd-dev/go-coap/v3/message"
@@ -44,7 +43,6 @@ type Conn struct {
 	*client.Client[*Conn]
 	session                         *Session
 	observationHandler              *observation.Handler[*Conn]
-	receivedMessageQueue            chan *pool.Message
 	processReceivedMessage          func(req *pool.Message, cc *Conn, handler HandlerFunc)
 	tokenHandlerContainer           *coapSync.Map[uint64, HandlerFunc]
 	blockWise                       *blockwise.BlockWise[*Conn]
@@ -53,9 +51,7 @@ type Conn struct {
 	disablePeerTCPSignalMessageCSMs bool
 	peerBlockWiseTranferEnabled     atomic.Bool
 
-	loopOverReceivedMessageQueueMutex sync.Mutex
-	loopOverReceivedMessageQueueDone  chan struct{}
-	receivedMessageQueueReading       *atomic.Bool
+	receivedMessageReader *client.ReceivedMessageReader[*Conn]
 }
 
 // NewConn creates connection over session and observation.
@@ -69,7 +65,6 @@ func NewConn(
 		cfg.GetToken = message.GetToken
 	}
 	cc := Conn{
-		receivedMessageQueue:            make(chan *pool.Message, cfg.ReceivedMessageQueueSize),
 		tokenHandlerContainer:           coapSync.NewMap[uint64, HandlerFunc](),
 		blockwiseSZX:                    cfg.BlockwiseSZX,
 		disablePeerTCPSignalMessageCSMs: cfg.DisablePeerTCPSignalMessageCSMs,
@@ -92,48 +87,16 @@ func NewConn(
 	if cc.processReceivedMessage == nil {
 		cc.processReceivedMessage = processReceivedMessage
 	}
-	loopDone := make(chan struct{})
-	receivedMessageQueueReading := atomic.NewBool(true)
-	cc.loopOverReceivedMessageQueueDone = loopDone
-	cc.receivedMessageQueueReading = receivedMessageQueueReading
-	go cc.loopOverReceivedMessageQueue(loopDone, receivedMessageQueueReading)
+	cc.receivedMessageReader = client.NewReceivedMessageReader(&cc, cfg.ReceivedMessageQueueSize)
 	return &cc
 }
 
 func processReceivedMessage(req *pool.Message, cc *Conn, handler HandlerFunc) {
-	cc.ProcessReceivedMessage(req, handler)
+	cc.processReceivedMessageWithHandler(req, handler)
 }
 
-func (cc *Conn) loopOverReceivedMessageQueue(loopDone chan struct{}, reading *atomic.Bool) {
-	for {
-		select {
-		case <-loopDone:
-			return
-		case <-cc.Done():
-			return
-		case req := <-cc.receivedMessageQueue:
-			reading.Store(false)
-			cc.processReceivedMessage(req, cc, cc.handle)
-			cc.loopOverReceivedMessageQueueMutex.Lock()
-			reading.Store(true)
-			cc.loopOverReceivedMessageQueueMutex.Unlock()
-		}
-	}
-}
-
-func (cc *Conn) trySpawnLoopOverReceivedMessageQueue() {
-	cc.loopOverReceivedMessageQueueMutex.Lock()
-	if cc.receivedMessageQueueReading.Load() {
-		cc.loopOverReceivedMessageQueueMutex.Unlock()
-		return
-	}
-	defer cc.loopOverReceivedMessageQueueMutex.Unlock()
-	close(cc.loopOverReceivedMessageQueueDone)
-	loopDone := make(chan struct{})
-	receivedMessageQueueReading := atomic.NewBool(true)
-	cc.loopOverReceivedMessageQueueDone = loopDone
-	cc.receivedMessageQueueReading = receivedMessageQueueReading
-	go cc.loopOverReceivedMessageQueue(loopDone, receivedMessageQueueReading)
+func (cc *Conn) ProcessReceivedMessage(req *pool.Message) {
+	cc.processReceivedMessage(req, cc, cc.handle)
 }
 
 func (cc *Conn) Session() *Session {
@@ -171,7 +134,7 @@ func (cc *Conn) doInternal(req *pool.Message) (*pool.Message, error) {
 		return nil, fmt.Errorf("cannot write request: %w", err)
 	}
 
-	cc.trySpawnLoopOverReceivedMessageQueue()
+	cc.receivedMessageReader.TryToReplaceLoop()
 
 	select {
 	case <-req.Context().Done():
@@ -308,7 +271,7 @@ func (cc *Conn) doObserve(req *pool.Message, observeFunc func(req *pool.Message)
 	return cc.observationHandler.NewObservation(req, observeFunc)
 }
 
-func (cc *Conn) ProcessReceivedMessage(req *pool.Message, handler HandlerFunc) {
+func (cc *Conn) processReceivedMessageWithHandler(req *pool.Message, handler HandlerFunc) {
 	origResp := cc.AcquireMessage(cc.Context())
 	origResp.SetToken(req.Token())
 	w := responsewriter.New(origResp, cc, req.Options()...)
@@ -401,7 +364,7 @@ func (cc *Conn) pushToReceivedMessageQueue(r *pool.Message) {
 		return
 	}
 	select {
-	case cc.receivedMessageQueue <- r:
+	case cc.receivedMessageReader.C() <- r:
 	case <-cc.Context().Done():
 	}
 }
