@@ -92,7 +92,7 @@ func NewConn(
 }
 
 func processReceivedMessage(req *pool.Message, cc *Conn, handler HandlerFunc) {
-	cc.processReceivedMessageWithHandler(req, handler)
+	cc.ProcessReceivedMessageWithHandler(req, handler)
 }
 
 func (cc *Conn) ProcessReceivedMessage(req *pool.Message) {
@@ -271,7 +271,7 @@ func (cc *Conn) doObserve(req *pool.Message, observeFunc func(req *pool.Message)
 	return cc.observationHandler.NewObservation(req, observeFunc)
 }
 
-func (cc *Conn) processReceivedMessageWithHandler(req *pool.Message, handler HandlerFunc) {
+func (cc *Conn) ProcessReceivedMessageWithHandler(req *pool.Message, handler HandlerFunc) {
 	origResp := cc.AcquireMessage(cc.Context())
 	origResp.SetToken(req.Token())
 	w := responsewriter.New(origResp, cc, req.Options()...)

@@ -21,6 +21,7 @@ import (
 	coapNet "github.com/plgd-dev/go-coap/v3/net"
 	"github.com/plgd-dev/go-coap/v3/net/responsewriter"
 	"github.com/plgd-dev/go-coap/v3/options"
+	"github.com/plgd-dev/go-coap/v3/options/config"
 	"github.com/plgd-dev/go-coap/v3/pkg/runner/periodic"
 	"github.com/plgd-dev/go-coap/v3/udp/client"
 	"github.com/plgd-dev/go-coap/v3/udp/coder"
@@ -217,6 +218,10 @@ func TestServerInactiveMonitor(t *testing.T) {
 			require.NoError(t, errC)
 		}),
 		options.WithPeriodicRunner(periodic.New(ctx.Done(), time.Millisecond*10)),
+		options.WithReceivedMessageQueueSize(32),
+		options.WithProcessReceivedMessageFunc(func(req *pool.Message, cc *client.Conn, handler config.HandlerFunc[*client.Conn]) {
+			cc.ProcessReceivedMessageWithHandler(req, handler)
+		}),
 	)
 
 	var serverWg sync.WaitGroup

@@ -237,7 +237,7 @@ func NewConn(
 }
 
 func processReceivedMessage(req *pool.Message, cc *Conn, handler config.HandlerFunc[*Conn]) {
-	cc.processReceivedMessageWithHandler(req, handler)
+	cc.ProcessReceivedMessageWithHandler(req, handler)
 }
 
 func (cc *Conn) ProcessReceivedMessage(req *pool.Message) {
@@ -700,7 +700,7 @@ func (cc *Conn) closeConnection() {
 	}
 }
 
-func (cc *Conn) processReceivedMessageWithHandler(req *pool.Message, handler config.HandlerFunc[*Conn]) {
+func (cc *Conn) ProcessReceivedMessageWithHandler(req *pool.Message, handler config.HandlerFunc[*Conn]) {
 	defer func() {
 		if !req.IsHijacked() {
 			cc.ReleaseMessage(req)
@@ -736,7 +736,7 @@ func (cc *Conn) handlePong(w *responsewriter.ResponseWriter[*Conn], r *pool.Mess
 func (cc *Conn) handleSpecialMessages(r *pool.Message) bool {
 	// ping request
 	if r.Code() == codes.Empty && r.Type() == message.Confirmable && len(r.Token()) == 0 && len(r.Options()) == 0 && r.Body() == nil {
-		cc.processReceivedMessageWithHandler(r, cc.handlePong)
+		cc.ProcessReceivedMessageWithHandler(r, cc.handlePong)
 		return true
 	}
 	// if waits for concrete message handler
