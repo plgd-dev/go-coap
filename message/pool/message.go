@@ -575,7 +575,6 @@ func (r *Message) Clone(p *Pool) (*Message, error) {
 		buf := bytes.NewBuffer(nil)
 		_, err := io.Copy(buf, r.Body())
 		if err != nil {
-			_, _ = r.Body().Seek(0, io.SeekStart)
 			p.ReleaseMessage(msg)
 			return nil, err
 		}
