@@ -22,8 +22,6 @@ type Session struct {
 	// This field needs to be the first in the struct to ensure proper word alignment on 32-bit platforms.
 	// See: https://golang.org/pkg/sync/atomic/#pkg-note-BUG
 	sequence          atomic.Uint64
-	onClose           []EventFunc
-	ctx               atomic.Value // // TODO: change to atomic.Pointer[context.Context] for go1.19
 	inactivityMonitor InactivityMonitor
 	errSendCSM        error
 	cancel            context.CancelFunc
@@ -31,9 +29,12 @@ type Session struct {
 	errors            ErrorFunc
 	connection        *coapNet.Conn
 	messagePool       *pool.Pool
-	mutex             sync.Mutex
+	ctx               atomic.Value // TODO: change to atomic.Pointer[context.Context] for go1.19
 	maxMessageSize    uint32
-
+	private           struct {
+		mutex   sync.Mutex
+		onClose []EventFunc
+	}
 	connectionCacheSize        uint16
 	disableTCPSignalMessageCSM bool
 	closeSocket                bool
@@ -86,8 +87,6 @@ func NewSession(
 
 // SetContextValue stores the value associated with key to context of connection.
 func (s *Session) SetContextValue(key interface{}, val interface{}) {
-	s.mutex.Lock()
-	defer s.mutex.Unlock()
 	ctx := context.WithValue(s.Context(), key, val)
 	s.ctx.Store(&ctx)
 }
@@ -98,16 +97,16 @@ func (s *Session) Done() <-chan struct{} {
 }
 
 func (s *Session) AddOnClose(f EventFunc) {
-	s.mutex.Lock()
-	defer s.mutex.Unlock()
-	s.onClose = append(s.onClose, f)
+	s.private.mutex.Lock()
+	defer s.private.mutex.Unlock()
+	s.private.onClose = append(s.private.onClose, f)
 }
 
 func (s *Session) popOnClose() []EventFunc {
-	s.mutex.Lock()
-	defer s.mutex.Unlock()
-	tmp := s.onClose
-	s.onClose = nil
+	s.private.mutex.Lock()
+	defer s.private.mutex.Unlock()
+	tmp := s.private.onClose
+	s.private.onClose = nil
 	return tmp
 }
 

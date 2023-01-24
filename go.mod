@@ -4,6 +4,7 @@ go 1.18
 
 require (
 	github.com/dsnet/golib/memfile v1.0.0
+	github.com/hashicorp/go-multierror v1.1.1
 	github.com/pion/dtls/v2 v2.1.6-0.20230104045405-f40c61d83b5f
 	github.com/pion/udp v0.1.2-0.20221201030934-a2465bb5d508
 	github.com/stretchr/testify v1.8.1
@@ -15,6 +16,7 @@ require (
 
 require (
 	github.com/davecgh/go-spew v1.1.1 // indirect
+	github.com/hashicorp/errwrap v1.0.0 // indirect
 	github.com/pion/logging v0.2.2 // indirect
 	github.com/pion/transport v0.14.1 // indirect
 	github.com/pmezard/go-difflib v1.0.0 // indirect

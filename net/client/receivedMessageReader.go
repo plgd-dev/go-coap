@@ -47,6 +47,12 @@ func (r *ReceivedMessageReader[C]) C() chan<- *pool.Message {
 	return r.queue
 }
 
+// The loop function continuously listens to messages. IT can be replaced with a new one by calling the TryToReplaceLoop function,
+// ensuring that only one loop is reading from the queue at a time.
+// The loopDone channel is used to signal when the loop should be closed.
+// The readingMessages variable is used to indicate if the loop is currently reading from the queue.
+// When the loop is not reading from the queue, it sets readingMessages to false, and when it starts reading again, it sets it to true.
+// If the client is closed, the loop also closes.
 func (r *ReceivedMessageReader[C]) loop(loopDone chan struct{}, readingMessages *atomic.Bool) {
 	for {
 		select {
@@ -55,8 +61,11 @@ func (r *ReceivedMessageReader[C]) loop(loopDone chan struct{}, readingMessages 
 			return
 		// process received message until the queue is empty
 		case req := <-r.queue:
+			// This signalizes that the loop is not reading messages.
 			readingMessages.Store(false)
 			r.cc.ProcessReceivedMessage(req)
+			// This signalizes that the loop is reading messages. We call mutex because we want to ensure that TryToReplaceLoop has ended and
+			// loopDone is closed if it was replaced.
 			r.private.mutex.Lock()
 			readingMessages.Store(true)
 			r.private.mutex.Unlock()
@@ -67,7 +76,10 @@ func (r *ReceivedMessageReader[C]) loop(loopDone chan struct{}, readingMessages 
 	}
 }
 
-// TryToReplaceLoop replace the loop with a new one if the loop is not reading messages.
+// TryToReplaceLoop function attempts to replace the loop with a new one,
+// but only if the loop is not currently reading messages. If the loop is reading messages,
+// the function returns immediately. If the loop is not reading messages, the current loop is closed,
+// and new loopDone and readingMessages channels and variables are created.
 func (r *ReceivedMessageReader[C]) TryToReplaceLoop() {
 	r.private.mutex.Lock()
 	if r.private.readingMessages.Load() {

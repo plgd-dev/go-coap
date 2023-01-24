@@ -116,8 +116,9 @@ func (m *midElement) GetMessage(cc *Conn) (*pool.Message, bool, error) {
 	if m.private.msg == nil {
 		return nil, false, nil
 	}
-	msg, err := m.private.msg.Clone(cc.messagePool)
-	if err != nil {
+	msg := cc.AcquireMessage(m.private.msg.Context())
+	if err := m.private.msg.Clone(msg); err != nil {
+		cc.ReleaseMessage(msg)
 		return nil, false, err
 	}
 	return msg, true, nil
@@ -358,8 +359,9 @@ func (cc *Conn) prepareWriteMessage(req *pool.Message, handler HandlerFunc) (fun
 	// Only confirmable messages ever match an message ID
 	switch req.Type() {
 	case message.Confirmable:
-		msg, err := req.Clone(cc.messagePool)
-		if err != nil {
+		msg := cc.AcquireMessage(req.Context())
+		if err := req.Clone(msg); err != nil {
+			cc.ReleaseMessage(msg)
 			return nil, fmt.Errorf("cannot clone message: %w", err)
 		}
 		if req.Code() >= codes.GET && req.Code() <= codes.DELETE {

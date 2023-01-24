@@ -472,7 +472,6 @@ func TestCheckForLossOrder(t *testing.T) {
 		defer arrivedMessagesLock.Unlock()
 		arrivedMessages = append(arrivedMessages, binary.LittleEndian.Uint64(req.Token()))
 	}))
-	defer sd.Stop()
 
 	var wg sync.WaitGroup
 	wg.Add(1)
@@ -480,6 +479,10 @@ func TestCheckForLossOrder(t *testing.T) {
 		defer wg.Done()
 		errS := sd.Serve(ld)
 		require.NoError(t, errS)
+	}()
+	defer func() {
+		sd.Stop()
+		wg.Wait()
 	}()
 
 	cc, err := udp.Dial(ld.LocalAddr().String())

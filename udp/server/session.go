@@ -62,8 +62,6 @@ func NewSession(
 
 // SetContextValue stores the value associated with key to context of connection.
 func (s *Session) SetContextValue(key interface{}, val interface{}) {
-	s.mutex.Lock()
-	defer s.mutex.Unlock()
 	ctx := context.WithValue(s.Context(), key, val)
 	s.ctx.Store(&ctx)
 }
