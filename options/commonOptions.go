@@ -780,7 +780,7 @@ func (o ReceivedMessageQueueSizeOpt) UDPClientApply(cfg *udpClient.Config) {
 	cfg.ReceivedMessageQueueSize = o.receivedMessageQueueSize
 }
 
-// WithReceivedMessageQueueSize limit's message queue size for received messages. (default: 0)
+// WithReceivedMessageQueueSize limit's message queue size for received messages. (default: 16)
 func WithReceivedMessageQueueSize(receivedMessageQueueSize int) ReceivedMessageQueueSizeOpt {
 	return ReceivedMessageQueueSizeOpt{receivedMessageQueueSize: receivedMessageQueueSize}
 }

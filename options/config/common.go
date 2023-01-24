@@ -56,6 +56,6 @@ func NewCommon[C responsewriter.Client]() Common[C] {
 		GetToken:                            message.GetToken,
 		LimitClientParallelRequests:         1,
 		LimitClientEndpointParallelRequests: 1,
-		ReceivedMessageQueueSize:            0,
+		ReceivedMessageQueueSize:            16,
 	}
 }
