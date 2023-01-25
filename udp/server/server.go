@@ -314,11 +314,12 @@ func (s *Server) getOrCreateConn(udpConn *coapNet.UDPConn, raddr *net.UDPAddr) (
 		s.cfg.Handler(w, r)
 	}
 	cfg.BlockwiseSZX = s.cfg.BlockwiseSZX
-	cfg.GoPool = s.cfg.GoPool
 	cfg.Errors = s.cfg.Errors
 	cfg.GetMID = s.cfg.GetMID
 	cfg.GetToken = s.cfg.GetToken
 	cfg.MessagePool = s.cfg.MessagePool
+	cfg.ProcessReceivedMessage = s.cfg.ProcessReceivedMessage
+	cfg.ReceivedMessageQueueSize = s.cfg.ReceivedMessageQueueSize
 
 	cc = client.NewConn(
 		session,

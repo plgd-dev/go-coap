@@ -214,11 +214,12 @@ func (s *Server) createConn(connection *coapNet.Conn, monitor udpClient.Inactivi
 	cfg.TransmissionMaxRetransmit = s.cfg.TransmissionMaxRetransmit
 	cfg.Handler = s.cfg.Handler
 	cfg.BlockwiseSZX = s.cfg.BlockwiseSZX
-	cfg.GoPool = s.cfg.GoPool
 	cfg.Errors = s.cfg.Errors
 	cfg.GetMID = s.cfg.GetMID
 	cfg.GetToken = s.cfg.GetToken
 	cfg.MessagePool = s.cfg.MessagePool
+	cfg.ReceivedMessageQueueSize = s.cfg.ReceivedMessageQueueSize
+	cfg.ProcessReceivedMessage = s.cfg.ProcessReceivedMessage
 	cc := udpClient.NewConn(
 		session,
 		createBlockWise,

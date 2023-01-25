@@ -213,70 +213,67 @@ func WithErrors(errors ErrorFunc) ErrorsOpt {
 	return ErrorsOpt{errors: errors}
 }
 
-// GoPoolOpt gopool option.
-type GoPoolOpt[C responsewriter.Client] struct {
-	goPool config.GoPoolFunc[C]
+// ProcessReceivedMessageOpt gopool option.
+type ProcessReceivedMessageOpt[C responsewriter.Client] struct {
+	ProcessReceivedMessageFunc config.ProcessReceivedMessageFunc[C]
 }
 
-func panicForInvalidGoPoolFunc(t, exp any) {
-	panic(fmt.Errorf("invalid GoPoolFunc type %T, expected %T", t, exp))
+func panicForInvalidProcessReceivedMessageFunc(t, exp any) {
+	panic(fmt.Errorf("invalid ProcessReceivedMessageFunc type %T, expected %T", t, exp))
 }
 
-func (o GoPoolOpt[C]) TCPServerApply(cfg *tcpServer.Config) {
-	switch v := any(o.goPool).(type) {
-	case config.GoPoolFunc[*tcpClient.Conn]:
-		cfg.GoPool = v
+func (o ProcessReceivedMessageOpt[C]) TCPServerApply(cfg *tcpServer.Config) {
+	switch v := any(o.ProcessReceivedMessageFunc).(type) {
+	case config.ProcessReceivedMessageFunc[*tcpClient.Conn]:
+		cfg.ProcessReceivedMessage = v
 	default:
-		var t config.GoPoolFunc[*tcpClient.Conn]
-		panicForInvalidGoPoolFunc(v, t)
+		var t config.ProcessReceivedMessageFunc[*tcpClient.Conn]
+		panicForInvalidProcessReceivedMessageFunc(v, t)
 	}
 }
 
-func (o GoPoolOpt[C]) TCPClientApply(cfg *tcpClient.Config) {
-	switch v := any(o.goPool).(type) {
-	case config.GoPoolFunc[*tcpClient.Conn]:
-		cfg.GoPool = v
+func (o ProcessReceivedMessageOpt[C]) TCPClientApply(cfg *tcpClient.Config) {
+	switch v := any(o.ProcessReceivedMessageFunc).(type) {
+	case config.ProcessReceivedMessageFunc[*tcpClient.Conn]:
+		cfg.ProcessReceivedMessage = v
 	default:
-		var t config.GoPoolFunc[*tcpClient.Conn]
-		panicForInvalidGoPoolFunc(v, t)
+		var t config.ProcessReceivedMessageFunc[*tcpClient.Conn]
+		panicForInvalidProcessReceivedMessageFunc(v, t)
 	}
 }
 
-func (o GoPoolOpt[C]) UDPServerApply(cfg *udpServer.Config) {
-	switch v := any(o.goPool).(type) {
-	case config.GoPoolFunc[*udpClient.Conn]:
-		cfg.GoPool = v
+func (o ProcessReceivedMessageOpt[C]) UDPServerApply(cfg *udpServer.Config) {
+	switch v := any(o.ProcessReceivedMessageFunc).(type) {
+	case config.ProcessReceivedMessageFunc[*udpClient.Conn]:
+		cfg.ProcessReceivedMessage = v
 	default:
-		var t config.GoPoolFunc[*udpClient.Conn]
-		panicForInvalidGoPoolFunc(v, t)
+		var t config.ProcessReceivedMessageFunc[*udpClient.Conn]
+		panicForInvalidProcessReceivedMessageFunc(v, t)
 	}
 }
 
-func (o GoPoolOpt[C]) DTLSServerApply(cfg *dtlsServer.Config) {
-	switch v := any(o.goPool).(type) {
-	case config.GoPoolFunc[*udpClient.Conn]:
-		cfg.GoPool = v
+func (o ProcessReceivedMessageOpt[C]) DTLSServerApply(cfg *dtlsServer.Config) {
+	switch v := any(o.ProcessReceivedMessageFunc).(type) {
+	case config.ProcessReceivedMessageFunc[*udpClient.Conn]:
+		cfg.ProcessReceivedMessage = v
 	default:
-		var t config.GoPoolFunc[*udpClient.Conn]
-		panicForInvalidGoPoolFunc(v, t)
+		var t config.ProcessReceivedMessageFunc[*udpClient.Conn]
+		panicForInvalidProcessReceivedMessageFunc(v, t)
 	}
 }
 
-func (o GoPoolOpt[C]) UDPClientApply(cfg *udpClient.Config) {
-	switch v := any(o.goPool).(type) {
-	case config.GoPoolFunc[*udpClient.Conn]:
-		cfg.GoPool = v
+func (o ProcessReceivedMessageOpt[C]) UDPClientApply(cfg *udpClient.Config) {
+	switch v := any(o.ProcessReceivedMessageFunc).(type) {
+	case config.ProcessReceivedMessageFunc[*udpClient.Conn]:
+		cfg.ProcessReceivedMessage = v
 	default:
-		var t config.GoPoolFunc[*udpClient.Conn]
-		panicForInvalidGoPoolFunc(v, t)
+		var t config.ProcessReceivedMessageFunc[*udpClient.Conn]
+		panicForInvalidProcessReceivedMessageFunc(v, t)
 	}
 }
 
-// WithGoPool sets function for managing spawning go routines
-// for handling incoming request's.
-// Eg: https://github.com/panjf2000/ants.
-func WithGoPool[C responsewriter.Client](goPool config.GoPoolFunc[C]) GoPoolOpt[C] {
-	return GoPoolOpt[C]{goPool: goPool}
+func WithProcessReceivedMessageFunc[C responsewriter.Client](processReceivedMessageFunc config.ProcessReceivedMessageFunc[C]) ProcessReceivedMessageOpt[C] {
+	return ProcessReceivedMessageOpt[C]{ProcessReceivedMessageFunc: processReceivedMessageFunc}
 }
 
 type (
@@ -753,7 +750,37 @@ func (o LimitClientEndpointParallelRequestOpt) UDPClientApply(cfg *udpClient.Con
 	cfg.LimitClientEndpointParallelRequests = o.limitClientEndpointParallelRequests
 }
 
-// WithLimitClientParallelRequestOpt limits number of parallel requests to endpoint from client. (default: 1)
+// WithLimitClientEndpointParallelRequest limits number of parallel requests to endpoint from client. (default: 1)
 func WithLimitClientEndpointParallelRequest(limitClientEndpointParallelRequests int64) LimitClientEndpointParallelRequestOpt {
 	return LimitClientEndpointParallelRequestOpt{limitClientEndpointParallelRequests: limitClientEndpointParallelRequests}
+}
+
+// ReceivedMessageQueueSizeOpt limit's message queue size for received messages.
+type ReceivedMessageQueueSizeOpt struct {
+	receivedMessageQueueSize int
+}
+
+func (o ReceivedMessageQueueSizeOpt) TCPServerApply(cfg *tcpServer.Config) {
+	cfg.ReceivedMessageQueueSize = o.receivedMessageQueueSize
+}
+
+func (o ReceivedMessageQueueSizeOpt) TCPClientApply(cfg *tcpClient.Config) {
+	cfg.ReceivedMessageQueueSize = o.receivedMessageQueueSize
+}
+
+func (o ReceivedMessageQueueSizeOpt) UDPServerApply(cfg *udpServer.Config) {
+	cfg.ReceivedMessageQueueSize = o.receivedMessageQueueSize
+}
+
+func (o ReceivedMessageQueueSizeOpt) DTLSServerApply(cfg *dtlsServer.Config) {
+	cfg.ReceivedMessageQueueSize = o.receivedMessageQueueSize
+}
+
+func (o ReceivedMessageQueueSizeOpt) UDPClientApply(cfg *udpClient.Config) {
+	cfg.ReceivedMessageQueueSize = o.receivedMessageQueueSize
+}
+
+// WithReceivedMessageQueueSize limit's message queue size for received messages. (default: 16)
+func WithReceivedMessageQueueSize(receivedMessageQueueSize int) ReceivedMessageQueueSizeOpt {
+	return ReceivedMessageQueueSizeOpt{receivedMessageQueueSize: receivedMessageQueueSize}
 }

@@ -7,6 +7,7 @@ import (
 	"crypto/x509"
 	"fmt"
 	"math/big"
+	"net"
 	"sync"
 	"testing"
 	"time"
@@ -23,6 +24,7 @@ import (
 	"github.com/plgd-dev/go-coap/v3/options/config"
 	"github.com/plgd-dev/go-coap/v3/pkg/runner/periodic"
 	"github.com/plgd-dev/go-coap/v3/udp/client"
+	"github.com/plgd-dev/go-coap/v3/udp/coder"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/atomic"
 	"golang.org/x/sync/semaphore"
@@ -216,6 +218,10 @@ func TestServerInactiveMonitor(t *testing.T) {
 			require.NoError(t, errC)
 		}),
 		options.WithPeriodicRunner(periodic.New(ctx.Done(), time.Millisecond*10)),
+		options.WithReceivedMessageQueueSize(32),
+		options.WithProcessReceivedMessageFunc(func(req *pool.Message, cc *client.Conn, handler config.HandlerFunc[*client.Conn]) {
+			cc.ProcessReceivedMessageWithHandler(req, handler)
+		}),
 	)
 
 	var serverWg sync.WaitGroup
@@ -271,8 +277,8 @@ func TestServerKeepAliveMonitor(t *testing.T) {
 		require.NoError(t, errC)
 	}()
 
-	checkClose := semaphore.NewWeighted(2)
-	err = checkClose.Acquire(ctx, 2)
+	checkClose := semaphore.NewWeighted(1)
+	err = checkClose.Acquire(ctx, 1)
 	require.NoError(t, err)
 
 	sd := dtls.NewServer(
@@ -302,27 +308,22 @@ func TestServerKeepAliveMonitor(t *testing.T) {
 		require.NoError(t, errS)
 	}()
 
-	cc, err := dtls.Dial(
-		ld.Addr().String(),
-		clientCgf,
-		options.WithGoPool(func(processReqFunc config.ProcessRequestFunc[*client.Conn], req *pool.Message, cc *client.Conn, handler config.HandlerFunc[*client.Conn]) error {
-			time.Sleep(time.Millisecond * 500)
-			processReqFunc(req, cc, handler)
-			return nil
-		}),
-	)
-	require.NoError(t, err)
-	cc.AddOnClose(func() {
-		checkClose.Release(1)
-	})
-
-	// send ping to create serverside connection
-	ctxPing, cancel := context.WithTimeout(ctx, time.Second)
-	defer cancel()
-	err = cc.Ping(ctxPing)
+	cc, err := piondtls.Dial("udp", ld.Addr().(*net.UDPAddr), clientCgf)
 	require.NoError(t, err)
 
-	err = checkClose.Acquire(ctx, 2)
+	p := pool.NewMessage(ctx)
+	p.SetCode(codes.GET)
+	err = p.SetPath("/")
+	require.NoError(t, err)
+	p.SetMessageID(12345)
+	p.SetType(message.NonConfirmable)
+
+	data, err := p.MarshalWithEncoder(coder.DefaultCoder)
+	require.NoError(t, err)
+	_, err = cc.Write(data)
+	require.NoError(t, err)
+
+	err = checkClose.Acquire(ctx, 1)
 	require.NoError(t, err)
 	require.True(t, inactivityDetected.Load())
 }

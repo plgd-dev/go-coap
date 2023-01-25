@@ -5,7 +5,9 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/binary"
 	"math/big"
+	"net"
 	"sync"
 	"testing"
 	"time"
@@ -21,6 +23,7 @@ import (
 	"github.com/plgd-dev/go-coap/v3/pkg/runner/periodic"
 	"github.com/plgd-dev/go-coap/v3/tcp"
 	"github.com/plgd-dev/go-coap/v3/tcp/client"
+	"github.com/plgd-dev/go-coap/v3/tcp/coder"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/atomic"
 	"golang.org/x/sync/semaphore"
@@ -208,6 +211,10 @@ func TestServerInactiveMonitor(t *testing.T) {
 			require.NoError(t, errC)
 		}),
 		options.WithPeriodicRunner(periodic.New(ctx.Done(), time.Millisecond*10)),
+		options.WithReceivedMessageQueueSize(32),
+		options.WithProcessReceivedMessageFunc(func(req *pool.Message, cc *client.Conn, handler config.HandlerFunc[*client.Conn]) {
+			cc.ProcessReceivedMessageWithHandler(req, handler)
+		}),
 	)
 
 	var serverWg sync.WaitGroup
@@ -263,8 +270,8 @@ func TestServerKeepAliveMonitor(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*8)
 	defer cancel()
 
-	checkClose := semaphore.NewWeighted(2)
-	err = checkClose.Acquire(ctx, 2)
+	checkClose := semaphore.NewWeighted(1)
+	err = checkClose.Acquire(ctx, 1)
 	require.NoError(t, err)
 	sd := tcp.NewServer(
 		options.WithOnNewConn(func(cc *client.Conn) {
@@ -272,7 +279,7 @@ func TestServerKeepAliveMonitor(t *testing.T) {
 				checkClose.Release(1)
 			})
 		}),
-		options.WithKeepAlive(3, 200*time.Millisecond, func(cc *client.Conn) {
+		options.WithKeepAlive(3, 500*time.Millisecond, func(cc *client.Conn) {
 			require.False(t, inactivityDetected.Load())
 			inactivityDetected.Store(true)
 			errC := cc.Close()
@@ -293,31 +300,82 @@ func TestServerKeepAliveMonitor(t *testing.T) {
 		require.NoError(t, errS)
 	}()
 
-	cc, err := tcp.Dial(
-		ld.Addr().String(),
-		options.WithGoPool(func(processReqFunc config.ProcessRequestFunc[*client.Conn], req *pool.Message, cc *client.Conn, handler config.HandlerFunc[*client.Conn]) error {
-			time.Sleep(time.Second * 2)
-			processReqFunc(req, cc, handler)
-			return nil
-		}),
-	)
+	cc, err := net.Dial("tcp", ld.Addr().String())
 	require.NoError(t, err)
-	go func() {
-		select {
-		case <-cc.Done():
-			checkClose.Release(1)
-		case <-ctx.Done():
-			return
-		}
+	defer func() {
+		_ = cc.Close()
 	}()
 
-	// send ping to create serverside connection
-	reqCtx, cancel := context.WithTimeout(context.Background(), time.Second)
-	defer cancel()
-	_, err = cc.Get(reqCtx, "/tmp")
-	require.Error(t, err)
+	p := pool.NewMessage(ctx)
+	p.SetCode(codes.GET)
+	err = p.SetPath("/tmp")
+	require.NoError(t, err)
 
-	err = checkClose.Acquire(ctx, 2)
+	data, err := p.MarshalWithEncoder(coder.DefaultCoder)
+	require.NoError(t, err)
+	_, err = cc.Write(data)
+	require.NoError(t, err)
+
+	err = checkClose.Acquire(ctx, 1)
 	require.NoError(t, err)
 	require.True(t, inactivityDetected.Load())
+}
+
+func TestCheckForLossOrder(t *testing.T) {
+	ld, err := coapNet.NewTCPListener("tcp4", "")
+	require.NoError(t, err)
+	defer func() {
+		errC := ld.Close()
+		require.NoError(t, errC)
+	}()
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second*8)
+	defer cancel()
+
+	const numMessages = 1000
+	arrivedMessages := make([]uint64, 0, numMessages)
+	var arrivedMessagesLock sync.Mutex
+
+	sd := tcp.NewServer(options.WithHandlerFunc(func(resp *responsewriter.ResponseWriter[*client.Conn], req *pool.Message) {
+		errH := resp.SetResponse(codes.Content, message.TextPlain, bytes.NewReader([]byte("1234")))
+		require.NoError(t, errH)
+		arrivedMessagesLock.Lock()
+		defer arrivedMessagesLock.Unlock()
+		arrivedMessages = append(arrivedMessages, binary.LittleEndian.Uint64(req.Token()))
+	}))
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		errS := sd.Serve(ld)
+		require.NoError(t, errS)
+	}()
+	defer func() {
+		sd.Stop()
+		wg.Wait()
+	}()
+
+	cc, err := tcp.Dial(ld.Addr().String())
+	require.NoError(t, err)
+	defer func() {
+		errC := cc.Close()
+		require.NoError(t, errC)
+		<-cc.Done()
+	}()
+	for i := 0; i < numMessages; i++ {
+		p, err := cc.NewGetRequest(ctx, "/tmp")
+		require.NoError(t, err)
+		bs := make([]byte, 8)
+		binary.LittleEndian.PutUint64(bs, uint64(i))
+		p.SetToken(bs)
+		_, err = cc.Do(p)
+		require.NoError(t, err)
+	}
+	arrivedMessagesLock.Lock()
+	defer arrivedMessagesLock.Unlock()
+	require.Len(t, arrivedMessages, numMessages)
+	for idx, v := range arrivedMessages {
+		require.Equal(t, uint64(idx), v)
+	}
 }

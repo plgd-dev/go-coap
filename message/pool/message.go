@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 
+	multierror "github.com/hashicorp/go-multierror"
 	"github.com/plgd-dev/go-coap/v3/message"
 	"github.com/plgd-dev/go-coap/v3/message/codes"
 	"go.uber.org/atomic"
@@ -559,4 +560,37 @@ func (r *Message) SetupPut(path string, token message.Token, contentFormat messa
 
 func (r *Message) SetupDelete(path string, token message.Token, opts ...message.Option) error {
 	return r.setupCommon(codes.DELETE, path, token, opts...)
+}
+
+func (r *Message) Clone(msg *Message) error {
+	msg.SetCode(r.Code())
+	msg.SetToken(r.Token())
+	msg.ResetOptionsTo(r.Options())
+	msg.SetType(r.Type())
+	msg.SetMessageID(r.MessageID())
+
+	if r.Body() != nil {
+		buf := bytes.NewBuffer(nil)
+		n, err := r.Body().Seek(0, io.SeekCurrent)
+		if err != nil {
+			return err
+		}
+		_, err = io.Copy(buf, r.Body())
+		if err != nil {
+			var errs *multierror.Error
+			errs = multierror.Append(errs, err)
+			_, errS := r.Body().Seek(n, io.SeekStart)
+			if errS != nil {
+				errs = multierror.Append(errs, errS)
+			}
+			return errs.ErrorOrNil()
+		}
+		_, err = r.Body().Seek(n, io.SeekStart)
+		if err != nil {
+			return err
+		}
+		r := bytes.NewReader(buf.Bytes())
+		msg.SetBody(r)
+	}
+	return nil
 }

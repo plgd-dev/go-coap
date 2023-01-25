@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math"
 	"net"
+	"sync"
 	"time"
 
 	"github.com/plgd-dev/go-coap/v3/message"
@@ -33,7 +34,6 @@ const ExchangeLifetime = 247 * time.Second
 type (
 	HandlerFunc                 = func(*responsewriter.ResponseWriter[*Conn], *pool.Message)
 	ErrorFunc                   = func(error)
-	GoPoolFunc                  = config.GoPoolFunc[*Conn]
 	EventFunc                   = func()
 	GetMIDFunc                  = func() int32
 	CreateInactivityMonitorFunc = func() InactivityMonitor
@@ -70,6 +70,60 @@ const (
 	errFmtWriteResponse = "cannot write response: %w"
 )
 
+type midElement struct {
+	handler    HandlerFunc
+	start      time.Time
+	deadline   time.Time
+	retransmit atomic.Int32
+
+	private struct {
+		sync.Mutex
+		msg *pool.Message
+	}
+}
+
+func (m *midElement) ReleaseMessage(cc *Conn) {
+	m.private.Lock()
+	defer m.private.Unlock()
+	if m.private.msg != nil {
+		cc.ReleaseMessage(m.private.msg)
+		m.private.msg = nil
+	}
+}
+
+func (m *midElement) IsExpired(now time.Time, maxRetransmit int32) bool {
+	if !m.deadline.IsZero() && now.After(m.deadline) {
+		// remove element if deadline is exceeded
+		return true
+	}
+	retransmit := m.retransmit.Load()
+	return retransmit >= maxRetransmit
+}
+
+func (m *midElement) Retransmit(now time.Time, acknowledgeTimeout time.Duration) bool {
+	if now.After(m.start.Add(acknowledgeTimeout * time.Duration(m.retransmit.Load()+1))) {
+		m.retransmit.Inc()
+		// retransmit
+		return true
+	}
+	// wait for next retransmit
+	return false
+}
+
+func (m *midElement) GetMessage(cc *Conn) (*pool.Message, bool, error) {
+	m.private.Lock()
+	defer m.private.Unlock()
+	if m.private.msg == nil {
+		return nil, false, nil
+	}
+	msg := cc.AcquireMessage(m.private.msg.Context())
+	if err := m.private.msg.Clone(msg); err != nil {
+		cc.ReleaseMessage(msg)
+		return nil, false, err
+	}
+	return msg, true, nil
+}
+
 // Conn represents a virtual connection to a conceptual endpoint, to perform COAPs commands.
 type Conn struct {
 	// This field needs to be the first in the struct to ensure proper word alignment on 32-bit platforms.
@@ -85,13 +139,13 @@ type Conn struct {
 	transmission       *Transmission
 	messagePool        *pool.Pool
 
-	goPool           GoPoolFunc
-	errors           ErrorFunc
-	responseMsgCache *cache.Cache[string, []byte]
-	msgIDMutex       *MutexMap
+	processReceivedMessage config.ProcessReceivedMessageFunc[*Conn]
+	errors                 ErrorFunc
+	responseMsgCache       *cache.Cache[string, []byte]
+	msgIDMutex             *MutexMap
 
 	tokenHandlerContainer *coapSync.Map[uint64, HandlerFunc]
-	midHandlerContainer   *coapSync.Map[int32, HandlerFunc]
+	midHandlerContainer   *coapSync.Map[int32, *midElement]
 	msgID                 atomic.Uint32
 	blockwiseSZX          blockwise.SZX
 
@@ -103,6 +157,7 @@ type Conn struct {
 		time, counting as one outstanding interaction).
 	*/
 	numOutstandingInteraction *semaphore.Weighted
+	receivedMessageReader     *client.ReceivedMessageReader[*Conn]
 }
 
 // Transmission is a threadsafe container for transmission related parameters
@@ -147,6 +202,9 @@ func NewConn(
 	if cfg.GetToken == nil {
 		cfg.GetToken = message.GetToken
 	}
+	if cfg.ReceivedMessageQueueSize < 0 {
+		cfg.ReceivedMessageQueueSize = 0
+	}
 
 	cc := Conn{
 		session: session,
@@ -158,8 +216,8 @@ func NewConn(
 		blockwiseSZX: cfg.BlockwiseSZX,
 
 		tokenHandlerContainer:     coapSync.NewMap[uint64, HandlerFunc](),
-		midHandlerContainer:       coapSync.NewMap[int32, HandlerFunc](),
-		goPool:                    cfg.GoPool,
+		midHandlerContainer:       coapSync.NewMap[int32, *midElement](),
+		processReceivedMessage:    cfg.ProcessReceivedMessage,
 		errors:                    cfg.Errors,
 		msgIDMutex:                NewMutexMap(),
 		responseMsgCache:          cache.NewCache[string, []byte](),
@@ -172,7 +230,19 @@ func NewConn(
 	limitParallelRequests := limitparallelrequests.New(cfg.LimitClientParallelRequests, cfg.LimitClientEndpointParallelRequests, cc.do, cc.doObserve)
 	cc.observationHandler = observation.NewHandler(&cc, cfg.Handler, limitParallelRequests.Do)
 	cc.Client = client.New(&cc, cc.observationHandler, cfg.GetToken, limitParallelRequests)
+	if cc.processReceivedMessage == nil {
+		cc.processReceivedMessage = processReceivedMessage
+	}
+	cc.receivedMessageReader = client.NewReceivedMessageReader(&cc, cfg.ReceivedMessageQueueSize)
 	return &cc
+}
+
+func processReceivedMessage(req *pool.Message, cc *Conn, handler config.HandlerFunc[*Conn]) {
+	cc.ProcessReceivedMessageWithHandler(req, handler)
+}
+
+func (cc *Conn) ProcessReceivedMessage(req *pool.Message) {
+	cc.processReceivedMessage(req, cc, cc.handleReq)
 }
 
 func (cc *Conn) Session() Session {
@@ -215,10 +285,11 @@ func (cc *Conn) doInternal(req *pool.Message) (*pool.Message, error) {
 	if err != nil {
 		return nil, fmt.Errorf(errFmtWriteRequest, err)
 	}
+	cc.receivedMessageReader.TryToReplaceLoop()
 	select {
 	case <-req.Context().Done():
 		return nil, req.Context().Err()
-	case <-cc.session.Context().Done():
+	case <-cc.Context().Done():
 		return nil, fmt.Errorf("connection was closed: %w", cc.session.Context().Err())
 	case resp := <-respChan:
 		return resp, nil
@@ -270,31 +341,29 @@ func (cc *Conn) acquireOutstandingInteraction(ctx context.Context) error {
 	return nil
 }
 
-func (cc *Conn) transmitMessage(req *pool.Message, waitForResponseChan chan struct{}) error {
-	maxRetransmit := cc.transmission.maxRetransmit.Load()
-	for i := int32(0); i < maxRetransmit; i++ {
-		select {
-		case <-waitForResponseChan:
-			return nil
-		case <-req.Context().Done():
-			return req.Context().Err()
-		case <-cc.Context().Done():
-			return fmt.Errorf("connection was closed: %w", cc.Context().Err())
-		case <-time.After(cc.transmission.acknowledgeTimeout.Load()):
-			if err := cc.session.WriteMessage(req); err != nil {
-				return err
-			}
-		}
+func (cc *Conn) waitForAcknowledge(req *pool.Message, waitForResponseChan chan struct{}) error {
+	cc.receivedMessageReader.TryToReplaceLoop()
+	select {
+	case <-waitForResponseChan:
+		return nil
+	case <-req.Context().Done():
+		return req.Context().Err()
+	case <-cc.Context().Done():
+		return fmt.Errorf("connection was closed: %w", cc.Context().Err())
 	}
-	return fmt.Errorf("timeout: retransmission(%v) was exhausted", cc.transmission.maxRetransmit.Load())
 }
 
-func (cc *Conn) prepareWriteMessage(req *pool.Message, respChan chan struct{}) (func(), error) {
+func (cc *Conn) prepareWriteMessage(req *pool.Message, handler HandlerFunc) (func(), error) {
 	var closeFns fn.FuncList
 
 	// Only confirmable messages ever match an message ID
 	switch req.Type() {
 	case message.Confirmable:
+		msg := cc.AcquireMessage(req.Context())
+		if err := req.Clone(msg); err != nil {
+			cc.ReleaseMessage(msg)
+			return nil, fmt.Errorf("cannot clone message: %w", err)
+		}
 		if req.Code() >= codes.GET && req.Code() <= codes.DELETE {
 			if err := cc.acquireOutstandingInteraction(req.Context()); err != nil {
 				return nil, err
@@ -303,13 +372,15 @@ func (cc *Conn) prepareWriteMessage(req *pool.Message, respChan chan struct{}) (
 				cc.releaseOutstandingInteraction()
 			})
 		}
-		if _, loaded := cc.midHandlerContainer.LoadOrStore(req.MessageID(), func(w *responsewriter.ResponseWriter[*Conn], r *pool.Message) {
-			close(respChan)
-			if r.IsSeparateMessage() {
-				// separate message - just accept
-				return
-			}
-			cc.handleBW(w, r)
+		deadline, _ := req.Context().Deadline()
+		if _, loaded := cc.midHandlerContainer.LoadOrStore(req.MessageID(), &midElement{
+			handler:  handler,
+			start:    time.Now(),
+			deadline: deadline,
+			private: struct {
+				sync.Mutex
+				msg *pool.Message
+			}{msg: msg},
 		}); loaded {
 			closeFns.Execute()
 			return nil, fmt.Errorf("cannot insert mid(%v) handler: %w", req.MessageID(), coapErrors.ErrKeyAlreadyExists)
@@ -326,27 +397,40 @@ func (cc *Conn) prepareWriteMessage(req *pool.Message, respChan chan struct{}) (
 	return closeFns.ToFunction(), nil
 }
 
-func (cc *Conn) writeMessage(req *pool.Message) error {
-	respChan := make(chan struct{})
+func (cc *Conn) writeMessageAsync(req *pool.Message) error {
 	req.UpsertType(message.Confirmable)
 	req.UpsertMessageID(cc.GetMessageID())
-
-	closeFn, err := cc.prepareWriteMessage(req, respChan)
+	closeFn, err := cc.prepareWriteMessage(req, func(w *responsewriter.ResponseWriter[*Conn], r *pool.Message) {
+		// do nothing
+	})
 	if err != nil {
 		return err
 	}
 	defer closeFn()
-
 	if err := cc.session.WriteMessage(req); err != nil {
 		return fmt.Errorf(errFmtWriteRequest, err)
 	}
-	if req.Type() != message.Confirmable {
-		// If the request is not confirmable, we do not need to wait for a response
-		// and skip retransmissions
-		close(respChan)
-	}
+	return nil
+}
 
-	if err := cc.transmitMessage(req, respChan); err != nil {
+func (cc *Conn) writeMessage(req *pool.Message) error {
+	req.UpsertType(message.Confirmable)
+	req.UpsertMessageID(cc.GetMessageID())
+	if req.Type() != message.Confirmable {
+		return cc.writeMessageAsync(req)
+	}
+	respChan := make(chan struct{})
+	closeFn, err := cc.prepareWriteMessage(req, func(w *responsewriter.ResponseWriter[*Conn], r *pool.Message) {
+		close(respChan)
+	})
+	if err != nil {
+		return err
+	}
+	defer closeFn()
+	if err := cc.session.WriteMessage(req); err != nil {
+		return fmt.Errorf(errFmtWriteRequest, err)
+	}
+	if err := cc.waitForAcknowledge(req, respChan); err != nil {
 		return fmt.Errorf(errFmtWriteRequest, err)
 	}
 	return nil
@@ -375,20 +459,29 @@ func (cc *Conn) Context() context.Context {
 // AsyncPing sends ping and receivedPong will be called when pong arrives. It returns cancellation of ping operation.
 func (cc *Conn) AsyncPing(receivedPong func()) (func(), error) {
 	req := cc.AcquireMessage(cc.Context())
-	defer cc.ReleaseMessage(req)
 	req.SetType(message.Confirmable)
 	req.SetCode(codes.Empty)
 	mid := cc.GetMessageID()
 	req.SetMessageID(mid)
-	if _, loaded := cc.midHandlerContainer.LoadOrStore(mid, func(w *responsewriter.ResponseWriter[*Conn], r *pool.Message) {
-		if r.Type() == message.Reset || r.Type() == message.Acknowledgement {
-			receivedPong()
-		}
+	if _, loaded := cc.midHandlerContainer.LoadOrStore(mid, &midElement{
+		handler: func(w *responsewriter.ResponseWriter[*Conn], r *pool.Message) {
+			if r.Type() == message.Reset || r.Type() == message.Acknowledgement {
+				receivedPong()
+			}
+		},
+		start:    time.Now(),
+		deadline: time.Time{}, // no deadline
+		private: struct {
+			sync.Mutex
+			msg *pool.Message
+		}{msg: req},
 	}); loaded {
 		return nil, fmt.Errorf("cannot insert mid(%v) handler: %w", mid, coapErrors.ErrKeyAlreadyExists)
 	}
 	removeMidHandler := func() {
-		_, _ = cc.midHandlerContainer.LoadAndDelete(mid)
+		if elem, ok := cc.midHandlerContainer.LoadAndDelete(mid); ok {
+			elem.ReleaseMessage(cc)
+		}
 	}
 	if err := cc.session.WriteMessage(req); err != nil {
 		removeMidHandler()
@@ -415,13 +508,26 @@ func (cc *Conn) LocalAddr() net.Addr {
 	return cc.session.LocalAddr()
 }
 
-func (cc *Conn) sendPong(w *responsewriter.ResponseWriter[*Conn]) {
+func (cc *Conn) sendPong(w *responsewriter.ResponseWriter[*Conn], r *pool.Message) {
 	if err := w.SetResponse(codes.Empty, message.TextPlain, nil); err != nil {
 		cc.errors(fmt.Errorf("cannot send pong response: %w", err))
 	}
+	if r.Type() == message.Confirmable {
+		w.Message().SetType(message.Acknowledgement)
+		w.Message().SetMessageID(r.MessageID())
+	} else {
+		if w.Message().Type() != message.Reset {
+			w.Message().SetType(message.NonConfirmable)
+		}
+		w.Message().SetMessageID(cc.GetMessageID())
+	}
 }
 
-func (cc *Conn) handleBW(w *responsewriter.ResponseWriter[*Conn], m *pool.Message) {
+func (cc *Conn) handle(w *responsewriter.ResponseWriter[*Conn], m *pool.Message) {
+	if m.IsSeparateMessage() {
+		// msg was processed by token handler - just drop it.
+		return
+	}
 	if cc.blockWise != nil {
 		cc.blockWise.Handle(w, m, cc.blockwiseSZX, cc.session.MaxMessageSize(), func(rw *responsewriter.ResponseWriter[*Conn], rm *pool.Message) {
 			if h, ok := cc.tokenHandlerContainer.LoadAndDelete(rm.Token().Hash()); ok {
@@ -437,22 +543,6 @@ func (cc *Conn) handleBW(w *responsewriter.ResponseWriter[*Conn], m *pool.Messag
 		return
 	}
 	cc.observationHandler.Handle(w, m)
-}
-
-func (cc *Conn) handle(w *responsewriter.ResponseWriter[*Conn], r *pool.Message) {
-	if r.Code() == codes.Empty && r.Type() == message.Confirmable && len(r.Token()) == 0 && len(r.Options()) == 0 && r.Body() == nil {
-		cc.sendPong(w)
-		return
-	}
-	if h, ok := cc.midHandlerContainer.LoadAndDelete(r.MessageID()); ok {
-		h(w, r)
-		return
-	}
-	if r.IsSeparateMessage() {
-		// msg was processed by token handler - just drop it.
-		return
-	}
-	cc.handleBW(w, r)
 }
 
 // Sequence acquires sequence number.
@@ -612,7 +702,7 @@ func (cc *Conn) closeConnection() {
 	}
 }
 
-func processReqWithHandle(req *pool.Message, cc *Conn, handler config.HandlerFunc[*Conn]) {
+func (cc *Conn) ProcessReceivedMessageWithHandler(req *pool.Message, handler config.HandlerFunc[*Conn]) {
 	defer func() {
 		if !req.IsHijacked() {
 			cc.ReleaseMessage(req)
@@ -634,11 +724,43 @@ func processReqWithHandle(req *pool.Message, cc *Conn, handler config.HandlerFun
 		// nothing to send
 		return
 	}
-	errW := cc.writeMessage(w.Message())
+	errW := cc.writeMessageAsync(w.Message())
 	if errW != nil {
 		cc.closeConnection()
 		cc.errors(fmt.Errorf(errFmtWriteResponse, errW))
 	}
+}
+
+func (cc *Conn) handlePong(w *responsewriter.ResponseWriter[*Conn], r *pool.Message) {
+	cc.sendPong(w, r)
+}
+
+func (cc *Conn) handleSpecialMessages(r *pool.Message) bool {
+	// ping request
+	if r.Code() == codes.Empty && r.Type() == message.Confirmable && len(r.Token()) == 0 && len(r.Options()) == 0 && r.Body() == nil {
+		cc.ProcessReceivedMessageWithHandler(r, cc.handlePong)
+		return true
+	}
+	// if waits for concrete message handler
+	if elem, ok := cc.midHandlerContainer.LoadAndDelete(r.MessageID()); ok {
+		elem.ReleaseMessage(cc)
+		resp := cc.AcquireMessage(cc.Context())
+		resp.SetToken(r.Token())
+		w := responsewriter.New(resp, cc, r.Options()...)
+		defer func() {
+			cc.ReleaseMessage(w.Message())
+		}()
+		elem.handler(w, r)
+		// we just confirmed that message was processed for cc.writeMessage
+		// the body of the message is need to be processed by the loopOverReceivedMessageQueue goroutine
+		return false
+	}
+	// separate message
+	if r.IsSeparateMessage() {
+		// msg was processed by token handler - just drop it.
+		return true
+	}
+	return false
 }
 
 func (cc *Conn) Process(datagram []byte) error {
@@ -654,10 +776,12 @@ func (cc *Conn) Process(datagram []byte) error {
 	req.SetSequence(cc.Sequence())
 	cc.checkMyMessageID(req)
 	cc.inactivityMonitor.Notify()
-	err = cc.goPool(processReqWithHandle, req, cc, cc.handleReq)
-	if err != nil {
-		cc.ReleaseMessage(req)
-		return err
+	if cc.handleSpecialMessages(req) {
+		return nil
+	}
+	select {
+	case cc.receivedMessageReader.C() <- req:
+	case <-cc.Context().Done():
 	}
 	return nil
 }
@@ -672,6 +796,32 @@ func (cc *Conn) Done() <-chan struct{} {
 	return cc.session.Done()
 }
 
+func (cc *Conn) checkMidHandlerContainer(now time.Time, maxRetransmit int32, acknowledgeTimeout time.Duration, key int32, value *midElement) {
+	if value.IsExpired(now, maxRetransmit) {
+		cc.midHandlerContainer.Delete(key)
+		value.ReleaseMessage(cc)
+		cc.errors(fmt.Errorf(errFmtWriteRequest, context.DeadlineExceeded))
+		return
+	}
+	if !value.Retransmit(now, acknowledgeTimeout) {
+		return
+	}
+	msg, ok, err := value.GetMessage(cc)
+	if err != nil {
+		cc.midHandlerContainer.Delete(key)
+		value.ReleaseMessage(cc)
+		cc.errors(fmt.Errorf(errFmtWriteRequest, err))
+		return
+	}
+	if ok {
+		defer cc.ReleaseMessage(msg)
+		err := cc.session.WriteMessage(msg)
+		if err != nil {
+			cc.errors(fmt.Errorf(errFmtWriteRequest, err))
+		}
+	}
+}
+
 // CheckExpirations checks and remove expired items from caches.
 func (cc *Conn) CheckExpirations(now time.Time) {
 	cc.inactivityMonitor.CheckInactivity(now, cc)
@@ -679,6 +829,23 @@ func (cc *Conn) CheckExpirations(now time.Time) {
 	if cc.blockWise != nil {
 		cc.blockWise.CheckExpirations(now)
 	}
+	maxRetransmit := cc.transmission.maxRetransmit.Load()
+	acknowledgeTimeout := cc.transmission.acknowledgeTimeout.Load()
+	x := struct {
+		now                time.Time
+		maxRetransmit      int32
+		acknowledgeTimeout time.Duration
+		cc                 *Conn
+	}{
+		now:                now,
+		maxRetransmit:      maxRetransmit,
+		acknowledgeTimeout: acknowledgeTimeout,
+		cc:                 cc,
+	}
+	cc.midHandlerContainer.Range(func(key int32, value *midElement) bool {
+		x.cc.checkMidHandlerContainer(x.now, x.maxRetransmit, x.acknowledgeTimeout, key, value)
+		return true
+	})
 }
 
 func (cc *Conn) AcquireMessage(ctx context.Context) *pool.Message {

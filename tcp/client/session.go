@@ -13,11 +13,7 @@ import (
 	"github.com/plgd-dev/go-coap/v3/message/codes"
 	"github.com/plgd-dev/go-coap/v3/message/pool"
 	coapNet "github.com/plgd-dev/go-coap/v3/net"
-	"github.com/plgd-dev/go-coap/v3/net/blockwise"
 	"github.com/plgd-dev/go-coap/v3/net/monitor/inactivity"
-	"github.com/plgd-dev/go-coap/v3/net/responsewriter"
-	"github.com/plgd-dev/go-coap/v3/options/config"
-	coapSync "github.com/plgd-dev/go-coap/v3/pkg/sync"
 	"github.com/plgd-dev/go-coap/v3/tcp/coder"
 	"go.uber.org/atomic"
 )
@@ -25,41 +21,30 @@ import (
 type Session struct {
 	// This field needs to be the first in the struct to ensure proper word alignment on 32-bit platforms.
 	// See: https://golang.org/pkg/sync/atomic/#pkg-note-BUG
-	sequence                        atomic.Uint64
-	onClose                         []EventFunc
-	ctx                             atomic.Value // // TODO: change to atomic.Pointer[context.Context] for go1.19
-	inactivityMonitor               InactivityMonitor
-	errSendCSM                      error
-	cancel                          context.CancelFunc
-	done                            chan struct{}
-	goPool                          GoPoolFunc
-	errors                          ErrorFunc
-	blockWise                       *blockwise.BlockWise[*Conn]
-	connection                      *coapNet.Conn
-	handler                         func(*responsewriter.ResponseWriter[*Conn], *pool.Message)
-	tokenHandlerContainer           *coapSync.Map[uint64, func(*responsewriter.ResponseWriter[*Conn], *pool.Message)]
-	messagePool                     *pool.Pool
-	mutex                           sync.Mutex
-	maxMessageSize                  uint32
-	peerBlockWiseTranferEnabled     atomic.Bool
-	peerMaxMessageSize              atomic.Uint32
-	connectionCacheSize             uint16
-	disableTCPSignalMessageCSM      bool
-	disablePeerTCPSignalMessageCSMs bool
-	blockwiseSZX                    blockwise.SZX
-	closeSocket                     bool
+	sequence          atomic.Uint64
+	inactivityMonitor InactivityMonitor
+	errSendCSM        error
+	cancel            context.CancelFunc
+	done              chan struct{}
+	errors            ErrorFunc
+	connection        *coapNet.Conn
+	messagePool       *pool.Pool
+	ctx               atomic.Value // TODO: change to atomic.Pointer[context.Context] for go1.19
+	maxMessageSize    uint32
+	private           struct {
+		mutex   sync.Mutex
+		onClose []EventFunc
+	}
+	connectionCacheSize        uint16
+	disableTCPSignalMessageCSM bool
+	closeSocket                bool
 }
 
 func NewSession(
 	ctx context.Context,
 	connection *coapNet.Conn,
-	handler HandlerFunc,
 	maxMessageSize uint32,
-	goPool GoPoolFunc,
 	errors ErrorFunc,
-	blockwiseSZX blockwise.SZX,
-	blockWise *blockwise.BlockWise[*Conn],
-	disablePeerTCPSignalMessageCSMs bool,
 	disableTCPSignalMessageCSM bool,
 	closeSocket bool,
 	inactivityMonitor InactivityMonitor,
@@ -77,22 +62,16 @@ func NewSession(
 	}
 
 	s := &Session{
-		cancel:                          cancel,
-		connection:                      connection,
-		handler:                         handler,
-		maxMessageSize:                  maxMessageSize,
-		tokenHandlerContainer:           coapSync.NewMap[uint64, HandlerFunc](),
-		goPool:                          goPool,
-		errors:                          errors,
-		blockWise:                       blockWise,
-		blockwiseSZX:                    blockwiseSZX,
-		disablePeerTCPSignalMessageCSMs: disablePeerTCPSignalMessageCSMs,
-		disableTCPSignalMessageCSM:      disableTCPSignalMessageCSM,
-		closeSocket:                     closeSocket,
-		inactivityMonitor:               inactivityMonitor,
-		done:                            make(chan struct{}),
-		connectionCacheSize:             connectionCacheSize,
-		messagePool:                     messagePool,
+		cancel:                     cancel,
+		connection:                 connection,
+		maxMessageSize:             maxMessageSize,
+		errors:                     errors,
+		disableTCPSignalMessageCSM: disableTCPSignalMessageCSM,
+		closeSocket:                closeSocket,
+		inactivityMonitor:          inactivityMonitor,
+		done:                       make(chan struct{}),
+		connectionCacheSize:        connectionCacheSize,
+		messagePool:                messagePool,
 	}
 	s.ctx.Store(&ctx)
 
@@ -108,8 +87,6 @@ func NewSession(
 
 // SetContextValue stores the value associated with key to context of connection.
 func (s *Session) SetContextValue(key interface{}, val interface{}) {
-	s.mutex.Lock()
-	defer s.mutex.Unlock()
 	ctx := context.WithValue(s.Context(), key, val)
 	s.ctx.Store(&ctx)
 }
@@ -120,16 +97,16 @@ func (s *Session) Done() <-chan struct{} {
 }
 
 func (s *Session) AddOnClose(f EventFunc) {
-	s.mutex.Lock()
-	defer s.mutex.Unlock()
-	s.onClose = append(s.onClose, f)
+	s.private.mutex.Lock()
+	defer s.private.mutex.Unlock()
+	s.private.onClose = append(s.private.onClose, f)
 }
 
 func (s *Session) popOnClose() []EventFunc {
-	s.mutex.Lock()
-	defer s.mutex.Unlock()
-	tmp := s.onClose
-	s.onClose = nil
+	s.private.mutex.Lock()
+	defer s.private.mutex.Unlock()
+	tmp := s.private.onClose
+	s.private.onClose = nil
 	return tmp
 }
 
@@ -154,98 +131,6 @@ func (s *Session) Sequence() uint64 {
 
 func (s *Session) Context() context.Context {
 	return *s.ctx.Load().(*context.Context) //nolint:forcetypeassert
-}
-
-func (s *Session) PeerMaxMessageSize() uint32 {
-	return s.peerMaxMessageSize.Load()
-}
-
-func (s *Session) PeerBlockWiseTransferEnabled() bool {
-	return s.peerBlockWiseTranferEnabled.Load()
-}
-
-func (s *Session) handleSignals(r *pool.Message, cc *Conn) bool {
-	switch r.Code() {
-	case codes.CSM:
-		if s.disablePeerTCPSignalMessageCSMs {
-			return true
-		}
-		if size, err := r.GetOptionUint32(message.TCPMaxMessageSize); err == nil {
-			s.peerMaxMessageSize.Store(size)
-		}
-		if r.HasOption(message.TCPBlockWiseTransfer) {
-			s.peerBlockWiseTranferEnabled.Store(true)
-		}
-		return true
-	case codes.Ping:
-		// if r.HasOption(message.TCPCustody) {
-		// TODO
-		// }
-		if err := s.sendPong(r.Token()); err != nil && !coapNet.IsConnectionBrokenError(err) {
-			s.errors(fmt.Errorf("cannot handle ping signal: %w", err))
-		}
-		return true
-	case codes.Release:
-		// if r.HasOption(message.TCPAlternativeAddress) {
-		// TODO
-		// }
-		return true
-	case codes.Abort:
-		// if r.HasOption(message.TCPBadCSMOption) {
-		// TODO
-		// }
-		return true
-	case codes.Pong:
-		if h, ok := s.tokenHandlerContainer.LoadAndDelete(r.Token().Hash()); ok {
-			s.processReq(r, cc, h)
-		}
-		return true
-	}
-	return false
-}
-
-func (s *Session) blockwiseHandle(w *responsewriter.ResponseWriter[*Conn], r *pool.Message) {
-	if h, ok := s.tokenHandlerContainer.Load(r.Token().Hash()); ok {
-		h(w, r)
-		return
-	}
-	s.handler(w, r)
-}
-
-func (s *Session) Handle(w *responsewriter.ResponseWriter[*Conn], r *pool.Message) {
-	if s.blockWise != nil && s.PeerBlockWiseTransferEnabled() {
-		s.blockWise.Handle(w, r, s.blockwiseSZX, s.maxMessageSize, s.blockwiseHandle)
-		return
-	}
-	if h, ok := s.tokenHandlerContainer.LoadAndDelete(r.Token().Hash()); ok {
-		h(w, r)
-		return
-	}
-	s.handler(w, r)
-}
-
-func (s *Session) TokenHandler() *coapSync.Map[uint64, HandlerFunc] {
-	return s.tokenHandlerContainer
-}
-
-func (s *Session) processReq(req *pool.Message, cc *Conn, handler config.HandlerFunc[*Conn]) {
-	origResp := s.messagePool.AcquireMessage(s.Context())
-	origResp.SetToken(req.Token())
-	w := responsewriter.New(origResp, cc, req.Options()...)
-	handler(w, req)
-	defer s.messagePool.ReleaseMessage(w.Message())
-	if !req.IsHijacked() {
-		s.messagePool.ReleaseMessage(req)
-	}
-	if w.Message().IsModified() {
-		err := s.WriteMessage(w.Message())
-		if err != nil {
-			if errC := s.Close(); errC != nil {
-				s.errors(fmt.Errorf("cannot close connection: %w", errC))
-			}
-			s.errors(fmt.Errorf("cannot write response to %v: %w", s.connection.RemoteAddr(), err))
-		}
-	}
 }
 
 func seekBufferToNextMessage(buffer *bytes.Buffer, msgSize int) *bytes.Buffer {
@@ -290,13 +175,7 @@ func (s *Session) processBuffer(buffer *bytes.Buffer, cc *Conn) error {
 		buffer = seekBufferToNextMessage(buffer, read)
 		req.SetSequence(s.Sequence())
 		s.inactivityMonitor.Notify()
-		if s.handleSignals(req, cc) {
-			continue
-		}
-		err = s.goPool(s.processReq, req, cc, s.Handle)
-		if err != nil {
-			return fmt.Errorf("cannot spawn go routine: %w", err)
-		}
+		cc.pushToReceivedMessageQueue(req)
 	}
 	return nil
 }
@@ -321,14 +200,6 @@ func (s *Session) sendCSM() error {
 	req := s.messagePool.AcquireMessage(s.Context())
 	defer s.messagePool.ReleaseMessage(req)
 	req.SetCode(codes.CSM)
-	req.SetToken(token)
-	return s.WriteMessage(req)
-}
-
-func (s *Session) sendPong(token message.Token) error {
-	req := s.messagePool.AcquireMessage(s.Context())
-	defer s.messagePool.ReleaseMessage(req)
-	req.SetCode(codes.Pong)
 	req.SetToken(token)
 	return s.WriteMessage(req)
 }
@@ -376,9 +247,6 @@ func (s *Session) Run(cc *Conn) (err error) {
 // CheckExpirations checks and remove expired items from caches.
 func (s *Session) CheckExpirations(now time.Time, cc *Conn) {
 	s.inactivityMonitor.CheckInactivity(now, cc)
-	if s.blockWise != nil {
-		s.blockWise.CheckExpirations(now)
-	}
 }
 
 func (s *Session) AcquireMessage(ctx context.Context) *pool.Message {

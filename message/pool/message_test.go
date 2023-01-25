@@ -1,7 +1,9 @@
 package pool_test
 
 import (
+	"bytes"
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -294,4 +296,67 @@ func TestMessageETag(t *testing.T) {
 	value, err = msg.ETag()
 	require.NoError(t, err)
 	require.Equal(t, etag, value)
+}
+
+type malFuncSeeker struct{}
+
+func (m malFuncSeeker) Read(p []byte) (n int, err error) {
+	return 0, nil
+}
+
+func (m malFuncSeeker) Seek(offset int64, whence int) (int64, error) {
+	return 0, errors.New("seek error")
+}
+
+type malFuncReader struct{}
+
+func (m malFuncReader) Read(p []byte) (n int, err error) {
+	return 0, errors.New("read error")
+}
+
+func (m malFuncReader) Seek(offset int64, whence int) (int64, error) {
+	return 0, nil
+}
+
+func TestMessageClone(t *testing.T) {
+	original := pool.NewMessage(context.Background())
+	original.SetMessageID(1)
+	original.SetType(message.Confirmable)
+	err := original.SetPath("/test")
+	require.NoError(t, err)
+	original.AddQuery("q1")
+	original.AddQuery("q2")
+	original.SetBody(bytes.NewReader([]byte("test body")))
+
+	cloned := pool.NewMessage(original.Context())
+	err = original.Clone(cloned)
+	require.NoError(t, err)
+
+	require.Equal(t, original.MessageID(), cloned.MessageID())
+	require.Equal(t, original.Type(), cloned.Type())
+	originalPath, err := original.Path()
+	require.NoError(t, err)
+	clonedPath, err := cloned.Path()
+	require.NoError(t, err)
+	require.Equal(t, originalPath, clonedPath)
+	originalQueries, err := original.Queries()
+	require.NoError(t, err)
+	clonedQueries, err := cloned.Queries()
+	require.NoError(t, err)
+	require.Equal(t, originalQueries, clonedQueries)
+	originalBody, err := original.ReadBody()
+	require.NoError(t, err)
+	clonedBody, err := cloned.ReadBody()
+	require.NoError(t, err)
+	require.Equal(t, originalBody, clonedBody)
+
+	original.SetBody(malFuncSeeker{})
+	err = original.Clone(cloned)
+	require.Error(t, err)
+	require.Equal(t, err.Error(), "seek error")
+
+	original.SetBody(malFuncReader{})
+	err = original.Clone(cloned)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "read error")
 }

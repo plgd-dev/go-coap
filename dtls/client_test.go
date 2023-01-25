@@ -304,9 +304,8 @@ func TestConnPost(t *testing.T) {
 				buf, errH := io.ReadAll(r.Body())
 				require.NoError(t, errH)
 				assert.Len(t, buf, 7000)
-
-				err = w.SetResponse(codes.BadRequest, message.TextPlain, bytes.NewReader(make([]byte, 5330)))
-				require.NoError(t, err)
+				errH = w.SetResponse(codes.BadRequest, message.TextPlain, bytes.NewReader(make([]byte, 5330)))
+				require.NoError(t, errH)
 				require.NotEmpty(t, w.Conn())
 			}))
 			require.NoError(t, err)
@@ -782,44 +781,29 @@ func TestClientKeepAliveMonitor(t *testing.T) {
 
 	ld, err := coapNet.NewDTLSListener("udp4", "", serverCgf)
 	require.NoError(t, err)
-	defer func() {
-		errC := ld.Close()
-		require.NoError(t, errC)
-	}()
 
-	checkClose := semaphore.NewWeighted(2)
-	err = checkClose.Acquire(ctx, 2)
+	checkClose := semaphore.NewWeighted(1)
+	err = checkClose.Acquire(ctx, 1)
 	require.NoError(t, err)
-	sd := dtls.NewServer(
-		options.WithOnNewConn(func(cc *client.Conn) {
-			t.Log("server - new connection")
-			cc.AddOnClose(func() {
-				t.Log("server - client is closed")
-				checkClose.Release(1)
-			})
-		}),
-		options.WithGoPool(func(processReqFunc config.ProcessRequestFunc[*client.Conn], req *pool.Message, cc *client.Conn, handler config.HandlerFunc[*client.Conn]) error {
-			time.Sleep(time.Millisecond * 500)
-			processReqFunc(req, cc, handler)
-			return nil
-		}),
-		options.WithPeriodicRunner(periodic.New(ctx.Done(), time.Millisecond*10)),
-		options.WithInactivityMonitor(Timeout/2, func(c *client.Conn) {
-			t.Log("server - close for inactivity")
-			_ = c.Close()
-		}),
-	)
 
 	var serverWg sync.WaitGroup
 	serverWg.Add(1)
 	go func() {
 		defer serverWg.Done()
-		errS := sd.Serve(ld)
-		require.NoError(t, errS)
+		for {
+			c, errA := ld.AcceptWithContext(ctx)
+			if errA != nil {
+				if errors.Is(errA, coapNet.ErrListenerIsClosed) {
+					return
+				}
+			}
+			defer c.Close()
+			require.NoError(t, errA)
+		}
 	}()
 	defer func() {
-		sd.Stop()
-		serverWg.Wait()
+		errC := ld.Close()
+		require.NoError(t, errC)
 	}()
 
 	cc, err := dtls.Dial(
@@ -832,10 +816,13 @@ func TestClientKeepAliveMonitor(t *testing.T) {
 			require.NoError(t, errC)
 		}),
 		options.WithPeriodicRunner(periodic.New(ctx.Done(), time.Millisecond*10)),
+		options.WithReceivedMessageQueueSize(32),
+		options.WithProcessReceivedMessageFunc(func(req *pool.Message, cc *client.Conn, handler config.HandlerFunc[*client.Conn]) {
+			cc.ProcessReceivedMessageWithHandler(req, handler)
+		}),
 	)
 	require.NoError(t, err)
 	cc.AddOnClose(func() {
-		t.Log("client is closed")
 		checkClose.Release(1)
 	})
 
@@ -845,7 +832,7 @@ func TestClientKeepAliveMonitor(t *testing.T) {
 	err = cc.Ping(ctxPing)
 	require.Error(t, err)
 
-	err = checkClose.Acquire(ctx, 2)
+	err = checkClose.Acquire(ctx, 1)
 	require.NoError(t, err)
 	require.True(t, inactivityDetected.Load())
 }
