@@ -66,6 +66,13 @@ func (r *ResponseWriter[C]) Message() *pool.Message {
 	return r.response
 }
 
+// Swap message in response without releasing.
+func (r *ResponseWriter[C]) Swap(m *pool.Message) *pool.Message {
+	tmp := r.response
+	r.response = m
+	return tmp
+}
+
 // CConn peer connection.
 func (r *ResponseWriter[C]) Conn() C {
 	return r.cc

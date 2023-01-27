@@ -149,7 +149,6 @@ func TestBlockWiseDo(t *testing.T) {
 				payload: memfile.New(make([]byte, 17)),
 			},
 		},
-
 		{
 			name: "SZX16-SZX1024",
 			args: args{
