@@ -8,8 +8,8 @@ import (
 
 // Map is like a Go map[interface{}]interface{} but is safe for concurrent use by multiple goroutines.
 type Map[K comparable, V any] struct {
-	mutex sync.RWMutex
 	data  map[K]V
+	mutex sync.RWMutex
 }
 
 // NewMap creates map.

@@ -20,19 +20,19 @@ type (
 )
 
 type Common[C responsewriter.Client] struct {
-	LimitClientParallelRequests         int64
-	LimitClientEndpointParallelRequests int64
 	Ctx                                 context.Context
 	Errors                              ErrorFunc
 	PeriodicRunner                      periodic.Func
 	MessagePool                         *pool.Pool
 	GetToken                            client.GetTokenFunc
-	MaxMessageSize                      uint32
+	ProcessReceivedMessage              ProcessReceivedMessageFunc[C]
 	BlockwiseTransferTimeout            time.Duration
+	LimitClientParallelRequests         int64
+	LimitClientEndpointParallelRequests int64
+	ReceivedMessageQueueSize            int
+	MaxMessageSize                      uint32
 	BlockwiseSZX                        blockwise.SZX
 	BlockwiseEnable                     bool
-	ProcessReceivedMessage              ProcessReceivedMessageFunc[C]
-	ReceivedMessageQueueSize            int
 }
 
 func NewCommon[C responsewriter.Client]() Common[C] {

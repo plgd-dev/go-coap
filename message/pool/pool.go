@@ -9,8 +9,6 @@ import (
 )
 
 type Pool struct {
-	// This field needs to be the first in the struct to ensure proper word alignment on 32-bit platforms.
-	// See: https://golang.org/pkg/sync/atomic/#pkg-note-BUG
 	currentMessagesInPool atomic.Int64
 	messagePool           sync.Pool
 	maxNumMessages        uint32

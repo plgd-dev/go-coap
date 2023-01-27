@@ -10,14 +10,12 @@ import (
 const MaxTokenSize = 8
 
 type Message struct {
-	Token   Token
-	Options Options
-	Code    codes.Code
-	Payload []byte
-
-	// For DTLS and UDP messages
-	MessageID int32 // uint16 is valid, all other values are invalid, -1 is used for unset
-	Type      Type  // uint8 is valid, all other values are invalid, -1 is used for unset
+	Token     Token
+	Options   Options
+	Payload   []byte
+	MessageID int32
+	Code      codes.Code
+	Type      Type
 }
 
 func (r *Message) String() string {

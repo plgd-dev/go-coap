@@ -10,8 +10,8 @@ import (
 
 // TransmissionOpt transmission options.
 type TransmissionOpt struct {
-	transmissionNStart             uint32
 	transmissionAcknowledgeTimeout time.Duration
+	transmissionNStart             uint32
 	transmissionMaxRetransmit      uint32
 }
 

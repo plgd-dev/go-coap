@@ -24,12 +24,12 @@ type Listener interface {
 }
 
 type Server struct {
+	cfg    *Config
 	ctx    context.Context
 	cancel context.CancelFunc
-	cfg    *Config
 
-	listenMutex sync.Mutex
 	listen      Listener
+	listenMutex sync.Mutex
 }
 
 // A Option sets options such as credentials, codec and keepalive parameters, etc.

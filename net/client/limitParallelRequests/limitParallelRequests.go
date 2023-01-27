@@ -23,17 +23,17 @@ type Observation = interface {
 }
 
 type endpointQueue struct {
-	processedCounter int64
 	orderedRequest   []chan struct{}
+	processedCounter int64
 }
 
 type LimitParallelRequests struct {
-	endpointLimit int64
-	limit         *semaphore.Weighted
-	do            DoFunc
-	doObserve     DoObserveFunc
+	limit     *semaphore.Weighted
+	do        DoFunc
+	doObserve DoObserveFunc
 	// only one request can be processed by one endpoint
 	endpointQueues *coapSync.Map[uint64, *endpointQueue]
+	endpointLimit  int64
 }
 
 // New creates new LimitParallelRequests. When limit, endpointLimit == 0, then limit is not used.

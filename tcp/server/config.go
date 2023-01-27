@@ -52,10 +52,10 @@ var DefaultConfig = func() Config {
 }()
 
 type Config struct {
+	CreateInactivityMonitor client.CreateInactivityMonitorFunc
+	Handler                 HandlerFunc
+	OnNewConn               OnNewConnFunc
 	config.Common[*client.Conn]
-	CreateInactivityMonitor         client.CreateInactivityMonitorFunc
-	Handler                         HandlerFunc
-	OnNewConn                       OnNewConnFunc
 	ConnectionCacheSize             uint16
 	DisablePeerTCPSignalMessageCSMs bool
 	DisableTCPSignalMessageCSM      bool

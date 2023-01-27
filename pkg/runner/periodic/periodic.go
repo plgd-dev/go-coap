@@ -2,15 +2,16 @@ package periodic
 
 import (
 	"sync"
-	"sync/atomic"
 	"time"
+
+	"go.uber.org/atomic"
 )
 
 type Func = func(f func(now time.Time) bool)
 
 func New(stop <-chan struct{}, tick time.Duration) Func {
+	var idx atomic.Uint64
 	var m sync.Map
-	var idx uint64
 	go func() {
 		t := time.NewTicker(tick)
 		defer t.Stop()
@@ -37,7 +38,7 @@ func New(stop <-chan struct{}, tick time.Duration) Func {
 		if f == nil {
 			return
 		}
-		v := atomic.AddUint64(&idx, 1)
+		v := idx.Add(1)
 		m.Store(v, f)
 	}
 }

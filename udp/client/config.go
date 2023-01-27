@@ -41,15 +41,15 @@ var DefaultConfig = func() Config {
 }()
 
 type Config struct {
+	CreateInactivityMonitor CreateInactivityMonitorFunc
+	GetMID                  GetMIDFunc
+	Handler                 HandlerFunc
+	Dialer                  *net.Dialer
+	Net                     string
 	config.Common[*Conn]
-	CreateInactivityMonitor        CreateInactivityMonitorFunc
-	Net                            string
-	GetMID                         GetMIDFunc
-	Handler                        HandlerFunc
-	Dialer                         *net.Dialer
-	TransmissionNStart             uint32
 	TransmissionAcknowledgeTimeout time.Duration
+	TransmissionNStart             uint32
 	TransmissionMaxRetransmit      uint32
-	CloseSocket                    bool
 	MTU                            uint16
+	CloseSocket                    bool
 }

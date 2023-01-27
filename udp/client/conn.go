@@ -71,15 +71,14 @@ const (
 )
 
 type midElement struct {
-	handler    HandlerFunc
-	start      time.Time
-	deadline   time.Time
-	retransmit atomic.Int32
-
-	private struct {
-		sync.Mutex
+	start    time.Time
+	deadline time.Time
+	handler  HandlerFunc
+	private  struct {
 		msg *pool.Message
+		sync.Mutex
 	}
+	retransmit atomic.Int32
 }
 
 func (m *midElement) ReleaseMessage(cc *Conn) {
@@ -146,9 +145,6 @@ type Conn struct {
 
 	tokenHandlerContainer *coapSync.Map[uint64, HandlerFunc]
 	midHandlerContainer   *coapSync.Map[int32, *midElement]
-	msgID                 atomic.Uint32
-	blockwiseSZX          blockwise.SZX
-
 	/*
 		An outstanding interaction is either a CON for which an ACK has not
 		yet been received but is still expected (message layer) or a request
@@ -158,12 +154,15 @@ type Conn struct {
 	*/
 	numOutstandingInteraction *semaphore.Weighted
 	receivedMessageReader     *client.ReceivedMessageReader[*Conn]
+
+	msgID        atomic.Uint32
+	blockwiseSZX blockwise.SZX
 }
 
 // Transmission is a threadsafe container for transmission related parameters
 type Transmission struct {
-	nStart             *atomic.Uint32
 	acknowledgeTimeout *atomic.Duration
+	nStart             *atomic.Uint32
 	maxRetransmit      *atomic.Int32
 }
 
@@ -209,9 +208,9 @@ func NewConn(
 	cc := Conn{
 		session: session,
 		transmission: &Transmission{
-			atomic.NewUint32(cfg.TransmissionNStart),
-			atomic.NewDuration(cfg.TransmissionAcknowledgeTimeout),
-			atomic.NewInt32(int32(cfg.TransmissionMaxRetransmit)),
+			nStart:             atomic.NewUint32(cfg.TransmissionNStart),
+			acknowledgeTimeout: atomic.NewDuration(cfg.TransmissionAcknowledgeTimeout),
+			maxRetransmit:      atomic.NewInt32(int32(cfg.TransmissionMaxRetransmit)),
 		},
 		blockwiseSZX: cfg.BlockwiseSZX,
 
@@ -378,8 +377,8 @@ func (cc *Conn) prepareWriteMessage(req *pool.Message, handler HandlerFunc) (fun
 			start:    time.Now(),
 			deadline: deadline,
 			private: struct {
-				sync.Mutex
 				msg *pool.Message
+				sync.Mutex
 			}{msg: msg},
 		}); loaded {
 			closeFns.Execute()
@@ -472,8 +471,8 @@ func (cc *Conn) AsyncPing(receivedPong func()) (func(), error) {
 		start:    time.Now(),
 		deadline: time.Time{}, // no deadline
 		private: struct {
-			sync.Mutex
 			msg *pool.Message
+			sync.Mutex
 		}{msg: req},
 	}); loaded {
 		return nil, fmt.Errorf("cannot insert mid(%v) handler: %w", mid, coapErrors.ErrKeyAlreadyExists)
@@ -832,10 +831,10 @@ func (cc *Conn) CheckExpirations(now time.Time) {
 	maxRetransmit := cc.transmission.maxRetransmit.Load()
 	acknowledgeTimeout := cc.transmission.acknowledgeTimeout.Load()
 	x := struct {
-		now                time.Time
-		maxRetransmit      int32
-		acknowledgeTimeout time.Duration
 		cc                 *Conn
+		now                time.Time
+		acknowledgeTimeout time.Duration
+		maxRetransmit      int32
 	}{
 		now:                now,
 		maxRetransmit:      maxRetransmit,

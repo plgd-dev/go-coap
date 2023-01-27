@@ -20,8 +20,8 @@ func TestMessageSetPath(t *testing.T) {
 	tests := []struct {
 		name    string
 		args    args
-		wantErr bool
 		want    string
+		wantErr bool
 	}{
 		{
 			name:    "Empty",

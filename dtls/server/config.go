@@ -52,13 +52,13 @@ var DefaultConfig = func() Config {
 }()
 
 type Config struct {
+	CreateInactivityMonitor func() udpClient.InactivityMonitor
+	GetMID                  GetMIDFunc
+	Handler                 HandlerFunc
+	OnNewConn               OnNewConnFunc
 	config.Common[*udpClient.Conn]
-	CreateInactivityMonitor        func() udpClient.InactivityMonitor
-	GetMID                         GetMIDFunc
-	Handler                        HandlerFunc
-	OnNewConn                      OnNewConnFunc
-	TransmissionNStart             uint32
 	TransmissionAcknowledgeTimeout time.Duration
+	TransmissionNStart             uint32
 	TransmissionMaxRetransmit      uint32
 	MTU                            uint16
 }

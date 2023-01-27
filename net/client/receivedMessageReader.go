@@ -17,9 +17,9 @@ type ReceivedMessageReader[C ReceivedMessageReaderClient] struct {
 	cc    C
 
 	private struct {
-		mutex           sync.Mutex
 		loopDone        chan struct{}
 		readingMessages *atomic.Bool
+		mutex           sync.Mutex
 	}
 }
 
@@ -29,9 +29,9 @@ func NewReceivedMessageReader[C ReceivedMessageReaderClient](cc C, queueSize int
 		queue: make(chan *pool.Message, queueSize),
 		cc:    cc,
 		private: struct {
-			mutex           sync.Mutex
 			loopDone        chan struct{}
 			readingMessages *atomic.Bool
+			mutex           sync.Mutex
 		}{
 			loopDone:        make(chan struct{}),
 			readingMessages: atomic.NewBool(true),
