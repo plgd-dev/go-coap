@@ -15,8 +15,8 @@ type Conn = interface {
 
 type Monitor[C Conn] struct {
 	lastActivity atomic.Value
-	duration     time.Duration
 	onInactive   OnInactiveFunc[C]
+	duration     time.Duration
 }
 
 func (m *Monitor[C]) Notify() {

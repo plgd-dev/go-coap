@@ -39,11 +39,11 @@ const (
 type InterfaceError = func(iface *net.Interface, err error)
 
 type MulticastOptions struct {
-	IFaceMode      MulticastInterfaceMode
 	Iface          *net.Interface
 	Source         *net.IP
-	HopLimit       int
 	InterfaceError InterfaceError
+	IFaceMode      MulticastInterfaceMode
+	HopLimit       int
 }
 
 func (m *MulticastOptions) Apply(o MulticastOption) {

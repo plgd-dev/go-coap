@@ -9,13 +9,13 @@ import (
 type cancelPingFunc func()
 
 type KeepAlive[C Conn] struct {
+	// This field needs to be the first in the struct to ensure proper word alignment on 32-bit platforms.
+	// See: https://golang.org/pkg/sync/atomic/#pkg-note-BUG
 	pongToken  atomic.Uint64
 	onInactive OnInactiveFunc[C]
-
 	sendPing   func(cc C, receivePong func()) (func(), error)
 	cancelPing atomic.UnsafePointer
 	numFails   atomic.Uint32
-
 	maxRetries uint32
 }
 

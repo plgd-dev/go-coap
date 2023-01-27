@@ -29,11 +29,11 @@ type Listener interface {
 }
 
 type Server struct {
-	listenMutex sync.Mutex
 	listen      Listener
 	ctx         context.Context
 	cancel      context.CancelFunc
 	cfg         *Config
+	listenMutex sync.Mutex
 }
 
 func New(opt ...Option) *Server {

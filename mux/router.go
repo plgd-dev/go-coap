@@ -41,18 +41,17 @@ func (f HandlerFunc) ServeCOAP(w ResponseWriter, r *Message) {
 // with same name.
 // Router is also safe for concurrent access from multiple goroutines.
 type Router struct {
-	middlewares []MiddlewareFunc
-	errors      ErrorFunc
-
 	m              *sync.RWMutex
+	errors         ErrorFunc
 	defaultHandler Handler          // guarded by m
 	z              map[string]Route // guarded by m
+	middlewares    []MiddlewareFunc
 }
 
 type Route struct {
 	h            Handler
-	pattern      string
 	regexMatcher *routeRegexp
+	pattern      string
 }
 
 func (route *Route) GetRouteRegexp() (string, error) {

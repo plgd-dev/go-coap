@@ -36,12 +36,12 @@ var DefaultConfig = func() Config {
 }()
 
 type Config struct {
+	CreateInactivityMonitor CreateInactivityMonitorFunc
+	Net                     string
+	Dialer                  *net.Dialer
+	TLSCfg                  *tls.Config
+	Handler                 HandlerFunc
 	config.Common[*Conn]
-	CreateInactivityMonitor         CreateInactivityMonitorFunc
-	Net                             string
-	Dialer                          *net.Dialer
-	TLSCfg                          *tls.Config
-	Handler                         HandlerFunc
 	ConnectionCacheSize             uint16
 	DisablePeerTCPSignalMessageCSMs bool
 	CloseSocket                     bool

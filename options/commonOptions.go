@@ -291,8 +291,8 @@ func panicForInvalidOnInactiveFunc(t, exp any) {
 
 // KeepAliveOpt keepalive option.
 type KeepAliveOpt[C OnInactiveFunc] struct {
-	timeout    time.Duration
 	onInactive C
+	timeout    time.Duration
 	maxRetries uint32
 }
 
@@ -375,8 +375,8 @@ func WithKeepAlive[C OnInactiveFunc](maxRetries uint32, timeout time.Duration, o
 
 // InactivityMonitorOpt notifies when a connection was inactive for a given duration.
 type InactivityMonitorOpt[C OnInactiveFunc] struct {
-	duration   time.Duration
 	onInactive C
+	duration   time.Duration
 }
 
 func (o InactivityMonitorOpt[C]) toTCPCreateInactivityMonitor(onInactive TCPOnInactive) func() tcpClient.InactivityMonitor {

@@ -23,19 +23,16 @@ type Decoder interface {
 }
 
 type Message struct {
-	// Context context of request.
 	ctx             context.Context
-	msg             message.Message
-	hijacked        atomic.Bool
-	isModified      bool
+	body            io.ReadSeeker
 	valueBuffer     []byte
 	origValueBuffer []byte
-	body            io.ReadSeeker
-	sequence        uint64
-
-	// local vars
 	bufferUnmarshal []byte
 	bufferMarshal   []byte
+	msg             message.Message
+	hijacked        atomic.Bool
+	sequence        uint64
+	isModified      bool
 }
 
 const valueBufferSize = 256

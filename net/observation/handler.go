@@ -140,17 +140,16 @@ type respObservationMessage struct {
 
 // Observation represents subscription to resource on the server
 type Observation[C Client] struct {
-	req                 message.Message
 	observeFunc         func(req *pool.Message)
 	respObservationChan chan respObservationMessage
-	waitForResponse     atomic.Bool
 	observationHandler  *Handler[C]
-
-	private struct {
-		mutex       sync.Mutex
-		obsSequence uint32    // guarded by mutex
+	private             struct {
 		lastEvent   time.Time // guarded by mutex
+		obsSequence uint32    // guarded by mutex
+		mutex       sync.Mutex
 	}
+	req             message.Message
+	waitForResponse atomic.Bool
 }
 
 func (o *Observation[C]) Canceled() bool {

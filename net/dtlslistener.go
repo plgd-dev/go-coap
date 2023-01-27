@@ -37,11 +37,11 @@ type acceptedConn struct {
 type DTLSListener struct {
 	listener         net.Listener
 	config           *dtls.Config
-	closed           atomic.Bool
 	goPool           GoPoolFunc
 	acceptedConnChan chan acceptedConn
-	wg               sync.WaitGroup
 	done             chan struct{}
+	wg               sync.WaitGroup
+	closed           atomic.Bool
 }
 
 func tlsPacketFilter(packet []byte) bool {

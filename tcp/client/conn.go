@@ -43,15 +43,14 @@ type Conn struct {
 	*client.Client[*Conn]
 	session                         *Session
 	observationHandler              *observation.Handler[*Conn]
-	processReceivedMessage          func(req *pool.Message, cc *Conn, handler HandlerFunc)
 	tokenHandlerContainer           *coapSync.Map[uint64, HandlerFunc]
 	blockWise                       *blockwise.BlockWise[*Conn]
-	blockwiseSZX                    blockwise.SZX
+	receivedMessageReader           *client.ReceivedMessageReader[*Conn]
+	processReceivedMessage          func(req *pool.Message, cc *Conn, handler HandlerFunc)
 	peerMaxMessageSize              atomic.Uint32
+	blockwiseSZX                    blockwise.SZX
 	disablePeerTCPSignalMessageCSMs bool
 	peerBlockWiseTranferEnabled     atomic.Bool
-
-	receivedMessageReader *client.ReceivedMessageReader[*Conn]
 }
 
 // NewConn creates connection over session and observation.

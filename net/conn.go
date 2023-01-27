@@ -14,9 +14,9 @@ import (
 // Multiple goroutines may invoke methods on a Conn simultaneously.
 type Conn struct {
 	connection       net.Conn
-	closed           atomic.Bool
 	handshakeContext func(ctx context.Context) error
 	lock             sync.Mutex
+	closed           atomic.Bool
 }
 
 // NewConn creates connection over net.Conn.

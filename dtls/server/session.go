@@ -17,22 +17,15 @@ import (
 type EventFunc = func()
 
 type Session struct {
-	onClose []EventFunc
-
-	ctx atomic.Value // TODO: change to atomic.Pointer[context.Context] for go1.19
-
-	cancel     context.CancelFunc
-	connection *coapNet.Conn
-
-	done chan struct{}
-
-	mutex sync.Mutex
-
+	ctx            atomic.Value // TODO: change to atomic.Pointer[context.Context] for go1.19
+	cancel         context.CancelFunc
+	connection     *coapNet.Conn
+	done           chan struct{}
+	onClose        []EventFunc
+	mutex          sync.Mutex
 	maxMessageSize uint32
-
-	mtu uint16
-
-	closeSocket bool
+	mtu            uint16
+	closeSocket    bool
 }
 
 func NewSession(

@@ -27,14 +27,12 @@ type Server struct {
 	doneCancel        context.CancelFunc
 	cancel            context.CancelFunc
 	responseMsgCache  *cache.Cache[string, []byte]
+	conns             map[string]*client.Conn
+	listen            *coapNet.UDPConn
 
-	connsMutex sync.Mutex
-	conns      map[string]*client.Conn
-
+	cfg         *Config
 	listenMutex sync.Mutex
-	listen      *coapNet.UDPConn
-
-	cfg *Config
+	connsMutex  sync.Mutex
 }
 
 // A Option sets options such as credentials, codec and keepalive parameters, etc.

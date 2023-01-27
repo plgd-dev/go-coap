@@ -30,11 +30,11 @@ type Session struct {
 	connection        *coapNet.Conn
 	messagePool       *pool.Pool
 	ctx               atomic.Value // TODO: change to atomic.Pointer[context.Context] for go1.19
-	maxMessageSize    uint32
 	private           struct {
-		mutex   sync.Mutex
 		onClose []EventFunc
+		mutex   sync.Mutex
 	}
+	maxMessageSize             uint32
 	connectionCacheSize        uint16
 	disableTCPSignalMessageCSM bool
 	closeSocket                bool
