@@ -567,11 +567,10 @@ func (b *BlockWise[C]) getSentRequest(token message.Token) *pool.Message {
 		}
 		v := value.Data()
 		msg := b.cc.AcquireMessage(v.Context())
-		err := v.Clone(msg)
-		if err != nil {
-			return nil
-		}
-		msg.SetMessageID(-1)
+		msg.SetCode(v.Code())
+		msg.SetToken(v.Token())
+		msg.ResetOptionsTo(v.Options())
+		msg.SetType(v.Type())
 		return cache.NewElement(msg, value.ValidUntil.Load(), nil)
 	})
 	if ok {
