@@ -149,6 +149,7 @@ func TestBlockWiseDo(t *testing.T) {
 				payload: memfile.New(make([]byte, 17)),
 			},
 		},
+
 		{
 			name: "SZX16-SZX1024",
 			args: args{
@@ -198,7 +199,7 @@ func TestBlockWiseDo(t *testing.T) {
 				},
 				szx:            SZXBERT,
 				maxMessageSize: SZXBERT.Size() * 2,
-				do: makeDo(t, sender, receiver, SZXBERT, uint32(SZXBERT.Size()*2), SZXBERT, uint32(SZXBERT.Size()*5), func(w *responsewriter.ResponseWriter[*testClient], r *pool.Message) {
+				do: makeDo(t, sender, receiver, SZXBERT, uint32(SZXBERT.Size()*2), SZXBERT, uint32(SZXBERT.Size()*2), func(w *responsewriter.ResponseWriter[*testClient], r *pool.Message) {
 					require.Equal(t, &testmessage{
 						ctx:     context.Background(),
 						token:   []byte{'B', 'E', 'R', 'T'},
@@ -223,6 +224,7 @@ func TestBlockWiseDo(t *testing.T) {
 				payload: memfile.New(make([]byte, 22222)),
 			},
 		},
+
 		{
 			name: "PUT-SZX16-SZX16",
 			args: args{
