@@ -575,10 +575,6 @@ func (r *Message) Clone(msg *Message) error {
 		if err != nil {
 			return err
 		}
-		_, err = r.body.Seek(0, io.SeekStart)
-		if err != nil {
-			return err
-		}
 		_, err = io.Copy(buf, r.Body())
 		if err != nil {
 			var errs *multierror.Error
