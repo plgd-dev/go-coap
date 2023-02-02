@@ -4,14 +4,13 @@ import (
 	"crypto/rand"
 	"encoding/binary"
 	"math"
-	mathRand "math/rand"
 	"sync/atomic"
 	"time"
+
+	pkgRand "github.com/plgd-dev/go-coap/v3/pkg/rand"
 )
 
-func init() {
-	mathRand.Seed(time.Now().UnixNano())
-}
+var weakRng = pkgRand.NewRand(time.Now().UnixNano())
 
 var msgID = uint32(RandMID())
 
@@ -25,7 +24,7 @@ func RandMID() int32 {
 	_, err := rand.Read(b)
 	if err != nil {
 		// fallback to cryptographically insecure pseudo-random generator
-		return int32(uint16(mathRand.Uint32() >> 16))
+		return int32(uint16(weakRng.Uint32() >> 16))
 	}
 	return int32(uint16(binary.BigEndian.Uint32(b)))
 }

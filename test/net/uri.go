@@ -2,15 +2,14 @@
 package net
 
 import (
-	"math/rand"
 	"regexp"
 	"strings"
 	"time"
+
+	pkgRand "github.com/plgd-dev/go-coap/v3/pkg/rand"
 )
 
-func init() {
-	rand.Seed(time.Now().UnixNano())
-}
+var weakRng = pkgRand.NewRand(time.Now().UnixNano())
 
 const (
 	// 71 allowed letters in URL path segment
@@ -27,7 +26,7 @@ func RandomURLString(n int) string {
 		b[0] = '/'
 	}
 	for i := 1; i < n; {
-		if idx := int(rand.Int63() & urlLetterIdxMask); idx < len(urlLetterBytes) {
+		if idx := int(weakRng.Int63() & urlLetterIdxMask); idx < len(urlLetterBytes) {
 			b[i] = urlLetterBytes[idx]
 			i++
 		}
@@ -43,7 +42,7 @@ func RandomValidURLString(n, maxSegmentLen int) string {
 		b[0] = '/'
 	}
 	for i := 1; i < n; {
-		if idx := int(rand.Int63() & urlLetterIdxMask); idx < len(urlLetterBytes) {
+		if idx := int(weakRng.Int63() & urlLetterIdxMask); idx < len(urlLetterBytes) {
 			b[i] = urlLetterBytes[idx]
 			i++
 		}
@@ -57,7 +56,7 @@ func RandomValidURLString(n, maxSegmentLen int) string {
 		if remainder < maxSegmentLen {
 			break
 		}
-		shift := uint8(rand.Int63() >> 55)
+		shift := uint8(weakRng.Int63() >> 55)
 		index = index + int(shift) + 1
 		if index >= n {
 			index = n - 1
