@@ -116,7 +116,7 @@ issues:
       linters:
         - gocritic
 
-    - path: message/getmid.go
+    - path: pkg/rand/rand.go
       text: "G404: Use of weak random number generator \\(math/rand instead of crypto/rand\\)"
       linters:
         - gosec
