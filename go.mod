@@ -7,7 +7,7 @@ require (
 	github.com/hashicorp/go-multierror v1.1.1
 	github.com/pion/dtls/v2 v2.1.6-0.20230201184248-11ea8c257a48
 	github.com/pion/udp v0.1.2
-	github.com/stretchr/testify v1.8.1
+	github.com/stretchr/testify v1.8.2
 	go.uber.org/atomic v1.10.0
 	golang.org/x/exp v0.0.0-20230131160201-f062dba9d201
 	golang.org/x/net v0.5.0
