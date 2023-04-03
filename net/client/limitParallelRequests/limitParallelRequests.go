@@ -14,7 +14,7 @@ import (
 
 type (
 	DoFunc        = func(req *pool.Message) (*pool.Message, error)
-	DoObserveFunc = func(req *pool.Message, observeFunc func(req *pool.Message), opts ...message.Option) (Observation, error)
+	DoObserveFunc = func(req *pool.Message, observeFunc func(req *pool.Message)) (Observation, error)
 )
 
 type Observation = interface {
@@ -120,7 +120,7 @@ func (c *LimitParallelRequests) Do(req *pool.Message) (*pool.Message, error) {
 	return c.do(req)
 }
 
-func (c *LimitParallelRequests) DoObserve(req *pool.Message, observeFunc func(req *pool.Message), opts ...message.Option) (Observation, error) {
+func (c *LimitParallelRequests) DoObserve(req *pool.Message, observeFunc func(req *pool.Message)) (Observation, error) {
 	endpointLimitKey := hash(req.Options())
 	if err := c.acquireEndpoint(req.Context(), endpointLimitKey); err != nil {
 		return nil, fmt.Errorf("cannot process observe request %v for client endpoint limit: %w", req, err)
@@ -131,5 +131,5 @@ func (c *LimitParallelRequests) DoObserve(req *pool.Message, observeFunc func(re
 		return nil, fmt.Errorf("cannot process observe request %v for client limit: %w", req, err)
 	}
 	defer c.limit.Release(1)
-	return c.doObserve(req, observeFunc, opts...)
+	return c.doObserve(req, observeFunc)
 }

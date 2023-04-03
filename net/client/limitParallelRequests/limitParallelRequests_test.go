@@ -7,7 +7,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/plgd-dev/go-coap/v3/message"
 	"github.com/plgd-dev/go-coap/v3/message/codes"
 	"github.com/plgd-dev/go-coap/v3/message/pool"
 	"github.com/stretchr/testify/require"
@@ -26,12 +25,12 @@ type mockClient struct {
 	num atomic.Int32
 }
 
-func (c *mockClient) do(req *pool.Message) (*pool.Message, error) {
+func (c *mockClient) do(*pool.Message) (*pool.Message, error) {
 	c.num.Inc()
 	return nil, fmt.Errorf("not implemented")
 }
 
-func (c *mockClient) doObserve(req *pool.Message, observeFunc func(req *pool.Message), opts ...message.Option) (Observation, error) {
+func (c *mockClient) doObserve(*pool.Message, func(req *pool.Message)) (Observation, error) {
 	c.num.Inc()
 	return nil, fmt.Errorf("not implemented")
 }

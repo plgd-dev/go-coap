@@ -31,7 +31,7 @@ type mcastreceiver struct {
 	sync.Mutex
 }
 
-func (m *mcastreceiver) process(cc *client.Conn, resp *pool.Message) {
+func (m *mcastreceiver) process(_ *client.Conn, resp *pool.Message) {
 	m.Lock()
 	defer m.Unlock()
 	resp.Hijack()

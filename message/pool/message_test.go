@@ -300,21 +300,21 @@ func TestMessageETag(t *testing.T) {
 
 type malFuncSeeker struct{}
 
-func (m malFuncSeeker) Read(p []byte) (n int, err error) {
+func (m malFuncSeeker) Read([]byte) (int, error) {
 	return 0, nil
 }
 
-func (m malFuncSeeker) Seek(offset int64, whence int) (int64, error) {
+func (m malFuncSeeker) Seek(int64, int) (int64, error) {
 	return 0, errors.New("seek error")
 }
 
 type malFuncReader struct{}
 
-func (m malFuncReader) Read(p []byte) (n int, err error) {
+func (m malFuncReader) Read([]byte) (int, error) {
 	return 0, errors.New("read error")
 }
 
-func (m malFuncReader) Seek(offset int64, whence int) (int64, error) {
+func (m malFuncReader) Seek(int64, int) (int64, error) {
 	return 0, nil
 }
 
