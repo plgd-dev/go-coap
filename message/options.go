@@ -386,12 +386,14 @@ func (options Options) findPosition(id OptionID) (minIdx int, maxIdx int) {
 	for {
 		switch {
 		case id == options[pivot].ID || (maxIdx-minIdx)/2 == 0:
-			for maxIdx = pivot; maxIdx < len(options) && options[maxIdx].ID <= id; maxIdx++ {
+			for maxIdx = pivot; maxIdx < len(options) && options[maxIdx].ID <= id; {
+				maxIdx++
 			}
 			if maxIdx == len(options) {
 				maxIdx = -1
 			}
-			for minIdx = pivot; minIdx >= 0 && options[minIdx].ID >= id; minIdx-- {
+			for minIdx = pivot; minIdx >= 0 && options[minIdx].ID >= id; {
+				minIdx--
 			}
 			return minIdx, maxIdx
 		case id < options[pivot].ID:

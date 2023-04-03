@@ -267,7 +267,7 @@ func (cc *Conn) NetConn() net.Conn {
 }
 
 // DoObserve subscribes for every change with request.
-func (cc *Conn) doObserve(req *pool.Message, observeFunc func(req *pool.Message), opts ...message.Option) (client.Observation, error) {
+func (cc *Conn) doObserve(req *pool.Message, observeFunc func(req *pool.Message)) (client.Observation, error) {
 	return cc.observationHandler.NewObservation(req, observeFunc)
 }
 

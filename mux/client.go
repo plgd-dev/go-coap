@@ -36,7 +36,7 @@ type Conn interface {
 	// used for GET,PUT,POST,DELETE
 	Do(req *pool.Message) (*pool.Message, error)
 	// used for observation (GET with observe 0)
-	DoObserve(req *pool.Message, observeFunc func(req *pool.Message), opts ...message.Option) (Observation, error)
+	DoObserve(req *pool.Message, observeFunc func(req *pool.Message)) (Observation, error)
 	Close() error
 	Sequence() uint64
 	// Done signalizes that connection is not more processed.

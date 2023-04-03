@@ -7,7 +7,7 @@ import (
 	"go.uber.org/atomic"
 )
 
-func DefaultOnExpire[D any](d D) {
+func DefaultOnExpire[D any](D) {
 	// for nothing on expire
 }
 
