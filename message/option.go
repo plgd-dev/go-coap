@@ -207,8 +207,8 @@ var mediaTypeToString = map[MediaType]string{
 	AppCoseSign:       "application/cose; cose-type=\"cose-sign\" (RFC 8152)",
 	AppCoseKey:        "application/cose-key (RFC 8152)",
 	AppCoseKeySet:     "application/cose-key-set (RFC 8152)",
-	AppSenmlJSON:      "application/senml+json"
-	AppSenmlCbor:      "application/senml+cbor"
+	AppSenmlJSON:      "application/senml+json",
+	AppSenmlCbor:      "application/senml+cbor",
 	AppCoapGroup:      "coap-group+json (RFC 7390)",
 	AppOcfCbor:        "application/vnd.ocf+cbor",
 	AppLwm2mTLV:       "application/vnd.oma.lwm2m+tlv",
