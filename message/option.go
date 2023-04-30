@@ -185,6 +185,7 @@ var (
 	AppOcfCbor        MediaType = 10000 // application/vnd.ocf+cbor
 	AppLwm2mTLV       MediaType = 11542 // application/vnd.oma.lwm2m+tlv
 	AppLwm2mJSON      MediaType = 11543 // application/vnd.oma.lwm2m+json
+	AppLwm2mCbor      MediaType = 11544 // application/vnd.oma.lwm2m+cbor
 )
 
 var mediaTypeToString = map[MediaType]string{
@@ -212,6 +213,7 @@ var mediaTypeToString = map[MediaType]string{
 	AppOcfCbor:        "application/vnd.ocf+cbor",
 	AppLwm2mTLV:       "application/vnd.oma.lwm2m+tlv",
 	AppLwm2mJSON:      "application/vnd.oma.lwm2m+json",
+	AppLwm2mCbor:      "application/vnd.oma.lwm2m+cbor",
 }
 
 func (c MediaType) String() string {
