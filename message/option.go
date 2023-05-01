@@ -179,10 +179,15 @@ var (
 	AppCoseSign       MediaType = 98    // application/cose; cose-type="cose-sign" (RFC 8152)
 	AppCoseKey        MediaType = 101   // application/cose-key (RFC 8152)
 	AppCoseKeySet     MediaType = 102   // application/cose-key-set (RFC 8152)
+	AppSenmlJSON      MediaType = 110   // application/senml+json
+	AppSenmlCbor      MediaType = 112   // application/senml+cbor
 	AppCoapGroup      MediaType = 256   // coap-group+json (RFC 7390)
+	AppSenmlEtchJSON  MediaType = 320   // application/senml-etch+json
+	AppSenmlEtchCbor  MediaType = 322   // application/senml-etch+cbor
 	AppOcfCbor        MediaType = 10000 // application/vnd.ocf+cbor
 	AppLwm2mTLV       MediaType = 11542 // application/vnd.oma.lwm2m+tlv
 	AppLwm2mJSON      MediaType = 11543 // application/vnd.oma.lwm2m+json
+	AppLwm2mCbor      MediaType = 11544 // application/vnd.oma.lwm2m+cbor
 )
 
 var mediaTypeToString = map[MediaType]string{
@@ -204,10 +209,15 @@ var mediaTypeToString = map[MediaType]string{
 	AppCoseSign:       "application/cose; cose-type=\"cose-sign\" (RFC 8152)",
 	AppCoseKey:        "application/cose-key (RFC 8152)",
 	AppCoseKeySet:     "application/cose-key-set (RFC 8152)",
+	AppSenmlJSON:      "application/senml+json",
+	AppSenmlCbor:      "application/senml+cbor",
 	AppCoapGroup:      "coap-group+json (RFC 7390)",
+	AppSenmlEtchJSON:  "application/senml-etch+json",
+	AppSenmlEtchCbor:  "application/senml-etch+cbor",
 	AppOcfCbor:        "application/vnd.ocf+cbor",
 	AppLwm2mTLV:       "application/vnd.oma.lwm2m+tlv",
 	AppLwm2mJSON:      "application/vnd.oma.lwm2m+json",
+	AppLwm2mCbor:      "application/vnd.oma.lwm2m+cbor",
 }
 
 func (c MediaType) String() string {
