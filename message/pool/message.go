@@ -10,6 +10,7 @@ import (
 	multierror "github.com/hashicorp/go-multierror"
 	"github.com/plgd-dev/go-coap/v3/message"
 	"github.com/plgd-dev/go-coap/v3/message/codes"
+	"github.com/plgd-dev/go-coap/v3/net"
 	"go.uber.org/atomic"
 )
 
@@ -26,6 +27,7 @@ type Message struct {
 	// Context context of request.
 	ctx             context.Context
 	msg             message.Message
+	controlMessage  *net.ControlMessage // control message for UDP
 	hijacked        atomic.Bool
 	isModified      bool
 	valueBuffer     []byte
@@ -71,6 +73,22 @@ func (r *Message) SetMessage(message message.Message) {
 		r.body = bytes.NewReader(message.Payload)
 	}
 	r.isModified = true
+}
+
+func (r *Message) SetControlMessage(cm *net.ControlMessage) {
+	r.controlMessage = cm
+}
+
+func (r *Message) ControlMessage() *net.ControlMessage {
+	return r.controlMessage
+}
+
+// UpsertControlMessage set value only when origin value is not set.
+func (r *Message) UpsertControlMessage(cm *net.ControlMessage) {
+	if r.controlMessage != nil {
+		return
+	}
+	r.SetControlMessage(cm)
 }
 
 // SetMessageID only 0 to 2^16-1 are valid.
@@ -120,6 +138,7 @@ func (r *Message) Reset() {
 	r.valueBuffer = r.origValueBuffer
 	r.body = nil
 	r.isModified = false
+	r.controlMessage = nil
 	if cap(r.bufferMarshal) > 1024 {
 		r.bufferMarshal = make([]byte, 256)
 	}
@@ -568,6 +587,7 @@ func (r *Message) Clone(msg *Message) error {
 	msg.ResetOptionsTo(r.Options())
 	msg.SetType(r.Type())
 	msg.SetMessageID(r.MessageID())
+	msg.SetControlMessage(r.ControlMessage())
 
 	if r.Body() != nil {
 		buf := bytes.NewBuffer(nil)

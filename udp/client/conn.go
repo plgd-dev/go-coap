@@ -716,6 +716,7 @@ func (cc *Conn) ProcessReceivedMessageWithHandler(req *pool.Message, handler con
 	}()
 	resp := cc.AcquireMessage(cc.Context())
 	resp.SetToken(req.Token())
+	ifIndex := req.ControlMessage().GetIfIndex()
 	w := responsewriter.New(resp, cc, req.Options()...)
 	defer func() {
 		cc.ReleaseMessage(w.Message())
@@ -730,6 +731,7 @@ func (cc *Conn) ProcessReceivedMessageWithHandler(req *pool.Message, handler con
 		// nothing to send
 		return
 	}
+	upsertInterfaceToMessage(w.Message(), ifIndex)
 	errW := cc.writeMessageAsync(w.Message())
 	if errW != nil {
 		cc.closeConnection()
@@ -739,6 +741,15 @@ func (cc *Conn) ProcessReceivedMessageWithHandler(req *pool.Message, handler con
 
 func (cc *Conn) handlePong(w *responsewriter.ResponseWriter[*Conn], r *pool.Message) {
 	cc.sendPong(w, r)
+}
+
+func upsertInterfaceToMessage(m *pool.Message, ifIndex int) {
+	if ifIndex >= 1 {
+		cm := coapNet.ControlMessage{
+			IfIndex: ifIndex,
+		}
+		m.UpsertControlMessage(&cm)
+	}
 }
 
 func (cc *Conn) handleSpecialMessages(r *pool.Message) bool {
@@ -752,6 +763,7 @@ func (cc *Conn) handleSpecialMessages(r *pool.Message) bool {
 		elem.ReleaseMessage(cc)
 		resp := cc.AcquireMessage(cc.Context())
 		resp.SetToken(r.Token())
+		upsertInterfaceToMessage(resp, r.ControlMessage().GetIfIndex())
 		w := responsewriter.New(resp, cc, r.Options()...)
 		defer func() {
 			cc.ReleaseMessage(w.Message())
@@ -769,7 +781,7 @@ func (cc *Conn) handleSpecialMessages(r *pool.Message) bool {
 	return false
 }
 
-func (cc *Conn) Process(datagram []byte) error {
+func (cc *Conn) Process(cm *coapNet.ControlMessage, datagram []byte) error {
 	if uint32(len(datagram)) > cc.session.MaxMessageSize() {
 		return fmt.Errorf("max message size(%v) was exceeded %v", cc.session.MaxMessageSize(), len(datagram))
 	}
@@ -779,6 +791,7 @@ func (cc *Conn) Process(datagram []byte) error {
 		cc.ReleaseMessage(req)
 		return err
 	}
+	req.SetControlMessage(cm)
 	req.SetSequence(cc.Sequence())
 	cc.checkMyMessageID(req)
 	cc.inactivityMonitor.Notify()
