@@ -146,7 +146,7 @@ func (s *Session) Run(cc *client.Conn) (err error) {
 			return fmt.Errorf("cannot read from connection: %w", err)
 		}
 		readBuf = readBuf[:readLen]
-		err = cc.Process(readBuf)
+		err = cc.Process(nil, readBuf)
 		if err != nil {
 			return err
 		}
