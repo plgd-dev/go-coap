@@ -508,3 +508,98 @@ func TestCheckForLossOrder(t *testing.T) {
 		require.Equal(t, uint64(idx), v)
 	}
 }
+
+// The objective of the test is to confirm the system's behavior during reconnections.
+// It specifically examines situations where a connection (cc) is established but eventually
+// closed due to inactivity. Subsequently, a new cc is created. The test focuses on verifying
+// the system's ability to handle cases where the message ID of the new cc is no longer
+// initialized with the same value as the previous cc. The desired outcome is for the receiver
+// to correctly identify the distinctiveness of the message ID and effectively process the
+// incoming message without any instances of message loss.
+func TestServerReconnectNewClient(t *testing.T) {
+	newServer := func(l *coapNet.UDPConn, closedConn chan struct{}) (*server.Server, func()) {
+		var wg sync.WaitGroup
+		var opts []server.Option
+		if closedConn != nil {
+			opts = append(opts, options.WithInactivityMonitor(time.Second, func(cc *client.Conn) {
+				log.Printf("inactivityMonitor")
+				errC := cc.Close()
+				require.NoError(t, errC)
+				closedConn <- struct{}{}
+			}))
+		}
+		s := udp.NewServer(opts...)
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			errS := s.Serve(l)
+			require.NoError(t, errS)
+		}()
+		return s, func() {
+			s.Stop()
+			wg.Wait()
+		}
+	}
+
+	l, err := coapNet.NewListenUDP("udp", "[::1]:0")
+	require.NoError(t, err)
+	defer func() {
+		errC := l.Close()
+		require.NoError(t, errC)
+	}()
+	_, server0Shutdown := newServer(l, nil)
+	defer server0Shutdown()
+
+	l1, err := coapNet.NewListenUDP("udp", "[::1]:0")
+	require.NoError(t, err)
+	defer func() {
+		errC := l1.Close()
+		require.NoError(t, errC)
+	}()
+
+	connClosed := make(chan struct{}, 1)
+	s1, server1shutdown := newServer(l1, connClosed)
+	defer server1shutdown()
+
+	peer, err := net.ResolveUDPAddr("udp", l.LocalAddr().String())
+	require.NoError(t, err)
+
+	time.Sleep(time.Second)
+
+	cc, err := s1.NewConn(peer)
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second*1)
+	defer cancel()
+	// increment messageID
+	_, err = cc.Get(ctx, "/tmp")
+	require.NoError(t, err)
+	// increment messageID
+	_, err = cc.Get(ctx, "/tmp")
+	// increment messageID
+	require.NoError(t, err)
+	// increment messageID
+	_, err = cc.Get(ctx, "/tmp")
+	require.NoError(t, err)
+	// increment messageID
+	_, err = cc.Get(ctx, "/tmp")
+	require.NoError(t, err)
+	<-connClosed
+
+	checkMessageID := make(map[int32]bool)
+	for i := 0; i < 100; i++ {
+		checkMessageID[cc.GetMessageID()] = true
+	}
+
+	// new client
+	cc, err = s1.NewConn(peer)
+	require.NoError(t, err)
+	ctx, cancel = context.WithTimeout(context.Background(), time.Second*1)
+	defer cancel()
+	// test if get is successful
+	_, err = cc.Get(ctx, "/tmp")
+	require.NoError(t, err)
+	for i := 0; i < 100; i++ {
+		require.False(t, checkMessageID[cc.GetMessageID()])
+	}
+}

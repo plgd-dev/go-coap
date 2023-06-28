@@ -250,6 +250,12 @@ func (cc *Conn) Session() Session {
 }
 
 func (cc *Conn) GetMessageID() int32 {
+	// To prevent collisions during reconnections, it is important to always increment the global counter.
+	// For example, if a connection (cc) is established and later closed due to inactivity, a new cc may
+	// be created shortly after. However, if the new cc is initialized with the same message ID as the
+	// previous one, the receiver may mistakenly treat the incoming message as a duplicate and discard it.
+	// Hence, by incrementing the global counter, we can ensure unique message IDs and avoid such issues.
+	message.GetMID()
 	return int32(uint16(cc.msgID.Inc()))
 }
 
