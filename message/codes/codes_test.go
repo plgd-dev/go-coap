@@ -57,3 +57,13 @@ func TestCodeToString(t *testing.T) {
 		require.NoError(t, err)
 	}
 }
+
+func FuzzUnmarshalJSON(f *testing.F) {
+	f.Add([]byte("xxx"))
+	f.Add([]byte("Code(17)"))
+
+	f.Fuzz(func(t *testing.T, input_data []byte) {
+		var got *Code
+		_ = got.UnmarshalJSON(input_data)
+	})
+}
