@@ -109,7 +109,6 @@ func BenchmarkUnmarshalMessage(b *testing.B) {
 
 func FuzzDecode(f *testing.F) {
 	f.Add([]byte{211, 0, 1, 1, 2, 3, 177, 97, 1, 98, 1, 99, 1, 100, 1, 101, 16, 255, 1})
-	f.Add([]byte{211, 0, 1, 1, 2, 3, 177, 97, 1, 98, 1, 99, 1, 100, 1, 101, 16, 255, 1})
 
 	f.Fuzz(func(t *testing.T, input_data []byte) {
 		msg := message.Message{Options: make(message.Options, 0, 32)}
