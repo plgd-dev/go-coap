@@ -376,3 +376,10 @@ func BenchmarkPathOption(b *testing.B) {
 		}
 	}
 }
+
+func FuzzUnmarshal(f *testing.F) {
+	f.Fuzz(func(t *testing.T, input_data []byte) {
+		uoptions := make(Options, 0, 10)
+		_, _ = uoptions.Unmarshal(input_data, CoapOptionDefs)
+	})
+}
