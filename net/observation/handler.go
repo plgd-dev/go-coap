@@ -222,7 +222,7 @@ func (o *Observation[C]) Cancel(ctx context.Context, opts ...message.Option) err
 		return err
 	}
 	defer o.client().ReleaseMessage(resp)
-	if resp.Code() != codes.Content {
+	if resp.Code() != codes.Content && resp.Code() != codes.Valid {
 		return fmt.Errorf("unexpected return code(%v)", resp.Code())
 	}
 	return nil
