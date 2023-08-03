@@ -200,7 +200,7 @@ func (o *Observation[C]) Request() message.Message {
 }
 
 // Cancel remove observation from server. For recreate observation use Observe.
-func (o *Observation[C]) Cancel(ctx context.Context) error {
+func (o *Observation[C]) Cancel(ctx context.Context, opts ...message.Option) error {
 	if !o.cleanUp() {
 		// observation was already cleanup
 		return nil
@@ -208,6 +208,7 @@ func (o *Observation[C]) Cancel(ctx context.Context) error {
 
 	req := o.client().AcquireMessage(ctx)
 	defer o.client().ReleaseMessage(req)
+	req.ResetOptionsTo(opts)
 	req.SetCode(codes.GET)
 	req.SetObserve(1)
 	if path, err := o.req.Options.Path(); err == nil {
@@ -221,7 +222,7 @@ func (o *Observation[C]) Cancel(ctx context.Context) error {
 		return err
 	}
 	defer o.client().ReleaseMessage(resp)
-	if resp.Code() != codes.Content {
+	if resp.Code() != codes.Content && resp.Code() != codes.Valid {
 		return fmt.Errorf("unexpected return code(%v)", resp.Code())
 	}
 	return nil

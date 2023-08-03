@@ -24,6 +24,7 @@ func TestConnObserve(t *testing.T) {
 		payload   []byte
 		numEvents uint32
 		goFunc    func(f func())
+		etag      []byte
 	}
 	tests := []struct {
 		name    string
@@ -53,6 +54,15 @@ func TestConnObserve(t *testing.T) {
 				numEvents: 20,
 				payload:   make([]byte, 5000),
 				goFunc:    func(f func()) { go f() },
+			},
+		},
+		{
+			name: "5000bytes with ETag",
+			args: args{
+				path:      "/tmp",
+				numEvents: 20,
+				payload:   make([]byte, 5000),
+				etag:      []byte("1337"),
 			},
 		},
 	}
@@ -100,7 +110,14 @@ func TestConnObserve(t *testing.T) {
 								}
 							}
 							p := bytes.NewReader(tt.args.payload)
-							etag, errE := message.GetETag(p)
+							var etag []byte
+							var errE error
+							if tt.args.etag != nil {
+								etag = tt.args.etag
+							} else {
+								etag, errE = message.GetETag(p)
+								require.NoError(t, errE)
+							}
 							require.NoError(t, errE)
 							req := cc.AcquireMessage(cc.Context())
 							defer cc.ReleaseMessage(req)
@@ -124,6 +141,13 @@ func TestConnObserve(t *testing.T) {
 					}
 					f()
 				case 1:
+					if tt.args.etag != nil {
+						if etag, errE := r.ETag(); errE == nil && bytes.Equal(tt.args.etag, etag) {
+							errS := w.SetResponse(codes.Valid, message.TextPlain, nil)
+							require.NoError(t, errS)
+							return
+						}
+					}
 					errS := w.SetResponse(codes.Content, message.TextPlain, bytes.NewReader([]byte("close")))
 					require.NoError(t, errS)
 				default:
@@ -147,7 +171,7 @@ func TestConnObserve(t *testing.T) {
 				require.NoError(t, errC)
 			}()
 
-			ctx, cancel := context.WithTimeout(context.Background(), time.Second*3600)
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
 			defer cancel()
 			obs := &observer{
 				t:         t,
@@ -161,7 +185,14 @@ func TestConnObserve(t *testing.T) {
 			}
 			require.NoError(t, err)
 			<-obs.done
-			err = got.Cancel(ctx)
+
+			opts := make(message.Options, 0, 1)
+			if tt.args.etag != nil {
+				buf := make([]byte, len(tt.args.etag))
+				opts, _, err = opts.SetBytes(buf, message.ETag, tt.args.etag)
+				require.NoError(t, err)
+			}
+			err = got.Cancel(ctx, opts...)
 			require.NoError(t, err)
 		})
 	}
@@ -263,7 +294,7 @@ func TestConnObserveNotSupported(t *testing.T) {
 				require.NoError(t, errC)
 			}()
 
-			ctx, cancel := context.WithTimeout(context.Background(), time.Second*3600)
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
 			defer cancel()
 			obs := &observer{
 				t:                        t,
@@ -280,6 +311,94 @@ func TestConnObserveNotSupported(t *testing.T) {
 			<-obs.done
 			err = got.Cancel(ctx)
 			require.NoError(t, err)
+		})
+	}
+}
+
+func TestConnObserveCancel(t *testing.T) {
+	type cancelType int
+	const (
+		cancelContext cancelType = iota
+		closeListeningConnection
+		closeClientConnection
+	)
+	type args struct {
+		cancel cancelType
+	}
+	tests := []struct {
+		name string
+		args args
+	}{
+		{
+			name: "cancel context",
+			args: args{
+				cancel: cancelContext,
+			},
+		},
+		{
+			name: "close listening connection",
+			args: args{
+				cancel: closeListeningConnection,
+			},
+		},
+		{
+			name: "close client connection",
+			args: args{
+				cancel: closeClientConnection,
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			l, err := coapNet.NewTCPListener("tcp", "")
+			require.NoError(t, err)
+			closeListener := func() {
+				errC := l.Close()
+				require.NoError(t, errC)
+			}
+			defer closeListener()
+
+			var wg sync.WaitGroup
+			defer wg.Wait()
+
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
+			defer cancel()
+
+			closeClient := func() {}
+			s := NewServer(options.WithHandlerFunc(func(w *responsewriter.ResponseWriter[*client.Conn], r *pool.Message) {
+				errS := w.SetResponse(codes.BadRequest, message.TextPlain, nil)
+				require.NoError(t, errS)
+				w.Message().SetContext(w.Conn().Context())
+
+				switch tt.args.cancel {
+				case cancelContext:
+					cancel()
+				case closeListeningConnection:
+					closeListener()
+				case closeClientConnection:
+					closeClient()
+				}
+			}))
+			defer s.Stop()
+
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				errS := s.Serve(l)
+				require.NoError(t, errS)
+			}()
+
+			cc, err := Dial(l.Addr().String())
+			require.NoError(t, err)
+			closeClient = func() {
+				errC := cc.Close()
+				require.NoError(t, errC)
+			}
+			defer closeClient()
+			_, err = cc.Observe(ctx, "/tmp", func(req *pool.Message) {
+				// no-op
+			})
+			require.Error(t, err)
 		})
 	}
 }

@@ -18,7 +18,7 @@ type (
 )
 
 type Observation = interface {
-	Cancel(ctx context.Context) error
+	Cancel(ctx context.Context, opts ...message.Option) error
 	Canceled() bool
 }
 
