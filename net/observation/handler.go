@@ -225,7 +225,7 @@ func (o *Observation[C]) Cancel(ctx context.Context, opts ...message.Option) err
 	}
 	req.SetToken(o.req.Token)
 	etag := o.etag()
-	if etag != nil {
+	if len(etag) > 0 {
 		_ = req.SetETag(etag) // ignore invalid etag
 	}
 	resp, err := o.observationHandler.do(req)
@@ -255,8 +255,11 @@ func (o *Observation[C]) wantBeNotified(r *pool.Message) bool {
 	o.private.obsSequence = obsSequence
 	o.private.lastEvent = now
 	if etag, err := r.ETag(); err == nil {
-		if len(o.private.etag) != len(etag) {
+		if cap(o.private.etag) < len(etag) {
 			o.private.etag = make([]byte, len(etag))
+		}
+		if len(o.private.etag) != len(etag) {
+			o.private.etag = o.private.etag[:len(etag)]
 		}
 		copy(o.private.etag, etag)
 	}
