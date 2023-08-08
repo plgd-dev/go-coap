@@ -248,14 +248,17 @@ func (o *Observation[C]) wantBeNotified(r *pool.Message) bool {
 
 	o.private.mutex.Lock()
 	defer o.private.mutex.Unlock()
-	if ValidSequenceNumber(o.private.obsSequence, obsSequence, o.private.lastEvent, now) {
-		o.private.obsSequence = obsSequence
-		o.private.lastEvent = now
-		if etag, err := r.ETag(); err == nil {
-			o.private.etag = etag
-		}
-		return true
+	if !ValidSequenceNumber(o.private.obsSequence, obsSequence, o.private.lastEvent, now) {
+		return false
 	}
 
-	return false
+	o.private.obsSequence = obsSequence
+	o.private.lastEvent = now
+	if etag, err := r.ETag(); err == nil {
+		if len(o.private.etag) != len(etag) {
+			o.private.etag = make([]byte, len(etag))
+		}
+		copy(o.private.etag, etag)
+	}
+	return true
 }
