@@ -113,6 +113,8 @@ func TestConnObserve(t *testing.T) {
 							var etag []byte
 							var errE error
 							if tt.args.etag != nil {
+								// force unexpected etag, Cancel should still succeed but with codes.Content
+								// instead of codes.Valid
 								etag = tt.args.etag
 							} else {
 								etag, errE = message.GetETag(p)
@@ -141,12 +143,13 @@ func TestConnObserve(t *testing.T) {
 					}
 					f()
 				case 1:
-					if tt.args.etag != nil {
-						if etag, errE := r.ETag(); errE == nil && bytes.Equal(tt.args.etag, etag) {
-							errS := w.SetResponse(codes.Valid, message.TextPlain, nil)
-							require.NoError(t, errS)
-							return
-						}
+					p := bytes.NewReader(tt.args.payload)
+					etag, errE := message.GetETag(p)
+					require.NoError(t, errE)
+					if retag, errE := r.ETag(); errE == nil && bytes.Equal(etag, retag) {
+						errS := w.SetResponse(codes.Valid, message.TextPlain, nil)
+						require.NoError(t, errS)
+						return
 					}
 					errS := w.SetResponse(codes.Content, message.TextPlain, bytes.NewReader([]byte("close")))
 					require.NoError(t, errS)
@@ -186,13 +189,7 @@ func TestConnObserve(t *testing.T) {
 			require.NoError(t, err)
 			<-obs.done
 
-			opts := make(message.Options, 0, 1)
-			if tt.args.etag != nil {
-				buf := make([]byte, len(tt.args.etag))
-				opts, _, err = opts.SetBytes(buf, message.ETag, tt.args.etag)
-				require.NoError(t, err)
-			}
-			err = got.Cancel(ctx, opts...)
+			err = got.Cancel(ctx)
 			require.NoError(t, err)
 		})
 	}
