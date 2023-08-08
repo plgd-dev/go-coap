@@ -146,10 +146,11 @@ type Observation[C Client] struct {
 	waitForResponse     atomic.Bool
 	observationHandler  *Handler[C]
 
-	private struct {
+	private struct { // members guarded by mutex
 		mutex       sync.Mutex
-		obsSequence uint32    // guarded by mutex
-		lastEvent   time.Time // guarded by mutex
+		obsSequence uint32
+		lastEvent   time.Time
+		etag        []byte
 	}
 }
 
@@ -199,6 +200,12 @@ func (o *Observation[C]) Request() message.Message {
 	return o.req
 }
 
+func (o *Observation[C]) etag() []byte {
+	o.private.mutex.Lock()
+	defer o.private.mutex.Unlock()
+	return o.private.etag
+}
+
 // Cancel remove observation from server. For recreate observation use Observe.
 func (o *Observation[C]) Cancel(ctx context.Context, opts ...message.Option) error {
 	if !o.cleanUp() {
@@ -217,6 +224,10 @@ func (o *Observation[C]) Cancel(ctx context.Context, opts ...message.Option) err
 		}
 	}
 	req.SetToken(o.req.Token)
+	etag := o.etag()
+	if etag != nil {
+		_ = req.SetETag(etag) // ignore invalid etag
+	}
 	resp, err := o.observationHandler.do(req)
 	if err != nil {
 		return err
@@ -240,6 +251,9 @@ func (o *Observation[C]) wantBeNotified(r *pool.Message) bool {
 	if ValidSequenceNumber(o.private.obsSequence, obsSequence, o.private.lastEvent, now) {
 		o.private.obsSequence = obsSequence
 		o.private.lastEvent = now
+		if etag, err := r.ETag(); err == nil {
+			o.private.etag = etag
+		}
 		return true
 	}
 
