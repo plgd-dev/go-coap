@@ -12,6 +12,10 @@ import (
 	"github.com/plgd-dev/go-coap/v3/options"
 	"github.com/plgd-dev/go-coap/v3/tcp"
 	"github.com/plgd-dev/go-coap/v3/udp"
+
+	dtlsServer "github.com/plgd-dev/go-coap/v3/dtls/server"
+	tcpServer "github.com/plgd-dev/go-coap/v3/tcp/server"
+	udpServer "github.com/plgd-dev/go-coap/v3/udp/server"
 )
 
 // ListenAndServe Starts a server on address and network specified Invoke handler
@@ -80,7 +84,7 @@ func ListenAndServeDTLS(network string, addr string, config *piondtls.Config, ha
 }
 
 // ListenAndServeWithOption Starts a server on address and network specified Invoke options
-// for incoming queries.
+// for incoming queries. The options is only support tcpServer.Option and udpServer.Option
 func ListenAndServeWithOptions(network, addr string, opts ...any) (err error) {
 	tcpOptions := []tcpServer.Option{}
 	udpOptions := []udpServer.Option{}
@@ -93,7 +97,7 @@ func ListenAndServeWithOptions(network, addr string, opts ...any) (err error) {
 			o, _ := opt.(udpServer.Option)
 			udpOptions = append(udpOptions, o)
 		default:
-			return fmt.Errorf("only support tcpServer.Option, udpServer.Option and dtlsServer.Option")
+			return fmt.Errorf("only support tcpServer.Option and udpServer.Option")
 		}
 	}
 
