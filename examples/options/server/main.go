@@ -60,10 +60,16 @@ func main() {
 	m.Handle("/b", mux.HandlerFunc(handleB))
 
 	tcpOpts := []tcpServer.Option{}
-	tcpOpts = append(tcpOpts, options.WithMux(m), options.WithContext(context.Background()))
+	tcpOpts = append(tcpOpts,
+		options.WithMux(m),
+		options.WithContext(context.Background()))
 
 	dtlsOpts := []dtlsServer.Option{}
-	dtlsOpts = append(dtlsOpts, options.WithMux(m), options.WithContext(context.Background()))
+	dtlsOpts = append(dtlsOpts,
+		options.WithMux(m),
+		options.WithContext(context.Background()),
+		options.WithOnNewConn(handleOnNewConn),
+	)
 
 	go func() {
 		// serve a tcp server on :5686
