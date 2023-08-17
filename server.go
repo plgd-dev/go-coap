@@ -7,14 +7,13 @@ import (
 
 	piondtls "github.com/pion/dtls/v2"
 	"github.com/plgd-dev/go-coap/v3/dtls"
+	dtlsServer "github.com/plgd-dev/go-coap/v3/dtls/server"
 	"github.com/plgd-dev/go-coap/v3/mux"
 	"github.com/plgd-dev/go-coap/v3/net"
 	"github.com/plgd-dev/go-coap/v3/options"
 	"github.com/plgd-dev/go-coap/v3/tcp"
-	"github.com/plgd-dev/go-coap/v3/udp"
-
-	dtlsServer "github.com/plgd-dev/go-coap/v3/dtls/server"
 	tcpServer "github.com/plgd-dev/go-coap/v3/tcp/server"
+	"github.com/plgd-dev/go-coap/v3/udp"
 	udpServer "github.com/plgd-dev/go-coap/v3/udp/server"
 )
 
@@ -89,12 +88,10 @@ func ListenAndServeWithOptions(network, addr string, opts ...any) (err error) {
 	tcpOptions := []tcpServer.Option{}
 	udpOptions := []udpServer.Option{}
 	for _, opt := range opts {
-		switch opt.(type) {
+		switch o := opt.(type) {
 		case tcpServer.Option:
-			o, _ := opt.(tcpServer.Option)
 			tcpOptions = append(tcpOptions, o)
 		case udpServer.Option:
-			o, _ := opt.(udpServer.Option)
 			udpOptions = append(udpOptions, o)
 		default:
 			return fmt.Errorf("only support tcpServer.Option and udpServer.Option")
