@@ -91,7 +91,7 @@ func (h *Handler[C]) NewObservation(req *pool.Message, observeFunc func(req *poo
 		err = fmt.Errorf("connection was closed: %w", h.cc.Context().Err())
 		return nil, err
 	case resp := <-respObservationChan:
-		if resp.code != codes.Content {
+		if resp.code != codes.Content && resp.code != codes.Valid {
 			err = fmt.Errorf("unexpected return code(%v)", resp.code)
 			return nil, err
 		}

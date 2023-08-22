@@ -523,10 +523,7 @@ func isObserveResponse(msg *pool.Message) bool {
 	if err != nil {
 		return false
 	}
-	if msg.Code() == codes.Content {
-		return true
-	}
-	return false
+	return msg.Code() >= codes.Created
 }
 
 func (b *BlockWise[C]) startSendingMessage(w *responsewriter.ResponseWriter[C], maxSZX SZX, maxMessageSize uint32, block uint32) error {
