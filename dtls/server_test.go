@@ -308,7 +308,7 @@ func TestServerKeepAliveMonitor(t *testing.T) {
 		require.NoError(t, errS)
 	}()
 
-	cc, err := piondtls.Dial("udp", ld.Addr().(*net.UDPAddr), clientCgf)
+	cc, err := piondtls.Dial("udp4", &net.UDPAddr{IP: []byte{127, 0, 0, 1}, Port: ld.Addr().(*net.UDPAddr).Port}, clientCgf)
 	require.NoError(t, err)
 
 	p := pool.NewMessage(ctx)
