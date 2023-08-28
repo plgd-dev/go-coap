@@ -9,6 +9,7 @@ import (
 	"time"
 
 	dtls "github.com/pion/dtls/v2"
+	dtlsnet "github.com/pion/dtls/v2/pkg/net"
 	"github.com/pion/dtls/v2/pkg/protocol"
 	"github.com/pion/dtls/v2/pkg/protocol/recordlayer"
 	"github.com/pion/transport/v2/udp"
@@ -121,7 +122,7 @@ func (l *DTLSListener) accept() error {
 		return err
 	}
 	err = l.goPool(func() {
-		l.send(dtls.Server(c, l.config))
+		l.send(dtls.Server(dtlsnet.PacketConnFromConn(c), c.RemoteAddr(), l.config))
 	})
 	if err != nil {
 		_ = c.Close()
