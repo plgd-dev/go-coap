@@ -6,7 +6,7 @@ require (
 	github.com/dsnet/golib/memfile v1.0.0
 	github.com/hashicorp/go-multierror v1.1.1
 	github.com/pion/dtls/v2 v2.2.8-0.20230828143201-609e5bee6eb0
-	github.com/pion/transport/v2 v2.2.2-0.20230802201558-f2dffd80896b
+	github.com/pion/transport/v2 v2.2.2-0.20230831071146-a788a32e051c
 	github.com/stretchr/testify v1.8.4
 	go.uber.org/atomic v1.11.0
 	golang.org/x/exp v0.0.0-20230801115018-d63ba01acd4b
