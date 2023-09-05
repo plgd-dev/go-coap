@@ -33,12 +33,12 @@ jobs:
       # Checks-out repository under $GITHUB_WORKSPACE
       - name: Checkout
         if: ${{!startsWith(matrix.os, 'ubuntu')}}
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
       # Checks-out repository under $GITHUB_WORKSPACE with tags and history (needed by "SonarCloud Scan" step)
       - name: Full checkout
         if: startsWith(matrix.os,'ubuntu')
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
         with:
           fetch-depth: 0 # Full clone for SonarCloud
 
