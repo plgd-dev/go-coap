@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"log"
 	"net"
-	"sync/atomic"
 	"time"
 
 	piondtls "github.com/pion/dtls/v2"
@@ -16,6 +15,7 @@ import (
 	"github.com/plgd-dev/go-coap/v3/mux"
 	"github.com/plgd-dev/go-coap/v3/options"
 	udpClient "github.com/plgd-dev/go-coap/v3/udp/client"
+	"go.uber.org/atomic"
 )
 
 func handleA(w mux.ResponseWriter, r *mux.Message) {

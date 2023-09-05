@@ -12,7 +12,7 @@ import (
 	dtlsnet "github.com/pion/dtls/v2/pkg/net"
 	"github.com/pion/dtls/v2/pkg/protocol"
 	"github.com/pion/dtls/v2/pkg/protocol/recordlayer"
-	"github.com/pion/transport/v2/udp"
+	"github.com/pion/transport/v3/udp"
 	"go.uber.org/atomic"
 )
 
