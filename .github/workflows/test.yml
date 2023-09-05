@@ -62,3 +62,29 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+
+  test1_18:
+    # don't run for forks
+    if: github.event_name == 'push' ||
+      (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) ||
+      github.event_name == 'workflow_dispatch'
+
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Set up Go 1.18
+        uses: actions/setup-go@v4
+        with:
+          # Go 1.18 is required by coap-gateway-go1-18 in https://github.com/plgd-dev/hub/blob/main/.github/workflows/publishDockerImagesGhcr.yml
+          go-version: "~1.18"
+
+      - run: go version
+
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Run a build
+        run: go build ./...
+
+      - name: Run a test
+        run: go test -v -race ./... -coverpkg=./... -covermode=atomic -coverprofile=./coverage.txt
