@@ -129,7 +129,7 @@ func (s *Session) LocalAddr() net.Addr {
 	return s.connection.LocalAddr()
 }
 
-// Run reads and process requests from a connection, until the connection is not closed.
+// Run reads and processes requests from a connection, until the connection is closed.
 func (s *Session) Run(cc *client.Conn) (err error) {
 	defer func() {
 		err1 := s.Close()
