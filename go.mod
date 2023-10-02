@@ -5,7 +5,7 @@ go 1.18
 require (
 	github.com/dsnet/golib/memfile v1.0.0
 	github.com/hashicorp/go-multierror v1.1.1
-	github.com/pion/dtls/v2 v2.2.8-0.20230905141523-2b584af66577
+	github.com/pion/dtls/v2 v2.2.8-0.20231001141911-840187442335
 	github.com/pion/transport/v3 v3.0.1
 	github.com/stretchr/testify v1.8.4
 	go.uber.org/atomic v1.11.0
