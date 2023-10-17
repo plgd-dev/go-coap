@@ -91,7 +91,7 @@ func TestServerDiscover(t *testing.T) {
 	log.Printf("ifs:%v", ifs)
 	var iface net.Interface
 	for _, i := range ifs {
-		if i.Flags&net.FlagMulticast == net.FlagMulticast && i.Flags&net.FlagUp == net.FlagUp && i.Flags&net.FlagRunning == net.FlagRunning{
+		if i.Flags&net.FlagMulticast == net.FlagMulticast && i.Flags&net.FlagUp == net.FlagUp && i.Flags&net.FlagRunning == net.FlagRunning {
 			iface = i
 			log.Printf("first available multicast if:%v", iface)
 			break
