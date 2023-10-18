@@ -81,6 +81,13 @@ func NewRouter() *Router {
 	return router
 }
 
+// SetErrorHandler sets a custom error handler for the default mux handler set in the constructor.
+func (r *Router) SetErrorHandler(h func(error)) {
+	r.m.Lock()
+	defer r.m.Unlock()
+	r.errors = h
+}
+
 // Does path match pattern?
 func pathMatch(pattern Route, path string) bool {
 	return pattern.regexMatcher.regexp.MatchString(path)
