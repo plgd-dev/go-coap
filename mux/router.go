@@ -81,6 +81,13 @@ func NewRouter() *Router {
 	return router
 }
 
+// SetErrorHandler sets a custom error handler for the default mux handler set in the constructor.
+func (r *Router) SetErrorHandler(h func(error)) {
+	r.m.Lock()
+	defer r.m.Unlock()
+	r.errors = h
+}
+
 // Does path match pattern?
 func pathMatch(pattern Route, path string) bool {
 	return pattern.regexMatcher.regexp.MatchString(path)
@@ -148,9 +155,11 @@ func (r *Router) DefaultHandle(handler Handler) {
 }
 
 // HandleFunc adds a handler function to the Router for pattern.
+// This function will panic if the pattern parameter is invalid. If the APP provides 'user defined patterns' better
+// use Handle(), which will return an error.
 func (r *Router) HandleFunc(pattern string, handler func(w ResponseWriter, r *Message)) {
 	if err := r.Handle(pattern, HandlerFunc(handler)); err != nil {
-		r.errors(fmt.Errorf("cannot handle pattern(%v): %w", pattern, err))
+		panic(fmt.Errorf("cannot handle pattern(%v): %w", pattern, err))
 	}
 }
 
