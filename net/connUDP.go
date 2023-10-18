@@ -28,7 +28,13 @@ type ControlMessage struct {
 	IfIndex int    // interface index, must be 1 <= value when specifying
 }
 
+type UDPSrc struct {
+	Addr net.UDPAddr
+	IfIndex int
+}
+
 type packetConn interface {
+	ReadFrom(b []byte) (n int, cm ControlMessage, src net.Addr, err error)
 	SetWriteDeadline(t time.Time) error
 	WriteTo(b []byte, cm *ControlMessage, dst net.Addr) (n int, err error)
 	SetMulticastInterface(ifi *net.Interface) error
@@ -52,6 +58,14 @@ func (p *packetConnIPv4) SetMulticastInterface(ifi *net.Interface) error {
 
 func (p *packetConnIPv4) SetWriteDeadline(t time.Time) error {
 	return p.packetConnIPv4.SetWriteDeadline(t)
+}
+
+func (p *packetConnIPv4) ReadFrom(b []byte) (n int, cm ControlMessage, src net.Addr, err error) {
+	n, v4cm, src, err := p.packetConnIPv4.ReadFrom(b)
+	if v4cm == nil {
+		return n, ControlMessage{}, src, err
+	}
+	return n, ControlMessage{Src: v4cm.Src, IfIndex: v4cm.IfIndex}, src, err
 }
 
 func (p *packetConnIPv4) WriteTo(b []byte, cm *ControlMessage, dst net.Addr) (n int, err error) {
@@ -95,6 +109,14 @@ func (p *packetConnIPv6) SetMulticastInterface(ifi *net.Interface) error {
 
 func (p *packetConnIPv6) SetWriteDeadline(t time.Time) error {
 	return p.packetConnIPv6.SetWriteDeadline(t)
+}
+
+func (p *packetConnIPv6) ReadFrom(b []byte) (n int, cm ControlMessage, src net.Addr, err error) {
+	n, v6cm, src, err := p.packetConnIPv6.ReadFrom(b)
+	if v6cm == nil {
+		return n, ControlMessage{}, src, err
+	}
+	return n, ControlMessage{Src: v6cm.Src, IfIndex: v6cm.IfIndex}, src, err
 }
 
 func (p *packetConnIPv6) WriteTo(b []byte, cm *ControlMessage, dst net.Addr) (n int, err error) {
@@ -143,7 +165,7 @@ var DefaultUDPConnConfig = UDPConnConfig{
 }
 
 type UDPConnConfig struct {
-	Errors func(err error)
+	Errors    func(err error)
 }
 
 func NewListenUDP(network, addr string, opts ...UDPOption) (*UDPConn, error) {
@@ -175,11 +197,16 @@ func NewUDPConn(network string, c *net.UDPConn, opts ...UDPOption) *UDPConn {
 	}
 	var pc packetConn
 	if IsIPv6(addr.IP) {
-		pc = newPacketConnIPv6(ipv6.NewPacketConn(c))
+		pcInt := ipv6.NewPacketConn(c)
+		pcInt.SetControlMessage(ipv6.FlagSrc, true)
+		pcInt.SetControlMessage(ipv6.FlagInterface, true)
+		pc = newPacketConnIPv6(pcInt)
 	} else {
-		pc = newPacketConnIPv4(ipv4.NewPacketConn(c))
+		pcInt := ipv4.NewPacketConn(c)
+		pcInt.SetControlMessage(ipv4.FlagSrc, true)
+		pcInt.SetControlMessage(ipv4.FlagInterface, true)
+		pc = newPacketConnIPv4(pcInt)
 	}
-
 	return &UDPConn{
 		network:    network,
 		connection: c,
@@ -443,11 +470,40 @@ func (c *UDPConn) ReadWithContext(ctx context.Context, buffer []byte) (int, *net
 	if c.closed.Load() {
 		return -1, nil, ErrConnectionIsClosed
 	}
+
 	n, s, err := c.connection.ReadFromUDP(buffer)
 	if err != nil {
 		return -1, nil, fmt.Errorf("cannot read from udp connection: %w", err)
 	}
-	return n, s, err
+	return n,s,nil
+}
+
+// ReadWithContext reads packet with context. In addition to the length in bytes and the remote address, it also
+// returns the incoming interface if available
+func (c *UDPConn) ReadIfaceWithContext(ctx context.Context, buffer []byte) (int, *UDPSrc, error) {
+	select {
+	case <-ctx.Done():
+		return -1, nil, ctx.Err()
+	default:
+	}
+	if c.closed.Load() {
+		return -1, nil, ErrConnectionIsClosed
+	}
+	// use packetConn to get incoming interface and set it to UDPAddr zone
+	n, cm, s, err := c.packetConn.ReadFrom(buffer)
+	if err != nil {
+		return -1, nil, fmt.Errorf("cannot read from udp connection: %w", err)
+	}
+
+	udpAddr, ok := s.(*net.UDPAddr)
+	if !ok {
+		// Fallback in the unlikely case that we do not get an UDPAddr
+		udpAddr, err = net.ResolveUDPAddr(s.Network(), s.String())
+		if err != nil {
+			return -1, nil, fmt.Errorf("unknown incoming source address: %w", err)
+		}
+	}
+	return n, &UDPSrc{Addr: *udpAddr, IfIndex: cm.IfIndex}, nil
 }
 
 // SetMulticastLoopback sets whether transmitted multicast packets

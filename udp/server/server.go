@@ -145,7 +145,7 @@ func (s *Server) Serve(l *coapNet.UDPConn) error {
 
 	for {
 		buf := m
-		n, raddr, err := l.ReadWithContext(s.ctx, buf)
+		n, src, err := l.ReadIfaceWithContext(s.ctx, buf)
 		if err != nil {
 			wg.Wait()
 
@@ -160,12 +160,12 @@ func (s *Server) Serve(l *coapNet.UDPConn) error {
 			}
 		}
 		buf = buf[:n]
-		cc, err := s.getConn(l, raddr, true)
+		cc, err := s.getConn(l, &src.Addr, true)
 		if err != nil {
-			s.cfg.Errors(fmt.Errorf("%v: cannot get client connection: %w", raddr, err))
+			s.cfg.Errors(fmt.Errorf("%v: cannot get client connection: %w", src.Addr, err))
 			continue
 		}
-		err = cc.Process(buf)
+		err = cc.ProcessWithIf(buf, src.IfIndex)
 		if err != nil {
 			s.closeConnection(cc)
 			s.cfg.Errors(fmt.Errorf("%v: cannot process packet: %w", cc.RemoteAddr(), err))
@@ -255,7 +255,17 @@ func getClose(cc *client.Conn) func() {
 	return closeFn
 }
 
+func cleanupRAddr(raddr *net.UDPAddr) *net.UDPAddr{
+	if raddr.IP.To4() == nil && (raddr.IP.IsLinkLocalMulticast() || raddr.IP.IsLinkLocalUnicast() || raddr.IP.IsInterfaceLocalMulticast()) {
+		return raddr
+	}
+	kaddr := *raddr
+	kaddr.Zone = ""
+	return &kaddr
+}
+
 func (s *Server) getOrCreateConn(udpConn *coapNet.UDPConn, raddr *net.UDPAddr) (cc *client.Conn, created bool) {
+	raddr = cleanupRAddr(raddr)
 	s.connsMutex.Lock()
 	defer s.connsMutex.Unlock()
 	key := raddr.String()

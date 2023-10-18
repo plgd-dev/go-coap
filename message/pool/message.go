@@ -32,6 +32,7 @@ type Message struct {
 	origValueBuffer []byte
 	body            io.ReadSeeker
 	sequence        uint64
+	ifIndex         int
 
 	// local vars
 	bufferUnmarshal []byte
@@ -423,6 +424,14 @@ func (r *Message) SetSequence(seq uint64) {
 
 func (r *Message) Sequence() uint64 {
 	return r.sequence
+}
+
+func (r *Message) SetIfIndex(ifIndex int) {
+	r.ifIndex = ifIndex
+}
+
+func (r *Message) IfIndex() int {
+	return r.ifIndex
 }
 
 func (r *Message) Hijack() {
