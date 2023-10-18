@@ -29,7 +29,7 @@ type ControlMessage struct {
 }
 
 type UDPSrc struct {
-	Addr net.UDPAddr
+	Addr    net.UDPAddr
 	IfIndex int
 }
 
@@ -165,7 +165,7 @@ var DefaultUDPConnConfig = UDPConnConfig{
 }
 
 type UDPConnConfig struct {
-	Errors    func(err error)
+	Errors func(err error)
 }
 
 func NewListenUDP(network, addr string, opts ...UDPOption) (*UDPConn, error) {
@@ -475,7 +475,7 @@ func (c *UDPConn) ReadWithContext(ctx context.Context, buffer []byte) (int, *net
 	if err != nil {
 		return -1, nil, fmt.Errorf("cannot read from udp connection: %w", err)
 	}
-	return n,s,nil
+	return n, s, nil
 }
 
 // ReadWithContext reads packet with context. In addition to the length in bytes and the remote address, it also

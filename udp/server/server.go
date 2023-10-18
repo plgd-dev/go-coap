@@ -255,7 +255,7 @@ func getClose(cc *client.Conn) func() {
 	return closeFn
 }
 
-func cleanupRAddr(raddr *net.UDPAddr) *net.UDPAddr{
+func cleanupRAddr(raddr *net.UDPAddr) *net.UDPAddr {
 	if raddr.IP.To4() == nil && (raddr.IP.IsLinkLocalMulticast() || raddr.IP.IsLinkLocalUnicast() || raddr.IP.IsInterfaceLocalMulticast()) {
 		return raddr
 	}

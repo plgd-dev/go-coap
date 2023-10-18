@@ -772,6 +772,7 @@ func (cc *Conn) handleSpecialMessages(r *pool.Message) bool {
 func (cc *Conn) Process(datagram []byte) error {
 	return cc.ProcessWithIf(datagram, 0)
 }
+
 func (cc *Conn) ProcessWithIf(datagram []byte, ifIndex int) error {
 	if uint32(len(datagram)) > cc.session.MaxMessageSize() {
 		return fmt.Errorf("max message size(%v) was exceeded %v", cc.session.MaxMessageSize(), len(datagram))
