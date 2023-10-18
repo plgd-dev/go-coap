@@ -150,7 +150,7 @@ func (r *Router) DefaultHandle(handler Handler) {
 // HandleFunc adds a handler function to the Router for pattern.
 func (r *Router) HandleFunc(pattern string, handler func(w ResponseWriter, r *Message)) {
 	if err := r.Handle(pattern, HandlerFunc(handler)); err != nil {
-		r.errors(fmt.Errorf("cannot handle pattern(%v): %w", pattern, err))
+		panic(fmt.Errorf("cannot handle pattern(%v): %w", pattern, err))
 	}
 }
 
