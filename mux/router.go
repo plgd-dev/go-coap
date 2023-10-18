@@ -6,6 +6,9 @@ import (
 	"io"
 	"sync"
 
+	// TODO: switch to non-exp maps package when dependency hits 1.20
+	"golang.org/x/exp/maps"
+
 	"github.com/plgd-dev/go-coap/v3/message"
 	"github.com/plgd-dev/go-coap/v3/message/codes"
 	"github.com/plgd-dev/go-coap/v3/message/pool"
@@ -196,7 +199,7 @@ func (r *Router) GetRoute(pattern string) *Route {
 func (r *Router) GetRoutes() map[string]Route {
 	r.m.RLock()
 	defer r.m.RUnlock()
-	return r.z
+	return maps.Clone(r.z)
 }
 
 // ServeCOAP dispatches the request to the handler whose
