@@ -155,6 +155,8 @@ func (r *Router) DefaultHandle(handler Handler) {
 }
 
 // HandleFunc adds a handler function to the Router for pattern.
+// This function will panic if the pattern parameter is invalid. If the APP provides 'user defined patterns' better
+// use Handle(), which will return an error.
 func (r *Router) HandleFunc(pattern string, handler func(w ResponseWriter, r *Message)) {
 	if err := r.Handle(pattern, HandlerFunc(handler)); err != nil {
 		panic(fmt.Errorf("cannot handle pattern(%v): %w", pattern, err))
