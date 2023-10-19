@@ -5,6 +5,9 @@ import (
 
 	"github.com/plgd-dev/go-coap/v3/mux"
 	"github.com/stretchr/testify/require"
+
+	// TODO: replace with standard maps package as soon as Go dependency hits 1.20
+	"golang.org/x/exp/maps"
 )
 
 type routeTest struct {
@@ -144,7 +147,7 @@ func testRoute(t *testing.T, router *mux.Router, test routeTest) {
 		t.Errorf("(%v) %v:\nPath: %#v\nPathTemplate: %#v\nVars: %v\n", test.title, msg, test.path, test.pathTemplate, test.vars)
 	}
 	if test.shouldMatch {
-		if vars != nil && !stringMapEqual(vars, routeParams.Vars) {
+		if vars != nil && !maps.Equal(vars, routeParams.Vars) {
 			t.Errorf("(%v) Vars not equal: expected %v, got %v", test.title, vars, routeParams.Vars)
 			return
 		}
@@ -154,19 +157,4 @@ func testRoute(t *testing.T, router *mux.Router, test routeTest) {
 			return
 		}
 	}
-}
-
-// stringMapEqual checks the equality of two string maps
-func stringMapEqual(m1, m2 map[string]string) bool {
-	nil1 := len(m1) == 0
-	nil2 := len(m2) == 0
-	if nil1 != nil2 || len(m1) != len(m2) {
-		return false
-	}
-	for k, v := range m1 {
-		if v != m2[k] {
-			return false
-		}
-	}
-	return true
 }
