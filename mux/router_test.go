@@ -158,8 +158,8 @@ func testRoute(t *testing.T, router *mux.Router, test routeTest) {
 
 // stringMapEqual checks the equality of two string maps
 func stringMapEqual(m1, m2 map[string]string) bool {
-	nil1 := m1 == nil || len(m1) == 0
-	nil2 := m2 == nil || len(m2) == 0
+	nil1 := len(m1) == 0
+	nil2 := len(m2) == 0
 	if nil1 != nil2 || len(m1) != len(m2) {
 		return false
 	}
