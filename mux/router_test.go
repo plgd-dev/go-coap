@@ -78,6 +78,34 @@ func TestMux(t *testing.T) {
 			pathTemplate: `/{category:a|b/c}`,
 			shouldMatch:  true,
 		},
+		{
+			title:        "root path without slash",
+			vars:         map[string]string{},
+			path:         "",
+			pathTemplate: "",
+			shouldMatch:  true,
+		},
+		{
+			title:        "root path with slash",
+			vars:         map[string]string{},
+			path:         "/",
+			pathTemplate: "/",
+			shouldMatch:  true,
+		},
+		{
+			title:        "root path without slash",
+			vars:         map[string]string{},
+			path:         "",
+			pathTemplate: "/",
+			shouldMatch:  true,
+		},
+		{
+			title:        "root path with slash",
+			vars:         map[string]string{},
+			path:         "/",
+			pathTemplate: "",
+			shouldMatch:  true,
+		},
 	}
 
 	for _, test := range tests {
@@ -121,8 +149,8 @@ func testRoute(t *testing.T, router *mux.Router, test routeTest) {
 			return
 		}
 
-		if routeParams.PathTemplate != test.pathTemplate {
-			t.Errorf("(%v) PathTemplate not equal: expected %v, got %v", test.title, test.pathTemplate, test.pathTemplate)
+		if routeParams.PathTemplate != mux.FilterPath(test.pathTemplate) {
+			t.Errorf("(%v) PathTemplate not equal: expected %v, got %v", test.title, test.pathTemplate, routeParams.PathTemplate)
 			return
 		}
 	}
@@ -130,8 +158,8 @@ func testRoute(t *testing.T, router *mux.Router, test routeTest) {
 
 // stringMapEqual checks the equality of two string maps
 func stringMapEqual(m1, m2 map[string]string) bool {
-	nil1 := m1 == nil
-	nil2 := m2 == nil
+	nil1 := m1 == nil || len(m1) == 0
+	nil2 := m2 == nil || len(m2) == 0
 	if nil1 != nil2 || len(m1) != len(m2) {
 		return false
 	}

@@ -93,9 +93,19 @@ func pathMatch(pattern Route, path string) bool {
 	return pattern.regexMatcher.regexp.MatchString(path)
 }
 
+// FilterPath checks the unfiltered input path or pattern against a blacklist and transforms them into valid paths
+// of the same semantic meaning
+func FilterPath(unfiltered string) string {
+	if unfiltered == "" {
+		return "/"
+	}
+	return unfiltered
+}
+
 // Find a handler on a handler map given a path string
 // Most-specific (longest) pattern wins
 func (r *Router) Match(path string, routeParams *RouteParams) (matchedRoute *Route, matchedPattern string) {
+	path = FilterPath(path)
 	r.m.RLock()
 	n := 0
 	for pattern, route := range r.z {
@@ -127,10 +137,7 @@ func (r *Router) Match(path string, routeParams *RouteParams) (matchedRoute *Rou
 
 // Handle adds a handler to the Router for pattern.
 func (r *Router) Handle(pattern string, handler Handler) error {
-	switch pattern {
-	case "", "/":
-		pattern = "/"
-	}
+	pattern = FilterPath(pattern)
 
 	if handler == nil {
 		return errors.New("nil handler")
@@ -170,10 +177,7 @@ func (r *Router) DefaultHandleFunc(handler func(w ResponseWriter, r *Message)) {
 
 // HandleRemove deregistrars the handler specific for pattern from the Router.
 func (r *Router) HandleRemove(pattern string) error {
-	switch pattern {
-	case "", "/":
-		pattern = "/"
-	}
+	pattern = FilterPath(pattern)
 	r.m.Lock()
 	defer r.m.Unlock()
 	if _, ok := r.z[pattern]; ok {
@@ -185,6 +189,7 @@ func (r *Router) HandleRemove(pattern string) error {
 
 // GetRoute obtains route from the pattern it has been assigned
 func (r *Router) GetRoute(pattern string) *Route {
+	pattern = FilterPath(pattern)
 	r.m.RLock()
 	defer r.m.RUnlock()
 	if route, ok := r.z[pattern]; ok {
