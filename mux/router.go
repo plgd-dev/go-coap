@@ -6,12 +6,11 @@ import (
 	"io"
 	"sync"
 
-	// TODO: switch to non-exp maps package when dependency hits 1.20
-	"golang.org/x/exp/maps"
-
 	"github.com/plgd-dev/go-coap/v3/message"
 	"github.com/plgd-dev/go-coap/v3/message/codes"
 	"github.com/plgd-dev/go-coap/v3/message/pool"
+	// TODO: switch to non-exp maps package when dependency hits 1.20
+	"golang.org/x/exp/maps"
 )
 
 type ResponseWriter = interface {
