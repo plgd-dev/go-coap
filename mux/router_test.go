@@ -5,6 +5,7 @@ import (
 
 	"github.com/plgd-dev/go-coap/v3/mux"
 	"github.com/stretchr/testify/require"
+	"golang.org/x/exp/maps" // TODO: replace with standard maps package as soon as Go dependency hits 1.20
 )
 
 type routeTest struct {
@@ -78,6 +79,34 @@ func TestMux(t *testing.T) {
 			pathTemplate: `/{category:a|b/c}`,
 			shouldMatch:  true,
 		},
+		{
+			title:        "root path without slash",
+			vars:         map[string]string{},
+			path:         "",
+			pathTemplate: "",
+			shouldMatch:  true,
+		},
+		{
+			title:        "root path with slash",
+			vars:         map[string]string{},
+			path:         "/",
+			pathTemplate: "/",
+			shouldMatch:  true,
+		},
+		{
+			title:        "root path without slash",
+			vars:         map[string]string{},
+			path:         "",
+			pathTemplate: "/",
+			shouldMatch:  true,
+		},
+		{
+			title:        "root path with slash",
+			vars:         map[string]string{},
+			path:         "/",
+			pathTemplate: "",
+			shouldMatch:  true,
+		},
 	}
 
 	for _, test := range tests {
@@ -116,29 +145,14 @@ func testRoute(t *testing.T, router *mux.Router, test routeTest) {
 		t.Errorf("(%v) %v:\nPath: %#v\nPathTemplate: %#v\nVars: %v\n", test.title, msg, test.path, test.pathTemplate, test.vars)
 	}
 	if test.shouldMatch {
-		if vars != nil && !stringMapEqual(vars, routeParams.Vars) {
+		if vars != nil && !maps.Equal(vars, routeParams.Vars) {
 			t.Errorf("(%v) Vars not equal: expected %v, got %v", test.title, vars, routeParams.Vars)
 			return
 		}
 
-		if routeParams.PathTemplate != test.pathTemplate {
-			t.Errorf("(%v) PathTemplate not equal: expected %v, got %v", test.title, test.pathTemplate, test.pathTemplate)
+		if routeParams.PathTemplate != mux.FilterPath(test.pathTemplate) {
+			t.Errorf("(%v) PathTemplate not equal: expected %v, got %v", test.title, test.pathTemplate, routeParams.PathTemplate)
 			return
 		}
 	}
-}
-
-// stringMapEqual checks the equality of two string maps
-func stringMapEqual(m1, m2 map[string]string) bool {
-	nil1 := m1 == nil
-	nil2 := m2 == nil
-	if nil1 != nil2 || len(m1) != len(m2) {
-		return false
-	}
-	for k, v := range m1 {
-		if v != m2[k] {
-			return false
-		}
-	}
-	return true
 }
