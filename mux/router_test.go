@@ -5,9 +5,7 @@ import (
 
 	"github.com/plgd-dev/go-coap/v3/mux"
 	"github.com/stretchr/testify/require"
-
-	// TODO: replace with standard maps package as soon as Go dependency hits 1.20
-	"golang.org/x/exp/maps"
+	"golang.org/x/exp/maps" // TODO: replace with standard maps package as soon as Go dependency hits 1.20
 )
 
 type routeTest struct {
