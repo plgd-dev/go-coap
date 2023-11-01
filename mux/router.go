@@ -215,7 +215,7 @@ func (r *Router) ServeCOAP(w ResponseWriter, req *Message) {
 	r.m.RLock()
 	defaultHandler := r.defaultHandler
 	r.m.RUnlock()
-	if err != nil {
+	if err != nil && !errors.Is(err, message.ErrOptionNotFound) {
 		defaultHandler.ServeCOAP(w, req)
 		return
 	}
