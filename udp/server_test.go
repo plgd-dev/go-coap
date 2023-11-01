@@ -13,6 +13,7 @@ import (
 	"github.com/plgd-dev/go-coap/v3/message"
 	"github.com/plgd-dev/go-coap/v3/message/codes"
 	"github.com/plgd-dev/go-coap/v3/message/pool"
+	"github.com/plgd-dev/go-coap/v3/mux"
 	coapNet "github.com/plgd-dev/go-coap/v3/net"
 	"github.com/plgd-dev/go-coap/v3/net/responsewriter"
 	"github.com/plgd-dev/go-coap/v3/options"
@@ -601,5 +602,79 @@ func TestServerReconnectNewClient(t *testing.T) {
 	require.NoError(t, err)
 	for i := 0; i < 100; i++ {
 		require.False(t, checkMessageID[cc.GetMessageID()])
+	}
+}
+
+func TestMuxPath(t *testing.T) {
+	r := mux.NewRouter()
+	err := r.Handle("/", mux.HandlerFunc(handleA))
+	require.NoError(t, err)
+	err = r.Handle("/a", mux.HandlerFunc(handleA))
+	require.NoError(t, err)
+
+	l, err := coapNet.NewListenUDP("udp", ":5688")
+	require.NoError(t, err)
+	defer func() {
+		errC := l.Close()
+		require.NoError(t, errC)
+	}()
+	s := udp.NewServer(options.WithMux(r))
+	go func() {
+		errL := s.Serve(l)
+		require.NoError(t, errL)
+	}()
+
+	type args struct {
+		path string
+	}
+	tests := []struct {
+		name     string
+		args     args
+		wantCode codes.Code
+	}{
+		{
+			name:     "empty path",
+			args:     args{path: ""},
+			wantCode: codes.Content,
+		},
+		{
+			name:     "root path",
+			args:     args{path: "/"},
+			wantCode: codes.Content,
+		},
+		{
+			name:     "a path",
+			args:     args{path: "/a"},
+			wantCode: codes.Content,
+		},
+		{
+			name:     "not found path",
+			args:     args{path: "/b"},
+			wantCode: codes.NotFound,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			testPath(t, tt.args.path, tt.wantCode)
+		})
+	}
+}
+
+func testPath(t *testing.T, path string, expCode codes.Code) {
+	co, err := udp.Dial("localhost:5688")
+	require.NoError(t, err)
+	defer func() {
+		errC := co.Close()
+		require.NoError(t, errC)
+	}()
+	resp, err := co.Get(context.Background(), path)
+	require.NoError(t, err)
+	require.Equal(t, expCode, resp.Code())
+}
+
+func handleA(w mux.ResponseWriter, _ *mux.Message) {
+	err := w.SetResponse(codes.Content, message.TextPlain, bytes.NewReader([]byte("hello world")))
+	if err != nil {
+		log.Printf("cannot set response: %v", err)
 	}
 }
