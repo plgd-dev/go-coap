@@ -5,13 +5,13 @@ go 1.18
 require (
 	github.com/dsnet/golib/memfile v1.0.0
 	github.com/hashicorp/go-multierror v1.1.1
-	github.com/pion/dtls/v2 v2.2.8-0.20231001141911-840187442335
+	github.com/pion/dtls/v2 v2.2.8-0.20231026152330-9cc3df9c3369
 	github.com/pion/transport/v3 v3.0.1
 	github.com/stretchr/testify v1.8.4
 	go.uber.org/atomic v1.11.0
-	golang.org/x/exp v0.0.0-20230905200255-921286631fa9
+	golang.org/x/exp v0.0.0-20231006140011-7918f672742d
 	golang.org/x/net v0.17.0
-	golang.org/x/sync v0.3.0
+	golang.org/x/sync v0.4.0
 )
 
 require (
