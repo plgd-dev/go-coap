@@ -9,7 +9,7 @@
   "packageRules": [
     {
       "matchPackagePatterns": [
-        "+"
+        "*"
       ],
       "schedule": [
         "on the first day of the month"
