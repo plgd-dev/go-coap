@@ -63,6 +63,7 @@ func New(opt ...Option) *Server {
 			return inactivity.NewNilMonitor[*udpClient.Conn]()
 		}
 	}
+
 	if cfg.MessagePool == nil {
 		cfg.MessagePool = pool.New(0, 0)
 	}
@@ -158,8 +159,10 @@ func (s *Server) Serve(l Listener) error {
 		}
 		wg.Add(1)
 		var cc *udpClient.Conn
-		monitor := s.cfg.CreateInactivityMonitor()
-		cc = s.createConn(coapNet.NewConn(rw), monitor)
+		inactivityMonitor := s.cfg.CreateInactivityMonitor()
+		requestMonitor := s.cfg.RequestMonitor
+
+		cc = s.createConn(coapNet.NewConn(rw), inactivityMonitor, requestMonitor)
 		if s.cfg.OnNewConn != nil {
 			s.cfg.OnNewConn(cc)
 		}
@@ -184,7 +187,7 @@ func (s *Server) Stop() {
 	}
 }
 
-func (s *Server) createConn(connection *coapNet.Conn, monitor udpClient.InactivityMonitor) *udpClient.Conn {
+func (s *Server) createConn(connection *coapNet.Conn, inactivityMonitor udpClient.InactivityMonitor, requestMonitor udpClient.RequestMonitorFunc) *udpClient.Conn {
 	createBlockWise := func(cc *udpClient.Conn) *blockwise.BlockWise[*udpClient.Conn] {
 		return nil
 	}
@@ -220,10 +223,12 @@ func (s *Server) createConn(connection *coapNet.Conn, monitor udpClient.Inactivi
 	cfg.MessagePool = s.cfg.MessagePool
 	cfg.ReceivedMessageQueueSize = s.cfg.ReceivedMessageQueueSize
 	cfg.ProcessReceivedMessage = s.cfg.ProcessReceivedMessage
+
 	cc := udpClient.NewConn(
 		session,
 		createBlockWise,
-		monitor,
+		inactivityMonitor,
+		requestMonitor,
 		&cfg,
 	)
 
