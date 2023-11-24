@@ -792,10 +792,6 @@ func (cc *Conn) handlePong(w *responsewriter.ResponseWriter[*Conn], r *pool.Mess
 	cc.sendPong(w, r)
 }
 
-func (cc *Conn) IsPingMessage(r *pool.Message) bool {
-	return r.Code() == codes.Empty && r.Type() == message.Confirmable && len(r.Token()) == 0 && len(r.Options()) == 0 && r.Body() == nil
-}
-
 func upsertInterfaceToMessage(m *pool.Message, ifIndex int) {
 	if ifIndex >= 1 {
 		cm := coapNet.ControlMessage{
@@ -807,7 +803,7 @@ func upsertInterfaceToMessage(m *pool.Message, ifIndex int) {
 
 func (cc *Conn) handleSpecialMessages(r *pool.Message) bool {
 	// ping request
-	if cc.IsPingMessage(r) {
+	if r.IsPing(false) {
 		cc.ProcessReceivedMessageWithHandler(r, cc.handlePong)
 		return true
 	}

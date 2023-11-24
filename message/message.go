@@ -48,3 +48,11 @@ func (r *Message) String() string {
 	}
 	return buf
 }
+
+// IsPing returns true if the message is a ping.
+func (r *Message) IsPing(isTCP bool) bool {
+	if isTCP {
+		return r.Code == codes.Ping
+	}
+	return r.Code == codes.Empty && r.Type == Confirmable && len(r.Token) == 0 && len(r.Options) == 0 && len(r.Payload) == 0
+}
