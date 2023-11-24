@@ -145,7 +145,9 @@ func (s *Server) Serve(l *coapNet.UDPConn) error {
 
 	for {
 		buf := m
-		n, raddr, err := l.ReadWithContext(s.ctx, buf)
+		var raddr *net.UDPAddr
+		var cm *coapNet.ControlMessage
+		n, err := l.ReadWithOptions(buf, coapNet.WithContext(s.ctx), coapNet.WithGetControlMessage(&cm), coapNet.WithGetRemoteAddr(&raddr))
 		if err != nil {
 			wg.Wait()
 
@@ -165,7 +167,7 @@ func (s *Server) Serve(l *coapNet.UDPConn) error {
 			s.cfg.Errors(fmt.Errorf("%v: cannot get client connection: %w", raddr, err))
 			continue
 		}
-		err = cc.Process(buf)
+		err = cc.Process(cm, buf)
 		if err != nil {
 			s.closeConnection(cc)
 			s.cfg.Errors(fmt.Errorf("%v: cannot process packet: %w", cc.RemoteAddr(), err))

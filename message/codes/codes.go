@@ -56,6 +56,8 @@ const (
 
 const _maxCode = 255
 
+var _maxCodeLen int
+
 var strToCode = map[string]Code{
 	`"GET"`:                                GET,
 	`"POST"`:                               POST,
@@ -90,6 +92,21 @@ var strToCode = map[string]Code{
 	`"Abort"`:                              Abort,
 }
 
+func getMaxCodeLen() int {
+	// max uint32 as string binary representation: "0b" + 32 digits
+	max := 34
+	for k := range strToCode {
+		if len(k) > max {
+			max = len(k)
+		}
+	}
+	return max
+}
+
+func init() {
+	_maxCodeLen = getMaxCodeLen()
+}
+
 // UnmarshalJSON unmarshals b into the Code.
 func (c *Code) UnmarshalJSON(b []byte) error {
 	// From json.Unmarshaler: By convention, to approximate the behavior of
@@ -100,6 +117,10 @@ func (c *Code) UnmarshalJSON(b []byte) error {
 	}
 	if c == nil {
 		return fmt.Errorf("nil receiver passed to UnmarshalJSON")
+	}
+
+	if len(b) > _maxCodeLen {
+		return fmt.Errorf("invalid code: input too large(length=%d)", len(b))
 	}
 
 	if ci, err := strconv.ParseUint(string(b), 10, 32); err == nil {
@@ -115,5 +136,5 @@ func (c *Code) UnmarshalJSON(b []byte) error {
 		*c = jc
 		return nil
 	}
-	return fmt.Errorf("invalid code: %q", string(b))
+	return fmt.Errorf("invalid code: %v", b)
 }

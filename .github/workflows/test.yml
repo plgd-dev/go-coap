@@ -30,14 +30,8 @@ jobs:
 
       - run: go version
 
-      # Checks-out repository under $GITHUB_WORKSPACE
-      - name: Checkout
-        if: ${{!startsWith(matrix.os, 'ubuntu')}}
-        uses: actions/checkout@v4
-
       # Checks-out repository under $GITHUB_WORKSPACE with tags and history (needed by "SonarCloud Scan" step)
       - name: Full checkout
-        if: startsWith(matrix.os,'ubuntu')
         uses: actions/checkout@v4
         with:
           fetch-depth: 0 # Full clone for SonarCloud
@@ -45,19 +39,62 @@ jobs:
       # Build everything
       - name: Run a build
         run: go build ./...
+        shell: bash
 
       # Runs a single command using the runners shell, -p1 for `race: limit on 8128 simultaneously alive goroutines is exceeded, dying` at macos
       - name: Run a test
-        run: go test -v -race ./... -coverpkg=./... -covermode=atomic -coverprofile=./coverage.txt
+        run: go test -v -race ./... -coverpkg=./... -covermode=atomic -coverprofile=./coverage.txt -json > ./report.json
+        shell: bash
+      
+      - name: Dump test report
+        if: always()
+        run: cat ./report.json
+        shell: bash
 
-      # Skip this step when running from forked repository (no write privileges)
-      - name: Publish the coverage
-        if: startsWith(matrix.os,'ubuntu')
-        run: bash <(curl -s https://codecov.io/bash)
+      - name: Prepare upload files
+        run: |
+          mkdir -p ./outputs
+          cp ./coverage.txt ./outputs/${{ matrix.os }}.coverage.txt
+          cp ./report.json ./outputs/${{ matrix.os }}.report.json
+        shell: bash
 
-      # Skip this step when running from forked repository (no access to ${{ secrets }})
+      - name: Upload coverage and report files
+        uses: actions/upload-artifact@v3
+        with:
+          name: ${{ hashFiles('./outputs') || 'none' }}
+          path: ./outputs
+          retention-days: 1
+          if-no-files-found: warn
+  
+  coverage-sonar-cloud-scan:
+    needs: test
+    # The type of runner that the job will run on
+    runs-on: ubuntu-latest
+    steps:
+      # Checks-out your repository under $GITHUB_WORKSPACE, so your job can access it
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # Shallow clones should be disabled for a better relevancy of analysis
+
+      - name: Download artifacts
+        uses: actions/download-artifact@v3
+        with:
+          path: ./outputs
+
+      - name: Prepare coverage and report files
+        run: |
+          mkdir -p .tmp/coverage
+          mkdir -p .tmp/report
+          find ./outputs -name "*.coverage.txt" -exec sh -c 'cp $1 .tmp/coverage/$(echo $1 | sed "s/[\/.]/-/g" ).coverage.txt' _ {}  \;
+          find ./outputs -name "*.report.json" -exec sh -c 'cp $1 .tmp/report/$(echo $1 | sed "s/[\/.]/-/g" ).report.json' _ {}  \;
+
+      - name: Code coverage
+        uses: codecov/codecov-action@v4.0.0-beta.3
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          directory: .tmp/
+
       - name: SonarCloud Scan
-        if: startsWith(matrix.os,'ubuntu')
         uses: SonarSource/sonarcloud-github-action@master
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
