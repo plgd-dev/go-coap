@@ -384,7 +384,6 @@ func (cc *Conn) handleSignals(r *pool.Message) bool {
 		// if r.HasOption(message.TCPCustody) {
 		// TODO
 		// }
-		cc.session.requestMonitor(cc, r)
 		if err := cc.sendPong(r.Token()); err != nil && !coapNet.IsConnectionBrokenError(err) {
 			cc.Session().errors(fmt.Errorf("cannot handle ping signal: %w", err))
 		}
