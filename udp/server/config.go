@@ -22,9 +22,6 @@ type ErrorFunc = func(error)
 // OnNewConnFunc is the callback for new connections.
 type OnNewConnFunc = func(cc *udpClient.Conn)
 
-// RequestMonitorFunc is the callback to see any requests.
-type RequestMonitorFunc = func(cc *udpClient.Conn, req *pool.Message)
-
 type GetMIDFunc = func() int32
 
 var DefaultConfig = func() Config {
@@ -40,8 +37,8 @@ var DefaultConfig = func() Config {
 		OnNewConn: func(cc *udpClient.Conn) {
 			// do nothing by default
 		},
-		RequestMonitor: func(cc *udpClient.Conn, req *pool.Message) {
-			// do nothing by default
+		RequestMonitor: func(cc *udpClient.Conn, req *pool.Message) error {
+			return nil
 		},
 		TransmissionNStart:             1,
 		TransmissionAcknowledgeTimeout: time.Second * 2,
@@ -63,7 +60,7 @@ type Config struct {
 	GetMID                         GetMIDFunc
 	Handler                        HandlerFunc
 	OnNewConn                      OnNewConnFunc
-	RequestMonitor                 RequestMonitorFunc
+	RequestMonitor                 udpClient.RequestMonitorFunc
 	TransmissionNStart             uint32
 	TransmissionAcknowledgeTimeout time.Duration
 	TransmissionMaxRetransmit      uint32

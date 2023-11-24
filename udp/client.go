@@ -58,6 +58,11 @@ func Client(conn *net.UDPConn, opts ...Option) *client.Conn {
 	if cfg.MessagePool == nil {
 		cfg.MessagePool = pool.New(0, 0)
 	}
+	if cfg.RequestMonitor == nil {
+		cfg.RequestMonitor = func(*client.Conn, *pool.Message) error {
+			return nil
+		}
+	}
 
 	errorsFunc := cfg.Errors
 	cfg.Errors = func(err error) {
@@ -95,10 +100,10 @@ func Client(conn *net.UDPConn, opts ...Option) *client.Conn {
 		cfg.MTU,
 		cfg.CloseSocket,
 	)
-	cc := client.NewConn(session,
-		createBlockWise,
-		monitor,
-		&cfg,
+	cc := client.NewConnWithOpts(session, &cfg,
+		client.WithBlockWise(createBlockWise),
+		client.WithInactivityMonitor(monitor),
+		client.WithRequestMonitor(cfg.RequestMonitor),
 	)
 	cfg.PeriodicRunner(func(now time.Time) bool {
 		cc.CheckExpirations(now)

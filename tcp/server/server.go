@@ -183,7 +183,7 @@ func (s *Server) Stop() {
 	}
 }
 
-func (s *Server) createConn(connection *coapNet.Conn, inactivityMonitor client.InactivityMonitor, requestMonitor RequestMonitorFunc) *client.Conn {
+func (s *Server) createConn(connection *coapNet.Conn, inactivityMonitor client.InactivityMonitor, requestMonitor client.RequestMonitorFunc) *client.Conn {
 	createBlockWise := func(cc *client.Conn) *blockwise.BlockWise[*client.Conn] {
 		return nil
 	}
@@ -213,12 +213,12 @@ func (s *Server) createConn(connection *coapNet.Conn, inactivityMonitor client.I
 	cfg.GetToken = s.cfg.GetToken
 	cfg.ProcessReceivedMessage = s.cfg.ProcessReceivedMessage
 	cfg.ReceivedMessageQueueSize = s.cfg.ReceivedMessageQueueSize
-	cc := client.NewConn(
+	cc := client.NewConnWithOpts(
 		connection,
-		createBlockWise,
-		inactivityMonitor,
-		requestMonitor,
 		&cfg,
+		client.WithBlockWise(createBlockWise),
+		client.WithInactivityMonitor(inactivityMonitor),
+		client.WithRequestMonitor(requestMonitor),
 	)
 
 	return cc

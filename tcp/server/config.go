@@ -24,9 +24,6 @@ type GoPoolFunc = func(func()) error
 // OnNewConnFunc is the callback for new connections.
 type OnNewConnFunc = func(cc *client.Conn)
 
-// RequestMonitorFunc is the callback to see any requests.
-type RequestMonitorFunc = func(cc *client.Conn, req *pool.Message)
-
 var DefaultConfig = func() Config {
 	opts := Config{
 		Common: config.NewCommon[*client.Conn](),
@@ -44,8 +41,8 @@ var DefaultConfig = func() Config {
 		OnNewConn: func(cc *client.Conn) {
 			// do nothing by default
 		},
-		RequestMonitor: func(cc *client.Conn, req *pool.Message) {
-			// do nothing by default
+		RequestMonitor: func(cc *client.Conn, req *pool.Message) error {
+			return nil
 		},
 		ConnectionCacheSize: 2 * 1024,
 	}
@@ -62,7 +59,7 @@ type Config struct {
 	CreateInactivityMonitor         client.CreateInactivityMonitorFunc
 	Handler                         HandlerFunc
 	OnNewConn                       OnNewConnFunc
-	RequestMonitor                  RequestMonitorFunc
+	RequestMonitor                  client.RequestMonitorFunc
 	ConnectionCacheSize             uint16
 	DisablePeerTCPSignalMessageCSMs bool
 	DisableTCPSignalMessageCSM      bool

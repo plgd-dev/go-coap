@@ -88,10 +88,11 @@ func Client(conn net.Conn, opts ...Option) *client.Conn {
 
 	l := coapNet.NewConn(conn)
 	monitor := cfg.CreateInactivityMonitor()
-	cc := client.NewConn(l,
-		createBlockWise,
-		monitor,
+	cc := client.NewConnWithOpts(l,
 		&cfg,
+		client.WithBlockWise(createBlockWise),
+		client.WithInactivityMonitor(monitor),
+		client.WithRequestMonitor(cfg.RequestMonitor),
 	)
 
 	cfg.PeriodicRunner(func(now time.Time) bool {

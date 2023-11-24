@@ -21,6 +21,9 @@ var DefaultConfig = func() Config {
 		CreateInactivityMonitor: func() InactivityMonitor {
 			return inactivity.NewNilMonitor[*Conn]()
 		},
+		RequestMonitor: func(*Conn, *pool.Message) error {
+			return nil
+		},
 		Dialer:                         &net.Dialer{Timeout: time.Second * 3},
 		Net:                            "udp",
 		TransmissionNStart:             1,
@@ -43,6 +46,7 @@ var DefaultConfig = func() Config {
 type Config struct {
 	config.Common[*Conn]
 	CreateInactivityMonitor        CreateInactivityMonitorFunc
+	RequestMonitor                 RequestMonitorFunc
 	Net                            string
 	GetMID                         GetMIDFunc
 	Handler                        HandlerFunc

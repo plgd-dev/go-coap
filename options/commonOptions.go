@@ -595,7 +595,7 @@ func WithOnNewConn[F OnNewConnFunc](onNewConn F) OnNewConnOpt[F] {
 
 // WithRequestMonitor
 type WithRequestMonitorFunc interface {
-	tcpServer.RequestMonitorFunc | udpServer.RequestMonitorFunc
+	tcpClient.RequestMonitorFunc | udpClient.RequestMonitorFunc
 }
 
 // WithRequestMonitorOpt network option.
@@ -609,30 +609,30 @@ func panicForInvalidWithRequestMonitorFunc(t, exp any) {
 
 func (o WithRequestMonitorOpt[F]) UDPServerApply(cfg *udpServer.Config) {
 	switch v := any(o.f).(type) {
-	case udpServer.RequestMonitorFunc:
+	case udpClient.RequestMonitorFunc:
 		cfg.RequestMonitor = v
 	default:
-		var exp udpServer.RequestMonitorFunc
+		var exp udpClient.RequestMonitorFunc
 		panicForInvalidWithRequestMonitorFunc(v, exp)
 	}
 }
 
 func (o WithRequestMonitorOpt[F]) DTLSServerApply(cfg *dtlsServer.Config) {
 	switch v := any(o.f).(type) {
-	case udpServer.RequestMonitorFunc:
+	case udpClient.RequestMonitorFunc:
 		cfg.RequestMonitor = v
 	default:
-		var exp udpServer.RequestMonitorFunc
+		var exp udpClient.RequestMonitorFunc
 		panicForInvalidWithRequestMonitorFunc(v, exp)
 	}
 }
 
 func (o WithRequestMonitorOpt[F]) TCPServerApply(cfg *tcpServer.Config) {
 	switch v := any(o.f).(type) {
-	case tcpServer.RequestMonitorFunc:
+	case tcpClient.RequestMonitorFunc:
 		cfg.RequestMonitor = v
 	default:
-		var exp tcpServer.RequestMonitorFunc
+		var exp tcpClient.RequestMonitorFunc
 		panicForInvalidWithRequestMonitorFunc(v, exp)
 	}
 }

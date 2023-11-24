@@ -224,12 +224,12 @@ func (s *Server) createConn(connection *coapNet.Conn, inactivityMonitor udpClien
 	cfg.ReceivedMessageQueueSize = s.cfg.ReceivedMessageQueueSize
 	cfg.ProcessReceivedMessage = s.cfg.ProcessReceivedMessage
 
-	cc := udpClient.NewConn(
+	cc := udpClient.NewConnWithOpts(
 		session,
-		createBlockWise,
-		inactivityMonitor,
-		requestMonitor,
 		&cfg,
+		udpClient.WithBlockWise(createBlockWise),
+		udpClient.WithInactivityMonitor(inactivityMonitor),
+		udpClient.WithRequestMonitor(requestMonitor),
 	)
 
 	return cc

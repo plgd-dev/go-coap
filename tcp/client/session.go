@@ -62,6 +62,11 @@ func NewSession(
 	if inactivityMonitor == nil {
 		inactivityMonitor = inactivity.NewNilMonitor[*Conn]()
 	}
+	if requestMonitor == nil {
+		requestMonitor = func(*Conn, *pool.Message) error {
+			return nil
+		}
+	}
 
 	s := &Session{
 		cancel:                     cancel,
@@ -177,6 +182,11 @@ func (s *Session) processBuffer(buffer *bytes.Buffer, cc *Conn) error {
 		}
 		buffer = seekBufferToNextMessage(buffer, read)
 		req.SetSequence(s.Sequence())
+
+		if err = s.requestMonitor(cc, req); err != nil {
+			s.messagePool.ReleaseMessage(req)
+			return fmt.Errorf("request monitor: %w", err)
+		}
 		s.inactivityMonitor.Notify()
 		cc.pushToReceivedMessageQueue(req)
 	}
