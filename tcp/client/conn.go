@@ -32,6 +32,7 @@ type (
 	EventFunc                   = func()
 	GetMIDFunc                  = func() int32
 	CreateInactivityMonitorFunc = func() InactivityMonitor
+	RequestMonitorFunc          = func(cc *Conn, req *pool.Message)
 )
 
 type Notifier interface {
@@ -59,6 +60,7 @@ func NewConn(
 	connection *coapNet.Conn,
 	createBlockWise func(cc *Conn) *blockwise.BlockWise[*Conn],
 	inactivityMonitor InactivityMonitor,
+	requestMonitor RequestMonitorFunc,
 	cfg *Config,
 ) *Conn {
 	if cfg.GetToken == nil {
@@ -80,6 +82,7 @@ func NewConn(
 		cfg.DisableTCPSignalMessageCSM,
 		cfg.CloseSocket,
 		inactivityMonitor,
+		requestMonitor,
 		cfg.ConnectionCacheSize,
 		cfg.MessagePool,
 	)
@@ -336,6 +339,7 @@ func (cc *Conn) handleSignals(r *pool.Message) bool {
 		// if r.HasOption(message.TCPCustody) {
 		// TODO
 		// }
+		cc.session.requestMonitor(cc, r)
 		if err := cc.sendPong(r.Token()); err != nil && !coapNet.IsConnectionBrokenError(err) {
 			cc.Session().errors(fmt.Errorf("cannot handle ping signal: %w", err))
 		}

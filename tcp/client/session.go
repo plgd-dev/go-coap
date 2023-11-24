@@ -23,6 +23,7 @@ type Session struct {
 	// See: https://golang.org/pkg/sync/atomic/#pkg-note-BUG
 	sequence          atomic.Uint64
 	inactivityMonitor InactivityMonitor
+	requestMonitor    RequestMonitorFunc
 	errSendCSM        error
 	cancel            context.CancelFunc
 	done              chan struct{}
@@ -48,6 +49,7 @@ func NewSession(
 	disableTCPSignalMessageCSM bool,
 	closeSocket bool,
 	inactivityMonitor InactivityMonitor,
+	requestMonitor RequestMonitorFunc,
 	connectionCacheSize uint16,
 	messagePool *pool.Pool,
 ) *Session {
@@ -69,6 +71,7 @@ func NewSession(
 		disableTCPSignalMessageCSM: disableTCPSignalMessageCSM,
 		closeSocket:                closeSocket,
 		inactivityMonitor:          inactivityMonitor,
+		requestMonitor:             requestMonitor,
 		done:                       make(chan struct{}),
 		connectionCacheSize:        connectionCacheSize,
 		messagePool:                messagePool,

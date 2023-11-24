@@ -37,6 +37,7 @@ type (
 	EventFunc                   = func()
 	GetMIDFunc                  = func() int32
 	CreateInactivityMonitorFunc = func() InactivityMonitor
+	RequestMonitorFunc          = func(cc *Conn, req *pool.Message)
 )
 
 type InactivityMonitor interface {
@@ -133,6 +134,7 @@ type Conn struct {
 	session Session
 	*client.Client[*Conn]
 	inactivityMonitor InactivityMonitor
+	requestMonitor    RequestMonitorFunc
 
 	blockWise          *blockwise.BlockWise[*Conn]
 	observationHandler *observation.Handler[*Conn]
@@ -189,6 +191,7 @@ func NewConn(
 	session Session,
 	createBlockWise func(cc *Conn) *blockwise.BlockWise[*Conn],
 	inactivityMonitor InactivityMonitor,
+	requestMonitor RequestMonitorFunc,
 	cfg *Config,
 ) *Conn {
 	if cfg.Errors == nil {
@@ -222,6 +225,7 @@ func NewConn(
 		msgIDMutex:                NewMutexMap(),
 		responseMsgCache:          cache.NewCache[string, []byte](),
 		inactivityMonitor:         inactivityMonitor,
+		requestMonitor:            requestMonitor,
 		messagePool:               cfg.MessagePool,
 		numOutstandingInteraction: semaphore.NewWeighted(math.MaxInt64),
 	}
@@ -743,21 +747,26 @@ func (cc *Conn) handlePong(w *responsewriter.ResponseWriter[*Conn], r *pool.Mess
 	cc.sendPong(w, r)
 }
 
+func (cc *Conn) IsPingMessage(r *pool.Message) bool {
+	return r.Code() == codes.Empty && r.Type() == message.Confirmable && len(r.Token()) == 0 && len(r.Options()) == 0 && r.Body() == nil
+}
+
 func upsertInterfaceToMessage(m *pool.Message, ifIndex int) {
 	if ifIndex >= 1 {
 		cm := coapNet.ControlMessage{
 			IfIndex: ifIndex,
 		}
 		m.UpsertControlMessage(&cm)
-	}
+  }
 }
 
 func (cc *Conn) handleSpecialMessages(r *pool.Message) bool {
 	// ping request
-	if r.Code() == codes.Empty && r.Type() == message.Confirmable && len(r.Token()) == 0 && len(r.Options()) == 0 && r.Body() == nil {
+	if cc.IsPingMessage(r) {
 		cc.ProcessReceivedMessageWithHandler(r, cc.handlePong)
 		return true
 	}
+
 	// if waits for concrete message handler
 	if elem, ok := cc.midHandlerContainer.LoadAndDelete(r.MessageID()); ok {
 		elem.ReleaseMessage(cc)
@@ -795,6 +804,7 @@ func (cc *Conn) Process(cm *coapNet.ControlMessage, datagram []byte) error {
 	req.SetSequence(cc.Sequence())
 	cc.checkMyMessageID(req)
 	cc.inactivityMonitor.Notify()
+	cc.requestMonitor(cc, req)
 	if cc.handleSpecialMessages(req) {
 		return nil
 	}

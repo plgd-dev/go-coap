@@ -119,8 +119,9 @@ func (s *Server) checkAcceptError(err error) bool {
 
 func (s *Server) serveConnection(connections *connections.Connections, rw net.Conn) {
 	var cc *client.Conn
-	monitor := s.cfg.CreateInactivityMonitor()
-	cc = s.createConn(coapNet.NewConn(rw), monitor)
+	inactivityMonitor := s.cfg.CreateInactivityMonitor()
+	requestMonitor := s.cfg.RequestMonitor
+	cc = s.createConn(coapNet.NewConn(rw), inactivityMonitor, requestMonitor)
 	if s.cfg.OnNewConn != nil {
 		s.cfg.OnNewConn(cc)
 	}
@@ -182,7 +183,7 @@ func (s *Server) Stop() {
 	}
 }
 
-func (s *Server) createConn(connection *coapNet.Conn, monitor client.InactivityMonitor) *client.Conn {
+func (s *Server) createConn(connection *coapNet.Conn, inactivityMonitor client.InactivityMonitor, requestMonitor RequestMonitorFunc) *client.Conn {
 	createBlockWise := func(cc *client.Conn) *blockwise.BlockWise[*client.Conn] {
 		return nil
 	}
@@ -215,7 +216,8 @@ func (s *Server) createConn(connection *coapNet.Conn, monitor client.InactivityM
 	cc := client.NewConn(
 		connection,
 		createBlockWise,
-		monitor,
+		inactivityMonitor,
+		requestMonitor,
 		&cfg,
 	)
 
