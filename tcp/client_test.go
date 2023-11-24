@@ -691,8 +691,7 @@ func TestConnRequestMonitor(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*60)
 	defer cancel()
-	closeConn := make(chan struct{}, 1)
-	var isEOF atomic.Bool
+	reqMonitorErr := make(chan struct{}, 1)
 	testEOFError := errors.New("test error")
 	s := NewServer(
 		options.WithMux(m),
@@ -705,18 +704,17 @@ func TestConnRequestMonitor(t *testing.T) {
 		options.WithErrors(func(err error) {
 			t.Log(err)
 			if errors.Is(err, testEOFError) {
-				isEOF.Store(true)
+				select {
+				case reqMonitorErr <- struct{}{}:
+					cancel()
+				default:
+				}
 			}
 		}),
 		options.WithOnNewConn(func(c *client.Conn) {
 			t.Log("new conn")
 			c.AddOnClose(func() {
 				t.Log("close conn")
-				select {
-				case closeConn <- struct{}{}:
-					cancel()
-				default:
-				}
 			})
 		}))
 	defer s.Stop()
@@ -754,6 +752,5 @@ func TestConnRequestMonitor(t *testing.T) {
 	deleteReq.SetMessageID(2)
 	_, err = cc.Do(deleteReq)
 	require.Error(t, err)
-	<-closeConn
-	require.True(t, isEOF.Load())
+	<-reqMonitorErr
 }
