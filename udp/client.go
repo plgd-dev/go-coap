@@ -58,11 +58,6 @@ func Client(conn *net.UDPConn, opts ...Option) *client.Conn {
 	if cfg.MessagePool == nil {
 		cfg.MessagePool = pool.New(0, 0)
 	}
-	if cfg.RequestMonitor == nil {
-		cfg.RequestMonitor = func(*client.Conn, *pool.Message) error {
-			return nil
-		}
-	}
 
 	errorsFunc := cfg.Errors
 	cfg.Errors = func(err error) {

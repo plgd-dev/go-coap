@@ -637,7 +637,10 @@ func (o WithRequestMonitorOpt[F]) TCPServerApply(cfg *tcpServer.Config) {
 	}
 }
 
-// WithRequestMonitor ping handler
+// WithRequestMonitor enables request monitoring for the connection.
+// It is called for each CoAP message received from the peer before it is processed.
+// If it returns an error, the connection is closed.
+// If it returns true, the message is dropped.
 func WithRequestMonitor[F WithRequestMonitorFunc](requestMonitor F) WithRequestMonitorOpt[F] {
 	return WithRequestMonitorOpt[F]{
 		f: requestMonitor,

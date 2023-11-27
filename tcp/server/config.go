@@ -41,8 +41,8 @@ var DefaultConfig = func() Config {
 		OnNewConn: func(cc *client.Conn) {
 			// do nothing by default
 		},
-		RequestMonitor: func(cc *client.Conn, req *pool.Message) error {
-			return nil
+		RequestMonitor: func(cc *client.Conn, req *pool.Message) (bool, error) {
+			return false, nil
 		},
 		ConnectionCacheSize: 2 * 1024,
 	}

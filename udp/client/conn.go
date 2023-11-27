@@ -38,7 +38,7 @@ type (
 	EventFunc                   = func()
 	GetMIDFunc                  = func() int32
 	CreateInactivityMonitorFunc = func() InactivityMonitor
-	RequestMonitorFunc          = func(cc *Conn, req *pool.Message) error
+	RequestMonitorFunc          = func(cc *Conn, req *pool.Message) (drop bool, err error)
 )
 
 type InactivityMonitor interface {
@@ -209,7 +209,10 @@ func WithInactivityMonitor(inactivityMonitor InactivityMonitor) Option {
 	}
 }
 
-// WithRequestMonitor enables request monitor for the connection.
+// WithRequestMonitor enables request monitoring for the connection.
+// It is called for each CoAP message received from the peer before it is processed.
+// If it returns an error, the connection is closed.
+// If it returns true, the message is dropped.
 func WithRequestMonitor(requestMonitor RequestMonitorFunc) Option {
 	return func(opts *ConnOptions) {
 		opts.requestMonitor = requestMonitor
@@ -237,8 +240,8 @@ func NewConnWithOpts(session Session, cfg *Config, opts ...Option) *Conn {
 			return nil
 		},
 		inactivityMonitor: inactivity.NewNilMonitor[*Conn](),
-		requestMonitor: func(*Conn, *pool.Message) error {
-			return nil
+		requestMonitor: func(*Conn, *pool.Message) (bool, error) {
+			return false, nil
 		},
 	}
 	for _, o := range opts {
@@ -844,9 +847,14 @@ func (cc *Conn) Process(cm *coapNet.ControlMessage, datagram []byte) error {
 	req.SetControlMessage(cm)
 	req.SetSequence(cc.Sequence())
 	cc.checkMyMessageID(req)
-	if err = cc.requestMonitor(cc, req); err != nil {
+	drop, err := cc.requestMonitor(cc, req)
+	if err != nil {
 		cc.ReleaseMessage(req)
 		return fmt.Errorf("request monitor: %w", err)
+	}
+	if drop {
+		cc.ReleaseMessage(req)
+		return nil
 	}
 	cc.inactivityMonitor.Notify()
 	if cc.handleSpecialMessages(req) {

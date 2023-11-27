@@ -37,8 +37,8 @@ var DefaultConfig = func() Config {
 		OnNewConn: func(cc *udpClient.Conn) {
 			// do nothing by default
 		},
-		RequestMonitor: func(cc *udpClient.Conn, req *pool.Message) error {
-			return nil
+		RequestMonitor: func(cc *udpClient.Conn, req *pool.Message) (bool, error) {
+			return false, nil
 		},
 		TransmissionNStart:             1,
 		TransmissionAcknowledgeTimeout: time.Second * 2,

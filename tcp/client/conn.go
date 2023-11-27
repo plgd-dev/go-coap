@@ -33,7 +33,7 @@ type (
 	EventFunc                   = func()
 	GetMIDFunc                  = func() int32
 	CreateInactivityMonitorFunc = func() InactivityMonitor
-	RequestMonitorFunc          = func(cc *Conn, req *pool.Message) error
+	RequestMonitorFunc          = func(cc *Conn, req *pool.Message) (drop bool, err error)
 )
 
 type Notifier interface {
@@ -78,7 +78,10 @@ func WithInactivityMonitor(inactivityMonitor InactivityMonitor) Option {
 	}
 }
 
-// WithRequestMonitor enables request monitor for the connection.
+// WithRequestMonitor enables request monitoring for the connection.
+// It is called for each CoAP message received from the peer before it is processed.
+// If it returns an error, the connection is closed.
+// If it returns true, the message is dropped.
 func WithRequestMonitor(requestMonitor RequestMonitorFunc) Option {
 	return func(opts *ConnOptions) {
 		opts.RequestMonitor = requestMonitor
@@ -104,8 +107,8 @@ func NewConnWithOpts(connection *coapNet.Conn, cfg *Config, opts ...Option) *Con
 			return nil
 		},
 		InactivityMonitor: inactivity.NewNilMonitor[*Conn](),
-		RequestMonitor: func(*Conn, *pool.Message) error {
-			return nil
+		RequestMonitor: func(*Conn, *pool.Message) (bool, error) {
+			return false, nil
 		},
 	}
 	for _, o := range opts {

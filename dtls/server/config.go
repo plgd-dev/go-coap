@@ -34,8 +34,8 @@ var DefaultConfig = func() Config {
 			}
 			return inactivity.New(timeout, onInactive)
 		},
-		RequestMonitor: func(cc *udpClient.Conn, req *pool.Message) error {
-			return nil
+		RequestMonitor: func(cc *udpClient.Conn, req *pool.Message) (bool, error) {
+			return false, nil
 		},
 		OnNewConn: func(cc *udpClient.Conn) {
 			// do nothing by default

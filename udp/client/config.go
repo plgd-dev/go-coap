@@ -21,8 +21,8 @@ var DefaultConfig = func() Config {
 		CreateInactivityMonitor: func() InactivityMonitor {
 			return inactivity.NewNilMonitor[*Conn]()
 		},
-		RequestMonitor: func(*Conn, *pool.Message) error {
-			return nil
+		RequestMonitor: func(*Conn, *pool.Message) (bool, error) {
+			return false, nil
 		},
 		Dialer:                         &net.Dialer{Timeout: time.Second * 3},
 		Net:                            "udp",
