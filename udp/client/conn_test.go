@@ -854,8 +854,10 @@ func TestConnRequestMonitorCloseConnection(t *testing.T) {
 	}))
 	require.NoError(t, err)
 
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second*60)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second*8)
 	defer cancel()
+	ctxRegMonitor, cancelReqMonitor := context.WithCancel(ctx)
+	defer cancelReqMonitor()
 	reqMonitorErr := make(chan struct{}, 1)
 	testEOFError := errors.New("test error")
 	s := udp.NewServer(
@@ -872,7 +874,7 @@ func TestConnRequestMonitorCloseConnection(t *testing.T) {
 				if errors.Is(err, testEOFError) {
 					select {
 					case reqMonitorErr <- struct{}{}:
-						cancel()
+						cancelReqMonitor()
 					default:
 					}
 				}
@@ -914,12 +916,16 @@ func TestConnRequestMonitorCloseConnection(t *testing.T) {
 	require.Equal(t, codes.Content.String(), got.Code().String())
 
 	// New request but with DELETE code to trigger EOF error from request monitor
-	deleteReq, err := cc.NewDeleteRequest(ctx, "/test")
+	deleteReq, err := cc.NewDeleteRequest(ctxRegMonitor, "/test")
 	require.NoError(t, err)
 	deleteReq.SetMessageID(2)
 	_, err = cc.Do(deleteReq)
 	require.Error(t, err)
-	<-reqMonitorErr
+	select {
+	case <-reqMonitorErr:
+	case <-ctx.Done():
+		require.Fail(t, "request monitor not called")
+	}
 }
 
 func TestConnRequestMonitorDropRequest(t *testing.T) {
