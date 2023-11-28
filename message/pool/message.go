@@ -618,3 +618,7 @@ func (r *Message) Clone(msg *Message) error {
 	}
 	return nil
 }
+
+func (r *Message) IsPing(isTCP bool) bool {
+	return r.msg.IsPing(isTCP)
+}

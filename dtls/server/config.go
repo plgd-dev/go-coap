@@ -34,6 +34,9 @@ var DefaultConfig = func() Config {
 			}
 			return inactivity.New(timeout, onInactive)
 		},
+		RequestMonitor: func(cc *udpClient.Conn, req *pool.Message) (bool, error) {
+			return false, nil
+		},
 		OnNewConn: func(cc *udpClient.Conn) {
 			// do nothing by default
 		},
@@ -57,6 +60,7 @@ type Config struct {
 	GetMID                         GetMIDFunc
 	Handler                        HandlerFunc
 	OnNewConn                      OnNewConnFunc
+	RequestMonitor                 udpClient.RequestMonitorFunc
 	TransmissionNStart             uint32
 	TransmissionAcknowledgeTimeout time.Duration
 	TransmissionMaxRetransmit      uint32

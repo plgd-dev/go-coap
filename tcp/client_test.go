@@ -3,6 +3,7 @@ package tcp
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"sync"
 	"testing"
@@ -666,4 +667,175 @@ func TestClientKeepAliveMonitor(t *testing.T) {
 	err = checkClose.Acquire(ctx, 2)
 	require.NoError(t, err)
 	require.True(t, inactivityDetected.Load())
+}
+
+func TestConnRequestMonitorCloseConnection(t *testing.T) {
+	l, err := coapNet.NewTCPListener("tcp", "")
+	require.NoError(t, err)
+	defer func() {
+		errC := l.Close()
+		require.NoError(t, errC)
+	}()
+	var wg sync.WaitGroup
+	defer wg.Wait()
+
+	m := mux.NewRouter()
+
+	// The response counts up with every get
+	// so we can check if the handler is only called once per message ID
+	err = m.Handle("/test", mux.HandlerFunc(func(w mux.ResponseWriter, r *mux.Message) {
+		errH := w.SetResponse(codes.Content, message.TextPlain, nil)
+		require.NoError(t, errH)
+	}))
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second*8)
+	defer cancel()
+
+	ctxRegMonitor, cancelReqMonitor := context.WithCancel(ctx)
+	defer cancelReqMonitor()
+	reqMonitorErr := make(chan struct{}, 1)
+	testEOFError := errors.New("test error")
+	s := NewServer(
+		options.WithMux(m),
+		options.WithRequestMonitor(func(c *client.Conn, req *pool.Message) (bool, error) {
+			if req.Code() == codes.DELETE {
+				return false, testEOFError
+			}
+			return false, nil
+		}),
+		options.WithErrors(func(err error) {
+			t.Log(err)
+			if errors.Is(err, testEOFError) {
+				select {
+				case reqMonitorErr <- struct{}{}:
+					cancelReqMonitor()
+				default:
+				}
+			}
+		}),
+		options.WithOnNewConn(func(c *client.Conn) {
+			t.Log("new conn")
+			c.AddOnClose(func() {
+				t.Log("close conn")
+			})
+		}))
+	defer s.Stop()
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		errS := s.Serve(l)
+		require.NoError(t, errS)
+	}()
+
+	cc, err := Dial(l.Addr().String(),
+		options.WithErrors(func(err error) {
+			t.Log(err)
+		}),
+	)
+	require.NoError(t, err)
+	defer func() {
+		errC := cc.Close()
+		require.NoError(t, errC)
+	}()
+
+	// Setup done - Run Tests
+	// Same request, executed twice (needs the same token)
+	getReq, err := cc.NewGetRequest(ctx, "/test")
+	getReq.SetMessageID(1)
+
+	require.NoError(t, err)
+	got, err := cc.Do(getReq)
+	require.NoError(t, err)
+	require.Equal(t, codes.Content.String(), got.Code().String())
+
+	// New request but with DELETE code to trigger EOF error from request monitor
+	deleteReq, err := cc.NewDeleteRequest(ctxRegMonitor, "/test")
+	require.NoError(t, err)
+	deleteReq.SetMessageID(2)
+	_, err = cc.Do(deleteReq)
+	require.Error(t, err)
+	select {
+	case <-reqMonitorErr:
+	case <-ctx.Done():
+		require.Fail(t, "request monitor not called")
+	}
+}
+
+func TestConnRequestMonitorDropRequest(t *testing.T) {
+	l, err := coapNet.NewTCPListener("tcp", "")
+	require.NoError(t, err)
+	defer func() {
+		errC := l.Close()
+		require.NoError(t, errC)
+	}()
+	var wg sync.WaitGroup
+	defer wg.Wait()
+
+	m := mux.NewRouter()
+
+	// The response counts up with every get
+	// so we can check if the handler is only called once per message ID
+	err = m.Handle("/test", mux.HandlerFunc(func(w mux.ResponseWriter, r *mux.Message) {
+		errH := w.SetResponse(codes.Content, message.TextPlain, nil)
+		require.NoError(t, errH)
+	}))
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second*2)
+	defer cancel()
+	s := NewServer(
+		options.WithMux(m),
+		options.WithRequestMonitor(func(c *client.Conn, req *pool.Message) (bool, error) {
+			if req.Code() == codes.DELETE {
+				t.Log("drop request")
+				return true, nil
+			}
+			return false, nil
+		}),
+		options.WithErrors(func(err error) {
+			require.NoError(t, err)
+		}),
+		options.WithOnNewConn(func(c *client.Conn) {
+			t.Log("new conn")
+			c.AddOnClose(func() {
+				t.Log("close conn")
+			})
+		}))
+	defer s.Stop()
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		errS := s.Serve(l)
+		require.NoError(t, errS)
+	}()
+
+	cc, err := Dial(l.Addr().String(),
+		options.WithErrors(func(err error) {
+			t.Log(err)
+		}),
+	)
+	require.NoError(t, err)
+	defer func() {
+		errC := cc.Close()
+		require.NoError(t, errC)
+	}()
+
+	// Setup done - Run Tests
+	// Same request, executed twice (needs the same token)
+	getReq, err := cc.NewGetRequest(ctx, "/test")
+	getReq.SetMessageID(1)
+
+	require.NoError(t, err)
+	got, err := cc.Do(getReq)
+	require.NoError(t, err)
+	require.Equal(t, codes.Content.String(), got.Code().String())
+
+	// New request but with DELETE code to trigger EOF error from request monitor
+	deleteReq, err := cc.NewDeleteRequest(ctx, "/test")
+	require.NoError(t, err)
+	deleteReq.SetMessageID(2)
+	_, err = cc.Do(deleteReq)
+	require.Error(t, err)
+	require.True(t, errors.Is(err, context.DeadlineExceeded))
 }

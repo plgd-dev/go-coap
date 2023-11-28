@@ -41,6 +41,9 @@ var DefaultConfig = func() Config {
 		OnNewConn: func(cc *client.Conn) {
 			// do nothing by default
 		},
+		RequestMonitor: func(cc *client.Conn, req *pool.Message) (bool, error) {
+			return false, nil
+		},
 		ConnectionCacheSize: 2 * 1024,
 	}
 	opts.Handler = func(w *responsewriter.ResponseWriter[*client.Conn], r *pool.Message) {
@@ -56,6 +59,7 @@ type Config struct {
 	CreateInactivityMonitor         client.CreateInactivityMonitorFunc
 	Handler                         HandlerFunc
 	OnNewConn                       OnNewConnFunc
+	RequestMonitor                  client.RequestMonitorFunc
 	ConnectionCacheSize             uint16
 	DisablePeerTCPSignalMessageCSMs bool
 	DisableTCPSignalMessageCSM      bool

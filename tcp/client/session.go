@@ -23,6 +23,7 @@ type Session struct {
 	// See: https://golang.org/pkg/sync/atomic/#pkg-note-BUG
 	sequence          atomic.Uint64
 	inactivityMonitor InactivityMonitor
+	requestMonitor    RequestMonitorFunc
 	errSendCSM        error
 	cancel            context.CancelFunc
 	done              chan struct{}
@@ -48,6 +49,7 @@ func NewSession(
 	disableTCPSignalMessageCSM bool,
 	closeSocket bool,
 	inactivityMonitor InactivityMonitor,
+	requestMonitor RequestMonitorFunc,
 	connectionCacheSize uint16,
 	messagePool *pool.Pool,
 ) *Session {
@@ -60,6 +62,11 @@ func NewSession(
 	if inactivityMonitor == nil {
 		inactivityMonitor = inactivity.NewNilMonitor[*Conn]()
 	}
+	if requestMonitor == nil {
+		requestMonitor = func(*Conn, *pool.Message) (bool, error) {
+			return false, nil
+		}
+	}
 
 	s := &Session{
 		cancel:                     cancel,
@@ -69,6 +76,7 @@ func NewSession(
 		disableTCPSignalMessageCSM: disableTCPSignalMessageCSM,
 		closeSocket:                closeSocket,
 		inactivityMonitor:          inactivityMonitor,
+		requestMonitor:             requestMonitor,
 		done:                       make(chan struct{}),
 		connectionCacheSize:        connectionCacheSize,
 		messagePool:                messagePool,
@@ -174,6 +182,16 @@ func (s *Session) processBuffer(buffer *bytes.Buffer, cc *Conn) error {
 		}
 		buffer = seekBufferToNextMessage(buffer, read)
 		req.SetSequence(s.Sequence())
+
+		drop, err := s.requestMonitor(cc, req)
+		if err != nil {
+			s.messagePool.ReleaseMessage(req)
+			return fmt.Errorf("request monitor: %w", err)
+		}
+		if drop {
+			s.messagePool.ReleaseMessage(req)
+			continue
+		}
 		s.inactivityMonitor.Notify()
 		cc.pushToReceivedMessageQueue(req)
 	}

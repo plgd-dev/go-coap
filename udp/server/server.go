@@ -323,11 +323,13 @@ func (s *Server) getOrCreateConn(udpConn *coapNet.UDPConn, raddr *net.UDPAddr) (
 	cfg.ProcessReceivedMessage = s.cfg.ProcessReceivedMessage
 	cfg.ReceivedMessageQueueSize = s.cfg.ReceivedMessageQueueSize
 
-	cc = client.NewConn(
+	requestMonitor := s.cfg.RequestMonitor
+	cc = client.NewConnWithOpts(
 		session,
-		createBlockWise,
-		monitor,
 		&cfg,
+		client.WithInactivityMonitor(monitor),
+		client.WithRequestMonitor(requestMonitor),
+		client.WithBlockWise(createBlockWise),
 	)
 	cc.SetContextValue(closeKey, func() {
 		if err := session.Close(); err != nil {

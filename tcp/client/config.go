@@ -20,6 +20,9 @@ var DefaultConfig = func() Config {
 		CreateInactivityMonitor: func() InactivityMonitor {
 			return inactivity.NewNilMonitor[*Conn]()
 		},
+		RequestMonitor: func(*Conn, *pool.Message) (bool, error) {
+			return false, nil
+		},
 		Dialer:              &net.Dialer{Timeout: time.Second * 3},
 		Net:                 "tcp",
 		ConnectionCacheSize: 2048,
@@ -38,6 +41,7 @@ var DefaultConfig = func() Config {
 type Config struct {
 	config.Common[*Conn]
 	CreateInactivityMonitor         CreateInactivityMonitorFunc
+	RequestMonitor                  RequestMonitorFunc
 	Net                             string
 	Dialer                          *net.Dialer
 	TLSCfg                          *tls.Config

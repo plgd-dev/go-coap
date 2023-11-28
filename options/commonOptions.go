@@ -593,6 +593,60 @@ func WithOnNewConn[F OnNewConnFunc](onNewConn F) OnNewConnOpt[F] {
 	}
 }
 
+// WithRequestMonitor
+type WithRequestMonitorFunc interface {
+	tcpClient.RequestMonitorFunc | udpClient.RequestMonitorFunc
+}
+
+// WithRequestMonitorOpt network option.
+type WithRequestMonitorOpt[F WithRequestMonitorFunc] struct {
+	f F
+}
+
+func panicForInvalidWithRequestMonitorFunc(t, exp any) {
+	panic(fmt.Errorf("invalid WithRequestMonitorFunc type %T, expected %T", t, exp))
+}
+
+func (o WithRequestMonitorOpt[F]) UDPServerApply(cfg *udpServer.Config) {
+	switch v := any(o.f).(type) {
+	case udpClient.RequestMonitorFunc:
+		cfg.RequestMonitor = v
+	default:
+		var exp udpClient.RequestMonitorFunc
+		panicForInvalidWithRequestMonitorFunc(v, exp)
+	}
+}
+
+func (o WithRequestMonitorOpt[F]) DTLSServerApply(cfg *dtlsServer.Config) {
+	switch v := any(o.f).(type) {
+	case udpClient.RequestMonitorFunc:
+		cfg.RequestMonitor = v
+	default:
+		var exp udpClient.RequestMonitorFunc
+		panicForInvalidWithRequestMonitorFunc(v, exp)
+	}
+}
+
+func (o WithRequestMonitorOpt[F]) TCPServerApply(cfg *tcpServer.Config) {
+	switch v := any(o.f).(type) {
+	case tcpClient.RequestMonitorFunc:
+		cfg.RequestMonitor = v
+	default:
+		var exp tcpClient.RequestMonitorFunc
+		panicForInvalidWithRequestMonitorFunc(v, exp)
+	}
+}
+
+// WithRequestMonitor enables request monitoring for the connection.
+// It is called for each CoAP message received from the peer before it is processed.
+// If it returns an error, the connection is closed.
+// If it returns true, the message is dropped.
+func WithRequestMonitor[F WithRequestMonitorFunc](requestMonitor F) WithRequestMonitorOpt[F] {
+	return WithRequestMonitorOpt[F]{
+		f: requestMonitor,
+	}
+}
+
 // CloseSocketOpt close socket option.
 type CloseSocketOpt struct{}
 

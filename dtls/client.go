@@ -105,10 +105,11 @@ func Client(conn *dtls.Conn, opts ...udp.Option) *udpClient.Conn {
 		cfg.MTU,
 		cfg.CloseSocket,
 	)
-	cc := udpClient.NewConn(session,
-		createBlockWise,
-		monitor,
+	cc := udpClient.NewConnWithOpts(session,
 		&cfg,
+		udpClient.WithBlockWise(createBlockWise),
+		udpClient.WithInactivityMonitor(monitor),
+		udpClient.WithRequestMonitor(cfg.RequestMonitor),
 	)
 
 	cfg.PeriodicRunner(func(now time.Time) bool {
