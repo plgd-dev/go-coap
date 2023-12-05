@@ -80,9 +80,8 @@ func main() {
 			fmt.Printf("Client's hint: %s \n", hint)
 			return []byte{0xAB, 0xC1, 0x23}, nil
 		},
-		PSKIdentityHint:       []byte("Pion DTLS Server"),
-		CipherSuites:          []piondtls.CipherSuiteID{piondtls.TLS_PSK_WITH_AES_128_CCM_8},
-		ConnectionIDGenerator: piondtls.RandomCIDGenerator(8),
+		PSKIdentityHint: []byte("Pion DTLS Server"),
+		CipherSuites:    []piondtls.CipherSuiteID{piondtls.TLS_PSK_WITH_AES_128_CCM_8},
 	})
 	if err != nil {
 		log.Fatalf("Error establishing DTLS listener: %v", err)

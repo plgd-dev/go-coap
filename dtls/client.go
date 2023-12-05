@@ -5,7 +5,6 @@ import (
 	"time"
 
 	"github.com/pion/dtls/v2"
-	dtlsnet "github.com/pion/dtls/v2/pkg/net"
 	"github.com/plgd-dev/go-coap/v3/dtls/server"
 	"github.com/plgd-dev/go-coap/v3/message"
 	"github.com/plgd-dev/go-coap/v3/message/codes"
@@ -44,7 +43,7 @@ func Dial(target string, dtlsCfg *dtls.Config, opts ...udp.Option) (*udpClient.C
 		return nil, err
 	}
 
-	conn, err := dtls.Client(dtlsnet.PacketConnFromConn(c), c.RemoteAddr(), dtlsCfg)
+	conn, err := dtls.Client(c, dtlsCfg)
 	if err != nil {
 		return nil, err
 	}
