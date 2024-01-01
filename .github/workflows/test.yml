@@ -59,7 +59,7 @@ jobs:
         shell: bash
 
       - name: Upload coverage and report files
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: ${{ hashFiles('./outputs') || 'none' }}
           path: ./outputs
