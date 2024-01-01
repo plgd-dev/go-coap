@@ -23,7 +23,7 @@ jobs:
 
     steps:
       - name: Set up Go 1.18+
-        uses: actions/setup-go@v4
+        uses: actions/setup-go@v5
         with:
           go-version: "^1.18"
           check-latest: true
@@ -110,7 +110,7 @@ jobs:
 
     steps:
       - name: Set up Go 1.18
-        uses: actions/setup-go@v4
+        uses: actions/setup-go@v5
         with:
           # Go 1.18 is required by coap-gateway-go1-18 in https://github.com/plgd-dev/hub/blob/main/.github/workflows/publishDockerImagesGhcr.yml
           go-version: "~1.18"
