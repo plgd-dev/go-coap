@@ -22,10 +22,10 @@ jobs:
         os: [ubuntu-latest, windows-latest, macOS-latest]
 
     steps:
-      - name: Set up Go 1.18+
+      - name: Set up Go 1.20+
         uses: actions/setup-go@v5
         with:
-          go-version: "^1.18"
+          go-version: "^1.20"
           check-latest: true
 
       - run: go version
@@ -100,7 +100,8 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
 
-  test1_18:
+  # test on oldest supported major Go version
+  test1_20:
     # don't run for forks
     if: github.event_name == 'push' ||
       (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) ||
@@ -109,11 +110,10 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Set up Go 1.18
+      - name: Set up Go 1.20
         uses: actions/setup-go@v5
         with:
-          # Go 1.18 is required by coap-gateway-go1-18 in https://github.com/plgd-dev/hub/blob/main/.github/workflows/publishDockerImagesGhcr.yml
-          go-version: "~1.18"
+          go-version: "~1.20"
 
       - run: go version
 
