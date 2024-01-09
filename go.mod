@@ -1,6 +1,6 @@
 module github.com/plgd-dev/go-coap/v3
 
-go 1.18
+go 1.20
 
 require (
 	github.com/dsnet/golib/memfile v1.0.0
