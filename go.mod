@@ -9,7 +9,7 @@ require (
 	github.com/pion/transport/v3 v3.0.1
 	github.com/stretchr/testify v1.8.4
 	go.uber.org/atomic v1.11.0
-	golang.org/x/exp v0.0.0-20240103183307-be819d1f06fc
+	golang.org/x/exp v0.0.0-20240112132812-db7319d0e0e3
 	golang.org/x/net v0.19.0
 	golang.org/x/sync v0.6.0
 )
