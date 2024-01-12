@@ -523,6 +523,20 @@ func (r *Message) MarshalWithEncoder(encoder Encoder) ([]byte, error) {
 	return r.bufferMarshal, nil
 }
 
+func (r *Message) decode(decoder Decoder) (int, error) {
+	var n int
+	var err error
+	for {
+		n, err = decoder.Decode(r.bufferUnmarshal, &r.msg)
+		if errors.Is(err, message.ErrOptionsTooSmall) {
+			// increase buffer size and try again
+			r.msg.Options = make(message.Options, 0, len(r.msg.Options)*2)
+			continue
+		}
+		return n, err
+	}
+}
+
 func (r *Message) UnmarshalWithDecoder(decoder Decoder, data []byte) (int, error) {
 	if len(r.bufferUnmarshal) < len(data) {
 		r.bufferUnmarshal = append(r.bufferUnmarshal, make([]byte, len(data)-len(r.bufferUnmarshal))...)
@@ -530,7 +544,7 @@ func (r *Message) UnmarshalWithDecoder(decoder Decoder, data []byte) (int, error
 	copy(r.bufferUnmarshal, data)
 	r.body = nil
 	r.bufferUnmarshal = r.bufferUnmarshal[:len(data)]
-	n, err := decoder.Decode(r.bufferUnmarshal, &r.msg)
+	n, err := r.decode(decoder)
 	if err != nil {
 		return n, err
 	}
