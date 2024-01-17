@@ -386,6 +386,10 @@ func (b *BlockWise[C]) handleReceivedMessage(w *responsewriter.ResponseWriter[C]
 		next(w, r)
 		return nil
 	case codes.GET, codes.DELETE:
+		// For GET and DELETE requests in CoAP, the initial request cannot have the message type of Acknowledge (ACK) or Reset (RST)
+		if !r.HasOption(message.Observe) && (r.Type() == message.Acknowledgement || r.Type() == message.Reset) {
+			return fmt.Errorf("invalid message type(%v) for code(%v)", r.Type(), r.Code())
+		}
 		maxSZX = fitSZX(r, message.Block2, maxSZX)
 		block, errG := r.GetOptionUint32(message.Block2)
 		if errG == nil {
@@ -519,11 +523,7 @@ func (b *BlockWise[C]) continueSendingMessage(w *responsewriter.ResponseWriter[C
 }
 
 func isObserveResponse(msg *pool.Message) bool {
-	_, err := msg.GetOptionUint32(message.Observe)
-	if err != nil {
-		return false
-	}
-	return msg.Code() >= codes.Created
+	return msg.HasOption(message.Observe) && msg.Code() >= codes.Created
 }
 
 func (b *BlockWise[C]) startSendingMessage(w *responsewriter.ResponseWriter[C], maxSZX SZX, maxMessageSize uint32, block uint32) error {
