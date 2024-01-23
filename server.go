@@ -91,6 +91,11 @@ func ListenAndServeWithOptions(network, addr string, opts ...any) (err error) {
 		switch o := opt.(type) {
 		case tcpServer.Option:
 			tcpOptions = append(tcpOptions, o)
+
+			// Duplicate the option for UDP if needed.
+			if udpOpt, ok := o.(udpServer.Option); ok {
+				udpOptions = append(udpOptions, udpOpt)
+			}
 		case udpServer.Option:
 			udpOptions = append(udpOptions, o)
 		default:
