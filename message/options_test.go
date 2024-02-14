@@ -352,7 +352,7 @@ func TestQueryOption(t *testing.T) {
 }
 
 func FuzzUnmarshalData(f *testing.F) {
-	f.Fuzz(func(t *testing.T, input_data []byte) {
+	f.Fuzz(func(_ *testing.T, input_data []byte) {
 		uoptions := make(Options, 0, 10)
 		_, _ = uoptions.Unmarshal(input_data, CoapOptionDefs)
 	})

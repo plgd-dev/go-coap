@@ -31,13 +31,13 @@ func SetTLSConfig(t *testing.T) *tls.Config {
 		ClientCAs:    caRootPool,
 		RootCAs:      caRootPool,
 
-		GetConfigForClient: func(info *tls.ClientHelloInfo) (*tls.Config, error) {
+		GetConfigForClient: func(*tls.ClientHelloInfo) (*tls.Config, error) {
 			// https://github.com/golang/go/issues/29895
 			m := tls.Config{
 				Certificates: []tls.Certificate{cert},
 				ClientAuth:   tls.RequireAnyClientCert,
 			}
-			m.VerifyPeerCertificate = func(rawCerts [][]byte, verifiedChains [][]*x509.Certificate) error {
+			m.VerifyPeerCertificate = func([][]byte, [][]*x509.Certificate) error {
 				return nil
 			}
 			return &m, nil
@@ -192,7 +192,7 @@ func TestTLSListenerCheckForInfinitLoop(t *testing.T) {
 				tlsConn := tls.Client(conn, &tls.Config{
 					InsecureSkipVerify: true,
 					Certificates:       []tls.Certificate{cert},
-					VerifyPeerCertificate: func(rawCerts [][]byte, verifiedChains [][]*x509.Certificate) error {
+					VerifyPeerCertificate: func([][]byte, [][]*x509.Certificate) error {
 						errC := conn.Close()
 						require.NoError(t, errC)
 						return nil

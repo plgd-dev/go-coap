@@ -236,7 +236,7 @@ func NewConnWithOpts(session Session, cfg *Config, opts ...Option) *Conn {
 	}
 
 	cfgOpts := ConnOptions{
-		createBlockWise: func(cc *Conn) *blockwise.BlockWise[*Conn] {
+		createBlockWise: func(*Conn) *blockwise.BlockWise[*Conn] {
 			return nil
 		},
 		inactivityMonitor: inactivity.NewNilMonitor[*Conn](),
@@ -327,7 +327,7 @@ func (cc *Conn) doInternal(req *pool.Message) (*pool.Message, error) {
 	}
 
 	respChan := make(chan *pool.Message, 1)
-	if _, loaded := cc.tokenHandlerContainer.LoadOrStore(token.Hash(), func(w *responsewriter.ResponseWriter[*Conn], r *pool.Message) {
+	if _, loaded := cc.tokenHandlerContainer.LoadOrStore(token.Hash(), func(_ *responsewriter.ResponseWriter[*Conn], r *pool.Message) {
 		r.Hijack()
 		select {
 		case respChan <- r:
@@ -458,7 +458,7 @@ func (cc *Conn) prepareWriteMessage(req *pool.Message, handler HandlerFunc) (fun
 func (cc *Conn) writeMessageAsync(req *pool.Message) error {
 	req.UpsertType(message.Confirmable)
 	req.UpsertMessageID(cc.GetMessageID())
-	closeFn, err := cc.prepareWriteMessage(req, func(w *responsewriter.ResponseWriter[*Conn], r *pool.Message) {
+	closeFn, err := cc.prepareWriteMessage(req, func(*responsewriter.ResponseWriter[*Conn], *pool.Message) {
 		// do nothing
 	})
 	if err != nil {
@@ -478,7 +478,7 @@ func (cc *Conn) writeMessage(req *pool.Message) error {
 		return cc.writeMessageAsync(req)
 	}
 	respChan := make(chan struct{})
-	closeFn, err := cc.prepareWriteMessage(req, func(w *responsewriter.ResponseWriter[*Conn], r *pool.Message) {
+	closeFn, err := cc.prepareWriteMessage(req, func(*responsewriter.ResponseWriter[*Conn], *pool.Message) {
 		close(respChan)
 	})
 	if err != nil {
@@ -522,7 +522,7 @@ func (cc *Conn) AsyncPing(receivedPong func()) (func(), error) {
 	mid := cc.GetMessageID()
 	req.SetMessageID(mid)
 	if _, loaded := cc.midHandlerContainer.LoadOrStore(mid, &midElement{
-		handler: func(w *responsewriter.ResponseWriter[*Conn], r *pool.Message) {
+		handler: func(_ *responsewriter.ResponseWriter[*Conn], r *pool.Message) {
 			if r.Type() == message.Reset || r.Type() == message.Acknowledgement {
 				receivedPong()
 			}

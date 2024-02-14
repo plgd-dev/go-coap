@@ -46,9 +46,8 @@ func TestLimitParallelRequestsDo(t *testing.T) {
 		req           []*pool.Message
 	}
 	tests := []struct {
-		name         string
-		args         args
-		expNumReqIds int
+		name string
+		args args
 	}{
 		{
 			name: "limit 1 endpointLimit 1",
@@ -66,7 +65,6 @@ func TestLimitParallelRequestsDo(t *testing.T) {
 					newReq(ctx, t), newReq(ctx, t), newReq(ctx, t),
 				},
 			},
-			expNumReqIds: 24,
 		},
 		{
 			name: "limit n endpointLimit 1",
@@ -84,7 +82,6 @@ func TestLimitParallelRequestsDo(t *testing.T) {
 					newReq(ctx, t), newReq(ctx, t), newReq(ctx, t),
 				},
 			},
-			expNumReqIds: 24,
 		},
 		{
 			name: "limit 1 endpointLimit n",
@@ -102,7 +99,6 @@ func TestLimitParallelRequestsDo(t *testing.T) {
 					newReq(ctx, t), newReq(ctx, t), newReq(ctx, t),
 				},
 			},
-			expNumReqIds: 24,
 		},
 		{
 			name: "limit n endpointLimit n",
@@ -120,7 +116,6 @@ func TestLimitParallelRequestsDo(t *testing.T) {
 					newReq(ctx, t), newReq(ctx, t), newReq(ctx, t),
 				},
 			},
-			expNumReqIds: 24,
 		},
 		{
 			name: "context canceled",
@@ -138,7 +133,6 @@ func TestLimitParallelRequestsDo(t *testing.T) {
 					newReq(ctx, t), newReq(canceledCtx, t), newReq(ctx, t),
 				},
 			},
-			expNumReqIds: 16,
 		},
 	}
 	for _, tt := range tests {
@@ -173,9 +167,8 @@ func TestLimitParallelRequestsDoObserve(t *testing.T) {
 		req           []*pool.Message
 	}
 	tests := []struct {
-		name         string
-		args         args
-		expNumReqIds int
+		name string
+		args args
 	}{
 		{
 			name: "limit 1 endpointLimit 1",
@@ -193,7 +186,6 @@ func TestLimitParallelRequestsDoObserve(t *testing.T) {
 					newReq(ctx, t), newReq(ctx, t), newReq(ctx, t),
 				},
 			},
-			expNumReqIds: 24,
 		},
 		{
 			name: "limit n endpointLimit 1",
@@ -211,7 +203,6 @@ func TestLimitParallelRequestsDoObserve(t *testing.T) {
 					newReq(ctx, t), newReq(ctx, t), newReq(ctx, t),
 				},
 			},
-			expNumReqIds: 24,
 		},
 		{
 			name: "limit 1 endpointLimit n",
@@ -229,7 +220,6 @@ func TestLimitParallelRequestsDoObserve(t *testing.T) {
 					newReq(ctx, t), newReq(ctx, t), newReq(ctx, t),
 				},
 			},
-			expNumReqIds: 24,
 		},
 		{
 			name: "limit n endpointLimit n",
@@ -247,7 +237,6 @@ func TestLimitParallelRequestsDoObserve(t *testing.T) {
 					newReq(ctx, t), newReq(ctx, t), newReq(ctx, t),
 				},
 			},
-			expNumReqIds: 24,
 		},
 		{
 			name: "context canceled",
@@ -265,7 +254,6 @@ func TestLimitParallelRequestsDoObserve(t *testing.T) {
 					newReq(ctx, t), newReq(canceledCtx, t), newReq(ctx, t),
 				},
 			},
-			expNumReqIds: 16,
 		},
 	}
 	for _, tt := range tests {
@@ -278,7 +266,7 @@ func TestLimitParallelRequestsDoObserve(t *testing.T) {
 				req.SetMessageID(int32(idx))
 				go func(r *pool.Message) {
 					defer wg.Done()
-					_, err := c.DoObserve(r, func(req *pool.Message) {
+					_, err := c.DoObserve(r, func(*pool.Message) {
 						// do nothing
 					})
 					require.Error(t, err)

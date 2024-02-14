@@ -93,7 +93,7 @@ func FuzzUnmarshalJSON(f *testing.F) {
 	f.Add([]byte("0x2a"))
 	f.Add([]byte("42"))
 
-	f.Fuzz(func(t *testing.T, input_data []byte) {
+	f.Fuzz(func(_ *testing.T, input_data []byte) {
 		var got Code
 		_ = got.UnmarshalJSON(input_data)
 	})

@@ -80,7 +80,7 @@ func Client(conn *dtls.Conn, opts ...udp.Option) *udpClient.Conn {
 		errorsFunc(fmt.Errorf("dtls: %v: %w", conn.RemoteAddr(), err))
 	}
 
-	createBlockWise := func(cc *udpClient.Conn) *blockwise.BlockWise[*udpClient.Conn] {
+	createBlockWise := func(*udpClient.Conn) *blockwise.BlockWise[*udpClient.Conn] {
 		return nil
 	}
 	if cfg.BlockwiseEnable {

@@ -188,7 +188,7 @@ func (s *Server) Stop() {
 }
 
 func (s *Server) createConn(connection *coapNet.Conn, inactivityMonitor udpClient.InactivityMonitor, requestMonitor udpClient.RequestMonitorFunc) *udpClient.Conn {
-	createBlockWise := func(cc *udpClient.Conn) *blockwise.BlockWise[*udpClient.Conn] {
+	createBlockWise := func(*udpClient.Conn) *blockwise.BlockWise[*udpClient.Conn] {
 		return nil
 	}
 	if s.cfg.BlockwiseEnable {

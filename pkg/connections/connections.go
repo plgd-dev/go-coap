@@ -31,7 +31,7 @@ func (c *Connections) Store(conn Connection) {
 
 func (c *Connections) length() int {
 	var l int
-	c.data.Range(func(k, v interface{}) bool {
+	c.data.Range(func(_, _ interface{}) bool {
 		l++
 		return true
 	})
@@ -40,7 +40,7 @@ func (c *Connections) length() int {
 
 func (c *Connections) copyConnections() []Connection {
 	m := make([]Connection, 0, c.length())
-	c.data.Range(func(key, value interface{}) bool {
+	c.data.Range(func(_, value interface{}) bool {
 		con, ok := value.(Connection)
 		if !ok {
 			panic(fmt.Errorf("invalid type %T in connections map", con))

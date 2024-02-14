@@ -74,7 +74,7 @@ func NewRouter() *Router {
 		m: new(sync.RWMutex),
 		z: make(map[string]Route),
 	}
-	router.defaultHandler = HandlerFunc(func(w ResponseWriter, m *Message) {
+	router.defaultHandler = HandlerFunc(func(w ResponseWriter, _ *Message) {
 		if err := w.SetResponse(codes.NotFound, message.TextPlain, nil); err != nil {
 			router.errors(fmt.Errorf("router handler: cannot set response: %w", err))
 		}
