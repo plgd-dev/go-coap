@@ -1,8 +1,11 @@
 linters-settings:
-  govet:
-    check-shadowing: true
   gocyclo:
     min-complexity: 15
+  govet:
+    check-shadowing: true
+  gomoddirectives:
+    replace-allow-list:
+      - github.com/pion/dtls/v2
 
 linters:
   enable:
