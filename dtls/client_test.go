@@ -207,7 +207,7 @@ func TestConnGetSeparateMessage(t *testing.T) {
 		require.NoError(t, errS)
 	}()
 
-	cc, err := dtls.Dial(l.Addr().String(), dtlsCfg, options.WithHandlerFunc(func(w *responsewriter.ResponseWriter[*client.Conn], r *pool.Message) {
+	cc, err := dtls.Dial(l.Addr().String(), dtlsCfg, options.WithHandlerFunc(func(_ *responsewriter.ResponseWriter[*client.Conn], r *pool.Message) {
 		assert.NoError(t, fmt.Errorf("none msg expected comes: %+v", r))
 	}))
 	require.NoError(t, err)

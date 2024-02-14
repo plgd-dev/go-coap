@@ -245,7 +245,7 @@ func TestConnGetSeparateMessage(t *testing.T) {
 		require.NoError(t, errS)
 	}()
 
-	cc, err := Dial(l.LocalAddr().String(), options.WithHandlerFunc(func(w *responsewriter.ResponseWriter[*client.Conn], r *pool.Message) {
+	cc, err := Dial(l.LocalAddr().String(), options.WithHandlerFunc(func(_ *responsewriter.ResponseWriter[*client.Conn], r *pool.Message) {
 		assert.NoError(t, fmt.Errorf("none msg expected comes: %+v", r))
 	}))
 	require.NoError(t, err)

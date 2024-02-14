@@ -373,7 +373,7 @@ func TestConnGetSeparateMessage(t *testing.T) {
 		require.NoError(t, errS)
 	}()
 
-	cc, err := udp.Dial(l.LocalAddr().String(), options.WithHandlerFunc(func(w *responsewriter.ResponseWriter[*client.Conn], r *pool.Message) {
+	cc, err := udp.Dial(l.LocalAddr().String(), options.WithHandlerFunc(func(_ *responsewriter.ResponseWriter[*client.Conn], r *pool.Message) {
 		assert.NoError(t, fmt.Errorf("none msg expected comes: %+v", r))
 	}))
 	require.NoError(t, err)
@@ -848,7 +848,7 @@ func TestConnRequestMonitorCloseConnection(t *testing.T) {
 
 	// The response counts up with every get
 	// so we can check if the handler is only called once per message ID
-	err = m.Handle("/test", mux.HandlerFunc(func(w mux.ResponseWriter, r *mux.Message) {
+	err = m.Handle("/test", mux.HandlerFunc(func(w mux.ResponseWriter, _ *mux.Message) {
 		errH := w.SetResponse(codes.Content, message.TextPlain, nil)
 		require.NoError(t, errH)
 	}))
@@ -862,7 +862,7 @@ func TestConnRequestMonitorCloseConnection(t *testing.T) {
 	testEOFError := errors.New("test error")
 	s := udp.NewServer(
 		options.WithMux(m),
-		options.WithRequestMonitor(func(c *client.Conn, req *pool.Message) (bool, error) {
+		options.WithRequestMonitor(func(_ *client.Conn, req *pool.Message) (bool, error) {
 			if req.Code() == codes.DELETE {
 				return false, testEOFError
 			}
@@ -942,7 +942,7 @@ func TestConnRequestMonitorDropRequest(t *testing.T) {
 
 	// The response counts up with every get
 	// so we can check if the handler is only called once per message ID
-	err = m.Handle("/test", mux.HandlerFunc(func(w mux.ResponseWriter, r *mux.Message) {
+	err = m.Handle("/test", mux.HandlerFunc(func(w mux.ResponseWriter, _ *mux.Message) {
 		errH := w.SetResponse(codes.Content, message.TextPlain, nil)
 		require.NoError(t, errH)
 	}))
@@ -952,7 +952,7 @@ func TestConnRequestMonitorDropRequest(t *testing.T) {
 	defer cancel()
 	s := udp.NewServer(
 		options.WithMux(m),
-		options.WithRequestMonitor(func(c *client.Conn, req *pool.Message) (bool, error) {
+		options.WithRequestMonitor(func(_ *client.Conn, req *pool.Message) (bool, error) {
 			if req.Code() == codes.DELETE {
 				t.Log("drop request")
 				return true, nil

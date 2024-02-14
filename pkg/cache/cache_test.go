@@ -72,7 +72,7 @@ func TestElementExpiration(t *testing.T) {
 	cache := NewCache[string, string]()
 
 	elementToCache := string("elem")
-	elem := NewElement(elementToCache, time.Now().Add(1*time.Second), func(d string) {
+	elem := NewElement(elementToCache, time.Now().Add(1*time.Second), func(string) {
 		expirationInvoked = true
 	})
 	loadedElem, _ := cache.LoadOrStore("abcd", elem)
@@ -141,7 +141,7 @@ func TestPullOutAllFunction(t *testing.T) {
 	cache.LoadAndDeleteAll()
 
 	foundElements := 0
-	cache.Range(func(key string, value *Element[string]) bool {
+	cache.Range(func(string, *Element[string]) bool {
 		foundElements++
 		return true
 	})

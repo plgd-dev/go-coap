@@ -69,7 +69,7 @@ func Client(conn net.Conn, opts ...Option) *client.Conn {
 		errorsFunc(fmt.Errorf("tcp: %w", err))
 	}
 
-	createBlockWise := func(cc *client.Conn) *blockwise.BlockWise[*client.Conn] {
+	createBlockWise := func(*client.Conn) *blockwise.BlockWise[*client.Conn] {
 		return nil
 	}
 	if cfg.BlockwiseEnable {

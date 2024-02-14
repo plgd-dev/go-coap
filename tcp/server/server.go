@@ -184,7 +184,7 @@ func (s *Server) Stop() {
 }
 
 func (s *Server) createConn(connection *coapNet.Conn, inactivityMonitor client.InactivityMonitor, requestMonitor client.RequestMonitorFunc) *client.Conn {
-	createBlockWise := func(cc *client.Conn) *blockwise.BlockWise[*client.Conn] {
+	createBlockWise := func(*client.Conn) *blockwise.BlockWise[*client.Conn] {
 		return nil
 	}
 	if s.cfg.BlockwiseEnable {
@@ -193,7 +193,7 @@ func (s *Server) createConn(connection *coapNet.Conn, inactivityMonitor client.I
 				cc,
 				s.cfg.BlockwiseTransferTimeout,
 				s.cfg.Errors,
-				func(token message.Token) (*pool.Message, bool) {
+				func(message.Token) (*pool.Message, bool) {
 					return nil, false
 				},
 			)

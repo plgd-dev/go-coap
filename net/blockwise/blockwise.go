@@ -163,7 +163,7 @@ func New[C Client](
 	getSentRequestFromOutside func(token message.Token) (*pool.Message, bool),
 ) *BlockWise[C] {
 	if getSentRequestFromOutside == nil {
-		getSentRequestFromOutside = func(token message.Token) (*pool.Message, bool) { return nil, false }
+		getSentRequestFromOutside = func(message.Token) (*pool.Message, bool) { return nil, false }
 	}
 	return &BlockWise[C]{
 		cc:                        cc,

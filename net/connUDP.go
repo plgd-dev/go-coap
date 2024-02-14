@@ -220,7 +220,7 @@ func IsIPv6(addr net.IP) bool {
 }
 
 var DefaultUDPConnConfig = UDPConnConfig{
-	Errors: func(err error) {
+	Errors: func(error) {
 		// don't log any error from fails for multicast requests
 	},
 }

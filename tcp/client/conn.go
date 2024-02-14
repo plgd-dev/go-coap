@@ -103,7 +103,7 @@ func NewConnWithOpts(connection *coapNet.Conn, cfg *Config, opts ...Option) *Con
 		cfg.GetToken = message.GetToken
 	}
 	cfgOpts := ConnOptions{
-		CreateBlockWise: func(cc *Conn) *blockwise.BlockWise[*Conn] {
+		CreateBlockWise: func(*Conn) *blockwise.BlockWise[*Conn] {
 			return nil
 		},
 		InactivityMonitor: inactivity.NewNilMonitor[*Conn](),
@@ -169,7 +169,7 @@ func (cc *Conn) doInternal(req *pool.Message) (*pool.Message, error) {
 		return nil, fmt.Errorf("invalid token")
 	}
 	respChan := make(chan *pool.Message, 1)
-	if _, loaded := cc.tokenHandlerContainer.LoadOrStore(token.Hash(), func(w *responsewriter.ResponseWriter[*Conn], r *pool.Message) {
+	if _, loaded := cc.tokenHandlerContainer.LoadOrStore(token.Hash(), func(_ *responsewriter.ResponseWriter[*Conn], r *pool.Message) {
 		r.Hijack()
 		select {
 		case respChan <- r:
@@ -244,7 +244,7 @@ func (cc *Conn) AsyncPing(receivedPong func()) (func(), error) {
 	req.SetCode(codes.Ping)
 	defer cc.ReleaseMessage(req)
 
-	if _, loaded := cc.tokenHandlerContainer.LoadOrStore(token.Hash(), func(w *responsewriter.ResponseWriter[*Conn], r *pool.Message) {
+	if _, loaded := cc.tokenHandlerContainer.LoadOrStore(token.Hash(), func(_ *responsewriter.ResponseWriter[*Conn], r *pool.Message) {
 		if r.Code() == codes.Pong {
 			receivedPong()
 		}

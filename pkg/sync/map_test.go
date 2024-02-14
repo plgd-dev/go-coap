@@ -76,7 +76,7 @@ func TestLoadOrStore(t *testing.T) {
 	}
 
 	newV := "forty two"
-	v1, l1 := m.LoadOrStoreWithFunc(42, func(value string) string {
+	v1, l1 := m.LoadOrStoreWithFunc(42, func(string) string {
 		require.FailNow(t, "unexpected load call")
 		return ""
 	}, func() string {
@@ -142,7 +142,7 @@ func TestReplace(t *testing.T) {
 	require.True(t, ok)
 	require.Equal(t, src[1], oldV)
 
-	oldV, ok = m.ReplaceWithFunc(1, func(oldValue string, oldLoaded bool) (string, bool) {
+	oldV, ok = m.ReplaceWithFunc(1, func(string, bool) (string, bool) {
 		return "", true
 	})
 	require.True(t, ok)
@@ -150,7 +150,7 @@ func TestReplace(t *testing.T) {
 	require.Equal(t, len(src)-1, m.Length())
 
 	newV = "forty two"
-	_, ok = m.ReplaceWithFunc(42, func(oldValue string, oldLoaded bool) (string, bool) {
+	_, ok = m.ReplaceWithFunc(42, func(string, bool) (string, bool) {
 		return newV, false
 	})
 	require.False(t, ok)
@@ -175,7 +175,7 @@ func TestDelete(t *testing.T) {
 	_, ok := m.Load(1)
 	require.False(t, ok)
 
-	m.DeleteWithFunc(1, func(value string) {
+	m.DeleteWithFunc(1, func(string) {
 		require.FailNow(t, "unexpected deleted value")
 	})
 

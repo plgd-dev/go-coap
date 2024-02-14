@@ -111,7 +111,7 @@ func TestMux(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.title, func(t *testing.T) {
-			r.HandleFunc(test.pathTemplate, func(w mux.ResponseWriter, r *mux.Message) {})
+			r.HandleFunc(test.pathTemplate, func(mux.ResponseWriter, *mux.Message) {})
 			testRegexp(t, r, test)
 			testRoute(t, r, test)
 			err := r.HandleRemove(test.pathTemplate)
