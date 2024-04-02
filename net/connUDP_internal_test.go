@@ -90,9 +90,9 @@ func TestUDPConnWriteWithContext(t *testing.T) {
 			c1.RemoteAddr()
 
 			if tt.wantErr {
-				assert.Error(t, err)
+				require.Error(t, err)
 			} else {
-				assert.NoError(t, err)
+				require.NoError(t, err)
 			}
 		})
 	}
@@ -208,7 +208,7 @@ func TestUDPConnwriteMulticastWithContext(t *testing.T) {
 	go func() {
 		b := make([]byte, 1024)
 		n, _, errR := c2.ReadWithContext(ctx, b)
-		assert.NoError(t, errR)
+		require.NoError(t, errR)
 		if n > 0 {
 			b = b[:n]
 			assert.Equal(t, payload, b)
@@ -224,10 +224,10 @@ func TestUDPConnwriteMulticastWithContext(t *testing.T) {
 			c1.RemoteAddr()
 
 			if tt.wantErr {
-				assert.Error(t, err)
+				require.Error(t, err)
 				return
 			}
-			assert.NoError(t, err)
+			require.NoError(t, err)
 		})
 	}
 }

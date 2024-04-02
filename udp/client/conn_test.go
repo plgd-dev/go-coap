@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"errors"
-	"fmt"
 	"io"
 	"log"
 	"sync"
@@ -374,7 +373,7 @@ func TestConnGetSeparateMessage(t *testing.T) {
 	}()
 
 	cc, err := udp.Dial(l.LocalAddr().String(), options.WithHandlerFunc(func(_ *responsewriter.ResponseWriter[*client.Conn], r *pool.Message) {
-		assert.NoError(t, fmt.Errorf("none msg expected comes: %+v", r))
+		require.Failf(t, "Unexpected msg", "Received unexpected message: %+v", r)
 	}))
 	require.NoError(t, err)
 	defer func() {
@@ -1003,5 +1002,5 @@ func TestConnRequestMonitorDropRequest(t *testing.T) {
 	deleteReq.SetMessageID(2)
 	_, err = cc.Do(deleteReq)
 	require.Error(t, err)
-	require.True(t, errors.Is(err, context.DeadlineExceeded))
+	require.ErrorIs(t, err, context.DeadlineExceeded)
 }

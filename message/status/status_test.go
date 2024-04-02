@@ -2,7 +2,6 @@ package status
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"testing"
 
@@ -25,7 +24,7 @@ func TestStatus(t *testing.T) {
 	s, ok = FromError(err)
 	require.True(t, ok)
 	require.Equal(t, codes.NotFound, s.Code())
-	require.True(t, errors.Is(err, context.Canceled))
+	require.ErrorIs(t, err, context.Canceled)
 
 	s = Convert(err)
 	require.Equal(t, codes.NotFound, s.Code())
@@ -34,7 +33,7 @@ func TestStatus(t *testing.T) {
 	require.Equal(t, OK, Code(nil))
 
 	err = FromContextError(context.Canceled)
-	require.True(t, errors.Is(err, context.Canceled))
+	require.ErrorIs(t, err, context.Canceled)
 	require.Equal(t, Canceled, Code(err))
 
 	err = FromContextError(nil)

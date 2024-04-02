@@ -1,7 +1,7 @@
 package codes
 
 import (
-	"fmt"
+	"errors"
 	"strconv"
 )
 
@@ -54,5 +54,5 @@ func ToCode(v string) (Code, error) {
 			return key, nil
 		}
 	}
-	return 0, fmt.Errorf("not found")
+	return 0, errors.New("not found")
 }

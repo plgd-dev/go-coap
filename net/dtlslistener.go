@@ -70,7 +70,7 @@ func NewDTLSListener(network string, addr string, dtlsCfg *dtls.Config, opts ...
 	}
 
 	if cfg.GoPool == nil {
-		return nil, fmt.Errorf("empty go pool")
+		return nil, errors.New("empty go pool")
 	}
 
 	l := DTLSListener{

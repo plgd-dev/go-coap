@@ -355,7 +355,7 @@ func TestMessageClone(t *testing.T) {
 	original.SetBody(malFuncSeeker{})
 	err = original.Clone(cloned)
 	require.Error(t, err)
-	require.Equal(t, err.Error(), "seek error")
+	require.Equal(t, "seek error", err.Error())
 
 	original.SetBody(malFuncReader{})
 	err = original.Clone(cloned)
@@ -386,7 +386,7 @@ func TestUnmarshalMessageWithMultipleOptions(t *testing.T) {
 			msg := pool.NewMessage(context.Background())
 			n, err := msg.UnmarshalWithDecoder(coder.DefaultCoder, data)
 			require.NoError(t, err)
-			require.Equal(t, n, len(data))
+			require.Len(t, data, n)
 			require.Equal(t, req.Options(), msg.Options())
 		})
 	}

@@ -204,10 +204,10 @@ func payloadSizeError(err error) error {
 // Do sends an coap message and returns an coap response via blockwise transfer.
 func (b *BlockWise[C]) Do(r *pool.Message, maxSzx SZX, maxMessageSize uint32, do func(req *pool.Message) (*pool.Message, error)) (*pool.Message, error) {
 	if maxSzx > SZXBERT {
-		return nil, fmt.Errorf("invalid szx")
+		return nil, errors.New("invalid szx")
 	}
 	if len(r.Token()) == 0 {
-		return nil, fmt.Errorf("invalid token")
+		return nil, errors.New("invalid token")
 	}
 
 	expire, ok := r.Context().Deadline()
@@ -216,7 +216,7 @@ func (b *BlockWise[C]) Do(r *pool.Message, maxSzx SZX, maxMessageSize uint32, do
 	}
 	_, loaded := b.sendingMessagesCache.LoadOrStore(r.Token().Hash(), cache.NewElement(r, expire, nil))
 	if loaded {
-		return nil, fmt.Errorf("invalid token")
+		return nil, errors.New("invalid token")
 	}
 	defer b.sendingMessagesCache.Delete(r.Token().Hash())
 	if r.Body() == nil {
@@ -583,7 +583,7 @@ func (b *BlockWise[C]) getSentRequest(token message.Token) *pool.Message {
 func (b *BlockWise[C]) handleObserveResponse(sentRequest *pool.Message) (message.Token, time.Time, error) {
 	// https://tools.ietf.org/html/rfc7959#section-2.6 - performs GET with new token.
 	if sentRequest == nil {
-		return nil, time.Time{}, fmt.Errorf("observation is not registered")
+		return nil, time.Time{}, errors.New("observation is not registered")
 	}
 	token, err := message.GetToken()
 	if err != nil {
@@ -594,7 +594,7 @@ func (b *BlockWise[C]) handleObserveResponse(sentRequest *pool.Message) (message
 	bwSentRequest.SetToken(token)
 	_, loaded := b.sendingMessagesCache.LoadOrStore(token.Hash(), cache.NewElement(bwSentRequest, validUntil, nil))
 	if loaded {
-		return nil, time.Time{}, fmt.Errorf("cannot process message: message with token already exist")
+		return nil, time.Time{}, errors.New("cannot process message: message with token already exist")
 	}
 	return token, validUntil, nil
 }
@@ -648,7 +648,6 @@ func (b *BlockWise[C]) getPayloadFromCachedReceivedMessage(r, cachedReceivedMess
 }
 
 func copyToPayloadFromOffset(r *pool.Message, payloadFile *memfile.File, offset int64) (int64, error) {
-	payloadSize := int64(0)
 	copyn, err := payloadFile.Seek(offset, io.SeekStart)
 	if err != nil {
 		return 0, fmt.Errorf("cannot seek to off(%v) of cached request: %w", offset, err)
@@ -664,7 +663,7 @@ func copyToPayloadFromOffset(r *pool.Message, payloadFile *memfile.File, offset 
 			return 0, fmt.Errorf("cannot copy to cached request: %w", err)
 		}
 	}
-	payloadSize = copyn + written
+	payloadSize := copyn + written
 	err = payloadFile.Truncate(payloadSize)
 	if err != nil {
 		return 0, fmt.Errorf("cannot truncate cached request: %w", err)
@@ -717,7 +716,7 @@ func (b *BlockWise[C]) getCachedReceivedMessage(mg *messageGuard, r *pool.Messag
 		mg = element.Data()
 		if mg == nil {
 			closeFn()
-			return nil, nil, fmt.Errorf("request was already stored in cache")
+			return nil, nil, errors.New("request was already stored in cache")
 		}
 		errA := mg.Acquire(mg.Context(), 1)
 		if errA != nil {
@@ -732,7 +731,6 @@ func (b *BlockWise[C]) getCachedReceivedMessage(mg *messageGuard, r *pool.Messag
 
 //nolint:gocyclo,gocognit
 func (b *BlockWise[C]) processReceivedMessage(w *responsewriter.ResponseWriter[C], r *pool.Message, maxSzx SZX, next func(w *responsewriter.ResponseWriter[C], r *pool.Message), blockType message.OptionID, sizeType message.OptionID) error {
-	// TODO: lower cyclomatic complexity
 	token := r.Token()
 	if len(token) == 0 {
 		next(w, r)
@@ -760,7 +758,7 @@ func (b *BlockWise[C]) processReceivedMessage(w *responsewriter.ResponseWriter[C
 	}
 	validUntil := b.getValidUntil(sentRequest)
 	if blockType == message.Block2 && sentRequest == nil {
-		return fmt.Errorf("cannot request body without paired request")
+		return errors.New("cannot request body without paired request")
 	}
 	if isObserveResponse(r) {
 		token, validUntil, err = b.handleObserveResponse(sentRequest)

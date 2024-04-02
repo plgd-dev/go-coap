@@ -2,6 +2,7 @@ package net
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"strings"
@@ -244,7 +245,7 @@ func NewListenUDP(network, addr string, opts ...UDPOption) (*UDPConn, error) {
 func newPacketConn(c *net.UDPConn) (packetConn, error) {
 	laddr := c.LocalAddr()
 	if laddr == nil {
-		return nil, fmt.Errorf("invalid UDP connection")
+		return nil, errors.New("invalid UDP connection")
 	}
 	addr, ok := laddr.(*net.UDPAddr)
 	if !ok {
@@ -255,14 +256,10 @@ func newPacketConn(c *net.UDPConn) (packetConn, error) {
 
 func newPacketConnWithAddr(addr *net.UDPAddr, c *net.UDPConn) (packetConn, error) {
 	var pc packetConn
-	var err error
 	if IsIPv6(addr.IP) {
 		pc = newPacketConnIPv6(ipv6.NewPacketConn(c))
 	} else {
 		pc = newPacketConnIPv4(ipv4.NewPacketConn(c))
-		if err != nil {
-			return nil, fmt.Errorf("invalid UDPv4 connection: %w", err)
-		}
 	}
 	return pc, nil
 }
@@ -398,7 +395,7 @@ func (c *UDPConn) WriteMulticast(ctx context.Context, raddr *net.UDPAddr, buffer
 
 func (c *UDPConn) writeMulticastWithInterface(raddr *net.UDPAddr, buffer []byte, opt MulticastOptions) error {
 	if opt.Iface == nil && opt.IFaceMode == MulticastSpecificInterface {
-		return fmt.Errorf("invalid interface")
+		return errors.New("invalid interface")
 	}
 	if opt.Source != nil {
 		return c.writeToAddr(opt.Iface, opt.Source, opt.HopLimit, raddr, buffer)
@@ -472,7 +469,7 @@ func (c *UDPConn) validateMulticast(ctx context.Context, raddr *net.UDPAddr, opt
 	default:
 	}
 	if raddr == nil {
-		return fmt.Errorf("cannot write multicast with context: invalid raddr")
+		return errors.New("cannot write multicast with context: invalid raddr")
 	}
 	if _, ok := c.packetConn.(*packetConnIPv4); ok && IsIPv6(raddr.IP) {
 		return fmt.Errorf("cannot write multicast with context: invalid destination address(%v)", raddr.IP)
@@ -611,7 +608,7 @@ func WithControlMessage(cm *ControlMessage) UDPWriteOption {
 // WriteWithContext writes data with context.
 func (c *UDPConn) writeWithCfg(buffer []byte, cfg UDPWriteCfg) error {
 	if cfg.RemoteAddr == nil {
-		return fmt.Errorf("cannot write with context: invalid raddr")
+		return errors.New("cannot write with context: invalid raddr")
 	}
 	select {
 	case <-cfg.Ctx.Done():

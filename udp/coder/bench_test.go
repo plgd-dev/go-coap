@@ -12,7 +12,7 @@ func BenchmarkMarshalMessage(b *testing.B) {
 	bufOptions := make([]byte, 1024)
 	bufOptionsUsed := bufOptions
 
-	enc := 0
+	var enc int
 	options, enc, _ = options.SetPath(bufOptionsUsed, "/a/b/c/d/e")
 	bufOptionsUsed = bufOptionsUsed[enc:]
 
