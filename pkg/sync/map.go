@@ -3,7 +3,7 @@ package sync
 import (
 	"sync"
 
-	"golang.org/x/exp/maps"
+	"golang.org/x/exp/maps" // TODO: replace with standard maps package as soon as Go dependency hits 1.21
 )
 
 // Map is like a Go map[interface{}]interface{} but is safe for concurrent use by multiple goroutines.
