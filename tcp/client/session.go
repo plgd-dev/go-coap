@@ -30,7 +30,7 @@ type Session struct {
 	errors            ErrorFunc
 	connection        *coapNet.Conn
 	messagePool       *pool.Pool
-	ctx               atomic.Value // TODO: change to atomic.Pointer[context.Context] for go1.19
+	ctx               atomic.Pointer[context.Context]
 	maxMessageSize    uint32
 	private           struct {
 		mutex   sync.Mutex
@@ -138,7 +138,7 @@ func (s *Session) Sequence() uint64 {
 }
 
 func (s *Session) Context() context.Context {
-	return *s.ctx.Load().(*context.Context) //nolint:forcetypeassert
+	return *s.ctx.Load()
 }
 
 func seekBufferToNextMessage(buffer *bytes.Buffer, msgSize int) *bytes.Buffer {

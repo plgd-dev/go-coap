@@ -2,7 +2,7 @@ package limitparallelrequests
 
 import (
 	"context"
-	"fmt"
+	"errors"
 	"sync"
 	"testing"
 	"time"
@@ -27,12 +27,12 @@ type mockClient struct {
 
 func (c *mockClient) do(*pool.Message) (*pool.Message, error) {
 	c.num.Inc()
-	return nil, fmt.Errorf("not implemented")
+	return nil, errors.New("not implemented")
 }
 
 func (c *mockClient) doObserve(*pool.Message, func(req *pool.Message)) (Observation, error) {
 	c.num.Inc()
-	return nil, fmt.Errorf("not implemented")
+	return nil, errors.New("not implemented")
 }
 
 func TestLimitParallelRequestsDo(t *testing.T) {

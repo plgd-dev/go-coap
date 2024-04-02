@@ -3,7 +3,6 @@ package blockwise
 import (
 	"bytes"
 	"context"
-	"fmt"
 	"io"
 	"testing"
 	"time"
@@ -302,13 +301,13 @@ func TestBlockWiseDo(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			got, err := sender.Do(toPoolMessage(tt.args.r), tt.args.szx, uint32(tt.args.maxMessageSize), tt.args.do)
 			if tt.wantErr {
-				assert.Error(t, err)
+				require.Error(t, err)
 				return
 			}
 			receivingMessagesCache := sender.receivingMessagesCache.LoadAndDeleteAll()
-			require.Len(t, receivingMessagesCache, 0)
+			require.Empty(t, receivingMessagesCache)
 			sendingMessagesCache := sender.sendingMessagesCache.LoadAndDeleteAll()
-			require.Len(t, sendingMessagesCache, 0)
+			require.Empty(t, sendingMessagesCache)
 			require.NoError(t, err)
 			assert.Equal(t, tt.want, fromPoolMessage(got))
 		})
@@ -390,7 +389,7 @@ func TestBlockWiseParallel(t *testing.T) {
 					}
 					got, err := sender.Do(toPoolMessage(req), tt.args.szx, uint32(tt.args.maxMessageSize), tt.args.do)
 					if tt.wantErr {
-						assert.Error(t, err)
+						require.Error(t, err)
 						return
 					}
 					require.NoError(t, err)
@@ -435,7 +434,7 @@ func TestEncodeBlockOption(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			got, err := EncodeBlockOption(tt.args.szx, tt.args.blockNumber, tt.args.moreBlocksFollowing)
 			if tt.wantErr {
-				assert.Error(t, err)
+				require.Error(t, err)
 				return
 			}
 			require.NoError(t, err)
@@ -478,7 +477,7 @@ func TestDecodeBlockOption(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			gotSzx, gotBlockNumber, gotMoreBlocksFollowing, err := DecodeBlockOption(tt.args.blockVal)
 			if tt.wantErr {
-				assert.Error(t, err)
+				require.Error(t, err)
 				return
 			}
 			require.NoError(t, err)
@@ -553,7 +552,7 @@ func TestBlockWiseWriteTestMessage(t *testing.T) {
 				szx:            SZX16,
 				maxMessageSize: SZX16.Size(),
 				writetestmessage: makeWriteReq(sender, receiver, SZX16, uint32(SZX16.Size()), SZX16, uint32(SZX16.Size()), func(_ *responsewriter.ResponseWriter[*testClient], r *pool.Message) {
-					require.NoError(t, fmt.Errorf("not expected received message: %+v", r))
+					require.Failf(t, "Unexpected msg", "Received unexpected message: %+v", r)
 				}),
 			},
 		},
@@ -609,7 +608,7 @@ func TestBlockWiseWriteTestMessage(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			err := sender.WriteMessage(toPoolMessage(tt.args.r), tt.args.szx, uint32(tt.args.maxMessageSize), tt.args.writetestmessage)
 			if tt.wantErr {
-				assert.Error(t, err)
+				require.Error(t, err)
 				return
 			}
 			require.NoError(t, err)

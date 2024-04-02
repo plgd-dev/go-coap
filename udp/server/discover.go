@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 
@@ -9,7 +10,7 @@ import (
 	"github.com/plgd-dev/go-coap/v3/message/pool"
 	coapNet "github.com/plgd-dev/go-coap/v3/net"
 	"github.com/plgd-dev/go-coap/v3/net/responsewriter"
-	"github.com/plgd-dev/go-coap/v3/pkg/errors"
+	pkgErrors "github.com/plgd-dev/go-coap/v3/pkg/errors"
 	"github.com/plgd-dev/go-coap/v3/udp/client"
 	"github.com/plgd-dev/go-coap/v3/udp/coder"
 )
@@ -43,11 +44,11 @@ func (s *Server) Discover(ctx context.Context, address, path string, receiverFun
 func (s *Server) DiscoveryRequest(req *pool.Message, address string, receiverFunc func(cc *client.Conn, resp *pool.Message), opts ...coapNet.MulticastOption) error {
 	token := req.Token()
 	if len(token) == 0 {
-		return fmt.Errorf("invalid token")
+		return errors.New("invalid token")
 	}
 	c := s.conn()
 	if c == nil {
-		return fmt.Errorf("server doesn't serve connection")
+		return errors.New("server doesn't serve connection")
 	}
 	addr, err := net.ResolveUDPAddr(c.Network(), address)
 	if err != nil {
@@ -63,7 +64,7 @@ func (s *Server) DiscoveryRequest(req *pool.Message, address string, receiverFun
 	if _, loaded := s.multicastHandler.LoadOrStore(token.Hash(), func(w *responsewriter.ResponseWriter[*client.Conn], r *pool.Message) {
 		receiverFunc(w.Conn(), r)
 	}); loaded {
-		return errors.ErrKeyAlreadyExists
+		return pkgErrors.ErrKeyAlreadyExists
 	}
 	defer func() {
 		_, _ = s.multicastHandler.LoadAndDelete(token.Hash())

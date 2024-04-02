@@ -52,7 +52,7 @@ func TestUnmarshalJSONUnknownInput(t *testing.T) {
 
 	var got Code
 	longStr := "This is a very long string that is longer than the max code length"
-	require.True(t, len(longStr) > getMaxCodeLen())
+	require.Greater(t, len(longStr), getMaxCodeLen())
 	err := got.UnmarshalJSON([]byte(longStr))
 	require.Error(t, err)
 }

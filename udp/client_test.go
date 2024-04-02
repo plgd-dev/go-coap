@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"errors"
-	"fmt"
 	"io"
 	"log"
 	"net"
@@ -105,7 +104,7 @@ func TestConnGet(t *testing.T) {
 		errS := w.SetResponse(codes.BadRequest, message.TextPlain, bytes.NewReader(make([]byte, 5330)))
 		require.NoError(t, errS)
 		require.NotEmpty(t, w.Conn())
-		require.True(t, r.Type() == message.Confirmable)
+		require.Equal(t, message.Confirmable, r.Type())
 	}))
 	require.NoError(t, err)
 	err = m.Handle("/b", mux.HandlerFunc(func(w mux.ResponseWriter, r *mux.Message) {
@@ -113,7 +112,7 @@ func TestConnGet(t *testing.T) {
 		errS := w.SetResponse(codes.Content, message.TextPlain, bytes.NewReader([]byte("b")))
 		require.NoError(t, errS)
 		require.NotEmpty(t, w.Conn())
-		assert.True(t, r.Type() == message.Confirmable)
+		assert.Equal(t, message.Confirmable, r.Type())
 	}))
 	require.NoError(t, err)
 	err = m.Handle("/b-non", mux.HandlerFunc(func(w mux.ResponseWriter, r *mux.Message) {
@@ -121,7 +120,7 @@ func TestConnGet(t *testing.T) {
 		errS := w.SetResponse(codes.Content, message.TextPlain, bytes.NewReader([]byte("b")))
 		require.NoError(t, errS)
 		require.NotEmpty(t, w.Conn())
-		assert.False(t, r.Type() == message.Confirmable)
+		assert.NotEqual(t, message.Confirmable, r.Type())
 	}))
 	require.NoError(t, err)
 	err = m.Handle("/empty", mux.HandlerFunc(func(w mux.ResponseWriter, r *mux.Message) {
@@ -131,7 +130,7 @@ func TestConnGet(t *testing.T) {
 		errS := w.SetResponse(codes.Content, message.TextPlain, bytes.NewReader([]byte{}))
 		require.NoError(t, errS)
 		require.NotEmpty(t, w.Conn())
-		assert.True(t, r.Type() == message.Confirmable)
+		require.Equal(t, message.Confirmable, r.Type())
 	}))
 	require.NoError(t, err)
 
@@ -173,7 +172,7 @@ func TestConnGet(t *testing.T) {
 			assert.Greater(t, got.Sequence(), uint64(0))
 			if tt.wantContentFormat != nil {
 				ct, errC := got.ContentFormat()
-				assert.NoError(t, errC)
+				require.NoError(t, errC)
 				assert.Equal(t, *tt.wantContentFormat, ct)
 			}
 			if tt.wantPayload != nil {
@@ -207,7 +206,7 @@ func TestConnGetSeparateMessage(t *testing.T) {
 		go func() {
 			time.Sleep(time.Second * 1)
 			assert.Equal(t, codes.GET, r.Code())
-			assert.True(t, r.Type() == message.Confirmable)
+			assert.Equal(t, message.Confirmable, r.Type())
 			customResp := message.Message{
 				Code:    codes.Content,
 				Token:   r.Token(),
@@ -246,7 +245,7 @@ func TestConnGetSeparateMessage(t *testing.T) {
 	}()
 
 	cc, err := Dial(l.LocalAddr().String(), options.WithHandlerFunc(func(_ *responsewriter.ResponseWriter[*client.Conn], r *pool.Message) {
-		assert.NoError(t, fmt.Errorf("none msg expected comes: %+v", r))
+		require.Failf(t, "Unexpected msg", "Received unexpected message: %+v", r)
 	}))
 	require.NoError(t, err)
 	defer func() {
@@ -339,7 +338,7 @@ func TestConnPost(t *testing.T) {
 				errH = w.SetResponse(codes.BadRequest, message.TextPlain, bytes.NewReader(make([]byte, 5330)))
 				require.NoError(t, errH)
 				require.NotEmpty(t, w.Conn())
-				assert.True(t, r.Type() == message.Confirmable)
+				assert.Equal(t, message.Confirmable, r.Type())
 			}))
 			require.NoError(t, err)
 			err = m.Handle("/b", mux.HandlerFunc(func(w mux.ResponseWriter, r *mux.Message) {
@@ -353,7 +352,7 @@ func TestConnPost(t *testing.T) {
 				errH = w.SetResponse(codes.Content, message.TextPlain, bytes.NewReader([]byte("b")))
 				require.NoError(t, errH)
 				require.NotEmpty(t, w.Conn())
-				assert.True(t, r.Type() == message.Confirmable)
+				assert.Equal(t, message.Confirmable, r.Type())
 			}))
 			require.NoError(t, err)
 
@@ -469,7 +468,7 @@ func TestConnPut(t *testing.T) {
 				errH = w.SetResponse(codes.BadRequest, message.TextPlain, bytes.NewReader(make([]byte, 5330)))
 				require.NoError(t, errH)
 				require.NotEmpty(t, w.Conn())
-				assert.True(t, r.Type() == message.Confirmable)
+				assert.Equal(t, message.Confirmable, r.Type())
 			}))
 			require.NoError(t, err)
 			err = m.Handle("/b", mux.HandlerFunc(func(w mux.ResponseWriter, r *mux.Message) {
@@ -483,7 +482,7 @@ func TestConnPut(t *testing.T) {
 				errH = w.SetResponse(codes.Content, message.TextPlain, bytes.NewReader([]byte("b")))
 				require.NoError(t, errH)
 				require.NotEmpty(t, w.Conn())
-				assert.True(t, r.Type() == message.Confirmable)
+				assert.Equal(t, message.Confirmable, r.Type())
 			}))
 			require.NoError(t, err)
 
@@ -582,7 +581,7 @@ func TestConnDelete(t *testing.T) {
 		errH := w.SetResponse(codes.BadRequest, message.TextPlain, bytes.NewReader(make([]byte, 5330)))
 		require.NoError(t, errH)
 		require.NotEmpty(t, w.Conn())
-		assert.True(t, r.Type() == message.Confirmable)
+		assert.Equal(t, message.Confirmable, r.Type())
 	}))
 	require.NoError(t, err)
 	err = m.Handle("/b", mux.HandlerFunc(func(w mux.ResponseWriter, r *mux.Message) {
@@ -590,7 +589,7 @@ func TestConnDelete(t *testing.T) {
 		errH := w.SetResponse(codes.Deleted, message.TextPlain, bytes.NewReader([]byte("b")))
 		require.NoError(t, errH)
 		require.NotEmpty(t, w.Conn())
-		assert.True(t, r.Type() == message.Confirmable)
+		assert.Equal(t, message.Confirmable, r.Type())
 	}))
 	require.NoError(t, err)
 

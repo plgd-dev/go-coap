@@ -118,7 +118,7 @@ func TestRangeFunction(t *testing.T) {
 		return true
 	})
 
-	require.Equal(t, foundElements, 2)
+	require.Equal(t, 2, foundElements)
 
 	for k := range actualMap {
 		_, contains := actualMap[k]
@@ -145,5 +145,5 @@ func TestPullOutAllFunction(t *testing.T) {
 		foundElements++
 		return true
 	})
-	require.Equal(t, foundElements, 0)
+	require.Equal(t, 0, foundElements)
 }

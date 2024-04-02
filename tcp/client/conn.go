@@ -166,7 +166,7 @@ func (cc *Conn) Close() error {
 func (cc *Conn) doInternal(req *pool.Message) (*pool.Message, error) {
 	token := req.Token()
 	if token == nil {
-		return nil, fmt.Errorf("invalid token")
+		return nil, errors.New("invalid token")
 	}
 	respChan := make(chan *pool.Message, 1)
 	if _, loaded := cc.tokenHandlerContainer.LoadOrStore(token.Hash(), func(_ *responsewriter.ResponseWriter[*Conn], r *pool.Message) {

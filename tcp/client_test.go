@@ -837,5 +837,5 @@ func TestConnRequestMonitorDropRequest(t *testing.T) {
 	deleteReq.SetMessageID(2)
 	_, err = cc.Do(deleteReq)
 	require.Error(t, err)
-	require.True(t, errors.Is(err, context.DeadlineExceeded))
+	require.ErrorIs(t, err, context.DeadlineExceeded)
 }

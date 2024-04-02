@@ -2,6 +2,7 @@ package observation
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"time"
@@ -10,7 +11,7 @@ import (
 	"github.com/plgd-dev/go-coap/v3/message/codes"
 	"github.com/plgd-dev/go-coap/v3/message/pool"
 	"github.com/plgd-dev/go-coap/v3/net/responsewriter"
-	"github.com/plgd-dev/go-coap/v3/pkg/errors"
+	pkgErrors "github.com/plgd-dev/go-coap/v3/pkg/errors"
 	coapSync "github.com/plgd-dev/go-coap/v3/pkg/sync"
 	"go.uber.org/atomic"
 )
@@ -57,7 +58,7 @@ func (h *Handler[C]) NewObservation(req *pool.Message, observeFunc func(req *poo
 	}
 	token := req.Token()
 	if len(token) == 0 {
-		return nil, fmt.Errorf("empty token")
+		return nil, errors.New("empty token")
 	}
 	options, err := req.Options().Clone()
 	if err != nil {
@@ -75,7 +76,7 @@ func (h *Handler[C]) NewObservation(req *pool.Message, observeFunc func(req *poo
 		}
 	}(&err)
 	if _, loaded := h.observations.LoadOrStore(token.Hash(), o); loaded {
-		err = errors.ErrKeyAlreadyExists
+		err = pkgErrors.ErrKeyAlreadyExists
 		return nil, err
 	}
 

@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"sync"
@@ -117,7 +118,7 @@ func (s *Server) closeConnection(cc *client.Conn) {
 
 func (s *Server) Serve(l *coapNet.UDPConn) error {
 	if s.cfg.BlockwiseSZX > blockwise.SZX1024 {
-		return fmt.Errorf("invalid blockwiseSZX")
+		return errors.New("invalid blockwiseSZX")
 	}
 
 	err := s.checkAndSetListener(l)
@@ -372,7 +373,7 @@ func (s *Server) getConn(l *coapNet.UDPConn, raddr *net.UDPAddr, firstTime bool)
 		if firstTime {
 			return s.getConn(l, raddr, false)
 		}
-		return nil, fmt.Errorf("connection is closed")
+		return nil, errors.New("connection is closed")
 	}
 	return cc, nil
 }
@@ -381,7 +382,7 @@ func (s *Server) NewConn(addr *net.UDPAddr) (*client.Conn, error) {
 	l := s.getListener()
 	if l == nil {
 		// server is not started/stopped
-		return nil, fmt.Errorf("server is not running")
+		return nil, errors.New("server is not running")
 	}
 	return s.getConn(l, addr, true)
 }

@@ -323,7 +323,7 @@ func (cc *Conn) Close() error {
 func (cc *Conn) doInternal(req *pool.Message) (*pool.Message, error) {
 	token := req.Token()
 	if token == nil {
-		return nil, fmt.Errorf("invalid token")
+		return nil, errors.New("invalid token")
 	}
 
 	respChan := make(chan *pool.Message, 1)
@@ -942,7 +942,7 @@ func (cc *Conn) ReleaseMessage(m *pool.Message) {
 // Via opts you can specify the network interface, source IP address, and hop limit.
 func (cc *Conn) WriteMulticastMessage(req *pool.Message, address *net.UDPAddr, options ...coapNet.MulticastOption) error {
 	if req.Type() == message.Confirmable {
-		return fmt.Errorf("multicast messages cannot be confirmable")
+		return errors.New("multicast messages cannot be confirmable")
 	}
 	req.UpsertMessageID(cc.GetMessageID())
 

@@ -3,7 +3,6 @@ package message
 import (
 	"encoding/binary"
 	"errors"
-	"fmt"
 	"strconv"
 )
 
@@ -113,7 +112,7 @@ func ToOptionID(v string) (OptionID, error) {
 			return key, nil
 		}
 	}
-	return 0, fmt.Errorf("not found")
+	return 0, errors.New("not found")
 }
 
 // Option value format (RFC7252 section 3.2)
@@ -234,7 +233,7 @@ func ToMediaType(v string) (MediaType, error) {
 			return key, nil
 		}
 	}
-	return 0, fmt.Errorf("not found")
+	return 0, errors.New("not found")
 }
 
 func extendOpt(opt int) (int, int) {

@@ -264,7 +264,7 @@ func TestSetBytesOption(t *testing.T) {
 
 	v := make([]string, 2)
 	n, err := options.GetStrings(1, v)
-	require.Equal(t, nil, err)
+	require.NoError(t, err)
 	require.Equal(t, 1, n)
 	require.Equal(t, []string{"11"}, v[:n])
 
@@ -288,7 +288,7 @@ func TestAddBytesOption(t *testing.T) {
 	options = testAddBytesOption(t, options, Option{ID: 1, Value: []byte("4")}, 2)
 	v := make([][]byte, 2)
 	n, err := options.GetBytess(0, v)
-	require.Equal(t, nil, err)
+	require.NoError(t, err)
 	require.Equal(t, 2, n)
 	require.Equal(t, [][]byte{{0x30}, {0x31}}, v)
 }

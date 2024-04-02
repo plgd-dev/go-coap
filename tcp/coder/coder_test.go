@@ -30,7 +30,7 @@ func TestMarshalMessage(t *testing.T) {
 	bufOptions := make([]byte, 1024)
 	bufOptionsUsed := bufOptions
 	options := make(message.Options, 0, 32)
-	enc := 0
+
 	options, enc, err := options.SetPath(bufOptionsUsed, "/a/b/c/d/e")
 	if err != nil {
 		t.Fatalf("Cannot set uri")
