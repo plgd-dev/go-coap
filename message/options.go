@@ -265,7 +265,7 @@ func (options Options) SetBytes(buf []byte, id OptionID, data []byte) (Options, 
 	return options.Set(Option{ID: id, Value: buf[:len(data)]}), len(data), nil
 }
 
-// AddBytes appends bytes of a option option to options.
+// AddBytes appends bytes of a option to options.
 //
 // Returns modified options, number of used buf bytes and error if occurs.
 func (options Options) AddBytes(buf []byte, id OptionID, data []byte) (Options, int, error) {

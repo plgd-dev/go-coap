@@ -96,7 +96,7 @@ func TestConnGet(t *testing.T) {
 	go func() {
 		defer wg.Done()
 		errS := s.Serve(l)
-		require.NoError(t, errS)
+		assert.NoError(t, errS)
 	}()
 
 	cc, err := Dial(l.Addr().String())
@@ -226,7 +226,7 @@ func TestConnPost(t *testing.T) {
 			go func() {
 				defer wg.Done()
 				errS := s.Serve(l)
-				require.NoError(t, errS)
+				assert.NoError(t, errS)
 			}()
 
 			cc, err := Dial(l.Addr().String())
@@ -354,7 +354,7 @@ func TestConnPut(t *testing.T) {
 			go func() {
 				defer wg.Done()
 				errS := s.Serve(l)
-				require.NoError(t, errS)
+				assert.NoError(t, errS)
 			}()
 
 			cc, err := Dial(l.Addr().String())
@@ -459,7 +459,7 @@ func TestConnDelete(t *testing.T) {
 	go func() {
 		defer wg.Done()
 		errS := s.Serve(l)
-		require.NoError(t, errS)
+		assert.NoError(t, errS)
 	}()
 
 	cc, err := Dial(l.Addr().String())
@@ -511,7 +511,7 @@ func TestConnPing(t *testing.T) {
 	go func() {
 		defer wg.Done()
 		errS := s.Serve(l)
-		require.NoError(t, errS)
+		assert.NoError(t, errS)
 	}()
 
 	cc, err := Dial(l.Addr().String())
@@ -566,7 +566,7 @@ func TestClientInactiveMonitor(t *testing.T) {
 	go func() {
 		defer serverWg.Done()
 		errS := sd.Serve(ld)
-		require.NoError(t, errS)
+		assert.NoError(t, errS)
 	}()
 
 	cc, err := Dial(
@@ -640,7 +640,7 @@ func TestClientKeepAliveMonitor(t *testing.T) {
 	go func() {
 		defer serverWg.Done()
 		errS := sd.Serve(ld)
-		require.NoError(t, errS)
+		assert.NoError(t, errS)
 	}()
 
 	cc, err := Dial(
@@ -725,7 +725,7 @@ func TestConnRequestMonitorCloseConnection(t *testing.T) {
 	go func() {
 		defer wg.Done()
 		errS := s.Serve(l)
-		require.NoError(t, errS)
+		assert.NoError(t, errS)
 	}()
 
 	cc, err := Dial(l.Addr().String(),
@@ -807,7 +807,7 @@ func TestConnRequestMonitorDropRequest(t *testing.T) {
 	go func() {
 		defer wg.Done()
 		errS := s.Serve(l)
-		require.NoError(t, errS)
+		assert.NoError(t, errS)
 	}()
 
 	cc, err := Dial(l.Addr().String(),

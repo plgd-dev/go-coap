@@ -208,7 +208,7 @@ func TestUDPConnwriteMulticastWithContext(t *testing.T) {
 	go func() {
 		b := make([]byte, 1024)
 		n, _, errR := c2.ReadWithContext(ctx, b)
-		require.NoError(t, errR)
+		assert.NoError(t, errR)
 		if n > 0 {
 			b = b[:n]
 			assert.Equal(t, payload, b)

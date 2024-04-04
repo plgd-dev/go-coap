@@ -603,33 +603,34 @@ func (r *Message) Clone(msg *Message) error {
 	msg.SetMessageID(r.MessageID())
 	msg.SetControlMessage(r.ControlMessage())
 
-	if r.Body() != nil {
-		buf := bytes.NewBuffer(nil)
-		n, err := r.Body().Seek(0, io.SeekCurrent)
-		if err != nil {
-			return err
-		}
-		_, err = r.body.Seek(0, io.SeekStart)
-		if err != nil {
-			return err
-		}
-		_, err = io.Copy(buf, r.Body())
-		if err != nil {
-			var errs *multierror.Error
-			errs = multierror.Append(errs, err)
-			_, errS := r.Body().Seek(n, io.SeekStart)
-			if errS != nil {
-				errs = multierror.Append(errs, errS)
-			}
-			return errs.ErrorOrNil()
-		}
-		_, err = r.Body().Seek(n, io.SeekStart)
-		if err != nil {
-			return err
-		}
-		r := bytes.NewReader(buf.Bytes())
-		msg.SetBody(r)
+	if r.Body() == nil {
+		return nil
 	}
+	buf := bytes.NewBuffer(nil)
+	n, err := r.Body().Seek(0, io.SeekCurrent)
+	if err != nil {
+		return err
+	}
+	_, err = r.body.Seek(0, io.SeekStart)
+	if err != nil {
+		return err
+	}
+	_, err = io.Copy(buf, r.Body())
+	if err != nil {
+		var errs *multierror.Error
+		errs = multierror.Append(errs, err)
+		_, errS := r.Body().Seek(n, io.SeekStart)
+		if errS != nil {
+			errs = multierror.Append(errs, errS)
+		}
+		return errs.ErrorOrNil()
+	}
+	_, err = r.Body().Seek(n, io.SeekStart)
+	if err != nil {
+		return err
+	}
+	body := bytes.NewReader(buf.Bytes())
+	msg.SetBody(body)
 	return nil
 }
 

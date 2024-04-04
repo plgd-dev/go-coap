@@ -15,6 +15,7 @@ import (
 	"github.com/plgd-dev/go-coap/v3/options"
 	"github.com/plgd-dev/go-coap/v3/udp"
 	"github.com/plgd-dev/go-coap/v3/udp/client"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -157,7 +158,7 @@ func TestConnObserve(t *testing.T) {
 			go func() {
 				defer wg.Done()
 				errS := s.Serve(l)
-				require.NoError(t, errS)
+				assert.NoError(t, errS)
 			}()
 
 			cc, err := udp.Dial(l.LocalAddr().String())
@@ -280,7 +281,7 @@ func TestConnObserveNotSupported(t *testing.T) {
 			go func() {
 				defer wg.Done()
 				errS := s.Serve(l)
-				require.NoError(t, errS)
+				assert.NoError(t, errS)
 			}()
 
 			cc, err := udp.Dial(l.LocalAddr().String())
@@ -376,7 +377,7 @@ func TestConnObserveCancel(t *testing.T) {
 			go func() {
 				defer wg.Done()
 				errS := s.Serve(l)
-				require.NoError(t, errS)
+				assert.NoError(t, errS)
 			}()
 
 			cc, err := udp.Dial(l.LocalAddr().String())

@@ -24,6 +24,7 @@ import (
 	"github.com/plgd-dev/go-coap/v3/tcp"
 	"github.com/plgd-dev/go-coap/v3/tcp/client"
 	"github.com/plgd-dev/go-coap/v3/tcp/coder"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/atomic"
 	"golang.org/x/sync/semaphore"
@@ -62,7 +63,7 @@ func TestServerCleanUpConns(t *testing.T) {
 	go func() {
 		defer wg.Done()
 		errS := sd.Serve(ld)
-		require.NoError(t, errS)
+		assert.NoError(t, errS)
 	}()
 
 	cc, err := tcp.Dial(ld.Addr().String())
@@ -166,7 +167,7 @@ func TestServerSetContextValueWithPKI(t *testing.T) {
 	defer sd.Stop()
 	go func() {
 		errS := sd.Serve(ld)
-		require.NoError(t, errS)
+		assert.NoError(t, errS)
 	}()
 
 	cc, err := tcp.Dial(ld.Addr().String(), options.WithTLS(clientCgf))
@@ -226,7 +227,7 @@ func TestServerInactiveMonitor(t *testing.T) {
 	go func() {
 		defer serverWg.Done()
 		errS := sd.Serve(ld)
-		require.NoError(t, errS)
+		assert.NoError(t, errS)
 	}()
 
 	cc, err := tcp.Dial(
@@ -297,7 +298,7 @@ func TestServerKeepAliveMonitor(t *testing.T) {
 	go func() {
 		defer serverWg.Done()
 		errS := sd.Serve(ld)
-		require.NoError(t, errS)
+		assert.NoError(t, errS)
 	}()
 
 	cc, err := net.Dial("tcp", ld.Addr().String())
@@ -349,7 +350,7 @@ func TestCheckForLossOrder(t *testing.T) {
 	go func() {
 		defer wg.Done()
 		errS := sd.Serve(ld)
-		require.NoError(t, errS)
+		assert.NoError(t, errS)
 	}()
 	defer func() {
 		sd.Stop()

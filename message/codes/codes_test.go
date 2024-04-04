@@ -73,7 +73,7 @@ func TestUnmarshalJSONMarshalUnmarshal(t *testing.T) {
 }
 
 func TestCodeToString(t *testing.T) {
-	var strCodes []string
+	strCodes := make([]string, 0, len(codeToString))
 	for _, val := range codeToString {
 		strCodes = append(strCodes, val)
 	}
