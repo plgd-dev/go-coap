@@ -22,6 +22,7 @@ import (
 	"github.com/plgd-dev/go-coap/v3/udp"
 	"github.com/plgd-dev/go-coap/v3/udp/client"
 	"github.com/plgd-dev/go-coap/v3/udp/server"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/atomic"
 	"golang.org/x/sync/semaphore"
@@ -70,7 +71,7 @@ func TestServerDiscoverIotivity(t *testing.T) {
 	go func() {
 		defer wg.Done()
 		errS := sd.Serve(ld)
-		require.NoError(t, errS)
+		assert.NoError(t, errS)
 	}()
 
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
@@ -169,7 +170,7 @@ func TestServerDiscover(t *testing.T) {
 	go func() {
 		defer wg.Done()
 		errS := s.Serve(l)
-		require.NoError(t, errS)
+		assert.NoError(t, errS)
 	}()
 
 	ld, err := coapNet.NewListenUDP("udp4", "")
@@ -186,7 +187,7 @@ func TestServerDiscover(t *testing.T) {
 	go func() {
 		defer wg.Done()
 		errS := sd.Serve(ld)
-		require.NoError(t, errS)
+		assert.NoError(t, errS)
 	}()
 
 	for _, tt := range tests {
@@ -233,7 +234,7 @@ func TestServerCleanUpConns(t *testing.T) {
 	go func() {
 		defer wg.Done()
 		errS := sd.Serve(ld)
-		require.NoError(t, errS)
+		assert.NoError(t, errS)
 	}()
 
 	cc, err := udp.Dial(ld.LocalAddr().String())
@@ -294,7 +295,7 @@ func TestServerInactiveMonitor(t *testing.T) {
 	go func() {
 		defer serverWg.Done()
 		errS := sd.Serve(ld)
-		require.NoError(t, errS)
+		assert.NoError(t, errS)
 	}()
 
 	cc, err := udp.Dial(
@@ -366,7 +367,7 @@ func TestServerKeepAliveMonitor(t *testing.T) {
 	go func() {
 		defer serverWg.Done()
 		errS := sd.Serve(ld)
-		require.NoError(t, errS)
+		assert.NoError(t, errS)
 	}()
 
 	cc, err := udp.Dial(
@@ -402,7 +403,7 @@ func TestServerNewClient(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			errS := s.Serve(l)
-			require.NoError(t, errS)
+			assert.NoError(t, errS)
 		}()
 		return s, func() {
 			s.Stop()
@@ -479,7 +480,7 @@ func TestCheckForLossOrder(t *testing.T) {
 	go func() {
 		defer wg.Done()
 		errS := sd.Serve(ld)
-		require.NoError(t, errS)
+		assert.NoError(t, errS)
 	}()
 	defer func() {
 		sd.Stop()
@@ -534,7 +535,7 @@ func TestServerReconnectNewClient(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			errS := s.Serve(l)
-			require.NoError(t, errS)
+			assert.NoError(t, errS)
 		}()
 		return s, func() {
 			s.Stop()
@@ -621,7 +622,7 @@ func TestMuxPath(t *testing.T) {
 	s := udp.NewServer(options.WithMux(r))
 	go func() {
 		errL := s.Serve(l)
-		require.NoError(t, errL)
+		assert.NoError(t, errL)
 	}()
 
 	type args struct {

@@ -9,6 +9,7 @@ import (
 
 	"github.com/plgd-dev/go-coap/v3/message/codes"
 	"github.com/plgd-dev/go-coap/v3/message/pool"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/atomic"
 )
@@ -146,7 +147,7 @@ func TestLimitParallelRequestsDo(t *testing.T) {
 				go func(r *pool.Message) {
 					defer wg.Done()
 					_, err := c.Do(r)
-					require.Error(t, err)
+					assert.Error(t, err)
 				}(req)
 			}
 			wg.Wait()
@@ -269,7 +270,7 @@ func TestLimitParallelRequestsDoObserve(t *testing.T) {
 					_, err := c.DoObserve(r, func(*pool.Message) {
 						// do nothing
 					})
-					require.Error(t, err)
+					assert.Error(t, err)
 				}(req)
 			}
 			wg.Wait()

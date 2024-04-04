@@ -48,7 +48,7 @@ func RandomValidURLString(n, maxSegmentLen int) string {
 		}
 	}
 
-	// ensure that at at least every maxSegmentLen-th character is '/', otherwise
+	// ensure that at least every maxSegmentLen-th character is '/', otherwise
 	// SetPath will fail with invalid path error
 	index := 0
 	for {

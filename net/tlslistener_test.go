@@ -97,7 +97,7 @@ func TestTLSListenerAcceptWithContext(t *testing.T) {
 		for i := 0; i < len(tests); i++ {
 			time.Sleep(time.Millisecond * 200)
 			cert, err := tls.X509KeyPair(CertPEMBlock, KeyPEMBlock)
-			require.NoError(t, err)
+			assert.NoError(t, err)
 
 			c, err := tls.DialWithDialer(&net.Dialer{
 				Timeout: time.Millisecond * 400,
@@ -109,10 +109,10 @@ func TestTLSListenerAcceptWithContext(t *testing.T) {
 				continue
 			}
 			_, err = c.Write([]byte("hello"))
-			require.NoError(t, err)
+			assert.NoError(t, err)
 			time.Sleep(time.Millisecond * 200)
 			err = c.Close()
-			require.NoError(t, err)
+			assert.NoError(t, err)
 		}
 	}()
 
@@ -183,7 +183,7 @@ func TestTLSListenerCheckForInfinitLoop(t *testing.T) {
 		for i := 0; i < len(tests); i++ {
 			time.Sleep(time.Millisecond * 200)
 			cert, err := tls.X509KeyPair(CertPEMBlock, KeyPEMBlock)
-			require.NoError(t, err)
+			assert.NoError(t, err)
 			func() {
 				conn, err := net.Dial("tcp", listener.Addr().String())
 				if err != nil {
@@ -194,14 +194,14 @@ func TestTLSListenerCheckForInfinitLoop(t *testing.T) {
 					Certificates:       []tls.Certificate{cert},
 					VerifyPeerCertificate: func([][]byte, [][]*x509.Certificate) error {
 						errC := conn.Close()
-						require.NoError(t, errC)
+						assert.NoError(t, errC)
 						return nil
 					},
 				})
 				ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond*300)
 				defer cancel()
 				err = tlsConn.HandshakeContext(ctx)
-				require.Error(t, err)
+				assert.Error(t, err)
 			}()
 		}
 	}()

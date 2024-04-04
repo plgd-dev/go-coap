@@ -796,7 +796,7 @@ func (b *BlockWise[C]) processReceivedMessage(w *responsewriter.ResponseWriter[C
 		return fmt.Errorf("cannot get payload: %w", err)
 	}
 	off := num * szx.Size()
-	if off == payloadSize {
+	if off == payloadSize { //nolint:nestif
 		payloadSize, err = copyToPayloadFromOffset(r, payloadFile, off)
 		if err != nil {
 			return fmt.Errorf("cannot copy data to payload: %w", err)

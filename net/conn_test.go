@@ -5,6 +5,7 @@ import (
 	"net"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -58,7 +59,7 @@ func TestConnWriteWithContext(t *testing.T) {
 			b := make([]byte, len(helloWorld))
 			_ = c.ReadFullWithContext(ctx, b)
 			err = c.Close()
-			require.NoError(t, err)
+			assert.NoError(t, err)
 		}
 	}()
 

@@ -141,7 +141,7 @@ func TestConnGet(t *testing.T) {
 	go func() {
 		defer wg.Done()
 		errS := s.Serve(l)
-		require.NoError(t, errS)
+		assert.NoError(t, errS)
 	}()
 
 	cc, err := Dial(l.LocalAddr().String())
@@ -241,7 +241,7 @@ func TestConnGetSeparateMessage(t *testing.T) {
 	go func() {
 		defer wg.Done()
 		errS := s.Serve(l)
-		require.NoError(t, errS)
+		assert.NoError(t, errS)
 	}()
 
 	cc, err := Dial(l.LocalAddr().String(), options.WithHandlerFunc(func(_ *responsewriter.ResponseWriter[*client.Conn], r *pool.Message) {
@@ -363,7 +363,7 @@ func TestConnPost(t *testing.T) {
 			go func() {
 				defer wg.Done()
 				errS := s.Serve(l)
-				require.NoError(t, errS)
+				assert.NoError(t, errS)
 			}()
 
 			cc, err := Dial(l.LocalAddr().String())
@@ -493,7 +493,7 @@ func TestConnPut(t *testing.T) {
 			go func() {
 				defer wg.Done()
 				errS := s.Serve(l)
-				require.NoError(t, errS)
+				assert.NoError(t, errS)
 			}()
 
 			cc, err := Dial(l.LocalAddr().String())
@@ -600,7 +600,7 @@ func TestConnDelete(t *testing.T) {
 	go func() {
 		defer wg.Done()
 		errS := s.Serve(l)
-		require.NoError(t, errS)
+		assert.NoError(t, errS)
 	}()
 
 	cc, err := Dial(l.LocalAddr().String())
@@ -652,7 +652,7 @@ func TestConnPing(t *testing.T) {
 	go func() {
 		defer wg.Done()
 		errS := s.Serve(l)
-		require.NoError(t, errS)
+		assert.NoError(t, errS)
 	}()
 
 	cc, err := Dial(l.LocalAddr().String())
@@ -699,7 +699,7 @@ func TestClientInactiveMonitor(t *testing.T) {
 	go func() {
 		defer serverWg.Done()
 		errS := sd.Serve(ld)
-		require.NoError(t, errS)
+		assert.NoError(t, errS)
 	}()
 
 	cc, err := Dial(
@@ -763,7 +763,7 @@ func TestClientKeepAliveMonitor(t *testing.T) {
 					return
 				}
 			}
-			require.NoError(t, errR)
+			assert.NoError(t, errR)
 		}
 	}()
 

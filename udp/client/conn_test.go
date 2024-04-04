@@ -67,7 +67,7 @@ func TestConnDeduplication(t *testing.T) {
 	go func() {
 		defer wg.Done()
 		errS := s.Serve(l)
-		require.NoError(t, errS)
+		assert.NoError(t, errS)
 	}()
 
 	cc, err := udp.Dial(l.LocalAddr().String(),
@@ -152,7 +152,7 @@ func TestConnDeduplicationRetransmission(t *testing.T) {
 	go func() {
 		defer wg.Done()
 		errS := s.Serve(l)
-		require.NoError(t, errS)
+		assert.NoError(t, errS)
 	}()
 
 	cc, err := udp.Dial(l.LocalAddr().String(),
@@ -268,7 +268,7 @@ func testParallelConnGet(t *testing.T, numParallel int) {
 	go func() {
 		defer wg.Done()
 		errS := s.Serve(l)
-		require.NoError(t, errS)
+		assert.NoError(t, errS)
 	}()
 
 	cc, err := udp.Dial(l.LocalAddr().String())
@@ -289,19 +289,19 @@ func testParallelConnGet(t *testing.T, numParallel int) {
 					defer cancel()
 					got, err := cc.Get(ctx, tt.args.path, tt.args.opts...)
 					if tt.wantErr {
-						require.Error(t, err)
+						assert.Error(t, err)
 						return
 					}
-					require.NoError(t, err)
-					require.Equal(t, tt.wantCode, got.Code())
+					assert.NoError(t, err)
+					assert.Equal(t, tt.wantCode, got.Code())
 					if tt.wantContentFormat != nil {
 						ct, err := got.ContentFormat()
-						require.NoError(t, err)
-						require.Equal(t, *tt.wantContentFormat, ct)
+						assert.NoError(t, err)
+						assert.Equal(t, *tt.wantContentFormat, ct)
 						buf := bytes.NewBuffer(nil)
 						_, err = buf.ReadFrom(got.Body())
-						require.NoError(t, err)
-						require.Equal(t, tt.wantPayload, buf.Bytes())
+						assert.NoError(t, err)
+						assert.Equal(t, tt.wantPayload, buf.Bytes())
 					}
 				}()
 			}
@@ -369,7 +369,7 @@ func TestConnGetSeparateMessage(t *testing.T) {
 	go func() {
 		defer wg.Done()
 		errS := s.Serve(l)
-		require.NoError(t, errS)
+		assert.NoError(t, errS)
 	}()
 
 	cc, err := udp.Dial(l.LocalAddr().String(), options.WithHandlerFunc(func(_ *responsewriter.ResponseWriter[*client.Conn], r *pool.Message) {
@@ -488,7 +488,7 @@ func testConnPost(t *testing.T, numParallel int) {
 			go func() {
 				defer wg.Done()
 				errS := s.Serve(l)
-				require.NoError(t, errS)
+				assert.NoError(t, errS)
 			}()
 
 			cc, err := udp.Dial(l.LocalAddr().String())
@@ -507,19 +507,19 @@ func testConnPost(t *testing.T, numParallel int) {
 					defer cancel()
 					got, err := cc.Post(ctx, tt.args.path, tt.args.contentFormat, tt.args.payload, tt.args.opts...)
 					if tt.wantErr {
-						require.Error(t, err)
+						assert.Error(t, err)
 						return
 					}
-					require.NoError(t, err)
-					require.Equal(t, tt.wantCode, got.Code())
+					assert.NoError(t, err)
+					assert.Equal(t, tt.wantCode, got.Code())
 					if tt.wantContentFormat != nil {
 						ct, err := got.ContentFormat()
-						require.NoError(t, err)
-						require.Equal(t, *tt.wantContentFormat, ct)
+						assert.NoError(t, err)
+						assert.Equal(t, *tt.wantContentFormat, ct)
 						buf := bytes.NewBuffer(nil)
 						_, err = buf.ReadFrom(got.Body())
-						require.NoError(t, err)
-						require.Equal(t, tt.wantPayload, buf.Bytes())
+						assert.NoError(t, err)
+						assert.Equal(t, tt.wantPayload, buf.Bytes())
 					}
 				}()
 			}
@@ -631,7 +631,7 @@ func testConnPut(t *testing.T, numParallel int) {
 			go func() {
 				defer wg.Done()
 				errS := s.Serve(l)
-				require.NoError(t, errS)
+				assert.NoError(t, errS)
 			}()
 
 			cc, err := udp.Dial(l.LocalAddr().String())
@@ -649,19 +649,19 @@ func testConnPut(t *testing.T, numParallel int) {
 					defer cancel()
 					got, err := cc.Put(ctx, tt.args.path, tt.args.contentFormat, tt.args.payload, tt.args.opts...)
 					if tt.wantErr {
-						require.Error(t, err)
+						assert.Error(t, err)
 						return
 					}
-					require.NoError(t, err)
-					require.Equal(t, tt.wantCode, got.Code())
+					assert.NoError(t, err)
+					assert.Equal(t, tt.wantCode, got.Code())
 					if tt.wantContentFormat != nil {
 						ct, err := got.ContentFormat()
-						require.NoError(t, err)
-						require.Equal(t, *tt.wantContentFormat, ct)
+						assert.NoError(t, err)
+						assert.Equal(t, *tt.wantContentFormat, ct)
 						buf := bytes.NewBuffer(nil)
 						_, err = buf.ReadFrom(got.Body())
-						require.NoError(t, err)
-						require.Equal(t, tt.wantPayload, buf.Bytes())
+						assert.NoError(t, err)
+						assert.Equal(t, tt.wantPayload, buf.Bytes())
 					}
 				}()
 			}
@@ -750,7 +750,7 @@ func testConnDelete(t *testing.T, numParallel int) {
 	go func() {
 		defer wg.Done()
 		errS := s.Serve(l)
-		require.NoError(t, errS)
+		assert.NoError(t, errS)
 	}()
 
 	cc, err := udp.Dial(l.LocalAddr().String())
@@ -771,19 +771,19 @@ func testConnDelete(t *testing.T, numParallel int) {
 					defer cancel()
 					got, err := cc.Delete(ctx, tt.args.path, tt.args.opts...)
 					if tt.wantErr {
-						require.Error(t, err)
+						assert.Error(t, err)
 						return
 					}
-					require.NoError(t, err)
-					require.Equal(t, tt.wantCode, got.Code())
+					assert.NoError(t, err)
+					assert.Equal(t, tt.wantCode, got.Code())
 					if tt.wantContentFormat != nil {
 						ct, err := got.ContentFormat()
-						require.NoError(t, err)
-						require.Equal(t, *tt.wantContentFormat, ct)
+						assert.NoError(t, err)
+						assert.Equal(t, *tt.wantContentFormat, ct)
 						buf := bytes.NewBuffer(nil)
 						_, err = buf.ReadFrom(got.Body())
-						require.NoError(t, err)
-						require.Equal(t, tt.wantPayload, buf.Bytes())
+						assert.NoError(t, err)
+						assert.Equal(t, tt.wantPayload, buf.Bytes())
 					}
 				}()
 			}
@@ -817,7 +817,7 @@ func TestConnPing(t *testing.T) {
 	go func() {
 		defer wg.Done()
 		errS := s.Serve(l)
-		require.NoError(t, errS)
+		assert.NoError(t, errS)
 	}()
 
 	cc, err := udp.Dial(l.LocalAddr().String())
@@ -890,7 +890,7 @@ func TestConnRequestMonitorCloseConnection(t *testing.T) {
 	go func() {
 		defer wg.Done()
 		errS := s.Serve(l)
-		require.NoError(t, errS)
+		assert.NoError(t, errS)
 	}()
 
 	cc, err := udp.Dial(l.LocalAddr().String(),
@@ -972,7 +972,7 @@ func TestConnRequestMonitorDropRequest(t *testing.T) {
 	go func() {
 		defer wg.Done()
 		errS := s.Serve(l)
-		require.NoError(t, errS)
+		assert.NoError(t, errS)
 	}()
 
 	cc, err := udp.Dial(l.LocalAddr().String(),

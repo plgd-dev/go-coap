@@ -2,7 +2,7 @@ package status
 
 import (
 	"context"
-	"fmt"
+	"errors"
 	"testing"
 
 	"github.com/plgd-dev/go-coap/v3/message/codes"
@@ -15,7 +15,7 @@ func TestStatus(t *testing.T) {
 	require.True(t, ok)
 	require.Equal(t, OK, s.Code())
 
-	_, ok = FromError(fmt.Errorf("test"))
+	_, ok = FromError(errors.New("test"))
 	require.False(t, ok)
 
 	msg := pool.NewMessage(context.TODO())
@@ -42,7 +42,7 @@ func TestStatus(t *testing.T) {
 	err = FromContextError(context.DeadlineExceeded)
 	require.Equal(t, Timeout, Code(err))
 
-	err = FromContextError(fmt.Errorf("test"))
+	err = FromContextError(errors.New("test"))
 	require.Equal(t, Unknown, Code(err))
-	require.Equal(t, Unknown, Code(fmt.Errorf("test")))
+	require.Equal(t, Unknown, Code(errors.New("test")))
 }
