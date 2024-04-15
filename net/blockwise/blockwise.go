@@ -270,6 +270,7 @@ func newWriteRequestResponse[C Client](cc C, request *pool.Message) *responsewri
 	req.SetToken(request.Token())
 	req.ResetOptionsTo(request.Options())
 	req.SetBody(request.Body())
+	req.SetType(request.Type())
 	return responsewriter.New(req, cc, request.Options()...)
 }
 
