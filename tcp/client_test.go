@@ -659,9 +659,9 @@ func TestClientKeepAliveMonitor(t *testing.T) {
 	})
 
 	// send ping to create serverside connection
-	ctx, cancel = context.WithTimeout(context.Background(), time.Second)
+	ctxPing, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	err = cc.Ping(ctx)
+	err = cc.Ping(ctxPing)
 	require.Error(t, err)
 
 	err = checkClose.Acquire(ctx, 2)
