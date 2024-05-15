@@ -198,8 +198,8 @@ func (s *Server) createConn(connection *coapNet.Conn, inactivityMonitor udpClien
 				v,
 				s.cfg.BlockwiseTransferTimeout,
 				s.cfg.Errors,
-				func(token message.Token) (*pool.Message, bool) {
-					return v.GetObservationRequest(token)
+				func(hash uint64) (*pool.Message, bool) {
+					return v.GetObservationRequest(hash)
 				},
 			)
 		}
