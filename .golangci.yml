@@ -25,7 +25,6 @@ linters:
     - errchkjson       # Checks types passed to the json encoding functions. Reports unsupported types and optionally reports occasions, where the check for the returned error can be omitted.
     - errname          # Checks that sentinel errors are prefixed with the `Err` and error types are suffixed with the `Error`.
     - errorlint        # errorlint is a linter for that can be used to find code that will cause problems with the error wrapping scheme introduced in Go 1.13.
-    - execinquery      # Execinquery is a linter about query string checker in Query function which reads your Go src files and warning it finds.
     - exportloopref    # checks for pointers to enclosing loop variables
     - forcetypeassert  # finds forced type assertions
     - gci              # Gci control golang package import order and make it always deterministic.
@@ -88,7 +87,6 @@ linters:
     - cyclop           # checks function and package cyclomatic complexity
     - depguard         # Go linter that checks if package imports are in a list of acceptable packages
     - exhaustive       # Check exhaustiveness of enum switch statements
-    - exhaustivestruct # Checks if all struct's fields are initialized
     - exhaustruct      # Checks if all structure fields are initialized.
     - forbidigo        # Forbids identifiers
     - funlen           # Tool for detection of long functions
@@ -96,14 +94,12 @@ linters:
     - gochecknoinits   # Checks that no init functions are present in Go code
     - godot            # Check if comments end in a period
     - gomnd            # An analyzer to detect magic numbers.
-    - ifshort          # Checks that your code uses short syntax for if-statements whenever possible
     - inamedparam      # Reports interfaces with unnamed method parameters.
     - interfacebloat   # A linter that checks the number of methods inside an interface
     - ireturn          # Accept Interfaces, Return Concrete Types
     - lll              # Reports long lines
     - maintidx         # maintidx measures the maintainability index of each function.
     - makezero         # Finds slice declarations with non-zero initial length
-    - maligned         # Tool to detect Go structs that would take less memory if their fields were sorted
     - nlreturn         # nlreturn checks for a new line before return and branch statements to increase code clarity
     - nonamedreturns   # Reports all named returns
     - paralleltest     # paralleltest detects missing usage of t.Parallel() method in your Go test
@@ -144,11 +140,6 @@ issues:
       text: "exitAfterDefer"
       linters:
         - gocritic
-
-    - path: pkg/rand/rand.go
-      text: "G404: Use of weak random number generator \\(math/rand instead of crypto/rand\\)"
-      linters:
-        - gosec
 
     - path: .*/client/conn.go
       linters:
