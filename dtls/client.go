@@ -90,8 +90,8 @@ func Client(conn *dtls.Conn, opts ...udp.Option) *udpClient.Conn {
 				v,
 				cfg.BlockwiseTransferTimeout,
 				cfg.Errors,
-				func(token message.Token) (*pool.Message, bool) {
-					return v.GetObservationRequest(token)
+				func(hash uint64) (*pool.Message, bool) {
+					return v.GetObservationRequest(hash)
 				},
 			)
 		}

@@ -193,7 +193,7 @@ func (s *Server) createConn(connection *coapNet.Conn, inactivityMonitor client.I
 				cc,
 				s.cfg.BlockwiseTransferTimeout,
 				s.cfg.Errors,
-				func(message.Token) (*pool.Message, bool) {
+				func(uint64) (*pool.Message, bool) {
 					return nil, false
 				},
 			)

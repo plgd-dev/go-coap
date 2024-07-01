@@ -47,6 +47,7 @@ type OptionID uint16
    |  35 | x  | x | - |   | Proxy-Uri      | string | 1-1034 | (none)  |
    |  39 | x  | x | - |   | Proxy-Scheme   | string | 1-255  | (none)  |
    |  60 |    |   | x |   | Size1          | uint   | 0-4    | (none)  |
+   | 292 |    |   |   | x | Request-Tag    | opaque | 0-8    | (none)  |
    +-----+----+---+---+---+----------------+--------+--------+---------+
    C=Critical, U=Unsafe, N=NoCacheKey, R=Repeatable
 */
@@ -73,6 +74,7 @@ const (
 	ProxyScheme   OptionID = 39
 	Size1         OptionID = 60
 	NoResponse    OptionID = 258
+	RequestTag    OptionID = 292
 )
 
 var optionIDToString = map[OptionID]string{
@@ -96,6 +98,7 @@ var optionIDToString = map[OptionID]string{
 	ProxyScheme:   "ProxyScheme",
 	Size1:         "Size1",
 	NoResponse:    "NoResponse",
+	RequestTag:    "RequestTag",
 }
 
 func (o OptionID) String() string {
@@ -153,6 +156,7 @@ var CoapOptionDefs = map[OptionID]OptionDef{
 	ProxyScheme:   {ValueFormat: ValueString, MinLen: 1, MaxLen: 255},
 	Size1:         {ValueFormat: ValueUint, MinLen: 0, MaxLen: 4},
 	NoResponse:    {ValueFormat: ValueUint, MinLen: 0, MaxLen: 1},
+	RequestTag:    {ValueFormat: ValueOpaque, MinLen: 0, MaxLen: 8},
 }
 
 // MediaType specifies the content format of a message.
