@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"strings"
 
 	"github.com/plgd-dev/go-coap/v3/message"
 	"github.com/plgd-dev/go-coap/v3/message/codes"
@@ -617,12 +616,12 @@ func (r *Message) Clone(msg *Message) error {
 	}
 	_, err = io.Copy(buf, r.Body())
 	if err != nil {
-		errStr := []string{err.Error()}
+		errs := []error{err}
 		_, errS := r.Body().Seek(n, io.SeekStart)
 		if errS != nil {
-			errStr = append(errStr, errS.Error())
+			errs = append(errs, errS)
 		}
-		return fmt.Errorf("%d errors occurred:\n\t%s", len(errStr), strings.Join(errStr, "\n\t"))
+		return errors.Join(errs...)
 	}
 	_, err = r.Body().Seek(n, io.SeekStart)
 	if err != nil {
