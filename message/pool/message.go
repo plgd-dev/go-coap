@@ -6,8 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strings"
 
-	multierror "github.com/hashicorp/go-multierror"
 	"github.com/plgd-dev/go-coap/v3/message"
 	"github.com/plgd-dev/go-coap/v3/message/codes"
 	"github.com/plgd-dev/go-coap/v3/net"
@@ -617,13 +617,12 @@ func (r *Message) Clone(msg *Message) error {
 	}
 	_, err = io.Copy(buf, r.Body())
 	if err != nil {
-		var errs *multierror.Error
-		errs = multierror.Append(errs, err)
+		errStr := []string{err.Error()}
 		_, errS := r.Body().Seek(n, io.SeekStart)
 		if errS != nil {
-			errs = multierror.Append(errs, errS)
+			errStr = append(errStr, errS.Error())
 		}
-		return errs.ErrorOrNil()
+		return fmt.Errorf("%d errors occurred:\n\t%s", len(errStr), strings.Join(errStr, "\n\t"))
 	}
 	_, err = r.Body().Seek(n, io.SeekStart)
 	if err != nil {
