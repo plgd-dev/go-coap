@@ -3,7 +3,6 @@ package message
 import (
 	"encoding/binary"
 	"errors"
-	"fmt"
 	"strconv"
 )
 
@@ -113,7 +112,7 @@ func ToOptionID(v string) (OptionID, error) {
 			return key, nil
 		}
 	}
-	return 0, fmt.Errorf("not found")
+	return 0, errors.New("not found")
 }
 
 // Option value format (RFC7252 section 3.2)
@@ -161,7 +160,7 @@ type MediaType uint16
 
 // Content formats.
 var (
-	TextPlain         MediaType         // text/plain;charset=utf-8
+	TextPlain         MediaType         // text/plain; charset=utf-8
 	AppCoseEncrypt0   MediaType = 16    // application/cose; cose-type="cose-encrypt0" (RFC 8152)
 	AppCoseMac0       MediaType = 17    // application/cose; cose-type="cose-mac0" (RFC 8152)
 	AppCoseSign1      MediaType = 18    // application/cose; cose-type="cose-sign1" (RFC 8152)
@@ -191,27 +190,27 @@ var (
 )
 
 var mediaTypeToString = map[MediaType]string{
-	TextPlain:         "text/plain;charset=utf-8",
-	AppCoseEncrypt0:   "application/cose; cose-type=\"cose-encrypt0\" (RFC 8152)",
-	AppCoseMac0:       "application/cose; cose-type=\"cose-mac0\" (RFC 8152)",
-	AppCoseSign1:      "application/cose; cose-type=\"cose-sign1\" (RFC 8152)",
+	TextPlain:         "text/plain; charset=utf-8",
+	AppCoseEncrypt0:   "application/cose; cose-type=\"cose-encrypt0\"",
+	AppCoseMac0:       "application/cose; cose-type=\"cose-mac0\"",
+	AppCoseSign1:      "application/cose; cose-type=\"cose-sign1\"",
 	AppLinkFormat:     "application/link-format",
 	AppXML:            "application/xml",
 	AppOctets:         "application/octet-stream",
 	AppExi:            "application/exi",
 	AppJSON:           "application/json",
-	AppJSONPatch:      "application/json-patch+json (RFC6902)",
-	AppJSONMergePatch: "application/merge-patch+json (RFC7396)",
-	AppCBOR:           "application/cbor (RFC 7049)",
+	AppJSONPatch:      "application/json-patch+json",
+	AppJSONMergePatch: "application/merge-patch+json",
+	AppCBOR:           "application/cbor",
 	AppCWT:            "application/cwt",
-	AppCoseEncrypt:    "application/cose; cose-type=\"cose-encrypt\" (RFC 8152)",
-	AppCoseMac:        "application/cose; cose-type=\"cose-mac\" (RFC 8152)",
-	AppCoseSign:       "application/cose; cose-type=\"cose-sign\" (RFC 8152)",
-	AppCoseKey:        "application/cose-key (RFC 8152)",
-	AppCoseKeySet:     "application/cose-key-set (RFC 8152)",
+	AppCoseEncrypt:    "application/cose; cose-type=\"cose-encrypt\"",
+	AppCoseMac:        "application/cose; cose-type=\"cose-mac\"",
+	AppCoseSign:       "application/cose; cose-type=\"cose-sign\"",
+	AppCoseKey:        "application/cose-key",
+	AppCoseKeySet:     "application/cose-key-set",
 	AppSenmlJSON:      "application/senml+json",
 	AppSenmlCbor:      "application/senml+cbor",
-	AppCoapGroup:      "coap-group+json (RFC 7390)",
+	AppCoapGroup:      "coap-group+json",
 	AppSenmlEtchJSON:  "application/senml-etch+json",
 	AppSenmlEtchCbor:  "application/senml-etch+cbor",
 	AppOcfCbor:        "application/vnd.ocf+cbor",
@@ -234,7 +233,7 @@ func ToMediaType(v string) (MediaType, error) {
 			return key, nil
 		}
 	}
-	return 0, fmt.Errorf("not found")
+	return 0, errors.New("not found")
 }
 
 func extendOpt(opt int) (int, int) {

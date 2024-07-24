@@ -16,7 +16,7 @@ func loggingMiddleware(next mux.Handler) mux.Handler {
 
 func Example_authenticationMiddleware() {
 	r := mux.NewRouter()
-	r.HandleFunc("/", func(w mux.ResponseWriter, r *mux.Message) {
+	r.HandleFunc("/", func(mux.ResponseWriter, *mux.Message) {
 		// Do something here
 	})
 	r.Use(loggingMiddleware)

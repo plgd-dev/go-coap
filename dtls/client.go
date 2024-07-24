@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/pion/dtls/v2"
+	dtlsnet "github.com/pion/dtls/v2/pkg/net"
 	"github.com/plgd-dev/go-coap/v3/dtls/server"
 	"github.com/plgd-dev/go-coap/v3/message"
 	"github.com/plgd-dev/go-coap/v3/message/codes"
@@ -43,7 +44,7 @@ func Dial(target string, dtlsCfg *dtls.Config, opts ...udp.Option) (*udpClient.C
 		return nil, err
 	}
 
-	conn, err := dtls.Client(c, dtlsCfg)
+	conn, err := dtls.Client(dtlsnet.PacketConnFromConn(c), c.RemoteAddr(), dtlsCfg)
 	if err != nil {
 		return nil, err
 	}
@@ -79,7 +80,7 @@ func Client(conn *dtls.Conn, opts ...udp.Option) *udpClient.Conn {
 		errorsFunc(fmt.Errorf("dtls: %v: %w", conn.RemoteAddr(), err))
 	}
 
-	createBlockWise := func(cc *udpClient.Conn) *blockwise.BlockWise[*udpClient.Conn] {
+	createBlockWise := func(*udpClient.Conn) *blockwise.BlockWise[*udpClient.Conn] {
 		return nil
 	}
 	if cfg.BlockwiseEnable {
@@ -104,10 +105,11 @@ func Client(conn *dtls.Conn, opts ...udp.Option) *udpClient.Conn {
 		cfg.MTU,
 		cfg.CloseSocket,
 	)
-	cc := udpClient.NewConn(session,
-		createBlockWise,
-		monitor,
+	cc := udpClient.NewConnWithOpts(session,
 		&cfg,
+		udpClient.WithBlockWise(createBlockWise),
+		udpClient.WithInactivityMonitor(monitor),
+		udpClient.WithRequestMonitor(cfg.RequestMonitor),
 	)
 
 	cfg.PeriodicRunner(func(now time.Time) bool {

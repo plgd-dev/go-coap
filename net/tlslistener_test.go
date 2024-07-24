@@ -31,13 +31,13 @@ func SetTLSConfig(t *testing.T) *tls.Config {
 		ClientCAs:    caRootPool,
 		RootCAs:      caRootPool,
 
-		GetConfigForClient: func(info *tls.ClientHelloInfo) (*tls.Config, error) {
+		GetConfigForClient: func(*tls.ClientHelloInfo) (*tls.Config, error) {
 			// https://github.com/golang/go/issues/29895
 			m := tls.Config{
 				Certificates: []tls.Certificate{cert},
 				ClientAuth:   tls.RequireAnyClientCert,
 			}
-			m.VerifyPeerCertificate = func(rawCerts [][]byte, verifiedChains [][]*x509.Certificate) error {
+			m.VerifyPeerCertificate = func([][]byte, [][]*x509.Certificate) error {
 				return nil
 			}
 			return &m, nil
@@ -75,10 +75,10 @@ func TestTLSListenerAcceptWithContext(t *testing.T) {
 	}
 
 	dir, err := os.MkdirTemp("", "gotesttmp")
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	defer func() {
 		errR := os.RemoveAll(dir)
-		assert.NoError(t, errR)
+		require.NoError(t, errR)
 	}()
 	config := SetTLSConfig(t)
 
@@ -86,7 +86,7 @@ func TestTLSListenerAcceptWithContext(t *testing.T) {
 	require.NoError(t, err)
 	defer func() {
 		err := listener.Close()
-		assert.NoError(t, err)
+		require.NoError(t, err)
 	}()
 
 	var wg sync.WaitGroup
@@ -97,7 +97,7 @@ func TestTLSListenerAcceptWithContext(t *testing.T) {
 		for i := 0; i < len(tests); i++ {
 			time.Sleep(time.Millisecond * 200)
 			cert, err := tls.X509KeyPair(CertPEMBlock, KeyPEMBlock)
-			require.NoError(t, err)
+			assert.NoError(t, err)
 
 			c, err := tls.DialWithDialer(&net.Dialer{
 				Timeout: time.Millisecond * 400,
@@ -120,14 +120,14 @@ func TestTLSListenerAcceptWithContext(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			con, err := listener.AcceptWithContext(tt.args.ctx)
 			if tt.wantErr {
-				assert.Error(t, err)
+				require.Error(t, err)
 			} else {
 				require.NoError(t, err)
 				b := make([]byte, 1024)
 				_, err = con.Read(b)
-				assert.NoError(t, err)
+				require.NoError(t, err)
 				err = con.Close()
-				assert.NoError(t, err)
+				require.NoError(t, err)
 			}
 		})
 	}
@@ -161,10 +161,10 @@ func TestTLSListenerCheckForInfinitLoop(t *testing.T) {
 	}
 
 	dir, err := os.MkdirTemp("", "gotesttmp")
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	defer func() {
 		errR := os.RemoveAll(dir)
-		assert.NoError(t, errR)
+		require.NoError(t, errR)
 	}()
 	config := SetTLSConfig(t)
 
@@ -172,7 +172,7 @@ func TestTLSListenerCheckForInfinitLoop(t *testing.T) {
 	require.NoError(t, err)
 	defer func() {
 		err := listener.Close()
-		assert.NoError(t, err)
+		require.NoError(t, err)
 	}()
 
 	var wg sync.WaitGroup
@@ -183,7 +183,7 @@ func TestTLSListenerCheckForInfinitLoop(t *testing.T) {
 		for i := 0; i < len(tests); i++ {
 			time.Sleep(time.Millisecond * 200)
 			cert, err := tls.X509KeyPair(CertPEMBlock, KeyPEMBlock)
-			require.NoError(t, err)
+			assert.NoError(t, err)
 			func() {
 				conn, err := net.Dial("tcp", listener.Addr().String())
 				if err != nil {
@@ -192,16 +192,16 @@ func TestTLSListenerCheckForInfinitLoop(t *testing.T) {
 				tlsConn := tls.Client(conn, &tls.Config{
 					InsecureSkipVerify: true,
 					Certificates:       []tls.Certificate{cert},
-					VerifyPeerCertificate: func(rawCerts [][]byte, verifiedChains [][]*x509.Certificate) error {
+					VerifyPeerCertificate: func([][]byte, [][]*x509.Certificate) error {
 						errC := conn.Close()
-						require.NoError(t, errC)
+						assert.NoError(t, errC)
 						return nil
 					},
 				})
 				ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond*300)
 				defer cancel()
 				err = tlsConn.HandshakeContext(ctx)
-				require.Error(t, err)
+				assert.Error(t, err)
 			}()
 		}
 	}()
@@ -210,17 +210,17 @@ func TestTLSListenerCheckForInfinitLoop(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			con, err := listener.AcceptWithContext(tt.args.ctx)
 			if tt.wantErr {
-				assert.Error(t, err)
+				require.Error(t, err)
 				return
 			}
 			require.NoError(t, err)
 			b := make([]byte, 1024)
 			c := NewConn(con)
 			_, err = c.ReadWithContext(context.Background(), b)
-			assert.Error(t, err)
+			require.Error(t, err)
 			assert.Contains(t, err.Error(), "EOF")
 			err = con.Close()
-			assert.Error(t, err)
+			require.Error(t, err)
 		})
 	}
 }

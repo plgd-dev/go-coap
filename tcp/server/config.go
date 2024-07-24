@@ -22,7 +22,7 @@ type ErrorFunc = func(error)
 type GoPoolFunc = func(func()) error
 
 // OnNewConnFunc is the callback for new connections.
-type OnNewConnFunc = func(cc *client.Conn)
+type OnNewConnFunc = func(*client.Conn)
 
 var DefaultConfig = func() Config {
 	opts := Config{
@@ -38,12 +38,15 @@ var DefaultConfig = func() Config {
 			})
 			return inactivity.New(timeout/time.Duration(maxRetries+1), keepalive.OnInactive)
 		},
-		OnNewConn: func(cc *client.Conn) {
+		OnNewConn: func(*client.Conn) {
 			// do nothing by default
+		},
+		RequestMonitor: func(*client.Conn, *pool.Message) (bool, error) {
+			return false, nil
 		},
 		ConnectionCacheSize: 2 * 1024,
 	}
-	opts.Handler = func(w *responsewriter.ResponseWriter[*client.Conn], r *pool.Message) {
+	opts.Handler = func(w *responsewriter.ResponseWriter[*client.Conn], _ *pool.Message) {
 		if err := w.SetResponse(codes.NotFound, message.TextPlain, nil); err != nil {
 			opts.Errors(fmt.Errorf("server handler: cannot set response: %w", err))
 		}
@@ -56,6 +59,7 @@ type Config struct {
 	CreateInactivityMonitor         client.CreateInactivityMonitorFunc
 	Handler                         HandlerFunc
 	OnNewConn                       OnNewConnFunc
+	RequestMonitor                  client.RequestMonitorFunc
 	ConnectionCacheSize             uint16
 	DisablePeerTCPSignalMessageCSMs bool
 	DisableTCPSignalMessageCSM      bool

@@ -11,12 +11,12 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
-      - name: Set up Go 1.18+
-        uses: actions/setup-go@v4
+      - name: Set up Go 1.20+
+        uses: actions/setup-go@v5
         with:
-          go-version: "^1.18" # The Go version to download (if necessary) and use.
+          go-version: "^1.20" # The Go version to download (if necessary) and use.
           check-latest: true
 
       - run: go version
@@ -29,16 +29,3 @@ jobs:
           export PATH=${PATH}:`go env GOPATH`/bin
           go install github.com/fzipp/gocyclo/cmd/gocyclo@latest
           gocyclo -over 15 -ignore ".pb(.gw)?.go$|_test.go$|wsproxy" . || echo "gocyclo detected too complex functions"
-
-      # Disable aligncheck until it is compatible with golang v1.18
-      # - name: Install and run aligncheck
-      #   run: |
-      #     go get -u gitlab.com/opennota/check/cmd/aligncheck@latest
-      #     aligncheck ./...
-
-      # Disable structslop until it is compatible with golang v1.18
-      # - name: Install and run structslop
-      #   run: |
-      #     export PATH=${PATH}:`go env GOPATH`/bin
-      #     go install github.com/orijtech/structslop/cmd/structslop@latest
-      #     structslop ./...

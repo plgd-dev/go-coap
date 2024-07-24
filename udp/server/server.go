@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"sync"
@@ -117,7 +118,7 @@ func (s *Server) closeConnection(cc *client.Conn) {
 
 func (s *Server) Serve(l *coapNet.UDPConn) error {
 	if s.cfg.BlockwiseSZX > blockwise.SZX1024 {
-		return fmt.Errorf("invalid blockwiseSZX")
+		return errors.New("invalid blockwiseSZX")
 	}
 
 	err := s.checkAndSetListener(l)
@@ -145,7 +146,9 @@ func (s *Server) Serve(l *coapNet.UDPConn) error {
 
 	for {
 		buf := m
-		n, raddr, err := l.ReadWithContext(s.ctx, buf)
+		var raddr *net.UDPAddr
+		var cm *coapNet.ControlMessage
+		n, err := l.ReadWithOptions(buf, coapNet.WithContext(s.ctx), coapNet.WithGetControlMessage(&cm), coapNet.WithGetRemoteAddr(&raddr))
 		if err != nil {
 			wg.Wait()
 
@@ -165,7 +168,7 @@ func (s *Server) Serve(l *coapNet.UDPConn) error {
 			s.cfg.Errors(fmt.Errorf("%v: cannot get client connection: %w", raddr, err))
 			continue
 		}
-		err = cc.Process(buf)
+		err = cc.Process(cm, buf)
 		if err != nil {
 			s.closeConnection(cc)
 			s.cfg.Errors(fmt.Errorf("%v: cannot process packet: %w", cc.RemoteAddr(), err))
@@ -265,7 +268,7 @@ func (s *Server) getOrCreateConn(udpConn *coapNet.UDPConn, raddr *net.UDPAddr) (
 		return cc, false
 	}
 
-	createBlockWise := func(cc *client.Conn) *blockwise.BlockWise[*client.Conn] {
+	createBlockWise := func(*client.Conn) *blockwise.BlockWise[*client.Conn] {
 		return nil
 	}
 	if s.cfg.BlockwiseEnable {
@@ -321,11 +324,13 @@ func (s *Server) getOrCreateConn(udpConn *coapNet.UDPConn, raddr *net.UDPAddr) (
 	cfg.ProcessReceivedMessage = s.cfg.ProcessReceivedMessage
 	cfg.ReceivedMessageQueueSize = s.cfg.ReceivedMessageQueueSize
 
-	cc = client.NewConn(
+	requestMonitor := s.cfg.RequestMonitor
+	cc = client.NewConnWithOpts(
 		session,
-		createBlockWise,
-		monitor,
 		&cfg,
+		client.WithInactivityMonitor(monitor),
+		client.WithRequestMonitor(requestMonitor),
+		client.WithBlockWise(createBlockWise),
 	)
 	cc.SetContextValue(closeKey, func() {
 		if err := session.Close(); err != nil {
@@ -368,7 +373,7 @@ func (s *Server) getConn(l *coapNet.UDPConn, raddr *net.UDPAddr, firstTime bool)
 		if firstTime {
 			return s.getConn(l, raddr, false)
 		}
-		return nil, fmt.Errorf("connection is closed")
+		return nil, errors.New("connection is closed")
 	}
 	return cc, nil
 }
@@ -377,7 +382,7 @@ func (s *Server) NewConn(addr *net.UDPAddr) (*client.Conn, error) {
 	l := s.getListener()
 	if l == nil {
 		// server is not started/stopped
-		return nil, fmt.Errorf("server is not running")
+		return nil, errors.New("server is not running")
 	}
 	return s.getConn(l, addr, true)
 }

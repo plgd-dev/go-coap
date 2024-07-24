@@ -13,6 +13,7 @@ import (
 	"github.com/plgd-dev/go-coap/v3/message"
 	"github.com/plgd-dev/go-coap/v3/message/codes"
 	"github.com/plgd-dev/go-coap/v3/message/pool"
+	"github.com/plgd-dev/go-coap/v3/mux"
 	coapNet "github.com/plgd-dev/go-coap/v3/net"
 	"github.com/plgd-dev/go-coap/v3/net/responsewriter"
 	"github.com/plgd-dev/go-coap/v3/options"
@@ -21,6 +22,7 @@ import (
 	"github.com/plgd-dev/go-coap/v3/udp"
 	"github.com/plgd-dev/go-coap/v3/udp/client"
 	"github.com/plgd-dev/go-coap/v3/udp/server"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/atomic"
 	"golang.org/x/sync/semaphore"
@@ -69,7 +71,7 @@ func TestServerDiscoverIotivity(t *testing.T) {
 	go func() {
 		defer wg.Done()
 		errS := sd.Serve(ld)
-		require.NoError(t, errS)
+		assert.NoError(t, errS)
 	}()
 
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
@@ -91,7 +93,7 @@ func TestServerDiscover(t *testing.T) {
 	log.Printf("ifs:%v", ifs)
 	var iface net.Interface
 	for _, i := range ifs {
-		if i.Flags&net.FlagMulticast == net.FlagMulticast && i.Flags&net.FlagUp == net.FlagUp {
+		if i.Flags&net.FlagMulticast == net.FlagMulticast && i.Flags&net.FlagUp == net.FlagUp && isRunningInterface(i) {
 			iface = i
 			log.Printf("first available multicast if:%v", iface)
 			break
@@ -157,7 +159,7 @@ func TestServerDiscover(t *testing.T) {
 	var wg sync.WaitGroup
 	defer wg.Wait()
 
-	s := udp.NewServer(options.WithHandlerFunc(func(w *responsewriter.ResponseWriter[*client.Conn], r *pool.Message) {
+	s := udp.NewServer(options.WithHandlerFunc(func(w *responsewriter.ResponseWriter[*client.Conn], _ *pool.Message) {
 		errS := w.SetResponse(codes.BadRequest, message.TextPlain, bytes.NewReader(make([]byte, 5330)))
 		require.NoError(t, errS)
 		require.NotNil(t, w.Conn())
@@ -168,7 +170,7 @@ func TestServerDiscover(t *testing.T) {
 	go func() {
 		defer wg.Done()
 		errS := s.Serve(l)
-		require.NoError(t, errS)
+		assert.NoError(t, errS)
 	}()
 
 	ld, err := coapNet.NewListenUDP("udp4", "")
@@ -185,7 +187,7 @@ func TestServerDiscover(t *testing.T) {
 	go func() {
 		defer wg.Done()
 		errS := sd.Serve(ld)
-		require.NoError(t, errS)
+		assert.NoError(t, errS)
 	}()
 
 	for _, tt := range tests {
@@ -196,7 +198,7 @@ func TestServerDiscover(t *testing.T) {
 			err = sd.Discover(ctx, multicastAddr, path, recv.process, tt.args.opts...)
 			require.NoError(t, err)
 			got := recv.pop()
-			require.Greater(t, len(got), 0)
+			require.NotEmpty(t, got)
 			require.Equal(t, codes.BadRequest, got[0].Code())
 		})
 	}
@@ -232,7 +234,7 @@ func TestServerCleanUpConns(t *testing.T) {
 	go func() {
 		defer wg.Done()
 		errS := sd.Serve(ld)
-		require.NoError(t, errS)
+		assert.NoError(t, errS)
 	}()
 
 	cc, err := udp.Dial(ld.LocalAddr().String())
@@ -293,7 +295,7 @@ func TestServerInactiveMonitor(t *testing.T) {
 	go func() {
 		defer serverWg.Done()
 		errS := sd.Serve(ld)
-		require.NoError(t, errS)
+		assert.NoError(t, errS)
 	}()
 
 	cc, err := udp.Dial(
@@ -365,7 +367,7 @@ func TestServerKeepAliveMonitor(t *testing.T) {
 	go func() {
 		defer serverWg.Done()
 		errS := sd.Serve(ld)
-		require.NoError(t, errS)
+		assert.NoError(t, errS)
 	}()
 
 	cc, err := udp.Dial(
@@ -401,7 +403,7 @@ func TestServerNewClient(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			errS := s.Serve(l)
-			require.NoError(t, errS)
+			assert.NoError(t, errS)
 		}()
 		return s, func() {
 			s.Stop()
@@ -478,7 +480,7 @@ func TestCheckForLossOrder(t *testing.T) {
 	go func() {
 		defer wg.Done()
 		errS := sd.Serve(ld)
-		require.NoError(t, errS)
+		assert.NoError(t, errS)
 	}()
 	defer func() {
 		sd.Stop()
@@ -533,7 +535,7 @@ func TestServerReconnectNewClient(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			errS := s.Serve(l)
-			require.NoError(t, errS)
+			assert.NoError(t, errS)
 		}()
 		return s, func() {
 			s.Stop()
@@ -601,5 +603,79 @@ func TestServerReconnectNewClient(t *testing.T) {
 	require.NoError(t, err)
 	for i := 0; i < 100; i++ {
 		require.False(t, checkMessageID[cc.GetMessageID()])
+	}
+}
+
+func TestMuxPath(t *testing.T) {
+	r := mux.NewRouter()
+	err := r.Handle("/", mux.HandlerFunc(handleA))
+	require.NoError(t, err)
+	err = r.Handle("/a", mux.HandlerFunc(handleA))
+	require.NoError(t, err)
+
+	l, err := coapNet.NewListenUDP("udp", ":5688")
+	require.NoError(t, err)
+	defer func() {
+		errC := l.Close()
+		require.NoError(t, errC)
+	}()
+	s := udp.NewServer(options.WithMux(r))
+	go func() {
+		errL := s.Serve(l)
+		assert.NoError(t, errL)
+	}()
+
+	type args struct {
+		path string
+	}
+	tests := []struct {
+		name     string
+		args     args
+		wantCode codes.Code
+	}{
+		{
+			name:     "empty path",
+			args:     args{path: ""},
+			wantCode: codes.Content,
+		},
+		{
+			name:     "root path",
+			args:     args{path: "/"},
+			wantCode: codes.Content,
+		},
+		{
+			name:     "a path",
+			args:     args{path: "/a"},
+			wantCode: codes.Content,
+		},
+		{
+			name:     "not found path",
+			args:     args{path: "/b"},
+			wantCode: codes.NotFound,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			testPath(t, tt.args.path, tt.wantCode)
+		})
+	}
+}
+
+func testPath(t *testing.T, path string, expCode codes.Code) {
+	co, err := udp.Dial("localhost:5688")
+	require.NoError(t, err)
+	defer func() {
+		errC := co.Close()
+		require.NoError(t, errC)
+	}()
+	resp, err := co.Get(context.Background(), path)
+	require.NoError(t, err)
+	require.Equal(t, expCode, resp.Code())
+}
+
+func handleA(w mux.ResponseWriter, _ *mux.Message) {
+	err := w.SetResponse(codes.Content, message.TextPlain, bytes.NewReader([]byte("hello world")))
+	if err != nil {
+		log.Printf("cannot set response: %v", err)
 	}
 }

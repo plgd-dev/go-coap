@@ -16,6 +16,7 @@ import (
 	"github.com/plgd-dev/go-coap/v3/net/blockwise"
 	"github.com/plgd-dev/go-coap/v3/net/client"
 	limitparallelrequests "github.com/plgd-dev/go-coap/v3/net/client/limitParallelRequests"
+	"github.com/plgd-dev/go-coap/v3/net/monitor/inactivity"
 	"github.com/plgd-dev/go-coap/v3/net/observation"
 	"github.com/plgd-dev/go-coap/v3/net/responsewriter"
 	"github.com/plgd-dev/go-coap/v3/options/config"
@@ -37,6 +38,7 @@ type (
 	EventFunc                   = func()
 	GetMIDFunc                  = func() int32
 	CreateInactivityMonitorFunc = func() InactivityMonitor
+	RequestMonitorFunc          = func(cc *Conn, req *pool.Message) (drop bool, err error)
 )
 
 type InactivityMonitor interface {
@@ -133,6 +135,7 @@ type Conn struct {
 	session Session
 	*client.Client[*Conn]
 	inactivityMonitor InactivityMonitor
+	requestMonitor    RequestMonitorFunc
 
 	blockWise          *blockwise.BlockWise[*Conn]
 	observationHandler *observation.Handler[*Conn]
@@ -184,13 +187,39 @@ func (cc *Conn) Transmission() *Transmission {
 	return cc.transmission
 }
 
-// NewConn creates connection over session and observation.
-func NewConn(
-	session Session,
-	createBlockWise func(cc *Conn) *blockwise.BlockWise[*Conn],
-	inactivityMonitor InactivityMonitor,
-	cfg *Config,
-) *Conn {
+type ConnOptions struct {
+	createBlockWise   func(cc *Conn) *blockwise.BlockWise[*Conn]
+	inactivityMonitor InactivityMonitor
+	requestMonitor    RequestMonitorFunc
+}
+
+type Option = func(opts *ConnOptions)
+
+// WithBlockWise enables block-wise transfer for the connection.
+func WithBlockWise(createBlockWise func(cc *Conn) *blockwise.BlockWise[*Conn]) Option {
+	return func(opts *ConnOptions) {
+		opts.createBlockWise = createBlockWise
+	}
+}
+
+// WithInactivityMonitor enables inactivity monitor for the connection.
+func WithInactivityMonitor(inactivityMonitor InactivityMonitor) Option {
+	return func(opts *ConnOptions) {
+		opts.inactivityMonitor = inactivityMonitor
+	}
+}
+
+// WithRequestMonitor enables request monitoring for the connection.
+// It is called for each CoAP message received from the peer before it is processed.
+// If it returns an error, the connection is closed.
+// If it returns true, the message is dropped.
+func WithRequestMonitor(requestMonitor RequestMonitorFunc) Option {
+	return func(opts *ConnOptions) {
+		opts.requestMonitor = requestMonitor
+	}
+}
+
+func NewConnWithOpts(session Session, cfg *Config, opts ...Option) *Conn {
 	if cfg.Errors == nil {
 		cfg.Errors = func(error) {
 			// default no-op
@@ -206,6 +235,18 @@ func NewConn(
 		cfg.ReceivedMessageQueueSize = 0
 	}
 
+	cfgOpts := ConnOptions{
+		createBlockWise: func(*Conn) *blockwise.BlockWise[*Conn] {
+			return nil
+		},
+		inactivityMonitor: inactivity.NewNilMonitor[*Conn](),
+		requestMonitor: func(*Conn, *pool.Message) (bool, error) {
+			return false, nil
+		},
+	}
+	for _, o := range opts {
+		o(&cfgOpts)
+	}
 	cc := Conn{
 		session: session,
 		transmission: &Transmission{
@@ -221,12 +262,13 @@ func NewConn(
 		errors:                    cfg.Errors,
 		msgIDMutex:                NewMutexMap(),
 		responseMsgCache:          cache.NewCache[string, []byte](),
-		inactivityMonitor:         inactivityMonitor,
+		inactivityMonitor:         cfgOpts.inactivityMonitor,
+		requestMonitor:            cfgOpts.requestMonitor,
 		messagePool:               cfg.MessagePool,
 		numOutstandingInteraction: semaphore.NewWeighted(math.MaxInt64),
 	}
 	cc.msgID.Store(uint32(cfg.GetMID() - 0xffff/2))
-	cc.blockWise = createBlockWise(&cc)
+	cc.blockWise = cfgOpts.createBlockWise(&cc)
 	limitParallelRequests := limitparallelrequests.New(cfg.LimitClientParallelRequests, cfg.LimitClientEndpointParallelRequests, cc.do, cc.doObserve)
 	cc.observationHandler = observation.NewHandler(&cc, cfg.Handler, limitParallelRequests.Do)
 	cc.Client = client.New(&cc, cc.observationHandler, cfg.GetToken, limitParallelRequests)
@@ -235,6 +277,16 @@ func NewConn(
 	}
 	cc.receivedMessageReader = client.NewReceivedMessageReader(&cc, cfg.ReceivedMessageQueueSize)
 	return &cc
+}
+
+// NewConn creates connection over session and observation.
+func NewConn(
+	session Session,
+	createBlockWise func(cc *Conn) *blockwise.BlockWise[*Conn],
+	inactivityMonitor InactivityMonitor,
+	cfg *Config,
+) *Conn {
+	return NewConnWithOpts(session, cfg, WithBlockWise(createBlockWise), WithInactivityMonitor(inactivityMonitor))
 }
 
 func processReceivedMessage(req *pool.Message, cc *Conn, handler config.HandlerFunc[*Conn]) {
@@ -271,11 +323,11 @@ func (cc *Conn) Close() error {
 func (cc *Conn) doInternal(req *pool.Message) (*pool.Message, error) {
 	token := req.Token()
 	if token == nil {
-		return nil, fmt.Errorf("invalid token")
+		return nil, errors.New("invalid token")
 	}
 
 	respChan := make(chan *pool.Message, 1)
-	if _, loaded := cc.tokenHandlerContainer.LoadOrStore(token.Hash(), func(w *responsewriter.ResponseWriter[*Conn], r *pool.Message) {
+	if _, loaded := cc.tokenHandlerContainer.LoadOrStore(token.Hash(), func(_ *responsewriter.ResponseWriter[*Conn], r *pool.Message) {
 		r.Hijack()
 		select {
 		case respChan <- r:
@@ -406,7 +458,7 @@ func (cc *Conn) prepareWriteMessage(req *pool.Message, handler HandlerFunc) (fun
 func (cc *Conn) writeMessageAsync(req *pool.Message) error {
 	req.UpsertType(message.Confirmable)
 	req.UpsertMessageID(cc.GetMessageID())
-	closeFn, err := cc.prepareWriteMessage(req, func(w *responsewriter.ResponseWriter[*Conn], r *pool.Message) {
+	closeFn, err := cc.prepareWriteMessage(req, func(*responsewriter.ResponseWriter[*Conn], *pool.Message) {
 		// do nothing
 	})
 	if err != nil {
@@ -426,7 +478,7 @@ func (cc *Conn) writeMessage(req *pool.Message) error {
 		return cc.writeMessageAsync(req)
 	}
 	respChan := make(chan struct{})
-	closeFn, err := cc.prepareWriteMessage(req, func(w *responsewriter.ResponseWriter[*Conn], r *pool.Message) {
+	closeFn, err := cc.prepareWriteMessage(req, func(*responsewriter.ResponseWriter[*Conn], *pool.Message) {
 		close(respChan)
 	})
 	if err != nil {
@@ -470,7 +522,7 @@ func (cc *Conn) AsyncPing(receivedPong func()) (func(), error) {
 	mid := cc.GetMessageID()
 	req.SetMessageID(mid)
 	if _, loaded := cc.midHandlerContainer.LoadOrStore(mid, &midElement{
-		handler: func(w *responsewriter.ResponseWriter[*Conn], r *pool.Message) {
+		handler: func(_ *responsewriter.ResponseWriter[*Conn], r *pool.Message) {
 			if r.Type() == message.Reset || r.Type() == message.Acknowledgement {
 				receivedPong()
 			}
@@ -716,6 +768,7 @@ func (cc *Conn) ProcessReceivedMessageWithHandler(req *pool.Message, handler con
 	}()
 	resp := cc.AcquireMessage(cc.Context())
 	resp.SetToken(req.Token())
+	ifIndex := req.ControlMessage().GetIfIndex()
 	w := responsewriter.New(resp, cc, req.Options()...)
 	defer func() {
 		cc.ReleaseMessage(w.Message())
@@ -730,6 +783,7 @@ func (cc *Conn) ProcessReceivedMessageWithHandler(req *pool.Message, handler con
 		// nothing to send
 		return
 	}
+	upsertInterfaceToMessage(w.Message(), ifIndex)
 	errW := cc.writeMessageAsync(w.Message())
 	if errW != nil {
 		cc.closeConnection()
@@ -741,17 +795,28 @@ func (cc *Conn) handlePong(w *responsewriter.ResponseWriter[*Conn], r *pool.Mess
 	cc.sendPong(w, r)
 }
 
+func upsertInterfaceToMessage(m *pool.Message, ifIndex int) {
+	if ifIndex >= 1 {
+		cm := coapNet.ControlMessage{
+			IfIndex: ifIndex,
+		}
+		m.UpsertControlMessage(&cm)
+	}
+}
+
 func (cc *Conn) handleSpecialMessages(r *pool.Message) bool {
 	// ping request
-	if r.Code() == codes.Empty && r.Type() == message.Confirmable && len(r.Token()) == 0 && len(r.Options()) == 0 && r.Body() == nil {
+	if r.IsPing(false) {
 		cc.ProcessReceivedMessageWithHandler(r, cc.handlePong)
 		return true
 	}
+
 	// if waits for concrete message handler
 	if elem, ok := cc.midHandlerContainer.LoadAndDelete(r.MessageID()); ok {
 		elem.ReleaseMessage(cc)
 		resp := cc.AcquireMessage(cc.Context())
 		resp.SetToken(r.Token())
+		upsertInterfaceToMessage(resp, r.ControlMessage().GetIfIndex())
 		w := responsewriter.New(resp, cc, r.Options()...)
 		defer func() {
 			cc.ReleaseMessage(w.Message())
@@ -769,7 +834,7 @@ func (cc *Conn) handleSpecialMessages(r *pool.Message) bool {
 	return false
 }
 
-func (cc *Conn) Process(datagram []byte) error {
+func (cc *Conn) Process(cm *coapNet.ControlMessage, datagram []byte) error {
 	if uint32(len(datagram)) > cc.session.MaxMessageSize() {
 		return fmt.Errorf("max message size(%v) was exceeded %v", cc.session.MaxMessageSize(), len(datagram))
 	}
@@ -779,8 +844,18 @@ func (cc *Conn) Process(datagram []byte) error {
 		cc.ReleaseMessage(req)
 		return err
 	}
+	req.SetControlMessage(cm)
 	req.SetSequence(cc.Sequence())
 	cc.checkMyMessageID(req)
+	drop, err := cc.requestMonitor(cc, req)
+	if err != nil {
+		cc.ReleaseMessage(req)
+		return fmt.Errorf("request monitor: %w", err)
+	}
+	if drop {
+		cc.ReleaseMessage(req)
+		return nil
+	}
 	cc.inactivityMonitor.Notify()
 	if cc.handleSpecialMessages(req) {
 		return nil
@@ -867,7 +942,7 @@ func (cc *Conn) ReleaseMessage(m *pool.Message) {
 // Via opts you can specify the network interface, source IP address, and hop limit.
 func (cc *Conn) WriteMulticastMessage(req *pool.Message, address *net.UDPAddr, options ...coapNet.MulticastOption) error {
 	if req.Type() == message.Confirmable {
-		return fmt.Errorf("multicast messages cannot be confirmable")
+		return errors.New("multicast messages cannot be confirmable")
 	}
 	req.UpsertMessageID(cc.GetMessageID())
 

@@ -68,7 +68,7 @@ func Client(conn *net.UDPConn, opts ...Option) *client.Conn {
 		errorsFunc(fmt.Errorf("udp: %v: %w", conn.RemoteAddr(), err))
 	}
 	addr, _ := conn.RemoteAddr().(*net.UDPAddr)
-	createBlockWise := func(cc *client.Conn) *blockwise.BlockWise[*client.Conn] {
+	createBlockWise := func(*client.Conn) *blockwise.BlockWise[*client.Conn] {
 		return nil
 	}
 	if cfg.BlockwiseEnable {
@@ -95,10 +95,10 @@ func Client(conn *net.UDPConn, opts ...Option) *client.Conn {
 		cfg.MTU,
 		cfg.CloseSocket,
 	)
-	cc := client.NewConn(session,
-		createBlockWise,
-		monitor,
-		&cfg,
+	cc := client.NewConnWithOpts(session, &cfg,
+		client.WithBlockWise(createBlockWise),
+		client.WithInactivityMonitor(monitor),
+		client.WithRequestMonitor(cfg.RequestMonitor),
 	)
 	cfg.PeriodicRunner(func(now time.Time) bool {
 		cc.CheckExpirations(now)

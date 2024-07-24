@@ -25,6 +25,7 @@ import (
 	"github.com/plgd-dev/go-coap/v3/pkg/runner/periodic"
 	"github.com/plgd-dev/go-coap/v3/udp/client"
 	"github.com/plgd-dev/go-coap/v3/udp/coder"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/atomic"
 	"golang.org/x/sync/semaphore"
@@ -67,7 +68,7 @@ func TestServerCleanUpConns(t *testing.T) {
 	go func() {
 		defer wg.Done()
 		errS := sd.Serve(ld)
-		require.NoError(t, errS)
+		assert.NoError(t, errS)
 	}()
 
 	cc, err := dtls.Dial(ld.Addr().String(), dtlsCfg)
@@ -174,7 +175,7 @@ func TestServerSetContextValueWithPKI(t *testing.T) {
 	defer sd.Stop()
 	go func() {
 		errS := sd.Serve(ld)
-		require.NoError(t, errS)
+		assert.NoError(t, errS)
 	}()
 
 	cc, err := dtls.Dial(ld.Addr().String(), clientCgf)
@@ -233,7 +234,7 @@ func TestServerInactiveMonitor(t *testing.T) {
 	go func() {
 		defer serverWg.Done()
 		errS := sd.Serve(ld)
-		require.NoError(t, errS)
+		assert.NoError(t, errS)
 	}()
 
 	cc, err := dtls.Dial(ld.Addr().String(), clientCgf)
@@ -243,12 +244,12 @@ func TestServerInactiveMonitor(t *testing.T) {
 	})
 
 	// send ping to create serverside connection
-	ctx, cancel = context.WithTimeout(ctx, time.Second)
+	ctxPing, cancel := context.WithTimeout(ctx, time.Second)
 	defer cancel()
-	err = cc.Ping(ctx)
+	err = cc.Ping(ctxPing)
 	require.NoError(t, err)
 
-	err = cc.Ping(ctx)
+	err = cc.Ping(ctxPing)
 	require.NoError(t, err)
 
 	time.Sleep(time.Second * 2)
@@ -305,10 +306,10 @@ func TestServerKeepAliveMonitor(t *testing.T) {
 	go func() {
 		defer serverWg.Done()
 		errS := sd.Serve(ld)
-		require.NoError(t, errS)
+		assert.NoError(t, errS)
 	}()
 
-	cc, err := piondtls.Dial("udp", ld.Addr().(*net.UDPAddr), clientCgf)
+	cc, err := piondtls.Dial("udp4", &net.UDPAddr{IP: []byte{127, 0, 0, 1}, Port: ld.Addr().(*net.UDPAddr).Port}, clientCgf)
 	require.NoError(t, err)
 
 	p := pool.NewMessage(ctx)

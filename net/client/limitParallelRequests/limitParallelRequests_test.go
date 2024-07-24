@@ -2,13 +2,14 @@ package limitparallelrequests
 
 import (
 	"context"
-	"fmt"
+	"errors"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/plgd-dev/go-coap/v3/message/codes"
 	"github.com/plgd-dev/go-coap/v3/message/pool"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/atomic"
 )
@@ -27,12 +28,12 @@ type mockClient struct {
 
 func (c *mockClient) do(*pool.Message) (*pool.Message, error) {
 	c.num.Inc()
-	return nil, fmt.Errorf("not implemented")
+	return nil, errors.New("not implemented")
 }
 
 func (c *mockClient) doObserve(*pool.Message, func(req *pool.Message)) (Observation, error) {
 	c.num.Inc()
-	return nil, fmt.Errorf("not implemented")
+	return nil, errors.New("not implemented")
 }
 
 func TestLimitParallelRequestsDo(t *testing.T) {
@@ -46,9 +47,8 @@ func TestLimitParallelRequestsDo(t *testing.T) {
 		req           []*pool.Message
 	}
 	tests := []struct {
-		name         string
-		args         args
-		expNumReqIds int
+		name string
+		args args
 	}{
 		{
 			name: "limit 1 endpointLimit 1",
@@ -66,7 +66,6 @@ func TestLimitParallelRequestsDo(t *testing.T) {
 					newReq(ctx, t), newReq(ctx, t), newReq(ctx, t),
 				},
 			},
-			expNumReqIds: 24,
 		},
 		{
 			name: "limit n endpointLimit 1",
@@ -84,7 +83,6 @@ func TestLimitParallelRequestsDo(t *testing.T) {
 					newReq(ctx, t), newReq(ctx, t), newReq(ctx, t),
 				},
 			},
-			expNumReqIds: 24,
 		},
 		{
 			name: "limit 1 endpointLimit n",
@@ -102,7 +100,6 @@ func TestLimitParallelRequestsDo(t *testing.T) {
 					newReq(ctx, t), newReq(ctx, t), newReq(ctx, t),
 				},
 			},
-			expNumReqIds: 24,
 		},
 		{
 			name: "limit n endpointLimit n",
@@ -120,7 +117,6 @@ func TestLimitParallelRequestsDo(t *testing.T) {
 					newReq(ctx, t), newReq(ctx, t), newReq(ctx, t),
 				},
 			},
-			expNumReqIds: 24,
 		},
 		{
 			name: "context canceled",
@@ -138,7 +134,6 @@ func TestLimitParallelRequestsDo(t *testing.T) {
 					newReq(ctx, t), newReq(canceledCtx, t), newReq(ctx, t),
 				},
 			},
-			expNumReqIds: 16,
 		},
 	}
 	for _, tt := range tests {
@@ -152,7 +147,7 @@ func TestLimitParallelRequestsDo(t *testing.T) {
 				go func(r *pool.Message) {
 					defer wg.Done()
 					_, err := c.Do(r)
-					require.Error(t, err)
+					assert.Error(t, err)
 				}(req)
 			}
 			wg.Wait()
@@ -173,9 +168,8 @@ func TestLimitParallelRequestsDoObserve(t *testing.T) {
 		req           []*pool.Message
 	}
 	tests := []struct {
-		name         string
-		args         args
-		expNumReqIds int
+		name string
+		args args
 	}{
 		{
 			name: "limit 1 endpointLimit 1",
@@ -193,7 +187,6 @@ func TestLimitParallelRequestsDoObserve(t *testing.T) {
 					newReq(ctx, t), newReq(ctx, t), newReq(ctx, t),
 				},
 			},
-			expNumReqIds: 24,
 		},
 		{
 			name: "limit n endpointLimit 1",
@@ -211,7 +204,6 @@ func TestLimitParallelRequestsDoObserve(t *testing.T) {
 					newReq(ctx, t), newReq(ctx, t), newReq(ctx, t),
 				},
 			},
-			expNumReqIds: 24,
 		},
 		{
 			name: "limit 1 endpointLimit n",
@@ -229,7 +221,6 @@ func TestLimitParallelRequestsDoObserve(t *testing.T) {
 					newReq(ctx, t), newReq(ctx, t), newReq(ctx, t),
 				},
 			},
-			expNumReqIds: 24,
 		},
 		{
 			name: "limit n endpointLimit n",
@@ -247,7 +238,6 @@ func TestLimitParallelRequestsDoObserve(t *testing.T) {
 					newReq(ctx, t), newReq(ctx, t), newReq(ctx, t),
 				},
 			},
-			expNumReqIds: 24,
 		},
 		{
 			name: "context canceled",
@@ -265,7 +255,6 @@ func TestLimitParallelRequestsDoObserve(t *testing.T) {
 					newReq(ctx, t), newReq(canceledCtx, t), newReq(ctx, t),
 				},
 			},
-			expNumReqIds: 16,
 		},
 	}
 	for _, tt := range tests {
@@ -278,10 +267,10 @@ func TestLimitParallelRequestsDoObserve(t *testing.T) {
 				req.SetMessageID(int32(idx))
 				go func(r *pool.Message) {
 					defer wg.Done()
-					_, err := c.DoObserve(r, func(req *pool.Message) {
+					_, err := c.DoObserve(r, func(*pool.Message) {
 						// do nothing
 					})
-					require.Error(t, err)
+					assert.Error(t, err)
 				}(req)
 			}
 			wg.Wait()

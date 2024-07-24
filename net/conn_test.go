@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestConnWriteWithContext(t *testing.T) {
@@ -40,10 +41,10 @@ func TestConnWriteWithContext(t *testing.T) {
 	}
 
 	listener, err := NewTCPListener("tcp", "127.0.0.1:")
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	defer func() {
 		err := listener.Close()
-		assert.NoError(t, err)
+		require.NoError(t, err)
 	}()
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -65,11 +66,11 @@ func TestConnWriteWithContext(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			tcpConn, err := net.Dial("tcp", listener.Addr().String())
-			assert.NoError(t, err)
+			require.NoError(t, err)
 			c := NewConn(tcpConn)
 			defer func() {
 				errC := c.Close()
-				assert.NoError(t, errC)
+				require.NoError(t, errC)
 			}()
 
 			c.LocalAddr()
@@ -77,10 +78,10 @@ func TestConnWriteWithContext(t *testing.T) {
 
 			err = c.WriteWithContext(tt.args.ctx, tt.args.data)
 			if tt.wantErr {
-				assert.Error(t, err)
+				require.Error(t, err)
 				return
 			}
-			assert.NoError(t, err)
+			require.NoError(t, err)
 		})
 	}
 }

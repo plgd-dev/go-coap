@@ -30,7 +30,7 @@ func TestMarshalMessage(t *testing.T) {
 	bufOptions := make([]byte, 1024)
 	bufOptionsUsed := bufOptions
 	options := make(message.Options, 0, 32)
-	enc := 0
+
 	options, enc, err := options.SetPath(bufOptionsUsed, "/a/b/c/d/e")
 	if err != nil {
 		t.Fatalf("Cannot set uri")
@@ -65,7 +65,7 @@ func TestUnmarshalMessage(t *testing.T) {
 func FuzzDecode(f *testing.F) {
 	f.Add([]byte{211, 0, 1, 1, 2, 3, 177, 97, 1, 98, 1, 99, 1, 100, 1, 101, 16, 255, 1})
 
-	f.Fuzz(func(t *testing.T, input_data []byte) {
+	f.Fuzz(func(_ *testing.T, input_data []byte) {
 		msg := message.Message{Options: make(message.Options, 0, 32)}
 		_, _ = DefaultCoder.Decode(input_data, &msg)
 	})

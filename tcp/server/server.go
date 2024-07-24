@@ -82,7 +82,7 @@ func (s *Server) checkAndSetListener(l Listener) error {
 	s.listenMutex.Lock()
 	defer s.listenMutex.Unlock()
 	if s.listen != nil {
-		return fmt.Errorf("server already serves listener")
+		return errors.New("server already serves listener")
 	}
 	s.listen = l
 	return nil
@@ -119,8 +119,9 @@ func (s *Server) checkAcceptError(err error) bool {
 
 func (s *Server) serveConnection(connections *connections.Connections, rw net.Conn) {
 	var cc *client.Conn
-	monitor := s.cfg.CreateInactivityMonitor()
-	cc = s.createConn(coapNet.NewConn(rw), monitor)
+	inactivityMonitor := s.cfg.CreateInactivityMonitor()
+	requestMonitor := s.cfg.RequestMonitor
+	cc = s.createConn(coapNet.NewConn(rw), inactivityMonitor, requestMonitor)
 	if s.cfg.OnNewConn != nil {
 		s.cfg.OnNewConn(cc)
 	}
@@ -134,7 +135,7 @@ func (s *Server) serveConnection(connections *connections.Connections, rw net.Co
 
 func (s *Server) Serve(l Listener) error {
 	if s.cfg.BlockwiseSZX > blockwise.SZXBERT {
-		return fmt.Errorf("invalid blockwiseSZX")
+		return errors.New("invalid blockwiseSZX")
 	}
 
 	err := s.checkAndSetListener(l)
@@ -182,8 +183,8 @@ func (s *Server) Stop() {
 	}
 }
 
-func (s *Server) createConn(connection *coapNet.Conn, monitor client.InactivityMonitor) *client.Conn {
-	createBlockWise := func(cc *client.Conn) *blockwise.BlockWise[*client.Conn] {
+func (s *Server) createConn(connection *coapNet.Conn, inactivityMonitor client.InactivityMonitor, requestMonitor client.RequestMonitorFunc) *client.Conn {
+	createBlockWise := func(*client.Conn) *blockwise.BlockWise[*client.Conn] {
 		return nil
 	}
 	if s.cfg.BlockwiseEnable {
@@ -192,7 +193,7 @@ func (s *Server) createConn(connection *coapNet.Conn, monitor client.InactivityM
 				cc,
 				s.cfg.BlockwiseTransferTimeout,
 				s.cfg.Errors,
-				func(token message.Token) (*pool.Message, bool) {
+				func(message.Token) (*pool.Message, bool) {
 					return nil, false
 				},
 			)
@@ -212,11 +213,12 @@ func (s *Server) createConn(connection *coapNet.Conn, monitor client.InactivityM
 	cfg.GetToken = s.cfg.GetToken
 	cfg.ProcessReceivedMessage = s.cfg.ProcessReceivedMessage
 	cfg.ReceivedMessageQueueSize = s.cfg.ReceivedMessageQueueSize
-	cc := client.NewConn(
+	cc := client.NewConnWithOpts(
 		connection,
-		createBlockWise,
-		monitor,
 		&cfg,
+		client.WithBlockWise(createBlockWise),
+		client.WithInactivityMonitor(inactivityMonitor),
+		client.WithRequestMonitor(requestMonitor),
 	)
 
 	return cc

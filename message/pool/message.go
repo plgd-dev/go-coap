@@ -10,6 +10,7 @@ import (
 	multierror "github.com/hashicorp/go-multierror"
 	"github.com/plgd-dev/go-coap/v3/message"
 	"github.com/plgd-dev/go-coap/v3/message/codes"
+	"github.com/plgd-dev/go-coap/v3/net"
 	"go.uber.org/atomic"
 )
 
@@ -26,6 +27,7 @@ type Message struct {
 	// Context context of request.
 	ctx             context.Context
 	msg             message.Message
+	controlMessage  *net.ControlMessage // control message for UDP
 	hijacked        atomic.Bool
 	isModified      bool
 	valueBuffer     []byte
@@ -71,6 +73,22 @@ func (r *Message) SetMessage(message message.Message) {
 		r.body = bytes.NewReader(message.Payload)
 	}
 	r.isModified = true
+}
+
+func (r *Message) SetControlMessage(cm *net.ControlMessage) {
+	r.controlMessage = cm
+}
+
+func (r *Message) ControlMessage() *net.ControlMessage {
+	return r.controlMessage
+}
+
+// UpsertControlMessage set value only when origin value is not set.
+func (r *Message) UpsertControlMessage(cm *net.ControlMessage) {
+	if r.controlMessage != nil {
+		return
+	}
+	r.SetControlMessage(cm)
 }
 
 // SetMessageID only 0 to 2^16-1 are valid.
@@ -120,6 +138,7 @@ func (r *Message) Reset() {
 	r.valueBuffer = r.origValueBuffer
 	r.body = nil
 	r.isModified = false
+	r.controlMessage = nil
 	if cap(r.bufferMarshal) > 1024 {
 		r.bufferMarshal = make([]byte, 256)
 	}
@@ -504,6 +523,20 @@ func (r *Message) MarshalWithEncoder(encoder Encoder) ([]byte, error) {
 	return r.bufferMarshal, nil
 }
 
+func (r *Message) decode(decoder Decoder) (int, error) {
+	var n int
+	var err error
+	for {
+		n, err = decoder.Decode(r.bufferUnmarshal, &r.msg)
+		if errors.Is(err, message.ErrOptionsTooSmall) {
+			// increase buffer size and try again
+			r.msg.Options = make(message.Options, 0, len(r.msg.Options)*2)
+			continue
+		}
+		return n, err
+	}
+}
+
 func (r *Message) UnmarshalWithDecoder(decoder Decoder, data []byte) (int, error) {
 	if len(r.bufferUnmarshal) < len(data) {
 		r.bufferUnmarshal = append(r.bufferUnmarshal, make([]byte, len(data)-len(r.bufferUnmarshal))...)
@@ -511,7 +544,7 @@ func (r *Message) UnmarshalWithDecoder(decoder Decoder, data []byte) (int, error
 	copy(r.bufferUnmarshal, data)
 	r.body = nil
 	r.bufferUnmarshal = r.bufferUnmarshal[:len(data)]
-	n, err := decoder.Decode(r.bufferUnmarshal, &r.msg)
+	n, err := r.decode(decoder)
 	if err != nil {
 		return n, err
 	}
@@ -568,33 +601,39 @@ func (r *Message) Clone(msg *Message) error {
 	msg.ResetOptionsTo(r.Options())
 	msg.SetType(r.Type())
 	msg.SetMessageID(r.MessageID())
+	msg.SetControlMessage(r.ControlMessage())
 
-	if r.Body() != nil {
-		buf := bytes.NewBuffer(nil)
-		n, err := r.Body().Seek(0, io.SeekCurrent)
-		if err != nil {
-			return err
-		}
-		_, err = r.body.Seek(0, io.SeekStart)
-		if err != nil {
-			return err
-		}
-		_, err = io.Copy(buf, r.Body())
-		if err != nil {
-			var errs *multierror.Error
-			errs = multierror.Append(errs, err)
-			_, errS := r.Body().Seek(n, io.SeekStart)
-			if errS != nil {
-				errs = multierror.Append(errs, errS)
-			}
-			return errs.ErrorOrNil()
-		}
-		_, err = r.Body().Seek(n, io.SeekStart)
-		if err != nil {
-			return err
-		}
-		r := bytes.NewReader(buf.Bytes())
-		msg.SetBody(r)
+	if r.Body() == nil {
+		return nil
 	}
+	buf := bytes.NewBuffer(nil)
+	n, err := r.Body().Seek(0, io.SeekCurrent)
+	if err != nil {
+		return err
+	}
+	_, err = r.body.Seek(0, io.SeekStart)
+	if err != nil {
+		return err
+	}
+	_, err = io.Copy(buf, r.Body())
+	if err != nil {
+		var errs *multierror.Error
+		errs = multierror.Append(errs, err)
+		_, errS := r.Body().Seek(n, io.SeekStart)
+		if errS != nil {
+			errs = multierror.Append(errs, errS)
+		}
+		return errs.ErrorOrNil()
+	}
+	_, err = r.Body().Seek(n, io.SeekStart)
+	if err != nil {
+		return err
+	}
+	body := bytes.NewReader(buf.Bytes())
+	msg.SetBody(body)
 	return nil
+}
+
+func (r *Message) IsPing(isTCP bool) bool {
+	return r.msg.IsPing(isTCP)
 }

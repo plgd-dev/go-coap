@@ -4,11 +4,13 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
 	"github.com/plgd-dev/go-coap/v3/message"
 	"github.com/plgd-dev/go-coap/v3/message/pool"
+	"github.com/plgd-dev/go-coap/v3/tcp/coder"
 	"github.com/plgd-dev/go-coap/v3/test/net"
 	"github.com/stretchr/testify/require"
 )
@@ -353,10 +355,39 @@ func TestMessageClone(t *testing.T) {
 	original.SetBody(malFuncSeeker{})
 	err = original.Clone(cloned)
 	require.Error(t, err)
-	require.Equal(t, err.Error(), "seek error")
+	require.Equal(t, "seek error", err.Error())
 
 	original.SetBody(malFuncReader{})
 	err = original.Clone(cloned)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "read error")
+}
+
+func TestUnmarshalMessageWithMultipleOptions(t *testing.T) {
+	tests := []struct {
+		numOptions int
+	}{
+		{numOptions: 0},
+		{numOptions: 8},
+		{numOptions: 16},
+		{numOptions: 32},
+		{numOptions: 64},
+		{numOptions: 1023},
+	}
+
+	for _, tt := range tests {
+		t.Run(fmt.Sprintf("num-options-%v", tt.numOptions), func(t *testing.T) {
+			req := pool.NewMessage(context.Background())
+			for i := 0; i < 64; i++ {
+				req.AddOptionUint32(message.URIQuery, uint32(i))
+			}
+			data, err := req.MarshalWithEncoder(coder.DefaultCoder)
+			require.NoError(t, err)
+			msg := pool.NewMessage(context.Background())
+			n, err := msg.UnmarshalWithDecoder(coder.DefaultCoder, data)
+			require.NoError(t, err)
+			require.Len(t, data, n)
+			require.Equal(t, req.Options(), msg.Options())
+		})
+	}
 }

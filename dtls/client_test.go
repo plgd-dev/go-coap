@@ -111,7 +111,7 @@ func TestConnGet(t *testing.T) {
 	go func() {
 		defer wg.Done()
 		errS := s.Serve(l)
-		require.NoError(t, errS)
+		assert.NoError(t, errS)
 	}()
 
 	cc, err := dtls.Dial(l.Addr().String(), dtlsCfg)
@@ -204,11 +204,11 @@ func TestConnGetSeparateMessage(t *testing.T) {
 	go func() {
 		defer wg.Done()
 		errS := s.Serve(l)
-		require.NoError(t, errS)
+		assert.NoError(t, errS)
 	}()
 
-	cc, err := dtls.Dial(l.Addr().String(), dtlsCfg, options.WithHandlerFunc(func(w *responsewriter.ResponseWriter[*client.Conn], r *pool.Message) {
-		assert.NoError(t, fmt.Errorf("none msg expected comes: %+v", r))
+	cc, err := dtls.Dial(l.Addr().String(), dtlsCfg, options.WithHandlerFunc(func(_ *responsewriter.ResponseWriter[*client.Conn], r *pool.Message) {
+		require.Failf(t, "Unexpected msg", "Received unexpected message: %+v", r)
 	}))
 	require.NoError(t, err)
 	defer func() {
@@ -330,7 +330,7 @@ func TestConnPost(t *testing.T) {
 			go func() {
 				defer wg.Done()
 				errS := s.Serve(l)
-				require.NoError(t, errS)
+				assert.NoError(t, errS)
 			}()
 
 			cc, err := dtls.Dial(l.Addr().String(), dtlsCfg)
@@ -465,7 +465,7 @@ func TestConnPut(t *testing.T) {
 			go func() {
 				defer wg.Done()
 				errS := s.Serve(l)
-				require.NoError(t, errS)
+				assert.NoError(t, errS)
 			}()
 
 			cc, err := dtls.Dial(l.Addr().String(), dtlsCfg)
@@ -577,7 +577,7 @@ func TestConnDelete(t *testing.T) {
 	go func() {
 		defer wg.Done()
 		errS := s.Serve(l)
-		require.NoError(t, errS)
+		assert.NoError(t, errS)
 	}()
 
 	cc, err := dtls.Dial(l.Addr().String(), dtlsCfg)
@@ -637,7 +637,7 @@ func TestConnPing(t *testing.T) {
 	go func() {
 		defer wg.Done()
 		errS := s.Serve(l)
-		require.NoError(t, errS)
+		assert.NoError(t, errS)
 	}()
 
 	cc, err := dtls.Dial(l.Addr().String(), dtlsCfg)
@@ -682,7 +682,7 @@ func TestConnHandeShakeFailure(t *testing.T) {
 	go func() {
 		defer wg.Done()
 		errS := s.Serve(l)
-		require.NoError(t, errS)
+		assert.NoError(t, errS)
 	}()
 
 	dtlsCfgClient := &piondtls.Config{
@@ -738,7 +738,7 @@ func TestClientInactiveMonitor(t *testing.T) {
 	go func() {
 		defer serverWg.Done()
 		errS := sd.Serve(ld)
-		require.NoError(t, errS)
+		assert.NoError(t, errS)
 	}()
 	defer func() {
 		sd.Stop()
@@ -798,7 +798,7 @@ func TestClientKeepAliveMonitor(t *testing.T) {
 				}
 			}
 			defer c.Close()
-			require.NoError(t, errA)
+			assert.NoError(t, errA)
 		}
 	}()
 	defer func() {

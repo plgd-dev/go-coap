@@ -2,6 +2,7 @@ package codes
 
 import (
 	"encoding/json"
+	"strconv"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -14,6 +15,24 @@ func TestJSONUnmarshal(t *testing.T) {
 	err := json.Unmarshal([]byte(in), &got)
 	require.NoError(t, err)
 	require.Equal(t, want, got)
+
+	inNumeric := "["
+	for i, c := range want {
+		if i > 0 {
+			inNumeric += ","
+		}
+		inNumeric += strconv.FormatUint(uint64(c), 10)
+	}
+	inNumeric += "]"
+	err = json.Unmarshal([]byte(inNumeric), &got)
+	require.NoError(t, err)
+	require.Equal(t, want, got)
+}
+
+func TestUnmarshalJSONNoop(t *testing.T) {
+	var got Code
+	err := got.UnmarshalJSON([]byte("null"))
+	require.NoError(t, err)
 }
 
 func TestUnmarshalJSONNilReceiver(t *testing.T) {
@@ -24,11 +43,18 @@ func TestUnmarshalJSONNilReceiver(t *testing.T) {
 }
 
 func TestUnmarshalJSONUnknownInput(t *testing.T) {
-	var got Code
-	for _, in := range [][]byte{[]byte(""), []byte("xxx"), []byte("Code(17)"), nil} {
+	inputs := [][]byte{nil, []byte(""), []byte("xxx"), []byte("Code(17)"), []byte("255")}
+	for _, in := range inputs {
+		var got Code
 		err := got.UnmarshalJSON(in)
 		require.Error(t, err)
 	}
+
+	var got Code
+	longStr := "This is a very long string that is longer than the max code length"
+	require.Greater(t, len(longStr), getMaxCodeLen())
+	err := got.UnmarshalJSON([]byte(longStr))
+	require.Error(t, err)
 }
 
 func TestUnmarshalJSONMarshalUnmarshal(t *testing.T) {
@@ -47,7 +73,7 @@ func TestUnmarshalJSONMarshalUnmarshal(t *testing.T) {
 }
 
 func TestCodeToString(t *testing.T) {
-	var strCodes []string
+	strCodes := make([]string, 0, len(codeToString))
 	for _, val := range codeToString {
 		strCodes = append(strCodes, val)
 	}
@@ -59,11 +85,16 @@ func TestCodeToString(t *testing.T) {
 }
 
 func FuzzUnmarshalJSON(f *testing.F) {
+	f.Add([]byte("null"))
 	f.Add([]byte("xxx"))
 	f.Add([]byte("Code(17)"))
+	f.Add([]byte("0b101010"))
+	f.Add([]byte("0o52"))
+	f.Add([]byte("0x2a"))
+	f.Add([]byte("42"))
 
-	f.Fuzz(func(t *testing.T, input_data []byte) {
-		var got *Code
+	f.Fuzz(func(_ *testing.T, input_data []byte) {
+		var got Code
 		_ = got.UnmarshalJSON(input_data)
 	})
 }

@@ -15,6 +15,7 @@ import (
 	"github.com/plgd-dev/go-coap/v3/options"
 	"github.com/plgd-dev/go-coap/v3/udp"
 	"github.com/plgd-dev/go-coap/v3/udp/client"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -157,7 +158,7 @@ func TestConnObserve(t *testing.T) {
 			go func() {
 				defer wg.Done()
 				errS := s.Serve(l)
-				require.NoError(t, errS)
+				assert.NoError(t, errS)
 			}()
 
 			cc, err := udp.Dial(l.LocalAddr().String())
@@ -280,7 +281,7 @@ func TestConnObserveNotSupported(t *testing.T) {
 			go func() {
 				defer wg.Done()
 				errS := s.Serve(l)
-				require.NoError(t, errS)
+				assert.NoError(t, errS)
 			}()
 
 			cc, err := udp.Dial(l.LocalAddr().String())
@@ -358,7 +359,7 @@ func TestConnObserveCancel(t *testing.T) {
 			defer cancel()
 
 			closeClient := func() {}
-			s := udp.NewServer(options.WithHandlerFunc(func(w *responsewriter.ResponseWriter[*client.Conn], r *pool.Message) {
+			s := udp.NewServer(options.WithHandlerFunc(func(w *responsewriter.ResponseWriter[*client.Conn], _ *pool.Message) {
 				errS := w.SetResponse(codes.BadRequest, message.TextPlain, nil)
 				require.NoError(t, errS)
 				w.Message().SetContext(w.Conn().Context())
@@ -376,7 +377,7 @@ func TestConnObserveCancel(t *testing.T) {
 			go func() {
 				defer wg.Done()
 				errS := s.Serve(l)
-				require.NoError(t, errS)
+				assert.NoError(t, errS)
 			}()
 
 			cc, err := udp.Dial(l.LocalAddr().String())
@@ -386,7 +387,7 @@ func TestConnObserveCancel(t *testing.T) {
 				require.NoError(t, errC)
 			}
 			defer closeClient()
-			_, err = cc.Observe(ctx, "/tmp", func(req *pool.Message) {
+			_, err = cc.Observe(ctx, "/tmp", func(*pool.Message) {
 				// no-op
 			})
 			require.Error(t, err)

@@ -69,7 +69,7 @@ func Client(conn net.Conn, opts ...Option) *client.Conn {
 		errorsFunc(fmt.Errorf("tcp: %w", err))
 	}
 
-	createBlockWise := func(cc *client.Conn) *blockwise.BlockWise[*client.Conn] {
+	createBlockWise := func(*client.Conn) *blockwise.BlockWise[*client.Conn] {
 		return nil
 	}
 	if cfg.BlockwiseEnable {
@@ -88,10 +88,11 @@ func Client(conn net.Conn, opts ...Option) *client.Conn {
 
 	l := coapNet.NewConn(conn)
 	monitor := cfg.CreateInactivityMonitor()
-	cc := client.NewConn(l,
-		createBlockWise,
-		monitor,
+	cc := client.NewConnWithOpts(l,
 		&cfg,
+		client.WithBlockWise(createBlockWise),
+		client.WithInactivityMonitor(monitor),
+		client.WithRequestMonitor(cfg.RequestMonitor),
 	)
 
 	cfg.PeriodicRunner(func(now time.Time) bool {

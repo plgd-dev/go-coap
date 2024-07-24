@@ -4,11 +4,9 @@ import (
 	"bytes"
 	"context"
 	"errors"
-	"fmt"
 	"io"
 	"log"
 	"sync"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -23,6 +21,7 @@ import (
 	"github.com/plgd-dev/go-coap/v3/udp/client"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/atomic"
 )
 
 const testNumParallel = 64
@@ -47,13 +46,13 @@ func TestConnDeduplication(t *testing.T) {
 
 	m := mux.NewRouter()
 
-	cnt := int32(0)
+	var cnt atomic.Int32
 	// The response counts up with every get
 	// so we can check if the handler is only called once per message ID
 	err = m.Handle("/count", mux.HandlerFunc(func(w mux.ResponseWriter, r *mux.Message) {
 		assert.Equal(t, codes.GET, r.Code())
-		atomic.AddInt32(&cnt, 1)
-		errH := w.SetResponse(codes.Content, message.AppOctets, bytes.NewReader([]byte{byte(cnt)}))
+		cnt.Add(1)
+		errH := w.SetResponse(codes.Content, message.AppOctets, bytes.NewReader([]byte{byte(cnt.Load())}))
 		require.NoError(t, errH)
 		require.NotEmpty(t, w.Conn())
 	}))
@@ -68,7 +67,7 @@ func TestConnDeduplication(t *testing.T) {
 	go func() {
 		defer wg.Done()
 		errS := s.Serve(l)
-		require.NoError(t, errS)
+		assert.NoError(t, errS)
 	}()
 
 	cc, err := udp.Dial(l.LocalAddr().String(),
@@ -126,14 +125,14 @@ func TestConnDeduplicationRetransmission(t *testing.T) {
 
 	m := mux.NewRouter()
 
-	cnt := int32(0)
+	var cnt atomic.Int32
 	// The response counts up with every get
 	// so we can check if the handler is only called once per message ID
 	once := sync.Once{}
 	err = m.Handle("/count", mux.HandlerFunc(func(w mux.ResponseWriter, r *mux.Message) {
 		assert.Equal(t, codes.GET, r.Code())
-		atomic.AddInt32(&cnt, 1)
-		errH := w.SetResponse(codes.Content, message.AppOctets, bytes.NewReader([]byte{byte(cnt)}))
+		cnt.Add(1)
+		errH := w.SetResponse(codes.Content, message.AppOctets, bytes.NewReader([]byte{byte(cnt.Load())}))
 		require.NoError(t, errH)
 
 		// Only one delay to trigger retransmissions
@@ -153,7 +152,7 @@ func TestConnDeduplicationRetransmission(t *testing.T) {
 	go func() {
 		defer wg.Done()
 		errS := s.Serve(l)
-		require.NoError(t, errS)
+		assert.NoError(t, errS)
 	}()
 
 	cc, err := udp.Dial(l.LocalAddr().String(),
@@ -269,7 +268,7 @@ func testParallelConnGet(t *testing.T, numParallel int) {
 	go func() {
 		defer wg.Done()
 		errS := s.Serve(l)
-		require.NoError(t, errS)
+		assert.NoError(t, errS)
 	}()
 
 	cc, err := udp.Dial(l.LocalAddr().String())
@@ -290,19 +289,19 @@ func testParallelConnGet(t *testing.T, numParallel int) {
 					defer cancel()
 					got, err := cc.Get(ctx, tt.args.path, tt.args.opts...)
 					if tt.wantErr {
-						require.Error(t, err)
+						assert.Error(t, err)
 						return
 					}
-					require.NoError(t, err)
-					require.Equal(t, tt.wantCode, got.Code())
+					assert.NoError(t, err)
+					assert.Equal(t, tt.wantCode, got.Code())
 					if tt.wantContentFormat != nil {
 						ct, err := got.ContentFormat()
-						require.NoError(t, err)
-						require.Equal(t, *tt.wantContentFormat, ct)
+						assert.NoError(t, err)
+						assert.Equal(t, *tt.wantContentFormat, ct)
 						buf := bytes.NewBuffer(nil)
 						_, err = buf.ReadFrom(got.Body())
-						require.NoError(t, err)
-						require.Equal(t, tt.wantPayload, buf.Bytes())
+						assert.NoError(t, err)
+						assert.Equal(t, tt.wantPayload, buf.Bytes())
 					}
 				}()
 			}
@@ -370,11 +369,11 @@ func TestConnGetSeparateMessage(t *testing.T) {
 	go func() {
 		defer wg.Done()
 		errS := s.Serve(l)
-		require.NoError(t, errS)
+		assert.NoError(t, errS)
 	}()
 
-	cc, err := udp.Dial(l.LocalAddr().String(), options.WithHandlerFunc(func(w *responsewriter.ResponseWriter[*client.Conn], r *pool.Message) {
-		assert.NoError(t, fmt.Errorf("none msg expected comes: %+v", r))
+	cc, err := udp.Dial(l.LocalAddr().String(), options.WithHandlerFunc(func(_ *responsewriter.ResponseWriter[*client.Conn], r *pool.Message) {
+		require.Failf(t, "Unexpected msg", "Received unexpected message: %+v", r)
 	}))
 	require.NoError(t, err)
 	defer func() {
@@ -489,7 +488,7 @@ func testConnPost(t *testing.T, numParallel int) {
 			go func() {
 				defer wg.Done()
 				errS := s.Serve(l)
-				require.NoError(t, errS)
+				assert.NoError(t, errS)
 			}()
 
 			cc, err := udp.Dial(l.LocalAddr().String())
@@ -508,19 +507,19 @@ func testConnPost(t *testing.T, numParallel int) {
 					defer cancel()
 					got, err := cc.Post(ctx, tt.args.path, tt.args.contentFormat, tt.args.payload, tt.args.opts...)
 					if tt.wantErr {
-						require.Error(t, err)
+						assert.Error(t, err)
 						return
 					}
-					require.NoError(t, err)
-					require.Equal(t, tt.wantCode, got.Code())
+					assert.NoError(t, err)
+					assert.Equal(t, tt.wantCode, got.Code())
 					if tt.wantContentFormat != nil {
 						ct, err := got.ContentFormat()
-						require.NoError(t, err)
-						require.Equal(t, *tt.wantContentFormat, ct)
+						assert.NoError(t, err)
+						assert.Equal(t, *tt.wantContentFormat, ct)
 						buf := bytes.NewBuffer(nil)
 						_, err = buf.ReadFrom(got.Body())
-						require.NoError(t, err)
-						require.Equal(t, tt.wantPayload, buf.Bytes())
+						assert.NoError(t, err)
+						assert.Equal(t, tt.wantPayload, buf.Bytes())
 					}
 				}()
 			}
@@ -632,7 +631,7 @@ func testConnPut(t *testing.T, numParallel int) {
 			go func() {
 				defer wg.Done()
 				errS := s.Serve(l)
-				require.NoError(t, errS)
+				assert.NoError(t, errS)
 			}()
 
 			cc, err := udp.Dial(l.LocalAddr().String())
@@ -650,19 +649,19 @@ func testConnPut(t *testing.T, numParallel int) {
 					defer cancel()
 					got, err := cc.Put(ctx, tt.args.path, tt.args.contentFormat, tt.args.payload, tt.args.opts...)
 					if tt.wantErr {
-						require.Error(t, err)
+						assert.Error(t, err)
 						return
 					}
-					require.NoError(t, err)
-					require.Equal(t, tt.wantCode, got.Code())
+					assert.NoError(t, err)
+					assert.Equal(t, tt.wantCode, got.Code())
 					if tt.wantContentFormat != nil {
 						ct, err := got.ContentFormat()
-						require.NoError(t, err)
-						require.Equal(t, *tt.wantContentFormat, ct)
+						assert.NoError(t, err)
+						assert.Equal(t, *tt.wantContentFormat, ct)
 						buf := bytes.NewBuffer(nil)
 						_, err = buf.ReadFrom(got.Body())
-						require.NoError(t, err)
-						require.Equal(t, tt.wantPayload, buf.Bytes())
+						assert.NoError(t, err)
+						assert.Equal(t, tt.wantPayload, buf.Bytes())
 					}
 				}()
 			}
@@ -751,7 +750,7 @@ func testConnDelete(t *testing.T, numParallel int) {
 	go func() {
 		defer wg.Done()
 		errS := s.Serve(l)
-		require.NoError(t, errS)
+		assert.NoError(t, errS)
 	}()
 
 	cc, err := udp.Dial(l.LocalAddr().String())
@@ -772,19 +771,19 @@ func testConnDelete(t *testing.T, numParallel int) {
 					defer cancel()
 					got, err := cc.Delete(ctx, tt.args.path, tt.args.opts...)
 					if tt.wantErr {
-						require.Error(t, err)
+						assert.Error(t, err)
 						return
 					}
-					require.NoError(t, err)
-					require.Equal(t, tt.wantCode, got.Code())
+					assert.NoError(t, err)
+					assert.Equal(t, tt.wantCode, got.Code())
 					if tt.wantContentFormat != nil {
 						ct, err := got.ContentFormat()
-						require.NoError(t, err)
-						require.Equal(t, *tt.wantContentFormat, ct)
+						assert.NoError(t, err)
+						assert.Equal(t, *tt.wantContentFormat, ct)
 						buf := bytes.NewBuffer(nil)
 						_, err = buf.ReadFrom(got.Body())
-						require.NoError(t, err)
-						require.Equal(t, tt.wantPayload, buf.Bytes())
+						assert.NoError(t, err)
+						assert.Equal(t, tt.wantPayload, buf.Bytes())
 					}
 				}()
 			}
@@ -818,7 +817,7 @@ func TestConnPing(t *testing.T) {
 	go func() {
 		defer wg.Done()
 		errS := s.Serve(l)
-		require.NoError(t, errS)
+		assert.NoError(t, errS)
 	}()
 
 	cc, err := udp.Dial(l.LocalAddr().String())
@@ -832,4 +831,176 @@ func TestConnPing(t *testing.T) {
 	defer cancel()
 	err = cc.Ping(ctx)
 	require.NoError(t, err)
+}
+
+func TestConnRequestMonitorCloseConnection(t *testing.T) {
+	l, err := coapNet.NewListenUDP("udp", "")
+	require.NoError(t, err)
+	defer func() {
+		errC := l.Close()
+		require.NoError(t, errC)
+	}()
+	var wg sync.WaitGroup
+	defer wg.Wait()
+
+	m := mux.NewRouter()
+
+	// The response counts up with every get
+	// so we can check if the handler is only called once per message ID
+	err = m.Handle("/test", mux.HandlerFunc(func(w mux.ResponseWriter, _ *mux.Message) {
+		errH := w.SetResponse(codes.Content, message.TextPlain, nil)
+		require.NoError(t, errH)
+	}))
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second*8)
+	defer cancel()
+	ctxRegMonitor, cancelReqMonitor := context.WithCancel(ctx)
+	defer cancelReqMonitor()
+	reqMonitorErr := make(chan struct{}, 1)
+	testEOFError := errors.New("test error")
+	s := udp.NewServer(
+		options.WithMux(m),
+		options.WithRequestMonitor(func(_ *client.Conn, req *pool.Message) (bool, error) {
+			if req.Code() == codes.DELETE {
+				return false, testEOFError
+			}
+			return false, nil
+		}),
+		options.WithErrors(func(err error) {
+			t.Log(err)
+			if errors.Is(err, testEOFError) {
+				if errors.Is(err, testEOFError) {
+					select {
+					case reqMonitorErr <- struct{}{}:
+						cancelReqMonitor()
+					default:
+					}
+				}
+			}
+		}),
+		options.WithOnNewConn(func(c *client.Conn) {
+			t.Log("new conn")
+			c.AddOnClose(func() {
+				t.Log("close conn")
+			})
+		}))
+	defer s.Stop()
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		errS := s.Serve(l)
+		assert.NoError(t, errS)
+	}()
+
+	cc, err := udp.Dial(l.LocalAddr().String(),
+		options.WithErrors(func(err error) {
+			t.Log(err)
+		}),
+	)
+	require.NoError(t, err)
+	defer func() {
+		errC := cc.Close()
+		require.NoError(t, errC)
+	}()
+
+	// Setup done - Run Tests
+	// Same request, executed twice (needs the same token)
+	getReq, err := cc.NewGetRequest(ctx, "/test")
+	getReq.SetMessageID(1)
+
+	require.NoError(t, err)
+	got, err := cc.Do(getReq)
+	require.NoError(t, err)
+	require.Equal(t, codes.Content.String(), got.Code().String())
+
+	// New request but with DELETE code to trigger EOF error from request monitor
+	deleteReq, err := cc.NewDeleteRequest(ctxRegMonitor, "/test")
+	require.NoError(t, err)
+	deleteReq.SetMessageID(2)
+	_, err = cc.Do(deleteReq)
+	require.Error(t, err)
+	select {
+	case <-reqMonitorErr:
+	case <-ctx.Done():
+		require.Fail(t, "request monitor not called")
+	}
+}
+
+func TestConnRequestMonitorDropRequest(t *testing.T) {
+	l, err := coapNet.NewListenUDP("udp", "")
+	require.NoError(t, err)
+	defer func() {
+		errC := l.Close()
+		require.NoError(t, errC)
+	}()
+	var wg sync.WaitGroup
+	defer wg.Wait()
+
+	m := mux.NewRouter()
+
+	// The response counts up with every get
+	// so we can check if the handler is only called once per message ID
+	err = m.Handle("/test", mux.HandlerFunc(func(w mux.ResponseWriter, _ *mux.Message) {
+		errH := w.SetResponse(codes.Content, message.TextPlain, nil)
+		require.NoError(t, errH)
+	}))
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second*2)
+	defer cancel()
+	s := udp.NewServer(
+		options.WithMux(m),
+		options.WithRequestMonitor(func(_ *client.Conn, req *pool.Message) (bool, error) {
+			if req.Code() == codes.DELETE {
+				t.Log("drop request")
+				return true, nil
+			}
+			return false, nil
+		}),
+		options.WithErrors(func(err error) {
+			require.NoError(t, err)
+		}),
+		options.WithOnNewConn(func(c *client.Conn) {
+			t.Log("new conn")
+			c.AddOnClose(func() {
+				t.Log("close conn")
+			})
+		}))
+	defer s.Stop()
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		errS := s.Serve(l)
+		assert.NoError(t, errS)
+	}()
+
+	cc, err := udp.Dial(l.LocalAddr().String(),
+		options.WithErrors(func(err error) {
+			t.Log(err)
+		}),
+	)
+	require.NoError(t, err)
+	defer func() {
+		errC := cc.Close()
+		require.NoError(t, errC)
+	}()
+
+	// Setup done - Run Tests
+	// Same request, executed twice (needs the same token)
+	getReq, err := cc.NewGetRequest(ctx, "/test")
+	getReq.SetMessageID(1)
+
+	require.NoError(t, err)
+	got, err := cc.Do(getReq)
+	require.NoError(t, err)
+	require.Equal(t, codes.Content.String(), got.Code().String())
+
+	// New request but with DELETE code to trigger EOF error from request monitor
+	deleteReq, err := cc.NewDeleteRequest(ctx, "/test")
+	require.NoError(t, err)
+	deleteReq.SetMessageID(2)
+	_, err = cc.Do(deleteReq)
+	require.Error(t, err)
+	require.ErrorIs(t, err, context.DeadlineExceeded)
 }

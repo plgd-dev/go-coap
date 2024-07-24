@@ -72,7 +72,7 @@ func TestElementExpiration(t *testing.T) {
 	cache := NewCache[string, string]()
 
 	elementToCache := string("elem")
-	elem := NewElement(elementToCache, time.Now().Add(1*time.Second), func(d string) {
+	elem := NewElement(elementToCache, time.Now().Add(1*time.Second), func(string) {
 		expirationInvoked = true
 	})
 	loadedElem, _ := cache.LoadOrStore("abcd", elem)
@@ -118,7 +118,7 @@ func TestRangeFunction(t *testing.T) {
 		return true
 	})
 
-	require.Equal(t, foundElements, 2)
+	require.Equal(t, 2, foundElements)
 
 	for k := range actualMap {
 		_, contains := actualMap[k]
@@ -141,9 +141,9 @@ func TestPullOutAllFunction(t *testing.T) {
 	cache.LoadAndDeleteAll()
 
 	foundElements := 0
-	cache.Range(func(key string, value *Element[string]) bool {
+	cache.Range(func(string, *Element[string]) bool {
 		foundElements++
 		return true
 	})
-	require.Equal(t, foundElements, 0)
+	require.Equal(t, 0, foundElements)
 }

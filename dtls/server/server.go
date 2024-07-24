@@ -63,6 +63,7 @@ func New(opt ...Option) *Server {
 			return inactivity.NewNilMonitor[*udpClient.Conn]()
 		}
 	}
+
 	if cfg.MessagePool == nil {
 		cfg.MessagePool = pool.New(0, 0)
 	}
@@ -88,7 +89,7 @@ func (s *Server) checkAndSetListener(l Listener) error {
 	s.listenMutex.Lock()
 	defer s.listenMutex.Unlock()
 	if s.listen != nil {
-		return fmt.Errorf("server already serve listener")
+		return errors.New("server already serve listener")
 	}
 	s.listen = l
 	return nil
@@ -126,7 +127,7 @@ func (s *Server) serveConnection(connections *connections.Connections, cc *udpCl
 
 func (s *Server) Serve(l Listener) error {
 	if s.cfg.BlockwiseSZX > blockwise.SZX1024 {
-		return fmt.Errorf("invalid blockwiseSZX")
+		return errors.New("invalid blockwiseSZX")
 	}
 	err := s.checkAndSetListener(l)
 	if err != nil {
@@ -153,13 +154,15 @@ func (s *Server) Serve(l Listener) error {
 		if ok := s.checkAcceptError(err); !ok {
 			return nil
 		}
-		if rw == nil {
+		if err != nil || rw == nil {
 			continue
 		}
 		wg.Add(1)
 		var cc *udpClient.Conn
-		monitor := s.cfg.CreateInactivityMonitor()
-		cc = s.createConn(coapNet.NewConn(rw), monitor)
+		inactivityMonitor := s.cfg.CreateInactivityMonitor()
+		requestMonitor := s.cfg.RequestMonitor
+
+		cc = s.createConn(coapNet.NewConn(rw), inactivityMonitor, requestMonitor)
 		if s.cfg.OnNewConn != nil {
 			s.cfg.OnNewConn(cc)
 		}
@@ -184,8 +187,8 @@ func (s *Server) Stop() {
 	}
 }
 
-func (s *Server) createConn(connection *coapNet.Conn, monitor udpClient.InactivityMonitor) *udpClient.Conn {
-	createBlockWise := func(cc *udpClient.Conn) *blockwise.BlockWise[*udpClient.Conn] {
+func (s *Server) createConn(connection *coapNet.Conn, inactivityMonitor udpClient.InactivityMonitor, requestMonitor udpClient.RequestMonitorFunc) *udpClient.Conn {
+	createBlockWise := func(*udpClient.Conn) *blockwise.BlockWise[*udpClient.Conn] {
 		return nil
 	}
 	if s.cfg.BlockwiseEnable {
@@ -220,11 +223,13 @@ func (s *Server) createConn(connection *coapNet.Conn, monitor udpClient.Inactivi
 	cfg.MessagePool = s.cfg.MessagePool
 	cfg.ReceivedMessageQueueSize = s.cfg.ReceivedMessageQueueSize
 	cfg.ProcessReceivedMessage = s.cfg.ProcessReceivedMessage
-	cc := udpClient.NewConn(
+
+	cc := udpClient.NewConnWithOpts(
 		session,
-		createBlockWise,
-		monitor,
 		&cfg,
+		udpClient.WithBlockWise(createBlockWise),
+		udpClient.WithInactivityMonitor(inactivityMonitor),
+		udpClient.WithRequestMonitor(requestMonitor),
 	)
 
 	return cc

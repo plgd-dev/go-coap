@@ -65,7 +65,7 @@ func ExampleServer_Discover() {
 	}()
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	err = s.Discover(ctx, "224.0.1.187:5683", "/oic/res", func(cc *client.Conn, res *pool.Message) {
+	err = s.Discover(ctx, "224.0.1.187:5683", "/oic/res", func(_ *client.Conn, res *pool.Message) {
 		data, errR := io.ReadAll(res.Body())
 		if errR != nil {
 			log.Fatal(errR)

@@ -18,7 +18,7 @@ type EventFunc = func()
 type Session struct {
 	onClose []EventFunc
 
-	ctx atomic.Value // TODO: change to atomic.Pointer[context.Context] for go1.19
+	ctx atomic.Pointer[context.Context]
 
 	doneCtx    context.Context
 	connection *coapNet.UDPConn
@@ -101,7 +101,7 @@ func (s *Session) Close() error {
 }
 
 func (s *Session) Context() context.Context {
-	return *s.ctx.Load().(*context.Context) //nolint:forcetypeassert
+	return *s.ctx.Load()
 }
 
 func (s *Session) WriteMessage(req *pool.Message) error {
@@ -109,7 +109,7 @@ func (s *Session) WriteMessage(req *pool.Message) error {
 	if err != nil {
 		return fmt.Errorf("cannot marshal: %w", err)
 	}
-	return s.connection.WriteWithContext(req.Context(), s.raddr, data)
+	return s.connection.WriteWithOptions(data, coapNet.WithContext(req.Context()), coapNet.WithRemoteAddr(s.raddr), coapNet.WithControlMessage(req.ControlMessage()))
 }
 
 // WriteMulticastMessage sends multicast to the remote multicast address.
@@ -135,12 +135,13 @@ func (s *Session) Run(cc *client.Conn) (err error) {
 	m := make([]byte, s.mtu)
 	for {
 		buf := m
-		n, _, err := s.connection.ReadWithContext(s.Context(), buf)
+		var cm *coapNet.ControlMessage
+		n, err := s.connection.ReadWithOptions(buf, coapNet.WithContext(s.Context()), coapNet.WithGetControlMessage(&cm))
 		if err != nil {
 			return err
 		}
 		buf = buf[:n]
-		err = cc.Process(buf)
+		err = cc.Process(cm, buf)
 		if err != nil {
 			return err
 		}

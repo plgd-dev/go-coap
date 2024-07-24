@@ -19,7 +19,7 @@ type EventFunc = func()
 type Session struct {
 	onClose []EventFunc
 
-	ctx atomic.Value // TODO: change to atomic.Pointer[context.Context] for go1.19
+	ctx atomic.Pointer[context.Context]
 
 	cancel     context.CancelFunc
 	connection *coapNet.Conn
@@ -90,7 +90,7 @@ func (s *Session) Close() error {
 }
 
 func (s *Session) Context() context.Context {
-	return *s.ctx.Load().(*context.Context) //nolint:forcetypeassert
+	return *s.ctx.Load()
 }
 
 // SetContextValue stores the value associated with key to context of connection.
@@ -112,7 +112,7 @@ func (s *Session) WriteMessage(req *pool.Message) error {
 }
 
 // WriteMulticastMessage sends multicast to the remote multicast address.
-// Currently it is not implemented - is is just satisfy golang udp/client/Session interface.
+// Currently it is not implemented - is just satisfy golang udp/client/Session interface.
 func (s *Session) WriteMulticastMessage(*pool.Message, *net.UDPAddr, ...coapNet.MulticastOption) error {
 	return errors.New("multicast messages not implemented for DTLS")
 }
@@ -129,7 +129,7 @@ func (s *Session) LocalAddr() net.Addr {
 	return s.connection.LocalAddr()
 }
 
-// Run reads and process requests from a connection, until the connection is not closed.
+// Run reads and processes requests from a connection, until the connection is closed.
 func (s *Session) Run(cc *client.Conn) (err error) {
 	defer func() {
 		err1 := s.Close()
@@ -146,7 +146,7 @@ func (s *Session) Run(cc *client.Conn) (err error) {
 			return fmt.Errorf("cannot read from connection: %w", err)
 		}
 		readBuf = readBuf[:readLen]
-		err = cc.Process(readBuf)
+		err = cc.Process(nil, readBuf)
 		if err != nil {
 			return err
 		}

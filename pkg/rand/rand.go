@@ -12,7 +12,7 @@ type Rand struct {
 
 func NewRand(seed int64) *Rand {
 	return &Rand{
-		src: rand.New(rand.NewSource(seed)),
+		src: rand.New(rand.NewSource(seed)), //nolint:gosec
 	}
 }
 

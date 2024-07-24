@@ -20,7 +20,7 @@ type HandlerFunc = func(*responsewriter.ResponseWriter[*udpClient.Conn], *pool.M
 type ErrorFunc = func(error)
 
 // OnNewConnFunc is the callback for new connections.
-type OnNewConnFunc = func(cc *udpClient.Conn)
+type OnNewConnFunc = func(*udpClient.Conn)
 
 type GetMIDFunc = func() int32
 
@@ -34,7 +34,10 @@ var DefaultConfig = func() Config {
 			}
 			return inactivity.New(timeout, onInactive)
 		},
-		OnNewConn: func(cc *udpClient.Conn) {
+		RequestMonitor: func(*udpClient.Conn, *pool.Message) (bool, error) {
+			return false, nil
+		},
+		OnNewConn: func(*udpClient.Conn) {
 			// do nothing by default
 		},
 		TransmissionNStart:             1,
@@ -43,7 +46,7 @@ var DefaultConfig = func() Config {
 		GetMID:                         message.GetMID,
 		MTU:                            udpClient.DefaultMTU,
 	}
-	opts.Handler = func(w *responsewriter.ResponseWriter[*udpClient.Conn], r *pool.Message) {
+	opts.Handler = func(w *responsewriter.ResponseWriter[*udpClient.Conn], _ *pool.Message) {
 		if err := w.SetResponse(codes.NotFound, message.TextPlain, nil); err != nil {
 			opts.Errors(fmt.Errorf("dtls server: cannot set response: %w", err))
 		}
@@ -57,6 +60,7 @@ type Config struct {
 	GetMID                         GetMIDFunc
 	Handler                        HandlerFunc
 	OnNewConn                      OnNewConnFunc
+	RequestMonitor                 udpClient.RequestMonitorFunc
 	TransmissionNStart             uint32
 	TransmissionAcknowledgeTimeout time.Duration
 	TransmissionMaxRetransmit      uint32

@@ -9,9 +9,10 @@ import (
 	"time"
 
 	dtls "github.com/pion/dtls/v2"
+	dtlsnet "github.com/pion/dtls/v2/pkg/net"
 	"github.com/pion/dtls/v2/pkg/protocol"
 	"github.com/pion/dtls/v2/pkg/protocol/recordlayer"
-	"github.com/pion/transport/v2/udp"
+	"github.com/pion/transport/v3/udp"
 	"go.uber.org/atomic"
 )
 
@@ -69,7 +70,7 @@ func NewDTLSListener(network string, addr string, dtlsCfg *dtls.Config, opts ...
 	}
 
 	if cfg.GoPool == nil {
-		return nil, fmt.Errorf("empty go pool")
+		return nil, errors.New("empty go pool")
 	}
 
 	l := DTLSListener{
@@ -121,7 +122,7 @@ func (l *DTLSListener) accept() error {
 		return err
 	}
 	err = l.goPool(func() {
-		l.send(dtls.Server(c, l.config))
+		l.send(dtls.Server(dtlsnet.PacketConnFromConn(c), c.RemoteAddr(), l.config))
 	})
 	if err != nil {
 		_ = c.Close()
