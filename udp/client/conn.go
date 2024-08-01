@@ -268,7 +268,7 @@ func NewConnWithOpts(session Session, cfg *Config, opts ...Option) *Conn {
 		messagePool:               cfg.MessagePool,
 		numOutstandingInteraction: semaphore.NewWeighted(math.MaxInt64),
 	}
-	cc.msgID.Store(uint32(cfg.GetMID() - 0xffff/2))
+	cc.msgID.Store(pkgMath.CastTo[uint32](cfg.GetMID() - 0xffff/2))
 	cc.blockWise = cfgOpts.createBlockWise(&cc)
 	limitParallelRequests := limitparallelrequests.New(cfg.LimitClientParallelRequests, cfg.LimitClientEndpointParallelRequests, cc.do, cc.doObserve)
 	cc.observationHandler = observation.NewHandler(&cc, cfg.Handler, limitParallelRequests.Do)

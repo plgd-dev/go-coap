@@ -14,12 +14,11 @@ type TCPListener struct {
 	closed   atomic.Bool
 }
 
-func newNetTCPListen(network string, addr string) (*net.TCPListener, error) {
+func newNetTCPListener(network string, addr string) (*net.TCPListener, error) {
 	a, err := net.ResolveTCPAddr(network, addr)
 	if err != nil {
-		return nil, fmt.Errorf("cannot create new net tcp listener: %w", err)
+		return nil, fmt.Errorf("cannot resolve address: %w", err)
 	}
-
 	tcp, err := net.ListenTCP(network, a)
 	if err != nil {
 		return nil, fmt.Errorf("cannot create new net tcp listener: %w", err)
@@ -30,7 +29,7 @@ func newNetTCPListen(network string, addr string) (*net.TCPListener, error) {
 // NewTCPListener creates tcp listener.
 // Known networks are "tcp", "tcp4" (IPv4-only), "tcp6" (IPv6-only).
 func NewTCPListener(network string, addr string) (*TCPListener, error) {
-	tcp, err := newNetTCPListen(network, addr)
+	tcp, err := newNetTCPListener(network, addr)
 	if err != nil {
 		return nil, fmt.Errorf("cannot create new tcp listener: %w", err)
 	}

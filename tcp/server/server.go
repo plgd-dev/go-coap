@@ -17,11 +17,6 @@ import (
 	"github.com/plgd-dev/go-coap/v3/tcp/client"
 )
 
-// A Option sets options such as credentials, codec and keepalive parameters, etc.
-type Option interface {
-	TCPServerApply(cfg *Config)
-}
-
 // Listener defined used by coap
 type Listener interface {
 	Close() error
@@ -34,6 +29,11 @@ type Server struct {
 	ctx         context.Context
 	cancel      context.CancelFunc
 	cfg         *Config
+}
+
+// A Option sets options such as credentials, codec and keepalive parameters, etc.
+type Option interface {
+	TCPServerApply(cfg *Config)
 }
 
 func New(opt ...Option) *Server {
@@ -118,10 +118,9 @@ func (s *Server) checkAcceptError(err error) bool {
 }
 
 func (s *Server) serveConnection(connections *connections.Connections, rw net.Conn) {
-	var cc *client.Conn
 	inactivityMonitor := s.cfg.CreateInactivityMonitor()
 	requestMonitor := s.cfg.RequestMonitor
-	cc = s.createConn(coapNet.NewConn(rw), inactivityMonitor, requestMonitor)
+	cc := s.createConn(coapNet.NewConn(rw), inactivityMonitor, requestMonitor)
 	if s.cfg.OnNewConn != nil {
 		s.cfg.OnNewConn(cc)
 	}
@@ -160,7 +159,7 @@ func (s *Server) Serve(l Listener) error {
 		if ok := s.checkAcceptError(err); !ok {
 			return nil
 		}
-		if rw == nil {
+		if err != nil || rw == nil {
 			continue
 		}
 		wg.Add(1)

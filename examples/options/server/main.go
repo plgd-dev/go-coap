@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"log"
 
-	piondtls "github.com/pion/dtls/v2"
+	piondtls "github.com/pion/dtls/v3"
 	coap "github.com/plgd-dev/go-coap/v3"
 	"github.com/plgd-dev/go-coap/v3/message"
 	"github.com/plgd-dev/go-coap/v3/message/codes"
@@ -46,10 +46,14 @@ func handleOnNewConn(cc *udpClient.Conn) {
 	if !ok {
 		log.Fatalf("invalid type %T", cc.NetConn())
 	}
-	clientId := dtlsConn.ConnectionState().IdentityHint
+	state, ok := dtlsConn.ConnectionState()
+	if !ok {
+		log.Fatalf("cannot get connection state")
+	}
+	clientId := state.IdentityHint
 	cc.SetContextValue("clientId", clientId)
 	cc.AddOnClose(func() {
-		clientId := dtlsConn.ConnectionState().IdentityHint
+		clientId := state.IdentityHint
 		log.Printf("closed connection clientId: %s", clientId)
 	})
 }

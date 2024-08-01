@@ -89,10 +89,18 @@ func (s *Server) checkAndSetListener(l Listener) error {
 	s.listenMutex.Lock()
 	defer s.listenMutex.Unlock()
 	if s.listen != nil {
-		return errors.New("server already serve listener")
+		return errors.New("server already serves listener")
 	}
 	s.listen = l
 	return nil
+}
+
+func (s *Server) popListener() Listener {
+	s.listenMutex.Lock()
+	defer s.listenMutex.Unlock()
+	l := s.listen
+	s.listen = nil
+	return l
 }
 
 func (s *Server) checkAcceptError(err error) bool {
@@ -116,7 +124,14 @@ func (s *Server) checkAcceptError(err error) bool {
 	}
 }
 
-func (s *Server) serveConnection(connections *connections.Connections, cc *udpClient.Conn) {
+func (s *Server) serveConnection(connections *connections.Connections, rw net.Conn) {
+	inactivityMonitor := s.cfg.CreateInactivityMonitor()
+	requestMonitor := s.cfg.RequestMonitor
+	dtlsConn := coapNet.NewConn(rw)
+	cc := s.createConn(dtlsConn, inactivityMonitor, requestMonitor)
+	if s.cfg.OnNewConn != nil {
+		s.cfg.OnNewConn(cc)
+	}
 	connections.Store(cc)
 	defer connections.Delete(cc)
 
@@ -129,16 +144,14 @@ func (s *Server) Serve(l Listener) error {
 	if s.cfg.BlockwiseSZX > blockwise.SZX1024 {
 		return errors.New("invalid blockwiseSZX")
 	}
+
 	err := s.checkAndSetListener(l)
 	if err != nil {
 		return err
 	}
 	defer func() {
-		s.listenMutex.Lock()
-		defer s.listenMutex.Unlock()
-		s.listen = nil
+		s.Stop()
 	}()
-
 	var wg sync.WaitGroup
 	defer wg.Wait()
 
@@ -158,17 +171,9 @@ func (s *Server) Serve(l Listener) error {
 			continue
 		}
 		wg.Add(1)
-		var cc *udpClient.Conn
-		inactivityMonitor := s.cfg.CreateInactivityMonitor()
-		requestMonitor := s.cfg.RequestMonitor
-
-		cc = s.createConn(coapNet.NewConn(rw), inactivityMonitor, requestMonitor)
-		if s.cfg.OnNewConn != nil {
-			s.cfg.OnNewConn(cc)
-		}
 		go func() {
 			defer wg.Done()
-			s.serveConnection(connections, cc)
+			s.serveConnection(connections, rw)
 		}()
 	}
 }
@@ -176,14 +181,12 @@ func (s *Server) Serve(l Listener) error {
 // Stop stops server without wait of ends Serve function.
 func (s *Server) Stop() {
 	s.cancel()
-	s.listenMutex.Lock()
-	l := s.listen
-	s.listen = nil
-	s.listenMutex.Unlock()
-	if l != nil {
-		if err := l.Close(); err != nil {
-			s.cfg.Errors(fmt.Errorf("cannot close listener: %w", err))
-		}
+	l := s.popListener()
+	if l == nil {
+		return
+	}
+	if err := l.Close(); err != nil {
+		s.cfg.Errors(fmt.Errorf("cannot close listener: %w", err))
 	}
 }
 
