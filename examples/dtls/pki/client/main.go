@@ -7,13 +7,13 @@ import (
 	"os"
 	"time"
 
-	piondtls "github.com/pion/dtls/v2"
+	piondtls "github.com/pion/dtls/v3"
 	"github.com/plgd-dev/go-coap/v3/dtls"
 	"github.com/plgd-dev/go-coap/v3/examples/dtls/pki"
 )
 
 func main() {
-	config, err := createClientConfig(context.Background())
+	config, err := createClientConfig()
 	if err != nil {
 		log.Fatalln(err)
 		return
@@ -36,7 +36,7 @@ func main() {
 	log.Printf("Response payload: %+v", resp)
 }
 
-func createClientConfig(ctx context.Context) (*piondtls.Config, error) {
+func createClientConfig() (*piondtls.Config, error) {
 	// root cert
 	ca, rootBytes, _, caPriv, err := pki.GenerateCA()
 	if err != nil {

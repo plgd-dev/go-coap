@@ -19,7 +19,7 @@ type TLSListener struct {
 // NewTLSListener creates tcp listener.
 // Known networks are "tcp", "tcp4" (IPv4-only), "tcp6" (IPv6-only).
 func NewTLSListener(network string, addr string, tlsCfg *tls.Config) (*TLSListener, error) {
-	tcp, err := newNetTCPListen(network, addr)
+	tcp, err := newNetTCPListener(network, addr)
 	if err != nil {
 		return nil, fmt.Errorf("cannot create new tls listener: %w", err)
 	}
@@ -40,11 +40,7 @@ func (l *TLSListener) AcceptWithContext(ctx context.Context) (net.Conn, error) {
 	if l.closed.Load() {
 		return nil, ErrListenerIsClosed
 	}
-	rw, err := l.listener.Accept()
-	if err != nil {
-		return nil, err
-	}
-	return rw, nil
+	return l.listener.Accept()
 }
 
 // Accept waits for a generic Conn.

@@ -10,7 +10,7 @@ import (
 	"math/big"
 	"time"
 
-	piondtls "github.com/pion/dtls/v2"
+	piondtls "github.com/pion/dtls/v3"
 	"github.com/plgd-dev/go-coap/v3/dtls"
 	"github.com/plgd-dev/go-coap/v3/examples/dtls/pki"
 	"github.com/plgd-dev/go-coap/v3/message"
@@ -26,7 +26,18 @@ func onNewConn(cc *client.Conn) {
 	if !ok {
 		log.Fatalf("invalid type %T", cc.NetConn())
 	}
-	clientCert, err := x509.ParseCertificate(dtlsConn.ConnectionState().PeerCertificates[0])
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second*3)
+	defer cancel()
+	// force handshake otherwhise ConnectionState is not available
+	err := dtlsConn.HandshakeContext(ctx)
+	if err != nil {
+		log.Fatalf("handshake failed: %v", err)
+	}
+	state, ok := dtlsConn.ConnectionState()
+	if !ok {
+		log.Fatalf("cannot get connection state")
+	}
+	clientCert, err := x509.ParseCertificate(state.PeerCertificates[0])
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -57,7 +68,7 @@ func main() {
 	m := mux.NewRouter()
 	m.Handle("/a", mux.HandlerFunc(handleA))
 
-	config, err := createServerConfig(context.Background())
+	config, err := createServerConfig()
 	if err != nil {
 		log.Fatalln(err)
 		return
@@ -76,7 +87,7 @@ func listenAndServeDTLS(network string, addr string, config *piondtls.Config, ha
 	return s.Serve(l)
 }
 
-func createServerConfig(ctx context.Context) (*piondtls.Config, error) {
+func createServerConfig() (*piondtls.Config, error) {
 	// root cert
 	ca, rootBytes, _, caPriv, err := pki.GenerateCA()
 	if err != nil {
@@ -102,8 +113,5 @@ func createServerConfig(ctx context.Context) (*piondtls.Config, error) {
 		ExtendedMasterSecret: piondtls.RequireExtendedMasterSecret,
 		ClientCAs:            certPool,
 		ClientAuth:           piondtls.RequireAndVerifyClientCert,
-		ConnectContextMaker: func() (context.Context, func()) {
-			return context.WithTimeout(ctx, 30*time.Second)
-		},
 	}, nil
 }

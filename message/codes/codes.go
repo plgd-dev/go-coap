@@ -96,7 +96,7 @@ var strToCode = map[string]Code{
 }
 
 func getMaxCodeLen() int {
-	// maxLen uint32 as string binary representation: "0b" + 32 digits
+	// max uint32 as string binary representation: "0b" + 32 digits
 	maxLen := 34
 	for k := range strToCode {
 		kLen := len(k)

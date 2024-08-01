@@ -632,15 +632,15 @@ func TestClientKeepAliveMonitor(t *testing.T) {
 	)
 
 	var serverWg sync.WaitGroup
-	defer func() {
-		sd.Stop()
-		serverWg.Wait()
-	}()
 	serverWg.Add(1)
 	go func() {
 		defer serverWg.Done()
 		errS := sd.Serve(ld)
 		assert.NoError(t, errS)
+	}()
+	defer func() {
+		sd.Stop()
+		serverWg.Wait()
 	}()
 
 	cc, err := Dial(

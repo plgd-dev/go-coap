@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"log"
 
-	piondtls "github.com/pion/dtls/v2"
+	piondtls "github.com/pion/dtls/v3"
 	coap "github.com/plgd-dev/go-coap/v3"
 	"github.com/plgd-dev/go-coap/v3/message"
 	"github.com/plgd-dev/go-coap/v3/message/codes"
