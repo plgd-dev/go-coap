@@ -95,6 +95,14 @@ func (s *Server) checkAndSetListener(l Listener) error {
 	return nil
 }
 
+func (s *Server) popListener() Listener {
+	s.listenMutex.Lock()
+	defer s.listenMutex.Unlock()
+	l := s.listen
+	s.listen = nil
+	return l
+}
+
 func (s *Server) checkAcceptError(err error) bool {
 	if err == nil {
 		return true
@@ -134,11 +142,8 @@ func (s *Server) Serve(l Listener) error {
 		return err
 	}
 	defer func() {
-		s.listenMutex.Lock()
-		defer s.listenMutex.Unlock()
-		s.listen = nil
+		s.Stop()
 	}()
-
 	var wg sync.WaitGroup
 	defer wg.Wait()
 
@@ -158,11 +163,9 @@ func (s *Server) Serve(l Listener) error {
 			continue
 		}
 		wg.Add(1)
-		var cc *udpClient.Conn
 		inactivityMonitor := s.cfg.CreateInactivityMonitor()
 		requestMonitor := s.cfg.RequestMonitor
-
-		cc = s.createConn(coapNet.NewConn(rw), inactivityMonitor, requestMonitor)
+		cc := s.createConn(coapNet.NewConn(rw), inactivityMonitor, requestMonitor)
 		if s.cfg.OnNewConn != nil {
 			s.cfg.OnNewConn(cc)
 		}
@@ -176,14 +179,12 @@ func (s *Server) Serve(l Listener) error {
 // Stop stops server without wait of ends Serve function.
 func (s *Server) Stop() {
 	s.cancel()
-	s.listenMutex.Lock()
-	l := s.listen
-	s.listen = nil
-	s.listenMutex.Unlock()
-	if l != nil {
-		if err := l.Close(); err != nil {
-			s.cfg.Errors(fmt.Errorf("cannot close listener: %w", err))
-		}
+	l := s.popListener()
+	if l == nil {
+		return
+	}
+	if err := l.Close(); err != nil {
+		s.cfg.Errors(fmt.Errorf("cannot close listener: %w", err))
 	}
 }
 

@@ -5,9 +5,6 @@ linters-settings:
     enable:
       - nilness
       - shadow
-  gomoddirectives:
-    replace-allow-list:
-      - github.com/pion/dtls/v2
 
 linters:
   enable:

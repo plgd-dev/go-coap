@@ -160,7 +160,7 @@ func (s *Server) Serve(l Listener) error {
 		if ok := s.checkAcceptError(err); !ok {
 			return nil
 		}
-		if rw == nil {
+		if err != nil || rw == nil {
 			continue
 		}
 		wg.Add(1)

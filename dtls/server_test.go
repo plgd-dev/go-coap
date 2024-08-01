@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	piondtls "github.com/pion/dtls/v2"
+	piondtls "github.com/pion/dtls/v3"
 	"github.com/plgd-dev/go-coap/v3/dtls"
 	"github.com/plgd-dev/go-coap/v3/examples/dtls/pki"
 	"github.com/plgd-dev/go-coap/v3/message"
@@ -85,7 +85,7 @@ func TestServerCleanUpConns(t *testing.T) {
 	<-cc.Done()
 }
 
-func createDTLSConfig(ctx context.Context) (serverConfig *piondtls.Config, clientConfig *piondtls.Config, clientSerial *big.Int, err error) {
+func createDTLSConfig() (serverConfig *piondtls.Config, clientConfig *piondtls.Config, clientSerial *big.Int, err error) {
 	// root cert
 	ca, rootBytes, _, caPriv, err := pki.GenerateCA()
 	if err != nil {
@@ -111,9 +111,6 @@ func createDTLSConfig(ctx context.Context) (serverConfig *piondtls.Config, clien
 		ExtendedMasterSecret: piondtls.RequireExtendedMasterSecret,
 		ClientCAs:            certPool,
 		ClientAuth:           piondtls.RequireAndVerifyClientCert,
-		ConnectContextMaker: func() (context.Context, func()) {
-			return context.WithTimeout(ctx, 30*time.Second)
-		},
 	}
 
 	// client cert
@@ -142,9 +139,9 @@ func createDTLSConfig(ctx context.Context) (serverConfig *piondtls.Config, clien
 }
 
 func TestServerSetContextValueWithPKI(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second*3600)
+	ctx, cancel := context.WithTimeout(context.Background(), Timeout)
 	defer cancel()
-	serverCgf, clientCgf, clientSerial, err := createDTLSConfig(ctx)
+	serverCgf, clientCgf, clientSerial, err := createDTLSConfig()
 	require.NoError(t, err)
 
 	ld, err := coapNet.NewDTLSListener("udp4", "", serverCgf)
@@ -157,8 +154,10 @@ func TestServerSetContextValueWithPKI(t *testing.T) {
 	onNewConn := func(cc *client.Conn) {
 		dtlsConn, ok := cc.NetConn().(*piondtls.Conn)
 		require.True(t, ok)
+		state, ok := dtlsConn.ConnectionState()
+		require.True(t, ok)
 		// set connection context certificate
-		clientCert, errP := x509.ParseCertificate(dtlsConn.ConnectionState().PeerCertificates[0])
+		clientCert, errP := x509.ParseCertificate(state.PeerCertificates[0])
 		require.NoError(t, errP)
 		cc.SetContextValue("client-cert", clientCert)
 	}
@@ -191,9 +190,9 @@ func TestServerSetContextValueWithPKI(t *testing.T) {
 func TestServerInactiveMonitor(t *testing.T) {
 	var inactivityDetected atomic.Bool
 
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second*8)
+	ctx, cancel := context.WithTimeout(context.Background(), Timeout)
 	defer cancel()
-	serverCgf, clientCgf, _, err := createDTLSConfig(ctx)
+	serverCgf, clientCgf, _, err := createDTLSConfig()
 	require.NoError(t, err)
 
 	ld, err := coapNet.NewDTLSListener("udp4", "", serverCgf)
@@ -266,9 +265,9 @@ func TestServerInactiveMonitor(t *testing.T) {
 func TestServerKeepAliveMonitor(t *testing.T) {
 	var inactivityDetected atomic.Bool
 
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second*8)
+	ctx, cancel := context.WithTimeout(context.Background(), Timeout)
 	defer cancel()
-	serverCgf, clientCgf, _, err := createDTLSConfig(ctx)
+	serverCgf, clientCgf, _, err := createDTLSConfig()
 	require.NoError(t, err)
 
 	ld, err := coapNet.NewDTLSListener("udp4", "", serverCgf)

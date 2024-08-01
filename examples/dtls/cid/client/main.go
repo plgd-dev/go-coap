@@ -6,7 +6,7 @@ import (
 	"log"
 	"net"
 
-	piondtls "github.com/pion/dtls/v2"
+	piondtls "github.com/pion/dtls/v3"
 	"github.com/plgd-dev/go-coap/v3/dtls"
 )
 
@@ -49,7 +49,10 @@ func main() {
 	log.Printf("Response payload: %+v", resp)
 
 	// Export state to resume connection from another address.
-	state := client.ConnectionState()
+	state, ok := client.ConnectionState()
+	if !ok {
+		log.Fatalf("Error exporting DTLS state")
+	}
 
 	// Setup second UDP listener on a different address.
 	udpconn, err = net.ListenUDP("udp", nil)
