@@ -4,7 +4,7 @@ go 1.20
 
 require (
 	github.com/dsnet/golib/memfile v1.0.0
-	github.com/pion/dtls/v2 v2.2.8-0.20240701035148-45e16a098c47
+	github.com/pion/dtls/v2 v2.2.12
 	github.com/pion/transport/v3 v3.0.2
 	github.com/stretchr/testify v1.9.0
 	go.uber.org/atomic v1.11.0
@@ -24,4 +24,4 @@ require (
 
 // note: github.com/pion/dtls/v2/pkg/net package is not yet available in release branches,
 // so we force to the use of the pinned master branch
-replace github.com/pion/dtls/v2 => github.com/pion/dtls/v2 v2.2.8-0.20240701035148-45e16a098c47
+replace github.com/pion/dtls/v2 => github.com/pion/dtls/v2 v2.2.12
