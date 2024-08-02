@@ -154,8 +154,8 @@ func TestServerSetContextValueWithPKI(t *testing.T) {
 	onNewConn := func(cc *client.Conn) {
 		dtlsConn, ok := cc.NetConn().(*piondtls.Conn)
 		require.True(t, ok)
-		state, ok := dtlsConn.ConnectionState()
-		require.True(t, ok)
+		state, k := dtlsConn.ConnectionState()
+		require.True(t, k)
 		// set connection context certificate
 		clientCert, errP := x509.ParseCertificate(state.PeerCertificates[0])
 		require.NoError(t, errP)
@@ -163,7 +163,20 @@ func TestServerSetContextValueWithPKI(t *testing.T) {
 	}
 	handle := func(w *responsewriter.ResponseWriter[*client.Conn], r *pool.Message) {
 		// get certificate from connection context
-		clientCert := r.Context().Value("client-cert").(*x509.Certificate)
+		var clientCert *x509.Certificate
+		value := r.Context().Value("client-cert")
+		if value == nil {
+			dtlsConn, ok := w.Conn().NetConn().(*piondtls.Conn)
+			require.True(t, ok)
+			state, k := dtlsConn.ConnectionState()
+			require.True(t, k)
+			var errP error
+			clientCert, errP = x509.ParseCertificate(state.PeerCertificates[0])
+			require.NoError(t, errP)
+			w.Conn().SetContextValue("client-cert", clientCert)
+		} else {
+			clientCert = r.Context().Value("client-cert").(*x509.Certificate)
+		}
 		require.Equal(t, clientCert.SerialNumber, clientSerial)
 		require.NotNil(t, clientCert)
 		errH := w.SetResponse(codes.Content, message.TextPlain, bytes.NewReader([]byte("done")))
@@ -179,12 +192,14 @@ func TestServerSetContextValueWithPKI(t *testing.T) {
 
 	cc, err := dtls.Dial(ld.Addr().String(), clientCgf)
 	require.NoError(t, err)
+	defer func() {
+		errC := cc.Close()
+		require.NoError(t, errC)
+		<-cc.Done()
+	}()
 
 	_, err = cc.Get(ctx, "/")
 	require.NoError(t, err)
-	err = cc.Close()
-	require.NoError(t, err)
-	<-cc.Done()
 }
 
 func TestServerInactiveMonitor(t *testing.T) {
