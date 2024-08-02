@@ -98,7 +98,7 @@ func Client(conn *dtls.Conn, opts ...udp.Option) *udpClient.Conn {
 	}
 
 	monitor := cfg.CreateInactivityMonitor()
-	l := coapNet.NewConn(conn)
+	l := coapNet.NewDTLSConn(conn)
 	session := server.NewSession(cfg.Ctx,
 		l,
 		cfg.MaxMessageSize,

@@ -165,7 +165,7 @@ func (s *Server) Serve(l Listener) error {
 		wg.Add(1)
 		inactivityMonitor := s.cfg.CreateInactivityMonitor()
 		requestMonitor := s.cfg.RequestMonitor
-		cc := s.createConn(coapNet.NewConn(rw), inactivityMonitor, requestMonitor)
+		cc := s.createConn(coapNet.NewDTLSConn(rw), inactivityMonitor, requestMonitor)
 		if s.cfg.OnNewConn != nil {
 			s.cfg.OnNewConn(cc)
 		}
