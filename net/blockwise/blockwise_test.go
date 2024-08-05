@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"io"
+	"net"
 	"testing"
 	"time"
 
@@ -52,6 +53,10 @@ func fromPoolMessage(m *pool.Message) *testmessage {
 
 type testClient struct {
 	p *pool.Pool
+}
+
+func (c *testClient) RemoteAddr() net.Addr {
+	return &net.IPAddr{IP: net.IPv4(127, 0, 0, 1)}
 }
 
 func newTestClient() *testClient {

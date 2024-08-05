@@ -278,12 +278,12 @@ func (s *Server) getOrCreateConn(udpConn *coapNet.UDPConn, raddr *net.UDPAddr) (
 				v,
 				s.cfg.BlockwiseTransferTimeout,
 				s.cfg.Errors,
-				func(token message.Token) (*pool.Message, bool) {
-					msg, ok := v.GetObservationRequest(token)
+				func(hash uint64) (*pool.Message, bool) {
+					msg, ok := v.GetObservationRequest(hash)
 					if ok {
 						return msg, ok
 					}
-					return s.multicastRequests.LoadWithFunc(token.Hash(), func(m *pool.Message) *pool.Message {
+					return s.multicastRequests.LoadWithFunc(hash, func(m *pool.Message) *pool.Message {
 						msg := v.AcquireMessage(m.Context())
 						msg.ResetOptionsTo(m.Options())
 						msg.SetCode(m.Code())
