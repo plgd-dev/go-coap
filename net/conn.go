@@ -92,14 +92,14 @@ func (c *Conn) handshake(ctx context.Context) error {
 		if err == nil {
 			return nil
 		}
-		if !c.cfg.disabledManualCloseAfterHandshake {
-			errC := c.Close()
-			if errC == nil {
-				return err
-			}
-			return fmt.Errorf("%v", []error{err, errC})
+		// if !c.cfg.disabledManualCloseAfterHandshake {
+		errC := c.Close()
+		if errC == nil {
+			return err
 		}
-		return err
+		return fmt.Errorf("%v", []error{err, errC})
+		// }
+		// return err
 	}
 	return nil
 }
