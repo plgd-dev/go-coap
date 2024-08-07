@@ -9,20 +9,45 @@ import (
 	"go.uber.org/atomic"
 )
 
+type ConnOption interface {
+	Apply(*ConnConfig)
+}
+
+type ConnConfig struct {
+	disabledManualCloseAfterHandshake bool
+}
+
+func (h ConnConfig) Apply(o *ConnConfig) {
+	o.disabledManualCloseAfterHandshake = h.disabledManualCloseAfterHandshake
+}
+
+func WithDisabledManualCloseAfterHandshake() ConnConfig {
+	return ConnConfig{
+		disabledManualCloseAfterHandshake: true,
+	}
+}
+
 // Conn is a generic stream-oriented network connection that provides Read/Write with context.
 //
 // Multiple goroutines may invoke methods on a Conn simultaneously.
 type Conn struct {
 	connection       net.Conn
 	closed           atomic.Bool
+	cfg              ConnConfig
 	handshakeContext func(ctx context.Context) error
 	lock             sync.Mutex
 }
 
 // NewConn creates connection over net.Conn.
-func NewConn(c net.Conn) *Conn {
+func NewConn(c net.Conn, opts ...ConnOption) *Conn {
+	cfg := ConnConfig{}
+	for _, o := range opts {
+		o.Apply(&cfg)
+	}
+
 	connection := Conn{
 		connection: c,
+		cfg:        cfg,
 	}
 
 	if v, ok := c.(interface {
@@ -32,6 +57,10 @@ func NewConn(c net.Conn) *Conn {
 	}
 
 	return &connection
+}
+
+func NewDTLSConn(c net.Conn) *Conn {
+	return NewConn(c, WithDisabledManualCloseAfterHandshake())
 }
 
 // LocalAddr returns the local network address. The Addr returned is shared by all invocations of LocalAddr, so do not modify it.
@@ -63,11 +92,14 @@ func (c *Conn) handshake(ctx context.Context) error {
 		if err == nil {
 			return nil
 		}
+		// if !c.cfg.disabledManualCloseAfterHandshake {
 		errC := c.Close()
 		if errC == nil {
 			return err
 		}
 		return fmt.Errorf("%v", []error{err, errC})
+		// }
+		// return err
 	}
 	return nil
 }

@@ -1,4 +1,4 @@
-package net
+package net_test
 
 import (
 	"context"
@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	coapNet "github.com/plgd-dev/go-coap/v3/net"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -82,7 +83,7 @@ func TestTLSListenerAcceptWithContext(t *testing.T) {
 	}()
 	config := SetTLSConfig(t)
 
-	listener, err := NewTLSListener("tcp", "127.0.0.1:", config)
+	listener, err := coapNet.NewTLSListener("tcp", "127.0.0.1:", config)
 	require.NoError(t, err)
 	defer func() {
 		err := listener.Close()
@@ -168,7 +169,7 @@ func TestTLSListenerCheckForInfinitLoop(t *testing.T) {
 	}()
 	config := SetTLSConfig(t)
 
-	listener, err := NewTLSListener("tcp", "127.0.0.1:", config)
+	listener, err := coapNet.NewTLSListener("tcp", "127.0.0.1:", config)
 	require.NoError(t, err)
 	defer func() {
 		err := listener.Close()
@@ -215,7 +216,7 @@ func TestTLSListenerCheckForInfinitLoop(t *testing.T) {
 			}
 			require.NoError(t, err)
 			b := make([]byte, 1024)
-			c := NewConn(con)
+			c := coapNet.NewConn(con)
 			_, err = c.ReadWithContext(context.Background(), b)
 			require.Error(t, err)
 			assert.Contains(t, err.Error(), "EOF")

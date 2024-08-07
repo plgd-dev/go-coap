@@ -6,7 +6,7 @@ import (
 	"errors"
 	"fmt"
 
-	piondtls "github.com/pion/dtls/v2"
+	piondtls "github.com/pion/dtls/v3"
 	"github.com/plgd-dev/go-coap/v3/dtls"
 	dtlsServer "github.com/plgd-dev/go-coap/v3/dtls/server"
 	"github.com/plgd-dev/go-coap/v3/mux"

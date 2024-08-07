@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/pion/dtls/v2"
-	dtlsnet "github.com/pion/dtls/v2/pkg/net"
+	"github.com/pion/dtls/v3"
+	dtlsnet "github.com/pion/dtls/v3/pkg/net"
 	"github.com/plgd-dev/go-coap/v3/dtls/server"
 	"github.com/plgd-dev/go-coap/v3/message"
 	"github.com/plgd-dev/go-coap/v3/message/codes"
@@ -98,7 +98,7 @@ func Client(conn *dtls.Conn, opts ...udp.Option) *udpClient.Conn {
 	}
 
 	monitor := cfg.CreateInactivityMonitor()
-	l := coapNet.NewConn(conn)
+	l := coapNet.NewDTLSConn(conn)
 	session := server.NewSession(cfg.Ctx,
 		l,
 		cfg.MaxMessageSize,
