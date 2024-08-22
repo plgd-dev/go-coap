@@ -14,6 +14,7 @@ import (
 	"github.com/plgd-dev/go-coap/v3/message/pool"
 	coapNet "github.com/plgd-dev/go-coap/v3/net"
 	"github.com/plgd-dev/go-coap/v3/net/monitor/inactivity"
+	"github.com/plgd-dev/go-coap/v3/pkg/math"
 	"github.com/plgd-dev/go-coap/v3/tcp/coder"
 	"go.uber.org/atomic"
 )
@@ -151,11 +152,11 @@ func seekBufferToNextMessage(buffer *bytes.Buffer, msgSize int) *bytes.Buffer {
 	trimmed := 0
 	for trimmed != msgSize {
 		b := make([]byte, 4096)
-		max := 4096
-		if msgSize-trimmed < max {
-			max = msgSize - trimmed
+		toRead := 4096
+		if msgSize-trimmed < toRead {
+			toRead = msgSize - trimmed
 		}
-		v, _ := buffer.Read(b[:max])
+		v, _ := buffer.Read(b[:toRead])
 		trimmed += v
 	}
 	return buffer
@@ -171,7 +172,7 @@ func (s *Session) processBuffer(buffer *bytes.Buffer, cc *Conn) error {
 		if header.MessageLength > s.maxMessageSize {
 			return fmt.Errorf("max message size(%v) was exceeded %v", s.maxMessageSize, header.MessageLength)
 		}
-		if uint32(buffer.Len()) < header.MessageLength {
+		if math.CastTo[uint32](buffer.Len()) < header.MessageLength {
 			return nil
 		}
 		req := s.messagePool.AcquireMessage(s.Context())

@@ -14,6 +14,7 @@ import (
 	"github.com/plgd-dev/go-coap/v3/message/pool"
 	"github.com/plgd-dev/go-coap/v3/net/responsewriter"
 	"github.com/plgd-dev/go-coap/v3/pkg/cache"
+	"github.com/plgd-dev/go-coap/v3/pkg/math"
 	"golang.org/x/sync/semaphore"
 )
 
@@ -98,13 +99,13 @@ func EncodeBlockOption(szx SZX, blockNumber int64, moreBlocksFollowing bool) (ui
 	if blockNumber > maxBlockNumber {
 		return 0, ErrBlockNumberExceedLimit
 	}
-	blockVal := uint32(blockNumber << 4)
+	blockVal := math.CastTo[uint32](blockNumber << 4)
 	m := uint32(0)
 	if moreBlocksFollowing {
 		m = 1
 	}
 	blockVal += m << 3
-	blockVal += uint32(szx)
+	blockVal += math.CastTo[uint32](szx)
 	return blockVal, nil
 }
 
@@ -238,7 +239,11 @@ func (b *BlockWise[C]) Do(r *pool.Message, maxSzx SZX, maxMessageSize uint32, do
 	}
 	req := b.cloneMessage(r)
 	defer b.cc.ReleaseMessage(req)
-	req.SetOptionUint32(message.Size1, uint32(payloadSize))
+	payloadSizeUint32, err := math.SafeCastTo[uint32](payloadSize)
+	if err != nil {
+		return nil, fmt.Errorf("cannot set payload size: %w", err)
+	}
+	req.SetOptionUint32(message.Size1, payloadSizeUint32)
 	block, err := EncodeBlockOption(maxSzx, 0, true)
 	if err != nil {
 		return nil, fmt.Errorf("cannot encode block option(%v, %v, %v) to bw request: %w", maxSzx, 0, true, err)
@@ -436,9 +441,7 @@ func (b *BlockWise[C]) createSendingMessage(sendingMessage *pool.Message, maxSZX
 		b.cc.ReleaseMessage(sendMessage)
 		return nil, false, payloadSizeError(err)
 	}
-	if szx > maxSZX {
-		szx = maxSZX
-	}
+	szx = getSzx(szx, maxSZX)
 	newBufLen := bufferSize(szx, maxMessageSize)
 	off := num * szx.Size()
 	if blockType == message.Block1 {
@@ -471,13 +474,19 @@ func (b *BlockWise[C]) createSendingMessage(sendingMessage *pool.Message, maxSZX
 		return nil, false, fmt.Errorf("cannot read response: %w", err)
 	}
 
+	payloadSizeUint32, err := math.SafeCastTo[uint32](payloadSize)
+	if err != nil {
+		b.cc.ReleaseMessage(sendMessage)
+		return nil, false, fmt.Errorf("cannot set payload size: %w", err)
+	}
+	sendMessage.SetOptionUint32(sizeType, payloadSizeUint32)
+
 	buf = buf[:readed]
 	sendMessage.SetBody(bytes.NewReader(buf))
 	more = true
 	if offSeek+int64(readed) == payloadSize {
 		more = false
 	}
-	sendMessage.SetOptionUint32(sizeType, uint32(payloadSize))
 	num = (offSeek) / szx.Size()
 	block, err = EncodeBlockOption(szx, num, more)
 	if err != nil {

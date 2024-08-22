@@ -7,6 +7,7 @@ import (
 
 	"github.com/plgd-dev/go-coap/v3/message"
 	"github.com/plgd-dev/go-coap/v3/message/codes"
+	"github.com/plgd-dev/go-coap/v3/pkg/math"
 )
 
 var DefaultCoder = new(Coder)
@@ -60,7 +61,8 @@ func (c *Coder) Encode(m message.Message, buf []byte) (int, error) {
 	}
 
 	tmpbuf := []byte{0, 0}
-	binary.BigEndian.PutUint16(tmpbuf, uint16(m.MessageID))
+	// safe: checked by message.ValidateMID above
+	binary.BigEndian.PutUint16(tmpbuf, math.CastTo[uint16](m.MessageID))
 
 	buf[0] = (1 << 6) | byte(m.Type)<<4 | byte(0xf&len(m.Token))
 	buf[1] = byte(m.Code)

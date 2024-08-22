@@ -373,7 +373,10 @@ func (r *Message) AddOptionUint32(opt message.OptionID, value uint32) {
 
 func (r *Message) ContentFormat() (message.MediaType, error) {
 	v, err := r.GetOptionUint32(message.ContentFormat)
-	return message.MediaType(v), err
+	if err != nil {
+		return message.MediaType(0), err
+	}
+	return message.MediaTypeFromNumber(v)
 }
 
 func (r *Message) HasOption(id message.OptionID) bool {
@@ -400,7 +403,10 @@ func (r *Message) SetAccept(contentFormat message.MediaType) {
 // Accept get's accept option.
 func (r *Message) Accept() (message.MediaType, error) {
 	v, err := r.GetOptionUint32(message.Accept)
-	return message.MediaType(v), err
+	if err != nil {
+		return message.MediaType(0), err
+	}
+	return message.MediaTypeFromNumber(v)
 }
 
 func (r *Message) BodySize() (int64, error) {

@@ -6,6 +6,7 @@ import (
 
 	"github.com/plgd-dev/go-coap/v3/message"
 	"github.com/plgd-dev/go-coap/v3/message/codes"
+	"github.com/plgd-dev/go-coap/v3/pkg/math"
 )
 
 var DefaultCoder = new(Coder)
@@ -46,13 +47,13 @@ func getHeader(messageLength int) (uint8, []byte) {
 	if messageLength < MessageLength15Base {
 		extLen := messageLength - MessageLength14Base
 		extLenBytes := make([]byte, 2)
-		binary.BigEndian.PutUint16(extLenBytes, uint16(extLen))
+		binary.BigEndian.PutUint16(extLenBytes, math.CastTo[uint16](extLen))
 		return 14, extLenBytes
 	}
 	if messageLength < messageMaxLen {
 		extLen := messageLength - MessageLength15Base
 		extLenBytes := make([]byte, 4)
-		binary.BigEndian.PutUint32(extLenBytes, uint32(extLen))
+		binary.BigEndian.PutUint32(extLenBytes, math.CastTo[uint32](extLen))
 		return 15, extLenBytes
 	}
 	return 0, nil
@@ -192,7 +193,7 @@ func (c *Coder) DecodeHeader(data []byte, h *MessageHeader) (int, error) {
 		opLen = MessageLength15Base + int(extLen)
 	}
 
-	h.MessageLength = hdrOff + 1 + uint32(tkl) + uint32(opLen)
+	h.MessageLength = hdrOff + 1 + uint32(tkl) + math.CastTo[uint32](opLen)
 	if len(data) < 1 {
 		return -1, message.ErrShortRead
 	}
@@ -229,12 +230,12 @@ func (c *Coder) DecodeWithHeader(data []byte, header MessageHeader, m *message.M
 		return -1, err
 	}
 	data = data[proc:]
-	processed += uint32(proc)
+	processed += math.CastTo[uint32](proc)
 
 	if len(data) > 0 {
 		m.Payload = data
 	}
-	processed += uint32(len(data))
+	processed += math.CastTo[uint32](len(data))
 	m.Code = header.Code
 	m.Token = header.Token
 
@@ -247,7 +248,7 @@ func (c *Coder) Decode(data []byte, m *message.Message) (int, error) {
 	if err != nil {
 		return -1, err
 	}
-	if uint32(len(data)) < header.MessageLength {
+	if math.CastTo[uint32](len(data)) < header.MessageLength {
 		return -1, message.ErrShortRead
 	}
 	return c.DecodeWithHeader(data[header.Length:], header, m)

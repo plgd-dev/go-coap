@@ -23,6 +23,7 @@ import (
 	"github.com/plgd-dev/go-coap/v3/pkg/cache"
 	coapErrors "github.com/plgd-dev/go-coap/v3/pkg/errors"
 	"github.com/plgd-dev/go-coap/v3/pkg/fn"
+	pkgMath "github.com/plgd-dev/go-coap/v3/pkg/math"
 	coapSync "github.com/plgd-dev/go-coap/v3/pkg/sync"
 	"github.com/plgd-dev/go-coap/v3/udp/coder"
 	"go.uber.org/atomic"
@@ -76,7 +77,7 @@ type midElement struct {
 	handler    HandlerFunc
 	start      time.Time
 	deadline   time.Time
-	retransmit atomic.Int32
+	retransmit atomic.Uint32
 
 	private struct {
 		sync.Mutex
@@ -93,7 +94,7 @@ func (m *midElement) ReleaseMessage(cc *Conn) {
 	}
 }
 
-func (m *midElement) IsExpired(now time.Time, maxRetransmit int32) bool {
+func (m *midElement) IsExpired(now time.Time, maxRetransmit uint32) bool {
 	if !m.deadline.IsZero() && now.After(m.deadline) {
 		// remove element if deadline is exceeded
 		return true
@@ -167,7 +168,7 @@ type Conn struct {
 type Transmission struct {
 	nStart             *atomic.Uint32
 	acknowledgeTimeout *atomic.Duration
-	maxRetransmit      *atomic.Int32
+	maxRetransmit      *atomic.Uint32
 }
 
 // SetTransmissionNStart changing the nStart value will only effect requests queued after the change. The requests waiting here already before the change will get unblocked when enough weight has been released.
@@ -179,7 +180,7 @@ func (t *Transmission) SetTransmissionAcknowledgeTimeout(d time.Duration) {
 	t.acknowledgeTimeout.Store(d)
 }
 
-func (t *Transmission) SetTransmissionMaxRetransmit(d int32) {
+func (t *Transmission) SetTransmissionMaxRetransmit(d uint32) {
 	t.maxRetransmit.Store(d)
 }
 
@@ -252,7 +253,7 @@ func NewConnWithOpts(session Session, cfg *Config, opts ...Option) *Conn {
 		transmission: &Transmission{
 			atomic.NewUint32(cfg.TransmissionNStart),
 			atomic.NewDuration(cfg.TransmissionAcknowledgeTimeout),
-			atomic.NewInt32(int32(cfg.TransmissionMaxRetransmit)),
+			atomic.NewUint32(cfg.TransmissionMaxRetransmit),
 		},
 		blockwiseSZX: cfg.BlockwiseSZX,
 
@@ -308,7 +309,7 @@ func (cc *Conn) GetMessageID() int32 {
 	// previous one, the receiver may mistakenly treat the incoming message as a duplicate and discard it.
 	// Hence, by incrementing the global counter, we can ensure unique message IDs and avoid such issues.
 	message.GetMID()
-	return int32(uint16(cc.msgID.Inc()))
+	return int32(pkgMath.CastTo[uint16](cc.msgID.Inc()))
 }
 
 // Close closes connection without waiting for the end of the Run function.
@@ -638,13 +639,13 @@ func (cc *Conn) getResponseFromCache(mid int32, resp *pool.Message) (bool, error
 	return false, nil
 }
 
-// checkMyMessageID compare client msgID against peer messageID and if it is near < 0xffff/4 then incrase msgID.
+// checkMyMessageID compare client msgID against peer messageID and if it is near < 0xffff/4 then increase msgID.
 // When msgIDs met it can cause issue because cache can send message to which doesn't bellows to request.
 func (cc *Conn) checkMyMessageID(req *pool.Message) {
 	if req.Type() == message.Confirmable {
 		for {
 			oldID := cc.msgID.Load()
-			if uint16(req.MessageID())-uint16(cc.msgID.Load()) >= 0xffff/4 {
+			if pkgMath.CastTo[uint16](req.MessageID())-pkgMath.CastTo[uint16](cc.msgID.Load()) >= 0xffff/4 {
 				return
 			}
 			newID := oldID + 0xffff/2
@@ -835,7 +836,7 @@ func (cc *Conn) handleSpecialMessages(r *pool.Message) bool {
 }
 
 func (cc *Conn) Process(cm *coapNet.ControlMessage, datagram []byte) error {
-	if uint32(len(datagram)) > cc.session.MaxMessageSize() {
+	if pkgMath.CastTo[uint32](len(datagram)) > cc.session.MaxMessageSize() {
 		return fmt.Errorf("max message size(%v) was exceeded %v", cc.session.MaxMessageSize(), len(datagram))
 	}
 	req := cc.AcquireMessage(cc.Context())
@@ -877,7 +878,7 @@ func (cc *Conn) Done() <-chan struct{} {
 	return cc.session.Done()
 }
 
-func (cc *Conn) checkMidHandlerContainer(now time.Time, maxRetransmit int32, acknowledgeTimeout time.Duration, key int32, value *midElement) {
+func (cc *Conn) checkMidHandlerContainer(now time.Time, maxRetransmit uint32, acknowledgeTimeout time.Duration, key int32, value *midElement) {
 	if value.IsExpired(now, maxRetransmit) {
 		cc.midHandlerContainer.Delete(key)
 		value.ReleaseMessage(cc)
@@ -914,7 +915,7 @@ func (cc *Conn) CheckExpirations(now time.Time) {
 	acknowledgeTimeout := cc.transmission.acknowledgeTimeout.Load()
 	x := struct {
 		now                time.Time
-		maxRetransmit      int32
+		maxRetransmit      uint32
 		acknowledgeTimeout time.Duration
 		cc                 *Conn
 	}{

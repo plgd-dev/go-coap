@@ -169,11 +169,11 @@ func TestConnGet(t *testing.T) {
 			}
 			require.NoError(t, err)
 			require.Equal(t, tt.wantCode, got.Code())
-			assert.Greater(t, got.Sequence(), uint64(0))
+			require.Positive(t, got.Sequence())
 			if tt.wantContentFormat != nil {
 				ct, errC := got.ContentFormat()
 				require.NoError(t, errC)
-				assert.Equal(t, *tt.wantContentFormat, ct)
+				require.Equal(t, *tt.wantContentFormat, ct)
 			}
 			if tt.wantPayload != nil {
 				buf := bytes.NewBuffer(nil)
