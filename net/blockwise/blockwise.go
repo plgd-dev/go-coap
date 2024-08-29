@@ -540,11 +540,6 @@ func (b *BlockWise[C]) startSendingMessage(w *responsewriter.ResponseWriter[C], 
 		return fmt.Errorf("handleSendingMessage: cannot create sending message: %w", err)
 	}
 	originalSendingMessage := w.Swap(sendingMessage)
-	if isObserveResponse(w.Message()) {
-		b.cc.ReleaseMessage(originalSendingMessage)
-		// https://tools.ietf.org/html/rfc7959#section-2.6 - we don't need store it because client will be get values via GET.
-		return nil
-	}
 	expire, ok := sendingMessage.Context().Deadline()
 	if !ok {
 		expire = time.Now().Add(b.expiration)
