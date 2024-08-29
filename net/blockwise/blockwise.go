@@ -391,9 +391,6 @@ func (b *BlockWise[C]) handleReceivedMessage(w *responsewriter.ResponseWriter[C]
 	case codes.GET, codes.DELETE:
 		maxSZX = fitSZX(r, message.Block2, maxSZX)
 		block, errG := r.GetOptionUint32(message.Block2)
-		if errG == nil {
-			r.Remove(message.Block2)
-		}
 		next(w, r)
 		if w.Message().Code() == codes.Content && errG == nil {
 			startSendingMessageBlock = block

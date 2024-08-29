@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 
-	multierror "github.com/hashicorp/go-multierror"
 	"github.com/plgd-dev/go-coap/v3/message"
 	"github.com/plgd-dev/go-coap/v3/message/codes"
 	"github.com/plgd-dev/go-coap/v3/net"
@@ -617,13 +616,12 @@ func (r *Message) Clone(msg *Message) error {
 	}
 	_, err = io.Copy(buf, r.Body())
 	if err != nil {
-		var errs *multierror.Error
-		errs = multierror.Append(errs, err)
+		errs := []error{err}
 		_, errS := r.Body().Seek(n, io.SeekStart)
 		if errS != nil {
-			errs = multierror.Append(errs, errS)
+			errs = append(errs, errS)
 		}
-		return errs.ErrorOrNil()
+		return errors.Join(errs...)
 	}
 	_, err = r.Body().Seek(n, io.SeekStart)
 	if err != nil {
