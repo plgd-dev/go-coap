@@ -270,7 +270,9 @@ func newWriteRequestResponse[C Client](cc C, request *pool.Message) *responsewri
 	req.SetToken(request.Token())
 	req.ResetOptionsTo(request.Options())
 	req.SetBody(request.Body())
-	req.SetType(request.Type())
+	if request.Type() == message.Confirmable || request.Type() == message.NonConfirmable {
+		req.SetType(request.Type())
+	}
 	return responsewriter.New(req, cc, request.Options()...)
 }
 
@@ -389,9 +391,6 @@ func (b *BlockWise[C]) handleReceivedMessage(w *responsewriter.ResponseWriter[C]
 	case codes.GET, codes.DELETE:
 		maxSZX = fitSZX(r, message.Block2, maxSZX)
 		block, errG := r.GetOptionUint32(message.Block2)
-		if errG == nil {
-			r.Remove(message.Block2)
-		}
 		next(w, r)
 		if w.Message().Code() == codes.Content && errG == nil {
 			startSendingMessageBlock = block

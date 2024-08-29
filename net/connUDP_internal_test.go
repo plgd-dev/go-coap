@@ -284,21 +284,32 @@ func TestControlMessageString(t *testing.T) {
 func getIfaceAddr(t *testing.T, iface net.Interface, ipv4 bool) net.IP {
 	addrs, err := iface.Addrs()
 	require.NoError(t, err)
+	require.NotEmpty(t, addrs)
+	var selectedIP net.IP
 	for _, addr := range addrs {
 		ip, _, err := net.ParseCIDR(addr.String())
-		require.NoError(t, err)
-		if !ip.IsPrivate() {
+		if err != nil {
+			t.Logf("Error parsing CIDR: %v", err)
 			continue
 		}
-		if ipv4 {
-			if ip.To4() != nil {
-				return ip
-			}
-			continue
+		if ip.IsPrivate() && (!ipv4 || ip.To4() != nil) {
+			selectedIP = ip
+			break
 		}
-		return ip
 	}
-	return nil
+	require.NotEmpty(t, selectedIP, "No suitable IP address found")
+	return selectedIP
+}
+
+func isActiveMulticastInterface(iface net.Interface) bool {
+	if iface.Name == "anpi0" || iface.Name == "anpi1" { // special debugging interfaces on macOS
+		return false
+	}
+	if iface.Flags&net.FlagUp == net.FlagUp && iface.Flags&net.FlagMulticast == net.FlagMulticast && iface.Flags&net.FlagLoopback != net.FlagLoopback {
+		addrs, err := iface.Addrs()
+		return err == nil && len(addrs) > 0
+	}
+	return false
 }
 
 func TestUDPConnWriteToAddr(t *testing.T) {
@@ -306,7 +317,8 @@ func TestUDPConnWriteToAddr(t *testing.T) {
 	require.NoError(t, err)
 	var iface net.Interface
 	for _, i := range ifaces {
-		if i.Flags&net.FlagUp == net.FlagUp && i.Flags&net.FlagMulticast == net.FlagMulticast && i.Flags&net.FlagLoopback != net.FlagLoopback {
+		t.Logf("interface name:%v, flags: %v", i.Name, i.Flags)
+		if isActiveMulticastInterface(i) {
 			iface = i
 			break
 		}
