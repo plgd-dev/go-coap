@@ -2,7 +2,10 @@ package message
 
 import (
 	"errors"
+	"fmt"
 	"strings"
+
+	"github.com/plgd-dev/go-coap/v3/pkg/math"
 )
 
 // Options Container of COAP Options, It must be always sort'ed after modification.
@@ -207,7 +210,7 @@ func (options Options) GetUint32(id OptionID) (uint32, error) {
 // ContentFormat gets the content format of body.
 func (options Options) ContentFormat() (MediaType, error) {
 	v, err := options.GetUint32(ContentFormat)
-	return MediaType(v), err
+	return math.CastTo[MediaType](v), err
 }
 
 // GetString gets the string value of the first option with the given ID.
@@ -353,7 +356,7 @@ func (options Options) SetAccept(buf []byte, contentFormat MediaType) (Options, 
 // Accept gets accept option.
 func (options Options) Accept() (MediaType, error) {
 	v, err := options.GetUint32(Accept)
-	return MediaType(v), err
+	return math.CastTo[MediaType](v), err
 }
 
 // Find returns range of type options. First number is index and second number is index of next option type.
@@ -576,7 +579,10 @@ func (options *Options) Unmarshal(data []byte, optionDefs map[OptionID]OptionDef
 		}
 
 		option := Option{}
-		oid := OptionID(prev + delta)
+		oid, err := math.SafeCastTo[OptionID](prev + delta)
+		if err != nil {
+			return -1, fmt.Errorf("%w: %w", ErrOptionNotFound, err)
+		}
 		proc, err = option.Unmarshal(data[:length], optionDefs, oid)
 		if err != nil {
 			return -1, err

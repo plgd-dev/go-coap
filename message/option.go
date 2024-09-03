@@ -4,6 +4,9 @@ import (
 	"encoding/binary"
 	"errors"
 	"strconv"
+
+	"github.com/plgd-dev/go-coap/v3/pkg/math"
+	"golang.org/x/exp/constraints"
 )
 
 const (
@@ -236,6 +239,18 @@ func ToMediaType(v string) (MediaType, error) {
 	return 0, errors.New("not found")
 }
 
+func MediaTypeFromNumber[T constraints.Integer](v T) (MediaType, error) {
+	mt, err := math.SafeCastTo[MediaType](v)
+	if err != nil {
+		return MediaType(0), err
+	}
+	_, ok := mediaTypeToString[mt]
+	if !ok {
+		return MediaType(0), errors.New("invalid value")
+	}
+	return mt, nil
+}
+
 func extendOpt(opt int) (int, int) {
 	ext := 0
 	if opt >= ExtendOptionByteAddend {
@@ -269,7 +284,7 @@ func marshalOptionHeaderExt(buf []byte, opt, ext int) (int, error) {
 		return 1, ErrTooSmall
 	case ExtendOptionWordCode:
 		if len(buf) > 1 {
-			binary.BigEndian.PutUint16(buf, uint16(ext))
+			binary.BigEndian.PutUint16(buf, math.CastTo[uint16](ext))
 			return 2, nil
 		}
 		return 2, ErrTooSmall
@@ -435,7 +450,8 @@ func (o *Option) Unmarshal(data []byte, optionDefs map[OptionID]OptionDef, optio
 			// Skip unrecognized options (RFC7252 section 5.4.1)
 			return len(data), nil
 		}
-		if uint32(len(data)) < def.MinLen || uint32(len(data)) > def.MaxLen {
+		dataLen := math.CastTo[uint32](len(data))
+		if dataLen < def.MinLen || dataLen > def.MaxLen {
 			// Skip options with illegal value length (RFC7252 section 5.4.3)
 			return len(data), nil
 		}

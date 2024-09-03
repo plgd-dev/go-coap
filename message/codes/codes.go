@@ -4,6 +4,8 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+
+	"github.com/plgd-dev/go-coap/v3/pkg/math"
 )
 
 // A Code is an unsigned 16-bit coap code as defined in the coap spec.
@@ -94,14 +96,15 @@ var strToCode = map[string]Code{
 }
 
 func getMaxCodeLen() int {
-	// max uint32 as string binary representation: "0b" + 32 digits
-	max := 34
+	// maxLen uint32 as string binary representation: "0b" + 32 digits
+	maxLen := 34
 	for k := range strToCode {
-		if len(k) > max {
-			max = len(k)
+		kLen := len(k)
+		if kLen > maxLen {
+			maxLen = kLen
 		}
 	}
-	return max
+	return maxLen
 }
 
 func init() {
@@ -128,8 +131,7 @@ func (c *Code) UnmarshalJSON(b []byte) error {
 		if ci >= _maxCode {
 			return fmt.Errorf("invalid code: %q", ci)
 		}
-
-		*c = Code(ci)
+		*c = math.CastTo[Code](ci)
 		return nil
 	}
 

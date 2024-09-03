@@ -2,6 +2,8 @@ package message
 
 import (
 	"encoding/binary"
+
+	"github.com/plgd-dev/go-coap/v3/pkg/math"
 )
 
 func EncodeUint32(buf []byte, value uint32) (int, error) {
@@ -18,7 +20,7 @@ func EncodeUint32(buf []byte, value uint32) (int, error) {
 		if len(buf) < 2 {
 			return 2, ErrTooSmall
 		}
-		binary.BigEndian.PutUint16(buf, uint16(value))
+		binary.BigEndian.PutUint16(buf, math.CastTo[uint16](value))
 		return 2, nil
 	case value <= max3ByteNumber:
 		if len(buf) < 3 {
