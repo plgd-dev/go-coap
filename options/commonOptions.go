@@ -116,7 +116,7 @@ func (o MuxHandlerOpt) UDPClientApply(cfg *udpClient.Config) {
 	cfg.Handler = mux.ToHandler[*udpClient.Conn](o.m)
 }
 
-// WithMux set's multiplexer for handle requests.
+// WithMux sets multiplexer for handle requests.
 func WithMux(m mux.Handler) MuxHandlerOpt {
 	return MuxHandlerOpt{
 		m: m,
@@ -148,7 +148,7 @@ func (o ContextOpt) UDPClientApply(cfg *udpClient.Config) {
 	cfg.Ctx = o.ctx
 }
 
-// WithContext set's parent context of server.
+// WithContext sets parent context of server.
 func WithContext(ctx context.Context) ContextOpt {
 	return ContextOpt{ctx: ctx}
 }

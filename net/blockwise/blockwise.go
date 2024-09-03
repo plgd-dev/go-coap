@@ -116,7 +116,7 @@ func DecodeBlockOption(blockVal uint32) (szx SZX, blockNumber int64, moreBlocksF
 		return
 	}
 
-	szx = SZX(blockVal & szxMask)                  // masking for the SZX
+	szx = math.CastTo[SZX](blockVal & szxMask)     // masking for the SZX
 	if (blockVal & moreBlocksFollowingMask) != 0 { // masking for the "M"
 		moreBlocksFollowing = true
 	}

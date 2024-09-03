@@ -210,10 +210,7 @@ func (options Options) GetUint32(id OptionID) (uint32, error) {
 // ContentFormat gets the content format of body.
 func (options Options) ContentFormat() (MediaType, error) {
 	v, err := options.GetUint32(ContentFormat)
-	if err != nil {
-		return MediaType(0), err
-	}
-	return MediaTypeFromNumber(v)
+	return math.CastTo[MediaType](v), err
 }
 
 // GetString gets the string value of the first option with the given ID.
@@ -359,10 +356,7 @@ func (options Options) SetAccept(buf []byte, contentFormat MediaType) (Options, 
 // Accept gets accept option.
 func (options Options) Accept() (MediaType, error) {
 	v, err := options.GetUint32(Accept)
-	if err != nil {
-		return MediaType(0), err
-	}
-	return MediaTypeFromNumber(v)
+	return math.CastTo[MediaType](v), err
 }
 
 // Find returns range of type options. First number is index and second number is index of next option type.

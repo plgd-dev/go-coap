@@ -10,6 +10,7 @@ import (
 	"github.com/plgd-dev/go-coap/v3/message"
 	"github.com/plgd-dev/go-coap/v3/message/codes"
 	"github.com/plgd-dev/go-coap/v3/net"
+	"github.com/plgd-dev/go-coap/v3/pkg/math"
 	"go.uber.org/atomic"
 )
 
@@ -373,10 +374,7 @@ func (r *Message) AddOptionUint32(opt message.OptionID, value uint32) {
 
 func (r *Message) ContentFormat() (message.MediaType, error) {
 	v, err := r.GetOptionUint32(message.ContentFormat)
-	if err != nil {
-		return message.MediaType(0), err
-	}
-	return message.MediaTypeFromNumber(v)
+	return math.CastTo[message.MediaType](v), err
 }
 
 func (r *Message) HasOption(id message.OptionID) bool {
@@ -395,18 +393,15 @@ func (r *Message) Observe() (uint32, error) {
 	return r.GetOptionUint32(message.Observe)
 }
 
-// SetAccept set's accept option.
+// SetAccept sets accept option.
 func (r *Message) SetAccept(contentFormat message.MediaType) {
 	r.SetOptionUint32(message.Accept, uint32(contentFormat))
 }
 
-// Accept get's accept option.
+// Accept gets accept option.
 func (r *Message) Accept() (message.MediaType, error) {
 	v, err := r.GetOptionUint32(message.Accept)
-	if err != nil {
-		return message.MediaType(0), err
-	}
-	return message.MediaTypeFromNumber(v)
+	return math.CastTo[message.MediaType](v), err
 }
 
 func (r *Message) BodySize() (int64, error) {

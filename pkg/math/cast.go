@@ -9,6 +9,7 @@ import (
 	"golang.org/x/exp/constraints"
 )
 
+// Max returns maximal value for given integer type
 func Max[T constraints.Integer]() T {
 	size := unsafe.Sizeof(T(0))
 	switch reflect.TypeOf((*T)(nil)).Elem().Kind() {
@@ -21,6 +22,7 @@ func Max[T constraints.Integer]() T {
 	}
 }
 
+// Min returns minimal value for given integer type
 func Min[T constraints.Integer]() T {
 	size := unsafe.Sizeof(T(0))
 	switch reflect.TypeOf((*T)(nil)).Elem().Kind() {
@@ -33,6 +35,7 @@ func Min[T constraints.Integer]() T {
 	}
 }
 
+// CastTo casts one integer type to another with bounds checking and returns error in case of overflow
 func SafeCastTo[T, F constraints.Integer](from F) (T, error) {
 	if from > 0 && uint64(Max[T]()) < uint64(from) {
 		return T(0), fmt.Errorf("value(%v) exceeds the maximum value for type(%v)", from, Max[T]())
@@ -43,10 +46,12 @@ func SafeCastTo[T, F constraints.Integer](from F) (T, error) {
 	return T(from), nil
 }
 
+// CastTo casts one integer type to another without bounds checking
 func CastTo[T, F constraints.Integer](from F) T {
 	return T(from)
 }
 
+// MustSafeCastTo casts one integer type to another with bounds checking and panics in case of overflow
 func MustSafeCastTo[T, F constraints.Integer](from F) T {
 	to, err := SafeCastTo[T](from)
 	if err != nil {

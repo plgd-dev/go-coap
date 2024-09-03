@@ -37,11 +37,11 @@ func (c *Coder) Size(m message.Message) (int, error) {
 
 func getHeader(messageLength int) (uint8, []byte) {
 	if messageLength < MessageLength13Base {
-		return uint8(messageLength), nil
+		return math.CastTo[uint8](messageLength), nil
 	}
 	if messageLength < MessageLength14Base {
 		extLen := messageLength - MessageLength13Base
-		extLenBytes := []byte{uint8(extLen)}
+		extLenBytes := []byte{math.CastTo[uint8](extLen)}
 		return 13, extLenBytes
 	}
 	if messageLength < MessageLength15Base {
@@ -115,7 +115,7 @@ func (c *Coder) Encode(m message.Message, buf []byte) (int, error) {
 	}
 
 	// Length and TKL nibbles.
-	hdr[hdrOff] = uint8(0xf&len(m.Token)) | (lenNib << 4)
+	hdr[hdrOff] = math.CastTo[uint8](len(m.Token)) | (lenNib << 4)
 	hdrOff++
 
 	// Extended length, if present.
