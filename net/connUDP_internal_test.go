@@ -3,6 +3,7 @@ package net
 import (
 	"context"
 	"net"
+	"runtime"
 	"strconv"
 	"sync"
 	"testing"
@@ -19,7 +20,9 @@ const (
 )
 
 func TestUDPConnWriteWithContext(t *testing.T) {
-	peerAddr := "127.0.0.1:2154"
+	iface := getInterfaceIndex(t)
+	ifaceIpv4 := getIfaceAddr(t, iface, true)
+	peerAddr := ifaceIpv4.String() + ":2154"
 	b, err := net.ResolveUDPAddr(udpNetwork, peerAddr)
 	require.NoError(t, err)
 
@@ -27,9 +30,10 @@ func TestUDPConnWriteWithContext(t *testing.T) {
 	ctxCancel()
 
 	type args struct {
-		ctx     context.Context
-		udpAddr *net.UDPAddr
-		buffer  []byte
+		ctx           context.Context
+		listenNetwork string
+		udpAddr       *net.UDPAddr
+		buffer        []byte
 	}
 	tests := []struct {
 		name    string
@@ -37,35 +41,42 @@ func TestUDPConnWriteWithContext(t *testing.T) {
 		wantErr bool
 	}{
 		{
-			name: "valid",
+			name: "valid - udp4 network",
 			args: args{
-				ctx:     context.Background(),
-				udpAddr: b,
-				buffer:  []byte("hello world"),
+				ctx:           context.Background(),
+				listenNetwork: udp4Network,
+				udpAddr:       b,
+				buffer:        []byte("hello world"),
 			},
 		},
 		{
 			name: "cancelled",
 			args: args{
-				ctx:    ctxCanceled,
-				buffer: []byte("hello world"),
+				ctx:           ctxCanceled,
+				listenNetwork: udp4Network,
+				buffer:        []byte("hello world"),
 			},
 			wantErr: true,
 		},
 	}
+	if runtime.GOOS == "linux" {
+		tests = append(tests, struct {
+			name    string
+			args    args
+			wantErr bool
+		}{
+			name: "valid - udp network",
+			args: args{
+				ctx:           context.Background(),
+				listenNetwork: udpNetwork,
+				udpAddr:       b,
+				buffer:        []byte("hello world"),
+			},
+		})
+	}
 
-	a, err := net.ResolveUDPAddr(udpNetwork, "127.0.0.1:")
-	require.NoError(t, err)
-	l1, err := net.ListenUDP(udpNetwork, a)
-	require.NoError(t, err)
-	c1 := NewUDPConn(udpNetwork, l1, WithErrors(func(err error) { t.Log(err) }))
-	defer func() {
-		errC := c1.Close()
-		require.NoError(t, errC)
-	}()
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-
 	l2, err := net.ListenUDP(udpNetwork, b)
 	require.NoError(t, err)
 	c2 := NewUDPConn(udpNetwork, l2, WithErrors(func(err error) { t.Log(err) }))
@@ -84,7 +95,19 @@ func TestUDPConnWriteWithContext(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err = c1.WriteWithContext(tt.args.ctx, tt.args.udpAddr, tt.args.buffer)
+			a, err := net.ResolveUDPAddr(tt.args.listenNetwork, ":")
+			require.NoError(t, err)
+			l1, err := net.ListenUDP(tt.args.listenNetwork, a)
+			require.NoError(t, err)
+			c1 := NewUDPConn(tt.args.listenNetwork, l1, WithErrors(func(err error) { t.Log(err) }))
+			defer func() {
+				errC := c1.Close()
+				require.NoError(t, errC)
+			}()
+
+			err = c1.WriteWithOptions(tt.args.buffer, WithContext(ctx), WithRemoteAddr(tt.args.udpAddr), WithControlMessage(&ControlMessage{
+				IfIndex: iface.Index,
+			}))
 
 			c1.LocalAddr()
 			c1.RemoteAddr()
@@ -312,18 +335,21 @@ func isActiveMulticastInterface(iface net.Interface) bool {
 	return false
 }
 
-func TestUDPConnWriteToAddr(t *testing.T) {
+func getInterfaceIndex(t *testing.T) net.Interface {
 	ifaces, err := net.Interfaces()
 	require.NoError(t, err)
-	var iface net.Interface
 	for _, i := range ifaces {
 		t.Logf("interface name:%v, flags: %v", i.Name, i.Flags)
 		if isActiveMulticastInterface(i) {
-			iface = i
-			break
+			return i
 		}
 	}
-	require.NotEmpty(t, iface)
+	require.Fail(t, "No suitable interface found")
+	return net.Interface{}
+}
+
+func TestUDPConnWriteToAddr(t *testing.T) {
+	iface := getInterfaceIndex(t)
 	type args struct {
 		iface             *net.Interface
 		src               net.IP
