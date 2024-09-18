@@ -516,6 +516,13 @@ func (c *UDPConn) writeTo(raddr *net.UDPAddr, cm *ControlMessage, buffer []byte)
 		// because the connection is already established.
 		return c.connection.Write(buffer)
 	}
+	// On Linux, UDP network binds both IPv6 and IPv4 addresses to the same socket.
+	// When receiving a packet from an IPv4 address, we cannot send a packet from an IPv6 address.
+	// Therefore, we wrap the connection using an IPv4 packet connection (packetConn).
+	if !IsIPv6(raddr.IP) && c.packetConn.IsIPv6() {
+		pc := packetConnIPv4{packetConn: ipv4.NewPacketConn(c.connection)}
+		return pc.WriteTo(buffer, cm, raddr)
+	}
 	return c.packetConn.WriteTo(buffer, cm, raddr)
 }
 
