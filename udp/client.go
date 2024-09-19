@@ -6,7 +6,6 @@ import (
 	"net"
 	"time"
 
-	"github.com/plgd-dev/go-coap/v3/message"
 	"github.com/plgd-dev/go-coap/v3/message/pool"
 	coapNet "github.com/plgd-dev/go-coap/v3/net"
 	"github.com/plgd-dev/go-coap/v3/net/blockwise"
@@ -78,8 +77,8 @@ func Client(conn *net.UDPConn, opts ...Option) *client.Conn {
 				v,
 				cfg.BlockwiseTransferTimeout,
 				cfg.Errors,
-				func(token message.Token) (*pool.Message, bool) {
-					return v.GetObservationRequest(token)
+				func(hash uint64) (*pool.Message, bool) {
+					return v.GetObservationRequest(hash)
 				},
 			)
 		}
