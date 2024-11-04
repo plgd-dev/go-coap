@@ -6,9 +6,11 @@ import (
 	"fmt"
 	"math"
 	"net"
+	"strconv"
 	"sync"
 	"time"
 
+	"github.com/karlseguin/ccache/v3"
 	"github.com/plgd-dev/go-coap/v3/message"
 	"github.com/plgd-dev/go-coap/v3/message/codes"
 	"github.com/plgd-dev/go-coap/v3/message/pool"
@@ -20,7 +22,6 @@ import (
 	"github.com/plgd-dev/go-coap/v3/net/observation"
 	"github.com/plgd-dev/go-coap/v3/net/responsewriter"
 	"github.com/plgd-dev/go-coap/v3/options/config"
-	"github.com/plgd-dev/go-coap/v3/pkg/cache"
 	coapErrors "github.com/plgd-dev/go-coap/v3/pkg/errors"
 	"github.com/plgd-dev/go-coap/v3/pkg/fn"
 	pkgMath "github.com/plgd-dev/go-coap/v3/pkg/math"
@@ -127,6 +128,57 @@ func (m *midElement) GetMessage(cc *Conn) (*pool.Message, bool, error) {
 	return msg, true, nil
 }
 
+// MessageCache is a cache of CoAP messages.
+type MessageCache interface {
+	Load(key string, msg *pool.Message) (bool, error)
+	Store(key string, msg *pool.Message) error
+	Close()
+}
+
+// messageCache is a CoAP message cache backed by
+type messageCache struct {
+	c    *ccache.Cache[*pool.Message]
+	pool *pool.Pool
+}
+
+// newMessageCache constructs a new CoAP message cache.
+func newMessageCache() *messageCache {
+	p := pool.New(30, 1600)
+	return &messageCache{
+		c: ccache.New(ccache.Configure[*pool.Message]().MaxSize(30).OnDelete(func(item *ccache.Item[*pool.Message]) {
+			p.ReleaseMessage(item.Value())
+		})),
+		pool: p,
+	}
+}
+
+// Load loads a message from the cache if one exists with key.
+func (m *messageCache) Load(key string, msg *pool.Message) (bool, error) {
+	item := m.c.Get(key)
+	if item == nil || item.Expired() {
+		return false, nil
+	}
+	if err := item.Value().Clone(msg); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+// Store stores a message in the cache.
+func (m *messageCache) Store(key string, msg *pool.Message) error {
+	cached := m.pool.AcquireMessage(context.Background())
+	if err := msg.Clone(cached); err != nil {
+		return err
+	}
+	m.c.Set(key, cached, ExchangeLifetime)
+	return nil
+}
+
+// Close closes the cache.
+func (m *messageCache) Close() {
+	m.c.Stop()
+}
+
 // Conn represents a virtual connection to a conceptual endpoint, to perform COAPs commands.
 type Conn struct {
 	// This field needs to be the first in the struct to ensure proper word alignment on 32-bit platforms.
@@ -145,7 +197,7 @@ type Conn struct {
 
 	processReceivedMessage config.ProcessReceivedMessageFunc[*Conn]
 	errors                 ErrorFunc
-	responseMsgCache       *cache.Cache[string, []byte]
+	responseMsgCache       MessageCache
 	msgIDMutex             *MutexMap
 
 	tokenHandlerContainer *coapSync.Map[uint64, HandlerFunc]
@@ -192,6 +244,7 @@ type ConnOptions struct {
 	createBlockWise   func(cc *Conn) *blockwise.BlockWise[*Conn]
 	inactivityMonitor InactivityMonitor
 	requestMonitor    RequestMonitorFunc
+	responseMsgCache  MessageCache
 }
 
 type Option = func(opts *ConnOptions)
@@ -217,6 +270,23 @@ func WithInactivityMonitor(inactivityMonitor InactivityMonitor) Option {
 func WithRequestMonitor(requestMonitor RequestMonitorFunc) Option {
 	return func(opts *ConnOptions) {
 		opts.requestMonitor = requestMonitor
+	}
+}
+
+// WithResponseMessageCache sets the cache used for response messages. All
+// response messages are submitted to the cache, but it is up to the cache
+// implementation to determine which messages are stored and for how long.
+// Caching responses enables sending the same Acknowledgment for retransmitted
+// confirmable messages within an EXCHANGE_LIFETIME. It may be desirable to
+// relax this behavior in some scenarios.
+// https://datatracker.ietf.org/doc/html/rfc7252#section-4.5
+// The default response message cache uses an LRU cache with capacity of 30
+// items and expiration of 247 seconds, which is EXCHANGE_LIFETIME when using
+// default CoAP transmission parameters.
+// https://datatracker.ietf.org/doc/html/rfc7252#section-4.8.2
+func WithResponseMessageCache(cache MessageCache) Option {
+	return func(opts *ConnOptions) {
+		opts.responseMsgCache = cache
 	}
 }
 
@@ -248,6 +318,10 @@ func NewConnWithOpts(session Session, cfg *Config, opts ...Option) *Conn {
 	for _, o := range opts {
 		o(&cfgOpts)
 	}
+	// Only construct cache if one was not set via options.
+	if cfgOpts.responseMsgCache == nil {
+		cfgOpts.responseMsgCache = newMessageCache()
+	}
 	cc := Conn{
 		session: session,
 		transmission: &Transmission{
@@ -262,7 +336,7 @@ func NewConnWithOpts(session Session, cfg *Config, opts ...Option) *Conn {
 		processReceivedMessage:    cfg.ProcessReceivedMessage,
 		errors:                    cfg.Errors,
 		msgIDMutex:                NewMutexMap(),
-		responseMsgCache:          cache.NewCache[string, []byte](),
+		responseMsgCache:          cfgOpts.responseMsgCache,
 		inactivityMonitor:         cfgOpts.inactivityMonitor,
 		requestMonitor:            cfgOpts.requestMonitor,
 		messagePool:               cfg.MessagePool,
@@ -318,6 +392,7 @@ func (cc *Conn) Close() error {
 	if errors.Is(err, net.ErrClosed) {
 		return nil
 	}
+	cc.responseMsgCache.Close()
 	return err
 }
 
@@ -609,34 +684,14 @@ func (cc *Conn) Sequence() uint64 {
 	return cc.sequence.Add(1)
 }
 
-func (cc *Conn) responseMsgCacheID(msgID int32) string {
-	return fmt.Sprintf("resp-%v-%d", cc.RemoteAddr(), msgID)
-}
-
-func (cc *Conn) addResponseToCache(resp *pool.Message) error {
-	marshaledResp, err := resp.MarshalWithEncoder(coder.DefaultCoder)
-	if err != nil {
-		return err
-	}
-	cacheMsg := make([]byte, len(marshaledResp))
-	copy(cacheMsg, marshaledResp)
-	cc.responseMsgCache.LoadOrStore(cc.responseMsgCacheID(resp.MessageID()), cache.NewElement(cacheMsg, time.Now().Add(ExchangeLifetime), nil))
-	return nil
-}
-
+// getResponseFromCache gets a message from the response message cache.
 func (cc *Conn) getResponseFromCache(mid int32, resp *pool.Message) (bool, error) {
-	cachedResp := cc.responseMsgCache.Load(cc.responseMsgCacheID(mid))
-	if cachedResp == nil {
-		return false, nil
-	}
-	if rawMsg := cachedResp.Data(); len(rawMsg) > 0 {
-		_, err := resp.UnmarshalWithDecoder(coder.DefaultCoder, rawMsg)
-		if err != nil {
-			return false, err
-		}
-		return true, nil
-	}
-	return false, nil
+	return cc.responseMsgCache.Load(strconv.Itoa(int(mid)), resp)
+}
+
+// addResponseToCache adds a message to the response message cache.
+func (cc *Conn) addResponseToCache(resp *pool.Message) error {
+	return cc.responseMsgCache.Store(strconv.Itoa(int(resp.MessageID())), resp)
 }
 
 // checkMyMessageID compare client msgID against peer messageID and if it is near < 0xffff/4 then increase msgID.
@@ -907,7 +962,6 @@ func (cc *Conn) checkMidHandlerContainer(now time.Time, maxRetransmit uint32, ac
 // CheckExpirations checks and remove expired items from caches.
 func (cc *Conn) CheckExpirations(now time.Time) {
 	cc.inactivityMonitor.CheckInactivity(now, cc)
-	cc.responseMsgCache.CheckExpirations(now)
 	if cc.blockWise != nil {
 		cc.blockWise.CheckExpirations(now)
 	}

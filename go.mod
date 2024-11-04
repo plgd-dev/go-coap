@@ -4,6 +4,7 @@ go 1.20
 
 require (
 	github.com/dsnet/golib/memfile v1.0.0
+	github.com/karlseguin/ccache/v3 v3.0.6
 	github.com/pion/dtls/v3 v3.0.2
 	github.com/stretchr/testify v1.9.0
 	go.uber.org/atomic v1.11.0
