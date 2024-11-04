@@ -14,7 +14,6 @@ import (
 	"github.com/plgd-dev/go-coap/v3/net/blockwise"
 	"github.com/plgd-dev/go-coap/v3/net/monitor/inactivity"
 	"github.com/plgd-dev/go-coap/v3/net/responsewriter"
-	"github.com/plgd-dev/go-coap/v3/pkg/cache"
 	coapSync "github.com/plgd-dev/go-coap/v3/pkg/sync"
 	"github.com/plgd-dev/go-coap/v3/udp/client"
 )
@@ -27,7 +26,6 @@ type Server struct {
 	serverStartedChan chan struct{}
 	doneCancel        context.CancelFunc
 	cancel            context.CancelFunc
-	responseMsgCache  *cache.Cache[string, []byte]
 
 	connsMutex sync.Mutex
 	conns      map[string]*client.Conn
@@ -92,7 +90,6 @@ func New(opt ...Option) *Server {
 		serverStartedChan: serverStartedChan,
 		doneCtx:           doneCtx,
 		doneCancel:        doneCancel,
-		responseMsgCache:  cache.NewCache[string, []byte](),
 		conns:             make(map[string]*client.Conn),
 
 		cfg: &cfg,
@@ -140,7 +137,6 @@ func (s *Server) Serve(l *coapNet.UDPConn) error {
 
 	s.cfg.PeriodicRunner(func(now time.Time) bool {
 		s.handleInactivityMonitors(now)
-		s.responseMsgCache.CheckExpirations(now)
 		return s.ctx.Err() == nil
 	})
 
