@@ -108,8 +108,8 @@ func (h *Handler[C]) GetObservation(key uint64) (*Observation[C], bool) {
 }
 
 // GetObservationRequest returns observation request for token
-func (h *Handler[C]) GetObservationRequest(token message.Token) (*pool.Message, bool) {
-	obs, ok := h.GetObservation(token.Hash())
+func (h *Handler[C]) GetObservationRequest(hash uint64) (*pool.Message, bool) {
+	obs, ok := h.GetObservation(hash)
 	if !ok {
 		return nil, false
 	}
