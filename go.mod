@@ -1,15 +1,17 @@
 module github.com/plgd-dev/go-coap/v3
 
-go 1.20
+go 1.22.0
+
+toolchain go1.23.4
 
 require (
 	github.com/dsnet/golib/memfile v1.0.0
 	github.com/pion/dtls/v3 v3.0.2
 	github.com/stretchr/testify v1.9.0
 	go.uber.org/atomic v1.11.0
-	golang.org/x/exp v0.0.0-20240823005443-9b4947da3948
+	golang.org/x/exp v0.0.0-20241215155358-4a5509556b9e
 	golang.org/x/net v0.28.0
-	golang.org/x/sync v0.8.0
+	golang.org/x/sync v0.10.0
 )
 
 require (
