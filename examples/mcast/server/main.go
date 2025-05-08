@@ -49,7 +49,7 @@ func main() {
 
 	for i := range ifaces {
 		iface := ifaces[i]
-		err := l.JoinGroup(&iface, a)
+		err = l.JoinGroup(&iface, a)
 		if err != nil {
 			log.Printf("cannot JoinGroup(%v, %v): %v", iface, a, err)
 		}

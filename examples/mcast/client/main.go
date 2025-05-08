@@ -103,15 +103,14 @@ func main() {
 		err = req.SetupGet("/oic/res", token) /* msg.Option{
 			ID:    msg.URIQuery,
 			Value: []byte("rt=oic.wk.d"),
-		}*/
-		if err != nil {
+		}*/if err != nil {
 			panic(fmt.Errorf("cannot create discover request: %w", err))
 		}
 		req.SetMessageID(message.GetMID())
 		req.SetType(message.NonConfirmable)
 		defer messagePool.ReleaseMessage(req)
 
-		err = s.DiscoveryRequest(req, "224.0.1.187:5683", func(cc *client.Conn, resp *pool.Message) {
+		err = s.DiscoveryRequest(req, "224.0.1.187:5683", func(cc *client.Conn, _ *pool.Message) {
 			_, loaded := duplicit.LoadOrStore(cc.RemoteAddr().String(), true)
 			if loaded {
 				atomic.AddUint32(&numDuplicit, 1)
@@ -125,7 +124,7 @@ func main() {
 
 		previousNum := uint32(0)
 		if previousDuplicit != nil {
-			previousDuplicit.Range(func(key, value interface{}) bool {
+			previousDuplicit.Range(func(key, _ interface{}) bool {
 				_, ok := duplicit.Load(key)
 				if !ok {
 					fmt.Printf("device %v is lost\n", key)

@@ -87,7 +87,6 @@ func LoadCertPool(caBytes []byte) (*x509.CertPool, error) {
 	for _, certBytes := range rootCertificate.Certificate {
 		cert, err := x509.ParseCertificate(certBytes)
 		if err != nil {
-			certPool = nil
 			return nil, err
 		}
 		certPool.AddCert(cert)

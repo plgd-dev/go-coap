@@ -9,12 +9,11 @@ import (
 
 	piondtls "github.com/pion/dtls/v3"
 	coap "github.com/plgd-dev/go-coap/v3"
+	dtlsServer "github.com/plgd-dev/go-coap/v3/dtls/server"
 	"github.com/plgd-dev/go-coap/v3/message"
 	"github.com/plgd-dev/go-coap/v3/message/codes"
 	"github.com/plgd-dev/go-coap/v3/mux"
 	"github.com/plgd-dev/go-coap/v3/options"
-
-	dtlsServer "github.com/plgd-dev/go-coap/v3/dtls/server"
 	tcpServer "github.com/plgd-dev/go-coap/v3/tcp/server"
 	udpClient "github.com/plgd-dev/go-coap/v3/udp/client"
 )
@@ -50,11 +49,11 @@ func handleOnNewConn(cc *udpClient.Conn) {
 	if !ok {
 		log.Fatalf("cannot get connection state")
 	}
-	clientId := state.IdentityHint
-	cc.SetContextValue("clientId", clientId)
+	clientID := state.IdentityHint
+	cc.SetContextValue("clientId", clientID)
 	cc.AddOnClose(func() {
-		clientId := state.IdentityHint
-		log.Printf("closed connection clientId: %s", clientId)
+		clientID := state.IdentityHint
+		log.Printf("closed connection clientId: %s", clientID)
 	})
 }
 
