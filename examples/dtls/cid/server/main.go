@@ -15,7 +15,6 @@ import (
 	"github.com/plgd-dev/go-coap/v3/mux"
 	"github.com/plgd-dev/go-coap/v3/options"
 	udpClient "github.com/plgd-dev/go-coap/v3/udp/client"
-	"go.uber.org/atomic"
 )
 
 func handleA(w mux.ResponseWriter, r *mux.Message) {
@@ -45,8 +44,7 @@ func handleB(w mux.ResponseWriter, r *mux.Message) {
 // NOTE: this utility is for example purposes only. Context should be handled
 // properly in meaningful scenarios.
 type wrappedListener struct {
-	l      net.Listener
-	closed atomic.Bool
+	l net.Listener
 }
 
 // AcceptWithContext disregards the passed context and calls the underlying
@@ -87,6 +85,6 @@ func main() {
 	if err != nil {
 		log.Fatalf("Error establishing DTLS listener: %v", err)
 	}
-	s := server.New(options.WithMux(m), options.WithInactivityMonitor(10*time.Second, func(cc *udpClient.Conn) {}))
+	s := server.New(options.WithMux(m), options.WithInactivityMonitor(10*time.Second, func(*udpClient.Conn) {}))
 	s.Serve(wrapListener(l))
 }

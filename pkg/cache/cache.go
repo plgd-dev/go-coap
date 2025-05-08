@@ -50,7 +50,7 @@ func NewCache[K comparable, D any]() *Cache[K, D] {
 
 func (c *Cache[K, D]) LoadOrStore(key K, e *Element[D]) (actual *Element[D], loaded bool) {
 	now := time.Now()
-	c.Map.ReplaceWithFunc(key, func(oldValue *Element[D], oldLoaded bool) (newValue *Element[D], deleteValue bool) {
+	c.ReplaceWithFunc(key, func(oldValue *Element[D], oldLoaded bool) (newValue *Element[D], deleteValue bool) {
 		if oldLoaded {
 			if !oldValue.IsExpired(now) {
 				actual = oldValue
@@ -77,7 +77,7 @@ func (c *Cache[K, D]) Load(key K) (actual *Element[D]) {
 func (c *Cache[K, D]) CheckExpirations(now time.Time) {
 	c.Range(func(key K, value *Element[D]) bool {
 		if value.IsExpired(now) {
-			c.Map.Delete(key)
+			c.Delete(key)
 			value.onExpire(value.Data())
 		}
 		return true

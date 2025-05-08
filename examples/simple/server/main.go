@@ -17,7 +17,7 @@ func loggingMiddleware(next mux.Handler) mux.Handler {
 	})
 }
 
-func handleA(w mux.ResponseWriter, r *mux.Message) {
+func handleA(w mux.ResponseWriter, _ *mux.Message) {
 	err := w.SetResponse(codes.Content, message.TextPlain, bytes.NewReader([]byte("hello world")))
 	if err != nil {
 		log.Printf("cannot set response: %v", err)
