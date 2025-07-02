@@ -1,6 +1,8 @@
 module github.com/plgd-dev/go-coap/v3
 
-go 1.20
+go 1.23.0
+
+toolchain go1.24.4
 
 require (
 	github.com/dsnet/golib/memfile v1.0.0
@@ -24,7 +26,7 @@ require (
 
 // pin versions to keep go1.20 support
 replace (
-	golang.org/x/crypto => golang.org/x/crypto v0.33.0
+	golang.org/x/crypto => golang.org/x/crypto v0.35.0
 	golang.org/x/exp => golang.org/x/exp v0.0.0-20240904232852-e7e105dedf7e
 	golang.org/x/net => golang.org/x/net v0.35.0
 	golang.org/x/sync => golang.org/x/sync v0.11.0
