@@ -646,15 +646,9 @@ func (cc *Conn) sendPong(w *responsewriter.ResponseWriter[*Conn], r *pool.Messag
 	if err := w.SetResponse(codes.Empty, message.TextPlain, nil); err != nil {
 		cc.errors(fmt.Errorf("cannot send pong response: %w", err))
 	}
-	if r.Type() == message.Confirmable {
-		w.Message().SetType(message.Acknowledgement)
-		w.Message().SetMessageID(r.MessageID())
-	} else {
-		if w.Message().Type() != message.Reset {
-			w.Message().SetType(message.NonConfirmable)
-		}
-		w.Message().SetMessageID(cc.GetMessageID())
-	}
+	w.Message().SetType(message.Reset)
+	w.Message().SetMessageID(r.MessageID())
+
 }
 
 func (cc *Conn) handle(w *responsewriter.ResponseWriter[*Conn], m *pool.Message) {
