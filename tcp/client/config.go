@@ -50,4 +50,5 @@ type Config struct {
 	DisablePeerTCPSignalMessageCSMs bool
 	CloseSocket                     bool
 	DisableTCPSignalMessageCSM      bool
+	CSMExchangeTimeout              time.Duration
 }
