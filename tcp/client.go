@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/plgd-dev/go-coap/v3/message"
+	"github.com/plgd-dev/go-coap/v3/message/codes"
 	"github.com/plgd-dev/go-coap/v3/message/pool"
 	coapNet "github.com/plgd-dev/go-coap/v3/net"
 	"github.com/plgd-dev/go-coap/v3/net/blockwise"
@@ -100,12 +101,32 @@ func Client(conn net.Conn, opts ...Option) *client.Conn {
 		return cc.Context().Err() == nil
 	})
 
+	var csmExchangeDone chan struct{}
+	if cfg.CSMExchangeTimeout != 0 && !cfg.DisablePeerTCPSignalMessageCSMs {
+		csmExchangeDone = make(chan struct{})
+
+		cc.OnTCPSignalReceivedHandler(func(code codes.Code) {
+			if code == codes.CSM {
+				close(csmExchangeDone)
+			}
+		})
+	}
+
 	go func() {
 		err := cc.Run()
 		if err != nil {
 			cfg.Errors(fmt.Errorf("%v: %w", cc.RemoteAddr(), err))
 		}
 	}()
+
+	// if CSM messages are enabled, wait for the CSM messages to be exchanged
+	if cfg.CSMExchangeTimeout != 0 && !cfg.DisablePeerTCPSignalMessageCSMs {
+		select {
+		case <-time.After(cfg.CSMExchangeTimeout):
+			cfg.Errors(fmt.Errorf("%v: timeout waiting for tcp signal csm exchange", cc.RemoteAddr()))
+		case <-csmExchangeDone:
+		}
+	}
 
 	return cc
 }

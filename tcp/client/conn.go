@@ -27,6 +27,8 @@ type InactivityMonitor interface {
 	CheckInactivity(now time.Time, cc *Conn)
 }
 
+type TCPSignalReceivedHandler func(codes.Code)
+
 type (
 	HandlerFunc                 = func(*responsewriter.ResponseWriter[*Conn], *pool.Message)
 	ErrorFunc                   = func(error)
@@ -51,6 +53,7 @@ type Conn struct {
 	blockwiseSZX                    blockwise.SZX
 	peerMaxMessageSize              atomic.Uint32
 	disablePeerTCPSignalMessageCSMs bool
+	tcpSignalReceivedHandler        TCPSignalReceivedHandler
 	peerBlockWiseTranferEnabled     atomic.Bool
 
 	receivedMessageReader *client.ReceivedMessageReader[*Conn]
@@ -267,6 +270,10 @@ func (cc *Conn) Run() (err error) {
 	return cc.session.Run(cc)
 }
 
+func (cc *Conn) OnTCPSignalReceivedHandler(handler TCPSignalReceivedHandler) {
+	cc.tcpSignalReceivedHandler = handler
+}
+
 // AddOnClose calls function on close connection event.
 func (cc *Conn) AddOnClose(f EventFunc) {
 	cc.session.AddOnClose(f)
@@ -382,6 +389,11 @@ func (cc *Conn) handleSignals(r *pool.Message) bool {
 		if r.HasOption(message.TCPBlockWiseTransfer) {
 			cc.peerBlockWiseTranferEnabled.Store(true)
 		}
+
+		// signal CSM message is received.
+		if cc.tcpSignalReceivedHandler != nil {
+			cc.tcpSignalReceivedHandler(codes.CSM)
+		}
 		return true
 	case codes.Ping:
 		// if r.HasOption(message.TCPCustody) {
@@ -390,20 +402,36 @@ func (cc *Conn) handleSignals(r *pool.Message) bool {
 		if err := cc.sendPong(r.Token()); err != nil && !coapNet.IsConnectionBrokenError(err) {
 			cc.Session().errors(fmt.Errorf("cannot handle ping signal: %w", err))
 		}
+
+		if cc.tcpSignalReceivedHandler != nil {
+			cc.tcpSignalReceivedHandler(codes.Ping)
+		}
 		return true
 	case codes.Release:
 		// if r.HasOption(message.TCPAlternativeAddress) {
 		// TODO
 		// }
+
+		if cc.disablePeerTCPSignalMessageCSMs {
+			cc.tcpSignalReceivedHandler(codes.Release)
+		}
 		return true
 	case codes.Abort:
 		// if r.HasOption(message.TCPBadCSMOption) {
 		// TODO
 		// }
+
+		if cc.disablePeerTCPSignalMessageCSMs {
+			cc.tcpSignalReceivedHandler(codes.Abort)
+		}
 		return true
 	case codes.Pong:
 		if h, ok := cc.tokenHandlerContainer.LoadAndDelete(r.Token().Hash()); ok {
 			cc.processReceivedMessage(r, cc, h)
+		}
+
+		if cc.tcpSignalReceivedHandler != nil {
+			cc.tcpSignalReceivedHandler(codes.Pong)
 		}
 		return true
 	}

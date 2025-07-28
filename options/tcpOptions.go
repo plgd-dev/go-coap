@@ -2,6 +2,7 @@ package options
 
 import (
 	"crypto/tls"
+	"time"
 
 	tcpClient "github.com/plgd-dev/go-coap/v3/tcp/client"
 	tcpServer "github.com/plgd-dev/go-coap/v3/tcp/server"
@@ -34,9 +35,22 @@ func (o DisableTCPSignalMessageCSMOpt) TCPClientApply(cfg *tcpClient.Config) {
 	cfg.DisableTCPSignalMessageCSM = true
 }
 
-// WithDisableTCPSignalMessageCSM don't send CSM when client conn is created.
 func WithDisableTCPSignalMessageCSM() DisableTCPSignalMessageCSMOpt {
 	return DisableTCPSignalMessageCSMOpt{}
+}
+
+type CSMExchangeTimeoutOpt struct {
+	timeout time.Duration
+}
+
+func (o CSMExchangeTimeoutOpt) TCPServerApply(cfg *tcpClient.Config) {
+	cfg.CSMExchangeTimeout = o.timeout
+}
+
+func WithCSMExchangeTimeout(timeout time.Duration) CSMExchangeTimeoutOpt {
+	return CSMExchangeTimeoutOpt{
+		timeout: timeout,
+	}
 }
 
 // TLSOpt tls configuration option.
