@@ -301,7 +301,8 @@ func TestServerKeepAliveMonitor(t *testing.T) {
 		assert.NoError(t, errS)
 	}()
 
-	cc, err := net.Dial("tcp", ld.Addr().String())
+	dialer := net.Dialer{}
+	cc, err := dialer.DialContext(context.Background(), "tcp", ld.Addr().String())
 	require.NoError(t, err)
 	defer func() {
 		_ = cc.Close()
