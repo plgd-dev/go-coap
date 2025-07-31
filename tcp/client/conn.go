@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"sync"
 	"time"
 
 	"github.com/plgd-dev/go-coap/v3/message"
@@ -54,6 +55,7 @@ type Conn struct {
 	peerMaxMessageSize              atomic.Uint32
 	disablePeerTCPSignalMessageCSMs bool
 	tcpSignalReceivedHandler        TCPSignalReceivedHandler
+	handlerMutex                    sync.RWMutex
 	peerBlockWiseTranferEnabled     atomic.Bool
 
 	receivedMessageReader *client.ReceivedMessageReader[*Conn]
@@ -270,7 +272,9 @@ func (cc *Conn) Run() (err error) {
 	return cc.session.Run(cc)
 }
 
-func (cc *Conn) OnTCPSignalReceivedHandler(handler TCPSignalReceivedHandler) {
+func (cc *Conn) SetTCPSignalReceivedHandler(handler TCPSignalReceivedHandler) {
+	cc.handlerMutex.Lock()
+	defer cc.handlerMutex.Unlock()
 	cc.tcpSignalReceivedHandler = handler
 }
 
@@ -377,6 +381,14 @@ func (cc *Conn) sendPong(token message.Token) error {
 	return cc.Session().WriteMessage(req)
 }
 
+func (cc *Conn) handleTcpSignalReceived(code codes.Code) {
+	cc.handlerMutex.RLock()
+	defer cc.handlerMutex.RUnlock()
+	if cc.tcpSignalReceivedHandler != nil {
+		cc.tcpSignalReceivedHandler(code)
+	}
+}
+
 func (cc *Conn) handleSignals(r *pool.Message) bool {
 	switch r.Code() {
 	case codes.CSM:
@@ -391,9 +403,7 @@ func (cc *Conn) handleSignals(r *pool.Message) bool {
 		}
 
 		// signal CSM message is received.
-		if cc.tcpSignalReceivedHandler != nil {
-			cc.tcpSignalReceivedHandler(codes.CSM)
-		}
+		cc.handleTcpSignalReceived(codes.CSM)
 		return true
 	case codes.Ping:
 		// if r.HasOption(message.TCPCustody) {
@@ -403,36 +413,28 @@ func (cc *Conn) handleSignals(r *pool.Message) bool {
 			cc.Session().errors(fmt.Errorf("cannot handle ping signal: %w", err))
 		}
 
-		if cc.tcpSignalReceivedHandler != nil {
-			cc.tcpSignalReceivedHandler(codes.Ping)
-		}
-		return true
-	case codes.Release:
-		// if r.HasOption(message.TCPAlternativeAddress) {
-		// TODO
-		// }
-
-		if cc.disablePeerTCPSignalMessageCSMs {
-			cc.tcpSignalReceivedHandler(codes.Release)
-		}
-		return true
-	case codes.Abort:
-		// if r.HasOption(message.TCPBadCSMOption) {
-		// TODO
-		// }
-
-		if cc.disablePeerTCPSignalMessageCSMs {
-			cc.tcpSignalReceivedHandler(codes.Abort)
-		}
+		cc.handleTcpSignalReceived(codes.Ping)
 		return true
 	case codes.Pong:
 		if h, ok := cc.tokenHandlerContainer.LoadAndDelete(r.Token().Hash()); ok {
 			cc.processReceivedMessage(r, cc, h)
 		}
 
-		if cc.tcpSignalReceivedHandler != nil {
-			cc.tcpSignalReceivedHandler(codes.Pong)
-		}
+		cc.handleTcpSignalReceived(codes.Pong)
+		return true
+	case codes.Release:
+		// if r.HasOption(message.TCPAlternativeAddress) {
+		// TODO
+		// }
+
+		cc.handleTcpSignalReceived(codes.Release)
+		return true
+	case codes.Abort:
+		// if r.HasOption(message.TCPBadCSMOption) {
+		// TODO
+		// }
+
+		cc.handleTcpSignalReceived(codes.Abort)
 		return true
 	}
 	return false
