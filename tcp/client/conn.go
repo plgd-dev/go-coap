@@ -381,7 +381,7 @@ func (cc *Conn) sendPong(token message.Token) error {
 	return cc.Session().WriteMessage(req)
 }
 
-func (cc *Conn) handleTcpSignalReceived(code codes.Code) {
+func (cc *Conn) handleTCPSignalReceived(code codes.Code) {
 	cc.handlerMutex.RLock()
 	defer cc.handlerMutex.RUnlock()
 	if cc.tcpSignalReceivedHandler != nil {
@@ -403,7 +403,7 @@ func (cc *Conn) handleSignals(r *pool.Message) bool {
 		}
 
 		// signal CSM message is received.
-		cc.handleTcpSignalReceived(codes.CSM)
+		cc.handleTCPSignalReceived(codes.CSM)
 		return true
 	case codes.Ping:
 		// if r.HasOption(message.TCPCustody) {
@@ -413,28 +413,28 @@ func (cc *Conn) handleSignals(r *pool.Message) bool {
 			cc.Session().errors(fmt.Errorf("cannot handle ping signal: %w", err))
 		}
 
-		cc.handleTcpSignalReceived(codes.Ping)
+		cc.handleTCPSignalReceived(codes.Ping)
 		return true
 	case codes.Pong:
 		if h, ok := cc.tokenHandlerContainer.LoadAndDelete(r.Token().Hash()); ok {
 			cc.processReceivedMessage(r, cc, h)
 		}
 
-		cc.handleTcpSignalReceived(codes.Pong)
+		cc.handleTCPSignalReceived(codes.Pong)
 		return true
 	case codes.Release:
 		// if r.HasOption(message.TCPAlternativeAddress) {
 		// TODO
 		// }
 
-		cc.handleTcpSignalReceived(codes.Release)
+		cc.handleTCPSignalReceived(codes.Release)
 		return true
 	case codes.Abort:
 		// if r.HasOption(message.TCPBadCSMOption) {
 		// TODO
 		// }
 
-		cc.handleTcpSignalReceived(codes.Abort)
+		cc.handleTCPSignalReceived(codes.Abort)
 		return true
 	}
 	return false
