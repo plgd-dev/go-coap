@@ -1,6 +1,7 @@
 package tcp
 
 import (
+	"context"
 	"crypto/tls"
 	"fmt"
 	"net"
@@ -31,7 +32,11 @@ func Dial(target string, opts ...Option) (*client.Conn, error) {
 	var conn net.Conn
 	var err error
 	if cfg.TLSCfg != nil {
-		conn, err = tls.DialWithDialer(cfg.Dialer, cfg.Net, target, cfg.TLSCfg)
+		d := &tls.Dialer{
+			NetDialer: cfg.Dialer,
+			Config:    cfg.TLSCfg,
+		}
+		conn, err = d.DialContext(context.Background(), cfg.Net, target)
 	} else {
 		conn, err = cfg.Dialer.DialContext(cfg.Ctx, cfg.Net, target)
 	}
