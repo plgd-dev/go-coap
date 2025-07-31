@@ -123,9 +123,15 @@ func Client(conn net.Conn, opts ...Option) *client.Conn {
 	if cfg.CSMExchangeTimeout != 0 && !cfg.DisablePeerTCPSignalMessageCSMs {
 		select {
 		case <-time.After(cfg.CSMExchangeTimeout):
-			cfg.Errors(fmt.Errorf("%v: timeout waiting for tcp signal csm exchange", cc.RemoteAddr()))
+			err := fmt.Errorf("%v: timeout waiting for CSM exchange with peer", cc.RemoteAddr())
+			cfg.Errors(err)
+			cc.Close() // Close connection on timeout
+			return nil // or return cc with an error state
 		case <-csmExchangeDone:
+			// CSM exchange completed successfully
 		}
+		// Clear the handler after exchange is complete or timed out
+		cc.SetTCPSignalReceivedHandler(nil)
 	}
 
 	return cc
