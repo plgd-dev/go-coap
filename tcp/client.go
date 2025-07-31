@@ -105,7 +105,7 @@ func Client(conn net.Conn, opts ...Option) *client.Conn {
 	if cfg.CSMExchangeTimeout != 0 && !cfg.DisablePeerTCPSignalMessageCSMs {
 		csmExchangeDone = make(chan struct{})
 
-		cc.OnTCPSignalReceivedHandler(func(code codes.Code) {
+		cc.SetTCPSignalReceivedHandler(func(code codes.Code) {
 			if code == codes.CSM {
 				close(csmExchangeDone)
 			}

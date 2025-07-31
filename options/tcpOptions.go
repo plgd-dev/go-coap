@@ -43,7 +43,7 @@ type CSMExchangeTimeoutOpt struct {
 	timeout time.Duration
 }
 
-func (o CSMExchangeTimeoutOpt) TCPServerApply(cfg *tcpClient.Config) {
+func (o CSMExchangeTimeoutOpt) TCPClientApply(cfg *tcpClient.Config) {
 	cfg.CSMExchangeTimeout = o.timeout
 }
 
