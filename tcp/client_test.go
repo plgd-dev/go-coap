@@ -842,7 +842,6 @@ func TestConnRequestMonitorDropRequest(t *testing.T) {
 }
 
 func TestConnWithCSMExchangeTimeout(t *testing.T) {
-
 	type args struct {
 		clientOptions []Option
 		serverOptions []server.Option
@@ -885,7 +884,6 @@ func TestConnWithCSMExchangeTimeout(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-
 			l, err := coapNet.NewTCPListener("tcp", "")
 			require.NoError(t, err)
 			defer func() {
