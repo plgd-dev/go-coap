@@ -1,7 +1,6 @@
 package tcp
 
 import (
-	"context"
 	"crypto/tls"
 	"fmt"
 	"net"
@@ -36,7 +35,7 @@ func Dial(target string, opts ...Option) (*client.Conn, error) {
 			NetDialer: cfg.Dialer,
 			Config:    cfg.TLSCfg,
 		}
-		conn, err = d.DialContext(context.Background(), cfg.Net, target)
+		conn, err = d.DialContext(cfg.Ctx, cfg.Net, target)
 	} else {
 		conn, err = cfg.Dialer.DialContext(cfg.Ctx, cfg.Net, target)
 	}
@@ -44,11 +43,11 @@ func Dial(target string, opts ...Option) (*client.Conn, error) {
 		return nil, err
 	}
 	opts = append(opts, options.WithCloseSocket())
-	return Client(conn, opts...), nil
+	return Client(conn, opts...)
 }
 
 // Client creates client over tcp/tcp-tls connection.
-func Client(conn net.Conn, opts ...Option) *client.Conn {
+func Client(conn net.Conn, opts ...Option) (*client.Conn, error) {
 	cfg := client.DefaultConfig
 	for _, o := range opts {
 		o.TCPClientApply(&cfg)
@@ -130,8 +129,8 @@ func Client(conn net.Conn, opts ...Option) *client.Conn {
 		case <-time.After(cfg.CSMExchangeTimeout):
 			err := fmt.Errorf("%v: timeout waiting for CSM exchange with peer", cc.RemoteAddr())
 			cfg.Errors(err)
-			cc.Close() // Close connection on timeout
-			return nil // or return cc with an error state
+			cc.Close()      // Close connection on timeout
+			return nil, err // or return cc with an error state
 		case <-csmExchangeDone:
 			// CSM exchange completed successfully
 		}
@@ -139,5 +138,5 @@ func Client(conn net.Conn, opts ...Option) *client.Conn {
 		cc.SetTCPSignalReceivedHandler(nil)
 	}
 
-	return cc
+	return cc, nil
 }
