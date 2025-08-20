@@ -2,6 +2,7 @@ package blockwise
 
 import (
 	"bytes"
+	"net"
 	"testing"
 	"time"
 
@@ -19,16 +20,18 @@ type block1Receiver struct {
 	cc        *testClient
 	bw        *BlockWise[*testClient]
 	token     message.Token
+	remote    net.Addr
 	delivered [][]byte
 }
 
 func newBlock1Receiver(t *testing.T, expiration time.Duration) *block1Receiver {
 	cc := newTestClient()
 	return &block1Receiver{
-		t:     t,
-		cc:    cc,
-		bw:    New(cc, expiration, func(error) {}, nil),
-		token: message.Token{0x01},
+		t:      t,
+		cc:     cc,
+		bw:     New(cc, expiration, func(error) {}, nil),
+		token:  message.Token{0x01},
+		remote: &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 5683},
 	}
 }
 
@@ -57,7 +60,7 @@ func (b *block1Receiver) sendPayload(num int64, more bool, payload []byte, size1
 
 	w := responsewriter.New(b.cc.AcquireMessage(b.t.Context()), b.cc)
 	defer func() { b.cc.ReleaseMessage(w.Message()) }()
-	b.bw.Handle(w, req, SZX1024, 64*1024, func(w *responsewriter.ResponseWriter[*testClient], r *pool.Message) {
+	b.bw.Handle(w, req, SZX1024, 64*1024, b.remote, func(w *responsewriter.ResponseWriter[*testClient], r *pool.Message) {
 		body, errR := r.ReadBody()
 		require.NoError(b.t, errR)
 		b.delivered = append(b.delivered, body)
@@ -265,39 +268,36 @@ func TestBlockWiseReceiveMaxBodySizeSingleBlock(t *testing.T) {
 
 func TestBlockWiseReceiveTokenless(t *testing.T) {
 	const limit = testBlock1Size / 2
-	tests := []struct {
-		name     string
-		num      int64
-		more     bool
-		size     int
-		size1    []uint32
-		wantCode codes.Code
-	}{
-		{name: "last block without context", num: 1, size: limit, wantCode: codes.RequestEntityIncomplete},
-		{name: "intermediate block without context", num: 1, more: true, size: testBlock1Size, wantCode: codes.RequestEntityIncomplete},
-		{name: "first block", more: true, size: testBlock1Size, wantCode: codes.RequestEntityIncomplete},
-		{name: "payload exceeds limit", size: testBlock1Size, wantCode: codes.RequestEntityTooLarge},
-		{name: "size1 exceeds limit", size: limit, size1: []uint32{limit + 1}, wantCode: codes.RequestEntityTooLarge},
-		{name: "within limit", size: limit, wantCode: codes.Changed},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			r := newBlock1Receiver(t, time.Minute)
-			r.token = nil
-			r.bw.SetMaxReceiveBodySize(limit)
-			resp := r.sendPayload(tt.num, tt.more, make([]byte, tt.size), tt.size1...)
-			require.Equal(t, tt.wantCode, resp.code)
-			if tt.wantCode == codes.Changed {
-				require.Len(t, r.delivered, 1)
-				require.Len(t, r.delivered[0], tt.size)
-			} else {
-				require.Empty(t, r.delivered)
-			}
-			if tt.wantCode == codes.RequestEntityTooLarge {
-				require.Equal(t, uint32(limit), resp.size1)
-			}
-			require.Nil(t, r.bw.receivingMessagesCache.Load(r.token.Hash()))
-			require.Nil(t, r.bw.sendingMessagesCache.Load(r.token.Hash()))
-		})
-	}
+	r := newBlock1Receiver(t, time.Minute)
+	r.token = nil
+	r.bw.SetMaxReceiveBodySize(testBlock1Size * 2)
+
+	require.Equal(t, codes.Continue, r.send(0, true).code)
+	require.Empty(t, r.delivered)
+	require.Equal(t, codes.Changed, r.sendPayload(1, false, make([]byte, limit)).code)
+	require.Len(t, r.delivered, 1)
+	require.Len(t, r.delivered[0], testBlock1Size+limit)
+
+	exchangeKey, err := getExchangeKey(r.token, r.remote)
+	require.NoError(t, err)
+	require.Nil(t, r.bw.receivingMessagesCache.Load(exchangeKey))
+	require.Nil(t, r.bw.sendingMessagesCache.Load(exchangeKey))
+
+	t.Run("rejects oversized payload", func(t *testing.T) {
+		r := newBlock1Receiver(t, time.Minute)
+		r.token = nil
+		r.bw.SetMaxReceiveBodySize(limit)
+		resp := r.sendPayload(0, false, make([]byte, testBlock1Size))
+		require.Equal(t, codes.RequestEntityTooLarge, resp.code)
+		require.Equal(t, uint32(limit), resp.size1)
+		require.Empty(t, r.delivered)
+	})
+
+	t.Run("requires earlier blocks", func(t *testing.T) {
+		r := newBlock1Receiver(t, time.Minute)
+		r.token = nil
+		resp := r.sendPayload(1, true, make([]byte, testBlock1Size))
+		require.Equal(t, codes.RequestEntityIncomplete, resp.code)
+		require.Empty(t, r.delivered)
+	})
 }

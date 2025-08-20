@@ -90,10 +90,10 @@ func makeDo[C Client](t *testing.T, sender, receiver *BlockWise[C], senderMaxSZX
 			for {
 				var resp *pool.Message
 				receiverResp := responsewriter.New(receiver.cc.AcquireMessage(roReq.Context()), receiver.cc)
-				receiver.Handle(receiverResp, roReq, senderMaxSZX, senderMaxMessageSize, next)
+				receiver.Handle(receiverResp, roReq, senderMaxSZX, senderMaxMessageSize, nil, next)
 				t.Logf("receiver.Handle - receiverResp %v senderResp.Message: %v\n", receiverResp.Message(), roReq)
 				senderResp := responsewriter.New(sender.cc.AcquireMessage(roReq.Context()), sender.cc)
-				sender.Handle(senderResp, receiverResp.Message(), receiverMaxSZX, receiverMaxMessageSize, func(_ *responsewriter.ResponseWriter[C], r *pool.Message) {
+				sender.Handle(senderResp, receiverResp.Message(), receiverMaxSZX, receiverMaxMessageSize, nil, func(_ *responsewriter.ResponseWriter[C], r *pool.Message) {
 					resp = r
 				})
 				t.Logf("sender.Handle - senderResp %v receiverResp.Message: %v\n", senderResp.Message(), receiverResp.Message())
@@ -312,7 +312,7 @@ func TestBlockWiseDo(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := sender.Do(toPoolMessage(tt.args.r), tt.args.szx, uint32(tt.args.maxMessageSize), tt.args.do)
+			got, err := sender.Do(toPoolMessage(tt.args.r), tt.args.szx, uint32(tt.args.maxMessageSize), nil, tt.args.do)
 			if tt.wantErr {
 				require.Error(t, err)
 				return
@@ -400,7 +400,7 @@ func TestBlockWiseParallel(t *testing.T) {
 						code:    r.Code(),
 						payload: bytes.NewReader(make([]byte, bodysize)),
 					}
-					got, err := sender.Do(toPoolMessage(req), tt.args.szx, uint32(tt.args.maxMessageSize), tt.args.do)
+					got, err := sender.Do(toPoolMessage(req), tt.args.szx, uint32(tt.args.maxMessageSize), nil, tt.args.do)
 					if tt.wantErr {
 						require.Error(t, err)
 						return
@@ -509,13 +509,13 @@ func makeWriteReq[C Client](sender, receiver *BlockWise[C], senderMaxSZX SZX, se
 			roReq = req
 			for {
 				receiverResp := responsewriter.New(receiver.cc.AcquireMessage(roReq.Context()), receiver.cc)
-				receiver.Handle(receiverResp, roReq, senderMaxSZX, senderMaxMessageSize, func(w *responsewriter.ResponseWriter[C], r *pool.Message) {
+				receiver.Handle(receiverResp, roReq, senderMaxSZX, senderMaxMessageSize, nil, func(w *responsewriter.ResponseWriter[C], r *pool.Message) {
 					defer close(c)
 					next(w, r)
 				})
 				senderResp := responsewriter.New(sender.cc.AcquireMessage(roReq.Context()), sender.cc)
 				orig := senderResp.Message()
-				sender.Handle(senderResp, receiverResp.Message(), receiverMaxSZX, receiverMaxMessageSize, func(*responsewriter.ResponseWriter[C], *pool.Message) {
+				sender.Handle(senderResp, receiverResp.Message(), receiverMaxSZX, receiverMaxMessageSize, nil, func(*responsewriter.ResponseWriter[C], *pool.Message) {
 				})
 				if orig == senderResp.Message() {
 					select {
@@ -619,7 +619,7 @@ func TestBlockWiseWriteTestMessage(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := sender.WriteMessage(toPoolMessage(tt.args.r), tt.args.szx, uint32(tt.args.maxMessageSize), tt.args.writetestmessage)
+			err := sender.WriteMessage(toPoolMessage(tt.args.r), tt.args.szx, uint32(tt.args.maxMessageSize), nil, tt.args.writetestmessage)
 			if tt.wantErr {
 				require.Error(t, err)
 				return
@@ -642,7 +642,7 @@ func TestProcessReceivedMessageReturnsEntityIncompleteForMissingPreviousFinalBlo
 	first.SetOptionUint32(message.Block1, block0)
 	first.SetBody(bytes.NewReader(make([]byte, int(SZX16.Size()))))
 	w1 := responsewriter.New(bw.cc.AcquireMessage(ctx), bw.cc)
-	bw.Handle(w1, first, SZX16, uint32(SZX16.Size()), func(_ *responsewriter.ResponseWriter[*testClient], _ *pool.Message) {
+	bw.Handle(w1, first, SZX16, uint32(SZX16.Size()), nil, func(_ *responsewriter.ResponseWriter[*testClient], _ *pool.Message) {
 		require.Fail(t, "next must not be called while more blocks follow")
 	})
 	require.Equal(t, codes.Continue, w1.Message().Code())
@@ -655,7 +655,7 @@ func TestProcessReceivedMessageReturnsEntityIncompleteForMissingPreviousFinalBlo
 	second.SetOptionUint32(message.Block1, block2Final)
 	second.SetBody(bytes.NewReader(make([]byte, int(SZX16.Size()))))
 	w2 := responsewriter.New(bw.cc.AcquireMessage(ctx), bw.cc)
-	bw.Handle(w2, second, SZX16, uint32(SZX16.Size()), func(_ *responsewriter.ResponseWriter[*testClient], _ *pool.Message) {
+	bw.Handle(w2, second, SZX16, uint32(SZX16.Size()), nil, func(_ *responsewriter.ResponseWriter[*testClient], _ *pool.Message) {
 		require.Fail(t, "next must not be called for incomplete transfer")
 	})
 	require.Equal(t, codes.RequestEntityIncomplete, w2.Message().Code())
@@ -675,7 +675,7 @@ func TestProcessReceivedMessageReturnsEntityIncompleteForSingleFinalNonZeroBlock
 	req.SetBody(bytes.NewReader(make([]byte, int(SZX16.Size()))))
 
 	w := responsewriter.New(bw.cc.AcquireMessage(ctx), bw.cc)
-	bw.Handle(w, req, SZX16, uint32(SZX16.Size()), func(_ *responsewriter.ResponseWriter[*testClient], _ *pool.Message) {
+	bw.Handle(w, req, SZX16, uint32(SZX16.Size()), nil, func(_ *responsewriter.ResponseWriter[*testClient], _ *pool.Message) {
 		require.Fail(t, "next must not be called for incomplete transfer")
 	})
 	require.Equal(t, codes.RequestEntityIncomplete, w.Message().Code())
@@ -696,7 +696,7 @@ func TestReceivingMessagesCacheIsBounded(t *testing.T) {
 	first.SetOptionUint32(message.Block1, block0)
 	first.SetBody(bytes.NewReader(make([]byte, int(SZX16.Size()))))
 	w1 := responsewriter.New(bw.cc.AcquireMessage(ctx), bw.cc)
-	bw.Handle(w1, first, SZX16, uint32(SZX16.Size()), func(_ *responsewriter.ResponseWriter[*testClient], _ *pool.Message) {
+	bw.Handle(w1, first, SZX16, uint32(SZX16.Size()), nil, func(_ *responsewriter.ResponseWriter[*testClient], _ *pool.Message) {
 		require.Fail(t, "next must not be called while more blocks follow")
 	})
 	require.Equal(t, codes.Continue, w1.Message().Code())
@@ -707,7 +707,7 @@ func TestReceivingMessagesCacheIsBounded(t *testing.T) {
 	second.SetOptionUint32(message.Block1, block0)
 	second.SetBody(bytes.NewReader(make([]byte, int(SZX16.Size()))))
 	w2 := responsewriter.New(bw.cc.AcquireMessage(ctx), bw.cc)
-	bw.Handle(w2, second, SZX16, uint32(SZX16.Size()), func(_ *responsewriter.ResponseWriter[*testClient], _ *pool.Message) {
+	bw.Handle(w2, second, SZX16, uint32(SZX16.Size()), nil, func(_ *responsewriter.ResponseWriter[*testClient], _ *pool.Message) {
 		require.Fail(t, "next must not be called when cache is full")
 	})
 	require.Equal(t, codes.ServiceUnavailable, w2.Message().Code())
@@ -831,7 +831,7 @@ func TestBlock1MissingBlocksAndRetransmission(t *testing.T) {
 				req.SetBody(bytes.NewReader(bytes.Repeat([]byte{byte(num)}, int(SZX128.Size()))))
 				w := responsewriter.New(bw.cc.AcquireMessage(req.Context()), bw.cc)
 				called := false
-				bw.Handle(w, req, SZX128, uint32(SZX128.Size()), func(w *responsewriter.ResponseWriter[*testClient], r *pool.Message) {
+				bw.Handle(w, req, SZX128, uint32(SZX128.Size()), nil, func(w *responsewriter.ResponseWriter[*testClient], r *pool.Message) {
 					called = true
 					body, err := io.ReadAll(r.Body())
 					require.NoError(t, err)

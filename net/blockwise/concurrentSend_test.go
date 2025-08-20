@@ -108,7 +108,7 @@ func continueSendingBlock(b *BlockWise[*testClient], token message.Token, code c
 	}
 	r.SetOptionUint32(blockType, block)
 	w := responsewriter.New(b.cc.AcquireMessage(context.Background()), b.cc)
-	more, err := b.continueSendingMessage(w, r, SZX16, 1152, code)
+	more, err := b.continueSendingMessage(w, r, SZX16, 1152, code, token.Hash())
 	if err != nil {
 		b.cc.ReleaseMessage(w.Message())
 		return nil, false, err
@@ -238,7 +238,7 @@ func TestBlockWiseDoWaitsForSendingMessage(t *testing.T) {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		_, err := b.Do(request, SZX16, 1152, func(*pool.Message) (*pool.Message, error) {
+		_, err := b.Do(request, SZX16, 1152, nil, func(*pool.Message) (*pool.Message, error) {
 			close(callbackEntered)
 			<-returnDo
 			return request, nil
@@ -284,7 +284,7 @@ func TestBlockWiseDoWaitsForSendingMessage(t *testing.T) {
 	resp, _, err := continueSendingBlock(b, token, codes.PUT, 0)
 	require.ErrorContains(t, err, "cannot find sending message")
 	require.Nil(t, resp)
-	require.Nil(t, b.getSentRequest(token))
+	require.Nil(t, b.getSentRequest(token.Hash(), token))
 	_, exists := b.getSendingMessageCode(token.Hash())
 	require.False(t, exists)
 }
