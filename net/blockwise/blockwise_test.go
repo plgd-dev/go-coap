@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"io"
+	"net"
 	"testing"
 	"time"
 
@@ -69,6 +70,18 @@ func (c *testClient) ReleaseMessage(m *pool.Message) {
 }
 
 func makeDo[C Client](t *testing.T, sender, receiver *BlockWise[C], senderMaxSZX SZX, senderMaxMessageSize uint32, receiverMaxSZX SZX, receiverMaxMessageSize uint32, next func(*responsewriter.ResponseWriter[C], *pool.Message)) func(*pool.Message) (*pool.Message, error) {
+	rcvAddr := net.UDPAddr{
+		IP:   net.IPv4(127, 0, 0, 1),
+		Port: 5683,
+		Zone: "",
+	}
+
+	sndAddr := net.UDPAddr{
+		IP:   net.IPv4(127, 0, 0, 1),
+		Port: 56833,
+		Zone: "",
+	}
+
 	return func(req *pool.Message) (*pool.Message, error) {
 		c := make(chan *pool.Message)
 		go func() {
@@ -77,10 +90,10 @@ func makeDo[C Client](t *testing.T, sender, receiver *BlockWise[C], senderMaxSZX
 			for {
 				var resp *pool.Message
 				receiverResp := responsewriter.New(receiver.cc.AcquireMessage(roReq.Context()), receiver.cc)
-				receiver.Handle(receiverResp, roReq, senderMaxSZX, senderMaxMessageSize, next)
+				receiver.Handle(receiverResp, roReq, senderMaxSZX, senderMaxMessageSize, &rcvAddr, next)
 				t.Logf("receiver.Handle - receiverResp %v senderResp.Message: %v\n", receiverResp.Message(), roReq)
 				senderResp := responsewriter.New(sender.cc.AcquireMessage(roReq.Context()), sender.cc)
-				sender.Handle(senderResp, receiverResp.Message(), receiverMaxSZX, receiverMaxMessageSize, func(_ *responsewriter.ResponseWriter[C], r *pool.Message) {
+				sender.Handle(senderResp, receiverResp.Message(), receiverMaxSZX, receiverMaxMessageSize, &sndAddr, func(_ *responsewriter.ResponseWriter[C], r *pool.Message) {
 					resp = r
 				})
 				t.Logf("sender.Handle - senderResp %v receiverResp.Message: %v\n", senderResp.Message(), receiverResp.Message())
@@ -489,6 +502,19 @@ func TestDecodeBlockOption(t *testing.T) {
 }
 
 func makeWriteReq[C Client](sender, receiver *BlockWise[C], senderMaxSZX SZX, senderMaxMessageSize uint32, receiverMaxSZX SZX, receiverMaxMessageSize uint32, next func(*responsewriter.ResponseWriter[C], *pool.Message)) func(*pool.Message) error {
+
+	rcvAddr := net.UDPAddr{
+		IP:   net.IPv4(127, 0, 0, 1),
+		Port: 5683,
+		Zone: "",
+	}
+
+	sndAddr := net.UDPAddr{
+		IP:   net.IPv4(127, 0, 0, 1),
+		Port: 56833,
+		Zone: "",
+	}
+
 	return func(req *pool.Message) error {
 		c := make(chan bool, 1)
 		go func() {
@@ -496,13 +522,13 @@ func makeWriteReq[C Client](sender, receiver *BlockWise[C], senderMaxSZX SZX, se
 			roReq = req
 			for {
 				receiverResp := responsewriter.New(receiver.cc.AcquireMessage(roReq.Context()), receiver.cc)
-				receiver.Handle(receiverResp, roReq, senderMaxSZX, senderMaxMessageSize, func(w *responsewriter.ResponseWriter[C], r *pool.Message) {
+				receiver.Handle(receiverResp, roReq, senderMaxSZX, senderMaxMessageSize, &rcvAddr, func(w *responsewriter.ResponseWriter[C], r *pool.Message) {
 					defer close(c)
 					next(w, r)
 				})
 				senderResp := responsewriter.New(sender.cc.AcquireMessage(roReq.Context()), sender.cc)
 				orig := senderResp.Message()
-				sender.Handle(senderResp, receiverResp.Message(), receiverMaxSZX, receiverMaxMessageSize, func(*responsewriter.ResponseWriter[C], *pool.Message) {
+				sender.Handle(senderResp, receiverResp.Message(), receiverMaxSZX, receiverMaxMessageSize, &sndAddr, func(*responsewriter.ResponseWriter[C], *pool.Message) {
 				})
 				if orig == senderResp.Message() {
 					select {
