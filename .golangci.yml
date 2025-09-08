@@ -46,7 +46,7 @@ linters:
     - nestif           # Reports deeply nested if statements
     - nilerr           # Finds the code that returns nil even if it checks that the error is not nil.
     - nilnil           # Checks that there is no simultaneous return of `nil` error and an invalid value.
-    - noctx            # noctx finds sending http request without context.Context
+    # - noctx            # noctx finds sending http request without context.Context - Some occurrences are not support in go1.20
     - nolintlint       # Reports ill-formed or insufficient nolint directives
     - nosprintfhostport # Checks for misuse of Sprintf to construct a host with port in a URL
     - perfsprint       # Checks that fmt.Sprintf can be replaced with a faster alternative.
