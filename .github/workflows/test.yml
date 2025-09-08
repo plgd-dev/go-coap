@@ -95,8 +95,8 @@ jobs:
           token: ${{ secrets.CODECOV_TOKEN }}
           directory: .tmp/
 
-      - name: SonarCloud Scan
-        uses: SonarSource/sonarcloud-github-action@v5
+      - name: SonarQube Scan
+        uses: SonarSource/sonarqube-scan-action@v5
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
