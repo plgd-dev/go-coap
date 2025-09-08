@@ -24,7 +24,7 @@ jobs:
 
     steps:
       - name: Set up Go 1.20+
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v6
         with:
           go-version: "^1.20"
           check-latest: true
@@ -33,7 +33,7 @@ jobs:
 
       # Checks-out repository under $GITHUB_WORKSPACE with tags and history (needed by "SonarCloud Scan" step)
       - name: Full checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           fetch-depth: 0 # Full clone for SonarCloud
 
@@ -73,12 +73,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       # Checks-out your repository under $GITHUB_WORKSPACE, so your job can access it
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           fetch-depth: 0 # Shallow clones should be disabled for a better relevancy of analysis
 
       - name: Download artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v5
         with:
           path: ./outputs
 
@@ -90,13 +90,13 @@ jobs:
           find ./outputs -name "*.report.json" -exec sh -c 'cp $1 .tmp/report/$(echo $1 | sed "s/[\/.]/-/g" ).report.json' _ {}  \;
 
       - name: Code coverage
-        uses: codecov/codecov-action@v4.0.0-beta.3
+        uses: codecov/codecov-action@v5
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           directory: .tmp/
 
       - name: SonarCloud Scan
-        uses: SonarSource/sonarcloud-github-action@master
+        uses: SonarSource/sonarcloud-github-action@v5
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
@@ -119,7 +119,7 @@ jobs:
       - run: go version
 
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Run a build
         run: go build ./...
