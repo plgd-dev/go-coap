@@ -884,21 +884,9 @@ func getExchangeKey(addr net.Addr, r *pool.Message) (uint64, error) {
 	code := r.Code()
 
 	h := fnv.New64a()
-	_, err = h.Write([]byte(fmt.Sprintf("%d|", code)))
-	if err != nil {
-		return 0, fmt.Errorf("cannot write code(%v) to hash: %w", code, err)
-	}
-	_, err = h.Write([]byte(path))
-	if err != nil {
-		return 0, fmt.Errorf("cannot write path(%v) to hash: %w", path, err)
-	}
-	_, err = h.Write([]byte("|"))
-	if err != nil {
-		return 0, fmt.Errorf("cannot write | to hash: %w", err)
-	}
-	_, err = h.Write([]byte(addr.String()))
-	if err != nil {
-		return 0, fmt.Errorf("cannot write addr(%v) to hash: %w", addr, err)
-	}
+	h.Write([]byte{byte(code >> 8), byte(code), '|'})
+	h.Write([]byte(path))
+	h.Write([]byte{'|'})
+	h.Write([]byte(addr.String()))
 	return h.Sum64(), nil
 }
