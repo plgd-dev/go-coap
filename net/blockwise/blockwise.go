@@ -356,12 +356,6 @@ func (b *BlockWise[C]) Handle(w *responsewriter.ResponseWriter[C], r *pool.Messa
 		panic("invalid maxSZX")
 	}
 
-	path, _ := r.Path()
-	if len(path) == 0 {
-		path = "/"
-		print(path)
-	}
-
 	var exchangeKey uint64
 	if len(r.Token()) != 0 {
 		exchangeKey = r.Token().Hash()
