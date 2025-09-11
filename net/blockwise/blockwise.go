@@ -370,15 +370,6 @@ func (b *BlockWise[C]) Handle(w *responsewriter.ResponseWriter[C], r *pool.Messa
 	}
 
 	token := r.Token()
-	//
-	//if len(token) == 0 {
-	//	err := b.handleReceivedMessage(w, r, maxSZX, maxMessageSize, next)
-	//	if err != nil {
-	//		b.sendEntityIncomplete(w, token)
-	//		b.errors(fmt.Errorf("handleReceivedMessage(%v): %w", r, err))
-	//	}
-	//	return
-	//}
 
 	sendingMessageCode, sendingMessageExist := b.getSendingMessageCode(exchangeKey)
 	if !sendingMessageExist || wantsToBeReceived(r) {
