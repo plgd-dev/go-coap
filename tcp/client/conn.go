@@ -207,7 +207,7 @@ func (cc *Conn) do(req *pool.Message) (*pool.Message, error) {
 	if !cc.peerBlockWiseTranferEnabled.Load() || cc.blockWise == nil {
 		return cc.doInternal(req)
 	}
-	resp, err := cc.blockWise.Do(req, cc.blockwiseSZX, cc.session.maxMessageSize, cc.doInternal)
+	resp, err := cc.blockWise.Do(req, cc.blockwiseSZX, cc.session.maxMessageSize, cc.RemoteAddr(), cc.doInternal)
 	if err != nil {
 		return nil, err
 	}

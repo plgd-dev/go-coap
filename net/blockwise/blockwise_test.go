@@ -24,6 +24,7 @@ type testmessage struct {
 	options  message.Options
 	payload  io.ReadSeeker
 	sequence uint64
+	path     string
 }
 
 func toPoolMessage(m *testmessage) *pool.Message {
@@ -33,6 +34,7 @@ func toPoolMessage(m *testmessage) *pool.Message {
 	msg.ResetOptionsTo(m.options)
 	msg.SetBody(m.payload)
 	msg.SetSequence(m.sequence)
+	msg.SetPath(m.path)
 	return msg
 }
 
@@ -41,6 +43,9 @@ func fromPoolMessage(m *pool.Message) *testmessage {
 	if len(opts) == 0 {
 		opts = nil
 	}
+
+	path, _ := m.Path()
+
 	return &testmessage{
 		code:     m.Code(),
 		ctx:      m.Context(),
@@ -48,6 +53,7 @@ func fromPoolMessage(m *pool.Message) *testmessage {
 		options:  opts,
 		payload:  m.Body(),
 		sequence: m.Sequence(),
+		path:     path,
 	}
 }
 
@@ -112,6 +118,13 @@ func makeDo[C Client](t *testing.T, sender, receiver *BlockWise[C], senderMaxSZX
 func TestBlockWiseDo(t *testing.T) {
 	sender := New(newTestClient(), time.Second*3600, func(err error) { t.Log(err) }, nil)
 	receiver := New(newTestClient(), time.Second*3600, func(err error) { t.Log(err) }, nil)
+
+	rcvAddr := net.UDPAddr{
+		IP:   net.IPv4(127, 0, 0, 1),
+		Port: 5683,
+		Zone: "",
+	}
+
 	type args struct {
 		r              *testmessage
 		szx            SZX
@@ -312,7 +325,7 @@ func TestBlockWiseDo(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := sender.Do(toPoolMessage(tt.args.r), tt.args.szx, uint32(tt.args.maxMessageSize), tt.args.do)
+			got, err := sender.Do(toPoolMessage(tt.args.r), tt.args.szx, uint32(tt.args.maxMessageSize), &rcvAddr, tt.args.do)
 			if tt.wantErr {
 				require.Error(t, err)
 				return
@@ -552,6 +565,18 @@ func makeWriteReq[C Client](sender, receiver *BlockWise[C], senderMaxSZX SZX, se
 }
 
 func TestBlockWiseWriteTestMessage(t *testing.T) {
+	rcvAddr := net.UDPAddr{
+		IP:   net.IPv4(127, 0, 0, 1),
+		Port: 5683,
+		Zone: "",
+	}
+
+	//sndAddr := net.UDPAddr{
+	//	IP:   net.IPv4(127, 0, 0, 1),
+	//	Port: 56833,
+	//	Zone: "",
+	//}
+
 	sender := New(newTestClient(), time.Second*3600, func(err error) { t.Log(err) }, nil)
 	receiver := New(newTestClient(), time.Second*3600, func(err error) { t.Log(err) }, nil)
 	type args struct {
@@ -632,7 +657,7 @@ func TestBlockWiseWriteTestMessage(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := sender.WriteMessage(toPoolMessage(tt.args.r), tt.args.szx, uint32(tt.args.maxMessageSize), tt.args.writetestmessage)
+			err := sender.WriteMessage(toPoolMessage(tt.args.r), tt.args.szx, uint32(tt.args.maxMessageSize), &rcvAddr, tt.args.writetestmessage)
 			if tt.wantErr {
 				require.Error(t, err)
 				return
