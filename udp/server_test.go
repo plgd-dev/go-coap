@@ -6,6 +6,7 @@ import (
 	"encoding/binary"
 	"log"
 	"net"
+	"runtime"
 	"sync"
 	"testing"
 	"time"
@@ -87,20 +88,40 @@ func TestServerDiscoverIotivity(t *testing.T) {
 }
 */
 
+func ifaceSupportsIPv4(iface net.Interface) bool {
+	addrs, err := iface.Addrs()
+	if err != nil {
+		return false
+	}
+	for _, addr := range addrs {
+		var ip net.IP
+		switch v := addr.(type) {
+		case *net.IPNet:
+			ip = v.IP
+		case *net.IPAddr:
+			ip = v.IP
+		}
+		if ip != nil && ip.To4() != nil {
+			return true // has at least one IPv4
+		}
+	}
+	return false
+}
+
 func TestServerDiscover(t *testing.T) {
 	ifs, err := net.Interfaces()
 	require.NoError(t, err)
 	log.Printf("ifs:%v", ifs)
 	var iface net.Interface
 	for _, i := range ifs {
-		if i.Flags&net.FlagMulticast == net.FlagMulticast && i.Flags&net.FlagUp == net.FlagUp && isRunningInterface(i) {
+		if i.Flags&net.FlagMulticast == net.FlagMulticast && i.Flags&net.FlagUp == net.FlagUp && isRunningInterface(i) && ifaceSupportsIPv4(i) {
 			iface = i
 			log.Printf("first available multicast if:%v", iface)
 			break
 		}
 	}
 	require.NotEmpty(t, iface)
-
+	const goosDarwin = "darwin"
 	type args struct {
 		opts []coapNet.MulticastOption
 	}
@@ -108,11 +129,15 @@ func TestServerDiscover(t *testing.T) {
 		name    string
 		args    args
 		wantErr bool
+		skip    func() bool
 	}{
 		{
 			name: "valid any interface",
 			args: args{
 				opts: []coapNet.MulticastOption{coapNet.WithAnyMulticastInterface()},
+			},
+			skip: func() bool {
+				return runtime.GOOS == goosDarwin
 			},
 		},
 		{
@@ -125,6 +150,9 @@ func TestServerDiscover(t *testing.T) {
 			name: "valid all interfaces",
 			args: args{
 				opts: []coapNet.MulticastOption{coapNet.WithAllMulticastInterface()},
+			},
+			skip: func() bool {
+				return runtime.GOOS == goosDarwin
 			},
 		},
 	}
@@ -192,6 +220,10 @@ func TestServerDiscover(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			if tt.skip != nil && tt.skip() {
+				t.Log("skipped")
+				return
+			}
 			ctx, cancel := context.WithTimeout(context.Background(), timeout)
 			defer cancel()
 			recv := &mcastreceiver{}
