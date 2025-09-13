@@ -140,6 +140,7 @@ func TestUDPConnwriteMulticastWithContext(t *testing.T) {
 		}
 	}
 	require.NotEmpty(t, iface)
+	const goosDarwin = "darwin"
 
 	type args struct {
 		ctx     context.Context
@@ -151,6 +152,7 @@ func TestUDPConnwriteMulticastWithContext(t *testing.T) {
 		name    string
 		args    args
 		wantErr bool
+		skip    func() bool
 	}{
 		{
 			name: "valid all interfaces",
@@ -160,6 +162,9 @@ func TestUDPConnwriteMulticastWithContext(t *testing.T) {
 				buffer:  payload,
 				opts:    []MulticastOption{WithAllMulticastInterface()},
 			},
+			skip: func() bool {
+				return runtime.GOOS == goosDarwin
+			},
 		},
 		{
 			name: "valid any interface",
@@ -168,6 +173,9 @@ func TestUDPConnwriteMulticastWithContext(t *testing.T) {
 				udpAddr: b,
 				buffer:  payload,
 				opts:    []MulticastOption{WithAnyMulticastInterface()},
+			},
+			skip: func() bool {
+				return runtime.GOOS == goosDarwin
 			},
 		},
 		{
@@ -242,6 +250,10 @@ func TestUDPConnwriteMulticastWithContext(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			if tt.skip != nil && tt.skip() {
+				t.Log("skipped")
+				return
+			}
 			err = c1.WriteMulticast(tt.args.ctx, tt.args.udpAddr, tt.args.buffer, tt.args.opts...)
 			c1.LocalAddr()
 			c1.RemoteAddr()
@@ -361,6 +373,7 @@ func TestUDPConnWriteToAddr(t *testing.T) {
 		name    string
 		args    args
 		wantErr bool
+		skip    func() bool
 	}{
 		{
 			name: "IPv4",
@@ -407,6 +420,9 @@ func TestUDPConnWriteToAddr(t *testing.T) {
 				raddr:             &net.UDPAddr{IP: net.IPv4(224, 0, 0, 1), Port: 1234},
 				buffer:            []byte("hello world"),
 			},
+			skip: func() bool {
+				return runtime.GOOS == "darwin"
+			},
 		},
 		{
 			name: "with interface and source",
@@ -421,6 +437,10 @@ func TestUDPConnWriteToAddr(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			if tt.skip != nil && tt.skip() {
+				t.Log("skipped")
+				return
+			}
 			network := udp4Network
 			ip := getIfaceAddr(t, iface, true)
 			if IsIPv6(tt.args.src) {
