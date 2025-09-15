@@ -361,7 +361,7 @@ func (b *BlockWise[C]) Handle(w *responsewriter.ResponseWriter[C], r *pool.Messa
 		exchangeKey = r.Token().Hash()
 	} else {
 		var err error
-		exchangeKey, err = getExchangeKey(remoteAddr, r)
+		exchangeKey, err = getExchangeKey(remoteAddr)
 		if err != nil {
 			b.errors(fmt.Errorf("cannot get exchange key from request Parameters(%v): %w", r, err))
 			return
@@ -865,28 +865,15 @@ func (b *BlockWise[C]) processReceivedMessage(w *responsewriter.ResponseWriter[C
 }
 
 // getExchangeKey returns a key for the blockwise exchange cache.
-// According to RFC 7252 the token is to be treated as opaque if not created by the entity and
-// according to RFC 7959 there can't be concurrent blockwise transfers for the same endpoint and resource
-// so we can use the address of the endpoint and the path of the resource as hash as a key.
-func getExchangeKey(addr net.Addr, r *pool.Message) (uint64, error) {
-	//TODO: Possibly seperate hash domains of token hashes and hashes from path, and address, to avoid systematic overlaps.
+// According to RFC 7252: "[...] An empty token value is appropriate e.g., when no other tokens are in use to a destination"
+// so we need to generate a key from the remote address of the corresponding endpoint.
+func getExchangeKey(addr net.Addr) (uint64, error) {
 
 	if addr == nil {
 		return 0, errors.New("cannot get exchange key: addr is nil")
 	}
-	if r == nil {
-		return 0, errors.New("cannot get exchange key: request is nil")
-	}
-	path, err := r.Path()
-	if err != nil {
-		return 0, fmt.Errorf("cannot get path from request(%v): %w", r, err)
-	}
-	code := r.Code()
 
 	h := fnv.New64a()
-	h.Write([]byte{byte(code >> 8), byte(code), '|'})
-	h.Write([]byte(path))
-	h.Write([]byte{'|'})
 	h.Write([]byte(addr.String()))
 	return h.Sum64(), nil
 }
