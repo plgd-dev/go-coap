@@ -17,3 +17,8 @@ v3/
 
 # Output of the go coverage tool, specifically when used with LiteIDE
 *.out
+
+# OpenSSL example certificates and keys
+examples/dtls/pki/*.pem
+examples/dtls/pki/*.csr
+examples/dtls/pki/*.srl

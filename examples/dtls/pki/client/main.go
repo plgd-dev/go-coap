@@ -61,6 +61,6 @@ func createClientConfig() (*piondtls.Config, error) {
 		Certificates:         []tls.Certificate{*certificate},
 		ExtendedMasterSecret: piondtls.RequireExtendedMasterSecret,
 		RootCAs:              certPool,
-		InsecureSkipVerify:   true,
+		InsecureSkipVerify:   false, // for test purposes only
 	}, nil
 }
