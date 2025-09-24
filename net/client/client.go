@@ -105,8 +105,8 @@ func (c *Client[C]) Observe(ctx context.Context, path string, observeFunc func(r
 	return c.DoObserve(req, observeFunc)
 }
 
-func (c *Client[C]) GetObservationRequest(token message.Token) (*pool.Message, bool) {
-	return c.observationHandler.GetObservationRequest(token)
+func (c *Client[C]) GetObservationRequest(hash uint64) (*pool.Message, bool) {
+	return c.observationHandler.GetObservationRequest(hash)
 }
 
 // NewPostRequest creates post request.
