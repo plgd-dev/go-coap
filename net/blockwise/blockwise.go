@@ -603,7 +603,7 @@ func (b *BlockWise[C]) getSentRequest(exchangeKey uint64, token message.Token) *
 	return nil
 }
 
-func (b *BlockWise[C]) handleObserveResponse(sentRequest *pool.Message, exchangeKey uint64) (message.Token, time.Time, error) {
+func (b *BlockWise[C]) handleObserveResponse(sentRequest *pool.Message) (message.Token, time.Time, error) {
 	// https://tools.ietf.org/html/rfc7959#section-2.6 - performs GET with new token.
 	if sentRequest == nil {
 		return nil, time.Time{}, errors.New("observation is not registered")
@@ -615,7 +615,7 @@ func (b *BlockWise[C]) handleObserveResponse(sentRequest *pool.Message, exchange
 	validUntil := time.Now().Add(b.expiration) // context of observation can be expired.
 	bwSentRequest := b.cloneMessage(sentRequest)
 	bwSentRequest.SetToken(token)
-	_, loaded := b.sendingMessagesCache.LoadOrStore(exchangeKey, cache.NewElement(bwSentRequest, validUntil, nil))
+	_, loaded := b.sendingMessagesCache.LoadOrStore(token.Hash(), cache.NewElement(bwSentRequest, validUntil, nil))
 	if loaded {
 		return nil, time.Time{}, errors.New("cannot process message: message with token already exist")
 	}
@@ -785,10 +785,12 @@ func (b *BlockWise[C]) processReceivedMessage(w *responsewriter.ResponseWriter[C
 		return errors.New("cannot request body without paired request")
 	}
 	if isObserveResponse(r) {
-		token, validUntil, err = b.handleObserveResponse(sentRequest, exchangeKey)
+		token, validUntil, err = b.handleObserveResponse(sentRequest)
 		if err != nil {
 			return fmt.Errorf("cannot process message: %w", err)
 		}
+		// we need to create new exchangeKey because token was changed
+		exchangeKey = token.Hash()
 	}
 
 	var cachedReceivedMessageGuard *messageGuard
