@@ -218,7 +218,10 @@ func (b *BlockWise[C]) Do(r *pool.Message, maxSzx SZX, maxMessageSize uint32, re
 		expire = time.Now().Add(b.expiration)
 	}
 
-	exchangeKey := r.Token().Hash()
+	exchangeKey, err := getExchangeKey(r.Token(), remoteAddr)
+	if err != nil {
+		return nil, fmt.Errorf("cannot get exchange key from request Parameters(%v): %w", r, err)
+	}
 	_, loaded := b.sendingMessagesCache.LoadOrStore(exchangeKey, cache.NewElement(r, expire, nil))
 	if loaded {
 		return nil, errors.New("invalid token")
@@ -356,19 +359,11 @@ func (b *BlockWise[C]) Handle(w *responsewriter.ResponseWriter[C], r *pool.Messa
 		panic("invalid maxSZX")
 	}
 
-	var exchangeKey uint64
-	if len(r.Token()) != 0 {
-		exchangeKey = r.Token().Hash()
-	} else {
-		var err error
-		exchangeKey, err = getExchangeKey(remoteAddr)
-		if err != nil {
-			b.errors(fmt.Errorf("cannot get exchange key from request Parameters(%v): %w", r, err))
-			return
-		}
-
+	exchangeKey, err := getExchangeKey(r.Token(), remoteAddr)
+	if err != nil {
+		b.errors(fmt.Errorf("cannot get exchange key from request Parameters(%v): %w", r, err))
+		return
 	}
-
 	token := r.Token()
 
 	sendingMessageCode, sendingMessageExist := b.getSendingMessageCode(exchangeKey)
@@ -869,7 +864,10 @@ func (b *BlockWise[C]) processReceivedMessage(w *responsewriter.ResponseWriter[C
 // getExchangeKey returns a key for the blockwise exchange cache.
 // According to RFC 7252: "[...] An empty token value is appropriate e.g., when no other tokens are in use to a destination"
 // so we need to generate a key from the remote address of the corresponding endpoint.
-func getExchangeKey(addr net.Addr) (uint64, error) {
+func getExchangeKey(token message.Token, addr net.Addr) (uint64, error) {
+	if len(token) != 0 {
+		return token.Hash(), nil
+	}
 
 	if addr == nil {
 		return 0, errors.New("cannot get exchange key: addr is nil")
