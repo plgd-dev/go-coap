@@ -205,12 +205,9 @@ func payloadSizeError(err error) error {
 }
 
 // validateDoInput validates basic input constraints for Do.
-func validateDoInput(r *pool.Message, maxSzx SZX) error {
+func validateDoInput(maxSzx SZX) error {
 	if maxSzx > SZXBERT {
 		return errors.New("invalid szx")
-	}
-	if len(r.Token()) == 0 {
-		return errors.New("invalid token")
 	}
 	return nil
 }
@@ -293,7 +290,7 @@ func (b *BlockWise[C]) buildFirstBlockRequest(r *pool.Message, maxSzx SZX, maxMe
 // Do sends a coap message and returns a coap response via blockwise transfer.
 func (b *BlockWise[C]) Do(r *pool.Message, maxSzx SZX, maxMessageSize uint32, remoteAddr net.Addr, do func(req *pool.Message) (*pool.Message, error)) (*pool.Message, error) {
 	// Input validation
-	if err := validateDoInput(r, maxSzx); err != nil {
+	if err := validateDoInput(maxSzx); err != nil {
 		return nil, err
 	}
 
@@ -917,16 +914,16 @@ func (b *BlockWise[C]) processReceivedMessage(w *responsewriter.ResponseWriter[C
 // getExchangeKey returns a key for the blockwise exchange cache.
 // According to RFC 7252: "[...] An empty token value is appropriate e.g., when no other tokens are in use to a destination"
 // so we need to generate a key from the remote address of the corresponding endpoint.
-func getExchangeKey(token message.Token, addr net.Addr) (uint64, error) {
+func getExchangeKey(token message.Token, remoteAddr net.Addr) (uint64, error) {
 	if len(token) != 0 {
 		return token.Hash(), nil
 	}
 
-	if addr == nil {
-		return 0, errors.New("cannot get exchange key: addr is nil")
+	if remoteAddr == nil {
+		return 0, errors.New("cannot get exchange key: remoteAddr is nil")
 	}
 
 	h := fnv.New64a()
-	h.Write([]byte(addr.String()))
+	h.Write([]byte(remoteAddr.String()))
 	return h.Sum64(), nil
 }
