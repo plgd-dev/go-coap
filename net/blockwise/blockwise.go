@@ -115,7 +115,7 @@ func EncodeBlockOption(szx SZX, blockNumber int64, moreBlocksFollowing bool) (ui
 func DecodeBlockOption(blockVal uint32) (szx SZX, blockNumber int64, moreBlocksFollowing bool, err error) {
 	if blockVal > maxBlockValue {
 		err = ErrBlockInvalidSize
-		return
+		return szx, blockNumber, moreBlocksFollowing, err
 	}
 
 	szx = math.CastTo[SZX](blockVal & szxMask)     // masking for the SZX
@@ -126,7 +126,7 @@ func DecodeBlockOption(blockVal uint32) (szx SZX, blockNumber int64, moreBlocksF
 	if blockNumber > maxBlockNumber {
 		err = ErrBlockNumberExceedLimit
 	}
-	return
+	return szx, blockNumber, moreBlocksFollowing, err
 }
 
 type Client interface {
@@ -204,62 +204,75 @@ func payloadSizeError(err error) error {
 	return fmt.Errorf("cannot get size of payload: %w", err)
 }
 
-// Do sends a coap message and returns a coap response via blockwise transfer.
-func (b *BlockWise[C]) Do(r *pool.Message, maxSzx SZX, maxMessageSize uint32, remoteAddr net.Addr, do func(req *pool.Message) (*pool.Message, error)) (*pool.Message, error) {
+// validateDoInput validates basic input constraints for Do.
+func validateDoInput(r *pool.Message, maxSzx SZX) error {
 	if maxSzx > SZXBERT {
-		return nil, errors.New("invalid szx")
+		return errors.New("invalid szx")
 	}
 	if len(r.Token()) == 0 {
-		return nil, errors.New("invalid token")
+		return errors.New("invalid token")
 	}
+	return nil
+}
 
-	expire, ok := r.Context().Deadline()
-	if !ok {
-		expire = time.Now().Add(b.expiration)
+// computeExpire returns deadline or default expiration.
+func (b *BlockWise[C]) computeExpire(r *pool.Message) time.Time {
+	if expire, ok := r.Context().Deadline(); ok {
+		return expire
 	}
+	return time.Now().Add(b.expiration)
+}
 
+// registerSendingMessage stores the original request in sendingMessagesCache.
+func (b *BlockWise[C]) registerSendingMessage(r *pool.Message, remoteAddr net.Addr) (uint64, error) {
+	expire := b.computeExpire(r)
 	exchangeKey, err := getExchangeKey(r.Token(), remoteAddr)
 	if err != nil {
-		return nil, fmt.Errorf("cannot get exchange key from request Parameters(%v): %w", r, err)
+		return 0, fmt.Errorf("cannot get exchange key from request Parameters(%v): %w", r, err)
 	}
 	_, loaded := b.sendingMessagesCache.LoadOrStore(exchangeKey, cache.NewElement(r, expire, nil))
 	if loaded {
-		return nil, errors.New("invalid token")
+		return 0, errors.New("invalid token")
 	}
-	defer b.sendingMessagesCache.Delete(exchangeKey)
-	if r.Body() == nil {
-		return do(r)
-	}
-	payloadSize, err := r.BodySize()
-	if err != nil {
-		return nil, payloadSizeError(err)
-	}
-	if payloadSize <= maxSzx.Size() {
-		return do(r)
-	}
+	return exchangeKey, nil
+}
 
+// buildFirstBlockRequest prepares the first blockwise request for large POST/PUT payloads.
+func (b *BlockWise[C]) buildFirstBlockRequest(r *pool.Message, maxSzx SZX, maxMessageSize uint32) (*pool.Message, error) {
 	switch r.Code() {
 	case codes.POST, codes.PUT:
-		break
+		// allowed
 	default:
 		return nil, fmt.Errorf("unsupported command(%v)", r.Code())
 	}
+
 	req := b.cloneMessage(r)
-	defer b.cc.ReleaseMessage(req)
+
+	payloadSize, err := r.BodySize()
+	if err != nil {
+		b.cc.ReleaseMessage(req)
+		return nil, payloadSizeError(err)
+	}
 	payloadSizeUint32, err := math.SafeCastTo[uint32](payloadSize)
 	if err != nil {
+		b.cc.ReleaseMessage(req)
 		return nil, fmt.Errorf("cannot set payload size: %w", err)
 	}
 	req.SetOptionUint32(message.Size1, payloadSizeUint32)
+
 	block, err := EncodeBlockOption(maxSzx, 0, true)
 	if err != nil {
+		b.cc.ReleaseMessage(req)
 		return nil, fmt.Errorf("cannot encode block option(%v, %v, %v) to bw request: %w", maxSzx, 0, true, err)
 	}
 	req.SetOptionUint32(message.Block1, block)
+
 	newBufLen := bufferSize(maxSzx, maxMessageSize)
 	buf := make([]byte, newBufLen)
+
 	newOff, err := r.Body().Seek(0, io.SeekStart)
 	if err != nil {
+		b.cc.ReleaseMessage(req)
 		return nil, fmt.Errorf("cannot seek in payload: %w", err)
 	}
 	readed, err := io.ReadFull(r.Body(), buf)
@@ -269,10 +282,51 @@ func (b *BlockWise[C]) Do(r *pool.Message, maxSzx SZX, maxMessageSize uint32, re
 		}
 	}
 	if err != nil {
+		b.cc.ReleaseMessage(req)
 		return nil, fmt.Errorf("cannot read payload: %w", err)
 	}
 	buf = buf[:readed]
 	req.SetBody(bytes.NewReader(buf))
+	return req, nil
+}
+
+// Do sends a coap message and returns a coap response via blockwise transfer.
+func (b *BlockWise[C]) Do(r *pool.Message, maxSzx SZX, maxMessageSize uint32, remoteAddr net.Addr, do func(req *pool.Message) (*pool.Message, error)) (*pool.Message, error) {
+	// Input validation
+	if err := validateDoInput(r, maxSzx); err != nil {
+		return nil, err
+	}
+
+	// Register sending message (token uniqueness + expiration)
+	exchangeKey, err := b.registerSendingMessage(r, remoteAddr)
+	if err != nil {
+		return nil, err
+	}
+	defer b.sendingMessagesCache.Delete(exchangeKey)
+
+	// No body -> direct send
+	if r.Body() == nil {
+		return do(r)
+	}
+
+	// Determine payload size
+	payloadSize, err := r.BodySize()
+	if err != nil {
+		return nil, payloadSizeError(err)
+	}
+
+	// Small enough -> direct send
+	if payloadSize <= maxSzx.Size() {
+		return do(r)
+	}
+
+	// Build first blockwise POST/PUT request
+	req, err := b.buildFirstBlockRequest(r, maxSzx, maxMessageSize)
+	if err != nil {
+		return nil, err
+	}
+	defer b.cc.ReleaseMessage(req)
+
 	return do(req)
 }
 
@@ -368,7 +422,7 @@ func (b *BlockWise[C]) Handle(w *responsewriter.ResponseWriter[C], r *pool.Messa
 
 	sendingMessageCode, sendingMessageExist := b.getSendingMessageCode(exchangeKey)
 	if !sendingMessageExist || wantsToBeReceived(r) {
-		err := b.handleReceivedMessage(w, r, maxSZX, maxMessageSize, exchangeKey, next)
+		err = b.handleReceivedMessage(w, r, maxSZX, maxMessageSize, exchangeKey, next)
 		if err != nil {
 			b.sendEntityIncomplete(w, token)
 			b.errors(fmt.Errorf("handleReceivedMessage(%v): %w", r, err))
@@ -575,7 +629,6 @@ func (b *BlockWise[C]) startSendingMessage(w *responsewriter.ResponseWriter[C], 
 }
 
 func (b *BlockWise[C]) getSentRequest(exchangeKey uint64, token message.Token) *pool.Message {
-
 	data, ok := b.sendingMessagesCache.LoadWithFunc(exchangeKey, func(value *cache.Element[*pool.Message]) *cache.Element[*pool.Message] {
 		if value == nil {
 			return nil
