@@ -63,7 +63,7 @@ func TestConnGetBlockwise(t *testing.T) {
 		return
 	}
 
-	l, err := coapNet.NewListenUDP("udp", "[::]:5685")
+	l, err := coapNet.NewListenUDP("udp", "")
 	require.NoError(t, err)
 	defer func() {
 		errC := l.Close()
@@ -168,7 +168,7 @@ func TestConnPutBlockwise(t *testing.T) {
 		return
 	}
 
-	l, err := coapNet.NewListenUDP("udp", "[::]:5686")
+	l, err := coapNet.NewListenUDP("udp", "")
 	require.NoError(t, err)
 	defer func() {
 		errC := l.Close()
@@ -267,7 +267,7 @@ func TestConnPostBlockwise(t *testing.T) {
 		return
 	}
 
-	l, err := coapNet.NewListenUDP("udp", "[::]:5687")
+	l, err := coapNet.NewListenUDP("udp", "")
 	require.NoError(t, err)
 	defer func() {
 		errC := l.Close()
