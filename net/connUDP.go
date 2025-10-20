@@ -57,6 +57,13 @@ func (c *ControlMessage) GetIfIndex() int {
 	return c.IfIndex
 }
 
+func (c *ControlMessage) FlipSrcDst() {
+	if c == nil {
+		return
+	}
+	c.Dst, c.Src = c.Src, c.Dst
+}
+
 type packetConn interface {
 	SetWriteDeadline(t time.Time) error
 	WriteTo(b []byte, cm *ControlMessage, dst net.Addr) (n int, err error)

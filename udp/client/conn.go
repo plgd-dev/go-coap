@@ -824,6 +824,10 @@ func (cc *Conn) ProcessReceivedMessageWithHandler(req *pool.Message, handler con
 	}()
 	resp := cc.AcquireMessage(cc.Context())
 	resp.SetToken(req.Token())
+
+	resp.SetControlMessage(req.ControlMessage())
+	resp.ControlMessage().FlipSrcDst()
+
 	ifIndex := req.ControlMessage().GetIfIndex()
 	w := responsewriter.New(resp, cc, req.Options()...)
 	defer func() {
