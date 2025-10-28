@@ -2,7 +2,14 @@ package udp
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
+	"math/rand"
+	"os/exec"
+	"strconv"
+	"sync"
+	"testing"
+
 	"github.com/plgd-dev/go-coap/v3/message"
 	"github.com/plgd-dev/go-coap/v3/message/codes"
 	"github.com/plgd-dev/go-coap/v3/mux"
@@ -10,18 +17,11 @@ import (
 	"github.com/plgd-dev/go-coap/v3/options"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"math/rand"
-	"os/exec"
-	"sync"
-	"testing"
 )
 
 func TestConnGetBlockwise(t *testing.T) {
-
 	type args struct {
 		path string
-		opts message.Options
-		typ  message.Type
 	}
 	tests := []struct {
 		name              string
@@ -59,7 +59,7 @@ func TestConnGetBlockwise(t *testing.T) {
 	// verify that the binary coap-client is installed
 	_, err := exec.LookPath("coap-client")
 	if err != nil {
-		t.Error("coap-client not found in PATH")
+		t.Skip("coap-client not found in PATH")
 		return
 	}
 
@@ -103,18 +103,13 @@ func TestConnGetBlockwise(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-
 			laddr := l.LocalAddr().String()
-
 			receivedBody, err := sendCoAPRequestLibCoAP(laddr, "get", tt.args.path, false, tt.useToken)
-
 			if tt.wantErr {
 				require.Error(t, err)
 				return
-			} else {
-				require.NoError(t, err)
 			}
-
+			require.NoError(t, err)
 			if tt.wantPayload != nil {
 				if wantPayloadBytes, ok := tt.wantPayload.([]byte); ok {
 					// add 1 for the extra newline added by coap-client
@@ -122,17 +117,13 @@ func TestConnGetBlockwise(t *testing.T) {
 					require.Equal(t, wantPayloadBytes, receivedBody[0:len(wantPayloadBytes)])
 				}
 			}
-
 		})
 	}
 }
 
 func TestConnPutBlockwise(t *testing.T) {
-
 	type args struct {
 		path string
-		opts message.Options
-		typ  message.Type
 	}
 	tests := []struct {
 		name        string
@@ -164,7 +155,7 @@ func TestConnPutBlockwise(t *testing.T) {
 
 	_, err := exec.LookPath("coap-client")
 	if err != nil {
-		t.Error("coap-client not found in PATH")
+		t.Skip("coap-client not found in PATH")
 		return
 	}
 
@@ -182,10 +173,10 @@ func TestConnPutBlockwise(t *testing.T) {
 	err = m.Handle("/big", mux.HandlerFunc(func(w mux.ResponseWriter, r *mux.Message) {
 		assert.Equal(t, codes.PUT, r.Code())
 		errS := w.SetResponse(codes.Changed, message.TextPlain, nil)
-		received, err := r.ReadBody()
-		assert.NoError(t, err)
+		received, err2 := r.ReadBody()
+		require.NoError(t, err2)
 		assert.Equal(t, bigPayload10KiB, received)
-		assert.NoError(t, errS)
+		require.NoError(t, errS)
 		assert.NotEmpty(t, w.Conn())
 		assert.Equal(t, message.Confirmable, r.Type())
 	}))
@@ -216,20 +207,15 @@ func TestConnPutBlockwise(t *testing.T) {
 			if tt.wantErr {
 				require.Error(t, err)
 				return
-			} else {
-				require.NoError(t, err)
 			}
-
+			require.NoError(t, err)
 		})
 	}
 }
 
 func TestConnPostBlockwise(t *testing.T) {
-
 	type args struct {
 		path string
-		opts message.Options
-		typ  message.Type
 	}
 	tests := []struct {
 		name        string
@@ -263,7 +249,7 @@ func TestConnPostBlockwise(t *testing.T) {
 
 	_, err := exec.LookPath("coap-client")
 	if err != nil {
-		t.Error("coap-client not found in PATH")
+		t.Skip("coap-client not found in PATH")
 		return
 	}
 
@@ -280,11 +266,11 @@ func TestConnPostBlockwise(t *testing.T) {
 
 	err = m.Handle("/big", mux.HandlerFunc(func(w mux.ResponseWriter, r *mux.Message) {
 		assert.Equal(t, codes.POST, r.Code())
-		received, err := r.ReadBody()
+		received, err2 := r.ReadBody()
 		errS := w.SetResponse(codes.Content, message.TextPlain, bytes.NewReader([]byte(bigPayload10KiB)))
-		assert.NoError(t, err)
+		require.NoError(t, err2)
 		assert.Equal(t, bigPayload10KiB, received)
-		assert.NoError(t, errS)
+		require.NoError(t, errS)
 		assert.NotEmpty(t, w.Conn())
 		assert.Equal(t, message.Confirmable, r.Type())
 	}))
@@ -315,9 +301,8 @@ func TestConnPostBlockwise(t *testing.T) {
 			if tt.wantErr {
 				require.Error(t, err)
 				return
-			} else {
-				require.NoError(t, err)
 			}
+			require.NoError(t, err)
 			if tt.wantPayload != nil {
 				// add 1 for the extra newline added by coap-client
 				require.Len(t, receivedBody, len(tt.wantPayload)+1)
@@ -328,10 +313,9 @@ func TestConnPostBlockwise(t *testing.T) {
 }
 
 func sendCoAPRequestLibCoAP(address string, method string, path string, payload bool, token bool) ([]byte, error) {
-
 	coapClientPath, err := exec.LookPath("coap-client")
 	if err != nil {
-		return nil, fmt.Errorf("coap-client not found in PATH")
+		return nil, errors.New("coap-client not found in PATH")
 	}
 
 	// Build coap-client command arguments
@@ -339,7 +323,7 @@ func sendCoAPRequestLibCoAP(address string, method string, path string, payload 
 	args = append(args, "-m", method)
 	if token {
 		rand.Uint64()
-		args = append(args, "-T", fmt.Sprintf("%d", rand.Uint64()))
+		args = append(args, "-T", strconv.FormatUint(rand.Uint64(), 10))
 	}
 	if payload {
 		args = append(args, "-b", "1024")
@@ -358,7 +342,7 @@ func sendCoAPRequestLibCoAP(address string, method string, path string, payload 
 	// Execute command
 	err = cmd.Run()
 	if err != nil {
-		return nil, fmt.Errorf("coap-client error: %v, output: %s", err, out.String())
+		return nil, fmt.Errorf("coap-client error: %w, output: %s", err, out.String())
 	}
 	return out.Bytes(), nil
 }
