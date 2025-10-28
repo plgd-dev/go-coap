@@ -800,10 +800,6 @@ func (b *BlockWise[C]) getCachedReceivedMessage(mg *messageGuard, r *pool.Messag
 //nolint:gocyclo,gocognit
 func (b *BlockWise[C]) processReceivedMessage(w *responsewriter.ResponseWriter[C], r *pool.Message, maxSzx SZX, next func(w *responsewriter.ResponseWriter[C], r *pool.Message), exchangeKey uint64, blockType message.OptionID, sizeType message.OptionID) error {
 	token := r.Token()
-	if len(token) == 0 {
-		next(w, r)
-		return nil
-	}
 	if r.Code() == codes.GET || r.Code() == codes.DELETE {
 		next(w, r)
 		return nil
