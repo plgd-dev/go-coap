@@ -35,7 +35,8 @@ jobs:
         run: |
           if [ "${{ matrix.os }}" == "ubuntu-latest" ]; then
             sudo apt-get update
-            sudo apt-get install -y libcoap2-bin
+            sudo apt-get install -y libcoap3-bin
+            sudo ln -s /usr/bin/coap-client-notls /usr/bin/coap-client 
           elif [ "${{ matrix.os }}" == "macOS-latest" ]; then
             brew install libcoap
           fi
@@ -132,7 +133,8 @@ jobs:
         run: |
           if [ "${{ matrix.os }}" == "ubuntu-latest" ]; then
             sudo apt-get update
-            sudo apt-get install -y libcoap2-bin
+            sudo apt-get install -y libcoap3-bin
+            sudo ln -s /usr/bin/coap-client-notls /usr/bin/coap-client 
           elif [ "${{ matrix.os }}" == "macOS-latest" ]; then
             brew install libcoap
           fi
