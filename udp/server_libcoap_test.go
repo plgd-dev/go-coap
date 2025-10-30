@@ -75,7 +75,7 @@ func TestConnGetBlockwise(t *testing.T) {
 
 	err = m.Handle("/big", mux.HandlerFunc(func(w mux.ResponseWriter, r *mux.Message) {
 		assert.Equal(t, codes.GET, r.Code())
-		errS := w.SetResponse(codes.Content, message.AppOctets, bytes.NewReader([]byte(bigPayload10KiB)))
+		errS := w.SetResponse(codes.Content, message.AppOctets, bytes.NewReader(bigPayload10KiB))
 		require.NoError(t, errS)
 		require.NotEmpty(t, w.Conn())
 		require.Equal(t, message.Confirmable, r.Type())
@@ -231,7 +231,7 @@ func TestConnPostBlockwise(t *testing.T) {
 			wantCode:    codes.Content,
 			wantErr:     false,
 			useToken:    true,
-			wantPayload: []byte(bigPayload10KiB),
+			wantPayload: bigPayload10KiB,
 		},
 		{
 			name: "block-post-without-token",
@@ -241,7 +241,7 @@ func TestConnPostBlockwise(t *testing.T) {
 			wantCode:    codes.Content,
 			wantErr:     false,
 			useToken:    false,
-			wantPayload: []byte(bigPayload10KiB),
+			wantPayload: bigPayload10KiB,
 		},
 	}
 
@@ -265,7 +265,7 @@ func TestConnPostBlockwise(t *testing.T) {
 	err = m.Handle("/big", mux.HandlerFunc(func(w mux.ResponseWriter, r *mux.Message) {
 		assert.Equal(t, codes.POST, r.Code())
 		received, err2 := r.ReadBody()
-		errS := w.SetResponse(codes.Content, message.TextPlain, bytes.NewReader([]byte(bigPayload10KiB)))
+		errS := w.SetResponse(codes.Content, message.TextPlain, bytes.NewReader(bigPayload10KiB))
 		require.NoError(t, err2)
 		assert.Equal(t, bigPayload10KiB, received)
 		require.NoError(t, errS)
