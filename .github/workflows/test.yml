@@ -60,7 +60,7 @@ jobs:
         shell: bash
 
       - name: Upload coverage and report files
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: ${{ hashFiles('./outputs') || 'none' }}
           path: ./outputs
@@ -78,7 +78,7 @@ jobs:
           fetch-depth: 0 # Shallow clones should be disabled for a better relevancy of analysis
 
       - name: Download artifacts
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@v6
         with:
           path: ./outputs
 
