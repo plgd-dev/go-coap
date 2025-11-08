@@ -1,6 +1,6 @@
 module github.com/plgd-dev/go-coap/v3
 
-go 1.20
+go 1.24.0
 
 require (
 	github.com/dsnet/golib/memfile v1.0.0
@@ -28,5 +28,5 @@ replace (
 	golang.org/x/exp => golang.org/x/exp v0.0.0-20240904232852-e7e105dedf7e
 	golang.org/x/net => golang.org/x/net v0.35.0
 	golang.org/x/sync => golang.org/x/sync v0.11.0
-	golang.org/x/sys => golang.org/x/sys v0.30.0
+	golang.org/x/sys => golang.org/x/sys v0.38.0
 )
