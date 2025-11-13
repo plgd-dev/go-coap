@@ -902,15 +902,18 @@ func TestConnWithCSMExchangeTimeout(t *testing.T) {
 				assert.NoError(t, errS)
 			}()
 
-			client, err := Dial(l.Addr().String(),
-				tt.args.clientOptions...)
+			cc, err := Dial(l.Addr().String(), tt.args.clientOptions...)
 			if tt.wantErr {
-				require.Nil(t, client)
+				require.Nil(t, cc)
 				require.Error(t, err)
-			} else {
-				require.NotNil(t, client)
-				require.NoError(t, err)
+				return
 			}
+			require.NoError(t, err)
+			require.NotNil(t, cc)
+			defer func() {
+				_ = cc.Close()
+				<-cc.Done()
+			}()
 		})
 	}
 }
