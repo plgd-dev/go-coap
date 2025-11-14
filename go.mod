@@ -1,15 +1,15 @@
 module github.com/plgd-dev/go-coap/v3
 
-go 1.20
+go 1.24.0
 
 require (
 	github.com/dsnet/golib/memfile v1.0.0
 	github.com/pion/dtls/v3 v3.0.7
 	github.com/stretchr/testify v1.11.1
 	go.uber.org/atomic v1.11.0
-	golang.org/x/exp v0.0.0-20240904232852-e7e105dedf7e
+	golang.org/x/exp v0.0.0-20251113190631-e25ba8c21ef6
 	golang.org/x/net v0.35.0
-	golang.org/x/sync v0.11.0
+	golang.org/x/sync v0.18.0
 )
 
 require (
@@ -25,7 +25,7 @@ require (
 // pin versions to keep go1.20 support
 replace (
 	golang.org/x/crypto => golang.org/x/crypto v0.33.0
-	golang.org/x/exp => golang.org/x/exp v0.0.0-20240904232852-e7e105dedf7e
+	golang.org/x/exp => golang.org/x/exp v0.0.0-20251113190631-e25ba8c21ef6
 	golang.org/x/net => golang.org/x/net v0.35.0
 	golang.org/x/sync => golang.org/x/sync v0.11.0
 	golang.org/x/sys => golang.org/x/sys v0.30.0
