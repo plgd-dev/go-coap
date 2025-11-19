@@ -65,7 +65,8 @@ func TestConnWriteWithContext(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			tcpConn, err := net.Dial("tcp", listener.Addr().String())
+			dialer := net.Dialer{}
+			tcpConn, err := dialer.DialContext(context.Background(), "tcp", listener.Addr().String())
 			require.NoError(t, err)
 			c := NewConn(tcpConn)
 			defer func() {

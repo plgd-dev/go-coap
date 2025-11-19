@@ -18,6 +18,7 @@ import (
 	"github.com/plgd-dev/go-coap/v3/options/config"
 	"github.com/plgd-dev/go-coap/v3/pkg/runner/periodic"
 	"github.com/plgd-dev/go-coap/v3/tcp/client"
+	"github.com/plgd-dev/go-coap/v3/tcp/server"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/atomic"
@@ -838,4 +839,81 @@ func TestConnRequestMonitorDropRequest(t *testing.T) {
 	_, err = cc.Do(deleteReq)
 	require.Error(t, err)
 	require.ErrorIs(t, err, context.DeadlineExceeded)
+}
+
+func TestConnWithCSMExchangeTimeout(t *testing.T) {
+	type args struct {
+		clientOptions []Option
+		serverOptions []server.Option
+	}
+	tests := []struct {
+		name    string
+		args    args
+		wantErr bool
+	}{
+		{
+			name: "client-server-no-csm",
+			args: args{
+				clientOptions: []Option{},
+				serverOptions: []server.Option{},
+			},
+			wantErr: false,
+		},
+		{
+			name: "client-server-csm-success",
+			args: args{
+				clientOptions: []Option{
+					options.WithCSMExchangeTimeout(time.Second * 3),
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "client-server-csm-timeout",
+			args: args{
+				clientOptions: []Option{
+					options.WithCSMExchangeTimeout(time.Second * 3),
+				},
+				serverOptions: []server.Option{
+					options.WithDisableTCPSignalMessageCSM(),
+				},
+			},
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			l, err := coapNet.NewTCPListener("tcp", "")
+			require.NoError(t, err)
+			defer func() {
+				errC := l.Close()
+				require.NoError(t, errC)
+			}()
+			var wg sync.WaitGroup
+			defer wg.Wait()
+
+			s := NewServer(tt.args.serverOptions...)
+			defer s.Stop()
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				errS := s.Serve(l)
+				assert.NoError(t, errS)
+			}()
+
+			cc, err := Dial(l.Addr().String(), tt.args.clientOptions...)
+			if tt.wantErr {
+				require.Nil(t, cc)
+				require.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
+			require.NotNil(t, cc)
+			defer func() {
+				_ = cc.Close()
+				<-cc.Done()
+			}()
+		})
+	}
 }

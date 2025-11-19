@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/plgd-dev/go-coap/v3/message"
+	"github.com/plgd-dev/go-coap/v3/message/codes"
 	"github.com/plgd-dev/go-coap/v3/message/pool"
 	coapNet "github.com/plgd-dev/go-coap/v3/net"
 	"github.com/plgd-dev/go-coap/v3/net/blockwise"
@@ -30,7 +31,11 @@ func Dial(target string, opts ...Option) (*client.Conn, error) {
 	var conn net.Conn
 	var err error
 	if cfg.TLSCfg != nil {
-		conn, err = tls.DialWithDialer(cfg.Dialer, cfg.Net, target, cfg.TLSCfg)
+		d := &tls.Dialer{
+			NetDialer: cfg.Dialer,
+			Config:    cfg.TLSCfg,
+		}
+		conn, err = d.DialContext(cfg.Ctx, cfg.Net, target)
 	} else {
 		conn, err = cfg.Dialer.DialContext(cfg.Ctx, cfg.Net, target)
 	}
@@ -38,11 +43,11 @@ func Dial(target string, opts ...Option) (*client.Conn, error) {
 		return nil, err
 	}
 	opts = append(opts, options.WithCloseSocket())
-	return Client(conn, opts...), nil
+	return Client(conn, opts...)
 }
 
 // Client creates client over tcp/tcp-tls connection.
-func Client(conn net.Conn, opts ...Option) *client.Conn {
+func Client(conn net.Conn, opts ...Option) (*client.Conn, error) {
 	cfg := client.DefaultConfig
 	for _, o := range opts {
 		o.TCPClientApply(&cfg)
@@ -100,6 +105,17 @@ func Client(conn net.Conn, opts ...Option) *client.Conn {
 		return cc.Context().Err() == nil
 	})
 
+	var csmExchangeDone chan struct{}
+	if cfg.CSMExchangeTimeout != 0 && !cfg.DisablePeerTCPSignalMessageCSMs {
+		csmExchangeDone = make(chan struct{})
+
+		cc.SetTCPSignalReceivedHandler(func(code codes.Code) {
+			if code == codes.CSM {
+				close(csmExchangeDone)
+			}
+		})
+	}
+
 	go func() {
 		err := cc.Run()
 		if err != nil {
@@ -107,5 +123,20 @@ func Client(conn net.Conn, opts ...Option) *client.Conn {
 		}
 	}()
 
-	return cc
+	// if CSM messages are enabled, wait for the CSM messages to be exchanged
+	if cfg.CSMExchangeTimeout != 0 && !cfg.DisablePeerTCPSignalMessageCSMs {
+		select {
+		case <-time.After(cfg.CSMExchangeTimeout):
+			err := fmt.Errorf("%v: timeout waiting for CSM exchange with peer", cc.RemoteAddr())
+			cfg.Errors(err)
+			cc.Close()      // Close connection on timeout
+			return nil, err // or return cc with an error state
+		case <-csmExchangeDone:
+			// CSM exchange completed successfully
+		}
+		// Clear the handler after exchange is complete or timed out
+		cc.SetTCPSignalReceivedHandler(nil)
+	}
+
+	return cc, nil
 }

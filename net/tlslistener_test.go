@@ -100,12 +100,16 @@ func TestTLSListenerAcceptWithContext(t *testing.T) {
 			cert, err := tls.X509KeyPair(CertPEMBlock, KeyPEMBlock)
 			assert.NoError(t, err)
 
-			c, err := tls.DialWithDialer(&net.Dialer{
-				Timeout: time.Millisecond * 400,
-			}, "tcp", listener.Addr().String(), &tls.Config{
-				InsecureSkipVerify: true,
-				Certificates:       []tls.Certificate{cert},
-			})
+			d := &tls.Dialer{
+				NetDialer: &net.Dialer{
+					Timeout: time.Millisecond * 400,
+				},
+				Config: &tls.Config{
+					InsecureSkipVerify: true,
+					Certificates:       []tls.Certificate{cert},
+				},
+			}
+			c, err := d.DialContext(context.Background(), "tcp", listener.Addr().String())
 			if err != nil {
 				continue
 			}
@@ -186,7 +190,8 @@ func TestTLSListenerCheckForInfinitLoop(t *testing.T) {
 			cert, err := tls.X509KeyPair(CertPEMBlock, KeyPEMBlock)
 			assert.NoError(t, err)
 			func() {
-				conn, err := net.Dial("tcp", listener.Addr().String())
+				dialer := net.Dialer{}
+				conn, err := dialer.DialContext(context.Background(), "tcp", listener.Addr().String())
 				if err != nil {
 					return
 				}

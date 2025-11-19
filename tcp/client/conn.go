@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"sync"
 	"time"
 
 	"github.com/plgd-dev/go-coap/v3/message"
@@ -26,6 +27,8 @@ type InactivityMonitor interface {
 	Notify()
 	CheckInactivity(now time.Time, cc *Conn)
 }
+
+type TCPSignalReceivedHandler func(codes.Code)
 
 type (
 	HandlerFunc                 = func(*responsewriter.ResponseWriter[*Conn], *pool.Message)
@@ -51,6 +54,8 @@ type Conn struct {
 	blockwiseSZX                    blockwise.SZX
 	peerMaxMessageSize              atomic.Uint32
 	disablePeerTCPSignalMessageCSMs bool
+	tcpSignalReceivedHandler        TCPSignalReceivedHandler
+	handlerMutex                    sync.RWMutex
 	peerBlockWiseTranferEnabled     atomic.Bool
 
 	receivedMessageReader *client.ReceivedMessageReader[*Conn]
@@ -267,6 +272,12 @@ func (cc *Conn) Run() (err error) {
 	return cc.session.Run(cc)
 }
 
+func (cc *Conn) SetTCPSignalReceivedHandler(handler TCPSignalReceivedHandler) {
+	cc.handlerMutex.Lock()
+	defer cc.handlerMutex.Unlock()
+	cc.tcpSignalReceivedHandler = handler
+}
+
 // AddOnClose calls function on close connection event.
 func (cc *Conn) AddOnClose(f EventFunc) {
 	cc.session.AddOnClose(f)
@@ -370,6 +381,14 @@ func (cc *Conn) sendPong(token message.Token) error {
 	return cc.Session().WriteMessage(req)
 }
 
+func (cc *Conn) handleTCPSignalReceived(code codes.Code) {
+	cc.handlerMutex.RLock()
+	defer cc.handlerMutex.RUnlock()
+	if cc.tcpSignalReceivedHandler != nil {
+		cc.tcpSignalReceivedHandler(code)
+	}
+}
+
 func (cc *Conn) handleSignals(r *pool.Message) bool {
 	switch r.Code() {
 	case codes.CSM:
@@ -382,6 +401,9 @@ func (cc *Conn) handleSignals(r *pool.Message) bool {
 		if r.HasOption(message.TCPBlockWiseTransfer) {
 			cc.peerBlockWiseTranferEnabled.Store(true)
 		}
+
+		// signal CSM message is received.
+		cc.handleTCPSignalReceived(codes.CSM)
 		return true
 	case codes.Ping:
 		// if r.HasOption(message.TCPCustody) {
@@ -390,21 +412,29 @@ func (cc *Conn) handleSignals(r *pool.Message) bool {
 		if err := cc.sendPong(r.Token()); err != nil && !coapNet.IsConnectionBrokenError(err) {
 			cc.Session().errors(fmt.Errorf("cannot handle ping signal: %w", err))
 		}
-		return true
-	case codes.Release:
-		// if r.HasOption(message.TCPAlternativeAddress) {
-		// TODO
-		// }
-		return true
-	case codes.Abort:
-		// if r.HasOption(message.TCPBadCSMOption) {
-		// TODO
-		// }
+
+		cc.handleTCPSignalReceived(codes.Ping)
 		return true
 	case codes.Pong:
 		if h, ok := cc.tokenHandlerContainer.LoadAndDelete(r.Token().Hash()); ok {
 			cc.processReceivedMessage(r, cc, h)
 		}
+
+		cc.handleTCPSignalReceived(codes.Pong)
+		return true
+	case codes.Release:
+		// if r.HasOption(message.TCPAlternativeAddress) {
+		// TODO
+		// }
+
+		cc.handleTCPSignalReceived(codes.Release)
+		return true
+	case codes.Abort:
+		// if r.HasOption(message.TCPBadCSMOption) {
+		// TODO
+		// }
+
+		cc.handleTCPSignalReceived(codes.Abort)
 		return true
 	}
 	return false
