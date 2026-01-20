@@ -58,6 +58,16 @@ func TestUDPConnWriteWithContext(t *testing.T) {
 			},
 			wantErr: true,
 		},
+		{
+			name: "send to v4 from v6 socket",
+			args: args{
+				ctx:           context.Background(),
+				listenNetwork: udpNetwork,
+				udpAddr:       b,
+				buffer:        []byte("hello world"),
+			},
+			wantErr: false,
+		},
 	}
 	if runtime.GOOS == "linux" {
 		tests = append(tests, struct {
