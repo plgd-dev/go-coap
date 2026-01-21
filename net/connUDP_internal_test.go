@@ -21,9 +21,14 @@ const (
 
 func TestUDPConnWriteWithContext(t *testing.T) {
 	iface := getInterfaceIndex(t)
+
 	ifaceIpv4 := getIfaceAddr(t, iface, true)
 	peerAddr := ifaceIpv4.String() + ":2154"
 	b, err := net.ResolveUDPAddr(udpNetwork, peerAddr)
+	require.NoError(t, err)
+
+	ifaceIpv6 := getIfaceAddr(t, iface, false)
+	v6, err := net.ResolveUDPAddr(udpNetwork, "["+ifaceIpv6.String()+"]:2154")
 	require.NoError(t, err)
 
 	ctxCanceled, ctxCancel := context.WithCancel(context.Background())
@@ -68,6 +73,16 @@ func TestUDPConnWriteWithContext(t *testing.T) {
 			},
 			wantErr: false,
 		},
+		{
+			name: "send to v6 from v6 socket",
+			args: args{
+				ctx:           context.Background(),
+				listenNetwork: udpNetwork,
+				udpAddr:       v6,
+				buffer:        []byte("hello world"),
+			},
+			wantErr: false,
+		},
 	}
 	if runtime.GOOS == "linux" {
 		tests = append(tests, struct {
@@ -85,26 +100,26 @@ func TestUDPConnWriteWithContext(t *testing.T) {
 		})
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	l2, err := net.ListenUDP(udpNetwork, b)
-	require.NoError(t, err)
-	c2 := NewUDPConn(udpNetwork, l2, WithErrors(func(err error) { t.Log(err) }))
-	defer func() {
-		errC := c2.Close()
-		require.NoError(t, errC)
-	}()
-
-	go func() {
-		b := make([]byte, 1024)
-		_, _, errR := c2.ReadWithContext(ctx, b)
-		if errR != nil {
-			return
-		}
-	}()
-
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			l2, err := net.ListenUDP(udpNetwork, tt.args.udpAddr)
+			require.NoError(t, err)
+			c2 := NewUDPConn(udpNetwork, l2, WithErrors(func(err error) { t.Log(err) }))
+			defer func() {
+				errC := c2.Close()
+				require.NoError(t, errC)
+			}()
+
+			go func() {
+				b := make([]byte, 1024)
+				_, _, errR := c2.ReadWithContext(ctx, b)
+				if errR != nil {
+					return
+				}
+			}()
+
 			a, err := net.ResolveUDPAddr(tt.args.listenNetwork, ":")
 			require.NoError(t, err)
 			l1, err := net.ListenUDP(tt.args.listenNetwork, a)
@@ -337,7 +352,10 @@ func getIfaceAddr(t *testing.T, iface net.Interface, ipv4 bool) net.IP {
 			t.Logf("Error parsing CIDR: %v", err)
 			continue
 		}
-		if ip.IsPrivate() && (!ipv4 || ip.To4() != nil) {
+		if !ip.IsPrivate() && !ip.IsGlobalUnicast() {
+			continue
+		}
+		if (!ipv4 && ip.To4() == nil) || (ipv4 && ip.To4() != nil) {
 			selectedIP = ip
 			break
 		}
@@ -453,7 +471,7 @@ func TestUDPConnWriteToAddr(t *testing.T) {
 			}
 			network := udp4Network
 			ip := getIfaceAddr(t, iface, true)
-			if IsIPv6(tt.args.src) {
+			if IsIPv6(tt.args.src) || IsIPv6(tt.args.raddr.IP) {
 				network = udp6Network
 				ip = getIfaceAddr(t, iface, false)
 			}

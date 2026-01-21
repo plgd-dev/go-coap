@@ -519,20 +519,18 @@ func (c *UDPConn) writeTo(raddr *net.UDPAddr, cm *ControlMessage, buffer []byte)
 
 	var cmb []byte
 
-	if cm != nil {
-		if _, ok := c.packetConn.(*packetConnIPv4); ok {
-			m := &ipv4.ControlMessage{
-				Src:     cm.Src,
-				IfIndex: cm.IfIndex,
-			}
-			cmb = m.Marshal()
-		} else if _, ok := c.packetConn.(*packetConnIPv6); ok {
-			m := &ipv6.ControlMessage{
-				Src:     cm.Src,
-				IfIndex: cm.IfIndex,
-			}
-			cmb = m.Marshal()
+	if cm != nil && IsIPv6(raddr.IP) {
+		m := &ipv6.ControlMessage{
+			Src:     cm.Src,
+			IfIndex: cm.IfIndex,
 		}
+		cmb = m.Marshal()
+	} else if cm != nil {
+		m := &ipv4.ControlMessage{
+			Src:     cm.Src,
+			IfIndex: cm.IfIndex,
+		}
+		cmb = m.Marshal()
 	}
 
 	i, _, err := c.connection.WriteMsgUDP(buffer, cmb, raddr)
