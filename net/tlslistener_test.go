@@ -6,7 +6,6 @@ import (
 	"crypto/x509"
 	"net"
 	"os"
-	"runtime"
 	"sync"
 	"testing"
 	"time"
@@ -225,12 +224,7 @@ func TestTLSListenerCheckForInfinitLoop(t *testing.T) {
 			c := coapNet.NewConn(con)
 			_, err = c.ReadWithContext(context.Background(), b)
 			require.Error(t, err)
-			t.Log(err.Error())
-			if runtime.GOOS == "darwin" {
-				assert.Contains(t, err.Error(), "connection reset by peer")
-			} else {
-				assert.Contains(t, err.Error(), "EOF")
-			}
+			assert.Contains(t, err.Error(), "EOF")
 			err = con.Close()
 			require.Error(t, err)
 		})
