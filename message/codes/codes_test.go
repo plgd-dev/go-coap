@@ -3,6 +3,7 @@ package codes
 import (
 	"encoding/json"
 	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -16,14 +17,16 @@ func TestJSONUnmarshal(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, want, got)
 
-	inNumeric := "["
+	var sb strings.Builder
+	sb.WriteString("[")
 	for i, c := range want {
 		if i > 0 {
-			inNumeric += ","
+			sb.WriteString(",")
 		}
-		inNumeric += strconv.FormatUint(uint64(c), 10)
+		sb.WriteString(strconv.FormatUint(uint64(c), 10))
 	}
-	inNumeric += "]"
+	sb.WriteString("]")
+	inNumeric := sb.String()
 	err = json.Unmarshal([]byte(inNumeric), &got)
 	require.NoError(t, err)
 	require.Equal(t, want, got)

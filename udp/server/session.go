@@ -24,9 +24,9 @@ type Session struct {
 	connection *coapNet.UDPConn
 	doneCancel context.CancelFunc
 
-	cancel          context.CancelFunc
-	raddr           *net.UDPAddr
-	originalDstIP   net.IP // Stores the original destination IP from received packets (public IP on Fly.io)
+	cancel        context.CancelFunc
+	raddr         *net.UDPAddr
+	originalDstIP net.IP // Stores the original destination IP from received packets (public IP on Fly.io)
 
 	mutex          sync.Mutex
 	maxMessageSize uint32

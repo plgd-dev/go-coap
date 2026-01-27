@@ -91,6 +91,7 @@ func Client(conn *net.UDPConn, opts ...Option) *client.Conn {
 		context.Background(),
 		l,
 		addr,
+		nil,
 		cfg.MaxMessageSize,
 		cfg.MTU,
 		cfg.CloseSocket,
