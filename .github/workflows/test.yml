@@ -33,7 +33,7 @@ jobs:
 
       # Checks-out repository under $GITHUB_WORKSPACE with tags and history (needed by "SonarCloud Scan" step)
       - name: Full checkout
-        uses: actions/checkout@v5
+        uses: actions/checkout@v6
         with:
           fetch-depth: 0 # Full clone for SonarCloud
 
@@ -60,7 +60,7 @@ jobs:
         shell: bash
 
       - name: Upload coverage and report files
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: ${{ hashFiles('./outputs') || 'none' }}
           path: ./outputs
@@ -73,12 +73,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       # Checks-out your repository under $GITHUB_WORKSPACE, so your job can access it
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0 # Shallow clones should be disabled for a better relevancy of analysis
 
       - name: Download artifacts
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@v7
         with:
           path: ./outputs
 
@@ -96,7 +96,7 @@ jobs:
           directory: .tmp/
 
       - name: SonarQube Scan
-        uses: SonarSource/sonarqube-scan-action@v5
+        uses: SonarSource/sonarqube-scan-action@v7
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
@@ -119,7 +119,7 @@ jobs:
       - run: go version
 
       - name: Checkout
-        uses: actions/checkout@v5
+        uses: actions/checkout@v6
 
       - name: Run a build
         run: go build ./...
