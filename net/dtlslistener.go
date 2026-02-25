@@ -15,6 +15,9 @@ type DTLSListener struct {
 	closed   atomic.Bool
 }
 
+// newNetDTLSListener is the internal helper for the legacy *dtls.Config-based path.
+//
+// Deprecated: use newNetDTLSListenerWithOptions instead.
 func newNetDTLSListener(network string, addr string, dtlsCfg *dtls.Config) (net.Listener, error) {
 	a, err := net.ResolveUDPAddr(network, addr)
 	if err != nil {
@@ -27,14 +30,39 @@ func newNetDTLSListener(network string, addr string, dtlsCfg *dtls.Config) (net.
 	return dtls, nil
 }
 
+func newNetDTLSListenerWithOptions(network string, addr string, dtlsOpts DTLSServerOptions) (net.Listener, error) {
+	a, err := net.ResolveUDPAddr(network, addr)
+	if err != nil {
+		return nil, fmt.Errorf("cannot resolve address: %w", err)
+	}
+	l, err := dtls.ListenWithOptions(network, a, dtlsOpts.opts...)
+	if err != nil {
+		return nil, fmt.Errorf("cannot create new net dtls listener: %w", err)
+	}
+	return l, nil
+}
+
 // NewDTLSListener creates dtls listener.
 // Known networks are "udp", "udp4" (IPv4-only), "udp6" (IPv6-only).
+//
+// Deprecated: use NewDTLSListenerWithOptions and NewDTLSServerOptions instead.
 func NewDTLSListener(network string, addr string, dtlsCfg *dtls.Config) (*DTLSListener, error) {
 	dtls, err := newNetDTLSListener(network, addr, dtlsCfg)
 	if err != nil {
 		return nil, fmt.Errorf("cannot create new dtls listener: %w", err)
 	}
 	return &DTLSListener{listener: dtls}, nil
+}
+
+// NewDTLSListenerWithOptions creates a DTLS listener using the options-based API.
+// Known networks are "udp", "udp4" (IPv4-only), "udp6" (IPv6-only).
+// Use NewDTLSServerOptions to build the dtlsOpts argument.
+func NewDTLSListenerWithOptions(network string, addr string, dtlsOpts DTLSServerOptions) (*DTLSListener, error) {
+	l, err := newNetDTLSListenerWithOptions(network, addr, dtlsOpts)
+	if err != nil {
+		return nil, fmt.Errorf("cannot create new dtls listener: %w", err)
+	}
+	return &DTLSListener{listener: l}, nil
 }
 
 // AcceptWithContext waits with context for a generic Conn.

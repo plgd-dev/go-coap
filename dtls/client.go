@@ -33,6 +33,8 @@ var DefaultConfig = func() udpClient.Config {
 }()
 
 // Dial creates a client connection to the given target.
+//
+// Deprecated: use DialWithOptions and NewDTLSClientOptions instead.
 func Dial(target string, dtlsCfg *dtls.Config, opts ...udp.Option) (*udpClient.Conn, error) {
 	cfg := DefaultConfig
 	for _, o := range opts {
@@ -45,6 +47,27 @@ func Dial(target string, dtlsCfg *dtls.Config, opts ...udp.Option) (*udpClient.C
 	}
 
 	conn, err := dtls.Client(dtlsnet.PacketConnFromConn(c), c.RemoteAddr(), dtlsCfg)
+	if err != nil {
+		return nil, err
+	}
+	opts = append(opts, options.WithCloseSocket())
+	return Client(conn, opts...), nil
+}
+
+// DialWithOptions creates a client connection to the given target using the
+// options-based DTLS API. Use NewDTLSClientOptions to build the dtlsOpts argument.
+func DialWithOptions(target string, dtlsOpts DTLSClientOptions, opts ...udp.Option) (*udpClient.Conn, error) {
+	cfg := DefaultConfig
+	for _, o := range opts {
+		o.UDPClientApply(&cfg)
+	}
+
+	c, err := cfg.Dialer.DialContext(cfg.Ctx, cfg.Net, target)
+	if err != nil {
+		return nil, err
+	}
+
+	conn, err := dtls.ClientWithOptions(dtlsnet.PacketConnFromConn(c), c.RemoteAddr(), dtlsOpts.opts...)
 	if err != nil {
 		return nil, err
 	}

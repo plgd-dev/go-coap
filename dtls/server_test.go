@@ -337,3 +337,178 @@ func TestServerKeepAliveMonitor(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, inactivityDetected.Load())
 }
+
+// createDTLSOptionsConfig builds DTLSServerOptions / DTLSClientOptions using
+// PKI certificates — mirrors createDTLSConfig but returns the options-based
+// wrappers instead of deprecated *piondtls.Config pointers.
+func createDTLSOptionsConfig() (serverOpts coapNet.DTLSServerOptions, clientOpts dtls.DTLSClientOptions, clientSerial *big.Int, err error) {
+	// root cert
+	ca, rootBytes, _, caPriv, err := pki.GenerateCA()
+	if err != nil {
+		return
+	}
+	certPool, err := pki.LoadCertPool(rootBytes)
+	if err != nil {
+		return
+	}
+	// server cert
+	certBytes, keyBytes, err := pki.GenerateCertificate(ca, caPriv, "server@test.com")
+	if err != nil {
+		return
+	}
+	serverCert, err := pki.LoadKeyAndCertificate(keyBytes, certBytes)
+	if err != nil {
+		return
+	}
+	serverOpts = coapNet.NewDTLSServerOptions(
+		piondtls.WithCertificates(*serverCert),
+		piondtls.WithExtendedMasterSecret(piondtls.RequireExtendedMasterSecret),
+		piondtls.WithClientCAs(certPool),
+		piondtls.WithClientAuth(piondtls.RequireAndVerifyClientCert),
+	)
+	// client cert
+	certBytes, keyBytes, err = pki.GenerateCertificate(ca, caPriv, "client@test.com")
+	if err != nil {
+		return
+	}
+	clientCert, err := pki.LoadKeyAndCertificate(keyBytes, certBytes)
+	if err != nil {
+		return
+	}
+	clientInfo, err := x509.ParseCertificate(clientCert.Certificate[0])
+	if err != nil {
+		return
+	}
+	clientSerial = clientInfo.SerialNumber
+	clientOpts = dtls.NewDTLSClientOptions(
+		piondtls.WithCertificates(*clientCert),
+		piondtls.WithExtendedMasterSecret(piondtls.RequireExtendedMasterSecret),
+		piondtls.WithRootCAs(certPool),
+		piondtls.WithInsecureSkipVerify(true),
+	)
+	return
+}
+
+// TestServerCleanUpConnsWithOptions mirrors TestServerCleanUpConns but uses
+// NewDTLSListenerWithOptions and DialWithOptions.
+func TestServerCleanUpConnsWithOptions(t *testing.T) {
+	serverOpts := coapNet.NewDTLSServerOptions(
+		piondtls.WithPSK(func(hint []byte) ([]byte, error) {
+			fmt.Printf("Hint: %s \n", hint)
+			return []byte{0xAB, 0xC1, 0x23}, nil
+		}),
+		piondtls.WithPSKIdentityHint([]byte("Pion DTLS Server")),
+		piondtls.WithCipherSuites(piondtls.TLS_PSK_WITH_AES_128_CCM_8),
+	)
+	clientOpts := dtls.NewDTLSClientOptions(
+		piondtls.WithPSK(func(hint []byte) ([]byte, error) {
+			fmt.Printf("Hint: %s \n", hint)
+			return []byte{0xAB, 0xC1, 0x23}, nil
+		}),
+		piondtls.WithPSKIdentityHint([]byte("Pion DTLS Server")),
+		piondtls.WithCipherSuites(piondtls.TLS_PSK_WITH_AES_128_CCM_8),
+	)
+
+	ld, err := coapNet.NewDTLSListenerWithOptions("udp4", "", serverOpts)
+	require.NoError(t, err)
+	defer func() {
+		errC := ld.Close()
+		require.NoError(t, errC)
+	}()
+	ctx, cancel := context.WithTimeout(context.Background(), Timeout)
+	defer cancel()
+
+	checkClose := semaphore.NewWeighted(2)
+	err = checkClose.Acquire(ctx, 2)
+	require.NoError(t, err)
+	defer func() {
+		err = checkClose.Acquire(ctx, 2)
+		require.NoError(t, err)
+	}()
+	sd := dtls.NewServer(options.WithOnNewConn(func(cc *client.Conn) {
+		cc.AddOnClose(func() {
+			checkClose.Release(1)
+		})
+	}))
+	defer sd.Stop()
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		errS := sd.Serve(ld)
+		assert.NoError(t, errS)
+	}()
+
+	cc, err := dtls.DialWithOptions(ld.Addr().String(), clientOpts)
+	require.NoError(t, err)
+	cc.AddOnClose(func() {
+		checkClose.Release(1)
+	})
+	ctxPing, cancel := context.WithTimeout(ctx, time.Second)
+	defer cancel()
+	err = cc.Ping(ctxPing)
+	require.NoError(t, err)
+	err = cc.Close()
+	require.NoError(t, err)
+	<-cc.Done()
+}
+
+// TestServerSetContextValueWithPKIAndOptions mirrors TestServerSetContextValueWithPKI
+// but uses NewDTLSListenerWithOptions and DialWithOptions.
+func TestServerSetContextValueWithPKIAndOptions(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), Timeout)
+	defer cancel()
+	serverOpts, clientOpts, clientSerial, err := createDTLSOptionsConfig()
+	require.NoError(t, err)
+
+	ld, err := coapNet.NewDTLSListenerWithOptions("udp4", "", serverOpts)
+	require.NoError(t, err)
+	defer func() {
+		errC := ld.Close()
+		require.NoError(t, errC)
+	}()
+
+	onNewConn := func(cc *client.Conn) {
+		dtlsConn, ok := cc.NetConn().(*piondtls.Conn)
+		assert.True(t, ok)
+		errH := dtlsConn.HandshakeContext(ctx)
+		assert.NoError(t, errH) //nolint:testifylint
+		state, ok := dtlsConn.ConnectionState()
+		assert.True(t, ok)
+		clientCert, errP := x509.ParseCertificate(state.PeerCertificates[0])
+		assert.NoError(t, errP) //nolint:testifylint
+		cc.SetContextValue("client-cert", clientCert)
+	}
+	handle := func(w *responsewriter.ResponseWriter[*client.Conn], r *pool.Message) {
+		clientCert := r.Context().Value("client-cert").(*x509.Certificate)
+		assert.Equal(t, clientCert.SerialNumber, clientSerial)
+		assert.NotNil(t, clientCert)
+		errH := w.SetResponse(codes.Content, message.TextPlain, bytes.NewReader([]byte("done")))
+		assert.NoError(t, errH)
+	}
+
+	sd := dtls.NewServer(options.WithHandlerFunc(handle), options.WithOnNewConn(onNewConn))
+	var wg sync.WaitGroup
+	defer func() {
+		sd.Stop()
+		wg.Wait()
+	}()
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		errS := sd.Serve(ld)
+		assert.NoError(t, errS)
+	}()
+
+	cc, err := dtls.DialWithOptions(ld.Addr().String(), clientOpts)
+	require.NoError(t, err)
+	defer func() {
+		errC := cc.Close()
+		require.NoError(t, errC)
+		<-cc.Done()
+	}()
+
+	_, err = cc.Get(ctx, "/")
+	require.NoError(t, err)
+}
