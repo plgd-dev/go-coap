@@ -3,7 +3,7 @@ package dtls
 import piondtls "github.com/pion/dtls/v3"
 
 // DTLSClientOptions holds DTLS client-side configuration options for use with
-// DialWithOptions. It wraps the options-based API of pion/dtls, keeping
+// Dial. It wraps the options-based API of pion/dtls, keeping
 // pion/dtls option types out of go-coap function signatures.
 type DTLSClientOptions struct {
 	opts []piondtls.ClientOption
@@ -17,4 +17,12 @@ type DTLSClientOptions struct {
 // directly.
 func NewDTLSClientOptions(opts ...piondtls.ClientOption) DTLSClientOptions {
 	return DTLSClientOptions{opts: opts}
+}
+
+// DTLSClientConfig is a type constraint accepted by Dial.
+// It allows callers to pass either the legacy *piondtls.Config
+// (backward-compatible) or the recommended DTLSClientOptions wrapper
+// (built via NewDTLSClientOptions).
+type DTLSClientConfig interface {
+	*piondtls.Config | DTLSClientOptions
 }

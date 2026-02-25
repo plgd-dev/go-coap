@@ -390,7 +390,7 @@ func createDTLSOptionsConfig() (serverOpts coapNet.DTLSServerOptions, clientOpts
 }
 
 // TestServerCleanUpConnsWithOptions mirrors TestServerCleanUpConns but uses
-// NewDTLSListenerWithOptions and DialWithOptions.
+// the generic NewDTLSListener and Dial API.
 func TestServerCleanUpConnsWithOptions(t *testing.T) {
 	serverOpts := coapNet.NewDTLSServerOptions(
 		piondtls.WithPSK(func(hint []byte) ([]byte, error) {
@@ -409,7 +409,7 @@ func TestServerCleanUpConnsWithOptions(t *testing.T) {
 		piondtls.WithCipherSuites(piondtls.TLS_PSK_WITH_AES_128_CCM_8),
 	)
 
-	ld, err := coapNet.NewDTLSListenerWithOptions("udp4", "", serverOpts)
+	ld, err := coapNet.NewDTLSListener("udp4", "", serverOpts)
 	require.NoError(t, err)
 	defer func() {
 		errC := ld.Close()
@@ -440,7 +440,7 @@ func TestServerCleanUpConnsWithOptions(t *testing.T) {
 		assert.NoError(t, errS)
 	}()
 
-	cc, err := dtls.DialWithOptions(ld.Addr().String(), clientOpts)
+	cc, err := dtls.Dial(ld.Addr().String(), clientOpts)
 	require.NoError(t, err)
 	cc.AddOnClose(func() {
 		checkClose.Release(1)
@@ -455,14 +455,14 @@ func TestServerCleanUpConnsWithOptions(t *testing.T) {
 }
 
 // TestServerSetContextValueWithPKIAndOptions mirrors TestServerSetContextValueWithPKI
-// but uses NewDTLSListenerWithOptions and DialWithOptions.
+// but uses the generic NewDTLSListener and Dial API.
 func TestServerSetContextValueWithPKIAndOptions(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), Timeout)
 	defer cancel()
 	serverOpts, clientOpts, clientSerial, err := createDTLSOptionsConfig()
 	require.NoError(t, err)
 
-	ld, err := coapNet.NewDTLSListenerWithOptions("udp4", "", serverOpts)
+	ld, err := coapNet.NewDTLSListener("udp4", "", serverOpts)
 	require.NoError(t, err)
 	defer func() {
 		errC := ld.Close()
@@ -501,7 +501,7 @@ func TestServerSetContextValueWithPKIAndOptions(t *testing.T) {
 		assert.NoError(t, errS)
 	}()
 
-	cc, err := dtls.DialWithOptions(ld.Addr().String(), clientOpts)
+	cc, err := dtls.Dial(ld.Addr().String(), clientOpts)
 	require.NoError(t, err)
 	defer func() {
 		errC := cc.Close()

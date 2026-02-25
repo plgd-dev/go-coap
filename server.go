@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 
-	piondtls "github.com/pion/dtls/v3"
 	"github.com/plgd-dev/go-coap/v3/dtls"
 	dtlsServer "github.com/plgd-dev/go-coap/v3/dtls/server"
 	"github.com/plgd-dev/go-coap/v3/mux"
@@ -67,28 +66,11 @@ func ListenAndServeTCPTLS(network, addr string, config *tls.Config, handler mux.
 	return s.Serve(l)
 }
 
-// ListenAndServeDTLS Starts a server on address and network over DTLS specified Invoke handler
-// for incoming queries.
-//
-// Deprecated: use ListenAndServeDTLSUsingOptions and net.NewDTLSServerOptions instead.
-func ListenAndServeDTLS(network string, addr string, config *piondtls.Config, handler mux.Handler) (err error) {
-	l, err := net.NewDTLSListener(network, addr, config)
-	if err != nil {
-		return err
-	}
-	defer func() {
-		if errC := l.Close(); errC != nil && err == nil {
-			err = errC
-		}
-	}()
-	s := dtls.NewServer(options.WithMux(handler))
-	return s.Serve(l)
-}
-
-// ListenAndServeDTLSUsingOptions starts a server on address and network over DTLS
-// using the options-based API. Use net.NewDTLSServerOptions to build dtlsOpts.
-func ListenAndServeDTLSUsingOptions(network string, addr string, dtlsOpts net.DTLSServerOptions, handler mux.Handler) (err error) {
-	l, err := net.NewDTLSListenerWithOptions(network, addr, dtlsOpts)
+// ListenAndServeDTLS starts a server on address and network over DTLS.
+// cfg accepts either a *piondtls.Config (backward-compatible legacy path) or a
+// net.DTLSServerOptions value built with net.NewDTLSServerOptions (recommended).
+func ListenAndServeDTLS[T net.DTLSServerConfig](network string, addr string, cfg T, handler mux.Handler) (err error) {
+	l, err := net.NewDTLSListener(network, addr, cfg)
 	if err != nil {
 		return err
 	}
@@ -168,29 +150,12 @@ func ListenAndServeTCPTLSWithOptions(network, addr string, config *tls.Config, o
 	return s.Serve(l)
 }
 
-// ListenAndServeDTLSWithOptions Starts a server on address and network over DTLS specified Invoke options
-// for incoming queries.
-//
-// Deprecated: use ListenAndServeDTLSWithServerOptions and net.NewDTLSServerOptions instead.
-func ListenAndServeDTLSWithOptions(network string, addr string, config *piondtls.Config, opts ...dtlsServer.Option) (err error) {
-	l, err := net.NewDTLSListener(network, addr, config)
-	if err != nil {
-		return err
-	}
-	defer func() {
-		if errC := l.Close(); errC != nil && err == nil {
-			err = errC
-		}
-	}()
-	s := dtls.NewServer(opts...)
-	return s.Serve(l)
-}
-
-// ListenAndServeDTLSWithServerOptions starts a server on address and network over
-// DTLS using the options-based API, with go-coap server options.
-// Use net.NewDTLSServerOptions to build dtlsOpts.
-func ListenAndServeDTLSWithServerOptions(network string, addr string, dtlsOpts net.DTLSServerOptions, opts ...dtlsServer.Option) (err error) {
-	l, err := net.NewDTLSListenerWithOptions(network, addr, dtlsOpts)
+// ListenAndServeDTLSWithOptions starts a server on address and network over DTLS
+// with go-coap server options.
+// cfg accepts either a *piondtls.Config (backward-compatible legacy path) or a
+// net.DTLSServerOptions value built with net.NewDTLSServerOptions (recommended).
+func ListenAndServeDTLSWithOptions[T net.DTLSServerConfig](network string, addr string, cfg T, opts ...dtlsServer.Option) (err error) {
+	l, err := net.NewDTLSListener(network, addr, cfg)
 	if err != nil {
 		return err
 	}

@@ -799,8 +799,7 @@ func TestClientKeepAliveMonitor(t *testing.T) {
 }
 
 // TestConnGetWithOptions mirrors TestConnGet but uses the new
-// NewDTLSListenerWithOptions / DialWithOptions API instead of the deprecated
-// *piondtls.Config-based one.
+// generic Dial / NewDTLSListener API with DTLSClientOptions / DTLSServerOptions.
 func TestConnGetWithOptions(t *testing.T) {
 	type args struct {
 		path string
@@ -850,7 +849,7 @@ func TestConnGetWithOptions(t *testing.T) {
 		piondtls.WithCipherSuites(piondtls.TLS_PSK_WITH_AES_128_CCM_8),
 	)
 
-	l, err := coapNet.NewDTLSListenerWithOptions("udp", "", serverOpts)
+	l, err := coapNet.NewDTLSListener("udp", "", serverOpts)
 	require.NoError(t, err)
 	defer func() {
 		errC := l.Close()
@@ -886,7 +885,7 @@ func TestConnGetWithOptions(t *testing.T) {
 		assert.NoError(t, errS)
 	}()
 
-	cc, err := dtls.DialWithOptions(l.Addr().String(), clientOpts)
+	cc, err := dtls.Dial(l.Addr().String(), clientOpts)
 	require.NoError(t, err)
 	defer func() {
 		errC := cc.Close()
@@ -917,21 +916,21 @@ func TestConnGetWithOptions(t *testing.T) {
 	}
 }
 
-// TestNewDTLSListenerWithOptionsInvalidAddr verifies that
-// NewDTLSListenerWithOptions propagates address-resolution errors.
-func TestNewDTLSListenerWithOptionsInvalidAddr(t *testing.T) {
-	_, err := coapNet.NewDTLSListenerWithOptions("udp", "!!invalid!!", coapNet.NewDTLSServerOptions(
+// TestNewDTLSListenerInvalidAddr verifies that
+// NewDTLSListener propagates address-resolution errors.
+func TestNewDTLSListenerInvalidAddr(t *testing.T) {
+	_, err := coapNet.NewDTLSListener("udp", "!!invalid!!", coapNet.NewDTLSServerOptions(
 		piondtls.WithPSK(func([]byte) ([]byte, error) { return []byte{0x01}, nil }),
 		piondtls.WithCipherSuites(piondtls.TLS_PSK_WITH_AES_128_CCM_8),
 	))
 	require.Error(t, err)
 }
 
-// TestDialWithOptionsConnectRefused ensures DialWithOptions returns an error
+// TestDialConnectRefused ensures Dial returns an error
 // when nothing is listening on the target address.
-func TestDialWithOptionsConnectRefused(t *testing.T) {
+func TestDialConnectRefused(t *testing.T) {
 	// port 1 is reserved and will never have a DTLS listener
-	_, err := dtls.DialWithOptions("127.0.0.1:1", dtls.NewDTLSClientOptions(
+	_, err := dtls.Dial("127.0.0.1:1", dtls.NewDTLSClientOptions(
 		piondtls.WithPSK(func([]byte) ([]byte, error) { return []byte{0x01}, nil }),
 		piondtls.WithCipherSuites(piondtls.TLS_PSK_WITH_AES_128_CCM_8),
 	))

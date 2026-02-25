@@ -3,7 +3,7 @@ package net
 import piondtls "github.com/pion/dtls/v3"
 
 // DTLSServerOptions holds DTLS server-side configuration options for use with
-// NewDTLSListenerWithOptions. It wraps the options-based API of pion/dtls,
+// NewDTLSListener. It wraps the options-based API of pion/dtls,
 // keeping pion/dtls option types out of go-coap function signatures.
 type DTLSServerOptions struct {
 	opts []piondtls.ServerOption
@@ -18,4 +18,13 @@ type DTLSServerOptions struct {
 // accepted.
 func NewDTLSServerOptions(opts ...piondtls.ServerOption) DTLSServerOptions {
 	return DTLSServerOptions{opts: opts}
+}
+
+// DTLSServerConfig is a type constraint accepted by NewDTLSListener,
+// ListenAndServeDTLS and ListenAndServeDTLSWithOptions.
+// It allows callers to pass either the legacy *piondtls.Config
+// (backward-compatible) or the recommended DTLSServerOptions wrapper
+// (built via NewDTLSServerOptions).
+type DTLSServerConfig interface {
+	*piondtls.Config | DTLSServerOptions
 }

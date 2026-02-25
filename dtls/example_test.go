@@ -39,8 +39,8 @@ func ExampleConn_Get() {
 	fmt.Printf("%v", data)
 }
 
-func ExampleDialWithOptions() {
-	conn, err := dtls.DialWithOptions("pluggedin.cloud:5684", dtls.NewDTLSClientOptions(
+func ExampleDial_withOptions() {
+	conn, err := dtls.Dial("pluggedin.cloud:5684", dtls.NewDTLSClientOptions(
 		piondtls.WithPSK(func(hint []byte) ([]byte, error) {
 			fmt.Printf("Hint: %s \n", hint)
 			return []byte{0xAB, 0xC1, 0x23}, nil
@@ -84,8 +84,8 @@ func ExampleServer() {
 	log.Fatal(s.Serve(l))
 }
 
-func ExampleServerWithOptions() {
-	l, err := net.NewDTLSListenerWithOptions("udp", "0.0.0.0:5683", net.NewDTLSServerOptions(
+func ExampleNewDTLSListener_withOptions() {
+	l, err := net.NewDTLSListener("udp", "0.0.0.0:5683", net.NewDTLSServerOptions(
 		piondtls.WithPSK(func(hint []byte) ([]byte, error) {
 			fmt.Printf("Hint: %s \n", hint)
 			return []byte{0xAB, 0xC1, 0x23}, nil

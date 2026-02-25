@@ -33,41 +33,28 @@ var DefaultConfig = func() udpClient.Config {
 }()
 
 // Dial creates a client connection to the given target.
-//
-// Deprecated: use DialWithOptions and NewDTLSClientOptions instead.
-func Dial(target string, dtlsCfg *dtls.Config, opts ...udp.Option) (*udpClient.Conn, error) {
-	cfg := DefaultConfig
+// cfg accepts either a *dtls.Config (backward-compatible legacy path) or a
+// DTLSClientOptions value built with NewDTLSClientOptions (recommended).
+func Dial[T DTLSClientConfig](target string, cfg T, opts ...udp.Option) (*udpClient.Conn, error) {
+	defaultCfg := DefaultConfig
 	for _, o := range opts {
-		o.UDPClientApply(&cfg)
+		o.UDPClientApply(&defaultCfg)
 	}
 
-	c, err := cfg.Dialer.DialContext(cfg.Ctx, cfg.Net, target)
+	c, err := defaultCfg.Dialer.DialContext(defaultCfg.Ctx, defaultCfg.Net, target)
 	if err != nil {
 		return nil, err
 	}
 
-	conn, err := dtls.Client(dtlsnet.PacketConnFromConn(c), c.RemoteAddr(), dtlsCfg)
-	if err != nil {
-		return nil, err
+	var conn *dtls.Conn
+	switch v := any(cfg).(type) {
+	case *dtls.Config:
+		conn, err = dtls.Client(dtlsnet.PacketConnFromConn(c), c.RemoteAddr(), v) //nolint:staticcheck
+	case DTLSClientOptions:
+		conn, err = dtls.ClientWithOptions(dtlsnet.PacketConnFromConn(c), c.RemoteAddr(), v.opts...)
+	default:
+		panic("unreachable: unexpected type in DTLSClientConfig constraint")
 	}
-	opts = append(opts, options.WithCloseSocket())
-	return Client(conn, opts...), nil
-}
-
-// DialWithOptions creates a client connection to the given target using the
-// options-based DTLS API. Use NewDTLSClientOptions to build the dtlsOpts argument.
-func DialWithOptions(target string, dtlsOpts DTLSClientOptions, opts ...udp.Option) (*udpClient.Conn, error) {
-	cfg := DefaultConfig
-	for _, o := range opts {
-		o.UDPClientApply(&cfg)
-	}
-
-	c, err := cfg.Dialer.DialContext(cfg.Ctx, cfg.Net, target)
-	if err != nil {
-		return nil, err
-	}
-
-	conn, err := dtls.ClientWithOptions(dtlsnet.PacketConnFromConn(c), c.RemoteAddr(), dtlsOpts.opts...)
 	if err != nil {
 		return nil, err
 	}

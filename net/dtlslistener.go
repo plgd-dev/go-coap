@@ -42,27 +42,27 @@ func newNetDTLSListenerWithOptions(network string, addr string, dtlsOpts DTLSSer
 	return l, nil
 }
 
-// NewDTLSListener creates dtls listener.
+// NewDTLSListener creates a DTLS listener.
 // Known networks are "udp", "udp4" (IPv4-only), "udp6" (IPv6-only).
-//
-// Deprecated: use NewDTLSListenerWithOptions and NewDTLSServerOptions instead.
-func NewDTLSListener(network string, addr string, dtlsCfg *dtls.Config) (*DTLSListener, error) {
-	dtls, err := newNetDTLSListener(network, addr, dtlsCfg)
-	if err != nil {
-		return nil, fmt.Errorf("cannot create new dtls listener: %w", err)
+// cfg accepts either a *dtls.Config (backward-compatible legacy path) or a
+// DTLSServerOptions value built with NewDTLSServerOptions (recommended).
+func NewDTLSListener[T DTLSServerConfig](network, addr string, cfg T) (*DTLSListener, error) {
+	switch v := any(cfg).(type) {
+	case *dtls.Config:
+		l, err := newNetDTLSListener(network, addr, v)
+		if err != nil {
+			return nil, fmt.Errorf("cannot create new dtls listener: %w", err)
+		}
+		return &DTLSListener{listener: l}, nil
+	case DTLSServerOptions:
+		l, err := newNetDTLSListenerWithOptions(network, addr, v)
+		if err != nil {
+			return nil, fmt.Errorf("cannot create new dtls listener: %w", err)
+		}
+		return &DTLSListener{listener: l}, nil
+	default:
+		panic("unreachable: unexpected type in DTLSServerConfig constraint")
 	}
-	return &DTLSListener{listener: dtls}, nil
-}
-
-// NewDTLSListenerWithOptions creates a DTLS listener using the options-based API.
-// Known networks are "udp", "udp4" (IPv4-only), "udp6" (IPv6-only).
-// Use NewDTLSServerOptions to build the dtlsOpts argument.
-func NewDTLSListenerWithOptions(network string, addr string, dtlsOpts DTLSServerOptions) (*DTLSListener, error) {
-	l, err := newNetDTLSListenerWithOptions(network, addr, dtlsOpts)
-	if err != nil {
-		return nil, fmt.Errorf("cannot create new dtls listener: %w", err)
-	}
-	return &DTLSListener{listener: l}, nil
 }
 
 // AcceptWithContext waits with context for a generic Conn.
