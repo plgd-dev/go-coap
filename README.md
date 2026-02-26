@@ -159,7 +159,7 @@ clientOpts := coapdtls.NewDTLSClientOptions(
 co, err := coapdtls.Dial("localhost:5688", clientOpts)
 ```
 
-See [examples/options/](examples/options/) for a complete working example using the options-based API.
+See [examples/options/server/](examples/options/server/) and [examples/options/client/](examples/options/client/) for complete working examples using the options-based API.
 
 ### Observe / Notify
 
