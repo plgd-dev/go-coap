@@ -12,14 +12,14 @@ import (
 )
 
 func main() {
-	co, err := dtls.Dial("localhost:5688", &piondtls.Config{
-		PSK: func(hint []byte) ([]byte, error) {
+	co, err := dtls.Dial("localhost:5688", dtls.NewDTLSClientOptions(
+		piondtls.WithPSK(func(hint []byte) ([]byte, error) {
 			fmt.Printf("Server's hint: %s \n", hint)
 			return []byte{0xAB, 0xC1, 0x23}, nil
-		},
-		PSKIdentityHint: []byte("Pion DTLS Client"),
-		CipherSuites:    []piondtls.CipherSuiteID{piondtls.TLS_PSK_WITH_AES_128_CCM_8},
-	})
+		}),
+		piondtls.WithPSKIdentityHint([]byte("Pion DTLS Client")),
+		piondtls.WithCipherSuites(piondtls.TLS_PSK_WITH_AES_128_CCM_8),
+	))
 	if err != nil {
 		log.Fatalf("Error dialing: %v", err)
 	}

@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"crypto/tls"
 	"log"
 	"os"
 	"time"
@@ -13,12 +12,12 @@ import (
 )
 
 func main() {
-	config, err := createClientConfig()
+	dtlsOpts, err := createClientConfig()
 	if err != nil {
 		log.Fatalln(err)
 		return
 	}
-	co, err := dtls.Dial("localhost:5688", config)
+	co, err := dtls.Dial("localhost:5688", dtlsOpts)
 	if err != nil {
 		log.Fatalf("Error dialing: %v", err)
 	}
@@ -36,31 +35,31 @@ func main() {
 	log.Printf("Response payload: %+v", resp)
 }
 
-func createClientConfig() (*piondtls.Config, error) {
+func createClientConfig() (dtls.DTLSClientOptions, error) {
 	// root cert
 	ca, rootBytes, _, caPriv, err := pki.GenerateCA()
 	if err != nil {
-		return nil, err
+		return dtls.DTLSClientOptions{}, err
 	}
 	// client cert
 	certBytes, keyBytes, err := pki.GenerateCertificate(ca, caPriv, "client@test.com")
 	if err != nil {
-		return nil, err
+		return dtls.DTLSClientOptions{}, err
 	}
 	certificate, err := pki.LoadKeyAndCertificate(keyBytes, certBytes)
 	if err != nil {
-		return nil, err
+		return dtls.DTLSClientOptions{}, err
 	}
 	// cert pool
 	certPool, err := pki.LoadCertPool(rootBytes)
 	if err != nil {
-		return nil, err
+		return dtls.DTLSClientOptions{}, err
 	}
 
-	return &piondtls.Config{
-		Certificates:         []tls.Certificate{*certificate},
-		ExtendedMasterSecret: piondtls.RequireExtendedMasterSecret,
-		RootCAs:              certPool,
-		InsecureSkipVerify:   false, // for test purposes only
-	}, nil
+	return dtls.NewDTLSClientOptions(
+		piondtls.WithCertificates(*certificate),
+		piondtls.WithExtendedMasterSecret(piondtls.RequireExtendedMasterSecret),
+		piondtls.WithRootCAs(certPool),
+		piondtls.WithInsecureSkipVerify(false),
+	), nil
 }

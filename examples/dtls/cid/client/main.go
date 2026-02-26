@@ -11,15 +11,6 @@ import (
 )
 
 func main() {
-	conf := &piondtls.Config{
-		PSK: func(hint []byte) ([]byte, error) {
-			fmt.Printf("Server's hint: %s \n", hint)
-			return []byte{0xAB, 0xC1, 0x23}, nil
-		},
-		PSKIdentityHint:       []byte("Pion DTLS Client"),
-		CipherSuites:          []piondtls.CipherSuiteID{piondtls.TLS_PSK_WITH_AES_128_CCM_8},
-		ConnectionIDGenerator: piondtls.OnlySendCIDGenerator(),
-	}
 	raddr, err := net.ResolveUDPAddr("udp", "127.0.0.1:5688")
 	if err != nil {
 		log.Fatalf("Error resolving UDP address: %v", err)
@@ -32,7 +23,15 @@ func main() {
 	}
 
 	// Create DTLS client on UDP listener.
-	client, err := piondtls.Client(udpconn, raddr, conf)
+	client, err := piondtls.ClientWithOptions(udpconn, raddr,
+		piondtls.WithPSK(func(hint []byte) ([]byte, error) {
+			fmt.Printf("Server's hint: %s \n", hint)
+			return []byte{0xAB, 0xC1, 0x23}, nil
+		}),
+		piondtls.WithPSKIdentityHint([]byte("Pion DTLS Client")),
+		piondtls.WithCipherSuites(piondtls.TLS_PSK_WITH_AES_128_CCM_8),
+		piondtls.WithConnectionIDGenerator(piondtls.OnlySendCIDGenerator()),
+	)
 	if err != nil {
 		log.Fatalf("Error establishing DTLS client: %v", err)
 	}
@@ -61,7 +60,15 @@ func main() {
 	}
 
 	// Resume connection on new address with previous state.
-	client, err = piondtls.Resume(&state, udpconn, raddr, conf)
+	client, err = piondtls.ResumeWithOptions(&state, udpconn, raddr,
+		piondtls.WithPSK(func(hint []byte) ([]byte, error) {
+			fmt.Printf("Server's hint: %s \n", hint)
+			return []byte{0xAB, 0xC1, 0x23}, nil
+		}),
+		piondtls.WithPSKIdentityHint([]byte("Pion DTLS Client")),
+		piondtls.WithCipherSuites(piondtls.TLS_PSK_WITH_AES_128_CCM_8),
+		piondtls.WithConnectionIDGenerator(piondtls.OnlySendCIDGenerator()),
+	)
 	if err != nil {
 		log.Fatalf("Error resuming DTLS connection: %v", err)
 	}
