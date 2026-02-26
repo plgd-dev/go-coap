@@ -80,8 +80,12 @@ The go-coap provides servers and clients for DTLS, TCP-TLS, UDP, TCP in golang l
         // for tcp-tls
         // log.Fatal(coap.ListenAndServeTLS("tcp", ":5688", &tls.Config{...}, r))
 
-        // for udp-dtls
+        // for udp-dtls (deprecated: *dtls.Config is deprecated in pion/dtls v3, prefer options-based API)
         // log.Fatal(coap.ListenAndServeDTLS("udp", ":5688", &dtls.Config{...}, r))
+
+        // for udp-dtls (options-based API — pion/dtls v3)
+        // log.Fatal(coap.ListenAndServeDTLS("udp", ":5688",
+        //     net.NewDTLSServerOptions(dtls.WithPSK(...), dtls.WithCertificates(...)), r))
     }
 ```
 
@@ -99,8 +103,12 @@ The go-coap provides servers and clients for DTLS, TCP-TLS, UDP, TCP in golang l
         // for tcp-tls
         // co, err := tcp.Dial("localhost:5688", tcp.WithTLS(&tls.Config{...}))
 
-        // for dtls
-        // co, err := dtls.Dial("localhost:5688", &dtls.Config{...}))
+        // for dtls (deprecated: *dtls.Config is deprecated in pion/dtls v3, prefer options-based API)
+        // co, err := dtls.Dial("localhost:5688", &dtls.Config{...})
+
+        // for dtls (options-based API — pion/dtls v3)
+        // co, err := dtls.Dial("localhost:5688",
+        //     dtlscoap.NewDTLSClientOptions(piondtls.WithPSK(...), piondtls.WithCertificates(...)))
 
         if err != nil {
             log.Fatalf("Error dialing: %v", err)
@@ -115,6 +123,43 @@ The go-coap provides servers and clients for DTLS, TCP-TLS, UDP, TCP in golang l
         log.Printf("Response: %+v", resp)
     }
 ```
+
+### DTLS Options-based API (pion/dtls v3)
+
+> **Deprecation notice:** `*dtls.Config` is [deprecated in pion/dtls v3](https://github.com/pion/dtls) in favour of immutable options-based configurations. Its use in go-coap is consequently deprecated as well and may be removed in a future major version. Migrate to `net.NewDTLSServerOptions` / `dtls.NewDTLSClientOptions` as shown below.
+
+In addition to the legacy `*dtls.Config`, go-coap supports the **options-based API** introduced in pion/dtls v3. Both approaches are currently accepted by the same generic functions (`ListenAndServeDTLS`, `Dial`, `NewDTLSListener`).
+
+Use `net.NewDTLSServerOptions(...)` / `dtls.NewDTLSClientOptions(...)` to compose DTLS configurations from individual options:
+
+```go
+import (
+    coap   "github.com/plgd-dev/go-coap/v3"
+    coapnet "github.com/plgd-dev/go-coap/v3/net"
+    coapdtls "github.com/plgd-dev/go-coap/v3/dtls"
+    piondtls "github.com/pion/dtls/v3"
+)
+
+// Server
+serverOpts := coapnet.NewDTLSServerOptions(
+    piondtls.WithPSK(func(hint []byte) ([]byte, error) {
+        return []byte{0xAB, 0xC1, 0x23}, nil
+    }),
+    piondtls.WithCipherSuites(piondtls.TLS_PSK_WITH_AES_128_CCM_8),
+)
+log.Fatal(coap.ListenAndServeDTLS("udp", ":5688", serverOpts, r))
+
+// Client
+clientOpts := coapdtls.NewDTLSClientOptions(
+    piondtls.WithPSK(func(hint []byte) ([]byte, error) {
+        return []byte{0xAB, 0xC1, 0x23}, nil
+    }),
+    piondtls.WithCipherSuites(piondtls.TLS_PSK_WITH_AES_128_CCM_8),
+)
+co, err := coapdtls.Dial("localhost:5688", clientOpts)
+```
+
+See [examples/options/](examples/options/) for a complete working example using the options-based API.
 
 ### Observe / Notify
 
