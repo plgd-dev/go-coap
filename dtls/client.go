@@ -56,6 +56,7 @@ func Dial[T DTLSClientConfig](target string, cfg T, opts ...udp.Option) (*udpCli
 		panic("unreachable: unexpected type in DTLSClientConfig constraint")
 	}
 	if err != nil {
+		_ = c.Close()
 		return nil, err
 	}
 	opts = append(opts, options.WithCloseSocket())
