@@ -832,7 +832,7 @@ func (cc *Conn) ProcessReceivedMessageWithHandler(req *pool.Message, handler con
 	resp.SetToken(req.Token())
 
 	cc.interfaceIndex.Store(int64(req.ControlMessage().GetIfIndex()))
-	cc.localAddr.Store(&req.ControlMessage().Src)
+	cc.localAddr.Store(&req.ControlMessage().Dst)
 
 	w := responsewriter.New(resp, cc, req.Options()...)
 	defer func() {

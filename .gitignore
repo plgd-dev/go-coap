@@ -12,6 +12,7 @@ client
 vendor/
 v3/
 .idea/
+.vscode/
 # Test binary, build with `go test -c`
 *.test
 
