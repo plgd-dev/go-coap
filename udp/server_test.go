@@ -467,7 +467,7 @@ func TestServerNewClient(t *testing.T) {
 
 	time.Sleep(time.Second)
 
-	cc, err := s1.NewConn(peer)
+	cc, err := s1.NewConn(peer, &net.UDPAddr{IP: net.IP{127, 0, 0, 1}})
 	require.NoError(t, err)
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*1)
@@ -478,7 +478,7 @@ func TestServerNewClient(t *testing.T) {
 	require.NoError(t, err)
 
 	// repeat ping - new client should be created
-	cc, err = s1.NewConn(peer)
+	cc, err = s1.NewConn(peer, &net.UDPAddr{IP: net.IP{127, 0, 0, 1}})
 	require.NoError(t, err)
 	err = cc.Ping(ctx)
 	require.NoError(t, err)
@@ -600,7 +600,7 @@ func TestServerReconnectNewClient(t *testing.T) {
 
 	time.Sleep(time.Second)
 
-	cc, err := s1.NewConn(peer)
+	cc, err := s1.NewConn(peer, &net.UDPAddr{IP: net.IP{127, 0, 0, 1}})
 	require.NoError(t, err)
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*1)
@@ -626,7 +626,7 @@ func TestServerReconnectNewClient(t *testing.T) {
 	}
 
 	// new client
-	cc, err = s1.NewConn(peer)
+	cc, err = s1.NewConn(peer, &net.UDPAddr{IP: net.IP{127, 0, 0, 1}})
 	require.NoError(t, err)
 	ctx, cancel = context.WithTimeout(context.Background(), time.Second*1)
 	defer cancel()
