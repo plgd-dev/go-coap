@@ -159,7 +159,15 @@ func (s *Server) Serve(l *coapNet.UDPConn) error {
 			}
 		}
 		buf = buf[:n]
-		cc, err := s.getConn(l, raddr, true)
+
+		// UDPConn.LocalAddr() only takes into account the address it is bound to.
+		// In the case of a wildcard address, the actual destination address is in the control message.
+		laddr := l.LocalAddr().(*net.UDPAddr)
+		if cm != nil && cm.Dst != nil {
+			laddr.IP = cm.Dst
+		}
+
+		cc, err := s.getConn(l, raddr, laddr, true)
 		if err != nil {
 			s.cfg.Errors(fmt.Errorf("%v: cannot get client connection: %w", raddr, err))
 			continue
@@ -254,10 +262,10 @@ func getClose(cc *client.Conn) func() {
 	return closeFn
 }
 
-func (s *Server) getOrCreateConn(udpConn *coapNet.UDPConn, raddr *net.UDPAddr) (cc *client.Conn, created bool) {
+func (s *Server) getOrCreateConn(udpConn *coapNet.UDPConn, raddr *net.UDPAddr, laddr *net.UDPAddr) (cc *client.Conn, created bool) {
 	s.connsMutex.Lock()
 	defer s.connsMutex.Unlock()
-	key := raddr.String()
+	key := raddr.String() + "-" + laddr.String()
 	cc = s.conns[key]
 
 	if cc != nil {
@@ -345,8 +353,8 @@ func (s *Server) getOrCreateConn(udpConn *coapNet.UDPConn, raddr *net.UDPAddr) (
 	return cc, true
 }
 
-func (s *Server) getConn(l *coapNet.UDPConn, raddr *net.UDPAddr, firstTime bool) (*client.Conn, error) {
-	cc, created := s.getOrCreateConn(l, raddr)
+func (s *Server) getConn(l *coapNet.UDPConn, raddr *net.UDPAddr, laddr *net.UDPAddr, firstTime bool) (*client.Conn, error) {
+	cc, created := s.getOrCreateConn(l, raddr, laddr)
 	if created {
 		if s.cfg.OnNewConn != nil {
 			s.cfg.OnNewConn(cc)
@@ -367,18 +375,18 @@ func (s *Server) getConn(l *coapNet.UDPConn, raddr *net.UDPAddr, firstTime bool)
 			closeFn()
 		}
 		if firstTime {
-			return s.getConn(l, raddr, false)
+			return s.getConn(l, raddr, laddr, false)
 		}
 		return nil, errors.New("connection is closed")
 	}
 	return cc, nil
 }
 
-func (s *Server) NewConn(addr *net.UDPAddr) (*client.Conn, error) {
+func (s *Server) NewConn(addr *net.UDPAddr, laddr *net.UDPAddr) (*client.Conn, error) {
 	l := s.getListener()
 	if l == nil {
 		// server is not started/stopped
 		return nil, errors.New("server is not running")
 	}
-	return s.getConn(l, addr, true)
+	return s.getConn(l, addr, laddr, true)
 }
