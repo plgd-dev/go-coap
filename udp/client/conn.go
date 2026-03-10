@@ -863,17 +863,19 @@ func (cc *Conn) handlePong(w *responsewriter.ResponseWriter[*Conn], r *pool.Mess
 }
 
 func (cc *Conn) upsertControlInformation(msg *pool.Message) {
-
-	cm := coapNet.ControlMessage{}
-	if cc.interfaceIndex.Load() >= 0 {
-		cm.IfIndex = int(cc.interfaceIndex.Load())
+	ifIndex := int(cc.interfaceIndex.Load())
+	localAddr := cc.localAddr.Load()
+	if ifIndex < 1 && localAddr == nil {
+		return
 	}
-
-	if cc.localAddr.Load() != nil {
-		cm.Src = *cc.localAddr.Load()
+	cm := coapNet.ControlMessage{}
+	if ifIndex >= 1 {
+		cm.IfIndex = ifIndex
+	}
+	if localAddr != nil {
+		cm.Src = *localAddr
 	}
 	msg.UpsertControlMessage(&cm)
-
 }
 
 func (cc *Conn) handleSpecialMessages(r *pool.Message) bool {
