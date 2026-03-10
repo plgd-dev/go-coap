@@ -162,7 +162,9 @@ func (s *Server) Serve(l *coapNet.UDPConn) error {
 
 		// UDPConn.LocalAddr() only takes into account the address it is bound to.
 		// In the case of a wildcard address, the actual destination address is in the control message.
-		laddr := l.LocalAddr().(*net.UDPAddr)
+		// Copy the UDPAddr before mutating to avoid a data race with concurrent LocalAddr() readers.
+		laddrVal := *l.LocalAddr().(*net.UDPAddr)
+		laddr := &laddrVal
 		if cm != nil && cm.Dst != nil {
 			laddr.IP = cm.Dst
 		}
