@@ -833,7 +833,9 @@ func (cc *Conn) ProcessReceivedMessageWithHandler(req *pool.Message, handler con
 
 	cc.interfaceIndex.Store(int64(req.ControlMessage().GetIfIndex()))
 	if cm := req.ControlMessage(); cm != nil && !cm.Dst.IsMulticast() {
-		cc.localAddr.Store(&cm.Dst)
+		dst := make(net.IP, len(cm.Dst))
+		copy(dst, cm.Dst)
+		cc.localAddr.Store(&dst)
 	}
 
 	w := responsewriter.New(resp, cc, req.Options()...)
@@ -864,18 +866,17 @@ func (cc *Conn) handlePong(w *responsewriter.ResponseWriter[*Conn], r *pool.Mess
 
 func (cc *Conn) upsertControlInformation(msg *pool.Message) {
 	ifIndex := int(cc.interfaceIndex.Load())
-	localAddr := cc.localAddr.Load()
-	if ifIndex < 1 && localAddr == nil {
+	localAddrPtr := cc.localAddr.Load()
+	if ifIndex < 1 && localAddrPtr == nil {
 		return
 	}
-	cm := coapNet.ControlMessage{}
-	if ifIndex >= 1 {
-		cm.IfIndex = ifIndex
+
+	var localAddr net.IP
+	if localAddrPtr != nil {
+		localAddr = *localAddrPtr
 	}
-	if localAddr != nil {
-		cm.Src = *localAddr
-	}
-	msg.UpsertControlMessage(&cm)
+
+	msg.UpsertControlMessage(&coapNet.ControlMessage{IfIndex: ifIndex, Src: localAddr})
 }
 
 func (cc *Conn) handleSpecialMessages(r *pool.Message) bool {
