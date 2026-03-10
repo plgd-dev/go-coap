@@ -832,8 +832,8 @@ func (cc *Conn) ProcessReceivedMessageWithHandler(req *pool.Message, handler con
 	resp.SetToken(req.Token())
 
 	cc.interfaceIndex.Store(int64(req.ControlMessage().GetIfIndex()))
-	if !req.ControlMessage().Dst.IsMulticast() {
-		cc.localAddr.Store(&req.ControlMessage().Dst)
+	if cm := req.ControlMessage(); cm != nil && !cm.Dst.IsMulticast() {
+		cc.localAddr.Store(&cm.Dst)
 	}
 
 	w := responsewriter.New(resp, cc, req.Options()...)
