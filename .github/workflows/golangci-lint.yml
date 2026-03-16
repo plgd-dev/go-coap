@@ -18,11 +18,12 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v5
 
-      - name: Set up Go 1.20+
+      - name: Set up Go from go.mod
         uses: actions/setup-go@v6
         with:
-          go-version: "^1.20" # The Go version to download (if necessary) and use.
-          check-latest: true
+          go-version-file: go.mod
+          # Keep CI on the module's declared Go line instead of floating to new majors.
+          check-latest: false
 
       - run: go version
 
