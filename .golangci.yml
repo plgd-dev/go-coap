@@ -143,6 +143,23 @@ linters:
           - godox
         path: .*.go
         text: replace with standard maps package
+      # Package names that intentionally shadow stdlib for API clarity
+      - linters:
+          - revive
+        path: ^pkg/errors/.*\.go
+        text: var-naming
+      - linters:
+          - revive
+        path: ^pkg/math/.*\.go
+        text: var-naming
+      - linters:
+          - revive
+        path: ^test/net/.*\.go
+        text: var-naming
+      - linters:
+          - revive
+        path: ^net/.*\.go
+        text: var-naming
     # Which file paths to exclude: they will be analyzed, but issues from them won't be reported.
     # "/" will be replaced by the current OS file path separator to properly work on Windows.
     # Default: []

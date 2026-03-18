@@ -159,7 +159,13 @@ func (s *Server) Serve(l *coapNet.UDPConn) error {
 			}
 		}
 		buf = buf[:n]
-		cc, err := s.getConn(l, raddr, true)
+		// Extract the original destination IP from the control message
+		// This is the IP that the client sent to (public IP on Fly.io)
+		var originalDstIP net.IP
+		if cm != nil && cm.Dst != nil {
+			originalDstIP = cm.Dst
+		}
+		cc, err := s.getConn(l, raddr, originalDstIP, true)
 		if err != nil {
 			s.cfg.Errors(fmt.Errorf("%v: cannot get client connection: %w", raddr, err))
 			continue
@@ -254,7 +260,7 @@ func getClose(cc *client.Conn) func() {
 	return closeFn
 }
 
-func (s *Server) getOrCreateConn(udpConn *coapNet.UDPConn, raddr *net.UDPAddr) (cc *client.Conn, created bool) {
+func (s *Server) getOrCreateConn(udpConn *coapNet.UDPConn, raddr *net.UDPAddr, originalDstIP net.IP) (cc *client.Conn, created bool) {
 	s.connsMutex.Lock()
 	defer s.connsMutex.Unlock()
 	key := raddr.String()
@@ -295,6 +301,7 @@ func (s *Server) getOrCreateConn(udpConn *coapNet.UDPConn, raddr *net.UDPAddr) (
 		s.doneCtx,
 		udpConn,
 		raddr,
+		originalDstIP,
 		s.cfg.MaxMessageSize,
 		s.cfg.MTU,
 		false,
@@ -345,8 +352,8 @@ func (s *Server) getOrCreateConn(udpConn *coapNet.UDPConn, raddr *net.UDPAddr) (
 	return cc, true
 }
 
-func (s *Server) getConn(l *coapNet.UDPConn, raddr *net.UDPAddr, firstTime bool) (*client.Conn, error) {
-	cc, created := s.getOrCreateConn(l, raddr)
+func (s *Server) getConn(l *coapNet.UDPConn, raddr *net.UDPAddr, originalDstIP net.IP, firstTime bool) (*client.Conn, error) {
+	cc, created := s.getOrCreateConn(l, raddr, originalDstIP)
 	if created {
 		if s.cfg.OnNewConn != nil {
 			s.cfg.OnNewConn(cc)
@@ -367,7 +374,7 @@ func (s *Server) getConn(l *coapNet.UDPConn, raddr *net.UDPAddr, firstTime bool)
 			closeFn()
 		}
 		if firstTime {
-			return s.getConn(l, raddr, false)
+			return s.getConn(l, raddr, originalDstIP, false)
 		}
 		return nil, errors.New("connection is closed")
 	}
@@ -380,5 +387,6 @@ func (s *Server) NewConn(addr *net.UDPAddr) (*client.Conn, error) {
 		// server is not started/stopped
 		return nil, errors.New("server is not running")
 	}
-	return s.getConn(l, addr, true)
+	// NewConn is used for outbound connections, so we don't have an original destination IP
+	return s.getConn(l, addr, nil, true)
 }

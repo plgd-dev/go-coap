@@ -24,8 +24,9 @@ type Session struct {
 	connection *coapNet.UDPConn
 	doneCancel context.CancelFunc
 
-	cancel context.CancelFunc
-	raddr  *net.UDPAddr
+	cancel        context.CancelFunc
+	raddr         *net.UDPAddr
+	originalDstIP net.IP // Stores the original destination IP from received packets (public IP on Fly.io)
 
 	mutex          sync.Mutex
 	maxMessageSize uint32
@@ -39,6 +40,7 @@ func NewSession(
 	doneCtx context.Context,
 	connection *coapNet.UDPConn,
 	raddr *net.UDPAddr,
+	originalDstIP net.IP,
 	maxMessageSize uint32,
 	mtu uint16,
 	closeSocket bool,
@@ -50,6 +52,7 @@ func NewSession(
 		cancel:         cancel,
 		connection:     connection,
 		raddr:          raddr,
+		originalDstIP:  originalDstIP,
 		maxMessageSize: maxMessageSize,
 		mtu:            mtu,
 		closeSocket:    closeSocket,
@@ -109,7 +112,21 @@ func (s *Session) WriteMessage(req *pool.Message) error {
 	if err != nil {
 		return fmt.Errorf("cannot marshal: %w", err)
 	}
-	return s.connection.WriteWithOptions(data, coapNet.WithContext(req.Context()), coapNet.WithRemoteAddr(s.raddr), coapNet.WithControlMessage(req.ControlMessage()))
+
+	// Get or create the control message with the correct source address
+	cm := req.ControlMessage()
+	if cm == nil {
+		cm = &coapNet.ControlMessage{}
+	}
+	// Set the source address to the original destination IP (public IP that client sent to)
+	// This ensures responses are sent from the same IP the client sent to, which is critical
+	// for environments like Fly.io where packets arrive at a public IP but the socket is
+	// bound to an internal private address.
+	if s.originalDstIP != nil && cm.Src == nil {
+		cm.Src = s.originalDstIP
+	}
+
+	return s.connection.WriteWithOptions(data, coapNet.WithContext(req.Context()), coapNet.WithRemoteAddr(s.raddr), coapNet.WithControlMessage(cm))
 }
 
 // WriteMulticastMessage sends multicast to the remote multicast address.
