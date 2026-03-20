@@ -163,7 +163,11 @@ func (s *Server) Serve(l *coapNet.UDPConn) error {
 		// UDPConn.LocalAddr() only takes into account the address it is bound to.
 		// In the case of a wildcard address, the actual destination address is in the control message.
 		// On server-initiated exchanges, listeners Local Addr can be used as the client has no assumptions of the source.
-		laddrVal := *l.LocalAddr().(*net.UDPAddr)
+		localAddr, ok := l.LocalAddr().(*net.UDPAddr)
+		if !ok || localAddr == nil {
+			return fmt.Errorf("unexpected listener local addr type: %T", l.LocalAddr())
+		}
+		laddrVal := *localAddr
 		laddr := &laddrVal
 		if cm != nil && cm.Dst != nil {
 			laddr.IP = cm.Dst
