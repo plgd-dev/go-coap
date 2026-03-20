@@ -830,13 +830,7 @@ func (cc *Conn) ProcessReceivedMessageWithHandler(req *pool.Message, handler con
 	}()
 	resp := cc.AcquireMessage(cc.Context())
 	resp.SetToken(req.Token())
-
-	cc.interfaceIndex.Store(int64(req.ControlMessage().GetIfIndex()))
-	if cm := req.ControlMessage(); cm != nil && !cm.Dst.IsMulticast() {
-		dst := make(net.IP, len(cm.Dst))
-		copy(dst, cm.Dst)
-		cc.localAddr.Store(&dst)
-	}
+	cc.setControlInformation(req.ControlMessage())
 
 	w := responsewriter.New(resp, cc, req.Options()...)
 	defer func() {
@@ -862,6 +856,24 @@ func (cc *Conn) ProcessReceivedMessageWithHandler(req *pool.Message, handler con
 
 func (cc *Conn) handlePong(w *responsewriter.ResponseWriter[*Conn], r *pool.Message) {
 	cc.sendPong(w, r)
+}
+
+func (cc *Conn) setControlInformation(cm *coapNet.ControlMessage) {
+	if cm == nil {
+		cc.interfaceIndex.Store(0)
+		cc.localAddr.Store(nil)
+		return
+	}
+
+	cc.interfaceIndex.Store(int64(cm.GetIfIndex()))
+	if len(cm.Dst) == 0 || cm.Dst.IsMulticast() {
+		cc.localAddr.Store(nil)
+		return
+	}
+
+	dst := make(net.IP, len(cm.Dst))
+	copy(dst, cm.Dst)
+	cc.localAddr.Store(&dst)
 }
 
 func (cc *Conn) upsertControlInformation(msg *pool.Message) {
