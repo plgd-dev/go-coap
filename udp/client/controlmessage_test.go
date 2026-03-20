@@ -31,10 +31,10 @@ func TestSetControlInformationUnicastCopiesAddress(t *testing.T) {
 	stored := cc.localAddr.Load()
 	require.NotNil(t, stored)
 	expected := append(net.IP(nil), dst...)
-	require.True(t, (*stored).Equal(expected))
+	require.True(t, stored.Equal(expected))
 
 	cm.Dst[0] ^= 0xff
-	require.True(t, (*stored).Equal(expected))
+	require.True(t, stored.Equal(expected))
 }
 
 func TestSetControlInformationMulticastClearsAddress(t *testing.T) {
