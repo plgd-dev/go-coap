@@ -227,8 +227,9 @@ func TestTLSListenerCheckForInfinitLoop(t *testing.T) {
 			require.Error(t, err)
 			// On macOS a RST during TLS handshake yields "connection reset by peer" instead of EOF;
 			// both indicate the remote side closed the connection.
+			// On Windows, the error message is "connection was forcibly closed by the remote host".
 			assert.True(t,
-				strings.Contains(err.Error(), "EOF") || strings.Contains(err.Error(), "connection reset by peer"),
+				strings.Contains(err.Error(), "EOF") || strings.Contains(err.Error(), "connection reset by peer") || strings.Contains(err.Error(), "connection was forcibly closed by the remote host"),
 				"expected EOF or connection reset by peer, got: %v", err,
 			)
 			err = con.Close()
