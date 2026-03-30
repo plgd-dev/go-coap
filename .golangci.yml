@@ -124,6 +124,7 @@ linters:
           - gocyclo
           - gosec
           - nakedret
+          - perfsprint
         path: _test\.go
       - linters:
           - dupl
@@ -143,6 +144,18 @@ linters:
           - godox
         path: .*.go
         text: replace with standard maps package
+      - linters:
+          - revive
+        path: '^dtls/clientoptions\.go'
+        text: 'stutters; consider calling this Client(Options|Config)'
+      - linters:
+          - revive
+        path: '^(pkg/errors/error\.go|pkg/math/cast\.go|test/net/uri\.go|net/.*\.go)$'
+        text: 'avoid package names that conflict with Go standard library package names'
+      - linters:
+          - staticcheck
+        path: '^(dtls/client\.go|dtls/client_test\.go|dtls/clientoptions\.go|dtls/server_test\.go|dtls/example_test\.go|net/dtlslistener\.go|net/dtlsoptions\.go)$'
+        text: 'SA1019: (piondtls\.(Config|Dial)|dtls\.Config) is deprecated'
     # Which file paths to exclude: they will be analyzed, but issues from them won't be reported.
     # "/" will be replaced by the current OS file path separator to properly work on Windows.
     # Default: []
