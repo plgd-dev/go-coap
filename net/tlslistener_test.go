@@ -6,6 +6,7 @@ import (
 	"crypto/x509"
 	"net"
 	"os"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -224,7 +225,12 @@ func TestTLSListenerCheckForInfinitLoop(t *testing.T) {
 			c := coapNet.NewConn(con)
 			_, err = c.ReadWithContext(context.Background(), b)
 			require.Error(t, err)
-			assert.Contains(t, err.Error(), "EOF")
+			// On macOS a RST during TLS handshake yields "connection reset by peer" instead of EOF;
+			// both indicate the remote side closed the connection.
+			assert.True(t,
+				strings.Contains(err.Error(), "EOF") || strings.Contains(err.Error(), "connection reset by peer"),
+				"expected EOF or connection reset by peer, got: %v", err,
+			)
 			err = con.Close()
 			require.Error(t, err)
 		})

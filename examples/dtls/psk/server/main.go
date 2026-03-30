@@ -10,6 +10,7 @@ import (
 	"github.com/plgd-dev/go-coap/v3/message"
 	"github.com/plgd-dev/go-coap/v3/message/codes"
 	"github.com/plgd-dev/go-coap/v3/mux"
+	coapNet "github.com/plgd-dev/go-coap/v3/net"
 )
 
 func handleA(w mux.ResponseWriter, r *mux.Message) {
@@ -39,12 +40,12 @@ func main() {
 	m.Handle("/a", mux.HandlerFunc(handleA))
 	m.Handle("/b", mux.HandlerFunc(handleB))
 
-	log.Fatal(coap.ListenAndServeDTLS("udp", ":5688", &piondtls.Config{
-		PSK: func(hint []byte) ([]byte, error) {
+	log.Fatal(coap.ListenAndServeDTLS("udp", ":5688", coapNet.NewDTLSServerOptions(
+		piondtls.WithPSK(func(hint []byte) ([]byte, error) {
 			fmt.Printf("Client's hint: %s \n", hint)
 			return []byte{0xAB, 0xC1, 0x23}, nil
-		},
-		PSKIdentityHint: []byte("Pion DTLS Client"),
-		CipherSuites:    []piondtls.CipherSuiteID{piondtls.TLS_PSK_WITH_AES_128_CCM_8},
-	}, m))
+		}),
+		piondtls.WithPSKIdentityHint([]byte("Pion DTLS Client")),
+		piondtls.WithCipherSuites(piondtls.TLS_PSK_WITH_AES_128_CCM_8),
+	), m))
 }

@@ -13,6 +13,7 @@ import (
 	"github.com/plgd-dev/go-coap/v3/message"
 	"github.com/plgd-dev/go-coap/v3/message/codes"
 	"github.com/plgd-dev/go-coap/v3/mux"
+	coapNet "github.com/plgd-dev/go-coap/v3/net"
 	"github.com/plgd-dev/go-coap/v3/options"
 	udpClient "github.com/plgd-dev/go-coap/v3/udp/client"
 )
@@ -69,19 +70,15 @@ func main() {
 	m := mux.NewRouter()
 	m.Handle("/a", mux.HandlerFunc(handleA))
 	m.Handle("/b", mux.HandlerFunc(handleB))
-	laddr, err := net.ResolveUDPAddr("udp", "127.0.0.1:5688")
-	if err != nil {
-		log.Fatalf("Error dialing: %v", err)
-	}
-	l, err := piondtls.Listen("udp", laddr, &piondtls.Config{
-		PSK: func(hint []byte) ([]byte, error) {
+	l, err := coapNet.NewDTLSListener("udp", "127.0.0.1:5688", coapNet.NewDTLSServerOptions(
+		piondtls.WithPSK(func(hint []byte) ([]byte, error) {
 			fmt.Printf("Client's hint: %s \n", hint)
 			return []byte{0xAB, 0xC1, 0x23}, nil
-		},
-		PSKIdentityHint:       []byte("Pion DTLS Server"),
-		CipherSuites:          []piondtls.CipherSuiteID{piondtls.TLS_PSK_WITH_AES_128_CCM_8},
-		ConnectionIDGenerator: piondtls.RandomCIDGenerator(8),
-	})
+		}),
+		piondtls.WithPSKIdentityHint([]byte("Pion DTLS Server")),
+		piondtls.WithCipherSuites(piondtls.TLS_PSK_WITH_AES_128_CCM_8),
+		piondtls.WithConnectionIDGenerator(piondtls.RandomCIDGenerator(8)),
+	))
 	if err != nil {
 		log.Fatalf("Error establishing DTLS listener: %v", err)
 	}

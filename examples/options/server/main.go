@@ -13,6 +13,7 @@ import (
 	"github.com/plgd-dev/go-coap/v3/message"
 	"github.com/plgd-dev/go-coap/v3/message/codes"
 	"github.com/plgd-dev/go-coap/v3/mux"
+	coapNet "github.com/plgd-dev/go-coap/v3/net"
 	"github.com/plgd-dev/go-coap/v3/options"
 	tcpServer "github.com/plgd-dev/go-coap/v3/tcp/server"
 	udpClient "github.com/plgd-dev/go-coap/v3/udp/client"
@@ -86,13 +87,13 @@ func main() {
 
 	go func() {
 		// serve a udp dtls server on :5688
-		log.Fatal(coap.ListenAndServeDTLSWithOptions("udp", ":5688", &piondtls.Config{
-			PSK: func(hint []byte) ([]byte, error) {
+		log.Fatal(coap.ListenAndServeDTLSWithOptions("udp", ":5688", coapNet.NewDTLSServerOptions(
+			piondtls.WithPSK(func(hint []byte) ([]byte, error) {
 				fmt.Printf("Client's hint: %s \n", hint)
 				return []byte{0xAB, 0xC1, 0x23}, nil
-			},
-			PSKIdentityHint: []byte("Pion DTLS Client"),
-			CipherSuites:    []piondtls.CipherSuiteID{piondtls.TLS_PSK_WITH_AES_128_CCM_8},
-		}, dtlsOpts...))
+			}),
+			piondtls.WithPSKIdentityHint([]byte("Pion DTLS Client")),
+			piondtls.WithCipherSuites(piondtls.TLS_PSK_WITH_AES_128_CCM_8),
+		), dtlsOpts...))
 	}()
 }

@@ -8,11 +8,11 @@ import (
 	"time"
 
 	piondtls "github.com/pion/dtls/v3"
-	"github.com/plgd-dev/go-coap/v3/dtls"
+	coapdtls "github.com/plgd-dev/go-coap/v3/dtls"
 )
 
 func main() {
-	co, err := dtls.Dial("localhost:5688", dtls.NewDTLSClientOptions(
+	co, err := coapdtls.Dial("localhost:5688", coapdtls.NewDTLSClientOptions(
 		piondtls.WithPSK(func(hint []byte) ([]byte, error) {
 			fmt.Printf("Server's hint: %s \n", hint)
 			return []byte{0xAB, 0xC1, 0x23}, nil
@@ -23,6 +23,8 @@ func main() {
 	if err != nil {
 		log.Fatalf("Error dialing: %v", err)
 	}
+	defer co.Close()
+
 	path := "/a"
 	if len(os.Args) > 1 {
 		path = os.Args[1]

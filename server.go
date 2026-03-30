@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 
-	piondtls "github.com/pion/dtls/v3"
 	"github.com/plgd-dev/go-coap/v3/dtls"
 	dtlsServer "github.com/plgd-dev/go-coap/v3/dtls/server"
 	"github.com/plgd-dev/go-coap/v3/mux"
@@ -67,10 +66,11 @@ func ListenAndServeTCPTLS(network, addr string, config *tls.Config, handler mux.
 	return s.Serve(l)
 }
 
-// ListenAndServeDTLS Starts a server on address and network over DTLS specified Invoke handler
-// for incoming queries.
-func ListenAndServeDTLS(network string, addr string, config *piondtls.Config, handler mux.Handler) (err error) {
-	l, err := net.NewDTLSListener(network, addr, config)
+// ListenAndServeDTLS starts a server on address and network over DTLS.
+// cfg accepts either a *piondtls.Config (backward-compatible legacy path) or a
+// net.DTLSServerOptions value built with net.NewDTLSServerOptions (recommended).
+func ListenAndServeDTLS[T net.DTLSServerConfig](network string, addr string, cfg T, handler mux.Handler) (err error) {
+	l, err := net.NewDTLSListener(network, addr, cfg)
 	if err != nil {
 		return err
 	}
@@ -150,10 +150,12 @@ func ListenAndServeTCPTLSWithOptions(network, addr string, config *tls.Config, o
 	return s.Serve(l)
 }
 
-// ListenAndServeDTLSWithOptions Starts a server on address and network over DTLS specified Invoke options
-// for incoming queries.
-func ListenAndServeDTLSWithOptions(network string, addr string, config *piondtls.Config, opts ...dtlsServer.Option) (err error) {
-	l, err := net.NewDTLSListener(network, addr, config)
+// ListenAndServeDTLSWithOptions starts a server on address and network over DTLS
+// with go-coap server options.
+// cfg accepts either a *piondtls.Config (backward-compatible legacy path) or a
+// net.DTLSServerOptions value built with net.NewDTLSServerOptions (recommended).
+func ListenAndServeDTLSWithOptions[T net.DTLSServerConfig](network string, addr string, cfg T, opts ...dtlsServer.Option) (err error) {
+	l, err := net.NewDTLSListener(network, addr, cfg)
 	if err != nil {
 		return err
 	}

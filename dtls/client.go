@@ -33,19 +33,30 @@ var DefaultConfig = func() udpClient.Config {
 }()
 
 // Dial creates a client connection to the given target.
-func Dial(target string, dtlsCfg *dtls.Config, opts ...udp.Option) (*udpClient.Conn, error) {
-	cfg := DefaultConfig
+// cfg accepts either a *dtls.Config (backward-compatible legacy path) or a
+// DTLSClientOptions value built with NewDTLSClientOptions (recommended).
+func Dial[T DTLSClientConfig](target string, cfg T, opts ...udp.Option) (*udpClient.Conn, error) {
+	defaultCfg := DefaultConfig
 	for _, o := range opts {
-		o.UDPClientApply(&cfg)
+		o.UDPClientApply(&defaultCfg)
 	}
 
-	c, err := cfg.Dialer.DialContext(cfg.Ctx, cfg.Net, target)
+	c, err := defaultCfg.Dialer.DialContext(defaultCfg.Ctx, defaultCfg.Net, target)
 	if err != nil {
 		return nil, err
 	}
 
-	conn, err := dtls.Client(dtlsnet.PacketConnFromConn(c), c.RemoteAddr(), dtlsCfg)
+	var conn *dtls.Conn
+	switch v := any(cfg).(type) {
+	case *dtls.Config:
+		conn, err = dtls.Client(dtlsnet.PacketConnFromConn(c), c.RemoteAddr(), v) //nolint:staticcheck
+	case DTLSClientOptions:
+		conn, err = dtls.ClientWithOptions(dtlsnet.PacketConnFromConn(c), c.RemoteAddr(), v.opts...)
+	default:
+		panic("unreachable: unexpected type in DTLSClientConfig constraint")
+	}
 	if err != nil {
+		_ = c.Close()
 		return nil, err
 	}
 	opts = append(opts, options.WithCloseSocket())

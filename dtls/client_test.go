@@ -797,3 +797,142 @@ func TestClientKeepAliveMonitor(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, inactivityDetected.Load())
 }
+
+// TestConnGetWithOptions mirrors TestConnGet but uses the new
+// generic Dial / NewDTLSListener API with DTLSClientOptions / DTLSServerOptions.
+func TestConnGetWithOptions(t *testing.T) {
+	type args struct {
+		path string
+		opts message.Options
+	}
+	tests := []struct {
+		name              string
+		args              args
+		wantCode          codes.Code
+		wantContentFormat *message.MediaType
+		wantPayload       interface{}
+		wantErr           bool
+	}{
+		{
+			name:              "ok-a",
+			args:              args{path: "/a"},
+			wantCode:          codes.BadRequest,
+			wantContentFormat: &message.TextPlain,
+			wantPayload:       make([]byte, 5330),
+		},
+		{
+			name:              "ok-b",
+			args:              args{path: "/b"},
+			wantCode:          codes.Content,
+			wantContentFormat: &message.TextPlain,
+			wantPayload:       []byte("b"),
+		},
+		{
+			name:     "notfound",
+			args:     args{path: "/c"},
+			wantCode: codes.NotFound,
+		},
+	}
+
+	pskCallback := func(hint []byte) ([]byte, error) {
+		fmt.Printf("Hint: %s \n", hint)
+		return []byte{0xAB, 0xC1, 0x23}, nil
+	}
+	serverOpts := coapNet.NewDTLSServerOptions(
+		piondtls.WithPSK(pskCallback),
+		piondtls.WithPSKIdentityHint([]byte("Pion DTLS Server")),
+		piondtls.WithCipherSuites(piondtls.TLS_PSK_WITH_AES_128_CCM_8),
+	)
+	clientOpts := dtls.NewDTLSClientOptions(
+		piondtls.WithPSK(pskCallback),
+		piondtls.WithPSKIdentityHint([]byte("Pion DTLS Server")),
+		piondtls.WithCipherSuites(piondtls.TLS_PSK_WITH_AES_128_CCM_8),
+	)
+
+	l, err := coapNet.NewDTLSListener("udp", "", serverOpts)
+	require.NoError(t, err)
+	defer func() {
+		errC := l.Close()
+		require.NoError(t, errC)
+	}()
+
+	var wg sync.WaitGroup
+	defer wg.Wait()
+
+	m := mux.NewRouter()
+	err = m.Handle("/a", mux.HandlerFunc(func(w mux.ResponseWriter, r *mux.Message) {
+		assert.Equal(t, codes.GET, r.Code())
+		errS := w.SetResponse(codes.BadRequest, message.TextPlain, bytes.NewReader(make([]byte, 5330)))
+		require.NoError(t, errS)
+		require.NotEmpty(t, w.Conn())
+	}))
+	require.NoError(t, err)
+	err = m.Handle("/b", mux.HandlerFunc(func(w mux.ResponseWriter, r *mux.Message) {
+		assert.Equal(t, codes.GET, r.Code())
+		errS := w.SetResponse(codes.Content, message.TextPlain, bytes.NewReader([]byte("b")))
+		require.NoError(t, errS)
+		require.NotEmpty(t, w.Conn())
+	}))
+	require.NoError(t, err)
+
+	s := dtls.NewServer(options.WithMux(m))
+	defer s.Stop()
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		errS := s.Serve(l)
+		assert.NoError(t, errS)
+	}()
+
+	cc, err := dtls.Dial(l.Addr().String(), clientOpts)
+	require.NoError(t, err)
+	defer func() {
+		errC := cc.Close()
+		require.NoError(t, errC)
+	}()
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), Timeout)
+			defer cancel()
+			got, err := cc.Get(ctx, tt.args.path, tt.args.opts...)
+			if tt.wantErr {
+				require.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, tt.wantCode, got.Code())
+			if tt.wantContentFormat != nil {
+				ct, err := got.ContentFormat()
+				require.NoError(t, err)
+				require.Equal(t, *tt.wantContentFormat, ct)
+				buf := bytes.NewBuffer(nil)
+				_, err = buf.ReadFrom(got.Body())
+				require.NoError(t, err)
+				require.Equal(t, tt.wantPayload, buf.Bytes())
+			}
+		})
+	}
+}
+
+// TestNewDTLSListenerInvalidAddr verifies that
+// NewDTLSListener propagates address-resolution errors.
+func TestNewDTLSListenerInvalidAddr(t *testing.T) {
+	_, err := coapNet.NewDTLSListener("udp", "!!invalid!!", coapNet.NewDTLSServerOptions(
+		piondtls.WithPSK(func([]byte) ([]byte, error) { return []byte{0x01}, nil }),
+		piondtls.WithCipherSuites(piondtls.TLS_PSK_WITH_AES_128_CCM_8),
+	))
+	require.Error(t, err)
+}
+
+// TestDialConnectRefused ensures Dial returns an error
+// when nothing is listening on the target address.
+func TestDialConnectRefused(t *testing.T) {
+	// port 1 is reserved and will never have a DTLS listener
+	_, err := dtls.Dial("127.0.0.1:1", dtls.NewDTLSClientOptions(
+		piondtls.WithPSK(func([]byte) ([]byte, error) { return []byte{0x01}, nil }),
+		piondtls.WithCipherSuites(piondtls.TLS_PSK_WITH_AES_128_CCM_8),
+	))
+	require.Error(t, err)
+}

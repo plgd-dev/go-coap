@@ -3,7 +3,6 @@ package main
 import (
 	"bytes"
 	"context"
-	"crypto/tls"
 	"crypto/x509"
 	"fmt"
 	"log"
@@ -68,17 +67,17 @@ func main() {
 	m := mux.NewRouter()
 	m.Handle("/a", mux.HandlerFunc(handleA))
 
-	config, err := createServerConfig()
+	dtlsOpts, err := createServerConfig()
 	if err != nil {
 		log.Fatalln(err)
 		return
 	}
 
-	log.Fatal(listenAndServeDTLS("udp", ":5688", config, m))
+	log.Fatal(listenAndServeDTLS("udp", ":5688", dtlsOpts, m))
 }
 
-func listenAndServeDTLS(network string, addr string, config *piondtls.Config, handler mux.Handler) error {
-	l, err := net.NewDTLSListener(network, addr, config)
+func listenAndServeDTLS(network string, addr string, dtlsOpts net.DTLSServerOptions, handler mux.Handler) error {
+	l, err := net.NewDTLSListener(network, addr, dtlsOpts)
 	if err != nil {
 		return err
 	}
@@ -87,31 +86,31 @@ func listenAndServeDTLS(network string, addr string, config *piondtls.Config, ha
 	return s.Serve(l)
 }
 
-func createServerConfig() (*piondtls.Config, error) {
+func createServerConfig() (net.DTLSServerOptions, error) {
 	// root cert
 	ca, rootBytes, _, caPriv, err := pki.GenerateCA()
 	if err != nil {
-		return nil, err
+		return net.DTLSServerOptions{}, err
 	}
 	// server cert
 	certBytes, keyBytes, err := pki.GenerateCertificate(ca, caPriv, "server@test.com")
 	if err != nil {
-		return nil, err
+		return net.DTLSServerOptions{}, err
 	}
 	certificate, err := pki.LoadKeyAndCertificate(keyBytes, certBytes)
 	if err != nil {
-		return nil, err
+		return net.DTLSServerOptions{}, err
 	}
 	// cert pool
 	certPool, err := pki.LoadCertPool(rootBytes)
 	if err != nil {
-		return nil, err
+		return net.DTLSServerOptions{}, err
 	}
 
-	return &piondtls.Config{
-		Certificates:         []tls.Certificate{*certificate},
-		ExtendedMasterSecret: piondtls.RequireExtendedMasterSecret,
-		ClientCAs:            certPool,
-		ClientAuth:           piondtls.RequireAndVerifyClientCert,
-	}, nil
+	return net.NewDTLSServerOptions(
+		piondtls.WithCertificates(*certificate),
+		piondtls.WithExtendedMasterSecret(piondtls.RequireExtendedMasterSecret),
+		piondtls.WithClientCAs(certPool),
+		piondtls.WithClientAuth(piondtls.RequireAndVerifyClientCert),
+	), nil
 }
