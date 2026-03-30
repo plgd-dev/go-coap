@@ -18,7 +18,7 @@ jobs:
         if: runner.os == 'Windows'
         uses: actions/setup-go@v6
         with:
-          go-version: ">=1.24 <1.26" # Temporary cap: Go 1.26 has a CI bug on Windows.
+          go-version: "<1.27" # Temporary cap: Go 1.26 has a CI bug on Windows.
           check-latest: true
 
       - name: Set up Go 1.24+ (Non-Windows)
