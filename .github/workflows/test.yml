@@ -98,7 +98,7 @@ jobs:
           find ./outputs -name "*.report.json" -exec sh -c 'cp $1 .tmp/report/$(echo $1 | sed "s/[\/.]/-/g" ).report.json' _ {}  \;
 
       - name: Code coverage
-        uses: codecov/codecov-action@v5
+        uses: codecov/codecov-action@v6
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           directory: .tmp/
