@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"log"
+	"net"
 	"sync"
 	"testing"
 	"time"
@@ -831,6 +832,59 @@ func TestConnPing(t *testing.T) {
 	defer cancel()
 	err = cc.Ping(ctx)
 	require.NoError(t, err)
+}
+
+func TestConnPingResponseIsReset(t *testing.T) {
+	l, err := coapNet.NewListenUDP("udp", "")
+	require.NoError(t, err)
+	defer func() {
+		errC := l.Close()
+		require.NoError(t, errC)
+	}()
+	var wg sync.WaitGroup
+	defer wg.Wait()
+
+	s := udp.NewServer()
+	defer s.Stop()
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		errS := s.Serve(l)
+		assert.NoError(t, errS)
+	}()
+
+	// Send a raw CoAP Ping (Empty CON) and verify the response is RST per RFC 7252 §4.2
+	conn, errD := net.Dial("udp", l.LocalAddr().String())
+	require.NoError(t, errD)
+	defer func() {
+		errC := conn.Close()
+		require.NoError(t, errC)
+	}()
+
+	// Build empty CON message: Ver=1, T=CON(0), TKL=0, Code=0.00, MID=1234
+	ping := []byte{
+		0x40,       // Ver=1, T=CON, TKL=0
+		0x00,       // Code=0.00 (Empty)
+		0x04, 0xd2, // MID=1234
+	}
+	_, errW := conn.Write(ping)
+	require.NoError(t, errW)
+
+	err = conn.(*net.UDPConn).SetReadDeadline(time.Now().Add(time.Second * 2))
+	require.NoError(t, err)
+	buf := make([]byte, 1024)
+	n, errR := conn.Read(buf)
+	require.NoError(t, errR)
+	require.GreaterOrEqual(t, n, 4)
+
+	// Parse response: verify type is RST (3) and MID matches
+	respType := message.Type((buf[0] >> 4) & 0x3)
+	respCode := codes.Code(buf[1])
+	respMID := uint16(buf[2])<<8 | uint16(buf[3])
+	require.Equal(t, message.Reset, respType, "CoAP Ping response must be RST per RFC 7252 §4.2")
+	require.Equal(t, codes.Empty, respCode, "CoAP Ping response code must be 0.00 (Empty)")
+	require.Equal(t, uint16(0x04d2), respMID, "CoAP Ping response MID must match request MID")
 }
 
 func TestConnRequestMonitorCloseConnection(t *testing.T) {
