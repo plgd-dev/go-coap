@@ -10,7 +10,7 @@ import (
 )
 
 func main() {
-	co, err := udp.Dial("localhost:5688")
+	co, err := udp.Dial("localhost:5685")
 	if err != nil {
 		log.Fatalf("Error dialing: %v", err)
 	}

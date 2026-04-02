@@ -212,7 +212,7 @@ func (cc *Conn) do(req *pool.Message) (*pool.Message, error) {
 	if !cc.peerBlockWiseTranferEnabled.Load() || cc.blockWise == nil {
 		return cc.doInternal(req)
 	}
-	resp, err := cc.blockWise.Do(req, cc.blockwiseSZX, cc.session.maxMessageSize, cc.doInternal)
+	resp, err := cc.blockWise.Do(req, cc.blockwiseSZX, cc.session.maxMessageSize, cc.RemoteAddr(), cc.doInternal)
 	if err != nil {
 		return nil, err
 	}
@@ -363,7 +363,7 @@ func (cc *Conn) blockwiseHandle(w *responsewriter.ResponseWriter[*Conn], r *pool
 
 func (cc *Conn) handle(w *responsewriter.ResponseWriter[*Conn], r *pool.Message) {
 	if cc.blockWise != nil && cc.peerBlockWiseTranferEnabled.Load() {
-		cc.blockWise.Handle(w, r, cc.blockwiseSZX, cc.Session().maxMessageSize, cc.blockwiseHandle)
+		cc.blockWise.Handle(w, r, cc.blockwiseSZX, cc.Session().maxMessageSize, cc.RemoteAddr(), cc.blockwiseHandle)
 		return
 	}
 	if h, ok := cc.tokenHandlerContainer.LoadAndDelete(r.Token().Hash()); ok {
