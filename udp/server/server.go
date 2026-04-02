@@ -159,7 +159,19 @@ func (s *Server) Serve(l *coapNet.UDPConn) error {
 			}
 		}
 		buf = buf[:n]
-		cc, err := s.getConn(l, raddr, true)
+
+		// UDPConn.LocalAddr() only takes into account the address it is bound to.
+		// In the case of a wildcard address, the actual destination address is in the control message.
+		// On server-initiated exchanges, listener's LocalAddr can be used as the client has no assumptions of the source.
+		laddr, err := s.getListenerLocalAddr(l)
+		if err != nil {
+			return err
+		}
+		if cm != nil && len(cm.Dst) > 0 && !cm.Dst.IsMulticast() {
+			laddr.IP = cm.Dst
+		}
+
+		cc, err := s.getConn(l, raddr, laddr, true)
 		if err != nil {
 			s.cfg.Errors(fmt.Errorf("%v: cannot get client connection: %w", raddr, err))
 			continue
@@ -176,6 +188,15 @@ func (s *Server) getListener() *coapNet.UDPConn {
 	s.listenMutex.Lock()
 	defer s.listenMutex.Unlock()
 	return s.listen
+}
+
+func (s *Server) getListenerLocalAddr(l *coapNet.UDPConn) (*net.UDPAddr, error) {
+	localAddr, ok := l.LocalAddr().(*net.UDPAddr)
+	if !ok || localAddr == nil {
+		return nil, fmt.Errorf("unexpected listener local addr type: %T", l.LocalAddr())
+	}
+	laddrVal := *localAddr
+	return &laddrVal, nil
 }
 
 // Stop stops server without wait of ends Serve function.
@@ -254,10 +275,21 @@ func getClose(cc *client.Conn) func() {
 	return closeFn
 }
 
-func (s *Server) getOrCreateConn(udpConn *coapNet.UDPConn, raddr *net.UDPAddr) (cc *client.Conn, created bool) {
+func getConnKey(raddr *net.UDPAddr, laddr *net.UDPAddr) string {
+	normalizedLocalAddr := *laddr
+	if len(normalizedLocalAddr.IP) > 0 && normalizedLocalAddr.IP.IsMulticast() {
+		// Multicast destination address does not identify a unique server-side source address.
+		// Normalize it to avoid creating one conn key per multicast group.
+		normalizedLocalAddr.IP = nil
+		normalizedLocalAddr.Zone = ""
+	}
+	return raddr.String() + "-" + normalizedLocalAddr.String()
+}
+
+func (s *Server) getOrCreateConn(udpConn *coapNet.UDPConn, raddr *net.UDPAddr, laddr *net.UDPAddr) (cc *client.Conn, created bool) {
 	s.connsMutex.Lock()
 	defer s.connsMutex.Unlock()
-	key := raddr.String()
+	key := getConnKey(raddr, laddr)
 	cc = s.conns[key]
 
 	if cc != nil {
@@ -345,8 +377,19 @@ func (s *Server) getOrCreateConn(udpConn *coapNet.UDPConn, raddr *net.UDPAddr) (
 	return cc, true
 }
 
-func (s *Server) getConn(l *coapNet.UDPConn, raddr *net.UDPAddr, firstTime bool) (*client.Conn, error) {
-	cc, created := s.getOrCreateConn(l, raddr)
+func (s *Server) getConn(l *coapNet.UDPConn, raddr *net.UDPAddr, laddr *net.UDPAddr, firstTime bool) (*client.Conn, error) {
+	if raddr == nil {
+		return nil, errors.New("invalid remote address")
+	}
+	if laddr == nil {
+		var err error
+		laddr, err = s.getListenerLocalAddr(l)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	cc, created := s.getOrCreateConn(l, raddr, laddr)
 	if created {
 		if s.cfg.OnNewConn != nil {
 			s.cfg.OnNewConn(cc)
@@ -367,18 +410,30 @@ func (s *Server) getConn(l *coapNet.UDPConn, raddr *net.UDPAddr, firstTime bool)
 			closeFn()
 		}
 		if firstTime {
-			return s.getConn(l, raddr, false)
+			return s.getConn(l, raddr, laddr, false)
 		}
 		return nil, errors.New("connection is closed")
 	}
 	return cc, nil
 }
 
-func (s *Server) NewConn(addr *net.UDPAddr) (*client.Conn, error) {
+// NewConn creates or gets a connection for the provided remote address.
+//
+// Optional laddr may be used to pin a concrete local address when the listener is bound to a wildcard address.
+// If laddr is omitted or nil, listener's local address is used.
+func (s *Server) NewConn(addr *net.UDPAddr, laddr ...*net.UDPAddr) (*client.Conn, error) {
+	if len(laddr) > 1 {
+		return nil, fmt.Errorf("invalid number of local addresses: %d", len(laddr))
+	}
+	var localAddr *net.UDPAddr
+	if len(laddr) == 1 {
+		localAddr = laddr[0]
+	}
+
 	l := s.getListener()
 	if l == nil {
 		// server is not started/stopped
 		return nil, errors.New("server is not running")
 	}
-	return s.getConn(l, addr, true)
+	return s.getConn(l, addr, localAddr, true)
 }

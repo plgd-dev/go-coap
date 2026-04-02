@@ -206,6 +206,9 @@ type Conn struct {
 	msgID                 atomic.Uint32
 	blockwiseSZX          blockwise.SZX
 
+	localAddr      atomic.Pointer[net.IP]
+	interfaceIndex atomic.Int64
+
 	/*
 		An outstanding interaction is either a CON for which an ACK has not
 		yet been received but is still expected (message layer) or a request
@@ -550,6 +553,8 @@ func (cc *Conn) writeMessageAsync(req *pool.Message) error {
 func (cc *Conn) writeMessage(req *pool.Message) error {
 	req.UpsertType(message.Confirmable)
 	req.UpsertMessageID(cc.GetMessageID())
+	cc.upsertControlInformation(req)
+
 	if req.Type() != message.Confirmable {
 		return cc.writeMessageAsync(req)
 	}
@@ -755,6 +760,7 @@ func (cc *Conn) processResponse(reqType message.Type, reqMessageID int32, w *res
 		w.Message().SetType(message.Acknowledgement)
 		w.Message().SetMessageID(reqMessageID)
 		w.Message().SetToken(nil)
+
 		err := cc.addResponseToCache(w.Message())
 		if err != nil {
 			return fmt.Errorf("cannot cache response: %w", err)
@@ -824,7 +830,8 @@ func (cc *Conn) ProcessReceivedMessageWithHandler(req *pool.Message, handler con
 	}()
 	resp := cc.AcquireMessage(cc.Context())
 	resp.SetToken(req.Token())
-	ifIndex := req.ControlMessage().GetIfIndex()
+	cc.setControlInformation(req.ControlMessage())
+
 	w := responsewriter.New(resp, cc, req.Options()...)
 	defer func() {
 		cc.ReleaseMessage(w.Message())
@@ -839,7 +846,7 @@ func (cc *Conn) ProcessReceivedMessageWithHandler(req *pool.Message, handler con
 		// nothing to send
 		return
 	}
-	upsertInterfaceToMessage(w.Message(), ifIndex)
+	cc.upsertControlInformation(w.Message())
 	errW := cc.writeMessageAsync(w.Message())
 	if errW != nil {
 		cc.closeConnection()
@@ -851,13 +858,37 @@ func (cc *Conn) handlePong(w *responsewriter.ResponseWriter[*Conn], r *pool.Mess
 	cc.sendPong(w, r)
 }
 
-func upsertInterfaceToMessage(m *pool.Message, ifIndex int) {
-	if ifIndex >= 1 {
-		cm := coapNet.ControlMessage{
-			IfIndex: ifIndex,
-		}
-		m.UpsertControlMessage(&cm)
+func (cc *Conn) setControlInformation(cm *coapNet.ControlMessage) {
+	if cm == nil {
+		cc.interfaceIndex.Store(0)
+		cc.localAddr.Store(nil)
+		return
 	}
+
+	cc.interfaceIndex.Store(int64(cm.GetIfIndex()))
+	if len(cm.Dst) == 0 || cm.Dst.IsMulticast() {
+		cc.localAddr.Store(nil)
+		return
+	}
+
+	dst := make(net.IP, len(cm.Dst))
+	copy(dst, cm.Dst)
+	cc.localAddr.Store(&dst)
+}
+
+func (cc *Conn) upsertControlInformation(msg *pool.Message) {
+	ifIndex := int(cc.interfaceIndex.Load())
+	localAddrPtr := cc.localAddr.Load()
+	if ifIndex < 1 && localAddrPtr == nil {
+		return
+	}
+
+	var localAddr net.IP
+	if localAddrPtr != nil {
+		localAddr = *localAddrPtr
+	}
+
+	msg.UpsertControlMessage(&coapNet.ControlMessage{IfIndex: ifIndex, Src: localAddr})
 }
 
 func (cc *Conn) handleSpecialMessages(r *pool.Message) bool {
@@ -872,7 +903,6 @@ func (cc *Conn) handleSpecialMessages(r *pool.Message) bool {
 		elem.ReleaseMessage(cc)
 		resp := cc.AcquireMessage(cc.Context())
 		resp.SetToken(r.Token())
-		upsertInterfaceToMessage(resp, r.ControlMessage().GetIfIndex())
 		w := responsewriter.New(resp, cc, r.Options()...)
 		defer func() {
 			cc.ReleaseMessage(w.Message())

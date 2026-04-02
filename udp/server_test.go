@@ -467,6 +467,9 @@ func TestServerNewClient(t *testing.T) {
 
 	time.Sleep(time.Second)
 
+	_, err = s1.NewConn(nil)
+	require.ErrorContains(t, err, "invalid remote address")
+
 	cc, err := s1.NewConn(peer)
 	require.NoError(t, err)
 
@@ -478,7 +481,7 @@ func TestServerNewClient(t *testing.T) {
 	require.NoError(t, err)
 
 	// repeat ping - new client should be created
-	cc, err = s1.NewConn(peer)
+	cc, err = s1.NewConn(peer, nil)
 	require.NoError(t, err)
 	err = cc.Ping(ctx)
 	require.NoError(t, err)
@@ -626,7 +629,7 @@ func TestServerReconnectNewClient(t *testing.T) {
 	}
 
 	// new client
-	cc, err = s1.NewConn(peer)
+	cc, err = s1.NewConn(peer, nil)
 	require.NoError(t, err)
 	ctx, cancel = context.WithTimeout(context.Background(), time.Second*1)
 	defer cancel()
