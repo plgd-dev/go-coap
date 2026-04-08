@@ -652,7 +652,9 @@ func (cc *Conn) sendPong(w *responsewriter.ResponseWriter[*Conn], r *pool.Messag
 		cc.errors(fmt.Errorf("cannot send pong response: %w", err))
 	}
 	if r.Type() == message.Confirmable {
-		w.Message().SetType(message.Acknowledgement)
+		// RFC 7252 §4.2: An Empty Confirmable message (CoAP Ping) is rejected
+		// with a matching Reset message.
+		w.Message().SetType(message.Reset)
 		w.Message().SetMessageID(r.MessageID())
 	} else {
 		if w.Message().Type() != message.Reset {
