@@ -871,7 +871,7 @@ func TestConnPingResponseIsReset(t *testing.T) {
 	_, errW := conn.Write(ping)
 	require.NoError(t, errW)
 
-	err = conn.(*net.UDPConn).SetReadDeadline(time.Now().Add(time.Second * 2))
+	err = conn.SetReadDeadline(time.Now().Add(time.Second * 2))
 	require.NoError(t, err)
 	buf := make([]byte, 1024)
 	n, errR := conn.Read(buf)
