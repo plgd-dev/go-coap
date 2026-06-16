@@ -483,6 +483,77 @@ func TestUDPConnWriteToAddr(t *testing.T) {
 	}
 }
 
+// TestUDPConnDualStackWriteDelivers verifies that a server response from a dual-stack
+// ("udp" / [::]) listener to an IPv4 client is accepted AND actually delivered, on every
+// platform.
+//
+// This is the combination that needs explicit coverage:
+//   - Windows: the underlying WriteMsgUDP reports n=0 (must still count as success via the
+//     writeWithCfg guard), and
+//   - macOS: ipv4.PacketConn.WriteTo cannot send to an IPv4 destination from a [::] socket
+//     ("sendmsg: invalid argument"), which is why the portable WriteMsgUDP path is kept.
+//
+// The existing TestUDPConnWriteWithContext/"send to v4 from v6 socket" only asserts the
+// absence of an error; this test additionally asserts the datagram is received.
+func TestUDPConnDualStackWriteDelivers(t *testing.T) {
+	// Dual-stack listener (IPv6 socket that also accepts IPv4 via v4-mapped addresses).
+	server, err := NewListenUDP(udpNetwork, "[::]:0")
+	if err != nil {
+		t.Skipf("cannot create dual-stack listener: %v", err)
+	}
+	defer func() {
+		errC := server.Close()
+		require.NoError(t, errC)
+	}()
+	require.True(t, supportsOverrideRemoteAddr(server.connection))
+	// Confirm we really exercise the v4-from-v6 path: the listener socket is IPv6.
+	require.True(t, server.packetConn.IsIPv6(), "listener should be a dual-stack IPv6 socket")
+
+	serverAddr, ok := server.LocalAddr().(*net.UDPAddr)
+	require.True(t, ok)
+
+	// IPv4 client talking to the dual-stack server over loopback.
+	client, err := net.DialUDP(udp4Network, nil, &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: serverAddr.Port})
+	if err != nil {
+		t.Skipf("cannot dial IPv4 to dual-stack listener: %v", err)
+	}
+	defer func() {
+		errC := client.Close()
+		require.NoError(t, errC)
+	}()
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second*5)
+	defer cancel()
+
+	// The client pings first so the server learns the remote address in whatever form the
+	// OS reports it (mirrors a real server reply flow).
+	_, err = client.Write([]byte("ping"))
+	require.NoError(t, err)
+
+	buf := make([]byte, 64)
+	var raddr *net.UDPAddr
+	_, err = server.ReadWithOptions(buf, WithContext(ctx), WithGetRemoteAddr(&raddr))
+	require.NoError(t, err)
+	require.NotNil(t, raddr)
+
+	payload := make([]byte, 1500)
+	for i := range payload {
+		payload[i] = byte(i % 251)
+	}
+
+	// The server reply path must succeed (no bogus ErrWriteInterrupted on Windows) and the
+	// datagram must actually arrive (no silent drop / family mismatch on macOS).
+	err = server.WriteWithContext(ctx, raddr, payload)
+	require.NoError(t, err)
+
+	errR := client.SetReadDeadline(time.Now().Add(time.Second * 2))
+	require.NoError(t, errR)
+	got := make([]byte, len(payload)+16)
+	n, errR := client.Read(got)
+	require.NoError(t, errR)
+	require.Equal(t, payload, got[:n])
+}
+
 // TestUDPConnUnconnectedWriteReportsFullWrite verifies that writing a datagram from an
 // unconnected server listener (supportsOverrideRemoteAddr == true) reports the full number
 // of written bytes and does not return ErrWriteInterrupted.
