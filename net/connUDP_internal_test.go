@@ -454,7 +454,10 @@ func TestUDPConnWriteToAddr(t *testing.T) {
 			}
 			network := udp4Network
 			ip := getIfaceAddr(t, iface, true)
-			if IsIPv6(tt.args.src) {
+			// The listen socket family must match the destination address family,
+			// because writeToAddr builds the packetConn from raddr. Derive it from
+			// the source address when set, otherwise from raddr itself.
+			if IsIPv6(tt.args.src) || (tt.args.src == nil && IsIPv6(tt.args.raddr.IP)) {
 				network = udp6Network
 				ip = getIfaceAddr(t, iface, false)
 			}
