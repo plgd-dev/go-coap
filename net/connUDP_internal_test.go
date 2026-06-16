@@ -2,6 +2,7 @@ package net
 
 import (
 	"context"
+	"fmt"
 	"net"
 	"runtime"
 	"strconv"
@@ -476,6 +477,82 @@ func TestUDPConnWriteToAddr(t *testing.T) {
 			}
 			require.NoError(t, err)
 		})
+	}
+}
+
+// TestUDPConnUnconnectedWriteReportsFullWrite verifies that writing a datagram from an
+// unconnected server listener (supportsOverrideRemoteAddr == true) reports the full number
+// of written bytes and does not return ErrWriteInterrupted.
+//
+// Regression test for the Windows bug where (*net.UDPConn).WriteMsgUDP reports n=0 even
+// though the datagram is delivered, which made writeWithCfg treat every server response as
+// a partial write and broke blockwise transfers. The fix routes writeTo through the
+// ipv4/ipv6 PacketConn.WriteTo wrapper, which returns the correct byte count on all
+// platforms (including Windows). Before the fix this test fails on Windows; after the fix
+// it passes on all platforms.
+func TestUDPConnUnconnectedWriteReportsFullWrite(t *testing.T) {
+	type netCfg struct {
+		network  string
+		listenIP string
+		dialIP   string
+	}
+	netCfgs := []netCfg{
+		{network: udp4Network, listenIP: "127.0.0.1", dialIP: "127.0.0.1"},
+		{network: udp6Network, listenIP: "::1", dialIP: "::1"},
+	}
+	sizes := []int{1, 256, 512, 1024, 2000}
+
+	for _, nc := range netCfgs {
+		for _, size := range sizes {
+			t.Run(fmt.Sprintf("%s/size=%d", nc.network, size), func(t *testing.T) {
+				server, err := NewListenUDP(nc.network, net.JoinHostPort(nc.listenIP, "0"))
+				if err != nil {
+					t.Skipf("cannot listen on %s: %v", nc.network, err)
+				}
+				defer func() {
+					errC := server.Close()
+					require.NoError(t, errC)
+				}()
+				// Sanity: the server listener must be unconnected so that the
+				// supportsOverrideRemoteAddr write path (the buggy one) is exercised.
+				require.True(t, supportsOverrideRemoteAddr(server.connection))
+
+				serverAddr, ok := server.LocalAddr().(*net.UDPAddr)
+				require.True(t, ok)
+				// Use the loopback dial IP instead of the (possibly unspecified) listen IP.
+				dialAddr := &net.UDPAddr{IP: net.ParseIP(nc.dialIP), Port: serverAddr.Port}
+
+				client, err := net.DialUDP(nc.network, nil, dialAddr)
+				require.NoError(t, err)
+				defer func() {
+					errC := client.Close()
+					require.NoError(t, errC)
+				}()
+
+				clientAddr, ok := client.LocalAddr().(*net.UDPAddr)
+				require.True(t, ok)
+
+				payload := make([]byte, size)
+				for i := range payload {
+					payload[i] = byte(i % 251)
+				}
+
+				ctx, cancel := context.WithTimeout(context.Background(), time.Second*5)
+				defer cancel()
+
+				// This is the assertion that fails on Windows before the fix: writeTo
+				// returns n=0 -> writeWithCfg returns ErrWriteInterrupted.
+				err = server.WriteWithContext(ctx, clientAddr, payload)
+				require.NoError(t, err)
+
+				errR := client.SetReadDeadline(time.Now().Add(time.Second * 2))
+				require.NoError(t, errR)
+				got := make([]byte, size+16)
+				n, errR := client.Read(got)
+				require.NoError(t, errR)
+				require.Equal(t, payload, got[:n])
+			})
+		}
 	}
 }
 

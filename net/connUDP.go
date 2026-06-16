@@ -517,24 +517,17 @@ func (c *UDPConn) writeTo(raddr *net.UDPAddr, cm *ControlMessage, buffer []byte)
 		return c.connection.Write(buffer)
 	}
 
-	var cmb []byte
-
-	if cm != nil && IsIPv6(raddr.IP) {
-		m := &ipv6.ControlMessage{
-			Src:     cm.Src,
-			IfIndex: cm.IfIndex,
-		}
-		cmb = m.Marshal()
-	} else if cm != nil {
-		m := &ipv4.ControlMessage{
-			Src:     cm.Src,
-			IfIndex: cm.IfIndex,
-		}
-		cmb = m.Marshal()
+	// For an unconnected listener we use the ipv4/ipv6 PacketConn.WriteTo wrapper
+	// instead of the raw (*net.UDPConn).WriteMsgUDP. On Windows WriteMsgUDP reports
+	// n=0 even though the datagram is delivered correctly, which made writeWithCfg
+	// treat every server response as a partial write (ErrWriteInterrupted) and broke
+	// blockwise transfers (endless request/response loop). PacketConn.WriteTo returns
+	// the correct number of written bytes on all platforms.
+	p, err := newPacketConnWithAddr(raddr, c.connection)
+	if err != nil {
+		return 0, err
 	}
-
-	i, _, err := c.connection.WriteMsgUDP(buffer, cmb, raddr)
-	return i, err
+	return p.WriteTo(buffer, cm, raddr)
 }
 
 type UDPWriteCfg struct {
