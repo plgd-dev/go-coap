@@ -408,22 +408,22 @@ func (c *UDPConn) writeMulticastWithInterface(raddr *net.UDPAddr, buffer []byte,
 	if IsIPv6(raddr.IP) {
 		netType = "udp6"
 	}
-	var errors []error
+	var errs []error
 	for _, ip := range convAddrsToIps(filterAddressesByNetwork(netType, ifaceAddrs)) {
 		ipAddr := ip
 		opt.Source = &ipAddr
 		err = c.writeToAddr(opt.Iface, opt.Source, opt.HopLimit, raddr, buffer)
 		if err != nil {
-			errors = append(errors, err)
+			errs = append(errs, err)
 		}
 	}
-	if errors == nil {
+	if errs == nil {
 		return nil
 	}
-	if len(errors) == 1 {
-		return errors[0]
+	if len(errs) == 1 {
+		return errs[0]
 	}
-	return fmt.Errorf("%v", errors)
+	return fmt.Errorf("%v", errs)
 }
 
 func (c *UDPConn) writeMulticastToAllInterfaces(raddr *net.UDPAddr, buffer []byte, opt MulticastOptions) error {
@@ -432,7 +432,7 @@ func (c *UDPConn) writeMulticastToAllInterfaces(raddr *net.UDPAddr, buffer []byt
 		return fmt.Errorf("cannot get interfaces for multicast connection: %w", err)
 	}
 
-	var errors []error
+	var errs []error
 	for i := range ifaces {
 		iface := ifaces[i]
 		if iface.Flags&net.FlagMulticast == 0 {
@@ -450,16 +450,16 @@ func (c *UDPConn) writeMulticastToAllInterfaces(raddr *net.UDPAddr, buffer []byt
 				opt.InterfaceError(&iface, err)
 				continue
 			}
-			errors = append(errors, err)
+			errs = append(errs, err)
 		}
 	}
-	if errors == nil {
+	if errs == nil {
 		return nil
 	}
-	if len(errors) == 1 {
-		return errors[0]
+	if len(errs) == 1 {
+		return errs[0]
 	}
-	return fmt.Errorf("%v", errors)
+	return fmt.Errorf("%v", errs)
 }
 
 func (c *UDPConn) validateMulticast(ctx context.Context, raddr *net.UDPAddr, opt MulticastOptions) error {
@@ -519,13 +519,26 @@ func (c *UDPConn) writeTo(raddr *net.UDPAddr, cm *ControlMessage, buffer []byte)
 
 	// For an unconnected listener we use the ipv4/ipv6 PacketConn.WriteTo wrapper
 	// instead of the raw (*net.UDPConn).WriteMsgUDP. On Windows WriteMsgUDP reports
-	// n=0 even though the datagram is delivered correctly, which made writeWithCfg
-	// treat every server response as a partial write (ErrWriteInterrupted) and broke
-	// blockwise transfers (endless request/response loop). PacketConn.WriteTo returns
-	// the correct number of written bytes on all platforms.
-	p, err := newPacketConnWithAddr(raddr, c.connection)
-	if err != nil {
-		return 0, err
+	// n=0 even though the datagram is delivered correctly. Historically this made
+	// writeWithCfg treat every server response as a partial write (ErrWriteInterrupted)
+	// and broke blockwise transfers (endless request/response loop). PacketConn.WriteTo
+	// returns the correct number of written bytes on all platforms.
+	//
+	// Note: writeWithCfg also guards against a bogus n=0 result, so the two changes are
+	// defense-in-depth - this wrapper reports the right byte count, and the caller no
+	// longer misinterprets a zero-length report as a partial write.
+	//
+	// Reuse the listener's cached packetConn when its address family matches the
+	// destination. Only on a family mismatch (e.g. a dual-stack socket replying to
+	// the other family) do we build a matching one. This avoids a per-write
+	// allocation and SetControlMessage syscall on the hot response path.
+	p := c.packetConn
+	if p == nil || p.IsIPv6() != IsIPv6(raddr.IP) {
+		var err error
+		p, err = newPacketConnWithAddr(raddr, c.connection)
+		if err != nil {
+			return 0, err
+		}
 	}
 	return p.WriteTo(buffer, cm, raddr)
 }
@@ -633,7 +646,16 @@ func (c *UDPConn) writeWithCfg(buffer []byte, cfg UDPWriteCfg) error {
 	if err != nil {
 		return err
 	}
-	if n != len(buffer) {
+	// UDP is datagram-oriented: the kernel either accepts the whole datagram or
+	// reports an error - it never sends "half" a datagram. So only a genuinely
+	// short write (some, but not all, bytes reported) is a real partial write.
+	//
+	// Some write paths/platforms report n=0 with err=nil even though the datagram
+	// was delivered (e.g. (*net.UDPConn).WriteMsgUDP on Windows). Treating that as
+	// a partial write previously broke blockwise transfers (endless loop). Guarding
+	// on `n > 0` makes this resilient to that class of bug regardless of the
+	// underlying write implementation.
+	if n > 0 && n < len(buffer) {
 		return ErrWriteInterrupted
 	}
 
