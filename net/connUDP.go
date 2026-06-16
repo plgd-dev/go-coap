@@ -517,30 +517,33 @@ func (c *UDPConn) writeTo(raddr *net.UDPAddr, cm *ControlMessage, buffer []byte)
 		return c.connection.Write(buffer)
 	}
 
-	// For an unconnected listener we use the ipv4/ipv6 PacketConn.WriteTo wrapper
-	// instead of the raw (*net.UDPConn).WriteMsgUDP. On Windows WriteMsgUDP reports
-	// n=0 even though the datagram is delivered correctly. Historically this made
-	// writeWithCfg treat every server response as a partial write (ErrWriteInterrupted)
-	// and broke blockwise transfers (endless request/response loop). PacketConn.WriteTo
-	// returns the correct number of written bytes on all platforms.
-	//
-	// Note: writeWithCfg also guards against a bogus n=0 result, so the two changes are
-	// defense-in-depth - this wrapper reports the right byte count, and the caller no
-	// longer misinterprets a zero-length report as a partial write.
-	//
-	// Reuse the listener's cached packetConn when its address family matches the
-	// destination. Only on a family mismatch (e.g. a dual-stack socket replying to
-	// the other family) do we build a matching one. This avoids a per-write
-	// allocation and SetControlMessage syscall on the hot response path.
-	p := c.packetConn
-	if p == nil || p.IsIPv6() != IsIPv6(raddr.IP) {
-		var err error
-		p, err = newPacketConnWithAddr(raddr, c.connection)
-		if err != nil {
-			return 0, err
+	var cmb []byte
+	if cm != nil && IsIPv6(raddr.IP) {
+		m := &ipv6.ControlMessage{
+			Src:     cm.Src,
+			IfIndex: cm.IfIndex,
 		}
+		cmb = m.Marshal()
+	} else if cm != nil {
+		m := &ipv4.ControlMessage{
+			Src:     cm.Src,
+			IfIndex: cm.IfIndex,
+		}
+		cmb = m.Marshal()
 	}
-	return p.WriteTo(buffer, cm, raddr)
+
+	// Write through the raw, dual-stack capable socket. This is the portable path:
+	// it correctly sends e.g. to an IPv4 destination from a [::] (dual-stack) socket,
+	// which ipv4.PacketConn.WriteTo rejects on macOS ("sendmsg: invalid argument").
+	//
+	// Caveat: on Windows WriteMsgUDP delivers the datagram but reports n=0, err=nil.
+	// That bogus zero-length report previously broke blockwise transfers (endless
+	// loop). It is now tolerated in writeWithCfg, which treats a zero-length report
+	// as success - a UDP datagram is delivered atomically, so only a genuine
+	// 0 < n < len(buffer) is a real partial write. Keep this portable path and rely
+	// on that guard instead of switching to PacketConn.WriteTo.
+	i, _, err := c.connection.WriteMsgUDP(buffer, cmb, raddr)
+	return i, err
 }
 
 type UDPWriteCfg struct {

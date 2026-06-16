@@ -3,6 +3,7 @@
 package net
 
 import (
+	"context"
 	"net"
 	"testing"
 	"time"
@@ -12,20 +13,22 @@ import (
 )
 
 // TestWindowsWriteMsgUDPReportingBehavior documents and pins the Windows-specific UDP write
-// behavior that motivated routing writeTo through the ipv4/ipv6 PacketConn.WriteTo wrapper.
+// behavior that motivated the blockwise fix.
 //
 // Background: on Windows (observed with go1.26.4) (*net.UDPConn).WriteMsgUDP delivers the
-// datagram correctly but reports n=0, err=nil. go-coap previously used WriteMsgUDP for the
-// unconnected server-listener path, so writeWithCfg treated every server response as a
-// partial write (ErrWriteInterrupted) and blockwise transfers looped forever.
+// datagram correctly but reports n=0, err=nil. go-coap's unconnected server-listener path
+// uses WriteMsgUDP, so writeWithCfg previously treated every server response as a partial
+// write (ErrWriteInterrupted) and blockwise transfers looped forever.
 //
-// This test acts as an early-warning regression guard:
-//   - It does NOT hard-fail on the stdlib WriteMsgUDP behavior (a future Go fix may change
-//     n from 0 to the real length). Instead it logs what WriteMsgUDP reports so a change is
-//     visible in test output.
-//   - It DOES hard-assert that ipv4.PacketConn.WriteTo and go-coap's writeTo report the full
-//     byte count on Windows. These are the guarantees the fix relies on; if they regress the
-//     test fails.
+// The fix keeps the portable WriteMsgUDP path (it is dual-stack capable, unlike
+// ipv4.PacketConn.WriteTo which fails on macOS) and instead hardens writeWithCfg to treat a
+// zero-length report as success. This test acts as an early-warning regression guard:
+//   - It does NOT hard-fail on the raw stdlib WriteMsgUDP behavior (a future Go fix may
+//     change n from 0 to the real length). Instead it logs what WriteMsgUDP reports so a
+//     change is visible in test output.
+//   - It DOES hard-assert that the public write path (WriteWithContext / writeWithCfg)
+//     succeeds and the datagram is delivered, even though the raw WriteMsgUDP reports n=0.
+//     This is the guarantee the fix relies on; if it regresses the test fails.
 func TestWindowsWriteMsgUDPReportingBehavior(t *testing.T) {
 	server, err := NewListenUDP(udp4Network, "127.0.0.1:0")
 	require.NoError(t, err)
@@ -54,23 +57,30 @@ func TestWindowsWriteMsgUDPReportingBehavior(t *testing.T) {
 			payload[i] = byte(i % 251)
 		}
 
-		// 1) Raw stdlib WriteMsgUDP: only logged, not asserted (may report n=0 on Windows).
+		// 1) Raw stdlib WriteMsgUDP: only logged, not asserted. On Windows it historically
+		//    reports n=0 even though the datagram is delivered. A change here (e.g. a future
+		//    Go fix) becomes visible in the test output without failing the suite.
 		rawN, _, errRaw := server.connection.WriteMsgUDP(payload, nil, clientAddr)
 		require.NoError(t, errRaw)
 		drainOne(t, client, size)
-		t.Logf("size=%4d  WriteMsgUDP reported n=%d (Windows historically reports 0 despite delivery)", size, rawN)
+		t.Logf("size=%4d  raw WriteMsgUDP reported n=%d (Windows historically reports 0 despite delivery)", size, rawN)
 
-		// 2) ipv4.PacketConn.WriteTo: must report the full length on Windows (the working path).
+		// 2) Informational: ipv4.PacketConn.WriteTo reports the full length on Windows. We do
+		//    NOT use it as the write path because it is not dual-stack capable on macOS, but it
+		//    illustrates that the n=0 quirk is specific to WriteMsgUDP.
 		p := ipv4.NewPacketConn(server.connection)
 		wtN, errWt := p.WriteTo(payload, &ipv4.ControlMessage{Src: net.IPv4(127, 0, 0, 1)}, clientAddr)
 		require.NoError(t, errWt)
 		require.Equal(t, size, wtN, "ipv4.PacketConn.WriteTo must report full length on Windows")
 		drainOne(t, client, size)
 
-		// 3) go-coap writeTo (the fixed path): must report the full length on Windows.
-		gcN, errGc := server.writeTo(clientAddr, nil, payload)
-		require.NoError(t, errGc)
-		require.Equal(t, size, gcN, "writeTo must report full length on Windows after the fix")
+		// 3) The real guarantee: the public write path must succeed and deliver the datagram
+		//    on Windows even though the underlying WriteMsgUDP reports n=0. This is what the
+		//    writeWithCfg hardening ensures.
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second*2)
+		errPub := server.WriteWithContext(ctx, clientAddr, payload)
+		cancel()
+		require.NoError(t, errPub, "WriteWithContext must not return ErrWriteInterrupted despite raw n=0")
 		drainOne(t, client, size)
 	}
 }

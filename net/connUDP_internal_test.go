@@ -489,10 +489,10 @@ func TestUDPConnWriteToAddr(t *testing.T) {
 //
 // Regression test for the Windows bug where (*net.UDPConn).WriteMsgUDP reports n=0 even
 // though the datagram is delivered, which made writeWithCfg treat every server response as
-// a partial write and broke blockwise transfers. The fix routes writeTo through the
-// ipv4/ipv6 PacketConn.WriteTo wrapper, which returns the correct byte count on all
-// platforms (including Windows). Before the fix this test fails on Windows; after the fix
-// it passes on all platforms.
+// a partial write and broke blockwise transfers. The fix hardens writeWithCfg to treat a
+// zero-length report as success (a UDP datagram is delivered atomically), while keeping the
+// portable, dual-stack capable WriteMsgUDP write path. Before the fix this test fails on
+// Windows; after the fix it passes on all platforms.
 func TestUDPConnUnconnectedWriteReportsFullWrite(t *testing.T) {
 	type netCfg struct {
 		network  string
