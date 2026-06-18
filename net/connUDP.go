@@ -539,6 +539,8 @@ func (c *UDPConn) writeTo(raddr *net.UDPAddr, cm *ControlMessage, buffer []byte)
 	return normalizeWriteMsgUDPResult(i, err, buffer)
 }
 
+var udpConnWriteTo = (*UDPConn).writeTo
+
 type UDPWriteCfg struct {
 	Ctx            context.Context
 	RemoteAddr     *net.UDPAddr
@@ -638,7 +640,7 @@ func (c *UDPConn) writeWithCfg(buffer []byte, cfg UDPWriteCfg) error {
 	if c.closed.Load() {
 		return ErrConnectionIsClosed
 	}
-	n, err := c.writeTo(cfg.RemoteAddr, cfg.ControlMessage, buffer)
+	n, err := udpConnWriteTo(c, cfg.RemoteAddr, cfg.ControlMessage, buffer)
 	if err != nil {
 		return err
 	}

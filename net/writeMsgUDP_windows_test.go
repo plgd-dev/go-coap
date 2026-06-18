@@ -85,6 +85,21 @@ func TestWindowsWriteMsgUDPReportingBehavior(t *testing.T) {
 	}
 }
 
+func TestNormalizeWriteMsgUDPResult(t *testing.T) {
+	gotN, gotErr := normalizeWriteMsgUDPResult(0, nil, []byte("abc"))
+	require.NoError(t, gotErr)
+	require.Equal(t, 3, gotN)
+
+	gotN, gotErr = normalizeWriteMsgUDPResult(5, nil, []byte("abc"))
+	require.NoError(t, gotErr)
+	require.Equal(t, 5, gotN)
+
+	boom := context.DeadlineExceeded
+	gotN, gotErr = normalizeWriteMsgUDPResult(0, boom, []byte("abc"))
+	require.ErrorIs(t, gotErr, boom)
+	require.Equal(t, 0, gotN)
+}
+
 func drainOne(t *testing.T, client *net.UDPConn, size int) {
 	t.Helper()
 	errR := client.SetReadDeadline(time.Now().Add(time.Second))

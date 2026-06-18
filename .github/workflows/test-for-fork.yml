@@ -14,18 +14,18 @@ jobs:
         os: [ubuntu-latest, windows-latest, macOS-latest]
 
     steps:
-      - name: Set up Go 1.26 (Windows)
+      - name: Set up Go >=1.24 (Windows)
         if: runner.os == 'Windows'
         uses: actions/setup-go@v6
         with:
-          go-version: "^1.26"
+          go-version: ">=1.24"
           check-latest: true
 
-      - name: Set up Go 1.26+ (Non-Windows)
+      - name: Set up Go >=1.24 (Non-Windows)
         if: runner.os != 'Windows'
         uses: actions/setup-go@v6
         with:
-          go-version: "^1.26"
+          go-version: ">=1.24"
           check-latest: true
 
       - run: go version

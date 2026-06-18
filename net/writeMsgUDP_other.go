@@ -2,6 +2,6 @@
 
 package net
 
-func normalizeWriteMsgUDPResult(n int, err error, buffer []byte) (int, error) {
+func normalizeWriteMsgUDPResult(n int, err error, _ []byte) (int, error) {
 	return n, err
 }
