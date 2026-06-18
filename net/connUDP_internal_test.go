@@ -2,6 +2,7 @@ package net
 
 import (
 	"context"
+	"fmt"
 	"net"
 	"runtime"
 	"strconv"
@@ -370,38 +371,41 @@ func getInterfaceIndex(t *testing.T) net.Interface {
 	return net.Interface{}
 }
 
+type writeToAddrArgs struct {
+	iface             *net.Interface
+	src               net.IP
+	multicastHopLimit int
+	raddr             *net.UDPAddr
+	buffer            []byte
+}
+
+type writeToAddrTestCase struct {
+	name    string
+	args    writeToAddrArgs
+	wantErr bool
+	skip    func() bool
+}
+
 func TestUDPConnWriteToAddr(t *testing.T) {
 	iface := getInterfaceIndex(t)
-	type args struct {
-		iface             *net.Interface
-		src               net.IP
-		multicastHopLimit int
-		raddr             *net.UDPAddr
-		buffer            []byte
-	}
-	tests := []struct {
-		name    string
-		args    args
-		wantErr bool
-		skip    func() bool
-	}{
+	tests := []writeToAddrTestCase{
 		{
 			name: "IPv4",
-			args: args{
+			args: writeToAddrArgs{
 				raddr:  &net.UDPAddr{IP: getIfaceAddr(t, iface, true), Port: 1234},
 				buffer: []byte("hello world"),
 			},
 		},
 		{
 			name: "IPv6",
-			args: args{
+			args: writeToAddrArgs{
 				raddr:  &net.UDPAddr{IP: getIfaceAddr(t, iface, false), Port: 1234},
 				buffer: []byte("hello world"),
 			},
 		},
 		{
 			name: "closed",
-			args: args{
+			args: writeToAddrArgs{
 				raddr:  &net.UDPAddr{IP: getIfaceAddr(t, iface, true), Port: 1234},
 				buffer: []byte("hello world"),
 			},
@@ -409,7 +413,7 @@ func TestUDPConnWriteToAddr(t *testing.T) {
 		},
 		{
 			name: "with interface",
-			args: args{
+			args: writeToAddrArgs{
 				iface:  &iface,
 				raddr:  &net.UDPAddr{IP: getIfaceAddr(t, iface, true), Port: 1234},
 				buffer: []byte("hello world"),
@@ -417,7 +421,7 @@ func TestUDPConnWriteToAddr(t *testing.T) {
 		},
 		{
 			name: "with source",
-			args: args{
+			args: writeToAddrArgs{
 				src:    net.IP{127, 0, 0, 1},
 				raddr:  &net.UDPAddr{IP: getIfaceAddr(t, iface, true), Port: 1234},
 				buffer: []byte("hello world"),
@@ -425,7 +429,7 @@ func TestUDPConnWriteToAddr(t *testing.T) {
 		},
 		{
 			name: "with multicast hop limit",
-			args: args{
+			args: writeToAddrArgs{
 				multicastHopLimit: 5,
 				raddr:             &net.UDPAddr{IP: net.IPv4(224, 0, 0, 1), Port: 1234},
 				buffer:            []byte("hello world"),
@@ -436,7 +440,7 @@ func TestUDPConnWriteToAddr(t *testing.T) {
 		},
 		{
 			name: "with interface and source",
-			args: args{
+			args: writeToAddrArgs{
 				iface:  &iface,
 				src:    getIfaceAddr(t, iface, true),
 				raddr:  &net.UDPAddr{IP: getIfaceAddr(t, iface, true), Port: 1234},
@@ -447,36 +451,376 @@ func TestUDPConnWriteToAddr(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if tt.skip != nil && tt.skip() {
-				t.Log("skipped")
-				return
-			}
-			network := udp4Network
-			ip := getIfaceAddr(t, iface, true)
-			if IsIPv6(tt.args.src) {
-				network = udp6Network
-				ip = getIfaceAddr(t, iface, false)
-			}
-			p, err := net.ListenUDP(network, &net.UDPAddr{IP: ip, Port: 1235})
-			require.NoError(t, err)
-			defer func() {
-				errC := p.Close()
-				require.NoError(t, errC)
-			}()
-			c := &UDPConn{
-				connection: p,
-			}
-			if tt.wantErr {
-				c.closed.Store(true)
-			}
-			err = c.writeToAddr(tt.args.iface, &tt.args.src, tt.args.multicastHopLimit, tt.args.raddr, tt.args.buffer)
-			if tt.wantErr {
-				require.Error(t, err)
-				return
-			}
-			require.NoError(t, err)
+			runUDPConnWriteToAddrCase(t, iface, tt)
 		})
 	}
+}
+
+func runUDPConnWriteToAddrCase(t *testing.T, iface net.Interface, tt writeToAddrTestCase) {
+	t.Helper()
+	if tt.skip != nil && tt.skip() {
+		t.Log("skipped")
+		return
+	}
+	network := udp4Network
+	ip := getIfaceAddr(t, iface, true)
+	// The listen socket family must match the destination address family,
+	// because writeToAddr builds the packetConn from raddr. Derive it from
+	// the source address when set, otherwise from raddr itself.
+	if IsIPv6(tt.args.src) || (tt.args.src == nil && IsIPv6(tt.args.raddr.IP)) {
+		network = udp6Network
+		ip = getIfaceAddr(t, iface, false)
+	}
+	p, err := net.ListenUDP(network, &net.UDPAddr{IP: ip, Port: 1235})
+	require.NoError(t, err)
+	defer func() {
+		errC := p.Close()
+		require.NoError(t, errC)
+	}()
+	c := &UDPConn{
+		connection: p,
+	}
+	if tt.wantErr {
+		c.closed.Store(true)
+	}
+	err = c.writeToAddr(tt.args.iface, &tt.args.src, tt.args.multicastHopLimit, tt.args.raddr, tt.args.buffer)
+	if tt.wantErr {
+		require.Error(t, err)
+		return
+	}
+	require.NoError(t, err)
+}
+
+// TestUDPConnDualStackWriteDelivers verifies that a server response from a dual-stack
+// ("udp" / [::]) listener to an IPv4 client is accepted AND actually delivered, on every
+// platform.
+//
+// This is the combination that needs explicit coverage:
+//   - Windows: the underlying WriteMsgUDP reports n=0 (must still count as success via the
+//     writeWithCfg guard), and
+//   - macOS: ipv4.PacketConn.WriteTo cannot send to an IPv4 destination from a [::] socket
+//     ("sendmsg: invalid argument"), which is why the portable WriteMsgUDP path is kept.
+//
+// The existing TestUDPConnWriteWithContext/"send to v4 from v6 socket" only asserts the
+// absence of an error; this test additionally asserts the datagram is received.
+func TestUDPConnDualStackWriteDelivers(t *testing.T) {
+	// Dual-stack listener (IPv6 socket that also accepts IPv4 via v4-mapped addresses).
+	server, err := NewListenUDP(udpNetwork, "[::]:0")
+	if err != nil {
+		t.Skipf("cannot create dual-stack listener: %v", err)
+	}
+	defer func() {
+		errC := server.Close()
+		require.NoError(t, errC)
+	}()
+	require.True(t, supportsOverrideRemoteAddr(server.connection))
+	// Confirm we really exercise the v4-from-v6 path: the listener socket is IPv6.
+	require.True(t, server.packetConn.IsIPv6(), "listener should be a dual-stack IPv6 socket")
+
+	serverAddr, ok := server.LocalAddr().(*net.UDPAddr)
+	require.True(t, ok)
+
+	// IPv4 client talking to the dual-stack server over loopback.
+	client, err := net.DialUDP(udp4Network, nil, &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: serverAddr.Port})
+	if err != nil {
+		t.Skipf("cannot dial IPv4 to dual-stack listener: %v", err)
+	}
+	defer func() {
+		errC := client.Close()
+		require.NoError(t, errC)
+	}()
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second*5)
+	defer cancel()
+
+	// The client pings first so the server learns the remote address in whatever form the
+	// OS reports it (mirrors a real server reply flow).
+	_, err = client.Write([]byte("ping"))
+	require.NoError(t, err)
+
+	buf := make([]byte, 64)
+	var raddr *net.UDPAddr
+	_, err = server.ReadWithOptions(buf, WithContext(ctx), WithGetRemoteAddr(&raddr))
+	require.NoError(t, err)
+	require.NotNil(t, raddr)
+
+	payload := make([]byte, 1500)
+	for i := range payload {
+		payload[i] = byte(i % 251)
+	}
+
+	// The server reply path must succeed (no bogus ErrWriteInterrupted on Windows) and the
+	// datagram must actually arrive (no silent drop / family mismatch on macOS).
+	err = server.WriteWithContext(ctx, raddr, payload)
+	require.NoError(t, err)
+
+	errR := client.SetReadDeadline(time.Now().Add(time.Second * 2))
+	require.NoError(t, errR)
+	got := make([]byte, len(payload)+16)
+	n, errR := client.Read(got)
+	require.NoError(t, errR)
+	require.Equal(t, payload, got[:n])
+}
+
+// TestUDPConnUnconnectedWriteReportsFullWrite verifies that writing a datagram from an
+// unconnected server listener (supportsOverrideRemoteAddr == true) reports the full number
+// of written bytes and does not return ErrWriteInterrupted.
+//
+// Regression test for the Windows bug where (*net.UDPConn).WriteMsgUDP reports n=0 even
+// though the datagram is delivered, which made writeWithCfg treat every server response as
+// a partial write and broke blockwise transfers. The fix hardens writeWithCfg to treat a
+// zero-length report as success (a UDP datagram is delivered atomically), while keeping the
+// portable, dual-stack capable WriteMsgUDP write path. Before the fix this test fails on
+// Windows; after the fix it passes on all platforms.
+func TestUDPConnUnconnectedWriteReportsFullWrite(t *testing.T) {
+	type netCfg struct {
+		network  string
+		listenIP string
+		dialIP   string
+	}
+	netCfgs := []netCfg{
+		{network: udp4Network, listenIP: "127.0.0.1", dialIP: "127.0.0.1"},
+		{network: udp6Network, listenIP: "::1", dialIP: "::1"},
+	}
+	sizes := []int{1, 256, 512, 1024, 2000}
+
+	for _, nc := range netCfgs {
+		for _, size := range sizes {
+			t.Run(fmt.Sprintf("%s/size=%d", nc.network, size), func(t *testing.T) {
+				server, err := NewListenUDP(nc.network, net.JoinHostPort(nc.listenIP, "0"))
+				if err != nil {
+					t.Skipf("cannot listen on %s: %v", nc.network, err)
+				}
+				defer func() {
+					errC := server.Close()
+					require.NoError(t, errC)
+				}()
+				// Sanity: the server listener must be unconnected so that the
+				// supportsOverrideRemoteAddr write path (the buggy one) is exercised.
+				require.True(t, supportsOverrideRemoteAddr(server.connection))
+
+				serverAddr, ok := server.LocalAddr().(*net.UDPAddr)
+				require.True(t, ok)
+				// Use the loopback dial IP instead of the (possibly unspecified) listen IP.
+				dialAddr := &net.UDPAddr{IP: net.ParseIP(nc.dialIP), Port: serverAddr.Port}
+
+				client, err := net.DialUDP(nc.network, nil, dialAddr)
+				require.NoError(t, err)
+				defer func() {
+					errC := client.Close()
+					require.NoError(t, errC)
+				}()
+
+				clientAddr, ok := client.LocalAddr().(*net.UDPAddr)
+				require.True(t, ok)
+
+				payload := make([]byte, size)
+				for i := range payload {
+					payload[i] = byte(i % 251)
+				}
+
+				ctx, cancel := context.WithTimeout(context.Background(), time.Second*5)
+				defer cancel()
+
+				// This is the assertion that fails on Windows before the fix: writeTo
+				// returns n=0 -> writeWithCfg returns ErrWriteInterrupted.
+				err = server.WriteWithContext(ctx, clientAddr, payload)
+				require.NoError(t, err)
+
+				errR := client.SetReadDeadline(time.Now().Add(time.Second * 2))
+				require.NoError(t, errR)
+				got := make([]byte, size+16)
+				n, errR := client.Read(got)
+				require.NoError(t, errR)
+				require.Equal(t, payload, got[:n])
+			})
+		}
+	}
+}
+
+func TestUDPConnConnectedWriteDelivers(t *testing.T) {
+	listener, err := net.ListenUDP(udp4Network, &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 0})
+	require.NoError(t, err)
+	defer func() {
+		errC := listener.Close()
+		require.NoError(t, errC)
+	}()
+
+	serverAddr, ok := listener.LocalAddr().(*net.UDPAddr)
+	require.True(t, ok)
+
+	client, err := net.DialUDP(udp4Network, nil, serverAddr)
+	require.NoError(t, err)
+	defer func() {
+		errC := client.Close()
+		require.NoError(t, errC)
+	}()
+
+	require.NotNil(t, client.RemoteAddr())
+	conn := NewUDPConn(udp4Network, client, WithErrors(func(err error) { t.Log(err) }))
+
+	payload := []byte("connected write")
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second*2)
+	defer cancel()
+
+	err = conn.WriteWithContext(ctx, serverAddr, payload)
+	require.NoError(t, err)
+
+	errR := listener.SetReadDeadline(time.Now().Add(time.Second * 2))
+	require.NoError(t, errR)
+	got := make([]byte, len(payload)+16)
+	n, errR := listener.Read(got)
+	require.NoError(t, errR)
+	require.Equal(t, payload, got[:n])
+}
+
+func TestUDPConnWriteToBranches(t *testing.T) {
+	t.Run("connected connection uses Write", func(t *testing.T) {
+		listener, err := net.ListenUDP(udp4Network, &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 0})
+		require.NoError(t, err)
+		defer func() {
+			errC := listener.Close()
+			require.NoError(t, errC)
+		}()
+
+		serverAddr, ok := listener.LocalAddr().(*net.UDPAddr)
+		require.True(t, ok)
+
+		client, err := net.DialUDP(udp4Network, nil, serverAddr)
+		require.NoError(t, err)
+		defer func() {
+			errC := client.Close()
+			require.NoError(t, errC)
+		}()
+
+		conn := &UDPConn{connection: client}
+		payload := []byte("connected writeTo")
+		n, err := conn.writeTo(serverAddr, nil, payload)
+		require.NoError(t, err)
+		require.Equal(t, len(payload), n)
+
+		errR := listener.SetReadDeadline(time.Now().Add(time.Second * 2))
+		require.NoError(t, errR)
+		got := make([]byte, len(payload)+16)
+		n, errR = listener.Read(got)
+		require.NoError(t, errR)
+		require.Equal(t, payload, got[:n])
+	})
+
+	t.Run("override remote addr with ipv4 control message", func(t *testing.T) {
+		listener, err := net.ListenUDP(udp4Network, &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 0})
+		require.NoError(t, err)
+		defer func() {
+			errC := listener.Close()
+			require.NoError(t, errC)
+		}()
+
+		serverAddr, ok := listener.LocalAddr().(*net.UDPAddr)
+		require.True(t, ok)
+
+		client, err := net.DialUDP(udp4Network, nil, serverAddr)
+		require.NoError(t, err)
+		defer func() {
+			errC := client.Close()
+			require.NoError(t, errC)
+		}()
+
+		conn := &UDPConn{connection: listener}
+		payload := []byte("ipv4 control")
+		n, err := conn.writeTo(client.LocalAddr().(*net.UDPAddr), &ControlMessage{Src: net.IPv4(127, 0, 0, 1)}, payload)
+		require.NoError(t, err)
+		require.Equal(t, len(payload), n)
+
+		errR := client.SetReadDeadline(time.Now().Add(time.Second * 2))
+		require.NoError(t, errR)
+		got := make([]byte, len(payload)+16)
+		n, errR = client.Read(got)
+		require.NoError(t, errR)
+		require.Equal(t, payload, got[:n])
+	})
+
+	t.Run("override remote addr with ipv6 control message", func(t *testing.T) {
+		listener, err := net.ListenUDP(udp6Network, &net.UDPAddr{IP: net.ParseIP("::1"), Port: 0})
+		if err != nil {
+			t.Skipf("cannot listen on udp6: %v", err)
+		}
+		defer func() {
+			errC := listener.Close()
+			require.NoError(t, errC)
+		}()
+
+		serverAddr, ok := listener.LocalAddr().(*net.UDPAddr)
+		require.True(t, ok)
+
+		client, err := net.DialUDP(udp6Network, nil, serverAddr)
+		if err != nil {
+			t.Skipf("cannot dial udp6: %v", err)
+		}
+		defer func() {
+			errC := client.Close()
+			require.NoError(t, errC)
+		}()
+
+		conn := &UDPConn{connection: listener}
+		payload := []byte("ipv6 control")
+		n, err := conn.writeTo(client.LocalAddr().(*net.UDPAddr), &ControlMessage{Src: net.ParseIP("::1")}, payload)
+		require.NoError(t, err)
+		require.Equal(t, len(payload), n)
+
+		errR := client.SetReadDeadline(time.Now().Add(time.Second * 2))
+		require.NoError(t, errR)
+		got := make([]byte, len(payload)+16)
+		n, errR = client.Read(got)
+		require.NoError(t, errR)
+		require.Equal(t, payload, got[:n])
+	})
+}
+
+func TestUDPConnWriteWithCfgBranches(t *testing.T) {
+	conn := &UDPConn{}
+
+	t.Run("missing remote addr", func(t *testing.T) {
+		err := conn.writeWithCfg([]byte("x"), UDPWriteCfg{Ctx: context.Background()})
+		require.Error(t, err)
+	})
+
+	t.Run("canceled context", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		err := conn.writeWithCfg([]byte("x"), UDPWriteCfg{Ctx: ctx, RemoteAddr: &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 1234}})
+		require.ErrorIs(t, err, context.Canceled)
+	})
+
+	t.Run("closed connection", func(t *testing.T) {
+		conn.closed.Store(true)
+		defer conn.closed.Store(false)
+		err := conn.writeWithCfg([]byte("x"), UDPWriteCfg{Ctx: context.Background(), RemoteAddr: &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 1234}})
+		require.ErrorIs(t, err, ErrConnectionIsClosed)
+	})
+
+	t.Run("writeTo error", func(t *testing.T) {
+		original := udpConnWriteTo
+		udpConnWriteTo = func(*UDPConn, *net.UDPAddr, *ControlMessage, []byte) (int, error) {
+			return 0, fmt.Errorf("boom")
+		}
+		defer func() {
+			udpConnWriteTo = original
+		}()
+		err := conn.writeWithCfg([]byte("x"), UDPWriteCfg{Ctx: context.Background(), RemoteAddr: &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 1234}})
+		require.ErrorContains(t, err, "boom")
+	})
+
+	t.Run("short write", func(t *testing.T) {
+		original := udpConnWriteTo
+		udpConnWriteTo = func(*UDPConn, *net.UDPAddr, *ControlMessage, []byte) (int, error) {
+			return 1, nil
+		}
+		defer func() {
+			udpConnWriteTo = original
+		}()
+		err := conn.writeWithCfg([]byte("xyz"), UDPWriteCfg{Ctx: context.Background(), RemoteAddr: &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 1234}})
+		require.ErrorIs(t, err, ErrWriteInterrupted)
+	})
 }
 
 func TestPacketConnReadFrom(t *testing.T) {

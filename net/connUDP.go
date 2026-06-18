@@ -408,22 +408,22 @@ func (c *UDPConn) writeMulticastWithInterface(raddr *net.UDPAddr, buffer []byte,
 	if IsIPv6(raddr.IP) {
 		netType = "udp6"
 	}
-	var errors []error
+	var errs []error
 	for _, ip := range convAddrsToIps(filterAddressesByNetwork(netType, ifaceAddrs)) {
 		ipAddr := ip
 		opt.Source = &ipAddr
 		err = c.writeToAddr(opt.Iface, opt.Source, opt.HopLimit, raddr, buffer)
 		if err != nil {
-			errors = append(errors, err)
+			errs = append(errs, err)
 		}
 	}
-	if errors == nil {
+	if errs == nil {
 		return nil
 	}
-	if len(errors) == 1 {
-		return errors[0]
+	if len(errs) == 1 {
+		return errs[0]
 	}
-	return fmt.Errorf("%v", errors)
+	return fmt.Errorf("%v", errs)
 }
 
 func (c *UDPConn) writeMulticastToAllInterfaces(raddr *net.UDPAddr, buffer []byte, opt MulticastOptions) error {
@@ -432,7 +432,7 @@ func (c *UDPConn) writeMulticastToAllInterfaces(raddr *net.UDPAddr, buffer []byt
 		return fmt.Errorf("cannot get interfaces for multicast connection: %w", err)
 	}
 
-	var errors []error
+	var errs []error
 	for i := range ifaces {
 		iface := ifaces[i]
 		if iface.Flags&net.FlagMulticast == 0 {
@@ -450,16 +450,16 @@ func (c *UDPConn) writeMulticastToAllInterfaces(raddr *net.UDPAddr, buffer []byt
 				opt.InterfaceError(&iface, err)
 				continue
 			}
-			errors = append(errors, err)
+			errs = append(errs, err)
 		}
 	}
-	if errors == nil {
+	if errs == nil {
 		return nil
 	}
-	if len(errors) == 1 {
-		return errors[0]
+	if len(errs) == 1 {
+		return errs[0]
 	}
-	return fmt.Errorf("%v", errors)
+	return fmt.Errorf("%v", errs)
 }
 
 func (c *UDPConn) validateMulticast(ctx context.Context, raddr *net.UDPAddr, opt MulticastOptions) error {
@@ -518,7 +518,6 @@ func (c *UDPConn) writeTo(raddr *net.UDPAddr, cm *ControlMessage, buffer []byte)
 	}
 
 	var cmb []byte
-
 	if cm != nil && IsIPv6(raddr.IP) {
 		m := &ipv6.ControlMessage{
 			Src:     cm.Src,
@@ -533,9 +532,14 @@ func (c *UDPConn) writeTo(raddr *net.UDPAddr, cm *ControlMessage, buffer []byte)
 		cmb = m.Marshal()
 	}
 
+	// Write through the raw, dual-stack capable socket. This is the portable path:
+	// it correctly sends e.g. to an IPv4 destination from a [::] (dual-stack) socket,
+	// which ipv4.PacketConn.WriteTo rejects on macOS ("sendmsg: invalid argument").
 	i, _, err := c.connection.WriteMsgUDP(buffer, cmb, raddr)
-	return i, err
+	return normalizeWriteMsgUDPResult(i, err, buffer)
 }
+
+var udpConnWriteTo = (*UDPConn).writeTo
 
 type UDPWriteCfg struct {
 	Ctx            context.Context
@@ -636,7 +640,7 @@ func (c *UDPConn) writeWithCfg(buffer []byte, cfg UDPWriteCfg) error {
 	if c.closed.Load() {
 		return ErrConnectionIsClosed
 	}
-	n, err := c.writeTo(cfg.RemoteAddr, cfg.ControlMessage, buffer)
+	n, err := udpConnWriteTo(c, cfg.RemoteAddr, cfg.ControlMessage, buffer)
 	if err != nil {
 		return err
 	}

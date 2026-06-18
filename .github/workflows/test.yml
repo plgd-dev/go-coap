@@ -23,18 +23,18 @@ jobs:
         os: [ubuntu-latest, windows-latest, macOS-latest]
 
     steps:
-      - name: Set up Go 1.24-1.25 (Windows)
+      - name: Set up Go >=1.24 (Windows)
         if: runner.os == 'Windows'
         uses: actions/setup-go@v6
         with:
-          go-version: ">=1.24 <1.26" # Temporary cap: Go 1.26 has a CI bug on Windows.
+          go-version: ">=1.24"
           check-latest: true
 
-      - name: Set up Go 1.24+ (Non-Windows)
+      - name: Set up Go >=1.24 (Non-Windows)
         if: runner.os != 'Windows'
         uses: actions/setup-go@v6
         with:
-          go-version: "^1.24"
+          go-version: ">=1.24"
           check-latest: true
 
       - run: go version
@@ -110,7 +110,7 @@ jobs:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
 
   # test on oldest supported major Go version
-  test1_20:
+  test1_24:
     # don't run for forks
     if: github.event_name == 'push' ||
       (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) ||
@@ -119,10 +119,10 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Set up Go 1.24
+      - name: Set up Go >=1.24
         uses: actions/setup-go@v6
         with:
-          go-version: "~1.24"
+          go-version: ">=1.24"
 
       - run: go version
 
