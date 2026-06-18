@@ -535,15 +535,8 @@ func (c *UDPConn) writeTo(raddr *net.UDPAddr, cm *ControlMessage, buffer []byte)
 	// Write through the raw, dual-stack capable socket. This is the portable path:
 	// it correctly sends e.g. to an IPv4 destination from a [::] (dual-stack) socket,
 	// which ipv4.PacketConn.WriteTo rejects on macOS ("sendmsg: invalid argument").
-	//
-	// Caveat: on Windows WriteMsgUDP delivers the datagram but reports n=0, err=nil.
-	// That bogus zero-length report previously broke blockwise transfers (endless
-	// loop). It is now tolerated in writeWithCfg, which treats a zero-length report
-	// as success - a UDP datagram is delivered atomically, so only a genuine
-	// 0 < n < len(buffer) is a real partial write. Keep this portable path and rely
-	// on that guard instead of switching to PacketConn.WriteTo.
 	i, _, err := c.connection.WriteMsgUDP(buffer, cmb, raddr)
-	return i, err
+	return normalizeWriteMsgUDPResult(i, err, buffer)
 }
 
 type UDPWriteCfg struct {
@@ -649,16 +642,7 @@ func (c *UDPConn) writeWithCfg(buffer []byte, cfg UDPWriteCfg) error {
 	if err != nil {
 		return err
 	}
-	// UDP is datagram-oriented: the kernel either accepts the whole datagram or
-	// reports an error - it never sends "half" a datagram. So only a genuinely
-	// short write (some, but not all, bytes reported) is a real partial write.
-	//
-	// Some write paths/platforms report n=0 with err=nil even though the datagram
-	// was delivered (e.g. (*net.UDPConn).WriteMsgUDP on Windows). Treating that as
-	// a partial write previously broke blockwise transfers (endless loop). Guarding
-	// on `n > 0` makes this resilient to that class of bug regardless of the
-	// underlying write implementation.
-	if n > 0 && n < len(buffer) {
+	if n != len(buffer) {
 		return ErrWriteInterrupted
 	}
 
