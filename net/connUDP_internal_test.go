@@ -274,7 +274,7 @@ func joinMulticastGroupOnAllInterfaces(t *testing.T, c *UDPConn, group *net.UDPA
 		ifa := iface
 		err = c.JoinGroup(&ifa, group)
 		if err != nil {
-			t.Logf("fmt cannot join group %v: %v", ifa.Name, err)
+			t.Logf("cannot join group %v: %v", ifa.Name, err)
 		}
 	}
 }
