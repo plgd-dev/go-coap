@@ -68,3 +68,18 @@ func WithMTU(mtu uint16) MTUOpt {
 		mtu: mtu,
 	}
 }
+
+// DTLSHandshakeTimeoutOpt configures server-side DTLS handshake timeout.
+type DTLSHandshakeTimeoutOpt struct {
+	timeout time.Duration
+}
+
+func (o DTLSHandshakeTimeoutOpt) DTLSServerApply(cfg *dtlsServer.Config) {
+	cfg.HandshakeTimeout = o.timeout
+}
+
+// WithDTLSHandshakeTimeout sets timeout for DTLS handshake performed before OnNewConn callback.
+// Set to 0 or a negative value to disable timeout and use server context cancellation only.
+func WithDTLSHandshakeTimeout(timeout time.Duration) DTLSHandshakeTimeoutOpt {
+	return DTLSHandshakeTimeoutOpt{timeout: timeout}
+}
