@@ -17,6 +17,10 @@ import (
 	udpClient "github.com/plgd-dev/go-coap/v3/udp/client"
 )
 
+type handshakeWithContext interface {
+	HandshakeContext(ctx context.Context) error
+}
+
 // Listener defined used by coap
 type Listener interface {
 	Close() error
@@ -125,6 +129,21 @@ func (s *Server) checkAcceptError(err error) bool {
 }
 
 func (s *Server) serveConnection(connections *connections.Connections, rw net.Conn) {
+	if h, ok := rw.(handshakeWithContext); ok {
+		handshakeCtx := s.ctx
+		cancel := func() {}
+		if s.cfg.HandshakeTimeout > 0 {
+			handshakeCtx, cancel = context.WithTimeout(s.ctx, s.cfg.HandshakeTimeout)
+		}
+		err := h.HandshakeContext(handshakeCtx)
+		cancel()
+		if err != nil {
+			s.cfg.Errors(fmt.Errorf("%v: handshake failed: %w", rw.RemoteAddr(), err))
+			_ = rw.Close()
+			return
+		}
+	}
+
 	inactivityMonitor := s.cfg.CreateInactivityMonitor()
 	requestMonitor := s.cfg.RequestMonitor
 	dtlsConn := coapNet.NewConn(rw)

@@ -34,6 +34,7 @@ func TestDTLSServerApply(t *testing.T) {
 	opt := []dtlsServer.Option{
 		options.WithTransmission(10, time.Second, 5),
 		options.WithMTU(1500),
+		options.WithDTLSHandshakeTimeout(12 * time.Second),
 	}
 	for _, o := range opt {
 		o.DTLSServerApply(&cfg)
@@ -44,6 +45,8 @@ func TestDTLSServerApply(t *testing.T) {
 	require.Equal(t, uint32(5), cfg.TransmissionMaxRetransmit)
 	// WithMTU
 	require.Equal(t, uint16(1500), cfg.MTU)
+	// WithDTLSHandshakeTimeout
+	require.Equal(t, 12*time.Second, cfg.HandshakeTimeout)
 }
 
 func TestUDPClientApply(t *testing.T) {

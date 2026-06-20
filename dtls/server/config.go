@@ -43,6 +43,7 @@ var DefaultConfig = func() Config {
 		TransmissionNStart:             1,
 		TransmissionAcknowledgeTimeout: time.Second * 2,
 		TransmissionMaxRetransmit:      4,
+		HandshakeTimeout:               30 * time.Second,
 		GetMID:                         message.GetMID,
 		MTU:                            udpClient.DefaultMTU,
 	}
@@ -64,5 +65,6 @@ type Config struct {
 	TransmissionNStart             uint32
 	TransmissionAcknowledgeTimeout time.Duration
 	TransmissionMaxRetransmit      uint32
+	HandshakeTimeout               time.Duration
 	MTU                            uint16
 }
