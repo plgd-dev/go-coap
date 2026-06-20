@@ -131,7 +131,9 @@ func (s *Server) checkAcceptError(err error) bool {
 func (s *Server) serveConnection(connections *connections.Connections, rw net.Conn) {
 	if h, ok := rw.(handshakeWithContext); ok {
 		handshakeCtx := s.ctx
-		cancel := func() {}
+		cancel := func() {
+			// do nothing by default
+		}
 		if s.cfg.HandshakeTimeout > 0 {
 			handshakeCtx, cancel = context.WithTimeout(s.ctx, s.cfg.HandshakeTimeout)
 		}
