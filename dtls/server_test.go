@@ -408,13 +408,23 @@ func TestServerOnNewConnReadsConnectionStateWithoutManualHandshake(t *testing.T)
 
 	onNewConn := func(cc *client.Conn) {
 		dtlsConn, ok := cc.NetConn().(*piondtls.Conn)
-		assert.True(t, ok)
+		if !assert.True(t, ok) {
+			return
+		}
 		// Handshake was already performed by the server before OnNewConn is called,
 		// so ConnectionState() must succeed without a manual HandshakeContext call.
 		state, ok := dtlsConn.ConnectionState()
-		assert.True(t, ok)
+		if !assert.True(t, ok) {
+			return
+		}
+		if !assert.NotEmpty(t, state.PeerCertificates) {
+			return
+		}
 		clientCert, errP := x509.ParseCertificate(state.PeerCertificates[0])
-		assert.NoError(t, errP) //nolint:testifylint
+		if !assert.NoError(t, errP) { //nolint:testifylint
+			return
+		}
+		cc.SetContextValue("client-cert", clientCert)
 		cc.SetContextValue("client-cert", clientCert)
 	}
 	handle := func(w *responsewriter.ResponseWriter[*client.Conn], r *pool.Message) {
