@@ -113,6 +113,10 @@ func (s *Server) closeConnection(cc *client.Conn) {
 	}
 }
 
+func (s *Server) shouldPropagateError(err error) bool {
+	return s.ctx.Err() == nil && !coapNet.IsCancelOrCloseError(err)
+}
+
 func (s *Server) Serve(l *coapNet.UDPConn) error {
 	if s.cfg.BlockwiseSZX > blockwise.SZX1024 {
 		return errors.New("invalid blockwiseSZX")
@@ -133,7 +137,6 @@ func (s *Server) Serve(l *coapNet.UDPConn) error {
 	}()
 
 	m := make([]byte, s.cfg.MaxMessageSize)
-	var wg sync.WaitGroup
 
 	s.cfg.PeriodicRunner(func(now time.Time) bool {
 		s.handleInactivityMonitors(now)
@@ -146,17 +149,10 @@ func (s *Server) Serve(l *coapNet.UDPConn) error {
 		var cm *coapNet.ControlMessage
 		n, err := l.ReadWithOptions(buf, coapNet.WithContext(s.ctx), coapNet.WithGetControlMessage(&cm), coapNet.WithGetRemoteAddr(&raddr))
 		if err != nil {
-			wg.Wait()
-
-			select {
-			case <-s.ctx.Done():
+			if !s.shouldPropagateError(err) {
 				return nil
-			default:
-				if coapNet.IsCancelOrCloseError(err) {
-					return nil
-				}
-				return err
 			}
+			return err
 		}
 		buf = buf[:n]
 
@@ -275,7 +271,7 @@ func getClose(cc *client.Conn) func() {
 	return closeFn
 }
 
-func getConnKey(raddr *net.UDPAddr, laddr *net.UDPAddr) string {
+func getConnKey(raddr, laddr *net.UDPAddr) string {
 	normalizedLocalAddr := *laddr
 	if len(normalizedLocalAddr.IP) > 0 && normalizedLocalAddr.IP.IsMulticast() {
 		// Multicast destination address does not identify a unique server-side source address.

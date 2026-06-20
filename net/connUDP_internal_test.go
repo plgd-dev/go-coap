@@ -20,6 +20,20 @@ const (
 	udp6Network = "udp6"
 )
 
+type multicastWriteArgs struct {
+	ctx     context.Context
+	udpAddr *net.UDPAddr
+	buffer  []byte
+	opts    []MulticastOption
+}
+
+type multicastWriteTestCase struct {
+	name    string
+	args    multicastWriteArgs
+	wantErr bool
+	skip    func() bool
+}
+
 func TestUDPConnWriteWithContext(t *testing.T) {
 	iface := getInterfaceIndex(t)
 	ifaceIpv4 := getIfaceAddr(t, iface, true)
@@ -140,34 +154,15 @@ func TestUDPConnwriteMulticastWithContext(t *testing.T) {
 	ctxCanceled, ctxCancel := context.WithCancel(context.Background())
 	ctxCancel()
 	payload := []byte("hello world")
-
-	ifs, err := net.Interfaces()
-	require.NoError(t, err)
-	var iface net.Interface
-	for _, i := range ifs {
-		if i.Flags&net.FlagMulticast == net.FlagMulticast && i.Flags&net.FlagUp == net.FlagUp {
-			iface = i
-			break
-		}
-	}
-	require.NotEmpty(t, iface)
 	const goosDarwin = "darwin"
 
-	type args struct {
-		ctx     context.Context
-		udpAddr *net.UDPAddr
-		buffer  []byte
-		opts    []MulticastOption
-	}
-	tests := []struct {
-		name    string
-		args    args
-		wantErr bool
-		skip    func() bool
-	}{
+	iface := getFirstUpMulticastInterface(t)
+	require.NotEmpty(t, iface)
+
+	tests := []multicastWriteTestCase{
 		{
 			name: "valid all interfaces",
-			args: args{
+			args: multicastWriteArgs{
 				ctx:     context.Background(),
 				udpAddr: b,
 				buffer:  payload,
@@ -179,7 +174,7 @@ func TestUDPConnwriteMulticastWithContext(t *testing.T) {
 		},
 		{
 			name: "valid any interface",
-			args: args{
+			args: multicastWriteArgs{
 				ctx:     context.Background(),
 				udpAddr: b,
 				buffer:  payload,
@@ -191,7 +186,7 @@ func TestUDPConnwriteMulticastWithContext(t *testing.T) {
 		},
 		{
 			name: "valid first interface",
-			args: args{
+			args: multicastWriteArgs{
 				ctx:     context.Background(),
 				udpAddr: b,
 				buffer:  payload,
@@ -200,7 +195,7 @@ func TestUDPConnwriteMulticastWithContext(t *testing.T) {
 		},
 		{
 			name: "cancelled",
-			args: args{
+			args: multicastWriteArgs{
 				ctx:     ctxCanceled,
 				udpAddr: b,
 				buffer:  payload,
@@ -219,15 +214,7 @@ func TestUDPConnwriteMulticastWithContext(t *testing.T) {
 		errC := c2.Close()
 		require.NoError(t, errC)
 	}()
-	ifaces, err := net.Interfaces()
-	require.NoError(t, err)
-	for _, iface := range ifaces {
-		ifa := iface
-		err = c2.JoinGroup(&ifa, b)
-		if err != nil {
-			t.Logf("fmt cannot join group %v: %v", ifa.Name, err)
-		}
-	}
+	joinMulticastGroupOnAllInterfaces(t, c2, b)
 
 	err = c2.SetMulticastLoopback(true)
 	require.NoError(t, err)
@@ -261,21 +248,52 @@ func TestUDPConnwriteMulticastWithContext(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if tt.skip != nil && tt.skip() {
-				t.Log("skipped")
-				return
-			}
-			err = c1.WriteMulticast(tt.args.ctx, tt.args.udpAddr, tt.args.buffer, tt.args.opts...)
-			c1.LocalAddr()
-			c1.RemoteAddr()
-
-			if tt.wantErr {
-				require.Error(t, err)
-				return
-			}
-			require.NoError(t, err)
+			runWriteMulticastCase(t, c1, tt)
 		})
 	}
+}
+
+func getFirstUpMulticastInterface(t *testing.T) net.Interface {
+	t.Helper()
+	ifs, err := net.Interfaces()
+	require.NoError(t, err)
+	for _, i := range ifs {
+		if i.Flags&net.FlagMulticast == net.FlagMulticast && i.Flags&net.FlagUp == net.FlagUp {
+			return i
+		}
+	}
+	require.FailNow(t, "No suitable multicast interface found")
+	return net.Interface{}
+}
+
+func joinMulticastGroupOnAllInterfaces(t *testing.T, c *UDPConn, group *net.UDPAddr) {
+	t.Helper()
+	ifaces, err := net.Interfaces()
+	require.NoError(t, err)
+	for _, iface := range ifaces {
+		ifa := iface
+		err = c.JoinGroup(&ifa, group)
+		if err != nil {
+			t.Logf("cannot join group %v: %v", ifa.Name, err)
+		}
+	}
+}
+
+func runWriteMulticastCase(t *testing.T, c *UDPConn, tt multicastWriteTestCase) {
+	t.Helper()
+	if tt.skip != nil && tt.skip() {
+		t.Log("skipped")
+		return
+	}
+	err := c.WriteMulticast(tt.args.ctx, tt.args.udpAddr, tt.args.buffer, tt.args.opts...)
+	c.LocalAddr()
+	c.RemoteAddr()
+
+	if tt.wantErr {
+		require.Error(t, err)
+		return
+	}
+	require.NoError(t, err)
 }
 
 func TestControlMessageString(t *testing.T) {
