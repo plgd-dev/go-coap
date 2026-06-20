@@ -49,7 +49,12 @@ func setupCSMExchangeHandler(cfg *client.Config, cc *client.Conn) chan struct{} 
 	csmExchangeDone := make(chan struct{})
 	cc.SetTCPSignalReceivedHandler(func(code codes.Code) {
 		if code == codes.CSM {
-			close(csmExchangeDone)
+			select {
+			case <-csmExchangeDone:
+				// already closed
+			default:
+				close(csmExchangeDone)
+			}
 		}
 	})
 	return csmExchangeDone
