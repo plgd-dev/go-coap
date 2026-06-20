@@ -113,11 +113,8 @@ func (s *Server) closeConnection(cc *client.Conn) {
 	}
 }
 
-func (s *Server) handleServeReadError(err error) error {
-	if s.ctx.Err() != nil || coapNet.IsCancelOrCloseError(err) {
-		return nil
-	}
-	return err
+func (s *Server) shouldPropagateError(err error) bool {
+	return s.ctx.Err() == nil && !coapNet.IsCancelOrCloseError(err)
 }
 
 func (s *Server) Serve(l *coapNet.UDPConn) error {
@@ -152,7 +149,10 @@ func (s *Server) Serve(l *coapNet.UDPConn) error {
 		var cm *coapNet.ControlMessage
 		n, err := l.ReadWithOptions(buf, coapNet.WithContext(s.ctx), coapNet.WithGetControlMessage(&cm), coapNet.WithGetRemoteAddr(&raddr))
 		if err != nil {
-			return s.handleServeReadError(err)
+			if !s.shouldPropagateError(err) {
+				return nil
+			}
+			return err
 		}
 		buf = buf[:n]
 
