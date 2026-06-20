@@ -389,6 +389,146 @@ func createDTLSOptionsConfig() (serverOpts coapNet.DTLSServerOptions, clientOpts
 	return
 }
 
+// TestServerOnNewConnReadsConnectionStateWithoutManualHandshake verifies that
+// the server completes the DTLS handshake before invoking OnNewConn, so the
+// callback can safely call dtlsConn.ConnectionState() without needing to call
+// HandshakeContext itself.
+func TestServerOnNewConnReadsConnectionStateWithoutManualHandshake(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), Timeout)
+	defer cancel()
+	serverCfg, clientCfg, clientSerial, err := createDTLSConfig()
+	require.NoError(t, err)
+
+	ld, err := coapNet.NewDTLSListener("udp4", "", serverCfg)
+	require.NoError(t, err)
+	defer func() {
+		errC := ld.Close()
+		require.NoError(t, errC)
+	}()
+
+	onNewConn := func(cc *client.Conn) {
+		dtlsConn, ok := cc.NetConn().(*piondtls.Conn)
+		assert.True(t, ok)
+		// Handshake was already performed by the server before OnNewConn is called,
+		// so ConnectionState() must succeed without a manual HandshakeContext call.
+		state, ok := dtlsConn.ConnectionState()
+		assert.True(t, ok)
+		clientCert, errP := x509.ParseCertificate(state.PeerCertificates[0])
+		assert.NoError(t, errP) //nolint:testifylint
+		cc.SetContextValue("client-cert", clientCert)
+	}
+	handle := func(w *responsewriter.ResponseWriter[*client.Conn], r *pool.Message) {
+		clientCert, _ := r.Context().Value("client-cert").(*x509.Certificate)
+		require.NotNil(t, clientCert)
+		assert.Equal(t, clientSerial, clientCert.SerialNumber)
+		errH := w.SetResponse(codes.Content, message.TextPlain, bytes.NewReader([]byte("done")))
+		assert.NoError(t, errH)
+	}
+
+	sd := dtls.NewServer(options.WithHandlerFunc(handle), options.WithOnNewConn(onNewConn))
+	var wg sync.WaitGroup
+	defer func() {
+		sd.Stop()
+		wg.Wait()
+	}()
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		errS := sd.Serve(ld)
+		assert.NoError(t, errS)
+	}()
+
+	cc, err := dtls.Dial(ld.Addr().String(), clientCfg)
+	require.NoError(t, err)
+	defer func() {
+		errC := cc.Close()
+		require.NoError(t, errC)
+		<-cc.Done()
+	}()
+
+	_, err = cc.Get(ctx, "/")
+	require.NoError(t, err)
+}
+
+// stalledHandshakeConn wraps a net.Conn and adds a HandshakeContext that blocks
+// until the provided context is cancelled, simulating a stalled DTLS handshake.
+type stalledHandshakeConn struct {
+	net.Conn
+}
+
+func (c *stalledHandshakeConn) HandshakeContext(ctx context.Context) error {
+	<-ctx.Done()
+	return ctx.Err()
+}
+
+// singleConnListener is a minimal Listener that returns one conn on the first
+// AcceptWithContext call and then blocks until its own context is cancelled.
+type singleConnListener struct {
+	ch chan net.Conn
+}
+
+func newSingleConnListener(conn net.Conn) *singleConnListener {
+	l := &singleConnListener{ch: make(chan net.Conn, 1)}
+	l.ch <- conn
+	return l
+}
+
+func (l *singleConnListener) AcceptWithContext(ctx context.Context) (net.Conn, error) {
+	select {
+	case conn := <-l.ch:
+		return conn, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+
+func (l *singleConnListener) Close() error { return nil }
+
+// TestServerHandshakeTimeout verifies that WithDTLSHandshakeTimeout causes
+// stalled DTLS handshakes to be abandoned and reported via the error callback.
+//
+// pion/dtls completes the handshake inside Accept(), so we use a synthetic
+// Listener that returns a connection whose HandshakeContext blocks until the
+// timeout fires, properly exercising the timeout path in serveConnection.
+func TestServerHandshakeTimeout(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), Timeout)
+	defer cancel()
+
+	// The stalled conn blocks HandshakeContext until the context deadline.
+	clientSide, serverSide := net.Pipe()
+	defer func() { _ = clientSide.Close() }()
+	connListener := newSingleConnListener(&stalledHandshakeConn{serverSide})
+
+	errCh := make(chan error, 1)
+	sd := dtls.NewServer(
+		options.WithDTLSHandshakeTimeout(time.Millisecond),
+		options.WithErrors(func(err error) {
+			select {
+			case errCh <- err:
+			default:
+			}
+		}),
+	)
+	var serverWg sync.WaitGroup
+	defer func() {
+		sd.Stop()
+		serverWg.Wait()
+	}()
+	serverWg.Add(1)
+	go func() {
+		defer serverWg.Done()
+		errS := sd.Serve(connListener)
+		assert.NoError(t, errS)
+	}()
+
+	select {
+	case err := <-errCh:
+		require.ErrorContains(t, err, "handshake failed")
+	case <-ctx.Done():
+		t.Fatal("timed out waiting for handshake error callback")
+	}
+}
+
 // TestServerCleanUpConnsWithOptions mirrors TestServerCleanUpConns but uses
 // the generic NewDTLSListener and Dial API.
 func TestServerCleanUpConnsWithOptions(t *testing.T) {
