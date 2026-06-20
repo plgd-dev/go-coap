@@ -14,7 +14,7 @@ type TCPListener struct {
 	closed   atomic.Bool
 }
 
-func newNetTCPListener(network string, addr string) (*net.TCPListener, error) {
+func newNetTCPListener(network, addr string) (*net.TCPListener, error) {
 	a, err := net.ResolveTCPAddr(network, addr)
 	if err != nil {
 		return nil, fmt.Errorf("cannot resolve address: %w", err)

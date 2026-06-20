@@ -21,6 +21,58 @@ type Option interface {
 	TCPClientApply(cfg *client.Config)
 }
 
+func createBlockWiseFactory(cfg *client.Config) func(*client.Conn) *blockwise.BlockWise[*client.Conn] {
+	if !cfg.BlockwiseEnable {
+		return func(*client.Conn) *blockwise.BlockWise[*client.Conn] {
+			return nil
+		}
+	}
+
+	return func(cc *client.Conn) *blockwise.BlockWise[*client.Conn] {
+		v := cc
+		return blockwise.New(
+			v,
+			cfg.BlockwiseTransferTimeout,
+			cfg.Errors,
+			func(token message.Token) (*pool.Message, bool) {
+				return v.GetObservationRequest(token)
+			},
+		)
+	}
+}
+
+func setupCSMExchangeHandler(cfg *client.Config, cc *client.Conn) chan struct{} {
+	if cfg.CSMExchangeTimeout == 0 || cfg.DisablePeerTCPSignalMessageCSMs {
+		return nil
+	}
+
+	csmExchangeDone := make(chan struct{})
+	cc.SetTCPSignalReceivedHandler(func(code codes.Code) {
+		if code == codes.CSM {
+			close(csmExchangeDone)
+		}
+	})
+	return csmExchangeDone
+}
+
+func waitForCSMExchange(cfg *client.Config, cc *client.Conn, csmExchangeDone chan struct{}) error {
+	if csmExchangeDone == nil {
+		return nil
+	}
+
+	defer cc.SetTCPSignalReceivedHandler(nil)
+
+	select {
+	case <-time.After(cfg.CSMExchangeTimeout):
+		err := fmt.Errorf("%v: timeout waiting for CSM exchange with peer", cc.RemoteAddr())
+		cfg.Errors(err)
+		cc.Close()
+		return err
+	case <-csmExchangeDone:
+		return nil
+	}
+}
+
 // Dial creates a client connection to the given target.
 func Dial(target string, opts ...Option) (*client.Conn, error) {
 	cfg := client.DefaultConfig
@@ -74,22 +126,7 @@ func Client(conn net.Conn, opts ...Option) (*client.Conn, error) {
 		errorsFunc(fmt.Errorf("tcp: %w", err))
 	}
 
-	createBlockWise := func(*client.Conn) *blockwise.BlockWise[*client.Conn] {
-		return nil
-	}
-	if cfg.BlockwiseEnable {
-		createBlockWise = func(cc *client.Conn) *blockwise.BlockWise[*client.Conn] {
-			v := cc
-			return blockwise.New(
-				v,
-				cfg.BlockwiseTransferTimeout,
-				cfg.Errors,
-				func(token message.Token) (*pool.Message, bool) {
-					return v.GetObservationRequest(token)
-				},
-			)
-		}
-	}
+	createBlockWise := createBlockWiseFactory(&cfg)
 
 	l := coapNet.NewConn(conn)
 	monitor := cfg.CreateInactivityMonitor()
@@ -105,16 +142,7 @@ func Client(conn net.Conn, opts ...Option) (*client.Conn, error) {
 		return cc.Context().Err() == nil
 	})
 
-	var csmExchangeDone chan struct{}
-	if cfg.CSMExchangeTimeout != 0 && !cfg.DisablePeerTCPSignalMessageCSMs {
-		csmExchangeDone = make(chan struct{})
-
-		cc.SetTCPSignalReceivedHandler(func(code codes.Code) {
-			if code == codes.CSM {
-				close(csmExchangeDone)
-			}
-		})
-	}
+	csmExchangeDone := setupCSMExchangeHandler(&cfg, cc)
 
 	go func() {
 		err := cc.Run()
@@ -123,19 +151,8 @@ func Client(conn net.Conn, opts ...Option) (*client.Conn, error) {
 		}
 	}()
 
-	// if CSM messages are enabled, wait for the CSM messages to be exchanged
-	if cfg.CSMExchangeTimeout != 0 && !cfg.DisablePeerTCPSignalMessageCSMs {
-		select {
-		case <-time.After(cfg.CSMExchangeTimeout):
-			err := fmt.Errorf("%v: timeout waiting for CSM exchange with peer", cc.RemoteAddr())
-			cfg.Errors(err)
-			cc.Close()      // Close connection on timeout
-			return nil, err // or return cc with an error state
-		case <-csmExchangeDone:
-			// CSM exchange completed successfully
-		}
-		// Clear the handler after exchange is complete or timed out
-		cc.SetTCPSignalReceivedHandler(nil)
+	if err := waitForCSMExchange(&cfg, cc, csmExchangeDone); err != nil {
+		return nil, err
 	}
 
 	return cc, nil
