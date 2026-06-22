@@ -490,16 +490,17 @@ func TestServerNewClient(t *testing.T) {
 func TestServerNewConnWildcardBindRoutesResponseToClient(t *testing.T) {
 	newServer := func(l *coapNet.UDPConn, opts ...server.Option) (*server.Server, func()) {
 		var wg sync.WaitGroup
+		var serveErr error
 		s := udp.NewServer(opts...)
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			errS := s.Serve(l)
-			assert.NoError(t, errS)
+			serveErr = s.Serve(l)
 		}()
 		return s, func() {
 			s.Stop()
 			wg.Wait()
+			assert.NoError(t, serveErr)
 		}
 	}
 
@@ -574,8 +575,7 @@ func TestServerNewConnWildcardBindRoutesResponseToClient(t *testing.T) {
 	_, err = resp.ReadBody()
 	require.NoError(t, err)
 
-	time.Sleep(100 * time.Millisecond)
-	require.Equal(t, int32(0), defaultHits.Load())
+	assert.Never(t, func() bool { return defaultHits.Load() != 0 }, 100*time.Millisecond, 10*time.Millisecond)
 }
 
 func TestCheckForLossOrder(t *testing.T) {
