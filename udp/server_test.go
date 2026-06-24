@@ -487,6 +487,97 @@ func TestServerNewClient(t *testing.T) {
 	require.NoError(t, err)
 }
 
+func TestServerNewConnWildcardBindRoutesResponseToClient(t *testing.T) {
+	newServer := func(l *coapNet.UDPConn, opts ...server.Option) (*server.Server, func()) {
+		var wg sync.WaitGroup
+		var serveErr error
+		s := udp.NewServer(opts...)
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			serveErr = s.Serve(l)
+		}()
+		return s, func() {
+			s.Stop()
+			wg.Wait()
+			assert.NoError(t, serveErr)
+		}
+	}
+
+	listenerA, err := coapNet.NewListenUDP("udp4", "0.0.0.0:0")
+	require.NoError(t, err)
+	defer func() {
+		errC := listenerA.Close()
+		require.NoError(t, errC)
+	}()
+
+	listenerB, err := coapNet.NewListenUDP("udp4", "0.0.0.0:0")
+	require.NoError(t, err)
+	defer func() {
+		errC := listenerB.Close()
+		require.NoError(t, errC)
+	}()
+
+	const putPath = "/somepath"
+
+	var defaultHits atomic.Int32
+	routerA := mux.NewRouter()
+	routerA.DefaultHandleFunc(func(_ mux.ResponseWriter, req *mux.Message) {
+		defaultHits.Inc()
+		_, _ = req.ReadBody()
+	})
+
+	routerB := mux.NewRouter()
+	routerB.HandleFunc(putPath, func(w mux.ResponseWriter, r *mux.Message) {
+		if r.Code() != codes.PUT {
+			_ = w.SetResponse(codes.MethodNotAllowed, message.TextPlain, bytes.NewReader([]byte("method not allowed")))
+			return
+		}
+		body, errR := r.ReadBody()
+		if errR != nil {
+			_ = w.SetResponse(codes.BadRequest, message.TextPlain, bytes.NewReader([]byte(errR.Error())))
+			return
+		}
+		_ = w.SetResponse(codes.Created, message.TextPlain, bytes.NewReader(body))
+	})
+
+	serverA, shutdownA := newServer(listenerA, options.WithMux(routerA))
+	defer shutdownA()
+
+	_, shutdownB := newServer(listenerB, options.WithMux(routerB))
+	defer shutdownB()
+
+	target := &net.UDPAddr{IP: net.ParseIP("127.0.0.1").To4(), Port: listenerB.LocalAddr().(*net.UDPAddr).Port}
+
+	var cc *client.Conn
+	require.Eventually(t, func() bool {
+		ccCandidate, errN := serverA.NewConn(target)
+		if errN != nil {
+			return false
+		}
+		cc = ccCandidate
+		return true
+	}, time.Second, 10*time.Millisecond)
+	require.NotNil(t, cc)
+	defer func() {
+		errC := cc.Close()
+		require.NoError(t, errC)
+	}()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	resp, err := cc.Put(ctx, putPath, message.TextPlain, bytes.NewReader([]byte("payload")))
+	require.NoError(t, err)
+	defer cc.ReleaseMessage(resp)
+	require.Equal(t, codes.Created, resp.Code())
+
+	_, err = resp.ReadBody()
+	require.NoError(t, err)
+
+	assert.Never(t, func() bool { return defaultHits.Load() != 0 }, 100*time.Millisecond, 10*time.Millisecond)
+}
+
 func TestCheckForLossOrder(t *testing.T) {
 	ld, err := coapNet.NewListenUDP("udp4", "")
 	require.NoError(t, err)

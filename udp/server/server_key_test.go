@@ -24,3 +24,13 @@ func TestGetConnKeyKeepsUnicastLocalAddressDistinct(t *testing.T) {
 
 	require.NotEqual(t, getConnKey(raddr, laddrA), getConnKey(raddr, laddrB))
 }
+
+func TestGetConnKeyNormalizesUnspecifiedLocalAddress(t *testing.T) {
+	raddr := &net.UDPAddr{IP: net.ParseIP("192.0.2.1"), Port: 56830}
+	unspecifiedV4 := &net.UDPAddr{IP: net.IPv4zero, Port: 5683}
+	unspecifiedV6 := &net.UDPAddr{IP: net.IPv6zero, Port: 5683}
+	normalized := &net.UDPAddr{Port: 5683}
+
+	require.Equal(t, getConnKey(raddr, unspecifiedV4), getConnKey(raddr, normalized))
+	require.Equal(t, getConnKey(raddr, unspecifiedV6), getConnKey(raddr, normalized))
+}
