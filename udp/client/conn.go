@@ -1,6 +1,7 @@
 package client
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -934,6 +935,14 @@ func (cc *Conn) Process(cm *coapNet.ControlMessage, datagram []byte) error {
 	}
 	req.SetControlMessage(cm)
 	req.SetSequence(cc.Sequence())
+	if req.Type() == message.Confirmable && req.Code() >= codes.GET && req.Code() <= codes.DELETE {
+		unknownCriticalOpts := client.GetUnknownCriticalOptions(req.Options())
+		if len(unknownCriticalOpts) > 0 {
+			err = cc.respondUnknownCriticalOptions(req, unknownCriticalOpts)
+			cc.ReleaseMessage(req)
+			return err
+		}
+	}
 	cc.checkMyMessageID(req)
 	drop, err := cc.requestMonitor(cc, req)
 	if err != nil {
@@ -951,6 +960,26 @@ func (cc *Conn) Process(cm *coapNet.ControlMessage, datagram []byte) error {
 	select {
 	case cc.receivedMessageReader.C() <- req:
 	case <-cc.Context().Done():
+	}
+	return nil
+}
+
+func (cc *Conn) respondUnknownCriticalOptions(req *pool.Message, unknownCriticalOpts []message.OptionID) error {
+	resp := cc.AcquireMessage(req.Context())
+	defer cc.ReleaseMessage(resp)
+
+	resp.SetCode(codes.BadOption)
+	resp.SetToken(req.Token())
+	resp.SetType(message.Acknowledgement)
+	resp.SetMessageID(req.MessageID())
+	resp.SetContentFormat(message.TextPlain)
+	resp.SetBody(bytes.NewReader([]byte(client.FormatUnknownCriticalOptionsDiagnostic(unknownCriticalOpts))))
+
+	cc.setControlInformation(req.ControlMessage())
+	cc.upsertControlInformation(resp)
+
+	if err := cc.session.WriteMessage(resp); err != nil {
+		return fmt.Errorf(errFmtWriteResponse, err)
 	}
 	return nil
 }
