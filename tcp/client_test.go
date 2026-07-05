@@ -25,6 +25,14 @@ import (
 	"golang.org/x/sync/semaphore"
 )
 
+func bodyToBytes(t *testing.T, r io.Reader) []byte {
+	t.Helper()
+	buf := bytes.NewBuffer(nil)
+	_, err := buf.ReadFrom(r)
+	require.NoError(t, err)
+	return buf.Bytes()
+}
+
 func TestConnGet(t *testing.T) {
 	type args struct {
 		path string
@@ -839,6 +847,100 @@ func TestConnRequestMonitorDropRequest(t *testing.T) {
 	_, err = cc.Do(deleteReq)
 	require.Error(t, err)
 	require.ErrorIs(t, err, context.DeadlineExceeded)
+}
+
+func TestConnRejectUnknownCriticalOptions(t *testing.T) {
+	l, err := coapNet.NewTCPListener("tcp", "")
+	require.NoError(t, err)
+	defer func() {
+		errC := l.Close()
+		require.NoError(t, errC)
+	}()
+	var wg sync.WaitGroup
+	defer wg.Wait()
+
+	storeMu := sync.Mutex{}
+	storeValue := []byte("atlas-critical-A")
+
+	m := mux.NewRouter()
+	err = m.Handle("/store", mux.HandlerFunc(func(w mux.ResponseWriter, r *mux.Message) {
+		switch r.Code() {
+		case codes.PUT:
+			storeMu.Lock()
+			storeValue = append(storeValue[:0], bodyToBytes(t, r.Body())...)
+			storeMu.Unlock()
+			errS := w.SetResponse(codes.Changed, message.TextPlain, nil)
+			require.NoError(t, errS)
+		case codes.GET:
+			storeMu.Lock()
+			payload := append([]byte(nil), storeValue...)
+			storeMu.Unlock()
+			errS := w.SetResponse(codes.Content, message.TextPlain, bytes.NewReader(payload))
+			require.NoError(t, errS)
+		default:
+			errS := w.SetResponse(codes.MethodNotAllowed, message.TextPlain, nil)
+			require.NoError(t, errS)
+		}
+	}))
+	require.NoError(t, err)
+
+	s := NewServer(options.WithMux(m))
+	defer s.Stop()
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		errS := s.Serve(l)
+		assert.NoError(t, errS)
+	}()
+
+	cc, err := Dial(l.Addr().String())
+	require.NoError(t, err)
+	defer func() {
+		errC := cc.Close()
+		require.NoError(t, errC)
+	}()
+
+	testCases := []struct {
+		name     string
+		options  message.Options
+		optionID string
+	}{
+		{
+			name: "unknown critical option 99",
+			options: message.Options{
+				{ID: 99, Value: []byte{0x01}},
+			},
+			optionID: "99",
+		},
+		{
+			name: "unknown critical option 13 with content format",
+			options: message.Options{
+				{ID: 13, Value: []byte{0x01}},
+			},
+			optionID: "13",
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			defer cancel()
+
+			setupResp, err := cc.Put(ctx, "/store", message.TextPlain, bytes.NewReader([]byte("atlas-critical-A")))
+			require.NoError(t, err)
+			require.Equal(t, codes.Changed, setupResp.Code())
+
+			probeResp, err := cc.Put(ctx, "/store", message.TextPlain, bytes.NewReader([]byte("atlas-critical-B")), tc.options...)
+			require.NoError(t, err)
+			require.Equal(t, codes.BadOption, probeResp.Code())
+			require.Contains(t, string(bodyToBytes(t, probeResp.Body())), tc.optionID)
+
+			getResp, err := cc.Get(ctx, "/store")
+			require.NoError(t, err)
+			require.Equal(t, codes.Content, getResp.Code())
+			require.Equal(t, []byte("atlas-critical-A"), bodyToBytes(t, getResp.Body()))
+		})
+	}
 }
 
 func TestConnWithCSMExchangeTimeout(t *testing.T) {
