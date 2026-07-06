@@ -38,7 +38,7 @@ The go-coap provides servers and clients for DTLS, TCP-TLS, UDP, TCP in golang l
 
 ## Requirements
 
-* Go 1.24 or higher
+* Go 1.25 or higher
 
 ## Samples
 

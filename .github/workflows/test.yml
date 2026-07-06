@@ -23,18 +23,18 @@ jobs:
         os: [ubuntu-latest, windows-latest, macOS-latest]
 
     steps:
-      - name: Set up Go >=1.24 (Windows)
+      - name: Set up Go >=1.25 (Windows)
         if: runner.os == 'Windows'
         uses: actions/setup-go@v6
         with:
-          go-version: ">=1.24"
+          go-version: ">=1.25"
           check-latest: true
 
-      - name: Set up Go >=1.24 (Non-Windows)
+      - name: Set up Go >=1.25 (Non-Windows)
         if: runner.os != 'Windows'
         uses: actions/setup-go@v6
         with:
-          go-version: ">=1.24"
+          go-version: ">=1.25"
           check-latest: true
 
       - run: go version
@@ -119,10 +119,10 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Set up Go >=1.24
+      - name: Set up Go >=1.25
         uses: actions/setup-go@v6
         with:
-          go-version: ">=1.24"
+          go-version: ">=1.25"
 
       - run: go version
 
