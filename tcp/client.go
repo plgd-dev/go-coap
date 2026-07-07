@@ -30,7 +30,7 @@ func createBlockWiseFactory(cfg *client.Config) func(*client.Conn) *blockwise.Bl
 
 	return func(cc *client.Conn) *blockwise.BlockWise[*client.Conn] {
 		v := cc
-		return blockwise.New(
+		bw := blockwise.New(
 			v,
 			cfg.BlockwiseTransferTimeout,
 			cfg.Errors,
@@ -38,6 +38,8 @@ func createBlockWiseFactory(cfg *client.Config) func(*client.Conn) *blockwise.Bl
 				return v.GetObservationRequest(token)
 			},
 		)
+		bw.SetReceivingMessagesCacheMaxEntries(cfg.BlockwiseReceivingMessagesCacheMaxEntries)
+		return bw
 	}
 }
 

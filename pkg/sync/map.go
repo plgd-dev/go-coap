@@ -170,6 +170,29 @@ func (m *Map[K, V]) LoadOrStoreWithFunc(key K, onLoadFunc func(value V) V, creat
 	return v, false
 }
 
+// LoadOrStoreWithFuncAndLimit loads and updates an entry using onLoadFunc, or
+// creates an entry using createFunc, under the map's write lock.
+// A non-positive limit means unlimited. The third result is false when a new
+// entry would exceed the limit; neither callback is invoked in that case.
+func (m *Map[K, V]) LoadOrStoreWithFuncAndLimit(key K, maxEntries int, onLoadFunc func(value V) V, createFunc func() V) (actual V, loaded, accepted bool) {
+	m.mutex.Lock()
+	defer m.mutex.Unlock()
+	v, ok := m.data[key]
+	if ok {
+		if onLoadFunc != nil {
+			v = onLoadFunc(v)
+		}
+		m.data[key] = v
+		return v, true, true
+	}
+	if maxEntries > 0 && len(m.data) >= maxEntries {
+		return actual, false, false
+	}
+	v = createFunc()
+	m.data[key] = v
+	return v, false, true
+}
+
 // ReplaceWithFunc checks whether key exists in the map, invokes the onReplaceFunc callback on the pair (value, ok) and either deletes or stores the element
 // in the map based on the returned values from the onReplaceFunc callback.
 //

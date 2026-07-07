@@ -74,7 +74,7 @@ func Client(conn *net.UDPConn, opts ...Option) *client.Conn {
 	if cfg.BlockwiseEnable {
 		createBlockWise = func(cc *client.Conn) *blockwise.BlockWise[*client.Conn] {
 			v := cc
-			return blockwise.New(
+			bw := blockwise.New(
 				v,
 				cfg.BlockwiseTransferTimeout,
 				cfg.Errors,
@@ -82,6 +82,8 @@ func Client(conn *net.UDPConn, opts ...Option) *client.Conn {
 					return v.GetObservationRequest(token)
 				},
 			)
+			bw.SetReceivingMessagesCacheMaxEntries(cfg.BlockwiseReceivingMessagesCacheMaxEntries)
+			return bw
 		}
 	}
 
