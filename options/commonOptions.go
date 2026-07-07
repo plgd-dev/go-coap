@@ -543,6 +543,37 @@ func WithBlockwise(enable bool, szx blockwise.SZX, transferTimeout time.Duration
 	}
 }
 
+// BlockwiseReceivingMessagesCacheMaxEntriesOpt network option.
+type BlockwiseReceivingMessagesCacheMaxEntriesOpt struct {
+	maxEntries int
+}
+
+func (o BlockwiseReceivingMessagesCacheMaxEntriesOpt) UDPServerApply(cfg *udpServer.Config) {
+	cfg.BlockwiseReceivingMessagesCacheMaxEntries = o.maxEntries
+}
+
+func (o BlockwiseReceivingMessagesCacheMaxEntriesOpt) DTLSServerApply(cfg *dtlsServer.Config) {
+	cfg.BlockwiseReceivingMessagesCacheMaxEntries = o.maxEntries
+}
+
+func (o BlockwiseReceivingMessagesCacheMaxEntriesOpt) UDPClientApply(cfg *udpClient.Config) {
+	cfg.BlockwiseReceivingMessagesCacheMaxEntries = o.maxEntries
+}
+
+func (o BlockwiseReceivingMessagesCacheMaxEntriesOpt) TCPServerApply(cfg *tcpServer.Config) {
+	cfg.BlockwiseReceivingMessagesCacheMaxEntries = o.maxEntries
+}
+
+func (o BlockwiseReceivingMessagesCacheMaxEntriesOpt) TCPClientApply(cfg *tcpClient.Config) {
+	cfg.BlockwiseReceivingMessagesCacheMaxEntries = o.maxEntries
+}
+
+// WithBlockwiseReceivingMessagesCacheMaxEntries configures max entries for
+// in-flight incoming block-wise assemblies. Value 0 means unlimited.
+func WithBlockwiseReceivingMessagesCacheMaxEntries(maxEntries int) BlockwiseReceivingMessagesCacheMaxEntriesOpt {
+	return BlockwiseReceivingMessagesCacheMaxEntriesOpt{maxEntries: maxEntries}
+}
+
 type OnNewConnFunc interface {
 	tcpServer.OnNewConnFunc | udpServer.OnNewConnFunc
 }

@@ -97,7 +97,7 @@ func Client(conn *dtls.Conn, opts ...udp.Option) *udpClient.Conn {
 	if cfg.BlockwiseEnable {
 		createBlockWise = func(cc *udpClient.Conn) *blockwise.BlockWise[*udpClient.Conn] {
 			v := cc
-			return blockwise.New(
+			bw := blockwise.New(
 				v,
 				cfg.BlockwiseTransferTimeout,
 				cfg.Errors,
@@ -105,6 +105,8 @@ func Client(conn *dtls.Conn, opts ...udp.Option) *udpClient.Conn {
 					return v.GetObservationRequest(token)
 				},
 			)
+			bw.SetReceivingMessagesCacheMaxEntries(cfg.BlockwiseReceivingMessagesCacheMaxEntries)
+			return bw
 		}
 	}
 

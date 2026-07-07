@@ -615,3 +615,90 @@ func TestBlockWiseWriteTestMessage(t *testing.T) {
 		})
 	}
 }
+
+func TestProcessReceivedMessageReturnsEntityIncompleteForMissingPreviousFinalBlock(t *testing.T) {
+	bw := New(newTestClient(), time.Second*3600, func(error) {}, nil)
+	ctx := context.Background()
+	token := message.Token{0xAA}
+
+	block0, err := EncodeBlockOption(SZX16, 0, true)
+	require.NoError(t, err)
+	first := bw.cc.AcquireMessage(ctx)
+	first.SetCode(codes.POST)
+	first.SetToken(token)
+	first.SetOptionUint32(message.Block1, block0)
+	first.SetBody(bytes.NewReader(make([]byte, int(SZX16.Size()))))
+	w1 := responsewriter.New(bw.cc.AcquireMessage(ctx), bw.cc)
+	bw.Handle(w1, first, SZX16, uint32(SZX16.Size()), func(_ *responsewriter.ResponseWriter[*testClient], _ *pool.Message) {
+		require.Fail(t, "next must not be called while more blocks follow")
+	})
+	require.Equal(t, codes.Continue, w1.Message().Code())
+
+	block2Final, err := EncodeBlockOption(SZX16, 2, false)
+	require.NoError(t, err)
+	second := bw.cc.AcquireMessage(ctx)
+	second.SetCode(codes.POST)
+	second.SetToken(token)
+	second.SetOptionUint32(message.Block1, block2Final)
+	second.SetBody(bytes.NewReader(make([]byte, int(SZX16.Size()))))
+	w2 := responsewriter.New(bw.cc.AcquireMessage(ctx), bw.cc)
+	bw.Handle(w2, second, SZX16, uint32(SZX16.Size()), func(_ *responsewriter.ResponseWriter[*testClient], _ *pool.Message) {
+		require.Fail(t, "next must not be called for incomplete transfer")
+	})
+	require.Equal(t, codes.RequestEntityIncomplete, w2.Message().Code())
+	require.Empty(t, bw.receivingMessagesCache.LoadAndDeleteAll())
+}
+
+func TestProcessReceivedMessageReturnsEntityIncompleteForSingleFinalNonZeroBlock(t *testing.T) {
+	bw := New(newTestClient(), time.Second*3600, func(error) {}, nil)
+	ctx := context.Background()
+	block2Final, err := EncodeBlockOption(SZX16, 2, false)
+	require.NoError(t, err)
+
+	req := bw.cc.AcquireMessage(ctx)
+	req.SetCode(codes.POST)
+	req.SetToken(message.Token{0xAB})
+	req.SetOptionUint32(message.Block1, block2Final)
+	req.SetBody(bytes.NewReader(make([]byte, int(SZX16.Size()))))
+
+	w := responsewriter.New(bw.cc.AcquireMessage(ctx), bw.cc)
+	bw.Handle(w, req, SZX16, uint32(SZX16.Size()), func(_ *responsewriter.ResponseWriter[*testClient], _ *pool.Message) {
+		require.Fail(t, "next must not be called for incomplete transfer")
+	})
+	require.Equal(t, codes.RequestEntityIncomplete, w.Message().Code())
+}
+
+func TestReceivingMessagesCacheIsBounded(t *testing.T) {
+	var gotErr error
+	bw := New(newTestClient(), time.Second*3600, func(err error) { gotErr = err }, nil)
+	bw.receivingMessagesCacheMaxEntries = 1
+	ctx := context.Background()
+
+	block0, err := EncodeBlockOption(SZX16, 0, true)
+	require.NoError(t, err)
+
+	first := bw.cc.AcquireMessage(ctx)
+	first.SetCode(codes.POST)
+	first.SetToken(message.Token{0x01})
+	first.SetOptionUint32(message.Block1, block0)
+	first.SetBody(bytes.NewReader(make([]byte, int(SZX16.Size()))))
+	w1 := responsewriter.New(bw.cc.AcquireMessage(ctx), bw.cc)
+	bw.Handle(w1, first, SZX16, uint32(SZX16.Size()), func(_ *responsewriter.ResponseWriter[*testClient], _ *pool.Message) {
+		require.Fail(t, "next must not be called while more blocks follow")
+	})
+	require.Equal(t, codes.Continue, w1.Message().Code())
+
+	second := bw.cc.AcquireMessage(ctx)
+	second.SetCode(codes.POST)
+	second.SetToken(message.Token{0x02})
+	second.SetOptionUint32(message.Block1, block0)
+	second.SetBody(bytes.NewReader(make([]byte, int(SZX16.Size()))))
+	w2 := responsewriter.New(bw.cc.AcquireMessage(ctx), bw.cc)
+	bw.Handle(w2, second, SZX16, uint32(SZX16.Size()), func(_ *responsewriter.ResponseWriter[*testClient], _ *pool.Message) {
+		require.Fail(t, "next must not be called when cache is full")
+	})
+	require.Equal(t, codes.ServiceUnavailable, w2.Message().Code())
+	require.Error(t, gotErr)
+	require.ErrorContains(t, gotErr, "receiving messages cache is full")
+	require.Len(t, bw.receivingMessagesCache.LoadAndDeleteAll(), 1)
+}
