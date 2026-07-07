@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"net"
@@ -16,6 +17,7 @@ import (
 	"github.com/plgd-dev/go-coap/v3/net/responsewriter"
 	coapSync "github.com/plgd-dev/go-coap/v3/pkg/sync"
 	"github.com/plgd-dev/go-coap/v3/udp/client"
+	"github.com/plgd-dev/go-coap/v3/udp/coder"
 )
 
 type Server struct {
@@ -117,6 +119,67 @@ func (s *Server) shouldPropagateError(err error) bool {
 	return s.ctx.Err() == nil && !coapNet.IsCancelOrCloseError(err)
 }
 
+func isMalformedMessageError(err error) bool {
+	return errors.Is(err, coder.ErrMessageTruncated) ||
+		errors.Is(err, coder.ErrMessageInvalidVersion) ||
+		errors.Is(err, message.ErrInvalidTokenLen) ||
+		errors.Is(err, message.ErrInvalidOptionHeaderExt) ||
+		errors.Is(err, message.ErrOptionTruncated) ||
+		errors.Is(err, message.ErrOptionUnexpectedExtendMarker) ||
+		errors.Is(err, message.ErrOptionsTooSmall) ||
+		errors.Is(err, message.ErrInvalidEncoding)
+}
+
+func makeResetDatagram(mid int32) []byte {
+	d := make([]byte, 4)
+	// Ver=1, Type=RST(3), TKL=0
+	d[0] = 0x70
+	// Code=0.00 Empty
+	d[1] = 0x00
+	binary.BigEndian.PutUint16(d[2:4], uint16(mid))
+	return d
+}
+
+func (s *Server) maybeRejectMalformedConfirmable(l *coapNet.UDPConn, cc *client.Conn, cm *coapNet.ControlMessage, processErr error) {
+	if !isMalformedMessageError(processErr) {
+		return
+	}
+	var malformedErr *client.MalformedMessageError
+	if !errors.As(processErr, &malformedErr) {
+		return
+	}
+	if malformedErr.InvalidVersion {
+		// RFC 7252 §3: unknown CoAP versions MUST be silently ignored.
+		return
+	}
+	if !malformedErr.HasHeader {
+		return
+	}
+	if malformedErr.Type != message.Confirmable {
+		return
+	}
+	if !message.ValidateMID(malformedErr.MessageID) {
+		return
+	}
+
+	raddr, ok := cc.RemoteAddr().(*net.UDPAddr)
+	if !ok || raddr == nil {
+		return
+	}
+
+	resetDatagram := makeResetDatagram(malformedErr.MessageID)
+	writeOpts := []coapNet.UDPWriteOption{coapNet.WithContext(s.ctx), coapNet.WithRemoteAddr(raddr)}
+	if cm != nil {
+		writeOpts = append(writeOpts, coapNet.WithControlMessage(&coapNet.ControlMessage{
+			IfIndex: cm.GetIfIndex(),
+			Src:     cm.Dst,
+		}))
+	}
+	if err := l.WriteWithOptions(resetDatagram, writeOpts...); err != nil {
+		s.cfg.Errors(fmt.Errorf("%v: cannot send reset for malformed confirmable packet: %w", cc.RemoteAddr(), err))
+	}
+}
+
 func (s *Server) Serve(l *coapNet.UDPConn) error {
 	if s.cfg.BlockwiseSZX > blockwise.SZX1024 {
 		return errors.New("invalid blockwiseSZX")
@@ -174,8 +237,9 @@ func (s *Server) Serve(l *coapNet.UDPConn) error {
 		}
 		err = cc.Process(cm, buf)
 		if err != nil {
-			s.closeConnection(cc)
-			s.cfg.Errors(fmt.Errorf("%v: cannot process packet: %w", cc.RemoteAddr(), err))
+			s.maybeRejectMalformedConfirmable(l, cc, cm, err)
+			s.cfg.Errors(fmt.Errorf("%v: dropping malformed packet: %w", cc.RemoteAddr(), err))
+			continue
 		}
 	}
 }
