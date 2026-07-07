@@ -105,13 +105,19 @@ func (c *Coder) Decode(data []byte, m *message.Message) (int, error) {
 	}
 
 	typ := message.Type((data[0] >> 4) & 0x3)
+	code := codes.Code(data[1])
+	messageID := binary.BigEndian.Uint16(data[2:4])
+	m.Type = typ
+	m.Code = code
+	m.MessageID = int32(messageID)
+	m.Token = nil
+	m.Payload = nil
+	m.Options = m.Options[:0]
+
 	tokenLen := int(data[0] & 0xf)
 	if tokenLen > 8 {
 		return -1, message.ErrInvalidTokenLen
 	}
-
-	code := codes.Code(data[1])
-	messageID := binary.BigEndian.Uint16(data[2:4])
 	data = data[4:]
 	if len(data) < tokenLen {
 		return -1, ErrMessageTruncated
@@ -133,10 +139,7 @@ func (c *Coder) Decode(data []byte, m *message.Message) (int, error) {
 	}
 
 	m.Payload = data
-	m.Code = code
 	m.Token = token
-	m.Type = typ
-	m.MessageID = int32(messageID)
 
 	return size, nil
 }

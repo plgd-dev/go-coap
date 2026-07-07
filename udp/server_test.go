@@ -29,6 +29,29 @@ import (
 	"golang.org/x/sync/semaphore"
 )
 
+func sendAndReadUDPDatagram(t *testing.T, c *net.UDPConn, req []byte) []byte {
+	t.Helper()
+	err := c.SetDeadline(time.Now().Add(time.Second))
+	require.NoError(t, err)
+	_, err = c.Write(req)
+	require.NoError(t, err)
+
+	buf := make([]byte, 1500)
+	n, err := c.Read(buf)
+	require.NoError(t, err)
+	return buf[:n]
+}
+
+func requireResetWithMID(t *testing.T, datagram []byte, mid uint16) {
+	t.Helper()
+	require.GreaterOrEqual(t, len(datagram), 4)
+	first := datagram[0]
+	require.Equal(t, uint8(1), first>>6, "response version must be 1")
+	require.Equal(t, message.Reset, message.Type((first>>4)&0x3), "response type must be RST")
+	require.Equal(t, uint8(0), datagram[1], "response code must be Empty")
+	require.Equal(t, mid, binary.BigEndian.Uint16(datagram[2:4]), "response MID must match request MID")
+}
+
 type mcastreceiver struct {
 	msgs []*pool.Message
 	sync.Mutex
@@ -234,6 +257,59 @@ func TestServerDiscover(t *testing.T) {
 			require.Equal(t, codes.BadRequest, got[0].Code())
 		})
 	}
+}
+
+func TestServerRejectsMalformedConfirmableWithoutTearingDownConnection(t *testing.T) {
+	ld, err := coapNet.NewListenUDP("udp4", "")
+	require.NoError(t, err)
+	defer func() {
+		errC := ld.Close()
+		require.NoError(t, errC)
+	}()
+
+	var newConnCount atomic.Int32
+	s := udp.NewServer(options.WithOnNewConn(func(*client.Conn) {
+		newConnCount.Inc()
+	}))
+	t.Cleanup(func() {
+		s.Stop()
+	})
+
+	var wg sync.WaitGroup
+	t.Cleanup(func() {
+		wg.Wait()
+	})
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		errS := s.Serve(ld)
+		assert.NoError(t, errS)
+	}()
+
+	serverAddr, ok := ld.LocalAddr().(*net.UDPAddr)
+	require.True(t, ok)
+	cli, err := net.DialUDP("udp4", nil, serverAddr)
+	require.NoError(t, err)
+	defer func() {
+		errC := cli.Close()
+		require.NoError(t, errC)
+	}()
+
+	// Create the per-peer connection with a valid ping and verify RST response.
+	pong := sendAndReadUDPDatagram(t, cli, []byte{0x40, 0x00, 0x11, 0x11})
+	requireResetWithMID(t, pong, 0x1111)
+	require.Eventually(t, func() bool {
+		return newConnCount.Load() == 1
+	}, time.Second, 10*time.Millisecond)
+
+	// Malformed CON: version=1, type=CON, TKL=9 (invalid), MID=0x2222.
+	rst := sendAndReadUDPDatagram(t, cli, []byte{0x49, 0x01, 0x22, 0x22})
+	requireResetWithMID(t, rst, 0x2222)
+
+	// Verify the same per-peer connection remains alive and is reused.
+	pong = sendAndReadUDPDatagram(t, cli, []byte{0x40, 0x00, 0x33, 0x33})
+	requireResetWithMID(t, pong, 0x3333)
+	require.Equal(t, int32(1), newConnCount.Load(), "malformed datagram must not recreate per-peer connection")
 }
 
 func TestServerCleanUpConns(t *testing.T) {

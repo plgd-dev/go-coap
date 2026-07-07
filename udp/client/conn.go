@@ -48,6 +48,25 @@ type InactivityMonitor interface {
 	CheckInactivity(now time.Time, cc *Conn)
 }
 
+// MalformedMessageError contains best-effort CoAP header metadata extracted
+// during decode failure. HasHeader indicates whether Type and MessageID are
+// valid and can be used by callers for protocol-level decisions.
+type MalformedMessageError struct {
+	Type           message.Type
+	MessageID      int32
+	HasHeader      bool
+	InvalidVersion bool
+	Err            error
+}
+
+func (e *MalformedMessageError) Error() string {
+	return e.Err.Error()
+}
+
+func (e *MalformedMessageError) Unwrap() error {
+	return e.Err
+}
+
 type Session interface {
 	Context() context.Context
 	Close() error
@@ -929,8 +948,17 @@ func (cc *Conn) Process(cm *coapNet.ControlMessage, datagram []byte) error {
 	req := cc.AcquireMessage(cc.Context())
 	_, err := req.UnmarshalWithDecoder(coder.DefaultCoder, datagram)
 	if err != nil {
+		malformedErr := &MalformedMessageError{Err: err}
+		if len(datagram) >= 1 && datagram[0]>>6 != 1 {
+			malformedErr.InvalidVersion = true
+		}
+		if len(datagram) >= 4 && !malformedErr.InvalidVersion {
+			malformedErr.HasHeader = true
+			malformedErr.Type = req.Type()
+			malformedErr.MessageID = req.MessageID()
+		}
 		cc.ReleaseMessage(req)
-		return err
+		return malformedErr
 	}
 	req.SetControlMessage(cm)
 	req.SetSequence(cc.Sequence())
