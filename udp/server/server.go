@@ -15,6 +15,7 @@ import (
 	"github.com/plgd-dev/go-coap/v3/net/blockwise"
 	"github.com/plgd-dev/go-coap/v3/net/monitor/inactivity"
 	"github.com/plgd-dev/go-coap/v3/net/responsewriter"
+	pkgMath "github.com/plgd-dev/go-coap/v3/pkg/math"
 	coapSync "github.com/plgd-dev/go-coap/v3/pkg/sync"
 	"github.com/plgd-dev/go-coap/v3/udp/client"
 	"github.com/plgd-dev/go-coap/v3/udp/coder"
@@ -130,14 +131,21 @@ func isMalformedMessageError(err error) bool {
 		errors.Is(err, message.ErrInvalidEncoding)
 }
 
-func makeResetDatagram(mid int32) []byte {
+func makeResetDatagram(mid int32) ([]byte, error) {
+	if !message.ValidateMID(mid) {
+		return nil, fmt.Errorf("invalid reset mid: %v", mid)
+	}
 	d := make([]byte, 4)
 	// Ver=1, Type=RST(3), TKL=0
 	d[0] = 0x70
 	// Code=0.00 Empty
 	d[1] = 0x00
-	binary.BigEndian.PutUint16(d[2:4], uint16(mid))
-	return d
+	midU16, err := pkgMath.SafeCastTo[uint16](mid)
+	if err != nil {
+		return nil, fmt.Errorf("invalid reset mid: %w", err)
+	}
+	binary.BigEndian.PutUint16(d[2:4], midU16)
+	return d, nil
 }
 
 func (s *Server) maybeRejectMalformedConfirmable(l *coapNet.UDPConn, cc *client.Conn, cm *coapNet.ControlMessage, processErr error) {
@@ -167,7 +175,11 @@ func (s *Server) maybeRejectMalformedConfirmable(l *coapNet.UDPConn, cc *client.
 		return
 	}
 
-	resetDatagram := makeResetDatagram(malformedErr.MessageID)
+	resetDatagram, err := makeResetDatagram(malformedErr.MessageID)
+	if err != nil {
+		s.cfg.Errors(fmt.Errorf("%v: cannot build reset for malformed confirmable packet: %w", cc.RemoteAddr(), err))
+		return
+	}
 	writeOpts := []coapNet.UDPWriteOption{coapNet.WithContext(s.ctx), coapNet.WithRemoteAddr(raddr)}
 	if cm != nil {
 		writeOpts = append(writeOpts, coapNet.WithControlMessage(&coapNet.ControlMessage{
@@ -178,6 +190,62 @@ func (s *Server) maybeRejectMalformedConfirmable(l *coapNet.UDPConn, cc *client.
 	if err := l.WriteWithOptions(resetDatagram, writeOpts...); err != nil {
 		s.cfg.Errors(fmt.Errorf("%v: cannot send reset for malformed confirmable packet: %w", cc.RemoteAddr(), err))
 	}
+}
+
+func isUnknownVersionError(err error) bool {
+	var malformedErr *client.MalformedMessageError
+	if errors.As(err, &malformedErr) {
+		return malformedErr.InvalidVersion
+	}
+	return errors.Is(err, coder.ErrMessageInvalidVersion)
+}
+
+type incomingDatagram struct {
+	buf   []byte
+	raddr *net.UDPAddr
+	cm    *coapNet.ControlMessage
+}
+
+func (s *Server) readIncomingDatagram(l *coapNet.UDPConn, buf []byte) (incomingDatagram, error) {
+	var raddr *net.UDPAddr
+	var cm *coapNet.ControlMessage
+	n, err := l.ReadWithOptions(buf, coapNet.WithContext(s.ctx), coapNet.WithGetControlMessage(&cm), coapNet.WithGetRemoteAddr(&raddr))
+	if err != nil {
+		return incomingDatagram{}, err
+	}
+	return incomingDatagram{
+		buf:   buf[:n],
+		raddr: raddr,
+		cm:    cm,
+	}, nil
+}
+
+func (s *Server) resolvePacketLocalAddr(l *coapNet.UDPConn, cm *coapNet.ControlMessage) (*net.UDPAddr, error) {
+	// UDPConn.LocalAddr() only takes into account the address it is bound to.
+	// In the case of a wildcard address, the actual destination address is in the control message.
+	// On server-initiated exchanges, listener's LocalAddr can be used as the client has no assumptions of the source.
+	laddr, err := s.getListenerLocalAddr(l)
+	if err != nil {
+		return nil, err
+	}
+	if cm != nil && len(cm.Dst) > 0 && !cm.Dst.IsMulticast() {
+		laddr.IP = cm.Dst
+	}
+	return laddr, nil
+}
+
+func (s *Server) handleProcessError(l *coapNet.UDPConn, cc *client.Conn, cm *coapNet.ControlMessage, err error) {
+	if isMalformedMessageError(err) {
+		s.maybeRejectMalformedConfirmable(l, cc, cm, err)
+		if isUnknownVersionError(err) {
+			// RFC 7252 §3: unknown CoAP versions MUST be silently ignored.
+			return
+		}
+		s.cfg.Errors(fmt.Errorf("%v: dropping malformed packet: %w", cc.RemoteAddr(), err))
+		return
+	}
+	s.closeConnection(cc)
+	s.cfg.Errors(fmt.Errorf("%v: cannot process packet: %w", cc.RemoteAddr(), err))
 }
 
 func (s *Server) Serve(l *coapNet.UDPConn) error {
@@ -207,38 +275,27 @@ func (s *Server) Serve(l *coapNet.UDPConn) error {
 	})
 
 	for {
-		buf := m
-		var raddr *net.UDPAddr
-		var cm *coapNet.ControlMessage
-		n, err := l.ReadWithOptions(buf, coapNet.WithContext(s.ctx), coapNet.WithGetControlMessage(&cm), coapNet.WithGetRemoteAddr(&raddr))
+		packet, err := s.readIncomingDatagram(l, m)
 		if err != nil {
 			if !s.shouldPropagateError(err) {
 				return nil
 			}
 			return err
 		}
-		buf = buf[:n]
 
-		// UDPConn.LocalAddr() only takes into account the address it is bound to.
-		// In the case of a wildcard address, the actual destination address is in the control message.
-		// On server-initiated exchanges, listener's LocalAddr can be used as the client has no assumptions of the source.
-		laddr, err := s.getListenerLocalAddr(l)
+		laddr, err := s.resolvePacketLocalAddr(l, packet.cm)
 		if err != nil {
 			return err
 		}
-		if cm != nil && len(cm.Dst) > 0 && !cm.Dst.IsMulticast() {
-			laddr.IP = cm.Dst
-		}
 
-		cc, err := s.getConn(l, raddr, laddr, true)
+		cc, err := s.getConn(l, packet.raddr, laddr, true)
 		if err != nil {
-			s.cfg.Errors(fmt.Errorf("%v: cannot get client connection: %w", raddr, err))
+			s.cfg.Errors(fmt.Errorf("%v: cannot get client connection: %w", packet.raddr, err))
 			continue
 		}
-		err = cc.Process(cm, buf)
+		err = cc.Process(packet.cm, packet.buf)
 		if err != nil {
-			s.maybeRejectMalformedConfirmable(l, cc, cm, err)
-			s.cfg.Errors(fmt.Errorf("%v: dropping malformed packet: %w", cc.RemoteAddr(), err))
+			s.handleProcessError(l, cc, packet.cm, err)
 			continue
 		}
 	}
