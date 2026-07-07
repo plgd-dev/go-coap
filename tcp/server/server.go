@@ -188,7 +188,7 @@ func (s *Server) createConn(connection *coapNet.Conn, inactivityMonitor client.I
 	}
 	if s.cfg.BlockwiseEnable {
 		createBlockWise = func(cc *client.Conn) *blockwise.BlockWise[*client.Conn] {
-			return blockwise.New(
+			bw := blockwise.New(
 				cc,
 				s.cfg.BlockwiseTransferTimeout,
 				s.cfg.Errors,
@@ -196,6 +196,8 @@ func (s *Server) createConn(connection *coapNet.Conn, inactivityMonitor client.I
 					return nil, false
 				},
 			)
+			bw.SetReceivingMessagesCacheMaxEntries(s.cfg.BlockwiseReceivingMessagesCacheMaxEntries)
+			return bw
 		}
 	}
 	cfg := client.DefaultConfig

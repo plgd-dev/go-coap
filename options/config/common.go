@@ -20,19 +20,20 @@ type (
 )
 
 type Common[C responsewriter.Client] struct {
-	LimitClientParallelRequests         int64
-	LimitClientEndpointParallelRequests int64
-	Ctx                                 context.Context
-	Errors                              ErrorFunc
-	PeriodicRunner                      periodic.Func
-	MessagePool                         *pool.Pool
-	GetToken                            client.GetTokenFunc
-	MaxMessageSize                      uint32
-	BlockwiseTransferTimeout            time.Duration
-	BlockwiseSZX                        blockwise.SZX
-	BlockwiseEnable                     bool
-	ProcessReceivedMessage              ProcessReceivedMessageFunc[C]
-	ReceivedMessageQueueSize            int
+	LimitClientParallelRequests               int64
+	LimitClientEndpointParallelRequests       int64
+	Ctx                                       context.Context
+	Errors                                    ErrorFunc
+	PeriodicRunner                            periodic.Func
+	MessagePool                               *pool.Pool
+	GetToken                                  client.GetTokenFunc
+	MaxMessageSize                            uint32
+	BlockwiseTransferTimeout                  time.Duration
+	BlockwiseReceivingMessagesCacheMaxEntries int
+	BlockwiseSZX                              blockwise.SZX
+	BlockwiseEnable                           bool
+	ProcessReceivedMessage                    ProcessReceivedMessageFunc[C]
+	ReceivedMessageQueueSize                  int
 }
 
 func NewCommon[C responsewriter.Client]() Common[C] {
@@ -45,6 +46,7 @@ func NewCommon[C responsewriter.Client]() Common[C] {
 		BlockwiseSZX:             blockwise.SZX1024,
 		BlockwiseEnable:          true,
 		BlockwiseTransferTimeout: time.Second * 3,
+		BlockwiseReceivingMessagesCacheMaxEntries: blockwise.DefaultReceivingMessagesCacheMaxEntries,
 		PeriodicRunner: func(f func(now time.Time) bool) {
 			go func() {
 				for f(time.Now()) {

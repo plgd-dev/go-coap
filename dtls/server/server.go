@@ -218,7 +218,7 @@ func (s *Server) createConn(connection *coapNet.Conn, inactivityMonitor udpClien
 	if s.cfg.BlockwiseEnable {
 		createBlockWise = func(cc *udpClient.Conn) *blockwise.BlockWise[*udpClient.Conn] {
 			v := cc
-			return blockwise.New(
+			bw := blockwise.New(
 				v,
 				s.cfg.BlockwiseTransferTimeout,
 				s.cfg.Errors,
@@ -226,6 +226,8 @@ func (s *Server) createConn(connection *coapNet.Conn, inactivityMonitor udpClien
 					return v.GetObservationRequest(token)
 				},
 			)
+			bw.SetReceivingMessagesCacheMaxEntries(s.cfg.BlockwiseReceivingMessagesCacheMaxEntries)
+			return bw
 		}
 	}
 	session := NewSession(
