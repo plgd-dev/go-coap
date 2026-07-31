@@ -602,6 +602,9 @@ func (cc *Conn) AsyncPing(receivedPong func()) (func(), error) {
 	req.SetCode(codes.Empty)
 	mid := cc.GetMessageID()
 	req.SetMessageID(mid)
+	// Keepalive pings must reuse the original destination IP as the packet source
+	// (e.g. Fly.io public IP), same as regular request/response writes.
+	cc.upsertControlInformation(req)
 	if _, loaded := cc.midHandlerContainer.LoadOrStore(mid, &midElement{
 		handler: func(_ *responsewriter.ResponseWriter[*Conn], r *pool.Message) {
 			if r.Type() == message.Reset || r.Type() == message.Acknowledgement {
