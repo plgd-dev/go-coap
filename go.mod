@@ -4,7 +4,7 @@ go 1.25.0
 
 require (
 	github.com/dsnet/golib/memfile v1.0.0
-	github.com/pion/dtls/v3 v3.1.5
+	github.com/pion/dtls/v3 v3.1.8
 	github.com/stretchr/testify v1.11.1
 	go.uber.org/atomic v1.11.0
 	golang.org/x/exp v0.0.0-20260611194520-c48552f49976
