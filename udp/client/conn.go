@@ -19,6 +19,7 @@ import (
 	limitparallelrequests "github.com/plgd-dev/go-coap/v3/net/client/limitParallelRequests"
 	"github.com/plgd-dev/go-coap/v3/net/monitor/inactivity"
 	"github.com/plgd-dev/go-coap/v3/net/observation"
+	"github.com/plgd-dev/go-coap/v3/net/qblock"
 	"github.com/plgd-dev/go-coap/v3/net/responsewriter"
 	"github.com/plgd-dev/go-coap/v3/options/config"
 	"github.com/plgd-dev/go-coap/v3/pkg/cache"
@@ -192,6 +193,7 @@ type Conn struct {
 	requestMonitor    RequestMonitorFunc
 
 	blockWise          *blockwise.BlockWise[*Conn]
+	qblockReceiver     *qblockReceiver
 	observationHandler *observation.Handler[*Conn]
 	transmission       *Transmission
 	messagePool        *pool.Pool
@@ -245,10 +247,11 @@ func (cc *Conn) Transmission() *Transmission {
 }
 
 type ConnOptions struct {
-	createBlockWise   func(cc *Conn) *blockwise.BlockWise[*Conn]
-	inactivityMonitor InactivityMonitor
-	requestMonitor    RequestMonitorFunc
-	responseMsgCache  MessageCache
+	createBlockWise      func(cc *Conn) *blockwise.BlockWise[*Conn]
+	createQBlockReceiver func(cc *Conn) *qblockReceiver
+	inactivityMonitor    InactivityMonitor
+	requestMonitor       RequestMonitorFunc
+	responseMsgCache     MessageCache
 }
 
 type Option = func(opts *ConnOptions)
@@ -314,6 +317,9 @@ func NewConnWithOpts(session Session, cfg *Config, opts ...Option) *Conn {
 		createBlockWise: func(*Conn) *blockwise.BlockWise[*Conn] {
 			return nil
 		},
+		createQBlockReceiver: func(*Conn) *qblockReceiver {
+			return nil
+		},
 		inactivityMonitor: inactivity.NewNilMonitor[*Conn](),
 		requestMonitor: func(*Conn, *pool.Message) (bool, error) {
 			return false, nil
@@ -348,6 +354,7 @@ func NewConnWithOpts(session Session, cfg *Config, opts ...Option) *Conn {
 	}
 	cc.msgID.Store(pkgMath.CastTo[uint32](cfg.GetMID() - 0xffff/2))
 	cc.blockWise = cfgOpts.createBlockWise(&cc)
+	cc.qblockReceiver = cfgOpts.createQBlockReceiver(&cc)
 	limitParallelRequests := limitparallelrequests.New(cfg.LimitClientParallelRequests, cfg.LimitClientEndpointParallelRequests, cc.do, cc.doObserve)
 	cc.observationHandler = observation.NewHandler(&cc, cfg.Handler, limitParallelRequests.Do)
 	cc.Client = client.New(&cc, cc.observationHandler, cfg.GetToken, limitParallelRequests)
@@ -406,6 +413,7 @@ func (cc *Conn) doInternal(req *pool.Message) (*pool.Message, error) {
 	}
 
 	respChan := make(chan *pool.Message, 1)
+	qblockErrChan := make(chan error, 1)
 	if _, loaded := cc.tokenHandlerContainer.LoadOrStore(token.Hash(), func(_ *responsewriter.ResponseWriter[*Conn], r *pool.Message) {
 		r.Hijack()
 		select {
@@ -417,7 +425,21 @@ func (cc *Conn) doInternal(req *pool.Message) (*pool.Message, error) {
 	}
 	defer func() {
 		_, _ = cc.tokenHandlerContainer.LoadAndDelete(token.Hash())
+		if cc.qblockReceiver != nil {
+			cc.qblockReceiver.abandon(token)
+		}
 	}()
+	if cc.qblockReceiver != nil {
+		_, err := cc.qblockReceiver.prepare(req, func(err error) {
+			select {
+			case qblockErrChan <- err:
+			default:
+			}
+		})
+		if err != nil {
+			return nil, err
+		}
+	}
 	err := cc.writeMessage(req)
 	if err != nil {
 		return nil, fmt.Errorf(errFmtWriteRequest, err)
@@ -428,6 +450,8 @@ func (cc *Conn) doInternal(req *pool.Message) (*pool.Message, error) {
 		return nil, req.Context().Err()
 	case <-cc.Context().Done():
 		return nil, fmt.Errorf("connection was closed: %w", cc.session.Context().Err())
+	case err := <-qblockErrChan:
+		return nil, err
 	case resp := <-respChan:
 		return resp, nil
 	}
@@ -669,6 +693,9 @@ func (cc *Conn) handle(w *responsewriter.ResponseWriter[*Conn], m *pool.Message)
 		// msg was processed by token handler - just drop it.
 		return
 	}
+	if cc.qblockReceiver != nil && cc.qblockReceiver.handle(m) {
+		return
+	}
 	if cc.blockWise != nil {
 		cc.blockWise.Handle(w, m, cc.blockwiseSZX, cc.session.MaxMessageSize(), func(rw *responsewriter.ResponseWriter[*Conn], rm *pool.Message) {
 			if h, ok := cc.tokenHandlerContainer.LoadAndDelete(rm.Token().Hash()); ok {
@@ -807,6 +834,9 @@ func (cc *Conn) handleReq(w *responsewriter.ResponseWriter[*Conn], req *pool.Mes
 	}
 
 	w.Message().SetModified(false)
+	if cc.handleDisabledQBlock(w, req) {
+		return
+	}
 	reqType := req.Type()
 	reqMessageID := req.MessageID()
 	cc.handle(w, req)
@@ -927,7 +957,7 @@ func (cc *Conn) Process(cm *coapNet.ControlMessage, datagram []byte) error {
 		return fmt.Errorf("max message size(%v) was exceeded %v", cc.session.MaxMessageSize(), len(datagram))
 	}
 	req := cc.AcquireMessage(cc.Context())
-	_, err := req.UnmarshalWithDecoder(coder.DefaultCoder, datagram)
+	_, err := req.UnmarshalWithDecoder(qblock.Decoder{}, datagram)
 	if err != nil {
 		cc.ReleaseMessage(req)
 		return err
