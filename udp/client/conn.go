@@ -447,6 +447,7 @@ func (cc *Conn) doInternal(req *pool.Message) (*pool.Message, error) {
 	respChan := make(chan *pool.Message, 1)
 	qblockErrChan := make(chan error, 1)
 	preparedQBlock := false
+	preparedQ1 := false
 	if _, loaded := cc.tokenHandlerContainer.LoadOrStore(token.Hash(), func(_ *responsewriter.ResponseWriter[*Conn], r *pool.Message) {
 		r.Hijack()
 		select {
@@ -465,6 +466,7 @@ func (cc *Conn) doInternal(req *pool.Message) (*pool.Message, error) {
 		}
 	}()
 	if cc.qblockClient != nil {
+		canPrepareQ1 := cc.qblockClient.canPrepareQ1(req)
 		prepared, err := cc.qblockClient.prepare(req, func(err error) {
 			select {
 			case qblockErrChan <- err:
@@ -475,10 +477,13 @@ func (cc *Conn) doInternal(req *pool.Message) (*pool.Message, error) {
 			return nil, err
 		}
 		preparedQBlock = prepared
+		preparedQ1 = prepared && canPrepareQ1
 	}
-	err := cc.writeMessage(req)
-	if err != nil {
-		return nil, fmt.Errorf(errFmtWriteRequest, err)
+	if !preparedQ1 {
+		err := cc.writeMessage(req)
+		if err != nil {
+			return nil, fmt.Errorf(errFmtWriteRequest, err)
+		}
 	}
 	cc.receivedMessageReader.TryToReplaceLoop()
 	connectionClosed := func() error {
@@ -563,6 +568,15 @@ func (cc *Conn) claimFreshQBlockToken() (message.Token, error) {
 func (cc *Conn) do(req *pool.Message) (*pool.Message, error) {
 	if cc.blockWise == nil {
 		return cc.doInternal(req)
+	}
+	if cc.qblockClient != nil && cc.qblockClient.canPrepareQ1(req) {
+		privateReq := cc.AcquireMessage(req.Context())
+		if err := req.Clone(privateReq); err != nil {
+			cc.ReleaseMessage(privateReq)
+			return nil, err
+		}
+		defer cc.ReleaseMessage(privateReq)
+		return cc.doInternal(privateReq)
 	}
 	resp, err := cc.blockWise.Do(req, cc.blockwiseSZX, cc.session.MaxMessageSize(), func(bwReq *pool.Message) (*pool.Message, error) {
 		if cc.qblockClient != nil && cc.qblockClient.canPrepare(bwReq) {

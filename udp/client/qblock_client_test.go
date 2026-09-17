@@ -205,8 +205,8 @@ func TestQBlockClientSerializesConcurrentOutputBursts(t *testing.T) {
 	<-firstDone
 	<-tickDone
 
-	requireQ1Burst(t, session.writesFor(first), []uint32{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10}, first.requestTag)
-	requireQ1Burst(t, session.writesSnapshot(), []uint32{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10}, first.requestTag)
+	requireQ1Burst(t, session.writesFor(first), codes.POST, []uint32{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10}, first.requestTag, bytes.Repeat([]byte{'a'}, 176))
+	requireQ1Burst(t, session.writesSnapshot(), codes.POST, []uint32{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10}, first.requestTag, bytes.Repeat([]byte{'a'}, 176))
 }
 
 func startQ1TransferForTest(t *testing.T, cc *Conn, payload []byte) (*qblockTransfer, <-chan struct{}) {
@@ -259,14 +259,23 @@ func startQ1TransferForTest(t *testing.T, cc *Conn, payload []byte) (*qblockTran
 	return transfer, done
 }
 
-func requireQ1Burst(t *testing.T, writes []qblockTestWrite, numbers []uint32, requestTag []byte) {
+func requireQ1Burst(t *testing.T, writes []qblockTestWrite, code codes.Code, numbers []uint32, requestTag, body []byte) {
 	t.Helper()
 	require.Len(t, writes, len(numbers))
+	seenTokens := make(map[string]struct{}, len(writes))
+	seenMIDs := make(map[int32]struct{}, len(writes))
+	var payload []byte
 	for index, write := range writes {
-		require.Equal(t, codes.POST, write.code)
+		require.Equal(t, code, write.code)
 		require.Equal(t, message.NonConfirmable, write.typ)
 		require.NotZero(t, write.mid)
-		require.Equal(t, bytes.Repeat([]byte{'a'}, 16), write.payload)
+		_, duplicate := seenTokens[string(write.token)]
+		require.False(t, duplicate)
+		seenTokens[string(write.token)] = struct{}{}
+		_, duplicate = seenMIDs[write.mid]
+		require.False(t, duplicate)
+		seenMIDs[write.mid] = struct{}{}
+		payload = append(payload, write.payload...)
 		tag, err := write.options.GetBytes(message.RequestTag)
 		require.NoError(t, err)
 		require.Equal(t, requestTag, tag)
@@ -274,6 +283,204 @@ func requireQ1Burst(t *testing.T, writes []qblockTestWrite, numbers []uint32, re
 		require.NoError(t, err)
 		require.Equal(t, qblock.Block{Number: numbers[index], More: index+1 < len(numbers), SZX: blockwise.SZX16}, block)
 	}
+	require.Equal(t, body, payload)
+}
+
+func TestQBlockClientPreparesPOSTAsQ1Burst(t *testing.T) {
+	cc, session := newPrivateQBlockClientConnWithTokens(t,
+		[]message.Token{{0xa1}, {0xb1}, {0xb2}, {0xb3}},
+	)
+	body := bytes.Repeat([]byte{'x'}, 48)
+	request := newPOSTWithBody(t, cc, message.Token{0x01}, body)
+	defer cc.ReleaseMessage(request)
+
+	prepared, err := cc.qblockClient.prepare(request, func(error) {})
+
+	require.NoError(t, err)
+	require.True(t, prepared)
+	writes := session.writesSnapshot()
+	requireQ1Burst(t, writes, codes.POST, []uint32{0, 1, 2}, []byte{0xa1}, body)
+	require.Equal(t, []message.Token{{0xb1}, {0xb2}, {0xb3}}, []message.Token{writes[0].token, writes[1].token, writes[2].token})
+	for _, write := range writes {
+		require.Equal(t, uint32(48), mustOptionUint32(t, write.options, message.Size1))
+		require.Equal(t, []byte{0xa1}, mustOptionBytes(t, write.options, message.RequestTag))
+		format, err := write.options.ContentFormat()
+		require.NoError(t, err)
+		require.Equal(t, message.TextPlain, format)
+	}
+}
+
+func TestQBlockClientPreparesPUTAsQ1Burst(t *testing.T) {
+	cc, session := newPrivateQBlockClientConnWithTokens(t,
+		[]message.Token{{0xa2}, {0xc1}},
+	)
+	body := []byte("0123456789abcdef")
+	request := newPOSTWithBody(t, cc, message.Token{0x03}, body)
+	defer cc.ReleaseMessage(request)
+	request.SetCode(codes.PUT)
+
+	prepared, err := cc.qblockClient.prepare(request, func(error) {})
+
+	require.NoError(t, err)
+	require.True(t, prepared)
+	requireQ1Burst(t, session.writesSnapshot(), codes.PUT, []uint32{0}, []byte{0xa2}, body)
+}
+
+func TestQBlockClientLeavesUnsupportedQ1ShapesOrdinary(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(*testing.T, *pool.Message)
+	}{
+		{"Observe", func(_ *testing.T, req *pool.Message) { req.SetOptionUint32(message.Observe, 0) }},
+		{"Block1", func(t *testing.T, req *pool.Message) {
+			value, err := blockwise.EncodeBlockOption(blockwise.SZX16, 0, true)
+			require.NoError(t, err)
+			req.SetOptionUint32(message.Block1, value)
+		}},
+		{"Block2", func(t *testing.T, req *pool.Message) {
+			value, err := blockwise.EncodeBlockOption(blockwise.SZX16, 0, true)
+			require.NoError(t, err)
+			req.SetOptionUint32(message.Block2, value)
+		}},
+		{"QBlock1", func(t *testing.T, req *pool.Message) {
+			value, err := qblock.EncodeBlock(qblock.Block{Number: 0, More: true, SZX: blockwise.SZX16})
+			require.NoError(t, err)
+			req.SetOptionUint32(message.QBlock1, value)
+		}},
+		{"QBlock2", func(t *testing.T, req *pool.Message) {
+			value, err := qblock.EncodeBlock(qblock.Block{Number: 0, More: true, SZX: blockwise.SZX16})
+			require.NoError(t, err)
+			req.SetOptionUint32(message.QBlock2, value)
+		}},
+		{"WithoutBody", func(_ *testing.T, req *pool.Message) { req.SetBody(nil) }},
+		{"Multicast", func(_ *testing.T, req *pool.Message) {
+			req.SetControlMessage(&coapNet.ControlMessage{Dst: net.ParseIP("224.0.1.187")})
+		}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			cc := newPrivateQBlockClientConn(t)
+			req := newPOSTWithBody(t, cc, message.Token{0x02}, []byte("body"))
+			defer cc.ReleaseMessage(req)
+			test.mutate(t, req)
+
+			prepared, err := cc.qblockClient.prepare(req, func(error) {})
+
+			require.NoError(t, err)
+			require.False(t, prepared)
+			requireQBlockClientEmpty(t, cc)
+		})
+	}
+}
+
+func TestQBlockClientQ1StartFailureRollsBackReservationAndState(t *testing.T) {
+	managerConfig := qblock.DefaultManagerConfig()
+	managerConfig.Transfer.MaxBodySize = 4
+	managerConfig.MaxRetainedBytes = 4
+	tokens := []message.Token{{0xa3}, {0xd1}}
+	next := 0
+	getToken := func() (message.Token, error) {
+		token := bytes.Clone(tokens[next])
+		next++
+		return token, nil
+	}
+	session := &qblockTestSession{ctx: context.Background()}
+	cfg := DefaultConfig
+	cfg.BlockwiseEnable = false
+	cfg.BlockwiseSZX = blockwise.SZX16
+	cfg.GetToken = getToken
+	cc := NewConnWithOpts(session, &cfg,
+		withQBlockClient(qblockClientConfig{Manager: managerConfig, Now: time.Now}),
+	)
+	request := newPOSTWithBody(t, cc, message.Token{0x04}, []byte("large"))
+	defer cc.ReleaseMessage(request)
+
+	prepared, err := cc.qblockClient.prepare(request, func(error) {})
+
+	require.Error(t, err)
+	require.False(t, prepared)
+	require.Empty(t, session.writesSnapshot())
+	requireQBlockClientEmpty(t, cc)
+	require.NoError(t, cc.claimToken(message.Token{0xd1}, tokenOwnerRequest))
+	cc.releaseToken(message.Token{0xd1}, tokenOwnerRequest)
+}
+
+func TestQBlockClientCopiesQ1BodyAndOptionsBeforeStarting(t *testing.T) {
+	managerConfig := qblock.DefaultManagerConfig()
+	managerConfig.Transfer.MaxPayloads = 3
+	now := time.Unix(100, 0)
+	tokens := []message.Token{{0xa4}, {0xe1}, {0xe2}, {0xe3}, {0xe4}}
+	next := 0
+	getToken := func() (message.Token, error) {
+		token := bytes.Clone(tokens[next])
+		next++
+		return token, nil
+	}
+	session := &qblockTestSession{ctx: context.Background()}
+	cfg := DefaultConfig
+	cfg.BlockwiseEnable = false
+	cfg.BlockwiseSZX = blockwise.SZX16
+	cfg.GetToken = getToken
+	cc := NewConnWithOpts(session, &cfg,
+		withQBlockClient(qblockClientConfig{Manager: managerConfig, Now: func() time.Time { return now }}),
+	)
+	body := bytes.Repeat([]byte{'x'}, 64)
+	reader := bytes.NewReader(body)
+	_, err := reader.Seek(5, io.SeekStart)
+	require.NoError(t, err)
+	request := newPOSTWithBody(t, cc, message.Token{0x05}, body)
+	defer cc.ReleaseMessage(request)
+	request.SetBody(reader)
+
+	prepared, err := cc.qblockClient.prepare(request, func(error) {})
+
+	require.NoError(t, err)
+	require.True(t, prepared)
+	position, err := reader.Seek(0, io.SeekCurrent)
+	require.NoError(t, err)
+	require.Equal(t, int64(5), position)
+	require.Len(t, session.writesSnapshot(), 3)
+	copy(body, bytes.Repeat([]byte{'y'}, len(body)))
+	require.NoError(t, request.SetPath("/changed"))
+	request.SetContentFormat(message.AppJSON)
+	cc.qblockClient.Tick(now.Add(2 * time.Second))
+
+	writes := session.writesSnapshot()
+	require.Len(t, writes, 4)
+	last := writes[3]
+	require.Equal(t, bytes.Repeat([]byte{'x'}, 16), last.payload)
+	path, err := last.options.Path()
+	require.NoError(t, err)
+	require.Equal(t, "/upload", path)
+	format, err := last.options.ContentFormat()
+	require.NoError(t, err)
+	require.Equal(t, message.TextPlain, format)
+}
+
+func TestDoUsesQ1BeforeClassicBlockwiseWithoutReplay(t *testing.T) {
+	cc, session := newPrivateQBlockClientConnWithTokens(t,
+		[]message.Token{{0xa5}, {0xf1}, {0xf2}, {0xf3}},
+	)
+	cc.blockWise = blockwise.New(cc, time.Hour, func(error) {}, nil)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	body := bytes.Repeat([]byte{'z'}, 48)
+	request := newPOSTWithBody(t, cc, message.Token{0x06}, body)
+	defer cc.ReleaseMessage(request)
+	request.SetContext(ctx)
+
+	_, err := cc.do(request)
+
+	require.ErrorIs(t, err, context.Canceled)
+	writes := session.writesSnapshot()
+	requireQ1Burst(t, writes, codes.POST, []uint32{0, 1, 2}, []byte{0xa5}, body)
+	for _, write := range writes {
+		require.False(t, write.options.HasOption(message.Block1))
+	}
+	position, seekErr := request.Body().Seek(0, io.SeekCurrent)
+	require.NoError(t, seekErr)
+	require.Equal(t, int64(0), position)
+	requireQBlockClientEmpty(t, cc)
 }
 
 func TestQBlockPrepareInitialGET(t *testing.T) {
@@ -1031,6 +1238,56 @@ func newPrivateQBlockClientConnWithTokenAndSZX(t *testing.T, session *qblockTest
 	return NewConnWithOpts(session, &cfg,
 		withQBlockClient(qblockClientConfig{Manager: qblock.DefaultManagerConfig(), Now: time.Now}),
 	)
+}
+
+func newPrivateQBlockClientConnWithTokens(t *testing.T, tokens []message.Token) (*Conn, *qblockTestSession) {
+	t.Helper()
+	session := &qblockTestSession{ctx: context.Background()}
+	next := 0
+	getToken := func() (message.Token, error) {
+		if next >= len(tokens) {
+			return nil, errors.New("test token sequence exhausted")
+		}
+		token := bytes.Clone(tokens[next])
+		next++
+		return token, nil
+	}
+	return newPrivateQBlockClientConnWithToken(t, session, getToken), session
+}
+
+func newPOSTWithBody(t *testing.T, cc *Conn, token message.Token, body []byte) *pool.Message {
+	t.Helper()
+	req := cc.AcquireMessage(context.Background())
+	req.SetCode(codes.POST)
+	req.SetToken(token)
+	require.NoError(t, req.SetPath("/upload"))
+	req.SetContentFormat(message.TextPlain)
+	req.SetBody(bytes.NewReader(body))
+	return req
+}
+
+func mustOptionUint32(t *testing.T, options message.Options, id message.OptionID) uint32 {
+	t.Helper()
+	value, err := options.GetUint32(id)
+	require.NoError(t, err)
+	return value
+}
+
+func mustOptionBytes(t *testing.T, options message.Options, id message.OptionID) []byte {
+	t.Helper()
+	value, err := options.GetBytes(id)
+	require.NoError(t, err)
+	return value
+}
+
+func requireQBlockClientEmpty(t *testing.T, cc *Conn) {
+	t.Helper()
+	require.Zero(t, cc.qblockClient.active())
+	require.Empty(t, cc.qblockClient.exchangesByOriginalToken)
+	require.Empty(t, cc.qblockClient.exchangeByTransfer)
+	require.Empty(t, cc.qblockClient.transfers)
+	require.Empty(t, cc.qblockClient.transferByToken)
+	require.Empty(t, cc.qblockClient.transferByMID)
 }
 
 func newPrivateQBlockClientGET(t *testing.T, cc *Conn, token message.Token) *pool.Message {

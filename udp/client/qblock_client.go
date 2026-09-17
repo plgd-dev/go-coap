@@ -30,6 +30,7 @@ type qblockExchange struct {
 	originalToken message.Token
 	requestCode   codes.Code
 	requestOpts   message.Options
+	requestTag    []byte
 	fail          func(error)
 	transfers     map[qblock.TransferID]struct{}
 	finished      bool
@@ -119,9 +120,23 @@ func (c *qblockClient) canPrepare(req *pool.Message) bool {
 	return c.initErr == nil && req.Code() == codes.GET && !req.HasOption(message.Observe) && req.Body() == nil && !req.HasOption(message.QBlock1) && !req.HasOption(message.QBlock2)
 }
 
+func (c *qblockClient) canPrepareQ1(req *pool.Message) bool {
+	if c.initErr != nil || (req.Code() != codes.POST && req.Code() != codes.PUT) || req.Body() == nil {
+		return false
+	}
+	if req.HasOption(message.Observe) || req.HasOption(message.QBlock1) || req.HasOption(message.QBlock2) || req.HasOption(message.Block1) || req.HasOption(message.Block2) {
+		return false
+	}
+	controlMessage := req.ControlMessage()
+	return controlMessage == nil || !controlMessage.Dst.IsMulticast()
+}
+
 func (c *qblockClient) prepare(req *pool.Message, fail func(error)) (bool, error) {
 	if c.initErr != nil {
 		return false, c.initErr
+	}
+	if c.canPrepareQ1(req) {
+		return c.prepareQ1(req, fail)
 	}
 	if !c.canPrepare(req) {
 		return false, nil
@@ -156,6 +171,128 @@ func (c *qblockClient) prepare(req *pool.Message, fail func(error)) (bool, error
 	return true, nil
 }
 
+func (c *qblockClient) prepareQ1(req *pool.Message, fail func(error)) (bool, error) {
+	if c.initErr != nil {
+		return false, c.initErr
+	}
+	if !c.canPrepareQ1(req) {
+		return false, nil
+	}
+	originalToken := req.Token()
+	if len(originalToken) == 0 {
+		return false, errors.New("q-block Q1 requires token")
+	}
+	options, err := req.Options().Clone()
+	if err != nil {
+		return false, err
+	}
+	body, err := copyQBlockBody(req.Body())
+	if err != nil {
+		return false, err
+	}
+	requestTag, err := c.getRequestTag()
+	if err != nil {
+		return false, err
+	}
+	requestTag = message.Token(bytes.Clone(requestTag))
+	if len(requestTag) == 0 || len(requestTag) > 8 {
+		return false, errors.New("q-block Request-Tag must contain one to eight bytes")
+	}
+	initialToken, err := c.cc.claimFreshQBlockToken()
+	if err != nil {
+		return false, err
+	}
+	exchange := &qblockExchange{
+		originalToken: message.Token(bytes.Clone(originalToken)),
+		requestCode:   req.Code(),
+		requestOpts:   options,
+		requestTag:    bytes.Clone(requestTag),
+		fail:          fail,
+		transfers:     make(map[qblock.TransferID]struct{}),
+	}
+
+	c.mu.Lock()
+	if _, ok := c.exchangesByOriginalToken[string(originalToken)]; ok {
+		c.mu.Unlock()
+		c.cc.releaseToken(initialToken, tokenOwnerQBlock)
+		return false, errors.New("q-block request token already pending")
+	}
+	outputs, err := c.startQ1Locked(exchange, body, initialToken)
+	if err != nil {
+		c.mu.Unlock()
+		c.cc.releaseToken(initialToken, tokenOwnerQBlock)
+		return false, err
+	}
+	c.mu.Unlock()
+	c.drive(outputs)
+	return true, nil
+}
+
+func copyQBlockBody(body io.ReadSeeker) (payload []byte, err error) {
+	position, err := body.Seek(0, io.SeekCurrent)
+	if err != nil {
+		return nil, err
+	}
+	if _, err = body.Seek(0, io.SeekStart); err != nil {
+		return nil, err
+	}
+	defer func() {
+		if _, restoreErr := body.Seek(position, io.SeekStart); restoreErr != nil {
+			err = errors.Join(err, restoreErr)
+		}
+	}()
+	payload, err = io.ReadAll(body)
+	return payload, err
+}
+
+func (c *qblockClient) startQ1Locked(exchange *qblockExchange, body []byte, initialToken message.Token) ([]qblock.Output, error) {
+	if uint64(len(body)) > uint64(^uint32(0)) {
+		return nil, errors.New("q-block body is too large")
+	}
+	operation, err := q1Operation(exchange.originalToken, exchange.requestTag)
+	if err != nil {
+		return nil, err
+	}
+	metadata := qblock.Metadata{
+		Size:     uint32(len(body)),
+		SZX:      c.cc.blockwiseSZX,
+		Identity: bytes.Clone(exchange.requestTag),
+	}
+	if exchange.requestOpts.HasOption(message.ContentFormat) {
+		contentFormat, err := exchange.requestOpts.ContentFormat()
+		if err != nil {
+			return nil, err
+		}
+		metadata.HasContentFormat = true
+		metadata.ContentFormat = contentFormat
+	}
+	outputs, err := c.manager.StartSender(operation, initialToken, qblock.Q1, metadata, body, c.now(), c.jitter())
+	if err != nil {
+		return nil, err
+	}
+	id, ok := c.manager.TransferID(operation)
+	if !ok {
+		return nil, qblock.ErrUnknownTransfer
+	}
+	transfer := &qblockTransfer{
+		id:           id,
+		exchange:     exchange,
+		kind:         qblock.Q1,
+		operation:    operation,
+		metadata:     metadata,
+		requestTag:   bytes.Clone(exchange.requestTag),
+		initialToken: message.Token(bytes.Clone(initialToken)),
+		tokens:       map[string]message.Token{string(initialToken): message.Token(bytes.Clone(initialToken))},
+		mids:         make(map[int32]struct{}),
+	}
+	exchange.transfers[id] = struct{}{}
+	c.exchangesByOriginalToken[string(exchange.originalToken)] = exchange
+	c.exchangeByTransfer[id] = exchange
+	c.transfers[id] = transfer
+	c.transferByToken[string(initialToken)] = transfer
+	return outputs, nil
+}
+
 func (c *qblockClient) active() uint32 {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -185,8 +322,14 @@ func (c *qblockClient) abandon(token message.Token, err error) {
 	key := string(token)
 	if transfer := c.transferByToken[key]; transfer != nil {
 		outputs = c.manager.Cancel(transfer.id, err)
-	} else if exchange := c.exchangesByOriginalToken[key]; exchange != nil && len(exchange.transfers) == 0 {
-		delete(c.exchangesByOriginalToken, key)
+	} else if exchange := c.exchangesByOriginalToken[key]; exchange != nil {
+		if len(exchange.transfers) == 0 {
+			delete(c.exchangesByOriginalToken, key)
+		} else {
+			for id := range exchange.transfers {
+				outputs = append(outputs, c.manager.Cancel(id, err)...)
+			}
+		}
 	}
 	c.mu.Unlock()
 	c.drive(outputs)
@@ -356,38 +499,77 @@ func (c *qblockClient) executeOutput(output qblock.Output) []func() {
 }
 
 func (c *qblockClient) writeQ1Block(id qblock.TransferID, action qblock.Action) error {
-	value, err := qblock.EncodeBlock(action.Block)
-	if err != nil {
-		return err
-	}
-	request := c.cc.AcquireMessage(c.cc.Context())
-	defer c.cc.ReleaseMessage(request)
-
 	c.mu.Lock()
 	transfer := c.transfers[id]
 	if transfer == nil || transfer.kind != qblock.Q1 {
 		c.mu.Unlock()
 		return qblock.ErrUnknownTransfer
 	}
+	var token message.Token
+	if !transfer.initialTokenUsed {
+		token = message.Token(bytes.Clone(transfer.initialToken))
+		transfer.initialTokenUsed = true
+	} else {
+		var err error
+		token, err = c.bindQ1TokenLocked(id)
+		if err != nil {
+			c.mu.Unlock()
+			return err
+		}
+	}
+	request, err := c.newQ1Request(transfer, token, action)
+	c.mu.Unlock()
+	if err != nil {
+		return err
+	}
+	defer c.cc.ReleaseMessage(request)
+
+	return c.cc.session.WriteMessage(request)
+}
+
+func (c *qblockClient) bindQ1TokenLocked(id qblock.TransferID) (message.Token, error) {
+	transfer := c.transfers[id]
+	if transfer == nil || transfer.kind != qblock.Q1 {
+		return nil, qblock.ErrUnknownTransfer
+	}
+	token, err := c.cc.claimFreshQBlockToken()
+	if err != nil {
+		return nil, err
+	}
+	if err := c.manager.BindToken(id, token); err != nil {
+		c.cc.releaseToken(token, tokenOwnerQBlock)
+		return nil, err
+	}
+	transfer.tokens[string(token)] = message.Token(bytes.Clone(token))
+	c.transferByToken[string(token)] = transfer
+	return message.Token(bytes.Clone(token)), nil
+}
+
+func (c *qblockClient) newQ1Request(transfer *qblockTransfer, token message.Token, action qblock.Action) (*pool.Message, error) {
+	value, err := qblock.EncodeBlock(action.Block)
+	if err != nil {
+		return nil, err
+	}
+	request := c.cc.AcquireMessage(c.cc.Context())
 	request.ResetOptionsTo(transfer.exchange.requestOpts)
+	request.Remove(message.QBlock1)
 	request.Remove(message.QBlock2)
 	request.Remove(message.Block1)
 	request.Remove(message.Block2)
+	request.Remove(message.RequestTag)
+	request.Remove(message.Size1)
 	request.SetCode(transfer.exchange.requestCode)
-	request.SetToken(transfer.initialToken)
+	request.SetToken(token)
 	request.SetType(message.NonConfirmable)
 	mid := c.cc.GetMessageID()
 	request.SetMessageID(mid)
+	request.SetOptionBytes(message.RequestTag, transfer.requestTag)
+	request.SetOptionUint32(message.Size1, transfer.metadata.Size)
 	request.SetOptionUint32(message.QBlock1, value)
-	if len(transfer.requestTag) > 0 {
-		request.SetOptionBytes(message.RequestTag, transfer.requestTag)
-	}
-	request.SetBody(bytes.NewReader(action.Payload))
+	request.SetBody(bytes.NewReader(bytes.Clone(action.Payload)))
 	transfer.mids[mid] = struct{}{}
 	c.transferByMID[mid] = transfer
-	c.mu.Unlock()
-
-	return c.cc.session.WriteMessage(request)
+	return request, nil
 }
 
 func (c *qblockClient) writeQ2Control(id qblock.TransferID, action qblock.Action) error {
