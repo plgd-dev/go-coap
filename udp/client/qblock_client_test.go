@@ -21,13 +21,14 @@ import (
 )
 
 type qblockTestSession struct {
-	ctx       context.Context
-	writeType message.Type
-	writeQ2   bool
-	writes    []qblockTestWrite
-	onClose   []EventFunc
-	writeErr  error
-	writeCh   chan struct{}
+	ctx        context.Context
+	remoteAddr net.Addr
+	writeType  message.Type
+	writeQ2    bool
+	writes     []qblockTestWrite
+	onClose    []EventFunc
+	writeErr   error
+	writeCh    chan struct{}
 
 	writeMu           sync.Mutex
 	firstWriteMu      sync.Mutex
@@ -49,9 +50,14 @@ type qblockTestWrite struct {
 func (s *qblockTestSession) Context() context.Context { return s.ctx }
 func (s *qblockTestSession) Close() error             { return nil }
 func (s *qblockTestSession) MaxMessageSize() uint32   { return 2048 }
-func (s *qblockTestSession) RemoteAddr() net.Addr     { return &net.UDPAddr{} }
-func (s *qblockTestSession) LocalAddr() net.Addr      { return &net.UDPAddr{} }
-func (s *qblockTestSession) NetConn() net.Conn        { return nil }
+func (s *qblockTestSession) RemoteAddr() net.Addr {
+	if s.remoteAddr != nil {
+		return s.remoteAddr
+	}
+	return &net.UDPAddr{}
+}
+func (s *qblockTestSession) LocalAddr() net.Addr { return &net.UDPAddr{} }
+func (s *qblockTestSession) NetConn() net.Conn   { return nil }
 func (s *qblockTestSession) WriteMessage(msg *pool.Message) error {
 	s.firstWriteMu.Lock()
 	firstWriteStarted := s.firstWriteStarted
@@ -368,6 +374,34 @@ func TestQBlockClientLeavesUnsupportedQ1ShapesOrdinary(t *testing.T) {
 
 			require.NoError(t, err)
 			require.False(t, prepared)
+			requireQBlockClientEmpty(t, cc)
+		})
+	}
+}
+
+func TestQBlockClientLeavesMulticastSessionQ1Ordinary(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		ip   net.IP
+	}{
+		{name: "IPv4", ip: net.ParseIP("224.0.1.187")},
+		{name: "IPv6", ip: net.ParseIP("ff02::fd")},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			session := &qblockTestSession{
+				ctx:        context.Background(),
+				remoteAddr: &net.UDPAddr{IP: test.ip, Port: 5683},
+			}
+			cc := newPrivateQBlockClientConnWithToken(t, session, message.GetToken)
+			request := newPOSTWithBody(t, cc, message.Token{0x07}, []byte("body"))
+			defer cc.ReleaseMessage(request)
+			require.Nil(t, request.ControlMessage())
+
+			prepared, err := cc.qblockClient.prepare(request, func(error) {})
+
+			require.NoError(t, err)
+			require.False(t, prepared)
+			require.Empty(t, session.writesSnapshot())
 			requireQBlockClientEmpty(t, cc)
 		})
 	}

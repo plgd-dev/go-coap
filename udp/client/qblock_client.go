@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"io"
+	"net"
 	"sync"
 	"time"
 
@@ -128,7 +129,11 @@ func (c *qblockClient) canPrepareQ1(req *pool.Message) bool {
 		return false
 	}
 	controlMessage := req.ControlMessage()
-	return controlMessage == nil || !controlMessage.Dst.IsMulticast()
+	if controlMessage != nil && controlMessage.Dst.IsMulticast() {
+		return false
+	}
+	remoteAddress, ok := c.cc.session.RemoteAddr().(*net.UDPAddr)
+	return !ok || remoteAddress == nil || !remoteAddress.IP.IsMulticast()
 }
 
 func (c *qblockClient) prepare(req *pool.Message, fail func(error)) (bool, error) {
