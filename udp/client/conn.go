@@ -517,9 +517,11 @@ func (cc *Conn) claimToken(token message.Token, owner tokenOwner) error {
 	if len(token) == 0 {
 		return errors.New("empty token")
 	}
-	if _, loaded := cc.tokenReservations.LoadOrStore(token.Hash(), tokenReservation{
-		token: bytes.Clone(token),
-		owner: owner,
+	if _, loaded := cc.tokenReservations.LoadOrStoreWithFunc(token.Hash(), nil, func() tokenReservation {
+		return tokenReservation{
+			token: bytes.Clone(token),
+			owner: owner,
+		}
 	}); loaded {
 		return coapErrors.ErrKeyAlreadyExists
 	}
@@ -528,7 +530,10 @@ func (cc *Conn) claimToken(token message.Token, owner tokenOwner) error {
 
 func (cc *Conn) releaseToken(token message.Token, owner tokenOwner) {
 	cc.tokenReservations.ReplaceWithFunc(token.Hash(), func(reservation tokenReservation, loaded bool) (tokenReservation, bool) {
-		if loaded && reservation.owner == owner && bytes.Equal(reservation.token, token) {
+		if !loaded {
+			return reservation, true
+		}
+		if reservation.owner == owner && bytes.Equal(reservation.token, token) {
 			return reservation, true
 		}
 		return reservation, false

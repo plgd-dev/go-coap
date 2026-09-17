@@ -2,6 +2,8 @@ package client
 
 import (
 	"context"
+	"runtime"
+	"sync"
 	"testing"
 
 	"github.com/plgd-dev/go-coap/v3/message"
@@ -14,6 +16,59 @@ func TestConnTokenReservationRejectsLiveOwners(t *testing.T) {
 	cc := NewConnWithOpts(&qblockTestSession{ctx: context.Background()}, &cfg)
 	token := message.Token{0x11}
 	require.NoError(t, cc.claimToken(token, tokenOwnerRequest))
+	require.Error(t, cc.claimToken(token, tokenOwnerQBlock))
+	cc.releaseToken(token, tokenOwnerRequest)
+	require.NoError(t, cc.claimToken(token, tokenOwnerQBlock))
+}
+
+func TestConnTokenReservationAllowsOnlyOneConcurrentClaim(t *testing.T) {
+	previousProcs := runtime.GOMAXPROCS(8)
+	defer runtime.GOMAXPROCS(previousProcs)
+
+	for range 64 {
+		cfg := DefaultConfig
+		cc := NewConnWithOpts(&qblockTestSession{ctx: context.Background()}, &cfg)
+		start := make(chan struct{})
+		results := make(chan error, 64)
+		var wg sync.WaitGroup
+		for range 64 {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				<-start
+				results <- cc.claimToken(message.Token{0x14}, tokenOwnerRequest)
+			}()
+		}
+		close(start)
+		wg.Wait()
+		close(results)
+
+		successes := 0
+		for err := range results {
+			if err == nil {
+				successes++
+			}
+		}
+		require.Equal(t, 1, successes)
+	}
+}
+
+func TestConnReleaseAbsentTokenDoesNotPoisonFutureClaim(t *testing.T) {
+	cfg := DefaultConfig
+	cc := NewConnWithOpts(&qblockTestSession{ctx: context.Background()}, &cfg)
+	token := message.Token{0x15}
+
+	cc.releaseToken(token, tokenOwnerQBlock)
+	require.NoError(t, cc.claimToken(token, tokenOwnerRequest))
+}
+
+func TestConnReleaseMismatchedOwnerDoesNotReleaseLiveReservation(t *testing.T) {
+	cfg := DefaultConfig
+	cc := NewConnWithOpts(&qblockTestSession{ctx: context.Background()}, &cfg)
+	token := message.Token{0x16}
+	require.NoError(t, cc.claimToken(token, tokenOwnerRequest))
+
+	cc.releaseToken(token, tokenOwnerQBlock)
 	require.Error(t, cc.claimToken(token, tokenOwnerQBlock))
 	cc.releaseToken(token, tokenOwnerRequest)
 	require.NoError(t, cc.claimToken(token, tokenOwnerQBlock))
