@@ -202,6 +202,7 @@ type Conn struct {
 	errors                 ErrorFunc
 	responseMsgCache       MessageCache
 	msgIDMutex             *MutexMap
+	getToken               func() (message.Token, error)
 
 	tokenHandlerContainer *coapSync.Map[uint64, HandlerFunc]
 	midHandlerContainer   *coapSync.Map[int32, *midElement]
@@ -350,11 +351,15 @@ func NewConnWithOpts(session Session, cfg *Config, opts ...Option) *Conn {
 		inactivityMonitor:         cfgOpts.inactivityMonitor,
 		requestMonitor:            cfgOpts.requestMonitor,
 		messagePool:               cfg.MessagePool,
+		getToken:                  cfg.GetToken,
 		numOutstandingInteraction: semaphore.NewWeighted(math.MaxInt64),
 	}
 	cc.msgID.Store(pkgMath.CastTo[uint32](cfg.GetMID() - 0xffff/2))
 	cc.blockWise = cfgOpts.createBlockWise(&cc)
 	cc.qblockReceiver = cfgOpts.createQBlockReceiver(&cc)
+	if cc.qblockReceiver != nil {
+		cc.session.AddOnClose(cc.qblockReceiver.close)
+	}
 	limitParallelRequests := limitparallelrequests.New(cfg.LimitClientParallelRequests, cfg.LimitClientEndpointParallelRequests, cc.do, cc.doObserve)
 	cc.observationHandler = observation.NewHandler(&cc, cfg.Handler, limitParallelRequests.Do)
 	cc.Client = client.New(&cc, cc.observationHandler, cfg.GetToken, limitParallelRequests)
@@ -414,6 +419,7 @@ func (cc *Conn) doInternal(req *pool.Message) (*pool.Message, error) {
 
 	respChan := make(chan *pool.Message, 1)
 	qblockErrChan := make(chan error, 1)
+	preparedQBlock := false
 	if _, loaded := cc.tokenHandlerContainer.LoadOrStore(token.Hash(), func(_ *responsewriter.ResponseWriter[*Conn], r *pool.Message) {
 		r.Hijack()
 		select {
@@ -426,11 +432,11 @@ func (cc *Conn) doInternal(req *pool.Message) (*pool.Message, error) {
 	defer func() {
 		_, _ = cc.tokenHandlerContainer.LoadAndDelete(token.Hash())
 		if cc.qblockReceiver != nil {
-			cc.qblockReceiver.abandon(token)
+			cc.qblockReceiver.abandon(token, req.Context().Err())
 		}
 	}()
 	if cc.qblockReceiver != nil {
-		_, err := cc.qblockReceiver.prepare(req, func(err error) {
+		prepared, err := cc.qblockReceiver.prepare(req, func(err error) {
 			select {
 			case qblockErrChan <- err:
 			default:
@@ -439,20 +445,41 @@ func (cc *Conn) doInternal(req *pool.Message) (*pool.Message, error) {
 		if err != nil {
 			return nil, err
 		}
+		preparedQBlock = prepared
 	}
 	err := cc.writeMessage(req)
 	if err != nil {
 		return nil, fmt.Errorf(errFmtWriteRequest, err)
 	}
 	cc.receivedMessageReader.TryToReplaceLoop()
+	connectionClosed := func() error {
+		if preparedQBlock {
+			cc.qblockReceiver.abandon(token, qblock.ErrClosed)
+			return qblock.ErrClosed
+		}
+		return fmt.Errorf("connection was closed: %w", cc.session.Context().Err())
+	}
+	if cc.Context().Err() != nil {
+		return nil, connectionClosed()
+	}
 	select {
 	case <-req.Context().Done():
+		if cc.Context().Err() != nil {
+			return nil, connectionClosed()
+		}
 		return nil, req.Context().Err()
 	case <-cc.Context().Done():
-		return nil, fmt.Errorf("connection was closed: %w", cc.session.Context().Err())
+		return nil, connectionClosed()
 	case err := <-qblockErrChan:
+		if cc.Context().Err() != nil {
+			return nil, connectionClosed()
+		}
 		return nil, err
 	case resp := <-respChan:
+		if cc.Context().Err() != nil && preparedQBlock {
+			cc.ReleaseMessage(resp)
+			return nil, connectionClosed()
+		}
 		return resp, nil
 	}
 }
@@ -468,6 +495,15 @@ func (cc *Conn) do(req *pool.Message) (*pool.Message, error) {
 		return cc.doInternal(req)
 	}
 	resp, err := cc.blockWise.Do(req, cc.blockwiseSZX, cc.session.MaxMessageSize(), func(bwReq *pool.Message) (*pool.Message, error) {
+		if cc.qblockReceiver != nil && cc.qblockReceiver.canPrepare(bwReq) {
+			privateReq := cc.AcquireMessage(bwReq.Context())
+			if err := bwReq.Clone(privateReq); err != nil {
+				cc.ReleaseMessage(privateReq)
+				return nil, err
+			}
+			defer cc.ReleaseMessage(privateReq)
+			bwReq = privateReq
+		}
 		if bwReq.Options().HasOption(message.Block1) || bwReq.Options().HasOption(message.Block2) {
 			bwReq.SetMessageID(cc.GetMessageID())
 		}
@@ -1027,6 +1063,9 @@ func (cc *Conn) CheckExpirations(now time.Time) {
 	cc.responseMsgCache.CheckExpirations(now)
 	if cc.blockWise != nil {
 		cc.blockWise.CheckExpirations(now)
+	}
+	if cc.qblockReceiver != nil {
+		cc.qblockReceiver.Tick(now)
 	}
 	maxRetransmit := cc.transmission.maxRetransmit.Load()
 	acknowledgeTimeout := cc.transmission.acknowledgeTimeout.Load()

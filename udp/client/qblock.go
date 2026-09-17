@@ -19,12 +19,12 @@ func (cc *Conn) handleDisabledQBlock(w *responsewriter.ResponseWriter[*Conn], re
 		return false
 	}
 	request := req.Code() >= codes.GET && req.Code() < codes.Code(32)
-	validationErr := qblock.ValidateOptions(opts, request)
-	// Q responses cannot be processed until Q support is enabled. Drop them,
-	// including malformed responses, without producing a response to a response.
+	// The enabled private Q2 receiver validates and consumes its responses.
+	// Other Q responses remain unsupported and never elicit another response.
 	if !request {
-		return true
+		return cc.qblockReceiver == nil || !opts.HasOption(message.QBlock2)
 	}
+	validationErr := qblock.ValidateOptions(opts, request)
 	if req.Type() != message.Confirmable && req.Type() != message.NonConfirmable {
 		return true
 	}
