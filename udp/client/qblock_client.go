@@ -57,6 +57,7 @@ type qblockClient struct {
 	getRequestTag            func() (message.Token, error)
 	mu                       sync.Mutex
 	actionMu                 sync.Mutex
+	actionMuContention       func()
 	manager                  *qblock.Manager
 	initErr                  error
 	exchangesByOriginalToken map[string]*qblockExchange
@@ -301,7 +302,12 @@ func (c *qblockClient) handle(msg *pool.Message) bool {
 }
 
 func (c *qblockClient) drive(outputs []qblock.Output) {
-	c.actionMu.Lock()
+	if !c.actionMu.TryLock() {
+		if c.actionMuContention != nil {
+			c.actionMuContention()
+		}
+		c.actionMu.Lock()
+	}
 	callbacks := c.executeOrdered(outputs)
 	c.actionMu.Unlock()
 	for _, callback := range callbacks {

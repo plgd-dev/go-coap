@@ -179,25 +179,27 @@ func TestQBlockClientSerializesConcurrentOutputBursts(t *testing.T) {
 	cc := newPrivateQBlockClientConnWithToken(t, session, message.GetToken)
 	session.firstWriteStarted = make(chan struct{}, 1)
 	session.releaseFirstWrite = make(chan struct{})
+	actionMuContended := make(chan struct{}, 1)
+	cc.qblockClient.actionMuContention = func() {
+		select {
+		case actionMuContended <- struct{}{}:
+		default:
+		}
+	}
 
 	first, firstDone := startQ1TransferForTest(t, cc, bytes.Repeat([]byte{'a'}, 176))
 	<-session.firstWriteStarted
-	if cc.qblockClient.actionMu.TryLock() {
-		cc.qblockClient.actionMu.Unlock()
-		t.Fatal("initial burst should hold the ordered action lock")
-	}
-	tickStarted := make(chan struct{})
 	tickDone := make(chan struct{})
 	go func() {
-		close(tickStarted)
 		cc.qblockClient.Tick(time.Unix(200, 0))
 		close(tickDone)
 	}()
-	<-tickStarted
 	select {
+	case <-actionMuContended:
 	case <-tickDone:
-		t.Fatal("competing Q-Block tick completed before the blocked initial write was released")
-	default:
+		t.Fatal("competing Q-Block tick completed without contending on ordered execution")
+	case <-time.After(time.Second):
+		t.Fatal("competing Q-Block tick did not reach ordered execution")
 	}
 	close(session.releaseFirstWrite)
 	<-firstDone
