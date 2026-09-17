@@ -207,7 +207,7 @@ type Conn struct {
 	requestMonitor    RequestMonitorFunc
 
 	blockWise          *blockwise.BlockWise[*Conn]
-	qblockReceiver     *qblockReceiver
+	qblockClient       *qblockClient
 	observationHandler *observation.Handler[*Conn]
 	transmission       *Transmission
 	messagePool        *pool.Pool
@@ -263,11 +263,11 @@ func (cc *Conn) Transmission() *Transmission {
 }
 
 type ConnOptions struct {
-	createBlockWise      func(cc *Conn) *blockwise.BlockWise[*Conn]
-	createQBlockReceiver func(cc *Conn) *qblockReceiver
-	inactivityMonitor    InactivityMonitor
-	requestMonitor       RequestMonitorFunc
-	responseMsgCache     MessageCache
+	createBlockWise    func(cc *Conn) *blockwise.BlockWise[*Conn]
+	createQBlockClient func(cc *Conn) *qblockClient
+	inactivityMonitor  InactivityMonitor
+	requestMonitor     RequestMonitorFunc
+	responseMsgCache   MessageCache
 }
 
 type Option = func(opts *ConnOptions)
@@ -333,7 +333,7 @@ func NewConnWithOpts(session Session, cfg *Config, opts ...Option) *Conn {
 		createBlockWise: func(*Conn) *blockwise.BlockWise[*Conn] {
 			return nil
 		},
-		createQBlockReceiver: func(*Conn) *qblockReceiver {
+		createQBlockClient: func(*Conn) *qblockClient {
 			return nil
 		},
 		inactivityMonitor: inactivity.NewNilMonitor[*Conn](),
@@ -372,9 +372,9 @@ func NewConnWithOpts(session Session, cfg *Config, opts ...Option) *Conn {
 	}
 	cc.msgID.Store(pkgMath.CastTo[uint32](cfg.GetMID() - 0xffff/2))
 	cc.blockWise = cfgOpts.createBlockWise(&cc)
-	cc.qblockReceiver = cfgOpts.createQBlockReceiver(&cc)
-	if cc.qblockReceiver != nil {
-		cc.session.AddOnClose(cc.qblockReceiver.close)
+	cc.qblockClient = cfgOpts.createQBlockClient(&cc)
+	if cc.qblockClient != nil {
+		cc.session.AddOnClose(cc.qblockClient.close)
 	}
 	limitParallelRequests := limitparallelrequests.New(cfg.LimitClientParallelRequests, cfg.LimitClientEndpointParallelRequests, cc.do, cc.doObserve)
 	cc.observationHandler = observation.NewHandler(&cc, cfg.Handler, limitParallelRequests.Do)
@@ -460,12 +460,12 @@ func (cc *Conn) doInternal(req *pool.Message) (*pool.Message, error) {
 	defer func() {
 		_, _ = cc.tokenHandlerContainer.LoadAndDelete(token.Hash())
 		cc.releaseToken(token, tokenOwnerRequest)
-		if cc.qblockReceiver != nil {
-			cc.qblockReceiver.abandon(token, req.Context().Err())
+		if cc.qblockClient != nil {
+			cc.qblockClient.abandon(token, req.Context().Err())
 		}
 	}()
-	if cc.qblockReceiver != nil {
-		prepared, err := cc.qblockReceiver.prepare(req, func(err error) {
+	if cc.qblockClient != nil {
+		prepared, err := cc.qblockClient.prepare(req, func(err error) {
 			select {
 			case qblockErrChan <- err:
 			default:
@@ -483,7 +483,7 @@ func (cc *Conn) doInternal(req *pool.Message) (*pool.Message, error) {
 	cc.receivedMessageReader.TryToReplaceLoop()
 	connectionClosed := func() error {
 		if preparedQBlock {
-			cc.qblockReceiver.abandon(token, qblock.ErrClosed)
+			cc.qblockClient.abandon(token, qblock.ErrClosed)
 			return qblock.ErrClosed
 		}
 		return fmt.Errorf("connection was closed: %w", cc.session.Context().Err())
@@ -565,7 +565,7 @@ func (cc *Conn) do(req *pool.Message) (*pool.Message, error) {
 		return cc.doInternal(req)
 	}
 	resp, err := cc.blockWise.Do(req, cc.blockwiseSZX, cc.session.MaxMessageSize(), func(bwReq *pool.Message) (*pool.Message, error) {
-		if cc.qblockReceiver != nil && cc.qblockReceiver.canPrepare(bwReq) {
+		if cc.qblockClient != nil && cc.qblockClient.canPrepare(bwReq) {
 			privateReq := cc.AcquireMessage(bwReq.Context())
 			if err := bwReq.Clone(privateReq); err != nil {
 				cc.ReleaseMessage(privateReq)
@@ -799,7 +799,7 @@ func (cc *Conn) handle(w *responsewriter.ResponseWriter[*Conn], m *pool.Message)
 		// msg was processed by token handler - just drop it.
 		return
 	}
-	if cc.qblockReceiver != nil && cc.qblockReceiver.handle(m) {
+	if cc.qblockClient != nil && cc.qblockClient.handle(m) {
 		return
 	}
 	if cc.blockWise != nil {
@@ -1134,8 +1134,8 @@ func (cc *Conn) CheckExpirations(now time.Time) {
 	if cc.blockWise != nil {
 		cc.blockWise.CheckExpirations(now)
 	}
-	if cc.qblockReceiver != nil {
-		cc.qblockReceiver.Tick(now)
+	if cc.qblockClient != nil {
+		cc.qblockClient.Tick(now)
 	}
 	maxRetransmit := cc.transmission.maxRetransmit.Load()
 	acknowledgeTimeout := cc.transmission.acknowledgeTimeout.Load()

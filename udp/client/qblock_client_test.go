@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"net"
+	"sync"
 	"testing"
 	"time"
 
@@ -27,6 +28,12 @@ type qblockTestSession struct {
 	onClose   []EventFunc
 	writeErr  error
 	writeCh   chan struct{}
+
+	writeMu           sync.Mutex
+	firstWriteMu      sync.Mutex
+	firstWriteBlocked bool
+	firstWriteStarted chan struct{}
+	releaseFirstWrite chan struct{}
 }
 
 type qblockTestWrite struct {
@@ -46,11 +53,32 @@ func (s *qblockTestSession) RemoteAddr() net.Addr     { return &net.UDPAddr{} }
 func (s *qblockTestSession) LocalAddr() net.Addr      { return &net.UDPAddr{} }
 func (s *qblockTestSession) NetConn() net.Conn        { return nil }
 func (s *qblockTestSession) WriteMessage(msg *pool.Message) error {
+	s.firstWriteMu.Lock()
+	firstWriteStarted := s.firstWriteStarted
+	var releaseFirstWrite chan struct{}
+	if !s.firstWriteBlocked {
+		releaseFirstWrite = s.releaseFirstWrite
+		s.firstWriteBlocked = releaseFirstWrite != nil
+	}
+	s.firstWriteMu.Unlock()
+	if releaseFirstWrite != nil {
+		select {
+		case firstWriteStarted <- struct{}{}:
+		default:
+		}
+		<-releaseFirstWrite
+	}
 	s.writeType = msg.Type()
 	s.writeQ2 = msg.HasOption(message.QBlock2)
 	var block uint32
 	if s.writeQ2 {
 		value, err := msg.GetOptionUint32(message.QBlock2)
+		if err != nil {
+			return err
+		}
+		block = value
+	} else if msg.HasOption(message.QBlock1) {
+		value, err := msg.GetOptionUint32(message.QBlock1)
 		if err != nil {
 			return err
 		}
@@ -67,7 +95,7 @@ func (s *qblockTestSession) WriteMessage(msg *pool.Message) error {
 			return err
 		}
 	}
-	s.writes = append(s.writes, qblockTestWrite{
+	write := qblockTestWrite{
 		code:    msg.Code(),
 		typ:     msg.Type(),
 		token:   bytes.Clone(msg.Token()),
@@ -75,7 +103,10 @@ func (s *qblockTestSession) WriteMessage(msg *pool.Message) error {
 		mid:     msg.MessageID(),
 		options: options,
 		payload: payload,
-	})
+	}
+	s.writeMu.Lock()
+	s.writes = append(s.writes, write)
+	s.writeMu.Unlock()
 	if s.writeCh != nil {
 		select {
 		case s.writeCh <- struct{}{}:
@@ -83,6 +114,31 @@ func (s *qblockTestSession) WriteMessage(msg *pool.Message) error {
 		}
 	}
 	return s.writeErr
+}
+
+func (s *qblockTestSession) writesFor(transfer *qblockTransfer) []qblockTestWrite {
+	keys := make(map[string]struct{})
+	if transfer != nil {
+		if len(transfer.initialToken) > 0 {
+			keys[string(transfer.initialToken)] = struct{}{}
+		}
+		for key := range transfer.tokens {
+			keys[key] = struct{}{}
+		}
+	}
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	writes := make([]qblockTestWrite, 0, len(s.writes))
+	for _, write := range s.writes {
+		if len(keys) == 0 {
+			writes = append(writes, write)
+			continue
+		}
+		if _, ok := keys[string(write.token)]; ok {
+			writes = append(writes, write)
+		}
+	}
+	return writes
 }
 func (s *qblockTestSession) WriteMulticastMessage(*pool.Message, *net.UDPAddr, ...coapNet.MulticastOption) error {
 	return nil
@@ -98,16 +154,98 @@ func (s *qblockTestSession) closeForTest() {
 	}
 }
 
-func addRetainedObserveOption(t *testing.T, receiver *qblockReceiver, token message.Token) {
+func addRetainedQBlockClientObserveOption(t *testing.T, receiver *qblockClient, token message.Token) {
 	t.Helper()
 	receiver.mu.Lock()
-	pending, ok := receiver.pending[string(token)]
+	exchange, ok := receiver.exchangesByOriginalToken[string(token)]
 	if ok {
-		pending.options = append(pending.options, message.Option{ID: message.Observe})
-		receiver.pending[string(token)] = pending
+		exchange.requestOpts = append(exchange.requestOpts, message.Option{ID: message.Observe})
+		receiver.exchangesByOriginalToken[string(token)] = exchange
 	}
 	receiver.mu.Unlock()
 	require.True(t, ok)
+}
+
+func TestQBlockClientSerializesConcurrentOutputBursts(t *testing.T) {
+	session := &qblockTestSession{ctx: context.Background()}
+	cc := newPrivateQBlockClientConnWithToken(t, session, message.GetToken)
+	session.firstWriteStarted = make(chan struct{}, 1)
+	session.releaseFirstWrite = make(chan struct{})
+
+	first := startQ1TransferForTest(t, cc, bytes.Repeat([]byte{'a'}, 48))
+	<-session.firstWriteStarted
+	done := make(chan struct{})
+	go func() {
+		cc.qblockClient.Tick(time.Unix(200, 0))
+		close(done)
+	}()
+	close(session.releaseFirstWrite)
+	<-done
+
+	requireQ1Burst(t, session.writesFor(first), []uint32{0, 1, 2}, first.requestTag)
+}
+
+func startQ1TransferForTest(t *testing.T, cc *Conn, payload []byte) *qblockTransfer {
+	t.Helper()
+	token := message.Token{0x71}
+	requestTag := []byte("tag-a")
+	operation, err := q1Operation(token, requestTag)
+	require.NoError(t, err)
+	req := cc.AcquireMessage(context.Background())
+	defer cc.ReleaseMessage(req)
+	require.NoError(t, req.SetPath("/upload"))
+	options, err := req.Options().Clone()
+	require.NoError(t, err)
+	metadata := qblock.Metadata{Size: uint32(len(payload)), SZX: blockwise.SZX16, Identity: requestTag}
+
+	cc.qblockClient.mu.Lock()
+	outputs, err := cc.qblockClient.manager.StartSender(operation, token, qblock.Q1, metadata, payload, time.Unix(100, 0), 0)
+	require.NoError(t, err)
+	id, ok := cc.qblockClient.manager.TransferID(operation)
+	require.True(t, ok)
+	exchange := &qblockExchange{
+		originalToken: token,
+		requestCode:   codes.POST,
+		requestOpts:   options,
+		fail:          func(error) {},
+		transfers:     map[qblock.TransferID]struct{}{id: {}},
+	}
+	transfer := &qblockTransfer{
+		id:           id,
+		exchange:     exchange,
+		kind:         qblock.Q1,
+		operation:    operation,
+		metadata:     metadata,
+		requestTag:   bytes.Clone(requestTag),
+		initialToken: token,
+		tokens:       map[string]message.Token{string(token): token},
+		mids:         make(map[int32]struct{}),
+	}
+	cc.qblockClient.exchangesByOriginalToken[string(token)] = exchange
+	cc.qblockClient.exchangeByTransfer[id] = exchange
+	cc.qblockClient.transfers[id] = transfer
+	cc.qblockClient.transferByToken[string(token)] = transfer
+	cc.qblockClient.mu.Unlock()
+
+	go cc.qblockClient.drive(outputs)
+	return transfer
+}
+
+func requireQ1Burst(t *testing.T, writes []qblockTestWrite, numbers []uint32, requestTag []byte) {
+	t.Helper()
+	require.Len(t, writes, len(numbers))
+	for index, write := range writes {
+		require.Equal(t, codes.POST, write.code)
+		require.Equal(t, message.NonConfirmable, write.typ)
+		require.NotZero(t, write.mid)
+		require.Equal(t, bytes.Repeat([]byte{'a'}, 16), write.payload)
+		tag, err := write.options.GetBytes(message.RequestTag)
+		require.NoError(t, err)
+		require.Equal(t, requestTag, tag)
+		block, err := qblock.DecodeBlock(write.block)
+		require.NoError(t, err)
+		require.Equal(t, qblock.Block{Number: numbers[index], More: index+1 < len(numbers), SZX: blockwise.SZX16}, block)
+	}
 }
 
 func TestQBlockPrepareInitialGET(t *testing.T) {
@@ -115,7 +253,7 @@ func TestQBlockPrepareInitialGET(t *testing.T) {
 	cfg.BlockwiseEnable = false
 	cfg.BlockwiseSZX = blockwise.SZX64
 	cc := NewConnWithOpts(&qblockTestSession{ctx: context.Background()}, &cfg,
-		withQBlockReceiver(qblockReceiverConfig{Manager: qblock.DefaultManagerConfig(), Now: time.Now}),
+		withQBlockClient(qblockClientConfig{Manager: qblock.DefaultManagerConfig(), Now: time.Now}),
 	)
 	req := cc.AcquireMessage(context.Background())
 	defer cc.ReleaseMessage(req)
@@ -123,7 +261,7 @@ func TestQBlockPrepareInitialGET(t *testing.T) {
 	req.SetToken(message.Token{1, 2, 3})
 	require.NoError(t, req.SetPath("/temperature"))
 
-	prepared, err := cc.qblockReceiver.prepare(req, func(error) {})
+	prepared, err := cc.qblockClient.prepare(req, func(error) {})
 	require.NoError(t, err)
 	require.True(t, prepared)
 	require.Equal(t, message.NonConfirmable, req.Type())
@@ -132,7 +270,7 @@ func TestQBlockPrepareInitialGET(t *testing.T) {
 	block, err := qblock.DecodeBlock(value)
 	require.NoError(t, err)
 	require.Equal(t, qblock.Block{Number: 0, More: true, SZX: blockwise.SZX64}, block)
-	require.Zero(t, cc.qblockReceiver.active())
+	require.Zero(t, cc.qblockClient.active())
 }
 
 func TestDoInternalPreparesPrivateQBlockGET(t *testing.T) {
@@ -141,7 +279,7 @@ func TestDoInternalPreparesPrivateQBlockGET(t *testing.T) {
 	cfg.BlockwiseSZX = blockwise.SZX64
 	session := &qblockTestSession{ctx: context.Background()}
 	cc := NewConnWithOpts(session, &cfg,
-		withQBlockReceiver(qblockReceiverConfig{Manager: qblock.DefaultManagerConfig(), Now: time.Now}),
+		withQBlockClient(qblockClientConfig{Manager: qblock.DefaultManagerConfig(), Now: time.Now}),
 	)
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
@@ -164,7 +302,7 @@ func TestDoInternalWithoutPrivateQBlockWritesOrdinaryGET(t *testing.T) {
 	cfg.BlockwiseEnable = false
 	session := &qblockTestSession{ctx: context.Background(), writeCh: make(chan struct{}, 1)}
 	cc := NewConnWithOpts(session, &cfg)
-	require.Nil(t, cc.qblockReceiver)
+	require.Nil(t, cc.qblockClient)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -212,7 +350,7 @@ func TestClassicBlock2WithoutPrivateQBlockDeliversNormalHandler(t *testing.T) {
 	cfg := DefaultConfig
 	cfg.BlockwiseEnable = false
 	cc := NewConnWithOpts(&qblockTestSession{ctx: context.Background()}, &cfg)
-	require.Nil(t, cc.qblockReceiver)
+	require.Nil(t, cc.qblockClient)
 	cc.blockWise = blockwise.New(cc, time.Hour, func(error) {}, func(token message.Token) (*pool.Message, bool) {
 		request := cc.AcquireMessage(context.Background())
 		request.SetCode(codes.GET)
@@ -246,36 +384,36 @@ func TestClassicBlock2WithoutPrivateQBlockDeliversNormalHandler(t *testing.T) {
 }
 
 func TestQBlockFirstFragmentRollback(t *testing.T) {
-	cc := newPrivateQBlockConn(t)
-	req := newPrivateQBlockGET(t, cc, message.Token{8, 9, 10})
+	cc := newPrivateQBlockClientConn(t)
+	req := newPrivateQBlockClientGET(t, cc, message.Token{8, 9, 10})
 	defer cc.ReleaseMessage(req)
-	prepared, err := cc.qblockReceiver.prepare(req, func(error) {})
+	prepared, err := cc.qblockClient.prepare(req, func(error) {})
 	require.NoError(t, err)
 	require.True(t, prepared)
 
-	invalid := newQBlockResponse(t, cc, req.Token(), false)
+	invalid := newQBlockClientResponse(t, cc, req.Token(), false)
 	defer cc.ReleaseMessage(invalid)
-	require.True(t, cc.qblockReceiver.handle(invalid))
-	require.Zero(t, cc.qblockReceiver.active())
+	require.True(t, cc.qblockClient.handle(invalid))
+	require.Zero(t, cc.qblockClient.active())
 
-	valid := newQBlockResponse(t, cc, req.Token(), true)
+	valid := newQBlockClientResponse(t, cc, req.Token(), true)
 	defer cc.ReleaseMessage(valid)
-	require.True(t, cc.qblockReceiver.handle(valid))
-	require.Equal(t, uint32(1), cc.qblockReceiver.active())
+	require.True(t, cc.qblockClient.handle(valid))
+	require.Equal(t, uint32(1), cc.qblockClient.active())
 }
 
 func TestConnRoutesQBlockResponseBeforeTokenHandler(t *testing.T) {
-	cc := newPrivateQBlockConn(t)
-	req := newPrivateQBlockGET(t, cc, message.Token{11, 12, 13})
+	cc := newPrivateQBlockClientConn(t)
+	req := newPrivateQBlockClientGET(t, cc, message.Token{11, 12, 13})
 	defer cc.ReleaseMessage(req)
-	prepared, err := cc.qblockReceiver.prepare(req, func(error) {})
+	prepared, err := cc.qblockClient.prepare(req, func(error) {})
 	require.NoError(t, err)
 	require.True(t, prepared)
 	called := false
 	cc.tokenHandlerContainer.Store(req.Token().Hash(), func(*responsewriter.ResponseWriter[*Conn], *pool.Message) {
 		called = true
 	})
-	response := newQBlockResponse(t, cc, req.Token(), true)
+	response := newQBlockClientResponse(t, cc, req.Token(), true)
 	defer cc.ReleaseMessage(response)
 	writerMessage := cc.AcquireMessage(context.Background())
 	defer cc.ReleaseMessage(writerMessage)
@@ -283,14 +421,14 @@ func TestConnRoutesQBlockResponseBeforeTokenHandler(t *testing.T) {
 	cc.handle(responsewriter.New(writerMessage, cc), response)
 
 	require.False(t, called)
-	require.Equal(t, uint32(1), cc.qblockReceiver.active())
+	require.Equal(t, uint32(1), cc.qblockClient.active())
 }
 
 func TestConnDeliversCompleteQBlockResponseThroughOriginalHandler(t *testing.T) {
-	cc := newPrivateQBlockConn(t)
-	req := newPrivateQBlockGET(t, cc, message.Token{14, 15, 16})
+	cc := newPrivateQBlockClientConn(t)
+	req := newPrivateQBlockClientGET(t, cc, message.Token{14, 15, 16})
 	defer cc.ReleaseMessage(req)
-	prepared, err := cc.qblockReceiver.prepare(req, func(error) {})
+	prepared, err := cc.qblockClient.prepare(req, func(error) {})
 	require.NoError(t, err)
 	require.True(t, prepared)
 	var delivered *pool.Message
@@ -298,7 +436,7 @@ func TestConnDeliversCompleteQBlockResponseThroughOriginalHandler(t *testing.T) 
 		msg.Hijack()
 		delivered = msg
 	})
-	first := newQBlockResponse(t, cc, req.Token(), true)
+	first := newQBlockClientResponse(t, cc, req.Token(), true)
 	defer cc.ReleaseMessage(first)
 	first.SetContentFormat(message.TextPlain)
 	first.SetOptionUint32(message.MaxAge, 60)
@@ -331,14 +469,14 @@ func TestConnDeliversCompleteQBlockResponseThroughOriginalHandler(t *testing.T) 
 	require.True(t, delivered.HasOption(message.MaxAge))
 	require.False(t, delivered.HasOption(message.QBlock2))
 	require.False(t, delivered.HasOption(message.Size2))
-	require.Zero(t, cc.qblockReceiver.active())
+	require.Zero(t, cc.qblockClient.active())
 }
 
 func TestConnDeliversSingleFragmentQBlockResponseThroughOriginalHandler(t *testing.T) {
-	cc := newPrivateQBlockConn(t)
-	req := newPrivateQBlockGET(t, cc, message.Token{15, 16, 17})
+	cc := newPrivateQBlockClientConn(t)
+	req := newPrivateQBlockClientGET(t, cc, message.Token{15, 16, 17})
 	defer cc.ReleaseMessage(req)
-	prepared, err := cc.qblockReceiver.prepare(req, func(error) {})
+	prepared, err := cc.qblockClient.prepare(req, func(error) {})
 	require.NoError(t, err)
 	require.True(t, prepared)
 
@@ -347,7 +485,7 @@ func TestConnDeliversSingleFragmentQBlockResponseThroughOriginalHandler(t *testi
 		msg.Hijack()
 		delivered = msg
 	})
-	response := newQBlockFragment(t, cc, req.Token(), 0, false, 16)
+	response := newQBlockClientFragment(t, cc, req.Token(), 0, false, 16)
 	defer cc.ReleaseMessage(response)
 
 	cc.handle(nil, response)
@@ -357,28 +495,28 @@ func TestConnDeliversSingleFragmentQBlockResponseThroughOriginalHandler(t *testi
 	body, err := io.ReadAll(delivered.Body())
 	require.NoError(t, err)
 	require.Equal(t, bytes.Repeat([]byte{'a'}, 16), body)
-	require.Zero(t, cc.qblockReceiver.active())
-	require.Empty(t, cc.qblockReceiver.pending)
-	require.Empty(t, cc.qblockReceiver.transfers)
-	require.Empty(t, cc.qblockReceiver.transferByToken)
+	require.Zero(t, cc.qblockClient.active())
+	require.Empty(t, cc.qblockClient.exchangesByOriginalToken)
+	require.Empty(t, cc.qblockClient.transfers)
+	require.Empty(t, cc.qblockClient.transferByToken)
 }
 
 func TestQBlockDeliveryAllowsHandlerToReenterReceiver(t *testing.T) {
-	cc := newPrivateQBlockConn(t)
-	req := newPrivateQBlockGET(t, cc, message.Token{17, 18, 19})
+	cc := newPrivateQBlockClientConn(t)
+	req := newPrivateQBlockClientGET(t, cc, message.Token{17, 18, 19})
 	defer cc.ReleaseMessage(req)
-	prepared, err := cc.qblockReceiver.prepare(req, func(error) {})
+	prepared, err := cc.qblockClient.prepare(req, func(error) {})
 	require.NoError(t, err)
 	require.True(t, prepared)
 
 	handlerDone := make(chan struct{})
 	cc.tokenHandlerContainer.Store(req.Token().Hash(), func(_ *responsewriter.ResponseWriter[*Conn], msg *pool.Message) {
 		msg.Hijack()
-		_ = cc.qblockReceiver.active()
+		_ = cc.qblockClient.active()
 		cc.ReleaseMessage(msg)
 		close(handlerDone)
 	})
-	first := newQBlockResponse(t, cc, req.Token(), true)
+	first := newQBlockClientResponse(t, cc, req.Token(), true)
 	defer cc.ReleaseMessage(first)
 	last := cc.AcquireMessage(context.Background())
 	defer cc.ReleaseMessage(last)
@@ -400,10 +538,10 @@ func TestQBlockDeliveryAllowsHandlerToReenterReceiver(t *testing.T) {
 	}
 }
 
-func TestQBlockReceiverSendsContinueWithFreshToken(t *testing.T) {
+func TestQBlockClientSendsContinueWithFreshToken(t *testing.T) {
 	session := &qblockTestSession{ctx: context.Background()}
 	allocationCalls := 0
-	cc := newPrivateQBlockConnWithTokenAndSZX(t, session, func() (message.Token, error) {
+	cc := newPrivateQBlockClientConnWithTokenAndSZX(t, session, func() (message.Token, error) {
 		allocationCalls++
 		switch allocationCalls {
 		case 1:
@@ -416,19 +554,19 @@ func TestQBlockReceiverSendsContinueWithFreshToken(t *testing.T) {
 			return message.Token{0xaa}, nil
 		}
 	}, blockwise.SZX64)
-	req := newPrivateQBlockGET(t, cc, message.Token{17, 18, 19})
+	req := newPrivateQBlockClientGET(t, cc, message.Token{17, 18, 19})
 	defer cc.ReleaseMessage(req)
 	req.SetOptionUint32(message.Size2, 704)
 	require.NoError(t, req.SetETag([]byte("req-tag")))
-	prepared, err := cc.qblockReceiver.prepare(req, func(error) {})
+	prepared, err := cc.qblockClient.prepare(req, func(error) {})
 	require.NoError(t, err)
 	require.True(t, prepared)
 	cc.tokenHandlerContainer.Store(message.Token{0xbb}.Hash(), func(*responsewriter.ResponseWriter[*Conn], *pool.Message) {})
 	defer cc.tokenHandlerContainer.Delete(message.Token{0xbb}.Hash())
-	addRetainedObserveOption(t, cc.qblockReceiver, req.Token())
+	addRetainedQBlockClientObserveOption(t, cc.qblockClient, req.Token())
 
 	for number := uint32(0); number < 10; number++ {
-		fragment := newQBlockFragmentWithSZX(t, cc, req.Token(), number, true, 704, blockwise.SZX64)
+		fragment := newQBlockClientFragmentWithSZX(t, cc, req.Token(), number, true, 704, blockwise.SZX64)
 		cc.handle(nil, fragment)
 		cc.ReleaseMessage(fragment)
 	}
@@ -452,24 +590,24 @@ func TestQBlockReceiverSendsContinueWithFreshToken(t *testing.T) {
 	require.Equal(t, qblock.Block{Number: 10, More: true, SZX: blockwise.SZX64}, block)
 }
 
-func TestQBlockReceiverSendsAscendingRepairRequests(t *testing.T) {
+func TestQBlockClientSendsAscendingRepairRequests(t *testing.T) {
 	session := &qblockTestSession{ctx: context.Background()}
 	next := byte(0xb0)
-	cc := newPrivateQBlockConnWithToken(t, session, func() (message.Token, error) {
+	cc := newPrivateQBlockClientConnWithToken(t, session, func() (message.Token, error) {
 		token := message.Token{next}
 		next++
 		return token, nil
 	})
-	req := newPrivateQBlockGET(t, cc, message.Token{17, 18, 19})
+	req := newPrivateQBlockClientGET(t, cc, message.Token{17, 18, 19})
 	defer cc.ReleaseMessage(req)
-	prepared, err := cc.qblockReceiver.prepare(req, func(error) {})
+	prepared, err := cc.qblockClient.prepare(req, func(error) {})
 	require.NoError(t, err)
 	require.True(t, prepared)
 
-	first := newQBlockFragment(t, cc, req.Token(), 0, true, 176)
+	first := newQBlockClientFragment(t, cc, req.Token(), 0, true, 176)
 	defer cc.ReleaseMessage(first)
 	cc.handle(nil, first)
-	last := newQBlockFragment(t, cc, req.Token(), 10, false, 176)
+	last := newQBlockClientFragment(t, cc, req.Token(), 10, false, 176)
 	defer cc.ReleaseMessage(last)
 	cc.handle(nil, last)
 
@@ -503,50 +641,50 @@ func TestQBlockReceiverSendsAscendingRepairRequests(t *testing.T) {
 func TestQBlockControlWriteFailureReleasesReceiver(t *testing.T) {
 	writeErr := errors.New("network down")
 	session := &qblockTestSession{ctx: context.Background(), writeErr: writeErr}
-	cc := newPrivateQBlockConnWithToken(t, session, func() (message.Token, error) { return message.Token{0xcc}, nil })
-	req := newPrivateQBlockGET(t, cc, message.Token{17, 18, 19})
+	cc := newPrivateQBlockClientConnWithToken(t, session, func() (message.Token, error) { return message.Token{0xcc}, nil })
+	req := newPrivateQBlockClientGET(t, cc, message.Token{17, 18, 19})
 	defer cc.ReleaseMessage(req)
 	errCh := make(chan error, 1)
-	prepared, err := cc.qblockReceiver.prepare(req, func(err error) { errCh <- err })
+	prepared, err := cc.qblockClient.prepare(req, func(err error) { errCh <- err })
 	require.NoError(t, err)
 	require.True(t, prepared)
-	first := newQBlockFragment(t, cc, req.Token(), 0, true, 176)
+	first := newQBlockClientFragment(t, cc, req.Token(), 0, true, 176)
 	defer cc.ReleaseMessage(first)
 	cc.handle(nil, first)
-	last := newQBlockFragment(t, cc, req.Token(), 10, false, 176)
+	last := newQBlockClientFragment(t, cc, req.Token(), 10, false, 176)
 	defer cc.ReleaseMessage(last)
 	cc.handle(nil, last)
 
 	require.ErrorIs(t, <-errCh, writeErr)
-	require.Zero(t, cc.qblockReceiver.active())
+	require.Zero(t, cc.qblockClient.active())
 }
 
 func TestQBlockControlTokenAllocationIsBounded(t *testing.T) {
 	allocationCalls := 0
-	cc := newPrivateQBlockConnWithToken(t, &qblockTestSession{ctx: context.Background()}, func() (message.Token, error) {
+	cc := newPrivateQBlockClientConnWithToken(t, &qblockTestSession{ctx: context.Background()}, func() (message.Token, error) {
 		allocationCalls++
 		return nil, nil
 	})
-	req := newPrivateQBlockGET(t, cc, message.Token{18, 19, 20})
+	req := newPrivateQBlockClientGET(t, cc, message.Token{18, 19, 20})
 	defer cc.ReleaseMessage(req)
 	failures := make(chan error, 1)
-	prepared, err := cc.qblockReceiver.prepare(req, func(err error) { failures <- err })
+	prepared, err := cc.qblockClient.prepare(req, func(err error) { failures <- err })
 	require.NoError(t, err)
 	require.True(t, prepared)
 	cc.tokenHandlerContainer.Store(req.Token().Hash(), func(*responsewriter.ResponseWriter[*Conn], *pool.Message) {})
 
 	for number := uint32(0); number < 10; number++ {
-		fragment := newQBlockFragment(t, cc, req.Token(), number, true, 176)
+		fragment := newQBlockClientFragment(t, cc, req.Token(), number, true, 176)
 		cc.handle(nil, fragment)
 		cc.ReleaseMessage(fragment)
 	}
 
 	require.ErrorIs(t, <-failures, errQBlockControlToken)
 	require.Equal(t, 32, allocationCalls)
-	require.Zero(t, cc.qblockReceiver.active())
-	require.Empty(t, cc.qblockReceiver.pending)
-	require.Empty(t, cc.qblockReceiver.transfers)
-	require.Empty(t, cc.qblockReceiver.transferByToken)
+	require.Zero(t, cc.qblockClient.active())
+	require.Empty(t, cc.qblockClient.exchangesByOriginalToken)
+	require.Empty(t, cc.qblockClient.transfers)
+	require.Empty(t, cc.qblockClient.transferByToken)
 	_, ok := cc.tokenHandlerContainer.Load(req.Token().Hash())
 	require.False(t, ok)
 }
@@ -558,17 +696,17 @@ func TestQBlockInvalidManagerConfigHooksAreSafe(t *testing.T) {
 	cfg := DefaultConfig
 	cfg.BlockwiseEnable = false
 	cc := NewConnWithOpts(session, &cfg,
-		withQBlockReceiver(qblockReceiverConfig{Manager: managerConfig, Now: time.Now}),
+		withQBlockClient(qblockClientConfig{Manager: managerConfig, Now: time.Now}),
 	)
-	req := newPrivateQBlockGET(t, cc, message.Token{21, 22, 23})
+	req := newPrivateQBlockClientGET(t, cc, message.Token{21, 22, 23})
 	defer cc.ReleaseMessage(req)
-	prepared, err := cc.qblockReceiver.prepare(req, func(error) {})
+	prepared, err := cc.qblockClient.prepare(req, func(error) {})
 	require.False(t, prepared)
-	require.ErrorIs(t, err, errInvalidQBlockReceiverConfig)
+	require.ErrorIs(t, err, errInvalidQBlockClientConfig)
 
 	require.NotPanics(t, func() { cc.CheckExpirations(time.Now()) })
 	require.NotPanics(t, session.closeForTest)
-	require.Zero(t, cc.qblockReceiver.active())
+	require.Zero(t, cc.qblockClient.active())
 }
 
 func TestQBlockExpiryFailsOriginalRequestAndReleasesState(t *testing.T) {
@@ -579,18 +717,18 @@ func TestQBlockExpiryFailsOriginalRequestAndReleasesState(t *testing.T) {
 	cfg.BlockwiseEnable = false
 	cfg.BlockwiseSZX = blockwise.SZX16
 	cc := NewConnWithOpts(&qblockTestSession{ctx: context.Background()}, &cfg,
-		withQBlockReceiver(qblockReceiverConfig{Manager: managerConfig, Now: func() time.Time { return now }}),
+		withQBlockClient(qblockClientConfig{Manager: managerConfig, Now: func() time.Time { return now }}),
 	)
-	req := newPrivateQBlockGET(t, cc, message.Token{20, 21, 22})
+	req := newPrivateQBlockClientGET(t, cc, message.Token{20, 21, 22})
 	defer cc.ReleaseMessage(req)
 	errCh := make(chan error, 1)
-	prepared, err := cc.qblockReceiver.prepare(req, func(err error) { errCh <- err })
+	prepared, err := cc.qblockClient.prepare(req, func(err error) { errCh <- err })
 	require.NoError(t, err)
 	require.True(t, prepared)
-	first := newQBlockResponse(t, cc, req.Token(), true)
+	first := newQBlockClientResponse(t, cc, req.Token(), true)
 	defer cc.ReleaseMessage(first)
 	cc.handle(nil, first)
-	require.Equal(t, uint32(1), cc.qblockReceiver.active())
+	require.Equal(t, uint32(1), cc.qblockClient.active())
 
 	cc.CheckExpirations(now.Add(managerConfig.Transfer.NonReceiveTimeout))
 	select {
@@ -599,38 +737,38 @@ func TestQBlockExpiryFailsOriginalRequestAndReleasesState(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("Q-Block expiry did not notify the original request")
 	}
-	require.Zero(t, cc.qblockReceiver.active())
+	require.Zero(t, cc.qblockClient.active())
 }
 
 func TestQBlockAbandonReleasesActiveReceiver(t *testing.T) {
-	cc := newPrivateQBlockConn(t)
-	req := newPrivateQBlockGET(t, cc, message.Token{23, 24, 25})
+	cc := newPrivateQBlockClientConn(t)
+	req := newPrivateQBlockClientGET(t, cc, message.Token{23, 24, 25})
 	defer cc.ReleaseMessage(req)
 	errCh := make(chan error, 1)
-	prepared, err := cc.qblockReceiver.prepare(req, func(err error) { errCh <- err })
+	prepared, err := cc.qblockClient.prepare(req, func(err error) { errCh <- err })
 	require.NoError(t, err)
 	require.True(t, prepared)
-	first := newQBlockResponse(t, cc, req.Token(), true)
+	first := newQBlockClientResponse(t, cc, req.Token(), true)
 	defer cc.ReleaseMessage(first)
 	cc.handle(nil, first)
-	require.Equal(t, uint32(1), cc.qblockReceiver.active())
+	require.Equal(t, uint32(1), cc.qblockClient.active())
 
-	cc.qblockReceiver.abandon(req.Token(), context.Canceled)
+	cc.qblockClient.abandon(req.Token(), context.Canceled)
 	select {
 	case err := <-errCh:
 		require.ErrorIs(t, err, context.Canceled)
 	case <-time.After(time.Second):
 		t.Fatal("Q-Block abandonment did not notify the original request")
 	}
-	require.Zero(t, cc.qblockReceiver.active())
+	require.Zero(t, cc.qblockClient.active())
 }
 
 // This would fail if a malformed follow-on were dropped instead of canceling
 // the established Q2 transfer and reporting its protocol error to doInternal.
 func TestQBlockConflictingFollowOnFailsOriginalDoAndReleasesState(t *testing.T) {
 	session := &qblockTestSession{ctx: context.Background(), writeCh: make(chan struct{}, 1)}
-	cc := newPrivateQBlockConnWithToken(t, session, message.GetToken)
-	req := newPrivateQBlockGET(t, cc, message.Token{24, 25, 26})
+	cc := newPrivateQBlockClientConnWithToken(t, session, message.GetToken)
+	req := newPrivateQBlockClientGET(t, cc, message.Token{24, 25, 26})
 	defer cc.ReleaseMessage(req)
 
 	errCh := make(chan error, 1)
@@ -644,12 +782,12 @@ func TestQBlockConflictingFollowOnFailsOriginalDoAndReleasesState(t *testing.T) 
 		t.Fatal("private Q-Block request was not written")
 	}
 
-	first := newQBlockResponse(t, cc, req.Token(), true)
+	first := newQBlockClientResponse(t, cc, req.Token(), true)
 	defer cc.ReleaseMessage(first)
 	cc.handle(nil, first)
-	require.Equal(t, uint32(1), cc.qblockReceiver.active())
+	require.Equal(t, uint32(1), cc.qblockClient.active())
 
-	conflicting := newQBlockFragment(t, cc, req.Token(), 1, false, 32)
+	conflicting := newQBlockClientFragment(t, cc, req.Token(), 1, false, 32)
 	defer cc.ReleaseMessage(conflicting)
 	require.NoError(t, conflicting.SetETag([]byte("etag-b")))
 	cc.handle(nil, conflicting)
@@ -660,27 +798,27 @@ func TestQBlockConflictingFollowOnFailsOriginalDoAndReleasesState(t *testing.T) 
 	case <-time.After(time.Second):
 		t.Fatal("conflicting Q-Block fragment did not fail the original request")
 	}
-	require.Zero(t, cc.qblockReceiver.active())
-	require.Empty(t, cc.qblockReceiver.pending)
-	require.Empty(t, cc.qblockReceiver.transfers)
-	require.Empty(t, cc.qblockReceiver.transferByToken)
+	require.Zero(t, cc.qblockClient.active())
+	require.Empty(t, cc.qblockClient.exchangesByOriginalToken)
+	require.Empty(t, cc.qblockClient.transfers)
+	require.Empty(t, cc.qblockClient.transferByToken)
 	_, ok := cc.tokenHandlerContainer.Load(req.Token().Hash())
 	require.False(t, ok)
 }
 
 func TestQBlockConnectionCloseReleasesActiveReceiver(t *testing.T) {
 	session := &qblockTestSession{ctx: context.Background()}
-	cc := newPrivateQBlockConnWithToken(t, session, message.GetToken)
-	req := newPrivateQBlockGET(t, cc, message.Token{26, 27, 28})
+	cc := newPrivateQBlockClientConnWithToken(t, session, message.GetToken)
+	req := newPrivateQBlockClientGET(t, cc, message.Token{26, 27, 28})
 	defer cc.ReleaseMessage(req)
 	errCh := make(chan error, 1)
-	prepared, err := cc.qblockReceiver.prepare(req, func(err error) { errCh <- err })
+	prepared, err := cc.qblockClient.prepare(req, func(err error) { errCh <- err })
 	require.NoError(t, err)
 	require.True(t, prepared)
-	first := newQBlockResponse(t, cc, req.Token(), true)
+	first := newQBlockClientResponse(t, cc, req.Token(), true)
 	defer cc.ReleaseMessage(first)
 	cc.handle(nil, first)
-	require.Equal(t, uint32(1), cc.qblockReceiver.active())
+	require.Equal(t, uint32(1), cc.qblockClient.active())
 
 	session.closeForTest()
 	select {
@@ -689,7 +827,7 @@ func TestQBlockConnectionCloseReleasesActiveReceiver(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("Q-Block connection close did not notify the original request")
 	}
-	require.Zero(t, cc.qblockReceiver.active())
+	require.Zero(t, cc.qblockClient.active())
 }
 
 // This would fail if doInternal treated a canceled connection as a caller
@@ -697,8 +835,8 @@ func TestQBlockConnectionCloseReleasesActiveReceiver(t *testing.T) {
 func TestQBlockConnectionShutdownFailsActiveDoWithClosedAndNoLeak(t *testing.T) {
 	sessionCtx, cancelSession := context.WithCancel(context.Background())
 	session := &qblockTestSession{ctx: sessionCtx, writeCh: make(chan struct{}, 1)}
-	cc := newPrivateQBlockConnWithToken(t, session, message.GetToken)
-	req := newPrivateQBlockGET(t, cc, message.Token{27, 28, 29})
+	cc := newPrivateQBlockClientConnWithToken(t, session, message.GetToken)
+	req := newPrivateQBlockClientGET(t, cc, message.Token{27, 28, 29})
 	defer cc.ReleaseMessage(req)
 	result := make(chan error, 1)
 	go func() {
@@ -710,10 +848,10 @@ func TestQBlockConnectionShutdownFailsActiveDoWithClosedAndNoLeak(t *testing.T) 
 	case <-time.After(time.Second):
 		t.Fatal("private Q-Block request was not written")
 	}
-	first := newQBlockResponse(t, cc, req.Token(), true)
+	first := newQBlockClientResponse(t, cc, req.Token(), true)
 	defer cc.ReleaseMessage(first)
 	cc.handle(nil, first)
-	require.Equal(t, uint32(1), cc.qblockReceiver.active())
+	require.Equal(t, uint32(1), cc.qblockClient.active())
 
 	cancelSession()
 	select {
@@ -725,10 +863,10 @@ func TestQBlockConnectionShutdownFailsActiveDoWithClosedAndNoLeak(t *testing.T) 
 	// The session invokes connection callbacks after exposing its canceled
 	// context. This must be harmless because doInternal already closed Q2.
 	session.closeForTest()
-	require.Zero(t, cc.qblockReceiver.active())
-	require.Empty(t, cc.qblockReceiver.pending)
-	require.Empty(t, cc.qblockReceiver.transfers)
-	require.Empty(t, cc.qblockReceiver.transferByToken)
+	require.Zero(t, cc.qblockClient.active())
+	require.Empty(t, cc.qblockClient.exchangesByOriginalToken)
+	require.Empty(t, cc.qblockClient.transfers)
+	require.Empty(t, cc.qblockClient.transferByToken)
 }
 
 // This would fail if merely enabling the private receiver changed connection
@@ -751,8 +889,8 @@ func TestQBlockEnabledIneligibleRequestKeepsGenericConnectionCloseError(t *testi
 		t.Run(test.name, func(t *testing.T) {
 			sessionCtx, cancelSession := context.WithCancel(context.Background())
 			session := &qblockTestSession{ctx: sessionCtx, writeCh: make(chan struct{}, 1)}
-			cc := newPrivateQBlockConnWithToken(t, session, message.GetToken)
-			req := newPrivateQBlockGET(t, cc, message.Token{28, 29, 30})
+			cc := newPrivateQBlockClientConnWithToken(t, session, message.GetToken)
+			req := newPrivateQBlockClientGET(t, cc, message.Token{28, 29, 30})
 			defer cc.ReleaseMessage(req)
 			test.configure(t, req)
 
@@ -782,8 +920,8 @@ func TestQBlockEnabledIneligibleRequestKeepsGenericConnectionCloseError(t *testi
 			case <-time.After(time.Second):
 				t.Fatal("connection shutdown did not fail the ineligible request")
 			}
-			require.Zero(t, cc.qblockReceiver.active())
-			require.Empty(t, cc.qblockReceiver.pending)
+			require.Zero(t, cc.qblockClient.active())
+			require.Empty(t, cc.qblockClient.exchangesByOriginalToken)
 		})
 	}
 }
@@ -805,8 +943,8 @@ func TestQBlockFollowOnMetadataConflictsFailOriginalDoAndReleaseState(t *testing
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			session := &qblockTestSession{ctx: context.Background(), writeCh: make(chan struct{}, 1)}
-			cc := newPrivateQBlockConnWithToken(t, session, message.GetToken)
-			req := newPrivateQBlockGET(t, cc, message.Token{30, 31, 32})
+			cc := newPrivateQBlockClientConnWithToken(t, session, message.GetToken)
+			req := newPrivateQBlockClientGET(t, cc, message.Token{30, 31, 32})
 			defer cc.ReleaseMessage(req)
 			result := make(chan error, 1)
 			go func() {
@@ -819,12 +957,12 @@ func TestQBlockFollowOnMetadataConflictsFailOriginalDoAndReleaseState(t *testing
 				t.Fatal("private Q-Block request was not written")
 			}
 
-			first := newQBlockResponse(t, cc, req.Token(), true)
+			first := newQBlockClientResponse(t, cc, req.Token(), true)
 			defer cc.ReleaseMessage(first)
 			first.SetContentFormat(message.TextPlain)
 			cc.handle(nil, first)
-			require.Equal(t, uint32(1), cc.qblockReceiver.active())
-			followOn := newQBlockFragment(t, cc, req.Token(), 1, false, 32)
+			require.Equal(t, uint32(1), cc.qblockClient.active())
+			followOn := newQBlockClientFragment(t, cc, req.Token(), 1, false, 32)
 			defer cc.ReleaseMessage(followOn)
 			followOn.SetContentFormat(message.TextPlain)
 			test.mutate(t, followOn)
@@ -836,38 +974,38 @@ func TestQBlockFollowOnMetadataConflictsFailOriginalDoAndReleaseState(t *testing
 			case <-time.After(time.Second):
 				t.Fatal("metadata conflict did not fail the original request")
 			}
-			require.Zero(t, cc.qblockReceiver.active())
-			require.Empty(t, cc.qblockReceiver.pending)
-			require.Empty(t, cc.qblockReceiver.transfers)
-			require.Empty(t, cc.qblockReceiver.transferByToken)
+			require.Zero(t, cc.qblockClient.active())
+			require.Empty(t, cc.qblockClient.exchangesByOriginalToken)
+			require.Empty(t, cc.qblockClient.transfers)
+			require.Empty(t, cc.qblockClient.transferByToken)
 			_, ok := cc.tokenHandlerContainer.Load(req.Token().Hash())
 			require.False(t, ok)
 		})
 	}
 }
 
-func newPrivateQBlockConn(t *testing.T) *Conn {
+func newPrivateQBlockClientConn(t *testing.T) *Conn {
 	t.Helper()
-	return newPrivateQBlockConnWithToken(t, &qblockTestSession{ctx: context.Background()}, message.GetToken)
+	return newPrivateQBlockClientConnWithToken(t, &qblockTestSession{ctx: context.Background()}, message.GetToken)
 }
 
-func newPrivateQBlockConnWithToken(t *testing.T, session *qblockTestSession, getToken func() (message.Token, error)) *Conn {
+func newPrivateQBlockClientConnWithToken(t *testing.T, session *qblockTestSession, getToken func() (message.Token, error)) *Conn {
 	t.Helper()
-	return newPrivateQBlockConnWithTokenAndSZX(t, session, getToken, blockwise.SZX16)
+	return newPrivateQBlockClientConnWithTokenAndSZX(t, session, getToken, blockwise.SZX16)
 }
 
-func newPrivateQBlockConnWithTokenAndSZX(t *testing.T, session *qblockTestSession, getToken func() (message.Token, error), szx blockwise.SZX) *Conn {
+func newPrivateQBlockClientConnWithTokenAndSZX(t *testing.T, session *qblockTestSession, getToken func() (message.Token, error), szx blockwise.SZX) *Conn {
 	t.Helper()
 	cfg := DefaultConfig
 	cfg.BlockwiseEnable = false
 	cfg.BlockwiseSZX = szx
 	cfg.GetToken = getToken
 	return NewConnWithOpts(session, &cfg,
-		withQBlockReceiver(qblockReceiverConfig{Manager: qblock.DefaultManagerConfig(), Now: time.Now}),
+		withQBlockClient(qblockClientConfig{Manager: qblock.DefaultManagerConfig(), Now: time.Now}),
 	)
 }
 
-func newPrivateQBlockGET(t *testing.T, cc *Conn, token message.Token) *pool.Message {
+func newPrivateQBlockClientGET(t *testing.T, cc *Conn, token message.Token) *pool.Message {
 	t.Helper()
 	req := cc.AcquireMessage(context.Background())
 	req.SetCode(codes.GET)
@@ -876,7 +1014,7 @@ func newPrivateQBlockGET(t *testing.T, cc *Conn, token message.Token) *pool.Mess
 	return req
 }
 
-func newQBlockResponse(t *testing.T, cc *Conn, token message.Token, withETag bool) *pool.Message {
+func newQBlockClientResponse(t *testing.T, cc *Conn, token message.Token, withETag bool) *pool.Message {
 	t.Helper()
 	resp := cc.AcquireMessage(context.Background())
 	resp.SetCode(codes.Content)
@@ -892,11 +1030,11 @@ func newQBlockResponse(t *testing.T, cc *Conn, token message.Token, withETag boo
 	return resp
 }
 
-func newQBlockFragment(t *testing.T, cc *Conn, token message.Token, number uint32, more bool, size uint32) *pool.Message {
-	return newQBlockFragmentWithSZX(t, cc, token, number, more, size, blockwise.SZX16)
+func newQBlockClientFragment(t *testing.T, cc *Conn, token message.Token, number uint32, more bool, size uint32) *pool.Message {
+	return newQBlockClientFragmentWithSZX(t, cc, token, number, more, size, blockwise.SZX16)
 }
 
-func newQBlockFragmentWithSZX(t *testing.T, cc *Conn, token message.Token, number uint32, more bool, size uint32, szx blockwise.SZX) *pool.Message {
+func newQBlockClientFragmentWithSZX(t *testing.T, cc *Conn, token message.Token, number uint32, more bool, size uint32, szx blockwise.SZX) *pool.Message {
 	t.Helper()
 	resp := cc.AcquireMessage(context.Background())
 	resp.SetCode(codes.Content)
