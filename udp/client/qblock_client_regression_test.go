@@ -357,7 +357,9 @@ func requireQBlockClientFullyIdle(t *testing.T, receiver *qblockClient) {
 	require.Zero(t, qblockClientManagerTokenCountForTest(receiver.manager))
 	require.Zero(t, qblockClientManagerRetainedBytesForTest(receiver.manager))
 	require.Empty(t, receiver.transfers)
+	require.Empty(t, receiver.exchangeByTransfer)
 	require.Empty(t, receiver.transferByToken)
+	require.Empty(t, receiver.transferByMID)
 	require.Empty(t, receiver.exchangesByOriginalToken)
 }
 

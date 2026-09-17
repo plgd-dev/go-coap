@@ -140,6 +140,14 @@ func (s *qblockTestSession) writesFor(transfer *qblockTransfer) []qblockTestWrit
 	}
 	return writes
 }
+
+func (s *qblockTestSession) writesSnapshot() []qblockTestWrite {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	writes := make([]qblockTestWrite, len(s.writes))
+	copy(writes, s.writes)
+	return writes
+}
 func (s *qblockTestSession) WriteMulticastMessage(*pool.Message, *net.UDPAddr, ...coapNet.MulticastOption) error {
 	return nil
 }
@@ -172,20 +180,34 @@ func TestQBlockClientSerializesConcurrentOutputBursts(t *testing.T) {
 	session.firstWriteStarted = make(chan struct{}, 1)
 	session.releaseFirstWrite = make(chan struct{})
 
-	first := startQ1TransferForTest(t, cc, bytes.Repeat([]byte{'a'}, 48))
+	first, firstDone := startQ1TransferForTest(t, cc, bytes.Repeat([]byte{'a'}, 176))
 	<-session.firstWriteStarted
-	done := make(chan struct{})
+	if cc.qblockClient.actionMu.TryLock() {
+		cc.qblockClient.actionMu.Unlock()
+		t.Fatal("initial burst should hold the ordered action lock")
+	}
+	tickStarted := make(chan struct{})
+	tickDone := make(chan struct{})
 	go func() {
+		close(tickStarted)
 		cc.qblockClient.Tick(time.Unix(200, 0))
-		close(done)
+		close(tickDone)
 	}()
+	<-tickStarted
+	select {
+	case <-tickDone:
+		t.Fatal("competing Q-Block tick completed before the blocked initial write was released")
+	default:
+	}
 	close(session.releaseFirstWrite)
-	<-done
+	<-firstDone
+	<-tickDone
 
-	requireQ1Burst(t, session.writesFor(first), []uint32{0, 1, 2}, first.requestTag)
+	requireQ1Burst(t, session.writesFor(first), []uint32{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10}, first.requestTag)
+	requireQ1Burst(t, session.writesSnapshot(), []uint32{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10}, first.requestTag)
 }
 
-func startQ1TransferForTest(t *testing.T, cc *Conn, payload []byte) *qblockTransfer {
+func startQ1TransferForTest(t *testing.T, cc *Conn, payload []byte) (*qblockTransfer, <-chan struct{}) {
 	t.Helper()
 	token := message.Token{0x71}
 	requestTag := []byte("tag-a")
@@ -227,8 +249,12 @@ func startQ1TransferForTest(t *testing.T, cc *Conn, payload []byte) *qblockTrans
 	cc.qblockClient.transferByToken[string(token)] = transfer
 	cc.qblockClient.mu.Unlock()
 
-	go cc.qblockClient.drive(outputs)
-	return transfer
+	done := make(chan struct{})
+	go func() {
+		cc.qblockClient.drive(outputs)
+		close(done)
+	}()
+	return transfer, done
 }
 
 func requireQ1Burst(t *testing.T, writes []qblockTestWrite, numbers []uint32, requestTag []byte) {
