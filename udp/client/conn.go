@@ -1,6 +1,7 @@
 package client
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -69,6 +70,19 @@ type Session interface {
 }
 
 type RequestsMap = coapSync.Map[uint64, *pool.Message]
+
+type tokenOwner uint8
+
+const (
+	tokenOwnerRequest tokenOwner = iota + 1
+	tokenOwnerObservation
+	tokenOwnerQBlock
+)
+
+type tokenReservation struct {
+	token message.Token
+	owner tokenOwner
+}
 
 const (
 	errFmtWriteRequest  = "cannot write request: %w"
@@ -205,6 +219,7 @@ type Conn struct {
 	getToken               func() (message.Token, error)
 
 	tokenHandlerContainer *coapSync.Map[uint64, HandlerFunc]
+	tokenReservations     *coapSync.Map[uint64, tokenReservation]
 	midHandlerContainer   *coapSync.Map[int32, *midElement]
 	msgID                 atomic.Uint32
 	blockwiseSZX          blockwise.SZX
@@ -343,6 +358,7 @@ func NewConnWithOpts(session Session, cfg *Config, opts ...Option) *Conn {
 		blockwiseSZX: cfg.BlockwiseSZX,
 
 		tokenHandlerContainer:     coapSync.NewMap[uint64, HandlerFunc](),
+		tokenReservations:         coapSync.NewMap[uint64, tokenReservation](),
 		midHandlerContainer:       coapSync.NewMap[int32, *midElement](),
 		processReceivedMessage:    cfg.ProcessReceivedMessage,
 		errors:                    cfg.Errors,
@@ -362,6 +378,14 @@ func NewConnWithOpts(session Session, cfg *Config, opts ...Option) *Conn {
 	}
 	limitParallelRequests := limitparallelrequests.New(cfg.LimitClientParallelRequests, cfg.LimitClientEndpointParallelRequests, cc.do, cc.doObserve)
 	cc.observationHandler = observation.NewHandler(&cc, cfg.Handler, limitParallelRequests.Do)
+	cc.observationHandler.SetTokenCallbacks(
+		func(token message.Token) error {
+			return cc.claimToken(token, tokenOwnerObservation)
+		},
+		func(token message.Token) {
+			cc.releaseToken(token, tokenOwnerObservation)
+		},
+	)
 	cc.Client = client.New(&cc, cc.observationHandler, cfg.GetToken, limitParallelRequests)
 	if cc.processReceivedMessage == nil {
 		cc.processReceivedMessage = processReceivedMessage
@@ -416,6 +440,9 @@ func (cc *Conn) doInternal(req *pool.Message) (*pool.Message, error) {
 	if token == nil {
 		return nil, errors.New("invalid token")
 	}
+	if err := cc.claimToken(token, tokenOwnerRequest); err != nil {
+		return nil, fmt.Errorf("cannot add token(%v) handler: %w", token, err)
+	}
 
 	respChan := make(chan *pool.Message, 1)
 	qblockErrChan := make(chan error, 1)
@@ -427,10 +454,12 @@ func (cc *Conn) doInternal(req *pool.Message) (*pool.Message, error) {
 		default:
 		}
 	}); loaded {
+		cc.releaseToken(token, tokenOwnerRequest)
 		return nil, fmt.Errorf("cannot add token(%v) handler: %w", token, coapErrors.ErrKeyAlreadyExists)
 	}
 	defer func() {
 		_, _ = cc.tokenHandlerContainer.LoadAndDelete(token.Hash())
+		cc.releaseToken(token, tokenOwnerRequest)
 		if cc.qblockReceiver != nil {
 			cc.qblockReceiver.abandon(token, req.Context().Err())
 		}
@@ -482,6 +511,42 @@ func (cc *Conn) doInternal(req *pool.Message) (*pool.Message, error) {
 		}
 		return resp, nil
 	}
+}
+
+func (cc *Conn) claimToken(token message.Token, owner tokenOwner) error {
+	if len(token) == 0 {
+		return errors.New("empty token")
+	}
+	if _, loaded := cc.tokenReservations.LoadOrStore(token.Hash(), tokenReservation{
+		token: bytes.Clone(token),
+		owner: owner,
+	}); loaded {
+		return coapErrors.ErrKeyAlreadyExists
+	}
+	return nil
+}
+
+func (cc *Conn) releaseToken(token message.Token, owner tokenOwner) {
+	cc.tokenReservations.ReplaceWithFunc(token.Hash(), func(reservation tokenReservation, loaded bool) (tokenReservation, bool) {
+		if loaded && reservation.owner == owner && bytes.Equal(reservation.token, token) {
+			return reservation, true
+		}
+		return reservation, false
+	})
+}
+
+func (cc *Conn) claimFreshQBlockToken() (message.Token, error) {
+	for range 32 {
+		token, err := cc.getToken()
+		if err != nil {
+			return nil, err
+		}
+		token = bytes.Clone(token)
+		if err := cc.claimToken(token, tokenOwnerQBlock); err == nil {
+			return token, nil
+		}
+	}
+	return nil, errors.New("cannot allocate fresh q-block token")
 }
 
 // Do sends an coap message and returns an coap response.

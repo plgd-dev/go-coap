@@ -34,6 +34,8 @@ type Handler[C Client] struct {
 	observations *coapSync.Map[uint64, *Observation[C]]
 	next         HandlerFunc[C]
 	do           DoFunc
+	claimToken   func(message.Token) error
+	releaseToken func(message.Token)
 }
 
 func (h *Handler[C]) Handle(w *responsewriter.ResponseWriter[C], r *pool.Message) {
@@ -48,7 +50,7 @@ func (h *Handler[C]) client() C {
 	return h.cc
 }
 
-func (h *Handler[C]) NewObservation(req *pool.Message, observeFunc func(req *pool.Message)) (*Observation[C], error) {
+func (h *Handler[C]) NewObservation(req *pool.Message, observeFunc func(req *pool.Message)) (observation *Observation[C], err error) {
 	observe, err := req.Observe()
 	if err != nil {
 		return nil, fmt.Errorf("cannot get observe option: %w", err)
@@ -60,25 +62,34 @@ func (h *Handler[C]) NewObservation(req *pool.Message, observeFunc func(req *poo
 	if len(token) == 0 {
 		return nil, errors.New("empty token")
 	}
+	if err := h.claimToken(token); err != nil {
+		return nil, err
+	}
+	stored := false
+	defer func() {
+		if err == nil {
+			return
+		}
+		if stored {
+			observation.cleanUp()
+			return
+		}
+		h.releaseToken(token)
+	}()
 	options, err := req.Options().Clone()
 	if err != nil {
 		return nil, fmt.Errorf("cannot clone options: %w", err)
 	}
 	respObservationChan := make(chan respObservationMessage, 1)
-	o := newObservation(message.Message{
+	observation = newObservation(message.Message{
 		Token:   req.Token(),
 		Code:    req.Code(),
 		Options: options,
 	}, h, observeFunc, respObservationChan)
-	defer func(err *error) {
-		if *err != nil {
-			o.cleanUp()
-		}
-	}(&err)
-	if _, loaded := h.observations.LoadOrStore(token.Hash(), o); loaded {
-		err = pkgErrors.ErrKeyAlreadyExists
-		return nil, err
+	if _, loaded := h.observations.LoadOrStore(token.Hash(), observation); loaded {
+		return nil, pkgErrors.ErrKeyAlreadyExists
 	}
+	stored = true
 
 	err = h.cc.WriteMessage(req)
 	if err != nil {
@@ -97,9 +108,9 @@ func (h *Handler[C]) NewObservation(req *pool.Message, observeFunc func(req *poo
 			return nil, err
 		}
 		if resp.notSupported {
-			o.cleanUp()
+			observation.cleanUp()
 		}
-		return o, nil
+		return observation, nil
 	}
 }
 
@@ -131,7 +142,23 @@ func NewHandler[C Client](cc C, next HandlerFunc[C], do DoFunc) *Handler[C] {
 		observations: coapSync.NewMap[uint64, *Observation[C]](),
 		next:         next,
 		do:           do,
+		claimToken: func(message.Token) error {
+			return nil
+		},
+		releaseToken: func(message.Token) {},
 	}
+}
+
+// SetTokenCallbacks configures optional callbacks for the lifetime of observation tokens.
+func (h *Handler[C]) SetTokenCallbacks(claim func(message.Token) error, release func(message.Token)) {
+	if claim == nil {
+		claim = func(message.Token) error { return nil }
+	}
+	if release == nil {
+		release = func(message.Token) {}
+	}
+	h.claimToken = claim
+	h.releaseToken = release
 }
 
 type respObservationMessage struct {
@@ -190,6 +217,9 @@ func (o *Observation[C]) cleanUp() bool {
 	// we can ignore err during cleanUp, if err != nil then some other
 	// part of code already removed the handler for the token
 	_, ok := o.observationHandler.pullOutObservation(o.req.Token.Hash())
+	if ok {
+		o.observationHandler.releaseToken(o.req.Token)
+	}
 	return ok
 }
 
