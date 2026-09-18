@@ -80,9 +80,13 @@ func (cc *Conn) handleDisabledQBlock(w *responsewriter.ResponseWriter[*Conn], re
 	}
 	request := req.Code() >= codes.GET && req.Code() < codes.Code(32)
 	// The enabled private Q-Block client validates and consumes Q2 responses.
+	// It also owns Q1 control responses for active private upload tokens.
 	// Other Q responses remain unsupported and never elicit another response.
 	if !request {
-		return cc.qblockClient == nil || !opts.HasOption(message.QBlock2)
+		if cc.qblockClient != nil && (opts.HasOption(message.QBlock2) || cc.qblockClient.ownsQ1Response(req)) {
+			return false
+		}
+		return true
 	}
 	validationErr := qblock.ValidateOptions(opts, request)
 	if req.Type() != message.Confirmable && req.Type() != message.NonConfirmable {

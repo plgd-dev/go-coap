@@ -494,6 +494,9 @@ func (c *qblockClient) handleQ1ResponseLocked(msg *pool.Message, id qblock.Trans
 	if transfer == nil || transfer.kind != qblock.Q1 {
 		return nil, false
 	}
+	if transfer.terminalResponse != nil {
+		return nil, true
+	}
 	blockCount := qblockClientBlockCount(transfer.metadata)
 	control, handled, err := q1ControlFromResponse(msg, blockCount)
 	if err != nil {
@@ -523,6 +526,13 @@ func (c *qblockClient) handleQ1ResponseLocked(msg *pool.Message, id qblock.Trans
 		return c.finishExchangeLocked(transfer.exchange, err), true
 	}
 	return outputs, true
+}
+
+func (c *qblockClient) ownsQ1Response(msg *pool.Message) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	transfer := c.transferByToken[string(msg.Token())]
+	return transfer != nil && transfer.kind == qblock.Q1
 }
 
 func qblockClientBlockCount(metadata qblock.Metadata) uint32 {

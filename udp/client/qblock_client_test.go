@@ -375,6 +375,25 @@ func TestQBlockClientContinuesAndRepairsQ1ByAnyFragmentToken(t *testing.T) {
 	}, session.requestTag(), bytes.Repeat([]byte{'x'}, 32))
 }
 
+func TestQBlockClientQ1ContinueReachesAdapterThroughIngress(t *testing.T) {
+	cc, session := startThreeBlockQ1(t)
+	last := session.writes[2].token
+	response := q1Continue(t, cc, last, 2)
+	response.SetType(message.NonConfirmable)
+	response.SetMessageID(9001)
+	defer cc.ReleaseMessage(response)
+	writer := responsewriter.New(cc.AcquireMessage(context.Background()), cc)
+	defer cc.ReleaseMessage(writer.Message())
+
+	cc.handleReq(writer, response)
+
+	requireQ1BurstBlocks(t, session.writes[3:], codes.POST, []qblock.Block{
+		{Number: 3, More: true, SZX: blockwise.SZX16},
+		{Number: 4, More: true, SZX: blockwise.SZX16},
+		{Number: 5, More: false, SZX: blockwise.SZX16},
+	}, session.requestTag(), bytes.Repeat([]byte{'x'}, 48))
+}
+
 func TestQBlockClientDeliversTerminalResponseOnce(t *testing.T) {
 	cc, session, result := startDoQ1POST(t)
 	response := ordinaryResponse(t, cc, session.writes[1].token, codes.Changed, []byte("ok"))
@@ -402,6 +421,72 @@ func TestQBlockClientDeliversTerminalResponseOnce(t *testing.T) {
 		t.Fatal("terminal Q1 response delivered more than once")
 	default:
 	}
+}
+
+func TestQBlockClientPendingTerminalResponseIgnoresSecondOwnedTerminal(t *testing.T) {
+	cc, session, result := startDoQ1POST(t)
+	first := ordinaryResponse(t, cc, session.writes[0].token, codes.Changed, []byte("first"))
+	first.SetMessageID(9101)
+	defer cc.ReleaseMessage(first)
+	second := ordinaryResponse(t, cc, session.writes[1].token, codes.Deleted, []byte("second"))
+	second.SetMessageID(9102)
+	defer cc.ReleaseMessage(second)
+	contended := make(chan struct{}, 2)
+	cc.qblockClient.actionMuContention = func() {
+		select {
+		case contended <- struct{}{}:
+		default:
+		}
+	}
+
+	cc.qblockClient.actionMu.Lock()
+	firstDone := make(chan struct{})
+	go func() {
+		cc.handle(nil, first)
+		close(firstDone)
+	}()
+	select {
+	case <-contended:
+	case <-time.After(time.Second):
+		t.Fatal("first terminal response did not reach pending ordered execution")
+	}
+	secondDone := make(chan struct{})
+	go func() {
+		cc.handle(nil, second)
+		close(secondDone)
+	}()
+	select {
+	case <-contended:
+	case <-time.After(time.Second):
+		t.Fatal("second terminal response did not reach pending ordered execution")
+	}
+	cc.qblockClient.actionMu.Unlock()
+
+	select {
+	case <-firstDone:
+	case <-time.After(time.Second):
+		t.Fatal("first terminal response did not complete")
+	}
+	select {
+	case <-secondDone:
+	case <-time.After(time.Second):
+		t.Fatal("second terminal response did not complete")
+	}
+
+	got := requireQBlockResponse(t, result)
+	defer cc.ReleaseMessage(got)
+	require.Equal(t, message.Token{0x01}, got.Token())
+	require.Equal(t, codes.Changed, got.Code())
+	body, err := io.ReadAll(got.Body())
+	require.NoError(t, err)
+	require.Equal(t, []byte("first"), body)
+	select {
+	case duplicate := <-result:
+		cc.ReleaseMessage(duplicate)
+		t.Fatal("pending terminal response delivered more than once")
+	default:
+	}
+	requireQBlockClientEmpty(t, cc)
 }
 
 func TestQBlockClientMalformedQ1ControlsFailOnceAndReleaseState(t *testing.T) {
@@ -1632,6 +1717,17 @@ func requireQBlockFailure(t *testing.T, failures <-chan error) error {
 		return err
 	case <-time.After(time.Second):
 		t.Fatal("Q-Block failure callback was not invoked")
+		return nil
+	}
+}
+
+func requireQBlockResponse(t *testing.T, responses <-chan *pool.Message) *pool.Message {
+	t.Helper()
+	select {
+	case response := <-responses:
+		return response
+	case <-time.After(time.Second):
+		t.Fatal("Q-Block response callback was not invoked")
 		return nil
 	}
 }
