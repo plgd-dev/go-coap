@@ -410,7 +410,13 @@ func (c *qblockClient) handle(msg *pool.Message) bool {
 	c.mu.Lock()
 	token := msg.Token()
 	if transfer := c.transferByToken[string(token)]; transfer != nil {
-		fragment, _, err := fragmentFromQ2(msg, transfer.operation, &transfer.metadata)
+		if transfer.kind == qblock.Q1 {
+			outputs, _ := c.handoffQ1ToQ2Locked(transfer.id, msg)
+			c.mu.Unlock()
+			c.drive(outputs)
+			return true
+		}
+		fragment, _, err := fragmentFromQ2ForCode(msg, transfer.operation, &transfer.metadata, transfer.responseCode)
 		if err != nil {
 			outputs := c.manager.Cancel(transfer.id, err)
 			c.mu.Unlock()
@@ -497,6 +503,10 @@ func (c *qblockClient) handleQ1ResponseLocked(msg *pool.Message, id qblock.Trans
 	if transfer.terminalResponse != nil {
 		return nil, true
 	}
+	if msg.HasOption(message.QBlock2) {
+		outputs, _ := c.handoffQ1ToQ2Locked(id, msg)
+		return outputs, true
+	}
 	blockCount := qblockClientBlockCount(transfer.metadata)
 	control, handled, err := q1ControlFromResponse(msg, blockCount)
 	if err != nil {
@@ -526,6 +536,95 @@ func (c *qblockClient) handleQ1ResponseLocked(msg *pool.Message, id qblock.Trans
 		return c.finishExchangeLocked(transfer.exchange, err), true
 	}
 	return outputs, true
+}
+
+// handoffQ1ToQ2Locked validates the complete first fragment before ending Q1.
+// An error with no outputs leaves the sender live; errors after sender completion
+// return terminal outputs so the regular driver reports failure exactly once.
+func (c *qblockClient) handoffQ1ToQ2Locked(id qblock.TransferID, msg *pool.Message) ([]qblock.Output, error) {
+	sender := c.transfers[id]
+	if sender == nil || sender.kind != qblock.Q1 {
+		return nil, qblock.ErrUnknownTransfer
+	}
+	if sender.terminalResponse != nil {
+		return nil, nil
+	}
+	exchange := sender.exchange
+	code := msg.Code()
+	if code != codes.Created && code != codes.Changed && (exchange.requestCode != codes.POST || (code != codes.Content && code != codes.Deleted)) {
+		return nil, errors.New("q-block response code is not applicable to upload")
+	}
+	etag, err := qblockETag(msg)
+	if err != nil {
+		return nil, err
+	}
+	operation, err := q2Operation(exchange.originalToken, etag)
+	if err != nil {
+		return nil, err
+	}
+	fragment, metadata, err := fragmentFromQ2ForCode(msg, operation, nil, code)
+	if err != nil {
+		return nil, err
+	}
+	responseOptions, err := qblockResponseOptions(msg)
+	if err != nil {
+		return nil, err
+	}
+	completed, err := c.manager.Control(qblock.Control{Token: fragment.Token}, c.now())
+	if err != nil {
+		return c.finishExchangeLocked(exchange, err), err
+	}
+	// Keep the response token reserved across the transition. All other Q1
+	// tokens and MIDs cease to route before the receiver is started.
+	for token := range sender.tokens {
+		if token == string(fragment.Token) {
+			continue
+		}
+		delete(c.transferByToken, token)
+		c.cc.releaseToken(message.Token([]byte(token)), tokenOwnerQBlock)
+		delete(sender.tokens, token)
+	}
+	for mid := range sender.mids {
+		delete(c.transferByMID, mid)
+		delete(sender.mids, mid)
+	}
+	outputs, err := c.manager.StartReceiver(fragment, c.now())
+	if err != nil {
+		c.finishExchangeLocked(exchange, err)
+		// Q1 has already left the manager, so its completion outputs now carry
+		// the handoff error and release the remaining adapter record.
+		for i := range completed {
+			if completed[i].Action.Kind == qblock.Complete {
+				completed[i].Action.Err = err
+			}
+		}
+		return completed, err
+	}
+	receiverID, ok := c.manager.TransferID(operation)
+	if !ok {
+		// A one-fragment body is delivered and released by StartReceiver.
+		receiverID = outputs[0].TransferID
+	}
+	receiver := &qblockTransfer{
+		id:               receiverID,
+		exchange:         exchange,
+		kind:             qblock.Q2,
+		operation:        operation,
+		metadata:         metadata,
+		initialToken:     message.Token(bytes.Clone(fragment.Token)),
+		initialTokenUsed: true,
+		tokens:           map[string]message.Token{string(fragment.Token): message.Token(bytes.Clone(fragment.Token))},
+		mids:             make(map[int32]struct{}),
+		responseOptions:  responseOptions,
+		responseCode:     code,
+	}
+	exchange.transfers[receiverID] = struct{}{}
+	c.exchangeByTransfer[receiverID] = exchange
+	c.transfers[receiverID] = receiver
+	c.transferByToken[string(fragment.Token)] = receiver
+	delete(sender.tokens, string(fragment.Token))
+	c.releaseTransferLocked(id)
+	return outputs, nil
 }
 
 func (c *qblockClient) ownsQ1Response(msg *pool.Message) bool {
@@ -919,8 +1018,12 @@ func qblockResponseOptions(msg *pool.Message) (message.Options, error) {
 }
 
 func fragmentFromQ2(msg *pool.Message, operation qblock.OperationKey, previous *qblock.Metadata) (qblock.Fragment, qblock.Metadata, error) {
-	if msg.Code() != codes.Content {
-		return qblock.Fragment{}, qblock.Metadata{}, errors.New("q-block response must be 2.05 Content")
+	return fragmentFromQ2ForCode(msg, operation, previous, codes.Content)
+}
+
+func fragmentFromQ2ForCode(msg *pool.Message, operation qblock.OperationKey, previous *qblock.Metadata, allowedCode codes.Code) (qblock.Fragment, qblock.Metadata, error) {
+	if msg.Code() != allowedCode {
+		return qblock.Fragment{}, qblock.Metadata{}, errors.New("q-block response code changed or is not applicable")
 	}
 	if msg.HasOption(message.QBlock1) {
 		return qblock.Fragment{}, qblock.Metadata{}, errQBlockMixedResponseOptions
@@ -969,7 +1072,16 @@ func fragmentFromQ2(msg *pool.Message, operation qblock.OperationKey, previous *
 			return qblock.Fragment{}, qblock.Metadata{}, err
 		}
 	}
-	return qblock.Fragment{Operation: operation, Token: msg.Token(), Kind: qblock.Q2, Metadata: metadata, Block: block, Payload: payload}, metadata, nil
+	// Validate layout independently of the manager's resource budget, before
+	// a handoff can mutate the sender. The manager still enforces its own limits.
+	body, err := qblock.NewBody(metadata, ^uint32(0))
+	if err != nil {
+		return qblock.Fragment{}, qblock.Metadata{}, err
+	}
+	if _, err := body.Add(metadata, block, payload); err != nil {
+		return qblock.Fragment{}, qblock.Metadata{}, err
+	}
+	return qblock.Fragment{Operation: operation, Token: message.Token(bytes.Clone(msg.Token())), Kind: qblock.Q2, Metadata: metadata, Block: block, Payload: payload}, metadata, nil
 }
 
 func qblockOptionCount(msg *pool.Message, id message.OptionID) int {

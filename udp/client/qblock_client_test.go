@@ -1634,6 +1634,99 @@ func startFailingQ1POST(t *testing.T) (*Conn, *qblockTestSession, chan error) {
 	return cc, session, failures
 }
 
+func TestQBlockClientHandsQ1ResponseToQ2Receiver(t *testing.T) {
+	cc, session, result := startDoQ1POST(t)
+	writes := session.writesSnapshot()
+	token := writes[len(writes)-1].token
+	first := q2ResponseForPost(t, cc, token, 0, true, 32, 'a')
+	defer cc.ReleaseMessage(first)
+	cc.handle(nil, first)
+	require.Equal(t, uint32(1), cc.qblockClient.active())
+	require.Equal(t, qblock.Q2, cc.qblockClient.transferByToken[string(token)].kind)
+	for _, write := range writes[:len(writes)-1] {
+		require.NoError(t, cc.claimToken(write.token, tokenOwnerRequest))
+		cc.releaseToken(write.token, tokenOwnerRequest)
+		require.NotContains(t, cc.qblockClient.transferByMID, write.mid)
+	}
+	// The terminal upload token remains reserved while it routes the response.
+	require.Error(t, cc.claimToken(token, tokenOwnerRequest))
+	last := q2ResponseForPost(t, cc, token, 1, false, 32, 'b')
+	defer cc.ReleaseMessage(last)
+	cc.handle(nil, last)
+	got := requireQBlockResponse(t, result)
+	defer cc.ReleaseMessage(got)
+	require.Equal(t, message.Token{0x01}, got.Token())
+	require.Equal(t, codes.Changed, got.Code())
+	body, err := io.ReadAll(got.Body())
+	require.NoError(t, err)
+	require.Equal(t, []byte("aaaaaaaaaaaaaaaabbbbbbbbbbbbbbbb"), body)
+	require.False(t, got.HasOption(message.QBlock2))
+	require.False(t, got.HasOption(message.Size2))
+	requireQBlockClientFullyIdle(t, cc.qblockClient)
+	require.NoError(t, cc.claimToken(token, tokenOwnerRequest))
+	cc.releaseToken(token, tokenOwnerRequest)
+	require.Len(t, session.writesSnapshot(), 3)
+}
+
+func TestQBlockClientHandoffSingleFragmentDeliveryReusesSenderBudget(t *testing.T) {
+	for _, test := range []struct {
+		method codes.Code
+		code   codes.Code
+	}{
+		{codes.POST, codes.Created}, {codes.POST, codes.Changed},
+		{codes.POST, codes.Content}, {codes.POST, codes.Deleted},
+		{codes.PUT, codes.Created}, {codes.PUT, codes.Changed},
+	} {
+		t.Run(test.method.String()+"/"+test.code.String(), func(t *testing.T) {
+			session := &qblockTestSession{ctx: context.Background()}
+			cfg := DefaultConfig
+			cfg.BlockwiseEnable = false
+			cfg.BlockwiseSZX = blockwise.SZX16
+			managerConfig := qblock.DefaultManagerConfig()
+			managerConfig.MaxTransfers = 1
+			managerConfig.MaxTokens = 1
+			managerConfig.Transfer.MaxBodySize = 16
+			managerConfig.MaxRetainedBytes = 16
+			cc := NewConnWithOpts(session, &cfg, withQBlockClient(qblockClientConfig{Manager: managerConfig}))
+			request := newPOSTWithBody(t, cc, message.Token{1}, bytes.Repeat([]byte{'x'}, 16))
+			defer cc.ReleaseMessage(request)
+			request.SetCode(test.method)
+			prepared, err := cc.qblockClient.prepare(request, func(err error) { t.Errorf("handoff failed: %v", err) })
+			require.NoError(t, err)
+			require.True(t, prepared)
+			result := make(chan *pool.Message, 1)
+			cc.tokenHandlerContainer.Store(request.Token().Hash(), func(_ *responsewriter.ResponseWriter[*Conn], msg *pool.Message) { result <- msg })
+			response := q2ResponseForPost(t, cc, session.writesSnapshot()[0].token, 0, false, 16, 'a')
+			defer cc.ReleaseMessage(response)
+			response.SetCode(test.code)
+			cc.handle(nil, response)
+			got := requireQBlockResponse(t, result)
+			defer cc.ReleaseMessage(got)
+			require.Equal(t, test.code, got.Code())
+			require.Equal(t, request.Token(), got.Token())
+			body, err := io.ReadAll(got.Body())
+			require.NoError(t, err)
+			require.Equal(t, bytes.Repeat([]byte{'a'}, 16), body)
+			requireQBlockClientFullyIdle(t, cc.qblockClient)
+			cc.handle(nil, response)
+			select {
+			case <-result:
+				t.Fatal("one-fragment response delivered twice")
+			default:
+			}
+			require.Len(t, session.writesSnapshot(), 1)
+		})
+	}
+}
+
+func q2ResponseForPost(t *testing.T, cc *Conn, token message.Token, number uint32, more bool, size uint32, payload byte) *pool.Message {
+	t.Helper()
+	msg := newQBlockClientFragment(t, cc, token, number, more, size)
+	msg.SetCode(codes.Changed)
+	msg.SetBody(bytes.NewReader(bytes.Repeat([]byte{payload}, 16)))
+	return msg
+}
+
 func startDoQ1POST(t *testing.T) (*Conn, *qblockTestSession, chan *pool.Message) {
 	t.Helper()
 	tokens := []message.Token{{0xa1}, {0xb1}, {0xb2}, {0xb3}}
@@ -1649,11 +1742,21 @@ func startDoQ1POST(t *testing.T) (*Conn, *qblockTestSession, chan *pool.Message)
 	})
 	request := newPOSTWithBody(t, cc, message.Token{0x01}, bytes.Repeat([]byte{'x'}, 48))
 	result := make(chan *pool.Message, 1)
+	done := make(chan error, 1)
+	t.Cleanup(func() {
+		cc.qblockClient.close()
+		select {
+		case err := <-done:
+			require.NoError(t, err)
+		case <-time.After(time.Second):
+			t.Error("private Q1 caller did not exit")
+		}
+	})
 	go func() {
 		response, err := cc.doInternal(request)
-		require.NoError(t, err)
 		result <- response
 		cc.ReleaseMessage(request)
+		done <- err
 	}()
 	for len(session.writesSnapshot()) < 3 {
 		select {

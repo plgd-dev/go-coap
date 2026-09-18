@@ -289,6 +289,113 @@ func TestQBlockMixedQOptionsFollowOnFailsOriginalCall(t *testing.T) {
 	require.False(t, registered)
 }
 
+func TestQBlockClientRejectsInvalidQ1ToQ2FirstFragmentAtomically(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(*pool.Message)
+	}{
+		{"AbsentETag", func(m *pool.Message) { m.Remove(message.ETag) }},
+		{"AbsentSize2", func(m *pool.Message) { m.Remove(message.Size2) }},
+		{"DuplicateQBlock2", func(m *pool.Message) { m.AddOptionUint32(message.QBlock2, 0) }},
+		{"MalformedQBlock2", func(m *pool.Message) { m.SetOptionBytes(message.QBlock2, []byte{0, 0, 0, 0}) }},
+		{"MixedQOptions", func(m *pool.Message) { m.SetOptionUint32(message.QBlock1, 0) }},
+		{"ClassicBlock2", func(m *pool.Message) { m.SetOptionUint32(message.Block2, 0) }},
+		{"InvalidPayload", func(m *pool.Message) { m.SetBody(bytes.NewReader([]byte("short"))) }},
+		{"InvalidSize", func(m *pool.Message) { m.SetOptionUint32(message.Size2, 16) }},
+		{"InvalidOffset", func(m *pool.Message) { m.SetOptionUint32(message.QBlock2, 40) }},
+		{"ErrorCode", func(m *pool.Message) { m.SetCode(codes.BadRequest) }},
+		{"ContinueCode", func(m *pool.Message) { m.SetCode(codes.Continue) }},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			cc, session, failures := startFailingQ1POST(t)
+			defer cc.qblockClient.close()
+			writes := session.writesSnapshot()
+			token := writes[0].token
+			before := cc.qblockClient.transferByToken[string(token)]
+			first := q2ResponseForPost(t, cc, token, 0, true, 32, 'a')
+			defer cc.ReleaseMessage(first)
+			test.mutate(first)
+			require.True(t, cc.qblockClient.handle(first))
+			require.Equal(t, uint32(1), cc.qblockClient.active())
+			require.Same(t, before, cc.qblockClient.transferByToken[string(token)])
+			require.Equal(t, qblock.Q1, before.kind)
+			require.Len(t, cc.qblockClient.transfers, 1)
+			_, registered := cc.tokenHandlerContainer.Load(message.Token{0x01}.Hash())
+			require.True(t, registered)
+			select {
+			case err := <-failures:
+				t.Fatalf("invalid first fragment ended upload: %v", err)
+			default:
+			}
+			// A valid Q1 continue still advances the surviving upload.
+			control := q1Continue(t, cc, token, 2)
+			defer cc.ReleaseMessage(control)
+			require.True(t, cc.qblockClient.handle(control))
+			require.Len(t, session.writesSnapshot(), 6)
+		})
+	}
+}
+
+func TestQBlockClientHandoffStartFailureEndsExchangeWithoutReplay(t *testing.T) {
+	cc, session, failures := startFailingQ1POST(t)
+	writes := session.writesSnapshot()
+	// The existing receiver owns the prospective response operation, but not
+	// any upload token: conversion succeeds and manager start must fail.
+	operation, err := q2Operation(message.Token{0x01}, []byte("etag-a"))
+	require.NoError(t, err)
+	_, err = cc.qblockClient.manager.StartReceiver(qblock.Fragment{
+		Operation: operation, Token: message.Token{0xf0}, Kind: qblock.Q2,
+		Metadata: qblock.Metadata{Size: 32, SZX: blockwise.SZX16, Identity: []byte("etag-a")},
+		Block:    qblock.Block{More: true, SZX: blockwise.SZX16}, Payload: bytes.Repeat([]byte{'z'}, 16),
+	}, time.Now())
+	require.NoError(t, err)
+	baseline, ok := cc.qblockClient.manager.TransferID(operation)
+	require.True(t, ok)
+	first := q2ResponseForPost(t, cc, writes[0].token, 0, true, 32, 'a')
+	defer cc.ReleaseMessage(first)
+	require.True(t, cc.qblockClient.handle(first))
+	require.ErrorIs(t, requireQBlockFailure(t, failures), qblock.ErrOperationInUse)
+	require.True(t, cc.qblockClient.handle(first))
+	cc.qblockClient.close()
+	select {
+	case err := <-failures:
+		t.Fatalf("handoff failed twice: %v", err)
+	default:
+	}
+	require.Len(t, session.writesSnapshot(), len(writes))
+	require.Equal(t, uint32(1), cc.qblockClient.active(), "unrelated receiver survives")
+	cc.qblockClient.manager.Cancel(baseline, qblock.ErrCanceled)
+	requireQBlockClientFullyIdle(t, cc.qblockClient)
+	for _, write := range writes {
+		require.NoError(t, cc.claimToken(write.token, tokenOwnerRequest))
+		cc.releaseToken(write.token, tokenOwnerRequest)
+	}
+}
+
+func TestQBlockClientHandoffInvalidFollowOnFailsOnce(t *testing.T) {
+	cc, session, failures := startFailingQ1POST(t)
+	token := session.writesSnapshot()[0].token
+	first := q2ResponseForPost(t, cc, token, 0, true, 32, 'a')
+	defer cc.ReleaseMessage(first)
+	require.True(t, cc.qblockClient.handle(first))
+	require.NotNil(t, cc.qblockClient.transferByToken[string(token)])
+	require.Equal(t, qblock.Q2, cc.qblockClient.transferByToken[string(token)].kind)
+	last := q2ResponseForPost(t, cc, token, 1, false, 32, 'b')
+	defer cc.ReleaseMessage(last)
+	last.SetOptionUint32(message.QBlock1, 0)
+	require.True(t, cc.qblockClient.handle(last))
+	require.Error(t, requireQBlockFailure(t, failures))
+	require.True(t, cc.qblockClient.handle(last))
+	cc.qblockClient.close()
+	select {
+	case err := <-failures:
+		t.Fatalf("follow-on failed twice: %v", err)
+	default:
+	}
+	requireQBlockClientFullyIdle(t, cc.qblockClient)
+}
+
 func startQBlockClientTokenConflictFixture(t *testing.T, receiver *qblockClient, token message.Token) qblock.TransferID {
 	t.Helper()
 	operation, err := qblock.NewOperationKey([]byte("baseline"), []byte("identity"))
