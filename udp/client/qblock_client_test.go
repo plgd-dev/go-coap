@@ -28,6 +28,7 @@ type qblockTestSession struct {
 	writes     []qblockTestWrite
 	onClose    []EventFunc
 	writeErr   error
+	writeErrAt int
 	writeCh    chan struct{}
 
 	writeMu           sync.Mutex
@@ -112,6 +113,7 @@ func (s *qblockTestSession) WriteMessage(msg *pool.Message) error {
 	}
 	s.writeMu.Lock()
 	s.writes = append(s.writes, write)
+	writeCount := len(s.writes)
 	s.writeMu.Unlock()
 	if s.writeCh != nil {
 		select {
@@ -119,7 +121,10 @@ func (s *qblockTestSession) WriteMessage(msg *pool.Message) error {
 		default:
 		}
 	}
-	return s.writeErr
+	if s.writeErr != nil && (s.writeErrAt == 0 || s.writeErrAt == writeCount) {
+		return s.writeErr
+	}
+	return nil
 }
 
 func (s *qblockTestSession) writesFor(transfer *qblockTransfer) []qblockTestWrite {
@@ -153,6 +158,16 @@ func (s *qblockTestSession) writesSnapshot() []qblockTestWrite {
 	writes := make([]qblockTestWrite, len(s.writes))
 	copy(writes, s.writes)
 	return writes
+}
+
+func (s *qblockTestSession) requestTag() []byte {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	if len(s.writes) == 0 {
+		return nil
+	}
+	tag, _ := s.writes[0].options.GetBytes(message.RequestTag)
+	return bytes.Clone(tag)
 }
 func (s *qblockTestSession) WriteMulticastMessage(*pool.Message, *net.UDPAddr, ...coapNet.MulticastOption) error {
 	return nil
@@ -267,7 +282,16 @@ func startQ1TransferForTest(t *testing.T, cc *Conn, payload []byte) (*qblockTran
 
 func requireQ1Burst(t *testing.T, writes []qblockTestWrite, code codes.Code, numbers []uint32, requestTag, body []byte) {
 	t.Helper()
-	require.Len(t, writes, len(numbers))
+	blocks := make([]qblock.Block, 0, len(numbers))
+	for index, number := range numbers {
+		blocks = append(blocks, qblock.Block{Number: number, More: index+1 < len(numbers), SZX: blockwise.SZX16})
+	}
+	requireQ1BurstBlocks(t, writes, code, blocks, requestTag, body)
+}
+
+func requireQ1BurstBlocks(t *testing.T, writes []qblockTestWrite, code codes.Code, blocks []qblock.Block, requestTag, body []byte) {
+	t.Helper()
+	require.Len(t, writes, len(blocks))
 	seenTokens := make(map[string]struct{}, len(writes))
 	seenMIDs := make(map[int32]struct{}, len(writes))
 	var payload []byte
@@ -287,7 +311,7 @@ func requireQ1Burst(t *testing.T, writes []qblockTestWrite, code codes.Code, num
 		require.Equal(t, requestTag, tag)
 		block, err := qblock.DecodeBlock(write.block)
 		require.NoError(t, err)
-		require.Equal(t, qblock.Block{Number: numbers[index], More: index+1 < len(numbers), SZX: blockwise.SZX16}, block)
+		require.Equal(t, blocks[index], block)
 	}
 	require.Equal(t, body, payload)
 }
@@ -330,6 +354,190 @@ func TestQBlockClientPreparesPUTAsQ1Burst(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, prepared)
 	requireQ1Burst(t, session.writesSnapshot(), codes.PUT, []uint32{0}, []byte{0xa2}, body)
+}
+
+func TestQBlockClientContinuesAndRepairsQ1ByAnyFragmentToken(t *testing.T) {
+	cc, session := startThreeBlockQ1(t)
+	last := session.writes[2].token
+
+	cc.handle(nil, q1Continue(t, cc, last, 2))
+	requireQ1BurstBlocks(t, session.writes[3:], codes.POST, []qblock.Block{
+		{Number: 3, More: true, SZX: blockwise.SZX16},
+		{Number: 4, More: true, SZX: blockwise.SZX16},
+		{Number: 5, More: false, SZX: blockwise.SZX16},
+	}, session.requestTag(), bytes.Repeat([]byte{'x'}, 48))
+
+	cc.handle(nil, q1Missing(t, cc, last, []uint32{1, 4}))
+	cc.qblockClient.Tick(time.Now().Add(3 * time.Second))
+	requireQ1BurstBlocks(t, session.writes[6:], codes.POST, []qblock.Block{
+		{Number: 1, More: true, SZX: blockwise.SZX16},
+		{Number: 4, More: true, SZX: blockwise.SZX16},
+	}, session.requestTag(), bytes.Repeat([]byte{'x'}, 32))
+}
+
+func TestQBlockClientDeliversTerminalResponseOnce(t *testing.T) {
+	cc, session, result := startDoQ1POST(t)
+	response := ordinaryResponse(t, cc, session.writes[1].token, codes.Changed, []byte("ok"))
+	defer cc.ReleaseMessage(response)
+
+	cc.handle(nil, response)
+
+	var got *pool.Message
+	select {
+	case got = <-result:
+	case <-time.After(time.Second):
+		t.Fatal("terminal Q1 response was not delivered")
+	}
+	defer cc.ReleaseMessage(got)
+	require.Equal(t, message.Token{0x01}, got.Token())
+	require.Equal(t, codes.Changed, got.Code())
+	body, err := io.ReadAll(got.Body())
+	require.NoError(t, err)
+	require.Equal(t, []byte("ok"), body)
+	requireQBlockClientEmpty(t, cc)
+	cc.handle(nil, response)
+	select {
+	case duplicate := <-result:
+		cc.ReleaseMessage(duplicate)
+		t.Fatal("terminal Q1 response delivered more than once")
+	default:
+	}
+}
+
+func TestQBlockClientMalformedQ1ControlsFailOnceAndReleaseState(t *testing.T) {
+	tests := []struct {
+		name    string
+		control func(*testing.T, *Conn, message.Token) *pool.Message
+	}{
+		{
+			name: "MalformedContinue",
+			control: func(t *testing.T, cc *Conn, token message.Token) *pool.Message {
+				msg := q1Continue(t, cc, token, 2)
+				msg.AddOptionUint32(message.QBlock1, 0)
+				return msg
+			},
+		},
+		{
+			name: "WrongMissingContentFormat",
+			control: func(t *testing.T, cc *Conn, token message.Token) *pool.Message {
+				msg := q1Missing(t, cc, token, []uint32{1})
+				msg.SetContentFormat(message.TextPlain)
+				return msg
+			},
+		},
+		{
+			name: "InvalidMissingCBOR",
+			control: func(t *testing.T, cc *Conn, token message.Token) *pool.Message {
+				msg := q1Missing(t, cc, token, []uint32{1})
+				msg.SetBody(bytes.NewReader([]byte{0xff}))
+				return msg
+			},
+		},
+		{
+			name: "OversizeMissingCBOR",
+			control: func(t *testing.T, cc *Conn, token message.Token) *pool.Message {
+				msg := q1Missing(t, cc, token, []uint32{6})
+				return msg
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			cc, session, failures := startFailingQ1POST(t)
+			msg := test.control(t, cc, session.writes[1].token)
+			defer cc.ReleaseMessage(msg)
+
+			require.True(t, cc.qblockClient.handle(msg))
+
+			require.Error(t, requireQBlockFailure(t, failures))
+			select {
+			case err := <-failures:
+				t.Fatalf("Q1 control failure reported more than once: %v", err)
+			default:
+			}
+			requireQBlockClientEmpty(t, cc)
+			_, registered := cc.tokenHandlerContainer.Load(message.Token{0x01}.Hash())
+			require.False(t, registered)
+		})
+	}
+}
+
+func TestQBlockClientUnknownQ1TokenDoesNotConsumeControl(t *testing.T) {
+	cc, _, failures := startFailingQ1POST(t)
+	msg := q1Continue(t, cc, message.Token{0xee}, 2)
+	defer cc.ReleaseMessage(msg)
+
+	require.False(t, cc.qblockClient.handle(msg))
+
+	select {
+	case err := <-failures:
+		t.Fatalf("unknown Q1 token failed active transfer: %v", err)
+	default:
+	}
+	require.Equal(t, uint32(1), cc.qblockClient.active())
+}
+
+func TestQBlockClientResetOnQ1MIDFailsOnceAndReleasesState(t *testing.T) {
+	cc, session, failures := startFailingQ1POST(t)
+	reset := cc.AcquireMessage(context.Background())
+	defer cc.ReleaseMessage(reset)
+	reset.SetType(message.Reset)
+	reset.SetCode(codes.Empty)
+	reset.SetMessageID(session.writes[1].mid)
+	reset.SetToken(session.writes[1].token)
+
+	require.True(t, cc.qblockClient.handle(reset))
+	require.ErrorIs(t, requireQBlockFailure(t, failures), qblock.ErrCanceled)
+	cc.handle(nil, reset)
+	select {
+	case err := <-failures:
+		t.Fatalf("Q1 reset failure reported more than once: %v", err)
+	default:
+	}
+	requireQBlockClientEmpty(t, cc)
+}
+
+func TestQBlockClientQ1SecondFragmentWriteFailureReleasesState(t *testing.T) {
+	writeErr := errors.New("write second q1 fragment")
+	session := &qblockTestSession{ctx: context.Background(), writeErr: writeErr, writeErrAt: 2}
+	tokens := [][]byte{{0xa1}, {0xb1}, {0xb2}}
+	next := 0
+	cc := newPrivateQBlockClientConnWithMaxPayloads(t, session, 3, func() (message.Token, error) {
+		token := message.Token(bytes.Clone(tokens[next]))
+		next++
+		return token, nil
+	})
+	request := newPOSTWithBody(t, cc, message.Token{0x01}, bytes.Repeat([]byte{'x'}, 96))
+	defer cc.ReleaseMessage(request)
+	failures := make(chan error, 2)
+
+	prepared, err := cc.qblockClient.prepare(request, func(err error) { failures <- err })
+
+	require.NoError(t, err)
+	require.True(t, prepared)
+	require.ErrorIs(t, requireQBlockFailure(t, failures), writeErr)
+	select {
+	case err := <-failures:
+		t.Fatalf("Q1 write failure reported more than once: %v", err)
+	default:
+	}
+	requireQBlockClientEmpty(t, cc)
+	require.Len(t, session.writes, 2)
+}
+
+func TestQBlockClientQ1CancelCleanupIsIdempotent(t *testing.T) {
+	cc, _, failures := startFailingQ1POST(t)
+
+	cc.qblockClient.abandon(message.Token{0x01}, context.Canceled)
+	cc.qblockClient.abandon(message.Token{0x01}, context.Canceled)
+
+	require.ErrorIs(t, requireQBlockFailure(t, failures), context.Canceled)
+	select {
+	case err := <-failures:
+		t.Fatalf("Q1 cancellation reported more than once: %v", err)
+	default:
+	}
+	requireQBlockClientEmpty(t, cc)
 }
 
 func TestQBlockClientLeavesUnsupportedQ1ShapesOrdinary(t *testing.T) {
@@ -1274,6 +1482,19 @@ func newPrivateQBlockClientConnWithTokenAndSZX(t *testing.T, session *qblockTest
 	)
 }
 
+func newPrivateQBlockClientConnWithMaxPayloads(t *testing.T, session *qblockTestSession, maxPayloads uint32, getToken func() (message.Token, error)) *Conn {
+	t.Helper()
+	cfg := DefaultConfig
+	cfg.BlockwiseEnable = false
+	cfg.BlockwiseSZX = blockwise.SZX16
+	cfg.GetToken = getToken
+	managerConfig := qblock.DefaultManagerConfig()
+	managerConfig.Transfer.MaxPayloads = maxPayloads
+	return NewConnWithOpts(session, &cfg,
+		withQBlockClient(qblockClientConfig{Manager: managerConfig, Now: time.Now}),
+	)
+}
+
 func newPrivateQBlockClientConnWithTokens(t *testing.T, tokens []message.Token) (*Conn, *qblockTestSession) {
 	t.Helper()
 	session := &qblockTestSession{ctx: context.Background()}
@@ -1289,6 +1510,76 @@ func newPrivateQBlockClientConnWithTokens(t *testing.T, tokens []message.Token) 
 	return newPrivateQBlockClientConnWithToken(t, session, getToken), session
 }
 
+func startThreeBlockQ1(t *testing.T) (*Conn, *qblockTestSession) {
+	t.Helper()
+	tokens := []message.Token{{0xa1}, {0xb1}, {0xb2}, {0xb3}, {0xb4}, {0xb5}, {0xb6}, {0xb7}, {0xb8}}
+	session := &qblockTestSession{ctx: context.Background()}
+	next := 0
+	cc := newPrivateQBlockClientConnWithMaxPayloads(t, session, 3, func() (message.Token, error) {
+		if next >= len(tokens) {
+			return nil, errors.New("test token sequence exhausted")
+		}
+		token := message.Token(bytes.Clone(tokens[next]))
+		next++
+		return token, nil
+	})
+	request := newPOSTWithBody(t, cc, message.Token{0x01}, bytes.Repeat([]byte{'x'}, 96))
+	defer cc.ReleaseMessage(request)
+	prepared, err := cc.qblockClient.prepare(request, func(error) {})
+	require.NoError(t, err)
+	require.True(t, prepared)
+	requireQ1BurstBlocks(t, session.writesSnapshot(), codes.POST, []qblock.Block{
+		{Number: 0, More: true, SZX: blockwise.SZX16},
+		{Number: 1, More: true, SZX: blockwise.SZX16},
+		{Number: 2, More: true, SZX: blockwise.SZX16},
+	}, []byte{0xa1}, bytes.Repeat([]byte{'x'}, 48))
+	return cc, session
+}
+
+func startFailingQ1POST(t *testing.T) (*Conn, *qblockTestSession, chan error) {
+	t.Helper()
+	cc, session := startThreeBlockQ1(t)
+	failures := make(chan error, 2)
+	cc.qblockClient.mu.Lock()
+	exchange := cc.qblockClient.exchangesByOriginalToken[string(message.Token{0x01})]
+	require.NotNil(t, exchange)
+	exchange.fail = func(err error) { failures <- err }
+	cc.qblockClient.mu.Unlock()
+	cc.tokenHandlerContainer.Store(message.Token{0x01}.Hash(), func(*responsewriter.ResponseWriter[*Conn], *pool.Message) {})
+	return cc, session, failures
+}
+
+func startDoQ1POST(t *testing.T) (*Conn, *qblockTestSession, chan *pool.Message) {
+	t.Helper()
+	tokens := []message.Token{{0xa1}, {0xb1}, {0xb2}, {0xb3}}
+	session := &qblockTestSession{ctx: context.Background(), writeCh: make(chan struct{}, 3)}
+	next := 0
+	cc := newPrivateQBlockClientConnWithToken(t, session, func() (message.Token, error) {
+		if next >= len(tokens) {
+			return nil, errors.New("test token sequence exhausted")
+		}
+		token := message.Token(bytes.Clone(tokens[next]))
+		next++
+		return token, nil
+	})
+	request := newPOSTWithBody(t, cc, message.Token{0x01}, bytes.Repeat([]byte{'x'}, 48))
+	result := make(chan *pool.Message, 1)
+	go func() {
+		response, err := cc.doInternal(request)
+		require.NoError(t, err)
+		result <- response
+		cc.ReleaseMessage(request)
+	}()
+	for len(session.writesSnapshot()) < 3 {
+		select {
+		case <-session.writeCh:
+		case <-time.After(time.Second):
+			t.Fatal("private Q1 request burst was not written")
+		}
+	}
+	return cc, session, result
+}
+
 func newPOSTWithBody(t *testing.T, cc *Conn, token message.Token, body []byte) *pool.Message {
 	t.Helper()
 	req := cc.AcquireMessage(context.Background())
@@ -1298,6 +1589,51 @@ func newPOSTWithBody(t *testing.T, cc *Conn, token message.Token, body []byte) *
 	req.SetContentFormat(message.TextPlain)
 	req.SetBody(bytes.NewReader(body))
 	return req
+}
+
+func q1Continue(t *testing.T, cc *Conn, token message.Token, number uint32) *pool.Message {
+	t.Helper()
+	response := cc.AcquireMessage(context.Background())
+	response.SetCode(codes.Continue)
+	response.SetToken(token)
+	value, err := qblock.EncodeBlock(qblock.Block{Number: number, More: true, SZX: blockwise.SZX16})
+	require.NoError(t, err)
+	response.SetOptionUint32(message.QBlock1, value)
+	return response
+}
+
+func q1Missing(t *testing.T, cc *Conn, token message.Token, numbers []uint32) *pool.Message {
+	t.Helper()
+	response := cc.AcquireMessage(context.Background())
+	response.SetCode(codes.RequestEntityIncomplete)
+	response.SetToken(token)
+	response.SetContentFormat(message.AppMissingBlocksCBORSeq)
+	payload, consumed, err := qblock.EncodeMissing(numbers, 1024)
+	require.NoError(t, err)
+	require.Equal(t, len(numbers), consumed)
+	response.SetBody(bytes.NewReader(payload))
+	return response
+}
+
+func ordinaryResponse(t *testing.T, cc *Conn, token message.Token, code codes.Code, payload []byte) *pool.Message {
+	t.Helper()
+	response := cc.AcquireMessage(context.Background())
+	response.SetCode(code)
+	response.SetToken(token)
+	response.SetContentFormat(message.TextPlain)
+	response.SetBody(bytes.NewReader(payload))
+	return response
+}
+
+func requireQBlockFailure(t *testing.T, failures <-chan error) error {
+	t.Helper()
+	select {
+	case err := <-failures:
+		return err
+	case <-time.After(time.Second):
+		t.Fatal("Q-Block failure callback was not invoked")
+		return nil
+	}
 }
 
 func mustOptionUint32(t *testing.T, options message.Options, id message.OptionID) uint32 {

@@ -3,6 +3,7 @@ package client
 import (
 	"errors"
 	"fmt"
+	"io"
 
 	"github.com/plgd-dev/go-coap/v3/message"
 	"github.com/plgd-dev/go-coap/v3/message/codes"
@@ -10,6 +11,65 @@ import (
 	"github.com/plgd-dev/go-coap/v3/net/qblock"
 	"github.com/plgd-dev/go-coap/v3/net/responsewriter"
 )
+
+func q1ControlFromResponse(msg *pool.Message, blockCount uint32) (qblock.Control, bool, error) {
+	control := qblock.Control{Token: message.Token(append([]byte(nil), msg.Token()...))}
+	switch msg.Code() {
+	case codes.Continue:
+		if msg.HasOption(message.QBlock2) {
+			return control, true, errQBlockMixedResponseOptions
+		}
+		if err := qblock.ValidateOptions(msg.Options(), true); err != nil {
+			return control, true, err
+		}
+		if qblockOptionCount(msg, message.QBlock1) != 1 {
+			return control, true, errors.New("q-block continue response requires one QBlock1")
+		}
+		value, err := msg.GetOptionUint32(message.QBlock1)
+		if err != nil {
+			return control, true, err
+		}
+		block, err := qblock.DecodeBlock(value)
+		if err != nil {
+			return control, true, err
+		}
+		control.Continue = &block.Number
+		return control, true, nil
+	case codes.RequestEntityIncomplete:
+		if msg.HasOption(message.QBlock1) || msg.HasOption(message.QBlock2) {
+			return control, true, errQBlockMixedResponseOptions
+		}
+		if qblockOptionCount(msg, message.ContentFormat) != 1 {
+			return control, true, errors.New("q-block missing response requires Content-Format")
+		}
+		contentFormat, err := msg.ContentFormat()
+		if err != nil {
+			return control, true, err
+		}
+		if contentFormat != message.AppMissingBlocksCBORSeq {
+			return control, true, errors.New("q-block missing response requires missing-blocks+cbor-seq")
+		}
+		body := msg.Body()
+		if body == nil {
+			return control, true, errors.New("q-block missing response requires payload")
+		}
+		payload, err := io.ReadAll(body)
+		if err != nil {
+			return control, true, err
+		}
+		missing, err := qblock.DecodeMissing(payload, blockCount, int(blockCount))
+		if err != nil {
+			return control, true, err
+		}
+		control.Missing = missing
+		return control, true, nil
+	default:
+		if msg.HasOption(message.QBlock1) || msg.HasOption(message.QBlock2) {
+			return control, true, errors.New("unexpected q-block option in terminal response")
+		}
+		return control, false, nil
+	}
+}
 
 // handleDisabledQBlock prevents unsupported fragments reaching application handlers.
 // Responses are not requests and must never elicit a Bad Option response.

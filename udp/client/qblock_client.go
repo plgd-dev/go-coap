@@ -28,13 +28,14 @@ type qblockClientConfig struct {
 }
 
 type qblockExchange struct {
-	originalToken message.Token
-	requestCode   codes.Code
-	requestOpts   message.Options
-	requestTag    []byte
-	fail          func(error)
-	transfers     map[qblock.TransferID]struct{}
-	finished      bool
+	originalToken   message.Token
+	requestCode     codes.Code
+	requestOpts     message.Options
+	requestTag      []byte
+	fail            func(error)
+	transfers       map[qblock.TransferID]struct{}
+	finished        bool
+	failureReported bool
 }
 
 type qblockTransfer struct {
@@ -50,6 +51,7 @@ type qblockTransfer struct {
 	mids             map[int32]struct{}
 	responseOptions  message.Options
 	responseCode     codes.Code
+	terminalResponse *pool.Message
 }
 
 type qblockClient struct {
@@ -364,8 +366,46 @@ func (c *qblockClient) close() {
 }
 
 func (c *qblockClient) handle(msg *pool.Message) bool {
+	if msg.Type() == message.Reset {
+		c.mu.Lock()
+		transfer := c.transferByMID[msg.MessageID()]
+		if transfer == nil {
+			c.mu.Unlock()
+			return false
+		}
+		outputs := c.finishExchangeLocked(transfer.exchange, qblock.ErrCanceled)
+		c.mu.Unlock()
+		c.drive(outputs)
+		return true
+	}
+	if msg.HasOption(message.QBlock1) {
+		c.mu.Lock()
+		token := msg.Token()
+		transfer := c.transferByToken[string(token)]
+		if transfer == nil || transfer.kind != qblock.Q1 {
+			c.mu.Unlock()
+			if !msg.HasOption(message.QBlock2) {
+				return false
+			}
+		} else {
+			outputs, handled := c.handleQ1ResponseLocked(msg, transfer.id)
+			c.mu.Unlock()
+			c.drive(outputs)
+			return handled
+		}
+	}
 	if !msg.HasOption(message.QBlock2) {
-		return false
+		c.mu.Lock()
+		token := msg.Token()
+		transfer := c.transferByToken[string(token)]
+		if transfer == nil || transfer.kind != qblock.Q1 {
+			c.mu.Unlock()
+			return false
+		}
+		outputs, handled := c.handleQ1ResponseLocked(msg, transfer.id)
+		c.mu.Unlock()
+		c.drive(outputs)
+		return handled
 	}
 	c.mu.Lock()
 	token := msg.Token()
@@ -449,6 +489,54 @@ func (c *qblockClient) handle(msg *pool.Message) bool {
 	return true
 }
 
+func (c *qblockClient) handleQ1ResponseLocked(msg *pool.Message, id qblock.TransferID) ([]qblock.Output, bool) {
+	transfer := c.transfers[id]
+	if transfer == nil || transfer.kind != qblock.Q1 {
+		return nil, false
+	}
+	blockCount := qblockClientBlockCount(transfer.metadata)
+	control, handled, err := q1ControlFromResponse(msg, blockCount)
+	if err != nil {
+		return c.finishExchangeLocked(transfer.exchange, err), true
+	}
+	if handled {
+		outputs, err := c.manager.Control(control, c.now())
+		if err != nil {
+			return c.finishExchangeLocked(transfer.exchange, err), true
+		}
+		return outputs, true
+	}
+	response := c.cc.AcquireMessage(c.cc.Context())
+	if err := msg.Clone(response); err != nil {
+		c.cc.ReleaseMessage(response)
+		return c.finishExchangeLocked(transfer.exchange, err), true
+	}
+	response.SetToken(transfer.exchange.originalToken)
+	if transfer.terminalResponse != nil {
+		c.cc.ReleaseMessage(transfer.terminalResponse)
+	}
+	transfer.terminalResponse = response
+	outputs, err := c.manager.Control(qblock.Control{Token: message.Token(bytes.Clone(msg.Token()))}, c.now())
+	if err != nil {
+		c.cc.ReleaseMessage(response)
+		transfer.terminalResponse = nil
+		return c.finishExchangeLocked(transfer.exchange, err), true
+	}
+	return outputs, true
+}
+
+func qblockClientBlockCount(metadata qblock.Metadata) uint32 {
+	size := uint64(16) << metadata.SZX
+	if size == 0 {
+		return 0
+	}
+	count := (uint64(metadata.Size) + size - 1) / size
+	if count == 0 {
+		return 1
+	}
+	return uint32(count)
+}
+
 func (c *qblockClient) drive(outputs []qblock.Output) {
 	if !c.actionMu.TryLock() {
 		if c.actionMuContention != nil {
@@ -495,9 +583,10 @@ func (c *qblockClient) executeOutput(output qblock.Output) []func() {
 		if output.Action.Err != nil {
 			return c.prepareFailure(output.TransferID, output.Action.Err)
 		}
+		return c.prepareTerminalResponse(output.TransferID)
 	case qblock.Release:
 		c.mu.Lock()
-		c.cleanupTransferLocked(output.TransferID)
+		c.releaseTransferLocked(output.TransferID)
 		c.mu.Unlock()
 	}
 	return nil
@@ -709,13 +798,33 @@ func (c *qblockClient) prepareDelivery(id qblock.TransferID, payload []byte) []f
 	return []func(){func() { handler(nil, response) }}
 }
 
-func (c *qblockClient) prepareFailure(id qblock.TransferID, err error) []func() {
+func (c *qblockClient) prepareTerminalResponse(id qblock.TransferID) []func() {
 	c.mu.Lock()
-	exchange := c.exchangeByTransfer[id]
-	if exchange == nil || exchange.fail == nil {
+	transfer := c.transfers[id]
+	if transfer == nil || transfer.kind != qblock.Q1 || transfer.terminalResponse == nil {
 		c.mu.Unlock()
 		return nil
 	}
+	response := transfer.terminalResponse
+	transfer.terminalResponse = nil
+	handler, ok := c.cc.tokenHandlerContainer.LoadAndDelete(transfer.exchange.originalToken.Hash())
+	if !ok {
+		c.cc.ReleaseMessage(response)
+		c.mu.Unlock()
+		return nil
+	}
+	c.mu.Unlock()
+	return []func(){func() { handler(nil, response) }}
+}
+
+func (c *qblockClient) prepareFailure(id qblock.TransferID, err error) []func() {
+	c.mu.Lock()
+	exchange := c.exchangeByTransfer[id]
+	if exchange == nil || exchange.fail == nil || exchange.failureReported {
+		c.mu.Unlock()
+		return nil
+	}
+	exchange.failureReported = true
 	_, _ = c.cc.tokenHandlerContainer.LoadAndDelete(exchange.originalToken.Hash())
 	fail := exchange.fail
 	c.mu.Unlock()
@@ -729,10 +838,34 @@ func (c *qblockClient) cancelTransfer(id qblock.TransferID, err error) []qblock.
 	return outputs
 }
 
-func (c *qblockClient) cleanupTransferLocked(id qblock.TransferID) {
+func (c *qblockClient) finishExchangeLocked(exchange *qblockExchange, err error) []qblock.Output {
+	if exchange == nil || exchange.finished {
+		return nil
+	}
+	exchange.finished = true
+	delete(c.exchangesByOriginalToken, string(exchange.originalToken))
+	if err != nil {
+		_, _ = c.cc.tokenHandlerContainer.LoadAndDelete(exchange.originalToken.Hash())
+	}
+	ids := make([]qblock.TransferID, 0, len(exchange.transfers))
+	for id := range exchange.transfers {
+		ids = append(ids, id)
+	}
+	var outputs []qblock.Output
+	for _, id := range ids {
+		outputs = append(outputs, c.manager.Cancel(id, err)...)
+	}
+	return outputs
+}
+
+func (c *qblockClient) releaseTransferLocked(id qblock.TransferID) {
 	transfer := c.transfers[id]
 	if transfer == nil {
 		return
+	}
+	if transfer.terminalResponse != nil {
+		c.cc.ReleaseMessage(transfer.terminalResponse)
+		transfer.terminalResponse = nil
 	}
 	for token := range transfer.tokens {
 		delete(c.transferByToken, token)
