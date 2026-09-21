@@ -873,7 +873,7 @@ func (c *qblockClient) newControlRequest(id qblock.TransferID, token message.Tok
 	request.Remove(message.ETag)
 	request.Remove(message.Observe)
 	request.Remove(message.Size2)
-	request.SetCode(codes.GET)
+	request.SetCode(transfer.exchange.requestCode)
 	request.SetToken(token)
 	request.SetType(message.NonConfirmable)
 	mid := c.cc.GetMessageID()

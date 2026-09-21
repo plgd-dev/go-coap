@@ -1668,6 +1668,88 @@ func TestQBlockClientHandsQ1ResponseToQ2Receiver(t *testing.T) {
 	require.Len(t, session.writesSnapshot(), 3)
 }
 
+func TestQBlockClientHandoffQ2ControlsPreserveRequestMethodAndOptions(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		method codes.Code
+		block  qblock.Block
+	}{
+		{name: "POST/Continue", method: codes.POST, block: qblock.Block{Number: 1, More: true, SZX: blockwise.SZX16}},
+		{name: "POST/Missing", method: codes.POST, block: qblock.Block{Number: 2, SZX: blockwise.SZX16}},
+		{name: "PUT/Continue", method: codes.PUT, block: qblock.Block{Number: 1, More: true, SZX: blockwise.SZX16}},
+		{name: "PUT/Missing", method: codes.PUT, block: qblock.Block{Number: 2, SZX: blockwise.SZX16}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			session := &qblockTestSession{ctx: context.Background()}
+			nextToken := byte(0xa0)
+			cc := newPrivateQBlockClientConnWithMaxPayloads(t, session, 2, func() (message.Token, error) {
+				token := message.Token{nextToken}
+				nextToken++
+				return token, nil
+			})
+			defer cc.qblockClient.close()
+
+			request := newPOSTWithBody(t, cc, message.Token{0x01}, bytes.Repeat([]byte{'x'}, 16))
+			defer cc.ReleaseMessage(request)
+			request.SetCode(test.method)
+			require.NoError(t, request.SetPath("/handoff/resource"))
+			request.AddQuery("mode=full")
+			request.SetAccept(message.AppJSON)
+			require.NoError(t, request.SetETag([]byte("req-etag")))
+			request.SetOptionUint32(message.Size2, 48)
+			prepared, err := cc.qblockClient.prepare(request, func(error) {})
+			require.NoError(t, err)
+			require.True(t, prepared)
+			addRetainedQBlockClientObserveOption(t, cc.qblockClient, request.Token())
+
+			writes := session.writesSnapshot()
+			require.Len(t, writes, 1)
+			upload := writes[0]
+			first := q2ResponseForPost(t, cc, upload.token, 0, true, 48, 'a')
+			defer cc.ReleaseMessage(first)
+			cc.handle(nil, first)
+			followOn := q2ResponseForPost(t, cc, upload.token, test.block.Number, test.block.More, 48, 'b')
+			defer cc.ReleaseMessage(followOn)
+			cc.handle(nil, followOn)
+
+			writes = session.writesSnapshot()
+			require.Len(t, writes, 2)
+			control := writes[1]
+			require.Equal(t, test.method, control.code)
+			require.Equal(t, message.NonConfirmable, control.typ)
+			require.Equal(t, message.Token{0xa2}, control.token)
+			require.NotEqual(t, request.Token(), control.token)
+			require.NotEqual(t, upload.token, control.token)
+			require.NotZero(t, control.mid)
+			require.NotEqual(t, upload.mid, control.mid)
+			path, err := control.options.Path()
+			require.NoError(t, err)
+			require.Equal(t, "/handoff/resource", path)
+			queries, err := control.options.Queries()
+			require.NoError(t, err)
+			require.Equal(t, []string{"mode=full"}, queries)
+			accept, err := control.options.Accept()
+			require.NoError(t, err)
+			require.Equal(t, message.AppJSON, accept)
+			contentFormat, err := control.options.ContentFormat()
+			require.NoError(t, err)
+			require.Equal(t, message.TextPlain, contentFormat)
+			require.False(t, control.options.HasOption(message.ETag))
+			require.False(t, control.options.HasOption(message.Observe))
+			require.False(t, control.options.HasOption(message.Size2))
+			require.False(t, control.options.HasOption(message.QBlock1))
+			require.Empty(t, control.payload)
+			block, err := qblock.DecodeBlock(control.block)
+			require.NoError(t, err)
+			if test.block.More {
+				require.Equal(t, qblock.Block{Number: 2, More: true, SZX: blockwise.SZX16}, block)
+			} else {
+				require.Equal(t, qblock.Block{Number: 1, SZX: blockwise.SZX16}, block)
+			}
+		})
+	}
+}
+
 func TestQBlockClientHandoffSingleFragmentDeliveryReusesSenderBudget(t *testing.T) {
 	for _, test := range []struct {
 		method codes.Code
