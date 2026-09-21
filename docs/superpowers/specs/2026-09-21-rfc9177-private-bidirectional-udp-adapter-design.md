@@ -1,20 +1,21 @@
 # Private bidirectional UDP Q-Block adapter design
 
 Status: proposed. This is the next internal slice after the completed private
-UDP client Q-Block1/Q-Block2 adapter. It completes the server-facing half of
-the private UDP adapter; it does not enable a public Q-Block API or claim full
-RFC 9177 support.
+UDP client Q-Block1/Q-Block2 adapter. It implements and tests the server role
+inside `udp/client`; it does not wire that role into `udp/server`, enable a
+public Q-Block API, or claim full RFC 9177 support.
 
 ## Purpose and boundary
 
-Extend a `udp/server`-created `udp/client.Conn` so it can receive a NON
-Q-Block1 POST/PUT, dispatch one assembled request to the configured server
+Extend a privately configured `udp/client.Conn` so its server role can receive
+a NON Q-Block1 POST/PUT, dispatch one assembled request to the configured
 handler, send a Q-Block2 response body, and answer later Q-Block2 Continue or
 repair requests. The result uses the existing `net/qblock` sender and receiver
 machines and keeps the ordinary handler body-oriented.
 
 The slice is deliberately private, selected only by unexported construction
-options used by same-package tests. It adds neither `options.WithQBlock`,
+options used by same-package `udp/client` tests. `udp/server` wiring is
+deferred with public configuration. This adds neither `options.WithQBlock`,
 capability discovery, DTLS propagation, Observe support, generic
 `WriteMessage` interception, nor application-visible Q-Block configuration.
 Classic Block1/Block2 behavior and the disabled Q-Block rejection path remain
@@ -38,12 +39,13 @@ Q2 controls <───────── server sender <── copied handler re
 outgoing client requests/responses <──> existing private client role
 ```
 
-The coordinator owns exactly one `qblock.Manager`, one serialization mutex,
-and connection-wide registries for Q-Block transfer IDs, tokens, MIDs, owned
-messages, and aggregate retained bytes. The existing `qblockClient` becomes a
-role adapter over this shared coordinator rather than retaining an independent
-manager. The server role is a separate private record/map namespace because
-its request and response lifecycles differ from outgoing client exchanges.
+The existing private `qblockClient` becomes the per-connection coordinator. It
+owns exactly one `qblock.Manager`, one serialization mutex, and
+connection-wide registries for Q-Block transfer IDs, tokens, MIDs, owned
+messages, and aggregate retained bytes. Its current client maps remain the
+client role; a private server-role record/map namespace hangs from the same
+coordinator because its request and response lifecycles differ from outgoing
+client exchanges.
 
 The manager is deliberately synchronization-free. The coordinator calls it
 only while its mutex is held. It snapshots outputs and releases that mutex
@@ -209,4 +211,3 @@ pacing/probing-rate accounting, packet/MTU sizing, and full connection-memory
 accounting. Only then add public configuration, explicit capability probing,
 and UDP/DTLS propagation. Interoperability, fault injection, and release
 documentation remain later milestones.
-
