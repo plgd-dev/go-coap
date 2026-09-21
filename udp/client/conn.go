@@ -265,6 +265,7 @@ func (cc *Conn) Transmission() *Transmission {
 type ConnOptions struct {
 	createBlockWise    func(cc *Conn) *blockwise.BlockWise[*Conn]
 	createQBlockClient func(cc *Conn) *qblockClient
+	qblockServerConfig *qblockServerConfig
 	inactivityMonitor  InactivityMonitor
 	requestMonitor     RequestMonitorFunc
 	responseMsgCache   MessageCache
@@ -373,6 +374,9 @@ func NewConnWithOpts(session Session, cfg *Config, opts ...Option) *Conn {
 	cc.msgID.Store(pkgMath.CastTo[uint32](cfg.GetMID() - 0xffff/2))
 	cc.blockWise = cfgOpts.createBlockWise(&cc)
 	cc.qblockClient = cfgOpts.createQBlockClient(&cc)
+	if cc.qblockClient != nil && cfgOpts.qblockServerConfig != nil {
+		cc.qblockClient.server = newQBlockServer(cc.qblockClient, cfg.Handler, *cfgOpts.qblockServerConfig)
+	}
 	if cc.qblockClient != nil {
 		cc.session.AddOnClose(cc.qblockClient.close)
 	}
@@ -954,6 +958,9 @@ func (cc *Conn) handleReq(w *responsewriter.ResponseWriter[*Conn], req *pool.Mes
 	}
 
 	w.Message().SetModified(false)
+	if cc.qblockClient != nil && cc.qblockClient.handleServerRequest(req) {
+		return
+	}
 	if cc.handleDisabledQBlock(w, req) {
 		return
 	}

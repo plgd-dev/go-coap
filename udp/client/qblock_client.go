@@ -67,12 +67,14 @@ type qblockClient struct {
 	actionMu                 sync.Mutex
 	actionMuContention       func()
 	manager                  *qblock.Manager
+	managerConfig            qblock.ManagerConfig
 	initErr                  error
 	exchangesByOriginalToken map[string]*qblockExchange
 	exchangeByTransfer       map[qblock.TransferID]*qblockExchange
 	transfers                map[qblock.TransferID]*qblockTransfer
 	transferByToken          map[string]*qblockTransfer
 	transferByMID            map[int32]*qblockTransfer
+	server                   *qblockServer
 }
 
 func withQBlockClient(cfg qblockClientConfig) Option {
@@ -106,6 +108,7 @@ func newQBlockClient(cc *Conn, cfg qblockClientConfig) *qblockClient {
 		jitter:                   jitter,
 		getRequestTag:            getRequestTag,
 		manager:                  manager,
+		managerConfig:            cfg.Manager,
 		initErr:                  err,
 		exchangesByOriginalToken: make(map[string]*qblockExchange),
 		exchangeByTransfer:       make(map[qblock.TransferID]*qblockExchange),
@@ -376,6 +379,11 @@ func (c *qblockClient) close() {
 	if c.manager != nil {
 		for id := range c.transfers {
 			outputs = append(outputs, c.manager.Cancel(id, qblock.ErrClosed)...)
+		}
+		if c.server != nil {
+			for id := range c.server.byID {
+				outputs = append(outputs, c.manager.Cancel(id, qblock.ErrClosed)...)
+			}
 		}
 	}
 	c.mu.Unlock()
@@ -690,6 +698,9 @@ func (c *qblockClient) executeOrdered(outputs []qblock.Output) []func() {
 }
 
 func (c *qblockClient) executeOutput(output qblock.Output) []func() {
+	if c.server != nil && c.server.ownsOutput(output) {
+		return c.executeServerOutput(output)
+	}
 	c.mu.Lock()
 	transfer := c.transfers[output.TransferID]
 	if transfer == nil || transfer.operation != output.Operation {
