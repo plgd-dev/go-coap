@@ -48,6 +48,162 @@ func TestManagerOwnsSenderTokensAndPayloads(t *testing.T) {
 	require.ErrorIs(t, m.BindToken(99, message.Token{3}), ErrUnknownTransfer)
 }
 
+func TestManagerControlWithTokenRollback(t *testing.T) {
+	cfg := DefaultManagerConfig()
+	cfg.Transfer.MaxPayloads = 2
+	m, err := NewManager(cfg)
+	require.NoError(t, err)
+
+	operation, err := NewOperationKey([]byte("response"), []byte("tag"))
+	require.NoError(t, err)
+	now := time.Unix(100, 0)
+	_, err = m.StartSender(operation, message.Token{1}, Q2,
+		Metadata{Size: 48, SZX: blockwise.SZX16, Identity: []byte("etag")},
+		bytes.Repeat([]byte{'r'}, 48), now, 0)
+	require.NoError(t, err)
+
+	id, ok := m.TransferID(operation)
+	require.True(t, ok)
+	beforeTokens, beforeBytes := len(m.byToken), m.retained
+	beforeNext := m.byID[id].sender.next
+	_, err = m.ControlWithToken(id, Control{
+		Token: message.Token{2}, Missing: []uint32{2},
+	}, now)
+	require.ErrorIs(t, err, ErrInvalidRepair)
+	require.Equal(t, beforeTokens, len(m.byToken))
+	require.Equal(t, beforeBytes, m.retained)
+	require.Equal(t, beforeNext, m.byID[id].sender.next)
+	require.NotContains(t, m.byToken, string(message.Token{2}))
+}
+
+func TestManagerControlWithTokenSuccess(t *testing.T) {
+	cfg := DefaultManagerConfig()
+	cfg.Transfer.MaxPayloads = 2
+	m, err := NewManager(cfg)
+	require.NoError(t, err)
+
+	operation, err := NewOperationKey([]byte("response"), []byte("tag"))
+	require.NoError(t, err)
+	now := time.Unix(100, 0)
+	_, err = m.StartSender(operation, message.Token{1}, Q2,
+		Metadata{Size: 48, SZX: blockwise.SZX16, Identity: []byte("etag")},
+		bytes.Repeat([]byte{'r'}, 48), now, 0)
+	require.NoError(t, err)
+
+	id, ok := m.TransferID(operation)
+	require.True(t, ok)
+	outputs, err := m.ControlWithToken(id, Control{
+		Token: message.Token{2}, Missing: []uint32{0},
+	}, now)
+	require.NoError(t, err)
+	require.Equal(t, []uint32{0}, outputNumbers(outputs))
+	require.Equal(t, id, m.byToken[string(message.Token{2})])
+}
+
+func TestManagerControlWithTokenExpiresWithoutBindingFreshToken(t *testing.T) {
+	cfg := DefaultManagerConfig()
+	cfg.MaxTransfers = 1
+	cfg.MaxTokens = 1
+	m, err := NewManager(cfg)
+	require.NoError(t, err)
+
+	operation, err := NewOperationKey([]byte("response"), []byte("tag"))
+	require.NoError(t, err)
+	now := time.Unix(100, 0)
+	_, err = m.StartSender(operation, message.Token{1}, Q2,
+		Metadata{Size: 16, SZX: blockwise.SZX16, Identity: []byte("etag")},
+		bytes.Repeat([]byte{'r'}, 16), now, 0)
+	require.NoError(t, err)
+
+	id, ok := m.TransferID(operation)
+	require.True(t, ok)
+	outputs, err := m.ControlWithToken(id, Control{
+		Token: message.Token{2}, Missing: []uint32{0},
+	}, now.Add(cfg.Transfer.Lifetime))
+	require.NoError(t, err)
+	require.Contains(t, outputs, Output{TransferID: id, Operation: operation, Action: Action{Kind: Release}})
+	require.Zero(t, m.Active())
+	require.NotContains(t, m.byToken, string(message.Token{2}))
+}
+
+func TestManagerControlWithTokenRejectsInvalidRoutesWithoutMutation(t *testing.T) {
+	m, err := NewManager(DefaultManagerConfig())
+	require.NoError(t, err)
+	now := time.Unix(100, 0)
+	meta := Metadata{Size: 48, SZX: blockwise.SZX16, Identity: []byte("etag")}
+	first, err := NewOperationKey([]byte("first"))
+	require.NoError(t, err)
+	second, err := NewOperationKey([]byte("second"))
+	require.NoError(t, err)
+	_, err = m.StartSender(first, message.Token{1}, Q2, meta, bytes.Repeat([]byte{'a'}, 48), now, 0)
+	require.NoError(t, err)
+	_, err = m.StartSender(second, message.Token{2}, Q2, meta, bytes.Repeat([]byte{'b'}, 48), now, 0)
+	require.NoError(t, err)
+	id, ok := m.TransferID(first)
+	require.True(t, ok)
+
+	assertUnchanged := func(t *testing.T, token message.Token, control Control, want error) {
+		t.Helper()
+		beforeTokens, beforeBytes := len(m.byToken), m.retained
+		beforeNext := m.byID[id].sender.next
+		_, err := m.ControlWithToken(id, control, now)
+		require.ErrorIs(t, err, want)
+		require.Equal(t, beforeTokens, len(m.byToken))
+		require.Equal(t, beforeBytes, m.retained)
+		require.Equal(t, beforeNext, m.byID[id].sender.next)
+		require.NotContains(t, m.byToken, string(token))
+	}
+
+	t.Run("wrong transfer", func(t *testing.T) {
+		_, err := m.ControlWithToken(99, Control{Token: message.Token{3}, Missing: []uint32{0}}, now)
+		require.ErrorIs(t, err, ErrUnknownTransfer)
+	})
+	t.Run("cross transfer token", func(t *testing.T) {
+		beforeTokens, beforeBytes := len(m.byToken), m.retained
+		_, err := m.ControlWithToken(id, Control{Token: message.Token{2}, Missing: []uint32{0}}, now)
+		require.ErrorIs(t, err, ErrTokenInUse)
+		require.Equal(t, beforeTokens, len(m.byToken))
+		require.Equal(t, beforeBytes, m.retained)
+		secondID, ok := m.TransferID(second)
+		require.True(t, ok)
+		require.Equal(t, secondID, m.byToken[string(message.Token{2})])
+	})
+	t.Run("malformed control", func(t *testing.T) {
+		through := uint32(1)
+		assertUnchanged(t, message.Token{3}, Control{Token: message.Token{3}, Continue: &through, Missing: []uint32{0}}, ErrInvalidControl)
+	})
+	t.Run("invalid repair", func(t *testing.T) {
+		assertUnchanged(t, message.Token{4}, Control{Token: message.Token{4}, Missing: []uint32{3}}, ErrInvalidRepair)
+	})
+}
+
+func TestManagerControlWithTokenBindsAcceptedRepairButNotNoopContinue(t *testing.T) {
+	cfg := DefaultManagerConfig()
+	cfg.Transfer.MaxPayloads = 2
+	m, err := NewManager(cfg)
+	require.NoError(t, err)
+	now := time.Unix(100, 0)
+	operation, err := NewOperationKey([]byte("response"), []byte("tag"))
+	require.NoError(t, err)
+	_, err = m.StartSender(operation, message.Token{1}, Q2,
+		Metadata{Size: 48, SZX: blockwise.SZX16, Identity: []byte("etag")},
+		bytes.Repeat([]byte{'r'}, 48), now, 0)
+	require.NoError(t, err)
+	id, ok := m.TransferID(operation)
+	require.True(t, ok)
+
+	stale := uint32(0)
+	outputs, err := m.ControlWithToken(id, Control{Token: message.Token{2}, Continue: &stale}, now)
+	require.NoError(t, err)
+	require.Empty(t, outputs)
+	require.NotContains(t, m.byToken, string(message.Token{2}))
+
+	outputs, err = m.ControlWithToken(id, Control{Token: message.Token{3}, Missing: []uint32{0}}, now)
+	require.NoError(t, err)
+	require.Equal(t, []uint32{0}, outputNumbers(outputs))
+	require.Equal(t, id, m.byToken[string(message.Token{3})])
+}
+
 func TestManagerRejectsConflictsAndReleasesSender(t *testing.T) {
 	cfg := DefaultManagerConfig()
 	cfg.Transfer.MaxBodySize = 16

@@ -303,22 +303,72 @@ func (m *Manager) Control(control Control, now time.Time) ([]Output, error) {
 	if !ok || record.sender == nil {
 		return nil, ErrUnknownTransfer
 	}
-	var actions []Action
-	var err error
-	switch {
-	case control.Continue != nil:
-		actions, err = record.sender.Continue(*control.Continue, now)
-	case len(control.Missing) > 0:
-		actions, err = record.sender.Repair(control.Missing, now)
-	default:
-		actions = record.sender.Finish(control.Finish)
-	}
+	actions, err := controlSender(record.sender, control, now)
 	if err != nil {
 		return nil, err
 	}
 	outputs := m.outputs(id, record, actions)
 	m.removeReleased(id, outputs)
 	return outputs, nil
+}
+
+// ControlWithToken resolves a caller-validated transfer ID and atomically
+// applies a control with its packet token. A rejected control leaves both the
+// sender and token registry unchanged.
+func (m *Manager) ControlWithToken(id TransferID, control Control, now time.Time) ([]Output, error) {
+	if len(control.Token) == 0 || !validControl(control) {
+		return nil, ErrInvalidControl
+	}
+	record, ok := m.byID[id]
+	if !ok || record.sender == nil {
+		return nil, ErrUnknownTransfer
+	}
+
+	token := string(control.Token)
+	owner, bound := m.byToken[token]
+	if bound && owner != id {
+		return nil, ErrTokenInUse
+	}
+
+	trial := *record.sender
+	trial.repairs = append([]uint32(nil), record.sender.repairs...)
+	actions, err := controlSender(&trial, control, now)
+	if err != nil {
+		return nil, err
+	}
+
+	released := false
+	for _, action := range actions {
+		if action.Kind == Release {
+			released = true
+			break
+		}
+	}
+	if !bound && !released && uint64(len(m.byToken)) >= uint64(m.cfg.MaxTokens) {
+		return nil, ErrLimitExceeded
+	}
+	// A no-op Continue does not establish a new token route. Terminal paths
+	// release the sender instead of retaining a just-arrived token.
+	bind := !bound && !released && (len(actions) > 0 || len(control.Missing) > 0)
+	record.sender = &trial
+	if bind {
+		m.byToken[token] = id
+		record.tokens[token] = struct{}{}
+	}
+	outputs := m.outputs(id, record, actions)
+	m.removeReleased(id, outputs)
+	return outputs, nil
+}
+
+func controlSender(sender *Sender, control Control, now time.Time) ([]Action, error) {
+	switch {
+	case control.Continue != nil:
+		return sender.Continue(*control.Continue, now)
+	case len(control.Missing) > 0:
+		return sender.Repair(control.Missing, now)
+	default:
+		return sender.Finish(control.Finish), nil
+	}
 }
 
 // Cancel releases one operation after emitting its terminal actions.

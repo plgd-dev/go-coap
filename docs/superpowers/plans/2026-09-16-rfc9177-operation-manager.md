@@ -79,6 +79,7 @@ func (m *Manager) StartSender(operation OperationKey, token message.Token,
 func (m *Manager) StartReceiver(fragment Fragment, now time.Time) ([]Output, error)
 func (m *Manager) Receive(fragment Fragment, now time.Time) ([]Output, error)
 func (m *Manager) Control(control Control, now time.Time) ([]Output, error)
+func (m *Manager) ControlWithToken(id TransferID, control Control, now time.Time) ([]Output, error)
 func (m *Manager) BindToken(id TransferID, token message.Token) error
 func (m *Manager) Tick(now time.Time) []Output
 func (m *Manager) Cancel(id TransferID, err error) []Output
@@ -89,6 +90,15 @@ func (m *Manager) Active() uint32
 `NewOperationKey` returns an error for zero parts, an empty part, more than 32 parts, or a combined encoded length above 512 bytes. It encodes each part as a two-byte big-endian length followed by bytes. The exact opaque result is only a map key; it is never parsed by the manager.
 
 `Control` permits exactly one of `Continue`, nonempty `Missing`, or `Finish`; malformed combinations are rejected before registry lookup. `Missing` is normalized by the manager: values must be in ascending order before it calls `Sender.Repair`, since an unordered report is protocol-invalid. Manager action wrapping copies `Payload`, `Numbers`, `Operation`, and `Block` by value.
+
+`ControlWithToken` is the explicit-ID variant for adapters that first validate
+control identity outside the manager and then receive a fresh packet token. It
+evaluates the sender transition and token binding atomically: rejection leaves
+sender state, token ownership, and retained bytes unchanged. Reusing a token
+already owned by that transfer is allowed; another transfer's token and a
+token-cap violation are rejected. A no-op Continue does not create a binding,
+an accepted queued Repair may, and an expiry release never retains the fresh
+token. `Control` and `BindToken` retain their existing semantics.
 
 ## Task 1: canonical operation identity and manager configuration
 
