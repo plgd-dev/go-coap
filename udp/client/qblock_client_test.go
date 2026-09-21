@@ -1226,7 +1226,7 @@ func TestQBlockControlWriteFailureReleasesReceiver(t *testing.T) {
 		t.Fatalf("Q2 control write failure reported more than once: %v", err)
 	default:
 	}
-	requireQBlockClientEmpty(t, cc)
+	requireQBlockClientFullyIdle(t, cc.qblockClient)
 	_, registered := cc.tokenHandlerContainer.Load(req.Token().Hash())
 	require.False(t, registered)
 	require.NoError(t, cc.claimToken(message.Token{0xcc}, tokenOwnerRequest))
@@ -1262,7 +1262,7 @@ func TestQBlockControlTokenAllocationIsBounded(t *testing.T) {
 		t.Fatalf("Q2 control token allocation failure reported more than once: %v", err)
 	default:
 	}
-	requireQBlockClientEmpty(t, cc)
+	requireQBlockClientFullyIdle(t, cc.qblockClient)
 	_, ok := cc.tokenHandlerContainer.Load(req.Token().Hash())
 	require.False(t, ok)
 }
