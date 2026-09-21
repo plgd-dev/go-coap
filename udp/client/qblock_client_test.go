@@ -413,7 +413,7 @@ func TestQBlockClientDeliversTerminalResponseOnce(t *testing.T) {
 	body, err := io.ReadAll(got.Body())
 	require.NoError(t, err)
 	require.Equal(t, []byte("ok"), body)
-	requireQBlockClientEmpty(t, cc)
+	requireQBlockClientFullyIdle(t, cc.qblockClient)
 	cc.handle(nil, response)
 	select {
 	case duplicate := <-result:
@@ -486,7 +486,7 @@ func TestQBlockClientPendingTerminalResponseIgnoresSecondOwnedTerminal(t *testin
 		t.Fatal("pending terminal response delivered more than once")
 	default:
 	}
-	requireQBlockClientEmpty(t, cc)
+	requireQBlockClientFullyIdle(t, cc.qblockClient)
 }
 
 func TestQBlockClientMalformedQ1ControlsFailOnceAndReleaseState(t *testing.T) {
@@ -1206,10 +1206,11 @@ func TestQBlockControlWriteFailureReleasesReceiver(t *testing.T) {
 	cc := newPrivateQBlockClientConnWithToken(t, session, func() (message.Token, error) { return message.Token{0xcc}, nil })
 	req := newPrivateQBlockClientGET(t, cc, message.Token{17, 18, 19})
 	defer cc.ReleaseMessage(req)
-	errCh := make(chan error, 1)
+	errCh := make(chan error, 2)
 	prepared, err := cc.qblockClient.prepare(req, func(err error) { errCh <- err })
 	require.NoError(t, err)
 	require.True(t, prepared)
+	cc.tokenHandlerContainer.Store(req.Token().Hash(), func(*responsewriter.ResponseWriter[*Conn], *pool.Message) {})
 	first := newQBlockClientFragment(t, cc, req.Token(), 0, true, 176)
 	defer cc.ReleaseMessage(first)
 	cc.handle(nil, first)
@@ -1217,8 +1218,19 @@ func TestQBlockControlWriteFailureReleasesReceiver(t *testing.T) {
 	defer cc.ReleaseMessage(last)
 	cc.handle(nil, last)
 
-	require.ErrorIs(t, <-errCh, writeErr)
-	require.Zero(t, cc.qblockClient.active())
+	require.ErrorIs(t, requireQBlockFailure(t, errCh), writeErr)
+	cc.qblockClient.abandon(req.Token(), context.Canceled)
+	session.closeForTest()
+	select {
+	case err := <-errCh:
+		t.Fatalf("Q2 control write failure reported more than once: %v", err)
+	default:
+	}
+	requireQBlockClientEmpty(t, cc)
+	_, registered := cc.tokenHandlerContainer.Load(req.Token().Hash())
+	require.False(t, registered)
+	require.NoError(t, cc.claimToken(message.Token{0xcc}, tokenOwnerRequest))
+	cc.releaseToken(message.Token{0xcc}, tokenOwnerRequest)
 }
 
 func TestQBlockControlTokenAllocationIsBounded(t *testing.T) {
@@ -1229,7 +1241,7 @@ func TestQBlockControlTokenAllocationIsBounded(t *testing.T) {
 	})
 	req := newPrivateQBlockClientGET(t, cc, message.Token{18, 19, 20})
 	defer cc.ReleaseMessage(req)
-	failures := make(chan error, 1)
+	failures := make(chan error, 2)
 	prepared, err := cc.qblockClient.prepare(req, func(err error) { failures <- err })
 	require.NoError(t, err)
 	require.True(t, prepared)
@@ -1241,12 +1253,16 @@ func TestQBlockControlTokenAllocationIsBounded(t *testing.T) {
 		cc.ReleaseMessage(fragment)
 	}
 
-	require.ErrorIs(t, <-failures, errQBlockControlToken)
+	require.ErrorIs(t, requireQBlockFailure(t, failures), errQBlockControlToken)
 	require.Equal(t, 32, allocationCalls)
-	require.Zero(t, cc.qblockClient.active())
-	require.Empty(t, cc.qblockClient.exchangesByOriginalToken)
-	require.Empty(t, cc.qblockClient.transfers)
-	require.Empty(t, cc.qblockClient.transferByToken)
+	cc.qblockClient.abandon(req.Token(), context.Canceled)
+	cc.qblockClient.close()
+	select {
+	case err := <-failures:
+		t.Fatalf("Q2 control token allocation failure reported more than once: %v", err)
+	default:
+	}
+	requireQBlockClientEmpty(t, cc)
 	_, ok := cc.tokenHandlerContainer.Load(req.Token().Hash())
 	require.False(t, ok)
 }
@@ -1300,6 +1316,81 @@ func TestQBlockExpiryFailsOriginalRequestAndReleasesState(t *testing.T) {
 		t.Fatal("Q-Block expiry did not notify the original request")
 	}
 	require.Zero(t, cc.qblockClient.active())
+}
+
+// This would fail if ordered output execution, the failure-once guard, or any
+// manager/adapter release path were removed. Holding actionMu lets the test
+// deterministically queue Tick, caller abandonment, and session close against
+// the same live exchange before any terminal output is applied.
+func TestQBlockTickAbandonAndCloseContentionFailsOnceAndReleasesState(t *testing.T) {
+	now := time.Unix(100, 0)
+	managerConfig := qblock.DefaultManagerConfig()
+	managerConfig.Transfer.NonMaxRetransmit = 0
+	session := &qblockTestSession{ctx: context.Background()}
+	cfg := DefaultConfig
+	cfg.BlockwiseEnable = false
+	cfg.BlockwiseSZX = blockwise.SZX16
+	cc := NewConnWithOpts(session, &cfg,
+		withQBlockClient(qblockClientConfig{Manager: managerConfig, Now: func() time.Time { return now }}),
+	)
+	req := newPrivateQBlockClientGET(t, cc, message.Token{0xd1, 0xd2, 0xd3})
+	defer cc.ReleaseMessage(req)
+	failures := make(chan error, 2)
+	prepared, err := cc.qblockClient.prepare(req, func(err error) { failures <- err })
+	require.NoError(t, err)
+	require.True(t, prepared)
+	cc.tokenHandlerContainer.Store(req.Token().Hash(), func(*responsewriter.ResponseWriter[*Conn], *pool.Message) {})
+	first := newQBlockClientResponse(t, cc, req.Token(), true)
+	defer cc.ReleaseMessage(first)
+	cc.handle(nil, first)
+	require.Equal(t, uint32(1), cc.qblockClient.active())
+
+	contended := make(chan struct{}, 3)
+	cc.qblockClient.actionMuContention = func() { contended <- struct{}{} }
+	cc.qblockClient.actionMu.Lock()
+	actionMuLocked := true
+	defer func() {
+		if actionMuLocked {
+			cc.qblockClient.actionMu.Unlock()
+		}
+	}()
+
+	tickDone := make(chan struct{})
+	go func() {
+		cc.qblockClient.Tick(now.Add(managerConfig.Transfer.NonReceiveTimeout))
+		close(tickDone)
+	}()
+	requireQBlockContention(t, contended, "Tick")
+
+	abandonDone := make(chan struct{})
+	go func() {
+		cc.qblockClient.abandon(req.Token(), context.Canceled)
+		close(abandonDone)
+	}()
+	requireQBlockContention(t, contended, "abandonment")
+
+	closeDone := make(chan struct{})
+	go func() {
+		session.closeForTest()
+		close(closeDone)
+	}()
+	requireQBlockContention(t, contended, "session close")
+
+	cc.qblockClient.actionMu.Unlock()
+	actionMuLocked = false
+	requireQBlockCompletion(t, tickDone, "Tick")
+	requireQBlockCompletion(t, abandonDone, "abandonment")
+	requireQBlockCompletion(t, closeDone, "session close")
+
+	require.ErrorIs(t, requireQBlockFailure(t, failures), qblock.ErrRetriesExhausted)
+	select {
+	case err := <-failures:
+		t.Fatalf("contending lifecycle paths reported failure more than once: %v", err)
+	default:
+	}
+	requireQBlockClientFullyIdle(t, cc.qblockClient)
+	_, registered := cc.tokenHandlerContainer.Load(req.Token().Hash())
+	require.False(t, registered)
 }
 
 func TestQBlockAbandonReleasesActiveReceiver(t *testing.T) {
@@ -1903,6 +1994,24 @@ func requireQBlockFailure(t *testing.T, failures <-chan error) error {
 	case <-time.After(time.Second):
 		t.Fatal("Q-Block failure callback was not invoked")
 		return nil
+	}
+}
+
+func requireQBlockContention(t *testing.T, contended <-chan struct{}, contender string) {
+	t.Helper()
+	select {
+	case <-contended:
+	case <-time.After(time.Second):
+		t.Fatalf("%s did not contend on ordered Q-Block output execution", contender)
+	}
+}
+
+func requireQBlockCompletion(t *testing.T, done <-chan struct{}, contender string) {
+	t.Helper()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatalf("%s did not complete after ordered Q-Block output execution resumed", contender)
 	}
 }
 
