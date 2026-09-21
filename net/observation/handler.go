@@ -66,12 +66,13 @@ func (h *Handler[C]) NewObservation(req *pool.Message, observeFunc func(req *poo
 		return nil, err
 	}
 	stored := false
+	var registeredObservation *Observation[C]
 	defer func() {
 		if err == nil {
 			return
 		}
 		if stored {
-			observation.cleanUp()
+			registeredObservation.cleanUp()
 			return
 		}
 		h.releaseToken(token)
@@ -86,6 +87,7 @@ func (h *Handler[C]) NewObservation(req *pool.Message, observeFunc func(req *poo
 		Code:    req.Code(),
 		Options: options,
 	}, h, observeFunc, respObservationChan)
+	registeredObservation = observation
 	if _, loaded := h.observations.LoadOrStore(token.Hash(), observation); loaded {
 		return nil, pkgErrors.ErrKeyAlreadyExists
 	}

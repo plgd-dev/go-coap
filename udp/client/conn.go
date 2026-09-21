@@ -460,10 +460,10 @@ func (cc *Conn) doInternal(req *pool.Message) (*pool.Message, error) {
 	}
 	defer func() {
 		_, _ = cc.tokenHandlerContainer.LoadAndDelete(token.Hash())
-		cc.releaseToken(token, tokenOwnerRequest)
 		if cc.qblockClient != nil {
 			cc.qblockClient.abandon(token, req.Context().Err())
 		}
+		cc.releaseToken(token, tokenOwnerRequest)
 	}()
 	if cc.qblockClient != nil {
 		canPrepareQ1 := cc.qblockClient.canPrepareQ1(req)

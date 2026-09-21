@@ -31,11 +31,13 @@ type qblockTestSession struct {
 	writeErrAt int
 	writeCh    chan struct{}
 
-	writeMu           sync.Mutex
-	firstWriteMu      sync.Mutex
-	firstWriteBlocked bool
-	firstWriteStarted chan struct{}
-	releaseFirstWrite chan struct{}
+	writeMu             sync.Mutex
+	firstWriteMu        sync.Mutex
+	firstWriteBlocked   bool
+	firstWriteStarted   chan struct{}
+	releaseFirstWrite   chan struct{}
+	contextWriteStart   chan struct{}
+	releaseContextWrite chan struct{}
 }
 
 type qblockTestWrite struct {
@@ -60,6 +62,18 @@ func (s *qblockTestSession) RemoteAddr() net.Addr {
 func (s *qblockTestSession) LocalAddr() net.Addr { return &net.UDPAddr{} }
 func (s *qblockTestSession) NetConn() net.Conn   { return nil }
 func (s *qblockTestSession) WriteMessage(msg *pool.Message) error {
+	if s.contextWriteStart != nil {
+		select {
+		case s.contextWriteStart <- struct{}{}:
+		default:
+		}
+		select {
+		case <-msg.Context().Done():
+			return msg.Context().Err()
+		case <-s.releaseContextWrite:
+			return errors.New("released blocked context write")
+		}
+	}
 	s.firstWriteMu.Lock()
 	firstWriteStarted := s.firstWriteStarted
 	var releaseFirstWrite chan struct{}
@@ -784,7 +798,7 @@ func TestQBlockClientCopiesQ1BodyAndOptionsBeforeStarting(t *testing.T) {
 	require.Equal(t, message.TextPlain, format)
 }
 
-func TestDoUsesQ1BeforeClassicBlockwiseWithoutReplay(t *testing.T) {
+func TestDoCanceledQ1DoesNotWriteBurst(t *testing.T) {
 	cc, session := newPrivateQBlockClientConnWithTokens(t,
 		[]message.Token{{0xa5}, {0xf1}, {0xf2}, {0xf3}},
 	)
@@ -799,14 +813,50 @@ func TestDoUsesQ1BeforeClassicBlockwiseWithoutReplay(t *testing.T) {
 	_, err := cc.do(request)
 
 	require.ErrorIs(t, err, context.Canceled)
-	writes := session.writesSnapshot()
-	requireQ1Burst(t, writes, codes.POST, []uint32{0, 1, 2}, []byte{0xa5}, body)
-	for _, write := range writes {
-		require.False(t, write.options.HasOption(message.Block1))
-	}
+	require.Empty(t, session.writesSnapshot())
 	position, seekErr := request.Body().Seek(0, io.SeekCurrent)
 	require.NoError(t, seekErr)
 	require.Equal(t, int64(0), position)
+	requireQBlockClientEmpty(t, cc)
+}
+
+func TestDoQ1BlockedWriteStopsOnCallerCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	session := &qblockTestSession{
+		ctx:                 context.Background(),
+		contextWriteStart:   make(chan struct{}, 1),
+		releaseContextWrite: make(chan struct{}),
+	}
+	cc := newPrivateQBlockClientConnWithTokensAndSession(t, session,
+		[]message.Token{{0xa6}, {0xf4}},
+	)
+	request := newPOSTWithBody(t, cc, message.Token{0x08}, []byte("0123456789abcdef"))
+	defer cc.ReleaseMessage(request)
+	request.SetContext(ctx)
+	result := make(chan error, 1)
+	go func() {
+		_, err := cc.doInternal(request)
+		result <- err
+	}()
+
+	select {
+	case <-session.contextWriteStart:
+	case <-time.After(time.Second):
+		close(session.releaseContextWrite)
+		<-result
+		t.Fatal("Q1 write did not start")
+	}
+	cancel()
+	select {
+	case err := <-result:
+		require.ErrorIs(t, err, context.Canceled)
+	case <-time.After(time.Second):
+		close(session.releaseContextWrite)
+		<-result
+		t.Fatal("blocked Q1 write did not stop after caller cancellation")
+	}
+	close(session.releaseContextWrite)
+	require.Empty(t, session.writesSnapshot())
 	requireQBlockClientEmpty(t, cc)
 }
 
@@ -855,6 +905,49 @@ func TestDoInternalPreparesPrivateQBlockGET(t *testing.T) {
 	require.ErrorIs(t, err, context.Canceled)
 	require.Equal(t, message.NonConfirmable, session.writeType)
 	require.True(t, session.writeQ2)
+}
+
+func TestDoInternalPrivateQBlockLeavesClassicBlock2GETOrdinary(t *testing.T) {
+	cfg := DefaultConfig
+	cfg.BlockwiseEnable = false
+	session := &qblockTestSession{ctx: context.Background(), writeCh: make(chan struct{}, 1)}
+	cc := NewConnWithOpts(session, &cfg,
+		withQBlockClient(qblockClientConfig{Manager: qblock.DefaultManagerConfig(), Now: time.Now}),
+	)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	req := cc.AcquireMessage(ctx)
+	defer cc.ReleaseMessage(req)
+	req.SetCode(codes.GET)
+	req.SetToken(message.Token{4, 5, 7})
+	require.NoError(t, req.SetPath("/classic"))
+	value, err := blockwise.EncodeBlockOption(blockwise.SZX16, 0, true)
+	require.NoError(t, err)
+	req.SetOptionUint32(message.Block2, value)
+
+	result := make(chan error, 1)
+	go func() {
+		_, err := cc.doInternal(req)
+		result <- err
+	}()
+	select {
+	case <-session.writeCh:
+	case <-time.After(time.Second):
+		t.Fatal("classic Block2 GET was not written")
+	}
+	writes := session.writesSnapshot()
+	require.Len(t, writes, 1)
+	require.True(t, writes[0].options.HasOption(message.Block2))
+	require.False(t, writes[0].options.HasOption(message.QBlock1))
+	require.False(t, writes[0].options.HasOption(message.QBlock2))
+	cancel()
+	select {
+	case err := <-result:
+		require.ErrorIs(t, err, context.Canceled)
+	case <-time.After(time.Second):
+		t.Fatal("classic Block2 GET did not stop after cancellation")
+	}
+	requireQBlockClientEmpty(t, cc)
 }
 
 // This would fail if the private receiver changed the default no-Q2 request
@@ -1684,6 +1777,19 @@ func newPrivateQBlockClientConnWithTokens(t *testing.T, tokens []message.Token) 
 		return token, nil
 	}
 	return newPrivateQBlockClientConnWithToken(t, session, getToken), session
+}
+
+func newPrivateQBlockClientConnWithTokensAndSession(t *testing.T, session *qblockTestSession, tokens []message.Token) *Conn {
+	t.Helper()
+	next := 0
+	return newPrivateQBlockClientConnWithToken(t, session, func() (message.Token, error) {
+		if next >= len(tokens) {
+			return nil, errors.New("test token sequence exhausted")
+		}
+		token := bytes.Clone(tokens[next])
+		next++
+		return token, nil
+	})
 }
 
 func startThreeBlockQ1(t *testing.T) (*Conn, *qblockTestSession) {

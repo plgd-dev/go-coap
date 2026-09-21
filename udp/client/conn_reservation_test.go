@@ -1,13 +1,17 @@
 package client
 
 import (
+	"bytes"
 	"context"
 	"runtime"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/plgd-dev/go-coap/v3/message"
 	"github.com/plgd-dev/go-coap/v3/message/codes"
+	"github.com/plgd-dev/go-coap/v3/message/pool"
+	"github.com/plgd-dev/go-coap/v3/net/responsewriter"
 	"github.com/stretchr/testify/require"
 )
 
@@ -115,4 +119,63 @@ func TestDoInternalRejectsQBlockReservedTokenWithoutWriting(t *testing.T) {
 	_, err := cc.doInternal(req)
 	require.Error(t, err)
 	require.Empty(t, session.writes)
+}
+
+func TestDoInternalFinishesPrivateAbandonmentBeforeTokenReuse(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	session := &qblockTestSession{ctx: context.Background(), writeCh: make(chan struct{}, 1)}
+	cc := newPrivateQBlockClientConnWithTokensAndSession(t, session,
+		[]message.Token{{0xa7}, {0xf5}},
+	)
+	requestToken := message.Token{0x17}
+	req := newPOSTWithBody(t, cc, requestToken, bytes.Repeat([]byte{'x'}, 16))
+	defer cc.ReleaseMessage(req)
+	req.SetContext(ctx)
+	contended := make(chan struct{}, 1)
+	cc.qblockClient.actionMuContention = func() {
+		select {
+		case contended <- struct{}{}:
+		default:
+		}
+	}
+	result := make(chan error, 1)
+	go func() {
+		_, err := cc.doInternal(req)
+		result <- err
+	}()
+	select {
+	case <-session.writeCh:
+	case <-time.After(time.Second):
+		t.Fatal("Q1 request was not written")
+	}
+
+	cc.qblockClient.actionMu.Lock()
+	cancel()
+	select {
+	case <-contended:
+	case <-time.After(time.Second):
+		cc.qblockClient.actionMu.Unlock()
+		t.Fatal("old request cleanup did not reach private abandonment")
+	}
+	reuseErr := cc.claimToken(requestToken, tokenOwnerRequest)
+	if reuseErr == nil {
+		cc.tokenHandlerContainer.Store(requestToken.Hash(), func(*responsewriter.ResponseWriter[*Conn], *pool.Message) {})
+	}
+	cc.qblockClient.actionMu.Unlock()
+	select {
+	case err := <-result:
+		require.ErrorIs(t, err, context.Canceled)
+	case <-time.After(time.Second):
+		t.Fatal("old request cleanup did not complete")
+	}
+	if reuseErr != nil {
+		require.NoError(t, cc.claimToken(requestToken, tokenOwnerRequest))
+		cc.tokenHandlerContainer.Store(requestToken.Hash(), func(*responsewriter.ResponseWriter[*Conn], *pool.Message) {})
+	}
+
+	_, registered := cc.tokenHandlerContainer.Load(requestToken.Hash())
+	require.True(t, registered, "old private abandonment removed the new same-token request")
+	require.Zero(t, cc.qblockClient.active())
+	cc.tokenHandlerContainer.Delete(requestToken.Hash())
+	cc.releaseToken(requestToken, tokenOwnerRequest)
 }

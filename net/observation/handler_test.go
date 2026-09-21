@@ -2,6 +2,7 @@ package observation
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"testing"
 	"time"
@@ -14,12 +15,13 @@ import (
 )
 
 type observationTestClient struct {
-	ctx  context.Context
-	pool *pool.Pool
+	ctx      context.Context
+	pool     *pool.Pool
+	writeErr error
 }
 
 func (c *observationTestClient) Context() context.Context         { return c.ctx }
-func (*observationTestClient) WriteMessage(*pool.Message) error   { return nil }
+func (c *observationTestClient) WriteMessage(*pool.Message) error { return c.writeErr }
 func (c *observationTestClient) ReleaseMessage(msg *pool.Message) { c.pool.ReleaseMessage(msg) }
 func (c *observationTestClient) AcquireMessage(ctx context.Context) *pool.Message {
 	return c.pool.AcquireMessage(ctx)
@@ -81,4 +83,33 @@ func TestObservationReleasesTokenReservationOnCleanup(t *testing.T) {
 	require.Equal(t, message.Token{0x12}, <-claims)
 	require.NoError(t, obs.Cancel(context.Background()))
 	require.Equal(t, message.Token{0x12}, <-releases)
+}
+
+func TestObservationWriteFailureCleansUpRegisteredObservation(t *testing.T) {
+	writeErr := errors.New("write observation")
+	h, cc := newObservationHandlerForTest()
+	cc.writeErr = writeErr
+	claims := make(chan message.Token, 1)
+	releases := make(chan message.Token, 1)
+	h.SetTokenCallbacks(func(token message.Token) error {
+		claims <- token
+		return nil
+	}, func(token message.Token) {
+		releases <- token
+	})
+	req := cc.AcquireMessage(context.Background())
+	defer cc.ReleaseMessage(req)
+	token := message.Token{0x13}
+	req.SetCode(codes.GET)
+	req.SetToken(token)
+	req.SetObserve(0)
+
+	obs, err := h.NewObservation(req, func(*pool.Message) {})
+
+	require.Nil(t, obs)
+	require.ErrorIs(t, err, writeErr)
+	require.Equal(t, token, <-claims)
+	require.Equal(t, token, <-releases)
+	_, ok := h.GetObservation(token.Hash())
+	require.False(t, ok)
 }

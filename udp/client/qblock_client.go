@@ -2,6 +2,7 @@ package client
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"io"
 	"net"
@@ -36,6 +37,9 @@ type qblockExchange struct {
 	transfers       map[qblock.TransferID]struct{}
 	finished        bool
 	failureReported bool
+	requestContext  context.Context
+	cancelContext   context.CancelFunc
+	stopConnCancel  func() bool
 }
 
 type qblockTransfer struct {
@@ -120,7 +124,7 @@ func q2Operation(token, etag message.Token) (qblock.OperationKey, error) {
 }
 
 func (c *qblockClient) canPrepare(req *pool.Message) bool {
-	return c.initErr == nil && req.Code() == codes.GET && !req.HasOption(message.Observe) && req.Body() == nil && !req.HasOption(message.QBlock1) && !req.HasOption(message.QBlock2)
+	return c.initErr == nil && req.Code() == codes.GET && !req.HasOption(message.Observe) && req.Body() == nil && !req.HasOption(message.QBlock1) && !req.HasOption(message.QBlock2) && !req.HasOption(message.Block1) && !req.HasOption(message.Block2)
 }
 
 func (c *qblockClient) canPrepareQ1(req *pool.Message) bool {
@@ -209,30 +213,47 @@ func (c *qblockClient) prepareQ1(req *pool.Message, fail func(error)) (bool, err
 	if err != nil {
 		return false, err
 	}
+	requestContext, cancelContext := context.WithCancel(req.Context())
 	exchange := &qblockExchange{
-		originalToken: message.Token(bytes.Clone(originalToken)),
-		requestCode:   req.Code(),
-		requestOpts:   options,
-		requestTag:    bytes.Clone(requestTag),
-		fail:          fail,
-		transfers:     make(map[qblock.TransferID]struct{}),
+		originalToken:  message.Token(bytes.Clone(originalToken)),
+		requestCode:    req.Code(),
+		requestOpts:    options,
+		requestTag:     bytes.Clone(requestTag),
+		fail:           fail,
+		transfers:      make(map[qblock.TransferID]struct{}),
+		requestContext: requestContext,
+		cancelContext:  cancelContext,
 	}
+	exchange.stopConnCancel = context.AfterFunc(c.cc.Context(), cancelContext)
 
 	c.mu.Lock()
 	if _, ok := c.exchangesByOriginalToken[string(originalToken)]; ok {
 		c.mu.Unlock()
+		exchange.closeRequestContext()
 		c.cc.releaseToken(initialToken, tokenOwnerQBlock)
 		return false, errors.New("q-block request token already pending")
 	}
 	outputs, err := c.startQ1Locked(exchange, body, initialToken)
 	if err != nil {
 		c.mu.Unlock()
+		exchange.closeRequestContext()
 		c.cc.releaseToken(initialToken, tokenOwnerQBlock)
 		return false, err
 	}
 	c.mu.Unlock()
 	c.drive(outputs)
 	return true, nil
+}
+
+func (e *qblockExchange) closeRequestContext() {
+	if e.stopConnCancel != nil {
+		e.stopConnCancel()
+		e.stopConnCancel = nil
+	}
+	if e.cancelContext != nil {
+		e.cancelContext()
+		e.cancelContext = nil
+	}
 }
 
 func copyQBlockBody(body io.ReadSeeker) (payload []byte, err error) {
@@ -726,6 +747,9 @@ func (c *qblockClient) writeQ1Block(id qblock.TransferID, action qblock.Action) 
 		return err
 	}
 	defer c.cc.ReleaseMessage(request)
+	if err := request.Context().Err(); err != nil {
+		return err
+	}
 
 	return c.cc.session.WriteMessage(request)
 }
@@ -753,7 +777,11 @@ func (c *qblockClient) newQ1Request(transfer *qblockTransfer, token message.Toke
 	if err != nil {
 		return nil, err
 	}
-	request := c.cc.AcquireMessage(c.cc.Context())
+	requestContext := transfer.exchange.requestContext
+	if requestContext == nil {
+		requestContext = c.cc.Context()
+	}
+	request := c.cc.AcquireMessage(requestContext)
 	request.ResetOptionsTo(transfer.exchange.requestOpts)
 	request.Remove(message.QBlock1)
 	request.Remove(message.QBlock2)
@@ -992,6 +1020,7 @@ func (c *qblockClient) releaseTransferLocked(id qblock.TransferID) {
 		if len(transfer.exchange.transfers) == 0 {
 			transfer.exchange.finished = true
 			delete(c.exchangesByOriginalToken, string(transfer.exchange.originalToken))
+			transfer.exchange.closeRequestContext()
 		}
 	}
 }
