@@ -44,7 +44,47 @@ type qblockServerRecord struct {
 	code            codes.Code
 	responseCode    codes.Code
 	responseOptions message.Options
+	pendingReplies  map[qblockServerReplyKey][]message.Token
 	charged         uint64
+}
+
+// qblockServerReplyKey identifies a concrete Q2 payload action.  A control
+// can be accepted before its output gets the serialized action turn; retain
+// its reply token with that action so a later control cannot retoken it.
+type qblockServerReplyKey struct {
+	number uint32
+	more   bool
+}
+
+func replyKey(action qblock.Action) qblockServerReplyKey {
+	return qblockServerReplyKey{number: action.Block.Number, more: action.Block.More}
+}
+
+func (r *qblockServerRecord) queueReplyTokens(outputs []qblock.Output, token message.Token) {
+	for _, output := range outputs {
+		if output.Action.Kind != qblock.SendBlock {
+			continue
+		}
+		if r.pendingReplies == nil {
+			r.pendingReplies = make(map[qblockServerReplyKey][]message.Token)
+		}
+		key := replyKey(output.Action)
+		r.pendingReplies[key] = append(r.pendingReplies[key], bytes.Clone(token))
+	}
+}
+
+func (r *qblockServerRecord) takeReplyToken(action qblock.Action) message.Token {
+	key := replyKey(action)
+	if pending := r.pendingReplies[key]; len(pending) > 0 {
+		token := pending[0]
+		if len(pending) == 1 {
+			delete(r.pendingReplies, key)
+		} else {
+			r.pendingReplies[key] = pending[1:]
+		}
+		return bytes.Clone(token)
+	}
+	return bytes.Clone(r.replyToken)
 }
 
 func withQBlockServer(cfg qblockServerConfig) Option {
@@ -89,7 +129,13 @@ func (s *qblockServer) ownsOutput(output qblock.Output) bool {
 }
 
 func (c *qblockClient) handleServerRequest(msg *pool.Message) bool {
-	if c.server == nil || !msg.HasOption(message.QBlock1) || msg.Code() < 1 || msg.Code() >= 32 {
+	if c.server == nil || msg.Code() < 1 || msg.Code() >= 32 {
+		return false
+	}
+	if msg.HasOption(message.QBlock2) {
+		return c.server.handleQ2Control(msg)
+	}
+	if !msg.HasOption(message.QBlock1) {
 		return false
 	}
 	return c.server.handleQ1(msg)
@@ -162,7 +208,7 @@ func (c *qblockClient) executeServerOutput(output qblock.Output) []func() {
 		}
 		return nil
 	case qblock.SendBlock:
-		token := bytes.Clone(record.replyToken)
+		token := record.takeReplyToken(output.Action)
 		code := record.responseCode
 		options, _ := record.responseOptions.Clone()
 		szx := record.metadata.SZX

@@ -640,6 +640,7 @@ func (c *qblockClient) handoffQ1ToQ2Locked(id qblock.TransferID, msg *pool.Messa
 		kind:             qblock.Q2,
 		operation:        operation,
 		metadata:         metadata,
+		requestTag:       bytes.Clone(sender.requestTag),
 		initialToken:     message.Token(bytes.Clone(fragment.Token)),
 		initialTokenUsed: true,
 		tokens:           map[string]message.Token{string(fragment.Token): message.Token(bytes.Clone(fragment.Token))},
@@ -918,6 +919,7 @@ func (c *qblockClient) newControlRequest(id qblock.TransferID, token message.Tok
 	mid := c.cc.GetMessageID()
 	request.SetMessageID(mid)
 	request.SetOptionUint32(message.QBlock2, value)
+	request.SetOptionBytes(message.RequestTag, transfer.requestTag)
 	transfer.mids[mid] = struct{}{}
 	c.transferByMID[mid] = transfer
 	c.mu.Unlock()

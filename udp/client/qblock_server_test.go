@@ -76,6 +76,23 @@ func (h *serverHarness) q1(t *testing.T, token byte, number uint32, more bool, s
 	return msg
 }
 
+func (h *serverHarness) control(t *testing.T, token byte, number uint32, more bool, tag string) *pool.Message {
+	t.Helper()
+	msg := h.cc.AcquireMessage(context.Background())
+	msg.SetType(message.NonConfirmable)
+	msg.SetCode(codes.POST)
+	msg.SetToken(message.Token{token})
+	msg.SetMessageID(h.nextMID)
+	h.nextMID++
+	require.NoError(t, msg.SetPath("/upload"))
+	msg.SetContentFormat(message.TextPlain)
+	msg.AddOptionBytes(message.RequestTag, []byte(tag))
+	value, err := qblock.EncodeBlock(qblock.Block{Number: number, More: more, SZX: blockwise.SZX16})
+	require.NoError(t, err)
+	msg.SetOptionUint32(message.QBlock2, value)
+	return msg
+}
+
 func (h *serverHarness) ingest(msg *pool.Message) {
 	h.cc.ProcessReceivedMessageWithHandler(msg, h.cc.handleReq)
 }
@@ -100,6 +117,18 @@ func (h *serverHarness) snapshot() serverSnapshot {
 		return true
 	})
 	return snapshot
+}
+
+func (h *serverHarness) serverTokenBound(token byte) bool {
+	client := h.cc.qblockClient
+	client.mu.Lock()
+	defer client.mu.Unlock()
+	for _, record := range client.server.records {
+		if _, ok := record.tokens[string(message.Token{token})]; ok {
+			return true
+		}
+	}
+	return false
 }
 
 func (h *serverHarness) advance(duration time.Duration) {
@@ -211,6 +240,218 @@ func TestQBlockServerUnmodifiedHandlerResponseSuppressesDuplicate(t *testing.T) 
 	require.Empty(t, h.session.writesSnapshot())
 	require.Zero(t, h.snapshot().active)
 	require.Equal(t, 1, h.snapshot().records)
+}
+
+func TestQBlockServerControlRollback(t *testing.T) {
+	mc := qblock.DefaultManagerConfig()
+	mc.Transfer.MaxPayloads = 2
+	h := newServerHarness(t, mc, qblockServerConfig{}, func(w *responsewriter.ResponseWriter[*Conn], r *pool.Message) {
+		require.NoError(t, w.SetResponse(codes.Changed, message.TextPlain, bytes.NewReader(bytes.Repeat([]byte{'r'}, 48))))
+	})
+	h.ingest(h.q1(t, 1, 0, false, 4, "body"))
+	before := h.snapshot()
+
+	h.ingest(h.control(t, 9, 2, false, "tag-a"))
+	require.Equal(t, before, h.snapshot())
+	h.ingest(h.control(t, 10, 0, false, "wrong-tag"))
+	require.Equal(t, before, h.snapshot())
+	h.ingest(h.control(t, 11, 0, false, "tag-a"))
+
+	writes := h.session.writesSnapshot()
+	require.Equal(t, message.Token{11}, writes[len(writes)-1].token)
+}
+
+func TestQBlockServerRepeatedControlTokenQueuesRepair(t *testing.T) {
+	mc := qblock.DefaultManagerConfig()
+	mc.Transfer.MaxPayloads = 2
+	h := newServerHarness(t, mc, qblockServerConfig{}, func(w *responsewriter.ResponseWriter[*Conn], r *pool.Message) {
+		require.NoError(t, w.SetResponse(codes.Changed, message.TextPlain, bytes.NewReader(bytes.Repeat([]byte{'r'}, 48))))
+	})
+	h.ingest(h.q1(t, 1, 0, false, 4, "body"))
+	h.advance(2 * time.Second) // send the final initial block before repairs
+	h.ingest(h.control(t, 11, 0, false, "tag-a"))
+	before := len(h.session.writesSnapshot())
+	h.ingest(h.control(t, 11, 0, false, "tag-a"))
+
+	h.advance(2 * time.Second)
+	writes := h.session.writesSnapshot()
+	require.Greater(t, len(writes), before)
+	require.Equal(t, message.Token{11}, writes[len(writes)-1].token)
+}
+
+func TestQBlockServerRepairKeepsAcceptedTokenUntilItsWrite(t *testing.T) {
+	// A regression here would read record.replyToken only when an already
+	// accepted repair is finally written, allowing a later control to retoken it.
+	mc := qblock.DefaultManagerConfig()
+	mc.Transfer.MaxPayloads = 2
+	h := newServerHarness(t, mc, qblockServerConfig{}, func(w *responsewriter.ResponseWriter[*Conn], r *pool.Message) {
+		require.NoError(t, w.SetResponse(codes.Changed, message.TextPlain, bytes.NewReader(bytes.Repeat([]byte{'r'}, 48))))
+	})
+	h.ingest(h.q1(t, 1, 0, false, 4, "body"))
+	h.advance(2 * time.Second) // finish the initial Q2 set; repairs are now valid
+
+	first := h.control(t, 11, 0, false, "tag-a")
+	second := h.control(t, 12, 1, false, "tag-a")
+	h.cc.qblockClient.actionMu.Lock()
+	firstDone := make(chan struct{})
+	go func() {
+		h.ingest(first)
+		close(firstDone)
+	}()
+	require.Eventually(t, func() bool {
+		return h.serverTokenBound(11)
+	}, time.Second, time.Millisecond)
+	secondDone := make(chan struct{})
+	go func() {
+		h.ingest(second)
+		close(secondDone)
+	}()
+	require.Eventually(t, func() bool {
+		return h.serverTokenBound(12)
+	}, time.Second, time.Millisecond)
+	h.cc.qblockClient.actionMu.Unlock()
+	<-firstDone
+	<-secondDone
+
+	writes := h.session.writesSnapshot()
+	require.Equal(t, message.Token{11}, writes[len(writes)-1].token)
+}
+
+func TestQBlockServerControlWrongSZXRollsBack(t *testing.T) {
+	h := newServerHarness(t, qblock.DefaultManagerConfig(), qblockServerConfig{}, func(w *responsewriter.ResponseWriter[*Conn], r *pool.Message) {
+		require.NoError(t, w.SetResponse(codes.Changed, message.TextPlain, bytes.NewReader(bytes.Repeat([]byte{'r'}, 32))))
+	})
+	h.ingest(h.q1(t, 1, 0, false, 4, "body"))
+	before := h.snapshot()
+	control := h.control(t, 9, 0, false, "tag-a")
+	value, err := qblock.EncodeBlock(qblock.Block{Number: 0, SZX: blockwise.SZX32})
+	require.NoError(t, err)
+	control.SetOptionUint32(message.QBlock2, value)
+
+	h.ingest(control)
+
+	require.Equal(t, before, h.snapshot())
+}
+
+func TestQBlockServerControlRequiresFullRequestIdentity(t *testing.T) {
+	// Each mutation must fail before a fresh control token becomes observable.
+	// Removing any of these checks would route a repair by a partial identity.
+	for name, mutate := range map[string]func(*pool.Message){
+		"changed URI": func(msg *pool.Message) {
+			require.NoError(t, msg.SetPath("/other"))
+		},
+		"changed query": func(msg *pool.Message) {
+			msg.AddOptionString(message.URIQuery, "other=true")
+		},
+		"changed method": func(msg *pool.Message) {
+			msg.SetCode(codes.PUT)
+		},
+		"multiple request tags": func(msg *pool.Message) {
+			msg.AddOptionBytes(message.RequestTag, []byte("tag-b"))
+		},
+		"partial request tag": func(msg *pool.Message) {
+			msg.Remove(message.RequestTag)
+			msg.AddOptionBytes(message.RequestTag, []byte("tag"))
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			h := newServerHarness(t, qblock.DefaultManagerConfig(), qblockServerConfig{}, func(w *responsewriter.ResponseWriter[*Conn], r *pool.Message) {
+				require.NoError(t, w.SetResponse(codes.Changed, message.TextPlain, bytes.NewReader(bytes.Repeat([]byte{'r'}, 32))))
+			})
+			h.ingest(h.q1(t, 1, 0, false, 4, "body"))
+			before := h.snapshot()
+			control := h.control(t, 9, 0, false, "tag-a")
+			mutate(control)
+
+			h.ingest(control)
+
+			require.Equal(t, before, h.snapshot())
+		})
+	}
+}
+
+func TestQBlockServerControlDoesNotUseResponseETagAsIdentity(t *testing.T) {
+	h := newServerHarness(t, qblock.DefaultManagerConfig(), qblockServerConfig{}, func(w *responsewriter.ResponseWriter[*Conn], r *pool.Message) {
+		require.NoError(t, w.SetResponse(codes.Changed, message.TextPlain, bytes.NewReader(bytes.Repeat([]byte{'r'}, 32))))
+	})
+	h.ingest(h.q1(t, 1, 0, false, 4, "body"))
+	other := h.q1(t, 2, 0, false, 4, "body")
+	require.NoError(t, other.SetPath("/other"))
+	h.ingest(other)
+
+	writes := h.session.writesSnapshot()
+	require.Len(t, writes, 4)
+	firstETag, err := writes[0].options.GetBytes(message.ETag)
+	require.NoError(t, err)
+	secondETag, err := writes[2].options.GetBytes(message.ETag)
+	require.NoError(t, err)
+	require.Equal(t, firstETag, secondETag)
+
+	control := h.control(t, 11, 0, false, "tag-a")
+	require.NoError(t, control.SetPath("/other"))
+	h.ingest(control)
+	writes = h.session.writesSnapshot()
+	require.Equal(t, message.Token{11}, writes[len(writes)-1].token)
+}
+
+func TestQBlockServerRejectedControlsDoNotConsumeTokens(t *testing.T) {
+	t.Run("stale continue", func(t *testing.T) {
+		h := newServerHarness(t, qblock.DefaultManagerConfig(), qblockServerConfig{}, func(w *responsewriter.ResponseWriter[*Conn], r *pool.Message) {
+			require.NoError(t, w.SetResponse(codes.Changed, message.TextPlain, bytes.NewReader(bytes.Repeat([]byte{'r'}, 48))))
+		})
+		h.ingest(h.q1(t, 1, 0, false, 4, "body"))
+		before := h.snapshot()
+		h.ingest(h.control(t, 9, 1, true, "tag-a"))
+		require.Equal(t, before, h.snapshot())
+	})
+	t.Run("zero continue", func(t *testing.T) {
+		h := newServerHarness(t, qblock.DefaultManagerConfig(), qblockServerConfig{}, func(w *responsewriter.ResponseWriter[*Conn], r *pool.Message) {
+			require.NoError(t, w.SetResponse(codes.Changed, message.TextPlain, bytes.NewReader(bytes.Repeat([]byte{'r'}, 32))))
+		})
+		h.ingest(h.q1(t, 1, 0, false, 4, "body"))
+		before := h.snapshot()
+		h.ingest(h.control(t, 9, 0, true, "tag-a"))
+		require.Equal(t, before, h.snapshot())
+	})
+	t.Run("manager token limit", func(t *testing.T) {
+		mc := qblock.DefaultManagerConfig()
+		mc.MaxTransfers, mc.MaxTokens = 1, 1
+		h := newServerHarness(t, mc, qblockServerConfig{}, func(w *responsewriter.ResponseWriter[*Conn], r *pool.Message) {
+			require.NoError(t, w.SetResponse(codes.Changed, message.TextPlain, bytes.NewReader(bytes.Repeat([]byte{'r'}, 32))))
+		})
+		h.ingest(h.q1(t, 1, 0, false, 4, "body"))
+		before := h.snapshot()
+		h.ingest(h.control(t, 9, 0, false, "tag-a"))
+		require.Equal(t, before, h.snapshot())
+	})
+	t.Run("other qblock record owns token", func(t *testing.T) {
+		h := newServerHarness(t, qblock.DefaultManagerConfig(), qblockServerConfig{}, func(w *responsewriter.ResponseWriter[*Conn], r *pool.Message) {
+			require.NoError(t, w.SetResponse(codes.Changed, message.TextPlain, bytes.NewReader(bytes.Repeat([]byte{'r'}, 32))))
+		})
+		h.ingest(h.q1(t, 1, 0, false, 4, "body"))
+		other := h.q1(t, 2, 0, false, 4, "body")
+		require.NoError(t, other.SetPath("/other"))
+		h.ingest(other)
+		before := h.snapshot()
+		h.ingest(h.control(t, 2, 0, false, "tag-a"))
+		require.Equal(t, before, h.snapshot())
+	})
+}
+
+func TestQBlockServerDelayedRepairUsesMostRecentAcceptedControlToken(t *testing.T) {
+	mc := qblock.DefaultManagerConfig()
+	mc.Transfer.MaxPayloads = 2
+	h := newServerHarness(t, mc, qblockServerConfig{}, func(w *responsewriter.ResponseWriter[*Conn], r *pool.Message) {
+		require.NoError(t, w.SetResponse(codes.Changed, message.TextPlain, bytes.NewReader(bytes.Repeat([]byte{'r'}, 48))))
+	})
+	h.ingest(h.q1(t, 1, 0, false, 4, "body"))
+	h.advance(2 * time.Second)
+	h.ingest(h.control(t, 11, 0, false, "tag-a"))
+	h.ingest(h.control(t, 12, 1, false, "tag-a"))
+
+	h.advance(2 * time.Second)
+	writes := h.session.writesSnapshot()
+	require.Equal(t, message.Token{12}, writes[len(writes)-1].token)
 }
 
 func TestQBlockServerRejectsMalformedFirstFragmentWithoutState(t *testing.T) {

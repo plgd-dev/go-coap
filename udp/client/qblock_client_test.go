@@ -1935,6 +1935,9 @@ func TestQBlockClientHandoffQ2ControlsPreserveRequestMethodAndOptions(t *testing
 			require.False(t, control.options.HasOption(message.Observe))
 			require.False(t, control.options.HasOption(message.Size2))
 			require.False(t, control.options.HasOption(message.QBlock1))
+			require.Equal(t,
+				mustOptionBytes(t, upload.options, message.RequestTag),
+				mustOptionBytes(t, control.options, message.RequestTag))
 			require.Empty(t, control.payload)
 			block, err := qblock.DecodeBlock(control.block)
 			require.NoError(t, err)
