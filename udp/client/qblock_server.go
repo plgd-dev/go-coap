@@ -398,7 +398,7 @@ func (s *qblockServer) finishHandler(operation qblock.OperationKey, generation u
 }
 
 func (c *qblockClient) writeServerQ2Block(token message.Token, mid int32, code codes.Code, options message.Options, szx blockwise.SZX, size uint32, etag []byte, action qblock.Action) error {
-	msg := c.cc.AcquireMessage(c.cc.Context())
+	msg := c.cc.AcquireMessage(c.writeContext)
 	defer c.cc.ReleaseMessage(msg)
 	msg.SetType(message.NonConfirmable)
 	msg.SetToken(token)
@@ -420,7 +420,7 @@ func (c *qblockClient) writeServerQ1Control(token message.Token, mid int32, szx 
 	if len(token) == 0 {
 		return qblock.ErrUnknownTransfer
 	}
-	msg := c.cc.AcquireMessage(c.cc.Context())
+	msg := c.cc.AcquireMessage(c.writeContext)
 	defer c.cc.ReleaseMessage(msg)
 	msg.SetType(message.NonConfirmable)
 	msg.SetToken(token)

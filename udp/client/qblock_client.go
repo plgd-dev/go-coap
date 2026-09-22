@@ -65,6 +65,8 @@ type qblockClient struct {
 	now                      func() time.Time
 	clock                    qblockClock
 	scheduleMode             qblockScheduleMode
+	writeContext             context.Context
+	cancelWriteContext       context.CancelFunc
 	jitter                   func() float64
 	getRequestTag            func() (message.Token, error)
 	mu                       sync.Mutex
@@ -91,6 +93,7 @@ func withQBlockClient(cfg qblockClientConfig) Option {
 
 func newQBlockClient(cc *Conn, cfg qblockClientConfig) *qblockClient {
 	now, clock, configErr := qblockClientClock(cfg)
+	writeContext, cancelWriteContext := context.WithCancel(cc.Context())
 	jitter := cfg.Jitter
 	if jitter == nil {
 		jitter = func() float64 { return 0 }
@@ -111,6 +114,8 @@ func newQBlockClient(cc *Conn, cfg qblockClientConfig) *qblockClient {
 		now:                      now,
 		clock:                    clock,
 		scheduleMode:             cfg.ScheduleMode,
+		writeContext:             writeContext,
+		cancelWriteContext:       cancelWriteContext,
 		jitter:                   jitter,
 		getRequestTag:            getRequestTag,
 		manager:                  manager,
@@ -416,6 +421,9 @@ func (c *qblockClient) abandon(token message.Token, err error) {
 }
 
 func (c *qblockClient) close() {
+	if c.cancelWriteContext != nil {
+		c.cancelWriteContext()
+	}
 	var pending []*qblockExchange
 	var outputs []qblock.Output
 	c.mu.Lock()

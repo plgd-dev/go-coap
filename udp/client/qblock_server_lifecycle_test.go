@@ -318,6 +318,31 @@ func serverLifecycleConfig() qblock.ManagerConfig {
 }
 
 func TestQBlockServerLifecycle(t *testing.T) {
+	t.Run("close cancels a blocked server write", func(t *testing.T) {
+		h := newServerHarness(t, serverLifecycleConfig(), qblockServerConfig{Retention: 10 * time.Second}, func(w *responsewriter.ResponseWriter[*Conn], _ *pool.Message) {
+			require.NoError(t, w.SetResponse(codes.Changed, message.TextPlain, bytes.NewReader([]byte("response"))))
+		})
+		h.session.contextWriteStart = make(chan struct{}, 1)
+		h.session.releaseContextWrite = make(chan struct{})
+		finished := make(chan struct{})
+		go func() {
+			h.ingest(h.q1(t, 1, 0, false, 4, "body"))
+			close(finished)
+		}()
+		select {
+		case <-h.session.contextWriteStart:
+		case <-time.After(time.Second):
+			t.Fatal("server write did not start")
+		}
+
+		h.session.closeForTest()
+		select {
+		case <-finished:
+		case <-time.After(time.Second):
+			t.Fatal("close did not cancel the blocked server write")
+		}
+	})
+
 	t.Run("expired handler settles retention when it returns", func(t *testing.T) {
 		entered := make(chan struct{})
 		release := make(chan struct{})
