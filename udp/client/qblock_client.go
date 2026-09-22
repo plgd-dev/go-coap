@@ -42,6 +42,7 @@ type qblockExchange struct {
 	requestContext  context.Context
 	cancelContext   context.CancelFunc
 	stopConnCancel  func() bool
+	callbackRelease func()
 }
 
 type qblockTransfer struct {
@@ -81,6 +82,7 @@ type qblockClient struct {
 	transferByToken          map[string]*qblockTransfer
 	transferByMID            map[int32]*qblockTransfer
 	server                   *qblockServer
+	callbackSlots            *qblockCallbackSlots
 }
 
 func withQBlockClient(cfg qblockClientConfig) Option {
@@ -126,6 +128,7 @@ func newQBlockClient(cc *Conn, cfg qblockClientConfig) *qblockClient {
 		transfers:                make(map[qblock.TransferID]*qblockTransfer),
 		transferByToken:          make(map[string]*qblockTransfer),
 		transferByMID:            make(map[int32]*qblockTransfer),
+		callbackSlots:            newQBlockCallbackSlots(cfg.Manager.MaxTransfers),
 	}
 }
 
@@ -208,9 +211,15 @@ func (c *qblockClient) prepare(req *pool.Message, fail func(error)) (bool, error
 		fail:          fail,
 		transfers:     make(map[qblock.TransferID]struct{}),
 	}
+	callbackRelease, ok := c.callbackSlots.tryAcquire()
+	if !ok {
+		return false, qblock.ErrLimitExceeded
+	}
+	exchange.callbackRelease = callbackRelease
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if _, ok := c.exchangesByOriginalToken[string(token)]; ok {
+		exchange.releaseCallbackSlot()
 		return false, errors.New("q-block GET token already pending")
 	}
 	req.SetType(message.NonConfirmable)
@@ -246,20 +255,26 @@ func (c *qblockClient) prepareQ1(req *pool.Message, fail func(error)) (bool, err
 	if len(requestTag) == 0 || len(requestTag) > 8 {
 		return false, errors.New("q-block Request-Tag must contain one to eight bytes")
 	}
+	callbackRelease, ok := c.callbackSlots.tryAcquire()
+	if !ok {
+		return false, qblock.ErrLimitExceeded
+	}
 	initialToken, err := c.cc.claimFreshQBlockToken()
 	if err != nil {
+		callbackRelease()
 		return false, err
 	}
 	requestContext, cancelContext := context.WithCancel(req.Context())
 	exchange := &qblockExchange{
-		originalToken:  message.Token(bytes.Clone(originalToken)),
-		requestCode:    req.Code(),
-		requestOpts:    options,
-		requestTag:     bytes.Clone(requestTag),
-		fail:           fail,
-		transfers:      make(map[qblock.TransferID]struct{}),
-		requestContext: requestContext,
-		cancelContext:  cancelContext,
+		originalToken:   message.Token(bytes.Clone(originalToken)),
+		requestCode:     req.Code(),
+		requestOpts:     options,
+		requestTag:      bytes.Clone(requestTag),
+		fail:            fail,
+		transfers:       make(map[qblock.TransferID]struct{}),
+		requestContext:  requestContext,
+		cancelContext:   cancelContext,
+		callbackRelease: callbackRelease,
 	}
 	exchange.stopConnCancel = context.AfterFunc(c.cc.Context(), cancelContext)
 
@@ -267,6 +282,7 @@ func (c *qblockClient) prepareQ1(req *pool.Message, fail func(error)) (bool, err
 	if _, ok := c.exchangesByOriginalToken[string(originalToken)]; ok {
 		c.mu.Unlock()
 		exchange.closeRequestContext()
+		exchange.releaseCallbackSlot()
 		c.cc.releaseToken(initialToken, tokenOwnerQBlock)
 		return false, errors.New("q-block request token already pending")
 	}
@@ -274,6 +290,7 @@ func (c *qblockClient) prepareQ1(req *pool.Message, fail func(error)) (bool, err
 	if err != nil {
 		c.mu.Unlock()
 		exchange.closeRequestContext()
+		exchange.releaseCallbackSlot()
 		c.cc.releaseToken(initialToken, tokenOwnerQBlock)
 		return false, err
 	}
@@ -290,6 +307,12 @@ func (e *qblockExchange) closeRequestContext() {
 	if e.cancelContext != nil {
 		e.cancelContext()
 		e.cancelContext = nil
+	}
+}
+
+func (e *qblockExchange) releaseCallbackSlot() {
+	if e.callbackRelease != nil {
+		e.callbackRelease()
 	}
 }
 
@@ -451,7 +474,10 @@ func (c *qblockClient) close() {
 	c.drive(outputs)
 	for _, exchange := range pending {
 		_, _ = c.cc.tokenHandlerContainer.LoadAndDelete(exchange.originalToken.Hash())
-		exchange.fail(qblock.ErrClosed)
+		func() {
+			defer exchange.releaseCallbackSlot()
+			exchange.fail(qblock.ErrClosed)
+		}()
 	}
 }
 
@@ -1009,17 +1035,24 @@ func (c *qblockClient) prepareDelivery(id qblock.TransferID, payload []byte) []f
 	handler, ok := c.cc.tokenHandlerContainer.LoadAndDelete(transfer.exchange.originalToken.Hash())
 	if !ok {
 		c.cc.ReleaseMessage(response)
+		transfer.exchange.releaseCallbackSlot()
 		c.mu.Unlock()
 		return nil
 	}
+	exchange := transfer.exchange
 	c.mu.Unlock()
-	return []func(){func() { handler(nil, response) }}
+	return []func(){func() { defer exchange.releaseCallbackSlot(); handler(nil, response) }}
 }
 
 func (c *qblockClient) prepareTerminalResponse(id qblock.TransferID) []func() {
 	c.mu.Lock()
 	transfer := c.transfers[id]
-	if transfer == nil || transfer.kind != qblock.Q1 || transfer.terminalResponse == nil {
+	if transfer == nil || transfer.kind != qblock.Q1 {
+		c.mu.Unlock()
+		return nil
+	}
+	if transfer.terminalResponse == nil {
+		transfer.exchange.releaseCallbackSlot()
 		c.mu.Unlock()
 		return nil
 	}
@@ -1028,25 +1061,32 @@ func (c *qblockClient) prepareTerminalResponse(id qblock.TransferID) []func() {
 	handler, ok := c.cc.tokenHandlerContainer.LoadAndDelete(transfer.exchange.originalToken.Hash())
 	if !ok {
 		c.cc.ReleaseMessage(response)
+		transfer.exchange.releaseCallbackSlot()
 		c.mu.Unlock()
 		return nil
 	}
+	exchange := transfer.exchange
 	c.mu.Unlock()
-	return []func(){func() { handler(nil, response) }}
+	return []func(){func() { defer exchange.releaseCallbackSlot(); handler(nil, response) }}
 }
 
 func (c *qblockClient) prepareFailure(id qblock.TransferID, err error) []func() {
 	c.mu.Lock()
 	exchange := c.exchangeByTransfer[id]
-	if exchange == nil || exchange.fail == nil || exchange.failureReported {
+	if exchange == nil || exchange.failureReported {
 		c.mu.Unlock()
 		return nil
 	}
 	exchange.failureReported = true
 	_, _ = c.cc.tokenHandlerContainer.LoadAndDelete(exchange.originalToken.Hash())
 	fail := exchange.fail
+	if fail == nil {
+		exchange.releaseCallbackSlot()
+		c.mu.Unlock()
+		return nil
+	}
 	c.mu.Unlock()
-	return []func(){func() { fail(err) }}
+	return []func(){func() { defer exchange.releaseCallbackSlot(); fail(err) }}
 }
 
 func (c *qblockClient) cancelTransfer(id qblock.TransferID, err error) []qblock.Output {

@@ -1739,6 +1739,80 @@ func TestQBlockFollowOnMetadataConflictsFailOriginalDoAndReleaseState(t *testing
 	}
 }
 
+func TestQBlockBlockedFailureCallbackBoundsNextQ1Admission(t *testing.T) {
+	session := &qblockTestSession{ctx: context.Background()}
+	tokens := []message.Token{{0xa1}, {0xa2}, {0xb1}, {0xb2}, {0xc1}, {0xc2}}
+	nextToken := 0
+	cc := newPrivateQBlockClientConnWithMaxTransfers(t, session, 1, func() (message.Token, error) {
+		if nextToken >= len(tokens) {
+			return nil, errors.New("test token sequence exhausted")
+		}
+		token := bytes.Clone(tokens[nextToken])
+		nextToken++
+		return token, nil
+	})
+	first := newPOSTWithBody(t, cc, message.Token{0x01}, []byte("first"))
+	defer cc.ReleaseMessage(first)
+	second := newPOSTWithBody(t, cc, message.Token{0x02}, []byte("second"))
+	defer cc.ReleaseMessage(second)
+
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	var releaseOnce sync.Once
+	releaseCallback := func() { releaseOnce.Do(func() { close(release) }) }
+
+	prepared, err := cc.qblockClient.prepare(first, func(error) {
+		close(entered)
+		<-release
+	})
+	require.NoError(t, err)
+	require.True(t, prepared)
+
+	abandonDone := make(chan struct{})
+	go func() {
+		cc.qblockClient.abandon(first.Token(), qblock.ErrCanceled)
+		close(abandonDone)
+	}()
+	t.Cleanup(func() {
+		releaseCallback()
+		select {
+		case <-abandonDone:
+		case <-time.After(time.Second):
+			t.Error("blocked Q-Block failure callback did not finish")
+		}
+	})
+	select {
+	case <-entered:
+	case <-time.After(time.Second):
+		t.Fatal("Q-Block failure callback did not start")
+	}
+	requireQBlockClientEmpty(t, cc)
+
+	prepared, err = cc.qblockClient.prepare(second, func(error) {})
+	require.ErrorIs(t, err, qblock.ErrLimitExceeded)
+	require.False(t, prepared)
+	requireQBlockClientEmpty(t, cc)
+	var reservations int
+	cc.tokenReservations.Range(func(_ uint64, _ tokenReservation) bool {
+		reservations++
+		return true
+	})
+	require.Zero(t, reservations)
+
+	releaseCallback()
+	select {
+	case <-abandonDone:
+	case <-time.After(time.Second):
+		t.Fatal("blocked Q-Block failure callback did not finish")
+	}
+
+	prepared, err = cc.qblockClient.prepare(second, func(error) {})
+	require.NoError(t, err)
+	require.True(t, prepared)
+	cc.qblockClient.abandon(second.Token(), qblock.ErrCanceled)
+	requireQBlockClientEmpty(t, cc)
+}
+
 func newPrivateQBlockClientConn(t *testing.T) *Conn {
 	t.Helper()
 	return newPrivateQBlockClientConnWithToken(t, &qblockTestSession{ctx: context.Background()}, message.GetToken)
@@ -1768,6 +1842,19 @@ func newPrivateQBlockClientConnWithMaxPayloads(t *testing.T, session *qblockTest
 	cfg.GetToken = getToken
 	managerConfig := qblock.DefaultManagerConfig()
 	managerConfig.Transfer.MaxPayloads = maxPayloads
+	return NewConnWithOpts(session, &cfg,
+		withQBlockClient(qblockClientConfig{Manager: managerConfig, Now: time.Now, ScheduleMode: qblockScheduleManual}),
+	)
+}
+
+func newPrivateQBlockClientConnWithMaxTransfers(t *testing.T, session *qblockTestSession, maxTransfers uint32, getToken func() (message.Token, error)) *Conn {
+	t.Helper()
+	cfg := DefaultConfig
+	cfg.BlockwiseEnable = false
+	cfg.BlockwiseSZX = blockwise.SZX16
+	cfg.GetToken = getToken
+	managerConfig := qblock.DefaultManagerConfig()
+	managerConfig.MaxTransfers = maxTransfers
 	return NewConnWithOpts(session, &cfg,
 		withQBlockClient(qblockClientConfig{Manager: managerConfig, Now: time.Now, ScheduleMode: qblockScheduleManual}),
 	)
