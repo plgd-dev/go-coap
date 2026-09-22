@@ -224,6 +224,10 @@ func TestQBlockClientSerializesConcurrentOutputBursts(t *testing.T) {
 
 	first, firstDone := startQ1TransferForTest(t, cc, bytes.Repeat([]byte{'a'}, 176))
 	<-session.firstWriteStarted
+	cc.qblockClient.mu.Lock()
+	deadlineBeforeTick, ok := cc.qblockClient.manager.NextDeadline()
+	cc.qblockClient.mu.Unlock()
+	require.True(t, ok)
 	tickDone := make(chan struct{})
 	go func() {
 		cc.qblockClient.Tick(time.Unix(200, 0))
@@ -236,6 +240,11 @@ func TestQBlockClientSerializesConcurrentOutputBursts(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("competing Q-Block tick did not reach ordered execution")
 	}
+	cc.qblockClient.mu.Lock()
+	deadlineWhileWriteBlocked, ok := cc.qblockClient.manager.NextDeadline()
+	cc.qblockClient.mu.Unlock()
+	require.True(t, ok)
+	require.Equal(t, deadlineBeforeTick, deadlineWhileWriteBlocked, "manager progress must wait for the prior output burst")
 	close(session.releaseFirstWrite)
 	<-firstDone
 	<-tickDone

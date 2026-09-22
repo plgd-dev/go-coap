@@ -385,9 +385,11 @@ func (c *qblockClient) nextDeadlineLocked() (time.Time, bool) {
 }
 
 func (c *qblockClient) Tick(now time.Time) {
+	c.lockAction()
 	c.mu.Lock()
 	if c.manager == nil {
 		c.mu.Unlock()
+		c.actionMu.Unlock()
 		return
 	}
 	outputs := c.manager.Tick(now)
@@ -395,7 +397,11 @@ func (c *qblockClient) Tick(now time.Time) {
 		c.server.expireRecordsLocked(now)
 	}
 	c.mu.Unlock()
-	c.drive(outputs)
+	callbacks := c.executeOrdered(outputs)
+	c.actionMu.Unlock()
+	for _, callback := range callbacks {
+		callback()
+	}
 }
 
 func (c *qblockClient) abandon(token message.Token, err error) {
@@ -735,16 +741,20 @@ func qblockClientBlockCount(metadata qblock.Metadata) uint32 {
 }
 
 func (c *qblockClient) drive(outputs []qblock.Output) {
+	c.lockAction()
+	callbacks := c.executeOrdered(outputs)
+	c.actionMu.Unlock()
+	for _, callback := range callbacks {
+		callback()
+	}
+}
+
+func (c *qblockClient) lockAction() {
 	if !c.actionMu.TryLock() {
 		if c.actionMuContention != nil {
 			c.actionMuContention()
 		}
 		c.actionMu.Lock()
-	}
-	callbacks := c.executeOrdered(outputs)
-	c.actionMu.Unlock()
-	for _, callback := range callbacks {
-		callback()
 	}
 }
 
