@@ -199,6 +199,22 @@ func TestQBlockSchedulerStaleWakeDoesNotDuplicateBurst(t *testing.T) {
 	require.Len(t, session.writesSnapshot(), writes)
 }
 
+func TestQBlockSchedulerArmsAfterInboundReceiverStart(t *testing.T) {
+	clock := newFakeQBlockClock(time.Unix(100, 0))
+	cc := newAutomaticQBlockClockTestConn(t, clock)
+	request := newPrivateQBlockClientGET(t, cc, message.Token{0x03})
+	defer cc.ReleaseMessage(request)
+	prepared, err := cc.qblockClient.prepare(request, func(error) {})
+	require.NoError(t, err)
+	require.True(t, prepared)
+	require.False(t, clock.activeTimer())
+
+	response := newQBlockClientResponse(t, cc, request.Token(), true)
+	defer cc.ReleaseMessage(response)
+	require.True(t, cc.qblockClient.handle(response))
+	require.Eventually(t, clock.activeTimer, time.Second, time.Millisecond)
+}
+
 func newQBlockClockTestConn(t *testing.T, qblockConfig qblockClientConfig) *Conn {
 	t.Helper()
 	cfg := DefaultConfig

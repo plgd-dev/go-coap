@@ -725,6 +725,7 @@ func (c *qblockClient) handle(msg *pool.Message) bool {
 	c.transferByToken[string(token)] = transfer
 	c.mu.Unlock()
 	c.drive(outputs)
+	c.notifyDeadlineChanged()
 	return true
 }
 
