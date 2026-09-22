@@ -54,6 +54,20 @@ func TestQBlockAutomaticModeRejectsMixedClockConfiguration(t *testing.T) {
 	require.Error(t, cc.qblockClient.initErr)
 }
 
+func TestQBlockCallbackSlotsBoundAndRecoverCapacity(t *testing.T) {
+	slots := newQBlockCallbackSlots(1)
+	release, ok := slots.tryAcquire()
+	require.True(t, ok)
+	_, ok = slots.tryAcquire()
+	require.False(t, ok)
+
+	release()
+	release()
+	release, ok = slots.tryAcquire()
+	require.True(t, ok)
+	release()
+}
+
 func newQBlockClockTestConn(t *testing.T, qblockConfig qblockClientConfig) *Conn {
 	t.Helper()
 	cfg := DefaultConfig
