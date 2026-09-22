@@ -1,9 +1,9 @@
 # Private bidirectional UDP Q-Block adapter design
 
-Status: proposed. This is the next internal slice after the completed private
-UDP client Q-Block1/Q-Block2 adapter. It implements and tests the server role
-inside `udp/client`; it does not wire that role into `udp/server`, enable a
-public Q-Block API, or claim full RFC 9177 support.
+Status: implemented private slice (2026-09-22). This follows the completed
+private UDP client Q-Block1/Q-Block2 adapter and implements/tests the server
+role inside `udp/client`; it does not wire that role into `udp/server`, enable
+a public Q-Block API, or claim full RFC 9177 support.
 
 ## Purpose and boundary
 
@@ -211,3 +211,7 @@ pacing/probing-rate accounting, packet/MTU sizing, and full connection-memory
 accounting. Only then add public configuration, explicit capability probing,
 and UDP/DTLS propagation. Interoperability, fault injection, and release
 documentation remain later milestones.
+
+Real `udp/server` construction, server-initiated GET Q-Block2, public
+configuration, DTLS propagation, complete scheduler/pacing/packet sizing, and
+interoperability are explicitly outside this implemented private slice.
