@@ -23,6 +23,91 @@ const (
 	qblockScheduleAutomatic
 )
 
+type qblockScheduler struct {
+	clock    qblockClock
+	timer    qblockTimer
+	notify   chan struct{}
+	due      chan struct{}
+	done     chan struct{}
+	stop     chan struct{}
+	stopped  chan struct{}
+	stopOnce sync.Once
+}
+
+type qblockCallbackDispatcher struct {
+	mu       sync.Mutex
+	queue    chan func()
+	stopCh   chan struct{}
+	stopped  chan struct{}
+	stopping bool
+	stopOnce sync.Once
+}
+
+func newQBlockCallbackDispatcher(limit uint32) *qblockCallbackDispatcher {
+	d := &qblockCallbackDispatcher{
+		queue:   make(chan func(), limit),
+		stopCh:  make(chan struct{}),
+		stopped: make(chan struct{}),
+	}
+	go d.run()
+	return d
+}
+
+func (d *qblockCallbackDispatcher) submit(callback func()) bool {
+	if callback == nil {
+		return true
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.stopping {
+		return false
+	}
+	select {
+	case d.queue <- callback:
+		return true
+	default:
+		return false
+	}
+}
+
+func (d *qblockCallbackDispatcher) stop() {
+	d.stopOnce.Do(func() {
+		d.mu.Lock()
+		d.stopping = true
+		close(d.stopCh)
+		d.mu.Unlock()
+	})
+}
+
+func (d *qblockCallbackDispatcher) run() {
+	defer close(d.stopped)
+	for {
+		select {
+		case <-d.stopCh:
+			return
+		default:
+		}
+		select {
+		case <-d.stopCh:
+			return
+		case callback := <-d.queue:
+			callback()
+		}
+	}
+}
+
+func newQBlockScheduler(clock qblockClock) *qblockScheduler {
+	return &qblockScheduler{
+		clock:   clock,
+		timer:   clock.NewTimer(),
+		notify:  make(chan struct{}, 1),
+		due:     make(chan struct{}, 1),
+		done:    make(chan struct{}, 1),
+		stop:    make(chan struct{}),
+		stopped: make(chan struct{}),
+	}
+}
+
 type qblockCallbackSlots struct {
 	mu    sync.Mutex
 	limit uint32

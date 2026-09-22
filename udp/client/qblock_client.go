@@ -83,6 +83,8 @@ type qblockClient struct {
 	transferByMID            map[int32]*qblockTransfer
 	server                   *qblockServer
 	callbackSlots            *qblockCallbackSlots
+	callbackDispatcher       *qblockCallbackDispatcher
+	scheduler                *qblockScheduler
 }
 
 func withQBlockClient(cfg qblockClientConfig) Option {
@@ -111,7 +113,7 @@ func newQBlockClient(cc *Conn, cfg qblockClientConfig) *qblockClient {
 	if err != nil {
 		err = errors.Join(errInvalidQBlockClientConfig, err)
 	}
-	return &qblockClient{
+	client := &qblockClient{
 		cc:                       cc,
 		now:                      now,
 		clock:                    clock,
@@ -130,6 +132,10 @@ func newQBlockClient(cc *Conn, cfg qblockClientConfig) *qblockClient {
 		transferByMID:            make(map[int32]*qblockTransfer),
 		callbackSlots:            newQBlockCallbackSlots(cfg.Manager.MaxTransfers),
 	}
+	if err == nil && cfg.ScheduleMode == qblockScheduleAutomatic {
+		client.startScheduler()
+	}
+	return client
 }
 
 func qblockClientClock(cfg qblockClientConfig) (func() time.Time, qblockClock, error) {
@@ -296,6 +302,7 @@ func (c *qblockClient) prepareQ1(req *pool.Message, fail func(error)) (bool, err
 	}
 	c.mu.Unlock()
 	c.drive(outputs)
+	c.notifyDeadlineChanged()
 	return true, nil
 }
 
@@ -408,6 +415,18 @@ func (c *qblockClient) nextDeadlineLocked() (time.Time, bool) {
 }
 
 func (c *qblockClient) Tick(now time.Time) {
+	if c.automaticScheduling() {
+		c.notifyDeadlineChanged()
+		return
+	}
+	c.advanceDue(now)
+}
+
+func (c *qblockClient) advanceDue(now time.Time) {
+	c.advanceDueWithCallbacks(now, false)
+}
+
+func (c *qblockClient) advanceDueWithCallbacks(now time.Time, scheduled bool) {
 	c.lockAction()
 	c.mu.Lock()
 	if c.manager == nil {
@@ -423,7 +442,99 @@ func (c *qblockClient) Tick(now time.Time) {
 	callbacks := c.executeOrdered(outputs)
 	c.actionMu.Unlock()
 	for _, callback := range callbacks {
+		if scheduled && c.callbackDispatcher != nil {
+			_ = c.callbackDispatcher.submit(callback)
+			continue
+		}
 		callback()
+	}
+}
+
+func (c *qblockClient) automaticScheduling() bool {
+	return c.scheduleMode == qblockScheduleAutomatic && c.scheduler != nil
+}
+
+func (c *qblockClient) startScheduler() {
+	if c.clock == nil || c.scheduler != nil {
+		return
+	}
+	scheduler := newQBlockScheduler(c.clock)
+	c.callbackDispatcher = newQBlockCallbackDispatcher(c.managerConfig.MaxTransfers)
+	c.scheduler = scheduler
+	go c.runSchedulerOwner(scheduler)
+	go c.runSchedulerWorker(scheduler)
+	c.notifyDeadlineChanged()
+}
+
+func (c *qblockClient) stopScheduler() {
+	scheduler := c.scheduler
+	if scheduler == nil {
+		return
+	}
+	scheduler.stopOnce.Do(func() { close(scheduler.stop) })
+	if c.callbackDispatcher != nil {
+		c.callbackDispatcher.stop()
+	}
+}
+
+func (c *qblockClient) notifyDeadlineChanged() {
+	if !c.automaticScheduling() {
+		return
+	}
+	select {
+	case c.scheduler.notify <- struct{}{}:
+	default:
+	}
+}
+
+func (c *qblockClient) runSchedulerOwner(scheduler *qblockScheduler) {
+	defer close(scheduler.stopped)
+	defer scheduler.timer.Stop()
+	for {
+		select {
+		case <-scheduler.stop:
+			return
+		case <-scheduler.notify:
+		case <-scheduler.timer.C():
+		case <-scheduler.done:
+		}
+		c.recomputeSchedulerDeadline(scheduler)
+	}
+}
+
+func (c *qblockClient) recomputeSchedulerDeadline(scheduler *qblockScheduler) {
+	c.mu.Lock()
+	deadline, ok := c.nextDeadlineLocked()
+	c.mu.Unlock()
+	if !ok {
+		scheduler.timer.Stop()
+		return
+	}
+	delay := deadline.Sub(scheduler.clock.Now())
+	if delay > 0 {
+		scheduler.timer.Reset(delay)
+		return
+	}
+	scheduler.timer.Stop()
+	select {
+	case scheduler.due <- struct{}{}:
+	default:
+	}
+}
+
+func (c *qblockClient) runSchedulerWorker(scheduler *qblockScheduler) {
+	for {
+		select {
+		case <-scheduler.stop:
+			return
+		case <-scheduler.due:
+			c.advanceDueWithCallbacks(scheduler.clock.Now(), true)
+			select {
+			case scheduler.done <- struct{}{}:
+			case <-scheduler.stop:
+				return
+			}
+		}
 	}
 }
 
@@ -447,9 +558,11 @@ func (c *qblockClient) abandon(token message.Token, err error) {
 	}
 	c.mu.Unlock()
 	c.drive(outputs)
+	c.notifyDeadlineChanged()
 }
 
 func (c *qblockClient) close() {
+	c.stopScheduler()
 	if c.cancelWriteContext != nil {
 		c.cancelWriteContext()
 	}
@@ -457,6 +570,7 @@ func (c *qblockClient) close() {
 	var outputs []qblock.Output
 	c.mu.Lock()
 	for key, exchange := range c.exchangesByOriginalToken {
+		exchange.releaseCallbackSlot()
 		if len(exchange.transfers) == 0 {
 			delete(c.exchangesByOriginalToken, key)
 			pending = append(pending, exchange)
