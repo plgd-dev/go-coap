@@ -50,7 +50,7 @@ func newServerHarness(t *testing.T, mc qblock.ManagerConfig, sc qblockServerConf
 		return mid
 	}
 	h.cc = NewConnWithOpts(h.session, &cfg,
-		withQBlockClient(qblockClientConfig{Manager: mc, Now: func() time.Time { return h.now }}),
+		withQBlockClient(qblockClientConfig{Manager: mc, Now: func() time.Time { return h.now }, ScheduleMode: qblockScheduleManual}),
 		withQBlockServer(sc),
 	)
 	t.Cleanup(h.session.closeForTest)

@@ -731,7 +731,7 @@ func TestQBlockClientQ1StartFailureRollsBackReservationAndState(t *testing.T) {
 	cfg.BlockwiseSZX = blockwise.SZX16
 	cfg.GetToken = getToken
 	cc := NewConnWithOpts(session, &cfg,
-		withQBlockClient(qblockClientConfig{Manager: managerConfig, Now: time.Now}),
+		withQBlockClient(qblockClientConfig{Manager: managerConfig, Now: time.Now, ScheduleMode: qblockScheduleManual}),
 	)
 	request := newPOSTWithBody(t, cc, message.Token{0x04}, []byte("large"))
 	defer cc.ReleaseMessage(request)
@@ -763,7 +763,7 @@ func TestQBlockClientCopiesQ1BodyAndOptionsBeforeStarting(t *testing.T) {
 	cfg.BlockwiseSZX = blockwise.SZX16
 	cfg.GetToken = getToken
 	cc := NewConnWithOpts(session, &cfg,
-		withQBlockClient(qblockClientConfig{Manager: managerConfig, Now: func() time.Time { return now }}),
+		withQBlockClient(qblockClientConfig{Manager: managerConfig, Now: func() time.Time { return now }, ScheduleMode: qblockScheduleManual}),
 	)
 	body := bytes.Repeat([]byte{'x'}, 64)
 	reader := bytes.NewReader(body)
@@ -865,7 +865,7 @@ func TestQBlockPrepareInitialGET(t *testing.T) {
 	cfg.BlockwiseEnable = false
 	cfg.BlockwiseSZX = blockwise.SZX64
 	cc := NewConnWithOpts(&qblockTestSession{ctx: context.Background()}, &cfg,
-		withQBlockClient(qblockClientConfig{Manager: qblock.DefaultManagerConfig(), Now: time.Now}),
+		withQBlockClient(qblockClientConfig{Manager: qblock.DefaultManagerConfig(), Now: time.Now, ScheduleMode: qblockScheduleManual}),
 	)
 	req := cc.AcquireMessage(context.Background())
 	defer cc.ReleaseMessage(req)
@@ -891,7 +891,7 @@ func TestDoInternalPreparesPrivateQBlockGET(t *testing.T) {
 	cfg.BlockwiseSZX = blockwise.SZX64
 	session := &qblockTestSession{ctx: context.Background()}
 	cc := NewConnWithOpts(session, &cfg,
-		withQBlockClient(qblockClientConfig{Manager: qblock.DefaultManagerConfig(), Now: time.Now}),
+		withQBlockClient(qblockClientConfig{Manager: qblock.DefaultManagerConfig(), Now: time.Now, ScheduleMode: qblockScheduleManual}),
 	)
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
@@ -912,7 +912,7 @@ func TestDoInternalPrivateQBlockLeavesClassicBlock2GETOrdinary(t *testing.T) {
 	cfg.BlockwiseEnable = false
 	session := &qblockTestSession{ctx: context.Background(), writeCh: make(chan struct{}, 1)}
 	cc := NewConnWithOpts(session, &cfg,
-		withQBlockClient(qblockClientConfig{Manager: qblock.DefaultManagerConfig(), Now: time.Now}),
+		withQBlockClient(qblockClientConfig{Manager: qblock.DefaultManagerConfig(), Now: time.Now, ScheduleMode: qblockScheduleManual}),
 	)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -1367,7 +1367,7 @@ func TestQBlockInvalidManagerConfigHooksAreSafe(t *testing.T) {
 	cfg := DefaultConfig
 	cfg.BlockwiseEnable = false
 	cc := NewConnWithOpts(session, &cfg,
-		withQBlockClient(qblockClientConfig{Manager: managerConfig, Now: time.Now}),
+		withQBlockClient(qblockClientConfig{Manager: managerConfig, Now: time.Now, ScheduleMode: qblockScheduleManual}),
 	)
 	req := newPrivateQBlockClientGET(t, cc, message.Token{21, 22, 23})
 	defer cc.ReleaseMessage(req)
@@ -1388,7 +1388,7 @@ func TestQBlockExpiryFailsOriginalRequestAndReleasesState(t *testing.T) {
 	cfg.BlockwiseEnable = false
 	cfg.BlockwiseSZX = blockwise.SZX16
 	cc := NewConnWithOpts(&qblockTestSession{ctx: context.Background()}, &cfg,
-		withQBlockClient(qblockClientConfig{Manager: managerConfig, Now: func() time.Time { return now }}),
+		withQBlockClient(qblockClientConfig{Manager: managerConfig, Now: func() time.Time { return now }, ScheduleMode: qblockScheduleManual}),
 	)
 	req := newPrivateQBlockClientGET(t, cc, message.Token{20, 21, 22})
 	defer cc.ReleaseMessage(req)
@@ -1424,7 +1424,7 @@ func TestQBlockTickAbandonAndCloseContentionFailsOnceAndReleasesState(t *testing
 	cfg.BlockwiseEnable = false
 	cfg.BlockwiseSZX = blockwise.SZX16
 	cc := NewConnWithOpts(session, &cfg,
-		withQBlockClient(qblockClientConfig{Manager: managerConfig, Now: func() time.Time { return now }}),
+		withQBlockClient(qblockClientConfig{Manager: managerConfig, Now: func() time.Time { return now }, ScheduleMode: qblockScheduleManual}),
 	)
 	req := newPrivateQBlockClientGET(t, cc, message.Token{0xd1, 0xd2, 0xd3})
 	defer cc.ReleaseMessage(req)
@@ -1747,7 +1747,7 @@ func newPrivateQBlockClientConnWithTokenAndSZX(t *testing.T, session *qblockTest
 	cfg.BlockwiseSZX = szx
 	cfg.GetToken = getToken
 	return NewConnWithOpts(session, &cfg,
-		withQBlockClient(qblockClientConfig{Manager: qblock.DefaultManagerConfig(), Now: time.Now}),
+		withQBlockClient(qblockClientConfig{Manager: qblock.DefaultManagerConfig(), Now: time.Now, ScheduleMode: qblockScheduleManual}),
 	)
 }
 
@@ -1760,7 +1760,7 @@ func newPrivateQBlockClientConnWithMaxPayloads(t *testing.T, session *qblockTest
 	managerConfig := qblock.DefaultManagerConfig()
 	managerConfig.Transfer.MaxPayloads = maxPayloads
 	return NewConnWithOpts(session, &cfg,
-		withQBlockClient(qblockClientConfig{Manager: managerConfig, Now: time.Now}),
+		withQBlockClient(qblockClientConfig{Manager: managerConfig, Now: time.Now, ScheduleMode: qblockScheduleManual}),
 	)
 }
 

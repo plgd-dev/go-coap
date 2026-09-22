@@ -187,11 +187,11 @@ func runQBlockPrivatePairedRolesTrace(t *testing.T, method codes.Code) {
 		require.NoError(t, w.SetResponse(codes.Changed, message.TextPlain, bytes.NewReader(bytes.Repeat([]byte{'r'}, 48))))
 	}
 	client := NewConnWithOpts(clientSession, &clientCfg,
-		withQBlockClient(qblockClientConfig{Manager: managerConfig, Now: func() time.Time { return now }}),
+		withQBlockClient(qblockClientConfig{Manager: managerConfig, Now: func() time.Time { return now }, ScheduleMode: qblockScheduleManual}),
 		withQBlockServer(qblockServerConfig{Retention: 10 * time.Second}),
 	)
 	server := NewConnWithOpts(serverSession, &serverCfg,
-		withQBlockClient(qblockClientConfig{Manager: managerConfig, Now: func() time.Time { return now }}),
+		withQBlockClient(qblockClientConfig{Manager: managerConfig, Now: func() time.Time { return now }, ScheduleMode: qblockScheduleManual}),
 		withQBlockServer(qblockServerConfig{Retention: 10 * time.Second}),
 	)
 	t.Cleanup(clientSession.closeForTest)

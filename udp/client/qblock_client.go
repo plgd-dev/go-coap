@@ -24,6 +24,8 @@ var (
 type qblockClientConfig struct {
 	Manager       qblock.ManagerConfig
 	Now           func() time.Time
+	Clock         qblockClock
+	ScheduleMode  qblockScheduleMode
 	Jitter        func() float64
 	GetRequestTag func() (message.Token, error)
 }
@@ -61,6 +63,8 @@ type qblockTransfer struct {
 type qblockClient struct {
 	cc                       *Conn
 	now                      func() time.Time
+	clock                    qblockClock
+	scheduleMode             qblockScheduleMode
 	jitter                   func() float64
 	getRequestTag            func() (message.Token, error)
 	mu                       sync.Mutex
@@ -86,10 +90,7 @@ func withQBlockClient(cfg qblockClientConfig) Option {
 }
 
 func newQBlockClient(cc *Conn, cfg qblockClientConfig) *qblockClient {
-	now := cfg.Now
-	if now == nil {
-		now = time.Now
-	}
+	now, clock, configErr := qblockClientClock(cfg)
 	jitter := cfg.Jitter
 	if jitter == nil {
 		jitter = func() float64 { return 0 }
@@ -99,12 +100,17 @@ func newQBlockClient(cc *Conn, cfg qblockClientConfig) *qblockClient {
 		getRequestTag = cc.getToken
 	}
 	manager, err := qblock.NewManager(cfg.Manager)
+	if configErr != nil {
+		err = errors.Join(err, configErr)
+	}
 	if err != nil {
 		err = errors.Join(errInvalidQBlockClientConfig, err)
 	}
 	return &qblockClient{
 		cc:                       cc,
 		now:                      now,
+		clock:                    clock,
+		scheduleMode:             cfg.ScheduleMode,
 		jitter:                   jitter,
 		getRequestTag:            getRequestTag,
 		manager:                  manager,
@@ -115,6 +121,29 @@ func newQBlockClient(cc *Conn, cfg qblockClientConfig) *qblockClient {
 		transfers:                make(map[qblock.TransferID]*qblockTransfer),
 		transferByToken:          make(map[string]*qblockTransfer),
 		transferByMID:            make(map[int32]*qblockTransfer),
+	}
+}
+
+func qblockClientClock(cfg qblockClientConfig) (func() time.Time, qblockClock, error) {
+	if cfg.Clock != nil && cfg.Now != nil {
+		return time.Now, nil, errInvalidQBlockClientConfig
+	}
+	switch cfg.ScheduleMode {
+	case qblockScheduleManual:
+		if cfg.Clock != nil {
+			return cfg.Clock.Now, cfg.Clock, nil
+		}
+		if cfg.Now != nil {
+			return cfg.Now, nil, nil
+		}
+		return time.Now, nil, nil
+	case qblockScheduleAutomatic:
+		if cfg.Clock == nil {
+			return time.Now, nil, errInvalidQBlockClientConfig
+		}
+		return cfg.Clock.Now, cfg.Clock, nil
+	default:
+		return time.Now, nil, errInvalidQBlockClientConfig
 	}
 }
 
