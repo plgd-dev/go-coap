@@ -30,6 +30,10 @@ func (s *qblockServer) handleQ1(msg *pool.Message) bool {
 
 	s.client.mu.Lock()
 	if record := s.records[operation]; record != nil {
+		if record.executing {
+			s.client.mu.Unlock()
+			return true
+		}
 		outputs := s.receiveLocked(record, fragment)
 		s.client.mu.Unlock()
 		s.client.drive(outputs)
@@ -64,7 +68,7 @@ func (s *qblockServer) handleQ1(msg *pool.Message) bool {
 	}
 	record := &qblockServerRecord{
 		id: id, operation: operation, metadata: fragment.Metadata, options: options,
-		tokens: map[string]message.Token{string(fragment.Token): bytes.Clone(fragment.Token)}, replyToken: bytes.Clone(fragment.Token), charged: charge,
+		tokens: map[string]message.Token{string(fragment.Token): bytes.Clone(fragment.Token)}, replyToken: bytes.Clone(fragment.Token), code: msg.Code(), charged: charge,
 	}
 	s.records[operation] = record
 	s.byID[id] = record

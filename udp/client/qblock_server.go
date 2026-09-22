@@ -2,8 +2,10 @@ package client
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"errors"
 	"fmt"
+	"io"
 	"time"
 
 	"github.com/plgd-dev/go-coap/v3/message"
@@ -11,6 +13,7 @@ import (
 	"github.com/plgd-dev/go-coap/v3/message/pool"
 	"github.com/plgd-dev/go-coap/v3/net/blockwise"
 	"github.com/plgd-dev/go-coap/v3/net/qblock"
+	"github.com/plgd-dev/go-coap/v3/net/responsewriter"
 )
 
 type qblockServerConfig struct {
@@ -29,15 +32,19 @@ type qblockServer struct {
 }
 
 type qblockServerRecord struct {
-	id         qblock.TransferID
-	operation  qblock.OperationKey
-	metadata   qblock.Metadata
-	options    message.Options
-	tokens     map[string]message.Token
-	replyToken message.Token
-	payload    []byte
-	ready      bool
-	charged    uint64
+	id              qblock.TransferID
+	operation       qblock.OperationKey
+	metadata        qblock.Metadata
+	options         message.Options
+	tokens          map[string]message.Token
+	replyToken      message.Token
+	payload         []byte
+	ready           bool
+	executing       bool
+	code            codes.Code
+	responseCode    codes.Code
+	responseOptions message.Options
+	charged         uint64
 }
 
 func withQBlockServer(cfg qblockServerConfig) Option {
@@ -95,7 +102,7 @@ func (c *qblockClient) executeServerOutput(output qblock.Output) []func() {
 		return nil
 	}
 	record := c.server.byID[output.TransferID]
-	if record == nil || record.operation != output.Operation {
+	if record == nil {
 		c.mu.Unlock()
 		return nil
 	}
@@ -103,9 +110,43 @@ func (c *qblockClient) executeServerOutput(output qblock.Output) []func() {
 	case qblock.Deliver:
 		record.payload = bytes.Clone(output.Action.Payload)
 		record.ready = true
+		if record.executing || c.server.handler == nil {
+			c.mu.Unlock()
+			return nil
+		}
+		record.executing = true
+		payload := bytes.Clone(record.payload)
+		options, _ := record.options.Clone()
+		code := record.code
+		operation := record.operation
 		c.mu.Unlock()
-		return nil
+		return []func(){func() {
+			req := c.cc.AcquireMessage(c.cc.Context())
+			resp := c.cc.AcquireMessage(c.cc.Context())
+			defer c.cc.ReleaseMessage(req)
+			defer c.cc.ReleaseMessage(resp)
+			req.SetCode(code)
+			req.ResetOptionsTo(options)
+			req.SetBody(bytes.NewReader(payload))
+			writer := responsewriter.New(resp, c.cc, options...)
+			c.server.handler(writer, req)
+			body := []byte(nil)
+			if reader := writer.Message().Body(); reader != nil {
+				body, _ = io.ReadAll(reader)
+			}
+			responseOptions, _ := writer.Message().Options().Clone()
+			c.server.finishHandler(operation, writer.Message().IsModified(), writer.Message().Code(), responseOptions, body)
+		}}
 	case qblock.Release:
+		if record.executing {
+			delete(c.server.byID, record.id)
+			for key, token := range record.tokens {
+				c.cc.releaseToken(token, tokenOwnerQBlock)
+				delete(record.tokens, key)
+			}
+			c.mu.Unlock()
+			return nil
+		}
 		c.server.releaseLocked(record)
 		c.mu.Unlock()
 		return nil
@@ -120,9 +161,82 @@ func (c *qblockClient) executeServerOutput(output qblock.Output) []func() {
 			return c.executeOrdered(outputs)
 		}
 		return nil
+	case qblock.SendBlock:
+		token := bytes.Clone(record.replyToken)
+		code := record.responseCode
+		options, _ := record.responseOptions.Clone()
+		szx := record.metadata.SZX
+		size := record.metadata.Size
+		etag := bytes.Clone(record.metadata.Identity)
+		c.mu.Unlock()
+		if err := c.writeServerQ2Block(token, code, options, szx, size, etag, output.Action); err != nil {
+			c.mu.Lock()
+			outputs := c.manager.Cancel(output.TransferID, err)
+			c.mu.Unlock()
+			return c.executeOrdered(outputs)
+		}
+		return nil
 	}
 	c.mu.Unlock()
 	return nil
+}
+
+func (s *qblockServer) finishHandler(operation qblock.OperationKey, modified bool, code codes.Code, options message.Options, payload []byte) {
+	c := s.client
+	c.mu.Lock()
+	record := s.records[operation]
+	if record == nil || !record.executing {
+		c.mu.Unlock()
+		return
+	}
+	q1id := record.id
+	_ = c.manager.Cancel(q1id, nil)
+	delete(s.byID, q1id)
+	if !modified {
+		c.mu.Unlock()
+		return
+	}
+	etag := sha256.Sum256(append([]byte{byte(code)}, payload...))
+	meta := qblock.Metadata{Size: uint32(len(payload)), SZX: record.metadata.SZX, Identity: etag[:8], HasContentFormat: true, ContentFormat: message.TextPlain}
+	q2op, err := qblock.NewOperationKey([]byte("server-q2"), []byte(operation), meta.Identity)
+	if err == nil {
+		var outputs []qblock.Output
+		outputs, err = c.manager.StartSender(q2op, record.replyToken, qblock.Q2, meta, payload, c.now(), c.jitter())
+		if err == nil {
+			id, ok := c.manager.TransferID(q2op)
+			if !ok {
+				c.mu.Unlock()
+				return
+			}
+			record.id, record.metadata, record.responseCode, record.responseOptions = id, meta, code, options
+			s.byID[record.id] = record
+			c.mu.Unlock()
+			c.drive(outputs)
+			return
+		}
+	}
+	// Keep a bounded duplicate record even when no representation can be sent.
+	record.executing = false
+	c.mu.Unlock()
+}
+
+func (c *qblockClient) writeServerQ2Block(token message.Token, code codes.Code, options message.Options, szx blockwise.SZX, size uint32, etag []byte, action qblock.Action) error {
+	msg := c.cc.AcquireMessage(c.cc.Context())
+	defer c.cc.ReleaseMessage(msg)
+	msg.SetType(message.NonConfirmable)
+	msg.SetToken(token)
+	msg.SetMessageID(c.cc.GetMessageID())
+	msg.SetCode(code)
+	msg.ResetOptionsTo(options)
+	value, err := qblock.EncodeBlock(qblock.Block{Number: action.Block.Number, More: action.Block.More, SZX: szx})
+	if err != nil {
+		return err
+	}
+	msg.SetOptionUint32(message.QBlock2, value)
+	msg.SetOptionUint32(message.Size2, size)
+	msg.SetOptionBytes(message.ETag, etag)
+	msg.SetBody(bytes.NewReader(action.Payload))
+	return c.cc.session.WriteMessage(msg)
 }
 
 func (c *qblockClient) writeServerQ1Control(token message.Token, szx blockwise.SZX, action qblock.Action) error {

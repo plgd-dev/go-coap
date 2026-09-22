@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"io"
 	"reflect"
 	"testing"
 	"time"
@@ -13,6 +14,7 @@ import (
 	"github.com/plgd-dev/go-coap/v3/message/pool"
 	"github.com/plgd-dev/go-coap/v3/net/blockwise"
 	"github.com/plgd-dev/go-coap/v3/net/qblock"
+	"github.com/plgd-dev/go-coap/v3/net/responsewriter"
 	"github.com/stretchr/testify/require"
 )
 
@@ -113,6 +115,102 @@ func TestQBlockServerAdmission(t *testing.T) {
 	require.Equal(t, uint32(1), snapshot.active)
 	require.Equal(t, 1, snapshot.records)
 	require.Empty(t, h.session.writesSnapshot())
+}
+
+func TestQBlockServerDispatchAndHandoff(t *testing.T) {
+	calls := 0
+	mc := qblock.DefaultManagerConfig()
+	mc.MaxTransfers, mc.MaxTokens = 1, 1
+	h := newServerHarness(t, mc, qblockServerConfig{}, func(w *responsewriter.ResponseWriter[*Conn], r *pool.Message) {
+		calls++
+		body, err := io.ReadAll(r.Body())
+		require.NoError(t, err)
+		require.Equal(t, "body", string(body))
+		require.NoError(t, w.SetResponse(codes.Changed, message.TextPlain, bytes.NewReader([]byte("response"))))
+	})
+	h.ingest(h.q1(t, 1, 0, false, 4, "body"))
+
+	require.Equal(t, 1, calls)
+	writes := h.session.writesSnapshot()
+	require.Len(t, writes, 1)
+	require.Equal(t, message.Token{1}, writes[0].token)
+	require.True(t, writes[0].options.HasOption(message.QBlock2))
+	require.Equal(t, uint32(1), h.snapshot().active)
+	h.ingest(h.q1(t, 2, 0, false, 4, "body"))
+	require.Equal(t, 1, calls)
+}
+
+func TestQBlockServerFailedQ2WriteStillSuppressesDuplicateUpload(t *testing.T) {
+	calls := 0
+	h := newServerHarness(t, qblock.DefaultManagerConfig(), qblockServerConfig{}, func(w *responsewriter.ResponseWriter[*Conn], r *pool.Message) {
+		calls++
+		require.NoError(t, w.SetResponse(codes.Changed, message.TextPlain, bytes.NewReader([]byte("response"))))
+	})
+	h.session.writeErr = errors.New("write failed")
+	h.ingest(h.q1(t, 1, 0, false, 4, "body"))
+	require.Equal(t, 1, calls)
+
+	h.ingest(h.q1(t, 2, 0, false, 4, "body"))
+	h.ingest(h.q1(t, 3, 0, false, 4, "body"))
+
+	require.Equal(t, 1, calls)
+	require.Equal(t, uint32(0), h.snapshot().active)
+	require.Equal(t, 1, h.snapshot().records)
+}
+
+func TestQBlockServerQ2BlocksUseStableRepresentationSize(t *testing.T) {
+	body := bytes.Repeat([]byte{'r'}, 32)
+	h := newServerHarness(t, qblock.DefaultManagerConfig(), qblockServerConfig{}, func(w *responsewriter.ResponseWriter[*Conn], r *pool.Message) {
+		require.NoError(t, w.SetResponse(codes.Changed, message.TextPlain, bytes.NewReader(body)))
+	})
+	h.ingest(h.q1(t, 1, 0, false, 4, "body"))
+
+	writes := h.session.writesSnapshot()
+	require.Len(t, writes, 2)
+	for _, write := range writes {
+		size, err := write.options.GetUint32(message.Size2)
+		require.NoError(t, err)
+		require.Equal(t, uint32(len(body)), size)
+		etag, err := write.options.GetBytes(message.ETag)
+		require.NoError(t, err)
+		require.Len(t, etag, 8)
+	}
+}
+
+func TestQBlockServerTickSendsNextQ2SetWithRetainedToken(t *testing.T) {
+	mc := qblock.DefaultManagerConfig()
+	mc.Transfer.MaxPayloads = 1
+	body := bytes.Repeat([]byte{'r'}, 32)
+	h := newServerHarness(t, mc, qblockServerConfig{}, func(w *responsewriter.ResponseWriter[*Conn], r *pool.Message) {
+		require.NoError(t, w.SetResponse(codes.Changed, message.TextPlain, bytes.NewReader(body)))
+	})
+	h.ingest(h.q1(t, 1, 0, false, 4, "body"))
+	require.Len(t, h.session.writesSnapshot(), 1)
+
+	h.advance(2 * time.Second)
+
+	writes := h.session.writesSnapshot()
+	require.Len(t, writes, 2)
+	require.Equal(t, message.Token{1}, writes[1].token)
+	value, err := writes[1].options.GetUint32(message.QBlock2)
+	require.NoError(t, err)
+	block, err := qblock.DecodeBlock(value)
+	require.NoError(t, err)
+	require.Equal(t, uint32(1), block.Number)
+}
+
+func TestQBlockServerUnmodifiedHandlerResponseSuppressesDuplicate(t *testing.T) {
+	calls := 0
+	h := newServerHarness(t, qblock.DefaultManagerConfig(), qblockServerConfig{}, func(*responsewriter.ResponseWriter[*Conn], *pool.Message) {
+		calls++
+	})
+	h.ingest(h.q1(t, 1, 0, false, 4, "body"))
+	h.ingest(h.q1(t, 2, 0, false, 4, "body"))
+
+	require.Equal(t, 1, calls)
+	require.Empty(t, h.session.writesSnapshot())
+	require.Zero(t, h.snapshot().active)
+	require.Equal(t, 1, h.snapshot().records)
 }
 
 func TestQBlockServerRejectsMalformedFirstFragmentWithoutState(t *testing.T) {
