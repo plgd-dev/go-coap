@@ -163,7 +163,35 @@ func (s *qblockServer) deactivateLocked(record *qblockServerRecord, now time.Tim
 	}
 	record.pendingReplies = nil
 	record.terminal = true
-	record.expires = now.Add(s.config.Retention)
+	if !record.handlerRunning && record.expires.IsZero() {
+		record.expires = now.Add(s.config.Retention)
+	}
+}
+
+// settleHandlerLocked records that a running handler has returned. A handler
+// can outlive its Q1 transfer; in that case preserve duplicate suppression
+// from the point at which application execution actually settles.
+// The caller holds client.mu.
+func (s *qblockServer) settleHandlerLocked(record *qblockServerRecord, now time.Time) {
+	record.handlerRunning = false
+	if record.terminal && record.expires.IsZero() {
+		record.expires = now.Add(s.config.Retention)
+	}
+}
+
+// nextRecordDeadlineLocked returns the earliest eligible terminal-record
+// cleanup deadline. The caller holds client.mu.
+func (s *qblockServer) nextRecordDeadlineLocked() (time.Time, bool) {
+	var next time.Time
+	for _, record := range s.records {
+		if !record.terminal || record.handlerRunning || record.expires.IsZero() {
+			continue
+		}
+		if next.IsZero() || record.expires.Before(next) {
+			next = record.expires
+		}
+	}
+	return next, !next.IsZero()
 }
 
 // expireRecordsLocked bounds completed duplicate-suppression records without
@@ -173,7 +201,7 @@ func (s *qblockServer) expireRecordsLocked(now time.Time) {
 		return
 	}
 	for _, record := range s.records {
-		if !record.terminal || record.handlerRunning || now.Before(record.expires) {
+		if !record.terminal || record.handlerRunning || record.expires.IsZero() || now.Before(record.expires) {
 			continue
 		}
 		if s.byID[record.id] != nil {
@@ -327,11 +355,15 @@ func (s *qblockServer) finishHandler(operation qblock.OperationKey, generation u
 	c := s.client
 	c.mu.Lock()
 	record := s.records[operation]
-	if record == nil || !record.executing || record.generation != generation || s.closed || record.terminal {
+	if record == nil || !record.executing || record.generation != generation || s.closed {
 		c.mu.Unlock()
 		return
 	}
-	record.handlerRunning = false
+	s.settleHandlerLocked(record, c.now())
+	if record.terminal {
+		c.mu.Unlock()
+		return
+	}
 	q1id := record.id
 	_ = c.manager.Cancel(q1id, nil)
 	delete(s.byID, q1id)

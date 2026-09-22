@@ -333,6 +333,23 @@ func (c *qblockClient) active() uint32 {
 	return c.manager.Active()
 }
 
+// nextDeadlineLocked returns the earliest active transfer or completed-server
+// record deadline. The caller holds c.mu.
+func (c *qblockClient) nextDeadlineLocked() (time.Time, bool) {
+	if c.manager == nil {
+		return time.Time{}, false
+	}
+	deadline, ok := c.manager.NextDeadline()
+	if c.server == nil {
+		return deadline, ok
+	}
+	recordDeadline, recordOK := c.server.nextRecordDeadlineLocked()
+	if recordOK && (!ok || recordDeadline.Before(deadline)) {
+		return recordDeadline, true
+	}
+	return deadline, ok
+}
+
 func (c *qblockClient) Tick(now time.Time) {
 	c.mu.Lock()
 	if c.manager == nil {

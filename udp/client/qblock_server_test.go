@@ -656,6 +656,27 @@ func TestQBlockServerRequiresValidPrivateConstruction(t *testing.T) {
 	require.Nil(t, invalid.qblockClient.server)
 }
 
+func TestQBlockNextDeadlineIncludesTerminalServerRetention(t *testing.T) {
+	h := newServerHarness(t, serverLifecycleConfig(), qblockServerConfig{Retention: 10 * time.Second}, func(w *responsewriter.ResponseWriter[*Conn], _ *pool.Message) {
+		require.NoError(t, w.SetResponse(codes.Changed, message.TextPlain, bytes.NewReader([]byte("response"))))
+	})
+	h.session.writeErr = io.ErrClosedPipe
+	h.ingest(h.q1(t, 1, 0, false, 4, "body"))
+
+	var deadline time.Time
+	var ok bool
+	var records int
+	func() {
+		h.cc.qblockClient.mu.Lock()
+		defer h.cc.qblockClient.mu.Unlock()
+		deadline, ok = h.cc.qblockClient.nextDeadlineLocked()
+		records = len(h.cc.qblockClient.server.records)
+	}()
+	require.Equal(t, 1, records)
+	require.True(t, ok)
+	require.Equal(t, h.now.Add(10*time.Second), deadline)
+}
+
 func mustContentFormat(t *testing.T, options message.Options) message.MediaType {
 	t.Helper()
 	format, err := options.ContentFormat()

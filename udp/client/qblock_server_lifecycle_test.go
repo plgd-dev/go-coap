@@ -318,6 +318,58 @@ func serverLifecycleConfig() qblock.ManagerConfig {
 }
 
 func TestQBlockServerLifecycle(t *testing.T) {
+	t.Run("expired handler settles retention when it returns", func(t *testing.T) {
+		entered := make(chan struct{})
+		release := make(chan struct{})
+		returned := make(chan struct{})
+		h := newServerHarness(t, serverLifecycleConfig(), qblockServerConfig{Retention: 10 * time.Second}, func(w *responsewriter.ResponseWriter[*Conn], r *pool.Message) {
+			close(entered)
+			<-release
+			require.NoError(t, w.SetResponse(codes.Changed, message.TextPlain, bytes.NewReader([]byte("late"))))
+		})
+		go func() {
+			h.ingest(h.q1(t, 1, 0, false, 4, "body"))
+			close(returned)
+		}()
+		select {
+		case <-entered:
+		case <-time.After(time.Second):
+			t.Fatal("handler did not start")
+		}
+
+		h.advance(10 * time.Second)
+		require.Zero(t, h.snapshot().active)
+		h.advance(5 * time.Second)
+		close(release)
+		select {
+		case <-returned:
+		case <-time.After(time.Second):
+			t.Fatal("handler did not return")
+		}
+
+		var exists, terminal, handlerRunning bool
+		var expires time.Time
+		func() {
+			h.cc.qblockClient.mu.Lock()
+			defer h.cc.qblockClient.mu.Unlock()
+			for _, record := range h.cc.qblockClient.server.records {
+				exists = true
+				terminal = record.terminal
+				handlerRunning = record.handlerRunning
+				expires = record.expires
+			}
+		}()
+		require.True(t, exists, "terminal duplicate-suppression record was released early")
+		require.True(t, terminal)
+		require.False(t, handlerRunning)
+		require.Equal(t, h.now.Add(10*time.Second), expires)
+
+		h.advance(9 * time.Second)
+		require.Equal(t, 1, h.snapshot().records)
+		h.advance(time.Second)
+		require.Zero(t, h.snapshot().records)
+	})
+
 	t.Run("terminal record frees capacity exactly at retention", func(t *testing.T) {
 		calls := 0
 		h := newServerHarness(t, serverLifecycleConfig(), qblockServerConfig{Retention: 10 * time.Second, MaxRecords: 1}, func(w *responsewriter.ResponseWriter[*Conn], r *pool.Message) {
