@@ -29,6 +29,10 @@ func (s *qblockServer) handleQ1(msg *pool.Message) bool {
 	fragment.Operation = operation
 
 	s.client.mu.Lock()
+	if s.closed {
+		s.client.mu.Unlock()
+		return true
+	}
 	if record := s.records[operation]; record != nil {
 		if record.executing {
 			s.client.mu.Unlock()
@@ -66,9 +70,11 @@ func (s *qblockServer) handleQ1(msg *pool.Message) bool {
 		s.client.mu.Unlock()
 		return true
 	}
+	s.nextGen++
 	record := &qblockServerRecord{
 		id: id, operation: operation, metadata: fragment.Metadata, options: options,
 		tokens: map[string]message.Token{string(fragment.Token): bytes.Clone(fragment.Token)}, replyToken: bytes.Clone(fragment.Token), code: msg.Code(), charged: charge,
+		generation: s.nextGen, mids: make(map[int32]struct{}),
 	}
 	s.records[operation] = record
 	s.byID[id] = record

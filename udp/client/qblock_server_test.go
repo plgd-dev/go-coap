@@ -108,6 +108,7 @@ func (h *serverHarness) snapshot() serverSnapshot {
 	if client.server != nil {
 		snapshot.records = len(client.server.records)
 		snapshot.metadataBytes = client.server.metadata
+		snapshot.mids = len(client.server.byMID)
 		for _, record := range client.server.records {
 			snapshot.serverTokens += len(record.tokens)
 		}

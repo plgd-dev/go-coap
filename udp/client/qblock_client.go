@@ -340,6 +340,9 @@ func (c *qblockClient) Tick(now time.Time) {
 		return
 	}
 	outputs := c.manager.Tick(now)
+	if c.server != nil {
+		c.server.expireRecordsLocked(now)
+	}
 	c.mu.Unlock()
 	c.drive(outputs)
 }
@@ -381,9 +384,7 @@ func (c *qblockClient) close() {
 			outputs = append(outputs, c.manager.Cancel(id, qblock.ErrClosed)...)
 		}
 		if c.server != nil {
-			for id := range c.server.byID {
-				outputs = append(outputs, c.manager.Cancel(id, qblock.ErrClosed)...)
-			}
+			outputs = append(outputs, c.server.closeLocked()...)
 		}
 	}
 	c.mu.Unlock()
@@ -396,6 +397,9 @@ func (c *qblockClient) close() {
 
 func (c *qblockClient) handle(msg *pool.Message) bool {
 	if msg.Type() == message.Reset {
+		if c.server != nil && c.server.handleReset(msg.MessageID()) {
+			return true
+		}
 		c.mu.Lock()
 		transfer := c.transferByMID[msg.MessageID()]
 		if transfer == nil {

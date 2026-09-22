@@ -39,8 +39,12 @@ func (s *qblockServer) handleQ2Control(msg *pool.Message) bool {
 		return true
 	}
 	s.client.mu.Lock()
+	if s.closed {
+		s.client.mu.Unlock()
+		return true
+	}
 	record := s.records[op]
-	if record == nil || !record.executing || s.byID[record.id] == nil {
+	if record == nil || !record.executing || record.terminal || s.byID[record.id] == nil {
 		s.client.mu.Unlock()
 		return true
 	}
