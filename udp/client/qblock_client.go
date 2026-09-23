@@ -574,6 +574,9 @@ func (c *qblockClient) close() {
 	var outputs []qblock.Output
 	c.mu.Lock()
 	for key, exchange := range c.exchangesByOriginalToken {
+		if exchange.cancelContext != nil {
+			exchange.cancelContext()
+		}
 		exchange.releaseCallbackSlot()
 		if len(exchange.transfers) == 0 {
 			delete(c.exchangesByOriginalToken, key)
@@ -1048,6 +1051,9 @@ func (c *qblockClient) newQ1Request(transfer *qblockTransfer, token message.Toke
 }
 
 func (c *qblockClient) writeQ2Control(id qblock.TransferID, action qblock.Action) error {
+	if err := c.writeContext.Err(); err != nil {
+		return err
+	}
 	c.mu.Lock()
 	transfer := c.transfers[id]
 	if transfer == nil {
@@ -1069,12 +1075,19 @@ func (c *qblockClient) writeQ2Control(id qblock.TransferID, action qblock.Action
 		return nil
 	}
 	for _, block := range blocks {
+		if err := c.writeContext.Err(); err != nil {
+			return err
+		}
 		token, err := c.bindControlToken(id)
 		if err != nil {
 			return err
 		}
 		request, err := c.newControlRequest(id, token, block)
 		if err != nil {
+			return err
+		}
+		if err := request.Context().Err(); err != nil {
+			c.cc.ReleaseMessage(request)
 			return err
 		}
 		err = c.cc.session.WriteMessage(request)
@@ -1132,7 +1145,7 @@ func (c *qblockClient) newControlRequest(id qblock.TransferID, token message.Tok
 	if err != nil {
 		return nil, err
 	}
-	request := c.cc.AcquireMessage(c.cc.Context())
+	request := c.cc.AcquireMessage(c.writeContext)
 	c.mu.Lock()
 	transfer := c.transfers[id]
 	if transfer == nil {

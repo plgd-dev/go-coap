@@ -324,6 +324,81 @@ func TestQBlockQ2ReceiveWaitsForOutputGateBeforeManagerMutation(t *testing.T) {
 	require.Equal(t, uint32(1), cc.qblockClient.active())
 }
 
+func TestQBlockCloseCancelsBlockedClientQ1Write(t *testing.T) {
+	session := &qblockTestSession{
+		ctx:                 context.Background(),
+		contextWriteStart:   make(chan struct{}, 1),
+		releaseContextWrite: make(chan struct{}),
+	}
+	cc := newPrivateQBlockClientConnWithToken(t, session, message.GetToken)
+	request := newPOSTWithBody(t, cc, message.Token{0xe3}, []byte("upload"))
+	defer cc.ReleaseMessage(request)
+	prepared := make(chan struct{})
+	go func() {
+		_, _ = cc.qblockClient.prepare(request, func(error) {})
+		close(prepared)
+	}()
+	select {
+	case <-session.contextWriteStart:
+	case <-time.After(time.Second):
+		t.Fatal("client Q1 write did not start")
+	}
+	closed := make(chan struct{})
+	go func() {
+		session.closeForTest()
+		close(closed)
+	}()
+	select {
+	case <-closed:
+	case <-time.After(time.Second):
+		t.Fatal("close did not cancel the blocked client Q1 write")
+	}
+	requireQBlockCompletion(t, prepared, "client Q1 write")
+	requireQBlockClientEmpty(t, cc)
+}
+
+func TestQBlockCloseCancelsBlockedClientQ2ControlWrite(t *testing.T) {
+	now := time.Unix(100, 0)
+	session := &qblockTestSession{ctx: context.Background()}
+	cfg := DefaultConfig
+	cfg.BlockwiseEnable = false
+	cc := NewConnWithOpts(session, &cfg, withQBlockClient(qblockClientConfig{
+		Manager: qblock.DefaultManagerConfig(), Now: func() time.Time { return now }, ScheduleMode: qblockScheduleManual,
+	}))
+	request := newPrivateQBlockClientGET(t, cc, message.Token{0xe4})
+	defer cc.ReleaseMessage(request)
+	prepared, err := cc.qblockClient.prepare(request, func(error) {})
+	require.NoError(t, err)
+	require.True(t, prepared)
+	first := newQBlockClientResponse(t, cc, request.Token(), true)
+	defer cc.ReleaseMessage(first)
+	require.True(t, cc.qblockClient.handle(first))
+	session.contextWriteStart = make(chan struct{}, 1)
+	session.releaseContextWrite = make(chan struct{})
+	tickDone := make(chan struct{})
+	go func() {
+		cc.qblockClient.Tick(now.Add(qblock.DefaultManagerConfig().Transfer.NonReceiveTimeout))
+		close(tickDone)
+	}()
+	select {
+	case <-session.contextWriteStart:
+	case <-time.After(time.Second):
+		t.Fatal("client Q2 control write did not start")
+	}
+	closed := make(chan struct{})
+	go func() {
+		session.closeForTest()
+		close(closed)
+	}()
+	select {
+	case <-closed:
+	case <-time.After(time.Second):
+		t.Fatal("close did not cancel the blocked client Q2 control write")
+	}
+	requireQBlockCompletion(t, tickDone, "client Q2 control write")
+	requireQBlockClientEmpty(t, cc)
+}
+
 func startQ1TransferForTest(t *testing.T, cc *Conn, payload []byte) (*qblockTransfer, <-chan struct{}) {
 	t.Helper()
 	token := message.Token{0x71}
