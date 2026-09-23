@@ -132,9 +132,6 @@ func newQBlockClient(cc *Conn, cfg qblockClientConfig) *qblockClient {
 		transferByMID:            make(map[int32]*qblockTransfer),
 		callbackSlots:            newQBlockCallbackSlots(cfg.Manager.MaxTransfers),
 	}
-	if err == nil && cfg.ScheduleMode == qblockScheduleAutomatic {
-		client.startScheduler()
-	}
 	return client
 }
 

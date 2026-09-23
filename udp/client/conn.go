@@ -395,6 +395,9 @@ func NewConnWithOpts(session Session, cfg *Config, opts ...Option) *Conn {
 		cc.processReceivedMessage = processReceivedMessage
 	}
 	cc.receivedMessageReader = client.NewReceivedMessageReader(&cc, cfg.ReceivedMessageQueueSize)
+	if cc.qblockClient != nil && cc.qblockClient.initErr == nil && cc.qblockClient.scheduleMode == qblockScheduleAutomatic {
+		cc.qblockClient.startScheduler()
+	}
 	return &cc
 }
 

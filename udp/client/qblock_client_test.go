@@ -1420,10 +1420,9 @@ func TestQBlockExpiryFailsOriginalRequestAndReleasesState(t *testing.T) {
 	require.Zero(t, cc.qblockClient.active())
 }
 
-// This would fail if ordered output execution, the failure-once guard, or any
-// manager/adapter release path were removed. Holding actionMu lets the test
-// deterministically queue Tick, caller abandonment, and session close against
-// the same live exchange before any terminal output is applied.
+// Holding actionMu queues Tick output behind cancellation and close. Abandon
+// invalidates the transfer before acquiring that gate, so its cancellation
+// error wins and is reported exactly once.
 func TestQBlockTickAbandonAndCloseContentionFailsOnceAndReleasesState(t *testing.T) {
 	now := time.Unix(100, 0)
 	managerConfig := qblock.DefaultManagerConfig()
@@ -1484,7 +1483,7 @@ func TestQBlockTickAbandonAndCloseContentionFailsOnceAndReleasesState(t *testing
 	requireQBlockCompletion(t, abandonDone, "abandonment")
 	requireQBlockCompletion(t, closeDone, "session close")
 
-	require.ErrorIs(t, requireQBlockFailure(t, failures), qblock.ErrRetriesExhausted)
+	require.ErrorIs(t, requireQBlockFailure(t, failures), context.Canceled)
 	select {
 	case err := <-failures:
 		t.Fatalf("contending lifecycle paths reported failure more than once: %v", err)

@@ -14,10 +14,11 @@ import (
 )
 
 type fakeQBlockClock struct {
-	mu        sync.Mutex
-	now       time.Time
-	newTimers uint32
-	timer     *fakeQBlockTimer
+	mu         sync.Mutex
+	now        time.Time
+	newTimers  uint32
+	timer      *fakeQBlockTimer
+	onNewTimer func()
 }
 
 func newFakeQBlockClock(now time.Time) *fakeQBlockClock { return &fakeQBlockClock{now: now} }
@@ -29,14 +30,34 @@ func (c *fakeQBlockClock) Now() time.Time {
 func (c *fakeQBlockClock) Advance(d time.Duration) {
 	c.mu.Lock()
 	c.now = c.now.Add(d)
+	if c.timer != nil && c.timer.active && !c.now.Before(c.timer.deadline) {
+		c.timer.active = false
+		select {
+		case c.timer.ch <- c.now:
+		default:
+		}
+	}
 	c.mu.Unlock()
 }
 func (c *fakeQBlockClock) NewTimer() qblockTimer {
+	if c.onNewTimer != nil {
+		c.onNewTimer()
+	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.newTimers++
 	c.timer = &fakeQBlockTimer{clock: c, ch: make(chan time.Time, 1)}
 	return c.timer
+}
+
+func TestQBlockSchedulerStartsAfterConnectionHooks(t *testing.T) {
+	clock := newFakeQBlockClock(time.Unix(100, 0))
+	session := &qblockTestSession{ctx: context.Background()}
+	hooksReady := false
+	clock.onNewTimer = func() { hooksReady = len(session.onClose) > 0 }
+	cc := newAutomaticQBlockClockTestConnWithSession(t, clock, session)
+	require.NotNil(t, cc.qblockClient.scheduler)
+	require.True(t, hooksReady, "scheduler timer was created before the connection close hook")
 }
 
 func (c *fakeQBlockClock) timerCreated() bool {
@@ -213,6 +234,29 @@ func TestQBlockSchedulerArmsAfterInboundReceiverStart(t *testing.T) {
 	defer cc.ReleaseMessage(response)
 	require.True(t, cc.qblockClient.handle(response))
 	require.Eventually(t, clock.activeTimer, time.Second, time.Millisecond)
+}
+
+func TestQBlockSchedulerAdvancesReceiverWithoutManualTick(t *testing.T) {
+	clock := newFakeQBlockClock(time.Unix(100, 0))
+	session := &qblockTestSession{ctx: context.Background()}
+	cc := newAutomaticQBlockClockTestConnWithSession(t, clock, session)
+	request := newPrivateQBlockClientGET(t, cc, message.Token{0x04})
+	defer cc.ReleaseMessage(request)
+	prepared, err := cc.qblockClient.prepare(request, func(error) {})
+	require.NoError(t, err)
+	require.True(t, prepared)
+	response := newQBlockClientResponse(t, cc, request.Token(), true)
+	defer cc.ReleaseMessage(response)
+	require.True(t, cc.qblockClient.handle(response))
+	require.Eventually(t, clock.activeTimer, time.Second, time.Millisecond)
+	writesBefore := len(session.writesSnapshot())
+	clock.Advance(clock.deadline().Sub(clock.Now()))
+	require.Eventually(t, func() bool {
+		return len(session.writesSnapshot()) > writesBefore
+	}, time.Second, time.Millisecond)
+	last := session.writesSnapshot()[len(session.writesSnapshot())-1]
+	require.Equal(t, message.NonConfirmable, last.typ)
+	require.True(t, last.options.HasOption(message.QBlock2))
 }
 
 func newQBlockClockTestConn(t *testing.T, qblockConfig qblockClientConfig) *Conn {
