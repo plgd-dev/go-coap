@@ -147,6 +147,34 @@ func TestQBlockServerAdmission(t *testing.T) {
 	require.Empty(t, h.session.writesSnapshot())
 }
 
+func TestQBlockServerQ1AdmissionWaitsForOutputGate(t *testing.T) {
+	h := newServerHarness(t, qblock.DefaultManagerConfig(), qblockServerConfig{}, nil)
+	contended := make(chan struct{}, 1)
+	h.cc.qblockClient.actionMuContention = func() { contended <- struct{}{} }
+	h.cc.qblockClient.actionMu.Lock()
+	locked := true
+	defer func() {
+		if locked {
+			h.cc.qblockClient.actionMu.Unlock()
+		}
+	}()
+	done := make(chan struct{})
+	first := h.q1(t, 1, 0, true, 32, "abcdefghijklmnop")
+	go func() {
+		h.ingest(first)
+		close(done)
+	}()
+	requireQBlockContention(t, contended, "server Q1 admission")
+	snapshot := h.snapshot()
+	require.Zero(t, snapshot.active)
+	require.Zero(t, snapshot.records)
+	require.Zero(t, snapshot.reservations)
+	h.cc.qblockClient.actionMu.Unlock()
+	locked = false
+	requireQBlockCompletion(t, done, "server Q1 admission")
+	require.Equal(t, uint32(1), h.snapshot().active)
+}
+
 func TestQBlockServerDispatchAndHandoff(t *testing.T) {
 	calls := 0
 	mc := qblock.DefaultManagerConfig()
@@ -280,9 +308,7 @@ func TestQBlockServerRepeatedControlTokenQueuesRepair(t *testing.T) {
 	require.Equal(t, message.Token{11}, writes[len(writes)-1].token)
 }
 
-func TestQBlockServerRepairKeepsAcceptedTokenUntilItsWrite(t *testing.T) {
-	// A regression here would read record.replyToken only when an already
-	// accepted repair is finally written, allowing a later control to retoken it.
+func TestQBlockServerRepairWaitsForOutputGateAndUsesAcceptedToken(t *testing.T) {
 	mc := qblock.DefaultManagerConfig()
 	mc.Transfer.MaxPayloads = 2
 	h := newServerHarness(t, mc, qblockServerConfig{}, func(w *responsewriter.ResponseWriter[*Conn], r *pool.Message) {
@@ -293,29 +319,33 @@ func TestQBlockServerRepairKeepsAcceptedTokenUntilItsWrite(t *testing.T) {
 
 	first := h.control(t, 11, 0, false, "tag-a")
 	second := h.control(t, 12, 1, false, "tag-a")
+	contended := make(chan struct{}, 1)
+	h.cc.qblockClient.actionMuContention = func() { contended <- struct{}{} }
 	h.cc.qblockClient.actionMu.Lock()
+	locked := true
+	defer func() {
+		if locked {
+			h.cc.qblockClient.actionMu.Unlock()
+		}
+	}()
 	firstDone := make(chan struct{})
 	go func() {
 		h.ingest(first)
 		close(firstDone)
 	}()
-	require.Eventually(t, func() bool {
-		return h.serverTokenBound(11)
-	}, time.Second, time.Millisecond)
-	secondDone := make(chan struct{})
-	go func() {
-		h.ingest(second)
-		close(secondDone)
-	}()
-	require.Eventually(t, func() bool {
-		return h.serverTokenBound(12)
-	}, time.Second, time.Millisecond)
+	requireQBlockContention(t, contended, "server Q2 repair")
+	require.False(t, h.serverTokenBound(11))
 	h.cc.qblockClient.actionMu.Unlock()
-	<-firstDone
-	<-secondDone
+	locked = false
+	requireQBlockCompletion(t, firstDone, "server Q2 repair")
 
 	writes := h.session.writesSnapshot()
 	require.Equal(t, message.Token{11}, writes[len(writes)-1].token)
+	h.ingest(second)
+	require.True(t, h.serverTokenBound(12))
+	h.advance(2 * time.Second)
+	writes = h.session.writesSnapshot()
+	require.Equal(t, message.Token{12}, writes[len(writes)-1].token)
 }
 
 func TestQBlockServerControlWrongSZXRollsBack(t *testing.T) {

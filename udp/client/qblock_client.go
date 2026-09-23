@@ -281,9 +281,11 @@ func (c *qblockClient) prepareQ1(req *pool.Message, fail func(error)) (bool, err
 	}
 	exchange.stopConnCancel = context.AfterFunc(c.cc.Context(), cancelContext)
 
+	c.lockAction()
 	c.mu.Lock()
 	if _, ok := c.exchangesByOriginalToken[string(originalToken)]; ok {
 		c.mu.Unlock()
+		c.actionMu.Unlock()
 		exchange.closeRequestContext()
 		exchange.releaseCallbackSlot()
 		c.cc.releaseToken(initialToken, tokenOwnerQBlock)
@@ -292,13 +294,18 @@ func (c *qblockClient) prepareQ1(req *pool.Message, fail func(error)) (bool, err
 	outputs, err := c.startQ1Locked(exchange, body, initialToken)
 	if err != nil {
 		c.mu.Unlock()
+		c.actionMu.Unlock()
 		exchange.closeRequestContext()
 		exchange.releaseCallbackSlot()
 		c.cc.releaseToken(initialToken, tokenOwnerQBlock)
 		return false, err
 	}
 	c.mu.Unlock()
-	c.drive(outputs)
+	callbacks := c.executeOrdered(outputs)
+	c.actionMu.Unlock()
+	for _, callback := range callbacks {
+		callback()
+	}
 	c.notifyDeadlineChanged()
 	return true, nil
 }
@@ -606,8 +613,21 @@ func (c *qblockClient) handle(msg *pool.Message) bool {
 		outputs := c.finishExchangeLocked(transfer.exchange, qblock.ErrCanceled)
 		c.mu.Unlock()
 		c.drive(outputs)
+		c.notifyDeadlineChanged()
 		return true
 	}
+	c.lockAction()
+	var callbacks []func()
+	progressed := false
+	defer func() {
+		c.actionMu.Unlock()
+		if progressed {
+			c.notifyDeadlineChanged()
+		}
+		for _, callback := range callbacks {
+			callback()
+		}
+	}()
 	if msg.HasOption(message.QBlock1) {
 		c.mu.Lock()
 		token := msg.Token()
@@ -620,7 +640,8 @@ func (c *qblockClient) handle(msg *pool.Message) bool {
 		} else {
 			outputs, handled := c.handleQ1ResponseLocked(msg, transfer.id)
 			c.mu.Unlock()
-			c.drive(outputs)
+			callbacks = append(callbacks, c.executeOrdered(outputs)...)
+			progressed = true
 			return handled
 		}
 	}
@@ -634,7 +655,8 @@ func (c *qblockClient) handle(msg *pool.Message) bool {
 		}
 		outputs, handled := c.handleQ1ResponseLocked(msg, transfer.id)
 		c.mu.Unlock()
-		c.drive(outputs)
+		callbacks = append(callbacks, c.executeOrdered(outputs)...)
+		progressed = true
 		return handled
 	}
 	c.mu.Lock()
@@ -643,25 +665,29 @@ func (c *qblockClient) handle(msg *pool.Message) bool {
 		if transfer.kind == qblock.Q1 {
 			outputs, _ := c.handoffQ1ToQ2Locked(transfer.id, msg)
 			c.mu.Unlock()
-			c.drive(outputs)
+			callbacks = append(callbacks, c.executeOrdered(outputs)...)
+			progressed = true
 			return true
 		}
 		fragment, _, err := fragmentFromQ2ForCode(msg, transfer.operation, &transfer.metadata, transfer.responseCode)
 		if err != nil {
 			outputs := c.manager.Cancel(transfer.id, err)
 			c.mu.Unlock()
-			c.drive(outputs)
+			callbacks = append(callbacks, c.executeOrdered(outputs)...)
+			progressed = true
 			return true
 		}
 		outputs, err := c.manager.Receive(fragment, c.now())
 		if err != nil {
 			outputs = c.manager.Cancel(transfer.id, err)
 			c.mu.Unlock()
-			c.drive(outputs)
+			callbacks = append(callbacks, c.executeOrdered(outputs)...)
+			progressed = true
 			return true
 		}
 		c.mu.Unlock()
-		c.drive(outputs)
+		callbacks = append(callbacks, c.executeOrdered(outputs)...)
+		progressed = true
 		return true
 	}
 	exchange, ok := c.exchangesByOriginalToken[string(token)]
@@ -721,8 +747,8 @@ func (c *qblockClient) handle(msg *pool.Message) bool {
 	c.transfers[id] = transfer
 	c.transferByToken[string(token)] = transfer
 	c.mu.Unlock()
-	c.drive(outputs)
-	c.notifyDeadlineChanged()
+	callbacks = append(callbacks, c.executeOrdered(outputs)...)
+	progressed = true
 	return true
 }
 

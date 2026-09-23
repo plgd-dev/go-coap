@@ -254,13 +254,26 @@ func (c *qblockClient) handleServerRequest(msg *pool.Message) bool {
 	if c.server == nil || msg.Code() < 1 || msg.Code() >= 32 {
 		return false
 	}
-	if msg.HasOption(message.QBlock2) {
-		return c.server.handleQ2Control(msg)
-	}
-	if !msg.HasOption(message.QBlock1) {
+	if !msg.HasOption(message.QBlock1) && !msg.HasOption(message.QBlock2) {
 		return false
 	}
-	return c.server.handleQ1(msg)
+	c.lockAction()
+	var outputs []qblock.Output
+	var changed bool
+	if msg.HasOption(message.QBlock2) {
+		outputs, changed = c.server.handleQ2Control(msg)
+	} else {
+		outputs, changed = c.server.handleQ1(msg)
+	}
+	callbacks := c.executeOrdered(outputs)
+	c.actionMu.Unlock()
+	if changed {
+		c.notifyDeadlineChanged()
+	}
+	for _, callback := range callbacks {
+		callback()
+	}
+	return true
 }
 
 func (c *qblockClient) executeServerOutput(output qblock.Output) []func() {
@@ -353,6 +366,17 @@ func (c *qblockClient) executeServerOutput(output qblock.Output) []func() {
 
 func (s *qblockServer) finishHandler(operation qblock.OperationKey, generation uint64, modified bool, code codes.Code, options message.Options, payload []byte) {
 	c := s.client
+	c.lockAction()
+	actionLocked := true
+	changed := false
+	defer func() {
+		if actionLocked {
+			c.actionMu.Unlock()
+		}
+		if changed {
+			c.notifyDeadlineChanged()
+		}
+	}()
 	c.mu.Lock()
 	record := s.records[operation]
 	if record == nil || !record.executing || record.generation != generation || s.closed {
@@ -360,6 +384,7 @@ func (s *qblockServer) finishHandler(operation qblock.OperationKey, generation u
 		return
 	}
 	s.settleHandlerLocked(record, c.now())
+	changed = true
 	if record.terminal {
 		c.mu.Unlock()
 		return
@@ -388,7 +413,14 @@ func (s *qblockServer) finishHandler(operation qblock.OperationKey, generation u
 			record.id, record.metadata, record.responseCode, record.responseOptions = id, meta, code, options
 			s.byID[record.id] = record
 			c.mu.Unlock()
-			c.drive(outputs)
+			callbacks := c.executeOrdered(outputs)
+			c.actionMu.Unlock()
+			actionLocked = false
+			c.notifyDeadlineChanged()
+			changed = false
+			for _, callback := range callbacks {
+				callback()
+			}
 			return
 		}
 	}

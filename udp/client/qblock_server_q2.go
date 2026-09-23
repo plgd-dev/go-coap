@@ -33,31 +33,31 @@ func serverQ2Control(msg *pool.Message) (qblock.OperationKey, qblock.Block, erro
 	return operation, block, err
 }
 
-func (s *qblockServer) handleQ2Control(msg *pool.Message) bool {
+func (s *qblockServer) handleQ2Control(msg *pool.Message) ([]qblock.Output, bool) {
 	op, block, err := serverQ2Control(msg)
 	if err != nil {
-		return true
+		return nil, false
 	}
 	s.client.mu.Lock()
 	if s.closed {
 		s.client.mu.Unlock()
-		return true
+		return nil, false
 	}
 	record := s.records[op]
 	if record == nil || !record.executing || record.terminal || s.byID[record.id] == nil {
 		s.client.mu.Unlock()
-		return true
+		return nil, false
 	}
 	if block.SZX != record.metadata.SZX {
 		s.client.mu.Unlock()
-		return true
+		return nil, false
 	}
 	token := bytes.Clone(msg.Token())
 	_, owned := record.tokens[string(token)]
 	if !owned {
 		if err := s.client.cc.claimToken(token, tokenOwnerQBlock); err != nil {
 			s.client.mu.Unlock()
-			return true
+			return nil, false
 		}
 	}
 	control := qblock.Control{Token: token}
@@ -67,7 +67,7 @@ func (s *qblockServer) handleQ2Control(msg *pool.Message) bool {
 				s.client.cc.releaseToken(token, tokenOwnerQBlock)
 			}
 			s.client.mu.Unlock()
-			return true
+			return nil, false
 		}
 		through := block.Number - 1
 		control.Continue = &through
@@ -80,7 +80,7 @@ func (s *qblockServer) handleQ2Control(msg *pool.Message) bool {
 			s.client.cc.releaseToken(token, tokenOwnerQBlock)
 		}
 		s.client.mu.Unlock()
-		return true
+		return nil, false
 	}
 	if len(outputs) == 0 && control.Continue != nil && !owned {
 		s.client.cc.releaseToken(token, tokenOwnerQBlock)
@@ -90,6 +90,5 @@ func (s *qblockServer) handleQ2Control(msg *pool.Message) bool {
 		record.queueReplyTokens(outputs, token)
 	}
 	s.client.mu.Unlock()
-	s.client.drive(outputs)
-	return true
+	return outputs, true
 }

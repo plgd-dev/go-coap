@@ -12,55 +12,54 @@ import (
 	"github.com/plgd-dev/go-coap/v3/net/qblock"
 )
 
-func (s *qblockServer) handleQ1(msg *pool.Message) bool {
+func (s *qblockServer) handleQ1(msg *pool.Message) ([]qblock.Output, bool) {
 	// Q-Block requests owned by the enabled private role are always consumed,
 	// including malformed input, so the generic disabled-Q path stays silent.
 	if msg.Type() != message.NonConfirmable || (msg.Code() != codes.POST && msg.Code() != codes.PUT) {
-		return true
+		return nil, false
 	}
 	fragment, options, err := serverQ1Fragment(msg)
 	if err != nil {
-		return true
+		return nil, false
 	}
 	operation, err := serverRequestKey(msg.Code(), options)
 	if err != nil {
-		return true
+		return nil, false
 	}
 	fragment.Operation = operation
 
 	s.client.mu.Lock()
 	if s.closed {
 		s.client.mu.Unlock()
-		return true
+		return nil, false
 	}
 	if record := s.records[operation]; record != nil {
 		if record.executing {
 			s.client.mu.Unlock()
-			return true
+			return nil, false
 		}
 		outputs := s.receiveLocked(record, fragment)
 		s.client.mu.Unlock()
-		s.client.drive(outputs)
-		return true
+		return outputs, true
 	}
 	if uint64(len(s.records)) >= uint64(s.config.MaxRecords) {
 		s.client.mu.Unlock()
-		return true
+		return nil, false
 	}
 	charge := uint64(len(operation)) + optionsSize(options)
 	if charge > s.config.MaxMetadataBytes-s.metadata {
 		s.client.mu.Unlock()
-		return true
+		return nil, false
 	}
 	if err := s.client.cc.claimToken(fragment.Token, tokenOwnerQBlock); err != nil {
 		s.client.mu.Unlock()
-		return true
+		return nil, false
 	}
 	outputs, err := s.client.manager.StartReceiver(fragment, s.client.now())
 	if err != nil {
 		s.client.cc.releaseToken(fragment.Token, tokenOwnerQBlock)
 		s.client.mu.Unlock()
-		return true
+		return nil, false
 	}
 	id, ok := s.client.manager.TransferID(operation)
 	if !ok {
@@ -68,7 +67,7 @@ func (s *qblockServer) handleQ1(msg *pool.Message) bool {
 		// manager invariant as a rejected admission without publishing a record.
 		s.client.cc.releaseToken(fragment.Token, tokenOwnerQBlock)
 		s.client.mu.Unlock()
-		return true
+		return nil, false
 	}
 	s.nextGen++
 	record := &qblockServerRecord{
@@ -80,8 +79,7 @@ func (s *qblockServer) handleQ1(msg *pool.Message) bool {
 	s.byID[id] = record
 	s.metadata += charge
 	s.client.mu.Unlock()
-	s.client.drive(outputs)
-	return true
+	return outputs, true
 }
 
 func (s *qblockServer) receiveLocked(record *qblockServerRecord, fragment qblock.Fragment) []qblock.Output {

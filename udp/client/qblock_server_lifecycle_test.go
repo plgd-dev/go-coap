@@ -318,6 +318,49 @@ func serverLifecycleConfig() qblock.ManagerConfig {
 }
 
 func TestQBlockServerLifecycle(t *testing.T) {
+	t.Run("handler handoff waits for output gate", func(t *testing.T) {
+		entered := make(chan struct{})
+		release := make(chan struct{})
+		h := newServerHarness(t, serverLifecycleConfig(), qblockServerConfig{Retention: 10 * time.Second}, func(w *responsewriter.ResponseWriter[*Conn], _ *pool.Message) {
+			close(entered)
+			<-release
+			require.NoError(t, w.SetResponse(codes.Changed, message.TextPlain, bytes.NewReader(bytes.Repeat([]byte{'r'}, 32))))
+		})
+		first := h.q1(t, 1, 0, false, 4, "body")
+		done := make(chan struct{})
+		go func() {
+			h.ingest(first)
+			close(done)
+		}()
+		select {
+		case <-entered:
+		case <-time.After(time.Second):
+			t.Fatal("server handler did not start")
+		}
+
+		contended := make(chan struct{}, 1)
+		h.cc.qblockClient.actionMuContention = func() { contended <- struct{}{} }
+		h.cc.qblockClient.actionMu.Lock()
+		locked := true
+		defer func() {
+			if locked {
+				h.cc.qblockClient.actionMu.Unlock()
+			}
+		}()
+		close(release)
+		requireQBlockContention(t, contended, "server handler handoff")
+		h.cc.qblockClient.mu.Lock()
+		var size uint32
+		for _, record := range h.cc.qblockClient.server.records {
+			size = record.metadata.Size
+		}
+		h.cc.qblockClient.mu.Unlock()
+		require.Equal(t, uint32(4), size, "Q1 must remain live until the output gate opens")
+		h.cc.qblockClient.actionMu.Unlock()
+		locked = false
+		requireQBlockCompletion(t, done, "server handler handoff")
+	})
+
 	t.Run("close cancels a blocked server write", func(t *testing.T) {
 		h := newServerHarness(t, serverLifecycleConfig(), qblockServerConfig{Retention: 10 * time.Second}, func(w *responsewriter.ResponseWriter[*Conn], _ *pool.Message) {
 			require.NoError(t, w.SetResponse(codes.Changed, message.TextPlain, bytes.NewReader([]byte("response"))))

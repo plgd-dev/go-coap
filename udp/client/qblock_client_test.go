@@ -253,6 +253,77 @@ func TestQBlockClientSerializesConcurrentOutputBursts(t *testing.T) {
 	requireQ1Burst(t, session.writesSnapshot(), codes.POST, []uint32{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10}, first.requestTag, bytes.Repeat([]byte{'a'}, 176))
 }
 
+func TestQBlockQ1StartWaitsForOutputGateBeforeManagerMutation(t *testing.T) {
+	cc := newPrivateQBlockClientConn(t)
+	request := newPOSTWithBody(t, cc, message.Token{0xe1}, []byte("upload"))
+	defer cc.ReleaseMessage(request)
+	contended := make(chan struct{}, 1)
+	cc.qblockClient.actionMuContention = func() { contended <- struct{}{} }
+	cc.qblockClient.actionMu.Lock()
+	locked := true
+	defer func() {
+		if locked {
+			cc.qblockClient.actionMu.Unlock()
+		}
+	}()
+
+	type result struct {
+		prepared bool
+		err      error
+	}
+	done := make(chan result, 1)
+	go func() {
+		prepared, err := cc.qblockClient.prepare(request, func(error) {})
+		done <- result{prepared: prepared, err: err}
+	}()
+	requireQBlockContention(t, contended, "Q1 start")
+	require.Zero(t, cc.qblockClient.active(), "manager must wait for the output gate")
+
+	cc.qblockClient.actionMu.Unlock()
+	locked = false
+	select {
+	case got := <-done:
+		require.NoError(t, got.err)
+		require.True(t, got.prepared)
+	case <-time.After(time.Second):
+		t.Fatal("Q1 start did not finish after the output gate opened")
+	}
+	require.Equal(t, uint32(1), cc.qblockClient.active())
+}
+
+func TestQBlockQ2ReceiveWaitsForOutputGateBeforeManagerMutation(t *testing.T) {
+	cc := newPrivateQBlockClientConn(t)
+	request := newPrivateQBlockClientGET(t, cc, message.Token{0xe2})
+	defer cc.ReleaseMessage(request)
+	prepared, err := cc.qblockClient.prepare(request, func(error) {})
+	require.NoError(t, err)
+	require.True(t, prepared)
+	response := newQBlockClientResponse(t, cc, request.Token(), true)
+	defer cc.ReleaseMessage(response)
+	contended := make(chan struct{}, 1)
+	cc.qblockClient.actionMuContention = func() { contended <- struct{}{} }
+	cc.qblockClient.actionMu.Lock()
+	locked := true
+	defer func() {
+		if locked {
+			cc.qblockClient.actionMu.Unlock()
+		}
+	}()
+	done := make(chan bool, 1)
+	go func() { done <- cc.qblockClient.handle(response) }()
+	requireQBlockContention(t, contended, "Q2 receiver start")
+	require.Zero(t, cc.qblockClient.active(), "inbound progress must wait for the output gate")
+	cc.qblockClient.actionMu.Unlock()
+	locked = false
+	select {
+	case handled := <-done:
+		require.True(t, handled)
+	case <-time.After(time.Second):
+		t.Fatal("Q2 receive did not finish after the output gate opened")
+	}
+	require.Equal(t, uint32(1), cc.qblockClient.active())
+}
+
 func startQ1TransferForTest(t *testing.T, cc *Conn, payload []byte) (*qblockTransfer, <-chan struct{}) {
 	t.Helper()
 	token := message.Token{0x71}
