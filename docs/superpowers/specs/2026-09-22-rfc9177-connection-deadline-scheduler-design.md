@@ -1,6 +1,11 @@
 # Private Q-Block connection deadline scheduler
 
-Status: draft for review, 2026-09-22. No scheduler implementation is claimed.
+Status: private scheduler runtime and paired traces implemented, 2026-09-23;
+the final Task 3 write-ownership/cancellation audit remains open. The
+socket-free Q-Block suites pass, including the race suite and automatic paired
+POST/PUT loss-and-repair traces. The full `udp/client` package remains
+unverified in this environment: unrelated loopback-dependent tests fail with
+`invalid srcAddr type <nil>`.
 
 Predecessor: [private bidirectional UDP adapter](2026-09-21-rfc9177-private-bidirectional-udp-adapter-design.md).
 Roadmap: [RFC 9177 implementation plan](../plans/2026-09-15-rfc9177.md), Milestone 3.

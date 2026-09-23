@@ -319,6 +319,60 @@ func TestQBlockSchedulerAdvancesReceiverWithoutManualTick(t *testing.T) {
 	require.True(t, last.options.HasOption(message.QBlock2))
 }
 
+func TestQBlockAutomaticTickDoesNotDuplicateScheduledAdvance(t *testing.T) {
+	clock := newFakeQBlockClock(time.Unix(100, 0))
+	session := &qblockTestSession{ctx: context.Background()}
+	cc := newAutomaticQBlockClockTestConnWithSession(t, clock, session)
+	request := newPrivateQBlockClientGET(t, cc, message.Token{0x06})
+	defer cc.ReleaseMessage(request)
+	prepared, err := cc.qblockClient.prepare(request, func(error) {})
+	require.NoError(t, err)
+	require.True(t, prepared)
+	response := newQBlockClientResponse(t, cc, request.Token(), true)
+	defer cc.ReleaseMessage(response)
+	require.True(t, cc.qblockClient.handle(response))
+	require.Eventually(t, clock.activeTimer, time.Second, time.Millisecond)
+	writes := len(session.writesSnapshot())
+	cc.CheckExpirations(clock.deadline())
+	require.Len(t, session.writesSnapshot(), writes, "legacy expiration check must not advance automatic Q-Block state")
+	clock.Advance(clock.deadline().Sub(clock.Now()))
+	require.Eventually(t, func() bool { return len(session.writesSnapshot()) > writes }, time.Second, time.Millisecond)
+	writes = len(session.writesSnapshot())
+	cc.CheckExpirations(clock.Now())
+	require.Len(t, session.writesSnapshot(), writes, "legacy expiration check must not repeat the due burst")
+}
+
+func TestQBlockCloseStopsSchedulerBeforeBlockedWriteDrains(t *testing.T) {
+	clock := newFakeQBlockClock(time.Unix(100, 0))
+	session := &qblockTestSession{ctx: context.Background()}
+	cc := newAutomaticQBlockClockTestConnWithSession(t, clock, session)
+	request := newPrivateQBlockClientGET(t, cc, message.Token{0x07})
+	defer cc.ReleaseMessage(request)
+	prepared, err := cc.qblockClient.prepare(request, func(error) {})
+	require.NoError(t, err)
+	require.True(t, prepared)
+	response := newQBlockClientResponse(t, cc, request.Token(), true)
+	defer cc.ReleaseMessage(response)
+	require.True(t, cc.qblockClient.handle(response))
+	require.Eventually(t, clock.activeTimer, time.Second, time.Millisecond)
+	session.contextWriteStart = make(chan struct{}, 1)
+	session.releaseContextWrite = make(chan struct{})
+	clock.Advance(clock.deadline().Sub(clock.Now()))
+	select {
+	case <-session.contextWriteStart:
+	case <-time.After(time.Second):
+		t.Fatal("scheduled Q2 control write did not start")
+	}
+	closed := make(chan struct{})
+	go func() {
+		session.closeForTest()
+		close(closed)
+	}()
+	requireQBlockCompletion(t, cc.qblockClient.schedulerStopped(), "scheduler owner stop")
+	requireQBlockCompletion(t, closed, "close after scheduled write cancellation")
+	requireQBlockClientEmpty(t, cc)
+}
+
 func TestQBlockSchedulerKeepsOneDueTurnWhileWorkerWaitsForGate(t *testing.T) {
 	clock := newFakeQBlockClock(time.Unix(100, 0))
 	cc := newAutomaticQBlockClockTestConn(t, clock)

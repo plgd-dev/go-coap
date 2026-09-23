@@ -157,14 +157,30 @@ func TestQBlockPrivatePairedRolesTrace(t *testing.T) {
 		{name: "PUT", code: codes.PUT},
 	} {
 		t.Run(method.name, func(t *testing.T) {
-			runQBlockPrivatePairedRolesTrace(t, method.code)
+			runQBlockPrivatePairedRolesTrace(t, method.code, false)
 		})
 	}
 }
 
-func runQBlockPrivatePairedRolesTrace(t *testing.T, method codes.Code) {
+func TestQBlockPrivatePairedRolesSchedulerTrace(t *testing.T) {
+	for _, method := range []struct {
+		name string
+		code codes.Code
+	}{
+		{name: "POST", code: codes.POST},
+		{name: "PUT", code: codes.PUT},
+	} {
+		t.Run(method.name, func(t *testing.T) {
+			runQBlockPrivatePairedRolesTrace(t, method.code, true)
+		})
+	}
+}
+
+func runQBlockPrivatePairedRolesTrace(t *testing.T, method codes.Code, automatic bool) {
 	t.Helper()
 	now := time.Unix(100, 0)
+	clientClock := newFakeQBlockClock(now)
+	serverClock := newFakeQBlockClock(now)
 	managerConfig := serverLifecycleConfig()
 	managerConfig.Transfer.MaxPayloads = 2
 	clientSession := &pairedQBlockSession{qblockTestSession: qblockTestSession{ctx: context.Background()}}
@@ -186,14 +202,24 @@ func runQBlockPrivatePairedRolesTrace(t *testing.T, method codes.Code) {
 		require.Equal(t, bytes.Repeat([]byte{'u'}, 48), body)
 		require.NoError(t, w.SetResponse(codes.Changed, message.TextPlain, bytes.NewReader(bytes.Repeat([]byte{'r'}, 48))))
 	}
+	clientQBlockConfig := qblockClientConfig{Manager: managerConfig, Now: func() time.Time { return now }, ScheduleMode: qblockScheduleManual}
+	serverQBlockConfig := qblockClientConfig{Manager: managerConfig, Now: func() time.Time { return now }, ScheduleMode: qblockScheduleManual}
+	if automatic {
+		clientQBlockConfig.Now, clientQBlockConfig.Clock, clientQBlockConfig.ScheduleMode = nil, clientClock, qblockScheduleAutomatic
+		serverQBlockConfig.Now, serverQBlockConfig.Clock, serverQBlockConfig.ScheduleMode = nil, serverClock, qblockScheduleAutomatic
+	}
 	client := NewConnWithOpts(clientSession, &clientCfg,
-		withQBlockClient(qblockClientConfig{Manager: managerConfig, Now: func() time.Time { return now }, ScheduleMode: qblockScheduleManual}),
+		withQBlockClient(clientQBlockConfig),
 		withQBlockServer(qblockServerConfig{Retention: 10 * time.Second}),
 	)
 	server := NewConnWithOpts(serverSession, &serverCfg,
-		withQBlockClient(qblockClientConfig{Manager: managerConfig, Now: func() time.Time { return now }, ScheduleMode: qblockScheduleManual}),
+		withQBlockClient(serverQBlockConfig),
 		withQBlockServer(qblockServerConfig{Retention: 10 * time.Second}),
 	)
+	if automatic {
+		require.True(t, client.qblockClient.automaticScheduling())
+		require.True(t, server.qblockClient.automaticScheduling())
+	}
 	t.Cleanup(clientSession.closeForTest)
 	t.Cleanup(serverSession.closeForTest)
 
@@ -240,11 +266,35 @@ func runQBlockPrivatePairedRolesTrace(t *testing.T, method codes.Code) {
 	duplicate.mid += 1000 // the same final Q1 under a distinct wire identity
 	deliverPairedQBlockWire(t, server, duplicate)
 	require.Equal(t, 1, calls)
-	now = now.Add(managerConfig.Transfer.NonReceiveTimeout)
-	client.CheckExpirations(now)
+	if automatic {
+		require.Eventually(t, func() bool {
+			client.qblockClient.mu.Lock()
+			deadline, ok := client.qblockClient.nextDeadlineLocked()
+			client.qblockClient.mu.Unlock()
+			return ok && clientClock.activeTimer() && clientClock.deadline().Equal(deadline)
+		}, time.Second, time.Millisecond)
+		before := len(clientSession.historySnapshot())
+		clientClock.Advance(clientClock.deadline().Sub(clientClock.Now()))
+		require.Eventually(t, func() bool { return len(clientSession.historySnapshot()) > before }, time.Second, time.Millisecond)
+	} else {
+		now = now.Add(managerConfig.Transfer.NonReceiveTimeout)
+		client.CheckExpirations(now)
+	}
 	drainPairedQBlock(t, client, server, clientSession, serverSession, false)
-	now = now.Add(managerConfig.Transfer.NonTimeout)
-	server.CheckExpirations(now)
+	if automatic {
+		require.Eventually(t, func() bool {
+			server.qblockClient.mu.Lock()
+			deadline, ok := server.qblockClient.nextDeadlineLocked()
+			server.qblockClient.mu.Unlock()
+			return ok && serverClock.activeTimer() && serverClock.deadline().Equal(deadline)
+		}, time.Second, time.Millisecond)
+		before := len(serverSession.historySnapshot())
+		serverClock.Advance(serverClock.deadline().Sub(serverClock.Now()))
+		require.Eventually(t, func() bool { return len(serverSession.historySnapshot()) > before }, time.Second, time.Millisecond)
+	} else {
+		now = now.Add(managerConfig.Transfer.NonTimeout)
+		server.CheckExpirations(now)
+	}
 	drainPairedQBlock(t, client, server, clientSession, serverSession, false)
 
 	select {
@@ -307,6 +357,10 @@ func runQBlockPrivatePairedRolesTrace(t *testing.T, method codes.Code) {
 	client.releaseToken(secondOriginal, tokenOwnerRequest)
 	clientSession.closeForTest()
 	serverSession.closeForTest()
+	if automatic {
+		requireQBlockCompletion(t, client.qblockClient.schedulerStopped(), "paired client scheduler stop")
+		requireQBlockCompletion(t, server.qblockClient.schedulerStopped(), "paired server scheduler stop")
+	}
 	require.Equal(t, serverSnapshot{}, pairedQBlockSnapshot(client))
 	require.Equal(t, serverSnapshot{}, pairedQBlockSnapshot(server))
 }
@@ -318,6 +372,44 @@ func serverLifecycleConfig() qblock.ManagerConfig {
 }
 
 func TestQBlockServerLifecycle(t *testing.T) {
+	t.Run("reset cancels a blocked server write without waiting for the output gate", func(t *testing.T) {
+		h := newServerHarness(t, serverLifecycleConfig(), qblockServerConfig{Retention: 10 * time.Second}, func(w *responsewriter.ResponseWriter[*Conn], _ *pool.Message) {
+			require.NoError(t, w.SetResponse(codes.Changed, message.TextPlain, bytes.NewReader([]byte("response"))))
+		})
+		h.session.contextWriteStart = make(chan struct{}, 1)
+		h.session.releaseContextWrite = make(chan struct{})
+		finished := make(chan struct{})
+		go func() {
+			h.ingest(h.q1(t, 1, 0, false, 4, "body"))
+			close(finished)
+		}()
+		select {
+		case <-h.session.contextWriteStart:
+		case <-time.After(time.Second):
+			t.Fatal("server write did not start")
+		}
+		h.cc.qblockClient.mu.Lock()
+		var mid int32
+		for mid = range h.cc.qblockClient.server.byMID {
+			break
+		}
+		h.cc.qblockClient.mu.Unlock()
+		require.NotZero(t, mid)
+		reset := h.cc.AcquireMessage(context.Background())
+		defer h.cc.ReleaseMessage(reset)
+		reset.SetType(message.Reset)
+		reset.SetMessageID(mid)
+		resetDone := make(chan bool, 1)
+		go func() { resetDone <- h.cc.qblockClient.handle(reset) }()
+		select {
+		case handled := <-resetDone:
+			require.True(t, handled)
+		case <-time.After(time.Second):
+			t.Fatal("Reset waited for the blocked server write")
+		}
+		requireQBlockCompletion(t, finished, "reset-canceled server write")
+	})
+
 	t.Run("handler handoff waits for output gate", func(t *testing.T) {
 		entered := make(chan struct{})
 		release := make(chan struct{})

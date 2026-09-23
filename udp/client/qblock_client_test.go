@@ -357,6 +357,50 @@ func TestQBlockCloseCancelsBlockedClientQ1Write(t *testing.T) {
 	requireQBlockClientEmpty(t, cc)
 }
 
+func TestQBlockResetCancelsBlockedClientQ1Write(t *testing.T) {
+	session := &qblockTestSession{
+		ctx:                 context.Background(),
+		contextWriteStart:   make(chan struct{}, 1),
+		releaseContextWrite: make(chan struct{}),
+	}
+	cc := newPrivateQBlockClientConnWithToken(t, session, message.GetToken)
+	t.Cleanup(session.closeForTest)
+	request := newPOSTWithBody(t, cc, message.Token{0xe9}, []byte("upload"))
+	defer cc.ReleaseMessage(request)
+	prepared := make(chan struct{})
+	go func() {
+		_, _ = cc.qblockClient.prepare(request, func(error) {})
+		close(prepared)
+	}()
+	select {
+	case <-session.contextWriteStart:
+	case <-time.After(time.Second):
+		t.Fatal("client Q1 write did not start")
+	}
+	cc.qblockClient.mu.Lock()
+	var mid int32
+	for mid = range cc.qblockClient.transferByMID {
+		break
+	}
+	cc.qblockClient.mu.Unlock()
+	require.NotZero(t, mid)
+	reset := cc.AcquireMessage(context.Background())
+	defer cc.ReleaseMessage(reset)
+	reset.SetType(message.Reset)
+	reset.SetMessageID(mid)
+	resetDone := make(chan bool, 1)
+	go func() { resetDone <- cc.qblockClient.handle(reset) }()
+	select {
+	case handled := <-resetDone:
+		require.True(t, handled)
+	case <-time.After(time.Second):
+		close(session.releaseContextWrite)
+		t.Fatal("Reset waited for the blocked client write")
+	}
+	requireQBlockCompletion(t, prepared, "reset-canceled client write")
+	requireQBlockClientEmpty(t, cc)
+}
+
 func TestQBlockCloseCancelsBlockedClientQ2ControlWrite(t *testing.T) {
 	now := time.Unix(100, 0)
 	session := &qblockTestSession{ctx: context.Background()}
@@ -397,6 +441,67 @@ func TestQBlockCloseCancelsBlockedClientQ2ControlWrite(t *testing.T) {
 	}
 	requireQBlockCompletion(t, tickDone, "client Q2 control write")
 	requireQBlockClientEmpty(t, cc)
+}
+
+func TestQBlockAbandonCancelsBlockedClientQ2ControlWrite(t *testing.T) {
+	now := time.Unix(100, 0)
+	session := &qblockTestSession{ctx: context.Background()}
+	cfg := DefaultConfig
+	cfg.BlockwiseEnable = false
+	cc := NewConnWithOpts(session, &cfg, withQBlockClient(qblockClientConfig{
+		Manager: qblock.DefaultManagerConfig(), Now: func() time.Time { return now }, ScheduleMode: qblockScheduleManual,
+	}))
+	t.Cleanup(session.closeForTest)
+	request := newPrivateQBlockClientGET(t, cc, message.Token{0xea})
+	defer cc.ReleaseMessage(request)
+	prepared, err := cc.qblockClient.prepare(request, func(error) {})
+	require.NoError(t, err)
+	require.True(t, prepared)
+	first := newQBlockClientResponse(t, cc, request.Token(), true)
+	defer cc.ReleaseMessage(first)
+	require.True(t, cc.qblockClient.handle(first))
+	session.contextWriteStart = make(chan struct{}, 1)
+	session.releaseContextWrite = make(chan struct{})
+	tickDone := make(chan struct{})
+	go func() {
+		cc.qblockClient.Tick(now.Add(qblock.DefaultManagerConfig().Transfer.NonReceiveTimeout))
+		close(tickDone)
+	}()
+	select {
+	case <-session.contextWriteStart:
+	case <-time.After(time.Second):
+		t.Fatal("client Q2 control write did not start")
+	}
+	abandonDone := make(chan struct{})
+	go func() {
+		cc.qblockClient.abandon(request.Token(), qblock.ErrCanceled)
+		close(abandonDone)
+	}()
+	select {
+	case <-abandonDone:
+	case <-time.After(time.Second):
+		close(session.releaseContextWrite)
+		t.Fatal("abandonment waited for the blocked Q2 control write")
+	}
+	requireQBlockCompletion(t, tickDone, "abandon-canceled Q2 control write")
+	requireQBlockClientEmpty(t, cc)
+}
+
+func TestQBlockAbandonPendingGETReleasesCallbackSlot(t *testing.T) {
+	session := &qblockTestSession{ctx: context.Background()}
+	cc := newPrivateQBlockClientConnWithMaxTransfers(t, session, 1, message.GetToken)
+	t.Cleanup(session.closeForTest)
+	request := newPrivateQBlockClientGET(t, cc, message.Token{0xeb})
+	defer cc.ReleaseMessage(request)
+	prepared, err := cc.qblockClient.prepare(request, func(error) {})
+	require.NoError(t, err)
+	require.True(t, prepared)
+	cc.qblockClient.abandon(request.Token(), qblock.ErrCanceled)
+	requireQBlockClientEmpty(t, cc)
+	cc.qblockClient.callbackSlots.mu.Lock()
+	used := cc.qblockClient.callbackSlots.used
+	cc.qblockClient.callbackSlots.mu.Unlock()
+	require.Zero(t, used)
 }
 
 func TestQBlockClosedConnectionRejectsNewClientExchanges(t *testing.T) {

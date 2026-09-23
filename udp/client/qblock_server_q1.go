@@ -2,6 +2,7 @@ package client
 
 import (
 	"bytes"
+	"context"
 	"encoding/binary"
 	"errors"
 	"io"
@@ -70,10 +71,11 @@ func (s *qblockServer) handleQ1(msg *pool.Message) ([]qblock.Output, bool) {
 		return nil, false
 	}
 	s.nextGen++
+	writeContext, cancelWrite := context.WithCancel(s.client.writeContext)
 	record := &qblockServerRecord{
 		id: id, operation: operation, metadata: fragment.Metadata, options: options,
 		tokens: map[string]message.Token{string(fragment.Token): bytes.Clone(fragment.Token)}, replyToken: bytes.Clone(fragment.Token), code: msg.Code(), charged: charge,
-		generation: s.nextGen, mids: make(map[int32]struct{}),
+		generation: s.nextGen, mids: make(map[int32]struct{}), writeContext: writeContext, cancelWrite: cancelWrite,
 	}
 	s.records[operation] = record
 	s.byID[id] = record

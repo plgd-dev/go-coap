@@ -226,13 +226,17 @@ func (c *qblockClient) prepare(req *pool.Message, fail func(error)) (bool, error
 		return false, qblock.ErrLimitExceeded
 	}
 	exchange.callbackRelease = callbackRelease
+	exchange.requestContext, exchange.cancelContext = context.WithCancel(req.Context())
+	exchange.stopConnCancel = context.AfterFunc(c.cc.Context(), exchange.cancelContext)
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.closed {
+		exchange.closeRequestContext()
 		exchange.releaseCallbackSlot()
 		return false, qblock.ErrClosed
 	}
 	if _, ok := c.exchangesByOriginalToken[string(token)]; ok {
+		exchange.closeRequestContext()
 		exchange.releaseCallbackSlot()
 		return false, errors.New("q-block GET token already pending")
 	}
@@ -479,6 +483,13 @@ func (c *qblockClient) automaticScheduling() bool {
 	return c.scheduleMode == qblockScheduleAutomatic && c.scheduler != nil
 }
 
+func (c *qblockClient) schedulerStopped() <-chan struct{} {
+	if c.scheduler == nil {
+		return nil
+	}
+	return c.scheduler.stopped
+}
+
 func (c *qblockClient) startScheduler() {
 	if c.clock == nil || c.scheduler != nil {
 		return
@@ -578,10 +589,19 @@ func (c *qblockClient) abandon(token message.Token, err error) {
 	c.mu.Lock()
 	key := string(token)
 	if transfer := c.transferByToken[key]; transfer != nil {
+		if transfer.exchange.cancelContext != nil {
+			transfer.exchange.cancelContext()
+		}
 		outputs = c.manager.Cancel(transfer.id, err)
 	} else if exchange := c.exchangesByOriginalToken[key]; exchange != nil {
+		if exchange.cancelContext != nil {
+			exchange.cancelContext()
+		}
 		if len(exchange.transfers) == 0 {
 			delete(c.exchangesByOriginalToken, key)
+			_, _ = c.cc.tokenHandlerContainer.LoadAndDelete(exchange.originalToken.Hash())
+			exchange.closeRequestContext()
+			exchange.releaseCallbackSlot()
 		} else {
 			for id := range exchange.transfers {
 				outputs = append(outputs, c.manager.Cancel(id, err)...)
@@ -1190,14 +1210,17 @@ func (c *qblockClient) newControlRequest(id qblock.TransferID, token message.Tok
 	if err != nil {
 		return nil, err
 	}
-	request := c.cc.AcquireMessage(c.writeContext)
 	c.mu.Lock()
 	transfer := c.transfers[id]
 	if transfer == nil {
 		c.mu.Unlock()
-		c.cc.ReleaseMessage(request)
 		return nil, qblock.ErrUnknownTransfer
 	}
+	requestContext := transfer.exchange.requestContext
+	if requestContext == nil {
+		requestContext = c.writeContext
+	}
+	request := c.cc.AcquireMessage(requestContext)
 	request.ResetOptionsTo(transfer.exchange.requestOpts)
 	request.Remove(message.QBlock2)
 	request.Remove(message.ETag)
@@ -1308,6 +1331,9 @@ func (c *qblockClient) finishExchangeLocked(exchange *qblockExchange, err error)
 	exchange.finished = true
 	delete(c.exchangesByOriginalToken, string(exchange.originalToken))
 	if err != nil {
+		if exchange.cancelContext != nil {
+			exchange.cancelContext()
+		}
 		_, _ = c.cc.tokenHandlerContainer.LoadAndDelete(exchange.originalToken.Hash())
 	}
 	ids := make([]qblock.TransferID, 0, len(exchange.transfers))

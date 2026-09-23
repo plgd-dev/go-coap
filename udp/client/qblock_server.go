@@ -2,6 +2,7 @@ package client
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"errors"
 	"fmt"
@@ -54,6 +55,8 @@ type qblockServerRecord struct {
 	handlerRunning  bool
 	terminal        bool
 	expires         time.Time
+	writeContext    context.Context
+	cancelWrite     context.CancelFunc
 }
 
 // qblockServerReplyKey identifies a concrete Q2 payload action.  A control
@@ -155,6 +158,9 @@ func (s *qblockServer) clearMIDsLocked(record *qblockServerRecord) {
 }
 
 func (s *qblockServer) deactivateLocked(record *qblockServerRecord, now time.Time) {
+	if record.cancelWrite != nil {
+		record.cancelWrite()
+	}
 	delete(s.byID, record.id)
 	s.clearMIDsLocked(record)
 	for key, token := range record.tokens {
@@ -240,13 +246,12 @@ func (s *qblockServer) handleReset(mid int32) bool {
 		s.client.mu.Unlock()
 		return false
 	}
-	outputs := s.client.manager.Cancel(record.id, qblock.ErrCanceled)
+	_ = s.client.manager.Cancel(record.id, qblock.ErrCanceled)
 	s.deactivateLocked(record, s.client.now())
 	if !record.executing {
 		s.releaseLocked(record)
 	}
 	s.client.mu.Unlock()
-	s.client.drive(outputs)
 	s.client.notifyDeadlineChanged()
 	return true
 }
@@ -332,11 +337,12 @@ func (c *qblockClient) executeServerOutput(output qblock.Output) []qblockCallbac
 		return nil
 	case qblock.SendContinue, qblock.RequestMissing:
 		token := bytes.Clone(record.replyToken)
+		writeContext := record.writeContext
 		szx := record.metadata.SZX
 		mid := c.cc.GetMessageID()
 		c.server.bindMIDLocked(record, mid)
 		c.mu.Unlock()
-		if err := c.writeServerQ1Control(token, mid, szx, output.Action); err != nil {
+		if err := c.writeServerQ1Control(writeContext, token, mid, szx, output.Action); err != nil {
 			c.mu.Lock()
 			outputs := c.manager.Cancel(output.TransferID, err)
 			c.mu.Unlock()
@@ -345,6 +351,7 @@ func (c *qblockClient) executeServerOutput(output qblock.Output) []qblockCallbac
 		return nil
 	case qblock.SendBlock:
 		token := record.takeReplyToken(output.Action)
+		writeContext := record.writeContext
 		code := record.responseCode
 		options, _ := record.responseOptions.Clone()
 		szx := record.metadata.SZX
@@ -353,7 +360,7 @@ func (c *qblockClient) executeServerOutput(output qblock.Output) []qblockCallbac
 		mid := c.cc.GetMessageID()
 		c.server.bindMIDLocked(record, mid)
 		c.mu.Unlock()
-		if err := c.writeServerQ2Block(token, mid, code, options, szx, size, etag, output.Action); err != nil {
+		if err := c.writeServerQ2Block(writeContext, token, mid, code, options, szx, size, etag, output.Action); err != nil {
 			c.mu.Lock()
 			outputs := c.manager.Cancel(output.TransferID, err)
 			c.mu.Unlock()
@@ -430,8 +437,8 @@ func (s *qblockServer) finishHandler(operation qblock.OperationKey, generation u
 	c.mu.Unlock()
 }
 
-func (c *qblockClient) writeServerQ2Block(token message.Token, mid int32, code codes.Code, options message.Options, szx blockwise.SZX, size uint32, etag []byte, action qblock.Action) error {
-	msg := c.cc.AcquireMessage(c.writeContext)
+func (c *qblockClient) writeServerQ2Block(writeContext context.Context, token message.Token, mid int32, code codes.Code, options message.Options, szx blockwise.SZX, size uint32, etag []byte, action qblock.Action) error {
+	msg := c.cc.AcquireMessage(writeContext)
 	defer c.cc.ReleaseMessage(msg)
 	msg.SetType(message.NonConfirmable)
 	msg.SetToken(token)
@@ -446,14 +453,17 @@ func (c *qblockClient) writeServerQ2Block(token message.Token, mid int32, code c
 	msg.SetOptionUint32(message.Size2, size)
 	msg.SetOptionBytes(message.ETag, etag)
 	msg.SetBody(bytes.NewReader(action.Payload))
+	if err := writeContext.Err(); err != nil {
+		return err
+	}
 	return c.cc.session.WriteMessage(msg)
 }
 
-func (c *qblockClient) writeServerQ1Control(token message.Token, mid int32, szx blockwise.SZX, action qblock.Action) error {
+func (c *qblockClient) writeServerQ1Control(writeContext context.Context, token message.Token, mid int32, szx blockwise.SZX, action qblock.Action) error {
 	if len(token) == 0 {
 		return qblock.ErrUnknownTransfer
 	}
-	msg := c.cc.AcquireMessage(c.writeContext)
+	msg := c.cc.AcquireMessage(writeContext)
 	defer c.cc.ReleaseMessage(msg)
 	msg.SetType(message.NonConfirmable)
 	msg.SetToken(token)
@@ -477,10 +487,16 @@ func (c *qblockClient) writeServerQ1Control(token message.Token, mid int32, szx 
 	default:
 		return errors.New("unsupported server q-block output")
 	}
+	if err := writeContext.Err(); err != nil {
+		return err
+	}
 	return c.cc.session.WriteMessage(msg)
 }
 
 func (s *qblockServer) releaseLocked(record *qblockServerRecord) {
+	if record.cancelWrite != nil {
+		record.cancelWrite()
+	}
 	delete(s.byID, record.id)
 	delete(s.records, record.operation)
 	s.clearMIDsLocked(record)
