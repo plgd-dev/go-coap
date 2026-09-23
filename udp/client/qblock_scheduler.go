@@ -36,16 +36,21 @@ type qblockScheduler struct {
 
 type qblockCallbackDispatcher struct {
 	mu       sync.Mutex
-	queue    chan func()
+	queue    chan qblockQueuedCallback
 	stopCh   chan struct{}
 	stopped  chan struct{}
 	stopping bool
 	stopOnce sync.Once
 }
 
+type qblockQueuedCallback struct {
+	run     func()
+	discard func()
+}
+
 func newQBlockCallbackDispatcher(limit uint32) *qblockCallbackDispatcher {
 	d := &qblockCallbackDispatcher{
-		queue:   make(chan func(), limit),
+		queue:   make(chan qblockQueuedCallback, limit),
 		stopCh:  make(chan struct{}),
 		stopped: make(chan struct{}),
 	}
@@ -54,6 +59,10 @@ func newQBlockCallbackDispatcher(limit uint32) *qblockCallbackDispatcher {
 }
 
 func (d *qblockCallbackDispatcher) submit(callback func()) bool {
+	return d.submitWithDiscard(callback, nil)
+}
+
+func (d *qblockCallbackDispatcher) submitWithDiscard(callback, discard func()) bool {
 	if callback == nil {
 		return true
 	}
@@ -63,7 +72,7 @@ func (d *qblockCallbackDispatcher) submit(callback func()) bool {
 		return false
 	}
 	select {
-	case d.queue <- callback:
+	case d.queue <- qblockQueuedCallback{run: callback, discard: discard}:
 		return true
 	default:
 		return false
@@ -75,7 +84,21 @@ func (d *qblockCallbackDispatcher) stop() {
 		d.mu.Lock()
 		d.stopping = true
 		close(d.stopCh)
-		d.mu.Unlock()
+		var discarded []func()
+		for {
+			select {
+			case callback := <-d.queue:
+				if callback.discard != nil {
+					discarded = append(discarded, callback.discard)
+				}
+			default:
+				d.mu.Unlock()
+				for _, discard := range discarded {
+					discard()
+				}
+				return
+			}
+		}
 	})
 }
 
@@ -91,7 +114,16 @@ func (d *qblockCallbackDispatcher) run() {
 		case <-d.stopCh:
 			return
 		case callback := <-d.queue:
-			callback()
+			d.mu.Lock()
+			stopping := d.stopping
+			d.mu.Unlock()
+			if stopping {
+				if callback.discard != nil {
+					callback.discard()
+				}
+				return
+			}
+			callback.run()
 		}
 	}
 }

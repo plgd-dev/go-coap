@@ -272,12 +272,12 @@ func (c *qblockClient) handleServerRequest(msg *pool.Message) bool {
 		c.notifyDeadlineChanged()
 	}
 	for _, callback := range callbacks {
-		callback()
+		callback.run()
 	}
 	return true
 }
 
-func (c *qblockClient) executeServerOutput(output qblock.Output) []func() {
+func (c *qblockClient) executeServerOutput(output qblock.Output) []qblockCallback {
 	c.mu.Lock()
 	if c.server == nil {
 		c.mu.Unlock()
@@ -304,7 +304,7 @@ func (c *qblockClient) executeServerOutput(output qblock.Output) []func() {
 		operation := record.operation
 		generation := record.generation
 		c.mu.Unlock()
-		return []func(){func() {
+		return []qblockCallback{{run: func() {
 			req := c.cc.AcquireMessage(c.cc.Context())
 			resp := c.cc.AcquireMessage(c.cc.Context())
 			defer c.cc.ReleaseMessage(req)
@@ -320,7 +320,7 @@ func (c *qblockClient) executeServerOutput(output qblock.Output) []func() {
 			}
 			responseOptions, _ := writer.Message().Options().Clone()
 			c.server.finishHandler(operation, generation, writer.Message().IsModified(), writer.Message().Code(), responseOptions, body)
-		}}
+		}}}
 	case qblock.Release:
 		if record.executing {
 			c.server.deactivateLocked(record, c.now())
@@ -420,7 +420,7 @@ func (s *qblockServer) finishHandler(operation qblock.OperationKey, generation u
 			c.notifyDeadlineChanged()
 			changed = false
 			for _, callback := range callbacks {
-				callback()
+				callback.run()
 			}
 			return
 		}

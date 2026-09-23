@@ -399,6 +399,88 @@ func TestQBlockCloseCancelsBlockedClientQ2ControlWrite(t *testing.T) {
 	requireQBlockClientEmpty(t, cc)
 }
 
+func TestQBlockClosedConnectionRejectsNewClientExchanges(t *testing.T) {
+	session := &qblockTestSession{ctx: context.Background()}
+	cc := newPrivateQBlockClientConnWithToken(t, session, message.GetToken)
+	session.closeForTest()
+	q1 := newPOSTWithBody(t, cc, message.Token{0xe5}, []byte("upload"))
+	defer cc.ReleaseMessage(q1)
+	prepared, err := cc.qblockClient.prepare(q1, func(error) {})
+	require.False(t, prepared)
+	require.ErrorIs(t, err, qblock.ErrClosed)
+	q2 := newPrivateQBlockClientGET(t, cc, message.Token{0xe6})
+	defer cc.ReleaseMessage(q2)
+	prepared, err = cc.qblockClient.prepare(q2, func(error) {})
+	require.False(t, prepared)
+	require.ErrorIs(t, err, qblock.ErrClosed)
+	requireQBlockClientEmpty(t, cc)
+	require.Empty(t, session.writesSnapshot())
+	var reservations int
+	cc.tokenReservations.Range(func(_ uint64, _ tokenReservation) bool {
+		reservations++
+		return true
+	})
+	require.Zero(t, reservations)
+}
+
+func TestQBlockCloseRetainsCallbackSlotUntilFailureCallbackReturns(t *testing.T) {
+	session := &qblockTestSession{ctx: context.Background()}
+	cc := newPrivateQBlockClientConnWithMaxTransfers(t, session, 1, message.GetToken)
+	request := newPOSTWithBody(t, cc, message.Token{0xe7}, []byte("upload"))
+	defer cc.ReleaseMessage(request)
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	prepared, err := cc.qblockClient.prepare(request, func(error) {
+		close(entered)
+		<-release
+	})
+	require.NoError(t, err)
+	require.True(t, prepared)
+	closed := make(chan struct{})
+	go func() {
+		session.closeForTest()
+		close(closed)
+	}()
+	t.Cleanup(func() {
+		select {
+		case <-release:
+		default:
+			close(release)
+		}
+	})
+	select {
+	case <-entered:
+	case <-time.After(time.Second):
+		t.Fatal("close did not invoke the active exchange callback")
+	}
+	cc.qblockClient.callbackSlots.mu.Lock()
+	used := cc.qblockClient.callbackSlots.used
+	cc.qblockClient.callbackSlots.mu.Unlock()
+	require.Equal(t, uint32(1), used, "callback slot must outlive the user callback")
+	close(release)
+	requireQBlockCompletion(t, closed, "close callback")
+	cc.qblockClient.callbackSlots.mu.Lock()
+	used = cc.qblockClient.callbackSlots.used
+	cc.qblockClient.callbackSlots.mu.Unlock()
+	require.Zero(t, used)
+}
+
+func TestQBlockClosePendingExchangeWithoutFailureCallback(t *testing.T) {
+	session := &qblockTestSession{ctx: context.Background()}
+	cc := newPrivateQBlockClientConnWithMaxTransfers(t, session, 1, message.GetToken)
+	request := newPrivateQBlockClientGET(t, cc, message.Token{0xe8})
+	defer cc.ReleaseMessage(request)
+	prepared, err := cc.qblockClient.prepare(request, nil)
+	require.NoError(t, err)
+	require.True(t, prepared)
+	require.NotPanics(t, session.closeForTest)
+	requireQBlockClientEmpty(t, cc)
+	cc.qblockClient.callbackSlots.mu.Lock()
+	used := cc.qblockClient.callbackSlots.used
+	cc.qblockClient.callbackSlots.mu.Unlock()
+	require.Zero(t, used)
+}
+
 func startQ1TransferForTest(t *testing.T, cc *Conn, payload []byte) (*qblockTransfer, <-chan struct{}) {
 	t.Helper()
 	token := message.Token{0x71}

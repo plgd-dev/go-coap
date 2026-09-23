@@ -76,6 +76,7 @@ type qblockClient struct {
 	manager                  *qblock.Manager
 	managerConfig            qblock.ManagerConfig
 	initErr                  error
+	closed                   bool
 	exchangesByOriginalToken map[string]*qblockExchange
 	exchangeByTransfer       map[qblock.TransferID]*qblockExchange
 	transfers                map[qblock.TransferID]*qblockTransfer
@@ -189,6 +190,12 @@ func (c *qblockClient) prepare(req *pool.Message, fail func(error)) (bool, error
 	if c.initErr != nil {
 		return false, c.initErr
 	}
+	c.mu.Lock()
+	closed := c.closed
+	c.mu.Unlock()
+	if closed {
+		return false, qblock.ErrClosed
+	}
 	if c.canPrepareQ1(req) {
 		return c.prepareQ1(req, fail)
 	}
@@ -221,6 +228,10 @@ func (c *qblockClient) prepare(req *pool.Message, fail func(error)) (bool, error
 	exchange.callbackRelease = callbackRelease
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if c.closed {
+		exchange.releaseCallbackSlot()
+		return false, qblock.ErrClosed
+	}
 	if _, ok := c.exchangesByOriginalToken[string(token)]; ok {
 		exchange.releaseCallbackSlot()
 		return false, errors.New("q-block GET token already pending")
@@ -283,6 +294,14 @@ func (c *qblockClient) prepareQ1(req *pool.Message, fail func(error)) (bool, err
 
 	c.lockAction()
 	c.mu.Lock()
+	if c.closed {
+		c.mu.Unlock()
+		c.actionMu.Unlock()
+		exchange.closeRequestContext()
+		exchange.releaseCallbackSlot()
+		c.cc.releaseToken(initialToken, tokenOwnerQBlock)
+		return false, qblock.ErrClosed
+	}
 	if _, ok := c.exchangesByOriginalToken[string(originalToken)]; ok {
 		c.mu.Unlock()
 		c.actionMu.Unlock()
@@ -304,7 +323,7 @@ func (c *qblockClient) prepareQ1(req *pool.Message, fail func(error)) (bool, err
 	callbacks := c.executeOrdered(outputs)
 	c.actionMu.Unlock()
 	for _, callback := range callbacks {
-		callback()
+		callback.run()
 	}
 	c.notifyDeadlineChanged()
 	return true, nil
@@ -433,7 +452,7 @@ func (c *qblockClient) advanceDue(now time.Time) {
 func (c *qblockClient) advanceDueWithCallbacks(now time.Time, scheduled bool) {
 	c.lockAction()
 	c.mu.Lock()
-	if c.manager == nil {
+	if c.manager == nil || c.closed {
 		c.mu.Unlock()
 		c.actionMu.Unlock()
 		return
@@ -447,10 +466,12 @@ func (c *qblockClient) advanceDueWithCallbacks(now time.Time, scheduled bool) {
 	c.actionMu.Unlock()
 	for _, callback := range callbacks {
 		if scheduled && c.callbackDispatcher != nil {
-			_ = c.callbackDispatcher.submit(callback)
+			if !c.callbackDispatcher.submitWithDiscard(callback.run, callback.discard) {
+				callback.drop()
+			}
 			continue
 		}
-		callback()
+		callback.run()
 	}
 }
 
@@ -573,18 +594,21 @@ func (c *qblockClient) abandon(token message.Token, err error) {
 }
 
 func (c *qblockClient) close() {
-	c.stopScheduler()
-	if c.cancelWriteContext != nil {
-		c.cancelWriteContext()
-	}
 	var pending []*qblockExchange
 	var outputs []qblock.Output
 	c.mu.Lock()
+	if c.closed {
+		c.mu.Unlock()
+		return
+	}
+	c.closed = true
+	if c.cancelWriteContext != nil {
+		c.cancelWriteContext()
+	}
 	for key, exchange := range c.exchangesByOriginalToken {
 		if exchange.cancelContext != nil {
 			exchange.cancelContext()
 		}
-		exchange.releaseCallbackSlot()
 		if len(exchange.transfers) == 0 {
 			delete(c.exchangesByOriginalToken, key)
 			pending = append(pending, exchange)
@@ -599,12 +623,15 @@ func (c *qblockClient) close() {
 		}
 	}
 	c.mu.Unlock()
+	c.stopScheduler()
 	c.drive(outputs)
 	for _, exchange := range pending {
 		_, _ = c.cc.tokenHandlerContainer.LoadAndDelete(exchange.originalToken.Hash())
 		func() {
 			defer exchange.releaseCallbackSlot()
-			exchange.fail(qblock.ErrClosed)
+			if exchange.fail != nil {
+				exchange.fail(qblock.ErrClosed)
+			}
 		}()
 	}
 }
@@ -627,7 +654,7 @@ func (c *qblockClient) handle(msg *pool.Message) bool {
 		return true
 	}
 	c.lockAction()
-	var callbacks []func()
+	var callbacks []qblockCallback
 	progressed := false
 	defer func() {
 		c.actionMu.Unlock()
@@ -635,7 +662,7 @@ func (c *qblockClient) handle(msg *pool.Message) bool {
 			c.notifyDeadlineChanged()
 		}
 		for _, callback := range callbacks {
-			callback()
+			callback.run()
 		}
 	}()
 	if msg.HasOption(message.QBlock1) {
@@ -919,7 +946,7 @@ func (c *qblockClient) drive(outputs []qblock.Output) {
 	callbacks := c.executeOrdered(outputs)
 	c.actionMu.Unlock()
 	for _, callback := range callbacks {
-		callback()
+		callback.run()
 	}
 }
 
@@ -932,15 +959,26 @@ func (c *qblockClient) lockAction() {
 	}
 }
 
-func (c *qblockClient) executeOrdered(outputs []qblock.Output) []func() {
-	var callbacks []func()
+type qblockCallback struct {
+	run     func()
+	discard func()
+}
+
+func (c qblockCallback) drop() {
+	if c.discard != nil {
+		c.discard()
+	}
+}
+
+func (c *qblockClient) executeOrdered(outputs []qblock.Output) []qblockCallback {
+	var callbacks []qblockCallback
 	for _, output := range outputs {
 		callbacks = append(callbacks, c.executeOutput(output)...)
 	}
 	return callbacks
 }
 
-func (c *qblockClient) executeOutput(output qblock.Output) []func() {
+func (c *qblockClient) executeOutput(output qblock.Output) []qblockCallback {
 	if c.server != nil && c.server.ownsOutput(output) {
 		return c.executeServerOutput(output)
 	}
@@ -1178,7 +1216,7 @@ func (c *qblockClient) newControlRequest(id qblock.TransferID, token message.Tok
 	return request, nil
 }
 
-func (c *qblockClient) prepareDelivery(id qblock.TransferID, payload []byte) []func() {
+func (c *qblockClient) prepareDelivery(id qblock.TransferID, payload []byte) []qblockCallback {
 	c.mu.Lock()
 	transfer := c.transfers[id]
 	if transfer == nil || transfer.kind != qblock.Q2 {
@@ -1199,10 +1237,13 @@ func (c *qblockClient) prepareDelivery(id qblock.TransferID, payload []byte) []f
 	}
 	exchange := transfer.exchange
 	c.mu.Unlock()
-	return []func(){func() { defer exchange.releaseCallbackSlot(); handler(nil, response) }}
+	return []qblockCallback{{
+		run:     func() { defer exchange.releaseCallbackSlot(); handler(nil, response) },
+		discard: func() { c.cc.ReleaseMessage(response); exchange.releaseCallbackSlot() },
+	}}
 }
 
-func (c *qblockClient) prepareTerminalResponse(id qblock.TransferID) []func() {
+func (c *qblockClient) prepareTerminalResponse(id qblock.TransferID) []qblockCallback {
 	c.mu.Lock()
 	transfer := c.transfers[id]
 	if transfer == nil || transfer.kind != qblock.Q1 {
@@ -1225,10 +1266,13 @@ func (c *qblockClient) prepareTerminalResponse(id qblock.TransferID) []func() {
 	}
 	exchange := transfer.exchange
 	c.mu.Unlock()
-	return []func(){func() { defer exchange.releaseCallbackSlot(); handler(nil, response) }}
+	return []qblockCallback{{
+		run:     func() { defer exchange.releaseCallbackSlot(); handler(nil, response) },
+		discard: func() { c.cc.ReleaseMessage(response); exchange.releaseCallbackSlot() },
+	}}
 }
 
-func (c *qblockClient) prepareFailure(id qblock.TransferID, err error) []func() {
+func (c *qblockClient) prepareFailure(id qblock.TransferID, err error) []qblockCallback {
 	c.mu.Lock()
 	exchange := c.exchangeByTransfer[id]
 	if exchange == nil || exchange.failureReported {
@@ -1244,7 +1288,10 @@ func (c *qblockClient) prepareFailure(id qblock.TransferID, err error) []func() 
 		return nil
 	}
 	c.mu.Unlock()
-	return []func(){func() { defer exchange.releaseCallbackSlot(); fail(err) }}
+	return []qblockCallback{{
+		run:     func() { defer exchange.releaseCallbackSlot(); fail(err) },
+		discard: exchange.releaseCallbackSlot,
+	}}
 }
 
 func (c *qblockClient) cancelTransfer(id qblock.TransferID, err error) []qblock.Output {

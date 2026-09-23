@@ -201,6 +201,52 @@ func TestQBlockCallbackDispatcherStopDoesNotWaitForBlockedCallback(t *testing.T)
 	}
 }
 
+func TestQBlockCallbackDispatcherDiscardsQueuedCallbackOnStop(t *testing.T) {
+	dispatcher := newQBlockCallbackDispatcher(1)
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	slots := newQBlockCallbackSlots(1)
+	releaseSlot, ok := slots.tryAcquire()
+	require.True(t, ok)
+	require.True(t, dispatcher.submit(func() {
+		close(entered)
+		<-release
+	}))
+	<-entered
+	ran := make(chan struct{})
+	discarded := make(chan struct{})
+	require.True(t, dispatcher.submitWithDiscard(func() { close(ran) }, func() {
+		releaseSlot()
+		close(discarded)
+	}))
+	stopped := make(chan struct{})
+	go func() {
+		dispatcher.stop()
+		close(stopped)
+	}()
+	select {
+	case <-stopped:
+	case <-time.After(time.Second):
+		t.Fatal("dispatcher stop waited for the blocked callback")
+	}
+	select {
+	case <-discarded:
+	case <-time.After(time.Second):
+		t.Fatal("queued callback was not discarded")
+	}
+	slots.mu.Lock()
+	used := slots.used
+	slots.mu.Unlock()
+	require.Zero(t, used)
+	select {
+	case <-ran:
+		t.Fatal("discarded callback ran")
+	default:
+	}
+	close(release)
+	<-dispatcher.stopped
+}
+
 func TestQBlockSchedulerArmsEarliestDeadlineAndParksIdle(t *testing.T) {
 	clock := newFakeQBlockClock(time.Unix(100, 0))
 	cc := newAutomaticQBlockClockTestConn(t, clock)
