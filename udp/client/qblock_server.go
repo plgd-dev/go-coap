@@ -247,6 +247,7 @@ func (s *qblockServer) handleReset(mid int32) bool {
 	}
 	s.client.mu.Unlock()
 	s.client.drive(outputs)
+	s.client.notifyDeadlineChanged()
 	return true
 }
 

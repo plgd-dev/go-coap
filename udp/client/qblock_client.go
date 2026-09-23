@@ -494,6 +494,7 @@ func (c *qblockClient) notifyDeadlineChanged() {
 func (c *qblockClient) runSchedulerOwner(scheduler *qblockScheduler) {
 	defer close(scheduler.stopped)
 	defer scheduler.timer.Stop()
+	busy := false
 	for {
 		select {
 		case <-scheduler.stop:
@@ -501,29 +502,35 @@ func (c *qblockClient) runSchedulerOwner(scheduler *qblockScheduler) {
 		case <-scheduler.notify:
 		case <-scheduler.timer.C():
 		case <-scheduler.done:
+			busy = false
 		}
-		c.recomputeSchedulerDeadline(scheduler)
+		if busy {
+			scheduler.timer.Stop()
+			continue
+		}
+		busy = c.recomputeSchedulerDeadline(scheduler)
 	}
 }
 
-func (c *qblockClient) recomputeSchedulerDeadline(scheduler *qblockScheduler) {
+func (c *qblockClient) recomputeSchedulerDeadline(scheduler *qblockScheduler) bool {
 	c.mu.Lock()
 	deadline, ok := c.nextDeadlineLocked()
 	c.mu.Unlock()
 	if !ok {
 		scheduler.timer.Stop()
-		return
+		return false
 	}
 	delay := deadline.Sub(scheduler.clock.Now())
 	if delay > 0 {
 		scheduler.timer.Reset(delay)
-		return
+		return false
 	}
 	scheduler.timer.Stop()
 	select {
 	case scheduler.due <- struct{}{}:
 	default:
 	}
+	return true
 }
 
 func (c *qblockClient) runSchedulerWorker(scheduler *qblockScheduler) {

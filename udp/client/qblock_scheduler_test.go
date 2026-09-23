@@ -8,8 +8,11 @@ import (
 	"time"
 
 	"github.com/plgd-dev/go-coap/v3/message"
+	"github.com/plgd-dev/go-coap/v3/message/codes"
+	"github.com/plgd-dev/go-coap/v3/message/pool"
 	"github.com/plgd-dev/go-coap/v3/net/blockwise"
 	"github.com/plgd-dev/go-coap/v3/net/qblock"
+	"github.com/plgd-dev/go-coap/v3/net/responsewriter"
 	"github.com/stretchr/testify/require"
 )
 
@@ -98,6 +101,16 @@ type fakeQBlockTimer struct {
 	ch       chan time.Time
 	active   bool
 	deadline time.Time
+	stops    uint32
+}
+
+func (c *fakeQBlockClock) stopCount() uint32 {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.timer == nil {
+		return 0
+	}
+	return c.timer.stops
 }
 
 func (t *fakeQBlockTimer) C() <-chan time.Time { return t.ch }
@@ -110,6 +123,7 @@ func (t *fakeQBlockTimer) Reset(d time.Duration) {
 func (t *fakeQBlockTimer) Stop() bool {
 	t.clock.mu.Lock()
 	defer t.clock.mu.Unlock()
+	t.stops++
 	active := t.active
 	t.active = false
 	return active
@@ -257,6 +271,87 @@ func TestQBlockSchedulerAdvancesReceiverWithoutManualTick(t *testing.T) {
 	last := session.writesSnapshot()[len(session.writesSnapshot())-1]
 	require.Equal(t, message.NonConfirmable, last.typ)
 	require.True(t, last.options.HasOption(message.QBlock2))
+}
+
+func TestQBlockSchedulerKeepsOneDueTurnWhileWorkerWaitsForGate(t *testing.T) {
+	clock := newFakeQBlockClock(time.Unix(100, 0))
+	cc := newAutomaticQBlockClockTestConn(t, clock)
+	request := newPrivateQBlockClientGET(t, cc, message.Token{0x05})
+	defer cc.ReleaseMessage(request)
+	prepared, err := cc.qblockClient.prepare(request, func(error) {})
+	require.NoError(t, err)
+	require.True(t, prepared)
+	first := newQBlockClientResponse(t, cc, request.Token(), true)
+	defer cc.ReleaseMessage(first)
+	require.True(t, cc.qblockClient.handle(first))
+	require.Eventually(t, clock.activeTimer, time.Second, time.Millisecond)
+
+	contended := make(chan struct{}, 1)
+	cc.qblockClient.actionMuContention = func() { contended <- struct{}{} }
+	cc.qblockClient.actionMu.Lock()
+	locked := true
+	defer func() {
+		if locked {
+			cc.qblockClient.actionMu.Unlock()
+		}
+	}()
+	clock.Advance(clock.deadline().Sub(clock.Now()))
+	requireQBlockContention(t, contended, "scheduler due worker")
+	stopsBeforeNotify := clock.stopCount()
+	cc.qblockClient.notifyDeadlineChanged()
+	require.Eventually(t, func() bool {
+		return clock.stopCount() > stopsBeforeNotify
+	}, time.Second, time.Millisecond)
+	require.Empty(t, cc.qblockClient.scheduler.due, "worker already owns the one due turn")
+	cc.qblockClient.actionMu.Unlock()
+	locked = false
+}
+
+func TestQBlockSchedulerRearmsServerRetentionAfterReset(t *testing.T) {
+	clock := newFakeQBlockClock(time.Unix(100, 0))
+	h := &serverHarness{now: clock.Now(), nextMID: 1}
+	h.session = &qblockTestSession{ctx: context.Background()}
+	cfg := DefaultConfig
+	cfg.BlockwiseEnable = false
+	cfg.BlockwiseSZX = blockwise.SZX16
+	cfg.Handler = func(w *responsewriter.ResponseWriter[*Conn], _ *pool.Message) {
+		require.NoError(t, w.SetResponse(codes.Changed, message.TextPlain, bytes.NewReader(bytes.Repeat([]byte{'r'}, 32))))
+	}
+	cfg.GetMID = func() int32 {
+		mid := h.nextMID
+		h.nextMID++
+		return mid
+	}
+	h.cc = NewConnWithOpts(h.session, &cfg,
+		withQBlockClient(qblockClientConfig{Manager: qblock.DefaultManagerConfig(), Clock: clock, ScheduleMode: qblockScheduleAutomatic}),
+		withQBlockServer(qblockServerConfig{Retention: 2 * qblock.DefaultManagerConfig().Transfer.Lifetime}),
+	)
+	t.Cleanup(h.session.closeForTest)
+	h.ingest(h.q1(t, 1, 0, false, 4, "body"))
+	h.cc.qblockClient.mu.Lock()
+	initialDeadline, initialOK := h.cc.qblockClient.nextDeadlineLocked()
+	h.cc.qblockClient.mu.Unlock()
+	require.True(t, initialOK)
+	require.Eventually(t, func() bool {
+		return clock.activeTimer() && clock.deadline().Equal(initialDeadline)
+	}, time.Second, time.Millisecond)
+	writes := h.session.writesSnapshot()
+	require.NotEmpty(t, writes)
+	reset := h.cc.AcquireMessage(context.Background())
+	defer h.cc.ReleaseMessage(reset)
+	reset.SetType(message.Reset)
+	reset.SetMessageID(writes[0].mid)
+	require.True(t, h.cc.qblockClient.handle(reset))
+	h.cc.qblockClient.mu.Lock()
+	deadline, ok := h.cc.qblockClient.server.nextRecordDeadlineLocked()
+	h.cc.qblockClient.mu.Unlock()
+	require.True(t, ok)
+	require.NotEqual(t, initialDeadline, deadline)
+	require.Eventually(t, func() bool {
+		return clock.activeTimer() && clock.deadline().Equal(deadline)
+	}, time.Second, time.Millisecond)
+	clock.Advance(deadline.Sub(clock.Now()))
+	require.Eventually(t, func() bool { return h.snapshot().records == 0 }, time.Second, time.Millisecond)
 }
 
 func newQBlockClockTestConn(t *testing.T, qblockConfig qblockClientConfig) *Conn {
