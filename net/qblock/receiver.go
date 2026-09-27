@@ -9,9 +9,14 @@ import (
 // Receiver assembles one pre-identified NON body. Its caller serializes
 // events and validates operation ownership before delivering fragments.
 type Receiver struct {
-	kind Kind
-	cfg  TransferConfig
-	body *Body
+	kind            Kind
+	cfg             TransferConfig
+	body            *Body
+	deferred        bool
+	revision        uint64
+	progress        uint64
+	pendingContinue *ControlIntent
+	pendingMissing  *ControlIntent
 
 	expires time.Time
 	due     time.Time
@@ -66,6 +71,11 @@ func (r *Receiver) Receive(meta Metadata, block Block, payload []byte, now time.
 		}
 		return nil, nil
 	}
+	r.progress++
+	if r.deferred {
+		r.pendingContinue = nil
+		r.pendingMissing = nil
+	}
 
 	r.haveFragment = true
 	r.retries = 0
@@ -85,6 +95,8 @@ func (r *Receiver) Receive(meta Metadata, block Block, payload []byte, now time.
 		r.delivered = true
 		r.due = time.Time{}
 		r.lastMissing = nil
+		r.pendingContinue = nil
+		r.pendingMissing = nil
 		actions := []Action{{Kind: Deliver, Payload: payload}}
 		if r.kind == Q2 {
 			r.close()
@@ -99,10 +111,15 @@ func (r *Receiver) Receive(meta Metadata, block Block, payload []byte, now time.
 	if observedSet > firstDue {
 		missing := r.body.Missing(firstDue, setEnd(firstDue, r.body.count, r.cfg.MaxPayloads), int(r.cfg.MaxPayloads))
 		if len(missing) > 0 && !slices.Equal(missing, r.lastMissing) && r.retries < r.cfg.NonMaxRetransmit {
-			r.lastMissing = slices.Clone(missing)
-			r.retries++
-			r.due = now.Add(r.cfg.retryDelay(r.retries))
-			actions = append(actions, Action{Kind: RequestMissing, Numbers: missing})
+			if r.deferred {
+				r.queueControl(Action{Kind: RequestMissing, Numbers: missing})
+				r.due = time.Time{}
+			} else {
+				r.lastMissing = slices.Clone(missing)
+				r.retries++
+				r.due = now.Add(r.cfg.retryDelay(r.retries))
+				actions = append(actions, Action{Kind: RequestMissing, Numbers: missing})
+			}
 		}
 	}
 	return actions, nil
@@ -111,6 +128,11 @@ func (r *Receiver) Receive(meta Metadata, block Block, payload []byte, now time.
 func (r *Receiver) continuationActions() []Action {
 	latest := r.contiguous - r.contiguous%r.cfg.MaxPayloads
 	if latest <= r.continued || latest >= r.body.count {
+		return nil
+	}
+	if r.deferred {
+		r.queueControl(Action{Kind: SendContinue, Through: latest - 1})
+		r.due = time.Time{}
 		return nil
 	}
 	r.continued = latest
@@ -135,6 +157,11 @@ func (r *Receiver) Tick(now time.Time) []Action {
 	first := r.contiguous - r.contiguous%r.cfg.MaxPayloads
 	missing := r.body.Missing(first, setEnd(first, r.body.count, r.cfg.MaxPayloads), int(r.cfg.MaxPayloads))
 	if len(missing) == 0 {
+		return nil
+	}
+	if r.deferred {
+		r.queueControl(Action{Kind: RequestMissing, Numbers: missing})
+		r.due = time.Time{}
 		return nil
 	}
 	r.lastMissing = slices.Clone(missing)
@@ -176,6 +203,8 @@ func (r *Receiver) close() {
 	r.body = nil
 	r.due = time.Time{}
 	r.lastMissing = nil
+	r.pendingContinue = nil
+	r.pendingMissing = nil
 }
 
 // NextDeadline returns the earliest recovery or absolute-lifetime deadline.

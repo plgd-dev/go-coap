@@ -130,47 +130,7 @@ func (m *Manager) StartSender(operation OperationKey, token message.Token, kind 
 // StartReceiver registers an inbound transfer only after its first fragment is
 // accepted. Every registry update is deferred until validation succeeds.
 func (m *Manager) StartReceiver(fragment Fragment, now time.Time) ([]Output, error) {
-	if fragment.Operation == "" {
-		return nil, ErrOperationNotFound
-	}
-	if len(fragment.Token) == 0 {
-		return nil, ErrUnknownTransfer
-	}
-	if _, ok := m.byOperation[fragment.Operation]; ok {
-		return nil, ErrOperationInUse
-	}
-	if _, ok := m.byToken[string(fragment.Token)]; ok {
-		return nil, ErrTokenInUse
-	}
-	if uint64(len(m.byID)) >= uint64(m.cfg.MaxTransfers) || uint64(len(m.byToken)) >= uint64(m.cfg.MaxTokens) || uint64(fragment.Metadata.Size) > m.cfg.MaxRetainedBytes-m.retained {
-		return nil, ErrLimitExceeded
-	}
-	receiver, err := NewReceiver(fragment.Kind, m.cfg.Transfer, fragment.Metadata, now)
-	if err != nil {
-		return nil, err
-	}
-	actions, err := receiver.Receive(fragment.Metadata, fragment.Block, fragment.Payload, now)
-	if err != nil {
-		return nil, err
-	}
-
-	m.nextID++
-	id := m.nextID
-	token := string(bytes.Clone(fragment.Token))
-	record := &managedTransfer{
-		operation: fragment.Operation,
-		kind:      fragment.Kind,
-		receiver:  receiver,
-		reserved:  fragment.Metadata.Size,
-		tokens:    map[string]struct{}{token: {}},
-	}
-	m.byID[id] = record
-	m.byOperation[fragment.Operation] = id
-	m.byToken[token] = id
-	m.retained += uint64(fragment.Metadata.Size)
-	outputs := m.outputs(id, record, actions)
-	m.removeReleased(id, outputs)
-	return outputs, nil
+	return m.startReceiver(fragment, now, false)
 }
 
 // TransferID returns the active transfer associated with operation. It lets an
