@@ -115,38 +115,15 @@ func NewManager(cfg ManagerConfig) (*Manager, error) {
 
 // StartSender registers one sender and its first packet token atomically.
 func (m *Manager) StartSender(operation OperationKey, token message.Token, kind Kind, meta Metadata, payload []byte, now time.Time, jitter float64) ([]Output, error) {
-	if operation == "" {
-		return nil, ErrOperationNotFound
-	}
-	if len(token) == 0 {
-		return nil, ErrUnknownTransfer
-	}
-	if _, ok := m.byOperation[operation]; ok {
-		return nil, ErrOperationInUse
-	}
-	if _, ok := m.byToken[string(token)]; ok {
-		return nil, ErrTokenInUse
-	}
-	if uint64(len(m.byID)) >= uint64(m.cfg.MaxTransfers) || uint64(len(m.byToken)) >= uint64(m.cfg.MaxTokens) || uint64(meta.Size) > m.cfg.MaxRetainedBytes-m.retained {
-		return nil, ErrLimitExceeded
-	}
-	sender, err := NewSender(kind, m.cfg.Transfer, meta, payload, now, jitter)
+	id, err := m.PrepareSender(operation, token, kind, meta, payload, now, jitter)
 	if err != nil {
 		return nil, err
 	}
-	actions, err := sender.Start(now)
+	outputs, err := m.ActivateSender(id, now)
 	if err != nil {
+		m.Cancel(id, err)
 		return nil, err
 	}
-	m.nextID++
-	id := m.nextID
-	record := &managedTransfer{operation: operation, kind: kind, sender: sender, reserved: meta.Size, tokens: map[string]struct{}{string(bytes.Clone(token)): {}}}
-	m.byID[id] = record
-	m.byOperation[operation] = id
-	m.byToken[string(token)] = id
-	m.retained += uint64(meta.Size)
-	outputs := m.outputs(id, record, actions)
-	m.removeReleased(id, outputs)
 	return outputs, nil
 }
 
