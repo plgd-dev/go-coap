@@ -562,12 +562,75 @@ func TestQBlockCloseRetainsCallbackSlotUntilFailureCallbackReturns(t *testing.T)
 	used := cc.qblockClient.callbackSlots.used
 	cc.qblockClient.callbackSlots.mu.Unlock()
 	require.Equal(t, uint32(1), used, "callback slot must outlive the user callback")
+	requireQBlockCompletion(t, closed, "close must not wait for a blocked callback")
 	close(release)
-	requireQBlockCompletion(t, closed, "close callback")
-	cc.qblockClient.callbackSlots.mu.Lock()
-	used = cc.qblockClient.callbackSlots.used
-	cc.qblockClient.callbackSlots.mu.Unlock()
-	require.Zero(t, used)
+	require.Eventually(t, func() bool {
+		cc.qblockClient.callbackSlots.mu.Lock()
+		defer cc.qblockClient.callbackSlots.mu.Unlock()
+		return cc.qblockClient.callbackSlots.used == 0
+	}, time.Second, time.Millisecond)
+}
+
+func TestQBlockQueuedClientDeliveryDoesNotSucceedAfterClose(t *testing.T) {
+	session := &qblockTestSession{ctx: context.Background()}
+	cc := newPrivateQBlockClientConnWithToken(t, session, message.GetToken)
+	request := newPrivateQBlockClientGET(t, cc, message.Token{0xe8})
+	defer cc.ReleaseMessage(request)
+	succeeded := make(chan struct{}, 1)
+	failed := make(chan error, 1)
+	cc.tokenHandlerContainer.Store(request.Token().Hash(), func(*responsewriter.ResponseWriter[*Conn], *pool.Message) {
+		succeeded <- struct{}{}
+	})
+	prepared, err := cc.qblockClient.prepare(request, func(err error) { failed <- err })
+	require.NoError(t, err)
+	require.True(t, prepared)
+	first := newQBlockClientResponse(t, cc, request.Token(), true)
+	defer cc.ReleaseMessage(first)
+	require.True(t, cc.qblockClient.handle(first))
+
+	client := cc.qblockClient
+	client.mu.Lock()
+	transfer := client.transferByToken[string(request.Token())]
+	require.NotNil(t, transfer)
+	operation, metadata := transfer.operation, transfer.metadata
+	client.mu.Unlock()
+	last := newQBlockClientFragment(t, cc, request.Token(), 1, false, 32)
+	defer cc.ReleaseMessage(last)
+	fragment, _, err := fragmentFromQ2ForCode(last, operation, &metadata, codes.Content)
+	require.NoError(t, err)
+	client.lockAction()
+	client.mu.Lock()
+	outputs, err := client.manager.Receive(fragment, client.now())
+	client.mu.Unlock()
+	require.NoError(t, err)
+	closed := make(chan struct{})
+	go func() {
+		session.closeForTest()
+		close(closed)
+	}()
+	require.Eventually(t, func() bool {
+		client.mu.Lock()
+		defer client.mu.Unlock()
+		return client.closed
+	}, time.Second, time.Millisecond)
+	callbacks := client.executeOrdered(outputs)
+	client.actionMu.Unlock()
+	for _, callback := range callbacks {
+		callback.run()
+	}
+	requireQBlockCompletion(t, closed, "queued client delivery close")
+	select {
+	case <-succeeded:
+		t.Fatal("queued client delivery reported success after close")
+	default:
+	}
+	select {
+	case err := <-failed:
+		require.ErrorIs(t, err, qblock.ErrClosed)
+	case <-time.After(time.Second):
+		t.Fatal("close did not report the pending exchange failure")
+	}
+	requireQBlockClientEmpty(t, cc)
 }
 
 func TestQBlockClosePendingExchangeWithoutFailureCallback(t *testing.T) {

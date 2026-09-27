@@ -407,6 +407,32 @@ func TestQBlockSchedulerKeepsOneDueTurnWhileWorkerWaitsForGate(t *testing.T) {
 	locked = false
 }
 
+func TestQBlockSchedulerSamplesTimeAfterWaitingForGate(t *testing.T) {
+	clock := newFakeQBlockClock(time.Unix(100, 0))
+	session := &qblockTestSession{ctx: context.Background()}
+	cc := newAutomaticQBlockClockTestConnWithSession(t, clock, session)
+	startQBlockSchedulerQ1(t, cc, message.Token{0x31}, bytes.Repeat([]byte("x"), 320))
+	require.Eventually(t, clock.activeTimer, time.Second, time.Millisecond)
+	writes := len(session.writesSnapshot())
+
+	contended := make(chan struct{}, 1)
+	cc.qblockClient.actionMuContention = func() { contended <- struct{}{} }
+	cc.qblockClient.actionMu.Lock()
+	locked := true
+	defer func() {
+		if locked {
+			cc.qblockClient.actionMu.Unlock()
+		}
+	}()
+	clock.Advance(clock.deadline().Sub(clock.Now()))
+	requireQBlockContention(t, contended, "scheduler due worker")
+	clock.Advance(qblock.DefaultManagerConfig().Transfer.Lifetime)
+	cc.qblockClient.actionMu.Unlock()
+	locked = false
+	require.Eventually(t, func() bool { return cc.qblockClient.active() == 0 }, time.Second, time.Millisecond)
+	require.Len(t, session.writesSnapshot(), writes, "a transfer expired while waiting for the gate must not send")
+}
+
 func TestQBlockSchedulerRearmsServerRetentionAfterReset(t *testing.T) {
 	clock := newFakeQBlockClock(time.Unix(100, 0))
 	h := &serverHarness{now: clock.Now(), nextMID: 1}

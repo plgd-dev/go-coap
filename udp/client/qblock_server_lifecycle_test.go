@@ -372,6 +372,48 @@ func serverLifecycleConfig() qblock.ManagerConfig {
 }
 
 func TestQBlockServerLifecycle(t *testing.T) {
+	t.Run("queued delivery does not execute after close", func(t *testing.T) {
+		calls := 0
+		h := newServerHarness(t, serverLifecycleConfig(), qblockServerConfig{Retention: 10 * time.Second}, func(*responsewriter.ResponseWriter[*Conn], *pool.Message) {
+			calls++
+		})
+		msg := h.q1(t, 1, 0, false, 4, "body")
+		defer h.cc.ReleaseMessage(msg)
+		client := h.cc.qblockClient
+		client.lockAction()
+		outputs, accepted := client.server.handleQ1(msg)
+		callbacks := client.executeOrdered(outputs)
+		client.actionMu.Unlock()
+		require.True(t, accepted)
+		require.Len(t, callbacks, 1)
+		client.close()
+		callbacks[0].run()
+		require.Zero(t, calls, "a closed record must not start application execution")
+	})
+
+	t.Run("queued delivery canceled by expiry settles retention", func(t *testing.T) {
+		calls := 0
+		h := newServerHarness(t, serverLifecycleConfig(), qblockServerConfig{Retention: 10 * time.Second}, func(*responsewriter.ResponseWriter[*Conn], *pool.Message) {
+			calls++
+		})
+		msg := h.q1(t, 1, 0, false, 4, "body")
+		defer h.cc.ReleaseMessage(msg)
+		client := h.cc.qblockClient
+		client.lockAction()
+		outputs, accepted := client.server.handleQ1(msg)
+		callbacks := client.executeOrdered(outputs)
+		client.actionMu.Unlock()
+		require.True(t, accepted)
+		require.Len(t, callbacks, 1)
+
+		h.advance(10 * time.Second)
+		require.Equal(t, 1, h.snapshot().records, "a pending handler keeps duplicate suppression")
+		callbacks[0].run()
+		require.Zero(t, calls, "an expired record must not start application execution")
+		h.advance(10 * time.Second)
+		require.Equal(t, serverSnapshot{}, h.snapshot(), "a skipped delivery must not pin its record")
+	})
+
 	t.Run("reset cancels a blocked server write without waiting for the output gate", func(t *testing.T) {
 		h := newServerHarness(t, serverLifecycleConfig(), qblockServerConfig{Retention: 10 * time.Second}, func(w *responsewriter.ResponseWriter[*Conn], _ *pool.Message) {
 			require.NoError(t, w.SetResponse(codes.Changed, message.TextPlain, bytes.NewReader([]byte("response"))))

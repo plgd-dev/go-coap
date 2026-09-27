@@ -38,6 +38,7 @@ type qblockServer struct {
 type qblockServerRecord struct {
 	id              qblock.TransferID
 	operation       qblock.OperationKey
+	activeOperation qblock.OperationKey
 	metadata        qblock.Metadata
 	options         message.Options
 	tokens          map[string]message.Token
@@ -59,9 +60,9 @@ type qblockServerRecord struct {
 	cancelWrite     context.CancelFunc
 }
 
-// qblockServerReplyKey identifies a concrete Q2 payload action.  A control
-// can be accepted before its output gets the serialized action turn; retain
-// its reply token with that action so a later control cannot retoken it.
+// qblockServerReplyKey groups Q2 payload actions for reply-token lookup.
+// Control acceptance and its complete output batch share actionMu, so the
+// FIFO queue is consumed before another control can enqueue an identical key.
 type qblockServerReplyKey struct {
 	number uint32
 	more   bool
@@ -137,7 +138,8 @@ func (c *qblockClient) managerConfigTransfers() uint32 { return c.managerConfig.
 func (s *qblockServer) ownsOutput(output qblock.Output) bool {
 	s.client.mu.Lock()
 	defer s.client.mu.Unlock()
-	return s.byID[output.TransferID] != nil
+	record := s.byID[output.TransferID]
+	return record != nil && record.activeOperation == output.Operation
 }
 
 func (s *qblockServer) bindMIDLocked(record *qblockServerRecord, mid int32) {
@@ -289,7 +291,7 @@ func (c *qblockClient) executeServerOutput(output qblock.Output) []qblockCallbac
 		return nil
 	}
 	record := c.server.byID[output.TransferID]
-	if record == nil {
+	if record == nil || record.activeOperation != output.Operation {
 		c.mu.Unlock()
 		return nil
 	}
@@ -310,6 +312,13 @@ func (c *qblockClient) executeServerOutput(output qblock.Output) []qblockCallbac
 		generation := record.generation
 		c.mu.Unlock()
 		return []qblockCallback{{run: func() {
+			c.mu.Lock()
+			current := c.server != nil && !c.server.closed && c.server.records[operation] == record && record.generation == generation && !record.terminal
+			c.mu.Unlock()
+			if !current {
+				c.server.finishHandler(operation, generation, false, 0, nil, nil)
+				return
+			}
 			req := c.cc.AcquireMessage(c.cc.Context())
 			resp := c.cc.AcquireMessage(c.cc.Context())
 			defer c.cc.ReleaseMessage(req)
@@ -418,7 +427,7 @@ func (s *qblockServer) finishHandler(operation qblock.OperationKey, generation u
 				c.mu.Unlock()
 				return
 			}
-			record.id, record.metadata, record.responseCode, record.responseOptions = id, meta, code, options
+			record.id, record.activeOperation, record.metadata, record.responseCode, record.responseOptions = id, q2op, meta, code, options
 			s.byID[record.id] = record
 			c.mu.Unlock()
 			callbacks := c.executeOrdered(outputs)

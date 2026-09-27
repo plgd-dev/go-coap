@@ -1,11 +1,12 @@
 # Private Q-Block connection deadline scheduler
 
-Status: private scheduler runtime and paired traces implemented, 2026-09-23;
-the final Task 3 write-ownership/cancellation audit remains open. The
-socket-free Q-Block suites pass, including the race suite and automatic paired
-POST/PUT loss-and-repair traces. The full `udp/client` package remains
-unverified in this environment: unrelated loopback-dependent tests fail with
-`invalid srcAddr type <nil>`.
+Status: private scheduler implemented and final Task 3 ownership/cancellation
+audit completed, 2026-09-27. Automatic paired POST/PUT loss-and-repair traces,
+queued-delivery rollback, close-callback shutdown, and post-gate clock sampling
+are covered by deterministic tests. Final verification: `go test
+./net/qblock ./udp/client -count=1` passed (423 tests), and `go test -race
+./udp/client -run TestQBlock -count=5` passed (940 test executions). An earlier
+loopback-dependent failure did not reproduce in the final full-package run.
 
 Predecessor: [private bidirectional UDP adapter](2026-09-21-rfc9177-private-bidirectional-udp-adapter-design.md).
 Roadmap: [RFC 9177 implementation plan](../plans/2026-09-15-rfc9177.md), Milestone 3.

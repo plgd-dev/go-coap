@@ -37,6 +37,7 @@ type qblockScheduler struct {
 type qblockCallbackDispatcher struct {
 	mu       sync.Mutex
 	queue    chan qblockQueuedCallback
+	onStop   []qblockQueuedCallback
 	stopCh   chan struct{}
 	stopped  chan struct{}
 	stopping bool
@@ -80,9 +81,20 @@ func (d *qblockCallbackDispatcher) submitWithDiscard(callback, discard func()) b
 }
 
 func (d *qblockCallbackDispatcher) stop() {
+	d.stopWithCallbacks(nil)
+}
+
+// stopWithCallbacks drops queued success notifications but runs the bounded
+// close notifications after any callback already in progress. It never waits
+// for user code, so a blocked callback cannot hold up connection shutdown.
+func (d *qblockCallbackDispatcher) stopWithCallbacks(callbacks []qblockCallback) {
 	d.stopOnce.Do(func() {
 		d.mu.Lock()
 		d.stopping = true
+		d.onStop = make([]qblockQueuedCallback, 0, len(callbacks))
+		for _, callback := range callbacks {
+			d.onStop = append(d.onStop, qblockQueuedCallback{run: callback.run, discard: callback.discard})
+		}
 		close(d.stopCh)
 		var discarded []func()
 		for {
@@ -107,11 +119,13 @@ func (d *qblockCallbackDispatcher) run() {
 	for {
 		select {
 		case <-d.stopCh:
+			d.runStopCallbacks()
 			return
 		default:
 		}
 		select {
 		case <-d.stopCh:
+			d.runStopCallbacks()
 			return
 		case callback := <-d.queue:
 			d.mu.Lock()
@@ -121,10 +135,21 @@ func (d *qblockCallbackDispatcher) run() {
 				if callback.discard != nil {
 					callback.discard()
 				}
+				d.runStopCallbacks()
 				return
 			}
 			callback.run()
 		}
+	}
+}
+
+func (d *qblockCallbackDispatcher) runStopCallbacks() {
+	d.mu.Lock()
+	callbacks := d.onStop
+	d.onStop = nil
+	d.mu.Unlock()
+	for _, callback := range callbacks {
+		callback.run()
 	}
 }
 

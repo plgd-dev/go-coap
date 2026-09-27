@@ -147,6 +147,28 @@ func TestQBlockServerAdmission(t *testing.T) {
 	require.Empty(t, h.session.writesSnapshot())
 }
 
+func TestQBlockServerRejectsMismatchedOutputOperation(t *testing.T) {
+	h := newServerHarness(t, qblock.DefaultManagerConfig(), qblockServerConfig{}, nil)
+	h.ingest(h.q1(t, 1, 0, true, 32, "abcdefghijklmnop"))
+	h.cc.qblockClient.mu.Lock()
+	var id qblock.TransferID
+	for _, record := range h.cc.qblockClient.server.records {
+		id = record.id
+	}
+	h.cc.qblockClient.mu.Unlock()
+	require.NotZero(t, id)
+
+	h.cc.qblockClient.lockAction()
+	callbacks := h.cc.qblockClient.executeServerOutput(qblock.Output{
+		TransferID: id,
+		Operation:  qblock.OperationKey("different-operation"),
+		Action:     qblock.Action{Kind: qblock.SendContinue, Through: 0},
+	})
+	h.cc.qblockClient.actionMu.Unlock()
+	require.Empty(t, callbacks)
+	require.Empty(t, h.session.writesSnapshot(), "an output for another operation must not use this record")
+}
+
 func TestQBlockServerQ1AdmissionWaitsForOutputGate(t *testing.T) {
 	h := newServerHarness(t, qblock.DefaultManagerConfig(), qblockServerConfig{}, nil)
 	contended := make(chan struct{}, 1)
