@@ -23,6 +23,7 @@ var (
 
 type qblockClientConfig struct {
 	Manager       qblock.ManagerConfig
+	Pacing        *qblockPacingConfig
 	Now           func() time.Time
 	Clock         qblockClock
 	ScheduleMode  qblockScheduleMode
