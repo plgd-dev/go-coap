@@ -1,6 +1,7 @@
 package qblock
 
 import (
+	"errors"
 	"fmt"
 	"sync"
 
@@ -57,10 +58,10 @@ func ValidateOptions(opts message.Options, request bool) error {
 		}
 	}
 	if q1 > 1 || (!request && q2 > 1) {
-		return fmt.Errorf("duplicate Q-Block option")
+		return errors.New("duplicate Q-Block option")
 	}
 	if classic > 0 && (q1 > 0 || q2 > 0) {
-		return fmt.Errorf("mixed classic and Q-Block options")
+		return errors.New("mixed classic and Q-Block options")
 	}
 	return nil
 }

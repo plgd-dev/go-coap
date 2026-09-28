@@ -27,9 +27,9 @@ func TestOptionIDString(t *testing.T) {
 }
 
 func TestQBlockIdentifiers(t *testing.T) {
-	require.Equal(t, OptionID(19), QBlock1)
-	require.Equal(t, OptionID(31), QBlock2)
-	require.Equal(t, OptionID(292), RequestTag)
+	require.Equal(t, QBlock1, OptionID(19))
+	require.Equal(t, QBlock2, OptionID(31))
+	require.Equal(t, RequestTag, OptionID(292))
 	require.Equal(t, MediaType(272), AppMissingBlocksCBORSeq)
 }
 

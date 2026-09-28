@@ -2,14 +2,14 @@ package qblock
 
 import (
 	"encoding/binary"
-	"fmt"
+	"errors"
 	"math"
 )
 
 // DecodeMissing reads a CBOR sequence of unsigned missing-block numbers.
 func DecodeMissing(data []byte, blockCount uint32, maxItems int) ([]uint32, error) {
 	if len(data) == 0 || maxItems <= 0 {
-		return nil, fmt.Errorf("empty or unbounded missing-block sequence")
+		return nil, errors.New("empty or unbounded missing-block sequence")
 	}
 	var numbers []uint32
 	var previous uint32
@@ -17,18 +17,18 @@ func DecodeMissing(data []byte, blockCount uint32, maxItems int) ([]uint32, erro
 	for len(data) > 0 {
 		items++
 		if items > maxItems {
-			return nil, fmt.Errorf("missing-block item limit exceeded")
+			return nil, errors.New("missing-block item limit exceeded")
 		}
 		value, consumed, err := decodeUnsigned(data)
 		if err != nil {
 			return nil, err
 		}
 		if value > math.MaxUint32 || value >= uint64(blockCount) {
-			return nil, fmt.Errorf("missing-block number outside body")
+			return nil, errors.New("missing-block number outside body")
 		}
 		number := uint32(value)
 		if len(numbers) > 0 && number < previous {
-			return nil, fmt.Errorf("descending missing-block sequence")
+			return nil, errors.New("descending missing-block sequence")
 		}
 		if len(numbers) == 0 || number != previous {
 			numbers = append(numbers, number)
@@ -41,7 +41,7 @@ func DecodeMissing(data []byte, blockCount uint32, maxItems int) ([]uint32, erro
 
 func decodeUnsigned(data []byte) (uint64, int, error) {
 	if data[0]>>5 != 0 {
-		return 0, 0, fmt.Errorf("missing-block item is not unsigned")
+		return 0, 0, errors.New("missing-block item is not unsigned")
 	}
 	minor := data[0] & 0x1f
 	switch {
@@ -68,19 +68,19 @@ func decodeUnsigned(data []byte) (uint64, int, error) {
 		}
 		return binary.BigEndian.Uint64(data[1:9]), 9, nil
 	default:
-		return 0, 0, fmt.Errorf("invalid CBOR unsigned integer width")
+		return 0, 0, errors.New("invalid CBOR unsigned integer width")
 	}
-	return 0, 0, fmt.Errorf("truncated CBOR unsigned integer")
+	return 0, 0, errors.New("truncated CBOR unsigned integer")
 }
 
 // EncodeMissing writes the largest whole-number prefix that fits maxBytes.
 func EncodeMissing(numbers []uint32, maxBytes int) ([]byte, int, error) {
 	if len(numbers) == 0 || maxBytes <= 0 {
-		return nil, 0, fmt.Errorf("empty missing-block sequence or byte budget")
+		return nil, 0, errors.New("empty missing-block sequence or byte budget")
 	}
 	for i := 1; i < len(numbers); i++ {
 		if numbers[i] <= numbers[i-1] {
-			return nil, 0, fmt.Errorf("missing-block sequence is not strictly increasing")
+			return nil, 0, errors.New("missing-block sequence is not strictly increasing")
 		}
 	}
 	var payload []byte
@@ -89,7 +89,7 @@ func EncodeMissing(numbers []uint32, maxBytes int) ([]byte, int, error) {
 		length := encodeUnsigned(encoded[:], number)
 		if len(payload)+length > maxBytes {
 			if i == 0 {
-				return nil, 0, fmt.Errorf("first missing-block number exceeds byte budget")
+				return nil, 0, errors.New("first missing-block number exceeds byte budget")
 			}
 			return payload, i, nil
 		}

@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"github.com/plgd-dev/go-coap/v3/net/blockwise"
+	pkgMath "github.com/plgd-dev/go-coap/v3/pkg/math"
 )
 
 const maxBlockNumber = 1048575
@@ -33,5 +34,5 @@ func DecodeBlock(value uint32) (Block, error) {
 	if szx > blockwise.SZX1024 {
 		return Block{}, fmt.Errorf("Q-Block SZX %d is not supported", szx)
 	}
-	return Block{Number: uint32(number), More: more, SZX: szx}, nil
+	return Block{Number: pkgMath.CastTo[uint32](number), More: more, SZX: szx}, nil
 }

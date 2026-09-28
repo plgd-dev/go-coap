@@ -2,10 +2,12 @@ package qblock
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 
 	"github.com/plgd-dev/go-coap/v3/message"
 	"github.com/plgd-dev/go-coap/v3/net/blockwise"
+	pkgMath "github.com/plgd-dev/go-coap/v3/pkg/math"
 )
 
 // Metadata describes one fixed-size representation being assembled.
@@ -32,7 +34,7 @@ func NewBody(meta Metadata, maxBytes uint32) (*Body, error) {
 	if meta.SZX > blockwise.SZX1024 {
 		return nil, fmt.Errorf("unsupported body SZX %d", meta.SZX)
 	}
-	blockSize := uint64(meta.SZX.Size())
+	blockSize := pkgMath.CastTo[uint64](meta.SZX.Size())
 	count := (uint64(meta.Size) + blockSize - 1) / blockSize
 	if count == 0 {
 		count = 1
@@ -41,7 +43,7 @@ func NewBody(meta Metadata, maxBytes uint32) (*Body, error) {
 		return nil, fmt.Errorf("body requires %d blocks", count)
 	}
 	if uint64(meta.Size) > uint64(^uint(0)>>1) {
-		return nil, fmt.Errorf("body size exceeds addressable memory")
+		return nil, errors.New("body size exceeds addressable memory")
 	}
 	meta.Identity = bytes.Clone(meta.Identity)
 	return &Body{meta: meta, count: uint32(count)}, nil
@@ -52,12 +54,12 @@ func (b *Body) Add(meta Metadata, block Block, payload []byte) (bool, error) {
 		meta.HasContentFormat != b.meta.HasContentFormat ||
 		(meta.HasContentFormat && meta.ContentFormat != b.meta.ContentFormat) ||
 		!bytes.Equal(meta.Identity, b.meta.Identity) {
-		return false, fmt.Errorf("body metadata changed")
+		return false, errors.New("body metadata changed")
 	}
 	if block.SZX != b.meta.SZX || block.Number >= b.count {
-		return false, fmt.Errorf("block is outside body or has wrong SZX")
+		return false, errors.New("block is outside body or has wrong SZX")
 	}
-	blockSize := uint64(b.meta.SZX.Size())
+	blockSize := pkgMath.CastTo[uint64](b.meta.SZX.Size())
 	offset := uint64(block.Number) * blockSize
 	remaining := uint64(b.meta.Size) - offset
 	expected := blockSize
@@ -65,7 +67,7 @@ func (b *Body) Add(meta Metadata, block Block, payload []byte) (bool, error) {
 		expected = remaining
 	}
 	if uint64(len(payload)) != expected || block.More != (block.Number+1 < b.count) {
-		return false, fmt.Errorf("block length or More flag does not match body size")
+		return false, errors.New("block length or More flag does not match body size")
 	}
 	if _, ok := b.blocks[block.Number]; ok {
 		return true, nil
@@ -102,12 +104,12 @@ func (b *Body) Complete() bool {
 // Assemble returns a new contiguous copy after all blocks arrive.
 func (b *Body) Assemble() ([]byte, error) {
 	if !b.Complete() {
-		return nil, fmt.Errorf("body is incomplete")
+		return nil, errors.New("body is incomplete")
 	}
 	assembled := make([]byte, int(b.meta.Size))
-	blockSize := uint64(b.meta.SZX.Size())
+	blockSize := pkgMath.CastTo[uint64](b.meta.SZX.Size())
 	for number := uint32(0); number < b.count; number++ {
-		copy(assembled[int(uint64(number)*blockSize):], b.blocks[number])
+		copy(assembled[pkgMath.CastTo[int](uint64(number)*blockSize):], b.blocks[number])
 	}
 	return assembled, nil
 }
