@@ -25,7 +25,7 @@ func TestQBlockIngressCompletesOriginalHandler(t *testing.T) {
 	defer cc.ReleaseMessage(req)
 	prepared, err := cc.qblockClient.prepare(req, func(err error) { t.Errorf("unexpected failure: %v", err) })
 	require.NoError(t, err)
-	require.True(t, prepared)
+	require.True(t, prepared.Prepared)
 	deliveries := 0
 	cc.tokenHandlerContainer.Store(req.Token().Hash(), func(_ *responsewriter.ResponseWriter[*Conn], msg *pool.Message) {
 		deliveries++
@@ -58,7 +58,7 @@ func TestQBlockControlTokenResponseCompletesOriginalHandler(t *testing.T) {
 	defer cc.ReleaseMessage(req)
 	prepared, err := cc.qblockClient.prepare(req, func(err error) { t.Errorf("unexpected failure: %v", err) })
 	require.NoError(t, err)
-	require.True(t, prepared)
+	require.True(t, prepared.Prepared)
 
 	deliveries := 0
 	cc.tokenHandlerContainer.Store(req.Token().Hash(), func(_ *responsewriter.ResponseWriter[*Conn], msg *pool.Message) {
@@ -222,7 +222,7 @@ func TestQBlockFirstFragmentRejectionsAreTransactional(t *testing.T) {
 			defer cc.ReleaseMessage(req)
 			prepared, err := cc.qblockClient.prepare(req, func(error) {})
 			require.NoError(t, err)
-			require.True(t, prepared)
+			require.True(t, prepared.Prepared)
 			cc.tokenHandlerContainer.Store(token.Hash(), func(*responsewriter.ResponseWriter[*Conn], *pool.Message) {})
 
 			var baseline qblock.TransferID

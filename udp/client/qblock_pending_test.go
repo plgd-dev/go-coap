@@ -102,7 +102,7 @@ func TestQBlockPendingExpiryAndUngatedContinue(t *testing.T) {
 	now := time.Unix(100, 0)
 	require.NoError(t, q.replace(first, qblockPendingWork{Kind: qblockWorkBody, Expires: now}, false))
 	require.NoError(t, q.replace(second, qblockPendingWork{Kind: qblockWorkGET, Expires: now.Add(time.Minute)}, false))
-	require.NoError(t, q.replace(third, qblockPendingWork{Kind: qblockWorkControls, Expires: now.Add(time.Minute), Controls: []qblockControlWork{{Intent: qblock.ControlIntent{Action: qblock.Action{Kind: qblock.SendContinue}}}}}, false))
+	require.NoError(t, q.replace(third, qblockPendingWork{Kind: qblockWorkControls, Ungated: true, Expires: now.Add(time.Minute), Controls: []qblockControlWork{{Intent: qblock.ControlIntent{Action: qblock.Action{Kind: qblock.SendContinue}}}}}, false))
 	gate := newQBlockProbeGate(1)
 	require.True(t, gate.admit(1, qblockProbeBody, 0, now))
 	id, _, ok := q.next(now, gate)
@@ -122,6 +122,26 @@ func TestQBlockPendingExpiryAndUngatedContinue(t *testing.T) {
 	q.clearPending(second)
 	_, ok = q.nextDeadline(now, gate)
 	require.False(t, ok)
+}
+
+func TestQBlockPendingQ2ContinueWaitsForGate(t *testing.T) {
+	q := newQBlockWorkQueue(1, 1024)
+	id, err := q.reserve(64)
+	require.NoError(t, err)
+	now := time.Unix(100, 0)
+	require.NoError(t, q.replace(id, qblockPendingWork{
+		Kind: qblockWorkControls, Expires: now.Add(time.Minute),
+		Controls: []qblockControlWork{{Intent: qblock.ControlIntent{Action: qblock.Action{Kind: qblock.SendContinue}}}},
+	}, false))
+	gate := newQBlockProbeGate(1)
+	require.True(t, gate.admit(1, qblockProbeControl, 0, now))
+	gate.charge(1, 20)
+	gate.settle(1, now)
+	_, _, ready := q.next(now, gate)
+	require.False(t, ready)
+	deadline, ok := q.nextDeadline(now, gate)
+	require.True(t, ok)
+	require.Equal(t, now.Add(20*time.Second), deadline)
 }
 
 func TestQBlockPendingOversizedOptions(t *testing.T) {

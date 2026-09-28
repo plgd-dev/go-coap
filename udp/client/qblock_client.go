@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"math"
 	"net"
 	"sync"
 	"time"
@@ -32,6 +33,9 @@ type qblockClientConfig struct {
 }
 
 type qblockExchange struct {
+	workID          qblockWorkID
+	generation      uint64
+	initialProbeKey qblockProbeKey
 	originalToken   message.Token
 	requestCode     codes.Code
 	requestOpts     message.Options
@@ -56,6 +60,11 @@ type qblockTransfer struct {
 	requestTag       []byte
 	initialToken     message.Token
 	initialTokenUsed bool
+	bodyProbeKey     qblockProbeKey
+	bodyWait         time.Duration
+	bodyAnswered     bool
+	repairReplies    map[uint32]uint32
+	expires          time.Time
 	tokens           map[string]message.Token
 	mids             map[int32]struct{}
 	responseOptions  message.Options
@@ -77,6 +86,12 @@ type qblockClient struct {
 	actionMuContention       func()
 	manager                  *qblock.Manager
 	managerConfig            qblock.ManagerConfig
+	pacingConfig             qblockPacingConfig
+	probeGate                *qblockProbeGate
+	currentProbe             *qblockProbeCorrelation
+	workQueue                *qblockWorkQueue
+	nextGeneration           uint64
+	nextProbeKey             qblockProbeKey
 	initErr                  error
 	closed                   bool
 	exchangesByOriginalToken map[string]*qblockExchange
@@ -111,6 +126,8 @@ func newQBlockClient(cc *Conn, cfg qblockClientConfig) *qblockClient {
 		getRequestTag = cc.getToken
 	}
 	manager, err := qblock.NewManager(cfg.Manager)
+	pacing, pacingErr := normalizeQBlockPacingConfig(cfg.Pacing, cfg.Manager)
+	err = errors.Join(err, pacingErr)
 	if configErr != nil {
 		err = errors.Join(err, configErr)
 	}
@@ -128,6 +145,9 @@ func newQBlockClient(cc *Conn, cfg qblockClientConfig) *qblockClient {
 		getRequestTag:            getRequestTag,
 		manager:                  manager,
 		managerConfig:            cfg.Manager,
+		pacingConfig:             pacing,
+		probeGate:                newQBlockProbeGate(pacing.ProbingRate),
+		workQueue:                newQBlockWorkQueue(cfg.Manager.MaxTransfers, pacing.MaxIntentBytes),
 		initErr:                  err,
 		exchangesByOriginalToken: make(map[string]*qblockExchange),
 		exchangeByTransfer:       make(map[qblock.TransferID]*qblockExchange),
@@ -189,101 +209,149 @@ func (c *qblockClient) canPrepareQ1(req *pool.Message) bool {
 	return !ok || remoteAddress == nil || !remoteAddress.IP.IsMulticast()
 }
 
-func (c *qblockClient) prepare(req *pool.Message, fail func(error)) (bool, error) {
+type qblockPreparation struct {
+	Prepared         bool
+	OwnsTransmission bool
+}
+
+func (c *qblockClient) prepare(req *pool.Message, fail func(error)) (qblockPreparation, error) {
 	if c.initErr != nil {
-		return false, c.initErr
+		return qblockPreparation{}, c.initErr
 	}
 	c.mu.Lock()
 	closed := c.closed
 	c.mu.Unlock()
 	if closed {
-		return false, qblock.ErrClosed
+		return qblockPreparation{}, qblock.ErrClosed
 	}
 	if c.canPrepareQ1(req) {
 		return c.prepareQ1(req, fail)
 	}
 	if !c.canPrepare(req) {
-		return false, nil
+		return qblockPreparation{}, nil
 	}
 	token := req.Token()
 	if len(token) == 0 {
-		return false, errors.New("q-block GET requires token")
+		return qblockPreparation{}, errors.New("q-block GET requires token")
 	}
-	options, err := req.Options().Clone()
-	if err != nil {
-		return false, err
-	}
+	req.SetType(message.NonConfirmable)
 	value, err := qblock.EncodeBlock(qblock.Block{Number: 0, More: true, SZX: c.cc.blockwiseSZX})
 	if err != nil {
-		return false, err
+		return qblockPreparation{}, err
+	}
+	req.SetOptionUint32(message.QBlock2, value)
+	options, err := req.Options().Clone()
+	if err != nil {
+		return qblockPreparation{}, err
+	}
+	capacity, err := qblockControlCapacity(options, c.managerConfig.Transfer.MaxPayloads)
+	if err != nil {
+		return qblockPreparation{}, err
+	}
+	expires := c.now().Add(c.managerConfig.Transfer.Lifetime)
+	if deadline, ok := req.Context().Deadline(); ok && deadline.Before(expires) {
+		expires = deadline
 	}
 	exchange := &qblockExchange{
 		originalToken: message.Token(bytes.Clone(token)),
 		requestCode:   req.Code(),
-		requestOpts:   options,
+		requestOpts:   options.Remove(message.QBlock2),
 		fail:          fail,
 		transfers:     make(map[qblock.TransferID]struct{}),
 	}
 	callbackRelease, ok := c.callbackSlots.tryAcquire()
 	if !ok {
-		return false, qblock.ErrLimitExceeded
+		return qblockPreparation{}, qblock.ErrLimitExceeded
 	}
 	exchange.callbackRelease = callbackRelease
 	exchange.requestContext, exchange.cancelContext = context.WithCancel(req.Context())
 	exchange.stopConnCancel = context.AfterFunc(c.cc.Context(), exchange.cancelContext)
 	c.mu.Lock()
-	defer c.mu.Unlock()
 	if c.closed {
+		c.mu.Unlock()
 		exchange.closeRequestContext()
 		exchange.releaseCallbackSlot()
-		return false, qblock.ErrClosed
+		return qblockPreparation{}, qblock.ErrClosed
 	}
 	if _, ok := c.exchangesByOriginalToken[string(token)]; ok {
+		c.mu.Unlock()
 		exchange.closeRequestContext()
 		exchange.releaseCallbackSlot()
-		return false, errors.New("q-block GET token already pending")
+		return qblockPreparation{}, errors.New("q-block GET token already pending")
 	}
-	req.SetType(message.NonConfirmable)
-	req.SetOptionUint32(message.QBlock2, value)
+	if c.nextGeneration == math.MaxUint64 || c.nextProbeKey == qblockProbeKey(math.MaxUint64) {
+		c.mu.Unlock()
+		exchange.closeRequestContext()
+		exchange.releaseCallbackSlot()
+		return qblockPreparation{}, qblock.ErrLimitExceeded
+	}
+	workID, err := c.workQueue.reserve(capacity)
+	if err != nil {
+		c.mu.Unlock()
+		exchange.closeRequestContext()
+		exchange.releaseCallbackSlot()
+		return qblockPreparation{}, err
+	}
+	generation := c.nextGeneration + 1
+	probeKey := c.nextProbeKey + 1
+	err = c.workQueue.replace(workID, qblockPendingWork{
+		Kind: qblockWorkGET, Generation: generation, Expires: expires,
+		ProbeKey: probeKey, RequestCode: req.Code(), RequestOptions: options,
+		RequestToken: token,
+	}, false)
+	if err != nil {
+		c.releasePacingWorkLocked(workID)
+		c.mu.Unlock()
+		exchange.closeRequestContext()
+		exchange.releaseCallbackSlot()
+		return qblockPreparation{}, err
+	}
+	c.nextGeneration = generation
+	c.nextProbeKey = probeKey
+	exchange.workID = workID
+	exchange.generation = generation
+	exchange.initialProbeKey = probeKey
 	c.exchangesByOriginalToken[string(token)] = exchange
-	return true, nil
+	c.mu.Unlock()
+	c.notifyDeadlineChanged()
+	return qblockPreparation{Prepared: true, OwnsTransmission: true}, nil
 }
 
-func (c *qblockClient) prepareQ1(req *pool.Message, fail func(error)) (bool, error) {
+func (c *qblockClient) prepareQ1(req *pool.Message, fail func(error)) (qblockPreparation, error) {
 	if c.initErr != nil {
-		return false, c.initErr
+		return qblockPreparation{}, c.initErr
 	}
 	if !c.canPrepareQ1(req) {
-		return false, nil
+		return qblockPreparation{}, nil
 	}
 	originalToken := req.Token()
 	if len(originalToken) == 0 {
-		return false, errors.New("q-block Q1 requires token")
+		return qblockPreparation{}, errors.New("q-block Q1 requires token")
 	}
 	options, err := req.Options().Clone()
 	if err != nil {
-		return false, err
+		return qblockPreparation{}, err
 	}
 	body, err := copyQBlockBody(req.Body())
 	if err != nil {
-		return false, err
+		return qblockPreparation{}, err
 	}
 	requestTag, err := c.getRequestTag()
 	if err != nil {
-		return false, err
+		return qblockPreparation{}, err
 	}
 	requestTag = message.Token(bytes.Clone(requestTag))
 	if len(requestTag) == 0 || len(requestTag) > 8 {
-		return false, errors.New("q-block Request-Tag must contain one to eight bytes")
+		return qblockPreparation{}, errors.New("q-block Request-Tag must contain one to eight bytes")
 	}
 	callbackRelease, ok := c.callbackSlots.tryAcquire()
 	if !ok {
-		return false, qblock.ErrLimitExceeded
+		return qblockPreparation{}, qblock.ErrLimitExceeded
 	}
 	initialToken, err := c.cc.claimFreshQBlockToken()
 	if err != nil {
 		callbackRelease()
-		return false, err
+		return qblockPreparation{}, err
 	}
 	requestContext, cancelContext := context.WithCancel(req.Context())
 	exchange := &qblockExchange{
@@ -307,7 +375,7 @@ func (c *qblockClient) prepareQ1(req *pool.Message, fail func(error)) (bool, err
 		exchange.closeRequestContext()
 		exchange.releaseCallbackSlot()
 		c.cc.releaseToken(initialToken, tokenOwnerQBlock)
-		return false, qblock.ErrClosed
+		return qblockPreparation{}, qblock.ErrClosed
 	}
 	if _, ok := c.exchangesByOriginalToken[string(originalToken)]; ok {
 		c.mu.Unlock()
@@ -315,25 +383,25 @@ func (c *qblockClient) prepareQ1(req *pool.Message, fail func(error)) (bool, err
 		exchange.closeRequestContext()
 		exchange.releaseCallbackSlot()
 		c.cc.releaseToken(initialToken, tokenOwnerQBlock)
-		return false, errors.New("q-block request token already pending")
+		return qblockPreparation{}, errors.New("q-block request token already pending")
 	}
-	outputs, err := c.startQ1Locked(exchange, body, initialToken)
+	err = c.startQ1Locked(exchange, body, initialToken)
 	if err != nil {
 		c.mu.Unlock()
 		c.actionMu.Unlock()
 		exchange.closeRequestContext()
 		exchange.releaseCallbackSlot()
 		c.cc.releaseToken(initialToken, tokenOwnerQBlock)
-		return false, err
+		return qblockPreparation{}, err
 	}
 	c.mu.Unlock()
-	callbacks := c.executeOrdered(outputs)
+	callbacks := c.executePendingOrdered(c.now())
 	c.actionMu.Unlock()
 	for _, callback := range callbacks {
 		callback.run()
 	}
 	c.notifyDeadlineChanged()
-	return true, nil
+	return qblockPreparation{Prepared: true, OwnsTransmission: true}, nil
 }
 
 func (e *qblockExchange) closeRequestContext() {
@@ -370,13 +438,13 @@ func copyQBlockBody(body io.ReadSeeker) (payload []byte, err error) {
 	return payload, err
 }
 
-func (c *qblockClient) startQ1Locked(exchange *qblockExchange, body []byte, initialToken message.Token) ([]qblock.Output, error) {
+func (c *qblockClient) startQ1Locked(exchange *qblockExchange, body []byte, initialToken message.Token) error {
 	if uint64(len(body)) > uint64(^uint32(0)) {
-		return nil, errors.New("q-block body is too large")
+		return errors.New("q-block body is too large")
 	}
 	operation, err := q1Operation(exchange.originalToken, exchange.requestTag)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	metadata := qblock.Metadata{
 		Size:     uint32(len(body)),
@@ -386,19 +454,49 @@ func (c *qblockClient) startQ1Locked(exchange *qblockExchange, body []byte, init
 	if exchange.requestOpts.HasOption(message.ContentFormat) {
 		contentFormat, err := exchange.requestOpts.ContentFormat()
 		if err != nil {
-			return nil, err
+			return err
 		}
 		metadata.HasContentFormat = true
 		metadata.ContentFormat = contentFormat
 	}
-	outputs, err := c.manager.StartSender(operation, initialToken, qblock.Q1, metadata, body, c.now(), c.jitter())
+	capacity, err := qblockControlCapacity(exchange.requestOpts, c.managerConfig.Transfer.MaxPayloads)
 	if err != nil {
-		return nil, err
+		return err
 	}
-	id, ok := c.manager.TransferID(operation)
-	if !ok {
-		return nil, qblock.ErrUnknownTransfer
+	if c.nextGeneration == math.MaxUint64 || c.nextProbeKey == qblockProbeKey(math.MaxUint64) {
+		return qblock.ErrLimitExceeded
 	}
+	now := c.now()
+	jitter := c.jitter()
+	wait, err := qblockProbingWait(c.pacingConfig, c.managerConfig.Transfer, jitter)
+	if err != nil {
+		return err
+	}
+	workID, err := c.workQueue.reserve(capacity)
+	if err != nil {
+		return err
+	}
+	id, err := c.manager.PrepareSender(operation, initialToken, qblock.Q1, metadata, body, now, jitter)
+	if err != nil {
+		c.releasePacingWorkLocked(workID)
+		return err
+	}
+	generation := c.nextGeneration + 1
+	probeKey := c.nextProbeKey + 1
+	err = c.workQueue.replace(workID, qblockPendingWork{
+		Kind: qblockWorkBody, Operation: operation, TransferID: id,
+		Generation: generation, Expires: now.Add(c.managerConfig.Transfer.Lifetime),
+		ProbeKey: probeKey, NonProbingWait: wait,
+	}, false)
+	if err != nil {
+		c.manager.Cancel(id, err)
+		c.releasePacingWorkLocked(workID)
+		return err
+	}
+	c.nextGeneration = generation
+	c.nextProbeKey = probeKey
+	exchange.workID = workID
+	exchange.generation = generation
 	transfer := &qblockTransfer{
 		id:           id,
 		exchange:     exchange,
@@ -407,6 +505,8 @@ func (c *qblockClient) startQ1Locked(exchange *qblockExchange, body []byte, init
 		metadata:     metadata,
 		requestTag:   bytes.Clone(exchange.requestTag),
 		initialToken: message.Token(bytes.Clone(initialToken)),
+		bodyProbeKey: probeKey,
+		bodyWait:     wait,
 		tokens:       map[string]message.Token{string(initialToken): message.Token(bytes.Clone(initialToken))},
 		mids:         make(map[int32]struct{}),
 	}
@@ -415,7 +515,7 @@ func (c *qblockClient) startQ1Locked(exchange *qblockExchange, body []byte, init
 	c.exchangeByTransfer[id] = exchange
 	c.transfers[id] = transfer
 	c.transferByToken[string(initialToken)] = transfer
-	return outputs, nil
+	return nil
 }
 
 func (c *qblockClient) active() uint32 {
@@ -434,6 +534,14 @@ func (c *qblockClient) nextDeadlineLocked() (time.Time, bool) {
 		return time.Time{}, false
 	}
 	deadline, ok := c.manager.NextDeadline()
+	if c.workQueue != nil {
+		now := c.now()
+		c.clearExpiredPacingProbeLocked(now)
+		workDeadline, workOK := c.workQueue.nextDeadline(now, c.probeGate)
+		if workOK && (!ok || workDeadline.Before(deadline)) {
+			deadline, ok = workDeadline, true
+		}
+	}
 	if c.server == nil {
 		return deadline, ok
 	}
@@ -470,11 +578,19 @@ func (c *qblockClient) advanceDueWithCallbacks(now time.Time, scheduled bool) {
 		return
 	}
 	outputs := c.manager.Tick(now)
+	for id, transfer := range c.transfers {
+		if transfer.kind == qblock.Q2 {
+			if err := c.syncPacingControlsLocked(id, now); err != nil {
+				outputs = append(outputs, c.manager.Cancel(id, err)...)
+			}
+		}
+	}
 	if c.server != nil {
 		c.server.expireRecordsLocked(now)
 	}
 	c.mu.Unlock()
 	callbacks := c.executeOrdered(outputs)
+	callbacks = append(callbacks, c.executePendingOrdered(now)...)
 	c.actionMu.Unlock()
 	for _, callback := range callbacks {
 		if scheduled && c.callbackDispatcher != nil {
@@ -610,6 +726,7 @@ func (c *qblockClient) abandon(token message.Token, err error) {
 		}
 		if len(exchange.transfers) == 0 {
 			delete(c.exchangesByOriginalToken, key)
+			c.releasePacingWorkLocked(exchange.workID)
 			_, _ = c.cc.tokenHandlerContainer.LoadAndDelete(exchange.originalToken.Hash())
 			exchange.closeRequestContext()
 			exchange.releaseCallbackSlot()
@@ -659,6 +776,7 @@ func (c *qblockClient) close() {
 		}
 		if len(exchange.transfers) == 0 {
 			delete(c.exchangesByOriginalToken, key)
+			c.releasePacingWorkLocked(exchange.workID)
 			exchange.closeRequestContext()
 		}
 	}
@@ -727,6 +845,7 @@ func (c *qblockClient) handle(msg *pool.Message) bool {
 			outputs, handled := c.handleQ1ResponseLocked(msg, transfer.id)
 			c.mu.Unlock()
 			callbacks = append(callbacks, c.executeOrdered(outputs)...)
+			callbacks = append(callbacks, c.executePendingOrdered(c.now())...)
 			progressed = true
 			return handled
 		}
@@ -742,6 +861,7 @@ func (c *qblockClient) handle(msg *pool.Message) bool {
 		outputs, handled := c.handleQ1ResponseLocked(msg, transfer.id)
 		c.mu.Unlock()
 		callbacks = append(callbacks, c.executeOrdered(outputs)...)
+		callbacks = append(callbacks, c.executePendingOrdered(c.now())...)
 		progressed = true
 		return handled
 	}
@@ -752,6 +872,7 @@ func (c *qblockClient) handle(msg *pool.Message) bool {
 			outputs, _ := c.handoffQ1ToQ2Locked(transfer.id, msg)
 			c.mu.Unlock()
 			callbacks = append(callbacks, c.executeOrdered(outputs)...)
+			callbacks = append(callbacks, c.executePendingOrdered(c.now())...)
 			progressed = true
 			return true
 		}
@@ -763,7 +884,9 @@ func (c *qblockClient) handle(msg *pool.Message) bool {
 			progressed = true
 			return true
 		}
-		outputs, err := c.manager.Receive(fragment, c.now())
+		now := c.now()
+		before, _ := c.manager.ReceiverProgress(transfer.id)
+		outputs, err := c.manager.Receive(fragment, now)
 		if err != nil {
 			outputs = c.manager.Cancel(transfer.id, err)
 			c.mu.Unlock()
@@ -771,8 +894,23 @@ func (c *qblockClient) handle(msg *pool.Message) bool {
 			progressed = true
 			return true
 		}
+		after, stillActive := c.manager.ReceiverProgress(transfer.id)
+		acceptedDelivery := false
+		for _, output := range outputs {
+			if output.TransferID == transfer.id && output.Action.Kind == qblock.Deliver {
+				acceptedDelivery = true
+				break
+			}
+		}
+		if (stillActive && after > before) || acceptedDelivery {
+			c.acceptPacingQ2ProgressLocked(transfer, fragment.Block.Number)
+		}
+		if err := c.syncPacingControlsLocked(transfer.id, now); err != nil {
+			outputs = append(outputs, c.manager.Cancel(transfer.id, err)...)
+		}
 		c.mu.Unlock()
 		callbacks = append(callbacks, c.executeOrdered(outputs)...)
+		callbacks = append(callbacks, c.executePendingOrdered(now)...)
 		progressed = true
 		return true
 	}
@@ -801,7 +939,8 @@ func (c *qblockClient) handle(msg *pool.Message) bool {
 		c.mu.Unlock()
 		return true
 	}
-	outputs, err := c.manager.StartReceiver(fragment, c.now())
+	now := c.now()
+	outputs, err := c.manager.StartReceiverDeferred(fragment, now)
 	if err != nil {
 		c.mu.Unlock()
 		return true
@@ -815,6 +954,11 @@ func (c *qblockClient) handle(msg *pool.Message) bool {
 		c.mu.Unlock()
 		return true
 	}
+	if slot := c.workQueue.slots[exchange.workID]; slot != nil && slot.pending != nil && slot.pending.Kind == qblockWorkGET {
+		// An accepted first fragment supersedes an unsent initial GET. This
+		// also protects against a stale queued write after response routing.
+		c.workQueue.clearPending(exchange.workID)
+	}
 	transfer := &qblockTransfer{
 		id:               id,
 		exchange:         exchange,
@@ -827,13 +971,19 @@ func (c *qblockClient) handle(msg *pool.Message) bool {
 		mids:             make(map[int32]struct{}),
 		responseOptions:  responseOptions,
 		responseCode:     msg.Code(),
+		expires:          now.Add(c.managerConfig.Transfer.Lifetime),
 	}
 	exchange.transfers[id] = struct{}{}
 	c.exchangeByTransfer[id] = exchange
 	c.transfers[id] = transfer
 	c.transferByToken[string(token)] = transfer
+	c.acceptPacingFeedbackLocked(exchange.initialProbeKey)
+	if err := c.syncPacingControlsLocked(id, now); err != nil {
+		outputs = append(outputs, c.manager.Cancel(id, err)...)
+	}
 	c.mu.Unlock()
 	callbacks = append(callbacks, c.executeOrdered(outputs)...)
+	callbacks = append(callbacks, c.executePendingOrdered(now)...)
 	progressed = true
 	return true
 }
@@ -856,9 +1006,27 @@ func (c *qblockClient) handleQ1ResponseLocked(msg *pool.Message, id qblock.Trans
 		return c.finishExchangeLocked(transfer.exchange, err), true
 	}
 	if handled {
-		outputs, err := c.manager.Control(control, c.now())
+		now := c.now()
+		matchesProbe := c.matchesPacingQ1ControlLocked(transfer, control)
+		outputs, err := c.manager.Control(control, now)
 		if err != nil {
 			return c.finishExchangeLocked(transfer.exchange, err), true
+		}
+		hasSendBlock := false
+		for _, output := range outputs {
+			if output.TransferID != id || output.Action.Kind != qblock.SendBlock {
+				continue
+			}
+			hasSendBlock = true
+			if len(control.Missing) != 0 {
+				if transfer.repairReplies == nil {
+					transfer.repairReplies = make(map[uint32]uint32)
+				}
+				transfer.repairReplies[output.Action.Block.Number]++
+			}
+		}
+		if matchesProbe && hasSendBlock && c.acceptPacingFeedbackLocked(transfer.bodyProbeKey) {
+			transfer.bodyAnswered = true
 		}
 		return outputs, true
 	}
@@ -877,6 +1045,9 @@ func (c *qblockClient) handleQ1ResponseLocked(msg *pool.Message, id qblock.Trans
 		c.pendingMessageRelease = append(c.pendingMessageRelease, response)
 		transfer.terminalResponse = nil
 		return c.finishExchangeLocked(transfer.exchange, err), true
+	}
+	if len(outputs) != 0 && c.acceptPacingFeedbackLocked(transfer.bodyProbeKey) {
+		transfer.bodyAnswered = true
 	}
 	return outputs, true
 }
@@ -917,6 +1088,9 @@ func (c *qblockClient) handoffQ1ToQ2Locked(id qblock.TransferID, msg *pool.Messa
 	if err != nil {
 		return c.finishExchangeLocked(exchange, err), err
 	}
+	if c.acceptPacingFeedbackLocked(sender.bodyProbeKey) {
+		sender.bodyAnswered = true
+	}
 	// Keep the response token reserved across the transition. All other Q1
 	// tokens and MIDs cease to route before the receiver is started.
 	for token := range sender.tokens {
@@ -931,7 +1105,8 @@ func (c *qblockClient) handoffQ1ToQ2Locked(id qblock.TransferID, msg *pool.Messa
 		delete(c.transferByMID, mid)
 		delete(sender.mids, mid)
 	}
-	outputs, err := c.manager.StartReceiver(fragment, c.now())
+	now := c.now()
+	outputs, err := c.manager.StartReceiverDeferred(fragment, now)
 	if err != nil {
 		c.finishExchangeLocked(exchange, err)
 		// Q1 has already left the manager, so its completion outputs now carry
@@ -961,6 +1136,7 @@ func (c *qblockClient) handoffQ1ToQ2Locked(id qblock.TransferID, msg *pool.Messa
 		mids:             make(map[int32]struct{}),
 		responseOptions:  responseOptions,
 		responseCode:     code,
+		expires:          now.Add(c.managerConfig.Transfer.Lifetime),
 	}
 	exchange.transfers[receiverID] = struct{}{}
 	c.exchangeByTransfer[receiverID] = exchange
@@ -968,6 +1144,9 @@ func (c *qblockClient) handoffQ1ToQ2Locked(id qblock.TransferID, msg *pool.Messa
 	c.transferByToken[string(fragment.Token)] = receiver
 	delete(sender.tokens, string(fragment.Token))
 	c.releaseTransferLocked(id)
+	if err := c.syncPacingControlsLocked(receiverID, now); err != nil {
+		outputs = append(outputs, c.manager.Cancel(receiverID, err)...)
+	}
 	return outputs, nil
 }
 
@@ -993,6 +1172,7 @@ func qblockClientBlockCount(metadata qblock.Metadata) uint32 {
 func (c *qblockClient) drive(outputs []qblock.Output) {
 	c.lockAction()
 	callbacks := c.executeOrdered(outputs)
+	callbacks = append(callbacks, c.executePendingOrdered(c.now())...)
 	c.actionMu.Unlock()
 	for _, callback := range callbacks {
 		callback.run()
@@ -1021,10 +1201,32 @@ func (c qblockCallback) drop() {
 
 func (c *qblockClient) executeOrdered(outputs []qblock.Output) []qblockCallback {
 	var callbacks []qblockCallback
+	type bodyBurst struct {
+		key   qblockProbeKey
+		final bool
+	}
+	bodyBursts := make(map[qblock.TransferID]bodyBurst)
+	c.mu.Lock()
+	for _, output := range outputs {
+		if output.Action.Kind == qblock.SendBlock {
+			if transfer := c.transfers[output.TransferID]; transfer != nil && transfer.kind == qblock.Q1 && transfer.bodyProbeKey != 0 {
+				burst := bodyBursts[output.TransferID]
+				burst.key = transfer.bodyProbeKey
+				burst.final = burst.final || !output.Action.Block.More
+				bodyBursts[output.TransferID] = burst
+			}
+		}
+	}
+	c.mu.Unlock()
 	for _, output := range outputs {
 		callbacks = append(callbacks, c.executeOutput(output)...)
 	}
 	c.mu.Lock()
+	for id, burst := range bodyBursts {
+		if burst.final || c.transfers[id] == nil {
+			c.probeGate.settle(burst.key, c.now())
+		}
+	}
 	messages := c.pendingMessageRelease
 	c.pendingMessageRelease = nil
 	c.mu.Unlock()
@@ -1052,9 +1254,9 @@ func (c *qblockClient) executeOutput(output qblock.Output) []qblockCallback {
 			return c.executeOrdered(c.cancelTransfer(output.TransferID, err))
 		}
 	case qblock.SendContinue, qblock.RequestMissing:
-		if err := c.writeQ2Control(output.TransferID, output.Action); err != nil {
-			return c.executeOrdered(c.cancelTransfer(output.TransferID, err))
-		}
+		// All client receivers use deferred controls. An immediate action is
+		// a contract violation and must never reach the socket ungated.
+		return c.executeOrdered(c.cancelTransfer(output.TransferID, errors.New("unexpected immediate q-block client control")))
 	case qblock.Deliver:
 		return c.prepareDelivery(output.TransferID, output.Action.Payload)
 	case qblock.Complete:
@@ -1090,6 +1292,15 @@ func (c *qblockClient) writeQ1Block(id qblock.TransferID, action qblock.Action) 
 		}
 	}
 	request, err := c.newQ1Request(transfer, token, action)
+	bodyAnswered := transfer.bodyAnswered
+	repairReply := transfer.repairReplies[action.Block.Number] > 0
+	if repairReply {
+		transfer.repairReplies[action.Block.Number]--
+		if transfer.repairReplies[action.Block.Number] == 0 {
+			delete(transfer.repairReplies, action.Block.Number)
+		}
+	}
+	bodyProbeActive := c.probeGate.state == qblockProbeActive && c.probeGate.key == transfer.bodyProbeKey
 	c.mu.Unlock()
 	if err != nil {
 		return err
@@ -1099,7 +1310,10 @@ func (c *qblockClient) writeQ1Block(id qblock.TransferID, action qblock.Action) 
 		return err
 	}
 
-	return c.cc.session.WriteMessage(request)
+	if bodyAnswered || (repairReply && !bodyProbeActive) {
+		return c.cc.session.WriteMessage(request)
+	}
+	return c.writePacedMessage(transfer.bodyProbeKey, request)
 }
 
 func (c *qblockClient) bindQ1TokenLocked(id qblock.TransferID) (message.Token, error) {
@@ -1149,55 +1363,6 @@ func (c *qblockClient) newQ1Request(transfer *qblockTransfer, token message.Toke
 	transfer.mids[mid] = struct{}{}
 	c.transferByMID[mid] = transfer
 	return request, nil
-}
-
-func (c *qblockClient) writeQ2Control(id qblock.TransferID, action qblock.Action) error {
-	if err := c.writeContext.Err(); err != nil {
-		return err
-	}
-	c.mu.Lock()
-	transfer := c.transfers[id]
-	if transfer == nil {
-		c.mu.Unlock()
-		return qblock.ErrUnknownTransfer
-	}
-	szx := transfer.metadata.SZX
-	c.mu.Unlock()
-
-	var blocks []qblock.Block
-	switch action.Kind {
-	case qblock.SendContinue:
-		blocks = append(blocks, qblock.Block{Number: action.Through + 1, More: true, SZX: szx})
-	case qblock.RequestMissing:
-		for _, number := range action.Numbers {
-			blocks = append(blocks, qblock.Block{Number: number, SZX: szx})
-		}
-	default:
-		return nil
-	}
-	for _, block := range blocks {
-		if err := c.writeContext.Err(); err != nil {
-			return err
-		}
-		token, err := c.bindControlToken(id)
-		if err != nil {
-			return err
-		}
-		request, err := c.newControlRequest(id, token, block)
-		if err != nil {
-			return err
-		}
-		if err := request.Context().Err(); err != nil {
-			c.cc.ReleaseMessage(request)
-			return err
-		}
-		err = c.cc.session.WriteMessage(request)
-		c.cc.ReleaseMessage(request)
-		if err != nil {
-			return err
-		}
-	}
-	return nil
 }
 
 func (c *qblockClient) bindControlToken(id qblock.TransferID) (message.Token, error) {
@@ -1434,6 +1599,7 @@ func (c *qblockClient) releaseTransferLocked(id qblock.TransferID) {
 		if len(transfer.exchange.transfers) == 0 {
 			transfer.exchange.finished = true
 			delete(c.exchangesByOriginalToken, string(transfer.exchange.originalToken))
+			c.releasePacingWorkLocked(transfer.exchange.workID)
 			transfer.exchange.closeRequestContext()
 		}
 	}

@@ -268,7 +268,7 @@ func TestQBlockQ1StartWaitsForOutputGateBeforeManagerMutation(t *testing.T) {
 	}()
 
 	type result struct {
-		prepared bool
+		prepared qblockPreparation
 		err      error
 	}
 	done := make(chan result, 1)
@@ -284,7 +284,7 @@ func TestQBlockQ1StartWaitsForOutputGateBeforeManagerMutation(t *testing.T) {
 	select {
 	case got := <-done:
 		require.NoError(t, got.err)
-		require.True(t, got.prepared)
+		require.True(t, got.prepared.Prepared)
 	case <-time.After(time.Second):
 		t.Fatal("Q1 start did not finish after the output gate opened")
 	}
@@ -297,7 +297,7 @@ func TestQBlockQ2ReceiveWaitsForOutputGateBeforeManagerMutation(t *testing.T) {
 	defer cc.ReleaseMessage(request)
 	prepared, err := cc.qblockClient.prepare(request, func(error) {})
 	require.NoError(t, err)
-	require.True(t, prepared)
+	require.True(t, prepared.Prepared)
 	response := newQBlockClientResponse(t, cc, request.Token(), true)
 	defer cc.ReleaseMessage(response)
 	contended := make(chan struct{}, 1)
@@ -413,7 +413,7 @@ func TestQBlockCloseCancelsBlockedClientQ2ControlWrite(t *testing.T) {
 	defer cc.ReleaseMessage(request)
 	prepared, err := cc.qblockClient.prepare(request, func(error) {})
 	require.NoError(t, err)
-	require.True(t, prepared)
+	require.True(t, prepared.Prepared)
 	first := newQBlockClientResponse(t, cc, request.Token(), true)
 	defer cc.ReleaseMessage(first)
 	require.True(t, cc.qblockClient.handle(first))
@@ -456,7 +456,7 @@ func TestQBlockAbandonCancelsBlockedClientQ2ControlWrite(t *testing.T) {
 	defer cc.ReleaseMessage(request)
 	prepared, err := cc.qblockClient.prepare(request, func(error) {})
 	require.NoError(t, err)
-	require.True(t, prepared)
+	require.True(t, prepared.Prepared)
 	first := newQBlockClientResponse(t, cc, request.Token(), true)
 	defer cc.ReleaseMessage(first)
 	require.True(t, cc.qblockClient.handle(first))
@@ -495,7 +495,7 @@ func TestQBlockAbandonPendingGETReleasesCallbackSlot(t *testing.T) {
 	defer cc.ReleaseMessage(request)
 	prepared, err := cc.qblockClient.prepare(request, func(error) {})
 	require.NoError(t, err)
-	require.True(t, prepared)
+	require.True(t, prepared.Prepared)
 	cc.qblockClient.abandon(request.Token(), qblock.ErrCanceled)
 	requireQBlockClientEmpty(t, cc)
 	cc.qblockClient.callbackSlots.mu.Lock()
@@ -511,12 +511,12 @@ func TestQBlockClosedConnectionRejectsNewClientExchanges(t *testing.T) {
 	q1 := newPOSTWithBody(t, cc, message.Token{0xe5}, []byte("upload"))
 	defer cc.ReleaseMessage(q1)
 	prepared, err := cc.qblockClient.prepare(q1, func(error) {})
-	require.False(t, prepared)
+	require.False(t, prepared.Prepared)
 	require.ErrorIs(t, err, qblock.ErrClosed)
 	q2 := newPrivateQBlockClientGET(t, cc, message.Token{0xe6})
 	defer cc.ReleaseMessage(q2)
 	prepared, err = cc.qblockClient.prepare(q2, func(error) {})
-	require.False(t, prepared)
+	require.False(t, prepared.Prepared)
 	require.ErrorIs(t, err, qblock.ErrClosed)
 	requireQBlockClientEmpty(t, cc)
 	require.Empty(t, session.writesSnapshot())
@@ -540,7 +540,7 @@ func TestQBlockCloseRetainsCallbackSlotUntilFailureCallbackReturns(t *testing.T)
 		<-release
 	})
 	require.NoError(t, err)
-	require.True(t, prepared)
+	require.True(t, prepared.Prepared)
 	closed := make(chan struct{})
 	go func() {
 		session.closeForTest()
@@ -583,7 +583,7 @@ func TestQBlockQueuedClientDeliveryDoesNotSucceedAfterClose(t *testing.T) {
 	})
 	prepared, err := cc.qblockClient.prepare(request, func(err error) { failed <- err })
 	require.NoError(t, err)
-	require.True(t, prepared)
+	require.True(t, prepared.Prepared)
 	first := newQBlockClientResponse(t, cc, request.Token(), true)
 	defer cc.ReleaseMessage(first)
 	require.True(t, cc.qblockClient.handle(first))
@@ -640,7 +640,7 @@ func TestQBlockClosePendingExchangeWithoutFailureCallback(t *testing.T) {
 	defer cc.ReleaseMessage(request)
 	prepared, err := cc.qblockClient.prepare(request, nil)
 	require.NoError(t, err)
-	require.True(t, prepared)
+	require.True(t, prepared.Prepared)
 	require.NotPanics(t, session.closeForTest)
 	requireQBlockClientEmpty(t, cc)
 	cc.qblockClient.callbackSlots.mu.Lock()
@@ -663,11 +663,21 @@ func startQ1TransferForTest(t *testing.T, cc *Conn, payload []byte) (*qblockTran
 	metadata := qblock.Metadata{Size: uint32(len(payload)), SZX: blockwise.SZX16, Identity: requestTag}
 
 	cc.qblockClient.mu.Lock()
+	capacity, err := qblockControlCapacity(options, cc.qblockClient.managerConfig.Transfer.MaxPayloads)
+	require.NoError(t, err)
+	workID, err := cc.qblockClient.workQueue.reserve(capacity)
+	require.NoError(t, err)
+	cc.qblockClient.nextGeneration++
+	cc.qblockClient.nextProbeKey++
+	probeKey := cc.qblockClient.nextProbeKey
+	require.True(t, cc.qblockClient.probeGate.admit(probeKey, qblockProbeBody, time.Second, cc.qblockClient.now()))
 	outputs, err := cc.qblockClient.manager.StartSender(operation, token, qblock.Q1, metadata, payload, time.Unix(100, 0), 0)
 	require.NoError(t, err)
 	id, ok := cc.qblockClient.manager.TransferID(operation)
 	require.True(t, ok)
 	exchange := &qblockExchange{
+		workID:        workID,
+		generation:    cc.qblockClient.nextGeneration,
 		originalToken: token,
 		requestCode:   codes.POST,
 		requestOpts:   options,
@@ -682,6 +692,7 @@ func startQ1TransferForTest(t *testing.T, cc *Conn, payload []byte) (*qblockTran
 		metadata:     metadata,
 		requestTag:   bytes.Clone(requestTag),
 		initialToken: token,
+		bodyProbeKey: probeKey,
 		tokens:       map[string]message.Token{string(token): token},
 		mids:         make(map[int32]struct{}),
 	}
@@ -746,7 +757,7 @@ func TestQBlockClientPreparesPOSTAsQ1Burst(t *testing.T) {
 	prepared, err := cc.qblockClient.prepare(request, func(error) {})
 
 	require.NoError(t, err)
-	require.True(t, prepared)
+	require.True(t, prepared.Prepared)
 	writes := session.writesSnapshot()
 	requireQ1Burst(t, writes, codes.POST, []uint32{0, 1, 2}, []byte{0xa1}, body)
 	require.Equal(t, []message.Token{{0xb1}, {0xb2}, {0xb3}}, []message.Token{writes[0].token, writes[1].token, writes[2].token})
@@ -771,7 +782,7 @@ func TestQBlockClientPreparesPUTAsQ1Burst(t *testing.T) {
 	prepared, err := cc.qblockClient.prepare(request, func(error) {})
 
 	require.NoError(t, err)
-	require.True(t, prepared)
+	require.True(t, prepared.Prepared)
 	requireQ1Burst(t, session.writesSnapshot(), codes.PUT, []uint32{0}, []byte{0xa2}, body)
 }
 
@@ -1018,7 +1029,7 @@ func TestQBlockClientQ1SecondFragmentWriteFailureReleasesState(t *testing.T) {
 	prepared, err := cc.qblockClient.prepare(request, func(err error) { failures <- err })
 
 	require.NoError(t, err)
-	require.True(t, prepared)
+	require.True(t, prepared.Prepared)
 	require.ErrorIs(t, requireQBlockFailure(t, failures), writeErr)
 	select {
 	case err := <-failures:
@@ -1085,7 +1096,7 @@ func TestQBlockClientLeavesUnsupportedQ1ShapesOrdinary(t *testing.T) {
 			prepared, err := cc.qblockClient.prepare(req, func(error) {})
 
 			require.NoError(t, err)
-			require.False(t, prepared)
+			require.False(t, prepared.Prepared)
 			requireQBlockClientEmpty(t, cc)
 		})
 	}
@@ -1112,7 +1123,7 @@ func TestQBlockClientLeavesMulticastSessionQ1Ordinary(t *testing.T) {
 			prepared, err := cc.qblockClient.prepare(request, func(error) {})
 
 			require.NoError(t, err)
-			require.False(t, prepared)
+			require.False(t, prepared.Prepared)
 			require.Empty(t, session.writesSnapshot())
 			requireQBlockClientEmpty(t, cc)
 		})
@@ -1144,7 +1155,7 @@ func TestQBlockClientQ1StartFailureRollsBackReservationAndState(t *testing.T) {
 	prepared, err := cc.qblockClient.prepare(request, func(error) {})
 
 	require.Error(t, err)
-	require.False(t, prepared)
+	require.False(t, prepared.Prepared)
 	require.Empty(t, session.writesSnapshot())
 	requireQBlockClientEmpty(t, cc)
 	require.NoError(t, cc.claimToken(message.Token{0xd1}, tokenOwnerRequest))
@@ -1181,7 +1192,7 @@ func TestQBlockClientCopiesQ1BodyAndOptionsBeforeStarting(t *testing.T) {
 	prepared, err := cc.qblockClient.prepare(request, func(error) {})
 
 	require.NoError(t, err)
-	require.True(t, prepared)
+	require.True(t, prepared.Prepared)
 	position, err := reader.Seek(0, io.SeekCurrent)
 	require.NoError(t, err)
 	require.Equal(t, int64(5), position)
@@ -1280,7 +1291,7 @@ func TestQBlockPrepareInitialGET(t *testing.T) {
 
 	prepared, err := cc.qblockClient.prepare(req, func(error) {})
 	require.NoError(t, err)
-	require.True(t, prepared)
+	require.True(t, prepared.Prepared)
 	require.Equal(t, message.NonConfirmable, req.Type())
 	value, err := req.GetOptionUint32(message.QBlock2)
 	require.NoError(t, err)
@@ -1308,8 +1319,9 @@ func TestDoInternalPreparesPrivateQBlockGET(t *testing.T) {
 
 	_, err := cc.doInternal(req)
 	require.ErrorIs(t, err, context.Canceled)
-	require.Equal(t, message.NonConfirmable, session.writeType)
-	require.True(t, session.writeQ2)
+	require.Empty(t, session.writesSnapshot(), "a canceled private GET must not be written")
+	requireQBlockClientEmpty(t, cc)
+	require.Empty(t, cc.qblockClient.workQueue.slots)
 }
 
 func TestDoInternalPrivateQBlockLeavesClassicBlock2GETOrdinary(t *testing.T) {
@@ -1449,7 +1461,7 @@ func TestQBlockFirstFragmentRollback(t *testing.T) {
 	defer cc.ReleaseMessage(req)
 	prepared, err := cc.qblockClient.prepare(req, func(error) {})
 	require.NoError(t, err)
-	require.True(t, prepared)
+	require.True(t, prepared.Prepared)
 
 	invalid := newQBlockClientResponse(t, cc, req.Token(), false)
 	defer cc.ReleaseMessage(invalid)
@@ -1468,7 +1480,7 @@ func TestConnRoutesQBlockResponseBeforeTokenHandler(t *testing.T) {
 	defer cc.ReleaseMessage(req)
 	prepared, err := cc.qblockClient.prepare(req, func(error) {})
 	require.NoError(t, err)
-	require.True(t, prepared)
+	require.True(t, prepared.Prepared)
 	called := false
 	cc.tokenHandlerContainer.Store(req.Token().Hash(), func(*responsewriter.ResponseWriter[*Conn], *pool.Message) {
 		called = true
@@ -1490,7 +1502,7 @@ func TestConnDeliversCompleteQBlockResponseThroughOriginalHandler(t *testing.T) 
 	defer cc.ReleaseMessage(req)
 	prepared, err := cc.qblockClient.prepare(req, func(error) {})
 	require.NoError(t, err)
-	require.True(t, prepared)
+	require.True(t, prepared.Prepared)
 	var delivered *pool.Message
 	cc.tokenHandlerContainer.Store(req.Token().Hash(), func(_ *responsewriter.ResponseWriter[*Conn], msg *pool.Message) {
 		msg.Hijack()
@@ -1538,7 +1550,7 @@ func TestConnDeliversSingleFragmentQBlockResponseThroughOriginalHandler(t *testi
 	defer cc.ReleaseMessage(req)
 	prepared, err := cc.qblockClient.prepare(req, func(error) {})
 	require.NoError(t, err)
-	require.True(t, prepared)
+	require.True(t, prepared.Prepared)
 
 	var delivered *pool.Message
 	cc.tokenHandlerContainer.Store(req.Token().Hash(), func(_ *responsewriter.ResponseWriter[*Conn], msg *pool.Message) {
@@ -1567,7 +1579,7 @@ func TestQBlockDeliveryAllowsHandlerToReenterReceiver(t *testing.T) {
 	defer cc.ReleaseMessage(req)
 	prepared, err := cc.qblockClient.prepare(req, func(error) {})
 	require.NoError(t, err)
-	require.True(t, prepared)
+	require.True(t, prepared.Prepared)
 
 	handlerDone := make(chan struct{})
 	cc.tokenHandlerContainer.Store(req.Token().Hash(), func(_ *responsewriter.ResponseWriter[*Conn], msg *pool.Message) {
@@ -1620,7 +1632,7 @@ func TestQBlockClientSendsContinueWithFreshToken(t *testing.T) {
 	require.NoError(t, req.SetETag([]byte("req-tag")))
 	prepared, err := cc.qblockClient.prepare(req, func(error) {})
 	require.NoError(t, err)
-	require.True(t, prepared)
+	require.True(t, prepared.Prepared)
 	cc.tokenHandlerContainer.Store(message.Token{0xbb}.Hash(), func(*responsewriter.ResponseWriter[*Conn], *pool.Message) {})
 	defer cc.tokenHandlerContainer.Delete(message.Token{0xbb}.Hash())
 	addRetainedQBlockClientObserveOption(t, cc.qblockClient, req.Token())
@@ -1652,17 +1664,26 @@ func TestQBlockClientSendsContinueWithFreshToken(t *testing.T) {
 
 func TestQBlockClientSendsAscendingRepairRequests(t *testing.T) {
 	session := &qblockTestSession{ctx: context.Background()}
+	clock := newFakeQBlockClock(time.Unix(100, 0))
 	next := byte(0xb0)
-	cc := newPrivateQBlockClientConnWithToken(t, session, func() (message.Token, error) {
+	cfg := DefaultConfig
+	cfg.BlockwiseEnable = false
+	cfg.BlockwiseSZX = blockwise.SZX16
+	cfg.GetToken = func() (message.Token, error) {
 		token := message.Token{next}
 		next++
 		return token, nil
-	})
+	}
+	managerConfig := qblock.DefaultManagerConfig()
+	cc := NewConnWithOpts(session, &cfg, withQBlockClient(qblockClientConfig{
+		Manager: managerConfig, Clock: clock, ScheduleMode: qblockScheduleManual,
+		Pacing: &qblockPacingConfig{ProbingRate: 1 << 30, MaxIntentBytes: managerConfig.MaxRetainedBytes},
+	}))
 	req := newPrivateQBlockClientGET(t, cc, message.Token{17, 18, 19})
 	defer cc.ReleaseMessage(req)
 	prepared, err := cc.qblockClient.prepare(req, func(error) {})
 	require.NoError(t, err)
-	require.True(t, prepared)
+	require.True(t, prepared.Prepared)
 
 	first := newQBlockClientFragment(t, cc, req.Token(), 0, true, 176)
 	defer cc.ReleaseMessage(first)
@@ -1671,6 +1692,14 @@ func TestQBlockClientSendsAscendingRepairRequests(t *testing.T) {
 	defer cc.ReleaseMessage(last)
 	cc.handle(nil, last)
 
+	for len(session.writesSnapshot()) < 9 {
+		cc.qblockClient.mu.Lock()
+		deadline, ok := cc.qblockClient.probeGate.nextDeadline()
+		cc.qblockClient.mu.Unlock()
+		require.True(t, ok)
+		clock.Advance(deadline.Sub(clock.Now()))
+		cc.qblockClient.Tick(clock.Now())
+	}
 	require.Len(t, session.writes, 9)
 	seen := make(map[string]struct{}, len(session.writes))
 	seenMIDs := make(map[int32]struct{}, len(session.writes))
@@ -1707,7 +1736,7 @@ func TestQBlockControlWriteFailureReleasesReceiver(t *testing.T) {
 	errCh := make(chan error, 2)
 	prepared, err := cc.qblockClient.prepare(req, func(err error) { errCh <- err })
 	require.NoError(t, err)
-	require.True(t, prepared)
+	require.True(t, prepared.Prepared)
 	cc.tokenHandlerContainer.Store(req.Token().Hash(), func(*responsewriter.ResponseWriter[*Conn], *pool.Message) {})
 	first := newQBlockClientFragment(t, cc, req.Token(), 0, true, 176)
 	defer cc.ReleaseMessage(first)
@@ -1742,7 +1771,7 @@ func TestQBlockControlTokenAllocationIsBounded(t *testing.T) {
 	failures := make(chan error, 2)
 	prepared, err := cc.qblockClient.prepare(req, func(err error) { failures <- err })
 	require.NoError(t, err)
-	require.True(t, prepared)
+	require.True(t, prepared.Prepared)
 	cc.tokenHandlerContainer.Store(req.Token().Hash(), func(*responsewriter.ResponseWriter[*Conn], *pool.Message) {})
 
 	for number := uint32(0); number < 10; number++ {
@@ -1777,7 +1806,7 @@ func TestQBlockInvalidManagerConfigHooksAreSafe(t *testing.T) {
 	req := newPrivateQBlockClientGET(t, cc, message.Token{21, 22, 23})
 	defer cc.ReleaseMessage(req)
 	prepared, err := cc.qblockClient.prepare(req, func(error) {})
-	require.False(t, prepared)
+	require.False(t, prepared.Prepared)
 	require.ErrorIs(t, err, errInvalidQBlockClientConfig)
 
 	require.NotPanics(t, func() { cc.CheckExpirations(time.Now()) })
@@ -1800,7 +1829,7 @@ func TestQBlockExpiryFailsOriginalRequestAndReleasesState(t *testing.T) {
 	errCh := make(chan error, 1)
 	prepared, err := cc.qblockClient.prepare(req, func(err error) { errCh <- err })
 	require.NoError(t, err)
-	require.True(t, prepared)
+	require.True(t, prepared.Prepared)
 	first := newQBlockClientResponse(t, cc, req.Token(), true)
 	defer cc.ReleaseMessage(first)
 	cc.handle(nil, first)
@@ -1835,7 +1864,7 @@ func TestQBlockTickAbandonAndCloseContentionFailsOnceAndReleasesState(t *testing
 	failures := make(chan error, 2)
 	prepared, err := cc.qblockClient.prepare(req, func(err error) { failures <- err })
 	require.NoError(t, err)
-	require.True(t, prepared)
+	require.True(t, prepared.Prepared)
 	cc.tokenHandlerContainer.Store(req.Token().Hash(), func(*responsewriter.ResponseWriter[*Conn], *pool.Message) {})
 	first := newQBlockClientResponse(t, cc, req.Token(), true)
 	defer cc.ReleaseMessage(first)
@@ -1897,7 +1926,7 @@ func TestQBlockAbandonReleasesActiveReceiver(t *testing.T) {
 	errCh := make(chan error, 1)
 	prepared, err := cc.qblockClient.prepare(req, func(err error) { errCh <- err })
 	require.NoError(t, err)
-	require.True(t, prepared)
+	require.True(t, prepared.Prepared)
 	first := newQBlockClientResponse(t, cc, req.Token(), true)
 	defer cc.ReleaseMessage(first)
 	cc.handle(nil, first)
@@ -1964,7 +1993,7 @@ func TestQBlockConnectionCloseReleasesActiveReceiver(t *testing.T) {
 	errCh := make(chan error, 1)
 	prepared, err := cc.qblockClient.prepare(req, func(err error) { errCh <- err })
 	require.NoError(t, err)
-	require.True(t, prepared)
+	require.True(t, prepared.Prepared)
 	first := newQBlockClientResponse(t, cc, req.Token(), true)
 	defer cc.ReleaseMessage(first)
 	cc.handle(nil, first)
@@ -2161,7 +2190,7 @@ func TestQBlockBlockedFailureCallbackBoundsNextQ1Admission(t *testing.T) {
 		<-release
 	})
 	require.NoError(t, err)
-	require.True(t, prepared)
+	require.True(t, prepared.Prepared)
 
 	abandonDone := make(chan struct{})
 	go func() {
@@ -2185,7 +2214,7 @@ func TestQBlockBlockedFailureCallbackBoundsNextQ1Admission(t *testing.T) {
 
 	prepared, err = cc.qblockClient.prepare(second, func(error) {})
 	require.ErrorIs(t, err, qblock.ErrLimitExceeded)
-	require.False(t, prepared)
+	require.False(t, prepared.Prepared)
 	requireQBlockClientEmpty(t, cc)
 	var reservations int
 	cc.tokenReservations.Range(func(_ uint64, _ tokenReservation) bool {
@@ -2203,7 +2232,7 @@ func TestQBlockBlockedFailureCallbackBoundsNextQ1Admission(t *testing.T) {
 
 	prepared, err = cc.qblockClient.prepare(second, func(error) {})
 	require.NoError(t, err)
-	require.True(t, prepared)
+	require.True(t, prepared.Prepared)
 	cc.qblockClient.abandon(second.Token(), qblock.ErrCanceled)
 	requireQBlockClientEmpty(t, cc)
 }
@@ -2300,7 +2329,7 @@ func startThreeBlockQ1(t *testing.T) (*Conn, *qblockTestSession) {
 	defer cc.ReleaseMessage(request)
 	prepared, err := cc.qblockClient.prepare(request, func(error) {})
 	require.NoError(t, err)
-	require.True(t, prepared)
+	require.True(t, prepared.Prepared)
 	requireQ1BurstBlocks(t, session.writesSnapshot(), codes.POST, []qblock.Block{
 		{Number: 0, More: true, SZX: blockwise.SZX16},
 		{Number: 1, More: true, SZX: blockwise.SZX16},
@@ -2387,7 +2416,7 @@ func TestQBlockClientHandoffQ2ControlsPreserveRequestMethodAndOptions(t *testing
 			request.SetOptionUint32(message.Size2, 48)
 			prepared, err := cc.qblockClient.prepare(request, func(error) {})
 			require.NoError(t, err)
-			require.True(t, prepared)
+			require.True(t, prepared.Prepared)
 			addRetainedQBlockClientObserveOption(t, cc.qblockClient, request.Token())
 
 			writes := session.writesSnapshot()
@@ -2460,13 +2489,18 @@ func TestQBlockClientHandoffSingleFragmentDeliveryReusesSenderBudget(t *testing.
 			managerConfig.MaxTokens = 1
 			managerConfig.Transfer.MaxBodySize = 16
 			managerConfig.MaxRetainedBytes = 16
-			cc := NewConnWithOpts(session, &cfg, withQBlockClient(qblockClientConfig{Manager: managerConfig}))
+			cc := NewConnWithOpts(session, &cfg, withQBlockClient(qblockClientConfig{
+				Manager: managerConfig,
+				// This test isolates the manager's 16-byte retained-body budget;
+				// queued control metadata has its own explicit private budget.
+				Pacing: &qblockPacingConfig{ProbingRate: 1, MaxIntentBytes: 4096},
+			}))
 			request := newPOSTWithBody(t, cc, message.Token{1}, bytes.Repeat([]byte{'x'}, 16))
 			defer cc.ReleaseMessage(request)
 			request.SetCode(test.method)
 			prepared, err := cc.qblockClient.prepare(request, func(err error) { t.Errorf("handoff failed: %v", err) })
 			require.NoError(t, err)
-			require.True(t, prepared)
+			require.True(t, prepared.Prepared)
 			result := make(chan *pool.Message, 1)
 			cc.tokenHandlerContainer.Store(request.Token().Hash(), func(_ *responsewriter.ResponseWriter[*Conn], msg *pool.Message) { result <- msg })
 			response := q2ResponseForPost(t, cc, session.writesSnapshot()[0].token, 0, false, 16, 'a')

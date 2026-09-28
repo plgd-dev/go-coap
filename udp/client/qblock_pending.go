@@ -31,6 +31,7 @@ type qblockControlWork struct {
 // the transfer manager; no message, callback, or transport closure is queued.
 type qblockPendingWork struct {
 	Kind           qblockWorkKind
+	Ungated        bool // Reserved for Q1 Continue responses, not Q2 requests.
 	Operation      qblock.OperationKey
 	TransferID     qblock.TransferID
 	Generation     uint64
@@ -230,7 +231,7 @@ func (q *qblockWorkQueue) next(now time.Time, gate *qblockProbeGate) (qblockWork
 			if expiredID == 0 || slot.seq < expiredSeq {
 				expiredID, expiredSeq = id, slot.seq
 			}
-		case work.Kind == qblockWorkControls && len(work.Controls) != 0 && work.Controls[0].Intent.Action.Kind == qblock.SendContinue:
+		case work.Ungated:
 			if continueID == 0 || slot.seq < continueSeq {
 				continueID, continueSeq = id, slot.seq
 			}
@@ -260,7 +261,7 @@ func (q *qblockWorkQueue) nextDeadline(now time.Time, gate *qblockProbeGate) (ti
 		if !work.Expires.IsZero() && (earliest.IsZero() || work.Expires.Before(earliest)) {
 			earliest = work.Expires
 		}
-		if work.Kind == qblockWorkControls && len(work.Controls) != 0 && work.Controls[0].Intent.Action.Kind == qblock.SendContinue {
+		if work.Ungated {
 			return now, true
 		}
 		hasGated = true

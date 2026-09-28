@@ -244,7 +244,7 @@ func runQBlockPrivatePairedRolesTrace(t *testing.T, method codes.Code, automatic
 	request.SetBody(bytes.NewReader(bytes.Repeat([]byte{'u'}, 48)))
 	prepared, err := client.qblockClient.prepareQ1(request, nil)
 	require.NoError(t, err)
-	require.True(t, prepared)
+	require.True(t, prepared.Prepared)
 
 	drainPairedQBlock(t, client, server, clientSession, serverSession, true)
 	require.Equal(t, 1, calls)
@@ -351,7 +351,7 @@ func runQBlockPrivatePairedRolesTrace(t *testing.T, method codes.Code, automatic
 	second.SetBody(bytes.NewReader(bytes.Repeat([]byte{'s'}, 32)))
 	prepared, err = client.qblockClient.prepareQ1(second, nil)
 	require.NoError(t, err)
-	require.True(t, prepared)
+	require.True(t, prepared.Prepared)
 	require.Positive(t, client.qblockClient.active())
 	require.Positive(t, server.qblockClient.active())
 	client.releaseToken(secondOriginal, tokenOwnerRequest)
