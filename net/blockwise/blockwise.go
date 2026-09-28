@@ -39,7 +39,7 @@ const (
 	// max block size is 3bytes: https://tools.ietf.org/html/rfc7959#section-2.1
 	maxBlockValue = 0xffffff
 	// maxBlockNumber is 20bits (NUM)
-	maxBlockNumber = 0xffff7
+	maxBlockNumber = 0xfffff
 	// moreBlocksFollowingMask is represented by one bit (M)
 	moreBlocksFollowingMask = 0x8
 	// szxMask last 3bits represents SZX (SZX)
