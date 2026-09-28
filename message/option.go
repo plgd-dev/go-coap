@@ -43,13 +43,16 @@ type OptionID uint16
    |  14 |    | x | - |   | Max-Age        | uint   | 0-4    | 60      |
    |  15 | x  | x | - | x | Uri-Query      | string | 0-255  | (none)  |
    |  17 | x  |   |   |   | Accept         | uint   | 0-2    | (none)  |
+   |  19 | x  | x | - | - | Q-Block1       | uint   | 0-3    | (none)  |
    |  20 |    |   |   | x | Location-Query | string | 0-255  | (none)  |
    |  23 | x  | x | - | - | Block2         | uint   | 0-3    | (none)  |
    |  27 | x  | x | - | - | Block1         | uint   | 0-3    | (none)  |
    |  28 |    |   | x |   | Size2          | uint   | 0-4    | (none)  |
+   |  31 | x  | x | - | x | Q-Block2       | uint   | 0-3    | (none)  |
    |  35 | x  | x | - |   | Proxy-Uri      | string | 1-1034 | (none)  |
    |  39 | x  | x | - |   | Proxy-Scheme   | string | 1-255  | (none)  |
    |  60 |    |   | x |   | Size1          | uint   | 0-4    | (none)  |
+   | 292 |    |   |   | x | Request-Tag    | opaque | 0-8    | (none)  |
    +-----+----+---+---+---+----------------+--------+--------+---------+
    C=Critical, U=Unsafe, N=NoCacheKey, R=Repeatable
 */
@@ -68,14 +71,17 @@ const (
 	MaxAge        OptionID = 14
 	URIQuery      OptionID = 15
 	Accept        OptionID = 17
+	QBlock1       OptionID = 19
 	LocationQuery OptionID = 20
 	Block2        OptionID = 23
 	Block1        OptionID = 27
 	Size2         OptionID = 28
+	QBlock2       OptionID = 31
 	ProxyURI      OptionID = 35
 	ProxyScheme   OptionID = 39
 	Size1         OptionID = 60
 	NoResponse    OptionID = 258
+	RequestTag    OptionID = 292
 )
 
 var optionIDToString = map[OptionID]string{
@@ -91,14 +97,17 @@ var optionIDToString = map[OptionID]string{
 	MaxAge:        "MaxAge",
 	URIQuery:      "URIQuery",
 	Accept:        "Accept",
+	QBlock1:       "QBlock1",
 	LocationQuery: "LocationQuery",
 	Block2:        "Block2",
 	Block1:        "Block1",
 	Size2:         "Size2",
+	QBlock2:       "QBlock2",
 	ProxyURI:      "ProxyURI",
 	ProxyScheme:   "ProxyScheme",
 	Size1:         "Size1",
 	NoResponse:    "NoResponse",
+	RequestTag:    "RequestTag",
 }
 
 func (o OptionID) String() string {
@@ -148,14 +157,17 @@ var CoapOptionDefs = map[OptionID]OptionDef{
 	MaxAge:        {ValueFormat: ValueUint, MinLen: 0, MaxLen: 4},
 	URIQuery:      {ValueFormat: ValueString, MinLen: 0, MaxLen: 255},
 	Accept:        {ValueFormat: ValueUint, MinLen: 0, MaxLen: 2},
+	QBlock1:       {ValueFormat: ValueUint, MinLen: 0, MaxLen: 3},
 	LocationQuery: {ValueFormat: ValueString, MinLen: 0, MaxLen: 255},
 	Block2:        {ValueFormat: ValueUint, MinLen: 0, MaxLen: 3},
 	Block1:        {ValueFormat: ValueUint, MinLen: 0, MaxLen: 3},
 	Size2:         {ValueFormat: ValueUint, MinLen: 0, MaxLen: 4},
+	QBlock2:       {ValueFormat: ValueUint, MinLen: 0, MaxLen: 3},
 	ProxyURI:      {ValueFormat: ValueString, MinLen: 1, MaxLen: 1034},
 	ProxyScheme:   {ValueFormat: ValueString, MinLen: 1, MaxLen: 255},
 	Size1:         {ValueFormat: ValueUint, MinLen: 0, MaxLen: 4},
 	NoResponse:    {ValueFormat: ValueUint, MinLen: 0, MaxLen: 1},
+	RequestTag:    {ValueFormat: ValueOpaque, MinLen: 0, MaxLen: 8},
 }
 
 // MediaType specifies the content format of a message.
@@ -163,63 +175,65 @@ type MediaType uint16
 
 // Content formats.
 var (
-	TextPlain         MediaType         // text/plain; charset=utf-8
-	AppCoseEncrypt0   MediaType = 16    // application/cose; cose-type="cose-encrypt0" (RFC 8152)
-	AppCoseMac0       MediaType = 17    // application/cose; cose-type="cose-mac0" (RFC 8152)
-	AppCoseSign1      MediaType = 18    // application/cose; cose-type="cose-sign1" (RFC 8152)
-	AppLinkFormat     MediaType = 40    // application/link-format
-	AppXML            MediaType = 41    // application/xml
-	AppOctets         MediaType = 42    // application/octet-stream
-	AppExi            MediaType = 47    // application/exi
-	AppJSON           MediaType = 50    // application/json
-	AppJSONPatch      MediaType = 51    // application/json-patch+json (RFC6902)
-	AppJSONMergePatch MediaType = 52    // application/merge-patch+json (RFC7396)
-	AppCBOR           MediaType = 60    // application/cbor (RFC 7049)
-	AppCWT            MediaType = 61    // application/cwt
-	AppCoseEncrypt    MediaType = 96    // application/cose; cose-type="cose-encrypt" (RFC 8152)
-	AppCoseMac        MediaType = 97    // application/cose; cose-type="cose-mac" (RFC 8152)
-	AppCoseSign       MediaType = 98    // application/cose; cose-type="cose-sign" (RFC 8152)
-	AppCoseKey        MediaType = 101   // application/cose-key (RFC 8152)
-	AppCoseKeySet     MediaType = 102   // application/cose-key-set (RFC 8152)
-	AppSenmlJSON      MediaType = 110   // application/senml+json
-	AppSenmlCbor      MediaType = 112   // application/senml+cbor
-	AppCoapGroup      MediaType = 256   // coap-group+json (RFC 7390)
-	AppSenmlEtchJSON  MediaType = 320   // application/senml-etch+json
-	AppSenmlEtchCbor  MediaType = 322   // application/senml-etch+cbor
-	AppOcfCbor        MediaType = 10000 // application/vnd.ocf+cbor
-	AppLwm2mTLV       MediaType = 11542 // application/vnd.oma.lwm2m+tlv
-	AppLwm2mJSON      MediaType = 11543 // application/vnd.oma.lwm2m+json
-	AppLwm2mCbor      MediaType = 11544 // application/vnd.oma.lwm2m+cbor
+	TextPlain               MediaType         // text/plain; charset=utf-8
+	AppCoseEncrypt0         MediaType = 16    // application/cose; cose-type="cose-encrypt0" (RFC 8152)
+	AppCoseMac0             MediaType = 17    // application/cose; cose-type="cose-mac0" (RFC 8152)
+	AppCoseSign1            MediaType = 18    // application/cose; cose-type="cose-sign1" (RFC 8152)
+	AppLinkFormat           MediaType = 40    // application/link-format
+	AppXML                  MediaType = 41    // application/xml
+	AppOctets               MediaType = 42    // application/octet-stream
+	AppExi                  MediaType = 47    // application/exi
+	AppJSON                 MediaType = 50    // application/json
+	AppJSONPatch            MediaType = 51    // application/json-patch+json (RFC6902)
+	AppJSONMergePatch       MediaType = 52    // application/merge-patch+json (RFC7396)
+	AppCBOR                 MediaType = 60    // application/cbor (RFC 7049)
+	AppCWT                  MediaType = 61    // application/cwt
+	AppCoseEncrypt          MediaType = 96    // application/cose; cose-type="cose-encrypt" (RFC 8152)
+	AppCoseMac              MediaType = 97    // application/cose; cose-type="cose-mac" (RFC 8152)
+	AppCoseSign             MediaType = 98    // application/cose; cose-type="cose-sign" (RFC 8152)
+	AppCoseKey              MediaType = 101   // application/cose-key (RFC 8152)
+	AppCoseKeySet           MediaType = 102   // application/cose-key-set (RFC 8152)
+	AppSenmlJSON            MediaType = 110   // application/senml+json
+	AppSenmlCbor            MediaType = 112   // application/senml+cbor
+	AppCoapGroup            MediaType = 256   // coap-group+json (RFC 7390)
+	AppMissingBlocksCBORSeq MediaType = 272   // application/missing-blocks+cbor-seq (RFC 9177)
+	AppSenmlEtchJSON        MediaType = 320   // application/senml-etch+json
+	AppSenmlEtchCbor        MediaType = 322   // application/senml-etch+cbor
+	AppOcfCbor              MediaType = 10000 // application/vnd.ocf+cbor
+	AppLwm2mTLV             MediaType = 11542 // application/vnd.oma.lwm2m+tlv
+	AppLwm2mJSON            MediaType = 11543 // application/vnd.oma.lwm2m+json
+	AppLwm2mCbor            MediaType = 11544 // application/vnd.oma.lwm2m+cbor
 )
 
 var mediaTypeToString = map[MediaType]string{
-	TextPlain:         "text/plain; charset=utf-8",
-	AppCoseEncrypt0:   "application/cose; cose-type=\"cose-encrypt0\"",
-	AppCoseMac0:       "application/cose; cose-type=\"cose-mac0\"",
-	AppCoseSign1:      "application/cose; cose-type=\"cose-sign1\"",
-	AppLinkFormat:     "application/link-format",
-	AppXML:            "application/xml",
-	AppOctets:         "application/octet-stream",
-	AppExi:            "application/exi",
-	AppJSON:           "application/json",
-	AppJSONPatch:      "application/json-patch+json",
-	AppJSONMergePatch: "application/merge-patch+json",
-	AppCBOR:           "application/cbor",
-	AppCWT:            "application/cwt",
-	AppCoseEncrypt:    "application/cose; cose-type=\"cose-encrypt\"",
-	AppCoseMac:        "application/cose; cose-type=\"cose-mac\"",
-	AppCoseSign:       "application/cose; cose-type=\"cose-sign\"",
-	AppCoseKey:        "application/cose-key",
-	AppCoseKeySet:     "application/cose-key-set",
-	AppSenmlJSON:      "application/senml+json",
-	AppSenmlCbor:      "application/senml+cbor",
-	AppCoapGroup:      "coap-group+json",
-	AppSenmlEtchJSON:  "application/senml-etch+json",
-	AppSenmlEtchCbor:  "application/senml-etch+cbor",
-	AppOcfCbor:        "application/vnd.ocf+cbor",
-	AppLwm2mTLV:       "application/vnd.oma.lwm2m+tlv",
-	AppLwm2mJSON:      "application/vnd.oma.lwm2m+json",
-	AppLwm2mCbor:      "application/vnd.oma.lwm2m+cbor",
+	TextPlain:               "text/plain; charset=utf-8",
+	AppCoseEncrypt0:         "application/cose; cose-type=\"cose-encrypt0\"",
+	AppCoseMac0:             "application/cose; cose-type=\"cose-mac0\"",
+	AppCoseSign1:            "application/cose; cose-type=\"cose-sign1\"",
+	AppLinkFormat:           "application/link-format",
+	AppXML:                  "application/xml",
+	AppOctets:               "application/octet-stream",
+	AppExi:                  "application/exi",
+	AppJSON:                 "application/json",
+	AppJSONPatch:            "application/json-patch+json",
+	AppJSONMergePatch:       "application/merge-patch+json",
+	AppCBOR:                 "application/cbor",
+	AppCWT:                  "application/cwt",
+	AppCoseEncrypt:          "application/cose; cose-type=\"cose-encrypt\"",
+	AppCoseMac:              "application/cose; cose-type=\"cose-mac\"",
+	AppCoseSign:             "application/cose; cose-type=\"cose-sign\"",
+	AppCoseKey:              "application/cose-key",
+	AppCoseKeySet:           "application/cose-key-set",
+	AppSenmlJSON:            "application/senml+json",
+	AppSenmlCbor:            "application/senml+cbor",
+	AppCoapGroup:            "coap-group+json",
+	AppMissingBlocksCBORSeq: "application/missing-blocks+cbor-seq",
+	AppSenmlEtchJSON:        "application/senml-etch+json",
+	AppSenmlEtchCbor:        "application/senml-etch+cbor",
+	AppOcfCbor:              "application/vnd.ocf+cbor",
+	AppLwm2mTLV:             "application/vnd.oma.lwm2m+tlv",
+	AppLwm2mJSON:            "application/vnd.oma.lwm2m+json",
+	AppLwm2mCbor:            "application/vnd.oma.lwm2m+cbor",
 }
 
 func (c MediaType) String() string {
