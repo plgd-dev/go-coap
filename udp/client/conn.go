@@ -19,6 +19,7 @@ import (
 	limitparallelrequests "github.com/plgd-dev/go-coap/v3/net/client/limitParallelRequests"
 	"github.com/plgd-dev/go-coap/v3/net/monitor/inactivity"
 	"github.com/plgd-dev/go-coap/v3/net/observation"
+	"github.com/plgd-dev/go-coap/v3/net/qblock"
 	"github.com/plgd-dev/go-coap/v3/net/responsewriter"
 	"github.com/plgd-dev/go-coap/v3/options/config"
 	"github.com/plgd-dev/go-coap/v3/pkg/cache"
@@ -807,6 +808,9 @@ func (cc *Conn) handleReq(w *responsewriter.ResponseWriter[*Conn], req *pool.Mes
 	}
 
 	w.Message().SetModified(false)
+	if cc.handleDisabledQBlock(w, req) {
+		return
+	}
 	reqType := req.Type()
 	reqMessageID := req.MessageID()
 	cc.handle(w, req)
@@ -927,7 +931,7 @@ func (cc *Conn) Process(cm *coapNet.ControlMessage, datagram []byte) error {
 		return fmt.Errorf("max message size(%v) was exceeded %v", cc.session.MaxMessageSize(), len(datagram))
 	}
 	req := cc.AcquireMessage(cc.Context())
-	_, err := req.UnmarshalWithDecoder(coder.DefaultCoder, datagram)
+	_, err := req.UnmarshalWithDecoder(qblock.Decoder{}, datagram)
 	if err != nil {
 		cc.ReleaseMessage(req)
 		return err
