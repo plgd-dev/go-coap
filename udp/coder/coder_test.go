@@ -9,6 +9,24 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestDecodeWithOptionDefsPreservesRawQBlock(t *testing.T) {
+	raw := []byte{0x40, 0x01, 0, 1, 0xd4, 0x06, 0, 0, 0, 0}
+	ordinary := message.Message{Options: make(message.Options, 0, 1)}
+	_, err := DefaultCoder.Decode(raw, &ordinary)
+	require.NoError(t, err)
+	require.False(t, ordinary.Options.HasOption(message.QBlock1))
+
+	defs := make(map[message.OptionID]message.OptionDef, len(message.CoapOptionDefs))
+	for id, def := range message.CoapOptionDefs {
+		defs[id] = def
+	}
+	defs[message.QBlock1] = message.OptionDef{ValueFormat: message.ValueOpaque, MaxLen: ^uint32(0)}
+	custom := message.Message{Options: make(message.Options, 0, 1)}
+	_, err = DefaultCoder.DecodeWithOptionDefs(raw, &custom, defs)
+	require.NoError(t, err)
+	require.True(t, custom.Options.HasOption(message.QBlock1))
+}
+
 func testMarshalMessage(t *testing.T, msg message.Message, buf []byte, expectedOut []byte) {
 	length, err := DefaultCoder.Encode(msg, buf)
 

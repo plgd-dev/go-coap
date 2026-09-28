@@ -95,6 +95,11 @@ func (c *Coder) Encode(m message.Message, buf []byte) (int, error) {
 }
 
 func (c *Coder) Decode(data []byte, m *message.Message) (int, error) {
+	return c.DecodeWithOptionDefs(data, m, message.CoapOptionDefs)
+}
+
+// DecodeWithOptionDefs decodes a datagram using the supplied option definitions.
+func (c *Coder) DecodeWithOptionDefs(data []byte, m *message.Message, defs map[message.OptionID]message.OptionDef) (int, error) {
 	size := len(data)
 	if size < 4 {
 		return -1, ErrMessageTruncated
@@ -122,8 +127,7 @@ func (c *Coder) Decode(data []byte, m *message.Message) (int, error) {
 	}
 	data = data[tokenLen:]
 
-	optionDefs := message.CoapOptionDefs
-	proc, err := m.Options.Unmarshal(data, optionDefs)
+	proc, err := m.Options.Unmarshal(data, defs)
 	if err != nil {
 		return -1, err
 	}
