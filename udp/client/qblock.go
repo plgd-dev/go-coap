@@ -10,14 +10,9 @@ import (
 	"github.com/plgd-dev/go-coap/v3/net/responsewriter"
 )
 
-// handleDisabledQBlock keeps unsupported fragments out of classic routing.
-func (cc *Conn) handleDisabledQBlock(w *responsewriter.ResponseWriter[*Conn], req *pool.Message) bool {
-	code := req.Code()
-	if code == codes.Empty || code >= 32 {
-		return false
-	}
-	var hasQ, mixed, classic bool
-	for _, opt := range req.Options() {
+func isMixedQBlockOptions(opts message.Options) bool {
+	var hasQ, classic bool
+	for _, opt := range opts {
 		switch opt.ID {
 		case message.QBlock1, message.QBlock2:
 			hasQ = true
@@ -25,7 +20,17 @@ func (cc *Conn) handleDisabledQBlock(w *responsewriter.ResponseWriter[*Conn], re
 			classic = true
 		}
 	}
-	mixed = hasQ && classic
+	return hasQ && classic
+}
+
+// handleDisabledQBlock keeps unsupported fragments out of classic routing.
+func (cc *Conn) handleDisabledQBlock(w *responsewriter.ResponseWriter[*Conn], req *pool.Message) bool {
+	code := req.Code()
+	if code == codes.Empty || code >= 32 {
+		return false
+	}
+	hasQ := req.Options().HasOption(message.QBlock1) || req.Options().HasOption(message.QBlock2)
+	mixed := isMixedQBlockOptions(req.Options())
 	invalid := qblock.ValidateOptions(req.Options(), true) != nil
 	if !hasQ && !invalid {
 		return false
@@ -44,7 +49,11 @@ func (cc *Conn) handleDisabledQBlock(w *responsewriter.ResponseWriter[*Conn], re
 		w.Message().SetType(message.NonConfirmable)
 		w.Message().SetMessageID(cc.GetMessageID())
 	}
-	if err := cc.addResponseToCache(w.Message()); err != nil {
+	cacheMID := w.Message().MessageID()
+	if req.Type() == message.NonConfirmable {
+		cacheMID = req.MessageID()
+	}
+	if err := cc.addResponseToCacheForMID(cacheMID, w.Message()); err != nil {
 		cc.closeConnection()
 		cc.errors(fmt.Errorf("cannot cache disabled Q-Block response: %w", err))
 	}

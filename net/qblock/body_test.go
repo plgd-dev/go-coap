@@ -1,6 +1,7 @@
 package qblock
 
 import (
+	"runtime"
 	"testing"
 
 	"github.com/plgd-dev/go-coap/v3/message"
@@ -30,6 +31,20 @@ func TestBodyFinalBlockFirst(t *testing.T) {
 	again, err := b.Assemble()
 	require.NoError(t, err)
 	require.Equal(t, byte(9), again[16])
+}
+
+func TestBodyLargeFinalBlockStaysSparse(t *testing.T) {
+	const bodySize = 32 << 20
+	meta := Metadata{Size: bodySize, SZX: blockwise.SZX1024}
+	var before, after runtime.MemStats
+	runtime.ReadMemStats(&before)
+	b, err := NewBody(meta, bodySize)
+	require.NoError(t, err)
+	_, err = b.Add(meta, Block{Number: bodySize/1024 - 1, SZX: blockwise.SZX1024}, make([]byte, 1024))
+	require.NoError(t, err)
+	runtime.ReadMemStats(&after)
+	require.Less(t, after.TotalAlloc-before.TotalAlloc, uint64(4<<20))
+	require.False(t, b.Complete())
 }
 
 func TestBodyDuplicateAndMetadata(t *testing.T) {

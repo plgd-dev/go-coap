@@ -699,7 +699,11 @@ func (cc *Conn) getResponseFromCache(mid int32, resp *pool.Message) (bool, error
 
 // addResponseToCache adds a message to the response message cache.
 func (cc *Conn) addResponseToCache(resp *pool.Message) error {
-	return cc.responseMsgCache.Store(strconv.Itoa(int(resp.MessageID())), resp)
+	return cc.addResponseToCacheForMID(resp.MessageID(), resp)
+}
+
+func (cc *Conn) addResponseToCacheForMID(mid int32, resp *pool.Message) error {
+	return cc.responseMsgCache.Store(strconv.Itoa(int(mid)), resp)
 }
 
 // checkMyMessageID compare client msgID against peer messageID and if it is near < 0xffff/4 then increase msgID.
@@ -722,11 +726,13 @@ func (cc *Conn) checkMyMessageID(req *pool.Message) {
 func (cc *Conn) checkResponseCache(req *pool.Message, w *responsewriter.ResponseWriter[*Conn]) (bool, error) {
 	if req.Type() == message.Confirmable || req.Type() == message.NonConfirmable {
 		if ok, err := cc.getResponseFromCache(req.MessageID(), w.Message()); ok {
-			w.Message().SetMessageID(req.MessageID())
 			w.Message().SetType(message.NonConfirmable)
 			if req.Type() == message.Confirmable {
 				// req could be changed from NonConfirmation to confirmation message.
 				w.Message().SetType(message.Acknowledgement)
+				w.Message().SetMessageID(req.MessageID())
+			} else if req.Code() >= 32 || !isMixedQBlockOptions(req.Options()) {
+				w.Message().SetMessageID(req.MessageID())
 			}
 			return true, nil
 		} else if err != nil {

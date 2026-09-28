@@ -107,3 +107,49 @@ func TestQBlockDisabledRequestGate(t *testing.T) {
 		require.NotEqual(t, codes.BadOption, response.Code)
 	}
 }
+
+func TestQBlockMixedNONResponseCache(t *testing.T) {
+	listener, err := coapNet.NewListenUDP("udp", "127.0.0.1:0")
+	require.NoError(t, err)
+	defer listener.Close()
+	var calls atomic.Int32
+	server := udp.NewServer(options.WithHandlerFunc(func(w *responsewriter.ResponseWriter[*client.Conn], _ *pool.Message) {
+		calls.Add(1)
+		_ = w.SetResponse(codes.Content, message.TextPlain, nil)
+	}))
+	defer server.Stop()
+	go func() { _ = server.Serve(listener) }()
+	peer, err := net.DialUDP("udp", nil, listener.LocalAddr().(*net.UDPAddr))
+	require.NoError(t, err)
+	defer peer.Close()
+
+	exchange := func(req message.Message) message.Message {
+		wire := make([]byte, 128)
+		n, encodeErr := coder.DefaultCoder.Encode(req, wire)
+		require.NoError(t, encodeErr)
+		_, writeErr := peer.Write(wire[:n])
+		require.NoError(t, writeErr)
+		require.NoError(t, peer.SetReadDeadline(time.Now().Add(time.Second)))
+		n, readErr := peer.Read(wire)
+		require.NoError(t, readErr)
+		resp := message.Message{Options: make(message.Options, 0, 4)}
+		_, decodeErr := coder.DefaultCoder.Decode(wire[:n], &resp)
+		require.NoError(t, decodeErr)
+		return resp
+	}
+
+	mixed := message.Message{Code: codes.GET, Type: message.NonConfirmable, MessageID: 300, Token: []byte{1}, Options: message.Options{{ID: message.Block2}, {ID: message.QBlock2}}}
+	first := exchange(mixed)
+	require.Equal(t, codes.BadOption, first.Code)
+	require.NotEqual(t, mixed.MessageID, first.MessageID)
+	duplicate := exchange(mixed)
+	require.Equal(t, first.MessageID, duplicate.MessageID)
+	require.Equal(t, first.Token, duplicate.Token)
+	require.Zero(t, calls.Load())
+
+	ordinary := message.Message{Code: codes.GET, Type: message.NonConfirmable, MessageID: first.MessageID, Token: []byte{2}}
+	response := exchange(ordinary)
+	require.Equal(t, codes.Content, response.Code)
+	require.Equal(t, ordinary.Token, response.Token)
+	require.EqualValues(t, 1, calls.Load())
+}
