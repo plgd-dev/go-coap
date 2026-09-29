@@ -15,7 +15,7 @@
 Tasks 1–5 are complete and committed: prepared senders (`4877126`), deferred
 receiver controls (`df7918d`), probing gate and packet sizing (`525984f`),
 bounded pending work (`089e3ec`), and paced private client traffic (`2775a89`).
-Task 6's shared server gate integration is complete; Tasks 7–8 remain open.
+Tasks 6–7 are complete; Task 8 remains open.
 The Task 5 completion run passed
 `rtk go test ./udp/client -run TestQBlock -count=1` (216 tests); a broader
 core/client selection passed 285 tests and repeated paced-path race checks
@@ -28,6 +28,12 @@ and the focused server pacing tests under `-race`. The required broader
 `net/qblock` + `udp/client` run passed core tests but failed in the unrelated
 IPv6 `TestConnDeduplication` path (`invalid srcAddr type <nil>`), also reproduced
 on the untouched original branch. This is not counted as a passing full suite.
+
+Task 7's queued-GET cancellation regression failed before the callback fix and
+passed afterward. The other new lifecycle adversaries passed without further
+production changes; `rtk go test -race ./udp/client -run 'TestQBlock(Pacing|Paced)' -count=1 -timeout=180s` passed. Existing expiry selection and release paths
+met those tests, so the proposed extra `expirePendingWorkLocked` helper and
+`releasePacingWorkLocked` signature change were not added speculatively.
 
 ## Global Constraints
 
@@ -313,12 +319,12 @@ releasePacingWorkLocked is idempotent, removes unsent work, and settles an
 active body's attempted debt without clearing another owner's gate. Returned
 terminal outputs/callbacks follow the existing ordered executor/dispatcher.
 
-- [ ] **1. Write `TestQBlockPacingSchedulerExpiryWinsTie`.** Schedule a prepared sender and gate at the same absolute deadline. Wake exactly there; assert no packet and one expiry result, with operation/token/body/work reservations released. Add an old timer wake after close and assert no rearm. `TestQBlockPacingSchedulerNoBusyLoop` holds a recovery intent past its old retry deadline and asserts the timer targets gate readiness or absolute expiry, with one due turn and no speculative output batches.
-- [ ] **2. Write lifecycle adversaries.** `TestQBlockPacingCancelPartialBatch` cancels between two Q2 control requests and verifies one attempted token, no second MID, no retry commit, and retained scalar debt. `TestQBlockPacingCloseInterruptsBothRoles` holds a context-aware write with both roles queued: stop is visible before drain, callback runs once outside locks, and every work reservation is released. `TestQBlockPacingCallbackReentersClose` verifies no self-join. `TestQBlockPacingLateCommitAfterReuse` delivers a stale revision/result after operation name reuse and verifies the replacement is unchanged.
-- [ ] **3. Run red:** `rtk go test ./udp/client -run TestQBlockPacing -count=1`. Force ordering with existing fake clock, session write channels, and actionMu contention barriers. If an adversarial test already passes, record that fact and add no speculative production change for it.
-- [ ] **4. Complete deadline and cancellation coverage.** Expire invalid work before manager progress or admission, resample automatic time after acquiring actionMu, then execute active outputs and ready pending work. Notify on every readiness-changing mutation, including accepted feedback and canceled unsent GET. Leave debt without waiters lazy. Check generation/context again just before charge/write. Close cancels contexts and invalidates queue before waiting for output; late completions cannot recreate slots or intents. Never await a rate deadline while holding either lock.
-- [ ] **5. Run green and race checks:** `rtk go test ./udp/client -run 'TestQBlock(Pacing|Paced)' -count=1`, then `rtk go test -race ./udp/client -run 'TestQBlock(Pacing|Paced)' -count=1 -timeout=180s`. Require clean completion and no race reports; inspect exact terminal counts and snapshots, not just absence of a hang.
-- [ ] **6. Commit:** `fix(qblock): complete paced scheduler lifecycle handling`.
+- [x] **1. Write `TestQBlockPacingSchedulerExpiryWinsTie`.** Schedule a prepared sender and gate at the same absolute deadline. Wake exactly there; assert no packet and one expiry result, with operation/token/body/work reservations released. Add an old timer wake after close and assert no rearm. `TestQBlockPacingSchedulerNoBusyLoop` holds a recovery intent past its old retry deadline and asserts the timer targets gate readiness or absolute expiry, with one due turn and no speculative output batches.
+- [x] **2. Write lifecycle adversaries.** `TestQBlockPacingCancelPartialBatch` cancels between two Q2 control requests and verifies one attempted token, no second MID, no retry commit, and retained scalar debt. `TestQBlockPacingCloseInterruptsBothRoles` holds a context-aware write with both roles queued: stop is visible before drain, callback runs once outside locks, and every work reservation is released. `TestQBlockPacingCallbackReentersClose` verifies no self-join. `TestQBlockPacingLateCommitAfterReuse` delivers a stale revision/result after operation name reuse and verifies the replacement is unchanged.
+- [x] **3. Run red:** `rtk go test ./udp/client -run TestQBlockPacing -count=1`. Force ordering with existing fake clock, session write channels, and actionMu contention barriers. If an adversarial test already passes, record that fact and add no speculative production change for it.
+- [x] **4. Complete deadline and cancellation coverage.** Expire invalid work before manager progress or admission, resample automatic time after acquiring actionMu, then execute active outputs and ready pending work. Notify on every readiness-changing mutation, including accepted feedback and canceled unsent GET. Leave debt without waiters lazy. Check generation/context again just before charge/write. Close cancels contexts and invalidates queue before waiting for output; late completions cannot recreate slots or intents. Never await a rate deadline while holding either lock.
+- [x] **5. Run green and race checks:** `rtk go test ./udp/client -run 'TestQBlock(Pacing|Paced)' -count=1`, then `rtk go test -race ./udp/client -run 'TestQBlock(Pacing|Paced)' -count=1 -timeout=180s`. Require clean completion and no race reports; inspect exact terminal counts and snapshots, not just absence of a hang.
+- [x] **6. Commit:** `fix(qblock): complete paced scheduler lifecycle handling`.
 
 ## Task 8: Validate paired flows and record the slice's actual completion
 
@@ -351,5 +357,5 @@ These boundaries are closely coupled; parallel implementation of dependent
 contracts would add avoidable integration work. Task-specific implementer and
 reviewer agents remain an alternative if selected by the user.
 
-Status: Tasks 1–6 implemented; Tasks 7–8 remain open. Full-suite verification
+Status: Tasks 1–7 implemented; Task 8 remains open. Full-suite verification
 is blocked by the separately reproduced host IPv6 UDP failure.

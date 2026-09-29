@@ -714,6 +714,7 @@ func (c *qblockClient) abandon(token message.Token, err error) {
 		err = qblock.ErrCanceled
 	}
 	var outputs []qblock.Output
+	var callbacks []qblockCallback
 	c.mu.Lock()
 	key := string(token)
 	if transfer := c.transferByToken[key]; transfer != nil {
@@ -732,11 +733,7 @@ func (c *qblockClient) abandon(token message.Token, err error) {
 			exchange.cancelContext()
 		}
 		if len(exchange.transfers) == 0 {
-			delete(c.exchangesByOriginalToken, key)
-			c.releasePacingWorkLocked(exchange.workID)
-			_, _ = c.cc.tokenHandlerContainer.LoadAndDelete(exchange.originalToken.Hash())
-			exchange.closeRequestContext()
-			exchange.releaseCallbackSlot()
+			callbacks = append(callbacks, c.failPendingGETLocked(exchange, exchange.terminalErr)...)
 		} else {
 			for id := range exchange.transfers {
 				outputs = append(outputs, c.manager.Cancel(id, err)...)
@@ -745,6 +742,9 @@ func (c *qblockClient) abandon(token message.Token, err error) {
 	}
 	c.mu.Unlock()
 	c.drive(outputs)
+	for _, callback := range callbacks {
+		callback.run()
+	}
 	c.notifyDeadlineChanged()
 }
 
