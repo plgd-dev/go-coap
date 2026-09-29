@@ -96,3 +96,52 @@ func TestDisabledQBlock(t *testing.T) {
 		})
 	}
 }
+
+// A duplicate mixed NON request must replay the original error, including its
+// fresh response MID, without invoking the application or changing its token.
+func TestQBlockMixedNONResponseCache(t *testing.T) {
+	l, err := coapNet.NewListenUDP("udp4", "127.0.0.1:0")
+	require.NoError(t, err)
+	defer l.Close()
+	var calls atomic.Int32
+	s := udp.NewServer(options.WithHandlerFunc(func(w *responsewriter.ResponseWriter[*client.Conn], _ *pool.Message) {
+		calls.Add(1)
+		require.NoError(t, w.SetResponse(codes.Content, message.TextPlain, nil))
+	}))
+	done := make(chan error, 1)
+	go func() { done <- s.Serve(l) }()
+	defer func() { s.Stop(); require.NoError(t, <-done) }()
+	peer, err := net.Dial("udp4", l.LocalAddr().String())
+	require.NoError(t, err)
+	defer peer.Close()
+	require.NoError(t, peer.SetDeadline(time.Now().Add(3*time.Second)))
+
+	exchange := func(req message.Message) message.Message {
+		wire := make([]byte, 128)
+		n, encodeErr := coder.DefaultCoder.Encode(req, wire)
+		require.NoError(t, encodeErr)
+		_, writeErr := peer.Write(wire[:n])
+		require.NoError(t, writeErr)
+		n, readErr := peer.Read(wire)
+		require.NoError(t, readErr)
+		resp := message.Message{Options: make(message.Options, 0, 4)}
+		_, decodeErr := coder.DefaultCoder.Decode(wire[:n], &resp)
+		require.NoError(t, decodeErr)
+		return resp
+	}
+
+	mixed := message.Message{Code: codes.GET, Type: message.NonConfirmable, MessageID: 300, Token: []byte{1}, Options: message.Options{{ID: message.Block2}, {ID: message.QBlock2}}}
+	first := exchange(mixed)
+	require.Equal(t, codes.BadOption, first.Code)
+	require.NotEqual(t, mixed.MessageID, first.MessageID)
+	duplicate := exchange(mixed)
+	require.Equal(t, first.MessageID, duplicate.MessageID)
+	require.Equal(t, first.Token, duplicate.Token)
+	require.Zero(t, calls.Load())
+
+	ordinary := message.Message{Code: codes.GET, Type: message.NonConfirmable, MessageID: first.MessageID, Token: []byte{2}}
+	response := exchange(ordinary)
+	require.Equal(t, codes.Content, response.Code)
+	require.Equal(t, ordinary.Token, response.Token)
+	require.EqualValues(t, 1, calls.Load())
+}

@@ -71,6 +71,12 @@ func q1ControlFromResponse(msg *pool.Message, blockCount uint32) (qblock.Control
 	}
 }
 
+func isMixedQBlockOptions(opts message.Options) bool {
+	hasQ := opts.HasOption(message.QBlock1) || opts.HasOption(message.QBlock2)
+	hasClassic := opts.HasOption(message.Block1) || opts.HasOption(message.Block2)
+	return hasQ && hasClassic
+}
+
 // handleDisabledQBlock prevents unsupported fragments reaching application handlers.
 // Responses are not requests and must never elicit a Bad Option response.
 func (cc *Conn) handleDisabledQBlock(w *responsewriter.ResponseWriter[*Conn], req *pool.Message) bool {
@@ -106,12 +112,12 @@ func (cc *Conn) handleDisabledQBlock(w *responsewriter.ResponseWriter[*Conn], re
 		resp.SetType(message.NonConfirmable)
 		resp.SetMessageID(cc.GetMessageID())
 	}
-	// The existing cache indexes response MID, which matches request MID only
-	// for ACKs. Do not cache fresh-MID NON errors under an unrelated request key.
-	if req.Type() == message.Confirmable {
-		if err := cc.addResponseToCache(resp); err != nil {
-			cc.errors(fmt.Errorf("cannot cache Q-Block rejection: %w", err))
-		}
+	cacheMID := resp.MessageID()
+	if req.Type() == message.NonConfirmable {
+		cacheMID = req.MessageID()
+	}
+	if err := cc.addResponseToCacheForMID(cacheMID, resp); err != nil {
+		cc.errors(fmt.Errorf("cannot cache Q-Block rejection: %w", err))
 	}
 	return true
 }
