@@ -431,6 +431,11 @@ func TestQBlockServerControlDoesNotUseResponseETagAsIdentity(t *testing.T) {
 	other := h.q1(t, 2, 0, false, 4, "body")
 	require.NoError(t, other.SetPath("/other"))
 	h.ingest(other)
+	h.cc.qblockClient.mu.Lock()
+	deadline, ready := h.cc.qblockClient.probeGate.nextDeadline()
+	h.cc.qblockClient.mu.Unlock()
+	require.True(t, ready)
+	h.advance(deadline.Sub(h.now))
 
 	writes := h.session.writesSnapshot()
 	require.Len(t, writes, 4)

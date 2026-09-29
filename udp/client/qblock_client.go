@@ -586,6 +586,13 @@ func (c *qblockClient) advanceDueWithCallbacks(now time.Time, scheduled bool) {
 		}
 	}
 	if c.server != nil {
+		for _, record := range c.server.byID {
+			if record.activeOperation == record.operation {
+				if err := c.server.syncControlsLocked(record, now); err != nil {
+					outputs = append(outputs, c.manager.Cancel(record.id, err)...)
+				}
+			}
+		}
 		c.server.expireRecordsLocked(now)
 	}
 	c.mu.Unlock()

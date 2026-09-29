@@ -31,6 +31,7 @@ type qblockControlWork struct {
 // the transfer manager; no message, callback, or transport closure is queued.
 type qblockPendingWork struct {
 	Kind           qblockWorkKind
+	Server         bool
 	Ungated        bool // Reserved for Q1 Continue responses, not Q2 requests.
 	Operation      qblock.OperationKey
 	TransferID     qblock.TransferID

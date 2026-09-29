@@ -7,6 +7,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
+	"slices"
 	"time"
 
 	"github.com/plgd-dev/go-coap/v3/message"
@@ -37,6 +39,9 @@ type qblockServer struct {
 
 type qblockServerRecord struct {
 	id              qblock.TransferID
+	workID          qblockWorkID
+	bodyProbeKey    qblockProbeKey
+	bodyAnswered    bool
 	operation       qblock.OperationKey
 	activeOperation qblock.OperationKey
 	metadata        qblock.Metadata
@@ -55,7 +60,9 @@ type qblockServerRecord struct {
 	mids            map[int32]struct{}
 	handlerRunning  bool
 	terminal        bool
+	writeExpires    time.Time
 	expires         time.Time
+	retainUntil     time.Time
 	writeContext    context.Context
 	cancelWrite     context.CancelFunc
 }
@@ -159,6 +166,57 @@ func (s *qblockServer) clearMIDsLocked(record *qblockServerRecord) {
 	}
 }
 
+func (s *qblockServer) acceptPacingFeedbackLocked(record *qblockServerRecord, msg *pool.Message, progressed bool) bool {
+	if !progressed || record == nil || record.workID == 0 {
+		return false
+	}
+	c := s.client
+	probe := c.currentProbe
+	if probe == nil || !probe.server || probe.workID != record.workID || probe.generation != record.generation || probe.transferID != record.id {
+		return false
+	}
+	var number uint32
+	if msg.HasOption(message.QBlock2) && probe.kind == qblockProbeBody {
+		value, err := msg.GetOptionUint32(message.QBlock2)
+		if err != nil {
+			return false
+		}
+		block, err := qblock.DecodeBlock(value)
+		if err != nil {
+			return false
+		}
+		number = block.Number
+		if block.More {
+			if number == 0 {
+				return false
+			}
+			number--
+		}
+	} else if msg.HasOption(message.QBlock1) && probe.kind == qblockProbeControl {
+		value, err := msg.GetOptionUint32(message.QBlock1)
+		if err != nil {
+			return false
+		}
+		block, err := qblock.DecodeBlock(value)
+		if err != nil {
+			return false
+		}
+		number = block.Number
+	} else {
+		return false
+	}
+	if number/c.managerConfig.Transfer.MaxPayloads != probe.set || !slices.Contains(probe.numbers, number) {
+		return false
+	}
+	if !c.acceptPacingFeedbackLocked(probe.key) {
+		return false
+	}
+	if probe.kind == qblockProbeBody {
+		record.bodyAnswered = true
+	}
+	return true
+}
+
 func (s *qblockServer) deactivateLocked(record *qblockServerRecord, now time.Time) {
 	if record.cancelWrite != nil {
 		record.cancelWrite()
@@ -171,8 +229,15 @@ func (s *qblockServer) deactivateLocked(record *qblockServerRecord, now time.Tim
 	}
 	record.pendingReplies = nil
 	record.terminal = true
+	if record.workID != 0 {
+		s.client.releasePacingWorkLocked(record.workID)
+		record.workID = 0
+	}
 	if !record.handlerRunning && record.expires.IsZero() {
-		record.expires = now.Add(s.config.Retention)
+		if record.retainUntil.IsZero() {
+			record.retainUntil = now.Add(s.config.Retention)
+		}
+		record.expires = record.retainUntil
 	}
 }
 
@@ -182,8 +247,11 @@ func (s *qblockServer) deactivateLocked(record *qblockServerRecord, now time.Tim
 // The caller holds client.mu.
 func (s *qblockServer) settleHandlerLocked(record *qblockServerRecord, now time.Time) {
 	record.handlerRunning = false
+	if record.retainUntil.IsZero() {
+		record.retainUntil = now.Add(s.config.Retention)
+	}
 	if record.terminal && record.expires.IsZero() {
-		record.expires = now.Add(s.config.Retention)
+		record.expires = record.retainUntil
 	}
 }
 
@@ -274,6 +342,7 @@ func (c *qblockClient) handleServerRequest(msg *pool.Message) bool {
 		outputs, changed = c.server.handleQ1(msg)
 	}
 	callbacks := c.executeOrdered(outputs)
+	callbacks = append(callbacks, c.executePendingOrdered(c.now())...)
 	c.actionMu.Unlock()
 	if changed {
 		c.notifyDeadlineChanged()
@@ -345,21 +414,15 @@ func (c *qblockClient) executeServerOutput(output qblock.Output) []qblockCallbac
 		c.mu.Unlock()
 		return nil
 	case qblock.SendContinue, qblock.RequestMissing:
-		token := bytes.Clone(record.replyToken)
-		writeContext := record.writeContext
-		szx := record.metadata.SZX
-		mid := c.cc.GetMessageID()
-		c.server.bindMIDLocked(record, mid)
+		outputs := c.manager.Cancel(record.id, errors.New("unexpected immediate q-block server control"))
 		c.mu.Unlock()
-		if err := c.writeServerQ1Control(writeContext, token, mid, szx, output.Action); err != nil {
-			c.mu.Lock()
-			outputs := c.manager.Cancel(output.TransferID, err)
-			c.mu.Unlock()
-			return c.executeOrdered(outputs)
-		}
-		return nil
+		return c.executeOrdered(outputs)
 	case qblock.SendBlock:
 		token := record.takeReplyToken(output.Action)
+		probeKey := qblockProbeKey(0)
+		if !record.bodyAnswered && c.probeGate.state == qblockProbeActive && c.probeGate.key == record.bodyProbeKey {
+			probeKey = record.bodyProbeKey
+		}
 		writeContext := record.writeContext
 		code := record.responseCode
 		options, _ := record.responseOptions.Clone()
@@ -369,12 +432,16 @@ func (c *qblockClient) executeServerOutput(output qblock.Output) []qblockCallbac
 		mid := c.cc.GetMessageID()
 		c.server.bindMIDLocked(record, mid)
 		c.mu.Unlock()
-		if err := c.writeServerQ2Block(writeContext, token, mid, code, options, szx, size, etag, output.Action); err != nil {
+		if err := c.writeServerQ2Block(writeContext, token, mid, code, options, szx, size, etag, output.Action, probeKey); err != nil {
 			c.mu.Lock()
 			outputs := c.manager.Cancel(output.TransferID, err)
 			c.mu.Unlock()
 			return c.executeOrdered(outputs)
 		}
+		return nil
+	case qblock.Complete:
+		c.probeGate.settle(record.bodyProbeKey, c.now())
+		c.mu.Unlock()
 		return nil
 	}
 	c.mu.Unlock()
@@ -415,38 +482,63 @@ func (s *qblockServer) finishHandler(operation qblock.OperationKey, generation u
 		c.mu.Unlock()
 		return
 	}
-	etag := sha256.Sum256(append([]byte{byte(code)}, payload...))
-	meta := qblock.Metadata{Size: uint32(len(payload)), SZX: record.metadata.SZX, Identity: etag[:8], HasContentFormat: true, ContentFormat: message.TextPlain}
-	q2op, err := qblock.NewOperationKey([]byte("server-q2"), []byte(operation), meta.Identity)
-	if err == nil {
-		var outputs []qblock.Output
-		outputs, err = c.manager.StartSender(q2op, record.replyToken, qblock.Q2, meta, payload, c.now(), c.jitter())
-		if err == nil {
-			id, ok := c.manager.TransferID(q2op)
-			if !ok {
-				c.mu.Unlock()
-				return
-			}
-			record.id, record.activeOperation, record.metadata, record.responseCode, record.responseOptions = id, q2op, meta, code, options
-			s.byID[record.id] = record
-			c.mu.Unlock()
-			callbacks := c.executeOrdered(outputs)
-			c.actionMu.Unlock()
-			actionLocked = false
-			c.notifyDeadlineChanged()
-			changed = false
-			for _, callback := range callbacks {
-				callback.run()
-			}
-			return
+	if err := s.prepareResponseLocked(record, code, options, payload, c.now(), c.jitter()); err == nil {
+		c.mu.Unlock()
+		callbacks := c.executePendingOrdered(c.now())
+		c.actionMu.Unlock()
+		actionLocked = false
+		c.notifyDeadlineChanged()
+		changed = false
+		for _, callback := range callbacks {
+			callback.run()
 		}
+		return
 	}
 	// Keep a bounded duplicate record even when no representation can be sent.
 	s.deactivateLocked(record, c.now())
 	c.mu.Unlock()
 }
 
-func (c *qblockClient) writeServerQ2Block(writeContext context.Context, token message.Token, mid int32, code codes.Code, options message.Options, szx blockwise.SZX, size uint32, etag []byte, action qblock.Action) error {
+func (s *qblockServer) prepareResponseLocked(record *qblockServerRecord, code codes.Code, options message.Options, payload []byte, now time.Time, jitter float64) error {
+	c := s.client
+	if record.workID == 0 || uint64(len(payload)) > math.MaxUint32 || c.nextProbeKey == qblockProbeKey(math.MaxUint64) {
+		return qblock.ErrLimitExceeded
+	}
+	wait, err := qblockProbingWait(c.pacingConfig, c.managerConfig.Transfer, jitter)
+	if err != nil {
+		return err
+	}
+	etag := sha256.Sum256(append([]byte{byte(code)}, payload...))
+	meta := qblock.Metadata{Size: uint32(len(payload)), SZX: record.metadata.SZX, Identity: etag[:8], HasContentFormat: true, ContentFormat: message.TextPlain}
+	q2op, err := qblock.NewOperationKey([]byte("server-q2"), []byte(record.operation), meta.Identity)
+	if err != nil {
+		return err
+	}
+	id, err := c.manager.PrepareSender(q2op, record.replyToken, qblock.Q2, meta, payload, now, jitter)
+	if err != nil {
+		return err
+	}
+	probeKey := c.nextProbeKey + 1
+	work := qblockPendingWork{
+		Kind: qblockWorkBody, Server: true, Operation: q2op, TransferID: id,
+		Generation: record.generation, Expires: now.Add(c.managerConfig.Transfer.Lifetime),
+		ProbeKey: probeKey, NonProbingWait: wait,
+	}
+	if err := c.workQueue.replace(record.workID, work, false); err != nil {
+		_ = c.manager.Cancel(id, err)
+		return err
+	}
+	c.nextProbeKey = probeKey
+	record.id, record.activeOperation, record.metadata = id, q2op, meta
+	record.responseCode, record.responseOptions = code, options
+	record.bodyProbeKey = probeKey
+	record.bodyAnswered = false
+	record.writeExpires = work.Expires
+	s.byID[id] = record
+	return nil
+}
+
+func (c *qblockClient) writeServerQ2Block(writeContext context.Context, token message.Token, mid int32, code codes.Code, options message.Options, szx blockwise.SZX, size uint32, etag []byte, action qblock.Action, probeKey qblockProbeKey) error {
 	msg := c.cc.AcquireMessage(writeContext)
 	defer c.cc.ReleaseMessage(msg)
 	msg.SetType(message.NonConfirmable)
@@ -465,10 +557,13 @@ func (c *qblockClient) writeServerQ2Block(writeContext context.Context, token me
 	if err := writeContext.Err(); err != nil {
 		return err
 	}
+	if probeKey != 0 {
+		return c.writePacedMessage(probeKey, msg)
+	}
 	return c.cc.session.WriteMessage(msg)
 }
 
-func (c *qblockClient) writeServerQ1Control(writeContext context.Context, token message.Token, mid int32, szx blockwise.SZX, action qblock.Action) error {
+func (c *qblockClient) writeServerQ1Control(writeContext context.Context, token message.Token, mid int32, szx blockwise.SZX, action qblock.Action, probeKey qblockProbeKey) error {
 	if len(token) == 0 {
 		return qblock.ErrUnknownTransfer
 	}
@@ -499,6 +594,9 @@ func (c *qblockClient) writeServerQ1Control(writeContext context.Context, token 
 	if err := writeContext.Err(); err != nil {
 		return err
 	}
+	if probeKey != 0 {
+		return c.writePacedMessage(probeKey, msg)
+	}
 	return c.cc.session.WriteMessage(msg)
 }
 
@@ -508,6 +606,10 @@ func (s *qblockServer) releaseLocked(record *qblockServerRecord) {
 	}
 	delete(s.byID, record.id)
 	delete(s.records, record.operation)
+	if record.workID != 0 {
+		s.client.releasePacingWorkLocked(record.workID)
+		record.workID = 0
+	}
 	s.clearMIDsLocked(record)
 	for key, token := range record.tokens {
 		s.client.cc.releaseToken(token, tokenOwnerQBlock)

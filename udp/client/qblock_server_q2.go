@@ -82,6 +82,14 @@ func (s *qblockServer) handleQ2Control(msg *pool.Message) ([]qblock.Output, bool
 		s.client.mu.Unlock()
 		return nil, false
 	}
+	progressed := false
+	for _, output := range outputs {
+		if output.TransferID == record.id && output.Action.Kind == qblock.SendBlock {
+			progressed = true
+			break
+		}
+	}
+	s.acceptPacingFeedbackLocked(record, msg, progressed)
 	if len(outputs) == 0 && control.Continue != nil && !owned {
 		s.client.cc.releaseToken(token, tokenOwnerQBlock)
 	} else {

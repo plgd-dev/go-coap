@@ -20,6 +20,7 @@ import (
 type qblockProbeCorrelation struct {
 	key        qblockProbeKey
 	kind       qblockProbeKind
+	server     bool
 	workID     qblockWorkID
 	generation uint64
 	transferID qblock.TransferID
@@ -51,9 +52,11 @@ func (c *qblockClient) recordPacingAttemptLocked(key qblockProbeKey, msg *pool.M
 	var id qblockWorkID
 	var generation uint64
 	var transferID qblock.TransferID
+	var server bool
 	for candidateID, slot := range c.workQueue.slots {
 		if slot.pending != nil && slot.pending.ProbeKey == key {
 			id, generation, transferID = candidateID, slot.pending.Generation, slot.pending.TransferID
+			server = slot.pending.Server
 			break
 		}
 	}
@@ -65,21 +68,37 @@ func (c *qblockClient) recordPacingAttemptLocked(key qblockProbeKey, msg *pool.M
 			}
 		}
 	}
+	if id == 0 && c.server != nil {
+		for _, record := range c.server.byID {
+			if record.bodyProbeKey == key && record.workID != 0 && c.workQueue.slots[record.workID] != nil {
+				id, generation, transferID, server = record.workID, record.generation, record.id, true
+				break
+			}
+		}
+	}
 	if id == 0 {
 		return
 	}
 	probe := &qblockProbeCorrelation{
-		key: key, kind: c.probeGate.kind, workID: id, generation: generation,
+		key: key, kind: c.probeGate.kind, server: server, workID: id, generation: generation,
 		transferID: transferID, token: bytes.Clone(msg.Token()),
 	}
 	optionID := message.QBlock2
-	if probe.kind == qblockProbeBody {
+	if probe.kind == qblockProbeBody && !probe.server {
 		optionID = message.QBlock1
 	}
 	if value, err := msg.GetOptionUint32(optionID); err == nil {
 		if block, err := qblock.DecodeBlock(value); err == nil {
 			probe.set = block.Number / c.managerConfig.Transfer.MaxPayloads
 			probe.numbers = []uint32{block.Number}
+		}
+	}
+	if probe.server && probe.kind == qblockProbeControl && len(probe.numbers) == 0 {
+		if slot := c.workQueue.slots[id]; slot != nil && slot.pending != nil && len(slot.pending.Controls) != 0 {
+			probe.numbers = slices.Clone(slot.pending.Controls[0].Intent.Action.Numbers)
+			if len(probe.numbers) != 0 {
+				probe.set = probe.numbers[0] / c.managerConfig.Transfer.MaxPayloads
+			}
 		}
 	}
 	if probe.kind == qblockProbeBody && c.currentProbe != nil && c.currentProbe.key == key && c.currentProbe.set == probe.set {
@@ -206,7 +225,13 @@ func (c *qblockClient) executePendingOrdered(now time.Time) []qblockCallback {
 			return callbacks
 		}
 		if work.Kind == qblockWorkControls {
-			moreCallbacks, keepScanning := c.executePacingControlOrdered(id, work, now)
+			var moreCallbacks []qblockCallback
+			var keepScanning bool
+			if work.Server {
+				moreCallbacks, keepScanning = c.executeServerPacingControlOrdered(id, work, now)
+			} else {
+				moreCallbacks, keepScanning = c.executePacingControlOrdered(id, work, now)
+			}
 			callbacks = append(callbacks, moreCallbacks...)
 			if keepScanning {
 				continue
@@ -214,6 +239,46 @@ func (c *qblockClient) executePendingOrdered(now time.Time) []qblockCallback {
 			return callbacks
 		}
 		if work.Kind == qblockWorkBody {
+			if work.Server {
+				record := (*qblockServerRecord)(nil)
+				if c.server != nil {
+					record = c.server.byID[work.TransferID]
+				}
+				if record == nil || record.workID != id || record.generation != work.Generation || record.activeOperation != work.Operation {
+					c.releasePacingWorkLocked(id)
+					c.mu.Unlock()
+					continue
+				}
+				failure := record.writeContext.Err()
+				if failure == nil && !work.Expires.IsZero() && !now.Before(work.Expires) {
+					failure = qblock.ErrExpired
+				}
+				if failure != nil {
+					outputs := c.manager.Cancel(record.id, failure)
+					c.mu.Unlock()
+					callbacks = append(callbacks, c.executeOrdered(outputs)...)
+					continue
+				}
+				if !c.probeGate.admit(work.ProbeKey, qblockProbeBody, work.NonProbingWait, now) {
+					c.mu.Unlock()
+					return callbacks
+				}
+				outputs, err := c.manager.ActivateSender(record.id, now)
+				if err != nil {
+					outputs = c.manager.Cancel(record.id, err)
+				}
+				c.mu.Unlock()
+				callbacks = append(callbacks, c.executeOrdered(outputs)...)
+				c.mu.Lock()
+				if err != nil {
+					c.probeGate.settle(work.ProbeKey, c.now())
+				}
+				if slot := c.workQueue.slots[id]; slot != nil && slot.pending != nil && slot.pending.Generation == work.Generation {
+					c.workQueue.clearPending(id)
+				}
+				c.mu.Unlock()
+				return callbacks
+			}
 			transfer := c.transfers[work.TransferID]
 			if transfer == nil || transfer.operation != work.Operation || transfer.exchange.workID != id || transfer.exchange.generation != work.Generation {
 				c.releasePacingWorkLocked(id)
@@ -411,6 +476,90 @@ func (c *qblockClient) executePacingControlOrdered(id qblockWorkID, work qblockP
 	return callbacks, false
 }
 
+// executeServerPacingControlOrdered enters with mu held and exits unlocked.
+// Continue responses are ungated; a NON 4.08 report is one paced datagram.
+func (c *qblockClient) executeServerPacingControlOrdered(id qblockWorkID, work qblockPendingWork, now time.Time) ([]qblockCallback, bool) {
+	var record *qblockServerRecord
+	if c.server != nil {
+		record = c.server.byID[work.TransferID]
+	}
+	if record == nil || record.workID != id || record.generation != work.Generation || record.activeOperation != work.Operation || len(work.Controls) == 0 {
+		c.releasePacingWorkLocked(id)
+		c.mu.Unlock()
+		return nil, true
+	}
+	control := work.Controls[0]
+	current := false
+	for _, intent := range c.manager.PendingControls(record.id) {
+		if intent.Revision == control.Intent.Revision {
+			current = true
+			break
+		}
+	}
+	if !current {
+		err := c.server.syncControlsLocked(record, now)
+		if err != nil {
+			outputs := c.manager.Cancel(record.id, err)
+			c.mu.Unlock()
+			return c.executeOrdered(outputs), true
+		}
+		c.mu.Unlock()
+		return nil, true
+	}
+	failure := record.writeContext.Err()
+	if failure == nil && !work.Expires.IsZero() && !now.Before(work.Expires) {
+		failure = qblock.ErrExpired
+	}
+	if failure != nil {
+		outputs := c.manager.Cancel(record.id, failure)
+		c.mu.Unlock()
+		return c.executeOrdered(outputs), true
+	}
+	ungated := control.Intent.Action.Kind == qblock.SendContinue
+	if !ungated && !c.probeGate.admit(control.ProbeKey, qblockProbeControl, 0, now) {
+		c.mu.Unlock()
+		return nil, false
+	}
+	token := bytes.Clone(control.ReplyToken)
+	writeContext := record.writeContext
+	szx := record.metadata.SZX
+	mid := c.cc.GetMessageID()
+	c.server.bindMIDLocked(record, mid)
+	c.mu.Unlock()
+
+	err := c.writeServerQ1Control(writeContext, token, mid, szx, control.Intent.Action, control.ProbeKey)
+	c.mu.Lock()
+	if !ungated {
+		c.probeGate.settle(control.ProbeKey, c.now())
+	}
+	record = c.server.byID[work.TransferID]
+	slot := c.workQueue.slots[id]
+	if record == nil || slot == nil || slot.pending == nil || slot.pending.Generation != work.Generation || len(slot.pending.Controls) == 0 || slot.pending.Controls[0].Intent.Revision != control.Intent.Revision {
+		c.mu.Unlock()
+		return nil, false
+	}
+	if err != nil {
+		outputs := c.manager.Cancel(record.id, err)
+		c.mu.Unlock()
+		return c.executeOrdered(outputs), false
+	}
+	outputs := c.manager.CommitControl(record.id, control.Intent.Revision, c.now())
+	remaining := work.Controls[1:]
+	if len(remaining) != 0 {
+		work.Controls = remaining
+		work.ProbeKey = remaining[0].ProbeKey
+		work.Ungated = remaining[0].Intent.Action.Kind == qblock.SendContinue
+		err = c.workQueue.replace(id, work, false)
+	} else {
+		c.workQueue.clearPending(id)
+	}
+	if err != nil {
+		outputs = append(outputs, c.manager.Cancel(record.id, err)...)
+	}
+	c.mu.Unlock()
+	return c.executeOrdered(outputs), ungated
+}
+
 // failPendingGETLocked removes a pre-receiver exchange without spending a
 // transfer slot. Its callback executes only after actionMu and mu are released.
 func (c *qblockClient) failPendingGETLocked(exchange *qblockExchange, err error) []qblockCallback {
@@ -458,6 +607,14 @@ func (c *qblockClient) writePacedMessage(key qblockProbeKey, msg *pool.Message) 
 				}
 			}
 		}
+		if !owned && c.server != nil {
+			for _, record := range c.server.byID {
+				if record.bodyProbeKey == key && record.workID != 0 && c.workQueue.slots[record.workID] != nil {
+					owned = true
+					break
+				}
+			}
+		}
 	}
 	if !owned {
 		c.mu.Unlock()
@@ -479,9 +636,19 @@ func (c *qblockClient) acceptPacingFeedbackLocked(key qblockProbeKey) bool {
 		return false
 	}
 	if probe.transferID != 0 {
-		transfer := c.transfers[probe.transferID]
-		if transfer == nil || transfer.exchange == nil || transfer.exchange.workID != probe.workID || transfer.exchange.generation != probe.generation {
-			return false
+		if probe.server {
+			if c.server == nil {
+				return false
+			}
+			record := c.server.byID[probe.transferID]
+			if record == nil || record.workID != probe.workID || record.generation != probe.generation {
+				return false
+			}
+		} else {
+			transfer := c.transfers[probe.transferID]
+			if transfer == nil || transfer.exchange == nil || transfer.exchange.workID != probe.workID || transfer.exchange.generation != probe.generation {
+				return false
+			}
 		}
 	} else {
 		exchange := c.exchangesByOriginalToken[string(probe.token)]

@@ -6,6 +6,8 @@ import (
 	"encoding/binary"
 	"errors"
 	"io"
+	"math"
+	"time"
 
 	"github.com/plgd-dev/go-coap/v3/message"
 	"github.com/plgd-dev/go-coap/v3/message/codes"
@@ -39,7 +41,7 @@ func (s *qblockServer) handleQ1(msg *pool.Message) ([]qblock.Output, bool) {
 			s.client.mu.Unlock()
 			return nil, false
 		}
-		outputs := s.receiveLocked(record, fragment)
+		outputs := s.receiveLocked(record, fragment, msg)
 		s.client.mu.Unlock()
 		return outputs, true
 	}
@@ -52,13 +54,26 @@ func (s *qblockServer) handleQ1(msg *pool.Message) ([]qblock.Output, bool) {
 		s.client.mu.Unlock()
 		return nil, false
 	}
-	if err := s.client.cc.claimToken(fragment.Token, tokenOwnerQBlock); err != nil {
+	capacity, err := qblockControlCapacity(options, s.client.managerConfig.Transfer.MaxPayloads)
+	if err != nil {
 		s.client.mu.Unlock()
 		return nil, false
 	}
-	outputs, err := s.client.manager.StartReceiver(fragment, s.client.now())
+	workID, err := s.client.workQueue.reserve(capacity)
+	if err != nil {
+		s.client.mu.Unlock()
+		return nil, false
+	}
+	if err := s.client.cc.claimToken(fragment.Token, tokenOwnerQBlock); err != nil {
+		s.client.releasePacingWorkLocked(workID)
+		s.client.mu.Unlock()
+		return nil, false
+	}
+	now := s.client.now()
+	outputs, err := s.client.manager.StartReceiverDeferred(fragment, now)
 	if err != nil {
 		s.client.cc.releaseToken(fragment.Token, tokenOwnerQBlock)
+		s.client.releasePacingWorkLocked(workID)
 		s.client.mu.Unlock()
 		return nil, false
 	}
@@ -67,24 +82,29 @@ func (s *qblockServer) handleQ1(msg *pool.Message) ([]qblock.Output, bool) {
 		// StartReceiver must retain Q1 after any Deliver. Treat a violated
 		// manager invariant as a rejected admission without publishing a record.
 		s.client.cc.releaseToken(fragment.Token, tokenOwnerQBlock)
+		s.client.releasePacingWorkLocked(workID)
 		s.client.mu.Unlock()
 		return nil, false
 	}
 	s.nextGen++
 	writeContext, cancelWrite := context.WithCancel(s.client.writeContext)
 	record := &qblockServerRecord{
-		id: id, operation: operation, activeOperation: operation, metadata: fragment.Metadata, options: options,
+		id: id, workID: workID, operation: operation, activeOperation: operation, metadata: fragment.Metadata, options: options,
 		tokens: map[string]message.Token{string(fragment.Token): bytes.Clone(fragment.Token)}, replyToken: bytes.Clone(fragment.Token), code: msg.Code(), charged: charge,
 		generation: s.nextGen, mids: make(map[int32]struct{}), writeContext: writeContext, cancelWrite: cancelWrite,
+		writeExpires: now.Add(s.client.managerConfig.Transfer.Lifetime),
 	}
 	s.records[operation] = record
 	s.byID[id] = record
 	s.metadata += charge
+	if err := s.syncControlsLocked(record, now); err != nil {
+		outputs = append(outputs, s.client.manager.Cancel(id, err)...)
+	}
 	s.client.mu.Unlock()
 	return outputs, true
 }
 
-func (s *qblockServer) receiveLocked(record *qblockServerRecord, fragment qblock.Fragment) []qblock.Output {
+func (s *qblockServer) receiveLocked(record *qblockServerRecord, fragment qblock.Fragment, msg *pool.Message) []qblock.Output {
 	if fragment.Metadata.Size != record.metadata.Size || fragment.Metadata.SZX != record.metadata.SZX || fragment.Metadata.HasContentFormat != record.metadata.HasContentFormat || fragment.Metadata.ContentFormat != record.metadata.ContentFormat || !bytes.Equal(fragment.Metadata.Identity, record.metadata.Identity) {
 		return s.client.manager.Cancel(record.id, errors.New("q-block request metadata changed"))
 	}
@@ -99,12 +119,74 @@ func (s *qblockServer) receiveLocked(record *qblockServerRecord, fragment qblock
 		}
 		record.tokens[key] = bytes.Clone(fragment.Token)
 	}
-	outputs, err := s.client.manager.Receive(fragment, s.client.now())
+	now := s.client.now()
+	before, _ := s.client.manager.ReceiverProgress(record.id)
+	outputs, err := s.client.manager.Receive(fragment, now)
 	if err != nil {
 		return s.client.manager.Cancel(record.id, err)
 	}
+	after, _ := s.client.manager.ReceiverProgress(record.id)
+	s.acceptPacingFeedbackLocked(record, msg, after > before)
 	record.replyToken = bytes.Clone(fragment.Token)
+	if err := s.syncControlsLocked(record, now); err != nil {
+		return append(outputs, s.client.manager.Cancel(record.id, err)...)
+	}
 	return outputs
+}
+
+// syncControlsLocked copies the current deferred Q1 control revision and its
+// accepted reply token into the server record's existing shared work slot.
+func (s *qblockServer) syncControlsLocked(record *qblockServerRecord, _ time.Time) error {
+	if record == nil || record.terminal || record.workID == 0 || s.byID[record.id] != record {
+		return nil
+	}
+	slot := s.client.workQueue.slots[record.workID]
+	if slot == nil {
+		return qblock.ErrUnknownTransfer
+	}
+	intents := s.client.manager.PendingControls(record.id)
+	if len(intents) == 0 {
+		if slot.pending != nil && slot.pending.Server && slot.pending.Kind == qblockWorkControls {
+			s.client.workQueue.clearPending(record.workID)
+		}
+		return nil
+	}
+	if slot.pending != nil && slot.pending.Server && slot.pending.Kind == qblockWorkControls && len(slot.pending.Controls) != 0 {
+		current := slot.pending.Controls[0].Intent.Revision
+		for _, intent := range intents {
+			if intent.Revision == current {
+				return nil
+			}
+		}
+	}
+	controls := make([]qblockControlWork, 0, len(intents))
+	nextKey := s.client.nextProbeKey
+	for _, intent := range intents {
+		control := qblockControlWork{Intent: intent, ReplyToken: bytes.Clone(record.replyToken)}
+		if intent.Action.Kind == qblock.RequestMissing {
+			if nextKey == qblockProbeKey(math.MaxUint64) {
+				return qblock.ErrLimitExceeded
+			}
+			nextKey++
+			control.ProbeKey = nextKey
+		}
+		controls = append(controls, control)
+	}
+	if len(controls) == 0 {
+		return nil
+	}
+	work := qblockPendingWork{
+		Kind: qblockWorkControls, Server: true, Operation: record.activeOperation,
+		TransferID: record.id, Generation: record.generation,
+		Expires: record.writeExpires, ProbeKey: controls[0].ProbeKey,
+		Ungated:  controls[0].Intent.Action.Kind == qblock.SendContinue,
+		Controls: controls,
+	}
+	if err := s.client.workQueue.replace(record.workID, work, slot.pending != nil); err != nil {
+		return err
+	}
+	s.client.nextProbeKey = nextKey
+	return nil
 }
 
 func serverQ1Fragment(msg *pool.Message) (qblock.Fragment, message.Options, error) {
