@@ -15,7 +15,8 @@
 Tasks 1–5 are complete and committed: prepared senders (`4877126`), deferred
 receiver controls (`df7918d`), probing gate and packet sizing (`525984f`),
 bounded pending work (`089e3ec`), and paced private client traffic (`2775a89`).
-Tasks 6–7 are complete; Task 8 remains open.
+Tasks 6–7 are complete. Task 8's integration traces and review are complete;
+its full-suite verification gate remains open.
 The Task 5 completion run passed
 `rtk go test ./udp/client -run TestQBlock -count=1` (216 tests); a broader
 core/client selection passed 285 tests and repeated paced-path race checks
@@ -34,6 +35,17 @@ passed afterward. The other new lifecycle adversaries passed without further
 production changes; `rtk go test -race ./udp/client -run 'TestQBlock(Pacing|Paced)' -count=1 -timeout=180s` passed. Existing expiry selection and release paths
 met those tests, so the proposed extra `expirePendingWorkLocked` helper and
 `releasePacingWorkLocked` signature change were not added speculatively.
+
+Task 8's paired POST/PUT repair, scripted GET repair, bidirectional silence,
+and default-rate wait traces passed. The selected `net/qblock` and `udp/client`
+race tests passed, and `rtk proxy go test ./... -run '^$' -count=1 -timeout=180s`
+compiled every package. The full core/client run failed only in the IPv6
+`TestConnDeduplication` paths. The full `./...` run also failed in DTLS/UDP
+loopback tests (`broken pipe`, `invalid srcAddr type <nil>`) and timed out in
+`TestClientKeepAliveMonitor`. The DTLS and UDP `TestConnGet/ok-a` failures
+were separately reproduced on the untouched original branch. These broad
+commands are recorded as failures, not passes; the full-suite gate remains
+open pending a working host networking environment or an independent fix.
 
 ## Global Constraints
 
@@ -332,12 +344,12 @@ terminal outputs/callbacks follow the existing ordered executor/dispatcher.
 
 **Interfaces:** Reuse `pairedQBlockSession`, `pairedQBlockSnapshot`, `newFakeQBlockClock`, and copied packets. GET server initiation remains unsupported: for GET downloads drive the existing client through a deterministic scripted peer, not a newly implemented server handler route.
 
-- [ ] **1. Write `TestQBlockPacingPairedPOSTPUTRepair`.** Run both methods with MaxPayloads=2, SZX16, 48-byte upload/response, rate=1024 bytes/s, and explicit wait=1s. Drop an upload block and a response block, advance fake clocks to the actual next deadlines, and assert complete bodies, correct tokens, one handler execution, and no direct Tick calls in automatic mode. Add a default-rate trace with sufficient operation lifetime to observe the actual long waits rather than bypassing the gate.
-- [ ] **2. Write `TestQBlockPacingScriptedGETRepair` and `TestQBlockPacingBidirectionalSilenceExpires`.** GET verifies initial-request ownership and separately paced repairs. In the silence case both connections have active client and server wire phases; suppress feedback and advance to absolute expiry. Assert bounded termination, no late bursts, zero transfer/token/work counters after lifecycle cleanup, and no handler replay. Retention records may remain until their own specified deadline; advance to that deadline before asserting their count is zero.
-- [ ] **3. Run targeted red/green:** `rtk go test ./udp/client -run 'TestQBlockPacing(Paired|Scripted|Bidirectional)' -count=1 -timeout=180s`. These are integration assertions over completed components; if already green, keep the new coverage and do not manufacture a failure. Fix only demonstrated integration gaps in the owning files and rerun their focused tests.
+- [x] **1. Write `TestQBlockPacingPairedPOSTPUTRepair`.** Run both methods with MaxPayloads=2, SZX16, 48-byte upload/response, rate=1024 bytes/s, and explicit wait=1s. Drop an upload block and a response block, advance fake clocks to the actual next deadlines, and assert complete bodies, correct tokens, one handler execution, and no direct Tick calls in automatic mode. Add a default-rate trace with sufficient operation lifetime to observe the actual long waits rather than bypassing the gate.
+- [x] **2. Write `TestQBlockPacingScriptedGETRepair` and `TestQBlockPacingBidirectionalSilenceExpires`.** GET verifies initial-request ownership and separately paced repairs. In the silence case both connections have active client and server wire phases; suppress feedback and advance to absolute expiry. Assert bounded termination, no late bursts, zero transfer/token/work counters after lifecycle cleanup, and no handler replay. Retention records may remain until their own specified deadline; advance to that deadline before asserting their count is zero.
+- [x] **3. Run targeted red/green:** `rtk go test ./udp/client -run 'TestQBlockPacing(Paired|Scripted|Bidirectional)' -count=1 -timeout=180s`. These are integration assertions over completed components; if already green, keep the new coverage and do not manufacture a failure. Fix only demonstrated integration gaps in the owning files and rerun their focused tests.
 - [ ] **4. Run final verification:** `rtk go test ./net/qblock ./udp/client -count=1 -timeout=180s`; `rtk go test -race ./net/qblock ./udp/client -run 'Test(ManagerPrepared|ManagerDeferred|DeferredReceiver|QBlock)' -count=1 -timeout=180s`; then `rtk go test ./... -count=1 -timeout=180s`. Record the actual commands/results. Investigate assertion/race failures; record environmental failures with their evidence rather than treating them as passes. Do not repeat broad tests without a new change or unresolved failure.
-- [ ] **5. Review the complete diff and update evidence.** Confirm all outbound private entry points use the gate policy, immediate core API behavior is preserved, and no public UDP configuration appeared. Record the conservative simultaneous-silence limitation and the remaining packet-sizing/full-memory/public-enablement work. Mark this slice complete only after all tasks/checks pass; do not mark all Milestone 3 complete. Leave the recovered private-adapter plan untouched.
-- [ ] **6. Commit:** `test(qblock): validate paced bidirectional UDP lifecycle`.
+- [x] **5. Review the complete diff and update evidence.** Confirm all outbound private entry points use the gate policy, immediate core API behavior is preserved, and no public UDP configuration appeared. Record the conservative simultaneous-silence limitation and the remaining packet-sizing/full-memory/public-enablement work. Mark this slice complete only after all tasks/checks pass; do not mark all Milestone 3 complete. Leave the recovered private-adapter plan untouched.
+- [x] **6. Commit:** `test(qblock): validate paced bidirectional UDP lifecycle` (full-suite gate in step 4 remains open).
 
 ## Coverage and handoff
 
@@ -357,5 +369,7 @@ These boundaries are closely coupled; parallel implementation of dependent
 contracts would add avoidable integration work. Task-specific implementer and
 reviewer agents remain an alternative if selected by the user.
 
-Status: Tasks 1–7 implemented; Task 8 remains open. Full-suite verification
-is blocked by the separately reproduced host IPv6 UDP failure.
+Status: Tasks 1–7 implemented; Task 8 integration coverage implemented but its
+full-suite verification gate remains open. The host's DTLS/UDP loopback failures
+were reproduced on the untouched original branch. This slice and Milestone 3
+are not marked complete.
