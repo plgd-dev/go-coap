@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"testing"
+	"unsafe"
 
 	"github.com/plgd-dev/go-coap/v3/message"
 	"github.com/plgd-dev/go-coap/v3/message/codes"
@@ -153,4 +154,53 @@ func TestQBlockMemoryCompletedServerRecordDropsUploadBody(t *testing.T) {
 	for _, record := range h.cc.qblockClient.server.records {
 		require.Nil(t, record.payload, "duplicate suppression and Q2 repairs need identity and response, not the assembled upload")
 	}
+}
+
+func TestQBlockMemoryServerResponseOptionsBudget(t *testing.T) {
+	for _, reject := range []bool{false, true} {
+		t.Run(map[bool]string{false: "exact fit", true: "over budget"}[reject], func(t *testing.T) {
+			var h *serverHarness
+			var baseline uint64
+			// Content-Format with empty value and URI-Query with 8 bytes.
+			responseBytes := 2*uint64(unsafe.Sizeof(message.Option{})) + 8
+			calls := 0
+			h = newServerHarness(t, qblock.DefaultManagerConfig(), qblockServerConfig{}, func(w *responsewriter.ResponseWriter[*Conn], _ *pool.Message) {
+				calls++
+				baseline = h.snapshot().metadataBytes
+				h.cc.qblockClient.server.config.MaxMetadataBytes = baseline + responseBytes
+				if reject {
+					h.cc.qblockClient.server.config.MaxMetadataBytes--
+				}
+				require.NoError(t, w.SetResponse(codes.Changed, message.TextPlain, bytes.NewReader([]byte("response"))))
+				w.Message().SetOptionString(message.URIQuery, "12345678")
+			})
+			h.ingest(h.q1(t, 1, 0, false, 4, "body"))
+			snapshot := h.snapshot()
+			if reject {
+				require.Empty(t, h.session.writesSnapshot())
+				require.Zero(t, snapshot.active)
+				require.Equal(t, baseline, snapshot.metadataBytes)
+				require.Empty(t, h.cc.qblockClient.workQueue.slots)
+			} else {
+				require.Len(t, h.session.writesSnapshot(), 1)
+				require.Equal(t, baseline+responseBytes, snapshot.metadataBytes)
+				for _, record := range h.cc.qblockClient.server.records {
+					value, err := record.responseOptions.GetBytes(message.URIQuery)
+					require.NoError(t, err)
+					require.Equal(t, 8, cap(value), "retained option snapshot must not pin the default 64-byte clone buffer")
+					h.cc.qblockClient.server.handleReset(recordMIDForMemoryTest(record))
+				}
+				require.Equal(t, baseline, h.snapshot().metadataBytes)
+			}
+			h.ingest(h.q1(t, 2, 0, false, 4, "body"))
+			require.Equal(t, 1, calls)
+		})
+	}
+}
+
+func recordMIDForMemoryTest(record *qblockServerRecord) int32 {
+	for mid := range record.mids {
+		return mid
+	}
+	return -1
 }

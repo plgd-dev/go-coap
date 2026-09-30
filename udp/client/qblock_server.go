@@ -55,6 +55,7 @@ type qblockServerRecord struct {
 	responseOptions message.Options
 	pendingReplies  map[qblockServerReplyKey][]message.Token
 	charged         uint64
+	responseCharged uint64
 	generation      uint64
 	mids            map[int32]struct{}
 	handlerRunning  bool
@@ -227,6 +228,7 @@ func (s *qblockServer) deactivateLocked(record *qblockServerRecord, now time.Tim
 		delete(record.tokens, key)
 	}
 	record.pendingReplies = nil
+	s.releaseResponseMetadataLocked(record)
 	record.terminal = true
 	if record.workID != 0 {
 		s.client.releasePacingWorkLocked(record.workID)
@@ -408,7 +410,7 @@ func (c *qblockClient) executeServerOutput(output qblock.Output) []qblockCallbac
 					return
 				}
 			}
-			responseOptions, _ := writer.Message().Options().Clone()
+			responseOptions := cloneQBlockResponseOptions(writer.Message().Options())
 			c.server.finishHandler(operation, generation, writer.Message().IsModified(), writer.Message().Code(), responseOptions, body)
 		}}}
 	case qblock.Release:
@@ -511,6 +513,13 @@ func (s *qblockServer) prepareResponseLocked(record *qblockServerRecord, code co
 	if record.workID == 0 || uint64(len(payload)) > math.MaxUint32 || c.nextProbeKey == qblockProbeKey(math.MaxUint64) {
 		return qblock.ErrLimitExceeded
 	}
+	responseBytes, err := qblockOptionBytes(options)
+	if err != nil {
+		return err
+	}
+	if s.metadata > s.config.MaxMetadataBytes || responseBytes > s.config.MaxMetadataBytes-s.metadata {
+		return qblock.ErrLimitExceeded
+	}
 	wait, err := qblockProbingWait(c.pacingConfig, c.managerConfig.Transfer, jitter)
 	if err != nil {
 		return err
@@ -547,6 +556,8 @@ func (s *qblockServer) prepareResponseLocked(record *qblockServerRecord, code co
 	c.nextProbeKey = probeKey
 	record.id, record.activeOperation, record.metadata = id, q2op, meta
 	record.responseCode, record.responseOptions = code, options
+	record.responseCharged = responseBytes
+	s.metadata += responseBytes
 	record.bodyProbeKey = probeKey
 	record.bodyAnswered = false
 	record.writeExpires = work.Expires
@@ -643,6 +654,25 @@ func (s *qblockServer) releaseLocked(record *qblockServerRecord) {
 	if s.metadata >= record.charged {
 		s.metadata -= record.charged
 	}
+	s.releaseResponseMetadataLocked(record)
+}
+
+func (s *qblockServer) releaseResponseMetadataLocked(record *qblockServerRecord) {
+	s.metadata -= record.responseCharged
+	record.responseCharged = 0
+	record.responseOptions = nil
+}
+
+// The ordinary Options.Clone retains a minimum-size shared buffer. Retained
+// response snapshots use exact storage so their metadata charge matches it.
+func cloneQBlockResponseOptions(options message.Options) message.Options {
+	result := make(message.Options, len(options))
+	for i, option := range options {
+		value := make([]byte, len(option.Value))
+		copy(value, option.Value)
+		result[i] = message.Option{ID: option.ID, Value: value}
+	}
+	return result
 }
 
 var errQBlockServerConfig = errors.New("invalid private q-block server configuration")
