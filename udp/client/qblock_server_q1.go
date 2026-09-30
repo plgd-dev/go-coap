@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/binary"
 	"errors"
-	"io"
 	"math"
 	"time"
 
@@ -213,7 +212,7 @@ func serverQ1Fragment(msg *pool.Message) (qblock.Fragment, message.Options, erro
 	}
 	payload := []byte(nil)
 	if body := msg.Body(); body != nil {
-		payload, err = io.ReadAll(body)
+		payload, err = readQBlockBody(body, uint32(16)<<block.SZX)
 		if err != nil {
 			return qblock.Fragment{}, nil, err
 		}

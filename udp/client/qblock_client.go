@@ -333,7 +333,7 @@ func (c *qblockClient) prepareQ1(req *pool.Message, fail func(error)) (qblockPre
 	if err != nil {
 		return qblockPreparation{}, err
 	}
-	body, err := copyQBlockBody(req.Body())
+	body, err := copyQBlockBody(req.Body(), c.managerConfig.Transfer.MaxBodySize)
 	if err != nil {
 		return qblockPreparation{}, err
 	}
@@ -422,7 +422,7 @@ func (e *qblockExchange) releaseCallbackSlot() {
 	}
 }
 
-func copyQBlockBody(body io.ReadSeeker) (payload []byte, err error) {
+func copyQBlockBody(body io.ReadSeeker, limit uint32) (payload []byte, err error) {
 	position, err := body.Seek(0, io.SeekCurrent)
 	if err != nil {
 		return nil, err
@@ -435,7 +435,7 @@ func copyQBlockBody(body io.ReadSeeker) (payload []byte, err error) {
 			err = errors.Join(err, restoreErr)
 		}
 	}()
-	payload, err = io.ReadAll(body)
+	payload, err = readQBlockBody(body, limit)
 	return payload, err
 }
 
@@ -1695,7 +1695,7 @@ func fragmentFromQ2ForCode(msg *pool.Message, operation qblock.OperationKey, pre
 	}
 	payload := []byte(nil)
 	if body := msg.Body(); body != nil {
-		payload, err = io.ReadAll(body)
+		payload, err = readQBlockBody(body, uint32(16)<<block.SZX)
 		if err != nil {
 			return qblock.Fragment{}, qblock.Metadata{}, err
 		}

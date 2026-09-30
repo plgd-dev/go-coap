@@ -6,7 +6,6 @@ import (
 	"crypto/sha256"
 	"errors"
 	"fmt"
-	"io"
 	"math"
 	"slices"
 	"time"
@@ -247,6 +246,9 @@ func (s *qblockServer) deactivateLocked(record *qblockServerRecord, now time.Tim
 // The caller holds client.mu.
 func (s *qblockServer) settleHandlerLocked(record *qblockServerRecord, now time.Time) {
 	record.handlerRunning = false
+	// The handler has returned; suppression and response repair depend on
+	// operation identity, not another retained copy of the upload body.
+	record.payload = nil
 	if record.retainUntil.IsZero() {
 		record.retainUntil = now.Add(s.config.Retention)
 	}
@@ -399,7 +401,12 @@ func (c *qblockClient) executeServerOutput(output qblock.Output) []qblockCallbac
 			c.server.handler(writer, req)
 			body := []byte(nil)
 			if reader := writer.Message().Body(); reader != nil {
-				body, _ = io.ReadAll(reader)
+				var err error
+				body, err = readQBlockBody(reader, c.managerConfig.Transfer.MaxBodySize)
+				if err != nil {
+					c.server.finishHandler(operation, generation, false, 0, nil, nil)
+					return
+				}
 			}
 			responseOptions, _ := writer.Message().Options().Clone()
 			c.server.finishHandler(operation, generation, writer.Message().IsModified(), writer.Message().Code(), responseOptions, body)

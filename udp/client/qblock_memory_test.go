@@ -1,0 +1,156 @@
+package client
+
+import (
+	"bytes"
+	"context"
+	"errors"
+	"io"
+	"testing"
+
+	"github.com/plgd-dev/go-coap/v3/message"
+	"github.com/plgd-dev/go-coap/v3/message/codes"
+	"github.com/plgd-dev/go-coap/v3/message/pool"
+	"github.com/plgd-dev/go-coap/v3/net/blockwise"
+	"github.com/plgd-dev/go-coap/v3/net/qblock"
+	"github.com/plgd-dev/go-coap/v3/net/responsewriter"
+	"github.com/stretchr/testify/require"
+)
+
+type qblockCountingReader struct {
+	*bytes.Reader
+	readBytes int
+	failure   error
+}
+
+func (r *qblockCountingReader) Read(p []byte) (int, error) {
+	n, err := r.Reader.Read(p)
+	r.readBytes += n
+	if r.failure != nil {
+		return n, r.failure
+	}
+	return n, err
+}
+
+func TestQBlockMemoryUploadReadStopsAtBodyLimit(t *testing.T) {
+	mc := qblock.DefaultManagerConfig()
+	mc.Transfer.MaxBodySize, mc.MaxRetainedBytes = 16, 16
+	session := &qblockTestSession{ctx: context.Background()}
+	cfg := DefaultConfig
+	cfg.BlockwiseEnable, cfg.BlockwiseSZX = false, blockwise.SZX16
+	cc := NewConnWithOpts(session, &cfg, withQBlockClient(qblockClientConfig{Manager: mc, ScheduleMode: qblockScheduleManual}))
+	t.Cleanup(session.closeForTest)
+	req := newPOSTWithBody(t, cc, message.Token{1}, nil)
+	defer cc.ReleaseMessage(req)
+	r := &qblockCountingReader{Reader: bytes.NewReader(bytes.Repeat([]byte{'x'}, 4096))}
+	_, err := r.Seek(7, io.SeekStart)
+	require.NoError(t, err)
+	req.SetBody(r)
+	_, err = cc.qblockClient.prepare(req, nil)
+	require.Error(t, err)
+	require.LessOrEqual(t, r.readBytes, 17, "read only the cap and one overflow byte")
+	position, err := r.Seek(0, io.SeekCurrent)
+	require.NoError(t, err)
+	require.Equal(t, int64(7), position)
+	requireQBlockClientEmpty(t, cc)
+	require.Empty(t, session.writesSnapshot())
+}
+
+func TestQBlockMemoryHandlerCaptureRejectsOverflowAndReadError(t *testing.T) {
+	for _, fail := range []bool{false, true} {
+		t.Run(map[bool]string{false: "overflow", true: "read error"}[fail], func(t *testing.T) {
+			mc := qblock.DefaultManagerConfig()
+			mc.Transfer.MaxBodySize = 16
+			r := &qblockCountingReader{Reader: bytes.NewReader(bytes.Repeat([]byte{'r'}, 4096))}
+			if fail {
+				r.Reader = bytes.NewReader([]byte("partial"))
+				r.failure = errors.New("body read failed")
+			}
+			calls := 0
+			h := newServerHarness(t, mc, qblockServerConfig{}, func(w *responsewriter.ResponseWriter[*Conn], _ *pool.Message) {
+				calls++
+				require.NoError(t, w.SetResponse(codes.Changed, message.TextPlain, r))
+			})
+			h.ingest(h.q1(t, 1, 0, false, 4, "body"))
+			h.ingest(h.q1(t, 2, 0, false, 4, "body"))
+			require.Equal(t, 1, calls)
+			require.LessOrEqual(t, r.readBytes, 17)
+			require.Empty(t, h.session.writesSnapshot(), "never send a partial response after a failed capture")
+			snapshot := h.snapshot()
+			require.Zero(t, snapshot.active)
+			require.Zero(t, snapshot.managerTokens)
+			require.Zero(t, snapshot.managerBytes)
+			require.Zero(t, snapshot.reservations)
+			require.Empty(t, h.cc.qblockClient.workQueue.slots)
+			require.Equal(t, 1, snapshot.records)
+		})
+	}
+}
+
+func TestQBlockMemoryInboundFragmentReadsAreBlockBounded(t *testing.T) {
+	cc := newPrivateQBlockClientConn(t)
+	for _, q1 := range []bool{true, false} {
+		t.Run(map[bool]string{true: "Q1", false: "Q2"}[q1], func(t *testing.T) {
+			msg := newQBlockClientFragment(t, cc, message.Token{1}, 0, false, 16)
+			defer cc.ReleaseMessage(msg)
+			if q1 {
+				msg.Remove(message.QBlock2)
+				msg.SetCode(codes.POST)
+				msg.SetOptionUint32(message.QBlock1, 0)
+				msg.SetOptionUint32(message.Size1, 16)
+				msg.SetOptionBytes(message.RequestTag, []byte{1})
+			}
+			r := &qblockCountingReader{Reader: bytes.NewReader(bytes.Repeat([]byte{'x'}, 4096))}
+			msg.SetBody(r)
+			var err error
+			if q1 {
+				_, _, err = serverQ1Fragment(msg)
+			} else {
+				_, _, err = fragmentFromQ2(msg, "test", nil)
+			}
+			require.Error(t, err)
+			require.LessOrEqual(t, r.readBytes, 17)
+		})
+	}
+}
+
+func TestQBlockMemoryBodyCopyExactLimitAndReadFailure(t *testing.T) {
+	for _, tt := range []struct {
+		name    string
+		body    string
+		failure error
+		wantErr bool
+	}{
+		{name: "empty"},
+		{name: "exact", body: "0123456789abcdef"},
+		{name: "overflow", body: "0123456789abcdefg", wantErr: true},
+		{name: "read error", body: "partial", failure: errors.New("read failed"), wantErr: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			r := &qblockCountingReader{Reader: bytes.NewReader([]byte(tt.body)), failure: tt.failure}
+			_, err := r.Seek(2, io.SeekStart)
+			require.NoError(t, err)
+			payload, err := copyQBlockBody(r, 16)
+			if tt.wantErr {
+				require.Error(t, err)
+				require.Nil(t, payload)
+			} else {
+				require.NoError(t, err)
+				require.Equal(t, tt.body, string(payload))
+			}
+			pos, err := r.Seek(0, io.SeekCurrent)
+			require.NoError(t, err)
+			require.Equal(t, int64(2), pos)
+		})
+	}
+}
+
+func TestQBlockMemoryCompletedServerRecordDropsUploadBody(t *testing.T) {
+	h := newServerHarness(t, qblock.DefaultManagerConfig(), qblockServerConfig{}, func(w *responsewriter.ResponseWriter[*Conn], _ *pool.Message) {
+		require.NoError(t, w.SetResponse(codes.Changed, message.TextPlain, bytes.NewReader([]byte("response"))))
+	})
+	h.ingest(h.q1(t, 1, 0, false, 4, "body"))
+	require.Len(t, h.session.writesSnapshot(), 1)
+	for _, record := range h.cc.qblockClient.server.records {
+		require.Nil(t, record.payload, "duplicate suppression and Q2 repairs need identity and response, not the assembled upload")
+	}
+}
