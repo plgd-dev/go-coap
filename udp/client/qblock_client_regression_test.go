@@ -448,7 +448,7 @@ func requireQBlockClientConflictFixtureIntact(t *testing.T, cc *Conn, token mess
 	defer r.mu.Unlock()
 	require.Equal(t, uint32(1), r.manager.Active())
 	require.Equal(t, 1, qblockClientManagerTokenCountForTest(r.manager))
-	require.Equal(t, uint64(32), qblockClientManagerRetainedBytesForTest(r.manager))
+	require.Equal(t, uint64(64), qblockClientManagerRetainedBytesForTest(r.manager))
 	require.Empty(t, r.transfers)
 	require.Empty(t, r.transferByToken)
 	require.Contains(t, r.exchangesByOriginalToken, string(token))

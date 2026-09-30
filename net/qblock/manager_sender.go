@@ -33,7 +33,7 @@ func (m *Manager) PrepareSender(operation OperationKey, token message.Token, kin
 	m.nextID++
 	id := m.nextID
 	ownedToken := string(bytes.Clone(token))
-	record := &managedTransfer{operation: operation, kind: kind, sender: sender, reserved: meta.Size, tokens: map[string]struct{}{ownedToken: {}}}
+	record := &managedTransfer{operation: operation, kind: kind, sender: sender, reserved: uint64(meta.Size), tokens: map[string]struct{}{ownedToken: {}}}
 	m.byID[id] = record
 	m.byOperation[operation] = id
 	m.byToken[ownedToken] = id

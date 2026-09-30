@@ -104,7 +104,10 @@ func (m *Manager) startReceiver(fragment Fragment, now time.Time, deferred bool)
 	if _, ok := m.byToken[string(fragment.Token)]; ok {
 		return nil, ErrTokenInUse
 	}
-	if uint64(len(m.byID)) >= uint64(m.cfg.MaxTransfers) || uint64(len(m.byToken)) >= uint64(m.cfg.MaxTokens) || uint64(fragment.Metadata.Size) > m.cfg.MaxRetainedBytes-m.retained {
+	// Reserve sparse payload and the contiguous assembly before first intake.
+	// uint32 body sizes doubled in uint64 cannot overflow.
+	reserved := 2 * uint64(fragment.Metadata.Size)
+	if uint64(len(m.byID)) >= uint64(m.cfg.MaxTransfers) || uint64(len(m.byToken)) >= uint64(m.cfg.MaxTokens) || reserved > m.cfg.MaxRetainedBytes-m.retained {
 		return nil, ErrLimitExceeded
 	}
 	var receiver *Receiver
@@ -124,11 +127,11 @@ func (m *Manager) startReceiver(fragment Fragment, now time.Time, deferred bool)
 	m.nextID++
 	id := m.nextID
 	token := string(bytes.Clone(fragment.Token))
-	record := &managedTransfer{operation: fragment.Operation, kind: fragment.Kind, receiver: receiver, reserved: fragment.Metadata.Size, tokens: map[string]struct{}{token: {}}}
+	record := &managedTransfer{operation: fragment.Operation, kind: fragment.Kind, receiver: receiver, reserved: reserved, tokens: map[string]struct{}{token: {}}}
 	m.byID[id] = record
 	m.byOperation[fragment.Operation] = id
 	m.byToken[token] = id
-	m.retained += uint64(fragment.Metadata.Size)
+	m.retained += reserved
 	outputs := m.outputs(id, record, actions)
 	m.removeReleased(id, outputs)
 	return outputs, nil

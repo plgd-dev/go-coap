@@ -12,6 +12,8 @@ import (
 
 // ManagerConfig bounds all active normalized Q-Block operations for one peer
 // connection. Packet storage and socket-level budgets belong to the adapter.
+// Receivers reserve twice their announced body size for sparse payload and
+// contiguous assembly; senders reserve their retained representation size.
 type ManagerConfig struct {
 	Transfer         TransferConfig
 	MaxTransfers     uint32
@@ -96,7 +98,7 @@ type managedTransfer struct {
 	kind      Kind
 	sender    *Sender
 	receiver  *Receiver
-	reserved  uint32
+	reserved  uint64
 	tokens    map[string]struct{}
 }
 
@@ -375,7 +377,7 @@ func (m *Manager) removeReleased(id TransferID, outputs []Output) {
 		for token := range record.tokens {
 			delete(m.byToken, token)
 		}
-		m.retained -= uint64(record.reserved)
+		m.retained -= record.reserved
 		return
 	}
 }

@@ -2488,10 +2488,10 @@ func TestQBlockClientHandoffSingleFragmentDeliveryReusesSenderBudget(t *testing.
 			managerConfig.MaxTransfers = 1
 			managerConfig.MaxTokens = 1
 			managerConfig.Transfer.MaxBodySize = 16
-			managerConfig.MaxRetainedBytes = 16
+			managerConfig.MaxRetainedBytes = 32
 			cc := NewConnWithOpts(session, &cfg, withQBlockClient(qblockClientConfig{
 				Manager: managerConfig,
-				// This test isolates the manager's 16-byte retained-body budget;
+				// One receiver reserves 16 sparse plus 16 assembly bytes;
 				// queued control metadata has its own explicit private budget.
 				Pacing: &qblockPacingConfig{ProbingRate: 1, MaxIntentBytes: 4096},
 			}))
