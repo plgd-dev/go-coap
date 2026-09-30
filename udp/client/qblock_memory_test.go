@@ -211,12 +211,13 @@ func TestQBlockMemoryClientSnapshotReservation(t *testing.T) {
 			session := &qblockTestSession{ctx: context.Background()}
 			cfg := DefaultConfig
 			cfg.BlockwiseEnable, cfg.BlockwiseSZX = false, blockwise.SZX16
-			cc := NewConnWithOpts(session, &cfg, withQBlockClient(qblockClientConfig{Manager: qblock.DefaultManagerConfig(), ScheduleMode: qblockScheduleManual, GetRequestTag: func() (message.Token, error) { return message.Token{7}, nil }}))
+			tag := message.Token{7, 8, 9}
+			cc := NewConnWithOpts(session, &cfg, withQBlockClient(qblockClientConfig{Manager: qblock.DefaultManagerConfig(), ScheduleMode: qblockScheduleManual, GetRequestTag: func() (message.Token, error) { return tag, nil }}))
 			t.Cleanup(session.closeForTest)
-			req := newPrivateQBlockClientGET(t, cc, message.Token{1})
+			req := newPrivateQBlockClientGET(t, cc, message.Token{1, 2, 3})
 			if post {
 				cc.ReleaseMessage(req)
-				req = newPOSTWithBody(t, cc, message.Token{1}, []byte("body"))
+				req = newPOSTWithBody(t, cc, message.Token{1, 2, 3}, []byte("body"))
 			}
 			defer cc.ReleaseMessage(req)
 			capacity, err := qblockControlCapacity(req.Options(), 10)
@@ -239,6 +240,15 @@ func TestQBlockMemoryClientSnapshotReservation(t *testing.T) {
 			require.True(t, prepared.Prepared)
 			exchange := cc.qblockClient.exchangesByOriginalToken[string(req.Token())]
 			require.NotNil(t, exchange)
+			require.Equal(t, len(exchange.originalToken), cap(exchange.originalToken), "retained original token must match its byte charge")
+			if post {
+				require.Equal(t, len(exchange.requestTag), cap(exchange.requestTag), "retained Request-Tag must match its byte charge")
+				tag[0] = 0
+				require.Equal(t, []byte{7, 8, 9}, exchange.requestTag)
+			}
+			req.SetToken(message.Token{9, 9, 9})
+			require.Equal(t, message.Token{1, 2, 3}, exchange.originalToken)
+			req.SetToken(exchange.originalToken)
 			value, err := exchange.requestOpts.GetBytes(message.URIPath)
 			require.NoError(t, err)
 			require.Equal(t, len(value), cap(value))
@@ -287,4 +297,41 @@ func TestQBlockMemoryPendingBackingMatchesCharge(t *testing.T) {
 	require.Equal(t, uint64(1), q.used)
 	q.release(id)
 	require.Zero(t, q.used)
+}
+
+func TestQBlockMemoryGETSnapshotAndPendingOptions(t *testing.T) {
+	session := &qblockTestSession{ctx: context.Background()}
+	cfg := DefaultConfig
+	cfg.BlockwiseEnable, cfg.BlockwiseSZX = false, blockwise.SZX16
+	cc := NewConnWithOpts(session, &cfg, withQBlockClient(qblockClientConfig{Manager: qblock.DefaultManagerConfig(), ScheduleMode: qblockScheduleManual}))
+	t.Cleanup(session.closeForTest)
+	req := newPrivateQBlockClientGET(t, cc, message.Token{1, 2, 3})
+	defer cc.ReleaseMessage(req)
+	req.SetOptionString(message.ProxyURI, string(bytes.Repeat([]byte{'p'}, 1000)))
+	req.SetOptionUint32(message.QBlock2, 8)
+	budget, err := qblockClientSnapshotCapacity(req.Options(), req.Token(), nil, 10)
+	require.NoError(t, err)
+	req.Remove(message.QBlock2)
+	cc.qblockClient.workQueue.maxBytes = budget
+	prepared, err := cc.qblockClient.prepare(req, nil)
+	require.NoError(t, err)
+	require.True(t, prepared.Prepared)
+	exchange := cc.qblockClient.exchangesByOriginalToken[string(req.Token())]
+	slot := cc.qblockClient.workQueue.slots[exchange.workID]
+	pendingBytes, err := qblockWorkBytes(*slot.pending)
+	require.NoError(t, err)
+	snapshotBytes, err := qblockOptionBytes(exchange.requestOpts)
+	require.NoError(t, err)
+	require.LessOrEqual(t, snapshotBytes+uint64(cap(exchange.originalToken))+pendingBytes, cc.qblockClient.workQueue.used)
+	_, err = slot.pending.RequestOptions.GetUint32(message.QBlock2)
+	require.NoError(t, err, "queued GET must retain its advertisement")
+	proxyCount := 0
+	for _, option := range slot.pending.RequestOptions {
+		if option.ID == message.ProxyURI {
+			proxyCount++
+		}
+	}
+	require.Equal(t, 1, proxyCount)
+	cc.qblockClient.abandon(req.Token(), qblock.ErrCanceled)
+	require.Zero(t, cc.qblockClient.workQueue.used)
 }

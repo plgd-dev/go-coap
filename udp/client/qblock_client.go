@@ -242,6 +242,10 @@ func (c *qblockClient) prepare(req *pool.Message, fail func(error)) (qblockPrepa
 	}
 	req.SetOptionUint32(message.QBlock2, value)
 	options := cloneQBlockOptions(req.Options())
+	// Remove mutates the option array; keep the initial GET advertisement
+	// separate from the immutable exchange snapshot used by later controls.
+	snapshotOptions := cloneQBlockOptions(options)
+	snapshotOptions = cloneQBlockOptions(snapshotOptions.Remove(message.QBlock2))
 	capacity, err := qblockClientSnapshotCapacity(options, token, nil, c.managerConfig.Transfer.MaxPayloads)
 	if err != nil {
 		return qblockPreparation{}, err
@@ -251,9 +255,9 @@ func (c *qblockClient) prepare(req *pool.Message, fail func(error)) (qblockPrepa
 		expires = deadline
 	}
 	exchange := &qblockExchange{
-		originalToken: message.Token(bytes.Clone(token)),
+		originalToken: message.Token(cloneQBlockBytes(token)),
 		requestCode:   req.Code(),
-		requestOpts:   options.Remove(message.QBlock2),
+		requestOpts:   snapshotOptions,
 		fail:          fail,
 		transfers:     make(map[qblock.TransferID]struct{}),
 	}
@@ -350,10 +354,10 @@ func (c *qblockClient) prepareQ1(req *pool.Message, fail func(error)) (qblockPre
 	}
 	requestContext, cancelContext := context.WithCancel(req.Context())
 	exchange := &qblockExchange{
-		originalToken:   message.Token(bytes.Clone(originalToken)),
+		originalToken:   message.Token(cloneQBlockBytes(originalToken)),
 		requestCode:     req.Code(),
 		requestOpts:     options,
-		requestTag:      bytes.Clone(requestTag),
+		requestTag:      cloneQBlockBytes(requestTag),
 		fail:            fail,
 		transfers:       make(map[qblock.TransferID]struct{}),
 		requestContext:  requestContext,

@@ -1,11 +1,20 @@
 package client
 
 import (
-	"github.com/plgd-dev/go-coap/v3/message"
 	"io"
 
+	"github.com/plgd-dev/go-coap/v3/message"
 	"github.com/plgd-dev/go-coap/v3/net/qblock"
 )
+
+func cloneQBlockBytes(value []byte) []byte {
+	if value == nil {
+		return nil
+	}
+	result := make([]byte, len(value))
+	copy(result, value)
+	return result
+}
 
 // readQBlockBody copies at most the limit and one overflow-detection byte.
 // Failed reads never return a partial body for publication or transmission.
