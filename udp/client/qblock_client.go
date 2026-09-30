@@ -86,6 +86,7 @@ type qblockClient struct {
 	actionMuContention       func()
 	manager                  *qblock.Manager
 	managerConfig            qblock.ManagerConfig
+	datagramLimit            uint32
 	pacingConfig             qblockPacingConfig
 	probeGate                *qblockProbeGate
 	currentProbe             *qblockProbeCorrelation

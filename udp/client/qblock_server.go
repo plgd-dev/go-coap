@@ -581,12 +581,21 @@ func (c *qblockClient) writeServerQ1Control(writeContext context.Context, token 
 		msg.SetCode(codes.Continue)
 		msg.SetOptionUint32(message.QBlock1, value)
 	case qblock.RequestMissing:
-		payload, _, err := qblock.EncodeMissing(action.Numbers, int(c.cc.session.MaxMessageSize()))
+		msg.SetCode(codes.RequestEntityIncomplete)
+		msg.SetContentFormat(message.AppMissingBlocksCBORSeq)
+		// Measure the actual header, token, and option encoding before
+		// allocating the report. A nonempty CBOR sequence adds one marker.
+		overhead, err := qblockDatagramSize(msg)
+		if err != nil {
+			return err
+		}
+		if overhead+1 >= uint64(c.datagramLimit) {
+			return qblock.ErrLimitExceeded
+		}
+		payload, _, err := qblock.EncodeMissing(action.Numbers, int(uint64(c.datagramLimit)-overhead-1))
 		if err != nil {
 			return fmt.Errorf("encode q-block missing report: %w", err)
 		}
-		msg.SetCode(codes.RequestEntityIncomplete)
-		msg.SetContentFormat(message.AppMissingBlocksCBORSeq)
 		msg.SetBody(bytes.NewReader(payload))
 	default:
 		return errors.New("unsupported server q-block output")

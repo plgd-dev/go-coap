@@ -374,6 +374,10 @@ func NewConnWithOpts(session Session, cfg *Config, opts ...Option) *Conn {
 	cc.msgID.Store(pkgMath.CastTo[uint32](cfg.GetMID() - 0xffff/2))
 	cc.blockWise = cfgOpts.createBlockWise(&cc)
 	cc.qblockClient = cfgOpts.createQBlockClient(&cc)
+	if cc.qblockClient != nil {
+		// MTU is the UDP payload budget, as in the ordinary UDP session.
+		cc.qblockClient.datagramLimit = min(uint32(cfg.MTU), session.MaxMessageSize())
+	}
 	if cc.qblockClient != nil && cfgOpts.qblockServerConfig != nil {
 		cc.qblockClient.server = newQBlockServer(cc.qblockClient, cfg.Handler, *cfgOpts.qblockServerConfig)
 	}
