@@ -510,6 +510,15 @@ func (s *qblockServer) prepareResponseLocked(record *qblockServerRecord, code co
 	}
 	etag := sha256.Sum256(append([]byte{byte(code)}, payload...))
 	meta := qblock.Metadata{Size: uint32(len(payload)), SZX: record.metadata.SZX, Identity: etag[:8], HasContentFormat: true, ContentFormat: message.TextPlain}
+	template := c.cc.AcquireMessage(c.cc.Context())
+	template.ResetOptionsTo(options)
+	template.SetOptionUint32(message.Size2, meta.Size)
+	template.SetOptionBytes(message.ETag, meta.Identity)
+	meta.SZX, err = c.selectBodySZX(template, message.QBlock2, meta.Size, meta.SZX)
+	c.cc.ReleaseMessage(template)
+	if err != nil {
+		return err
+	}
 	q2op, err := qblock.NewOperationKey([]byte("server-q2"), []byte(record.operation), meta.Identity)
 	if err != nil {
 		return err
@@ -560,7 +569,7 @@ func (c *qblockClient) writeServerQ2Block(writeContext context.Context, token me
 	if probeKey != 0 {
 		return c.writePacedMessage(probeKey, msg)
 	}
-	return c.cc.session.WriteMessage(msg)
+	return c.writeQBlockMessage(msg)
 }
 
 func (c *qblockClient) writeServerQ1Control(writeContext context.Context, token message.Token, mid int32, szx blockwise.SZX, action qblock.Action, probeKey qblockProbeKey) error {
@@ -606,7 +615,7 @@ func (c *qblockClient) writeServerQ1Control(writeContext context.Context, token 
 	if probeKey != 0 {
 		return c.writePacedMessage(probeKey, msg)
 	}
-	return c.cc.session.WriteMessage(msg)
+	return c.writeQBlockMessage(msg)
 }
 
 func (s *qblockServer) releaseLocked(record *qblockServerRecord) {

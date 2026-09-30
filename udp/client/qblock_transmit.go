@@ -590,6 +590,9 @@ func (c *qblockClient) writePacedMessage(key qblockProbeKey, msg *pool.Message) 
 	if err != nil {
 		return err
 	}
+	if size > uint64(c.datagramLimit) {
+		return qblock.ErrLimitExceeded
+	}
 	c.mu.Lock()
 	owned := false
 	if !c.closed && c.probeGate.state == qblockProbeActive && c.probeGate.key == key {

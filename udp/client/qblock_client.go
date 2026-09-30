@@ -452,6 +452,17 @@ func (c *qblockClient) startQ1Locked(exchange *qblockExchange, body []byte, init
 		SZX:      c.cc.blockwiseSZX,
 		Identity: bytes.Clone(exchange.requestTag),
 	}
+	template := c.cc.AcquireMessage(c.cc.Context())
+	template.ResetOptionsTo(exchange.requestOpts)
+	template.Remove(message.Size1)
+	template.Remove(message.RequestTag)
+	template.SetOptionBytes(message.RequestTag, exchange.requestTag)
+	template.SetOptionUint32(message.Size1, metadata.Size)
+	metadata.SZX, err = c.selectBodySZX(template, message.QBlock1, metadata.Size, metadata.SZX)
+	c.cc.ReleaseMessage(template)
+	if err != nil {
+		return err
+	}
 	if exchange.requestOpts.HasOption(message.ContentFormat) {
 		contentFormat, err := exchange.requestOpts.ContentFormat()
 		if err != nil {
@@ -1319,7 +1330,7 @@ func (c *qblockClient) writeQ1Block(id qblock.TransferID, action qblock.Action) 
 	}
 
 	if bodyAnswered || (repairReply && !bodyProbeActive) {
-		return c.cc.session.WriteMessage(request)
+		return c.writeQBlockMessage(request)
 	}
 	return c.writePacedMessage(transfer.bodyProbeKey, request)
 }
