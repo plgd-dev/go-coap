@@ -204,3 +204,49 @@ func recordMIDForMemoryTest(record *qblockServerRecord) int32 {
 	}
 	return -1
 }
+
+func TestQBlockMemoryClientSnapshotReservation(t *testing.T) {
+	for _, post := range []bool{false, true} {
+		t.Run(map[bool]string{false: "GET", true: "POST"}[post], func(t *testing.T) {
+			session := &qblockTestSession{ctx: context.Background()}
+			cfg := DefaultConfig
+			cfg.BlockwiseEnable, cfg.BlockwiseSZX = false, blockwise.SZX16
+			cc := NewConnWithOpts(session, &cfg, withQBlockClient(qblockClientConfig{Manager: qblock.DefaultManagerConfig(), ScheduleMode: qblockScheduleManual, GetRequestTag: func() (message.Token, error) { return message.Token{7}, nil }}))
+			t.Cleanup(session.closeForTest)
+			req := newPrivateQBlockClientGET(t, cc, message.Token{1})
+			if post {
+				cc.ReleaseMessage(req)
+				req = newPOSTWithBody(t, cc, message.Token{1}, []byte("body"))
+			}
+			defer cc.ReleaseMessage(req)
+			capacity, err := qblockControlCapacity(req.Options(), 10)
+			require.NoError(t, err)
+			// GET preparation adds its QBlock2 advertisement before budgeting.
+			if !post {
+				capacity += uint64(unsafe.Sizeof(message.Option{})) + 1
+			}
+			cc.qblockClient.workQueue.maxBytes = capacity
+			_, err = cc.qblockClient.prepare(req, nil)
+			require.ErrorIs(t, err, qblock.ErrLimitExceeded)
+			require.Empty(t, cc.qblockClient.workQueue.slots)
+			require.Empty(t, session.writesSnapshot())
+			requireQBlockClientEmpty(t, cc)
+			// Restore the caller request shape after rejected GET preparation.
+			req.Remove(message.QBlock2)
+			cc.qblockClient.workQueue.maxBytes = 1 << 20
+			prepared, err := cc.qblockClient.prepare(req, nil)
+			require.NoError(t, err)
+			require.True(t, prepared.Prepared)
+			exchange := cc.qblockClient.exchangesByOriginalToken[string(req.Token())]
+			require.NotNil(t, exchange)
+			value, err := exchange.requestOpts.GetBytes(message.URIPath)
+			require.NoError(t, err)
+			require.Equal(t, len(value), cap(value))
+			before := bytes.Clone(value)
+			req.SetOptionString(message.URIPath, "mutated")
+			require.Equal(t, before, value)
+			cc.qblockClient.abandon(req.Token(), qblock.ErrCanceled)
+			require.Zero(t, cc.qblockClient.workQueue.used)
+		})
+	}
+}

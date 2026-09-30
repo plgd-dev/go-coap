@@ -410,7 +410,7 @@ func (c *qblockClient) executeServerOutput(output qblock.Output) []qblockCallbac
 					return
 				}
 			}
-			responseOptions := cloneQBlockResponseOptions(writer.Message().Options())
+			responseOptions := cloneQBlockOptions(writer.Message().Options())
 			c.server.finishHandler(operation, generation, writer.Message().IsModified(), writer.Message().Code(), responseOptions, body)
 		}}}
 	case qblock.Release:
@@ -665,7 +665,7 @@ func (s *qblockServer) releaseResponseMetadataLocked(record *qblockServerRecord)
 
 // The ordinary Options.Clone retains a minimum-size shared buffer. Retained
 // response snapshots use exact storage so their metadata charge matches it.
-func cloneQBlockResponseOptions(options message.Options) message.Options {
+func cloneQBlockOptions(options message.Options) message.Options {
 	result := make(message.Options, len(options))
 	for i, option := range options {
 		value := make([]byte, len(option.Value))

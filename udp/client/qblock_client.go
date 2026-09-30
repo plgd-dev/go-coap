@@ -241,11 +241,8 @@ func (c *qblockClient) prepare(req *pool.Message, fail func(error)) (qblockPrepa
 		return qblockPreparation{}, err
 	}
 	req.SetOptionUint32(message.QBlock2, value)
-	options, err := req.Options().Clone()
-	if err != nil {
-		return qblockPreparation{}, err
-	}
-	capacity, err := qblockControlCapacity(options, c.managerConfig.Transfer.MaxPayloads)
+	options := cloneQBlockOptions(req.Options())
+	capacity, err := qblockClientSnapshotCapacity(options, token, nil, c.managerConfig.Transfer.MaxPayloads)
 	if err != nil {
 		return qblockPreparation{}, err
 	}
@@ -329,10 +326,7 @@ func (c *qblockClient) prepareQ1(req *pool.Message, fail func(error)) (qblockPre
 	if len(originalToken) == 0 {
 		return qblockPreparation{}, errors.New("q-block Q1 requires token")
 	}
-	options, err := req.Options().Clone()
-	if err != nil {
-		return qblockPreparation{}, err
-	}
+	options := cloneQBlockOptions(req.Options())
 	body, err := copyQBlockBody(req.Body(), c.managerConfig.Transfer.MaxBodySize)
 	if err != nil {
 		return qblockPreparation{}, err
@@ -471,7 +465,7 @@ func (c *qblockClient) startQ1Locked(exchange *qblockExchange, body []byte, init
 		metadata.HasContentFormat = true
 		metadata.ContentFormat = contentFormat
 	}
-	capacity, err := qblockControlCapacity(exchange.requestOpts, c.managerConfig.Transfer.MaxPayloads)
+	capacity, err := qblockClientSnapshotCapacity(exchange.requestOpts, exchange.originalToken, exchange.requestTag, c.managerConfig.Transfer.MaxPayloads)
 	if err != nil {
 		return err
 	}

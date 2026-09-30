@@ -1,6 +1,7 @@
 package client
 
 import (
+	"github.com/plgd-dev/go-coap/v3/message"
 	"io"
 
 	"github.com/plgd-dev/go-coap/v3/net/qblock"
@@ -17,4 +18,23 @@ func readQBlockBody(reader io.Reader, limit uint32) ([]byte, error) {
 		return nil, qblock.ErrLimitExceeded
 	}
 	return payload, nil
+}
+
+func qblockClientSnapshotCapacity(options message.Options, token message.Token, tag []byte, maxPayloads uint32) (uint64, error) {
+	capacity, err := qblockControlCapacity(options, maxPayloads)
+	if err != nil {
+		return 0, err
+	}
+	snapshot, err := qblockOptionBytes(options)
+	if err != nil {
+		return 0, err
+	}
+	for _, part := range []uint64{snapshot, uint64(len(token)), uint64(len(tag))} {
+		var ok bool
+		capacity, ok = qblockCheckedAdd(capacity, part)
+		if !ok {
+			return 0, qblock.ErrLimitExceeded
+		}
+	}
+	return capacity, nil
 }
