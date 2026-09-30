@@ -1,7 +1,6 @@
 package client
 
 import (
-	"bytes"
 	"math"
 	"time"
 	"unsafe"
@@ -167,20 +166,28 @@ func qblockWorkBytes(work qblockPendingWork) (uint64, error) {
 }
 
 func qblockCloneWork(work qblockPendingWork) qblockPendingWork {
-	work.RequestToken = bytes.Clone(work.RequestToken)
-	if len(work.RequestOptions) != 0 {
-		options := make(message.Options, len(work.RequestOptions))
-		for i, option := range work.RequestOptions {
-			options[i] = message.Option{ID: option.ID, Value: bytes.Clone(option.Value)}
-		}
-		work.RequestOptions = options
+	if work.RequestToken != nil {
+		token := make(message.Token, len(work.RequestToken))
+		copy(token, work.RequestToken)
+		work.RequestToken = token
 	}
-	if len(work.Controls) != 0 {
+	if work.RequestOptions != nil {
+		work.RequestOptions = cloneQBlockOptions(work.RequestOptions)
+	}
+	if work.Controls != nil {
 		controls := make([]qblockControlWork, len(work.Controls))
 		copy(controls, work.Controls)
 		for i := range controls {
-			controls[i].ReplyToken = bytes.Clone(controls[i].ReplyToken)
-			controls[i].Intent.Action.Numbers = append([]uint32(nil), controls[i].Intent.Action.Numbers...)
+			if controls[i].ReplyToken != nil {
+				token := make(message.Token, len(controls[i].ReplyToken))
+				copy(token, controls[i].ReplyToken)
+				controls[i].ReplyToken = token
+			}
+			if controls[i].Intent.Action.Numbers != nil {
+				numbers := make([]uint32, len(controls[i].Intent.Action.Numbers))
+				copy(numbers, controls[i].Intent.Action.Numbers)
+				controls[i].Intent.Action.Numbers = numbers
+			}
 		}
 		work.Controls = controls
 	}

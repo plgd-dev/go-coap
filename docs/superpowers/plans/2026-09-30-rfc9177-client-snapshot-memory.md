@@ -33,12 +33,12 @@
 
 **Interfaces:** Consume qblockOptionBytes, qblockCheckedAdd, qblockControlCapacity, workQueue.reserve/release. Produce `qblockClientSnapshotCapacity(options message.Options, token message.Token, tag []byte, maxPayloads uint32) (uint64, error)` in qblock_memory.go. Generalize exact retained option copy to `cloneQBlockOptions(options message.Options) message.Options` and use for request snapshots.
 
-- [ ] Write `TestQBlockMemoryClientSnapshotReservation` for GET and POST: provide only the previous control reservation as MaxIntentBytes, expect ErrLimitExceeded, no packet, no work slot; then increase budget to cover snapshot/control and expect admission followed by full release on abandonment. Assert copied request options remain independent after caller mutation.
-- [ ] Run `rtk proxy go test ./udp/client -run '^TestQBlockMemoryClientSnapshot' -count=1 -timeout=30s`. Expected: FAIL on missing snapshot reservation.
-- [ ] Implement checked snapshot-plus-control reservation: exact option element/value bytes plus original token and Request-Tag. Use it at GET and Q1 work-slot admission. Snapshot options copy exactly; preserve existing rollback and handoff slot lifetime.
-- [ ] Run the focused command above. Expected: PASS.
-- [ ] Run `rtk proxy go test ./net/qblock ./udp/client -run '^(TestQBlock|TestManager|TestDeferred|TestDoInternalWithoutPrivateQBlockWritesOrdinaryGET|TestClassicBlock2WithoutPrivateQBlockDeliversNormalHandler|TestConnDelivers.*QBlock)' -count=1 -timeout=180s`. Expected: PASS.
-- [ ] Commit only task code/tests and this plan: `fix(qblock): reserve retained client request snapshots`.
+- [x] Write `TestQBlockMemoryClientSnapshotReservation` for GET and POST: provide only the previous control reservation as MaxIntentBytes, expect ErrLimitExceeded, no packet, no work slot; then increase budget to cover snapshot/control and expect admission followed by full release on abandonment. Assert copied request options remain independent after caller mutation.
+- [x] Run `rtk proxy go test ./udp/client -run '^TestQBlockMemoryClientSnapshot' -count=1 -timeout=30s`. Expected: FAIL on missing snapshot reservation.
+- [x] Implement checked snapshot-plus-control reservation: exact option element/value bytes plus original token and Request-Tag. Use it at GET and Q1 work-slot admission. Snapshot options copy exactly; preserve existing rollback and handoff slot lifetime.
+- [x] Run the focused command above. Expected: PASS.
+- [x] Run `rtk proxy go test ./net/qblock ./udp/client -run '^(TestQBlock|TestManager|TestDeferred|TestDoInternalWithoutPrivateQBlockWritesOrdinaryGET|TestClassicBlock2WithoutPrivateQBlockDeliversNormalHandler|TestConnDelivers.*QBlock)' -count=1 -timeout=180s`. Expected: PASS.
+- [x] Commit only task code/tests and this plan: `fix(qblock): reserve retained client request snapshots`.
 
 ### Task 2: Match pending storage to charged bytes
 
@@ -46,12 +46,12 @@
 
 **Interfaces:** Consume Task 1's exact option clone; preserve qblockCloneWork, qblockWorkBytes, replacement/order APIs.
 
-- [ ] Write `TestQBlockMemoryPendingBackingMatchesCharge`: odd-length option/token/control number arrays retain capacity equal to copied length, source mutations do not affect stored work, replacement/release returns all extra bytes.
-- [ ] Run `rtk proxy go test ./udp/client -run '^TestQBlockMemoryPendingBacking' -count=1 -timeout=30s`. Expected: FAIL on append/clone spare capacity.
-- [ ] Replace append-based token/value/number copies with exact make/copy arrays; keep zero-value semantics and detached snapshots. Do not charge transient executor snapshots as retained queue state.
-- [ ] Run the focused command above and Task 1's whole-task selection. Expected: PASS.
-- [ ] Run the whole-task selection with `-race`; run `rtk proxy go test ./... -run '^$' -count=1 -timeout=180s`, `rtk proxy go vet ./udp/client ./net/qblock`, and `rtk git diff --check`. Expected: all PASS; repository check is compile-only.
-- [ ] Update roadmap/results with exact limits and remaining transient/map/metadata accounting. Commit: `fix(qblock): match pending copies to memory charges`.
+- [x] Write `TestQBlockMemoryPendingBackingMatchesCharge`: odd-length option/token/control number arrays retain capacity equal to copied length, source mutations do not affect stored work, replacement/release returns all extra bytes.
+- [x] Run `rtk proxy go test ./udp/client -run '^TestQBlockMemoryPendingBacking' -count=1 -timeout=30s`. Expected: FAIL on append/clone spare capacity.
+- [x] Replace append-based token/value/number copies with exact make/copy arrays; keep zero-value semantics and detached snapshots. Do not charge transient executor snapshots as retained queue state.
+- [x] Run the focused command above and Task 1's whole-task selection. Expected: PASS.
+- [x] Run the whole-task selection with `-race`; run `rtk proxy go test ./... -run '^$' -count=1 -timeout=180s`, `rtk proxy go vet ./udp/client ./net/qblock`, and `rtk git diff --check`. Expected: all PASS; repository check is compile-only.
+- [x] Update roadmap/results with exact limits and remaining transient/map/metadata accounting. Commit: `fix(qblock): match pending copies to memory charges`.
 
 ## Execution and completion
 

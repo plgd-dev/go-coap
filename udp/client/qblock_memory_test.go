@@ -250,3 +250,41 @@ func TestQBlockMemoryClientSnapshotReservation(t *testing.T) {
 		})
 	}
 }
+
+func TestQBlockMemoryPendingBackingMatchesCharge(t *testing.T) {
+	q := newQBlockWorkQueue(1, 4096)
+	id, err := q.reserve(1)
+	require.NoError(t, err)
+	work := qblockPendingWork{
+		Kind:           qblockWorkControls,
+		RequestOptions: message.Options{{ID: message.URIPath, Value: []byte("abc")}},
+		RequestToken:   message.Token{1, 2, 3},
+		Controls: []qblockControlWork{{
+			ReplyToken: message.Token{4, 5, 6},
+			Intent:     qblock.ControlIntent{Action: qblock.Action{Numbers: []uint32{1, 2, 3}}},
+		}},
+	}
+	require.NoError(t, q.replace(id, work, false))
+	charged, err := qblockWorkBytes(work)
+	require.NoError(t, err)
+	require.Equal(t, charged, q.used)
+	stored := q.slots[id].pending
+	require.Equal(t, 3, cap(stored.RequestOptions[0].Value))
+	require.Equal(t, 3, cap(stored.RequestToken))
+	require.Equal(t, 3, cap(stored.Controls[0].ReplyToken))
+	require.Equal(t, 3, cap(stored.Controls[0].Intent.Action.Numbers))
+	work.RequestOptions[0].Value[0] = 'z'
+	work.RequestToken[0] = 9
+	work.Controls[0].ReplyToken[0] = 9
+	work.Controls[0].Intent.Action.Numbers[0] = 9
+	require.Equal(t, []byte("abc"), stored.RequestOptions[0].Value)
+	require.Equal(t, message.Token{1, 2, 3}, stored.RequestToken)
+	require.Equal(t, message.Token{4, 5, 6}, stored.Controls[0].ReplyToken)
+	require.Equal(t, []uint32{1, 2, 3}, stored.Controls[0].Intent.Action.Numbers)
+	require.NoError(t, q.replace(id, qblockPendingWork{Kind: qblockWorkGET}, true))
+	require.Equal(t, uint64(1), q.used)
+	q.clearPending(id)
+	require.Equal(t, uint64(1), q.used)
+	q.release(id)
+	require.Zero(t, q.used)
+}
