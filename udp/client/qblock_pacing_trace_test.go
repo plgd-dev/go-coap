@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/plgd-dev/go-coap/v3/internal/test/qblocklink"
 	"github.com/plgd-dev/go-coap/v3/message"
 	"github.com/plgd-dev/go-coap/v3/message/codes"
 	"github.com/plgd-dev/go-coap/v3/message/pool"
@@ -65,6 +66,10 @@ func TestQBlockPacingPairedPOSTPUTRepair(t *testing.T) {
 }
 
 func runQBlockPacingPairedRepair(t *testing.T, method codes.Code, pacing *qblockPacingConfig, lifetime time.Duration) {
+	runQBlockPacingPairedRepairWithRelay(t, method, pacing, lifetime, nil)
+}
+
+func runQBlockPacingPairedRepairWithRelay(t *testing.T, method codes.Code, pacing *qblockPacingConfig, lifetime time.Duration, relay *qblocklink.Link) {
 	t.Helper()
 	start := time.Unix(100, 0)
 	clientClock, serverClock := newFakeQBlockClock(start), newFakeQBlockClock(start)
@@ -134,7 +139,16 @@ func runQBlockPacingPairedRepair(t *testing.T, method codes.Code, pacing *qblock
 			progressed := false
 			if wire, ok := clientSession.pop(); ok {
 				progressed = true
-				if wire.options.HasOption(message.QBlock1) {
+				if relay != nil {
+					packets := processQBlockRelayWire(t, relay, qblocklink.ClientToServer, wire)
+					if len(packets) == 0 {
+						droppedUpload = true
+					}
+					for _, packet := range packets {
+						deliverQBlockRelayPacket(t, server, packet)
+						acceptedServerTokens[string(wire.token)] = struct{}{}
+					}
+				} else if wire.options.HasOption(message.QBlock1) {
 					value, getErr := wire.options.GetUint32(message.QBlock1)
 					require.NoError(t, getErr)
 					block, decodeErr := qblock.DecodeBlock(value)
@@ -152,7 +166,15 @@ func runQBlockPacingPairedRepair(t *testing.T, method codes.Code, pacing *qblock
 			}
 			if wire, ok := serverSession.pop(); ok {
 				progressed = true
-				if wire.options.HasOption(message.QBlock2) {
+				if relay != nil {
+					packets := processQBlockRelayWire(t, relay, qblocklink.ServerToClient, wire)
+					if len(packets) == 0 {
+						droppedResponse = true
+					}
+					for _, packet := range packets {
+						deliverQBlockRelayPacket(t, client, packet)
+					}
+				} else if wire.options.HasOption(message.QBlock2) {
 					value, getErr := wire.options.GetUint32(message.QBlock2)
 					require.NoError(t, getErr)
 					block, decodeErr := qblock.DecodeBlock(value)
