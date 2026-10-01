@@ -2,6 +2,7 @@ package client
 
 import (
 	"github.com/plgd-dev/go-coap/v3/message"
+	"github.com/plgd-dev/go-coap/v3/message/codes"
 	"github.com/plgd-dev/go-coap/v3/message/pool"
 	"github.com/plgd-dev/go-coap/v3/net/blockwise"
 	"github.com/plgd-dev/go-coap/v3/net/qblock"
@@ -17,7 +18,7 @@ func (c *qblockClient) selectGETSZX() (blockwise.SZX, error) {
 	template.SetOptionBytes(message.ETag, make([]byte, 8))
 	template.SetOptionUint32(message.ContentFormat, 65535)
 	template.SetOptionUint32(message.Size2, c.managerConfig.Transfer.MaxBodySize)
-	return c.selectBodySZX(template, message.QBlock2, c.managerConfig.Transfer.MaxBodySize, c.cc.blockwiseSZX)
+	return c.selectSZX(template, message.QBlock2, c.managerConfig.Transfer.MaxBodySize, c.cc.blockwiseSZX, true)
 }
 
 func qblockGETSize(req *pool.Message) (uint64, error) {
@@ -53,6 +54,10 @@ func qblockIncomingSize(msg *pool.Message) (uint64, error) {
 // all stable wire options; reserve the longest token future controls can use
 // and the largest block number this body can emit, including repair packets.
 func (c *qblockClient) selectBodySZX(template *pool.Message, option message.OptionID, size uint32, maximum blockwise.SZX) (blockwise.SZX, error) {
+	return c.selectSZX(template, option, size, maximum, false)
+}
+
+func (c *qblockClient) selectSZX(template *pool.Message, option message.OptionID, size uint32, maximum blockwise.SZX, synthetic bool) (blockwise.SZX, error) {
 	if maximum > blockwise.SZX1024 {
 		return 0, blockwise.ErrInvalidSZX
 	}
@@ -61,7 +66,12 @@ func (c *qblockClient) selectBodySZX(template *pool.Message, option message.Opti
 		blockSize := uint64(16) << szx
 		count := max(uint64(1), (uint64(size)+blockSize-1)/blockSize)
 		if count > 1<<20 {
-			continue
+			if !synthetic {
+				continue
+			}
+			// A GET's cap is not its representation size. Reserve the largest
+			// legal NUM without requiring every resource to reach the cap.
+			count = 1 << 20
 		}
 		value, err := qblock.EncodeBlock(qblock.Block{Number: uint32(count - 1), More: true, SZX: szx})
 		if err != nil {
@@ -80,6 +90,16 @@ func (c *qblockClient) selectBodySZX(template *pool.Message, option message.Opti
 		}
 	}
 	return 0, qblock.ErrLimitExceeded
+}
+
+func (c *qblockClient) oversizedInitialGET(msg *pool.Message, wireSize uint64) bool {
+	if wireSize <= uint64(c.datagramLimit) || !msg.HasOption(message.QBlock2) || msg.Code() < 64 {
+		return false
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	exchange := c.exchangesByOriginalToken[string(msg.Token())]
+	return exchange != nil && exchange.requestCode == codes.GET && len(exchange.transfers) == 0
 }
 
 func (c *qblockClient) writeQBlockMessage(msg *pool.Message) error {

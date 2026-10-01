@@ -47,3 +47,14 @@
 ## Completion
 
 Pre-flight: Task 2 consumes Task 1's saved advertised ceiling; no shared-interface conflict. Self-review: this plan covers only GET first-response negotiation under the approved design; remaining incoming/Q1/handoff sizing is deliberately deferred. User explicitly authorized planning and inline execution without routine confirmation. Keep the scoped ledger for continuity. Review base 4ae63b9 through final HEAD once with gpt-6-astra/high, fix important findings in one TDD pass, preserve worktree/branch and do not merge or push.
+
+
+## Final review fix pass
+
+One fresh-context Astra/high review found two Important gaps. Both were reproduced
+RED and fixed GREEN: Conn.Process now checks original raw length for pending
+initial GET Q2 responses (decoded options may omit malformed values); synthetic
+GET sizing caps reserved NUM at the largest legal value rather than rejecting
+all GETs under a large configured MaxBodySize. Actual sender size validation
+remains unchanged. Files additionally include udp/client/conn.go. Review and
+rulings are retained in this plan's scoped ledger. No Minor findings.

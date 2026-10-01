@@ -1102,6 +1102,12 @@ func (cc *Conn) Process(cm *coapNet.ControlMessage, datagram []byte) error {
 		cc.ReleaseMessage(req)
 		return err
 	}
+	// Decoding can discard malformed known options. Check the original wire
+	// length before a pending private GET can admit its first Q2 response.
+	if cc.qblockClient != nil && cc.qblockClient.oversizedInitialGET(req, uint64(len(datagram))) {
+		cc.ReleaseMessage(req)
+		return nil
+	}
 	req.SetControlMessage(cm)
 	req.SetSequence(cc.Sequence())
 	cc.checkMyMessageID(req)

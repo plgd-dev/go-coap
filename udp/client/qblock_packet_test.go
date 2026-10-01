@@ -245,3 +245,64 @@ func TestQBlockPacketGETRejectsUnacceptableFirstResponse(t *testing.T) {
 		})
 	}
 }
+
+func TestQBlockPacketGETLargeBodyCapAllowsSmallResource(t *testing.T) {
+	session := &qblockTestSession{ctx: context.Background()}
+	cfg := DefaultConfig
+	cfg.BlockwiseEnable, cfg.BlockwiseSZX = false, blockwise.SZX16
+	manager := qblock.DefaultManagerConfig()
+	manager.Transfer.MaxBodySize = 32 << 20
+	manager.MaxRetainedBytes = 64 << 20
+	cc := NewConnWithOpts(session, &cfg, withQBlockClient(qblockClientConfig{Manager: manager, ScheduleMode: qblockScheduleManual}))
+	t.Cleanup(session.closeForTest)
+	req := newPrivateQBlockClientGET(t, cc, message.Token{1})
+	defer cc.ReleaseMessage(req)
+	prepared, err := cc.qblockClient.prepare(req, nil)
+	require.NoError(t, err)
+	require.True(t, prepared.Prepared)
+	response := newQBlockClientFragment(t, cc, req.Token(), 0, false, 16)
+	defer cc.ReleaseMessage(response)
+	require.True(t, cc.qblockClient.handle(response))
+	requireQBlockClientFullyIdle(t, cc.qblockClient)
+}
+
+func TestQBlockPacketGETRawDatagramLimitSurvivesOptionDiscard(t *testing.T) {
+	session := &qblockTestSession{ctx: context.Background()}
+	cc := newPrivateQBlockClientConnWithToken(t, session, message.GetToken)
+	t.Cleanup(session.closeForTest)
+	cc.qblockClient.datagramLimit = 68
+	req := newPrivateQBlockClientGET(t, cc, message.Token{1})
+	defer cc.ReleaseMessage(req)
+	_, err := cc.qblockClient.prepare(req, nil)
+	require.NoError(t, err)
+	cc.qblockClient.Tick(cc.qblockClient.now())
+	debt := cc.qblockClient.probeGate.bytes
+	// Route synchronously at the monitor boundary to make this Process test
+	// deterministic; the real decoder and Q2 adapter still execute.
+	monitored := 0
+	cc.requestMonitor = func(_ *Conn, msg *pool.Message) (bool, error) {
+		monitored++
+		cc.qblockClient.handle(msg)
+		return true, nil
+	}
+	response := newQBlockClientFragment(t, cc, req.Token(), 0, true, 32)
+	defer cc.ReleaseMessage(response)
+	response.SetType(message.NonConfirmable)
+	response.SetMessageID(101)
+	response.SetOptionBytes(message.MaxAge, bytes.Repeat([]byte{'x'}, 80))
+	raw, err := response.MarshalWithEncoder(coder.DefaultCoder)
+	require.NoError(t, err)
+	require.Greater(t, len(raw), 68)
+	require.NoError(t, cc.Process(nil, raw))
+	require.Zero(t, monitored)
+	require.Zero(t, cc.qblockClient.active())
+	require.Equal(t, debt, cc.qblockClient.probeGate.bytes)
+	response.Remove(message.MaxAge)
+	raw, err = response.MarshalWithEncoder(coder.DefaultCoder)
+	require.NoError(t, err)
+	require.NoError(t, cc.Process(nil, raw))
+	require.Equal(t, 1, monitored)
+	require.Equal(t, uint32(1), cc.qblockClient.active())
+	cc.qblockClient.abandon(req.Token(), qblock.ErrCanceled)
+	requireQBlockClientFullyIdle(t, cc.qblockClient)
+}
