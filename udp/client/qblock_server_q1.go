@@ -29,6 +29,7 @@ func (s *qblockServer) handleQ1(msg *pool.Message) ([]qblock.Output, bool) {
 		return nil, false
 	}
 	fragment.Operation = operation
+	hint, _ := serverUploadResponseHint(msg)
 
 	s.client.mu.Lock()
 	if s.closed {
@@ -36,6 +37,10 @@ func (s *qblockServer) handleQ1(msg *pool.Message) ([]qblock.Output, bool) {
 		return nil, false
 	}
 	if record := s.records[operation]; record != nil {
+		if (record.responseCeiling == nil) != (hint == nil) || (hint != nil && *record.responseCeiling != *hint) {
+			s.client.mu.Unlock()
+			return nil, false
+		}
 		if record.executing {
 			s.client.mu.Unlock()
 			return nil, false
@@ -88,7 +93,8 @@ func (s *qblockServer) handleQ1(msg *pool.Message) ([]qblock.Output, bool) {
 	s.nextGen++
 	writeContext, cancelWrite := context.WithCancel(s.client.writeContext)
 	record := &qblockServerRecord{
-		id: id, workID: workID, operation: operation, activeOperation: operation, metadata: fragment.Metadata, options: options,
+		responseCeiling: hint,
+		id:              id, workID: workID, operation: operation, activeOperation: operation, metadata: fragment.Metadata, options: options,
 		tokens: map[string]message.Token{string(fragment.Token): bytes.Clone(fragment.Token)}, replyToken: bytes.Clone(fragment.Token), code: msg.Code(), charged: charge,
 		generation: s.nextGen, mids: make(map[int32]struct{}), writeContext: writeContext, cancelWrite: cancelWrite,
 		writeExpires: now.Add(s.client.managerConfig.Transfer.Lifetime),
@@ -189,8 +195,11 @@ func (s *qblockServer) syncControlsLocked(record *qblockServerRecord, _ time.Tim
 }
 
 func serverQ1Fragment(msg *pool.Message) (qblock.Fragment, message.Options, error) {
-	if msg.HasOption(message.QBlock2) || msg.HasOption(message.Block1) || msg.HasOption(message.Block2) {
+	if msg.HasOption(message.Block1) || msg.HasOption(message.Block2) {
 		return qblock.Fragment{}, nil, errors.New("mixed q-block request options")
+	}
+	if _, err := serverUploadResponseHint(msg); err != nil {
+		return qblock.Fragment{}, nil, err
 	}
 	if err := qblock.ValidateOptions(msg.Options(), true); err != nil {
 		return qblock.Fragment{}, nil, err
@@ -273,4 +282,25 @@ func optionsSize(opts message.Options) uint64 {
 		size += uint64(4 + len(option.Value))
 	}
 	return size
+}
+
+func serverUploadResponseHint(msg *pool.Message) (*qblock.Block, error) {
+	if !msg.HasOption(message.QBlock2) {
+		return nil, nil
+	}
+	if qblockOptionCount(msg, message.QBlock2) != 1 {
+		return nil, errors.New("upload requires one response ceiling")
+	}
+	value, err := msg.GetOptionUint32(message.QBlock2)
+	if err != nil {
+		return nil, err
+	}
+	block, err := qblock.DecodeBlock(value)
+	if err != nil {
+		return nil, err
+	}
+	if block.Number != 0 || !block.More {
+		return nil, errors.New("upload response ceiling requires NUM0/M1")
+	}
+	return &block, nil
 }

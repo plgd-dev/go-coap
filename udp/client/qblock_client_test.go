@@ -90,7 +90,7 @@ func (s *qblockTestSession) WriteMessage(msg *pool.Message) error {
 		<-releaseFirstWrite
 	}
 	s.writeType = msg.Type()
-	s.writeQ2 = msg.HasOption(message.QBlock2)
+	s.writeQ2 = msg.HasOption(message.QBlock2) && !msg.HasOption(message.QBlock1)
 	var block uint32
 	if s.writeQ2 {
 		value, err := msg.GetOptionUint32(message.QBlock2)

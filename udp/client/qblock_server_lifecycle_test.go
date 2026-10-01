@@ -313,7 +313,7 @@ func runQBlockPrivatePairedRolesTrace(t *testing.T, method codes.Code, automatic
 		if wire.options.HasOption(message.QBlock1) {
 			uploadTag = tag
 		}
-		if wire.options.HasOption(message.QBlock2) {
+		if wire.options.HasOption(message.QBlock2) && !wire.options.HasOption(message.QBlock1) {
 			if controlToken == nil {
 				controlTag = tag
 				controlToken = wire.token

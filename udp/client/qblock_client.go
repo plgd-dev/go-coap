@@ -344,6 +344,10 @@ func (c *qblockClient) prepareQ1(req *pool.Message, fail func(error)) (qblockPre
 	if len(originalToken) == 0 {
 		return qblockPreparation{}, errors.New("q-block Q1 requires token")
 	}
+	responseSZX, err := c.selectGETSZX()
+	if err != nil {
+		return qblockPreparation{}, err
+	}
 	options := cloneQBlockOptions(req.Options())
 	body, err := copyQBlockBody(req.Body(), c.managerConfig.Transfer.MaxBodySize)
 	if err != nil {
@@ -368,6 +372,7 @@ func (c *qblockClient) prepareQ1(req *pool.Message, fail func(error)) (qblockPre
 	}
 	requestContext, cancelContext := context.WithCancel(req.Context())
 	exchange := &qblockExchange{
+		getSZX:          responseSZX,
 		originalToken:   message.Token(cloneQBlockBytes(originalToken)),
 		requestCode:     req.Code(),
 		requestOpts:     options,
@@ -470,6 +475,12 @@ func (c *qblockClient) startQ1Locked(exchange *qblockExchange, body []byte, init
 	template.Remove(message.RequestTag)
 	template.SetOptionBytes(message.RequestTag, exchange.requestTag)
 	template.SetOptionUint32(message.Size1, metadata.Size)
+	responseHint, err := qblock.EncodeBlock(qblock.Block{More: true, SZX: exchange.getSZX})
+	if err != nil {
+		c.cc.ReleaseMessage(template)
+		return err
+	}
+	template.SetOptionUint32(message.QBlock2, responseHint)
 	metadata.SZX, err = c.selectBodySZX(template, message.QBlock1, metadata.Size, metadata.SZX)
 	c.cc.ReleaseMessage(template)
 	if err != nil {
@@ -1058,6 +1069,13 @@ func (c *qblockClient) handleQ1ResponseLocked(msg *pool.Message, id qblock.Trans
 		return c.finishExchangeLocked(transfer.exchange, err), true
 	}
 	if handled {
+		if msg.Code() == codes.Continue {
+			value, _ := msg.GetOptionUint32(message.QBlock1)
+			block, _ := qblock.DecodeBlock(value)
+			if block.SZX != transfer.metadata.SZX {
+				return c.finishExchangeLocked(transfer.exchange, errors.New("q-block Continue changed upload SZX")), true
+			}
+		}
 		now := c.now()
 		matchesProbe := c.matchesPacingQ1ControlLocked(transfer, control)
 		outputs, err := c.manager.Control(control, now)
@@ -1131,6 +1149,9 @@ func (c *qblockClient) handoffQ1ToQ2Locked(id qblock.TransferID, msg *pool.Messa
 	fragment, metadata, err := fragmentFromQ2ForCode(msg, operation, nil, code)
 	if err != nil {
 		return nil, err
+	}
+	if metadata.SZX > exchange.getSZX {
+		return nil, errors.New("q-block response exceeds advertised upload response ceiling")
 	}
 	responseOptions, err := qblockResponseOptions(msg)
 	if err != nil {
@@ -1411,6 +1432,12 @@ func (c *qblockClient) newQ1Request(transfer *qblockTransfer, token message.Toke
 	request.SetOptionBytes(message.RequestTag, transfer.requestTag)
 	request.SetOptionUint32(message.Size1, transfer.metadata.Size)
 	request.SetOptionUint32(message.QBlock1, value)
+	responseHint, err := qblock.EncodeBlock(qblock.Block{More: true, SZX: transfer.exchange.getSZX})
+	if err != nil {
+		c.cc.ReleaseMessage(request)
+		return nil, err
+	}
+	request.SetOptionUint32(message.QBlock2, responseHint)
 	request.SetBody(bytes.NewReader(bytes.Clone(action.Payload)))
 	transfer.mids[mid] = struct{}{}
 	c.transferByMID[mid] = transfer

@@ -523,3 +523,150 @@ func TestQBlockPacketIncomingSessionLimit(t *testing.T) {
 		})
 	}
 }
+
+// The response ceiling must be negotiated even when upload options force a
+// smaller upload block; removing Q2 from a Q1 packet breaks this contract.
+func TestQBlockPacketQ1AdvertisesIndependentResponseCeiling(t *testing.T) {
+	session := &qblockTestSession{ctx: context.Background()}
+	cfg := DefaultConfig
+	cfg.BlockwiseEnable, cfg.BlockwiseSZX, cfg.MTU = false, blockwise.SZX1024, 68
+	cfg.GetToken = message.GetToken
+	cc := NewConnWithOpts(session, &cfg, withQBlockClient(qblockClientConfig{Manager: qblock.DefaultManagerConfig(), ScheduleMode: qblockScheduleManual, GetRequestTag: func() (message.Token, error) { return message.Token{1}, nil }}))
+	t.Cleanup(session.closeForTest)
+	req := newPOSTWithBody(t, cc, message.Token{1}, bytes.Repeat([]byte{'u'}, 96))
+	defer cc.ReleaseMessage(req)
+	require.NoError(t, req.SetPath("/long-upload-path-123456789"))
+	_, err := cc.qblockClient.prepareQ1(req, nil)
+	require.NoError(t, err)
+	writes := session.writesSnapshot()
+	require.NotEmpty(t, writes)
+	for _, wire := range writes {
+		value, err := wire.options.GetUint32(message.QBlock2)
+		require.NoError(t, err)
+		hint, err := qblock.DecodeBlock(value)
+		require.NoError(t, err)
+		require.Equal(t, qblock.Block{More: true, SZX: blockwise.SZX32}, hint)
+		upload, err := qblock.DecodeBlock(wire.block)
+		require.NoError(t, err)
+		require.Equal(t, blockwise.SZX16, upload.SZX)
+		size, err := coder.DefaultCoder.Size(message.Message{Token: wire.token, Options: wire.options, Payload: wire.payload})
+		require.NoError(t, err)
+		require.LessOrEqual(t, size, int(cfg.MTU))
+	}
+}
+
+func TestQBlockPacketServerCombinedUploadResponseCeiling(t *testing.T) {
+	for _, hint := range []uint32{uint32(blockwise.SZX64) | 8, uint32(blockwise.SZX16) | 8} {
+		t.Run(string(rune('a'+hint)), func(t *testing.T) {
+			h := newServerHarness(t, qblock.DefaultManagerConfig(), qblockServerConfig{}, func(w *responsewriter.ResponseWriter[*Conn], _ *pool.Message) {
+				require.NoError(t, w.SetResponse(codes.Changed, message.TextPlain, bytes.NewReader(bytes.Repeat([]byte{'r'}, 96))))
+			})
+			h.cc.qblockClient.datagramLimit = 1500
+			request := h.q1(t, 1, 0, false, 4, "body")
+			request.SetOptionUint32(message.QBlock2, hint)
+			h.ingest(request)
+			writes := h.session.writesSnapshot()
+			require.NotEmpty(t, writes, "combined Q1/Q2 request must dispatch")
+			for _, wire := range writes {
+				block, err := qblock.DecodeBlock(wire.block)
+				require.NoError(t, err)
+				require.Equal(t, blockwise.SZX(hint&7), block.SZX)
+			}
+		})
+	}
+}
+
+func TestQBlockPacketServerRejectsInvalidUploadResponseHints(t *testing.T) {
+	for _, hint := range []uint32{0, 16 | 8, 7 | 8} {
+		h := newServerHarness(t, qblock.DefaultManagerConfig(), qblockServerConfig{}, nil)
+		req := h.q1(t, 1, 0, false, 4, "body")
+		req.SetOptionUint32(message.QBlock2, hint)
+		_, _, err := serverQ1Fragment(req)
+		require.Error(t, err)
+		h.cc.ReleaseMessage(req)
+	}
+	h := newServerHarness(t, qblock.DefaultManagerConfig(), qblockServerConfig{}, nil)
+	req := h.q1(t, 1, 0, false, 4, "body")
+	req.AddOptionUint32(message.QBlock2, 8)
+	req.AddOptionUint32(message.QBlock2, 8)
+	_, _, err := serverQ1Fragment(req)
+	require.Error(t, err)
+	h.cc.ReleaseMessage(req)
+}
+
+func TestQBlockPacketUploadRejectsLargerResponseCeilingBeforeHandoff(t *testing.T) {
+	session := &qblockTestSession{ctx: context.Background()}
+	cc := newPrivateQBlockClientConnWithTokenAndSZX(t, session, message.GetToken, blockwise.SZX16)
+	defer cc.qblockClient.close()
+	req := newPOSTWithBody(t, cc, message.Token{1}, []byte("body"))
+	defer cc.ReleaseMessage(req)
+	_, err := cc.qblockClient.prepareQ1(req, nil)
+	require.NoError(t, err)
+	token := session.writesSnapshot()[0].token
+	bad := q2ResponseForPost(t, cc, token, 0, false, 4, 'r')
+	defer cc.ReleaseMessage(bad)
+	bad.SetOptionUint32(message.QBlock2, uint32(blockwise.SZX32))
+	bad.SetBody(bytes.NewReader([]byte("body")))
+	cc.handle(nil, bad)
+	require.NotNil(t, cc.qblockClient.transferByToken[string(token)], "invalid response must retain upload")
+	require.Equal(t, qblock.Q1, cc.qblockClient.transferByToken[string(token)].kind)
+	valid := q2ResponseForPost(t, cc, token, 0, true, 32, 'r')
+	defer cc.ReleaseMessage(valid)
+	cc.handle(nil, valid)
+	require.Equal(t, qblock.Q2, cc.qblockClient.transferByToken[string(token)].kind)
+}
+
+func TestQBlockPacketUploadRejectsChangedContinueSZX(t *testing.T) {
+	session := &qblockTestSession{ctx: context.Background()}
+	cc := newPrivateQBlockClientConnWithMaxPayloads(t, session, 2, message.GetToken)
+	defer cc.qblockClient.close()
+	req := newPOSTWithBody(t, cc, message.Token{1}, bytes.Repeat([]byte{'u'}, 48))
+	defer cc.ReleaseMessage(req)
+	failures := make(chan error, 1)
+	_, err := cc.qblockClient.prepareQ1(req, func(err error) { failures <- err })
+	require.NoError(t, err)
+	writes := session.writesSnapshot()
+	require.Len(t, writes, 2)
+	msg := cc.AcquireMessage(context.Background())
+	defer cc.ReleaseMessage(msg)
+	msg.SetCode(codes.Continue)
+	msg.SetType(message.NonConfirmable)
+	msg.SetToken(writes[1].token)
+	value, err := qblock.EncodeBlock(qblock.Block{Number: 1, More: true, SZX: blockwise.SZX32})
+	require.NoError(t, err)
+	msg.SetOptionUint32(message.QBlock1, value)
+	cc.handle(nil, msg)
+	require.Zero(t, cc.qblockClient.active())
+	require.Len(t, session.writesSnapshot(), 2)
+	select {
+	case err := <-failures:
+		require.Error(t, err)
+	default:
+		t.Fatal("changed SZX must fail exchange")
+	}
+}
+
+func TestQBlockPacketServerIgnoresChangedUploadResponseHint(t *testing.T) {
+	calls := 0
+	h := newServerHarness(t, qblock.DefaultManagerConfig(), qblockServerConfig{}, func(w *responsewriter.ResponseWriter[*Conn], req *pool.Message) {
+		calls++
+		body, err := req.ReadBody()
+		require.NoError(t, err)
+		require.Equal(t, bytes.Repeat([]byte{'u'}, 32), body)
+		require.NoError(t, w.SetResponse(codes.Changed, message.TextPlain, bytes.NewReader([]byte("done"))))
+	})
+	first := h.q1(t, 1, 0, true, 32, string(bytes.Repeat([]byte{'u'}, 16)))
+	first.SetOptionUint32(message.QBlock2, 8)
+	h.ingest(first)
+	next := h.q1(t, 2, 1, false, 32, string(bytes.Repeat([]byte{'u'}, 16)))
+	next.SetOptionUint32(message.QBlock2, 9)
+	h.ingest(next)
+	require.Zero(t, calls, "changed hint must not dispatch handler")
+	require.EqualValues(t, 1, h.cc.qblockClient.active())
+	require.Empty(t, h.session.writesSnapshot())
+	valid := h.q1(t, 3, 1, false, 32, string(bytes.Repeat([]byte{'u'}, 16)))
+	valid.SetOptionUint32(message.QBlock2, 8)
+	h.ingest(valid)
+	require.Equal(t, 1, calls, "original hint must finish exactly once")
+	require.NotEmpty(t, h.session.writesSnapshot())
+}

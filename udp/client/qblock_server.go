@@ -43,6 +43,7 @@ type qblockServerRecord struct {
 	bodyAnswered    bool
 	operation       qblock.OperationKey
 	activeOperation qblock.OperationKey
+	responseCeiling *qblock.Block
 	metadata        qblock.Metadata
 	options         message.Options
 	tokens          map[string]message.Token
@@ -344,10 +345,10 @@ func (c *qblockClient) handleServerRequest(msg *pool.Message) bool {
 	c.lockAction()
 	var outputs []qblock.Output
 	var changed bool
-	if msg.HasOption(message.QBlock2) {
-		outputs, changed = c.server.handleQ2Control(msg)
-	} else {
+	if msg.HasOption(message.QBlock1) {
 		outputs, changed = c.server.handleQ1(msg)
+	} else {
+		outputs, changed = c.server.handleQ2Control(msg)
 	}
 	callbacks := c.executeOrdered(outputs)
 	callbacks = append(callbacks, c.executePendingOrdered(c.now())...)
@@ -530,6 +531,9 @@ func (s *qblockServer) prepareResponseLocked(record *qblockServerRecord, code co
 	}
 	etag := sha256.Sum256(append([]byte{byte(code)}, payload...))
 	meta := qblock.Metadata{Size: uint32(len(payload)), SZX: record.metadata.SZX, Identity: etag[:8], HasContentFormat: true, ContentFormat: message.TextPlain}
+	if record.responseCeiling != nil {
+		meta.SZX = record.responseCeiling.SZX
+	}
 	template := c.cc.AcquireMessage(c.cc.Context())
 	template.ResetOptionsTo(options)
 	template.SetOptionUint32(message.Size2, meta.Size)
