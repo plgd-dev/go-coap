@@ -5,7 +5,7 @@ import (
 	"time"
 )
 
-// ServerConfig enables NON Q-Block GET and POST/PUT handling on a UDP server.
+// ServerConfig enables NON Q-Block GET and POST/PUT handling on a UDP or DTLS server.
 // Limits cover each connection; endpoint table limits cover the whole server.
 // MaxOwnedBytes follows the adapter-owned copy/bookkeeping allowance model,
 // excluding caller/handler allocations and preexisting message-pool capacity.

@@ -8,6 +8,7 @@ import (
 	"github.com/plgd-dev/go-coap/v3/message/codes"
 	"github.com/plgd-dev/go-coap/v3/message/pool"
 	"github.com/plgd-dev/go-coap/v3/net/monitor/inactivity"
+	"github.com/plgd-dev/go-coap/v3/net/qblock"
 	"github.com/plgd-dev/go-coap/v3/net/responsewriter"
 	"github.com/plgd-dev/go-coap/v3/options/config"
 	udpClient "github.com/plgd-dev/go-coap/v3/udp/client"
@@ -56,6 +57,7 @@ var DefaultConfig = func() Config {
 }()
 
 type Config struct {
+	QBlockServer *qblock.ServerConfig
 	config.Common[*udpClient.Conn]
 	CreateInactivityMonitor        func() udpClient.InactivityMonitor
 	GetMID                         GetMIDFunc

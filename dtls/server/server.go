@@ -28,9 +28,11 @@ type Listener interface {
 }
 
 type Server struct {
-	ctx    context.Context
-	cancel context.CancelFunc
-	cfg    *Config
+	ctx           context.Context
+	cancel        context.CancelFunc
+	cfg           *Config
+	qblockRuntime *udpClient.QBlockServerRuntime
+	initErr       error
 
 	listenMutex sync.Mutex
 	listen      Listener
@@ -82,10 +84,21 @@ func New(opt ...Option) *Server {
 		errorsFunc(fmt.Errorf("dtls: %w", err))
 	}
 
+	var runtime *udpClient.QBlockServerRuntime
+	var initErr error
+	if cfg.QBlockServer != nil {
+		copy := *cfg.QBlockServer
+		cfg.QBlockServer = &copy
+		runtime, initErr = udpClient.NewQBlockServerRuntime(copy)
+		if initErr == nil {
+			initErr = runtime.ValidateTransport(min(uint32(cfg.MTU), cfg.MaxMessageSize))
+		}
+	}
 	return &Server{
-		ctx:    ctx,
-		cancel: cancel,
-		cfg:    &cfg,
+		ctx:           ctx,
+		cancel:        cancel,
+		cfg:           &cfg,
+		qblockRuntime: runtime, initErr: initErr,
 	}
 }
 
@@ -149,7 +162,12 @@ func (s *Server) serveConnection(connections *connections.Connections, rw net.Co
 	inactivityMonitor := s.cfg.CreateInactivityMonitor()
 	requestMonitor := s.cfg.RequestMonitor
 	dtlsConn := coapNet.NewConn(rw)
-	cc := s.createConn(dtlsConn, inactivityMonitor, requestMonitor)
+	cc, err := s.createConn(dtlsConn, inactivityMonitor, requestMonitor)
+	if err != nil {
+		s.cfg.Errors(fmt.Errorf("%v: connection admission: %w", rw.RemoteAddr(), err))
+		_ = rw.Close()
+		return
+	}
 	if s.cfg.OnNewConn != nil {
 		s.cfg.OnNewConn(cc)
 	}
@@ -162,6 +180,9 @@ func (s *Server) serveConnection(connections *connections.Connections, rw net.Co
 }
 
 func (s *Server) Serve(l Listener) error {
+	if s.initErr != nil {
+		return s.initErr
+	}
 	if s.cfg.BlockwiseSZX > blockwise.SZX1024 {
 		return errors.New("invalid blockwiseSZX")
 	}
@@ -179,6 +200,9 @@ func (s *Server) Serve(l Listener) error {
 	connections := connections.New()
 	s.cfg.PeriodicRunner(func(now time.Time) bool {
 		connections.CheckExpirations(now)
+		if s.qblockRuntime != nil {
+			s.qblockRuntime.Prune(now)
+		}
 		return s.ctx.Err() == nil
 	})
 	defer connections.Close()
@@ -202,6 +226,9 @@ func (s *Server) Serve(l Listener) error {
 // Stop stops server without wait of ends Serve function.
 func (s *Server) Stop() {
 	s.cancel()
+	if s.qblockRuntime != nil {
+		s.qblockRuntime.Close()
+	}
 	l := s.popListener()
 	if l == nil {
 		return
@@ -211,7 +238,7 @@ func (s *Server) Stop() {
 	}
 }
 
-func (s *Server) createConn(connection *coapNet.Conn, inactivityMonitor udpClient.InactivityMonitor, requestMonitor udpClient.RequestMonitorFunc) *udpClient.Conn {
+func (s *Server) createConn(connection *coapNet.Conn, inactivityMonitor udpClient.InactivityMonitor, requestMonitor udpClient.RequestMonitorFunc) (*udpClient.Conn, error) {
 	createBlockWise := func(*udpClient.Conn) *blockwise.BlockWise[*udpClient.Conn] {
 		return nil
 	}
@@ -236,6 +263,7 @@ func (s *Server) createConn(connection *coapNet.Conn, inactivityMonitor udpClien
 		true,
 	)
 	cfg := udpClient.DefaultConfig
+	cfg.MTU = s.cfg.MTU
 	cfg.TransmissionNStart = s.cfg.TransmissionNStart
 	cfg.TransmissionAcknowledgeTimeout = s.cfg.TransmissionAcknowledgeTimeout
 	cfg.TransmissionMaxRetransmit = s.cfg.TransmissionMaxRetransmit
@@ -248,13 +276,9 @@ func (s *Server) createConn(connection *coapNet.Conn, inactivityMonitor udpClien
 	cfg.ReceivedMessageQueueSize = s.cfg.ReceivedMessageQueueSize
 	cfg.ProcessReceivedMessage = s.cfg.ProcessReceivedMessage
 
-	cc := udpClient.NewConnWithOpts(
-		session,
-		&cfg,
-		udpClient.WithBlockWise(createBlockWise),
-		udpClient.WithInactivityMonitor(inactivityMonitor),
-		udpClient.WithRequestMonitor(requestMonitor),
-	)
-
-	return cc
+	opts := []udpClient.Option{udpClient.WithBlockWise(createBlockWise), udpClient.WithInactivityMonitor(inactivityMonitor), udpClient.WithRequestMonitor(requestMonitor)}
+	if s.qblockRuntime != nil {
+		return s.qblockRuntime.NewConn(session, &cfg, opts...)
+	}
+	return udpClient.NewConnWithOpts(session, &cfg, opts...), nil
 }

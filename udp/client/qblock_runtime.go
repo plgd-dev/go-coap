@@ -7,8 +7,8 @@ import (
 	"github.com/plgd-dev/go-coap/v3/net/qblock"
 )
 
-// QBlockServerRuntime bridges UDP server construction to shared endpoint state.
-// Applications normally use options.WithQBlockServer on udp/server.New.
+// QBlockServerRuntime bridges UDP/DTLS server construction to shared endpoint state.
+// Applications normally use options.WithQBlockServer on udp/server.New or dtls/server.New.
 type QBlockServerRuntime struct {
 	config qblock.ServerConfig
 	domain *qblockEndpointDomain
@@ -46,7 +46,7 @@ func (r *QBlockServerRuntime) Prune(now time.Time) {
 	r.domain.mu.Unlock()
 }
 
-// ValidateTransport checks adapter reservations against the final UDP payload cap.
+// ValidateTransport checks adapter reservations against the final plaintext datagram cap.
 func (r *QBlockServerRuntime) ValidateTransport(datagram uint32) error {
 	cfg := r.config
 	if datagram == 0 {
