@@ -25,6 +25,30 @@ func qblockGETSize(req *pool.Message) (uint64, error) {
 	return uint64(size), err
 }
 
+// qblockIncomingSize checks the decoded datagram without allocating a payload
+// copy. BodySize preserves the seek position for later fragment validation.
+func qblockIncomingSize(msg *pool.Message) (uint64, error) {
+	overhead, err := qblockGETSize(msg)
+	if err != nil {
+		return 0, err
+	}
+	bodySize, err := msg.BodySize()
+	if err != nil {
+		return 0, err
+	}
+	if bodySize < 0 {
+		return 0, qblock.ErrLimitExceeded
+	}
+	if bodySize == 0 {
+		return overhead, nil
+	}
+	size, ok := qblockCheckedAdd(overhead, uint64(bodySize)+1)
+	if !ok {
+		return 0, qblock.ErrLimitExceeded
+	}
+	return size, nil
+}
+
 // selectBodySZX fixes offsets before sender registration. The template has
 // all stable wire options; reserve the longest token future controls can use
 // and the largest block number this body can emit, including repair packets.

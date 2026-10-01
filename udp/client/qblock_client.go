@@ -950,6 +950,21 @@ func (c *qblockClient) handle(msg *pool.Message) bool {
 		c.mu.Unlock()
 		return true
 	}
+	size, err := qblockIncomingSize(msg)
+	if err != nil || size > uint64(c.datagramLimit) {
+		c.mu.Unlock()
+		return true
+	}
+	value, err := msg.GetOptionUint32(message.QBlock2)
+	if err != nil {
+		c.mu.Unlock()
+		return true
+	}
+	block, err := qblock.DecodeBlock(value)
+	if err != nil || block.SZX > exchange.getSZX {
+		c.mu.Unlock()
+		return true
+	}
 	etag, err := qblockETag(msg)
 	if err != nil {
 		c.mu.Unlock()

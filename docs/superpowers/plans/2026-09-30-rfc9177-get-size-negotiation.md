@@ -37,12 +37,12 @@
 
 **Interfaces:** Consume Task 1 getSZX; preserve invalid-first-fragment ignore policy and existing follow-on metadata validation.
 
-- [ ] Add TestQBlockPacketGETRejectsUnacceptableFirstResponse for SZX above advertised ceiling and oversized options; assert zero manager receiver bytes/transfers, pending exchange intact and unchanged probing debt, then valid smaller response admits a receiver. Include equal/smaller first SZX and later changed SZX behavior using existing validation coverage.
-- [ ] Run `rtk proxy go test ./udp/client -run '^TestQBlockPacketGETRejects' -count=1 -timeout=30s`. Expected: FAIL on unwanted receiver admission/feedback.
-- [ ] Check actual first response size before payload snapshot and check decoded SZX before StartReceiverDeferred. Ignore unacceptable first packets without clearing work or feedback.
-- [ ] Run focused command and Task 1 whole-task selection. Expected: PASS.
-- [ ] Run whole-task selection with -race; `rtk proxy go test ./... -run '^$' -count=1 -timeout=180s`; `rtk proxy go vet ./udp/client ./net/qblock`; `rtk git diff --check`. Expected: PASS, repository command is compile-only.
-- [ ] Update roadmap/results with exact scope, RED/GREEN and host probe evidence. Commit scoped files: `fix(qblock): enforce initial GET response size negotiation`.
+- [x] Add TestQBlockPacketGETRejectsUnacceptableFirstResponse for SZX above advertised ceiling and oversized options; assert zero manager receiver bytes/transfers, pending exchange intact and unchanged probing debt, then valid smaller response admits a receiver. Include equal/smaller first SZX and later changed SZX behavior using existing validation coverage.
+- [x] Run `rtk proxy go test ./udp/client -run '^TestQBlockPacketGETRejects' -count=1 -timeout=30s`. Expected: FAIL on unwanted receiver admission/feedback.
+- [x] Check actual first response size before payload snapshot and check decoded SZX before StartReceiverDeferred. Ignore unacceptable first packets without clearing work or feedback.
+- [x] Run focused command and Task 1 whole-task selection. Expected: PASS.
+- [x] Run whole-task selection with -race; `rtk proxy go test ./... -run '^$' -count=1 -timeout=180s`; `rtk proxy go vet ./udp/client ./net/qblock`; `rtk git diff --check`. Expected: PASS, repository command is compile-only.
+- [x] Update roadmap/results with exact scope, RED/GREEN and host probe evidence. Commit scoped files: `fix(qblock): enforce initial GET response size negotiation`.
 
 ## Completion
 

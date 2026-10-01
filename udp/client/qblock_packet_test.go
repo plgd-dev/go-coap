@@ -193,3 +193,55 @@ func TestQBlockPacketGETSelectsSZXBeforeAdmission(t *testing.T) {
 		})
 	}
 }
+
+// Catches admitting a peer's larger SZX or unexpected metadata despite the
+// advertised ceiling, and incorrectly treating either packet as feedback.
+func TestQBlockPacketGETRejectsUnacceptableFirstResponse(t *testing.T) {
+	for _, oversizedOptions := range []bool{false, true} {
+		t.Run(map[bool]string{false: "larger SZX", true: "oversized options"}[oversizedOptions], func(t *testing.T) {
+			session := &qblockTestSession{ctx: context.Background()}
+			cc := newPrivateQBlockClientConnWithTokenAndSZX(t, session, message.GetToken, blockwise.SZX1024)
+			t.Cleanup(session.closeForTest)
+			cc.qblockClient.datagramLimit = 68
+			req := newPrivateQBlockClientGET(t, cc, message.Token{1})
+			defer cc.ReleaseMessage(req)
+			prepared, err := cc.qblockClient.prepare(req, nil)
+			require.NoError(t, err)
+			require.True(t, prepared.Prepared)
+			cc.qblockClient.Tick(cc.qblockClient.now())
+			exchange := cc.qblockClient.exchangesByOriginalToken[string(req.Token())]
+			debt, owner, state := cc.qblockClient.probeGate.bytes, cc.qblockClient.probeGate.key, cc.qblockClient.probeGate.state
+			szx := blockwise.SZX64
+			if oversizedOptions {
+				szx = blockwise.SZX16
+			}
+			bad := newQBlockClientFragmentWithSZX(t, cc, req.Token(), 0, true, 128, szx)
+			defer cc.ReleaseMessage(bad)
+			if oversizedOptions {
+				bad.SetOptionBytes(message.LocationQuery, bytes.Repeat([]byte{'x'}, 80))
+			} else {
+				// Small final payload fits the MTU despite a too-large SZX.
+				bad.SetOptionUint32(message.QBlock2, uint32(blockwise.SZX64))
+				bad.SetOptionUint32(message.Size2, 4)
+				bad.SetBody(bytes.NewReader([]byte("body")))
+			}
+			require.True(t, cc.qblockClient.handle(bad))
+			require.Zero(t, cc.qblockClient.active())
+			require.Zero(t, qblockClientManagerRetainedBytesForTest(cc.qblockClient.manager))
+			require.Same(t, exchange, cc.qblockClient.exchangesByOriginalToken[string(req.Token())])
+			require.Equal(t, debt, cc.qblockClient.probeGate.bytes)
+			require.Equal(t, owner, cc.qblockClient.probeGate.key)
+			require.Equal(t, state, cc.qblockClient.probeGate.state)
+			// A later first fragment choosing a smaller SZX is still accepted.
+			valid := newQBlockClientFragmentWithSZX(t, cc, req.Token(), 0, true, 128, blockwise.SZX16)
+			defer cc.ReleaseMessage(valid)
+			require.True(t, cc.qblockClient.handle(valid))
+			require.Equal(t, uint32(1), cc.qblockClient.active())
+			for _, transfer := range cc.qblockClient.transfers {
+				require.Equal(t, blockwise.SZX16, transfer.metadata.SZX)
+			}
+			cc.qblockClient.abandon(req.Token(), qblock.ErrCanceled)
+			requireQBlockClientFullyIdle(t, cc.qblockClient)
+		})
+	}
+}
