@@ -131,8 +131,10 @@ func TestQBlockPacketServerNoFitPreservesSuppression(t *testing.T) {
 	h := newServerHarness(t, qblock.DefaultManagerConfig(), qblockServerConfig{}, func(w *responsewriter.ResponseWriter[*Conn], _ *pool.Message) {
 		calls++
 		require.NoError(t, w.SetResponse(codes.Changed, message.TextPlain, bytes.NewReader(bytes.Repeat([]byte{'r'}, 32))))
+		w.Message().SetOptionBytes(message.LocationQuery, bytes.Repeat([]byte{'x'}, 80))
 	})
-	h.cc.qblockClient.datagramLimit = 20
+	// The incoming upload fits; only the captured response cannot fit.
+	h.cc.qblockClient.datagramLimit = 68
 	h.ingest(h.q1(t, 1, 0, false, 4, "body"))
 	h.ingest(h.q1(t, 2, 0, false, 4, "body"))
 	require.Equal(t, 1, calls)
