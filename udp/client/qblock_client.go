@@ -13,6 +13,7 @@ import (
 	"github.com/plgd-dev/go-coap/v3/message"
 	"github.com/plgd-dev/go-coap/v3/message/codes"
 	"github.com/plgd-dev/go-coap/v3/message/pool"
+	"github.com/plgd-dev/go-coap/v3/net/blockwise"
 	"github.com/plgd-dev/go-coap/v3/net/qblock"
 )
 
@@ -36,6 +37,7 @@ type qblockExchange struct {
 	workID          qblockWorkID
 	generation      uint64
 	initialProbeKey qblockProbeKey
+	getSZX          blockwise.SZX
 	originalToken   message.Token
 	requestCode     codes.Code
 	requestOpts     message.Options
@@ -236,11 +238,22 @@ func (c *qblockClient) prepare(req *pool.Message, fail func(error)) (qblockPrepa
 		return qblockPreparation{}, errors.New("q-block GET requires token")
 	}
 	req.SetType(message.NonConfirmable)
-	value, err := qblock.EncodeBlock(qblock.Block{Number: 0, More: true, SZX: c.cc.blockwiseSZX})
+	szx, err := c.selectGETSZX()
+	if err != nil {
+		return qblockPreparation{}, err
+	}
+	value, err := qblock.EncodeBlock(qblock.Block{Number: 0, More: true, SZX: szx})
 	if err != nil {
 		return qblockPreparation{}, err
 	}
 	req.SetOptionUint32(message.QBlock2, value)
+	size, err := qblockGETSize(req)
+	if err != nil {
+		return qblockPreparation{}, err
+	}
+	if size > uint64(c.datagramLimit) {
+		return qblockPreparation{}, qblock.ErrLimitExceeded
+	}
 	options := cloneQBlockOptions(req.Options())
 	// Remove mutates the option array; keep the initial GET advertisement
 	// separate from the immutable exchange snapshot used by later controls.
@@ -257,6 +270,7 @@ func (c *qblockClient) prepare(req *pool.Message, fail func(error)) (qblockPrepa
 	exchange := &qblockExchange{
 		originalToken: message.Token(cloneQBlockBytes(token)),
 		requestCode:   req.Code(),
+		getSZX:        szx,
 		requestOpts:   snapshotOptions,
 		fail:          fail,
 		transfers:     make(map[qblock.TransferID]struct{}),

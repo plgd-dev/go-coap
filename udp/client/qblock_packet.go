@@ -8,6 +8,23 @@ import (
 	"github.com/plgd-dev/go-coap/v3/udp/coder"
 )
 
+// selectGETSZX reserves the standard representation metadata and the largest
+// block number allowed by the body cap. Extra peer options are checked on
+// receipt; they cannot be predicted by an initial GET.
+func (c *qblockClient) selectGETSZX() (blockwise.SZX, error) {
+	template := c.cc.AcquireMessage(c.writeContext)
+	defer c.cc.ReleaseMessage(template)
+	template.SetOptionBytes(message.ETag, make([]byte, 8))
+	template.SetOptionUint32(message.ContentFormat, 65535)
+	template.SetOptionUint32(message.Size2, c.managerConfig.Transfer.MaxBodySize)
+	return c.selectBodySZX(template, message.QBlock2, c.managerConfig.Transfer.MaxBodySize, c.cc.blockwiseSZX)
+}
+
+func qblockGETSize(req *pool.Message) (uint64, error) {
+	size, err := coder.DefaultCoder.Size(message.Message{Token: req.Token(), Options: req.Options()})
+	return uint64(size), err
+}
+
 // selectBodySZX fixes offsets before sender registration. The template has
 // all stable wire options; reserve the longest token future controls can use
 // and the largest block number this body can emit, including repair packets.

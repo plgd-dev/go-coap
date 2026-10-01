@@ -146,3 +146,50 @@ func TestQBlockPacketServerNoFitPreservesSuppression(t *testing.T) {
 	require.Equal(t, 1, snapshot.records)
 	require.Empty(t, h.cc.qblockClient.workQueue.slots)
 }
+
+// Catches advertising blocks that cannot fit response metadata, and queuing
+// an initial GET that can never pass the writer's complete-datagram guard.
+func TestQBlockPacketGETSelectsSZXBeforeAdmission(t *testing.T) {
+	for _, tt := range []struct {
+		name   string
+		mtu    uint16
+		path   string
+		want   blockwise.SZX
+		reject bool
+	}{
+		{name: "32 byte response", mtu: 68, path: "/q", want: blockwise.SZX32},
+		{name: "16 byte response", mtu: 50, path: "/q", want: blockwise.SZX16},
+		{name: "response cannot fit", mtu: 49, path: "/q", reject: true},
+		{name: "request cannot fit", mtu: 68, path: "/" + string(bytes.Repeat([]byte{'p'}, 80)), reject: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			session := &qblockTestSession{ctx: context.Background()}
+			cfg := DefaultConfig
+			cfg.BlockwiseEnable, cfg.BlockwiseSZX, cfg.MTU = false, blockwise.SZX1024, tt.mtu
+			cc := NewConnWithOpts(session, &cfg, withQBlockClient(qblockClientConfig{Manager: qblock.DefaultManagerConfig(), ScheduleMode: qblockScheduleManual}))
+			t.Cleanup(session.closeForTest)
+			req := newPrivateQBlockClientGET(t, cc, message.Token{1})
+			defer cc.ReleaseMessage(req)
+			require.NoError(t, req.SetPath(tt.path))
+			prepared, err := cc.qblockClient.prepare(req, nil)
+			if tt.reject {
+				require.ErrorIs(t, err, qblock.ErrLimitExceeded)
+				require.False(t, prepared.Prepared)
+				require.Empty(t, cc.qblockClient.exchangesByOriginalToken)
+				require.Empty(t, cc.qblockClient.workQueue.slots)
+				require.Empty(t, session.writesSnapshot())
+				return
+			}
+			require.NoError(t, err)
+			require.True(t, prepared.OwnsTransmission)
+			cc.qblockClient.Tick(cc.qblockClient.now())
+			writes := session.writesSnapshot()
+			require.Len(t, writes, 1)
+			block, err := qblock.DecodeBlock(writes[0].block)
+			require.NoError(t, err)
+			require.Equal(t, qblock.Block{Number: 0, More: true, SZX: tt.want}, block)
+			cc.qblockClient.abandon(req.Token(), qblock.ErrCanceled)
+			requireQBlockClientFullyIdle(t, cc.qblockClient)
+		})
+	}
+}
