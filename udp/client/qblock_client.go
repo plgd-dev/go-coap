@@ -293,6 +293,15 @@ func (c *qblockClient) prepare(req *pool.Message, fail func(error)) (qblockPrepa
 		return qblockPreparation{}, err
 	}
 	req.SetOptionUint32(message.QBlock2, value)
+	tag, err := req.GetOptionBytes(message.RequestTag)
+	if err != nil {
+		tag = token
+	}
+	if len(tag) == 0 || len(tag) > 8 {
+		return qblockPreparation{}, message.ErrInvalidValueLength
+	}
+	tag = cloneQBlockBytes(tag)
+	req.SetOptionBytes(message.RequestTag, tag)
 	size, err := qblockGETSize(req)
 	if err != nil {
 		return qblockPreparation{}, err
@@ -317,6 +326,7 @@ func (c *qblockClient) prepare(req *pool.Message, fail func(error)) (qblockPrepa
 		originalToken: message.Token(cloneQBlockBytes(token)),
 		requestCode:   req.Code(),
 		getSZX:        szx,
+		requestTag:    cloneQBlockBytes(tag),
 		requestOpts:   snapshotOptions,
 		fail:          fail,
 		transfers:     make(map[qblock.TransferID]struct{}),
@@ -1116,6 +1126,7 @@ func (c *qblockClient) handle(msg *pool.Message) bool {
 		mids:             make(map[int32]struct{}),
 		responseOptions:  responseOptions,
 		responseCode:     msg.Code(),
+		requestTag:       cloneQBlockBytes(exchange.requestTag),
 		expires:          now.Add(c.managerConfig.Transfer.Lifetime),
 	}
 	c.clearPendingGETMIDsLocked(exchange)

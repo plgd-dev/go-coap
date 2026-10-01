@@ -311,6 +311,7 @@ func TestQBlockMemoryGETSnapshotAndPendingOptions(t *testing.T) {
 	defer cc.ReleaseMessage(req)
 	req.SetOptionString(message.ProxyURI, string(bytes.Repeat([]byte{'p'}, 1000)))
 	req.SetOptionUint32(message.QBlock2, 8)
+	req.SetOptionBytes(message.RequestTag, req.Token())
 	budget, err := qblockClientSnapshotCapacity(req.Options(), req.Token(), nil, 10)
 	require.NoError(t, err)
 	req.Remove(message.QBlock2)

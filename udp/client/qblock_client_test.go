@@ -2737,3 +2737,37 @@ func newQBlockClientFragmentWithSZX(t *testing.T, cc *Conn, token message.Token,
 	resp.SetBody(bytes.NewReader(bytes.Repeat([]byte{'a'}, int(szx.Size()))))
 	return resp
 }
+
+func TestQBlockGETCarriesStableRequestTag(t *testing.T) {
+	for _, supplied := range []bool{false, true} {
+		t.Run(map[bool]string{false: "default", true: "supplied"}[supplied], func(t *testing.T) {
+			session := &qblockTestSession{ctx: context.Background()}
+			cfg := DefaultConfig
+			cfg.BlockwiseEnable = false
+			cc := NewConnWithOpts(session, &cfg, withQBlockClient(qblockClientConfig{Manager: qblock.DefaultManagerConfig()}))
+			t.Cleanup(session.closeForTest)
+			req := cc.AcquireMessage(cc.Context())
+			defer cc.ReleaseMessage(req)
+			req.SetCode(codes.GET)
+			req.SetToken([]byte{1})
+			require.NoError(t, req.SetPath("/get"))
+			want := []byte{1}
+			if supplied {
+				want = []byte("get-tag")
+				req.SetOptionBytes(message.RequestTag, want)
+			}
+			_, err := cc.qblockClient.prepare(req, func(error) {})
+			require.NoError(t, err)
+			tag, err := req.GetOptionBytes(message.RequestTag)
+			require.NoError(t, err)
+			require.Equal(t, want, tag)
+			cc.qblockClient.mu.Lock()
+			exchange := cc.qblockClient.exchangesByOriginalToken[string([]byte{1})]
+			snapshot := cloneQBlockOptions(exchange.requestOpts)
+			cc.qblockClient.mu.Unlock()
+			tag, err = snapshot.GetBytes(message.RequestTag)
+			require.NoError(t, err)
+			require.Equal(t, want, tag)
+		})
+	}
+}
