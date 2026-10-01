@@ -148,6 +148,9 @@ func (s *qblockServer) ownsOutput(output qblock.Output) bool {
 	s.client.mu.Lock()
 	defer s.client.mu.Unlock()
 	record := s.byID[output.TransferID]
+	if output.TransferID == 0 {
+		record = s.records[output.Operation]
+	}
 	return record != nil && record.activeOperation == output.Operation
 }
 
@@ -271,6 +274,12 @@ func (s *qblockServer) settleHandlerLocked(record *qblockServerRecord, now time.
 func (s *qblockServer) nextRecordDeadlineLocked() (time.Time, bool) {
 	var next time.Time
 	for _, record := range s.records {
+		if record.id == 0 && !record.terminal {
+			if next.IsZero() || record.writeExpires.Before(next) {
+				next = record.writeExpires
+			}
+			continue
+		}
 		if !record.terminal || record.handlerRunning || record.expires.IsZero() {
 			continue
 		}
@@ -363,7 +372,10 @@ func (c *qblockClient) handleServerRequest(msg *pool.Message) bool {
 	if msg.HasOption(message.QBlock1) {
 		outputs, changed = c.server.handleQ1(msg)
 	} else {
-		outputs, changed = c.server.handleQ2Control(msg)
+		outputs, changed = c.server.handleInitialGET(msg)
+		if !changed {
+			outputs, changed = c.server.handleQ2Control(msg)
+		}
 	}
 	callbacks := c.executeOrdered(outputs)
 	callbacks = append(callbacks, c.executePendingOrdered(c.now())...)
@@ -384,6 +396,9 @@ func (c *qblockClient) executeServerOutput(output qblock.Output) []qblockCallbac
 		return nil
 	}
 	record := c.server.byID[output.TransferID]
+	if output.TransferID == 0 {
+		record = c.server.records[output.Operation]
+	}
 	if record == nil || record.activeOperation != output.Operation {
 		c.mu.Unlock()
 		return nil
@@ -506,6 +521,9 @@ func (s *qblockServer) finishHandler(operation qblock.OperationKey, generation u
 	if record == nil || !record.executing || record.generation != generation || s.closed {
 		c.mu.Unlock()
 		return
+	}
+	if record.id == 0 && !c.now().Before(record.writeExpires) {
+		s.deactivateLocked(record, c.now())
 	}
 	s.settleHandlerLocked(record, c.now())
 	changed = true

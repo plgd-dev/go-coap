@@ -19,6 +19,8 @@ import (
 )
 
 type Server struct {
+	qblockRuntime     *client.QBlockServerRuntime
+	initErr           error
 	doneCtx           context.Context
 	ctx               context.Context
 	multicastRequests *client.RequestsMap
@@ -82,7 +84,18 @@ func New(opt ...Option) *Server {
 		}
 		errorsFunc(fmt.Errorf("udp: %w", err))
 	}
+	var runtime *client.QBlockServerRuntime
+	var initErr error
+	if cfg.QBlockServer != nil {
+		copy := *cfg.QBlockServer
+		cfg.QBlockServer = &copy
+		runtime, initErr = client.NewQBlockServerRuntime(copy)
+		if initErr == nil {
+			initErr = runtime.ValidateTransport(min(uint32(cfg.MTU), cfg.MaxMessageSize))
+		}
+	}
 	return &Server{
+		qblockRuntime: runtime, initErr: initErr,
 		ctx:               ctx,
 		cancel:            cancel,
 		multicastHandler:  coapSync.NewMap[uint64, HandlerFunc](),
@@ -118,6 +131,9 @@ func (s *Server) shouldPropagateError(err error) bool {
 }
 
 func (s *Server) Serve(l *coapNet.UDPConn) error {
+	if s.initErr != nil {
+		return s.initErr
+	}
 	if s.cfg.BlockwiseSZX > blockwise.SZX1024 {
 		return errors.New("invalid blockwiseSZX")
 	}
@@ -205,6 +221,9 @@ func (s *Server) Stop() {
 		}
 	}
 	s.closeSessions()
+	if s.qblockRuntime != nil {
+		s.qblockRuntime.Close()
+	}
 }
 
 func (s *Server) closeSessions() {
@@ -246,6 +265,9 @@ func (s *Server) getConns() []*client.Conn {
 }
 
 func (s *Server) handleInactivityMonitors(now time.Time) {
+	if s.qblockRuntime != nil {
+		s.qblockRuntime.Prune(now)
+	}
 	for _, cc := range s.getConns() {
 		select {
 		case <-cc.Context().Done():
@@ -305,14 +327,17 @@ func toWildcardLocalAddr(laddr *net.UDPAddr) *net.UDPAddr {
 	return &wildcard
 }
 
-func (s *Server) getOrCreateConn(udpConn *coapNet.UDPConn, raddr *net.UDPAddr, laddr *net.UDPAddr) (cc *client.Conn, created bool) {
+func (s *Server) getOrCreateConn(udpConn *coapNet.UDPConn, raddr *net.UDPAddr, laddr *net.UDPAddr) (cc *client.Conn, created bool, err error) {
 	s.connsMutex.Lock()
 	defer s.connsMutex.Unlock()
+	if s.initErr != nil {
+		return nil, false, s.initErr
+	}
 	key := getConnKey(raddr, laddr)
 	cc = s.conns[key]
 
 	if cc != nil {
-		return cc, false
+		return cc, false, nil
 	}
 
 	// When a client connection is created via NewConn() on a wildcard-bound listener,
@@ -321,8 +346,12 @@ func (s *Server) getOrCreateConn(udpConn *coapNet.UDPConn, raddr *net.UDPAddr, l
 	// same conn instead of creating a second server-side conn.
 	if localAddrCanFallbackToWildcard(laddr) {
 		if cc = s.conns[getConnKey(raddr, toWildcardLocalAddr(laddr))]; cc != nil {
-			return cc, false
+			return cc, false, nil
 		}
+	}
+
+	if s.cfg.QBlockServer != nil && uint64(len(s.conns)) >= uint64(s.cfg.QBlockServer.MaxConnections) {
+		return nil, false, errors.New("q-block server connection limit exceeded")
 	}
 
 	createBlockWise := func(*client.Conn) *blockwise.BlockWise[*client.Conn] {
@@ -382,13 +411,17 @@ func (s *Server) getOrCreateConn(udpConn *coapNet.UDPConn, raddr *net.UDPAddr, l
 	cfg.ReceivedMessageQueueSize = s.cfg.ReceivedMessageQueueSize
 
 	requestMonitor := s.cfg.RequestMonitor
-	cc = client.NewConnWithOpts(
-		session,
-		&cfg,
-		client.WithInactivityMonitor(monitor),
-		client.WithRequestMonitor(requestMonitor),
-		client.WithBlockWise(createBlockWise),
-	)
+	cfg.MTU = s.cfg.MTU
+	opts := []client.Option{client.WithInactivityMonitor(monitor), client.WithRequestMonitor(requestMonitor), client.WithBlockWise(createBlockWise)}
+	if s.qblockRuntime != nil {
+		cc, err = s.qblockRuntime.NewConn(session, &cfg, opts...)
+		if err != nil {
+			session.shutdown()
+			return nil, false, err
+		}
+	} else {
+		cc = client.NewConnWithOpts(session, &cfg, opts...)
+	}
 	cc.SetContextValue(closeKey, func() {
 		if err := session.Close(); err != nil {
 			s.cfg.Errors(fmt.Errorf("cannot close session: %w", err))
@@ -403,7 +436,7 @@ func (s *Server) getOrCreateConn(udpConn *coapNet.UDPConn, raddr *net.UDPAddr, l
 		}
 	})
 	s.conns[key] = cc
-	return cc, true
+	return cc, true, nil
 }
 
 func (s *Server) getConn(l *coapNet.UDPConn, raddr *net.UDPAddr, laddr *net.UDPAddr, firstTime bool) (*client.Conn, error) {
@@ -418,7 +451,10 @@ func (s *Server) getConn(l *coapNet.UDPConn, raddr *net.UDPAddr, laddr *net.UDPA
 		}
 	}
 
-	cc, created := s.getOrCreateConn(l, raddr, laddr)
+	cc, created, err := s.getOrCreateConn(l, raddr, laddr)
+	if err != nil {
+		return nil, err
+	}
 	if created {
 		if s.cfg.OnNewConn != nil {
 			s.cfg.OnNewConn(cc)

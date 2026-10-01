@@ -79,6 +79,7 @@ type qblockTransfer struct {
 }
 
 type qblockClient struct {
+	serverOnly               bool
 	cc                       *Conn
 	now                      func() time.Time
 	clock                    qblockClock
@@ -225,11 +226,11 @@ func q2Operation(token, etag message.Token) (qblock.OperationKey, error) {
 }
 
 func (c *qblockClient) canPrepare(req *pool.Message) bool {
-	return c.initErr == nil && req.Code() == codes.GET && !req.HasOption(message.Observe) && req.Body() == nil && !req.HasOption(message.QBlock1) && !req.HasOption(message.QBlock2) && !req.HasOption(message.Block1) && !req.HasOption(message.Block2)
+	return !c.serverOnly && c.initErr == nil && req.Code() == codes.GET && !req.HasOption(message.Observe) && req.Body() == nil && !req.HasOption(message.QBlock1) && !req.HasOption(message.QBlock2) && !req.HasOption(message.Block1) && !req.HasOption(message.Block2)
 }
 
 func (c *qblockClient) canPrepareQ1(req *pool.Message) bool {
-	if c.initErr != nil || (req.Code() != codes.POST && req.Code() != codes.PUT) || req.Body() == nil {
+	if c.serverOnly || c.initErr != nil || (req.Code() != codes.POST && req.Code() != codes.PUT) || req.Body() == nil {
 		return false
 	}
 	if req.HasOption(message.Observe) || req.HasOption(message.QBlock1) || req.HasOption(message.QBlock2) || req.HasOption(message.Block1) || req.HasOption(message.Block2) {

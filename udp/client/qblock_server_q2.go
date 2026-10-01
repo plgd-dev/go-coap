@@ -11,7 +11,7 @@ import (
 )
 
 func serverQ2Control(msg *pool.Message) (qblock.OperationKey, qblock.Block, error) {
-	if msg.Type() != message.NonConfirmable || (msg.Code() != codes.POST && msg.Code() != codes.PUT) || msg.HasOption(message.QBlock1) || msg.HasOption(message.Block1) || msg.HasOption(message.Block2) {
+	if msg.Type() != message.NonConfirmable || (msg.Code() != codes.GET && msg.Code() != codes.POST && msg.Code() != codes.PUT) || msg.HasOption(message.QBlock1) || msg.HasOption(message.Block1) || msg.HasOption(message.Block2) {
 		return "", qblock.Block{}, errors.New("invalid q-block2 control request")
 	}
 	if err := qblock.ValidateOptions(msg.Options(), true); err != nil || qblockOptionCount(msg, message.QBlock2) != 1 || msg.Body() != nil {
