@@ -158,3 +158,25 @@ func TestQBlockSessionCleanupAdmission(t *testing.T) {
 	cc.qblockGeneration = nil
 	cc.qblockProbeMu.Unlock()
 }
+
+func TestQBlockProbeUnpublishesBeforeLeaseRelease(t *testing.T) {
+	cc, s, _, _ := capabilityEndpointConn(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	result, _ := startCapabilityProbe(t, cc, s, ctx)
+	cc.qblockProbeMu.Lock()
+	p := cc.qblockProbe
+	cc.qblockProbeMu.Unlock()
+	entered, resume := make(chan struct{}), make(chan struct{})
+	p.lease.mu.Lock()
+	release := p.lease.release
+	p.lease.release = func() { release(); close(entered); <-resume }
+	p.lease.mu.Unlock()
+	cancel()
+	<-entered
+	cc.qblockProbeMu.Lock()
+	published := cc.qblockProbe != nil
+	cc.qblockProbeMu.Unlock()
+	close(resume)
+	require.ErrorIs(t, awaitCapability(t, result).err, context.Canceled)
+	require.False(t, published, "lease release must follow ingress unpublication")
+}

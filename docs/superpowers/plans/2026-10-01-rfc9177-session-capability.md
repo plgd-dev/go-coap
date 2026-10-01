@@ -40,18 +40,18 @@
 
 **Interfaces:** Produce private qblockCapability uint8 constants qblockCapabilityUnknown/Supported/Unsupported; Conn.qblockCapabilityState() qblockCapability; qblockProbeGeneration{path string, context context.Context, cancel context.CancelFunc, deadline time.Time, waiters uint32, terminal bool, result qblockCapabilityResult, done/cleaned chan struct{}}; Conn.probeQBlockWire(context.Context,string,*qblockProbeGeneration)(bool,error). Conn.ProbeQBlock(context.Context,string)(bool,error) remains public. Conn.publishQBlockProbe(*qblockProbeGeneration,bool,error,qblockCapability) freezes under qblockProbeMu. Wire ingress supplies supported or conclusive BadOption evidence only after validation and required ACK.
 
-- [ ] Write TestQBlockSessionKnowledge: initial/replacement unknown; positive→supported; Q-less/malformed preserve; BadOption→unsupported; fresh positive restores; every refresh writes one new CON; no runtime created.
-- [ ] RED: `rtk proxy go test ./udp/client -run '^TestQBlockSessionKnowledge$' -count=1 -timeout=30s`; expected missing session-state interface then failed transition assertions.
-- [ ] Implement state/publication interface in qblock_capability.go and validated evidence in qblock_probe.go; no ordinary-exchange transitions.
-- [ ] GREEN: same command passes.
-- [ ] Write TestQBlockSessionCoalescing: empty/default same path shares one write; different exact paths busy; invalid/canceled callers not admitted; limit64 accepts64/rejects65 with ErrLimitExceeded; leader and follower departures isolated; last departure cancels and releases reservations before successor.
-- [ ] RED: `rtk proxy go test ./udp/client -run '^TestQBlockSessionCoalescing$' -count=1 -timeout=30s`; expected old busy behavior or incorrect lifetime/limit.
-- [ ] Implement one pending generation with connection-derived absolute timeout, count-only waiters, worker-owned cleanup and no caller callbacks/I/O under lock. Charge coordinator fields through owned probe envelope where available; fixed bounded storage otherwise.
-- [ ] GREEN: same command passes.
-- [ ] Write TestQBlockSessionTerminalOwnership: deterministic lock/barrier ordering for result then conflicting duplicate; processed last departure then stale positive; expired deadline/closed context before positive; completed cleanup rejects same/different paths; teardown allows successor; old completion cannot clear successor. Assert knowledge and token/MID/NSTART/lease cleanup.
-- [ ] RED then GREEN: `rtk proxy go test ./udp/client -run '^TestQBlockSessionTerminalOwnership$' -count=1 -timeout=30s`; RED must expose unfrozen/late publication, GREEN no leaks.
-- [ ] Verify `rtk proxy go test ./udp/client -run 'TestQBlock(Session|CapabilityProbe)' -count=1 -timeout=60s` and race equivalent; expected exit0, no races. Preserve reviewed wire tests except the explicitly revised concurrent-call expectation.
-- [ ] Commit exact Task1 files plus this plan as `feat(qblock): coalesce fresh session capability probes`; ledger records baseline, commands, outcomes and SHA.
+- [x] Write TestQBlockSessionKnowledge: initial/replacement unknown; positive→supported; Q-less/malformed preserve; BadOption→unsupported; fresh positive restores; every refresh writes one new CON; no runtime created.
+- [x] RED: `rtk proxy go test ./udp/client -run '^TestQBlockSessionKnowledge$' -count=1 -timeout=30s`; expected missing session-state interface then failed transition assertions.
+- [x] Implement state/publication interface in qblock_capability.go and validated evidence in qblock_probe.go; no ordinary-exchange transitions.
+- [x] GREEN: same command passes.
+- [x] Write TestQBlockSessionCoalescing: empty/default same path shares one write; different exact paths busy; invalid/canceled callers not admitted; limit64 accepts64/rejects65 with ErrLimitExceeded; leader and follower departures isolated; last departure cancels and releases reservations before successor.
+- [x] RED: `rtk proxy go test ./udp/client -run '^TestQBlockSessionCoalescing$' -count=1 -timeout=30s`; expected old busy behavior or incorrect lifetime/limit.
+- [x] Implement one pending generation with connection-derived absolute timeout, count-only waiters, worker-owned cleanup and no caller callbacks/I/O under lock. Charge coordinator fields through owned probe envelope where available; fixed bounded storage otherwise.
+- [x] GREEN: same command passes.
+- [x] Write TestQBlockSessionTerminalOwnership: deterministic lock/barrier ordering for result then conflicting duplicate; processed last departure then stale positive; expired deadline/closed context before positive; completed cleanup rejects same/different paths; teardown allows successor; old completion cannot clear successor. Assert knowledge and token/MID/NSTART/lease cleanup.
+- [x] RED then GREEN: `rtk proxy go test ./udp/client -run '^TestQBlockSessionTerminalOwnership$' -count=1 -timeout=30s`; RED must expose unfrozen/late publication, GREEN no leaks.
+- [x] Verify `rtk proxy go test ./udp/client -run 'TestQBlock(Session|CapabilityProbe)' -count=1 -timeout=60s` and race equivalent; expected exit0, no races. Preserve reviewed wire tests except the explicitly revised concurrent-call expectation.
+- [x] Commit exact Task1 files plus this plan as `feat(qblock): coalesce fresh session capability probes`; ledger records baseline, commands, outcomes and SHA.
 
 ### Task 2: Complete public configuration, selection and UDP/DTLS runtime
 
@@ -59,29 +59,33 @@
 
 **Interfaces:** Produce qblock.Mode uint8 PreferKnown/Require, ClientConfig with exact fields/defaults above and Validate() error; ErrCapabilityUnknown/ErrPeerUnsupported/ErrUnsupportedOperation; options.QBlockConfig/Mode aliases and constants, WithQBlock(qblock.ClientConfig) QBlockOpt with UDPClientApply/UDPServerApply/DTLSServerApply. Config.QBlock *qblock.ClientConfig on client and servers. Produce client.ValidateQBlockConfig(*Config) error; Conn.InitializationError() error; optional initialization guards consumed by net/client convenience methods and limit queue. Extend shared QBlockServerRuntime constructor with optional client role while retaining current inbound constructor compatibility; one shared endpoint owner, expose connection admission limit independent of inbound role. Conn.selectQBlock(*pool.Message)(bool,error); internal execution accepts a fixed selected boolean, private runtime tests retain direct private selection.
 
-- [ ] Write TestQBlockClientConfigValidation and TestQBlockOptionCopies: default valid, zero invalid, mode/MID/waiter/endpoint/timing overflow boundaries; every shared mismatch in both orders rejected; immutable config copies; no TCP/TLS apply.
-- [ ] RED/GREEN: `rtk proxy go test ./net/qblock ./options -run 'TestQBlock(ClientConfig|Option)' -count=1`; expected undefined API/validation failure then PASS. Implement canonical types/options together with complete runtime below; do not commit exposed partial API.
-- [ ] Write TestQBlockSelectionMatrix: supported/unknown/unsupported × both modes × eligible GET/POST/PUT (including empty nonnil body), nil body/Observe/DELETE/body GET/explicit classic/Q blocks/multicast; body Read/Seek counters remain0 on rejection. PreferKnown ordinary with classic disabled, Require uses correct sentinel. TestQBlockSelectionQueue samples after queue admission; TestQBlockSelectionDelayed preserves selected route despite later knowledge change. Assert caller metadata/body position preserved and bounded capacity rejection precedes copy.
-- [ ] RED/GREEN: `rtk proxy go test ./udp/client -run 'TestQBlockSelection' -count=1 -timeout=60s`; expected premature body access/wrong routing, then PASS. Implement metadata-only Q request copy, fixed-route doInternal calls, ordinary/classic callbacks explicitly false; prepareQ1 already owns bounded body admission. Gate new DoObserve at execution; existing cancellation remains ordinary.
-- [ ] Write TestQBlockConstruction: Q SZX0–6 valid independent classic, BERT invalid; invalid config Dial returns before opening; pointer borrowed/owned transport policy, Done closed on return, callback1, reader/scheduler/periodic0; canceled contexts still errors.Is(initErr) for Do/convenience/Observe/Probe/Write/Ping/Run. TestQBlockCombinedRuntime asserts one manager/member/budget and inbound/outbound independence for both option orders and accepted sessions.
-- [ ] RED/GREEN: `rtk proxy go test ./udp/... ./dtls/... ./options -run 'TestQBlock(Construction|CombinedRuntime)' -count=1 -timeout=90s`; expected absent startup suppression/guards/role validation, then PASS. Synchronously reject/finalize sessions via explicit session finalizer, retaining CloseSocket ownership. Dial preflight and rollback return primary error without duplicate callback.
-- [ ] Write TestQBlockOutboundUDP and TestQBlockOutboundDTLS: dialed and accepted Require rejects before probe, explicit independently constructed positive permits Q, inbound-only never outbound; replacement unknown; oversized/temp-record recovery every DTLS role; no implicit probe. TestQBlockNoReplay drops terminal POST response after one handler execution; timeout sends no classic replay. TestQBlockProductionJitter verifies public automatic wiring samples valid random jitter per body, deterministic injected timing remains.
-- [ ] RED/GREEN: `rtk proxy go test ./udp/... ./dtls/... -run 'TestQBlock(Outbound|NoReplay|ProductionJitter)' -count=1 -timeout=120s`; expected missing runtime/receive setup, then PASS. Wire production real clock/automatic scheduler/random Float64, all DTLS Q roles before reader start. Keep CON server response slice untouched; test peer constructs discovery replies independently.
-- [ ] Verify focused normal/race UDP/DTLS/options/net-qblock, unfiltered core race, compile-only ./..., vet ./..., full runtime ./... (commands below); expected exit0/no races. Record exact host limitations without claiming full readiness.
-- [ ] Update roadmap/results as completed bounded capability/selection slice, Milestone4 incomplete; commit exact production/tests/docs as `feat(qblock): enable explicit outbound UDP and DTLS selection`.
+- [x] Write TestQBlockClientConfigValidation and TestQBlockOptionCopies: default valid, zero invalid, mode/MID/waiter/endpoint/timing overflow boundaries; every shared mismatch in both orders rejected; immutable config copies; no TCP/TLS apply.
+- [x] RED/GREEN: `rtk proxy go test ./net/qblock ./options -run 'TestQBlock(ClientConfig|Option)' -count=1`; expected undefined API/validation failure then PASS. Implement canonical types/options together with complete runtime below; do not commit exposed partial API.
+- [x] Write TestQBlockSelectionMatrix: supported/unknown/unsupported × both modes × eligible GET/POST/PUT (including empty nonnil body), nil body/Observe/DELETE/body GET/explicit classic/Q blocks/multicast; body Read/Seek counters remain0 on rejection. PreferKnown ordinary with classic disabled, Require uses correct sentinel. TestQBlockSelectionQueue samples after queue admission; TestQBlockSelectionDelayed preserves selected route despite later knowledge change. Assert caller metadata/body position preserved and bounded capacity rejection precedes copy.
+- [x] RED/GREEN: `rtk proxy go test ./udp/client -run 'TestQBlockSelection' -count=1 -timeout=60s`; expected premature body access/wrong routing, then PASS. Implement metadata-only Q request copy, fixed-route doInternal calls, ordinary/classic callbacks explicitly false; prepareQ1 already owns bounded body admission. Gate new DoObserve at execution; existing cancellation remains ordinary.
+- [ ] Coverage limitation: Write TestQBlockConstruction: Q SZX0–6 valid independent classic, BERT invalid; invalid config Dial returns before opening; pointer borrowed/owned transport policy, Done closed on return, callback1, reader/scheduler/periodic0; canceled contexts still errors.Is(initErr) for Do/convenience/Observe/Probe/Write/Ping/Run. TestQBlockCombinedRuntime asserts one manager/member/budget and inbound/outbound independence for both option orders and accepted sessions.
+- [x] RED/GREEN: `rtk proxy go test ./udp/... ./dtls/... ./options -run 'TestQBlock(Construction|CombinedRuntime)' -count=1 -timeout=90s`; expected absent startup suppression/guards/role validation, then PASS. Synchronously reject/finalize sessions via explicit session finalizer, retaining CloseSocket ownership. Dial preflight and rollback return primary error without duplicate callback.
+- [ ] Coverage limitation: Write TestQBlockOutboundUDP and TestQBlockOutboundDTLS: dialed and accepted Require rejects before probe, explicit independently constructed positive permits Q, inbound-only never outbound; replacement unknown; oversized/temp-record recovery every DTLS role; no implicit probe. TestQBlockNoReplay drops terminal POST response after one handler execution; timeout sends no classic replay. TestQBlockProductionJitter verifies public automatic wiring samples valid random jitter per body, deterministic injected timing remains.
+- [x] RED/GREEN: `rtk proxy go test ./udp/... ./dtls/... -run 'TestQBlock(Outbound|NoReplay|ProductionJitter)' -count=1 -timeout=120s`; expected missing runtime/receive setup, then PASS. Wire production real clock/automatic scheduler/random Float64, all DTLS Q roles before reader start. Keep CON server response slice untouched; test peer constructs discovery replies independently.
+- [x] Verify focused normal/race UDP/DTLS/options/net-qblock, unfiltered core race, compile-only ./..., vet ./..., full runtime ./... (commands below); expected exit0/no races. Record exact host limitations without claiming full readiness.
+- [x] Update roadmap/results as completed bounded capability/selection slice, Milestone4 incomplete; commit exact production/tests/docs as `feat(qblock): enable explicit outbound UDP and DTLS selection`.
 
 ### Final verification and one implementation review
 
-- [ ] `rtk proxy go test ./udp/... ./dtls/... ./options ./net/qblock -run 'TestQBlock' -count=1 -timeout=180s`
-- [ ] `rtk proxy go test -race ./udp/... ./dtls/... ./options -run 'TestQBlock' -count=1 -timeout=180s`
-- [ ] `rtk proxy go test -race ./net/qblock -count=1 -timeout=180s`
-- [ ] `rtk proxy go test ./... -run '^$' -count=1 -timeout=180s`
-- [ ] `rtk proxy go vet ./...`
-- [ ] `rtk proxy go test ./... -count=1 -timeout=180s`
-- [ ] `rtk proxy git diff --check`; retain output/logs under the scoped ledger directory.
-- [ ] Exactly one fresh-context gpt-6-astra/high reviewer, fork_turns none, reviews 985ab630..new implementation HEAD against this authorized spec/plan. No historical probe/M3 re-review. Record Critical/Important/Minor findings and rulings.
-- [ ] One TDD fix pass for material findings, rerun affected focused/race plus full verification if behavior changes; defer minors explicitly. No second review.
-- [ ] Scoped commit for fixes/results; verify exact HEAD/log/status and both supplied hashes; retain branch/worktree/all ledgers, no merge/push.
+- [x] `rtk proxy go test ./udp/... ./dtls/... ./options ./net/qblock -run 'TestQBlock' -count=1 -timeout=180s`
+- [x] `rtk proxy go test -race ./udp/... ./dtls/... ./options -run 'TestQBlock' -count=1 -timeout=180s`
+- [x] `rtk proxy go test -race ./net/qblock -count=1 -timeout=180s`
+- [x] `rtk proxy go test ./... -run '^$' -count=1 -timeout=180s`
+- [x] `rtk proxy go vet ./...`
+- [x] `rtk proxy go test ./... -count=1 -timeout=180s`
+- [x] `rtk proxy git diff --check`; retain output/logs under the scoped ledger directory.
+- [x] Exactly one fresh-context gpt-6-astra/high reviewer, fork_turns none, reviews 985ab630..new implementation HEAD against this authorized spec/plan. No historical probe/M3 re-review. Record Critical/Important/Minor findings and rulings.
+- [x] One TDD fix pass for material findings, rerun affected focused/race plus full verification if behavior changes; defer minors explicitly. No second review.
+- [x] Scoped commit for fixes/results; verify exact HEAD/log/status and both supplied hashes; retain branch/worktree/all ledgers, no merge/push.
+
+## Execution record
+
+Task1 committed104def5; Task2 committed7032d43; one Astra review and one TDD fix pass recorded in the retained ledger. Implementation deliverables and required verification completed. RED/GREEN assertions expanded during execution where live integration revealed defects; supplementary already-GREEN tests are explicitly identified in the ledger and not claimed as separate RED cycles. Plan steps below historical outline stay unchecked as historical evidence. Some exhaustive coverage items were narrowed: supplied-DTLS constructor ownership/guard combinations and public accepted outbound discovery end-to-end are recorded coverage limitations, not proof of Milestone4 completion. Separate server CON reply slice remains open.
 
 ## Plan self-review and pre-flight
 

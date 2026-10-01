@@ -51,6 +51,12 @@ func (p *qblockCapabilityProbe) complete(supported bool, err error, evidence qbl
 func (cc *Conn) probeQBlockWire(ctx context.Context, path string, g *qblockProbeGeneration) (bool, error) {
 	var owned *qblockOwnedLease
 	defer func() {
+		// Stop ingress from acquiring an owner whose envelope is being released.
+		cc.qblockProbeMu.Lock()
+		if cc.qblockGeneration == g {
+			cc.qblockProbe = nil
+		}
+		cc.qblockProbeMu.Unlock()
 		if owned != nil {
 			owned.drop()
 		}

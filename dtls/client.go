@@ -64,8 +64,7 @@ func Dial[T DTLSClientConfig](target string, cfg T, opts ...udp.Option) (*udpCli
 		return nil, err
 	}
 	opts = append(opts, options.WithCloseSocket())
-	opts = append(opts, options.WithErrors(func(error) {}))
-	cc := Client(conn, opts...)
+	cc := newClient(conn, false, opts...)
 	if err := cc.InitializationError(); err != nil {
 		return nil, errors.Join(err, conn.Close())
 	}
@@ -74,6 +73,9 @@ func Dial[T DTLSClientConfig](target string, cfg T, opts ...udp.Option) (*udpCli
 
 // Client creates client over dtls connection.
 func Client(conn *dtls.Conn, opts ...udp.Option) *udpClient.Conn {
+	return newClient(conn, true, opts...)
+}
+func newClient(conn *dtls.Conn, reportInit bool, opts ...udp.Option) *udpClient.Conn {
 	cfg := DefaultConfig
 	for _, o := range opts {
 		o.UDPClientApply(&cfg)
@@ -136,7 +138,9 @@ func Client(conn *dtls.Conn, opts ...udp.Option) *udpClient.Conn {
 	)
 
 	if err := cc.InitializationError(); err != nil {
-		cfg.Errors(err)
+		if reportInit {
+			cfg.Errors(err)
+		}
 		return cc
 	}
 	cfg.PeriodicRunner(func(now time.Time) bool {

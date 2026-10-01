@@ -282,6 +282,7 @@ func (s *Server) createConn(connection *coapNet.Conn, inactivityMonitor udpClien
 	)
 	session.qblockEnabled = s.qblockRuntime != nil
 	cfg := udpClient.DefaultConfig
+	cfg.MaxMessageSize = s.cfg.MaxMessageSize
 	cfg.MTU = s.cfg.MTU
 	cfg.TransmissionNStart = s.cfg.TransmissionNStart
 	cfg.TransmissionAcknowledgeTimeout = s.cfg.TransmissionAcknowledgeTimeout

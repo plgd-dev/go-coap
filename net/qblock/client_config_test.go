@@ -3,6 +3,7 @@ package qblock
 import (
 	"github.com/stretchr/testify/require"
 	"testing"
+	"time"
 )
 
 func TestQBlockClientConfigValidation(t *testing.T) {
@@ -19,4 +20,11 @@ func TestQBlockClientConfigValidation(t *testing.T) {
 	}
 	c.Mode = Mode(2)
 	require.Error(t, c.Validate())
+}
+
+func TestQBlockClientLifetime(t *testing.T) {
+	c := DefaultClientConfig()
+	c.Manager.Transfer.Lifetime = 5 * time.Minute
+	require.NoError(t, c.Manager.Validate())
+	require.NoError(t, c.Validate())
 }

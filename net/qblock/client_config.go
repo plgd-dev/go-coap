@@ -37,6 +37,7 @@ func DefaultClientConfig() ClientConfig {
 func (c ClientConfig) Validate() error {
 	s := DefaultServerConfig()
 	s.Manager = c.Manager
+	s.Retention = c.Manager.Transfer.Lifetime
 	s.ProbingRate = c.ProbingRate
 	s.NonProbingWait = c.NonProbingWait
 	s.MaxIntentBytes = c.MaxIntentBytes

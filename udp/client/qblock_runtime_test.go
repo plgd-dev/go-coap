@@ -108,3 +108,50 @@ func TestQBlockCombinedRuntimeRoles(t *testing.T) {
 		r.Close()
 	}
 }
+
+func TestQBlockCombinedInvalidInbound(t *testing.T) {
+	out := qblock.DefaultClientConfig()
+	for _, change := range []func(*qblock.ServerConfig){func(c *qblock.ServerConfig) { c.Retention = -time.Second }, func(c *qblock.ServerConfig) { c.MaxRecords = 0 }, func(c *qblock.ServerConfig) { c.MaxMetadataBytes = 0 }} {
+		in := qblock.DefaultServerConfig()
+		change(&in)
+		_, err := NewQBlockRuntime(&out, &in)
+		require.Error(t, err)
+	}
+}
+func TestQBlockRuntimeRejectsStoredInitError(t *testing.T) {
+	out := qblock.DefaultClientConfig()
+	r, err := NewQBlockRuntime(&out, nil)
+	require.NoError(t, err)
+	defer r.Close()
+	s := &qblockTestSession{ctx: context.Background(), remoteAddr: endpointPeer(123)}
+	defer s.closeForTest()
+	cfg := DefaultConfig
+	cfg.BlockwiseSZX = 7
+	cc, err := r.NewConn(s, &cfg)
+	require.Error(t, err)
+	require.Nil(t, cc)
+}
+
+func TestQBlockAcceptedBudgetMatchesSession(t *testing.T) {
+	q := qblock.DefaultClientConfig()
+	probe := &qblockClient{managerConfig: q.Manager, datagramLimit: 64, maxMIDEntries: q.MaxMIDEntries, pacingConfig: qblockPacingConfig{MaxIntentBytes: q.MaxIntentBytes}}
+	require.NoError(t, probe.initOwnedBudget())
+	q.MaxOwnedBytes = probe.ownedBudget.floor + probe.ownedBudget.clientCost
+	r, err := NewQBlockRuntime(&q, nil)
+	require.NoError(t, err)
+	defer r.Close()
+	require.NoError(t, r.ValidateTransport(64))
+	require.Error(t, r.ValidateTransport(128))
+	cfg := DefaultConfig
+	cfg.MTU = 128
+	cfg.MaxMessageSize = 64
+	s := &capBudgetSession{qblockTestSession: &qblockTestSession{ctx: context.Background(), remoteAddr: endpointPeer(123)}}
+	defer s.closeForTest()
+	cc, err := r.NewConn(s, &cfg)
+	require.NoError(t, err)
+	require.NoError(t, cc.InitializationError())
+}
+
+type capBudgetSession struct{ *qblockTestSession }
+
+func (s *capBudgetSession) MaxMessageSize() uint32 { return 64 }

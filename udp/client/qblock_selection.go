@@ -10,7 +10,7 @@ import (
 
 func (cc *Conn) selectQBlock(req *pool.Message) (bool, error) {
 	// Observation cancellation must remain ordinary even under Require.
-	if value, err := req.GetOptionUint32(message.Observe); err == nil && value == 1 {
+	if value, err := req.GetOptionUint32(message.Observe); err == nil && value == 1 && req.Code() == codes.GET && req.Body() == nil && !req.HasOption(message.Block1) && !req.HasOption(message.Block2) && !req.HasOption(message.QBlock1) && !req.HasOption(message.QBlock2) {
 		return false, nil
 	}
 	if cc.qblockConfig == nil {

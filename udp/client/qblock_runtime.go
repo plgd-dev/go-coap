@@ -45,7 +45,7 @@ func (r *QBlockServerRuntime) NewConn(session Session, cfg *Config, opts ...Opti
 	}
 	cc := NewConnWithOpts(session, cfg, opts...)
 	cc.qblockClient.serverOnly = r.clientConfig == nil
-	if err := cc.qblockClient.initErr; err != nil {
+	if err := cc.InitializationError(); err != nil {
 		cc.qblockClient.close()
 		return nil, errors.Join(err, session.Close())
 	}
@@ -111,6 +111,11 @@ func NewQBlockRuntime(outbound *qblock.ClientConfig, inbound *qblock.ServerConfi
 	}
 	if err := outbound.Validate(); err != nil {
 		return nil, err
+	}
+	if inbound != nil {
+		if err := inbound.Validate(); err != nil {
+			return nil, err
+		}
 	}
 	if inbound != nil && !outbound.MatchesServer(*inbound) {
 		return nil, errInvalidQBlockClientConfig

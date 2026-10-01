@@ -3,6 +3,9 @@ package udp_test
 import (
 	"bytes"
 	"context"
+	"errors"
+	"github.com/plgd-dev/go-coap/v3/udp/client"
+	"io"
 	"net"
 	"testing"
 	"time"
@@ -208,4 +211,102 @@ func TestQBlockConstructionUDP(t *testing.T) {
 	}
 	_, err = udp.Dial("invalid target", options.WithQBlock(cfg))
 	require.Error(t, err)
+}
+
+func TestQBlockDialKeepsRuntimeErrors(t *testing.T) {
+	peer, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	require.NoError(t, err)
+	defer peer.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	reported := make(chan error, 1)
+	sentinel := errors.New("request monitor failure")
+	cc, err := udp.Dial(peer.LocalAddr().String(), options.WithContext(ctx), options.WithErrors(func(err error) { reported <- err }), runtimeMonitorOption{sentinel})
+	require.NoError(t, err)
+	defer cc.Close()
+	req := pool.NewMessage(ctx)
+	req.SetType(message.NonConfirmable)
+	req.SetCode(codes.GET)
+	req.SetToken([]byte{1})
+	req.SetMessageID(1)
+	wire, err := req.MarshalWithEncoder(coder.DefaultCoder)
+	require.NoError(t, err)
+	_, err = peer.WriteToUDP(wire, cc.LocalAddr().(*net.UDPAddr))
+	require.NoError(t, err)
+	select {
+	case err := <-reported:
+		require.ErrorIs(t, err, sentinel)
+	case <-time.After(time.Second):
+		t.Fatal("Dial discarded runtime Errors callback")
+	}
+}
+
+type runtimeMonitorOption struct{ err error }
+
+func (o runtimeMonitorOption) UDPClientApply(c *client.Config) {
+	c.RequestMonitor = func(*client.Conn, *pool.Message) (bool, error) { return false, o.err }
+}
+
+func TestQBlockNoReplayAfterPeerProcessesPOST(t *testing.T) {
+	peer, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	require.NoError(t, err)
+	defer peer.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	q := qblock.DefaultClientConfig()
+	q.Mode = qblock.Require
+	cc, err := udp.Dial(peer.LocalAddr().String(), options.WithContext(ctx), options.WithQBlock(q))
+	require.NoError(t, err)
+	defer cc.Close()
+	probe := make(chan error, 1)
+	go func() { _, err := cc.ProbeQBlock(ctx, ""); probe <- err }()
+	buf := make([]byte, 2048)
+	require.NoError(t, peer.SetReadDeadline(time.Now().Add(time.Second)))
+	n, addr, err := peer.ReadFromUDP(buf)
+	require.NoError(t, err)
+	req := pool.NewMessage(ctx)
+	_, err = req.UnmarshalWithDecoder(qblock.Decoder{}, buf[:n])
+	require.NoError(t, err)
+	reply := pool.NewMessage(ctx)
+	reply.SetCode(codes.Content)
+	reply.SetType(message.Acknowledgement)
+	reply.SetMessageID(req.MessageID())
+	reply.SetToken(req.Token())
+	reply.SetOptionUint32(message.QBlock2, 0)
+	reply.SetOptionBytes(message.ETag, []byte{1})
+	reply.SetOptionUint32(message.Size2, 1)
+	reply.SetBody(bytes.NewReader([]byte("x")))
+	wire, err := reply.MarshalWithEncoder(coder.DefaultCoder)
+	require.NoError(t, err)
+	_, err = peer.WriteToUDP(wire, addr)
+	require.NoError(t, err)
+	require.NoError(t, <-probe)
+	operation, cancelOperation := context.WithTimeout(ctx, 150*time.Millisecond)
+	defer cancelOperation()
+	result := make(chan error, 1)
+	go func() {
+		r, err := cc.Post(operation, "/write", message.TextPlain, bytes.NewReader([]byte("x")))
+		if r != nil {
+			cc.ReleaseMessage(r)
+		}
+		result <- err
+	}()
+	n, _, err = peer.ReadFromUDP(buf)
+	require.NoError(t, err)
+	req = pool.NewMessage(ctx)
+	_, err = req.UnmarshalWithDecoder(qblock.Decoder{}, buf[:n])
+	require.NoError(t, err)
+	require.Equal(t, codes.POST, req.Code())
+	require.True(t, req.HasOption(message.QBlock1))
+	payload, err := io.ReadAll(req.Body())
+	require.NoError(t, err)
+	require.Equal(t, []byte("x"), payload)
+	// The independent peer applies this complete one-block operation once, drops
+	// its terminal response, then watches for any automatic resubmission.
+	applied := 1
+	require.ErrorIs(t, <-result, context.DeadlineExceeded)
+	require.NoError(t, peer.SetReadDeadline(time.Now().Add(50*time.Millisecond)))
+	_, _, err = peer.ReadFromUDP(buf)
+	require.Error(t, err)
+	require.Equal(t, 1, applied)
 }

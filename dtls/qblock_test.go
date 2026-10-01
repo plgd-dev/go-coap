@@ -3,6 +3,7 @@ package dtls_test
 import (
 	"bytes"
 	"context"
+	"errors"
 	"net"
 	"sync/atomic"
 	"testing"
@@ -421,4 +422,47 @@ func TestQBlockOutboundDTLS(t *testing.T) {
 			require.NoError(t, <-result)
 		})
 	}
+}
+
+func TestQBlockDialKeepsRuntimeErrorsDTLS(t *testing.T) {
+	l, err := piondtls.Listen("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)}, qDTLSConfig())
+	require.NoError(t, err)
+	defer l.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	reported := make(chan error, 1)
+	sentinel := errors.New("dtls monitor failure")
+	cc, err := dtls.Dial(l.Addr().String(), qDTLSConfig(), options.WithContext(ctx), options.WithErrors(func(err error) { reported <- err }), dtlsRuntimeMonitorOption{sentinel})
+	require.NoError(t, err)
+	defer cc.Close()
+	handshake := make(chan error, 1)
+	go func() { handshake <- cc.WriteMessage(pool.NewMessage(ctx)) }()
+	peer, err := l.Accept()
+	require.NoError(t, err)
+	defer peer.Close()
+	buf := make([]byte, 128)
+	_, err = peer.Read(buf)
+	require.NoError(t, err)
+	<-handshake
+	req := pool.NewMessage(ctx)
+	req.SetType(message.NonConfirmable)
+	req.SetCode(codes.GET)
+	req.SetToken([]byte{1})
+	req.SetMessageID(1)
+	wire, err := req.MarshalWithEncoder(coder.DefaultCoder)
+	require.NoError(t, err)
+	_, err = peer.Write(wire)
+	require.NoError(t, err)
+	select {
+	case err := <-reported:
+		require.ErrorIs(t, err, sentinel)
+	case <-time.After(time.Second):
+		t.Fatal("DTLS Dial discarded callback")
+	}
+}
+
+type dtlsRuntimeMonitorOption struct{ err error }
+
+func (o dtlsRuntimeMonitorOption) UDPClientApply(c *client.Config) {
+	c.RequestMonitor = func(*client.Conn, *pool.Message) (bool, error) { return false, o.err }
 }

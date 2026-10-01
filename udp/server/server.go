@@ -427,6 +427,7 @@ func (s *Server) getOrCreateConn(udpConn *coapNet.UDPConn, raddr *net.UDPAddr, l
 	cfg.ReceivedMessageQueueSize = s.cfg.ReceivedMessageQueueSize
 
 	requestMonitor := s.cfg.RequestMonitor
+	cfg.MaxMessageSize = s.cfg.MaxMessageSize
 	cfg.MTU = s.cfg.MTU
 	opts := []client.Option{client.WithInactivityMonitor(monitor), client.WithRequestMonitor(requestMonitor), client.WithBlockWise(createBlockWise)}
 	if s.qblockRuntime != nil {

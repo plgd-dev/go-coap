@@ -9,6 +9,7 @@ import (
 	"github.com/plgd-dev/go-coap/v3/net/qblock"
 	"github.com/stretchr/testify/require"
 	"io"
+	"net"
 	"testing"
 	"time"
 )
@@ -224,4 +225,45 @@ func TestQBlockSelectionObserveCancellation(t *testing.T) {
 	route, err := cc.selectQBlock(req)
 	require.NoError(t, err)
 	require.False(t, route)
+}
+
+func TestQBlockObserveOneDoesNotBypassRequire(t *testing.T) {
+	cc, _, _ := capabilityConn(t)
+	q := qblock.DefaultClientConfig()
+	q.Mode = qblock.Require
+	cc.qblockConfig = &q
+	req := cc.AcquireMessage(context.Background())
+	defer cc.ReleaseMessage(req)
+	body := &untouchedQBody{}
+	req.SetCode(codes.POST)
+	req.SetBody(body)
+	req.SetObserve(1)
+	_, err := cc.selectQBlock(req)
+	require.ErrorIs(t, err, qblock.ErrUnsupportedOperation)
+	require.Zero(t, body.calls)
+}
+
+func TestQBlockSelectionIneligibleBodies(t *testing.T) {
+	cc, _, _ := capabilityConn(t)
+	q := qblock.DefaultClientConfig()
+	q.Mode = qblock.Require
+	cc.qblockConfig = &q
+	for _, code := range []codes.Code{codes.GET, codes.POST, codes.PUT} {
+		req := cc.AcquireMessage(context.Background())
+		req.SetCode(code)
+		body := &untouchedQBody{}
+		if code == codes.GET {
+			req.SetBody(body)
+		}
+		_, err := cc.selectQBlock(req)
+		require.ErrorIs(t, err, qblock.ErrUnsupportedOperation)
+		require.Zero(t, body.calls)
+		cc.ReleaseMessage(req)
+	}
+	req := cc.AcquireMessage(context.Background())
+	defer cc.ReleaseMessage(req)
+	req.SetCode(codes.GET)
+	cc.session.(*capabilitySession).remoteAddr = &net.UDPAddr{IP: net.IPv4(224, 0, 0, 1), Port: 5683}
+	_, err := cc.selectQBlock(req)
+	require.ErrorIs(t, err, qblock.ErrUnsupportedOperation)
 }

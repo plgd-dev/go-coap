@@ -40,8 +40,7 @@ func Dial(target string, opts ...Option) (*client.Conn, error) {
 		return nil, fmt.Errorf("unsupported connection type: %T", c)
 	}
 	opts = append(opts, options.WithCloseSocket())
-	opts = append(opts, options.WithErrors(func(error) {}))
-	cc := Client(conn, opts...)
+	cc := newClient(conn, false, opts...)
 	if err := cc.InitializationError(); err != nil {
 		return nil, errors.Join(err, conn.Close())
 	}
@@ -50,6 +49,9 @@ func Dial(target string, opts ...Option) (*client.Conn, error) {
 
 // Client creates client over udp connection.
 func Client(conn *net.UDPConn, opts ...Option) *client.Conn {
+	return newClient(conn, true, opts...)
+}
+func newClient(conn *net.UDPConn, reportInit bool, opts ...Option) *client.Conn {
 	cfg := client.DefaultConfig
 	for _, o := range opts {
 		o.UDPClientApply(&cfg)
@@ -110,7 +112,9 @@ func Client(conn *net.UDPConn, opts ...Option) *client.Conn {
 		client.WithRequestMonitor(cfg.RequestMonitor),
 	)
 	if err := cc.InitializationError(); err != nil {
-		cfg.Errors(err)
+		if reportInit {
+			cfg.Errors(err)
+		}
 		return cc
 	}
 	cfg.PeriodicRunner(func(now time.Time) bool {
