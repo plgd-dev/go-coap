@@ -90,6 +90,7 @@ const (
 )
 
 type midElement struct {
+	ordinary   *qblockOrdinaryPermit
 	handler    HandlerFunc
 	start      time.Time
 	deadline   time.Time
@@ -102,6 +103,9 @@ type midElement struct {
 }
 
 func (m *midElement) ReleaseMessage(cc *Conn) {
+	if m.ordinary != nil {
+		m.ordinary.finish(false, m.ordinary.member.domain.clock.Now())
+	}
 	m.private.Lock()
 	defer m.private.Unlock()
 	if m.private.msg != nil {
@@ -199,7 +203,9 @@ func (m *messageCache) CheckExpirations(now time.Time) {
 type Conn struct {
 	// This field needs to be the first in the struct to ensure proper word alignment on 32-bit platforms.
 	// See: https://golang.org/pkg/sync/atomic/#pkg-note-BUG
-	sequence atomic.Uint64
+	sequence   atomic.Uint64
+	ordinaryMu sync.Mutex
+	ordinary   map[*qblockOrdinaryPermit]struct{}
 
 	session Session
 	*client.Client[*Conn]
@@ -387,6 +393,7 @@ func NewConnWithOpts(session Session, cfg *Config, opts ...Option) *Conn {
 			cc.qblockClient.endpoint.detach(cc.qblockClient.now())
 		}
 		cc.session.AddOnClose(cc.qblockClient.close)
+		cc.session.AddOnClose(cc.closeOrdinary)
 	}
 	limitParallelRequests := limitparallelrequests.New(cfg.LimitClientParallelRequests, cfg.LimitClientEndpointParallelRequests, cc.do, cc.doObserve)
 	cc.observationHandler = observation.NewHandler(&cc, cfg.Handler, limitParallelRequests.Do)
@@ -649,8 +656,12 @@ func (cc *Conn) waitForAcknowledge(req *pool.Message, waitForResponseChan chan s
 	}
 }
 
-func (cc *Conn) prepareWriteMessage(req *pool.Message, handler HandlerFunc) (func(), error) {
+func (cc *Conn) prepareWriteMessage(req *pool.Message, handler HandlerFunc, permits ...*qblockOrdinaryPermit) (func(), error) {
 	var closeFns fn.FuncList
+	var permit *qblockOrdinaryPermit
+	if len(permits) > 0 {
+		permit = permits[0]
+	}
 
 	// Only confirmable messages ever match an message ID
 	switch req.Type() {
@@ -671,6 +682,7 @@ func (cc *Conn) prepareWriteMessage(req *pool.Message, handler HandlerFunc) (fun
 		deadline, _ := req.Context().Deadline()
 		if _, loaded := cc.midHandlerContainer.LoadOrStore(req.MessageID(), &midElement{
 			handler:  handler,
+			ordinary: permit,
 			start:    time.Now(),
 			deadline: deadline,
 			private: struct {
@@ -694,16 +706,30 @@ func (cc *Conn) prepareWriteMessage(req *pool.Message, handler HandlerFunc) (fun
 }
 
 func (cc *Conn) writeMessageAsync(req *pool.Message) error {
+	return cc.writeMessageAsyncOrigin(req, false)
+}
+func (cc *Conn) writeMessageAsyncOrigin(req *pool.Message, immediate bool) error {
 	req.UpsertType(message.Confirmable)
 	req.UpsertMessageID(cc.GetMessageID())
+	var permit *qblockOrdinaryPermit
+	var err error
+	if !immediate {
+		permit, err = cc.acquireOrdinary(req)
+	}
+	if err != nil {
+		return err
+	}
+	if permit != nil && permit.con {
+		defer permit.finish(false, permit.member.domain.clock.Now())
+	}
 	closeFn, err := cc.prepareWriteMessage(req, func(*responsewriter.ResponseWriter[*Conn], *pool.Message) {
 		// do nothing
-	})
+	}, permit)
 	if err != nil {
 		return err
 	}
 	defer closeFn()
-	if err := cc.session.WriteMessage(req); err != nil {
+	if err := cc.writeOrdinary(req, permit); err != nil {
 		return fmt.Errorf(errFmtWriteRequest, err)
 	}
 	return nil
@@ -718,14 +744,21 @@ func (cc *Conn) writeMessage(req *pool.Message) error {
 		return cc.writeMessageAsync(req)
 	}
 	respChan := make(chan struct{})
+	permit, err := cc.acquireOrdinary(req)
+	if err != nil {
+		return err
+	}
+	if permit != nil && permit.con {
+		defer permit.finish(false, permit.member.domain.clock.Now())
+	}
 	closeFn, err := cc.prepareWriteMessage(req, func(*responsewriter.ResponseWriter[*Conn], *pool.Message) {
 		close(respChan)
-	})
+	}, permit)
 	if err != nil {
 		return err
 	}
 	defer closeFn()
-	if err := cc.session.WriteMessage(req); err != nil {
+	if err := cc.writeOrdinary(req, permit); err != nil {
 		return fmt.Errorf(errFmtWriteRequest, err)
 	}
 	if err := cc.waitForAcknowledge(req, respChan); err != nil {
@@ -761,7 +794,13 @@ func (cc *Conn) AsyncPing(receivedPong func()) (func(), error) {
 	req.SetCode(codes.Empty)
 	mid := cc.GetMessageID()
 	req.SetMessageID(mid)
+	permit, err := cc.acquireOrdinary(req)
+	if err != nil {
+		cc.ReleaseMessage(req)
+		return nil, err
+	}
 	if _, loaded := cc.midHandlerContainer.LoadOrStore(mid, &midElement{
+		ordinary: permit,
 		handler: func(_ *responsewriter.ResponseWriter[*Conn], r *pool.Message) {
 			if r.Type() == message.Reset || r.Type() == message.Acknowledgement {
 				receivedPong()
@@ -774,6 +813,10 @@ func (cc *Conn) AsyncPing(receivedPong func()) (func(), error) {
 			msg *pool.Message
 		}{msg: req},
 	}); loaded {
+		if permit != nil {
+			permit.finish(false, permit.member.domain.clock.Now())
+		}
+		cc.ReleaseMessage(req)
 		return nil, fmt.Errorf("cannot insert mid(%v) handler: %w", mid, coapErrors.ErrKeyAlreadyExists)
 	}
 	removeMidHandler := func() {
@@ -781,7 +824,7 @@ func (cc *Conn) AsyncPing(receivedPong func()) (func(), error) {
 			elem.ReleaseMessage(cc)
 		}
 	}
-	if err := cc.session.WriteMessage(req); err != nil {
+	if err := cc.writeOrdinary(req, permit); err != nil {
 		removeMidHandler()
 		return nil, fmt.Errorf(errFmtWriteRequest, err)
 	}
@@ -1023,7 +1066,7 @@ func (cc *Conn) ProcessReceivedMessageWithHandler(req *pool.Message, handler con
 		return
 	}
 	cc.upsertControlInformation(w.Message())
-	errW := cc.writeMessageAsync(w.Message())
+	errW := cc.writeMessageAsyncOrigin(w.Message(), true)
 	if errW != nil {
 		cc.closeConnection()
 		cc.errors(fmt.Errorf(errFmtWriteResponse, errW))
@@ -1075,18 +1118,30 @@ func (cc *Conn) handleSpecialMessages(r *pool.Message) bool {
 	}
 
 	// if waits for concrete message handler
-	if elem, ok := cc.midHandlerContainer.LoadAndDelete(r.MessageID()); ok {
-		elem.ReleaseMessage(cc)
-		resp := cc.AcquireMessage(cc.Context())
-		resp.SetToken(r.Token())
-		w := responsewriter.New(resp, cc, r.Options()...)
-		defer func() {
-			cc.ReleaseMessage(w.Message())
-		}()
-		elem.handler(w, r)
-		// we just confirmed that message was processed for cc.writeMessage
-		// the body of the message is need to be processed by the loopOverReceivedMessageQueue goroutine
-		return false
+	if r.Type() == message.Acknowledgement || r.Type() == message.Reset {
+		if elem, ok := cc.midHandlerContainer.Load(r.MessageID()); ok {
+			if elem.ordinary != nil && !cc.validOrdinaryMIDFeedback(elem.ordinary, r) {
+				return false
+			}
+			elem, ok = cc.midHandlerContainer.LoadAndDelete(r.MessageID())
+			if !ok {
+				return false
+			}
+			if elem.ordinary != nil {
+				elem.ordinary.finish(true, elem.ordinary.member.domain.clock.Now())
+			}
+			elem.ReleaseMessage(cc)
+			resp := cc.AcquireMessage(cc.Context())
+			resp.SetToken(r.Token())
+			w := responsewriter.New(resp, cc, r.Options()...)
+			defer func() {
+				cc.ReleaseMessage(w.Message())
+			}()
+			elem.handler(w, r)
+			// we just confirmed that message was processed for cc.writeMessage
+			// the body of the message is need to be processed by the loopOverReceivedMessageQueue goroutine
+			return false
+		}
 	}
 	// separate message
 	if r.IsSeparateMessage() {
@@ -1128,6 +1183,7 @@ func (cc *Conn) Process(cm *coapNet.ControlMessage, datagram []byte) error {
 		return nil
 	}
 	cc.inactivityMonitor.Notify()
+	cc.acceptOrdinaryResponse(req)
 	if cc.handleSpecialMessages(req) {
 		return nil
 	}
@@ -1167,7 +1223,7 @@ func (cc *Conn) checkMidHandlerContainer(now time.Time, maxRetransmit uint32, ac
 	}
 	if ok {
 		defer cc.ReleaseMessage(msg)
-		err := cc.session.WriteMessage(msg)
+		err := cc.writeOrdinary(msg, value.ordinary)
 		if err != nil {
 			cc.errors(fmt.Errorf(errFmtWriteRequest, err))
 		}
@@ -1176,6 +1232,7 @@ func (cc *Conn) checkMidHandlerContainer(now time.Time, maxRetransmit uint32, ac
 
 // CheckExpirations checks and remove expired items from caches.
 func (cc *Conn) CheckExpirations(now time.Time) {
+	cc.pruneOrdinary(now)
 	cc.inactivityMonitor.CheckInactivity(now, cc)
 	cc.responseMsgCache.CheckExpirations(now)
 	if cc.blockWise != nil {
