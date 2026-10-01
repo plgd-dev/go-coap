@@ -16,17 +16,23 @@ Actions: pass/drop/hold/duplicate. Hold returns no output; Release IDs in caller
 
 Create internal/test/qblocklink/link.go, link_test.go and README.md. New API: New(rules []Rule, limits Limits) (*Link,error), Process(Direction,[]byte) ([]Packet,error), Release(ids ...uint64) ([]Packet,error), Trace() []Event. Types Direction, Kind, Action, Rule, Limits, Packet and Event described in package docs. Link is caller-serialized.
 
-- [ ] Write literal-wire tests for direction/occurrence isolation, drop/duplicate, hold/reorder, raw controls/malformed Q, caller/output/trace mutation isolation, constructor validation, atomic failed release and finite limits. Tests catch wrong packet selection, corruption and silent loss of fault evidence.
-- [ ] Supply compilable API stub and run normal test: expected behavioral assertion failures (not missing symbols). Retain red.log.
-- [ ] Implement minimal relay; run normal/race count1; expected exit0. Retain green.log/race.log.
-- [ ] Commit implementation/tests/plan/README after diff check.
+- [x] Write literal-wire tests for direction/occurrence isolation, drop/duplicate, hold/reorder, raw controls/malformed Q, caller/output/trace mutation isolation, constructor validation, atomic failed release and finite limits. Tests catch wrong packet selection, corruption and silent loss of fault evidence.
+- [x] Supply compilable API stub and run normal test: expected behavioral assertion failures (not missing symbols). Retain red.log.
+- [x] Implement minimal relay; run normal/race count1; expected exit0. Retain green.log/race.log.
+- [x] Commit implementation/tests/plan/README after diff check.
 
 ### Task2: roadmap reconciliation, review and final evidence
 
-- [ ] Append current M4 acceptance boundary to roadmap/results; retain historical entries. M4 named deliverables/acceptance covered through407e5ab with two deferred test minors, historical full runtime bounded to1cf57d3 and no whole-branch approval. Link latest evidence and new relay slice.
-- [ ] One fresh Astra/high reviewer evaluates only407e5ab..new HEAD plus uncommitted current documentation against this contract. Review focus: independent classification, atomic limit/release failure, occurrence isolation, immutable storage, trace reproducibility and scope claims. Not final whole-branch acceptance. Address material findings in one TDD pass; retain minors, no rereview.
-- [ ] Final normal/race relay; compile-only ./...; vet ./...; diff check; retain logs with commands/exits. Commit scoped final docs/fixes. No full runtime solely for breadth.
+- [x] Append current M4 acceptance boundary to roadmap/results; retain historical entries. M4 named deliverables/acceptance covered through407e5ab with two deferred test minors, historical full runtime bounded to1cf57d3 and no whole-branch approval. Link latest evidence and new relay slice.
+- [x] One fresh Astra/high reviewer evaluates only407e5ab..new HEAD plus uncommitted current documentation against this contract. Review focus: independent classification, atomic limit/release failure, occurrence isolation, immutable storage, trace reproducibility and scope claims. Not final whole-branch acceptance. Address material findings in one TDD pass; retain minors, no rereview.
+- [x] Final normal/race relay; compile-only ./...; vet ./...; diff check; retain logs with commands/exits. Commit scoped final docs/fixes. No full runtime solely for breadth.
 
 ## Rulings
 
 User authorization overrides design confirmation gates. Keep existing linked worktree, all sibling/new ignored ledgers/logs and both preserved user edits; no force-add, merge or push. Review only this new bounded range; final whole-branch acceptance remains open. Socket-free slice requires no host-loopback probe; prior host evidence remains retained.
+
+## Final scoped evidence
+
+One fresh Astra/high review found no Critical/runtime defect, one Important evidence gap (event-count limit and rejected-release hold preservation), and one Minor missing valid two-byte option-extension fixture. The Important receives one test-only pass: isolated mutations removing MaxEvents and deleting held inputs on release rejection fail the new test; restored implementation passes all six normal/race tests. No production behavioral fix is claimed. The Minor is deferred. No rereview or final whole-branch approval.
+
+Final relay normal/race, repository compile-only/vet and diff check exit0 using local GOCACHE. Exact logs, mutation failures, review and rulings are retained in .superpowers/sdd/2026-10-01-rfc9177-fault-relay/. No full runtime rerun for this infrastructure-only slice.
