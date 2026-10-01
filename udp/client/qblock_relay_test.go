@@ -155,6 +155,9 @@ func TestQBlockRelayRecoveryControlLoss(t *testing.T) {
 						t.Error(e)
 						return
 					}
+					if t.Failed() {
+						t.Logf("recovery-control trace: %s", b)
+					}
 					if e = os.MkdirAll(traceDir, 0700); e != nil {
 						t.Error(e)
 						return
