@@ -7,6 +7,7 @@ import (
 	"github.com/plgd-dev/go-coap/v3/udp/client"
 	"io"
 	"net"
+	"syscall"
 	"testing"
 	"time"
 
@@ -196,11 +197,7 @@ func TestQBlockConstructionUDP(t *testing.T) {
 		}
 		require.Equal(t, 1, calls)
 		require.Zero(t, periodic)
-		ctx, cancel := context.WithCancel(context.Background())
-		cancel()
-		_, err = cc.Get(ctx, "/x")
-		require.ErrorIs(t, err, cc.InitializationError())
-		require.ErrorIs(t, cc.Run(), cc.InitializationError())
+		assertQBlockInitializationGuardsUDP(t, cc)
 		require.Equal(t, 1, calls)
 		err = transport.SetReadDeadline(time.Now())
 		if owned {
@@ -211,6 +208,90 @@ func TestQBlockConstructionUDP(t *testing.T) {
 	}
 	_, err = udp.Dial("invalid target", options.WithQBlock(cfg))
 	require.Error(t, err)
+}
+
+func assertQBlockInitializationGuardsUDP(t *testing.T, cc *client.Conn) {
+	t.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	req := pool.NewMessage(ctx)
+	req.SetCode(codes.GET)
+	req.SetType(message.NonConfirmable)
+	observeReq := pool.NewMessage(ctx)
+	observeReq.SetCode(codes.GET)
+	observeReq.SetType(message.Confirmable)
+	observeReq.SetObserve(0)
+	cases := []struct {
+		name string
+		run  func() error
+	}{
+		{"Do", func() error { _, err := cc.Do(req); return err }},
+		{"Get", func() error { _, err := cc.Get(ctx, "/x"); return err }},
+		{"Post", func() error {
+			_, err := cc.Post(ctx, "/x", message.TextPlain, bytes.NewReader([]byte("body")))
+			return err
+		}},
+		{"Put", func() error {
+			_, err := cc.Put(ctx, "/x", message.TextPlain, bytes.NewReader([]byte("body")))
+			return err
+		}},
+		{"Delete", func() error { _, err := cc.Delete(ctx, "/x"); return err }},
+		{"DoObserve", func() error { _, err := cc.DoObserve(observeReq, func(*pool.Message) {}); return err }},
+		{"Observe", func() error { _, err := cc.Observe(ctx, "/x", func(*pool.Message) {}); return err }},
+		{"ProbeQBlock", func() error { _, err := cc.ProbeQBlock(ctx, "/x"); return err }},
+		{"WriteMessage", func() error { return cc.WriteMessage(req) }},
+		{"AsyncPing", func() error { _, err := cc.AsyncPing(func() {}); return err }},
+		{"Ping", func() error { return cc.Ping(ctx) }},
+		{"Run", cc.Run},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			require.ErrorIs(t, tc.run(), cc.InitializationError())
+		})
+	}
+}
+
+func TestQBlockDialRejectsBeforeSocketUDP(t *testing.T) {
+	peer, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	require.NoError(t, err)
+	defer peer.Close()
+	q := qblock.DefaultClientConfig()
+	q.MaxProbeWaiters = 0
+	var opens int
+	dialer := &net.Dialer{Control: func(_, _ string, _ syscall.RawConn) error { opens++; return nil }}
+	_, err = udp.Dial(peer.LocalAddr().String(), options.WithQBlock(q), options.WithDialer(dialer))
+	require.Error(t, err)
+	require.Zero(t, opens)
+}
+
+func TestQBlockSuppliedClientKeepsRuntimeErrorsUDP(t *testing.T) {
+	peer, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	require.NoError(t, err)
+	defer peer.Close()
+	clientSocket, err := net.DialUDP("udp4", nil, peer.LocalAddr().(*net.UDPAddr))
+	require.NoError(t, err)
+	defer clientSocket.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	reported := make(chan error, 1)
+	sentinel := errors.New("supplied UDP monitor failure")
+	cc := udp.Client(clientSocket, options.WithContext(ctx), options.WithQBlock(qblock.DefaultClientConfig()), options.WithErrors(func(err error) { reported <- err }), runtimeMonitorOption{sentinel})
+	defer cc.Close()
+	req := pool.NewMessage(ctx)
+	req.SetType(message.NonConfirmable)
+	req.SetCode(codes.GET)
+	req.SetToken([]byte{1})
+	req.SetMessageID(1)
+	wire, err := req.MarshalWithEncoder(coder.DefaultCoder)
+	require.NoError(t, err)
+	_, err = peer.WriteToUDP(wire, cc.LocalAddr().(*net.UDPAddr))
+	require.NoError(t, err)
+	select {
+	case err := <-reported:
+		require.ErrorIs(t, err, sentinel)
+	case <-time.After(time.Second):
+		t.Fatal("supplied UDP Client discarded runtime Errors callback")
+	}
 }
 
 func TestQBlockDialKeepsRuntimeErrors(t *testing.T) {

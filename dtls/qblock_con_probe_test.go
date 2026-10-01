@@ -83,3 +83,127 @@ func TestQBlockServerCONProbeDTLS(t *testing.T) {
 		})
 	}
 }
+
+func TestQBlockAcceptedOutboundDTLS(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	defer cancel()
+	q := qblock.DefaultClientConfig()
+	q.Mode = qblock.Require
+	q.ProbingRate = 65536
+	workflow := make(chan struct {
+		body     string
+		postCode codes.Code
+		err      error
+	}, 1)
+	addr, _ := startQDTLS(t, options.WithQBlock(q), options.WithBlockwise(false, blockwise.SZX16, time.Second), options.WithOnNewConn(func(cc *client.Conn) {
+		go func() {
+			result := struct {
+				body     string
+				postCode codes.Code
+				err      error
+			}{}
+			supported, err := cc.ProbeQBlock(ctx, "/probe")
+			if err != nil {
+				result.err = err
+			} else if !supported {
+				result.err = io.ErrUnexpectedEOF
+			} else {
+				resp, err := cc.Get(ctx, "/get")
+				if err != nil {
+					result.err = err
+				} else {
+					body, readErr := io.ReadAll(resp.Body())
+					cc.ReleaseMessage(resp)
+					if readErr != nil {
+						result.err = readErr
+					} else {
+						result.body = string(body)
+						resp, err = cc.Post(ctx, "/upload", message.TextPlain, bytes.NewReader([]byte("accepted upload")))
+						if err != nil {
+							result.err = err
+						} else {
+							result.postCode = resp.Code()
+							cc.ReleaseMessage(resp)
+						}
+					}
+				}
+			}
+			workflow <- result
+		}()
+	}), options.WithHandlerFunc(func(w *responsewriter.ResponseWriter[*client.Conn], _ *pool.Message) {
+		_ = w.SetResponse(codes.Changed, message.TextPlain, nil)
+	}))
+	peer := dialQDTLS(t, addr)
+	require.NoError(t, peer.SetDeadline(time.Now().Add(8*time.Second)))
+	trigger := pool.NewMessage(ctx)
+	trigger.SetType(message.NonConfirmable)
+	trigger.SetCode(codes.GET)
+	trigger.SetMessageID(90)
+	trigger.SetToken([]byte{90})
+	require.NoError(t, trigger.SetPath("/trigger"))
+	writeQDTLS(t, peer, trigger)
+
+	var probes, gets, posts int
+	for posts == 0 {
+		req := readQDTLS(t, peer)
+		if req.Code() != codes.GET && req.Code() != codes.POST {
+			continue
+		}
+		path, err := req.Path()
+		require.NoError(t, err)
+		switch path {
+		case "/probe":
+			require.Equal(t, codes.GET, req.Code())
+			require.Equal(t, message.Confirmable, req.Type())
+			require.True(t, req.HasOption(message.QBlock2))
+			probes++
+			resp := pool.NewMessage(ctx)
+			resp.SetType(message.Acknowledgement)
+			resp.SetCode(codes.Content)
+			resp.SetMessageID(req.MessageID())
+			resp.SetToken(req.Token())
+			resp.SetOptionUint32(message.QBlock2, 0)
+			resp.SetOptionUint32(message.Size2, 4)
+			resp.SetOptionBytes(message.ETag, []byte{1})
+			resp.SetBody(bytes.NewReader([]byte("peer")))
+			writeQDTLS(t, peer, resp)
+		case "/get":
+			require.Equal(t, codes.GET, req.Code())
+			require.True(t, req.HasOption(message.QBlock2))
+			require.Equal(t, message.NonConfirmable, req.Type())
+			gets++
+			body := []byte("accepted reply")
+			resp := pool.NewMessage(ctx)
+			resp.SetType(message.NonConfirmable)
+			resp.SetCode(codes.Content)
+			resp.SetMessageID(req.MessageID())
+			resp.SetToken(req.Token())
+			resp.SetOptionUint32(message.QBlock2, 0)
+			resp.SetOptionUint32(message.Size2, uint32(len(body)))
+			resp.SetOptionBytes(message.ETag, []byte{2})
+			resp.SetBody(bytes.NewReader(body))
+			writeQDTLS(t, peer, resp)
+		case "/upload":
+			require.Equal(t, codes.POST, req.Code())
+			require.True(t, req.HasOption(message.QBlock1))
+			require.Equal(t, message.NonConfirmable, req.Type())
+			body, err := io.ReadAll(req.Body())
+			require.NoError(t, err)
+			require.Equal(t, "accepted upload", string(body))
+			posts++
+			resp := pool.NewMessage(ctx)
+			resp.SetType(message.NonConfirmable)
+			resp.SetCode(codes.Changed)
+			resp.SetMessageID(req.MessageID())
+			resp.SetToken(req.Token())
+			writeQDTLS(t, peer, resp)
+		}
+	}
+	result := <-workflow
+	require.NoError(t, result.err)
+	require.Equal(t, "accepted reply", result.body)
+	require.Equal(t, codes.Changed, result.postCode)
+	require.Equal(t, 1, probes)
+	require.Equal(t, 1, gets)
+	require.Equal(t, 1, posts)
+}

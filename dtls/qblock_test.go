@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
@@ -20,6 +21,7 @@ import (
 	"github.com/plgd-dev/go-coap/v3/net/qblock"
 	"github.com/plgd-dev/go-coap/v3/net/responsewriter"
 	"github.com/plgd-dev/go-coap/v3/options"
+	"github.com/plgd-dev/go-coap/v3/udp"
 	"github.com/plgd-dev/go-coap/v3/udp/client"
 	"github.com/plgd-dev/go-coap/v3/udp/coder"
 	"github.com/stretchr/testify/require"
@@ -111,6 +113,159 @@ func TestQBlockCapabilityProbeDTLS(t *testing.T) {
 
 func qDTLSConfig() *piondtls.Config {
 	return &piondtls.Config{PSK: func([]byte) ([]byte, error) { return []byte{1, 2, 3, 4}, nil }, PSKIdentityHint: []byte("qblock"), CipherSuites: []piondtls.CipherSuiteID{piondtls.TLS_PSK_WITH_AES_128_CCM_8}}
+}
+
+func establishQDTLSTransport(t *testing.T, listener net.Listener) (*piondtls.Conn, *piondtls.Conn) {
+	t.Helper()
+	transport, err := piondtls.Dial("udp4", listener.Addr().(*net.UDPAddr), qDTLSConfig())
+	require.NoError(t, err)
+	writeDone := make(chan error, 1)
+	go func() { _, err := transport.Write([]byte("handshake")); writeDone <- err }()
+	accepted, err := listener.Accept()
+	require.NoError(t, err)
+	peer, ok := accepted.(*piondtls.Conn)
+	require.True(t, ok)
+	buf := make([]byte, 64)
+	require.NoError(t, peer.SetReadDeadline(time.Now().Add(time.Second)))
+	n, err := peer.Read(buf)
+	require.NoError(t, err)
+	require.Equal(t, "handshake", string(buf[:n]))
+	require.NoError(t, <-writeDone)
+	return transport, peer
+}
+
+func TestQBlockConstructionDTLS(t *testing.T) {
+	q := qblock.DefaultClientConfig()
+	q.MaxProbeWaiters = 0
+	for _, owned := range []bool{false, true} {
+		t.Run(map[bool]string{false: "borrowed", true: "CloseSocket"}[owned], func(t *testing.T) {
+			listener, err := piondtls.Listen("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)}, qDTLSConfig())
+			require.NoError(t, err)
+			defer listener.Close()
+			transport, peer := establishQDTLSTransport(t, listener)
+			defer peer.Close()
+			calls := atomic.Int32{}
+			periodic := atomic.Int32{}
+			opts := []udp.Option{options.WithQBlock(q), options.WithErrors(func(error) { calls.Add(1) }), options.WithPeriodicRunner(func(func(time.Time) bool) { periodic.Add(1) })}
+			if owned {
+				opts = append(opts, options.WithCloseSocket())
+			}
+			cc := dtls.Client(transport, opts...)
+			require.Error(t, cc.InitializationError())
+			select {
+			case <-cc.Done():
+			default:
+				t.Fatal("failed DTLS construction returned with Done open")
+			}
+			require.EqualValues(t, 1, calls.Load())
+			require.Zero(t, periodic.Load())
+			assertQBlockInitializationGuardsDTLS(t, cc)
+			require.EqualValues(t, 1, calls.Load())
+			require.Zero(t, periodic.Load())
+			if owned {
+				_, err = transport.Write([]byte{1})
+				require.Error(t, err)
+			} else {
+				require.NoError(t, transport.SetWriteDeadline(time.Now().Add(time.Second)))
+				_, err = transport.Write([]byte("borrowed socket remains open"))
+				require.NoError(t, err)
+				buf := make([]byte, 64)
+				require.NoError(t, peer.SetReadDeadline(time.Now().Add(time.Second)))
+				n, readErr := peer.Read(buf)
+				require.NoError(t, readErr)
+				require.Equal(t, "borrowed socket remains open", string(buf[:n]))
+			}
+			_ = cc.Close()
+			if !owned {
+				_ = transport.Close()
+			}
+		})
+	}
+}
+
+func assertQBlockInitializationGuardsDTLS(t *testing.T, cc *client.Conn) {
+	t.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	req := pool.NewMessage(ctx)
+	req.SetCode(codes.GET)
+	req.SetType(message.NonConfirmable)
+	observeReq := pool.NewMessage(ctx)
+	observeReq.SetCode(codes.GET)
+	observeReq.SetType(message.Confirmable)
+	observeReq.SetObserve(0)
+	cases := []struct {
+		name string
+		run  func() error
+	}{
+		{"Do", func() error { _, err := cc.Do(req); return err }},
+		{"Get", func() error { _, err := cc.Get(ctx, "/x"); return err }},
+		{"Post", func() error {
+			_, err := cc.Post(ctx, "/x", message.TextPlain, bytes.NewReader([]byte("body")))
+			return err
+		}},
+		{"Put", func() error {
+			_, err := cc.Put(ctx, "/x", message.TextPlain, bytes.NewReader([]byte("body")))
+			return err
+		}},
+		{"Delete", func() error { _, err := cc.Delete(ctx, "/x"); return err }},
+		{"DoObserve", func() error { _, err := cc.DoObserve(observeReq, func(*pool.Message) {}); return err }},
+		{"Observe", func() error { _, err := cc.Observe(ctx, "/x", func(*pool.Message) {}); return err }},
+		{"ProbeQBlock", func() error { _, err := cc.ProbeQBlock(ctx, "/x"); return err }},
+		{"WriteMessage", func() error { return cc.WriteMessage(req) }},
+		{"AsyncPing", func() error { _, err := cc.AsyncPing(func() {}); return err }},
+		{"Ping", func() error { return cc.Ping(ctx) }},
+		{"Run", cc.Run},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			require.ErrorIs(t, tc.run(), cc.InitializationError())
+		})
+	}
+}
+
+func TestQBlockDialRejectsBeforeSocketDTLS(t *testing.T) {
+	peer, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	require.NoError(t, err)
+	defer peer.Close()
+	q := qblock.DefaultClientConfig()
+	q.MaxProbeWaiters = 0
+	var opens int
+	dialer := &net.Dialer{Control: func(_, _ string, _ syscall.RawConn) error { opens++; return nil }}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	_, err = dtls.Dial(peer.LocalAddr().String(), qDTLSConfig(), options.WithContext(ctx), options.WithQBlock(q), options.WithDialer(dialer))
+	require.Error(t, err)
+	require.Zero(t, opens)
+}
+
+func TestQBlockSuppliedClientKeepsRuntimeErrorsDTLS(t *testing.T) {
+	listener, err := piondtls.Listen("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)}, qDTLSConfig())
+	require.NoError(t, err)
+	defer listener.Close()
+	transport, peer := establishQDTLSTransport(t, listener)
+	defer peer.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	reported := make(chan error, 1)
+	sentinel := errors.New("supplied DTLS monitor failure")
+	cc := dtls.Client(transport, options.WithContext(ctx), options.WithQBlock(qblock.DefaultClientConfig()), options.WithErrors(func(err error) { reported <- err }), dtlsRuntimeMonitorOption{sentinel})
+	defer cc.Close()
+	req := pool.NewMessage(ctx)
+	req.SetType(message.NonConfirmable)
+	req.SetCode(codes.GET)
+	req.SetToken([]byte{1})
+	req.SetMessageID(1)
+	wire, err := req.MarshalWithEncoder(coder.DefaultCoder)
+	require.NoError(t, err)
+	_, err = peer.Write(wire)
+	require.NoError(t, err)
+	select {
+	case err := <-reported:
+		require.ErrorIs(t, err, sentinel)
+	case <-time.After(time.Second):
+		t.Fatal("supplied DTLS Client discarded runtime Errors callback")
+	}
 }
 
 func startQDTLS(t *testing.T, opts ...server.Option) (string, *server.Server) {
