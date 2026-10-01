@@ -347,7 +347,7 @@ terminal outputs/callbacks follow the existing ordered executor/dispatcher.
 - [x] **1. Write `TestQBlockPacingPairedPOSTPUTRepair`.** Run both methods with MaxPayloads=2, SZX16, 48-byte upload/response, rate=1024 bytes/s, and explicit wait=1s. Drop an upload block and a response block, advance fake clocks to the actual next deadlines, and assert complete bodies, correct tokens, one handler execution, and no direct Tick calls in automatic mode. Add a default-rate trace with sufficient operation lifetime to observe the actual long waits rather than bypassing the gate.
 - [x] **2. Write `TestQBlockPacingScriptedGETRepair` and `TestQBlockPacingBidirectionalSilenceExpires`.** GET verifies initial-request ownership and separately paced repairs. In the silence case both connections have active client and server wire phases; suppress feedback and advance to absolute expiry. Assert bounded termination, no late bursts, zero transfer/token/work counters after lifecycle cleanup, and no handler replay. Retention records may remain until their own specified deadline; advance to that deadline before asserting their count is zero.
 - [x] **3. Run targeted red/green:** `rtk go test ./udp/client -run 'TestQBlockPacing(Paired|Scripted|Bidirectional)' -count=1 -timeout=180s`. These are integration assertions over completed components; if already green, keep the new coverage and do not manufacture a failure. Fix only demonstrated integration gaps in the owning files and rerun their focused tests.
-- [ ] **4. Run final verification:** `rtk go test ./net/qblock ./udp/client -count=1 -timeout=180s`; `rtk go test -race ./net/qblock ./udp/client -run 'Test(ManagerPrepared|ManagerDeferred|DeferredReceiver|QBlock)' -count=1 -timeout=180s`; then `rtk go test ./... -count=1 -timeout=180s`. Record the actual commands/results. Investigate assertion/race failures; record environmental failures with their evidence rather than treating them as passes. Do not repeat broad tests without a new change or unresolved failure.
+- [x] **4. Run final verification:** `rtk go test ./net/qblock ./udp/client -count=1 -timeout=180s`; `rtk go test -race ./net/qblock ./udp/client -run 'Test(ManagerPrepared|ManagerDeferred|DeferredReceiver|QBlock)' -count=1 -timeout=180s`; then `rtk go test ./... -count=1 -timeout=180s`. Record the actual commands/results. Investigate assertion/race failures; record environmental failures with their evidence rather than treating them as passes. Do not repeat broad tests without a new change or unresolved failure.
 - [x] **5. Review the complete diff and update evidence.** Confirm all outbound private entry points use the gate policy, immediate core API behavior is preserved, and no public UDP configuration appeared. Record the conservative simultaneous-silence limitation and the remaining packet-sizing/full-memory/public-enablement work. Mark this slice complete only after all tasks/checks pass; do not mark all Milestone 3 complete. Leave the recovered private-adapter plan untouched.
 - [x] **6. Commit:** `test(qblock): validate paced bidirectional UDP lifecycle` (full-suite gate in step 4 remains open).
 
@@ -373,3 +373,13 @@ Status: Tasks 1–7 implemented; Task 8 integration coverage implemented but its
 full-suite verification gate remains open. The host's DTLS/UDP loopback failures
 were reproduced on the untouched original branch. This slice and Milestone 3
 are not marked complete.
+
+### 2026-10-01 acceptance gate closed
+
+Task8 is complete. Exact focused normal/race commands and a fresh full runtime
+`go test ./... -count=1 -timeout=180s` passed with authorized host access.
+Loopback fixture repair cleared the earlier host blocker; paired event pump now
+synchronizes executor/current deadlines and both clocks. Repeated100 normal/race
+traces passed. Later final whole-branch review findings were fixed RED/GREEN and
+verified again with fresh runtime, focused race, compile, vet and whitespace.
+Earlier failure records above remain historical evidence.

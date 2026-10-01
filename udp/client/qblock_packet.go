@@ -173,6 +173,7 @@ func qblockRawOptionField(n byte, data []byte) (uint64, []byte, bool) {
 }
 
 func (c *qblockClient) writeQBlockMessage(msg *pool.Message) error {
+	c.cc.upsertControlInformation(msg)
 	if err := c.writeContext.Err(); err != nil {
 		return err
 	}

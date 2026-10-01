@@ -581,6 +581,7 @@ func (c *qblockClient) failPendingGETLocked(exchange *qblockExchange, err error)
 }
 
 func (c *qblockClient) writePacedMessage(key qblockProbeKey, msg *pool.Message) error {
+	c.cc.upsertControlInformation(msg)
 	if err := c.writeContext.Err(); err != nil {
 		return err
 	}

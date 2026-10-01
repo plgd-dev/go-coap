@@ -152,7 +152,11 @@ func (s *Server) Serve(l *coapNet.UDPConn) error {
 		s.serverStartedChan = make(chan struct{}, 1)
 	}()
 
-	m := make([]byte, s.cfg.MaxMessageSize)
+	readCapacity := uint64(s.cfg.MaxMessageSize)
+	if s.qblockRuntime != nil {
+		readCapacity++
+	}
+	m := make([]byte, readCapacity)
 
 	s.cfg.PeriodicRunner(func(now time.Time) bool {
 		s.handleInactivityMonitors(now)
@@ -169,6 +173,9 @@ func (s *Server) Serve(l *coapNet.UDPConn) error {
 				return nil
 			}
 			return err
+		}
+		if s.qblockRuntime != nil && uint64(n) > uint64(s.cfg.MaxMessageSize) {
+			continue
 		}
 		buf = buf[:n]
 

@@ -2,12 +2,15 @@ package client
 
 import (
 	"bytes"
+	"context"
 	"github.com/plgd-dev/go-coap/v3/message"
 	"github.com/plgd-dev/go-coap/v3/message/codes"
 	"github.com/plgd-dev/go-coap/v3/message/pool"
+	coapNet "github.com/plgd-dev/go-coap/v3/net"
 	"github.com/plgd-dev/go-coap/v3/net/qblock"
 	"github.com/plgd-dev/go-coap/v3/net/responsewriter"
 	"github.com/stretchr/testify/require"
+	"net"
 	"testing"
 )
 
@@ -57,4 +60,82 @@ func TestQBlockServerInitialGETHandlerExpiresBeforeResponse(t *testing.T) {
 	req.SetOptionUint32(message.QBlock2, 8)
 	h.ingest(req)
 	require.Empty(t, h.session.writesSnapshot(), "expired GET handler cannot start new sender")
+}
+
+func TestQBlockServerHandlerPreservesRequestEnvelope(t *testing.T) {
+	cm := &coapNet.ControlMessage{Dst: net.ParseIP("127.0.0.2"), Src: net.ParseIP("127.0.0.1"), IfIndex: 3}
+	h := newServerHarness(t, qblock.DefaultManagerConfig(), qblockServerConfig{}, func(w *responsewriter.ResponseWriter[*Conn], r *pool.Message) {
+		require.Equal(t, message.Token{1}, r.Token())
+		require.Equal(t, message.NonConfirmable, r.Type())
+		require.EqualValues(t, 7, r.MessageID())
+		require.EqualValues(t, 9, r.Sequence())
+		require.Equal(t, cm, r.ControlMessage())
+		require.NoError(t, w.SetResponse(codes.Content, message.TextPlain, nil))
+	})
+	req := h.cc.AcquireMessage(h.cc.Context())
+	req.SetCode(codes.GET)
+	req.SetType(message.NonConfirmable)
+	req.SetMessageID(7)
+	req.SetSequence(9)
+	req.SetToken([]byte{1})
+	req.SetControlMessage(cm)
+	req.SetOptionBytes(message.RequestTag, []byte{1})
+	req.SetOptionUint32(message.QBlock2, 8)
+	h.ingest(req)
+}
+func TestQBlockWritesPreserveConnectionControlInformation(t *testing.T) {
+	session := &qblockControlCaptureSession{qblockTestSession: &qblockTestSession{ctx: context.Background()}}
+	cfg := DefaultConfig
+	cfg.BlockwiseEnable = false
+	cc := NewConnWithOpts(session, &cfg, withQBlockClient(qblockClientConfig{Manager: qblock.DefaultManagerConfig()}))
+	t.Cleanup(session.closeForTest)
+	cc.setControlInformation(&coapNet.ControlMessage{Dst: net.ParseIP("127.0.0.2"), IfIndex: 3})
+	req := cc.AcquireMessage(cc.Context())
+	defer cc.ReleaseMessage(req)
+	req.SetCode(codes.Content)
+	req.SetType(message.NonConfirmable)
+	req.SetMessageID(1)
+	require.NoError(t, cc.qblockClient.writeQBlockMessage(req))
+	require.NotNil(t, session.control)
+	require.Equal(t, net.ParseIP("127.0.0.2"), session.control.Src)
+	require.Equal(t, 3, session.control.IfIndex)
+}
+
+type qblockControlCaptureSession struct {
+	*qblockTestSession
+	control *coapNet.ControlMessage
+}
+
+func (s *qblockControlCaptureSession) WriteMessage(msg *pool.Message) error {
+	s.control = msg.ControlMessage()
+	return s.qblockTestSession.WriteMessage(msg)
+}
+
+func TestQBlockServerInitialGETExpiryRemovesActiveDeadline(t *testing.T) {
+	h := newServerHarness(t, qblock.DefaultManagerConfig(), qblockServerConfig{}, nil)
+	req := h.cc.AcquireMessage(h.cc.Context())
+	defer h.cc.ReleaseMessage(req)
+	req.SetCode(codes.GET)
+	req.SetType(message.NonConfirmable)
+	req.SetMessageID(1)
+	req.SetToken([]byte{1})
+	req.SetOptionBytes(message.RequestTag, []byte{1})
+	req.SetOptionUint32(message.QBlock2, 8)
+	_, ok := h.cc.qblockClient.server.handleInitialGET(req)
+	require.True(t, ok)
+	h.cc.qblockClient.mu.Lock()
+	var record *qblockServerRecord
+	for _, r := range h.cc.qblockClient.server.records {
+		record = r
+	}
+	record.executing = true
+	record.handlerRunning = true
+	h.cc.qblockClient.mu.Unlock()
+	h.advance(h.cc.qblockClient.managerConfig.Transfer.Lifetime)
+	h.cc.qblockClient.mu.Lock()
+	terminal := record.terminal
+	_, active := h.cc.qblockClient.server.nextRecordDeadlineLocked()
+	h.cc.qblockClient.mu.Unlock()
+	require.True(t, terminal)
+	require.False(t, active, "blocked handler cannot leave overdue active GET deadline")
 }

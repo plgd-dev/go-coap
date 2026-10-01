@@ -141,6 +141,7 @@ func (s *qblockServer) handleQ1(msg *pool.Message) ([]qblock.Output, bool) {
 		writeExpires: now.Add(s.client.managerConfig.Transfer.Lifetime),
 	}
 	ownedLease = nil
+	record.captureRequest(msg)
 	s.records[operation] = record
 	s.byID[id] = record
 	s.metadata += charge

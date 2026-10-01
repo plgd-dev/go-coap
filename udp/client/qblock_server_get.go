@@ -66,6 +66,7 @@ func (s *qblockServer) handleInitialGET(msg *pool.Message) ([]qblock.Output, boo
 	ctx, cancel := context.WithCancel(c.writeContext)
 	now := c.now()
 	record := &qblockServerRecord{ownedLease: lease, workID: work, operation: op, activeOperation: op, responseCeiling: &block, metadata: qblock.Metadata{SZX: block.SZX}, options: options, tokens: map[string]message.Token{string(token): token}, replyToken: token, code: codes.GET, charged: charge, generation: s.nextGen, writeContext: ctx, cancelWrite: cancel, writeExpires: now.Add(c.managerConfig.Transfer.Lifetime)}
+	record.captureRequest(msg)
 	s.records[op] = record
 	s.metadata += charge
 	return []qblock.Output{{Operation: op, Action: qblock.Action{Kind: qblock.Deliver}}}, true

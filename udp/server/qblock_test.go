@@ -115,3 +115,44 @@ func TestQBlockServerPublicQ1Upload(t *testing.T) {
 		t.Fatal("handler did not receive upload")
 	}
 }
+
+func TestQBlockServerRejectsTruncatedOversizedUpload(t *testing.T) {
+	req := pool.NewMessage(context.Background())
+	req.SetCode(codes.POST)
+	req.SetType(message.NonConfirmable)
+	req.SetMessageID(1)
+	req.SetToken([]byte{1})
+	req.SetOptionBytes(message.RequestTag, []byte{1})
+	req.SetOptionUint32(message.QBlock1, 0)
+	req.SetOptionUint32(message.Size1, 4)
+	req.SetBody(bytes.NewReader([]byte("body")))
+	wire, err := req.MarshalWithEncoder(coder.DefaultCoder)
+	require.NoError(t, err)
+	calls := make(chan struct{}, 2)
+	srv := server.New(options.WithQBlockServer(qblock.DefaultServerConfig()), options.WithMaxMessageSize(uint32(len(wire))), options.WithHandlerFunc(func(w *responsewriter.ResponseWriter[*client.Conn], _ *pool.Message) {
+		calls <- struct{}{}
+		require.NoError(t, w.SetResponse(codes.Changed, message.TextPlain, nil))
+	}))
+	listener, err := coapNet.NewListenUDP("udp4", "127.0.0.1:0")
+	require.NoError(t, err)
+	done := make(chan error, 1)
+	go func() { done <- srv.Serve(listener) }()
+	defer func() { srv.Stop(); <-done }()
+	socket, err := net.DialUDP("udp4", nil, listener.LocalAddr().(*net.UDPAddr))
+	require.NoError(t, err)
+	defer socket.Close()
+	_, err = socket.Write(append(append([]byte(nil), wire...), []byte("extra")...))
+	require.NoError(t, err)
+	select {
+	case <-calls:
+		t.Fatal("oversized truncated datagram dispatched upload")
+	case <-time.After(100 * time.Millisecond):
+	}
+	_, err = socket.Write(wire)
+	require.NoError(t, err)
+	select {
+	case <-calls:
+	case <-time.After(time.Second):
+		t.Fatal("valid retry not dispatched")
+	}
+}

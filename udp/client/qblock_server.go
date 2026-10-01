@@ -13,6 +13,7 @@ import (
 	"github.com/plgd-dev/go-coap/v3/message"
 	"github.com/plgd-dev/go-coap/v3/message/codes"
 	"github.com/plgd-dev/go-coap/v3/message/pool"
+	coapNet "github.com/plgd-dev/go-coap/v3/net"
 	"github.com/plgd-dev/go-coap/v3/net/blockwise"
 	"github.com/plgd-dev/go-coap/v3/net/qblock"
 	"github.com/plgd-dev/go-coap/v3/net/responsewriter"
@@ -37,6 +38,10 @@ type qblockServer struct {
 }
 
 type qblockServerRecord struct {
+	requestMID      int32
+	requestSequence uint64
+	requestControl  *coapNet.ControlMessage
+	requestToken    message.Token
 	ownedLease      *qblockOwnedLease
 	id              qblock.TransferID
 	workID          qblockWorkID
@@ -297,6 +302,9 @@ func (s *qblockServer) expireRecordsLocked(now time.Time) {
 		return
 	}
 	for _, record := range s.records {
+		if record.id == 0 && !record.terminal && !now.Before(record.writeExpires) {
+			s.deactivateLocked(record, now)
+		}
 		if !record.terminal || record.handlerRunning || record.expires.IsZero() || now.Before(record.expires) {
 			continue
 		}
@@ -434,6 +442,12 @@ func (c *qblockClient) executeServerOutput(output qblock.Output) []qblockCallbac
 			defer c.cc.ReleaseMessage(req)
 			defer c.cc.ReleaseMessage(resp)
 			req.SetCode(code)
+			req.SetType(message.NonConfirmable)
+			req.SetMessageID(record.requestMID)
+			req.SetSequence(record.requestSequence)
+			req.SetToken(record.requestToken)
+			req.SetControlMessage(cloneQBlockControl(record.requestControl))
+			resp.SetToken(record.requestToken)
 			req.ResetOptionsTo(options)
 			req.SetBody(bytes.NewReader(payload))
 			writer := responsewriter.New(resp, c.cc, options...)
@@ -736,3 +750,16 @@ func cloneQBlockOptions(options message.Options) message.Options {
 }
 
 var errQBlockServerConfig = errors.New("invalid private q-block server configuration")
+
+func cloneQBlockControl(cm *coapNet.ControlMessage) *coapNet.ControlMessage {
+	if cm == nil {
+		return nil
+	}
+	return &coapNet.ControlMessage{Dst: cloneQBlockBytes(cm.Dst), Src: cloneQBlockBytes(cm.Src), IfIndex: cm.IfIndex}
+}
+func (r *qblockServerRecord) captureRequest(msg *pool.Message) {
+	r.requestMID = msg.MessageID()
+	r.requestSequence = msg.Sequence()
+	r.requestToken = cloneQBlockBytes(msg.Token())
+	r.requestControl = cloneQBlockControl(msg.ControlMessage())
+}
