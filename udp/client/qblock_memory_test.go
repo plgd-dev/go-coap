@@ -335,3 +335,21 @@ func TestQBlockMemoryGETSnapshotAndPendingOptions(t *testing.T) {
 	cc.qblockClient.abandon(req.Token(), qblock.ErrCanceled)
 	require.Zero(t, cc.qblockClient.workQueue.used)
 }
+
+func TestQBlockMemoryPreparationRejectsBeforeOwnedBodyRead(t *testing.T) {
+	session := &qblockTestSession{ctx: context.Background()}
+	cc := newPrivateQBlockClientConnWithMaxTransfers(t, session, 1, message.GetToken)
+	t.Cleanup(session.closeForTest)
+	release, ok := cc.qblockClient.callbackSlots.tryAcquire()
+	require.True(t, ok)
+	defer release()
+	reader := &qblockCountingReader{Reader: bytes.NewReader([]byte("body"))}
+	req := newPOSTWithBody(t, cc, message.Token{1}, nil)
+	defer cc.ReleaseMessage(req)
+	req.SetBody(reader)
+	_, err := cc.qblockClient.prepareQ1(req, nil)
+	require.ErrorIs(t, err, qblock.ErrLimitExceeded)
+	require.Zero(t, reader.readBytes, "rejected preparation must not read owned payload")
+	require.Empty(t, session.writesSnapshot())
+}
+

@@ -344,6 +344,16 @@ func (c *qblockClient) prepareQ1(req *pool.Message, fail func(error)) (qblockPre
 	if len(originalToken) == 0 {
 		return qblockPreparation{}, errors.New("q-block Q1 requires token")
 	}
+	callbackRelease, ok := c.callbackSlots.tryAcquire()
+	if !ok {
+		return qblockPreparation{}, qblock.ErrLimitExceeded
+	}
+	admitted := false
+	defer func() {
+		if !admitted {
+			callbackRelease()
+		}
+	}()
 	responseSZX, err := c.selectGETSZX()
 	if err != nil {
 		return qblockPreparation{}, err
@@ -360,10 +370,6 @@ func (c *qblockClient) prepareQ1(req *pool.Message, fail func(error)) (qblockPre
 	requestTag = message.Token(bytes.Clone(requestTag))
 	if len(requestTag) == 0 || len(requestTag) > 8 {
 		return qblockPreparation{}, errors.New("q-block Request-Tag must contain one to eight bytes")
-	}
-	callbackRelease, ok := c.callbackSlots.tryAcquire()
-	if !ok {
-		return qblockPreparation{}, qblock.ErrLimitExceeded
 	}
 	initialToken, err := c.cc.claimFreshQBlockToken()
 	if err != nil {
@@ -412,6 +418,7 @@ func (c *qblockClient) prepareQ1(req *pool.Message, fail func(error)) (qblockPre
 		c.cc.releaseToken(initialToken, tokenOwnerQBlock)
 		return qblockPreparation{}, err
 	}
+	admitted = true
 	c.mu.Unlock()
 	callbacks := c.executePendingOrdered(c.now())
 	c.actionMu.Unlock()
