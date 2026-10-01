@@ -191,3 +191,61 @@ func mustUDPAddr(t *testing.T, addr string) *net.UDPAddr {
 	require.NoError(t, err)
 	return a
 }
+
+func TestQBlockDTLSServerOversizeRetry(t *testing.T) {
+	cfg := qblock.DefaultServerConfig()
+	cfg.ProbingRate = 4096
+	calls := make(chan struct{}, 2)
+	addr, _ := startQDTLS(t, options.WithQBlockServer(cfg), options.WithMTU(64), options.WithMaxMessageSize(64), options.WithHandlerFunc(func(w *responsewriter.ResponseWriter[*client.Conn], _ *pool.Message) {
+		calls <- struct{}{}
+		require.NoError(t, w.SetResponse(codes.Changed, message.TextPlain, nil))
+	}))
+	c := dialQDTLS(t, addr)
+	req := newQDTLSRequest(t, codes.POST)
+	req.SetOptionUint32(message.QBlock1, 0)
+	req.SetOptionUint32(message.Size1, 4)
+	req.SetBody(bytes.NewReader([]byte("body")))
+	wire, err := req.MarshalWithEncoder(coder.DefaultCoder)
+	require.NoError(t, err)
+	_, err = c.Write(append(append([]byte(nil), wire...), bytes.Repeat([]byte("x"), 128)...))
+	require.NoError(t, err)
+	select {
+	case <-calls:
+		t.Fatal("oversized record dispatched")
+	case <-time.After(50 * time.Millisecond):
+	}
+	writeQDTLS(t, c, req)
+	select {
+	case <-calls:
+	case <-time.After(time.Second):
+		t.Fatal("valid retry lost after oversized record")
+	}
+}
+
+func TestQBlockDTLSServerSessionReplacement(t *testing.T) {
+	cfg := qblock.DefaultServerConfig()
+	cfg.ProbingRate = 1 << 20
+	calls := make(chan string, 4)
+	addr, _ := startQDTLS(t, options.WithQBlockServer(cfg), options.WithHandlerFunc(func(w *responsewriter.ResponseWriter[*client.Conn], r *pool.Message) {
+		b, err := r.ReadBody()
+		require.NoError(t, err)
+		calls <- string(b)
+		require.NoError(t, w.SetResponse(codes.Changed, message.TextPlain, nil))
+	}))
+	for i := 0; i < 2; i++ {
+		c := dialQDTLS(t, addr)
+		req := newQDTLSRequest(t, codes.POST)
+		req.SetOptionUint32(message.QBlock1, 0)
+		req.SetOptionUint32(message.Size1, 4)
+		req.SetBody(bytes.NewReader([]byte("body")))
+		writeQDTLS(t, c, req)
+		select {
+		case b := <-calls:
+			require.Equal(t, "body", b)
+		case <-time.After(time.Second):
+			t.Fatal("replacement retained suppression")
+		}
+		readQDTLS(t, c)
+		require.NoError(t, c.Close())
+	}
+}

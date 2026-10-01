@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	piondtls "github.com/pion/dtls/v3"
 	"net"
 	"sync"
 	"sync/atomic"
@@ -32,7 +33,8 @@ type Session struct {
 
 	mtu uint16
 
-	closeSocket bool
+	closeSocket   bool
+	qblockEnabled bool
 }
 
 func NewSession(
@@ -138,12 +140,27 @@ func (s *Session) Run(cc *client.Conn) (err error) {
 		}
 		s.shutdown()
 	}()
-	m := make([]byte, s.mtu)
+	cap := uint32(s.mtu)
+	if s.qblockEnabled {
+		cap = min(cap, s.maxMessageSize)
+	}
+	size := int(cap)
+	if s.qblockEnabled {
+		size++
+	}
+	m := make([]byte, size)
 	for {
 		readBuf := m
 		readLen, err := s.connection.ReadWithContext(s.Context(), readBuf)
 		if err != nil {
+			var temporary *piondtls.TemporaryError
+			if s.qblockEnabled && errors.As(err, &temporary) {
+				continue
+			}
 			return fmt.Errorf("cannot read from connection: %w", err)
+		}
+		if s.qblockEnabled && uint32(readLen) > cap {
+			continue
 		}
 		readBuf = readBuf[:readLen]
 		err = cc.Process(nil, readBuf)

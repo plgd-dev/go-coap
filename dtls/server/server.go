@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/plgd-dev/go-coap/v3/message"
@@ -28,11 +29,12 @@ type Listener interface {
 }
 
 type Server struct {
-	ctx           context.Context
-	cancel        context.CancelFunc
-	cfg           *Config
-	qblockRuntime *udpClient.QBlockServerRuntime
-	initErr       error
+	ctx                context.Context
+	cancel             context.CancelFunc
+	cfg                *Config
+	qblockRuntime      *udpClient.QBlockServerRuntime
+	initErr            error
+	activeQConnections atomic.Uint32
 
 	listenMutex sync.Mutex
 	listen      Listener
@@ -215,9 +217,16 @@ func (s *Server) Serve(l Listener) error {
 		if err != nil || rw == nil {
 			continue
 		}
+		if s.qblockRuntime != nil && !s.reserveQConnection() {
+			_ = rw.Close()
+			continue
+		}
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
+			if s.qblockRuntime != nil {
+				defer s.activeQConnections.Add(^uint32(0))
+			}
 			s.serveConnection(connections, rw)
 		}()
 	}
@@ -262,6 +271,7 @@ func (s *Server) createConn(connection *coapNet.Conn, inactivityMonitor udpClien
 		s.cfg.MTU,
 		true,
 	)
+	session.qblockEnabled = s.qblockRuntime != nil
 	cfg := udpClient.DefaultConfig
 	cfg.MTU = s.cfg.MTU
 	cfg.TransmissionNStart = s.cfg.TransmissionNStart
@@ -281,4 +291,16 @@ func (s *Server) createConn(connection *coapNet.Conn, inactivityMonitor udpClien
 		return s.qblockRuntime.NewConn(session, &cfg, opts...)
 	}
 	return udpClient.NewConnWithOpts(session, &cfg, opts...), nil
+}
+
+func (s *Server) reserveQConnection() bool {
+	for {
+		n := s.activeQConnections.Load()
+		if n >= s.cfg.QBlockServer.MaxConnections {
+			return false
+		}
+		if s.activeQConnections.CompareAndSwap(n, n+1) {
+			return true
+		}
+	}
 }
