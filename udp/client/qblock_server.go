@@ -26,15 +26,17 @@ type qblockServerConfig struct {
 }
 
 type qblockServer struct {
-	client   *qblockClient
-	handler  HandlerFunc
-	config   qblockServerConfig
-	records  map[qblock.OperationKey]*qblockServerRecord
-	byID     map[qblock.TransferID]*qblockServerRecord
-	byMID    map[int32]*qblockServerRecord
-	metadata uint64
-	nextGen  uint64
-	closed   bool
+	client      *qblockClient
+	handler     HandlerFunc
+	config      qblockServerConfig
+	records     map[qblock.OperationKey]*qblockServerRecord
+	byID        map[qblock.TransferID]*qblockServerRecord
+	byMID       map[int32]*qblockServerRecord
+	metadata    uint64
+	conRequests map[int32]*qblockServerCONRecord
+	conByMID    map[int32]*qblockServerCONRecord
+	nextGen     uint64
+	closed      bool
 }
 
 type qblockServerRecord struct {
@@ -138,9 +140,11 @@ func newQBlockServer(client *qblockClient, handler HandlerFunc, cfg qblockServer
 	}
 	return &qblockServer{
 		client: client, handler: handler, config: cfg,
-		records: make(map[qblock.OperationKey]*qblockServerRecord),
-		byID:    make(map[qblock.TransferID]*qblockServerRecord),
-		byMID:   make(map[int32]*qblockServerRecord),
+		records:     make(map[qblock.OperationKey]*qblockServerRecord),
+		byID:        make(map[qblock.TransferID]*qblockServerRecord),
+		byMID:       make(map[int32]*qblockServerRecord),
+		conRequests: make(map[int32]*qblockServerCONRecord),
+		conByMID:    make(map[int32]*qblockServerCONRecord),
 	}
 }
 
@@ -277,7 +281,7 @@ func (s *qblockServer) settleHandlerLocked(record *qblockServerRecord, now time.
 // nextRecordDeadlineLocked returns the earliest eligible terminal-record
 // cleanup deadline. The caller holds client.mu.
 func (s *qblockServer) nextRecordDeadlineLocked() (time.Time, bool) {
-	var next time.Time
+	next, _ := s.nextCONDeadlineLocked()
 	for _, record := range s.records {
 		if record.id == 0 && !record.terminal {
 			if next.IsZero() || record.writeExpires.Before(next) {
@@ -301,6 +305,7 @@ func (s *qblockServer) expireRecordsLocked(now time.Time) {
 	if s.closed {
 		return
 	}
+	s.expireCONLocked(now)
 	for _, record := range s.records {
 		if record.id == 0 && !record.terminal && !now.Before(record.writeExpires) {
 			s.deactivateLocked(record, now)
@@ -323,6 +328,7 @@ func (s *qblockServer) closeLocked() []qblock.Output {
 		return nil
 	}
 	s.closed = true
+	s.closeCONLocked()
 	s.nextGen++
 	var outputs []qblock.Output
 	for _, record := range s.records {

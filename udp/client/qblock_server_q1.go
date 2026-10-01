@@ -89,7 +89,7 @@ func (s *qblockServer) handleQ1(msg *pool.Message) ([]qblock.Output, bool) {
 			}
 		}()
 	}
-	if uint64(len(s.records)) >= uint64(s.config.MaxRecords) {
+	if uint64(s.recordCountLocked()) >= uint64(s.config.MaxRecords) {
 		s.client.mu.Unlock()
 		return nil, false
 	}

@@ -1053,6 +1053,9 @@ func (cc *Conn) processResponse(reqType message.Type, reqMessageID int32, w *res
 
 func (cc *Conn) handleReq(w *responsewriter.ResponseWriter[*Conn], req *pool.Message) {
 	defer cc.inactivityMonitor.Notify()
+	if cc.qblockClient != nil && cc.qblockClient.server != nil && cc.qblockClient.server.handleCONRequest(req) {
+		return
+	}
 	reqMid := req.MessageID()
 
 	// The same message ID can not be handled concurrently

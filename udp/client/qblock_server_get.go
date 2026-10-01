@@ -28,7 +28,7 @@ func (s *qblockServer) handleInitialGET(msg *pool.Message) ([]qblock.Output, boo
 	if s.records[op] != nil {
 		return nil, false
 	}
-	if uint64(len(s.records)) >= uint64(s.config.MaxRecords) || s.nextGen == math.MaxUint64 {
+	if uint64(s.recordCountLocked()) >= uint64(s.config.MaxRecords) || s.nextGen == math.MaxUint64 {
 		return nil, false
 	}
 	release, err := c.ownedBudget.acquire(c.ownedBudget.serverCost)
