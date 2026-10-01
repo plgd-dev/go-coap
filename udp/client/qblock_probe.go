@@ -5,8 +5,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net"
-	"strings"
 	"sync"
 	"time"
 
@@ -27,6 +25,8 @@ type qblockCapabilityResult struct {
 }
 
 type qblockCapabilityProbe struct {
+	generation         *qblockProbeGeneration
+	cc                 *Conn
 	lease              *qblockOwnedLease
 	token              message.Token
 	mid                int32
@@ -37,47 +37,24 @@ type qblockCapabilityProbe struct {
 }
 
 func (p *qblockCapabilityProbe) finish(supported bool, err error) {
+	p.complete(supported, err, qblockCapabilityUnknown)
+}
+
+func (p *qblockCapabilityProbe) complete(supported bool, err error, evidence qblockCapability) {
+	p.cc.publishQBlockProbe(p.generation, supported, err, evidence)
 	select {
 	case p.result <- qblockCapabilityResult{supported, err}:
 	default:
 	}
 }
 
-// ProbeQBlock explicitly checks the peer's RFC 9177 support with a safe CON GET.
-// An empty path selects /.well-known/core; another absolute resource path may
-// be supplied. The request asks only for block zero (16 bytes), even when the
-// resource is larger. It never sends an application payload or fetches more blocks.
-//
-// true,nil means a valid Q-aware response was received. false,nil means Bad
-// Option or a successful response without QBlock2. Errors are inconclusive.
-// Results are not cached and do not enable Q payload transfers. At most one
-// explicit probe runs per connection. The caller's context bounds the exchange,
-// with ExchangeLifetime as an upper limit, and closure cancels pending waits.
-func (cc *Conn) ProbeQBlock(ctx context.Context, path string) (bool, error) {
+func (cc *Conn) probeQBlockWire(ctx context.Context, path string, g *qblockProbeGeneration) (bool, error) {
 	var owned *qblockOwnedLease
-	cc.qblockProbeMu.Lock()
-	if cc.qblockProbeBusy {
-		cc.qblockProbeMu.Unlock()
-		return false, ErrQBlockProbeInProgress
-	}
-	cc.qblockProbeBusy = true
-	cc.qblockProbeMu.Unlock()
 	defer func() {
-		cc.qblockProbeMu.Lock()
-		cc.qblockProbe = nil
-		cc.qblockProbeBusy = false
-		cc.qblockProbeMu.Unlock()
 		if owned != nil {
 			owned.drop()
 		}
 	}()
-	ctx, cancel := context.WithTimeout(ctx, ExchangeLifetime)
-	defer cancel()
-	stop := context.AfterFunc(cc.Context(), cancel)
-	defer stop()
-	if err := cc.Context().Err(); err != nil {
-		return false, err
-	}
 	if err := ctx.Err(); err != nil {
 		return false, err
 	}
@@ -93,15 +70,6 @@ func (cc *Conn) ProbeQBlock(ctx context.Context, path string) (bool, error) {
 			return false, err
 		}
 		owned = newQBlockOwnedLease(release)
-	}
-	if peer, ok := cc.RemoteAddr().(*net.UDPAddr); ok && peer != nil && peer.IP.IsMulticast() {
-		return false, errors.New("q-block capability probe requires a unicast peer")
-	}
-	if path == "" {
-		path = "/.well-known/core"
-	}
-	if !strings.HasPrefix(path, "/") || strings.ContainsAny(path, "?#") || uint64(len(path)) > uint64(cc.qblockProbeLimit) {
-		return false, errors.New("invalid q-block probe resource path")
 	}
 	var token message.Token
 	for range 32 {
@@ -157,7 +125,7 @@ func (cc *Conn) ProbeQBlock(ctx context.Context, path string) (bool, error) {
 	if err := ctx.Err(); err != nil {
 		return false, err
 	}
-	p := &qblockCapabilityProbe{lease: owned, token: token, mid: req.MessageID(), permit: permit, result: make(chan qblockCapabilityResult, 1), releaseInteraction: releaseInteraction}
+	p := &qblockCapabilityProbe{generation: g, cc: cc, lease: owned, token: token, mid: req.MessageID(), permit: permit, result: make(chan qblockCapabilityResult, 1), releaseInteraction: releaseInteraction}
 	snapshot := cc.AcquireMessage(ctx)
 	if err := req.Clone(snapshot); err != nil {
 		cc.ReleaseMessage(snapshot)
@@ -278,7 +246,15 @@ func (cc *Conn) handleQBlockProbeResponse(p *qblockCapabilityProbe, msg *pool.Me
 		}
 		cc.ReleaseMessage(ack)
 	}
-	p.finish(supported, err)
+	evidence := qblockCapabilityUnknown
+	if err == nil {
+		if supported {
+			evidence = qblockCapabilitySupported
+		} else if msg.Code() == codes.BadOption {
+			evidence = qblockCapabilityUnsupported
+		}
+	}
+	p.complete(supported, err, evidence)
 	return true
 }
 

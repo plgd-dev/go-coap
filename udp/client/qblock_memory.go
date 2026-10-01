@@ -122,7 +122,7 @@ func (c *qblockClient) initOwnedBudget() error {
 		return v
 	}
 	o := mul(d, uint64(unsafe.Sizeof(message.Option{}))+1)
-	clientCost := add(mul(2, m+1), mul(4, o), uint64(unsafe.Sizeof(qblockExchange{})), uint64(unsafe.Sizeof(qblockTransfer{})), 2048)
+	clientCost := add(mul(2, m+1), mul(4, o), uint64(unsafe.Sizeof(qblockExchange{})), uint64(unsafe.Sizeof(qblockTransfer{})), uint64(unsafe.Sizeof(qblockProbeGeneration{})), uint64(unsafe.Sizeof(qblockCapabilityProbe{})), 2048)
 	serverCost := add(mul(4, m+1), mul(8, o), uint64(unsafe.Sizeof(qblockServerRecord{})), 4096)
 	blocks := min(uint64(1<<20), max(uint64(1), (m+15)/16))
 	actions := mul(n, min(p, blocks)+3)

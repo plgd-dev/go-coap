@@ -214,15 +214,17 @@ type Conn struct {
 	inactivityMonitor InactivityMonitor
 	requestMonitor    RequestMonitorFunc
 
-	blockWise          *blockwise.BlockWise[*Conn]
-	qblockClient       *qblockClient
-	qblockProbeMu      sync.Mutex
-	qblockProbeBusy    bool
-	qblockProbe        *qblockCapabilityProbe
-	qblockProbeLimit   uint32
-	observationHandler *observation.Handler[*Conn]
-	transmission       *Transmission
-	messagePool        *pool.Pool
+	blockWise             *blockwise.BlockWise[*Conn]
+	qblockClient          *qblockClient
+	qblockProbeMu         sync.Mutex
+	qblockGeneration      *qblockProbeGeneration
+	qblockMaxProbeWaiters uint32
+	qblockKnowledge       qblockCapability
+	qblockProbe           *qblockCapabilityProbe
+	qblockProbeLimit      uint32
+	observationHandler    *observation.Handler[*Conn]
+	transmission          *Transmission
+	messagePool           *pool.Pool
 
 	processReceivedMessage config.ProcessReceivedMessageFunc[*Conn]
 	errors                 ErrorFunc
