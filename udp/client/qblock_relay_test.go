@@ -115,3 +115,73 @@ func TestQBlockRelayCombinedFaults(t *testing.T) {
 		})
 	}
 }
+
+// Removing recovery-control loss or suppressing its retry must fail.
+func TestQBlockRelayRecoveryControlLoss(t *testing.T) {
+	for _, method := range []struct {
+		name string
+		code codes.Code
+	}{{"POST", codes.POST}, {"PUT", codes.PUT}} {
+		for _, control := range []struct {
+			name      string
+			direction qblocklink.Direction
+			kind      qblocklink.Kind
+		}{
+			{"missing_report", qblocklink.ServerToClient, qblocklink.Missing},
+			{"q2_repair", qblocklink.ClientToServer, qblocklink.Q2},
+		} {
+			t.Run(method.name+"/"+control.name, func(t *testing.T) {
+				rules := []qblocklink.Rule{
+					{Direction: qblocklink.ClientToServer, Kind: qblocklink.Q1, Occurrence: 2, Action: qblocklink.Drop},
+					{Direction: qblocklink.ServerToClient, Kind: qblocklink.Q2, Occurrence: 1, Action: qblocklink.Drop},
+					{Direction: qblocklink.ServerToClient, Kind: qblocklink.Q2, Occurrence: 2, Action: qblocklink.Duplicate},
+					{Direction: control.direction, Kind: control.kind, Occurrence: 1, Action: qblocklink.Drop},
+				}
+				l, e := qblocklink.New(rules, qblocklink.Limits{MaxEvents: 2048, MaxBytes: 1 << 20})
+				require.NoError(t, e)
+				traceDir := t.TempDir()
+				if configured := os.Getenv("QBLOCK_TRACE_DIR"); configured != "" {
+					traceDir = configured
+				}
+				t.Cleanup(func() {
+					artifact := struct {
+						Method  string
+						Control string
+						Rules   []qblocklink.Rule
+						Events  []qblocklink.Event
+					}{method.name, control.name, rules, l.Trace()}
+					b, e := json.MarshalIndent(artifact, "", "  ")
+					if e != nil {
+						t.Error(e)
+						return
+					}
+					if e = os.MkdirAll(traceDir, 0700); e != nil {
+						t.Error(e)
+						return
+					}
+					if e = os.WriteFile(filepath.Join(traceDir, method.name+"-"+control.name+"-trace.json"), b, 0600); e != nil {
+						t.Error(e)
+					}
+				})
+				runQBlockPacingPairedRepairWithRelay(t, method.code, &qblockPacingConfig{ProbingRate: 1024, NonProbingWait: time.Second, MaxIntentBytes: 1 << 20}, 2*time.Minute, l)
+				dropped, retried := false, false
+				for _, event := range l.Trace() {
+					if event.Direction != control.direction || event.Kind != control.kind {
+						continue
+					}
+					if event.Occurrence == 1 {
+						require.Equal(t, qblocklink.Drop, event.Action)
+						dropped = true
+					}
+					if event.Occurrence > 1 {
+						require.True(t, dropped)
+						require.Equal(t, qblocklink.Pass, event.Action)
+						retried = true
+					}
+				}
+				require.True(t, dropped, "selected recovery control must be lost")
+				require.True(t, retried, "recovery control must be retried after loss")
+			})
+		}
+	}
+}
