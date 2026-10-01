@@ -404,3 +404,69 @@ func TestQBlockPacketIncomingServerLimits(t *testing.T) {
 	require.Greater(t, len(h.session.writesSnapshot()), writes)
 	require.Equal(t, 1, calls)
 }
+
+func TestQBlockPacketIncomingRawLimits(t *testing.T) {
+	for _, role := range []string{"client Q2", "server Q1", "server Q2", "unowned response", "ordinary GET", "disabled server"} {
+		t.Run(role, func(t *testing.T) {
+			h := newServerHarness(t, qblock.DefaultManagerConfig(), qblockServerConfig{}, func(w *responsewriter.ResponseWriter[*Conn], _ *pool.Message) {
+				require.NoError(t, w.SetResponse(codes.Changed, message.TextPlain, bytes.NewReader(bytes.Repeat([]byte{'r'}, 32))))
+			})
+			cc := h.cc
+			cc.qblockClient.datagramLimit = 68
+			var packet *pool.Message
+			guarded := true
+			switch role {
+			case "client Q2":
+				req := newPrivateQBlockClientGET(t, cc, message.Token{1})
+				defer cc.ReleaseMessage(req)
+				_, err := cc.qblockClient.prepare(req, nil)
+				require.NoError(t, err)
+				first := newQBlockClientFragment(t, cc, req.Token(), 0, true, 32)
+				require.True(t, cc.qblockClient.handle(first))
+				cc.ReleaseMessage(first)
+				packet = newQBlockClientFragment(t, cc, req.Token(), 1, false, 32)
+			case "server Q1":
+				packet = h.q1(t, 1, 0, true, 32, "0123456789abcdef")
+			case "server Q2":
+				h.ingest(h.q1(t, 1, 0, false, 4, "body"))
+				packet = h.control(t, 2, 0, false, "tag-a")
+			case "unowned response":
+				packet = newQBlockClientFragment(t, cc, message.Token{99}, 0, true, 32)
+				guarded = false
+			case "ordinary GET":
+				packet = newPrivateQBlockClientGET(t, cc, message.Token{1})
+				guarded = false
+			case "disabled server":
+				cc.qblockClient.server = nil
+				packet = h.q1(t, 1, 0, true, 32, "0123456789abcdef")
+				guarded = false
+			}
+			defer cc.ReleaseMessage(packet)
+			monitored := 0
+			cc.requestMonitor = func(_ *Conn, _ *pool.Message) (bool, error) { monitored++; return true, nil }
+			packet.SetType(message.NonConfirmable)
+			packet.SetMessageID(101)
+			packet.SetOptionBytes(message.MaxAge, bytes.Repeat([]byte{'x'}, 80))
+			raw, err := packet.MarshalWithEncoder(coder.DefaultCoder)
+			require.NoError(t, err)
+			require.Greater(t, len(raw), 68)
+			before := h.snapshot()
+			debt := *cc.qblockClient.probeGate
+			require.NoError(t, cc.Process(nil, raw))
+			if guarded {
+				require.Zero(t, monitored)
+			} else {
+				require.Equal(t, 1, monitored)
+			}
+			require.Equal(t, before, h.snapshot())
+			require.Equal(t, debt, *cc.qblockClient.probeGate)
+			monitored = 0
+			packet.Remove(message.MaxAge)
+			raw, err = packet.MarshalWithEncoder(coder.DefaultCoder)
+			require.NoError(t, err)
+			require.LessOrEqual(t, len(raw), 68)
+			require.NoError(t, cc.Process(nil, raw))
+			require.Equal(t, 1, monitored)
+		})
+	}
+}

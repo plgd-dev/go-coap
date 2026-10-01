@@ -37,15 +37,17 @@
 
 **Interfaces:** Replace oversizedInitialGET with `func (c *qblockClient) oversizedIncomingQ(msg *pool.Message, wireSize uint64) bool`; correlate client responses under mu, recognize private server Q requests. Consume Task 1 decoded guards.
 
-- [ ] Add TestQBlockPacketIncomingRawLimits: Process decodes oversized malformed Max-Age options that would otherwise be discarded, covering owned client Q2 and private server Q1/Q2; ignored packets do not reach monitor/admission, valid packets still do. Verify unowned ordinary traffic is unchanged.
-- [ ] Run `rtk proxy go test ./udp/client -run '^TestQBlockPacketIncomingRaw' -count=1 -timeout=30s`. Expected: FAIL on oversized raw packet reaching monitor.
-- [ ] Generalize raw guard by role/ownership; preserve original first-GET behavior and server-disabled behavior.
-- [ ] Run RED command plus whole-task normal and race selection. Expected: PASS.
-- [ ] Run `rtk proxy go test ./... -run '^$' -count=1 -timeout=180s`, `rtk proxy go vet ./udp/client ./net/qblock`, `rtk git diff --check`. Expected: PASS (repository check compile-only).
-- [ ] Update roadmap/results; commit scoped verified files: `fix(qblock): enforce raw incoming limits across private roles`.
+- [x] Add TestQBlockPacketIncomingRawLimits: Process decodes oversized malformed Max-Age options that would otherwise be discarded, covering owned client Q2 and private server Q1/Q2; ignored packets do not reach monitor/admission, valid packets still do. Verify unowned ordinary traffic is unchanged.
+- [x] Run `rtk proxy go test ./udp/client -run '^TestQBlockPacketIncomingRaw' -count=1 -timeout=30s`. Expected: FAIL on oversized raw packet reaching monitor.
+- [x] Generalize raw guard by role/ownership; preserve original first-GET behavior and server-disabled behavior.
+- [x] Run RED command plus whole-task normal and race selection. Expected: PASS.
+- [x] Run `rtk proxy go test ./... -run '^$' -count=1 -timeout=180s`, `rtk proxy go vet ./udp/client ./net/qblock`, `rtk git diff --check`. Expected: PASS (repository check compile-only).
+- [x] Update roadmap/results; commit scoped verified files: `fix(qblock): enforce raw incoming limits across private roles`.
 
 ## Verification and completion
 
 Whole-task selection: `rtk proxy go test ./net/qblock ./udp/client -run '^(TestQBlock|TestManager|TestDeferred|TestDoInternalWithoutPrivateQBlockWritesOrdinaryGET|TestClassicBlock2WithoutPrivateQBlockDeliversNormalHandler|TestConnDelivers.*QBlock)' -count=1 -timeout=180s`; race uses the same command with -race.
 
 Pre-flight: Task 2 consumes Task 1's decoded rejection policy; raw validation precedes decoder-discard consequences and direct calls remain covered. No conflicting interfaces. Self-review: this is packet acceptance enforcement only; Q1 receive negotiation and Q1-to-Q2 advertised ceiling remain deferred. User authorized bounded planning/inline execution without routine confirmation. Maintain scoped ledger, review ef426db..final HEAD once with Astra/high, fix Important/Critical in one TDD pass. Keep branch/worktree, no merge/push.
+
+Verification qualification: whole focused normal/race selections passed, but repeated normal paired POST/PUT traces intermittently fail the existing readiness assertion. The same failure reproduced on an untouched ef426db archive. No speculative scheduler/test correction retained; this remains an open acceptance issue. Task completion means this scoped packet-limit behavior, not broad readiness.

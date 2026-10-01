@@ -92,14 +92,23 @@ func (c *qblockClient) selectSZX(template *pool.Message, option message.OptionID
 	return 0, qblock.ErrLimitExceeded
 }
 
-func (c *qblockClient) oversizedInitialGET(msg *pool.Message, wireSize uint64) bool {
-	if wireSize <= uint64(c.datagramLimit) || !msg.HasOption(message.QBlock2) || msg.Code() < 64 {
+func (c *qblockClient) oversizedIncomingQ(msg *pool.Message, wireSize uint64) bool {
+	if wireSize <= uint64(c.datagramLimit) || (!msg.HasOption(message.QBlock1) && !msg.HasOption(message.QBlock2)) {
 		return false
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if msg.Code() >= codes.GET && msg.Code() < 32 {
+		return c.server != nil
+	}
+	if msg.Code() < 64 {
+		return false
+	}
+	if c.transferByToken[string(msg.Token())] != nil {
+		return true
+	}
 	exchange := c.exchangesByOriginalToken[string(msg.Token())]
-	return exchange != nil && exchange.requestCode == codes.GET && len(exchange.transfers) == 0
+	return exchange != nil && exchange.requestCode == codes.GET
 }
 
 func (c *qblockClient) writeQBlockMessage(msg *pool.Message) error {
