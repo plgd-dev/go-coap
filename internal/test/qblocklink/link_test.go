@@ -80,7 +80,10 @@ func TestRawClassification(t *testing.T) {
 		wire []byte
 		kind Kind
 	}{
-		{q1, Q1}, {q2, Q2}, {[]byte{0x50, 95, 0, 1, 0xd0, 6}, Continue},
+		{q1, Q1}, {q2, Q2},
+		{[]byte{0x50, 1, 0, 1, 0xe0, 0, 1}, Ordinary},   // option270, two-byte delta
+		{[]byte{0x50, 1, 0, 1, 0xe0, 0}, Malformed},     // truncated two-byte delta
+		{[]byte{0x50, 1, 0, 1, 0x1e, 0}, Malformed},     // truncated two-byte length {[]byte{0x50, 95, 0, 1, 0xd0, 6}, Continue},
 		{[]byte{0x50, 136, 0, 1, 0xc2, 1, 16}, Missing}, // Content-Format272
 		{[]byte{0x60, 0, 0, 1}, ACK}, {[]byte{0x70, 0, 0, 1}, Reset},
 		{[]byte{0x50, 1, 0, 1}, Ordinary}, {[]byte{0x50, 1, 0, 1, 0xd4, 18, 0, 0, 0, 0}, Malformed},

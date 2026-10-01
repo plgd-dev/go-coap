@@ -3,7 +3,11 @@ package client
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"io"
+	"os"
+	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -70,11 +74,26 @@ func runQBlockPacingPairedRepair(t *testing.T, method codes.Code, pacing *qblock
 }
 
 func runQBlockPacingPairedRepairWithRelay(t *testing.T, method codes.Code, pacing *qblockPacingConfig, lifetime time.Duration, relay *qblocklink.Link) {
+	runQBlockPacingPairedScenario(t, method, pacing, lifetime, relay, 48, false)
+}
+
+func runQBlockPacingPairedScenario(t *testing.T, method codes.Code, pacing *qblockPacingConfig, lifetime time.Duration, relay *qblocklink.Link, bodySize int, reorder bool) {
+	runQBlockPacingPairedGeometry(t, method, pacing, lifetime, relay, bodySize, reorder, 2)
+}
+
+func runQBlockPacingPairedGeometry(t *testing.T, method codes.Code, pacing *qblockPacingConfig, lifetime time.Duration, relay *qblocklink.Link, bodySize int, reorder bool, maxPayloads uint32) {
 	t.Helper()
 	start := time.Unix(100, 0)
 	clientClock, serverClock := newFakeQBlockClock(start), newFakeQBlockClock(start)
+	uploadBody, responseBody := bytes.Repeat([]byte{'u'}, bodySize), bytes.Repeat([]byte{'r'}, bodySize)
+	if bodySize > 48 {
+		for i := range uploadBody {
+			uploadBody[i] = byte(i % 251)
+			responseBody[i] = byte((i + 97) % 251)
+		}
+	}
 	config := qblock.DefaultManagerConfig()
-	config.Transfer.MaxPayloads = 2
+	config.Transfer.MaxPayloads = maxPayloads
 	config.Transfer.Lifetime = lifetime
 	clientSession := &pairedQBlockSession{qblockTestSession: qblockTestSession{ctx: context.Background()}}
 	serverSession := &pairedQBlockSession{qblockTestSession: qblockTestSession{ctx: context.Background()}}
@@ -93,8 +112,8 @@ func runQBlockPacingPairedRepairWithRelay(t *testing.T, method codes.Code, pacin
 		handlerCalls.Add(1)
 		body, err := io.ReadAll(r.Body())
 		require.NoError(t, err)
-		require.Equal(t, bytes.Repeat([]byte{'u'}, 48), body)
-		require.NoError(t, w.SetResponse(codes.Changed, message.TextPlain, bytes.NewReader(bytes.Repeat([]byte{'r'}, 48))))
+		require.Equal(t, uploadBody, body)
+		require.NoError(t, w.SetResponse(codes.Changed, message.TextPlain, bytes.NewReader(responseBody)))
 	}
 	client := NewConnWithOpts(clientSession, &clientConfig,
 		withQBlockClient(qblockClientConfig{Manager: config, Clock: clientClock, ScheduleMode: qblockScheduleAutomatic, Pacing: pacing}),
@@ -127,7 +146,7 @@ func runQBlockPacingPairedRepairWithRelay(t *testing.T, method codes.Code, pacin
 	request.SetToken(original)
 	require.NoError(t, request.SetPath("/upload"))
 	request.SetContentFormat(message.TextPlain)
-	request.SetBody(bytes.NewReader(bytes.Repeat([]byte{'u'}, 48)))
+	request.SetBody(bytes.NewReader(uploadBody))
 	prepared, err := client.qblockClient.prepareQ1(request, nil)
 	require.NoError(t, err)
 	require.True(t, prepared.Prepared)
@@ -135,19 +154,77 @@ func runQBlockPacingPairedRepairWithRelay(t *testing.T, method codes.Code, pacin
 	droppedUpload, droppedResponse := false, false
 	delivered := make(map[uint64]int)
 	acceptedServerTokens := make(map[string]struct{})
+	deliveryOrder := make([]uint64, 0)
+	if relay != nil {
+		dir := t.TempDir()
+		if configured := os.Getenv("QBLOCK_TRACE_DIR"); configured != "" {
+			dir = configured
+		}
+		t.Cleanup(func() {
+			artifact := struct {
+				Test          string
+				Method        codes.Code
+				BodySize      int
+				SZX           int
+				Manager       qblock.ManagerConfig
+				Pacing        *qblockPacingConfig
+				Scheduler     string
+				Start, End    time.Time
+				Events        []qblocklink.Event
+				Delivered     map[uint64]int
+				DeliveryOrder []uint64
+			}{t.Name(), method, bodySize, 0, config, pacing, "automatic", start, clientClock.Now(), relay.Trace(), delivered, deliveryOrder}
+			data, err := json.MarshalIndent(artifact, "", "  ")
+			if err != nil {
+				t.Error(err)
+				return
+			}
+			if t.Failed() {
+				t.Logf("paired trace: %s", data)
+			}
+			if err = os.MkdirAll(dir, 0700); err != nil {
+				t.Error(err)
+				return
+			}
+			if err = os.WriteFile(filepath.Join(dir, strings.ReplaceAll(t.Name(), "/", "-")+"-paired.json"), data, 0600); err != nil {
+				t.Error(err)
+			}
+		})
+	}
+
+	var heldID uint64
+	releaseHeld := func(packets []qblocklink.Packet) []qblocklink.Packet {
+		if !reorder {
+			return packets
+		}
+		trace := relay.Trace()
+		latest := trace[len(trace)-1]
+		if latest.Action == qblocklink.Hold {
+			require.Zero(t, heldID)
+			heldID = latest.ID
+		}
+		if heldID != 0 && len(packets) > 0 && latest.Direction == qblocklink.ClientToServer && latest.Kind == qblocklink.Q1 {
+			released, err := relay.Release(heldID)
+			require.NoError(t, err)
+			packets = append(packets, released...)
+			heldID = 0
+		}
+		return packets
+	}
 	for step := 0; step < 100; step++ {
 		for turn := 0; turn < 100; turn++ {
 			progressed := false
 			if wire, ok := clientSession.pop(); ok {
 				progressed = true
 				if relay != nil {
-					packets := processQBlockRelayWire(t, relay, qblocklink.ClientToServer, wire)
+					packets := releaseHeld(processQBlockRelayWire(t, relay, qblocklink.ClientToServer, wire))
 					if len(packets) == 0 {
 						droppedUpload = true
 					}
 					for _, packet := range packets {
 						deliverQBlockRelayPacket(t, server, packet)
 						delivered[packet.ID]++
+						deliveryOrder = append(deliveryOrder, packet.ID)
 						acceptedServerTokens[string(wire.token)] = struct{}{}
 					}
 				} else if wire.options.HasOption(message.QBlock1) {
@@ -176,6 +253,7 @@ func runQBlockPacingPairedRepairWithRelay(t *testing.T, method codes.Code, pacin
 					for _, packet := range packets {
 						deliverQBlockRelayPacket(t, client, packet)
 						delivered[packet.ID]++
+						deliveryOrder = append(deliveryOrder, packet.ID)
 					}
 				} else if wire.options.HasOption(message.QBlock2) {
 					value, getErr := wire.options.GetUint32(message.QBlock2)
@@ -198,8 +276,15 @@ func runQBlockPacingPairedRepairWithRelay(t *testing.T, method codes.Code, pacin
 		select {
 		case body := <-received:
 			if relay != nil {
+				if reorder {
+					require.GreaterOrEqual(t, len(deliveryOrder), 2)
+					require.Equal(t, []uint64{2, 1}, deliveryOrder[:2], "held block0 must reach endpoint after block1")
+				}
 				for _, event := range relay.Trace() {
 					want := 1
+					if event.Action == qblocklink.Hold {
+						continue
+					}
 					if event.Action == qblocklink.Drop {
 						want = 0
 					}
@@ -209,9 +294,11 @@ func runQBlockPacingPairedRepairWithRelay(t *testing.T, method codes.Code, pacin
 					require.Equal(t, want, delivered[event.ID], "actual endpoint deliveries input%d action%s", event.ID, event.Action)
 				}
 			}
-			require.True(t, droppedUpload)
+			if !reorder {
+				require.True(t, droppedUpload)
+			}
 			require.True(t, droppedResponse)
-			require.Equal(t, bytes.Repeat([]byte{'r'}, 48), body)
+			require.Equal(t, responseBody, body)
 			require.EqualValues(t, 1, handlerCalls.Load())
 			var responses int
 			responseMIDs := make(map[int32]struct{})
