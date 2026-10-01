@@ -142,7 +142,7 @@ func (cc *Conn) probeQBlockWire(ctx context.Context, path string, g *qblockProbe
 		handler: func(*responsewriter.ResponseWriter[*Conn], *pool.Message) {}}
 	elem.private.msg = snapshot
 	p.elem = elem
-	if _, loaded := cc.midHandlerContainer.LoadOrStore(p.mid, elem); loaded {
+	if _, loaded := cc.storeMIDHandler(p.mid, elem); loaded {
 		elem.ReleaseMessage(cc)
 		return false, errors.New("q-block probe message ID is already in use")
 	}

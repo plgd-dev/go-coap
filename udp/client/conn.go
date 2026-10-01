@@ -722,7 +722,7 @@ func (cc *Conn) prepareWriteMessage(req *pool.Message, handler HandlerFunc, perm
 			})
 		}
 		deadline, _ := req.Context().Deadline()
-		if _, loaded := cc.midHandlerContainer.LoadOrStore(req.MessageID(), &midElement{
+		if _, loaded := cc.storeMIDHandler(req.MessageID(), &midElement{
 			handler:  handler,
 			ordinary: permit,
 			start:    time.Now(),
@@ -847,7 +847,7 @@ func (cc *Conn) AsyncPing(receivedPong func()) (func(), error) {
 		cc.ReleaseMessage(req)
 		return nil, err
 	}
-	if _, loaded := cc.midHandlerContainer.LoadOrStore(mid, &midElement{
+	if _, loaded := cc.storeMIDHandler(mid, &midElement{
 		ordinary: permit,
 		handler: func(_ *responsewriter.ResponseWriter[*Conn], r *pool.Message) {
 			if r.Type() == message.Reset || r.Type() == message.Acknowledgement {
@@ -1376,4 +1376,16 @@ func (cc *Conn) DoObserve(req *pool.Message, f func(*pool.Message)) (client.Obse
 		return nil, err
 	}
 	return cc.Client.DoObserve(req, f)
+}
+
+// Serialize ordinary MID admission with the Q server response namespace.
+func (cc *Conn) storeMIDHandler(mid int32, elem *midElement) (*midElement, bool) {
+	if c := cc.qblockClient; c != nil {
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		if c.server != nil && c.server.conByMID[mid] != nil {
+			return elem, true
+		}
+	}
+	return cc.midHandlerContainer.LoadOrStore(mid, elem)
 }

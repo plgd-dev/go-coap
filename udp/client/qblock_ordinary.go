@@ -12,12 +12,13 @@ import (
 )
 
 type qblockOrdinaryPermit struct {
-	cc     *Conn
-	member *qblockEndpointMember
-	token  message.Token
-	mid    int32
-	con    bool
-	once   sync.Once
+	cc             *Conn
+	member         *qblockEndpointMember
+	token          message.Token
+	mid            int32
+	con            bool
+	serverResponse bool
+	once           sync.Once
 }
 
 func (cc *Conn) ordinaryDomain() *qblockEndpointDomain {
@@ -155,7 +156,7 @@ func (cc *Conn) acceptOrdinaryResponse(msg *pool.Message) bool {
 	cc.ordinaryMu.Lock()
 	var matches []*qblockOrdinaryPermit
 	for p := range cc.ordinary {
-		if bytes.Equal(p.token, msg.Token()) {
+		if !p.serverResponse && bytes.Equal(p.token, msg.Token()) {
 			matches = append(matches, p)
 		}
 	}

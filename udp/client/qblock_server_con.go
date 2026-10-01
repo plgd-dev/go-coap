@@ -20,32 +20,33 @@ import (
 )
 
 type qblockServerCONRecord struct {
-	ackDone      chan struct{}
-	mid          int32
-	token        message.Token
-	options      message.Options
-	control      *coapNet.ControlMessage
-	sequence     uint64
-	block        qblock.Block
-	ctx          context.Context
-	cancel       context.CancelFunc
-	lease        *qblockOwnedLease
-	charged      uint64
-	expires      time.Time
-	running      bool
-	terminal     bool
-	ack          []byte
-	ackDue       time.Time
-	separate     bool
-	response     []byte
-	responseMID  int32
-	permit       *qblockOrdinaryPermit
-	retryDue     time.Time
-	interval     time.Duration
-	retries      uint32
-	maxRetries   uint32
-	sending      bool
-	acknowledged bool
+	ackDone         chan struct{}
+	mid             int32
+	token           message.Token
+	options         message.Options
+	control         *coapNet.ControlMessage
+	sequence        uint64
+	block           qblock.Block
+	ctx             context.Context
+	cancel          context.CancelFunc
+	lease           *qblockOwnedLease
+	charged         uint64
+	responseCharged uint64
+	expires         time.Time
+	running         bool
+	terminal        bool
+	ack             []byte
+	ackDue          time.Time
+	separate        bool
+	response        []byte
+	responseMID     int32
+	permit          *qblockOrdinaryPermit
+	retryDue        time.Time
+	interval        time.Duration
+	retries         uint32
+	maxRetries      uint32
+	sending         bool
+	acknowledged    bool
 }
 
 func (s *qblockServer) recordCountLocked() int { return len(s.records) + len(s.conRequests) }
@@ -90,13 +91,19 @@ func (s *qblockServer) handleCONRequest(msg *pool.Message) bool {
 	r := s.conRequests[msg.MessageID()]
 	if r != nil {
 		var wire []byte
-		if !r.terminal && sameCONRequest(r, msg) {
+		if !r.terminal && !s.closed && c.writeContext.Err() == nil && c.now().Before(r.expires) && sameCONRequest(r, msg) {
 			wire = r.ack
 		}
 		release := r.lease.retain()
 		c.mu.Unlock()
 		if len(wire) > 0 {
-			s.writeCONWire(r, wire)
+			err := s.writeCONWire(r, wire)
+			c.actionMu.Unlock()
+			release()
+			if err != nil {
+				c.cc.errors(err)
+			}
+			return true
 		}
 		c.actionMu.Unlock()
 		release()
@@ -115,8 +122,11 @@ func (s *qblockServer) handleCONRequest(msg *pool.Message) bool {
 	c.mu.Unlock()
 	block, err := serverCONBlock(msg)
 	if err != nil {
-		s.rejectCON(msg, codes.BadOption)
+		err := s.rejectCON(msg, codes.BadOption)
 		c.actionMu.Unlock()
+		if err != nil {
+			c.cc.errors(err)
+		}
 		return true
 	}
 	c.mu.Lock()
@@ -127,8 +137,11 @@ func (s *qblockServer) handleCONRequest(msg *pool.Message) bool {
 			release()
 		}
 		c.mu.Unlock()
-		s.rejectCON(msg, codes.ServiceUnavailable)
+		err := s.rejectCON(msg, codes.ServiceUnavailable)
 		c.actionMu.Unlock()
+		if err != nil {
+			c.cc.errors(err)
+		}
 		return true
 	}
 	ctx, cancel := context.WithCancel(c.writeContext)
@@ -162,6 +175,18 @@ func (s *qblockServer) handleCONRequest(msg *pool.Message) bool {
 	c.mu.Lock()
 	r.running = false
 	current := s.conRequests[r.mid] == r && !r.terminal && !s.closed && c.writeContext.Err() == nil && c.now().Before(r.expires)
+	if current {
+		decoded := c.cc.AcquireMessage(r.ctx)
+		_, decodeErr := decoded.UnmarshalWithDecoder(qblock.Decoder{}, wire)
+		responseCharge := optionsSize(decoded.Options())
+		c.cc.ReleaseMessage(decoded)
+		if decodeErr != nil || responseCharge > s.config.MaxMetadataBytes-s.metadata {
+			wire = s.simpleCONWire(r, codes.InternalServerError)
+			responseCharge = 0
+		}
+		r.responseCharged = responseCharge
+		s.metadata += responseCharge
+	}
 	separate := current && r.separate
 	if current && !separate {
 		r.ack = wire
@@ -170,10 +195,14 @@ func (s *qblockServer) handleCONRequest(msg *pool.Message) bool {
 		s.releaseCONLocked(r)
 	}
 	c.mu.Unlock()
+	var writeErr error
 	if current && !separate {
-		s.writeCONWire(r, wire)
+		writeErr = s.writeCONWire(r, wire)
 	}
 	c.actionMu.Unlock()
+	if writeErr != nil {
+		c.cc.errors(writeErr)
+	}
 	if separate {
 		s.sendSeparateCON(r, wire)
 	}
@@ -181,12 +210,12 @@ func (s *qblockServer) handleCONRequest(msg *pool.Message) bool {
 	return true
 }
 
-func (s *qblockServer) rejectCON(req *pool.Message, code codes.Code) {
+func (s *qblockServer) rejectCON(req *pool.Message, code codes.Code) error {
 	r := &qblockServerCONRecord{mid: req.MessageID(), token: req.Token(), control: req.ControlMessage(), ctx: s.client.writeContext}
 	if v, err := req.GetOptionUint32(message.NoResponse); err == nil && noresponse.IsNoResponseCode(code, v) != nil {
 		code = codes.Empty
 	}
-	s.writeCONWire(r, s.simpleCONWire(r, code))
+	return s.writeCONWire(r, s.simpleCONWire(r, code))
 }
 
 func (s *qblockServer) simpleCONWire(r *qblockServerCONRecord, code codes.Code) []byte {
@@ -213,18 +242,35 @@ func (s *qblockServer) captureCONResponse(r *qblockServerCONRecord, resp *pool.M
 	if code < 64 {
 		return s.simpleCONWire(r, codes.InternalServerError)
 	}
+	for _, opt := range resp.Options() {
+		if def, ok := message.CoapOptionDefs[opt.ID]; ok && (uint32(len(opt.Value)) < def.MinLen || uint32(len(opt.Value)) > def.MaxLen) {
+			return s.simpleCONWire(r, codes.InternalServerError)
+		}
+	}
+	if qblockOptionCount(resp, message.ETag) > 1 {
+		return s.simpleCONWire(r, codes.InternalServerError)
+	}
 	optionBytes, err := qblockOptionBytes(resp.Options())
 	if err != nil || optionBytes > s.config.MaxMetadataBytes || s.client.preflightOwnedOptions(resp.Options()) != nil {
 		return s.simpleCONWire(r, codes.InternalServerError)
 	}
 	block := r.block
 	offset := uint64(block.Number) * (uint64(16) << block.SZX)
+	if code != codes.Content {
+		offset = 0
+		block.Number = 0
+	}
 	block.SZX = min(block.SZX, s.client.cc.blockwiseSZX)
 	block.Number = uint32(offset / (uint64(16) << block.SZX))
 	if block.Number > 0xfffff {
 		return s.simpleCONWire(r, codes.BadRequest)
 	}
-	payload, size, digest, err := captureCONBody(resp.Body(), s.client.managerConfig.Transfer.MaxBodySize, offset, uint32(16)<<block.SZX)
+	payload, size, digest, err := captureCONBody(resp.Body(), s.client.managerConfig.Transfer.MaxBodySize, offset, func() uint32 {
+		if code != codes.Content {
+			return uint32(s.client.datagramLimit)
+		}
+		return uint32(16) << block.SZX
+	}())
 	if err != nil {
 		return s.simpleCONWire(r, codes.InternalServerError)
 	}
@@ -260,12 +306,29 @@ func (s *qblockServer) captureCONResponse(r *qblockServerCONRecord, resp *pool.M
 			return s.simpleCONWire(r, code)
 		}
 	}
-	out.SetBody(bytes.NewReader(payload))
-	wire, err := out.MarshalWithEncoder(coder.DefaultCoder)
-	if err != nil || len(wire) > int(s.client.datagramLimit) {
-		return s.simpleCONWire(r, codes.RequestEntityTooLarge)
+	for {
+		out.SetBody(bytes.NewReader(payload))
+		wire, err := out.MarshalWithEncoder(coder.DefaultCoder)
+		if err == nil && len(wire) <= int(s.client.datagramLimit) {
+			return cloneQBlockBytes(wire)
+		}
+		if code != codes.Content {
+			return s.simpleCONWire(r, code)
+		}
+		if block.SZX == 0 {
+			return s.simpleCONWire(r, codes.RequestEntityTooLarge)
+		}
+		block.SZX--
+		block.Number = uint32(offset / (uint64(16) << block.SZX))
+		if block.Number > 0xfffff {
+			return s.simpleCONWire(r, codes.BadRequest)
+		}
+		payload = payload[:min(len(payload), int(16)<<block.SZX)]
+		block.More = offset+uint64(len(payload)) < uint64(size)
+		value, _ := qblock.EncodeBlock(block)
+		out.SetOptionUint32(message.QBlock2, value)
 	}
-	return cloneQBlockBytes(wire)
+
 }
 
 // Stream the representation once, retaining only the selected block and a
@@ -314,21 +377,19 @@ func captureCONBody(body io.ReadSeeker, limit uint32, offset uint64, blockSize u
 	return payload, uint32(total), hash.Sum(nil)[:8], nil
 }
 
-func (s *qblockServer) writeCONWire(r *qblockServerCONRecord, wire []byte) {
+func (s *qblockServer) writeCONWire(r *qblockServerCONRecord, wire []byte) error {
 	if r.ctx.Err() != nil || len(wire) == 0 || len(wire) > int(s.client.datagramLimit) {
-		return
+		return nil
 	}
 	msg := s.client.cc.AcquireMessage(r.ctx)
 	defer s.client.cc.ReleaseMessage(msg)
 	if _, err := msg.UnmarshalWithDecoder(qblock.Decoder{}, wire); err != nil {
-		return
+		return nil
 	}
 	if r.control != nil {
 		msg.SetControlMessage(&coapNet.ControlMessage{Src: cloneQBlockBytes(r.control.Dst), IfIndex: r.control.IfIndex})
 	}
-	if err := s.client.cc.session.WriteMessage(msg); err != nil {
-		s.client.cc.errors(err)
-	}
+	return s.client.cc.session.WriteMessage(msg)
 }
 
 func (s *qblockServer) nextCONDeadlineLocked() (time.Time, bool) {
@@ -356,7 +417,7 @@ func (s *qblockServer) releaseCONLocked(r *qblockServerCONRecord) {
 	}
 	if s.conRequests[r.mid] == r {
 		delete(s.conRequests, r.mid)
-		s.metadata -= r.charged
+		s.metadata -= r.charged + r.responseCharged
 		r.lease.drop()
 	}
 }
@@ -429,9 +490,19 @@ func (s *qblockServer) sendSeparateCON(r *qblockServerCONRecord, wire []byte) {
 		c.actionMu.Unlock()
 		return
 	}
-	mid := c.cc.GetMessageID()
+	var mid int32
+	var err error
+	for range 32 {
+		mid = c.cc.GetMessageID()
+		_, ordinary := c.cc.midHandlerContainer.Load(mid)
+		err = c.reserveMIDLocked(mid)
+		if !ordinary && err == nil {
+			break
+		}
+		err = qblock.ErrLimitExceeded
+	}
 	// Reserve local namespace before waiting for endpoint admission.
-	if err := c.reserveMIDLocked(mid); err != nil {
+	if err != nil {
 		c.mu.Unlock()
 		c.actionMu.Unlock()
 		c.cc.errors(err)
@@ -465,6 +536,9 @@ func (s *qblockServer) sendSeparateCON(r *qblockServerCONRecord, wire []byte) {
 		return
 	}
 	r.permit = permit
+	if permit != nil {
+		permit.serverResponse = true
+	}
 	r.response, _ = msg.MarshalWithEncoder(coder.DefaultCoder)
 	r.response = cloneQBlockBytes(r.response)
 	r.interval = time.Duration(float64(c.cc.transmission.acknowledgeTimeout.Load()) * (1 + c.jitter()/2))
@@ -472,20 +546,23 @@ func (s *qblockServer) sendSeparateCON(r *qblockServerCONRecord, wire []byte) {
 	r.maxRetries = c.cc.transmission.maxRetransmit.Load()
 	r.retryDue = c.now().Add(r.interval)
 	c.mu.Unlock()
-	s.writeSeparateCON(r)
+	writeErr := s.writeSeparateCON(r)
 	c.actionMu.Unlock()
+	if writeErr != nil {
+		c.cc.errors(writeErr)
+	}
 	c.notifyDeadlineChanged()
 }
 
-func (s *qblockServer) writeSeparateCON(r *qblockServerCONRecord) {
+func (s *qblockServer) writeSeparateCON(r *qblockServerCONRecord) error {
 	c := s.client
 	if r.ctx.Err() != nil {
-		return
+		return nil
 	}
 	msg := c.cc.AcquireMessage(r.ctx)
 	defer c.cc.ReleaseMessage(msg)
 	if _, err := msg.UnmarshalWithDecoder(qblock.Decoder{}, r.response); err != nil {
-		return
+		return nil
 	}
 	if r.control != nil {
 		msg.SetControlMessage(&coapNet.ControlMessage{Src: cloneQBlockBytes(r.control.Dst), IfIndex: r.control.IfIndex})
@@ -494,8 +571,9 @@ func (s *qblockServer) writeSeparateCON(r *qblockServerCONRecord) {
 		c.mu.Lock()
 		s.settleCONLocked(r)
 		c.mu.Unlock()
-		c.cc.errors(err)
+		return err
 	}
+	return nil
 }
 
 // Called under client.mu; output callbacks take the action gate before writes.
@@ -536,15 +614,19 @@ func (s *qblockServer) dueCON(now time.Time) []qblockCallback {
 				current = current && !r.acknowledged
 			}
 			c.mu.Unlock()
+			var writeErr error
 			if current {
 				if ack {
-					s.writeCONWire(r, r.ack)
+					writeErr = s.writeCONWire(r, r.ack)
 					close(r.ackDone)
 				} else {
-					s.writeSeparateCON(r)
+					writeErr = s.writeSeparateCON(r)
 				}
 			}
 			c.actionMu.Unlock()
+			if writeErr != nil {
+				c.cc.errors(writeErr)
+			}
 			c.notifyDeadlineChanged()
 		}, discard: release})
 	}
