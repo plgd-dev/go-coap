@@ -375,6 +375,9 @@ func (c *qblockClient) handleServerRequest(msg *pool.Message) bool {
 		return true
 	}
 	if msg.HasOption(message.QBlock1) {
+		if c.rejectMissingQ1Metadata(msg) {
+			return true
+		}
 		announced, err := msg.GetOptionUint32(message.Size1)
 		if err != nil || announced > c.managerConfig.Transfer.MaxBodySize {
 			return true
@@ -458,9 +461,16 @@ func (c *qblockClient) executeServerOutput(output qblock.Output) []qblockCallbac
 			req.SetBody(bytes.NewReader(payload))
 			writer := responsewriter.New(resp, c.cc, options...)
 			c.server.handler(writer, req)
+			bareError := func() {
+				if qblockApplicationError(writer.Message().Code()) {
+					c.server.finishHandler(operation, generation, writer.Message().IsModified(), writer.Message().Code(), nil, nil)
+				} else {
+					c.server.finishHandler(operation, generation, false, 0, nil, nil)
+				}
+			}
 			optionBytes, err := qblockOptionBytes(writer.Message().Options())
 			if err != nil || optionBytes > c.server.config.MaxMetadataBytes || c.preflightOwnedOptions(writer.Message().Options()) != nil {
-				c.server.finishHandler(operation, generation, false, 0, nil, nil)
+				bareError()
 				return
 			}
 			body := []byte(nil)
@@ -468,7 +478,7 @@ func (c *qblockClient) executeServerOutput(output qblock.Output) []qblockCallbac
 				var err error
 				body, err = readQBlockBody(reader, c.managerConfig.Transfer.MaxBodySize)
 				if err != nil {
-					c.server.finishHandler(operation, generation, false, 0, nil, nil)
+					bareError()
 					return
 				}
 			}
@@ -558,6 +568,33 @@ func (s *qblockServer) finishHandler(operation qblock.OperationKey, generation u
 	if !modified {
 		s.deactivateLocked(record, c.now())
 		c.mu.Unlock()
+		return
+	}
+	if qblockApplicationError(code) {
+		// No sender is retained for an ordinary terminal error. Keeping id0
+		// publishes the original write deadline while the write runs unlocked.
+		record.id = 0
+		if !c.now().Before(record.writeExpires) {
+			s.deactivateLocked(record, c.now())
+			c.mu.Unlock()
+			return
+		}
+		msg := s.prepareErrorLocked(record, code, options, payload)
+		c.mu.Unlock()
+		c.actionMu.Unlock()
+		actionLocked = false
+		c.notifyDeadlineChanged()
+		changed = false
+		if msg != nil {
+			_ = c.writeQBlockMessage(msg)
+			c.cc.ReleaseMessage(msg)
+		}
+		c.mu.Lock()
+		if s.records[operation] == record && !record.terminal {
+			s.deactivateLocked(record, c.now())
+		}
+		c.mu.Unlock()
+		c.notifyDeadlineChanged()
 		return
 	}
 	if err := s.prepareResponseLocked(record, code, options, payload, c.now(), c.jitter()); err == nil {

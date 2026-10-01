@@ -534,7 +534,13 @@ func TestQBlockServerRejectsMalformedFirstFragmentWithoutState(t *testing.T) {
 			h.ingest(msg)
 
 			require.Equal(t, before, h.snapshot())
-			require.Empty(t, h.session.writesSnapshot())
+			if name == "missing request tag" || name == "missing size" {
+				writes := h.session.writesSnapshot()
+				require.Len(t, writes, 1)
+				require.Equal(t, codes.BadRequest, writes[0].code)
+			} else {
+				require.Empty(t, h.session.writesSnapshot())
+			}
 		})
 	}
 }

@@ -113,6 +113,7 @@ type qblockClient struct {
 	transferByToken          map[string]*qblockTransfer
 	transferByMID            map[int32]*qblockTransfer
 	pendingGETByMID          map[int32]*qblockExchange
+	terminalWriteMIDs        map[int32]struct{}
 	pendingMessageRelease    []*pool.Message
 	server                   *qblockServer
 	callbackSlots            *qblockCallbackSlots
@@ -177,6 +178,7 @@ func newQBlockClient(cc *Conn, cfg qblockClientConfig) *qblockClient {
 		transferByToken:          make(map[string]*qblockTransfer),
 		transferByMID:            make(map[int32]*qblockTransfer),
 		pendingGETByMID:          make(map[int32]*qblockExchange),
+		terminalWriteMIDs:        make(map[int32]struct{}),
 		callbackSlots:            newQBlockCallbackSlots(cfg.Manager.MaxTransfers),
 	}
 	if cfg.Endpoint != nil {
@@ -921,7 +923,7 @@ func (c *qblockClient) close() {
 
 func (c *qblockClient) handle(msg *pool.Message) bool {
 	c.mu.Lock()
-	ownedTerminal := msg.Code() >= 64 && c.transferByToken[string(msg.Token())] != nil
+	ownedTerminal := msg.Code() >= 64 && (c.transferByToken[string(msg.Token())] != nil || c.exchangesByOriginalToken[string(msg.Token())] != nil)
 	c.mu.Unlock()
 	if ownedTerminal || msg.HasOption(message.QBlock1) || msg.HasOption(message.QBlock2) {
 		size, err := qblockIncomingSize(msg)
@@ -992,6 +994,12 @@ func (c *qblockClient) handle(msg *pool.Message) bool {
 	}
 	if !msg.HasOption(message.QBlock2) {
 		c.mu.Lock()
+		if done, handled := c.completeGETErrorLocked(msg); handled {
+			c.mu.Unlock()
+			callbacks = append(callbacks, done...)
+			progressed = true
+			return true
+		}
 		token := msg.Token()
 		transfer := c.transferByToken[string(token)]
 		if transfer == nil || transfer.kind != qblock.Q1 {
@@ -1888,10 +1896,13 @@ func (c *qblockClient) reserveMIDLocked(mid int32) error {
 	if !message.ValidateMID(mid) {
 		return qblock.ErrLimitExceeded
 	}
+	if _, held := c.terminalWriteMIDs[mid]; held {
+		return qblock.ErrLimitExceeded
+	}
 	if c.transferByMID[mid] != nil || c.pendingGETByMID[mid] != nil {
 		return qblock.ErrLimitExceeded
 	}
-	count := len(c.transferByMID) + len(c.pendingGETByMID)
+	count := len(c.transferByMID) + len(c.pendingGETByMID) + len(c.terminalWriteMIDs)
 	if c.server != nil {
 		if c.server.byMID[mid] != nil || c.server.conByMID[mid] != nil {
 			return qblock.ErrLimitExceeded
