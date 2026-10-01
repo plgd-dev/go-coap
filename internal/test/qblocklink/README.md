@@ -1,0 +1,7 @@
+# Deterministic Q-Block fault relay
+
+`Link` transforms raw CoAP datagrams without sockets or wall-clock time. Serialize `Process` and `Release` calls in the scenario driver. Directions describe the initiating client/server roles. Rules select one one-based occurrence within a direction/kind stream; unmatched inputs pass. Continue and missing-block controls take precedence over Q data. Classification uses an independent structural parser, not full semantic protocol validation. A packet with both Q options is classified Q1. Repeated Q2 requests remain Q2.
+
+`Hold` stores an input; `Release(2, 1)` delivers held IDs in that order and implements deterministic reorder. Releases bypass rules and occurrence counters. Duplicate outputs own independent wire copies. Inputs, outputs, scripts and returned traces are isolated from caller mutation. Every accepted input (including drops) and release retains exact wire evidence; finite MaxEvents/MaxBytes reject exhaustion atomically instead of silently truncating. Configure enough capacity for the complete scenario. The trace includes original input IDs on release.
+
+This first Milestone5 slice unit-tests the fault oracle. Future scenario drivers must consume outputs and record timing, endpoint configuration and completion assertions. UDP/socket integration, decrypted DTLS injection, RFC figure mapping, combined adverse-network flows and pinned bidirectional libcoap interoperability are still open. Do not infer interoperability from this relay or two local endpoints.
