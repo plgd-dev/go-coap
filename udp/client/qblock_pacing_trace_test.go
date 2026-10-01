@@ -194,20 +194,12 @@ func runQBlockPacingPairedRepair(t *testing.T, method codes.Code, pacing *qblock
 		default:
 		}
 		require.Eventually(t, func() bool {
-			return clientSession.hasQueued() || serverSession.hasQueued() || clientClock.activeTimer() || serverClock.activeTimer()
+			if len(received) > 0 || clientSession.hasQueued() || serverSession.hasQueued() {
+				return true
+			}
+			return advancePairedQBlockClock(client, server, clientClock, serverClock)
 		}, time.Second, time.Millisecond)
-		if clientSession.hasQueued() || serverSession.hasQueued() {
-			continue
-		}
-		clientReady, serverReady := clientClock.activeTimer(), serverClock.activeTimer()
-		switch {
-		case clientReady && (!serverReady || !clientClock.deadline().After(serverClock.deadline())):
-			delay := max(time.Duration(0), clientClock.deadline().Sub(clientClock.Now()))
-			clientClock.Advance(delay)
-		case serverReady:
-			delay := max(time.Duration(0), serverClock.deadline().Sub(serverClock.Now()))
-			serverClock.Advance(delay)
-		}
+
 	}
 	t.Fatal("paced paired repair did not complete within 100 event turns")
 }
@@ -334,4 +326,72 @@ func TestQBlockPacingBidirectionalSilenceExpires(t *testing.T) {
 		require.Zero(t, state.managerBytes)
 		require.Zero(t, state.reservations)
 	}
+}
+
+// Sample deadlines only while both executors are idle. A published timer can
+// lag a manager mutation or returning handler; advancing that stale timer would
+// expire an exchange before the worker publishes its next response set.
+func advancePairedQBlockClock(client, server *Conn, clientClock, serverClock *fakeQBlockClock) bool {
+	a, b := client.qblockClient, server.qblockClient
+	if !a.actionMu.TryLock() {
+		return false
+	}
+	defer a.actionMu.Unlock()
+	if !b.actionMu.TryLock() {
+		return false
+	}
+	defer b.actionMu.Unlock()
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	for _, c := range []*qblockClient{a, b} {
+		if c.server != nil {
+			for _, r := range c.server.records {
+				if r.handlerRunning {
+					return false
+				}
+			}
+		}
+	}
+	var earliest time.Time
+	for i, c := range []*qblockClient{a, b} {
+		clock := []*fakeQBlockClock{clientClock, serverClock}[i]
+		deadline, ok := c.nextDeadlineLocked()
+		if !ok {
+			continue
+		}
+		if !clock.activeTimer() || !clock.deadline().Equal(deadline) {
+			return false
+		}
+		if earliest.IsZero() || deadline.Before(earliest) {
+			earliest = deadline
+		}
+	}
+	if earliest.IsZero() {
+		return false
+	}
+	clientClock.Advance(max(time.Duration(0), earliest.Sub(clientClock.Now())))
+	serverClock.Advance(max(time.Duration(0), earliest.Sub(serverClock.Now())))
+	return true
+}
+
+func TestQBlockPairedClockRejectsStalePublishedDeadline(t *testing.T) {
+	now := time.Unix(100, 0)
+	aClock, bClock := newFakeQBlockClock(now), newFakeQBlockClock(now)
+	a := newQBlockClockTestConnWithSession(t, &qblockTestSession{ctx: context.Background()}, qblockClientConfig{Manager: qblock.DefaultManagerConfig(), Clock: aClock})
+	b := newQBlockClockTestConnWithSession(t, &qblockTestSession{ctx: context.Background()}, qblockClientConfig{Manager: qblock.DefaultManagerConfig(), Clock: bClock})
+	a.qblockClient.mu.Lock()
+	require.True(t, a.qblockClient.gate().admit(1, qblockProbeControl, 0, now))
+	require.True(t, a.qblockClient.gate().beginAttempt(1, 1))
+	a.qblockClient.gate().settle(1, now)
+	id, err := a.qblockClient.workQueue.reserve(64)
+	require.NoError(t, err)
+	require.NoError(t, a.qblockClient.workQueue.replace(id, qblockPendingWork{Kind: qblockWorkGET, ProbeKey: 2, Expires: now.Add(time.Hour)}, false))
+	deadline, ok := a.qblockClient.nextDeadlineLocked()
+	require.True(t, ok)
+	a.qblockClient.mu.Unlock()
+	aClock.NewTimer().Reset(deadline.Sub(now) + time.Hour)
+	require.False(t, advancePairedQBlockClock(a, b, aClock, bClock))
+	require.Equal(t, now, aClock.Now())
 }

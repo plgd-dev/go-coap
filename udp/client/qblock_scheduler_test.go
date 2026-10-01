@@ -21,6 +21,7 @@ type fakeQBlockClock struct {
 	now        time.Time
 	newTimers  uint32
 	timer      *fakeQBlockTimer
+	timers     []*fakeQBlockTimer
 	onNewTimer func()
 }
 
@@ -33,11 +34,13 @@ func (c *fakeQBlockClock) Now() time.Time {
 func (c *fakeQBlockClock) Advance(d time.Duration) {
 	c.mu.Lock()
 	c.now = c.now.Add(d)
-	if c.timer != nil && c.timer.active && !c.now.Before(c.timer.deadline) {
-		c.timer.active = false
-		select {
-		case c.timer.ch <- c.now:
-		default:
+	for _, timer := range c.timers {
+		if timer.active && !c.now.Before(timer.deadline) {
+			timer.active = false
+			select {
+			case timer.ch <- c.now:
+			default:
+			}
 		}
 	}
 	c.mu.Unlock()
@@ -50,6 +53,7 @@ func (c *fakeQBlockClock) NewTimer() qblockTimer {
 	defer c.mu.Unlock()
 	c.newTimers++
 	c.timer = &fakeQBlockTimer{clock: c, ch: make(chan time.Time, 1)}
+	c.timers = append(c.timers, c.timer)
 	return c.timer
 }
 
@@ -522,4 +526,28 @@ func startQBlockSchedulerQ1(t *testing.T, cc *Conn, token message.Token, body []
 	prepared, err := cc.qblockClient.prepare(request, func(error) {})
 	require.NoError(t, err)
 	require.True(t, prepared.Prepared)
+}
+
+func TestQBlockFakeClockAdvancesAllTimers(t *testing.T) {
+	clock := newFakeQBlockClock(time.Unix(100, 0))
+	a, b := clock.NewTimer(), clock.NewTimer()
+	a.Reset(time.Second)
+	b.Reset(2 * time.Second)
+	clock.Advance(time.Second)
+	select {
+	case <-a.C():
+	default:
+		t.Fatal("older timer not fired")
+	}
+	select {
+	case <-b.C():
+		t.Fatal("later timer fired early")
+	default:
+	}
+	clock.Advance(time.Second)
+	select {
+	case <-b.C():
+	default:
+		t.Fatal("later timer not fired")
+	}
 }
