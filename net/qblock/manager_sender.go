@@ -14,7 +14,7 @@ func (m *Manager) PrepareSender(operation OperationKey, token message.Token, kin
 	if operation == "" {
 		return 0, ErrOperationNotFound
 	}
-	if len(token) == 0 {
+	if len(token) == 0 && kind != Q2 {
 		return 0, ErrUnknownTransfer
 	}
 	if _, ok := m.byOperation[operation]; ok {

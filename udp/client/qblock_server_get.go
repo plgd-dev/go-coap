@@ -16,7 +16,7 @@ func (s *qblockServer) handleInitialGET(msg *pool.Message) ([]qblock.Output, boo
 		return nil, false
 	}
 	op, block, err := serverQ2Control(msg)
-	if err != nil || block.Number != 0 || !block.More || len(msg.Token()) == 0 || qblockOptionCount(msg, message.RequestTag) == 0 {
+	if err != nil || block.Number != 0 || !block.More || qblockOptionCount(msg, message.RequestTag) == 0 {
 		return nil, false
 	}
 	c := s.client

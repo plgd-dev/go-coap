@@ -459,7 +459,7 @@ func TestQBlockServerRejectedControlsDoNotConsumeTokens(t *testing.T) {
 		})
 		h.ingest(h.q1(t, 1, 0, false, 4, "body"))
 		before := h.snapshot()
-		h.ingest(h.control(t, 9, 1, true, "tag-a"))
+		h.ingest(h.control(t, 9, 10, true, "tag-a"))
 		require.Equal(t, before, h.snapshot())
 	})
 	t.Run("zero continue", func(t *testing.T) {

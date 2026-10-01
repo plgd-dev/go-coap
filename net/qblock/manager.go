@@ -214,7 +214,7 @@ func (m *Manager) BindToken(id TransferID, token message.Token) error {
 	if !ok {
 		return ErrUnknownTransfer
 	}
-	if len(token) == 0 {
+	if len(token) == 0 && (record.kind != Q2 || record.sender == nil) {
 		return ErrUnknownTransfer
 	}
 	key := string(token)
@@ -231,7 +231,7 @@ func (m *Manager) BindToken(id TransferID, token message.Token) error {
 
 // Control routes one terminal, Continue, or missing-block signal by token.
 func (m *Manager) Control(control Control, now time.Time) ([]Output, error) {
-	if len(control.Token) == 0 || !validControl(control) {
+	if !validControl(control) {
 		return nil, ErrInvalidControl
 	}
 	id, ok := m.byToken[string(control.Token)]
@@ -241,6 +241,9 @@ func (m *Manager) Control(control Control, now time.Time) ([]Output, error) {
 	record, ok := m.byID[id]
 	if !ok || record.sender == nil {
 		return nil, ErrUnknownTransfer
+	}
+	if len(control.Token) == 0 && record.kind != Q2 {
+		return nil, ErrInvalidControl
 	}
 	actions, err := controlSender(record.sender, control, now)
 	if err != nil {
@@ -255,12 +258,15 @@ func (m *Manager) Control(control Control, now time.Time) ([]Output, error) {
 // applies a control with its packet token. A rejected control leaves both the
 // sender and token registry unchanged.
 func (m *Manager) ControlWithToken(id TransferID, control Control, now time.Time) ([]Output, error) {
-	if len(control.Token) == 0 || !validControl(control) {
+	if !validControl(control) {
 		return nil, ErrInvalidControl
 	}
 	record, ok := m.byID[id]
 	if !ok || record.sender == nil {
 		return nil, ErrUnknownTransfer
+	}
+	if len(control.Token) == 0 && record.kind != Q2 {
+		return nil, ErrInvalidControl
 	}
 
 	token := string(control.Token)

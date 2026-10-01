@@ -585,7 +585,7 @@ func (cc *Conn) doInternalSelected(req *pool.Message, selected bool) (*pool.Mess
 }
 
 func (cc *Conn) claimToken(token message.Token, owner tokenOwner) error {
-	if len(token) == 0 {
+	if len(token) == 0 && owner != tokenOwnerQBlock {
 		return errors.New("empty token")
 	}
 	if _, loaded := cc.tokenReservations.LoadOrStoreWithFunc(token.Hash(), nil, func() tokenReservation {
@@ -616,6 +616,11 @@ func (cc *Conn) claimFreshQBlockToken() (message.Token, error) {
 		token, err := cc.getToken()
 		if err != nil {
 			return nil, err
+		}
+		// Empty peer tokens are valid for inbound Q2, but locally generated
+		// exchange/control tokens must stay nonempty for client ownership.
+		if len(token) == 0 {
+			continue
 		}
 		token = bytes.Clone(token)
 		if err := cc.claimToken(token, tokenOwnerQBlock); err == nil {
