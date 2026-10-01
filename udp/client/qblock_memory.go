@@ -123,7 +123,7 @@ func (c *qblockClient) initOwnedBudget() error {
 	}
 	o := mul(d, uint64(unsafe.Sizeof(message.Option{}))+1)
 	clientCost := add(mul(2, m+1), mul(4, o), uint64(unsafe.Sizeof(qblockExchange{})), uint64(unsafe.Sizeof(qblockTransfer{})), uint64(unsafe.Sizeof(qblockProbeGeneration{})), uint64(unsafe.Sizeof(qblockCapabilityProbe{})), 2048)
-	serverCost := add(mul(4, m+1), mul(8, o), uint64(unsafe.Sizeof(qblockServerRecord{})), 4096)
+	serverCost := add(mul(4, m+1), mul(8, o), uint64(unsafe.Sizeof(qblockServerRecord{})), uint64(unsafe.Sizeof(qblockServerCONRecord{})), mul(4, d), 4096)
 	blocks := min(uint64(1<<20), max(uint64(1), (m+15)/16))
 	actions := mul(n, min(p, blocks)+3)
 	executor := add(mul(2, l), mul(4, i), mul(8, o), mul(16, d), mul(mul(4, actions), uint64(unsafe.Sizeof(qblock.Action{}))+uint64(unsafe.Sizeof(qblock.Output{}))+uint64(unsafe.Sizeof(qblockCallback{}))), mul(mul(mul(16, n), p), 4))
@@ -133,7 +133,7 @@ func (c *qblockClient) initOwnedBudget() error {
 	inventories := [][4]uint64{
 		{mul(n, 3), 16, 16, 0}, {mul(t, 2), 16, 16, 8},
 		{mul(n, 8), 16, 16, 0}, {mul(t, 4), 16, 16, 8},
-		{mul(r, 2), 16, 16, 0}, {add(mul(r, t), t), 16, 24, 8},
+		{mul(r, 4), 16, 16, 0}, {add(mul(r, t), t), 16, 24, 8},
 		{mul(uint64(c.maxMIDEntries), 2), 8, 16, 0}, {mul(mul(n, p), 2), 8, 24, 8},
 		{add(n, mul(r, t), t), 8, 16, 8},
 		// Explicit CON probes use the ordinary response cache for empty ACKs.

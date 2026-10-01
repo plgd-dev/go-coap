@@ -684,8 +684,13 @@ func (c *qblockClient) advanceDueWithCallbacks(now time.Time, scheduled bool) {
 		}
 		c.server.expireRecordsLocked(now)
 	}
+	var conCallbacks []qblockCallback
+	if c.server != nil {
+		conCallbacks = c.server.dueCON(now)
+	}
 	c.mu.Unlock()
 	callbacks := c.executeOrdered(outputs)
+	callbacks = append(callbacks, conCallbacks...)
 	callbacks = append(callbacks, c.executePendingOrdered(now)...)
 	c.actionMu.Unlock()
 	for _, callback := range callbacks {
@@ -1877,10 +1882,10 @@ func (c *qblockClient) reserveMIDLocked(mid int32) error {
 	}
 	count := len(c.transferByMID) + len(c.pendingGETByMID)
 	if c.server != nil {
-		if c.server.byMID[mid] != nil {
+		if c.server.byMID[mid] != nil || c.server.conByMID[mid] != nil {
 			return qblock.ErrLimitExceeded
 		}
-		count += len(c.server.byMID)
+		count += len(c.server.byMID) + len(c.server.conByMID)
 	}
 	if uint64(count) >= uint64(c.maxMIDEntries) {
 		return qblock.ErrLimitExceeded

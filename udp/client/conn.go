@@ -1052,6 +1052,9 @@ func (cc *Conn) processResponse(reqType message.Type, reqMessageID int32, w *res
 }
 
 func (cc *Conn) handleReq(w *responsewriter.ResponseWriter[*Conn], req *pool.Message) {
+	if cc.qblockClient != nil && cc.qblockClient.server != nil && cc.qblockClient.server.handleCONFeedback(req) {
+		return
+	}
 	defer cc.inactivityMonitor.Notify()
 	if cc.qblockClient != nil && cc.qblockClient.server != nil && cc.qblockClient.server.handleCONRequest(req) {
 		return
@@ -1165,6 +1168,10 @@ func (cc *Conn) upsertControlInformation(msg *pool.Message) {
 }
 
 func (cc *Conn) handleSpecialMessages(r *pool.Message) bool {
+	if cc.qblockClient != nil && cc.qblockClient.server != nil && cc.qblockClient.server.handleCONFeedback(r) {
+		cc.ReleaseMessage(r)
+		return true
+	}
 	// ping request
 	if r.IsPing(false) {
 		cc.ProcessReceivedMessageWithHandler(r, cc.handlePong)

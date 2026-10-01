@@ -20,20 +20,32 @@ import (
 )
 
 type qblockServerCONRecord struct {
-	mid      int32
-	token    message.Token
-	options  message.Options
-	control  *coapNet.ControlMessage
-	sequence uint64
-	block    qblock.Block
-	ctx      context.Context
-	cancel   context.CancelFunc
-	lease    *qblockOwnedLease
-	charged  uint64
-	expires  time.Time
-	running  bool
-	terminal bool
-	ack      []byte
+	ackDone      chan struct{}
+	mid          int32
+	token        message.Token
+	options      message.Options
+	control      *coapNet.ControlMessage
+	sequence     uint64
+	block        qblock.Block
+	ctx          context.Context
+	cancel       context.CancelFunc
+	lease        *qblockOwnedLease
+	charged      uint64
+	expires      time.Time
+	running      bool
+	terminal     bool
+	ack          []byte
+	ackDue       time.Time
+	separate     bool
+	response     []byte
+	responseMID  int32
+	permit       *qblockOrdinaryPermit
+	retryDue     time.Time
+	interval     time.Duration
+	retries      uint32
+	maxRetries   uint32
+	sending      bool
+	acknowledged bool
 }
 
 func (s *qblockServer) recordCountLocked() int { return len(s.records) + len(s.conRequests) }
@@ -121,6 +133,8 @@ func (s *qblockServer) handleCONRequest(msg *pool.Message) bool {
 	}
 	ctx, cancel := context.WithCancel(c.writeContext)
 	r = &qblockServerCONRecord{mid: msg.MessageID(), token: cloneQBlockBytes(msg.Token()), options: cloneQBlockOptions(msg.Options()), control: cloneQBlockControl(msg.ControlMessage()), sequence: msg.Sequence(), block: block, ctx: ctx, cancel: cancel, lease: newQBlockOwnedLease(release), charged: charge, expires: c.now().Add(ExchangeLifetime), running: true}
+	r.ackDone = make(chan struct{})
+	r.ackDue = c.now().Add(min(time.Second, max(time.Nanosecond, c.cc.transmission.acknowledgeTimeout.Load()/2)))
 	s.conRequests[r.mid] = r
 	s.metadata += charge
 	handlerRelease := r.lease.retain()
@@ -148,16 +162,21 @@ func (s *qblockServer) handleCONRequest(msg *pool.Message) bool {
 	c.mu.Lock()
 	r.running = false
 	current := s.conRequests[r.mid] == r && !r.terminal && !s.closed && c.writeContext.Err() == nil && c.now().Before(r.expires)
-	if current {
+	separate := current && r.separate
+	if current && !separate {
 		r.ack = wire
-	} else {
+		r.ackDue = time.Time{}
+	} else if !current {
 		s.releaseCONLocked(r)
 	}
 	c.mu.Unlock()
-	if current {
+	if current && !separate {
 		s.writeCONWire(r, wire)
 	}
 	c.actionMu.Unlock()
+	if separate {
+		s.sendSeparateCON(r, wire)
+	}
 	c.notifyDeadlineChanged()
 	return true
 }
@@ -315,14 +334,22 @@ func (s *qblockServer) writeCONWire(r *qblockServerCONRecord, wire []byte) {
 func (s *qblockServer) nextCONDeadlineLocked() (time.Time, bool) {
 	var next time.Time
 	for _, r := range s.conRequests {
-		if !r.terminal && (next.IsZero() || r.expires.Before(next)) {
-			next = r.expires
+		if r.terminal {
+			continue
+		}
+		for _, deadline := range []time.Time{r.expires, r.ackDue, r.retryDue} {
+			if !deadline.IsZero() && (next.IsZero() || deadline.Before(next)) {
+				next = deadline
+			}
 		}
 	}
 	return next, !next.IsZero()
 }
 func (s *qblockServer) releaseCONLocked(r *qblockServerCONRecord) {
 	r.terminal = true
+	r.ackDue = time.Time{}
+	r.retryDue = time.Time{}
+	s.settleCONLocked(r)
 	r.cancel()
 	if r.running {
 		return
@@ -344,4 +371,182 @@ func (s *qblockServer) closeCONLocked() {
 	for _, r := range s.conRequests {
 		s.releaseCONLocked(r)
 	}
+}
+
+// settleCONLocked unpublishes feedback before releasing endpoint ownership.
+func (s *qblockServer) settleCONLocked(r *qblockServerCONRecord) {
+	if s.conByMID[r.responseMID] == r {
+		delete(s.conByMID, r.responseMID)
+	}
+	r.acknowledged = true
+	r.retryDue = time.Time{}
+	if r.permit != nil {
+		r.permit.finish(false, s.client.now())
+		r.permit = nil
+	}
+}
+
+func (s *qblockServer) handleCONFeedback(msg *pool.Message) bool {
+	if msg.Type() != message.Acknowledgement && msg.Type() != message.Reset {
+		return false
+	}
+	c := s.client
+	c.lockAction()
+	c.mu.Lock()
+	r := s.conByMID[msg.MessageID()]
+	if r == nil {
+		c.mu.Unlock()
+		c.actionMu.Unlock()
+		return false
+	}
+	if r.permit != nil {
+		r.permit.finish(true, c.now())
+	}
+	s.settleCONLocked(r)
+	c.mu.Unlock()
+	c.actionMu.Unlock()
+	c.notifyDeadlineChanged()
+	return true
+}
+
+func (s *qblockServer) sendSeparateCON(r *qblockServerCONRecord, wire []byte) {
+	c := s.client
+	select {
+	case <-r.ackDone:
+	case <-r.ctx.Done():
+		return
+	}
+	msg := c.cc.AcquireMessage(r.ctx)
+	defer c.cc.ReleaseMessage(msg)
+	if _, err := msg.UnmarshalWithDecoder(qblock.Decoder{}, wire); err != nil || msg.Code() == codes.Empty {
+		return
+	}
+	msg.SetType(message.Confirmable)
+	c.lockAction()
+	c.mu.Lock()
+	if r.terminal || s.closed || !c.now().Before(r.expires) {
+		c.mu.Unlock()
+		c.actionMu.Unlock()
+		return
+	}
+	mid := c.cc.GetMessageID()
+	// Reserve local namespace before waiting for endpoint admission.
+	if err := c.reserveMIDLocked(mid); err != nil {
+		c.mu.Unlock()
+		c.actionMu.Unlock()
+		c.cc.errors(err)
+		return
+	}
+	r.responseMID = mid
+	r.acknowledged = false
+	s.conByMID[mid] = r
+	c.mu.Unlock()
+	c.actionMu.Unlock()
+	msg.SetMessageID(mid)
+	permit, err := c.cc.acquireOrdinary(msg)
+	if err != nil {
+		c.lockAction()
+		c.mu.Lock()
+		s.settleCONLocked(r)
+		c.mu.Unlock()
+		c.actionMu.Unlock()
+		c.cc.errors(err)
+		return
+	}
+	c.lockAction()
+	c.mu.Lock()
+	if r.terminal || s.closed || r.acknowledged || !c.now().Before(r.expires) {
+		if permit != nil {
+			permit.finish(false, c.now())
+		}
+		s.settleCONLocked(r)
+		c.mu.Unlock()
+		c.actionMu.Unlock()
+		return
+	}
+	r.permit = permit
+	r.response, _ = msg.MarshalWithEncoder(coder.DefaultCoder)
+	r.response = cloneQBlockBytes(r.response)
+	r.interval = time.Duration(float64(c.cc.transmission.acknowledgeTimeout.Load()) * (1 + c.jitter()/2))
+	r.interval = max(time.Nanosecond, r.interval)
+	r.maxRetries = c.cc.transmission.maxRetransmit.Load()
+	r.retryDue = c.now().Add(r.interval)
+	c.mu.Unlock()
+	s.writeSeparateCON(r)
+	c.actionMu.Unlock()
+	c.notifyDeadlineChanged()
+}
+
+func (s *qblockServer) writeSeparateCON(r *qblockServerCONRecord) {
+	c := s.client
+	if r.ctx.Err() != nil {
+		return
+	}
+	msg := c.cc.AcquireMessage(r.ctx)
+	defer c.cc.ReleaseMessage(msg)
+	if _, err := msg.UnmarshalWithDecoder(qblock.Decoder{}, r.response); err != nil {
+		return
+	}
+	if r.control != nil {
+		msg.SetControlMessage(&coapNet.ControlMessage{Src: cloneQBlockBytes(r.control.Dst), IfIndex: r.control.IfIndex})
+	}
+	if err := c.cc.writeOrdinary(msg, r.permit); err != nil {
+		c.mu.Lock()
+		s.settleCONLocked(r)
+		c.mu.Unlock()
+		c.cc.errors(err)
+	}
+}
+
+// Called under client.mu; output callbacks take the action gate before writes.
+func (s *qblockServer) dueCON(now time.Time) []qblockCallback {
+	var callbacks []qblockCallback
+	for _, r := range s.conRequests {
+		if r.terminal || r.sending {
+			continue
+		}
+		ack := !r.ackDue.IsZero() && !now.Before(r.ackDue)
+		retry := !r.retryDue.IsZero() && !now.Before(r.retryDue)
+		if !ack && !retry {
+			continue
+		}
+		if ack {
+			r.separate = true
+			r.ackDue = time.Time{}
+			r.ack = s.simpleCONWire(r, codes.Empty)
+		} else {
+			if r.retries >= r.maxRetries {
+				s.settleCONLocked(r)
+				continue
+			}
+			r.retries++
+			r.interval *= 2
+			r.retryDue = now.Add(r.interval)
+		}
+		r.sending = true
+		release := r.lease.retain()
+		callbacks = append(callbacks, qblockCallback{run: func() {
+			defer release()
+			c := s.client
+			c.lockAction()
+			c.mu.Lock()
+			current := s.conRequests[r.mid] == r && !r.terminal && !s.closed && c.now().Before(r.expires)
+			r.sending = false
+			if !ack {
+				current = current && !r.acknowledged
+			}
+			c.mu.Unlock()
+			if current {
+				if ack {
+					s.writeCONWire(r, r.ack)
+					close(r.ackDone)
+				} else {
+					s.writeSeparateCON(r)
+				}
+			}
+			c.actionMu.Unlock()
+			c.notifyDeadlineChanged()
+		}, discard: release})
+	}
+	return callbacks
 }
