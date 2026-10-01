@@ -835,6 +835,12 @@ func (c *qblockClient) close() {
 }
 
 func (c *qblockClient) handle(msg *pool.Message) bool {
+	if msg.HasOption(message.QBlock1) || msg.HasOption(message.QBlock2) {
+		size, err := qblockIncomingSize(msg)
+		if err != nil || size > uint64(c.datagramLimit) {
+			return true
+		}
+	}
 	if msg.Type() == message.Reset {
 		if c.server != nil && c.server.handleReset(msg.MessageID()) {
 			return true

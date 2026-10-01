@@ -306,3 +306,99 @@ func TestQBlockPacketGETRawDatagramLimitSurvivesOptionDiscard(t *testing.T) {
 	cc.qblockClient.abandon(req.Token(), qblock.ErrCanceled)
 	requireQBlockClientFullyIdle(t, cc.qblockClient)
 }
+
+// Rejecting a too-large fragment must act like packet loss, not accepted
+// progress or teardown. Both a live Q2 receiver and Q1 handoff need this.
+func TestQBlockPacketIncomingClientLimits(t *testing.T) {
+	for _, upload := range []bool{false, true} {
+		t.Run(map[bool]string{false: "follow-on GET", true: "upload handoff"}[upload], func(t *testing.T) {
+			session := &qblockTestSession{ctx: context.Background()}
+			cc := newPrivateQBlockClientConnWithToken(t, session, message.GetToken)
+			t.Cleanup(session.closeForTest)
+			cc.qblockClient.datagramLimit = 68
+			var req *pool.Message
+			if upload {
+				req = newPOSTWithBody(t, cc, message.Token{1}, []byte("body"))
+			} else {
+				req = newPrivateQBlockClientGET(t, cc, message.Token{1})
+			}
+			defer cc.ReleaseMessage(req)
+			_, err := cc.qblockClient.prepare(req, nil)
+			require.NoError(t, err)
+			cc.qblockClient.Tick(cc.qblockClient.now())
+			token := req.Token()
+			if upload {
+				token = session.writesSnapshot()[0].token
+			} else {
+				first := newQBlockClientFragment(t, cc, token, 0, true, 32)
+				require.True(t, cc.qblockClient.handle(first))
+				cc.ReleaseMessage(first)
+			}
+			var id qblock.TransferID
+			for liveID := range cc.qblockClient.transfers {
+				id = liveID
+			}
+			before := cc.qblockClient.transfers[id]
+			progress, _ := cc.qblockClient.manager.ReceiverProgress(id)
+			debt := *cc.qblockClient.probeGate
+			var bad *pool.Message
+			if upload {
+				bad = q2ResponseForPost(t, cc, token, 0, true, 32, 'r')
+			} else {
+				bad = newQBlockClientFragment(t, cc, token, 1, false, 32)
+			}
+			defer cc.ReleaseMessage(bad)
+			bad.SetOptionBytes(message.LocationQuery, bytes.Repeat([]byte{'x'}, 80))
+			require.True(t, cc.qblockClient.handle(bad))
+			require.Same(t, before, cc.qblockClient.transfers[id])
+			after, _ := cc.qblockClient.manager.ReceiverProgress(id)
+			require.Equal(t, progress, after)
+			require.Equal(t, debt, *cc.qblockClient.probeGate)
+			bad.Remove(message.LocationQuery)
+			require.True(t, cc.qblockClient.handle(bad))
+			if upload {
+				require.Equal(t, uint32(1), cc.qblockClient.active())
+				for _, tr := range cc.qblockClient.transfers {
+					require.Equal(t, qblock.Q2, tr.kind)
+				}
+				cc.qblockClient.abandon(req.Token(), qblock.ErrCanceled)
+			}
+			requireQBlockClientFullyIdle(t, cc.qblockClient)
+		})
+	}
+}
+
+func TestQBlockPacketIncomingServerLimits(t *testing.T) {
+	calls := 0
+	h := newServerHarness(t, qblock.DefaultManagerConfig(), qblockServerConfig{}, func(w *responsewriter.ResponseWriter[*Conn], _ *pool.Message) {
+		calls++
+		require.NoError(t, w.SetResponse(codes.Changed, message.TextPlain, bytes.NewReader(bytes.Repeat([]byte{'r'}, 32))))
+	})
+	h.cc.qblockClient.datagramLimit = 68
+	first := h.q1(t, 1, 0, true, 32, "0123456789abcdef")
+	first.SetOptionBytes(message.LocationQuery, bytes.Repeat([]byte{'x'}, 80))
+	require.True(t, h.cc.qblockClient.handleServerRequest(first))
+	require.Equal(t, serverSnapshot{}, h.snapshot())
+	first.Remove(message.LocationQuery)
+	h.ingest(first)
+	baseline := h.snapshot()
+	last := h.q1(t, 2, 1, false, 32, "0123456789abcdef")
+	last.SetOptionBytes(message.LocationQuery, bytes.Repeat([]byte{'x'}, 80))
+	require.True(t, h.cc.qblockClient.handleServerRequest(last))
+	require.Equal(t, baseline, h.snapshot())
+	require.Zero(t, calls)
+	last.Remove(message.LocationQuery)
+	h.ingest(last)
+	require.Equal(t, 1, calls)
+	baseline = h.snapshot()
+	writes := len(h.session.writesSnapshot())
+	control := h.control(t, 3, 0, false, "tag-a")
+	control.SetOptionBytes(message.LocationQuery, bytes.Repeat([]byte{'x'}, 80))
+	require.True(t, h.cc.qblockClient.handleServerRequest(control))
+	require.Equal(t, baseline, h.snapshot())
+	require.Len(t, h.session.writesSnapshot(), writes)
+	control.Remove(message.LocationQuery)
+	h.ingest(control)
+	require.Greater(t, len(h.session.writesSnapshot()), writes)
+	require.Equal(t, 1, calls)
+}

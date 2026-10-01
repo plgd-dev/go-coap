@@ -337,6 +337,10 @@ func (c *qblockClient) handleServerRequest(msg *pool.Message) bool {
 	if !msg.HasOption(message.QBlock1) && !msg.HasOption(message.QBlock2) {
 		return false
 	}
+	size, err := qblockIncomingSize(msg)
+	if err != nil || size > uint64(c.datagramLimit) {
+		return true
+	}
 	c.lockAction()
 	var outputs []qblock.Output
 	var changed bool
