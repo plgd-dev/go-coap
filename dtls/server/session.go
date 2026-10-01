@@ -27,7 +27,8 @@ type Session struct {
 
 	done chan struct{}
 
-	mutex sync.Mutex
+	mutex        sync.Mutex
+	shutdownOnce sync.Once
 
 	maxMessageSize uint32
 
@@ -77,10 +78,12 @@ func (s *Session) popOnClose() []EventFunc {
 }
 
 func (s *Session) shutdown() {
-	defer close(s.done)
-	for _, f := range s.popOnClose() {
-		f()
-	}
+	s.shutdownOnce.Do(func() {
+		defer close(s.done)
+		for _, f := range s.popOnClose() {
+			f()
+		}
+	})
 }
 
 func (s *Session) Close() error {

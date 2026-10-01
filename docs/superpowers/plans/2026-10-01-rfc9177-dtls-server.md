@@ -32,11 +32,11 @@
 
 **Interfaces:** Consume QBlockServerRuntime NewConn(Session,*client.Config,...client.Option)(*client.Conn,error), ValidateTransport(uint32)error, Close(), Prune(time.Time). Produce QBlockServerOpt.DTLSServerApply(*dtlsServer.Config); Config.QBlockServer *qblock.ServerConfig; private createConn returns (*client.Conn,error).
 
-- [ ] Step 1: Write TestQBlockDTLSServerTransfers table for GET, POST, PUT using real loopback PSK DTLS and raw Q datagrams. GET returns multiple Q2 blocks; Q1 arrives final-first across two blocks and handler receives exact complete bytes once, with a Q2 response. Add TestQBlockDTLSServerInvalidConfig with zero limits and final transport owned-budget rejection; Serve(nil) errors before listener access. Disabled CON Q gets BadOption and enabled ordinary GET has no Q option.
-- [ ] Step 2: Run `rtk proxy go test ./dtls -run TestQBlockDTLS -count=1 -timeout=30s`. Expected RED: option lacks DTLSServerApply, then transfer failure until runtime is connected.
-- [ ] Step 3: Add copied DTLS server config, runtime startup/transport validation, error-returning construction with cfg.MTU propagation, failed session cleanup, periodic pruning and Stop closure. Preserve existing classic construction when disabled. Runtime remains server-only.
-- [ ] Step 4: Run the focused command and `rtk proxy go test ./options ./dtls/... -count=1 -timeout=60s`. Expected PASS.
-- [ ] Step 5: Commit scoped code/tests/plan as `feat(qblock): propagate server-only Q handling to DTLS`.
+- [x] Step 1: Write TestQBlockDTLSServerTransfers table for GET, POST, PUT using real loopback PSK DTLS and raw Q datagrams. GET returns multiple Q2 blocks; Q1 arrives final-first across two blocks and handler receives exact complete bytes once, with a Q2 response. Add TestQBlockDTLSServerInvalidConfig with zero limits and final transport owned-budget rejection; Serve(nil) errors before listener access. Disabled CON Q gets BadOption and enabled ordinary GET has no Q option.
+- [x] Step 2: Run `rtk proxy go test ./dtls -run TestQBlockDTLS -count=1 -timeout=30s`. Expected RED: option lacks DTLSServerApply, then transfer failure until runtime is connected.
+- [x] Step 3: Add copied DTLS server config, runtime startup/transport validation, error-returning construction with cfg.MTU propagation, failed session cleanup, periodic pruning and Stop closure. Preserve existing classic construction when disabled. Runtime remains server-only.
+- [x] Step 4: Run the focused command and `rtk proxy go test ./options ./dtls/... -count=1 -timeout=60s`. Expected PASS.
+- [x] Step 5: Commit scoped code/tests/plan as `feat(qblock): propagate server-only Q handling to DTLS`.
 
 ### Task 2: DTLS admission, record and session boundaries
 
@@ -44,11 +44,11 @@
 
 **Interfaces:** Consume Task 1 runtime/config. Produce bounded active accepted-worker reservation before handshake/OnNewConn and release after worker return. Session read cap is min(MTU,MaxMessageSize) plus one overflow byte for Q-enabled sessions; oversized or Pion short-buffer records are consumed as loss without Process; disabled session behavior is preserved.
 
-- [ ] Step 1: Write TestQBlockDTLSServerConnectionLimit proving a second authenticated peer is rejected at MaxConnections=1 and a replacement is accepted after first close. Repeat identical Q upload/token/tag on a replacement session and require a fresh handler invocation. Write TestQBlockDTLSSessionOversize using datagram fake net.Conn: oversized valid-prefix record is dropped, a valid retry dispatches once, and a following ordinary datagram still works. Include short-buffer record followed by valid record and final MaxMessageSize smaller than MTU.
-- [ ] Step 2: Run `rtk proxy go test ./dtls/... -run TestQBlockDTLS -count=1 -timeout=30s`. Expected RED: second worker admitted and oversized record terminates/dispatches rather than retaining valid retry.
-- [ ] Step 3: Reserve bounded workers in Serve before goroutine/handshake; release with defer. Add Q-only session read guard with overflow byte and short-buffer loss handling. Keep failed construction closed and runtime Close idempotent.
-- [ ] Step 4: Run focused normal/race; `rtk proxy go test ./... -run '^$' -count=1 -timeout=180s`; `rtk proxy go vet ./...`; `rtk proxy go test ./... -count=1 -timeout=180s`; `rtk git diff --check`. Expected PASS. Update roadmap/results: DTLS server slice complete, Milestone 4 client work open.
-- [ ] Step 5: Commit as `fix(qblock): bound DTLS admission and receive records`.
+- [x] Step 1: Write TestQBlockDTLSServerConnectionLimit proving a second authenticated peer is rejected at MaxConnections=1 and a replacement is accepted after first close. Repeat identical Q upload/token/tag on a replacement session and require a fresh handler invocation. Write TestQBlockDTLSSessionOversize using datagram fake net.Conn: oversized valid-prefix record is dropped, a valid retry dispatches once, and a following ordinary datagram still works. Include short-buffer record followed by valid record and final MaxMessageSize smaller than MTU.
+- [x] Step 2: Run `rtk proxy go test ./dtls/... -run TestQBlockDTLS -count=1 -timeout=30s`. Expected RED: second worker admitted and oversized record terminates/dispatches rather than retaining valid retry.
+- [x] Step 3: Reserve bounded workers in Serve before goroutine/handshake; release with defer. Add Q-only session read guard with overflow byte and short-buffer loss handling. Keep failed construction closed and runtime Close idempotent.
+- [x] Step 4: Run focused normal/race; `rtk proxy go test ./... -run '^$' -count=1 -timeout=180s`; `rtk proxy go vet ./...`; `rtk proxy go test ./... -count=1 -timeout=180s`; `rtk git diff --check`. Expected PASS. Update roadmap/results: DTLS server slice complete, Milestone 4 client work open.
+- [x] Step 5: Commit as `fix(qblock): bound DTLS admission and receive records`.
 
 ## Completion
 

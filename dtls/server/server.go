@@ -288,7 +288,7 @@ func (s *Server) createConn(connection *coapNet.Conn, inactivityMonitor udpClien
 
 	opts := []udpClient.Option{udpClient.WithBlockWise(createBlockWise), udpClient.WithInactivityMonitor(inactivityMonitor), udpClient.WithRequestMonitor(requestMonitor)}
 	if s.qblockRuntime != nil {
-		return s.qblockRuntime.NewConn(session, &cfg, opts...)
+		return s.newSessionConn(session, &cfg, opts)
 	}
 	return udpClient.NewConnWithOpts(session, &cfg, opts...), nil
 }
@@ -303,4 +303,27 @@ func (s *Server) reserveQConnection() bool {
 			return true
 		}
 	}
+}
+
+func (s *Server) newSessionConn(session *Session, cfg *udpClient.Config, opts []udpClient.Option) (*udpClient.Conn, error) {
+	cc, err := s.qblockRuntime.NewConn(session, cfg, opts...)
+	if err != nil {
+		session.shutdown()
+		return nil, err
+	}
+	if err := s.admitQConnection(cc, session); err != nil {
+		return nil, err
+	}
+	return cc, nil
+}
+
+// admitQConnection is the final admission point after runtime construction.
+// Cancellation after this check is ordinary shutdown of an admitted connection.
+func (s *Server) admitQConnection(cc *udpClient.Conn, session *Session) error {
+	if err := cc.Context().Err(); err != nil {
+		_ = cc.Close()
+		session.shutdown()
+		return err
+	}
+	return nil
 }

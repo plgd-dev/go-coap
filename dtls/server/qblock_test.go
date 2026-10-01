@@ -33,6 +33,7 @@ type qDatagramConn struct {
 	records  chan qRecord
 	closed   chan struct{}
 	didClose atomic.Bool
+	peerPort int
 }
 
 func newQDatagramConn() *qDatagramConn {
@@ -60,7 +61,7 @@ func (c *qDatagramConn) LocalAddr() net.Addr {
 	return &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 5684}
 }
 func (c *qDatagramConn) RemoteAddr() net.Addr {
-	return &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 9000}
+	return &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 9000 + c.peerPort}
 }
 func (c *qDatagramConn) SetDeadline(time.Time) error      { return nil }
 func (c *qDatagramConn) SetReadDeadline(time.Time) error  { return nil }
@@ -193,4 +194,66 @@ func TestQBlockDTLSSessionOversize(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestQBlockDTLSRejectedConstructionCompletesSession(t *testing.T) {
+	cfg := qblock.DefaultServerConfig()
+	cfg.MaxPeers = 1
+	s := New(qOption(func(c *Config) { c.QBlockServer = &cfg }))
+	defer s.Stop()
+	c := client.DefaultConfig
+	first := NewSession(s.ctx, coapNet.NewConn(newQDatagramConn()), 65536, c.MTU, true)
+	cc, err := s.newSessionConn(first, &c, nil)
+	require.NoError(t, err)
+	defer func() { _ = cc.Close(); first.shutdown() }()
+	// Exhaust the peer table while leaving worker capacity available.
+	other := newQDatagramConn()
+	other.peerPort = 1
+	rejected := NewSession(s.ctx, coapNet.NewConn(other), 65536, c.MTU, true)
+	_, err = s.newSessionConn(rejected, &c, nil)
+	require.Error(t, err)
+	select {
+	case <-rejected.Done():
+	case <-time.After(time.Second):
+		t.Fatal("endpoint rejection never completed")
+	}
+	// Closing the domain simulates Stop before attachment, while the first Conn
+	// remains constructed. Repeated rejection must finalize every session.
+	s.Stop()
+	for i := 0; i < 3; i++ {
+		session := NewSession(s.ctx, coapNet.NewConn(newQDatagramConn()), 65536, c.MTU, true)
+		var closed atomic.Int32
+		session.AddOnClose(func() { closed.Add(1) })
+		_, err := s.newSessionConn(session, &c, nil)
+		require.Error(t, err)
+		select {
+		case <-session.Done():
+		case <-time.After(time.Second):
+			t.Fatal("rejected session never completed")
+		}
+		session.shutdown()
+		require.Equal(t, int32(1), closed.Load())
+	}
+}
+
+func TestQBlockDTLSStopBeforePublication(t *testing.T) {
+	cfg := qblock.DefaultServerConfig()
+	s := New(qOption(func(c *Config) { c.QBlockServer = &cfg }))
+	defer s.Stop()
+	c := client.DefaultConfig
+	session := NewSession(s.ctx, coapNet.NewConn(newQDatagramConn()), 65536, c.MTU, true)
+	cc, err := s.newSessionConn(session, &c, nil)
+	require.NoError(t, err)
+	var closed atomic.Int32
+	session.AddOnClose(func() { closed.Add(1) })
+	// Attachment and construction have succeeded, but publication has not.
+	s.Stop()
+	require.ErrorIs(t, s.admitQConnection(cc, session), context.Canceled)
+	select {
+	case <-cc.Done():
+	case <-time.After(time.Second):
+		t.Fatal("canceled construction never completed")
+	}
+	session.shutdown()
+	require.Equal(t, int32(1), closed.Load())
 }
