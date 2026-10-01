@@ -55,6 +55,10 @@ func TestQBlockRelayCombinedFaults(t *testing.T) {
 				{Direction: qblocklink.ServerToClient, Kind: qblocklink.Q2, Occurrence: 2, Action: qblocklink.Duplicate},
 			}, qblocklink.Limits{MaxEvents: 2048, MaxBytes: 1 << 20})
 			require.NoError(t, e)
+			traceDir := t.TempDir()
+			if configured := os.Getenv("QBLOCK_TRACE_DIR"); configured != "" {
+				traceDir = configured
+			}
 			t.Cleanup(func() {
 				artifact := struct {
 					Method      string
@@ -68,7 +72,11 @@ func TestQBlockRelayCombinedFaults(t *testing.T) {
 					t.Error(e)
 					return
 				}
-				path := filepath.Join("..", "..", ".superpowers", "sdd", "2026-10-01-rfc9177-relay-combined", method.name+"-trace.json")
+				path := filepath.Join(traceDir, method.name+"-trace.json")
+				if e = os.MkdirAll(traceDir, 0700); e != nil {
+					t.Error(e)
+					return
+				}
 				if e = os.WriteFile(path, b, 0600); e != nil {
 					t.Error(e)
 				}

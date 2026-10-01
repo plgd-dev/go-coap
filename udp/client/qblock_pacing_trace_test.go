@@ -133,6 +133,7 @@ func runQBlockPacingPairedRepairWithRelay(t *testing.T, method codes.Code, pacin
 	require.True(t, prepared.Prepared)
 
 	droppedUpload, droppedResponse := false, false
+	delivered := make(map[uint64]int)
 	acceptedServerTokens := make(map[string]struct{})
 	for step := 0; step < 100; step++ {
 		for turn := 0; turn < 100; turn++ {
@@ -146,6 +147,7 @@ func runQBlockPacingPairedRepairWithRelay(t *testing.T, method codes.Code, pacin
 					}
 					for _, packet := range packets {
 						deliverQBlockRelayPacket(t, server, packet)
+						delivered[packet.ID]++
 						acceptedServerTokens[string(wire.token)] = struct{}{}
 					}
 				} else if wire.options.HasOption(message.QBlock1) {
@@ -173,6 +175,7 @@ func runQBlockPacingPairedRepairWithRelay(t *testing.T, method codes.Code, pacin
 					}
 					for _, packet := range packets {
 						deliverQBlockRelayPacket(t, client, packet)
+						delivered[packet.ID]++
 					}
 				} else if wire.options.HasOption(message.QBlock2) {
 					value, getErr := wire.options.GetUint32(message.QBlock2)
@@ -194,6 +197,18 @@ func runQBlockPacingPairedRepairWithRelay(t *testing.T, method codes.Code, pacin
 		}
 		select {
 		case body := <-received:
+			if relay != nil {
+				for _, event := range relay.Trace() {
+					want := 1
+					if event.Action == qblocklink.Drop {
+						want = 0
+					}
+					if event.Action == qblocklink.Duplicate {
+						want = 2
+					}
+					require.Equal(t, want, delivered[event.ID], "actual endpoint deliveries input%d action%s", event.ID, event.Action)
+				}
+			}
 			require.True(t, droppedUpload)
 			require.True(t, droppedResponse)
 			require.Equal(t, bytes.Repeat([]byte{'r'}, 48), body)

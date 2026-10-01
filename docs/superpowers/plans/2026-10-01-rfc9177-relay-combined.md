@@ -8,8 +8,14 @@ Each method uploads48bytes and receives48bytes at SZX0, MaxPayloads2. Drop secon
 
 ## Tasks
 
-- [ ] Add optional relay path to existing paired helper; create TestQBlockRelayCombinedFaults POST/PUT with scripted rules and trace assertions. New encoder/deliver helper snapshots actual message wire; decoded inputs use existing receive dispatch, not public socket Process. Characterization may already be GREEN; no production RED→GREEN claim.
-- [ ] Verify fault assertions catch bypass of relay (temporary mutation RED, restore GREEN). Focus normal/race plus relay oracle; compile-only/vet/diff. Retain failed attempts.
-- [ ] One fresh Astra/high review only new slice. One test-only fix pass for material evidence findings, defer minors; no rereview. Append roadmap/results, commit scoped files. Keep branch/worktree/user edits/all ledgers; no merge/push.
+- [x] Add optional relay path to existing paired helper; create TestQBlockRelayCombinedFaults POST/PUT with scripted rules and trace assertions. New encoder/deliver helper snapshots actual message wire; decoded inputs use existing receive dispatch, not public socket Process. Characterization may already be GREEN; no production RED→GREEN claim.
+- [x] Verify fault assertions catch bypass of relay (temporary mutation RED, restore GREEN). Focus normal/race plus relay oracle; compile-only/vet/diff. Retain failed attempts.
+- [x] One fresh Astra/high review only new slice. One test-only fix pass for material evidence findings, defer minors; no rereview. Append roadmap/results, commit scoped files. Keep branch/worktree/user edits/all ledgers; no merge/push.
 
 Review focus: actual fault delivery and independent expected trace, handler/body outcomes, fake-clock races, failure cleanup, bounded evidence and claims.
+
+## Final disposition
+
+One fresh Astra/high reviewer: no Critical, two Important (normal tests depend on ignored trace directory; duplicate-only bypass untested). One test-only pass makes default output temporary, optional QBLOCK_TRACE_DIR explicitly persists evidence and creates its directory; checks actual endpoint deliveries per input ID. Reviewer original fresh-cwd RED and duplicate-only bypass GREEN retained; fixed fresh-cwd binary GREEN, duplicate-only suppression RED, restored scoped normal/race GREEN. No production defect or behavioral production fix claim; no rereview.
+
+Deferred Minor: artifact lacks pacing/fake-clock start/end metadata. Prior relay two-byte extension, supplied-DTLS cleanup and deadline-race ACK details remain deferred. Final compile/vet/diff pass. Retain all artifacts; no merge/push.
