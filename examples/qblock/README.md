@@ -92,14 +92,37 @@ remain deferred. These examples do not enable those features.
 
 ## Local performance characterization
 
-The release ledger records four loopback runs of a Q-Block2 GET: an 8 KiB
+The benchmark measures a Q-Block2 GET after explicit discovery: an 8 KiB
 one-set response and a 256 KiB multi-set response, each with no loss and with
-one dropped response block. The benchmark explicitly probes, requires support,
-verifies the complete body and records transfer time, hashes and Q-owned byte
-accounting. The byte figures describe manager retained-byte reservations and
-adapter ownership reservations. They are not process heap or RSS measurements.
-Loopback results characterize this host and configuration; they do not predict
-a universal Q-Block speedup.
+one dropped response block. These two timed runs completed each case and
+verified the complete body hash. Throughput is body bytes divided by elapsed
+wall time; capability discovery and fixture setup are outside the timed
+interval.
+
+| Response | Loss | Run 1 time | Run 1 MiB/s | Run 2 time | Run 2 MiB/s | Dropped Q2 blocks |
+| --- | --- | ---: | ---: | ---: | ---: | ---: |
+| 8 KiB | none | 1.770 ms | 4.400 | 1.655 ms | 4.634 | 0 / 0 |
+| 8 KiB | response NUM 3 | 1.154 s | 0.006767 | 1.154 s | 0.006771 | 1 / 1 |
+| 256 KiB | none | 50.733 ms | 4.973 | 59.872 ms | 4.196 | 0 / 0 |
+| 256 KiB | response NUM 3 | 256.972 ms | 0.9735 | 260.741 ms | 0.9596 | 1 / 1 |
+
+The sampled Q accounting high-water values were:
+
+| Response and loss | Client manager B (runs 1 / 2) | Server manager B (runs 1 / 2) | Client adapter reserved B | Server adapter reserved B |
+| --- | ---: | ---: | ---: | ---: |
+| 8 KiB, none | 0 / 0 | 8,192 / 8,192 | 190,381,962 | 204,844,496 |
+| 8 KiB, response NUM 3 | 16,504 / 16,504 | 8,192 / 8,192 | 190,381,962 | 204,844,496 |
+| 256 KiB, none | 524,528 / 524,528 | 262,144 / 262,144 | 190,889,866 | 206,876,112 |
+| 256 KiB, response NUM 3 | 524,528 / 524,528 | 262,144 / 262,144 | 190,889,866 | 206,876,112 |
+
+Manager values are read from `net/qblock.Manager.retained` at the benchmark's
+adapter event sampling points. The short one-set 8 KiB client transfer has no
+retained manager state at those points; these readings do not include
+transient in-call allocations. Adapter values are ownership reservations,
+including the conservative precharged budget floor, not live heap or RSS.
+The race-detector run is correctness evidence only and is excluded from the
+timing table. These loopback measurements describe this host and configuration;
+they do not predict a universal Q-Block speedup.
 
 Reproduce the measurement with:
 
@@ -109,6 +132,6 @@ GOCACHE=/private/tmp/go-coap-con-build go test ./udp/client \
   -benchtime=1x -count=1 -v
 ```
 
-Exact settings, repeat runs and measured values are recorded in
+Exact settings, body hashes, repeat runs and evidence paths are recorded in
 `docs/superpowers/plans/2026-09-15-rfc9177-results.md` and the retained
 `.superpowers/sdd/2026-10-01-rfc9177-milestone6/` ledger.

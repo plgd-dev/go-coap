@@ -22,6 +22,7 @@ The go-coap provides servers and clients for DTLS, TCP-TLS, UDP, TCP in golang l
 * CoAP over TCP/TLS [RFC 8232][coap-tcp]
 * Observe resources in CoAP [RFC 7641][coap-observe]
 * Block-wise transfers in CoAP [RFC 7959][coap-block-wise-transfers]
+* RFC 9177 NON Q-Block for unicast GET/POST/PUT over UDP/DTLS ([examples and limits](examples/qblock/README.md))
 * request multiplexer
 * multicast
 * CoAP NoResponse option in CoAP [RFC 7967][coap-noresponse]
