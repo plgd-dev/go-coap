@@ -7,6 +7,7 @@ import (
 	"reflect"
 	"testing"
 	"time"
+	"unsafe"
 
 	"github.com/plgd-dev/go-coap/v3/message"
 	"github.com/plgd-dev/go-coap/v3/message/codes"
@@ -448,7 +449,17 @@ func requireQBlockClientConflictFixtureIntact(t *testing.T, cc *Conn, token mess
 	defer r.mu.Unlock()
 	require.Equal(t, uint32(1), r.manager.Active())
 	require.Equal(t, 1, qblockClientManagerTokenCountForTest(r.manager))
-	require.Equal(t, uint64(64), qblockClientManagerRetainedBytesForTest(r.manager))
+	require.Equal(t, uint64(64)+uint64(unsafe.Sizeof(struct {
+		meta  qblock.Metadata
+		pages []*struct {
+			payload []byte
+			present uint64
+		}
+		count, received uint32
+	}{}))+uint64(unsafe.Sizeof(uintptr(0)))+uint64(unsafe.Sizeof(struct {
+		payload []byte
+		present uint64
+	}{}))+8, qblockClientManagerRetainedBytesForTest(r.manager))
 	require.Empty(t, r.transfers)
 	require.Empty(t, r.transferByToken)
 	require.Contains(t, r.exchangesByOriginalToken, string(token))

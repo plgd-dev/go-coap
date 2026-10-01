@@ -81,7 +81,7 @@ func (r *Receiver) Receive(meta Metadata, block Block, payload []byte, now time.
 	r.retries = 0
 	r.due = now.Add(r.cfg.NonReceiveTimeout)
 	for r.contiguous < r.body.count {
-		if _, ok := r.body.blocks[r.contiguous]; !ok {
+		if !r.body.has(r.contiguous) {
 			break
 		}
 		r.contiguous++

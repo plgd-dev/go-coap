@@ -104,9 +104,11 @@ func (m *Manager) startReceiver(fragment Fragment, now time.Time, deferred bool)
 	if _, ok := m.byToken[string(fragment.Token)]; ok {
 		return nil, ErrTokenInUse
 	}
-	// Reserve sparse payload and the contiguous assembly before first intake.
-	// uint32 body sizes doubled in uint64 cannot overflow.
-	reserved := 2 * uint64(fragment.Metadata.Size)
+	// Reserve payload, assembly, sparse indexing and body metadata before intake.
+	reserved, costErr := bodyStorageBytes(fragment.Metadata)
+	if costErr != nil {
+		return nil, costErr
+	}
 	if uint64(len(m.byID)) >= uint64(m.cfg.MaxTransfers) || uint64(len(m.byToken)) >= uint64(m.cfg.MaxTokens) || reserved > m.cfg.MaxRetainedBytes-m.retained {
 		return nil, ErrLimitExceeded
 	}

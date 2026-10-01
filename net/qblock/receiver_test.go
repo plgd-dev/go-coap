@@ -212,7 +212,7 @@ func TestReceiverInvalidFragmentIsAtomic(t *testing.T) {
 	require.NoError(t, err)
 	require.Empty(t, receiveTestBlock(t, r, meta, 0, now))
 	deadline, _ := r.NextDeadline()
-	beforeCount := len(r.body.blocks)
+	beforeCount := r.body.received
 
 	changed := meta
 	changed.Identity = []byte("other")
@@ -220,7 +220,7 @@ func TestReceiverInvalidFragmentIsAtomic(t *testing.T) {
 	require.Error(t, err)
 	_, err = r.Receive(meta, Block{Number: 1, SZX: meta.SZX}, []byte{1}, now.Add(time.Second))
 	require.Error(t, err)
-	require.Len(t, r.body.blocks, beforeCount)
+	require.Equal(t, beforeCount, r.body.received)
 	gotDeadline, _ := r.NextDeadline()
 	require.Equal(t, deadline, gotDeadline)
 }

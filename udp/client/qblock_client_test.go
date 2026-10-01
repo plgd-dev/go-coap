@@ -9,6 +9,7 @@ import (
 	"sync"
 	"testing"
 	"time"
+	"unsafe"
 
 	"github.com/plgd-dev/go-coap/v3/message"
 	"github.com/plgd-dev/go-coap/v3/message/codes"
@@ -2488,10 +2489,20 @@ func TestQBlockClientHandoffSingleFragmentDeliveryReusesSenderBudget(t *testing.
 			managerConfig.MaxTransfers = 1
 			managerConfig.MaxTokens = 1
 			managerConfig.Transfer.MaxBodySize = 16
-			managerConfig.MaxRetainedBytes = 32
+			managerConfig.MaxRetainedBytes = 32 + uint64(unsafe.Sizeof(struct {
+				meta  qblock.Metadata
+				pages []*struct {
+					payload []byte
+					present uint64
+				}
+				count, received uint32
+			}{})) + uint64(unsafe.Sizeof(uintptr(0))) + uint64(unsafe.Sizeof(struct {
+				payload []byte
+				present uint64
+			}{})) + 6
 			cc := NewConnWithOpts(session, &cfg, withQBlockClient(qblockClientConfig{
 				Manager: managerConfig,
-				// One receiver reserves 16 sparse plus 16 assembly bytes;
+				// One receiver reserves payload, assembly and bounded indexing;
 				// queued control metadata has its own explicit private budget.
 				Pacing: &qblockPacingConfig{ProbingRate: 1, MaxIntentBytes: 4096},
 			}))

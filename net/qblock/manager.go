@@ -12,8 +12,8 @@ import (
 
 // ManagerConfig bounds all active normalized Q-Block operations for one peer
 // connection. Packet storage and socket-level budgets belong to the adapter.
-// Receivers reserve twice their announced body size for sparse payload and
-// contiguous assembly; senders reserve their retained representation size.
+// Receivers reserve payload, contiguous assembly and bounded sparse indexing;
+// senders reserve their retained representation size.
 type ManagerConfig struct {
 	Transfer         TransferConfig
 	MaxTransfers     uint32

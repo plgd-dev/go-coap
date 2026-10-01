@@ -123,6 +123,49 @@ func TestBodySparseStorage(t *testing.T) {
 	_, err = b.Add(meta, Block{Number: (1 << 20) - 1, SZX: blockwise.SZX1024}, make([]byte, 1024))
 	require.NoError(t, err)
 	// Inspect retained payloads to prove a final fragment did not allocate Size bytes.
-	require.Len(t, b.blocks, 1)
-	require.Len(t, b.blocks[(1<<20)-1], 1024)
+	require.EqualValues(t, 1, b.received)
+	require.Len(t, b.pages, 1<<14)
+	require.Len(t, b.pages[len(b.pages)-1].payload, 64*1024)
+	require.Nil(t, b.pages[0])
+}
+
+func TestBodyPagedStorageDuplicateAndCrossPageAssembly(t *testing.T) {
+	meta := Metadata{Size: 65*16 - 3, SZX: blockwise.SZX16}
+	body, err := NewBody(meta, meta.Size)
+	require.NoError(t, err)
+	for number := uint32(64); ; number-- {
+		length := 16
+		if number == 64 {
+			length = 13
+		}
+		payload := bytes.Repeat([]byte{byte(number)}, length)
+		duplicate, err := body.Add(meta, Block{Number: number, More: number < 64, SZX: meta.SZX}, payload)
+		require.NoError(t, err)
+		require.False(t, duplicate)
+		payload[0] = 255
+		duplicate, err = body.Add(meta, Block{Number: number, More: number < 64, SZX: meta.SZX}, payload)
+		require.NoError(t, err)
+		require.True(t, duplicate)
+		if number == 0 {
+			break
+		}
+	}
+	require.True(t, body.Complete())
+	assembled, err := body.Assemble()
+	require.NoError(t, err)
+	require.Len(t, assembled, int(meta.Size))
+	for index, value := range assembled {
+		require.Equal(t, byte(index/16), value)
+	}
+	require.Empty(t, body.Missing(0, 65, 65))
+}
+
+func TestBodyIdentityRetainsExactBacking(t *testing.T) {
+	identity := make([]byte, 6, 128)
+	copy(identity, []byte("etag-a"))
+	body, err := NewBody(Metadata{Size: 16, SZX: blockwise.SZX16, Identity: identity}, 16)
+	require.NoError(t, err)
+	require.Equal(t, len(body.meta.Identity), cap(body.meta.Identity), "identity charge includes exact detached backing")
+	identity[0] = 'x'
+	require.Equal(t, []byte("etag-a"), body.meta.Identity)
 }

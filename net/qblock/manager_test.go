@@ -506,7 +506,7 @@ func TestManagerStartReceiverLimitFailuresLeaveStateUnchanged(t *testing.T) {
 		},
 		"retained bytes": func(cfg *ManagerConfig) {
 			cfg.Transfer.MaxBodySize = 16
-			cfg.MaxRetainedBytes = 32 // one receiver's sparse and assembly reservation
+			cfg.MaxRetainedBytes, _ = bodyStorageBytes(fragment(newKey(t, "first"), 1).Metadata)
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -603,7 +603,7 @@ func TestManagerReceiverOwnsInboundAndDeliveryPayloads(t *testing.T) {
 	require.Equal(t, append(bytes.Repeat([]byte{'p'}, 16), 'z'), outputs[0].Action.Payload)
 
 	outputs[0].Action.Payload[0] = 'x'
-	require.Equal(t, byte('p'), m.byID[1].receiver.body.blocks[0][0])
+	require.Equal(t, byte('p'), m.byID[1].receiver.body.pages[0].payload[0])
 }
 
 func TestManagerRejectsControlForReceiverTokenWithoutMutation(t *testing.T) {
@@ -627,7 +627,8 @@ func TestManagerRejectsControlForReceiverTokenWithoutMutation(t *testing.T) {
 	require.Empty(t, outputs)
 	require.Equal(t, uint32(1), m.Active())
 	require.Len(t, m.byToken, 1)
-	require.Equal(t, uint64(64), m.retained)
+	cost, _ := bodyStorageBytes(Metadata{Size: 32, SZX: blockwise.SZX16, Identity: []byte("body")})
+	require.Equal(t, cost, m.retained)
 }
 
 func TestManagerTickUsesEarliestDeadlineAndTransferIDOrder(t *testing.T) {

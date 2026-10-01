@@ -15,7 +15,7 @@ func TestManagerReceiverReservesSparseAndAssembly(t *testing.T) {
 		t.Run(map[bool]string{false: "immediate", true: "deferred"}[deferred], func(t *testing.T) {
 			cfg := DefaultManagerConfig()
 			cfg.Transfer.MaxBodySize = 32
-			cfg.MaxRetainedBytes = 64
+			cfg.MaxRetainedBytes, _ = bodyStorageBytes(Metadata{Size: 32, SZX: blockwise.SZX16})
 			m, err := NewManager(cfg)
 			require.NoError(t, err)
 			now := time.Unix(100, 0)
@@ -47,7 +47,9 @@ func TestManagerReceiverReservesSparseAndAssembly(t *testing.T) {
 
 func TestManagerReceiverRejectsBodyWithoutAssemblyCapacity(t *testing.T) {
 	cfg := DefaultManagerConfig()
-	cfg.Transfer.MaxBodySize, cfg.MaxRetainedBytes = 16, 31
+	cfg.Transfer.MaxBodySize = 16
+	cfg.MaxRetainedBytes, _ = bodyStorageBytes(Metadata{Size: 16, SZX: blockwise.SZX16})
+	cfg.MaxRetainedBytes--
 	m, err := NewManager(cfg)
 	require.NoError(t, err)
 	_, err = m.StartReceiver(Fragment{Operation: "one", Token: message.Token{1}, Kind: Q2, Metadata: Metadata{Size: 16, SZX: blockwise.SZX16}, Block: Block{SZX: blockwise.SZX16}, Payload: bytes.Repeat([]byte{'x'}, 16)}, time.Unix(100, 0))
@@ -59,7 +61,8 @@ func TestManagerReceiverRejectsBodyWithoutAssemblyCapacity(t *testing.T) {
 
 func TestManagerReceiverDeliveryReturnsReservation(t *testing.T) {
 	cfg := DefaultManagerConfig()
-	cfg.Transfer.MaxBodySize, cfg.MaxRetainedBytes = 16, 32
+	cfg.Transfer.MaxBodySize = 16
+	cfg.MaxRetainedBytes, _ = bodyStorageBytes(Metadata{Size: 16, SZX: blockwise.SZX16})
 	m, err := NewManager(cfg)
 	require.NoError(t, err)
 	now := time.Unix(100, 0)
@@ -73,4 +76,41 @@ func TestManagerReceiverDeliveryReturnsReservation(t *testing.T) {
 	_, err = m.StartSender("sender", message.Token{2}, Q1, fragment.Metadata, fragment.Payload, now, 0)
 	require.NoError(t, err)
 	require.Equal(t, uint64(16), m.retained, "sender reserves one retained body")
+}
+
+func TestManagerReceiverRejectsUnbudgetedSparseIndex(t *testing.T) {
+	cfg := DefaultManagerConfig()
+	cfg.Transfer.MaxBodySize = 1024
+	cfg.MaxRetainedBytes = 2048
+	m, err := NewManager(cfg)
+	require.NoError(t, err)
+	_, err = m.StartReceiver(Fragment{Operation: "indexed", Token: message.Token{1}, Kind: Q1, Metadata: Metadata{Size: 1024, SZX: blockwise.SZX16}, Block: Block{More: true, SZX: blockwise.SZX16}, Payload: bytes.Repeat([]byte{'x'}, 16)}, time.Unix(100, 0))
+	require.ErrorIs(t, err, ErrLimitExceeded, "payload and assembly budget excludes directory/page bookkeeping")
+	require.Zero(t, m.Active())
+	require.Zero(t, m.retained)
+}
+
+func TestManagerReceiverExactIdentityReservation(t *testing.T) {
+	meta := Metadata{Size: 16, SZX: blockwise.SZX16, Identity: []byte("etag-a")}
+	cost, err := bodyStorageBytes(meta)
+	require.NoError(t, err)
+	for _, limit := range []uint64{cost - 1, cost} {
+		cfg := DefaultManagerConfig()
+		cfg.Transfer.MaxBodySize = 16
+		cfg.MaxRetainedBytes = limit
+		manager, err := NewManager(cfg)
+		require.NoError(t, err)
+		outputs, err := manager.StartReceiver(Fragment{Operation: "exact", Token: message.Token{1}, Kind: Q1, Metadata: meta, Block: Block{SZX: meta.SZX}, Payload: bytes.Repeat([]byte{'x'}, 16)}, time.Unix(100, 0))
+		if limit < cost {
+			require.ErrorIs(t, err, ErrLimitExceeded)
+			require.Zero(t, manager.retained)
+			continue
+		}
+		require.NoError(t, err)
+		require.NotEmpty(t, outputs)
+		require.Equal(t, cost, manager.retained)
+		require.Equal(t, 6, cap(manager.byID[1].receiver.body.meta.Identity))
+		manager.Cancel(1, nil)
+		require.Zero(t, manager.retained)
+	}
 }
