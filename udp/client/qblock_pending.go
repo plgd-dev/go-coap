@@ -55,6 +55,7 @@ type qblockWorkSlot struct {
 // Its byte budget covers newly retained dynamic backing storage, while its
 // slot limit bounds the fixed map/record overhead.
 type qblockWorkQueue struct {
+	onClear  func(qblockProbeKey)
 	maxSlots uint32
 	maxBytes uint64
 	used     uint64
@@ -217,6 +218,9 @@ func (q *qblockWorkQueue) replace(id qblockWorkID, work qblockPendingWork, retai
 	copy := qblockCloneWork(work)
 	q.used = q.used - slot.extra + extra
 	slot.extra = extra
+	if slot.pending != nil && slot.pending.ProbeKey != copy.ProbeKey && q.onClear != nil {
+		q.onClear(slot.pending.ProbeKey)
+	}
 	if !retainOrder || slot.pending == nil {
 		q.nextSeq++
 		slot.seq = q.nextSeq
@@ -225,10 +229,13 @@ func (q *qblockWorkQueue) replace(id qblockWorkID, work qblockPendingWork, retai
 	return nil
 }
 
-func (q *qblockWorkQueue) next(now time.Time, gate *qblockProbeGate) (qblockWorkID, qblockPendingWork, bool) {
+func (q *qblockWorkQueue) next(now time.Time, gate qblockCongestionGate) (qblockWorkID, qblockPendingWork, bool) {
 	var expiredID, continueID, readyID qblockWorkID
 	var expiredSeq, continueSeq, readySeq uint64
 	gateReady := gate == nil || gate.ready(now)
+	if _, shared := gate.(*qblockEndpointMember); shared {
+		gateReady = true
+	}
 	for id, slot := range q.slots {
 		if slot.pending == nil {
 			continue
@@ -257,7 +264,7 @@ func (q *qblockWorkQueue) next(now time.Time, gate *qblockProbeGate) (qblockWork
 	return 0, qblockPendingWork{}, false
 }
 
-func (q *qblockWorkQueue) nextDeadline(now time.Time, gate *qblockProbeGate) (time.Time, bool) {
+func (q *qblockWorkQueue) nextDeadline(now time.Time, gate qblockCongestionGate) (time.Time, bool) {
 	var earliest time.Time
 	hasGated := false
 	gateReady := gate == nil || gate.ready(now)
@@ -275,6 +282,17 @@ func (q *qblockWorkQueue) nextDeadline(now time.Time, gate *qblockProbeGate) (ti
 		hasGated = true
 	}
 	if hasGated {
+		if member, shared := gate.(*qblockEndpointMember); shared {
+			var oldest *qblockWorkSlot
+			for _, slot := range q.slots {
+				if slot.pending != nil && !slot.pending.Ungated && (oldest == nil || slot.seq < oldest.seq) {
+					oldest = slot
+				}
+			}
+			if oldest != nil {
+				gateReady = member.candidateReady(oldest.pending.ProbeKey, now)
+			}
+		}
 		if gateReady {
 			return now, true
 		}
@@ -298,6 +316,9 @@ func (q *qblockWorkQueue) clearPending(id qblockWorkID) {
 	if slot == nil {
 		return
 	}
+	if slot.pending != nil && q.onClear != nil {
+		q.onClear(slot.pending.ProbeKey)
+	}
 	q.used -= slot.extra
 	slot.extra = 0
 	slot.pending = nil
@@ -307,6 +328,9 @@ func (q *qblockWorkQueue) release(id qblockWorkID) {
 	slot := q.slots[id]
 	if slot == nil {
 		return
+	}
+	if slot.pending != nil && q.onClear != nil {
+		q.onClear(slot.pending.ProbeKey)
 	}
 	q.used -= slot.reserve + slot.extra
 	delete(q.slots, id)

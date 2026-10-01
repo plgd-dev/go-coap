@@ -29,19 +29,19 @@ type qblockProbeCorrelation struct {
 
 func (c *qblockClient) releasePacingWorkLocked(id qblockWorkID) {
 	if c.currentProbe != nil && c.currentProbe.workID == id {
-		c.probeGate.settle(c.currentProbe.key, c.now())
+		c.gate().settle(c.currentProbe.key, c.now())
 		c.currentProbe = nil
 	} else if slot := c.workQueue.slots[id]; slot != nil && slot.pending != nil {
 		// A reservation canceled before its first write has zero debt and
 		// should release its active gate immediately.
-		c.probeGate.settle(slot.pending.ProbeKey, c.now())
+		c.gate().settle(slot.pending.ProbeKey, c.now())
 	}
 	c.workQueue.release(id)
 }
 
 func (c *qblockClient) clearExpiredPacingProbeLocked(now time.Time) {
-	c.probeGate.ready(now)
-	if c.currentProbe != nil && c.probeGate.key != c.currentProbe.key {
+	c.gate().ready(now)
+	if c.currentProbe != nil && !c.gate().owns(c.currentProbe.key) {
 		c.currentProbe = nil
 	}
 }
@@ -78,7 +78,7 @@ func (c *qblockClient) recordPacingAttemptLocked(key qblockProbeKey, msg *pool.M
 		return
 	}
 	probe := &qblockProbeCorrelation{
-		key: key, kind: c.probeGate.kind, server: server, workID: id, generation: generation,
+		key: key, kind: c.gate().kindOf(key), server: server, workID: id, generation: generation,
 		transferID: transferID, token: bytes.Clone(msg.Token()),
 	}
 	optionID := message.QBlock2
@@ -207,7 +207,7 @@ func (c *qblockClient) executePendingOrdered(now time.Time) []qblockCallback {
 			return callbacks
 		}
 		c.clearExpiredPacingProbeLocked(now)
-		id, work, ok := c.workQueue.next(now, c.probeGate)
+		id, work, ok := c.workQueue.next(now, c.gate())
 		if !ok {
 			c.mu.Unlock()
 			return callbacks
@@ -247,7 +247,7 @@ func (c *qblockClient) executePendingOrdered(now time.Time) []qblockCallback {
 					callbacks = append(callbacks, c.executeOrdered(outputs)...)
 					continue
 				}
-				if !c.probeGate.admit(work.ProbeKey, qblockProbeBody, work.NonProbingWait, now) {
+				if !c.gate().admit(work.ProbeKey, qblockProbeBody, work.NonProbingWait, now) {
 					c.mu.Unlock()
 					return callbacks
 				}
@@ -259,7 +259,7 @@ func (c *qblockClient) executePendingOrdered(now time.Time) []qblockCallback {
 				callbacks = append(callbacks, c.executeOrdered(outputs)...)
 				c.mu.Lock()
 				if err != nil {
-					c.probeGate.settle(work.ProbeKey, c.now())
+					c.gate().settle(work.ProbeKey, c.now())
 				}
 				if slot := c.workQueue.slots[id]; slot != nil && slot.pending != nil && slot.pending.Generation == work.Generation {
 					c.workQueue.clearPending(id)
@@ -283,7 +283,7 @@ func (c *qblockClient) executePendingOrdered(now time.Time) []qblockCallback {
 				callbacks = append(callbacks, c.executeOrdered(outputs)...)
 				continue
 			}
-			if !c.probeGate.admit(work.ProbeKey, qblockProbeBody, work.NonProbingWait, now) {
+			if !c.gate().admit(work.ProbeKey, qblockProbeBody, work.NonProbingWait, now) {
 				c.mu.Unlock()
 				return callbacks
 			}
@@ -295,7 +295,7 @@ func (c *qblockClient) executePendingOrdered(now time.Time) []qblockCallback {
 			callbacks = append(callbacks, c.executeOrdered(outputs)...)
 			c.mu.Lock()
 			if err != nil {
-				c.probeGate.settle(work.ProbeKey, c.now())
+				c.gate().settle(work.ProbeKey, c.now())
 			}
 			if slot := c.workQueue.slots[id]; slot != nil && slot.pending != nil && slot.pending.Generation == work.Generation {
 				c.workQueue.clearPending(id)
@@ -322,7 +322,7 @@ func (c *qblockClient) executePendingOrdered(now time.Time) []qblockCallback {
 			c.mu.Unlock()
 			continue
 		}
-		if !c.probeGate.admit(work.ProbeKey, qblockProbeControl, 0, now) {
+		if !c.gate().admit(work.ProbeKey, qblockProbeControl, 0, now) {
 			c.mu.Unlock()
 			return callbacks
 		}
@@ -345,7 +345,7 @@ func (c *qblockClient) executePendingOrdered(now time.Time) []qblockCallback {
 		err := c.writePacedMessage(work.ProbeKey, request)
 		c.cc.ReleaseMessage(request)
 		c.mu.Lock()
-		c.probeGate.settle(work.ProbeKey, c.now())
+		c.gate().settle(work.ProbeKey, c.now())
 		if c.exchangesByOriginalToken[string(work.RequestToken)] == exchange && exchange.workID == id {
 			if err != nil {
 				callbacks = append(callbacks, c.failPendingGETLocked(exchange, err)...)
@@ -395,7 +395,7 @@ func (c *qblockClient) executePacingControlOrdered(id qblockWorkID, work qblockP
 		c.mu.Unlock()
 		return c.executeOrdered(outputs), true
 	}
-	if !c.probeGate.admit(control.ProbeKey, qblockProbeControl, 0, now) {
+	if !c.gate().admit(control.ProbeKey, qblockProbeControl, 0, now) {
 		c.mu.Unlock()
 		return nil, false
 	}
@@ -430,7 +430,7 @@ func (c *qblockClient) executePacingControlOrdered(id qblockWorkID, work qblockP
 		c.cc.ReleaseMessage(request)
 	}
 	c.mu.Lock()
-	c.probeGate.settle(control.ProbeKey, c.now())
+	c.gate().settle(control.ProbeKey, c.now())
 	transfer = c.transfers[work.TransferID]
 	slot := c.workQueue.slots[id]
 	if transfer == nil || slot == nil || slot.pending == nil || slot.pending.Generation != work.Generation || len(slot.pending.Controls) == 0 || slot.pending.Controls[0].Intent.Revision != control.Intent.Revision || slot.pending.Controls[0].PacketIndex != control.PacketIndex {
@@ -512,7 +512,7 @@ func (c *qblockClient) executeServerPacingControlOrdered(id qblockWorkID, work q
 		return c.executeOrdered(outputs), true
 	}
 	ungated := control.Intent.Action.Kind == qblock.SendContinue
-	if !ungated && !c.probeGate.admit(control.ProbeKey, qblockProbeControl, 0, now) {
+	if !ungated && !c.gate().admit(control.ProbeKey, qblockProbeControl, 0, now) {
 		c.mu.Unlock()
 		return nil, false
 	}
@@ -530,7 +530,7 @@ func (c *qblockClient) executeServerPacingControlOrdered(id qblockWorkID, work q
 	err := c.writeServerQ1Control(writeContext, token, mid, szx, control.Intent.Action, control.ProbeKey)
 	c.mu.Lock()
 	if !ungated {
-		c.probeGate.settle(control.ProbeKey, c.now())
+		c.gate().settle(control.ProbeKey, c.now())
 	}
 	record = c.server.byID[work.TransferID]
 	slot := c.workQueue.slots[id]
@@ -596,7 +596,7 @@ func (c *qblockClient) writePacedMessage(key qblockProbeKey, msg *pool.Message) 
 	}
 	c.mu.Lock()
 	owned := false
-	if !c.closed && c.probeGate.state == qblockProbeActive && c.probeGate.key == key {
+	if !c.closed && c.gate().ownsActive(key) {
 		for _, slot := range c.workQueue.slots {
 			if slot.pending != nil && slot.pending.ProbeKey == key {
 				owned = true
@@ -628,10 +628,15 @@ func (c *qblockClient) writePacedMessage(key qblockProbeKey, msg *pool.Message) 
 		c.mu.Unlock()
 		return err
 	}
-	c.probeGate.charge(key, size)
+	if !c.gate().beginAttempt(key, size) {
+		c.mu.Unlock()
+		return qblock.ErrCanceled
+	}
 	c.recordPacingAttemptLocked(key, msg)
 	c.mu.Unlock()
-	return c.cc.session.WriteMessage(msg)
+	err = c.cc.session.WriteMessage(msg)
+	c.gate().endAttempt(key, c.now())
+	return err
 }
 
 func (c *qblockClient) acceptPacingFeedbackLocked(key qblockProbeKey) bool {
@@ -660,7 +665,7 @@ func (c *qblockClient) acceptPacingFeedbackLocked(key qblockProbeKey) bool {
 			return false
 		}
 	}
-	if !c.probeGate.feedback(key) {
+	if !c.gate().feedback(key) {
 		return false
 	}
 	c.currentProbe = nil

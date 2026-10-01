@@ -25,6 +25,7 @@ var (
 )
 
 type qblockClientConfig struct {
+	Endpoint      *qblockEndpointDomain
 	MaxOwnedBytes uint64
 	MaxMIDEntries uint32
 	Manager       qblock.ManagerConfig
@@ -97,6 +98,8 @@ type qblockClient struct {
 	ownedBudget              *qblockOwnedBudget
 	pacingConfig             qblockPacingConfig
 	probeGate                *qblockProbeGate
+	endpoint                 *qblockEndpointMember
+	endpointWake             chan struct{}
 	currentProbe             *qblockProbeCorrelation
 	workQueue                *qblockWorkQueue
 	nextGeneration           uint64
@@ -174,6 +177,18 @@ func newQBlockClient(cc *Conn, cfg qblockClientConfig) *qblockClient {
 		transferByMID:            make(map[int32]*qblockTransfer),
 		pendingGETByMID:          make(map[int32]*qblockExchange),
 		callbackSlots:            newQBlockCallbackSlots(cfg.Manager.MaxTransfers),
+	}
+	if cfg.Endpoint != nil {
+		client.endpointWake = make(chan struct{}, 1)
+		member, attachErr := cfg.Endpoint.attach(cc.RemoteAddr(), client.endpointWake, cfg.Endpoint.clock.Now())
+		client.initErr = errors.Join(client.initErr, attachErr)
+		client.endpoint = member
+		client.workQueue.onClear = client.withdrawPending
+		client.clock = cfg.Endpoint.clock
+		client.now = cfg.Endpoint.clock.Now
+		if pacing.ProbingRate != cfg.Endpoint.rate {
+			client.initErr = errors.Join(client.initErr, errInvalidQBlockClientConfig)
+		}
 	}
 	return client
 }
@@ -610,7 +625,7 @@ func (c *qblockClient) nextDeadlineLocked() (time.Time, bool) {
 	if c.workQueue != nil {
 		now := c.now()
 		c.clearExpiredPacingProbeLocked(now)
-		workDeadline, workOK := c.workQueue.nextDeadline(now, c.probeGate)
+		workDeadline, workOK := c.workQueue.nextDeadline(now, c.gate())
 		if workOK && (!ok || workDeadline.Before(deadline)) {
 			deadline, ok = workDeadline, true
 		}
@@ -733,6 +748,7 @@ func (c *qblockClient) runSchedulerOwner(scheduler *qblockScheduler) {
 		case <-scheduler.stop:
 			return
 		case <-scheduler.notify:
+		case <-c.endpointWake:
 		case <-scheduler.timer.C():
 		case <-scheduler.done:
 			busy = false
@@ -870,6 +886,9 @@ func (c *qblockClient) close() {
 		}
 	}
 	c.mu.Unlock()
+	if c.endpoint != nil {
+		c.endpoint.detach(c.now())
+	}
 	c.stopScheduler()
 	c.lockAction()
 	callbacks = append(callbacks, c.executeOrdered(outputs)...)
@@ -1355,7 +1374,7 @@ func (c *qblockClient) executeOrdered(outputs []qblock.Output) []qblockCallback 
 	c.mu.Lock()
 	for id, burst := range bodyBursts {
 		if burst.final || c.transfers[id] == nil {
-			c.probeGate.settle(burst.key, c.now())
+			c.gate().settle(burst.key, c.now())
 		}
 	}
 	messages := c.pendingMessageRelease
@@ -1431,7 +1450,7 @@ func (c *qblockClient) writeQ1Block(id qblock.TransferID, action qblock.Action) 
 			delete(transfer.repairReplies, action.Block.Number)
 		}
 	}
-	bodyProbeActive := c.probeGate.state == qblockProbeActive && c.probeGate.key == transfer.bodyProbeKey
+	bodyProbeActive := c.gate().ownsActive(transfer.bodyProbeKey)
 	c.mu.Unlock()
 	if err != nil {
 		return err

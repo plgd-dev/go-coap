@@ -178,3 +178,50 @@ func (g *qblockProbeGate) nextDeadline() (time.Time, bool) {
 	}
 	return g.deadline, true
 }
+
+// qblockCongestionGate allows a standalone connection or shared endpoint owner.
+type qblockCongestionGate interface {
+	ready(time.Time) bool
+	admit(qblockProbeKey, qblockProbeKind, time.Duration, time.Time) bool
+	settle(qblockProbeKey, time.Time)
+	feedback(qblockProbeKey) bool
+	nextDeadline() (time.Time, bool)
+	owns(qblockProbeKey) bool
+	ownsActive(qblockProbeKey) bool
+	kindOf(qblockProbeKey) qblockProbeKind
+	beginAttempt(qblockProbeKey, uint64) bool
+	endAttempt(qblockProbeKey, time.Time)
+}
+
+func (g *qblockProbeGate) owns(key qblockProbeKey) bool {
+	return g.key == key && g.state != qblockProbeOpen
+}
+func (g *qblockProbeGate) ownsActive(key qblockProbeKey) bool {
+	return g.key == key && g.state == qblockProbeActive
+}
+func (g *qblockProbeGate) kindOf(key qblockProbeKey) qblockProbeKind {
+	if g.owns(key) {
+		return g.kind
+	}
+	return 0
+}
+func (g *qblockProbeGate) beginAttempt(key qblockProbeKey, bytes uint64) bool {
+	if !g.ownsActive(key) {
+		return false
+	}
+	g.charge(key, bytes)
+	return true
+}
+func (g *qblockProbeGate) endAttempt(qblockProbeKey, time.Time) {}
+func (c *qblockClient) gate() qblockCongestionGate {
+	if c.endpoint != nil {
+		return c.endpoint
+	}
+	return c.probeGate
+}
+
+func (c *qblockClient) withdrawPending(key qblockProbeKey) {
+	if c.endpoint != nil {
+		c.endpoint.withdraw(key)
+	}
+}

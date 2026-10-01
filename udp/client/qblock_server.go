@@ -456,7 +456,7 @@ func (c *qblockClient) executeServerOutput(output qblock.Output) []qblockCallbac
 	case qblock.SendBlock:
 		token := record.takeReplyToken(output.Action)
 		probeKey := qblockProbeKey(0)
-		if !record.bodyAnswered && c.probeGate.state == qblockProbeActive && c.probeGate.key == record.bodyProbeKey {
+		if !record.bodyAnswered && c.gate().ownsActive(record.bodyProbeKey) {
 			probeKey = record.bodyProbeKey
 		}
 		writeContext := record.writeContext
@@ -480,7 +480,7 @@ func (c *qblockClient) executeServerOutput(output qblock.Output) []qblockCallbac
 		}
 		return nil
 	case qblock.Complete:
-		c.probeGate.settle(record.bodyProbeKey, c.now())
+		c.gate().settle(record.bodyProbeKey, c.now())
 		c.mu.Unlock()
 		return nil
 	}
