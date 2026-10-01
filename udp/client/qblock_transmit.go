@@ -331,7 +331,15 @@ func (c *qblockClient) executePendingOrdered(now time.Time) []qblockCallback {
 		request.SetCode(work.RequestCode)
 		request.SetToken(work.RequestToken)
 		request.SetType(message.NonConfirmable)
-		request.SetMessageID(c.cc.GetMessageID())
+		mid := c.cc.GetMessageID()
+		if err := c.reserveMIDLocked(mid); err != nil {
+			c.cc.ReleaseMessage(request)
+			callbacks = append(callbacks, c.failPendingGETLocked(exchange, err)...)
+			c.mu.Unlock()
+			continue
+		}
+		c.pendingGETByMID[mid] = exchange
+		request.SetMessageID(mid)
 		c.mu.Unlock()
 
 		err := c.writePacedMessage(work.ProbeKey, request)
@@ -512,7 +520,11 @@ func (c *qblockClient) executeServerPacingControlOrdered(id qblockWorkID, work q
 	writeContext := record.writeContext
 	szx := record.metadata.SZX
 	mid := c.cc.GetMessageID()
-	c.server.bindMIDLocked(record, mid)
+	if err := c.server.bindMIDLocked(record, mid); err != nil {
+		outputs := c.manager.Cancel(record.id, err)
+		c.mu.Unlock()
+		return c.executeOrdered(outputs), true
+	}
 	c.mu.Unlock()
 
 	err := c.writeServerQ1Control(writeContext, token, mid, szx, control.Intent.Action, control.ProbeKey)
@@ -554,6 +566,7 @@ func (c *qblockClient) failPendingGETLocked(exchange *qblockExchange, err error)
 	exchange.finished = true
 	exchange.failureReported = true
 	delete(c.exchangesByOriginalToken, string(exchange.originalToken))
+	c.clearPendingGETMIDsLocked(exchange)
 	c.releasePacingWorkLocked(exchange.workID)
 	_, _ = c.cc.tokenHandlerContainer.LoadAndDelete(exchange.originalToken.Hash())
 	exchange.closeRequestContext()

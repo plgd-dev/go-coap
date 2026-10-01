@@ -37,6 +37,7 @@ type qblockServer struct {
 }
 
 type qblockServerRecord struct {
+	ownedLease      *qblockOwnedLease
 	id              qblock.TransferID
 	workID          qblockWorkID
 	bodyProbeKey    qblockProbeKey
@@ -150,12 +151,16 @@ func (s *qblockServer) ownsOutput(output qblock.Output) bool {
 	return record != nil && record.activeOperation == output.Operation
 }
 
-func (s *qblockServer) bindMIDLocked(record *qblockServerRecord, mid int32) {
+func (s *qblockServer) bindMIDLocked(record *qblockServerRecord, mid int32) error {
+	if err := s.client.reserveMIDLocked(mid); err != nil {
+		return err
+	}
 	if record.mids == nil {
 		record.mids = make(map[int32]struct{})
 	}
 	record.mids[mid] = struct{}{}
 	s.byMID[mid] = record
+	return nil
 }
 
 func (s *qblockServer) clearMIDsLocked(record *qblockServerRecord) {
@@ -165,6 +170,7 @@ func (s *qblockServer) clearMIDsLocked(record *qblockServerRecord) {
 		}
 		delete(record.mids, mid)
 	}
+	record.mids = nil
 }
 
 func (s *qblockServer) acceptPacingFeedbackLocked(record *qblockServerRecord, msg *pool.Message, progressed bool) bool {
@@ -332,6 +338,9 @@ func (s *qblockServer) handleReset(mid int32) bool {
 }
 
 func (c *qblockClient) handleServerRequest(msg *pool.Message) bool {
+	if c.initErr != nil {
+		return c.server != nil
+	}
 	if c.server == nil || msg.Code() < 1 || msg.Code() >= 32 {
 		return false
 	}
@@ -389,6 +398,7 @@ func (c *qblockClient) executeServerOutput(output qblock.Output) []qblockCallbac
 		}
 		record.executing = true
 		record.handlerRunning = true
+		handlerRelease := record.ownedLease.retain()
 		payload := bytes.Clone(record.payload)
 		options, _ := record.options.Clone()
 		code := record.code
@@ -396,6 +406,7 @@ func (c *qblockClient) executeServerOutput(output qblock.Output) []qblockCallbac
 		generation := record.generation
 		c.mu.Unlock()
 		return []qblockCallback{{run: func() {
+			defer handlerRelease()
 			c.mu.Lock()
 			current := c.server != nil && !c.server.closed && c.server.records[operation] == record && record.generation == generation && !record.terminal
 			c.mu.Unlock()
@@ -413,7 +424,7 @@ func (c *qblockClient) executeServerOutput(output qblock.Output) []qblockCallbac
 			writer := responsewriter.New(resp, c.cc, options...)
 			c.server.handler(writer, req)
 			optionBytes, err := qblockOptionBytes(writer.Message().Options())
-			if err != nil || optionBytes > c.server.config.MaxMetadataBytes {
+			if err != nil || optionBytes > c.server.config.MaxMetadataBytes || c.preflightOwnedOptions(writer.Message().Options()) != nil {
 				c.server.finishHandler(operation, generation, false, 0, nil, nil)
 				return
 			}
@@ -455,7 +466,11 @@ func (c *qblockClient) executeServerOutput(output qblock.Output) []qblockCallbac
 		size := record.metadata.Size
 		etag := bytes.Clone(record.metadata.Identity)
 		mid := c.cc.GetMessageID()
-		c.server.bindMIDLocked(record, mid)
+		if err := c.server.bindMIDLocked(record, mid); err != nil {
+			outputs := c.manager.Cancel(record.id, err)
+			c.mu.Unlock()
+			return c.executeOrdered(outputs)
+		}
 		c.mu.Unlock()
 		if err := c.writeServerQ2Block(writeContext, token, mid, code, options, szx, size, etag, output.Action, probeKey); err != nil {
 			c.mu.Lock()
@@ -660,6 +675,10 @@ func (c *qblockClient) writeServerQ1Control(writeContext context.Context, token 
 }
 
 func (s *qblockServer) releaseLocked(record *qblockServerRecord) {
+	if record.ownedLease != nil {
+		record.ownedLease.drop()
+		record.ownedLease = nil
+	}
 	if record.cancelWrite != nil {
 		record.cancelWrite()
 	}

@@ -9,6 +9,7 @@ import (
 	"net"
 	"sync"
 	"time"
+	"unsafe"
 
 	"github.com/plgd-dev/go-coap/v3/message"
 	"github.com/plgd-dev/go-coap/v3/message/codes"
@@ -24,6 +25,8 @@ var (
 )
 
 type qblockClientConfig struct {
+	MaxOwnedBytes uint64
+	MaxMIDEntries uint32
 	Manager       qblock.ManagerConfig
 	Pacing        *qblockPacingConfig
 	Now           func() time.Time
@@ -89,6 +92,9 @@ type qblockClient struct {
 	manager                  *qblock.Manager
 	managerConfig            qblock.ManagerConfig
 	datagramLimit            uint32
+	maxMIDEntries            uint32
+	maxOwnedBytes            uint64
+	ownedBudget              *qblockOwnedBudget
 	pacingConfig             qblockPacingConfig
 	probeGate                *qblockProbeGate
 	currentProbe             *qblockProbeCorrelation
@@ -102,6 +108,7 @@ type qblockClient struct {
 	transfers                map[qblock.TransferID]*qblockTransfer
 	transferByToken          map[string]*qblockTransfer
 	transferByMID            map[int32]*qblockTransfer
+	pendingGETByMID          map[int32]*qblockExchange
 	pendingMessageRelease    []*pool.Message
 	server                   *qblockServer
 	callbackSlots            *qblockCallbackSlots
@@ -128,7 +135,13 @@ func newQBlockClient(cc *Conn, cfg qblockClientConfig) *qblockClient {
 	if getRequestTag == nil {
 		getRequestTag = cc.getToken
 	}
+	if cfg.MaxMIDEntries == 0 {
+		cfg.MaxMIDEntries = 65536
+	}
 	manager, err := qblock.NewManager(cfg.Manager)
+	if cfg.MaxMIDEntries > 65536 {
+		err = errors.Join(err, errInvalidQBlockClientConfig)
+	}
 	pacing, pacingErr := normalizeQBlockPacingConfig(cfg.Pacing, cfg.Manager)
 	err = errors.Join(err, pacingErr)
 	if configErr != nil {
@@ -148,6 +161,8 @@ func newQBlockClient(cc *Conn, cfg qblockClientConfig) *qblockClient {
 		getRequestTag:            getRequestTag,
 		manager:                  manager,
 		managerConfig:            cfg.Manager,
+		maxMIDEntries:            cfg.MaxMIDEntries,
+		maxOwnedBytes:            cfg.MaxOwnedBytes,
 		pacingConfig:             pacing,
 		probeGate:                newQBlockProbeGate(pacing.ProbingRate),
 		workQueue:                newQBlockWorkQueue(cfg.Manager.MaxTransfers, pacing.MaxIntentBytes),
@@ -157,6 +172,7 @@ func newQBlockClient(cc *Conn, cfg qblockClientConfig) *qblockClient {
 		transfers:                make(map[qblock.TransferID]*qblockTransfer),
 		transferByToken:          make(map[string]*qblockTransfer),
 		transferByMID:            make(map[int32]*qblockTransfer),
+		pendingGETByMID:          make(map[int32]*qblockExchange),
 		callbackSlots:            newQBlockCallbackSlots(cfg.Manager.MaxTransfers),
 	}
 	return client
@@ -238,6 +254,20 @@ func (c *qblockClient) prepare(req *pool.Message, fail func(error)) (qblockPrepa
 		return qblockPreparation{}, errors.New("q-block GET requires token")
 	}
 	req.SetType(message.NonConfirmable)
+	if err := c.preflightOwnedOptions(req.Options()); err != nil {
+		return qblockPreparation{}, err
+	}
+	callbackRelease, preparationRelease, err := c.acquireExchangeCapacity()
+	if err != nil {
+		return qblockPreparation{}, err
+	}
+	defer preparationRelease()
+	published := false
+	defer func() {
+		if !published {
+			callbackRelease()
+		}
+	}()
 	szx, err := c.selectGETSZX()
 	if err != nil {
 		return qblockPreparation{}, err
@@ -274,10 +304,6 @@ func (c *qblockClient) prepare(req *pool.Message, fail func(error)) (qblockPrepa
 		requestOpts:   snapshotOptions,
 		fail:          fail,
 		transfers:     make(map[qblock.TransferID]struct{}),
-	}
-	callbackRelease, ok := c.callbackSlots.tryAcquire()
-	if !ok {
-		return qblockPreparation{}, qblock.ErrLimitExceeded
 	}
 	exchange.callbackRelease = callbackRelease
 	exchange.requestContext, exchange.cancelContext = context.WithCancel(req.Context())
@@ -327,6 +353,7 @@ func (c *qblockClient) prepare(req *pool.Message, fail func(error)) (qblockPrepa
 	exchange.workID = workID
 	exchange.generation = generation
 	exchange.initialProbeKey = probeKey
+	published = true
 	c.exchangesByOriginalToken[string(token)] = exchange
 	c.mu.Unlock()
 	c.notifyDeadlineChanged()
@@ -344,10 +371,14 @@ func (c *qblockClient) prepareQ1(req *pool.Message, fail func(error)) (qblockPre
 	if len(originalToken) == 0 {
 		return qblockPreparation{}, errors.New("q-block Q1 requires token")
 	}
-	callbackRelease, ok := c.callbackSlots.tryAcquire()
-	if !ok {
-		return qblockPreparation{}, qblock.ErrLimitExceeded
+	if err := c.preflightOwnedOptions(req.Options()); err != nil {
+		return qblockPreparation{}, err
 	}
+	callbackRelease, preparationRelease, err := c.acquireExchangeCapacity()
+	if err != nil {
+		return qblockPreparation{}, err
+	}
+	defer preparationRelease()
 	admitted := false
 	defer func() {
 		if !admitted {
@@ -825,6 +856,7 @@ func (c *qblockClient) close() {
 		}
 		if len(exchange.transfers) == 0 {
 			delete(c.exchangesByOriginalToken, key)
+			c.clearPendingGETMIDsLocked(exchange)
 			c.releasePacingWorkLocked(exchange.workID)
 			exchange.closeRequestContext()
 		}
@@ -873,6 +905,15 @@ func (c *qblockClient) handle(msg *pool.Message) bool {
 			return true
 		}
 		c.mu.Lock()
+		if exchange := c.pendingGETByMID[msg.MessageID()]; exchange != nil {
+			callbacks := c.failPendingGETLocked(exchange, qblock.ErrCanceled)
+			c.mu.Unlock()
+			for _, callback := range callbacks {
+				callback.run()
+			}
+			c.notifyDeadlineChanged()
+			return true
+		}
 		transfer := c.transferByMID[msg.MessageID()]
 		if transfer == nil {
 			c.mu.Unlock()
@@ -1052,6 +1093,7 @@ func (c *qblockClient) handle(msg *pool.Message) bool {
 		responseCode:     msg.Code(),
 		expires:          now.Add(c.managerConfig.Transfer.Lifetime),
 	}
+	c.clearPendingGETMIDsLocked(exchange)
 	exchange.transfers[id] = struct{}{}
 	c.exchangeByTransfer[id] = exchange
 	c.transfers[id] = transfer
@@ -1444,6 +1486,10 @@ func (c *qblockClient) newQ1Request(transfer *qblockTransfer, token message.Toke
 	request.SetToken(token)
 	request.SetType(message.NonConfirmable)
 	mid := c.cc.GetMessageID()
+	if err := c.reserveMIDLocked(mid); err != nil {
+		c.cc.ReleaseMessage(request)
+		return nil, err
+	}
 	request.SetMessageID(mid)
 	request.SetOptionBytes(message.RequestTag, transfer.requestTag)
 	request.SetOptionUint32(message.Size1, transfer.metadata.Size)
@@ -1526,6 +1572,11 @@ func (c *qblockClient) newControlRequest(id qblock.TransferID, token message.Tok
 	request.SetToken(token)
 	request.SetType(message.NonConfirmable)
 	mid := c.cc.GetMessageID()
+	if err := c.reserveMIDLocked(mid); err != nil {
+		c.cc.ReleaseMessage(request)
+		c.mu.Unlock()
+		return nil, err
+	}
 	request.SetMessageID(mid)
 	request.SetOptionUint32(message.QBlock2, value)
 	request.SetOptionBytes(message.RequestTag, transfer.requestTag)
@@ -1649,6 +1700,7 @@ func (c *qblockClient) finishExchangeLocked(exchange *qblockExchange, err error)
 	}
 	exchange.finished = true
 	delete(c.exchangesByOriginalToken, string(exchange.originalToken))
+	c.clearPendingGETMIDsLocked(exchange)
 	if err != nil {
 		if exchange.terminalErr == nil {
 			exchange.terminalErr = err
@@ -1712,13 +1764,10 @@ func qblockETag(msg *pool.Message) ([]byte, error) {
 }
 
 func qblockResponseOptions(msg *pool.Message) (message.Options, error) {
-	options, err := msg.Options().Clone()
-	if err != nil {
-		return nil, err
-	}
+	options := cloneQBlockOptions(msg.Options())
 	options = options.Remove(message.QBlock2)
 	options = options.Remove(message.Size2)
-	return options, nil
+	return cloneQBlockOptions(options), nil
 }
 
 func fragmentFromQ2(msg *pool.Message, operation qblock.OperationKey, previous *qblock.Metadata) (qblock.Fragment, qblock.Metadata, error) {
@@ -1796,4 +1845,70 @@ func qblockOptionCount(msg *pool.Message, id message.OptionID) int {
 		}
 	}
 	return count
+}
+
+// The caller holds mu. Every new NON packet must have distinct live ownership.
+func (c *qblockClient) reserveMIDLocked(mid int32) error {
+	if !message.ValidateMID(mid) {
+		return qblock.ErrLimitExceeded
+	}
+	if c.transferByMID[mid] != nil || c.pendingGETByMID[mid] != nil {
+		return qblock.ErrLimitExceeded
+	}
+	count := len(c.transferByMID) + len(c.pendingGETByMID)
+	if c.server != nil {
+		if c.server.byMID[mid] != nil {
+			return qblock.ErrLimitExceeded
+		}
+		count += len(c.server.byMID)
+	}
+	if uint64(count) >= uint64(c.maxMIDEntries) {
+		return qblock.ErrLimitExceeded
+	}
+	return nil
+}
+
+func (c *qblockClient) acquireExchangeCapacity() (func(), func(), error) {
+	release, err := c.ownedBudget.acquire(c.ownedBudget.clientCost)
+	if err != nil {
+		return nil, nil, err
+	}
+	slot, ok := c.callbackSlots.tryAcquire()
+	if !ok {
+		release()
+		return nil, nil, qblock.ErrLimitExceeded
+	}
+	var mu sync.Mutex
+	refs := 2
+	drop := func() {
+		mu.Lock()
+		refs--
+		last := refs == 0
+		mu.Unlock()
+		if last {
+			release()
+		}
+	}
+	var callbackOnce, preparationOnce sync.Once
+	return func() { callbackOnce.Do(func() { slot(); drop() }) }, func() { preparationOnce.Do(drop) }, nil
+}
+
+func (c *qblockClient) preflightOwnedOptions(options message.Options) error {
+	size, err := qblockOptionBytes(options)
+	if err != nil {
+		return err
+	}
+	max, ok := qblockCheckedMul(uint64(c.datagramLimit), uint64(unsafe.Sizeof(message.Option{}))+1)
+	if !ok || size > max {
+		return qblock.ErrLimitExceeded
+	}
+	return nil
+}
+
+func (c *qblockClient) clearPendingGETMIDsLocked(exchange *qblockExchange) {
+	for mid, owner := range c.pendingGETByMID {
+		if owner == exchange {
+			delete(c.pendingGETByMID, mid)
+		}
+	}
 }

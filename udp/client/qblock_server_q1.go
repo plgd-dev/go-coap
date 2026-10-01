@@ -20,6 +20,31 @@ func (s *qblockServer) handleQ1(msg *pool.Message) ([]qblock.Output, bool) {
 	if msg.Type() != message.NonConfirmable || (msg.Code() != codes.POST && msg.Code() != codes.PUT) {
 		return nil, false
 	}
+	// Canonical identity work is covered by the serialized executor envelope.
+	preflightOptions, err := canonicalServerRequestOptions(msg.Options())
+	if err != nil {
+		return nil, false
+	}
+	preflightOperation, err := serverRequestKey(msg.Code(), preflightOptions)
+	if err != nil {
+		return nil, false
+	}
+	s.client.mu.Lock()
+	existing := s.records[preflightOperation] != nil
+	s.client.mu.Unlock()
+	var ownedLease *qblockOwnedLease
+	if !existing {
+		release, err := s.client.ownedBudget.acquire(s.client.ownedBudget.serverCost)
+		if err != nil {
+			return nil, false
+		}
+		ownedLease = newQBlockOwnedLease(release)
+		defer func() {
+			if ownedLease != nil {
+				ownedLease.drop()
+			}
+		}()
+	}
 	fragment, options, err := serverQ1Fragment(msg)
 	if err != nil {
 		return nil, false
@@ -48,6 +73,21 @@ func (s *qblockServer) handleQ1(msg *pool.Message) ([]qblock.Output, bool) {
 		outputs := s.receiveLocked(record, fragment, msg)
 		s.client.mu.Unlock()
 		return outputs, true
+	}
+	// Reset may retire the record while fragment parsing runs outside mu.
+	// Replacement admission must own a lease even when preflight saw a record.
+	if ownedLease == nil {
+		release, err := s.client.ownedBudget.acquire(s.client.ownedBudget.serverCost)
+		if err != nil {
+			s.client.mu.Unlock()
+			return nil, false
+		}
+		ownedLease = newQBlockOwnedLease(release)
+		defer func() {
+			if ownedLease != nil {
+				ownedLease.drop()
+			}
+		}()
 	}
 	if uint64(len(s.records)) >= uint64(s.config.MaxRecords) {
 		s.client.mu.Unlock()
@@ -93,12 +133,14 @@ func (s *qblockServer) handleQ1(msg *pool.Message) ([]qblock.Output, bool) {
 	s.nextGen++
 	writeContext, cancelWrite := context.WithCancel(s.client.writeContext)
 	record := &qblockServerRecord{
+		ownedLease:      ownedLease,
 		responseCeiling: hint,
 		id:              id, workID: workID, operation: operation, activeOperation: operation, metadata: fragment.Metadata, options: options,
 		tokens: map[string]message.Token{string(fragment.Token): bytes.Clone(fragment.Token)}, replyToken: bytes.Clone(fragment.Token), code: msg.Code(), charged: charge,
 		generation: s.nextGen, mids: make(map[int32]struct{}), writeContext: writeContext, cancelWrite: cancelWrite,
 		writeExpires: now.Add(s.client.managerConfig.Transfer.Lifetime),
 	}
+	ownedLease = nil
 	s.records[operation] = record
 	s.byID[id] = record
 	s.metadata += charge

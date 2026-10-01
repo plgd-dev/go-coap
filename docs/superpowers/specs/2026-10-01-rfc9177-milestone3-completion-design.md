@@ -41,3 +41,18 @@ Endpoint congestion records normalize peers (including IPv6 zone), own their loc
 and retain unacknowledged debt across connection teardown. Feedback ownership
 must prevent an old connection from settling newer work. Never invoke connection
 callbacks or take connection locks while holding the endpoint lock.
+
+## Aggregate ownership accounting policy
+
+`MaxOwnedBytes` reserves existing retained/intent/metadata reservoirs, a static
+serialized executor envelope, explicit high-water map/channel/record allowances,
+and client/server lifetime envelopes before owned payload copies. The map model
+is a conservative allowance (256+2*entries*(key+value+referenced bytes+64)), not a
+portable measurement of Go buckets. Context/closure bookkeeping uses named fixed
+allowances. The cap covers adapter-owned copied storage and this bookkeeping
+model. Caller/application allocations and arbitrary preexisting shared-pool
+capacity are outside it. An explicit cap must cover the fixed floor plus at least
+one supported operation; zero derives capacity from configured count limits.
+The fixed floor remains reserved for connection lifetime and teardown output
+work; callback/handler envelopes remain charged until their invocations return.
+Private total live MID cardinality defaults to65536 and is independently bounded.

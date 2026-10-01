@@ -382,6 +382,7 @@ func NewConnWithOpts(session Session, cfg *Config, opts ...Option) *Conn {
 		cc.qblockClient.server = newQBlockServer(cc.qblockClient, cfg.Handler, *cfgOpts.qblockServerConfig)
 	}
 	if cc.qblockClient != nil {
+		cc.qblockClient.initErr = errors.Join(cc.qblockClient.initErr, cc.qblockClient.initOwnedBudget())
 		cc.session.AddOnClose(cc.qblockClient.close)
 	}
 	limitParallelRequests := limitparallelrequests.New(cfg.LimitClientParallelRequests, cfg.LimitClientEndpointParallelRequests, cc.do, cc.doObserve)

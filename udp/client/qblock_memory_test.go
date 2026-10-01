@@ -5,7 +5,9 @@ import (
 	"context"
 	"errors"
 	"io"
+	"sync"
 	"testing"
+	"time"
 	"unsafe"
 
 	"github.com/plgd-dev/go-coap/v3/message"
@@ -453,7 +455,11 @@ func TestQBlockMemoryAnnouncedBodyRejectedBeforeFragmentRead(t *testing.T) {
 	require.Zero(t, h.cc.qblockClient.active())
 }
 
-
+func TestQBlockMemoryReadBackingHasPredictableLimit(t *testing.T) {
+	payload, err := readQBlockBody(bytes.NewReader([]byte("body")), 16)
+	require.NoError(t, err)
+	require.Equal(t, 17, cap(payload), "one limit+1 backing supports aggregate reservation")
+}
 
 type qblockSeekEndFailure struct{ *bytes.Reader }
 
@@ -485,4 +491,221 @@ func TestQBlockMemorySizingRejectsInvalidWireHeader(t *testing.T) {
 	defer cc.ReleaseMessage(req)
 	_, err := qblockDatagramSize(req)
 	require.Error(t, err)
+}
+
+func TestQBlockMemoryMIDBudgetBoundsLivePacketOwnership(t *testing.T) {
+	session := &qblockTestSession{ctx: context.Background()}
+	cfg := DefaultConfig
+	cfg.BlockwiseEnable = false
+	cfg.BlockwiseSZX = blockwise.SZX16
+	cfg.GetMID = func() int32 { return 1 }
+	cc := NewConnWithOpts(session, &cfg, withQBlockClient(qblockClientConfig{Manager: qblock.DefaultManagerConfig(), MaxMIDEntries: 1}))
+	t.Cleanup(session.closeForTest)
+	req := newPOSTWithBody(t, cc, message.Token{1}, bytes.Repeat([]byte{'u'}, 32))
+	defer cc.ReleaseMessage(req)
+	_, err := cc.qblockClient.prepareQ1(req, nil)
+	require.NoError(t, err)
+	require.Len(t, session.writesSnapshot(), 1, "live MID cannot be reused for second NON packet")
+	require.Zero(t, cc.qblockClient.active(), "failed burst must release ownership")
+}
+
+func TestQBlockMemoryAggregateRejectsBeforeSecondBodyRead(t *testing.T) {
+	session := &qblockTestSession{ctx: context.Background()}
+	cc := newPrivateQBlockClientConnWithMaxTransfers(t, session, 2, message.GetToken)
+	t.Cleanup(session.closeForTest)
+	budget := cc.qblockClient.ownedBudget
+	budget.limit = budget.floor + budget.clientCost
+	first := newPOSTWithBody(t, cc, message.Token{1}, []byte("body"))
+	defer cc.ReleaseMessage(first)
+	_, err := cc.qblockClient.prepareQ1(first, nil)
+	require.NoError(t, err)
+	reader := &qblockCountingReader{Reader: bytes.NewReader([]byte("other"))}
+	second := newPOSTWithBody(t, cc, message.Token{2}, nil)
+	defer cc.ReleaseMessage(second)
+	second.SetBody(reader)
+	_, err = cc.qblockClient.prepareQ1(second, nil)
+	require.ErrorIs(t, err, qblock.ErrLimitExceeded)
+	require.Zero(t, reader.readBytes)
+	require.Equal(t, budget.floor+budget.clientCost, budget.used)
+	cc.qblockClient.abandon(first.Token(), qblock.ErrCanceled)
+	require.Equal(t, budget.floor, budget.used)
+}
+
+func TestQBlockMemoryAggregateHandlerLeaseOutlivesClose(t *testing.T) {
+	entered, release := make(chan struct{}), make(chan struct{})
+	h := newServerHarness(t, qblock.DefaultManagerConfig(), qblockServerConfig{}, func(_ *responsewriter.ResponseWriter[*Conn], _ *pool.Message) { close(entered); <-release })
+	done := make(chan struct{})
+	go func() { h.ingest(h.q1(t, 1, 0, false, 4, "body")); close(done) }()
+	<-entered
+	budget := h.cc.qblockClient.ownedBudget
+	budget.mu.Lock()
+	before := budget.used
+	budget.mu.Unlock()
+	require.Greater(t, before, budget.floor, "running handler must own its envelope")
+	h.cc.qblockClient.close()
+	budget.mu.Lock()
+	after := budget.used
+	budget.mu.Unlock()
+	require.Equal(t, before, after, "handler copy remains charged after registry close")
+	close(release)
+	<-done
+	budget.mu.Lock()
+	after = budget.used
+	budget.mu.Unlock()
+	require.Equal(t, budget.floor, after)
+}
+
+func TestQBlockMemoryAggregateCallbackLeaseOutlivesClose(t *testing.T) {
+	session := &qblockTestSession{ctx: context.Background()}
+	cc := newPrivateQBlockClientConnWithMaxTransfers(t, session, 1, message.GetToken)
+	entered, release := make(chan struct{}), make(chan struct{})
+	t.Cleanup(func() {
+		select {
+		case <-release:
+		default:
+			close(release)
+		}
+	})
+	req := newPOSTWithBody(t, cc, message.Token{1}, []byte("body"))
+	defer cc.ReleaseMessage(req)
+	_, err := cc.qblockClient.prepareQ1(req, func(error) { close(entered); <-release })
+	require.NoError(t, err)
+	budget := cc.qblockClient.ownedBudget
+	cc.qblockClient.close()
+	<-entered
+	budget.mu.Lock()
+	used := budget.used
+	budget.mu.Unlock()
+	require.Equal(t, budget.floor+budget.clientCost, used)
+	close(release)
+	require.Eventually(t, func() bool { budget.mu.Lock(); defer budget.mu.Unlock(); return budget.used == budget.floor }, time.Second, time.Millisecond)
+}
+func TestQBlockMemoryAggregateOversizedOptionsBeforeBodyRead(t *testing.T) {
+	cc := newPrivateQBlockClientConn(t)
+	req := newPOSTWithBody(t, cc, message.Token{1}, nil)
+	defer cc.ReleaseMessage(req)
+	req.SetOptionBytes(message.URIQuery, make([]byte, 100000))
+	reader := &qblockCountingReader{Reader: bytes.NewReader([]byte("body"))}
+	req.SetBody(reader)
+	_, err := cc.qblockClient.prepareQ1(req, nil)
+	require.Error(t, err)
+	require.Zero(t, reader.readBytes)
+	require.Equal(t, cc.qblockClient.ownedBudget.floor, cc.qblockClient.ownedBudget.used)
+}
+
+func TestQBlockMemoryMIDCollisionPreservesExistingOwner(t *testing.T) {
+	cc := newPrivateQBlockClientConn(t)
+	owner := &qblockTransfer{mids: map[int32]struct{}{7: {}}}
+	cc.qblockClient.mu.Lock()
+	cc.qblockClient.transferByMID[7] = owner
+	err := cc.qblockClient.reserveMIDLocked(7)
+	require.ErrorIs(t, err, qblock.ErrLimitExceeded)
+	require.Same(t, owner, cc.qblockClient.transferByMID[7])
+	delete(cc.qblockClient.transferByMID, 7)
+	require.NoError(t, cc.qblockClient.reserveMIDLocked(7))
+	cc.qblockClient.mu.Unlock()
+}
+func TestQBlockMemoryAggregateInvalidCapAndOverflow(t *testing.T) {
+	for _, cap := range []uint64{1, 1000} {
+		session := &qblockTestSession{ctx: context.Background()}
+		cfg := DefaultConfig
+		cc := NewConnWithOpts(session, &cfg, withQBlockClient(qblockClientConfig{Manager: qblock.DefaultManagerConfig(), MaxOwnedBytes: cap}))
+		require.Error(t, cc.qblockClient.initErr)
+		session.closeForTest()
+	}
+	_, err := qblockMapAllowance(^uint64(0), 16, 16, 8)
+	require.Error(t, err)
+}
+
+func TestQBlockMemoryInvalidAggregateConfigRejectsIncoming(t *testing.T) {
+	session := &qblockTestSession{ctx: context.Background()}
+	cfg := DefaultConfig
+	cc := NewConnWithOpts(session, &cfg, withQBlockClient(qblockClientConfig{Manager: qblock.DefaultManagerConfig(), MaxOwnedBytes: 1}), withQBlockServer(qblockServerConfig{}))
+	h := &serverHarness{cc: cc, session: session, nextMID: 1}
+	require.NotPanics(t, func() { h.ingest(h.q1(t, 1, 0, false, 4, "body")) })
+	require.Zero(t, cc.qblockClient.active())
+	session.closeForTest()
+}
+func TestQBlockMemoryServerClearingMIDsDropsBacking(t *testing.T) {
+	h := newServerHarness(t, qblock.DefaultManagerConfig(), qblockServerConfig{}, nil)
+	record := &qblockServerRecord{mids: map[int32]struct{}{1: {}}}
+	h.cc.qblockClient.server.byMID[1] = record
+	h.cc.qblockClient.server.clearMIDsLocked(record)
+	require.Nil(t, record.mids, "retained suppression must not retain MID map high-water backing")
+}
+func TestQBlockMemoryPendingGETObeysMIDCapacity(t *testing.T) {
+	session := &qblockTestSession{ctx: context.Background()}
+	cfg := DefaultConfig
+	cfg.BlockwiseEnable = false
+	cc := NewConnWithOpts(session, &cfg, withQBlockClient(qblockClientConfig{Manager: qblock.DefaultManagerConfig(), MaxMIDEntries: 1}))
+	t.Cleanup(session.closeForTest)
+	cc.qblockClient.transferByMID[1] = &qblockTransfer{}
+	req := newPrivateQBlockClientGET(t, cc, message.Token{1})
+	defer cc.ReleaseMessage(req)
+	_, err := cc.qblockClient.prepare(req, nil)
+	require.NoError(t, err)
+	cc.qblockClient.drivePending(cc.qblockClient.now())
+	require.Empty(t, session.writesSnapshot(), "GET cannot bypass MID budget")
+	delete(cc.qblockClient.transferByMID, 1)
+}
+
+func TestQBlockMemoryHandlerSnapshotFitsPerHandlerEnvelope(t *testing.T) {
+	reader := &qblockCountingReader{Reader: bytes.NewReader([]byte("response"))}
+	h := newServerHarness(t, qblock.DefaultManagerConfig(), qblockServerConfig{MaxMetadataBytes: 1 << 20}, func(w *responsewriter.ResponseWriter[*Conn], _ *pool.Message) {
+		require.NoError(t, w.SetResponse(codes.Changed, message.TextPlain, reader))
+		w.Message().SetOptionBytes(message.LocationQuery, make([]byte, 100000))
+	})
+	h.ingest(h.q1(t, 1, 0, false, 4, "body"))
+	require.Zero(t, reader.readBytes, "reject before cloning response body")
+	for _, record := range h.cc.qblockClient.server.records {
+		require.Nil(t, record.responseOptions, "H cannot override per-handler wire-sized envelope")
+	}
+}
+
+type qblockResetOnRead struct {
+	*bytes.Reader
+	reset func()
+	once  sync.Once
+}
+
+func (r *qblockResetOnRead) Read(p []byte) (int, error) { r.once.Do(r.reset); return r.Reader.Read(p) }
+func TestQBlockMemoryResetDuringExistingIntakeKeepsAdmissionCharged(t *testing.T) {
+	calls := 0
+	h := newServerHarness(t, qblock.DefaultManagerConfig(), qblockServerConfig{}, func(w *responsewriter.ResponseWriter[*Conn], _ *pool.Message) {
+		calls++
+		require.NoError(t, w.SetResponse(codes.Changed, message.TextPlain, bytes.NewReader([]byte("done"))))
+	})
+	h.ingest(h.q1(t, 1, 0, true, 32, string(bytes.Repeat([]byte{'u'}, 16))))
+	var record *qblockServerRecord
+	for _, r := range h.cc.qblockClient.server.records {
+		record = r
+	}
+	require.NotNil(t, record)
+	h.cc.qblockClient.mu.Lock()
+	require.NoError(t, h.cc.qblockClient.server.bindMIDLocked(record, 123))
+	h.cc.qblockClient.mu.Unlock()
+	req := h.q1(t, 2, 1, false, 32, string(bytes.Repeat([]byte{'u'}, 16)))
+	req.SetBody(&qblockResetOnRead{Reader: bytes.NewReader(bytes.Repeat([]byte{'u'}, 16)), reset: func() { require.True(t, h.cc.qblockClient.server.handleReset(123)) }})
+	h.ingest(req)
+	for _, r := range h.cc.qblockClient.server.records {
+		require.NotNil(t, r.ownedLease, "replacement admission must acquire its lease")
+	}
+	require.NotPanics(t, func() { h.ingest(h.q1(t, 3, 0, true, 32, string(bytes.Repeat([]byte{'u'}, 16)))) })
+	require.Equal(t, 1, calls)
+}
+
+func TestQBlockMemoryPendingGETMIDsReleasedOnClose(t *testing.T) {
+	session := &qblockTestSession{ctx: context.Background()}
+	cfg := DefaultConfig
+	cfg.BlockwiseEnable = false
+	cc := NewConnWithOpts(session, &cfg, withQBlockClient(qblockClientConfig{Manager: qblock.DefaultManagerConfig()}))
+	t.Cleanup(session.closeForTest)
+	req := newPrivateQBlockClientGET(t, cc, message.Token{7})
+	defer cc.ReleaseMessage(req)
+	_, err := cc.qblockClient.prepare(req, nil)
+	require.NoError(t, err)
+	cc.qblockClient.drivePending(cc.qblockClient.now())
+	require.Len(t, cc.qblockClient.pendingGETByMID, 1)
+	cc.qblockClient.close()
+	require.Empty(t, cc.qblockClient.pendingGETByMID)
 }
