@@ -353,3 +353,136 @@ func TestQBlockMemoryPreparationRejectsBeforeOwnedBodyRead(t *testing.T) {
 	require.Empty(t, session.writesSnapshot())
 }
 
+func TestQBlockMemoryOwnedTerminalRespectsDatagramLimit(t *testing.T) {
+	session := &qblockTestSession{ctx: context.Background()}
+	cc := newPrivateQBlockClientConn(t)
+	cc.qblockClient.datagramLimit = 68
+	req := newPOSTWithBody(t, cc, message.Token{1}, []byte("body"))
+	defer cc.ReleaseMessage(req)
+	_, err := cc.qblockClient.prepareQ1(req, nil)
+	require.NoError(t, err)
+	var token message.Token
+	for key, transfer := range cc.qblockClient.transferByToken {
+		if transfer.kind == qblock.Q1 {
+			token = message.Token([]byte(key))
+			break
+		}
+	}
+	require.NotEmpty(t, token)
+	terminal := cc.AcquireMessage(context.Background())
+	defer cc.ReleaseMessage(terminal)
+	terminal.SetCode(codes.Changed)
+	terminal.SetType(message.NonConfirmable)
+	terminal.SetToken(token)
+	terminal.SetBody(bytes.NewReader(make([]byte, 69)))
+	require.True(t, cc.qblockClient.handle(terminal))
+	require.EqualValues(t, 1, cc.qblockClient.active(), "oversized terminal must not settle upload")
+	_ = session
+}
+
+func TestQBlockMemoryDatagramSizingDoesNotReadBody(t *testing.T) {
+	cc := newPrivateQBlockClientConn(t)
+	req := newPOSTWithBody(t, cc, message.Token{1}, nil)
+	defer cc.ReleaseMessage(req)
+	reader := &qblockCountingReader{Reader: bytes.NewReader([]byte("body"))}
+	req.SetMessageID(1)
+	req.SetType(message.NonConfirmable)
+	req.SetBody(reader)
+	_, err := reader.Seek(2, io.SeekStart)
+	require.NoError(t, err)
+	size, err := qblockDatagramSize(req)
+	require.NoError(t, err)
+	require.Greater(t, size, uint64(4))
+	require.Zero(t, reader.readBytes, "sizing must not marshal/copy payload")
+	position, err := reader.Seek(0, io.SeekCurrent)
+	require.NoError(t, err)
+	require.EqualValues(t, 2, position)
+}
+
+func TestQBlockMemoryHandlerOptionsRejectedBeforeSnapshot(t *testing.T) {
+	calls := 0
+	reader := &qblockCountingReader{Reader: bytes.NewReader([]byte("response"))}
+	h := newServerHarness(t, qblock.DefaultManagerConfig(), qblockServerConfig{MaxMetadataBytes: 256}, func(w *responsewriter.ResponseWriter[*Conn], _ *pool.Message) {
+		calls++
+		require.NoError(t, w.SetResponse(codes.Changed, message.TextPlain, reader))
+		w.Message().SetOptionBytes(message.LocationQuery, make([]byte, 512))
+	})
+	h.ingest(h.q1(t, 1, 0, false, 4, "body"))
+	h.ingest(h.q1(t, 2, 0, false, 4, "body"))
+	require.Equal(t, 1, calls)
+	require.Zero(t, reader.readBytes, "reject options before capturing owned response body")
+	require.Empty(t, h.session.writesSnapshot())
+	for _, record := range h.cc.qblockClient.server.records {
+		require.Nil(t, record.responseOptions)
+	}
+}
+
+func TestQBlockMemoryCanonicalOptionsUseExactStorageCharge(t *testing.T) {
+	opts := message.Options{{ID: message.URIPath, Value: []byte("x")}, {ID: message.QBlock1, Value: []byte{0}}}
+	snapshot, err := canonicalServerRequestOptions(opts)
+	require.NoError(t, err)
+	require.Len(t, snapshot, 1)
+	require.Equal(t, len(snapshot), cap(snapshot))
+	require.Equal(t, len(snapshot[0].Value), cap(snapshot[0].Value))
+	require.Equal(t, uint64(unsafe.Sizeof(message.Option{}))+1, optionsSize(snapshot))
+}
+
+func TestQBlockMemoryMissingReportBoundedBeforeDecode(t *testing.T) {
+	cc := newPrivateQBlockClientConn(t)
+	msg := cc.AcquireMessage(context.Background())
+	defer cc.ReleaseMessage(msg)
+	msg.SetCode(codes.RequestEntityIncomplete)
+	msg.SetToken(message.Token{1})
+	msg.SetContentFormat(message.AppMissingBlocksCBORSeq)
+	reader := &qblockCountingReader{Reader: bytes.NewReader(make([]byte, 4096))}
+	msg.SetBody(reader)
+	_, _, err := q1ControlFromResponseBounded(msg, 128, 16, 2)
+	require.Error(t, err)
+	require.LessOrEqual(t, reader.readBytes, 17)
+}
+
+func TestQBlockMemoryAnnouncedBodyRejectedBeforeFragmentRead(t *testing.T) {
+	mc := qblock.DefaultManagerConfig()
+	mc.Transfer.MaxBodySize = 16
+	h := newServerHarness(t, mc, qblockServerConfig{}, nil)
+	req := h.q1(t, 1, 0, true, 32, string(bytes.Repeat([]byte{'u'}, 16)))
+	reader := &qblockCountingReader{Reader: bytes.NewReader(bytes.Repeat([]byte{'u'}, 16))}
+	req.SetBody(reader)
+	h.ingest(req)
+	require.Zero(t, reader.readBytes, "reject announced size before sparse validation")
+	require.Zero(t, h.cc.qblockClient.active())
+}
+
+
+
+type qblockSeekEndFailure struct{ *bytes.Reader }
+
+func (r *qblockSeekEndFailure) Seek(offset int64, whence int) (int64, error) {
+	if whence == io.SeekEnd {
+		return 0, errors.New("seek end failed")
+	}
+	return r.Reader.Seek(offset, whence)
+}
+func TestQBlockMemorySizingRestoresCursorOnError(t *testing.T) {
+	cc := newPrivateQBlockClientConn(t)
+	req := newPOSTWithBody(t, cc, message.Token{1}, nil)
+	defer cc.ReleaseMessage(req)
+	req.SetMessageID(1)
+	req.SetType(message.NonConfirmable)
+	reader := &qblockSeekEndFailure{Reader: bytes.NewReader([]byte("body"))}
+	_, err := reader.Seek(2, io.SeekStart)
+	require.NoError(t, err)
+	req.SetBody(reader)
+	_, err = qblockDatagramSize(req)
+	require.Error(t, err)
+	pos, err := reader.Seek(0, io.SeekCurrent)
+	require.NoError(t, err)
+	require.EqualValues(t, 2, pos)
+}
+func TestQBlockMemorySizingRejectsInvalidWireHeader(t *testing.T) {
+	cc := newPrivateQBlockClientConn(t)
+	req := newPOSTWithBody(t, cc, message.Token{1}, nil)
+	defer cc.ReleaseMessage(req)
+	_, err := qblockDatagramSize(req)
+	require.Error(t, err)
+}

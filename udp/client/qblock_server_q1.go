@@ -250,14 +250,11 @@ func serverQ1Fragment(msg *pool.Message) (qblock.Fragment, message.Options, erro
 }
 
 func canonicalServerRequestOptions(opts message.Options) (message.Options, error) {
-	copy, err := opts.Clone()
-	if err != nil {
-		return nil, err
-	}
+	copy := cloneQBlockOptions(opts)
 	for _, id := range []message.OptionID{message.QBlock1, message.QBlock2, message.Size1, message.Size2, message.Block1, message.Block2, message.ETag} {
 		copy = copy.Remove(id)
 	}
-	return copy, nil
+	return cloneQBlockOptions(copy), nil
 }
 
 func serverRequestKey(code codes.Code, opts message.Options) (qblock.OperationKey, error) {
@@ -277,10 +274,7 @@ func serverRequestKey(code codes.Code, opts message.Options) (qblock.OperationKe
 }
 
 func optionsSize(opts message.Options) uint64 {
-	var size uint64
-	for _, option := range opts {
-		size += uint64(4 + len(option.Value))
-	}
+	size, _ := qblockOptionBytes(opts)
 	return size
 }
 

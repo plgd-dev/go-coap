@@ -3,7 +3,6 @@ package client
 import (
 	"errors"
 	"fmt"
-	"io"
 
 	"github.com/plgd-dev/go-coap/v3/message"
 	"github.com/plgd-dev/go-coap/v3/message/codes"
@@ -13,6 +12,14 @@ import (
 )
 
 func q1ControlFromResponse(msg *pool.Message, blockCount uint32) (qblock.Control, bool, error) {
+	size, err := msg.BodySize()
+	if err != nil || size < 0 || uint64(size) > uint64(^uint32(0)) {
+		return qblock.Control{}, true, qblock.ErrLimitExceeded
+	}
+	return q1ControlFromResponseBounded(msg, blockCount, uint32(size), blockCount)
+}
+
+func q1ControlFromResponseBounded(msg *pool.Message, blockCount, maxBytes, maxMissing uint32) (qblock.Control, bool, error) {
 	control := qblock.Control{Token: message.Token(append([]byte(nil), msg.Token()...))}
 	switch msg.Code() {
 	case codes.Continue:
@@ -53,11 +60,11 @@ func q1ControlFromResponse(msg *pool.Message, blockCount uint32) (qblock.Control
 		if body == nil {
 			return control, true, errors.New("q-block missing response requires payload")
 		}
-		payload, err := io.ReadAll(body)
+		payload, err := readQBlockBody(body, maxBytes)
 		if err != nil {
 			return control, true, err
 		}
-		missing, err := qblock.DecodeMissing(payload, blockCount, int(blockCount))
+		missing, err := qblock.DecodeMissing(payload, blockCount, int(min(blockCount, maxMissing)))
 		if err != nil {
 			return control, true, err
 		}

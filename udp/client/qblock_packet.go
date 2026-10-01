@@ -1,12 +1,14 @@
 package client
 
 import (
+	"errors"
 	"github.com/plgd-dev/go-coap/v3/message"
 	"github.com/plgd-dev/go-coap/v3/message/codes"
 	"github.com/plgd-dev/go-coap/v3/message/pool"
 	"github.com/plgd-dev/go-coap/v3/net/blockwise"
 	"github.com/plgd-dev/go-coap/v3/net/qblock"
 	"github.com/plgd-dev/go-coap/v3/udp/coder"
+	"io"
 )
 
 // selectGETSZX reserves the standard representation metadata and the largest
@@ -33,7 +35,7 @@ func qblockIncomingSize(msg *pool.Message) (uint64, error) {
 	if err != nil {
 		return 0, err
 	}
-	bodySize, err := msg.BodySize()
+	bodySize, err := qblockBodySize(msg.Body())
 	if err != nil {
 		return 0, err
 	}
@@ -185,4 +187,21 @@ func (c *qblockClient) writeQBlockMessage(msg *pool.Message) error {
 		return qblock.ErrLimitExceeded
 	}
 	return c.cc.session.WriteMessage(msg)
+}
+
+func qblockBodySize(body io.ReadSeeker) (size int64, err error) {
+	if body == nil {
+		return 0, nil
+	}
+	position, err := body.Seek(0, io.SeekCurrent)
+	if err != nil {
+		return 0, err
+	}
+	defer func() {
+		if _, restoreErr := body.Seek(position, io.SeekStart); restoreErr != nil {
+			size = 0
+			err = errors.Join(err, restoreErr)
+		}
+	}()
+	return body.Seek(0, io.SeekEnd)
 }

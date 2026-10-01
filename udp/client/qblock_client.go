@@ -853,9 +853,18 @@ func (c *qblockClient) close() {
 }
 
 func (c *qblockClient) handle(msg *pool.Message) bool {
-	if msg.HasOption(message.QBlock1) || msg.HasOption(message.QBlock2) {
+	c.mu.Lock()
+	ownedTerminal := msg.Code() >= 64 && c.transferByToken[string(msg.Token())] != nil
+	c.mu.Unlock()
+	if ownedTerminal || msg.HasOption(message.QBlock1) || msg.HasOption(message.QBlock2) {
 		size, err := qblockIncomingSize(msg)
 		if err != nil || size > uint64(c.datagramLimit) {
+			return true
+		}
+	}
+	if msg.HasOption(message.QBlock2) && msg.Code() >= 64 {
+		announced, err := msg.GetOptionUint32(message.Size2)
+		if err != nil || announced > c.managerConfig.Transfer.MaxBodySize {
 			return true
 		}
 	}
@@ -1071,7 +1080,7 @@ func (c *qblockClient) handleQ1ResponseLocked(msg *pool.Message, id qblock.Trans
 		return outputs, true
 	}
 	blockCount := qblockClientBlockCount(transfer.metadata)
-	control, handled, err := q1ControlFromResponse(msg, blockCount)
+	control, handled, err := q1ControlFromResponseBounded(msg, blockCount, c.datagramLimit, c.managerConfig.Transfer.MaxPayloads)
 	if err != nil {
 		return c.finishExchangeLocked(transfer.exchange, err), true
 	}

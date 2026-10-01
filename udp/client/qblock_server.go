@@ -342,6 +342,12 @@ func (c *qblockClient) handleServerRequest(msg *pool.Message) bool {
 	if err != nil || size > uint64(c.datagramLimit) {
 		return true
 	}
+	if msg.HasOption(message.QBlock1) {
+		announced, err := msg.GetOptionUint32(message.Size1)
+		if err != nil || announced > c.managerConfig.Transfer.MaxBodySize {
+			return true
+		}
+	}
 	c.lockAction()
 	var outputs []qblock.Output
 	var changed bool
@@ -406,6 +412,11 @@ func (c *qblockClient) executeServerOutput(output qblock.Output) []qblockCallbac
 			req.SetBody(bytes.NewReader(payload))
 			writer := responsewriter.New(resp, c.cc, options...)
 			c.server.handler(writer, req)
+			optionBytes, err := qblockOptionBytes(writer.Message().Options())
+			if err != nil || optionBytes > c.server.config.MaxMetadataBytes {
+				c.server.finishHandler(operation, generation, false, 0, nil, nil)
+				return
+			}
 			body := []byte(nil)
 			if reader := writer.Message().Body(); reader != nil {
 				var err error
@@ -529,7 +540,11 @@ func (s *qblockServer) prepareResponseLocked(record *qblockServerRecord, code co
 	if err != nil {
 		return err
 	}
-	etag := sha256.Sum256(append([]byte{byte(code)}, payload...))
+	hash := sha256.New()
+	_, _ = hash.Write([]byte{byte(code)})
+	_, _ = hash.Write(payload)
+	var etag [sha256.Size]byte
+	copy(etag[:], hash.Sum(etag[:0]))
 	meta := qblock.Metadata{Size: uint32(len(payload)), SZX: record.metadata.SZX, Identity: etag[:8], HasContentFormat: true, ContentFormat: message.TextPlain}
 	if record.responseCeiling != nil {
 		meta.SZX = record.responseCeiling.SZX

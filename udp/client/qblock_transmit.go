@@ -2,8 +2,7 @@ package client
 
 import (
 	"bytes"
-	"errors"
-	"io"
+	"fmt"
 	"math"
 	"slices"
 	"time"
@@ -11,7 +10,6 @@ import (
 	"github.com/plgd-dev/go-coap/v3/message"
 	"github.com/plgd-dev/go-coap/v3/message/pool"
 	"github.com/plgd-dev/go-coap/v3/net/qblock"
-	"github.com/plgd-dev/go-coap/v3/udp/coder"
 )
 
 // qblockProbeCorrelation is the one attempted packet (or current body set)
@@ -112,24 +110,14 @@ func (c *qblockClient) recordPacingAttemptLocked(key qblockProbeKey, msg *pool.M
 
 // qblockDatagramSize measures the encoded UDP payload without leaving a
 // pooled message's body reader at a different position for the later write.
-func qblockDatagramSize(msg *pool.Message) (size uint64, err error) {
-	if body := msg.Body(); body != nil {
-		position, seekErr := body.Seek(0, io.SeekCurrent)
-		if seekErr != nil {
-			return 0, seekErr
-		}
-		defer func() {
-			if _, restoreErr := body.Seek(position, io.SeekStart); restoreErr != nil {
-				size = 0
-				err = errors.Join(err, restoreErr)
-			}
-		}()
+func qblockDatagramSize(msg *pool.Message) (uint64, error) {
+	if !message.ValidateMID(msg.MessageID()) {
+		return 0, fmt.Errorf("invalid MessageID(%v)", msg.MessageID())
 	}
-	wire, err := msg.MarshalWithEncoder(coder.DefaultCoder)
-	if err != nil {
-		return 0, err
+	if !message.ValidateType(msg.Type()) {
+		return 0, fmt.Errorf("invalid Type(%v)", msg.Type())
 	}
-	return uint64(len(wire)), nil
+	return qblockIncomingSize(msg)
 }
 
 func (c *qblockClient) drivePending(now time.Time) {
