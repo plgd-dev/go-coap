@@ -77,6 +77,7 @@ const (
 	tokenOwnerRequest tokenOwner = iota + 1
 	tokenOwnerObservation
 	tokenOwnerQBlock
+	tokenOwnerQBlockProbe
 )
 
 type tokenReservation struct {
@@ -90,6 +91,7 @@ const (
 )
 
 type midElement struct {
+	capability *qblockCapabilityProbe
 	ordinary   *qblockOrdinaryPermit
 	handler    HandlerFunc
 	start      time.Time
@@ -214,6 +216,10 @@ type Conn struct {
 
 	blockWise          *blockwise.BlockWise[*Conn]
 	qblockClient       *qblockClient
+	qblockProbeMu      sync.Mutex
+	qblockProbeBusy    bool
+	qblockProbe        *qblockCapabilityProbe
+	qblockProbeLimit   uint32
 	observationHandler *observation.Handler[*Conn]
 	transmission       *Transmission
 	messagePool        *pool.Pool
@@ -362,7 +368,8 @@ func NewConnWithOpts(session Session, cfg *Config, opts ...Option) *Conn {
 			atomic.NewDuration(cfg.TransmissionAcknowledgeTimeout),
 			atomic.NewUint32(cfg.TransmissionMaxRetransmit),
 		},
-		blockwiseSZX: cfg.BlockwiseSZX,
+		blockwiseSZX:     cfg.BlockwiseSZX,
+		qblockProbeLimit: min(uint32(cfg.MTU), session.MaxMessageSize()),
 
 		tokenHandlerContainer:     coapSync.NewMap[uint64, HandlerFunc](),
 		tokenReservations:         coapSync.NewMap[uint64, tokenReservation](),
@@ -1183,6 +1190,9 @@ func (cc *Conn) Process(cm *coapNet.ControlMessage, datagram []byte) error {
 		return nil
 	}
 	cc.inactivityMonitor.Notify()
+	if cc.handleQBlockProbe(req, uint64(len(datagram))) {
+		return nil
+	}
 	cc.acceptOrdinaryResponse(req)
 	if cc.handleSpecialMessages(req) {
 		return nil
@@ -1208,6 +1218,9 @@ func (cc *Conn) checkMidHandlerContainer(now time.Time, maxRetransmit uint32, ac
 	if value.IsExpired(now, maxRetransmit) {
 		cc.midHandlerContainer.Delete(key)
 		value.ReleaseMessage(cc)
+		if value.capability != nil {
+			value.capability.finish(false, context.DeadlineExceeded)
+		}
 		cc.errors(fmt.Errorf(errFmtWriteRequest, context.DeadlineExceeded))
 		return
 	}
