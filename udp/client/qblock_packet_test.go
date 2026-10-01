@@ -470,3 +470,56 @@ func TestQBlockPacketIncomingRawLimits(t *testing.T) {
 		})
 	}
 }
+
+type qblockPacketLimitedSession struct {
+	*qblockTestSession
+	limit uint32
+}
+
+func (s *qblockPacketLimitedSession) MaxMessageSize() uint32 { return s.limit }
+
+func TestQBlockPacketIncomingSessionLimit(t *testing.T) {
+	for _, request := range []bool{false, true} {
+		t.Run(map[bool]string{false: "client response", true: "server request"}[request], func(t *testing.T) {
+			base := &qblockTestSession{ctx: context.Background()}
+			session := &qblockPacketLimitedSession{qblockTestSession: base, limit: 68}
+			cfg := DefaultConfig
+			cfg.MTU, cfg.BlockwiseEnable, cfg.BlockwiseSZX = 1500, false, blockwise.SZX16
+			cc := NewConnWithOpts(session, &cfg, withQBlockClient(qblockClientConfig{Manager: qblock.DefaultManagerConfig(), ScheduleMode: qblockScheduleManual}), withQBlockServer(qblockServerConfig{}))
+			t.Cleanup(base.closeForTest)
+			req := newPrivateQBlockClientGET(t, cc, message.Token{1})
+			defer cc.ReleaseMessage(req)
+			_, err := cc.qblockClient.prepare(req, nil)
+			require.NoError(t, err)
+			packet := newQBlockClientFragment(t, cc, req.Token(), 0, true, 32)
+			defer cc.ReleaseMessage(packet)
+			packet.SetType(message.NonConfirmable)
+			packet.SetMessageID(101)
+			if request {
+				packet.SetCode(codes.POST)
+				packet.Remove(message.QBlock2)
+				packet.SetOptionUint32(message.QBlock1, 8)
+			}
+			packet.SetOptionBytes(message.MaxAge, bytes.Repeat([]byte{'x'}, 80))
+			// Two-byte extended length is scanned without a payload copy.
+			packet.SetOptionBytes(message.LocationQuery, bytes.Repeat([]byte{'q'}, 270))
+			raw, err := packet.MarshalWithEncoder(coder.DefaultCoder)
+			require.NoError(t, err)
+			require.Greater(t, len(raw), 68)
+			monitored := 0
+			cc.requestMonitor = func(_ *Conn, _ *pool.Message) (bool, error) { monitored++; return true, nil }
+			require.NoError(t, cc.Process(nil, raw))
+			require.Zero(t, monitored)
+			require.Contains(t, cc.qblockClient.exchangesByOriginalToken, string(req.Token()))
+			truncated := append([]byte(nil), raw[:len(raw)-16]...)
+			// Reserved option nibble retains the generic session-limit error.
+			truncated[4+len(packet.Token())] = 0xf0
+			require.Error(t, cc.Process(nil, truncated))
+			packet.Remove(message.QBlock1)
+			packet.Remove(message.QBlock2)
+			raw, err = packet.MarshalWithEncoder(coder.DefaultCoder)
+			require.NoError(t, err)
+			require.Error(t, cc.Process(nil, raw), "ordinary oversized packet retains session error")
+		})
+	}
+}

@@ -1094,6 +1094,9 @@ func (cc *Conn) handleSpecialMessages(r *pool.Message) bool {
 
 func (cc *Conn) Process(cm *coapNet.ControlMessage, datagram []byte) error {
 	if pkgMath.CastTo[uint32](len(datagram)) > cc.session.MaxMessageSize() {
+		if cc.qblockClient != nil && cc.qblockClient.oversizedRawQ(datagram) {
+			return nil
+		}
 		return fmt.Errorf("max message size(%v) was exceeded %v", cc.session.MaxMessageSize(), len(datagram))
 	}
 	req := cc.AcquireMessage(cc.Context())

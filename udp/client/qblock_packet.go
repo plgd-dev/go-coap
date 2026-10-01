@@ -96,19 +96,78 @@ func (c *qblockClient) oversizedIncomingQ(msg *pool.Message, wireSize uint64) bo
 	if wireSize <= uint64(c.datagramLimit) || (!msg.HasOption(message.QBlock1) && !msg.HasOption(message.QBlock2)) {
 		return false
 	}
+	return c.ownsIncomingQ(msg.Code(), msg.Token())
+}
+
+func (c *qblockClient) ownsIncomingQ(code codes.Code, token message.Token) bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if msg.Code() >= codes.GET && msg.Code() < 32 {
+	if code >= codes.GET && code < 32 {
 		return c.server != nil
 	}
-	if msg.Code() < 64 {
+	if code < 64 {
 		return false
 	}
-	if c.transferByToken[string(msg.Token())] != nil {
+	if c.transferByToken[string(token)] != nil {
 		return true
 	}
-	exchange := c.exchangesByOriginalToken[string(msg.Token())]
+	exchange := c.exchangesByOriginalToken[string(token)]
 	return exchange != nil && exchange.requestCode == codes.GET
+}
+
+// oversizedRawQ recognizes private Q traffic above the session cap without
+// allocating decoded options or copying payload bytes. Malformed framing keeps
+// the existing session-limit error; option value semantics are checked later.
+func (c *qblockClient) oversizedRawQ(data []byte) bool {
+	if len(data) < 4 || data[0]>>6 != 1 {
+		return false
+	}
+	tokenLen := int(data[0] & 15)
+	if tokenLen > message.MaxTokenSize || len(data) < 4+tokenLen {
+		return false
+	}
+	code, token := codes.Code(data[1]), message.Token(data[4:4+tokenLen])
+	options := data[4+tokenLen:]
+	var number uint64
+	hasQ := false
+	for len(options) > 0 && options[0] != 0xff {
+		header := options[0]
+		options = options[1:]
+		delta, rest, ok := qblockRawOptionField(header>>4, options)
+		if !ok {
+			return false
+		}
+		length, rest, ok := qblockRawOptionField(header&15, rest)
+		if !ok || length > uint64(len(rest)) {
+			return false
+		}
+		number += delta
+		if number > 65535 {
+			return false
+		}
+		hasQ = hasQ || number == uint64(message.QBlock1) || number == uint64(message.QBlock2)
+		options = rest[length:]
+	}
+	return hasQ && c.ownsIncomingQ(code, token)
+}
+
+func qblockRawOptionField(n byte, data []byte) (uint64, []byte, bool) {
+	switch n {
+	case 13:
+		if len(data) < 1 {
+			return 0, nil, false
+		}
+		return uint64(data[0]) + 13, data[1:], true
+	case 14:
+		if len(data) < 2 {
+			return 0, nil, false
+		}
+		return uint64(data[0])<<8 + uint64(data[1]) + 269, data[2:], true
+	case 15:
+		return 0, nil, false
+	default:
+		return uint64(n), data, true
+	}
 }
 
 func (c *qblockClient) writeQBlockMessage(msg *pool.Message) error {

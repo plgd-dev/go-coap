@@ -51,3 +51,14 @@ Whole-task selection: `rtk proxy go test ./net/qblock ./udp/client -run '^(TestQ
 Pre-flight: Task 2 consumes Task 1's decoded rejection policy; raw validation precedes decoder-discard consequences and direct calls remain covered. No conflicting interfaces. Self-review: this is packet acceptance enforcement only; Q1 receive negotiation and Q1-to-Q2 advertised ceiling remain deferred. User authorized bounded planning/inline execution without routine confirmation. Maintain scoped ledger, review ef426db..final HEAD once with Astra/high, fix Important/Critical in one TDD pass. Keep branch/worktree, no merge/push.
 
 Verification qualification: whole focused normal/race selections passed, but repeated normal paired POST/PUT traces intermittently fail the existing readiness assertion. The same failure reproduced on an untouched ef426db archive. No speculative scheduler/test correction retained; this remains an open acceptance issue. Task completion means this scoped packet-limit behavior, not broad readiness.
+
+## Final review fix pass
+
+Fresh-context Astra/high review found one Important session-limit ordering gap.
+RED proved the generic Process size error preempted ignore policy and would
+close real sessions. GREEN fix scans raw header/options without decoded copies
+before that error, then ignores correlated private Q traffic; ordinary oversized
+traffic retains its error. Extended lengths and malformed reserved option
+framing are covered. Final focused normal/race, repository compile-only, vet
+and whitespace checks passed. No deferred Minor findings; acceptance blockers
+remain as qualified above.
