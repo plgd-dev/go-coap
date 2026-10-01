@@ -1190,7 +1190,7 @@ func (cc *Conn) Process(cm *coapNet.ControlMessage, datagram []byte) error {
 		return nil
 	}
 	cc.inactivityMonitor.Notify()
-	if cc.handleQBlockProbe(req, uint64(len(datagram))) {
+	if cc.handleQBlockProbe(req, datagram) {
 		return nil
 	}
 	cc.acceptOrdinaryResponse(req)

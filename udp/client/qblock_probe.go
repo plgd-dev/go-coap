@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/plgd-dev/go-coap/v3/message"
@@ -14,6 +15,7 @@ import (
 	"github.com/plgd-dev/go-coap/v3/message/pool"
 	"github.com/plgd-dev/go-coap/v3/net/qblock"
 	"github.com/plgd-dev/go-coap/v3/net/responsewriter"
+	"github.com/plgd-dev/go-coap/v3/udp/coder"
 )
 
 // ErrQBlockProbeInProgress indicates that this connection already has an explicit probe.
@@ -25,11 +27,13 @@ type qblockCapabilityResult struct {
 }
 
 type qblockCapabilityProbe struct {
-	lease  *qblockOwnedLease
-	token  message.Token
-	mid    int32
-	permit *qblockOrdinaryPermit
-	result chan qblockCapabilityResult
+	lease              *qblockOwnedLease
+	token              message.Token
+	mid                int32
+	permit             *qblockOrdinaryPermit
+	result             chan qblockCapabilityResult
+	elem               *midElement
+	releaseInteraction func()
 }
 
 func (p *qblockCapabilityProbe) finish(supported bool, err error) {
@@ -141,7 +145,8 @@ func (cc *Conn) ProbeQBlock(ctx context.Context, path string) (bool, error) {
 	if err := cc.acquireOutstandingInteraction(ctx); err != nil {
 		return false, err
 	}
-	defer cc.releaseOutstandingInteraction()
+	releaseInteraction := sync.OnceFunc(cc.releaseOutstandingInteraction)
+	defer releaseInteraction()
 	permit, err := cc.acquireOrdinary(req)
 	if err != nil {
 		return false, err
@@ -152,7 +157,7 @@ func (cc *Conn) ProbeQBlock(ctx context.Context, path string) (bool, error) {
 	if err := ctx.Err(); err != nil {
 		return false, err
 	}
-	p := &qblockCapabilityProbe{lease: owned, token: token, mid: req.MessageID(), permit: permit, result: make(chan qblockCapabilityResult, 1)}
+	p := &qblockCapabilityProbe{lease: owned, token: token, mid: req.MessageID(), permit: permit, result: make(chan qblockCapabilityResult, 1), releaseInteraction: releaseInteraction}
 	snapshot := cc.AcquireMessage(ctx)
 	if err := req.Clone(snapshot); err != nil {
 		cc.ReleaseMessage(snapshot)
@@ -162,15 +167,13 @@ func (cc *Conn) ProbeQBlock(ctx context.Context, path string) (bool, error) {
 	elem := &midElement{capability: p, ordinary: permit, start: time.Now(), deadline: deadline,
 		handler: func(*responsewriter.ResponseWriter[*Conn], *pool.Message) {}}
 	elem.private.msg = snapshot
+	p.elem = elem
 	if _, loaded := cc.midHandlerContainer.LoadOrStore(p.mid, elem); loaded {
 		elem.ReleaseMessage(cc)
 		return false, errors.New("q-block probe message ID is already in use")
 	}
 	defer func() {
-		cc.midHandlerContainer.ReplaceWithFunc(p.mid, func(current *midElement, loaded bool) (*midElement, bool) {
-			return current, !loaded || current == elem
-		})
-		elem.ReleaseMessage(cc)
+		cc.releaseQBlockProbeMID(p)
 	}()
 	cc.qblockProbeMu.Lock()
 	cc.qblockProbe = p
@@ -192,7 +195,14 @@ func (cc *Conn) ProbeQBlock(ctx context.Context, path string) (bool, error) {
 	}
 }
 
-func (cc *Conn) handleQBlockProbe(msg *pool.Message, wireSize uint64) bool {
+func (cc *Conn) releaseQBlockProbeMID(p *qblockCapabilityProbe) {
+	cc.midHandlerContainer.ReplaceWithFunc(p.mid, func(current *midElement, loaded bool) (*midElement, bool) {
+		return current, !loaded || current == p.elem
+	})
+	p.elem.ReleaseMessage(cc)
+}
+
+func (cc *Conn) handleQBlockProbe(msg *pool.Message, wire []byte) bool {
 	cc.qblockProbeMu.Lock()
 	p := cc.qblockProbe
 	if p != nil && p.lease != nil {
@@ -202,6 +212,10 @@ func (cc *Conn) handleQBlockProbe(msg *pool.Message, wireSize uint64) bool {
 	if p == nil {
 		return false
 	}
+	return cc.handleQBlockProbeResponse(p, msg, wire)
+}
+
+func (cc *Conn) handleQBlockProbeResponse(p *qblockCapabilityProbe, msg *pool.Message, wire []byte) bool {
 	tokenMatch := bytes.Equal(msg.Token(), p.token)
 	midMatch := msg.MessageID() == p.mid
 	isMID := msg.Type() == message.Acknowledgement || msg.Type() == message.Reset
@@ -210,7 +224,7 @@ func (cc *Conn) handleQBlockProbe(msg *pool.Message, wireSize uint64) bool {
 	}
 	// Own malformed candidates too: normal MID routing must not acknowledge them.
 	defer cc.ReleaseMessage(msg)
-	if wireSize > uint64(cc.qblockProbeLimit) {
+	if uint64(len(wire)) > uint64(cc.qblockProbeLimit) {
 		return true
 	}
 	if isMID {
@@ -218,7 +232,7 @@ func (cc *Conn) handleQBlockProbe(msg *pool.Message, wireSize uint64) bool {
 			return true
 		}
 		if msg.Code() == codes.Empty {
-			if len(msg.Token()) != 0 || len(msg.Options()) != 0 || msg.Body() != nil {
+			if len(wire) != 4 {
 				return true
 			}
 		} else if msg.Type() != message.Acknowledgement || msg.Code() < 64 || !tokenMatch {
@@ -230,9 +244,8 @@ func (cc *Conn) handleQBlockProbe(msg *pool.Message, wireSize uint64) bool {
 	if p.permit != nil {
 		p.permit.finish(true, p.permit.member.domain.clock.Now())
 	}
-	if elem, ok := cc.midHandlerContainer.LoadAndDelete(p.mid); ok {
-		elem.ReleaseMessage(cc)
-	}
+	cc.releaseQBlockProbeMID(p)
+	p.releaseInteraction()
 	if msg.Type() == message.Reset {
 		p.finish(false, errors.New("q-block capability probe reset by peer"))
 		return true
@@ -240,14 +253,26 @@ func (cc *Conn) handleQBlockProbe(msg *pool.Message, wireSize uint64) bool {
 	if msg.Code() == codes.Empty {
 		return true
 	}
-	supported, err := validateQBlockProbeResponse(msg)
+	// Re-decode only correlated probe replies with all options preserved. The
+	// ordinary decoder can discard illegal lengths, hiding malformed duplicates.
+	_, err := msg.UnmarshalWithDecoder(qblockProbeDecoder{}, wire)
+	var supported bool
+	if err == nil {
+		supported, err = validateQBlockProbeResponse(msg)
+	}
 	if msg.Type() == message.Confirmable {
 		ack := cc.AcquireMessage(cc.Context())
 		ack.SetType(message.Acknowledgement)
 		ack.SetCode(codes.Empty)
 		ack.SetMessageID(msg.MessageID())
 		cc.upsertControlInformation(ack)
-		if writeErr := cc.writeMessageAsyncOrigin(ack, true); writeErr != nil {
+		// CoAP duplicate-response handling must outlive this explicit probe.
+		// This stores an empty ACK, not a capability result or response body.
+		writeErr := cc.addResponseToCache(ack)
+		if writeErr == nil {
+			writeErr = cc.writeMessageAsyncOrigin(ack, true)
+		}
+		if writeErr != nil {
 			supported = false
 			err = writeErr
 		}
@@ -257,7 +282,34 @@ func (cc *Conn) handleQBlockProbe(msg *pool.Message, wireSize uint64) bool {
 	return true
 }
 
+type qblockProbeDecoder struct{}
+
+func (qblockProbeDecoder) Decode(data []byte, msg *message.Message) (int, error) {
+	msg.Options = msg.Options[:0]
+	n, err := coder.DefaultCoder.DecodeWithOptionDefs(data, msg, nil)
+	if err != nil {
+		return n, err
+	}
+	// A payload marker without payload is malformed, even though the shared
+	// decoder represents it as an absent body.
+	if len(msg.Payload) == 0 {
+		size, sizeErr := coder.DefaultCoder.Size(*msg)
+		if sizeErr != nil {
+			return n, sizeErr
+		}
+		if size != len(data) {
+			return n, errors.New("empty payload marker in q-block probe response")
+		}
+	}
+	return n, nil
+}
+
 func validateQBlockProbeResponse(msg *pool.Message) (bool, error) {
+	for _, opt := range msg.Options() {
+		if def, ok := message.CoapOptionDefs[opt.ID]; ok && (uint64(len(opt.Value)) < uint64(def.MinLen) || uint64(len(opt.Value)) > uint64(def.MaxLen)) {
+			return false, message.ErrInvalidValueLength
+		}
+	}
 	if err := qblock.ValidateOptions(msg.Options(), false); err != nil {
 		return false, err
 	}

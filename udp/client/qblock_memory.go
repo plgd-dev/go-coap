@@ -136,6 +136,11 @@ func (c *qblockClient) initOwnedBudget() error {
 		{mul(r, 2), 16, 16, 0}, {add(mul(r, t), t), 16, 24, 8},
 		{mul(uint64(c.maxMIDEntries), 2), 8, 16, 0}, {mul(mul(n, p), 2), 8, 24, 8},
 		{add(n, mul(r, t), t), 8, 16, 8},
+		// Explicit CON probes use the ordinary response cache for empty ACKs.
+		// These outlive the active probe lease. Reserve their full 16-bit MID
+		// namespace high-water storage, including keys and cache elements, in
+		// the fixed floor; custom cache implementation allocations are caller-owned.
+		{1 << 16, 16, 24, 128},
 	}
 	for _, inventory := range inventories {
 		cost, err := qblockMapAllowance(inventory[0], inventory[1], inventory[2], inventory[3])

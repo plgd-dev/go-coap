@@ -42,7 +42,7 @@ This plan implements the wire probe only. It stores no capability cache, perform
 
 **Files:** Create udp/client/qblock_probe.go, udp/client/qblock_probe_test.go. Modify udp/client/conn.go.
 
-**Interfaces:** Produce Conn.ProbeQBlock(context.Context,string)(bool,error), ErrQBlockProbeInProgress, private qblockCapabilityProbe, and Conn.handleQBlockProbe(*pool.Message,uint64)bool. Consume claimToken/releaseToken, acquireOutstandingInteraction, acquireOrdinary/writeOrdinary, midElement and CheckExpirations. Probe ingress consumes/releases only its own packets before normal response dispatch.
+**Interfaces:** Produce Conn.ProbeQBlock(context.Context,string)(bool,error), ErrQBlockProbeInProgress, private qblockCapabilityProbe, and Conn.handleQBlockProbe(*pool.Message,[]byte)bool. Consume claimToken/releaseToken, acquireOutstandingInteraction, acquireOrdinary/writeOrdinary, midElement and CheckExpirations. Probe ingress consumes/releases only its own packets before normal response dispatch; the original datagram permits validation without discarded options.
 
 - [x] Step 1: Write TestQBlockCapabilityProbeWireAndResponse using real Conn.Process and literal encoded packet expectations: CON GET, /.well-known/core, QBlock2 zero, empty payload, no classic blocks. Positive M0 and M1 with ETag/Size2 must return true and no manager transfer. Add table cases for BadOption, Q-less success, malformed/duplicate/mixed options, incorrect block, ETag/Size2 inconsistency, Reset and timeout; unknown/error cases must not become positive.
 - [x] Step 2: Run `rtk proxy go test ./udp/client -run TestQBlockCapabilityProbe -count=1 -timeout=30s`. Expected RED: ProbeQBlock missing, then assertions fail until implemented.
@@ -64,6 +64,14 @@ This plan implements the wire probe only. It stores no capability cache, perform
 ## Completion
 
 One fresh-context Astra/high review of 2cc5001..completed plan HEAD. Regrade findings, one TDD fix pass for material findings, ledger deferred minors and rulings. Retain workspace/ledger and recheck preserved SHA1s. No completed Milestone 3 re-review or unrelated cleanup.
+
+Review completed once for `2cc5001..f88c812`: four Important findings, all accepted
+and reproduced in the single fix pass. Strict raw control/metadata validation,
+ordinary duplicate ACK caching, idempotent acknowledgment-time NSTART release,
+and identity-checked MID removal address them. The fixed owned-memory floor
+covers empty ACK cache storage beyond probe completion. No new minors were
+raised; previous deferred minors remain retained. Final verification and the
+fix commit are recorded in the scoped ledger.
 
 ## Self-review
 
