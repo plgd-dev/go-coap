@@ -20,6 +20,31 @@ const (
 	udp6Network = "udp6"
 )
 
+// A connected IPv6 loopback read reports the peer and delivers its response.
+func TestUDPConnConnectedIPv6ReadPeer(t *testing.T) {
+	listener, err := net.ListenUDP("udp6", &net.UDPAddr{IP: net.IPv6loopback})
+	require.NoError(t, err)
+	defer listener.Close()
+	dialer, err := net.DialUDP("udp6", nil, listener.LocalAddr().(*net.UDPAddr))
+	require.NoError(t, err)
+	conn := NewUDPConn("udp6", dialer)
+	defer conn.Close()
+	require.NoError(t, listener.SetDeadline(time.Now().Add(3*time.Second)))
+	_, err = dialer.Write([]byte("request"))
+	require.NoError(t, err)
+	buf := make([]byte, 64)
+	_, peer, err := listener.ReadFromUDP(buf)
+	require.NoError(t, err)
+	_, err = listener.WriteToUDP([]byte("response"), peer)
+	require.NoError(t, err)
+	require.NoError(t, dialer.SetReadDeadline(time.Now().Add(3*time.Second)))
+	var source *net.UDPAddr
+	n, err := conn.ReadWithOptions(buf, WithGetRemoteAddr(&source))
+	require.NoError(t, err)
+	require.Equal(t, "response", string(buf[:n]))
+	require.Equal(t, listener.LocalAddr().String(), source.String())
+}
+
 type multicastWriteArgs struct {
 	ctx     context.Context
 	udpAddr *net.UDPAddr
@@ -842,7 +867,7 @@ func TestUDPConnWriteWithCfgBranches(t *testing.T) {
 }
 
 func TestPacketConnReadFrom(t *testing.T) {
-	readUDP4Conn, err := net.ListenUDP(udp4Network, &net.UDPAddr{Port: 1234})
+	readUDP4Conn, err := net.ListenUDP(udp4Network, &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 1234})
 	require.NoError(t, err)
 	defer func() {
 		errC := readUDP4Conn.Close()
@@ -860,7 +885,7 @@ func TestPacketConnReadFrom(t *testing.T) {
 
 	require.NotNil(t, writeUDP4Conn.RemoteAddr())
 
-	readUDP6Conn, err := net.ListenUDP(udp6Network, &net.UDPAddr{Port: 1235})
+	readUDP6Conn, err := net.ListenUDP(udp6Network, &net.UDPAddr{IP: net.IPv6loopback, Port: 1235})
 	require.NoError(t, err)
 	defer func() {
 		errC := readUDP6Conn.Close()

@@ -31,7 +31,7 @@ import (
 )
 
 func TestServerCleanUpConns(t *testing.T) {
-	ld, err := coapNet.NewTCPListener("tcp4", "")
+	ld, err := coapNet.NewTCPListener("tcp4", "127.0.0.1:0")
 	require.NoError(t, err)
 	defer func() {
 		errC := ld.Close()
@@ -139,7 +139,7 @@ func TestServerSetContextValueWithPKI(t *testing.T) {
 	serverCgf, clientCgf, clientSerial, err := createTLSConfig()
 	require.NoError(t, err)
 
-	ld, err := coapNet.NewTLSListener("tcp4", "", serverCgf)
+	ld, err := coapNet.NewTLSListener("tcp4", "127.0.0.1:0", serverCgf)
 	require.NoError(t, err)
 	defer func() {
 		errC := ld.Close()
@@ -188,7 +188,7 @@ func TestServerInactiveMonitor(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*8)
 	defer cancel()
 
-	ld, err := coapNet.NewTCPListener("tcp", "")
+	ld, err := coapNet.NewTCPListener("tcp", "localhost:0")
 	require.NoError(t, err)
 	defer func() {
 		errC := ld.Close()
@@ -261,7 +261,7 @@ func TestServerInactiveMonitor(t *testing.T) {
 func TestServerKeepAliveMonitor(t *testing.T) {
 	var inactivityDetected atomic.Bool
 
-	ld, err := coapNet.NewTCPListener("tcp", "")
+	ld, err := coapNet.NewTCPListener("tcp", "localhost:0")
 	require.NoError(t, err)
 	defer func() {
 		errC := ld.Close()
@@ -324,7 +324,7 @@ func TestServerKeepAliveMonitor(t *testing.T) {
 }
 
 func TestCheckForLossOrder(t *testing.T) {
-	ld, err := coapNet.NewTCPListener("tcp4", "")
+	ld, err := coapNet.NewTCPListener("tcp4", "127.0.0.1:0")
 	require.NoError(t, err)
 	defer func() {
 		errC := ld.Close()

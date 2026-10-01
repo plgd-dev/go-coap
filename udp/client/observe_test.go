@@ -69,7 +69,7 @@ func TestConnObserve(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			l, err := coapNet.NewListenUDP("udp", "")
+			l, err := coapNet.NewListenUDP("udp", "localhost:0")
 			require.NoError(t, err)
 			defer func() {
 				errC := l.Close()
@@ -224,7 +224,7 @@ func TestConnObserveNotSupported(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			l, err := coapNet.NewListenUDP("udp", "")
+			l, err := coapNet.NewListenUDP("udp", "localhost:0")
 			require.NoError(t, err)
 			defer func() {
 				errC := l.Close()
@@ -344,7 +344,7 @@ func TestConnObserveCancel(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			l, err := coapNet.NewListenUDP("udp", "")
+			l, err := coapNet.NewListenUDP("udp", "localhost:0")
 			require.NoError(t, err)
 			closeListener := func() {
 				errC := l.Close()

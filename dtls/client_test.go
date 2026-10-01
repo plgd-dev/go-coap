@@ -78,7 +78,7 @@ func TestConnGet(t *testing.T) {
 		PSKIdentityHint: []byte("Pion DTLS Server"),
 		CipherSuites:    []piondtls.CipherSuiteID{piondtls.TLS_PSK_WITH_AES_128_CCM_8},
 	}
-	l, err := coapNet.NewDTLSListener("udp", "", dtlsCfg)
+	l, err := coapNet.NewDTLSListener("udp", "localhost:0", dtlsCfg)
 	require.NoError(t, err)
 	defer func() {
 		errC := l.Close()
@@ -153,7 +153,7 @@ func TestConnGetSeparateMessage(t *testing.T) {
 		PSKIdentityHint: []byte("Pion DTLS Server"),
 		CipherSuites:    []piondtls.CipherSuiteID{piondtls.TLS_PSK_WITH_AES_128_CCM_8},
 	}
-	l, err := coapNet.NewDTLSListener("udp", "", dtlsCfg)
+	l, err := coapNet.NewDTLSListener("udp", "localhost:0", dtlsCfg)
 	require.NoError(t, err)
 	defer func() {
 		errC := l.Close()
@@ -285,7 +285,7 @@ func TestConnPost(t *testing.T) {
 				PSKIdentityHint: []byte("Pion DTLS Server"),
 				CipherSuites:    []piondtls.CipherSuiteID{piondtls.TLS_PSK_WITH_AES_128_CCM_8},
 			}
-			l, err := coapNet.NewDTLSListener("udp", "", dtlsCfg)
+			l, err := coapNet.NewDTLSListener("udp", "localhost:0", dtlsCfg)
 			require.NoError(t, err)
 			defer func() {
 				errC := l.Close()
@@ -419,7 +419,7 @@ func TestConnPut(t *testing.T) {
 				PSKIdentityHint: []byte("Pion DTLS Server"),
 				CipherSuites:    []piondtls.CipherSuiteID{piondtls.TLS_PSK_WITH_AES_128_CCM_8},
 			}
-			l, err := coapNet.NewDTLSListener("udp", "", dtlsCfg)
+			l, err := coapNet.NewDTLSListener("udp", "localhost:0", dtlsCfg)
 			require.NoError(t, err)
 			defer func() {
 				errC := l.Close()
@@ -544,7 +544,7 @@ func TestConnDelete(t *testing.T) {
 		PSKIdentityHint: []byte("Pion DTLS Server"),
 		CipherSuites:    []piondtls.CipherSuiteID{piondtls.TLS_PSK_WITH_AES_128_CCM_8},
 	}
-	l, err := coapNet.NewDTLSListener("udp", "", dtlsCfg)
+	l, err := coapNet.NewDTLSListener("udp", "localhost:0", dtlsCfg)
 	require.NoError(t, err)
 	defer func() {
 		errC := l.Close()
@@ -620,7 +620,7 @@ func TestConnPing(t *testing.T) {
 		PSKIdentityHint: []byte("Pion DTLS Server"),
 		CipherSuites:    []piondtls.CipherSuiteID{piondtls.TLS_PSK_WITH_AES_128_CCM_8},
 	}
-	l, err := coapNet.NewDTLSListener("udp", "", dtlsCfg)
+	l, err := coapNet.NewDTLSListener("udp", "localhost:0", dtlsCfg)
 	require.NoError(t, err)
 	defer func() {
 		errC := l.Close()
@@ -661,7 +661,7 @@ func TestClientInactiveMonitor(t *testing.T) {
 	serverCgf, clientCgf, _, err := createDTLSConfig()
 	require.NoError(t, err)
 
-	ld, err := coapNet.NewDTLSListener("udp4", "", serverCgf)
+	ld, err := coapNet.NewDTLSListener("udp4", "127.0.0.1:0", serverCgf)
 	require.NoError(t, err)
 	defer func() {
 		errC := ld.Close()
@@ -731,7 +731,7 @@ func TestClientKeepAliveMonitor(t *testing.T) {
 
 	serverCgf, clientCgf, _, err := createDTLSConfig()
 	require.NoError(t, err)
-	ld, err := coapNet.NewDTLSListener("udp4", "", serverCgf)
+	ld, err := coapNet.NewDTLSListener("udp4", "127.0.0.1:0", serverCgf)
 	require.NoError(t, err)
 	defer func() {
 		errC := ld.Close()
@@ -849,7 +849,7 @@ func TestConnGetWithOptions(t *testing.T) {
 		piondtls.WithCipherSuites(piondtls.TLS_PSK_WITH_AES_128_CCM_8),
 	)
 
-	l, err := coapNet.NewDTLSListener("udp", "", serverOpts)
+	l, err := coapNet.NewDTLSListener("udp", "localhost:0", serverOpts)
 	require.NoError(t, err)
 	defer func() {
 		errC := l.Close()

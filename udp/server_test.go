@@ -239,7 +239,7 @@ func TestServerDiscover(t *testing.T) {
 func TestServerCleanUpConns(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*5)
 	defer cancel()
-	ld, err := coapNet.NewListenUDP("udp4", "")
+	ld, err := coapNet.NewListenUDP("udp4", "127.0.0.1:0")
 	require.NoError(t, err)
 	defer func() {
 		errC := ld.Close()
@@ -289,7 +289,7 @@ func TestServerInactiveMonitor(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*8)
 	defer cancel()
 
-	ld, err := coapNet.NewListenUDP("udp4", "")
+	ld, err := coapNet.NewListenUDP("udp4", "127.0.0.1:0")
 	require.NoError(t, err)
 	defer func() {
 		errC := ld.Close()
@@ -362,7 +362,7 @@ func TestServerInactiveMonitor(t *testing.T) {
 func TestServerKeepAliveMonitor(t *testing.T) {
 	var inactivityDetected atomic.Bool
 
-	ld, err := coapNet.NewListenUDP("udp4", "")
+	ld, err := coapNet.NewListenUDP("udp4", "127.0.0.1:0")
 	require.NoError(t, err)
 	defer func() {
 		errC := ld.Close()
@@ -579,7 +579,7 @@ func TestServerNewConnWildcardBindRoutesResponseToClient(t *testing.T) {
 }
 
 func TestCheckForLossOrder(t *testing.T) {
-	ld, err := coapNet.NewListenUDP("udp4", "")
+	ld, err := coapNet.NewListenUDP("udp4", "127.0.0.1:0")
 	require.NoError(t, err)
 	defer func() {
 		errC := ld.Close()

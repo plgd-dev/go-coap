@@ -89,7 +89,7 @@ func TestConnGet(t *testing.T) {
 		},
 	}
 
-	l, err := coapNet.NewListenUDP("udp", "")
+	l, err := coapNet.NewListenUDP("udp", "localhost:0")
 	require.NoError(t, err)
 	defer func() {
 		errC := l.Close()
@@ -191,7 +191,7 @@ func TestConnGet(t *testing.T) {
 }
 
 func TestConnGetSeparateMessage(t *testing.T) {
-	l, err := coapNet.NewListenUDP("udp", "")
+	l, err := coapNet.NewListenUDP("udp", "localhost:0")
 	require.NoError(t, err)
 	defer func() {
 		errC := l.Close()
@@ -316,7 +316,7 @@ func TestConnPost(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			l, err := coapNet.NewListenUDP("udp", "")
+			l, err := coapNet.NewListenUDP("udp", "localhost:0")
 			require.NoError(t, err)
 			defer func() {
 				errC := l.Close()
@@ -446,7 +446,7 @@ func TestConnPut(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			l, err := coapNet.NewListenUDP("udp", "")
+			l, err := coapNet.NewListenUDP("udp", "localhost:0")
 			require.NoError(t, err)
 			defer func() {
 				errC := l.Close()
@@ -566,7 +566,7 @@ func TestConnDelete(t *testing.T) {
 		},
 	}
 
-	l, err := coapNet.NewListenUDP("udp", "")
+	l, err := coapNet.NewListenUDP("udp", "localhost:0")
 	require.NoError(t, err)
 	defer func() {
 		errC := l.Close()
@@ -636,7 +636,7 @@ func TestConnDelete(t *testing.T) {
 }
 
 func TestConnPing(t *testing.T) {
-	l, err := coapNet.NewListenUDP("udp", "")
+	l, err := coapNet.NewListenUDP("udp", "localhost:0")
 	require.NoError(t, err)
 	defer func() {
 		errC := l.Close()
@@ -675,7 +675,7 @@ func TestClientInactiveMonitor(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), Timeout)
 	defer cancel()
 
-	ld, err := coapNet.NewListenUDP("udp4", "")
+	ld, err := coapNet.NewListenUDP("udp4", "127.0.0.1:0")
 	require.NoError(t, err)
 	defer func() {
 		errC := ld.Close()
@@ -744,7 +744,7 @@ func TestClientKeepAliveMonitor(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), Timeout)
 	defer cancel()
 
-	ld, err := coapNet.NewListenUDP("udp4", "")
+	ld, err := coapNet.NewListenUDP("udp4", "127.0.0.1:0")
 	require.NoError(t, err)
 
 	var serverWg sync.WaitGroup

@@ -40,7 +40,7 @@ func TestServerCleanUpConns(t *testing.T) {
 		PSKIdentityHint: []byte("Pion DTLS Server"),
 		CipherSuites:    []piondtls.CipherSuiteID{piondtls.TLS_PSK_WITH_AES_128_CCM_8},
 	}
-	ld, err := coapNet.NewDTLSListener("udp4", "", dtlsCfg)
+	ld, err := coapNet.NewDTLSListener("udp4", "127.0.0.1:0", dtlsCfg)
 	require.NoError(t, err)
 	defer func() {
 		errC := ld.Close()
@@ -144,7 +144,7 @@ func TestServerSetContextValueWithPKI(t *testing.T) {
 	serverCgf, clientCgf, clientSerial, err := createDTLSConfig()
 	require.NoError(t, err)
 
-	ld, err := coapNet.NewDTLSListener("udp4", "", serverCgf)
+	ld, err := coapNet.NewDTLSListener("udp4", "127.0.0.1:0", serverCgf)
 	require.NoError(t, err)
 	defer func() {
 		errC := ld.Close()
@@ -205,7 +205,7 @@ func TestServerInactiveMonitor(t *testing.T) {
 	serverCgf, clientCgf, _, err := createDTLSConfig()
 	require.NoError(t, err)
 
-	ld, err := coapNet.NewDTLSListener("udp4", "", serverCgf)
+	ld, err := coapNet.NewDTLSListener("udp4", "127.0.0.1:0", serverCgf)
 	require.NoError(t, err)
 	defer func() {
 		errC := ld.Close()
@@ -280,7 +280,7 @@ func TestServerKeepAliveMonitor(t *testing.T) {
 	serverCgf, clientCgf, _, err := createDTLSConfig()
 	require.NoError(t, err)
 
-	ld, err := coapNet.NewDTLSListener("udp4", "", serverCgf)
+	ld, err := coapNet.NewDTLSListener("udp4", "127.0.0.1:0", serverCgf)
 	require.NoError(t, err)
 	defer func() {
 		errC := ld.Close()
@@ -399,7 +399,7 @@ func TestServerOnNewConnReadsConnectionStateWithoutManualHandshake(t *testing.T)
 	serverCfg, clientCfg, clientSerial, err := createDTLSConfig()
 	require.NoError(t, err)
 
-	ld, err := coapNet.NewDTLSListener("udp4", "", serverCfg)
+	ld, err := coapNet.NewDTLSListener("udp4", "127.0.0.1:0", serverCfg)
 	require.NoError(t, err)
 	defer func() {
 		errC := ld.Close()
@@ -559,7 +559,7 @@ func TestServerCleanUpConnsWithOptions(t *testing.T) {
 		piondtls.WithCipherSuites(piondtls.TLS_PSK_WITH_AES_128_CCM_8),
 	)
 
-	ld, err := coapNet.NewDTLSListener("udp4", "", serverOpts)
+	ld, err := coapNet.NewDTLSListener("udp4", "127.0.0.1:0", serverOpts)
 	require.NoError(t, err)
 	defer func() {
 		errC := ld.Close()
@@ -612,7 +612,7 @@ func TestServerSetContextValueWithPKIAndOptions(t *testing.T) {
 	serverOpts, clientOpts, clientSerial, err := createDTLSOptionsConfig()
 	require.NoError(t, err)
 
-	ld, err := coapNet.NewDTLSListener("udp4", "", serverOpts)
+	ld, err := coapNet.NewDTLSListener("udp4", "127.0.0.1:0", serverOpts)
 	require.NoError(t, err)
 	defer func() {
 		errC := ld.Close()

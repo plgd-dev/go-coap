@@ -36,7 +36,7 @@ func bodyToBytes(t *testing.T, r io.Reader) []byte {
 }
 
 func TestConnDeduplication(t *testing.T) {
-	l, err := coapNet.NewListenUDP("udp", "")
+	l, err := coapNet.NewListenUDP("udp", "localhost:0")
 	require.NoError(t, err)
 	defer func() {
 		errC := l.Close()
@@ -115,7 +115,7 @@ func TestConnDeduplication(t *testing.T) {
 }
 
 func TestConnDeduplicationRetransmission(t *testing.T) {
-	l, err := coapNet.NewListenUDP("udp", "")
+	l, err := coapNet.NewListenUDP("udp", "localhost:0")
 	require.NoError(t, err)
 	defer func() {
 		errC := l.Close()
@@ -237,7 +237,7 @@ func testParallelConnGet(t *testing.T, numParallel int) {
 		},
 	}
 
-	l, err := coapNet.NewListenUDP("udp", "")
+	l, err := coapNet.NewListenUDP("udp", "localhost:0")
 	require.NoError(t, err)
 	defer func() {
 		errC := l.Close()
@@ -320,7 +320,7 @@ func TestConnGet(t *testing.T) {
 }
 
 func TestConnGetSeparateMessage(t *testing.T) {
-	l, err := coapNet.NewListenUDP("udp", "")
+	l, err := coapNet.NewListenUDP("udp", "localhost:0")
 	require.NoError(t, err)
 	defer func() {
 		errC := l.Close()
@@ -444,7 +444,7 @@ func testConnPost(t *testing.T, numParallel int) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			l, err := coapNet.NewListenUDP("udp", "")
+			l, err := coapNet.NewListenUDP("udp", "localhost:0")
 			require.NoError(t, err)
 			defer func() {
 				errC := l.Close()
@@ -587,7 +587,7 @@ func testConnPut(t *testing.T, numParallel int) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			l, err := coapNet.NewListenUDP("udp", "")
+			l, err := coapNet.NewListenUDP("udp", "localhost:0")
 			require.NoError(t, err)
 			defer func() {
 				errC := l.Close()
@@ -719,7 +719,7 @@ func testConnDelete(t *testing.T, numParallel int) {
 		},
 	}
 
-	l, err := coapNet.NewListenUDP("udp", "")
+	l, err := coapNet.NewListenUDP("udp", "localhost:0")
 	require.NoError(t, err)
 	defer func() {
 		errC := l.Close()
@@ -802,7 +802,7 @@ func TestParallelConnDelete(t *testing.T) {
 }
 
 func TestConnPing(t *testing.T) {
-	l, err := coapNet.NewListenUDP("udp", "")
+	l, err := coapNet.NewListenUDP("udp", "localhost:0")
 	require.NoError(t, err)
 	defer func() {
 		errC := l.Close()
@@ -835,7 +835,7 @@ func TestConnPing(t *testing.T) {
 }
 
 func TestConnPingResponseIsReset(t *testing.T) {
-	l, err := coapNet.NewListenUDP("udp", "")
+	l, err := coapNet.NewListenUDP("udp", "localhost:0")
 	require.NoError(t, err)
 	defer func() {
 		errC := l.Close()
@@ -888,7 +888,7 @@ func TestConnPingResponseIsReset(t *testing.T) {
 }
 
 func TestConnRequestMonitorCloseConnection(t *testing.T) {
-	l, err := coapNet.NewListenUDP("udp", "")
+	l, err := coapNet.NewListenUDP("udp", "localhost:0")
 	require.NoError(t, err)
 	defer func() {
 		errC := l.Close()
@@ -982,7 +982,7 @@ func TestConnRequestMonitorCloseConnection(t *testing.T) {
 }
 
 func TestConnRequestMonitorDropRequest(t *testing.T) {
-	l, err := coapNet.NewListenUDP("udp", "")
+	l, err := coapNet.NewListenUDP("udp", "localhost:0")
 	require.NoError(t, err)
 	defer func() {
 		errC := l.Close()

@@ -65,7 +65,7 @@ func TestConnGet(t *testing.T) {
 		},
 	}
 
-	l, err := coapNet.NewTCPListener("tcp", "")
+	l, err := coapNet.NewTCPListener("tcp", "localhost:0")
 	require.NoError(t, err)
 	defer func() {
 		errC := l.Close()
@@ -182,7 +182,7 @@ func TestConnPost(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			l, err := coapNet.NewTCPListener("tcp", "")
+			l, err := coapNet.NewTCPListener("tcp", "localhost:0")
 			require.NoError(t, err)
 			defer func() {
 				errC := l.Close()
@@ -310,7 +310,7 @@ func TestConnPut(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			l, err := coapNet.NewTCPListener("tcp", "")
+			l, err := coapNet.NewTCPListener("tcp", "localhost:0")
 			require.NoError(t, err)
 			defer func() {
 				errC := l.Close()
@@ -428,7 +428,7 @@ func TestConnDelete(t *testing.T) {
 		},
 	}
 
-	l, err := coapNet.NewTCPListener("tcp", "")
+	l, err := coapNet.NewTCPListener("tcp", "localhost:0")
 	require.NoError(t, err)
 	defer func() {
 		errC := l.Close()
@@ -496,7 +496,7 @@ func TestConnDelete(t *testing.T) {
 }
 
 func TestConnPing(t *testing.T) {
-	l, err := coapNet.NewTCPListener("tcp", "")
+	l, err := coapNet.NewTCPListener("tcp", "localhost:0")
 	require.NoError(t, err)
 	defer func() {
 		errC := l.Close()
@@ -534,7 +534,7 @@ func TestClientInactiveMonitor(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*8)
 	defer cancel()
 
-	ld, err := coapNet.NewTCPListener("tcp", "")
+	ld, err := coapNet.NewTCPListener("tcp", "localhost:0")
 	require.NoError(t, err)
 	defer func() {
 		errC := ld.Close()
@@ -608,7 +608,7 @@ func TestClientInactiveMonitor(t *testing.T) {
 func TestClientKeepAliveMonitor(t *testing.T) {
 	var inactivityDetected atomic.Bool
 
-	ld, err := coapNet.NewTCPListener("tcp", "")
+	ld, err := coapNet.NewTCPListener("tcp", "localhost:0")
 	require.NoError(t, err)
 	defer func() {
 		errC := ld.Close()
@@ -671,7 +671,7 @@ func TestClientKeepAliveMonitor(t *testing.T) {
 }
 
 func TestConnRequestMonitorCloseConnection(t *testing.T) {
-	l, err := coapNet.NewTCPListener("tcp", "")
+	l, err := coapNet.NewTCPListener("tcp", "localhost:0")
 	require.NoError(t, err)
 	defer func() {
 		errC := l.Close()
@@ -764,7 +764,7 @@ func TestConnRequestMonitorCloseConnection(t *testing.T) {
 }
 
 func TestConnRequestMonitorDropRequest(t *testing.T) {
-	l, err := coapNet.NewTCPListener("tcp", "")
+	l, err := coapNet.NewTCPListener("tcp", "localhost:0")
 	require.NoError(t, err)
 	defer func() {
 		errC := l.Close()
@@ -884,7 +884,7 @@ func TestConnWithCSMExchangeTimeout(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			l, err := coapNet.NewTCPListener("tcp", "")
+			l, err := coapNet.NewTCPListener("tcp", "localhost:0")
 			require.NoError(t, err)
 			defer func() {
 				errC := l.Close()
