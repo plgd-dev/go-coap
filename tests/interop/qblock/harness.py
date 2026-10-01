@@ -3,6 +3,7 @@ import argparse
 import json
 import hashlib
 import platform
+import shutil
 import select
 import socket
 import subprocess
@@ -11,6 +12,7 @@ import time
 from pathlib import Path
 
 from wire import audit, decode
+from provenance import verify
 
 
 class Relay:
@@ -65,6 +67,16 @@ def free_port():
     with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
         sock.bind(('127.0.0.1', 0))
         return sock.getsockname()[1]
+
+
+def validate_response_status(records, method):
+    expected = 69 if method == 'GET' else 68  # Content / Changed for fixed existing echo resources.
+    statuses = [p['code'] for r in records if r['direction'] == 'server_to_client'
+                for p in [decode(bytes.fromhex(r['wire_hex']))]
+                if p['type'] == 'NON' and 64 <= p['code'] < 96 and p['code'] != 95]
+    assert statuses, 'no terminal NON payload response'
+    assert all(code == expected for code in statuses), f'{method}: expected response code {expected}, observed {statuses}'
+    return expected
 
 
 def run_case(args, direction, method, payload, fault=False):
@@ -130,7 +142,9 @@ def run_case(args, direction, method, payload, fault=False):
             actual = out.read_bytes() if out.exists() else b''
             assert actual == expected, f'response mismatch: {len(actual)} bytes; expected {len(expected)}'
             if args.transport == 'udp':
+                status = validate_response_status(records, method)
                 report = audit([r for r in records if r['decision'] == 'forward'], method, expected, payload if method != 'GET' else None)
+                report['expected_response_code'] = status
                 if fault:
                     assert dropped, 'configured Q2 block3 fault was not exercised'
                     controls = [decode(bytes.fromhex(r['wire_hex'])) for r in records if r['direction'] == 'client_to_server']
@@ -169,6 +183,7 @@ def main():
     parser.add_argument('--server-fixture', action='store_true', help='use public libcoap API server handler with explicit Size2')
     parser.add_argument('--explicit-token', action='store_true', help='libcoap client uses nonempty token')
     parser.add_argument('--transport', choices=['udp', 'dtls'], default='udp')
+    parser.add_argument('--provenance', type=Path, help='pre-build source capture directory (required by the runners)')
     args = parser.parse_args()
     args.output.mkdir(parents=True, exist_ok=False)
     payload = bytes(33 + i % 90 for i in range(1500))
@@ -178,6 +193,13 @@ def main():
     manifest = {'libcoap_pin': 'c63c8f7cb7f248a4992539529b9e1b691962f29a', 'platform': platform.platform(),
                 'go_head': subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip(),
                 'binaries_sha256': {str(p): hashlib.sha256(p.read_bytes()).hexdigest() for p in binaries}}
+    repo = Path(__file__).resolve().parents[3]
+    if args.provenance:
+        captured = verify(repo, args.provenance)
+        shutil.copytree(args.provenance, args.output / 'provenance')
+        manifest['source_sha256'] = captured['source']['sha256']
+        manifest['source_manifest'] = 'provenance/source-manifest.json'
+    manifest['fixture_build_info'] = subprocess.check_output(['go', 'version', '-m', str(args.fixture)], text=True)
     (args.output / 'manifest.json').write_text(json.dumps(manifest, indent=2))
     for name in ['configure.log', 'build.log', 'CMakeCache.txt']:
         path = args.build / name
@@ -194,6 +216,10 @@ def main():
             results.append(result)
             print(json.dumps(result), flush=True)
     (args.output / 'results.json').write_text(json.dumps(results, indent=2))
+    if args.provenance:
+        verify(repo, args.provenance)
+        manifest['source_unchanged_after_run'] = True
+        (args.output / 'manifest.json').write_text(json.dumps(manifest, indent=2))
     return 0 if all(r['status'] == 'PASS' for r in results) else 1
 
 

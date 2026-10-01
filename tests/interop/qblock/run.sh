@@ -18,10 +18,15 @@ rtk proxy cmake -S "$source_dir" -B "$build_dir" \
   -DENABLE_WS=OFF -DENABLE_OSCORE=OFF -DBUILD_SHARED_LIBS=OFF \
   -DCMAKE_BUILD_TYPE=Debug > "$build_dir/configure.log" 2>&1
 rtk proxy cmake --build "$build_dir" --parallel 4 > "$build_dir/build.log" 2>&1
+cd "$repo"
+export GOCACHE="${GOCACHE:-/private/tmp/go-coap-con-build}"
+provenance_dir="$output_dir-source"
+rtk proxy python3 tests/interop/qblock/provenance.py capture --output "$provenance_dir"
 rtk proxy cc -std=gnu11 -g -I"$build_dir" -I"$build_dir/include" -I"$source_dir/include" \
   "$repo/tests/interop/qblock/libcoap-server.c" "$build_dir/libcoap-3.a" -o "$build_dir/libcoap-fixture-server"
 cd "$repo"
 rtk proxy env GOCACHE="${GOCACHE:-/private/tmp/go-coap-con-build}" go build -o "$build_dir/go-fixture" ./tests/interop/qblock/fixture
-rtk proxy python3 -m unittest discover -s tests/interop/qblock -p test_wire.py
+rtk proxy python3 tests/interop/qblock/provenance.py verify --output "$provenance_dir"
+rtk proxy python3 -m unittest discover -s tests/interop/qblock -p 'test_*.py'
 echo "Evidence: $output_dir"
-rtk proxy python3 tests/interop/qblock/harness.py --build "$build_dir" --fixture "$build_dir/go-fixture" --output "$output_dir" --server-fixture
+rtk proxy python3 tests/interop/qblock/harness.py --build "$build_dir" --fixture "$build_dir/go-fixture" --output "$output_dir" --server-fixture --provenance "$provenance_dir"

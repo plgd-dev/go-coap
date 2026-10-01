@@ -47,7 +47,11 @@ byte. `wire.py` independently decodes RFC 7252 headers/options without Go's
 decoder, separates capability ACK from NON payload, rejects classic
 Block1/Block2, checks stable Request-Tag/ETag/Size/SZX/content format and
 response-token correlation, verifies complete fragment coverage, and
-reconstructs upload and response bytes with SHA-256. Run it separately with:
+reconstructs upload and response bytes with SHA-256. The UDP runner additionally
+requires exact fixed-scenario response codes: 2.05 Content for GET and 2.04
+Changed for existing-resource POST/PUT echo; another 2.xx code fails even when
+the body matches. A negative fixture verifies that 2.01 Created is rejected.
+Run the wire audit separately with:
 
 ```sh
 rtk proxy python3 tests/interop/qblock/wire.py /path/to/case/wire.jsonl --method GET
@@ -61,6 +65,20 @@ delivery of the lost block, and exact independently reconstructed body.
 Dropped packets are excluded from the delivered-body audit while retained in
 the raw trace. The script continues after individual case failures and exits
 nonzero if any case fails; `results.json` preserves the full matrix.
+
+Before compiling the fixtures, each runner captures the actual Go dependency
+inputs selected by `go list -deps -json`, module manifests, and the interop
+fixture/harness files. `provenance/source-manifest.json` contains normalized
+repository or module/version paths, each file's SHA-256, an aggregate source
+digest, HEAD, dependency module identity/checksums, and Go environment/toolchain.
+The complete selected source bytes and a scoped dirty diff against HEAD are
+retained alongside the manifest. User-owned project documents, `.codanna`, and
+unrelated untracked files are excluded. The scripts verify that this source
+digest is unchanged after compilation and after the matrix. `manifest.json`
+links the source digest to executable hashes and `go version -m` build info.
+The standard library is identified by the recorded Go toolchain rather than
+copied into the snapshot. Fingerprint tests verify changes in selected content
+or paths alter the digest, while unselected document changes do not.
 
 DTLS PSK is a separate six-case matrix with local test identity
 `qblock-interop` and key `qblock-interop-local-key`, using
