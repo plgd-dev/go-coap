@@ -18,12 +18,16 @@ type capabilityResult struct {
 	err       error
 }
 
+type capabilitySession struct{ *qblockTestSession }
+
+func (s *capabilitySession) Done() <-chan struct{} { return s.ctx.Done() }
+
 func capabilityConn(t *testing.T) (*Conn, *qblockTestSession, context.CancelFunc) {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
 	s := &qblockTestSession{ctx: ctx, writeCh: make(chan struct{}, 16)}
 	cfg := DefaultConfig
-	cc := NewConnWithOpts(s, &cfg)
+	cc := NewConnWithOpts(&capabilitySession{s}, &cfg)
 	t.Cleanup(func() { cancel(); s.closeForTest() })
 	return cc, s, cancel
 }

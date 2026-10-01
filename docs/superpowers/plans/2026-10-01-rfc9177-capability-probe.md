@@ -52,14 +52,14 @@ This plan implements the wire probe only. It stores no capability cache, perform
 
 ### Task 2: Lifecycle, transport and scope acceptance
 
-**Files:** udp/client/qblock_probe_test.go; udp/qblock_probe_test.go; dtls/qblock_test.go; roadmap/results and foundation design capability section.
+**Files:** udp/client/qblock_probe_test.go; udp/client/qblock_probe_lifecycle_test.go; udp/qblock_probe_test.go; dtls/qblock_test.go; roadmap/results and foundation design capability section.
 
 **Interfaces:** Consume Task 1 ProbeQBlock. Public calls use existing UDP/DTLS construction without Q payload runtime. Test peers return independently constructed responses; no libcoap execution/interop claim.
 
-- [ ] Step 1: Add TestQBlockCapabilityProbeLifecycle covering occupied slot, cancellation followed by another successful attempt, session close during NSTART/endpoint waits, request token/MID collisions, send failure, retransmission expiry and request size rejection. Pin state cleanup and preserve unrelated ownership. Observe RED for any missing behavior and implement minimal fixes.
-- [ ] Step 2: Add real UDP and PSK DTLS probe tests with a small raw response handler returning QBlock2 zero/eight, ETag and Size2. The large representation M1 case returns one 16-byte block, and the client emits no follow-up. Exercise classic enabled/disabled construction and path override. Validate request fields independently in the peer handler. Run focused normal/race, expected PASS.
-- [ ] Step 3: Run `rtk proxy go test ./udp/client ./udp ./dtls -run 'TestQBlockCapabilityProbe' -count=1 -timeout=60s`, focused Q race across UDP/DTLS, unfiltered net/qblock race, compile-only ./..., vet ./..., full runtime ./... count1 timeout180 and git diff --check. Expected PASS.
-- [ ] Step 4: Update roadmap/results and capability design with the RFC/libcoap-derived wire contract and completed probe-only scope. Cache/coalescing, public client config/modes, no-replay selection matrix, dialed Q payload wiring and server CON single-block response remain open. Commit as `test(qblock): verify explicit probe transport and lifecycle boundaries`.
+- [x] Step 1: Add TestQBlockCapabilityProbeLifecycle covering occupied slot, cancellation followed by another successful attempt, session close during NSTART/endpoint waits, request token/MID collisions, send failure, retransmission expiry and request size rejection. Pin state cleanup and preserve unrelated ownership. TestQBlockCapabilityProbeOwnedBudget must reject before sending when the existing Q owned budget is full and release the envelope after completion; retain the envelope through concurrent ingress. Observe RED for any missing behavior and implement minimal fixes.
+- [x] Step 2: Add real UDP and PSK DTLS probe tests with a small raw response handler returning QBlock2 zero/eight, ETag and Size2. The large representation M1 case returns one 16-byte block, and the client emits no follow-up. Exercise classic enabled/disabled construction and path override. Validate request fields independently in the peer handler. Run focused normal/race, expected PASS.
+- [x] Step 3: Run `rtk proxy go test ./udp/client ./udp ./dtls -run 'TestQBlockCapabilityProbe' -count=1 -timeout=60s`, focused Q race across UDP/DTLS, unfiltered net/qblock race, compile-only ./..., vet ./..., full runtime ./... count1 timeout180 and git diff --check. Expected PASS.
+- [x] Step 4: Update roadmap/results and capability design with the RFC/libcoap-derived wire contract and completed probe-only scope. Cache/coalescing, public client config/modes, no-replay selection matrix, dialed Q payload wiring and server CON single-block response remain open. Commit as `test(qblock): verify explicit probe transport and lifecycle boundaries`.
 
 ## Completion
 

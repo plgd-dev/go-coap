@@ -15,6 +15,7 @@ import (
 	"github.com/plgd-dev/go-coap/v3/message/codes"
 	"github.com/plgd-dev/go-coap/v3/message/pool"
 	coapNet "github.com/plgd-dev/go-coap/v3/net"
+	"github.com/plgd-dev/go-coap/v3/net/blockwise"
 	"github.com/plgd-dev/go-coap/v3/net/qblock"
 	"github.com/plgd-dev/go-coap/v3/net/responsewriter"
 	"github.com/plgd-dev/go-coap/v3/options"
@@ -22,6 +23,90 @@ import (
 	"github.com/plgd-dev/go-coap/v3/udp/coder"
 	"github.com/stretchr/testify/require"
 )
+
+func TestQBlockCapabilityProbeDTLS(t *testing.T) {
+	for _, classic := range []bool{false, true} {
+		t.Run(map[bool]string{false: "classic_disabled", true: "classic_enabled"}[classic], func(t *testing.T) {
+			l, err := piondtls.Listen("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)}, qDTLSConfig())
+			require.NoError(t, err)
+			defer l.Close()
+			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			defer cancel()
+			cc, err := dtls.Dial(l.Addr().String(), qDTLSConfig(), options.WithContext(ctx), options.WithBlockwise(classic, blockwise.SZX16, time.Second))
+			require.NoError(t, err)
+			defer cc.Close()
+			result := make(chan error, 1)
+			go func() {
+				ok, err := cc.ProbeQBlock(ctx, "")
+				if err == nil && !ok {
+					err = net.ErrClosed
+				}
+				result <- err
+			}()
+			peer, err := l.Accept()
+			require.NoError(t, err)
+			defer peer.Close()
+			require.NoError(t, peer.SetDeadline(time.Now().Add(3*time.Second)))
+			buf := make([]byte, 2048)
+			n, err := peer.Read(buf)
+			require.NoError(t, err)
+			req := pool.NewMessage(ctx)
+			_, err = req.UnmarshalWithDecoder(qblock.Decoder{}, buf[:n])
+			require.NoError(t, err)
+			require.Equal(t, message.Confirmable, req.Type())
+			require.Equal(t, codes.GET, req.Code())
+			require.Nil(t, req.Body())
+			path, err := req.Path()
+			require.NoError(t, err)
+			require.Equal(t, "/.well-known/core", path)
+			value, err := req.GetOptionUint32(message.QBlock2)
+			require.NoError(t, err)
+			require.Zero(t, value)
+			require.Len(t, req.Options(), 3)
+			resp := pool.NewMessage(ctx)
+			resp.SetType(message.Acknowledgement)
+			resp.SetCode(codes.Content)
+			resp.SetMessageID(req.MessageID())
+			resp.SetToken(req.Token())
+			resp.SetOptionUint32(message.QBlock2, 8)
+			resp.SetOptionBytes(message.ETag, []byte{1})
+			resp.SetOptionUint32(message.Size2, 1048576)
+			resp.SetBody(bytes.NewReader([]byte("0123456789abcdef")))
+			wire, err := resp.MarshalWithEncoder(coder.DefaultCoder)
+			require.NoError(t, err)
+			_, err = peer.Write(wire)
+			require.NoError(t, err)
+			require.NoError(t, <-result)
+			go func() {
+				r, err := cc.Get(ctx, "/ordinary")
+				if r != nil {
+					cc.ReleaseMessage(r)
+				}
+				result <- err
+			}()
+			n, err = peer.Read(buf)
+			require.NoError(t, err)
+			req = pool.NewMessage(ctx)
+			_, err = req.UnmarshalWithDecoder(qblock.Decoder{}, buf[:n])
+			require.NoError(t, err)
+			path, err = req.Path()
+			require.NoError(t, err)
+			require.Equal(t, "/ordinary", path)
+			require.False(t, req.HasOption(message.QBlock2))
+			resp = pool.NewMessage(ctx)
+			resp.SetType(message.Acknowledgement)
+			resp.SetCode(codes.Content)
+			resp.SetMessageID(req.MessageID())
+			resp.SetToken(req.Token())
+			resp.SetBody(bytes.NewReader([]byte("ordinary")))
+			wire, err = resp.MarshalWithEncoder(coder.DefaultCoder)
+			require.NoError(t, err)
+			_, err = peer.Write(wire)
+			require.NoError(t, err)
+			require.NoError(t, <-result)
+		})
+	}
+}
 
 func qDTLSConfig() *piondtls.Config {
 	return &piondtls.Config{PSK: func([]byte) ([]byte, error) { return []byte{1, 2, 3, 4}, nil }, PSKIdentityHint: []byte("qblock"), CipherSuites: []piondtls.CipherSuiteID{piondtls.TLS_PSK_WITH_AES_128_CCM_8}}

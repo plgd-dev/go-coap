@@ -25,6 +25,7 @@ type qblockCapabilityResult struct {
 }
 
 type qblockCapabilityProbe struct {
+	lease  *qblockOwnedLease
 	token  message.Token
 	mid    int32
 	permit *qblockOrdinaryPermit
@@ -49,6 +50,7 @@ func (p *qblockCapabilityProbe) finish(supported bool, err error) {
 // explicit probe runs per connection. The caller's context bounds the exchange,
 // with ExchangeLifetime as an upper limit, and closure cancels pending waits.
 func (cc *Conn) ProbeQBlock(ctx context.Context, path string) (bool, error) {
+	var owned *qblockOwnedLease
 	cc.qblockProbeMu.Lock()
 	if cc.qblockProbeBusy {
 		cc.qblockProbeMu.Unlock()
@@ -61,6 +63,9 @@ func (cc *Conn) ProbeQBlock(ctx context.Context, path string) (bool, error) {
 		cc.qblockProbe = nil
 		cc.qblockProbeBusy = false
 		cc.qblockProbeMu.Unlock()
+		if owned != nil {
+			owned.drop()
+		}
 	}()
 	ctx, cancel := context.WithTimeout(ctx, ExchangeLifetime)
 	defer cancel()
@@ -71,6 +76,19 @@ func (cc *Conn) ProbeQBlock(ctx context.Context, path string) (bool, error) {
 	}
 	if err := ctx.Err(); err != nil {
 		return false, err
+	}
+	if c := cc.qblockClient; c != nil {
+		if c.initErr != nil {
+			return false, c.initErr
+		}
+		// The existing client envelope covers the request, retransmit snapshot,
+		// bounded response handling and control bookkeeping, including ingress
+		// that is still completing after the caller cancels.
+		release, err := c.ownedBudget.acquire(c.ownedBudget.clientCost)
+		if err != nil {
+			return false, err
+		}
+		owned = newQBlockOwnedLease(release)
 	}
 	if peer, ok := cc.RemoteAddr().(*net.UDPAddr); ok && peer != nil && peer.IP.IsMulticast() {
 		return false, errors.New("q-block capability probe requires a unicast peer")
@@ -129,12 +147,12 @@ func (cc *Conn) ProbeQBlock(ctx context.Context, path string) (bool, error) {
 		return false, err
 	}
 	if permit != nil {
-		defer permit.finish(false, permit.member.domain.clock.Now())
+		defer func() { permit.finish(false, permit.member.domain.clock.Now()) }()
 	}
 	if err := ctx.Err(); err != nil {
 		return false, err
 	}
-	p := &qblockCapabilityProbe{token: token, mid: req.MessageID(), permit: permit, result: make(chan qblockCapabilityResult, 1)}
+	p := &qblockCapabilityProbe{lease: owned, token: token, mid: req.MessageID(), permit: permit, result: make(chan qblockCapabilityResult, 1)}
 	snapshot := cc.AcquireMessage(ctx)
 	if err := req.Clone(snapshot); err != nil {
 		cc.ReleaseMessage(snapshot)
@@ -177,6 +195,9 @@ func (cc *Conn) ProbeQBlock(ctx context.Context, path string) (bool, error) {
 func (cc *Conn) handleQBlockProbe(msg *pool.Message, wireSize uint64) bool {
 	cc.qblockProbeMu.Lock()
 	p := cc.qblockProbe
+	if p != nil && p.lease != nil {
+		defer p.lease.retain()()
+	}
 	cc.qblockProbeMu.Unlock()
 	if p == nil {
 		return false
@@ -206,11 +227,11 @@ func (cc *Conn) handleQBlockProbe(msg *pool.Message, wireSize uint64) bool {
 	} else if (msg.Type() != message.Confirmable && msg.Type() != message.NonConfirmable) || !tokenMatch || msg.Code() < 64 {
 		return true
 	}
-	if elem, ok := cc.midHandlerContainer.LoadAndDelete(p.mid); ok {
-		elem.ReleaseMessage(cc)
-	}
 	if p.permit != nil {
 		p.permit.finish(true, p.permit.member.domain.clock.Now())
+	}
+	if elem, ok := cc.midHandlerContainer.LoadAndDelete(p.mid); ok {
+		elem.ReleaseMessage(cc)
 	}
 	if msg.Type() == message.Reset {
 		p.finish(false, errors.New("q-block capability probe reset by peer"))
