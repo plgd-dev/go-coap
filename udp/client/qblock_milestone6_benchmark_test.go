@@ -139,7 +139,10 @@ func BenchmarkQBlockMilestone6WireMatrix(b *testing.B) {
 				if totalElapsed <= 0 {
 					b.Fatal("benchmark elapsed time was not positive")
 				}
-				b.ReportMetric(float64(bodySize.size*b.N)/totalElapsed.Seconds()/(1<<20), "MiB/s")
+				mibPerSecond := float64(bodySize.size*b.N) / totalElapsed.Seconds() / (1 << 20)
+				transferPerOperation := totalElapsed / time.Duration(b.N)
+				b.Logf("qblock-m6 transfer-ns/op=%d throughput-MiB/s=%.6f", transferPerOperation.Nanoseconds(), mibPerSecond)
+				b.ReportMetric(mibPerSecond, "MiB/s")
 				b.ReportMetric(float64(clientManagerPeak), "client-manager-reserved-B")
 				b.ReportMetric(float64(serverManagerPeak), "server-manager-reserved-B")
 				b.ReportMetric(float64(clientOwnedPeak), "client-adapter-reserved-B")

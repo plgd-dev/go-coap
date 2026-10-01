@@ -32,9 +32,14 @@ successful probe records Q support for that connection only; it does not
 enable Q by itself. `WithQBlock` enables outbound selection. The probe uses a
 single requested Q-Block2 block and validates the response's QBlock2, ETag and
 Size2 metadata. A generic successful response without Q-Block2 does not prove
-support. Reset, malformed responses, timeout and cancellation leave capability
-unknown. New UDP or DTLS connections start unknown and must be probed
-independently.
+support. A Q-less successful response returns `false, nil` but does not prove
+that Q is unsupported, so it leaves current knowledge unchanged. A validated
+Bad Option is conclusive and records the session as unsupported; a later
+positive probe restores supported. Reset, malformed or invalid responses,
+transport errors and timeout are inconclusive and preserve existing
+knowledge. Cancellation returns an error for that caller and does not itself
+clear session knowledge. Closing a connection clears its knowledge. New UDP
+or DTLS connections start unknown and must be probed independently.
 
 `PreferKnown` is the default. It uses Q only after the current connection has
 positive probe knowledge; otherwise the request follows the existing ordinary
@@ -99,30 +104,31 @@ verified the complete body hash. Throughput is body bytes divided by elapsed
 wall time; capability discovery and fixture setup are outside the timed
 interval.
 
-| Response | Loss | Run 1 time | Run 1 MiB/s | Run 2 time | Run 2 MiB/s | Dropped Q2 blocks |
+| Response | Loss | Run 1 transfer time | Run 1 MiB/s | Run 2 transfer time | Run 2 MiB/s | Dropped Q2 blocks |
 | --- | --- | ---: | ---: | ---: | ---: | ---: |
-| 8 KiB | none | 1.770 ms | 4.400 | 1.655 ms | 4.634 | 0 / 0 |
-| 8 KiB | response NUM 3 | 1.154 s | 0.006767 | 1.154 s | 0.006771 | 1 / 1 |
-| 256 KiB | none | 50.733 ms | 4.973 | 59.872 ms | 4.196 | 0 / 0 |
-| 256 KiB | response NUM 3 | 256.972 ms | 0.9735 | 260.741 ms | 0.9596 | 1 / 1 |
+| 8 KiB | none | 0.927083 ms | 8.426969 | 2.337583 ms | 3.342127 | 0 / 0 |
+| 8 KiB | response NUM 3 | 1.154987208 s | 0.006764 | 1.154801791 s | 0.006765 | 1 / 1 |
+| 256 KiB | none | 42.271541 ms | 5.914144 | 39.344167 ms | 6.354182 | 0 / 0 |
+| 256 KiB | response NUM 3 | 231.419708 ms | 1.080288 | 253.520417 ms | 0.986114 | 1 / 1 |
 
 The sampled Q accounting high-water values were:
 
 | Response and loss | Client manager B (runs 1 / 2) | Server manager B (runs 1 / 2) | Client adapter reserved B | Server adapter reserved B |
 | --- | ---: | ---: | ---: | ---: |
-| 8 KiB, none | 0 / 0 | 8,192 / 8,192 | 190,381,962 | 204,844,496 |
+| 8 KiB, none | 16,504 / 0 | 8,192 / 8,192 | 190,381,962 | 204,844,496 |
 | 8 KiB, response NUM 3 | 16,504 / 16,504 | 8,192 / 8,192 | 190,381,962 | 204,844,496 |
 | 256 KiB, none | 524,528 / 524,528 | 262,144 / 262,144 | 190,889,866 | 206,876,112 |
 | 256 KiB, response NUM 3 | 524,528 / 524,528 | 262,144 / 262,144 | 190,889,866 | 206,876,112 |
 
 Manager values are read from `net/qblock.Manager.retained` at the benchmark's
-adapter event sampling points. The short one-set 8 KiB client transfer has no
-retained manager state at those points; these readings do not include
-transient in-call allocations. Adapter values are ownership reservations,
-including the conservative precharged budget floor, not live heap or RSS.
-The race-detector run is correctness evidence only and is excluded from the
-timing table. These loopback measurements describe this host and configuration;
-they do not predict a universal Q-Block speedup.
+adapter event sampling points. The short one-set 8 KiB client observation
+varied from 0 to 16,504 bytes across the two timing runs; the separate race run
+also observed 16,504 bytes. These are sampled high-water values and may miss
+transient state within one adapter event. Adapter values are ownership
+reservations, including the conservative precharged budget floor, not live
+heap or RSS. The race-detector run is correctness evidence only and is
+excluded from the timing table. These loopback measurements describe this
+host and configuration; they do not predict a universal Q-Block speedup.
 
 Reproduce the measurement with:
 
