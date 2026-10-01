@@ -53,3 +53,58 @@ func TestQBlockRuntimeTransportBudgetValidation(t *testing.T) {
 	require.NoError(t, runtime.ValidateTransport(uint32(DefaultMTU)))
 	require.Error(t, runtime.ValidateTransport(65535))
 }
+
+func TestQBlockCombinedRuntime(t *testing.T) {
+	outbound := qblock.DefaultClientConfig()
+	inbound := qblock.DefaultServerConfig()
+	r, err := NewQBlockRuntime(&outbound, &inbound)
+	require.NoError(t, err)
+	defer r.Close()
+	inbound.MaxMIDEntries = 1
+	_, err = NewQBlockRuntime(&outbound, &inbound)
+	require.Error(t, err)
+	r2, err := NewQBlockRuntime(&outbound, nil)
+	require.NoError(t, err)
+	defer r2.Close()
+}
+
+func TestQBlockProductionJitter(t *testing.T) {
+	c := publicQBlockClientConfig(qblock.DefaultClientConfig(), nil)
+	require.Equal(t, qblockScheduleAutomatic, c.ScheduleMode)
+	require.NotNil(t, c.Clock)
+	values := map[float64]bool{}
+	for range 16 {
+		v := c.Jitter()
+		require.GreaterOrEqual(t, v, float64(0))
+		require.Less(t, v, float64(1))
+		values[v] = true
+	}
+	require.Greater(t, len(values), 1)
+}
+
+func TestQBlockCombinedRuntimeRoles(t *testing.T) {
+	for _, inbound := range []bool{false, true} {
+		q := qblock.DefaultClientConfig()
+		server := qblock.DefaultServerConfig()
+		var role *qblock.ServerConfig
+		if inbound {
+			role = &server
+		}
+		r, err := NewQBlockRuntime(&q, role)
+		require.NoError(t, err)
+		session := &qblockTestSession{ctx: context.Background(), remoteAddr: endpointPeer(123)}
+		cfg := DefaultConfig
+		cc, err := r.NewConn(session, &cfg)
+		require.NoError(t, err)
+		require.NotNil(t, cc.qblockConfig)
+		require.Equal(t, inbound, cc.qblockClient.server != nil)
+		require.Same(t, r.domain, cc.qblockClient.endpoint.domain)
+		req := newPrivateQBlockClientGET(t, cc, []byte{1})
+		selected, err := cc.selectQBlock(req)
+		require.NoError(t, err)
+		require.False(t, selected)
+		cc.ReleaseMessage(req)
+		session.closeForTest()
+		r.Close()
+	}
+}

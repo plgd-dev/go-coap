@@ -209,13 +209,16 @@ type Conn struct {
 	ordinaryMu sync.Mutex
 	ordinary   map[*qblockOrdinaryPermit]struct{}
 
-	session Session
+	initErr    error
+	failedDone chan struct{}
+	session    Session
 	*client.Client[*Conn]
 	inactivityMonitor InactivityMonitor
 	requestMonitor    RequestMonitorFunc
 
 	blockWise             *blockwise.BlockWise[*Conn]
 	qblockClient          *qblockClient
+	qblockConfig          *qblock.ClientConfig
 	qblockProbeMu         sync.Mutex
 	qblockGeneration      *qblockProbeGeneration
 	qblockMaxProbeWaiters uint32
@@ -388,7 +391,18 @@ func NewConnWithOpts(session Session, cfg *Config, opts ...Option) *Conn {
 	}
 	cc.msgID.Store(pkgMath.CastTo[uint32](cfg.GetMID() - 0xffff/2))
 	cc.blockWise = cfgOpts.createBlockWise(&cc)
+	if cfg.QBlock != nil {
+		copy := *cfg.QBlock
+		cc.qblockConfig = &copy
+		cc.qblockMaxProbeWaiters = copy.MaxProbeWaiters
+		cc.initErr = ValidateQBlockConfig(cfg)
+	}
 	cc.qblockClient = cfgOpts.createQBlockClient(&cc)
+	if cc.qblockClient == nil && cc.qblockConfig != nil && cc.initErr == nil {
+		domain := newQBlockEndpointDomain(realQBlockClock{}, cc.qblockConfig.ProbingRate, 1, cc.qblockConfig.MaxEndpointMembers)
+		cc.qblockClient = newQBlockClient(&cc, publicQBlockClientConfig(*cc.qblockConfig, domain))
+		cc.session.AddOnClose(domain.close)
+	}
 	if cc.qblockClient != nil {
 		// MTU is the UDP payload budget, as in the ordinary UDP session.
 		cc.qblockClient.datagramLimit = min(uint32(cfg.MTU), session.MaxMessageSize())
@@ -405,6 +419,7 @@ func NewConnWithOpts(session Session, cfg *Config, opts ...Option) *Conn {
 		cc.session.AddOnClose(cc.closeOrdinary)
 	}
 	limitParallelRequests := limitparallelrequests.New(cfg.LimitClientParallelRequests, cfg.LimitClientEndpointParallelRequests, cc.do, cc.doObserve)
+	limitParallelRequests.SetInitializationGuard(cc.InitializationError)
 	cc.observationHandler = observation.NewHandler(&cc, cfg.Handler, limitParallelRequests.Do)
 	cc.observationHandler.SetTokenCallbacks(
 		func(token message.Token) error {
@@ -417,6 +432,22 @@ func NewConnWithOpts(session Session, cfg *Config, opts ...Option) *Conn {
 	cc.Client = client.New(&cc, cc.observationHandler, cfg.GetToken, limitParallelRequests)
 	if cc.processReceivedMessage == nil {
 		cc.processReceivedMessage = processReceivedMessage
+	}
+	if cc.qblockClient != nil {
+		cc.initErr = errors.Join(cc.initErr, cc.qblockClient.initErr)
+	}
+	if cc.initErr != nil {
+		cc.failedDone = make(chan struct{})
+		close(cc.failedDone)
+		if cc.qblockClient != nil {
+			cc.qblockClient.close()
+		}
+		cc.closeOrdinary()
+		_ = cc.session.Close()
+		if finalizer, ok := cc.session.(interface{ Finalize() }); ok {
+			finalizer.Finalize()
+		}
+		return &cc
 	}
 	cc.receivedMessageReader = client.NewReceivedMessageReader(&cc, cfg.ReceivedMessageQueueSize)
 	if cc.qblockClient != nil && cc.qblockClient.initErr == nil && cc.qblockClient.scheduleMode == qblockScheduleAutomatic {
@@ -467,6 +498,10 @@ func (cc *Conn) Close() error {
 }
 
 func (cc *Conn) doInternal(req *pool.Message) (*pool.Message, error) {
+	selected := cc.qblockConfig == nil && cc.qblockClient != nil
+	return cc.doInternalSelected(req, selected)
+}
+func (cc *Conn) doInternalSelected(req *pool.Message, selected bool) (*pool.Message, error) {
 	token := req.Token()
 	if token == nil {
 		return nil, errors.New("invalid token")
@@ -495,7 +530,7 @@ func (cc *Conn) doInternal(req *pool.Message) (*pool.Message, error) {
 		}
 		cc.releaseToken(token, tokenOwnerRequest)
 	}()
-	if cc.qblockClient != nil {
+	if selected && cc.qblockClient != nil {
 		prepared, err := cc.qblockClient.prepare(req, func(err error) {
 			select {
 			case qblockErrChan <- err:
@@ -597,41 +632,39 @@ func (cc *Conn) claimFreshQBlockToken() (message.Token, error) {
 //
 // Caller is responsible to release request and response.
 func (cc *Conn) do(req *pool.Message) (*pool.Message, error) {
-	if cc.blockWise == nil {
-		return cc.doInternal(req)
-	}
-	if cc.qblockClient != nil && cc.qblockClient.canPrepareQ1(req) {
-		privateReq := cc.AcquireMessage(req.Context())
-		if err := req.Clone(privateReq); err != nil {
-			cc.ReleaseMessage(privateReq)
-			return nil, err
-		}
-		defer cc.ReleaseMessage(privateReq)
-		return cc.doInternal(privateReq)
-	}
-	resp, err := cc.blockWise.Do(req, cc.blockwiseSZX, cc.session.MaxMessageSize(), func(bwReq *pool.Message) (*pool.Message, error) {
-		if cc.qblockClient != nil && cc.qblockClient.canPrepare(bwReq) {
-			privateReq := cc.AcquireMessage(bwReq.Context())
-			if err := bwReq.Clone(privateReq); err != nil {
-				cc.ReleaseMessage(privateReq)
-				return nil, err
-			}
-			defer cc.ReleaseMessage(privateReq)
-			bwReq = privateReq
-		}
-		if bwReq.Options().HasOption(message.Block1) || bwReq.Options().HasOption(message.Block2) {
-			bwReq.SetMessageID(cc.GetMessageID())
-		}
-		return cc.doInternal(bwReq)
-	})
+	selected, err := cc.selectQBlock(req)
 	if err != nil {
 		return nil, err
 	}
-	return resp, nil
+	if selected {
+		privateReq := cc.AcquireMessage(req.Context())
+		defer cc.ReleaseMessage(privateReq)
+		// Copy only metadata here. prepareQ1 admits bounded body storage before reads.
+		privateReq.SetCode(req.Code())
+		privateReq.SetType(req.Type())
+		privateReq.SetMessageID(req.MessageID())
+		privateReq.SetToken(req.Token())
+		privateReq.ResetOptionsTo(req.Options())
+		privateReq.SetControlMessage(req.ControlMessage())
+		privateReq.SetBody(req.Body())
+		return cc.doInternalSelected(privateReq, true)
+	}
+	if cc.blockWise == nil {
+		return cc.doInternalSelected(req, false)
+	}
+	return cc.blockWise.Do(req, cc.blockwiseSZX, cc.session.MaxMessageSize(), func(bwReq *pool.Message) (*pool.Message, error) {
+		if bwReq.HasOption(message.Block1) || bwReq.HasOption(message.Block2) {
+			bwReq.SetMessageID(cc.GetMessageID())
+		}
+		return cc.doInternalSelected(bwReq, false)
+	})
 }
 
 // DoObserve subscribes for every change with request.
 func (cc *Conn) doObserve(req *pool.Message, observeFunc func(req *pool.Message)) (client.Observation, error) {
+	if cc.qblockConfig != nil && cc.qblockConfig.Mode == qblock.Require {
+		return nil, qblock.ErrUnsupportedOperation
+	}
 	return cc.observationHandler.NewObservation(req, observeFunc)
 }
 
@@ -778,6 +811,9 @@ func (cc *Conn) writeMessage(req *pool.Message) error {
 
 // WriteMessage sends an coap message.
 func (cc *Conn) WriteMessage(req *pool.Message) error {
+	if err := cc.InitializationError(); err != nil {
+		return err
+	}
 	if cc.blockWise == nil {
 		return cc.writeMessage(req)
 	}
@@ -798,6 +834,9 @@ func (cc *Conn) Context() context.Context {
 
 // AsyncPing sends ping and receivedPong will be called when pong arrives. It returns cancellation of ping operation.
 func (cc *Conn) AsyncPing(receivedPong func()) (func(), error) {
+	if err := cc.InitializationError(); err != nil {
+		return nil, err
+	}
 	req := cc.AcquireMessage(cc.Context())
 	req.SetType(message.Confirmable)
 	req.SetCode(codes.Empty)
@@ -842,6 +881,9 @@ func (cc *Conn) AsyncPing(receivedPong func()) (func(), error) {
 
 // Run reads and process requests from a connection, until the connection is closed.
 func (cc *Conn) Run() error {
+	if err := cc.InitializationError(); err != nil {
+		return err
+	}
 	return cc.session.Run(cc)
 }
 
@@ -1213,6 +1255,9 @@ func (cc *Conn) SetContextValue(key interface{}, val interface{}) {
 
 // Done signalizes that connection is not more processed.
 func (cc *Conn) Done() <-chan struct{} {
+	if cc.failedDone != nil {
+		return cc.failedDone
+	}
 	return cc.session.Done()
 }
 
@@ -1306,4 +1351,19 @@ func (cc *Conn) InactivityMonitor() InactivityMonitor {
 // NetConn returns the underlying connection that is wrapped by cc. The Conn returned is shared by all invocations of NetConn, so do not modify it.
 func (cc *Conn) NetConn() net.Conn {
 	return cc.session.NetConn()
+}
+
+// InitializationError reports failed Q construction without reporting it again.
+func (cc *Conn) InitializationError() error { return cc.initErr }
+func (cc *Conn) Do(req *pool.Message) (*pool.Message, error) {
+	if err := cc.InitializationError(); err != nil {
+		return nil, err
+	}
+	return cc.Client.Do(req)
+}
+func (cc *Conn) DoObserve(req *pool.Message, f func(*pool.Message)) (client.Observation, error) {
+	if err := cc.InitializationError(); err != nil {
+		return nil, err
+	}
+	return cc.Client.DoObserve(req, f)
 }

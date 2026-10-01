@@ -1,6 +1,7 @@
 package dtls
 
 import (
+	"errors"
 	"fmt"
 	"time"
 
@@ -41,6 +42,9 @@ func Dial[T DTLSClientConfig](target string, cfg T, opts ...udp.Option) (*udpCli
 		o.UDPClientApply(&defaultCfg)
 	}
 
+	if err := udpClient.ValidateQBlockConfig(&defaultCfg); err != nil {
+		return nil, err
+	}
 	c, err := defaultCfg.Dialer.DialContext(defaultCfg.Ctx, defaultCfg.Net, target)
 	if err != nil {
 		return nil, err
@@ -60,7 +64,12 @@ func Dial[T DTLSClientConfig](target string, cfg T, opts ...udp.Option) (*udpCli
 		return nil, err
 	}
 	opts = append(opts, options.WithCloseSocket())
-	return Client(conn, opts...), nil
+	opts = append(opts, options.WithErrors(func(error) {}))
+	cc := Client(conn, opts...)
+	if err := cc.InitializationError(); err != nil {
+		return nil, errors.Join(err, conn.Close())
+	}
+	return cc, nil
 }
 
 // Client creates client over dtls connection.
@@ -116,6 +125,9 @@ func Client(conn *dtls.Conn, opts ...udp.Option) *udpClient.Conn {
 		cfg.MTU,
 		cfg.CloseSocket,
 	)
+	if cfg.QBlock != nil {
+		session.EnableQBlockReceive()
+	}
 	cc := udpClient.NewConnWithOpts(session,
 		&cfg,
 		udpClient.WithBlockWise(createBlockWise),
@@ -123,6 +135,10 @@ func Client(conn *dtls.Conn, opts ...udp.Option) *udpClient.Conn {
 		udpClient.WithRequestMonitor(cfg.RequestMonitor),
 	)
 
+	if err := cc.InitializationError(); err != nil {
+		cfg.Errors(err)
+		return cc
+	}
 	cfg.PeriodicRunner(func(now time.Time) bool {
 		cc.CheckExpirations(now)
 		return cc.Context().Err() == nil

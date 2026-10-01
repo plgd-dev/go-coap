@@ -28,10 +28,11 @@ type endpointQueue struct {
 }
 
 type LimitParallelRequests struct {
-	endpointLimit int64
-	limit         *semaphore.Weighted
-	do            DoFunc
-	doObserve     DoObserveFunc
+	initializationGuard func() error
+	endpointLimit       int64
+	limit               *semaphore.Weighted
+	do                  DoFunc
+	doObserve           DoObserveFunc
 	// only one request can be processed by one endpoint
 	endpointQueues *coapSync.Map[uint64, *endpointQueue]
 }
@@ -108,6 +109,11 @@ func (c *LimitParallelRequests) releaseEndpoint(endpointLimitKey uint64) {
 }
 
 func (c *LimitParallelRequests) Do(req *pool.Message) (*pool.Message, error) {
+	if c.initializationGuard != nil {
+		if err := c.initializationGuard(); err != nil {
+			return nil, err
+		}
+	}
 	endpointLimitKey := hash(req.Options())
 	if err := c.acquireEndpoint(req.Context(), endpointLimitKey); err != nil {
 		return nil, fmt.Errorf("cannot process request %v for client endpoint limit: %w", req, err)
@@ -121,6 +127,11 @@ func (c *LimitParallelRequests) Do(req *pool.Message) (*pool.Message, error) {
 }
 
 func (c *LimitParallelRequests) DoObserve(req *pool.Message, observeFunc func(req *pool.Message)) (Observation, error) {
+	if c.initializationGuard != nil {
+		if err := c.initializationGuard(); err != nil {
+			return nil, err
+		}
+	}
 	endpointLimitKey := hash(req.Options())
 	if err := c.acquireEndpoint(req.Context(), endpointLimitKey); err != nil {
 		return nil, fmt.Errorf("cannot process observe request %v for client endpoint limit: %w", req, err)
@@ -132,4 +143,9 @@ func (c *LimitParallelRequests) DoObserve(req *pool.Message, observeFunc func(re
 	}
 	defer c.limit.Release(1)
 	return c.doObserve(req, observeFunc)
+}
+
+// SetInitializationGuard installs a construction-time guard before request queues.
+func (c *LimitParallelRequests) SetInitializationGuard(guard func() error) {
+	c.initializationGuard = guard
 }

@@ -177,3 +177,9 @@ func (s *Session) Run(cc *client.Conn) (err error) {
 func (s *Session) NetConn() net.Conn {
 	return s.connection.NetConn()
 }
+
+// Finalize releases wrapper lifecycle resources without requiring Run startup.
+func (s *Session) Finalize() { s.shutdown() }
+
+// EnableQBlockReceive applies plaintext record safety before reader startup.
+func (s *Session) EnableQBlockReceive() { s.qblockEnabled = true }

@@ -57,6 +57,7 @@ var DefaultConfig = func() Config {
 
 type Config struct {
 	QBlockServer *qblock.ServerConfig
+	QBlock       *qblock.ClientConfig
 	config.Common[*udpClient.Conn]
 	CreateInactivityMonitor        udpClient.CreateInactivityMonitorFunc
 	GetMID                         GetMIDFunc

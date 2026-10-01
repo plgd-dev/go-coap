@@ -100,3 +100,112 @@ func TestQBlockCapabilityProbeUDP(t *testing.T) {
 		})
 	}
 }
+
+func TestQBlockOutboundUDP(t *testing.T) {
+	peer, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	require.NoError(t, err)
+	defer peer.Close()
+	require.NoError(t, peer.SetDeadline(time.Now().Add(4*time.Second)))
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
+	defer cancel()
+	cfg := qblock.DefaultClientConfig()
+	cfg.Mode = qblock.Require
+	cc, err := udp.Dial(peer.LocalAddr().String(), options.WithContext(ctx), options.WithQBlock(cfg), options.WithBlockwise(false, blockwise.SZX16, time.Second))
+	require.NoError(t, err)
+	defer cc.Close()
+	_, err = cc.Get(ctx, "/x")
+	require.ErrorIs(t, err, qblock.ErrCapabilityUnknown)
+	done := make(chan error, 1)
+	go func() {
+		ok, err := cc.ProbeQBlock(ctx, "/probe")
+		if !ok && err == nil {
+			err = net.ErrClosed
+		}
+		done <- err
+	}()
+	buf := make([]byte, 2048)
+	n, addr, err := peer.ReadFromUDP(buf)
+	require.NoError(t, err)
+	req := pool.NewMessage(ctx)
+	_, err = req.UnmarshalWithDecoder(qblock.Decoder{}, buf[:n])
+	require.NoError(t, err)
+	reply := pool.NewMessage(ctx)
+	reply.SetType(message.Acknowledgement)
+	reply.SetCode(codes.Content)
+	reply.SetMessageID(req.MessageID())
+	reply.SetToken(req.Token())
+	reply.SetOptionUint32(message.QBlock2, 0)
+	reply.SetOptionBytes(message.ETag, []byte{1})
+	reply.SetOptionUint32(message.Size2, 2)
+	reply.SetBody(bytes.NewReader([]byte("ok")))
+	wire, err := reply.MarshalWithEncoder(coder.DefaultCoder)
+	require.NoError(t, err)
+	_, err = peer.WriteToUDP(wire, addr)
+	require.NoError(t, err)
+	require.NoError(t, <-done)
+	go func() {
+		r, err := cc.Get(ctx, "/x")
+		if r != nil {
+			cc.ReleaseMessage(r)
+		}
+		done <- err
+	}()
+	n, addr, err = peer.ReadFromUDP(buf)
+	require.NoError(t, err)
+	req = pool.NewMessage(ctx)
+	_, err = req.UnmarshalWithDecoder(qblock.Decoder{}, buf[:n])
+	require.NoError(t, err)
+	require.Equal(t, message.NonConfirmable, req.Type())
+	require.True(t, req.HasOption(message.QBlock2))
+	reply.SetType(message.NonConfirmable)
+	reply.SetMessageID(req.MessageID() + 1)
+	reply.SetToken(req.Token())
+	wire, err = reply.MarshalWithEncoder(coder.DefaultCoder)
+	require.NoError(t, err)
+	_, err = peer.WriteToUDP(wire, addr)
+	require.NoError(t, err)
+	require.NoError(t, <-done)
+}
+
+func TestQBlockConstructionUDP(t *testing.T) {
+	socket, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	require.NoError(t, err)
+	defer socket.Close()
+	cfg := qblock.DefaultClientConfig()
+	cfg.MaxProbeWaiters = 0
+	for _, owned := range []bool{false, true} {
+		transport := socket
+		if owned {
+			transport, err = net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+			require.NoError(t, err)
+		}
+		calls, periodic := 0, 0
+		opts := []udp.Option{options.WithQBlock(cfg), options.WithErrors(func(error) { calls++ }), options.WithPeriodicRunner(func(func(time.Time) bool) { periodic++ })}
+		if owned {
+			opts = append(opts, options.WithCloseSocket())
+		}
+		cc := udp.Client(transport, opts...)
+		require.Error(t, cc.InitializationError())
+		select {
+		case <-cc.Done():
+		default:
+			t.Fatal("failed Done open")
+		}
+		require.Equal(t, 1, calls)
+		require.Zero(t, periodic)
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		_, err = cc.Get(ctx, "/x")
+		require.ErrorIs(t, err, cc.InitializationError())
+		require.ErrorIs(t, cc.Run(), cc.InitializationError())
+		require.Equal(t, 1, calls)
+		err = transport.SetReadDeadline(time.Now())
+		if owned {
+			require.Error(t, err)
+		} else {
+			require.NoError(t, err)
+		}
+	}
+	_, err = udp.Dial("invalid target", options.WithQBlock(cfg))
+	require.Error(t, err)
+}

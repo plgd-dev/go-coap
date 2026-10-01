@@ -257,3 +257,47 @@ func TestQBlockDTLSStopBeforePublication(t *testing.T) {
 	session.shutdown()
 	require.Equal(t, int32(1), closed.Load())
 }
+
+func TestQBlockOutboundOnlyDTLSReceive(t *testing.T) {
+	for _, mode := range []string{"overflow", "temporary"} {
+		t.Run(mode, func(t *testing.T) {
+			q := qblock.DefaultClientConfig()
+			calls := make(chan codes.Code, 1)
+			s := New(qOption(func(c *Config) {
+				c.QBlock = &q
+				c.MTU = 128
+				c.MaxMessageSize = 64
+				c.Handler = func(w *responsewriter.ResponseWriter[*client.Conn], r *pool.Message) {
+					calls <- r.Code()
+					_ = w.SetResponse(codes.Content, message.TextPlain, nil)
+				}
+			}))
+			defer s.Stop()
+			socket := newQDatagramConn()
+			cc, err := s.createConn(coapNet.NewConn(socket), client.DefaultConfig.CreateInactivityMonitor(), client.DefaultConfig.RequestMonitor)
+			require.NoError(t, err)
+			done := make(chan error, 1)
+			go func() { done <- cc.Run() }()
+			defer func() { _ = socket.Close(); <-done }()
+			req := pool.NewMessage(context.Background())
+			req.SetType(message.NonConfirmable)
+			req.SetCode(codes.GET)
+			req.SetMessageID(1)
+			req.SetToken([]byte{1})
+			wire, err := req.MarshalWithEncoder(coder.DefaultCoder)
+			require.NoError(t, err)
+			if mode == "overflow" {
+				socket.records <- qRecord{data: append(append([]byte(nil), wire...), bytes.Repeat([]byte{0}, 64)...)}
+			} else {
+				socket.records <- qRecord{err: &piondtls.TemporaryError{Err: io.ErrShortBuffer}}
+			}
+			socket.records <- qRecord{data: wire}
+			select {
+			case code := <-calls:
+				require.Equal(t, codes.GET, code)
+			case <-time.After(time.Second):
+				t.Fatal("outbound-only reader lost valid retry")
+			}
+		})
+	}
+}

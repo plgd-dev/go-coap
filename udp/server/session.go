@@ -164,3 +164,6 @@ func (s *Session) LocalAddr() net.Addr {
 func (s *Session) NetConn() net.Conn {
 	return s.connection.NetConn()
 }
+
+// Finalize releases wrapper lifecycle resources without requiring Run startup.
+func (s *Session) Finalize() { s.shutdown() }

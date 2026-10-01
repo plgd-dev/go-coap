@@ -88,14 +88,23 @@ func New(opt ...Option) *Server {
 
 	var runtime *udpClient.QBlockServerRuntime
 	var initErr error
+	if cfg.QBlock != nil {
+		copy := *cfg.QBlock
+		cfg.QBlock = &copy
+	}
 	if cfg.QBlockServer != nil {
 		copy := *cfg.QBlockServer
 		cfg.QBlockServer = &copy
-		runtime, initErr = udpClient.NewQBlockServerRuntime(copy)
-		if initErr == nil {
+	}
+	runtime, initErr = udpClient.NewQBlockRuntime(cfg.QBlock, cfg.QBlockServer)
+	if initErr == nil && runtime != nil {
+		if cfg.BlockwiseSZX > 6 {
+			initErr = errors.New("invalid q-block SZX")
+		} else {
 			initErr = runtime.ValidateTransport(min(uint32(cfg.MTU), cfg.MaxMessageSize))
 		}
 	}
+
 	return &Server{
 		ctx:           ctx,
 		cancel:        cancel,
@@ -296,7 +305,7 @@ func (s *Server) createConn(connection *coapNet.Conn, inactivityMonitor udpClien
 func (s *Server) reserveQConnection() bool {
 	for {
 		n := s.activeQConnections.Load()
-		if n >= s.cfg.QBlockServer.MaxConnections {
+		if n >= s.qblockRuntime.MaxConnections() {
 			return false
 		}
 		if s.activeQConnections.CompareAndSwap(n, n+1) {

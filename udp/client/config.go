@@ -9,6 +9,7 @@ import (
 	"github.com/plgd-dev/go-coap/v3/message/codes"
 	"github.com/plgd-dev/go-coap/v3/message/pool"
 	"github.com/plgd-dev/go-coap/v3/net/monitor/inactivity"
+	"github.com/plgd-dev/go-coap/v3/net/qblock"
 	"github.com/plgd-dev/go-coap/v3/net/responsewriter"
 	"github.com/plgd-dev/go-coap/v3/options/config"
 )
@@ -44,6 +45,7 @@ var DefaultConfig = func() Config {
 }()
 
 type Config struct {
+	QBlock *qblock.ClientConfig
 	config.Common[*Conn]
 	CreateInactivityMonitor        CreateInactivityMonitorFunc
 	RequestMonitor                 RequestMonitorFunc

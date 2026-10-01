@@ -129,7 +129,7 @@ func TestQBlockClassicFallbackFollowUpDoesNotAdvertiseQBlock2(t *testing.T) {
 	cc.handle(writer, fragment)
 	defer cc.ReleaseMessage(writer.Message())
 
-	require.True(t, writer.Message().HasOption(message.Block2))
+	require.False(t, writer.Message().HasOption(message.Block2), "Q-selected exchange must not create classic continuation")
 	require.False(t, writer.Message().HasOption(message.QBlock2))
 	cancel()
 	select {

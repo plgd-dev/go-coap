@@ -70,6 +70,9 @@ func (c *Client[C]) NewGetRequest(ctx context.Context, path string, opts ...mess
 // An error is returned if by failure to speak COAP (such as a network connectivity problem).
 // Any status code doesn't cause an error.
 func (c *Client[C]) Get(ctx context.Context, path string, opts ...message.Option) (*pool.Message, error) {
+	if err := c.initializationError(); err != nil {
+		return nil, err
+	}
 	req, err := c.NewGetRequest(ctx, path, opts...)
 	if err != nil {
 		return nil, fmt.Errorf("cannot create get request: %w", err)
@@ -97,6 +100,9 @@ func (c *Client[C]) NewObserveRequest(ctx context.Context, path string, opts ...
 
 // Observe subscribes for every change of resource on path.
 func (c *Client[C]) Observe(ctx context.Context, path string, observeFunc func(req *pool.Message), opts ...message.Option) (Observation, error) {
+	if err := c.initializationError(); err != nil {
+		return nil, err
+	}
 	req, err := c.NewObserveRequest(ctx, path, opts...)
 	if err != nil {
 		return nil, err
@@ -141,6 +147,9 @@ func (c *Client[C]) NewPostRequest(ctx context.Context, path string, contentForm
 //
 // If payload is nil then content format is not used.
 func (c *Client[C]) Post(ctx context.Context, path string, contentFormat message.MediaType, payload io.ReadSeeker, opts ...message.Option) (*pool.Message, error) {
+	if err := c.initializationError(); err != nil {
+		return nil, err
+	}
 	req, err := c.NewPostRequest(ctx, path, contentFormat, payload, opts...)
 	if err != nil {
 		return nil, fmt.Errorf("cannot create post request: %w", err)
@@ -178,6 +187,9 @@ func (c *Client[C]) NewPutRequest(ctx context.Context, path string, contentForma
 //
 // If payload is nil then content format is not used.
 func (c *Client[C]) Put(ctx context.Context, path string, contentFormat message.MediaType, payload io.ReadSeeker, opts ...message.Option) (*pool.Message, error) {
+	if err := c.initializationError(); err != nil {
+		return nil, err
+	}
 	req, err := c.NewPutRequest(ctx, path, contentFormat, payload, opts...)
 	if err != nil {
 		return nil, fmt.Errorf("cannot create put request: %w", err)
@@ -208,6 +220,9 @@ func (c *Client[C]) NewDeleteRequest(ctx context.Context, path string, opts ...m
 //
 // Use ctx to set timeout.
 func (c *Client[C]) Delete(ctx context.Context, path string, opts ...message.Option) (*pool.Message, error) {
+	if err := c.initializationError(); err != nil {
+		return nil, err
+	}
 	req, err := c.NewDeleteRequest(ctx, path, opts...)
 	if err != nil {
 		return nil, fmt.Errorf("cannot create delete request: %w", err)
@@ -238,4 +253,11 @@ func (c *Client[C]) Ping(ctx context.Context) error {
 	case <-ctx.Done():
 		return ctx.Err()
 	}
+}
+
+func (c *Client[C]) initializationError() error {
+	if guard, ok := c.cc.(interface{ InitializationError() error }); ok {
+		return guard.InitializationError()
+	}
+	return nil
 }

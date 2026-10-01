@@ -41,6 +41,9 @@ func (cc *Conn) qblockCapabilityState() qblockCapability {
 // exact effective path share a connection-owned exchange; cancellation is local
 // to each caller. Probing records session knowledge but never enables payload Q.
 func (cc *Conn) ProbeQBlock(ctx context.Context, path string) (bool, error) {
+	if err := cc.InitializationError(); err != nil {
+		return false, err
+	}
 	if c := cc.qblockClient; c != nil && c.initErr != nil {
 		return false, c.initErr
 	}

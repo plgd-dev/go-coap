@@ -3,6 +3,7 @@ package options
 import (
 	dtlsServer "github.com/plgd-dev/go-coap/v3/dtls/server"
 	"github.com/plgd-dev/go-coap/v3/net/qblock"
+	udpClient "github.com/plgd-dev/go-coap/v3/udp/client"
 	udpServer "github.com/plgd-dev/go-coap/v3/udp/server"
 )
 
@@ -22,3 +23,20 @@ func (o QBlockServerOpt) DTLSServerApply(cfg *dtlsServer.Config) {
 	copy := o.config
 	cfg.QBlockServer = &copy
 }
+
+// QBlockConfig and Mode are the canonical outbound configuration aliases.
+type QBlockConfig = qblock.ClientConfig
+type Mode = qblock.Mode
+
+const (
+	PreferKnown = qblock.PreferKnown
+	Require     = qblock.Require
+)
+
+type QBlockOpt struct{ config qblock.ClientConfig }
+
+// WithQBlock enables outbound selection after explicit peer discovery.
+func WithQBlock(c qblock.ClientConfig) QBlockOpt         { return QBlockOpt{c} }
+func (o QBlockOpt) UDPClientApply(c *udpClient.Config)   { copy := o.config; c.QBlock = &copy }
+func (o QBlockOpt) UDPServerApply(c *udpServer.Config)   { copy := o.config; c.QBlock = &copy }
+func (o QBlockOpt) DTLSServerApply(c *dtlsServer.Config) { copy := o.config; c.QBlock = &copy }

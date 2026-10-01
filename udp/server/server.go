@@ -86,14 +86,23 @@ func New(opt ...Option) *Server {
 	}
 	var runtime *client.QBlockServerRuntime
 	var initErr error
+	if cfg.QBlock != nil {
+		copy := *cfg.QBlock
+		cfg.QBlock = &copy
+	}
 	if cfg.QBlockServer != nil {
 		copy := *cfg.QBlockServer
 		cfg.QBlockServer = &copy
-		runtime, initErr = client.NewQBlockServerRuntime(copy)
-		if initErr == nil {
+	}
+	runtime, initErr = client.NewQBlockRuntime(cfg.QBlock, cfg.QBlockServer)
+	if initErr == nil && runtime != nil {
+		if cfg.BlockwiseSZX > 6 {
+			initErr = errors.New("invalid q-block SZX")
+		} else {
 			initErr = runtime.ValidateTransport(min(uint32(cfg.MTU), cfg.MaxMessageSize))
 		}
 	}
+
 	return &Server{
 		qblockRuntime: runtime, initErr: initErr,
 		ctx:               ctx,
@@ -357,7 +366,7 @@ func (s *Server) getOrCreateConn(udpConn *coapNet.UDPConn, raddr *net.UDPAddr, l
 		}
 	}
 
-	if s.cfg.QBlockServer != nil && uint64(len(s.conns)) >= uint64(s.cfg.QBlockServer.MaxConnections) {
+	if s.qblockRuntime != nil && uint64(len(s.conns)) >= uint64(s.qblockRuntime.MaxConnections()) {
 		return nil, false, errors.New("q-block server connection limit exceeded")
 	}
 

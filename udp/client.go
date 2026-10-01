@@ -2,6 +2,7 @@ package udp
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"time"
@@ -27,6 +28,9 @@ func Dial(target string, opts ...Option) (*client.Conn, error) {
 	for _, o := range opts {
 		o.UDPClientApply(&cfg)
 	}
+	if err := client.ValidateQBlockConfig(&cfg); err != nil {
+		return nil, err
+	}
 	c, err := cfg.Dialer.DialContext(cfg.Ctx, cfg.Net, target)
 	if err != nil {
 		return nil, err
@@ -36,7 +40,12 @@ func Dial(target string, opts ...Option) (*client.Conn, error) {
 		return nil, fmt.Errorf("unsupported connection type: %T", c)
 	}
 	opts = append(opts, options.WithCloseSocket())
-	return Client(conn, opts...), nil
+	opts = append(opts, options.WithErrors(func(error) {}))
+	cc := Client(conn, opts...)
+	if err := cc.InitializationError(); err != nil {
+		return nil, errors.Join(err, conn.Close())
+	}
+	return cc, nil
 }
 
 // Client creates client over udp connection.
@@ -100,6 +109,10 @@ func Client(conn *net.UDPConn, opts ...Option) *client.Conn {
 		client.WithInactivityMonitor(monitor),
 		client.WithRequestMonitor(cfg.RequestMonitor),
 	)
+	if err := cc.InitializationError(); err != nil {
+		cfg.Errors(err)
+		return cc
+	}
 	cfg.PeriodicRunner(func(now time.Time) bool {
 		cc.CheckExpirations(now)
 		return cc.Context().Err() == nil
