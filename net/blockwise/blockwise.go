@@ -145,27 +145,12 @@ type BlockWise[C Client] struct {
 	maxReceiveBodySize        int64
 }
 
-var (
-	// ErrRequestEntityIncomplete is returned when a Block1 request cannot be
-	// matched to the reassembly state, e.g. because the transfer expired or a
-	// block is missing. The peer receives 4.08 (Request Entity Incomplete).
-	ErrRequestEntityIncomplete = errors.New("request entity incomplete")
-	// ErrRequestEntityTooLarge is returned when a reassembled Block1 body
-	// would exceed the configured limit. The peer receives 4.13 (Request
-	// Entity Too Large).
-	ErrRequestEntityTooLarge = errors.New("request entity too large")
-)
-
-// SetRollingExpiration enables rolling expiration for incoming Block1
-// transfers. When enabled, each block that extends the reassembled body
-// resets the expiration, so a transfer only expires after the configured
-// expiration of inactivity instead of a fixed time after the first block.
+// SetRollingExpiration resets the Block1 transfer expiration on each new block.
 func (b *BlockWise[C]) SetRollingExpiration(enabled bool) {
 	b.rollingExpiration = enabled
 }
 
-// SetMaxReceiveBodySize limits the size of a reassembled incoming Block1 body.
-// Value 0 means unlimited.
+// SetMaxReceiveBodySize limits the Block1 body size, 0 means unlimited.
 func (b *BlockWise[C]) SetMaxReceiveBodySize(size int64) {
 	b.maxReceiveBodySize = max(size, 0)
 }
@@ -340,24 +325,22 @@ func fitSZX(r *pool.Message, blockType message.OptionID, maxSZX SZX) SZX {
 	return maxSZX
 }
 
-func (b *BlockWise[C]) sendErrorResponse(w *responsewriter.ResponseWriter[C], token message.Token, code codes.Code) *pool.Message {
+func (b *BlockWise[C]) sendEntityIncomplete(w *responsewriter.ResponseWriter[C], token message.Token) {
 	sendMessage := b.cc.AcquireMessage(w.Message().Context())
-	sendMessage.SetCode(code)
+	sendMessage.SetCode(codes.RequestEntityIncomplete)
 	sendMessage.SetToken(token)
 	sendMessage.SetType(message.NonConfirmable)
 	w.SetMessage(sendMessage)
-	return sendMessage
 }
 
-func (b *BlockWise[C]) handleReceivedMessageError(w *responsewriter.ResponseWriter[C], r *pool.Message, err error) {
-	if errors.Is(err, ErrRequestEntityTooLarge) {
-		resp := b.sendErrorResponse(w, r.Token(), codes.RequestEntityTooLarge)
-		// RFC 7959 §4: indicate the maximum acceptable body size.
-		resp.SetOptionUint32(message.Size1, math.CastTo[uint32](b.maxReceiveBodySize))
-	} else {
-		b.sendErrorResponse(w, r.Token(), codes.RequestEntityIncomplete)
-	}
-	b.errors(fmt.Errorf("handleReceivedMessage(%v): %w", r, err))
+// sendEntityTooLarge responds with 4.13 and the size limit in Size1 (RFC 7959 §4).
+func (b *BlockWise[C]) sendEntityTooLarge(w *responsewriter.ResponseWriter[C], token message.Token) {
+	sendMessage := b.cc.AcquireMessage(w.Message().Context())
+	sendMessage.SetCode(codes.RequestEntityTooLarge)
+	sendMessage.SetToken(token)
+	sendMessage.SetType(message.NonConfirmable)
+	sendMessage.SetOptionUint32(message.Size1, math.CastTo[uint32](b.maxReceiveBodySize))
+	w.SetMessage(sendMessage)
 }
 
 func wantsToBeReceived(r *pool.Message) bool {
@@ -395,7 +378,8 @@ func (b *BlockWise[C]) Handle(w *responsewriter.ResponseWriter[C], r *pool.Messa
 	if len(token) == 0 {
 		err := b.handleReceivedMessage(w, r, maxSZX, maxMessageSize, next)
 		if err != nil {
-			b.handleReceivedMessageError(w, r, err)
+			b.sendEntityIncomplete(w, token)
+			b.errors(fmt.Errorf("handleReceivedMessage(%v): %w", r, err))
 		}
 		return
 	}
@@ -405,7 +389,8 @@ func (b *BlockWise[C]) Handle(w *responsewriter.ResponseWriter[C], r *pool.Messa
 	if !sendingMessageExist || wantsToBeReceived(r) {
 		err := b.handleReceivedMessage(w, r, maxSZX, maxMessageSize, next)
 		if err != nil {
-			b.handleReceivedMessageError(w, r, err)
+			b.sendEntityIncomplete(w, token)
+			b.errors(fmt.Errorf("handleReceivedMessage(%v): %w", r, err))
 		}
 		return
 	}
@@ -693,24 +678,20 @@ func (b *BlockWise[C]) getPayloadFromCachedReceivedMessage(r, cachedReceivedMess
 	return payloadFile, payloadSize, nil
 }
 
-// checkReceiveBodySize verifies that appending r at off, or the total size
-// announced by the Size1 option, does not exceed maxReceiveBodySize.
-func (b *BlockWise[C]) checkReceiveBodySize(r *pool.Message, off int64) error {
+// receiveBodySize returns the body size after appending r at off, or Size1 if larger.
+func receiveBodySize(r *pool.Message, off int64) (int64, error) {
 	size := off
 	if r.Body() != nil {
 		n, err := r.BodySize()
 		if err != nil {
-			return payloadSizeError(err)
+			return 0, payloadSizeError(err)
 		}
 		size += n
 	}
 	if size1, err := r.GetOptionUint32(message.Size1); err == nil {
 		size = max(size, int64(size1))
 	}
-	if size > b.maxReceiveBodySize {
-		return fmt.Errorf("%w: %v bytes exceeds limit of %v bytes", ErrRequestEntityTooLarge, size, b.maxReceiveBodySize)
-	}
-	return nil
+	return size, nil
 }
 
 func copyToPayloadFromOffset(r *pool.Message, payloadFile *memfile.File, offset int64) (int64, error) {
@@ -840,9 +821,7 @@ func (b *BlockWise[C]) processReceivedMessage(w *responsewriter.ResponseWriter[C
 	}
 	if cachedReceivedMessageGuard == nil {
 		szx = getSzx(szx, maxSzx)
-		// RFC 7959 §2.9.2: a non-initial block without transfer state
-		// (expired, evicted, or never seen) must be rejected with 4.08
-		// rather than acknowledged with 2.31 or forwarded as a full body.
+		// RFC 7959 §2.9.2: reject non-initial blocks without transfer state.
 		if blockType == message.Block1 && num != 0 {
 			return fmt.Errorf("%w: block %v received without transfer context", ErrRequestEntityIncomplete, num)
 		}
@@ -872,17 +851,24 @@ func (b *BlockWise[C]) processReceivedMessage(w *responsewriter.ResponseWriter[C
 		err = fmt.Errorf("%w: block %v at offset %v, have %v bytes", ErrRequestEntityIncomplete, num, off, payloadSize)
 		return err
 	}
-	if off == payloadSize { //nolint:nestif
-		if blockType == message.Block1 && b.maxReceiveBodySize > 0 {
-			if err = b.checkReceiveBodySize(r, off); err != nil {
-				return err
-			}
+	if blockType == message.Block1 && b.maxReceiveBodySize > 0 {
+		var size int64
+		if size, err = receiveBodySize(r, off); err != nil {
+			return err
 		}
+		if size > b.maxReceiveBodySize {
+			b.receivingMessagesCache.Delete(tokenStr)
+			b.sendEntityTooLarge(w, token)
+			b.errors(fmt.Errorf("handleReceivedMessage(%v): %w: %v bytes", r, ErrRequestEntityTooLarge, size))
+			return nil
+		}
+	}
+	if off == payloadSize { //nolint:nestif
 		payloadSize, err = copyToPayloadFromOffset(r, payloadFile, off)
 		if err != nil {
 			return fmt.Errorf("cannot copy data to payload: %w", err)
 		}
-		// Rolling expiry: only forward progress keeps the transfer alive.
+		// Only new data extends the expiration.
 		if more && blockType == message.Block1 && b.rollingExpiration {
 			if e := b.receivingMessagesCache.Load(tokenStr); e != nil {
 				e.ValidUntil.Store(time.Now().Add(b.expiration))
