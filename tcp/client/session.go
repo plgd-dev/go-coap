@@ -169,6 +169,9 @@ func (s *Session) processBuffer(buffer *bytes.Buffer, cc *Conn) error {
 		if errors.Is(err, message.ErrShortRead) {
 			return nil
 		}
+		if err != nil {
+			return fmt.Errorf("cannot decode header: %w", err)
+		}
 		if header.MessageLength > s.maxMessageSize {
 			return fmt.Errorf("max message size(%v) was exceeded %v", s.maxMessageSize, header.MessageLength)
 		}
