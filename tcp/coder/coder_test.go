@@ -1,6 +1,8 @@
 package coder
 
 import (
+	"encoding/binary"
+	"math"
 	"testing"
 
 	"github.com/plgd-dev/go-coap/v3/message"
@@ -60,6 +62,35 @@ func TestUnmarshalMessage(t *testing.T) {
 		Token:   []byte{0x1, 0x2, 0x3},
 		Options: []message.Option{{ID: 11, Value: []byte{97}}, {ID: 11, Value: []byte{98}}, {ID: 11, Value: []byte{99}}, {ID: 11, Value: []byte{100}}, {ID: 11, Value: []byte{101}}, {ID: 12, Value: []byte{}}},
 	})
+}
+
+func TestDecodeHeaderMessageLength(t *testing.T) {
+	// Len=15 with TKL=1: the header is 5 bytes, followed by code and token.
+	header := func(extLen uint32) []byte {
+		data := []byte{0xf1}
+		data = binary.BigEndian.AppendUint32(data, extLen)
+		return append(data, byte(codes.GET), 0x01)
+	}
+
+	// Largest message that still fits into MessageHeader.MessageLength.
+	var h MessageHeader
+	_, err := DefaultCoder.DecodeHeader(header(math.MaxUint32-MessageLength15Base-7), &h)
+	require.NoError(t, err)
+	require.Equal(t, uint32(math.MaxUint32), h.MessageLength)
+
+	// One byte more does not fit and must not wrap to a small MessageLength.
+	h = MessageHeader{}
+	_, err = DefaultCoder.DecodeHeader(header(math.MaxUint32-MessageLength15Base-6), &h)
+	require.ErrorIs(t, err, ErrMessageTooLong)
+
+	// Extended length that wraps the total to exactly 7 bytes.
+	data := header(1<<32 - MessageLength15Base)
+	h = MessageHeader{}
+	_, err = DefaultCoder.DecodeHeader(data, &h)
+	require.ErrorIs(t, err, ErrMessageTooLong)
+	msg := message.Message{Options: make(message.Options, 0, 32)}
+	_, err = DefaultCoder.Decode(data, &msg)
+	require.ErrorIs(t, err, ErrMessageTooLong)
 }
 
 func FuzzDecode(f *testing.F) {

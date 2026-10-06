@@ -323,6 +323,66 @@ func TestServerKeepAliveMonitor(t *testing.T) {
 	require.True(t, inactivityDetected.Load())
 }
 
+func TestServerRejectsOversizedMessageLength(t *testing.T) {
+	ld, err := coapNet.NewTCPListener("tcp4", "")
+	require.NoError(t, err)
+	defer func() {
+		errC := ld.Close()
+		require.NoError(t, errC)
+	}()
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second*8)
+	defer cancel()
+
+	var handlerCalled atomic.Bool
+	connClosed := make(chan struct{})
+	sd := tcp.NewServer(
+		options.WithHandlerFunc(func(*responsewriter.ResponseWriter[*client.Conn], *pool.Message) {
+			handlerCalled.Store(true)
+		}),
+		options.WithOnNewConn(func(cc *client.Conn) {
+			cc.AddOnClose(func() {
+				close(connClosed)
+			})
+		}),
+	)
+
+	var serverWg sync.WaitGroup
+	defer func() {
+		sd.Stop()
+		serverWg.Wait()
+	}()
+	serverWg.Add(1)
+	go func() {
+		defer serverWg.Done()
+		errS := sd.Serve(ld)
+		assert.NoError(t, errS)
+	}()
+
+	dialer := net.Dialer{}
+	cc, err := dialer.DialContext(ctx, "tcp", ld.Addr().String())
+	require.NoError(t, err)
+	defer func() {
+		_ = cc.Close()
+	}()
+
+	// Len=15, TKL=1 with an extended length that declares a 4 GiB message. Before the
+	// total was computed in 64 bits it wrapped to 7 bytes, slipped under MaxMessageSize
+	// and was dispatched as an empty GET.
+	data := []byte{0xf1}
+	data = binary.BigEndian.AppendUint32(data, 1<<32-coder.MessageLength15Base)
+	data = append(data, byte(codes.GET), 0x01)
+	_, err = cc.Write(data)
+	require.NoError(t, err)
+
+	select {
+	case <-connClosed:
+	case <-ctx.Done():
+		require.FailNow(t, "connection was not closed")
+	}
+	require.False(t, handlerCalled.Load())
+}
+
 func TestCheckForLossOrder(t *testing.T) {
 	ld, err := coapNet.NewTCPListener("tcp4", "")
 	require.NoError(t, err)

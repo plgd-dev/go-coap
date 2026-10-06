@@ -163,10 +163,10 @@ func (c *Coder) DecodeHeader(data []byte, h *MessageHeader) (int, error) {
 	lenNib := (firstByte & 0xf0) >> 4
 	tkl := firstByte & 0x0f
 
-	var opLen int
+	var opLen uint64
 	switch {
 	case lenNib < MessageLength13Base:
-		opLen = int(lenNib)
+		opLen = uint64(lenNib)
 	case lenNib == 13:
 		if len(data) < 1 {
 			return -1, message.ErrShortRead
@@ -174,7 +174,7 @@ func (c *Coder) DecodeHeader(data []byte, h *MessageHeader) (int, error) {
 		extLen := data[0]
 		data = data[1:]
 		hdrOff++
-		opLen = MessageLength13Base + int(extLen)
+		opLen = MessageLength13Base + uint64(extLen)
 	case lenNib == 14:
 		if len(data) < 2 {
 			return -1, message.ErrShortRead
@@ -182,7 +182,7 @@ func (c *Coder) DecodeHeader(data []byte, h *MessageHeader) (int, error) {
 		extLen := binary.BigEndian.Uint16(data)
 		data = data[2:]
 		hdrOff += 2
-		opLen = MessageLength14Base + int(extLen)
+		opLen = MessageLength14Base + uint64(extLen)
 	case lenNib == 15:
 		if len(data) < 4 {
 			return -1, message.ErrShortRead
@@ -190,10 +190,16 @@ func (c *Coder) DecodeHeader(data []byte, h *MessageHeader) (int, error) {
 		extLen := binary.BigEndian.Uint32(data)
 		data = data[4:]
 		hdrOff += 4
-		opLen = MessageLength15Base + int(extLen)
+		opLen = MessageLength15Base + uint64(extLen)
 	}
 
-	h.MessageLength = hdrOff + 1 + uint32(tkl) + math.CastTo[uint32](opLen)
+	// The 4-byte extended length can describe a message larger than MessageLength can hold,
+	// so compute the total in 64 bits and refuse it instead of letting it wrap.
+	messageLength, err := math.SafeCastTo[uint32](uint64(hdrOff) + 1 + uint64(tkl) + opLen)
+	if err != nil {
+		return -1, ErrMessageTooLong
+	}
+	h.MessageLength = messageLength
 	if len(data) < 1 {
 		return -1, message.ErrShortRead
 	}
