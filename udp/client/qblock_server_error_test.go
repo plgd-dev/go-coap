@@ -144,6 +144,65 @@ func TestQBlockNONApplicationErrorBounds(t *testing.T) {
 
 // Rejecting missing required metadata must not admit a partial body or steal
 // ownership from a different live transfer sharing the packet token.
+func TestQBlockNONOversizedQ1Size(t *testing.T) {
+	for _, method := range []codes.Code{codes.POST, codes.PUT} {
+		t.Run(method.String(), func(t *testing.T) {
+			mc := qblock.DefaultManagerConfig()
+			mc.Transfer.MaxBodySize = 16
+			calls := 0
+			h := newServerHarness(t, mc, qblockServerConfig{}, func(w *responsewriter.ResponseWriter[*Conn], _ *pool.Message) {
+				calls++
+				_ = w.SetResponse(codes.Changed, message.TextPlain, bytes.NewReader([]byte("handled")))
+			})
+			req := h.q1(t, 1, 0, true, 32, "0123456789abcdef")
+			req.SetCode(method)
+
+			h.ingest(req)
+
+			writes := h.session.writesSnapshot()
+			require.Len(t, writes, 1)
+			wire := writes[0]
+			require.Equal(t, codes.RequestEntityTooLarge, wire.code)
+			require.Equal(t, message.NonConfirmable, wire.typ)
+			require.Equal(t, message.Token{1}, wire.token)
+			require.Empty(t, wire.payload)
+			require.Len(t, wire.options, 1)
+			require.False(t, wire.options.HasOption(message.QBlock1))
+			require.False(t, wire.options.HasOption(message.QBlock2))
+			maxSize, err := wire.options.GetUint32(message.Size1)
+			require.NoError(t, err)
+			require.Equal(t, uint32(16), maxSize)
+
+			response := h.cc.AcquireMessage(context.Background())
+			defer h.cc.ReleaseMessage(response)
+			response.SetType(wire.typ)
+			response.SetCode(wire.code)
+			response.SetMessageID(wire.mid)
+			response.SetToken(wire.token)
+			response.ResetOptionsTo(wire.options)
+			wireSize, err := qblockDatagramSize(response)
+			require.NoError(t, err)
+			require.LessOrEqual(t, wireSize, uint64(h.cc.qblockClient.datagramLimit))
+
+			require.Zero(t, calls)
+			require.Equal(t, serverSnapshot{}, h.snapshot())
+		})
+	}
+}
+
+func TestQBlockNONOversizedQ1SizeNoResponse(t *testing.T) {
+	mc := qblock.DefaultManagerConfig()
+	mc.Transfer.MaxBodySize = 16
+	h := newServerHarness(t, mc, qblockServerConfig{}, nil)
+	req := h.q1(t, 1, 0, true, 32, "0123456789abcdef")
+	req.SetOptionUint32(message.NoResponse, 8)
+
+	h.ingest(req)
+
+	require.Empty(t, h.session.writesSnapshot())
+	require.Equal(t, serverSnapshot{}, h.snapshot())
+}
+
 func TestQBlockNONMissingQ1Metadata(t *testing.T) {
 	for _, method := range []codes.Code{codes.POST, codes.PUT} {
 		for _, missing := range []message.OptionID{message.RequestTag, message.Size1} {

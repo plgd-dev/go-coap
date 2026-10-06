@@ -379,7 +379,11 @@ func (c *qblockClient) handleServerRequest(msg *pool.Message) bool {
 			return true
 		}
 		announced, err := msg.GetOptionUint32(message.Size1)
-		if err != nil || announced > c.managerConfig.Transfer.MaxBodySize {
+		if err != nil {
+			return true
+		}
+		if announced > c.managerConfig.Transfer.MaxBodySize {
+			c.rejectOversizedQ1(msg)
 			return true
 		}
 	}

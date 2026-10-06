@@ -73,7 +73,22 @@ func (c *qblockClient) rejectMissingQ1Metadata(req *pool.Message) bool {
 	if req.Type() != message.NonConfirmable || (req.Code() != codes.POST && req.Code() != codes.PUT) || (req.HasOption(message.RequestTag) && req.HasOption(message.Size1)) {
 		return false
 	}
-	if qblockSuppressResponse(req.Options(), codes.BadRequest) {
+	return c.rejectQ1Error(req, codes.BadRequest, nil)
+}
+
+// An announced Q1 body above the configured limit cannot be assembled. Reject
+// it before receiver admission, and advertise the maximum body size in the
+// bounded ordinary 4.13 response when it fits in the response datagram.
+func (c *qblockClient) rejectOversizedQ1(req *pool.Message) bool {
+	if req.Type() != message.NonConfirmable || (req.Code() != codes.POST && req.Code() != codes.PUT) || !req.HasOption(message.RequestTag) || !req.HasOption(message.Size1) {
+		return false
+	}
+	maxSize := c.managerConfig.Transfer.MaxBodySize
+	return c.rejectQ1Error(req, codes.RequestEntityTooLarge, &maxSize)
+}
+
+func (c *qblockClient) rejectQ1Error(req *pool.Message, code codes.Code, responseSize1 *uint32) bool {
+	if qblockSuppressResponse(req.Options(), code) {
 		return true
 	}
 	c.lockAction()
@@ -106,7 +121,16 @@ func (c *qblockClient) rejectMissingQ1Metadata(req *pool.Message) bool {
 			break
 		}
 	}
-	c.setOrdinaryError(msg, codes.BadRequest, nil, nil)
+	c.setOrdinaryError(msg, code, nil, nil)
+	if responseSize1 != nil {
+		msg.SetOptionUint32(message.Size1, *responseSize1)
+		// Include the endpoint's control options in the bound calculation, as
+		// writeQBlockMessage will do before writing the response.
+		c.cc.upsertControlInformation(msg)
+		if size, err := qblockDatagramSize(msg); err != nil || size > uint64(c.datagramLimit) {
+			msg.Remove(message.Size1)
+		}
+	}
 	c.mu.Unlock()
 	c.actionMu.Unlock()
 	if admitted {
