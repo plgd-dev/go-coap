@@ -141,6 +141,18 @@ type BlockWise[C Client] struct {
 	errors                    func(error)
 	getSentRequestFromOutside func(token message.Token) (*pool.Message, bool)
 	expiration                time.Duration
+	rollingExpiration         bool
+	maxReceiveBodySize        int64
+}
+
+// SetRollingExpiration resets the Block1 transfer expiration on each new block.
+func (b *BlockWise[C]) SetRollingExpiration(enabled bool) {
+	b.rollingExpiration = enabled
+}
+
+// SetMaxReceiveBodySize limits the Block1 body size, 0 means unlimited.
+func (b *BlockWise[C]) SetMaxReceiveBodySize(size int64) {
+	b.maxReceiveBodySize = max(size, 0)
 }
 
 type messageGuard struct {
@@ -318,6 +330,16 @@ func (b *BlockWise[C]) sendEntityIncomplete(w *responsewriter.ResponseWriter[C],
 	sendMessage.SetCode(codes.RequestEntityIncomplete)
 	sendMessage.SetToken(token)
 	sendMessage.SetType(message.NonConfirmable)
+	w.SetMessage(sendMessage)
+}
+
+// sendEntityTooLarge responds with 4.13 and the size limit in Size1 (RFC 7959 §4).
+func (b *BlockWise[C]) sendEntityTooLarge(w *responsewriter.ResponseWriter[C], token message.Token) {
+	sendMessage := b.cc.AcquireMessage(w.Message().Context())
+	sendMessage.SetCode(codes.RequestEntityTooLarge)
+	sendMessage.SetToken(token)
+	sendMessage.SetType(message.NonConfirmable)
+	sendMessage.SetOptionUint32(message.Size1, math.CastTo[uint32](b.maxReceiveBodySize))
 	w.SetMessage(sendMessage)
 }
 
@@ -656,6 +678,22 @@ func (b *BlockWise[C]) getPayloadFromCachedReceivedMessage(r, cachedReceivedMess
 	return payloadFile, payloadSize, nil
 }
 
+// receiveBodySize returns the body size after appending r at off, or Size1 if larger.
+func receiveBodySize(r *pool.Message, off int64) (int64, error) {
+	size := off
+	if r.Body() != nil {
+		n, err := r.BodySize()
+		if err != nil {
+			return 0, payloadSizeError(err)
+		}
+		size += n
+	}
+	if size1, err := r.GetOptionUint32(message.Size1); err == nil {
+		size = max(size, int64(size1))
+	}
+	return size, nil
+}
+
 func copyToPayloadFromOffset(r *pool.Message, payloadFile *memfile.File, offset int64) (int64, error) {
 	copyn, err := payloadFile.Seek(offset, io.SeekStart)
 	if err != nil {
@@ -783,6 +821,10 @@ func (b *BlockWise[C]) processReceivedMessage(w *responsewriter.ResponseWriter[C
 	}
 	if cachedReceivedMessageGuard == nil {
 		szx = getSzx(szx, maxSzx)
+		// RFC 7959 §2.9.2: reject non-initial blocks without transfer state.
+		if blockType == message.Block1 && num != 0 {
+			return fmt.Errorf("%w: block %v received without transfer context", ErrRequestEntityIncomplete, num)
+		}
 		// if there is no more then just forward req to next handler
 		if !more {
 			next(w, r)
@@ -805,10 +847,32 @@ func (b *BlockWise[C]) processReceivedMessage(w *responsewriter.ResponseWriter[C
 		return fmt.Errorf("cannot get payload: %w", err)
 	}
 	off := num * szx.Size()
+	if blockType == message.Block1 && (off > payloadSize || (off < payloadSize && !more)) {
+		err = fmt.Errorf("%w: block %v at offset %v, have %v bytes", ErrRequestEntityIncomplete, num, off, payloadSize)
+		return err
+	}
+	if blockType == message.Block1 && b.maxReceiveBodySize > 0 {
+		var size int64
+		if size, err = receiveBodySize(r, off); err != nil {
+			return err
+		}
+		if size > b.maxReceiveBodySize {
+			b.receivingMessagesCache.Delete(tokenStr)
+			b.sendEntityTooLarge(w, token)
+			b.errors(fmt.Errorf("handleReceivedMessage(%v): %w: %v bytes", r, ErrRequestEntityTooLarge, size))
+			return nil
+		}
+	}
 	if off == payloadSize { //nolint:nestif
 		payloadSize, err = copyToPayloadFromOffset(r, payloadFile, off)
 		if err != nil {
 			return fmt.Errorf("cannot copy data to payload: %w", err)
+		}
+		// Only new data extends the expiration.
+		if more && blockType == message.Block1 && b.rollingExpiration {
+			if e := b.receivingMessagesCache.Load(tokenStr); e != nil {
+				e.ValidUntil.Store(time.Now().Add(b.expiration))
+			}
 		}
 		if !more {
 			b.receivingMessagesCache.Delete(tokenStr)
