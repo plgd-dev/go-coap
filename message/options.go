@@ -186,7 +186,7 @@ func (options Options) GetUint32s(id OptionID, r []uint32) (int, error) {
 		return lastIdx - firstIdx, ErrTooSmall
 	}
 	var idx int
-	for i := firstIdx; i <= lastIdx; i++ {
+	for i := firstIdx; i < lastIdx; i++ {
 		val, _, err := DecodeUint32(options[i].Value)
 		if err == nil {
 			r[idx] = val
