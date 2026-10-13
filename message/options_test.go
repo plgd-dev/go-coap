@@ -351,6 +351,30 @@ func TestQueryOption(t *testing.T) {
 	require.True(t, opts.HasOption(URIQuery))
 }
 
+func TestGetUint32s(t *testing.T) {
+	// Two repeated uint32 options of the same ID, followed by a different option.
+	opts := Options{
+		{ID: Accept, Value: []byte{0x01}},
+		{ID: Accept, Value: []byte{0x02}},
+		{ID: Size1, Value: []byte{0xAA}},
+	}
+
+	// Result buffer sized exactly to the matched group: must not read the
+	// neighbouring Size1 option nor write past the buffer.
+	r := make([]uint32, 2)
+	n, err := opts.GetUint32s(Accept, r)
+	require.NoError(t, err)
+	require.Equal(t, 2, n)
+	require.Equal(t, []uint32{1, 2}, r)
+
+	// Requested group positioned last must not index past the options slice.
+	r = make([]uint32, 4)
+	n, err = opts.GetUint32s(Size1, r)
+	require.NoError(t, err)
+	require.Equal(t, 1, n)
+	require.Equal(t, uint32(0xAA), r[0])
+}
+
 func FuzzUnmarshalData(f *testing.F) {
 	f.Fuzz(func(_ *testing.T, input_data []byte) {
 		uoptions := make(Options, 0, 10)
