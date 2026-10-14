@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"sync"
 	"time"
 
 	"github.com/dsnet/golib/memfile"
@@ -141,6 +142,9 @@ type BlockWise[C Client] struct {
 	errors                    func(error)
 	getSentRequestFromOutside func(token message.Token) (*pool.Message, bool)
 	expiration                time.Duration
+	// sendingMessageMutex serializes continueSendingMessage, which reads and
+	// seeks the body of a message shared via sendingMessagesCache.
+	sendingMessageMutex sync.Mutex
 }
 
 type messageGuard struct {
@@ -510,6 +514,11 @@ func (b *BlockWise[C]) continueSendingMessage(w *responsewriter.ResponseWriter[C
 	}
 	var sendMessage *pool.Message
 	var more bool
+	// createSendingMessage seeks and reads the body of the cached message, so
+	// concurrent continuations for the same token (LoadWithFunc only holds a
+	// read lock) must not run it at the same time.
+	b.sendingMessageMutex.Lock()
+	defer b.sendingMessageMutex.Unlock()
 	b.sendingMessagesCache.LoadWithFunc(r.Token().Hash(), func(value *cache.Element[*pool.Message]) *cache.Element[*pool.Message] {
 		sendMessage, more, err = b.createSendingMessage(value.Data(), maxSZX, maxMessageSize, block)
 		if err != nil {
