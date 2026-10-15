@@ -162,6 +162,11 @@ func (c *Coder) DecodeHeader(data []byte, h *MessageHeader) (int, error) {
 
 	lenNib := (firstByte & 0xf0) >> 4
 	tkl := firstByte & 0x0f
+	// TKL values 9-15 are reserved and must be treated as a message format
+	// error (RFC 8323 section 3.2). The UDP coder already rejects them.
+	if tkl > message.MaxTokenSize {
+		return -1, message.ErrInvalidTokenLen
+	}
 
 	var opLen uint64
 	switch {
