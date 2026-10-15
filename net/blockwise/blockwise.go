@@ -735,6 +735,35 @@ func receiveBodySize(r *pool.Message, off int64) (int64, error) {
 	return size, nil
 }
 
+// rejectTooLarge responds with 4.13 if appending r at off exceeds maxReceiveBodySize.
+func (b *BlockWise[C]) rejectTooLarge(w *responsewriter.ResponseWriter[C], r *pool.Message, token message.Token, off int64) (bool, error) {
+	if b.maxReceiveBodySize <= 0 {
+		return false, nil
+	}
+	size, err := receiveBodySize(r, off)
+	if err != nil {
+		return false, err
+	}
+	if size <= b.maxReceiveBodySize {
+		return false, nil
+	}
+	b.sendEntityTooLarge(w, token)
+	b.errors(fmt.Errorf("handleReceivedMessage(%v): %w: %v bytes", r, ErrRequestEntityTooLarge, size))
+	return true, nil
+}
+
+// checkFullBlock verifies that a non-final block carries a full block (RFC 7959 §2.2, RFC 8323 §6).
+func checkFullBlock(r *pool.Message, szx SZX) error {
+	n, err := r.BodySize()
+	if err != nil {
+		return payloadSizeError(err)
+	}
+	if n == szx.Size() || (szx == SZXBERT && n > 0 && n%szx.Size() == 0) {
+		return nil
+	}
+	return fmt.Errorf("%w: non-final block has %v bytes, expected %v", ErrRequestEntityIncomplete, n, szx.Size())
+}
+
 func copyToPayloadFromOffset(r *pool.Message, payloadFile *memfile.File, offset int64) (int64, error) {
 	copyn, err := payloadFile.Seek(offset, io.SeekStart)
 	if err != nil {
@@ -840,6 +869,8 @@ func (b *BlockWise[C]) processReceivedMessage(w *responsewriter.ResponseWriter[C
 	if err != nil {
 		return fmt.Errorf("cannot decode block option: %w", err)
 	}
+	// szx may be lowered to maxSzx below, but the payload size follows the requested szx.
+	reqSzx := szx
 	sentRequest := b.getSentRequest(token)
 	if sentRequest != nil {
 		defer b.cc.ReleaseMessage(sentRequest)
@@ -868,6 +899,15 @@ func (b *BlockWise[C]) processReceivedMessage(w *responsewriter.ResponseWriter[C
 		}
 		// if there is no more then just forward req to next handler
 		if !more {
+			if blockType == message.Block1 {
+				tooLarge, errS := b.rejectTooLarge(w, r, token, 0)
+				if errS != nil {
+					return errS
+				}
+				if tooLarge {
+					return nil
+				}
+			}
 			next(w, r)
 			return nil
 		}
@@ -887,20 +927,23 @@ func (b *BlockWise[C]) processReceivedMessage(w *responsewriter.ResponseWriter[C
 	if err != nil {
 		return fmt.Errorf("cannot get payload: %w", err)
 	}
+	if blockType == message.Block1 && more {
+		if err = checkFullBlock(r, reqSzx); err != nil {
+			return err
+		}
+	}
 	off := num * szx.Size()
 	if blockType == message.Block1 && (off > payloadSize || (off < payloadSize && !more)) {
 		err = fmt.Errorf("%w: block %v at offset %v, have %v bytes", ErrRequestEntityIncomplete, num, off, payloadSize)
 		return err
 	}
-	if blockType == message.Block1 && b.maxReceiveBodySize > 0 {
-		var size int64
-		if size, err = receiveBodySize(r, off); err != nil {
+	if blockType == message.Block1 {
+		var tooLarge bool
+		if tooLarge, err = b.rejectTooLarge(w, r, token, off); err != nil {
 			return err
 		}
-		if size > b.maxReceiveBodySize {
+		if tooLarge {
 			b.receivingMessagesCache.Delete(tokenStr)
-			b.sendEntityTooLarge(w, token)
-			b.errors(fmt.Errorf("handleReceivedMessage(%v): %w: %v bytes", r, ErrRequestEntityTooLarge, size))
 			return nil
 		}
 	}
@@ -910,7 +953,7 @@ func (b *BlockWise[C]) processReceivedMessage(w *responsewriter.ResponseWriter[C
 			return fmt.Errorf("cannot copy data to payload: %w", err)
 		}
 		// Only new data extends the expiration.
-		if more && blockType == message.Block1 && b.rollingExpiration {
+		if more && blockType == message.Block1 && b.rollingExpiration && payloadSize > off {
 			if e := b.receivingMessagesCache.Load(tokenStr); e != nil {
 				e.ValidUntil.Store(time.Now().Add(b.expiration))
 			}

@@ -36,6 +36,10 @@ type block1Response struct {
 }
 
 func (b *block1Receiver) send(num int64, more bool, size1 ...uint32) block1Response {
+	return b.sendPayload(num, more, bytes.Repeat([]byte{byte(num)}, testBlock1Size), size1...)
+}
+
+func (b *block1Receiver) sendPayload(num int64, more bool, payload []byte, size1 ...uint32) block1Response {
 	req := b.cc.AcquireMessage(b.t.Context())
 	defer b.cc.ReleaseMessage(req)
 	req.SetCode(codes.PUT)
@@ -47,7 +51,7 @@ func (b *block1Receiver) send(num int64, more bool, size1 ...uint32) block1Respo
 	for _, v := range size1 {
 		req.SetOptionUint32(message.Size1, v)
 	}
-	req.SetBody(bytes.NewReader(bytes.Repeat([]byte{byte(num)}, testBlock1Size)))
+	req.SetBody(bytes.NewReader(payload))
 
 	w := responsewriter.New(b.cc.AcquireMessage(b.t.Context()), b.cc)
 	defer func() { b.cc.ReleaseMessage(w.Message()) }()
@@ -78,10 +82,9 @@ func TestBlockWiseReceiveExpiredTransfer(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			r := newBlock1Receiver(t, 50*time.Millisecond)
+			r := newBlock1Receiver(t, time.Minute)
 			r.sendBlocks(3)
-			time.Sleep(100 * time.Millisecond)
-			r.bw.CheckExpirations(time.Now())
+			r.bw.CheckExpirations(time.Now().Add(2 * time.Minute))
 
 			// The transfer state is gone, so the block must not be
 			// acknowledged with 2.31 nor forwarded as a complete body.
@@ -160,12 +163,50 @@ func TestBlockWiseReceiveRollingExpiration(t *testing.T) {
 }
 
 func TestBlockWiseReceiveRollingExpirationIdle(t *testing.T) {
-	r := newBlock1Receiver(t, 50*time.Millisecond)
+	r := newBlock1Receiver(t, time.Minute)
 	r.bw.SetRollingExpiration(true)
 	r.sendBlocks(2)
-	time.Sleep(100 * time.Millisecond)
-	r.bw.CheckExpirations(time.Now())
+	r.bw.CheckExpirations(time.Now().Add(2 * time.Minute))
 	require.Equal(t, codes.RequestEntityIncomplete, r.send(2, true).code)
+}
+
+func TestBlockWiseReceiveRollingExpirationOnlyOnNewData(t *testing.T) {
+	r := newBlock1Receiver(t, time.Minute)
+	r.bw.SetRollingExpiration(true)
+	r.sendBlocks(2)
+	e := r.bw.receivingMessagesCache.Load(message.Token{0x01}.Hash())
+	require.NotNil(t, e)
+	pinned := time.Now().Add(time.Second)
+	e.ValidUntil.Store(pinned)
+
+	require.Equal(t, codes.Continue, r.send(1, true).code)
+	require.True(t, e.ValidUntil.Load().Equal(pinned), "duplicate block must not extend the expiration")
+
+	require.Equal(t, codes.Continue, r.send(2, true).code)
+	require.True(t, e.ValidUntil.Load().After(pinned), "new block must extend the expiration")
+}
+
+func TestBlockWiseReceiveInvalidNonFinalBlock(t *testing.T) {
+	payloads := map[string][]byte{
+		"empty": nil,
+		"short": make([]byte, testBlock1Size/2),
+		"long":  make([]byte, testBlock1Size+1),
+	}
+	for name, payload := range payloads {
+		t.Run(name+" first block", func(t *testing.T) {
+			r := newBlock1Receiver(t, time.Minute)
+			require.Equal(t, codes.RequestEntityIncomplete, r.sendPayload(0, true, payload).code)
+			require.Nil(t, r.bw.receivingMessagesCache.Load(message.Token{0x01}.Hash()))
+		})
+		t.Run(name+" next block", func(t *testing.T) {
+			r := newBlock1Receiver(t, time.Minute)
+			r.bw.SetRollingExpiration(true)
+			r.sendBlocks(2)
+			require.Equal(t, codes.RequestEntityIncomplete, r.sendPayload(2, true, payload).code)
+			require.Nil(t, r.bw.receivingMessagesCache.Load(message.Token{0x01}.Hash()), "state must be discarded")
+			require.Empty(t, r.delivered)
+		})
+	}
 }
 
 func TestBlockWiseReceiveMaxBodySize(t *testing.T) {
@@ -194,4 +235,33 @@ func TestBlockWiseReceiveMaxBodySize(t *testing.T) {
 		require.Equal(t, codes.Changed, r.send(1, false).code)
 		require.Len(t, r.delivered, 1)
 	})
+}
+
+func TestBlockWiseReceiveMaxBodySizeSingleBlock(t *testing.T) {
+	const limit = testBlock1Size / 2
+	tests := []struct {
+		name     string
+		size     int
+		size1    []uint32
+		wantCode codes.Code
+	}{
+		{name: "payload exceeds limit", size: limit + 1, wantCode: codes.RequestEntityTooLarge},
+		{name: "size1 exceeds limit", size: limit, size1: []uint32{limit + 1}, wantCode: codes.RequestEntityTooLarge},
+		{name: "within limit", size: limit, size1: []uint32{limit}, wantCode: codes.Changed},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			r := newBlock1Receiver(t, time.Minute)
+			r.bw.SetMaxReceiveBodySize(limit)
+			resp := r.sendPayload(0, false, make([]byte, tt.size), tt.size1...)
+			require.Equal(t, tt.wantCode, resp.code)
+			if tt.wantCode == codes.RequestEntityTooLarge {
+				require.Equal(t, uint32(limit), resp.size1)
+				require.Empty(t, r.delivered)
+				return
+			}
+			require.Len(t, r.delivered, 1)
+			require.Len(t, r.delivered[0], tt.size)
+		})
+	}
 }
