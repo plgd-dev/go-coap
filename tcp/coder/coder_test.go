@@ -93,6 +93,23 @@ func TestDecodeHeaderMessageLength(t *testing.T) {
 	require.ErrorIs(t, err, ErrMessageTooLong)
 }
 
+func TestDecodeHeaderRejectsReservedTokenLength(t *testing.T) {
+	// TKL (lower nibble of the first byte) 9-15 is reserved and must be
+	// rejected as a message format error (RFC 8323 section 3.2).
+	for tkl := 0; tkl <= 15; tkl++ {
+		data := []byte{byte(tkl), byte(codes.GET)}
+		data = append(data, make([]byte, tkl)...)
+		var h MessageHeader
+		_, err := DefaultCoder.DecodeHeader(data, &h)
+		if tkl > message.MaxTokenSize {
+			require.ErrorIsf(t, err, message.ErrInvalidTokenLen, "tkl=%d", tkl)
+			continue
+		}
+		require.NoErrorf(t, err, "tkl=%d", tkl)
+		require.Lenf(t, h.Token, tkl, "tkl=%d", tkl)
+	}
+}
+
 func FuzzDecode(f *testing.F) {
 	f.Add([]byte{211, 0, 1, 1, 2, 3, 177, 97, 1, 98, 1, 99, 1, 100, 1, 101, 16, 255, 1})
 
