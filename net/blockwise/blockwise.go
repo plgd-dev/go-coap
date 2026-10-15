@@ -735,9 +735,10 @@ func receiveBodySize(r *pool.Message, off int64) (int64, error) {
 	return size, nil
 }
 
-// rejectTooLarge responds with 4.13 if appending r at off exceeds maxReceiveBodySize.
-func (b *BlockWise[C]) rejectTooLarge(w *responsewriter.ResponseWriter[C], r *pool.Message, token message.Token, off int64) (bool, error) {
-	if b.maxReceiveBodySize <= 0 {
+// rejectTooLarge responds with 4.13 if appending the Block1 request r at off exceeds
+// maxReceiveBodySize, and reports whether it did.
+func (b *BlockWise[C]) rejectTooLarge(w *responsewriter.ResponseWriter[C], r *pool.Message, blockType message.OptionID, token message.Token, off int64) (bool, error) {
+	if blockType != message.Block1 || b.maxReceiveBodySize <= 0 {
 		return false, nil
 	}
 	size, err := receiveBodySize(r, off)
@@ -899,14 +900,8 @@ func (b *BlockWise[C]) processReceivedMessage(w *responsewriter.ResponseWriter[C
 		}
 		// if there is no more then just forward req to next handler
 		if !more {
-			if blockType == message.Block1 {
-				tooLarge, errS := b.rejectTooLarge(w, r, token, 0)
-				if errS != nil {
-					return errS
-				}
-				if tooLarge {
-					return nil
-				}
+			if tooLarge, errS := b.rejectTooLarge(w, r, blockType, token, 0); tooLarge || errS != nil {
+				return errS
 			}
 			next(w, r)
 			return nil
@@ -937,15 +932,9 @@ func (b *BlockWise[C]) processReceivedMessage(w *responsewriter.ResponseWriter[C
 		err = fmt.Errorf("%w: block %v at offset %v, have %v bytes", ErrRequestEntityIncomplete, num, off, payloadSize)
 		return err
 	}
-	if blockType == message.Block1 {
-		var tooLarge bool
-		if tooLarge, err = b.rejectTooLarge(w, r, token, off); err != nil {
-			return err
-		}
-		if tooLarge {
-			b.receivingMessagesCache.Delete(tokenStr)
-			return nil
-		}
+	if tooLarge, errS := b.rejectTooLarge(w, r, blockType, token, off); tooLarge || errS != nil {
+		b.receivingMessagesCache.Delete(tokenStr)
+		return errS
 	}
 	if off == payloadSize { //nolint:nestif
 		payloadSize, err = copyToPayloadFromOffset(r, payloadFile, off)
