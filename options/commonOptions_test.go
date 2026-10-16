@@ -59,6 +59,7 @@ func TestCommonTCPServerApply(t *testing.T) {
 		options.WithInactivityMonitor(time.Minute, inactivityMonitor),
 		options.WithPeriodicRunner(periodicRunner),
 		options.WithBlockwise(true, blockwise.SZX16, time.Second),
+		options.WithBlockwiseReceivingMessagesCacheMaxEntries(0),
 		options.WithOnNewConn(onNewConn),
 		options.WithRequestMonitor(requestMonitor),
 		options.WithMessagePool(mp),
@@ -89,6 +90,7 @@ func TestCommonTCPServerApply(t *testing.T) {
 	require.True(t, cfg.BlockwiseEnable)
 	require.Equal(t, blockwise.SZX16, cfg.BlockwiseSZX)
 	require.Equal(t, time.Second, cfg.BlockwiseTransferTimeout)
+	require.Equal(t, 0, cfg.BlockwiseReceivingMessagesCacheMaxEntries)
 	// WithOnNewConn
 	require.NotNil(t, cfg.OnNewConn)
 	// WithRequestMonitor
@@ -154,6 +156,7 @@ func TestCommonTCPClientApply(t *testing.T) {
 		options.WithNetwork(network),
 		options.WithPeriodicRunner(periodicRunner),
 		options.WithBlockwise(true, blockwise.SZX16, time.Second),
+		options.WithBlockwiseReceivingMessagesCacheMaxEntries(0),
 		options.WithCloseSocket(),
 		options.WithDialer(dialer),
 		options.WithMessagePool(mp),
@@ -186,6 +189,7 @@ func TestCommonTCPClientApply(t *testing.T) {
 	require.True(t, cfg.BlockwiseEnable)
 	require.Equal(t, blockwise.SZX16, cfg.BlockwiseSZX)
 	require.Equal(t, time.Second, cfg.BlockwiseTransferTimeout)
+	require.Equal(t, 0, cfg.BlockwiseReceivingMessagesCacheMaxEntries)
 	// WithCloseSocket
 	require.True(t, cfg.CloseSocket)
 	// WithDialer
@@ -254,6 +258,7 @@ func TestCommonUDPServerApply(t *testing.T) {
 		options.WithInactivityMonitor(time.Minute, inactivityMonitor),
 		options.WithPeriodicRunner(periodicRunner),
 		options.WithBlockwise(true, blockwise.SZX16, time.Second),
+		options.WithBlockwiseReceivingMessagesCacheMaxEntries(0),
 		options.WithOnNewConn(onNewConn),
 		options.WithRequestMonitor(requestMonitor),
 		options.WithMessagePool(mp),
@@ -284,6 +289,7 @@ func TestCommonUDPServerApply(t *testing.T) {
 	require.True(t, cfg.BlockwiseEnable)
 	require.Equal(t, blockwise.SZX16, cfg.BlockwiseSZX)
 	require.Equal(t, time.Second, cfg.BlockwiseTransferTimeout)
+	require.Equal(t, 0, cfg.BlockwiseReceivingMessagesCacheMaxEntries)
 	// WithOnNewConn
 	require.NotNil(t, cfg.OnNewConn)
 	// WithRequestMonitor
@@ -352,6 +358,7 @@ func TestCommonDTLSServerApply(t *testing.T) {
 		options.WithInactivityMonitor(time.Minute, inactivityMonitor),
 		options.WithPeriodicRunner(periodicRunner),
 		options.WithBlockwise(true, blockwise.SZX16, time.Second),
+		options.WithBlockwiseReceivingMessagesCacheMaxEntries(0),
 		options.WithOnNewConn(onNewConn),
 		options.WithRequestMonitor(requestMonitor),
 		options.WithMessagePool(mp),
@@ -382,6 +389,7 @@ func TestCommonDTLSServerApply(t *testing.T) {
 	require.True(t, cfg.BlockwiseEnable)
 	require.Equal(t, blockwise.SZX16, cfg.BlockwiseSZX)
 	require.Equal(t, time.Second, cfg.BlockwiseTransferTimeout)
+	require.Equal(t, 0, cfg.BlockwiseReceivingMessagesCacheMaxEntries)
 	// WithOnNewConn
 	require.NotNil(t, cfg.OnNewConn)
 	// WithRequestMonitor
@@ -448,6 +456,7 @@ func TestCommonUDPClientApply(t *testing.T) {
 		options.WithNetwork(network),
 		options.WithPeriodicRunner(periodicRunner),
 		options.WithBlockwise(true, blockwise.SZX16, time.Second),
+		options.WithBlockwiseReceivingMessagesCacheMaxEntries(0),
 		options.WithCloseSocket(),
 		options.WithDialer(dialer),
 		options.WithMessagePool(mp),
@@ -480,6 +489,7 @@ func TestCommonUDPClientApply(t *testing.T) {
 	require.True(t, cfg.BlockwiseEnable)
 	require.Equal(t, blockwise.SZX16, cfg.BlockwiseSZX)
 	require.Equal(t, time.Second, cfg.BlockwiseTransferTimeout)
+	require.Equal(t, 0, cfg.BlockwiseReceivingMessagesCacheMaxEntries)
 	// WithCloseSocket
 	require.True(t, cfg.CloseSocket)
 	// WithDialer
