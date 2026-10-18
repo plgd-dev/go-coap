@@ -956,6 +956,11 @@ func TestConnRejectUnknownCriticalOptions(t *testing.T) {
 			rawRequestHex: "43036f1166f302b573746f7265101101ff61746c61732d637269746963616c2d42",
 			optionID:      "13",
 		},
+		{
+			name:          "if-none-match with illegal length",
+			rawRequestHex: "43036f1166f30251006573746f726510ff61746c61732d637269746963616c2d42",
+			optionID:      "5",
+		},
 	}
 
 	for _, tc := range testCases {

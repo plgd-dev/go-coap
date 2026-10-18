@@ -919,6 +919,13 @@ func TestConnRejectUnknownCriticalOptions(t *testing.T) {
 			},
 			optionID: "13",
 		},
+		{
+			name: "if-none-match with illegal length",
+			options: message.Options{
+				{ID: message.IfNoneMatch, Value: []byte{0x00}},
+			},
+			optionID: "5",
+		},
 	}
 
 	for _, tc := range testCases {

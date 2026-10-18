@@ -8,6 +8,7 @@ import (
 )
 
 // GetUnknownCriticalOptions returns unique unknown critical option IDs in option-order.
+// Known critical options with illegal value length are treated as unknown (RFC7252 section 5.4.3).
 func GetUnknownCriticalOptions(options message.Options) []message.OptionID {
 	unknownCriticalOpts := make([]message.OptionID, 0, 4)
 	var lastUnknownCriticalOpt message.OptionID
@@ -15,7 +16,7 @@ func GetUnknownCriticalOptions(options message.Options) []message.OptionID {
 		if opt.ID%2 == 0 {
 			continue
 		}
-		if _, ok := message.CoapOptionDefs[opt.ID]; ok {
+		if _, ok := message.CoapOptionDefs[opt.ID]; ok && message.VerifyOptLen(opt.ID, len(opt.Value)) {
 			continue
 		}
 		if len(unknownCriticalOpts) > 0 && opt.ID == lastUnknownCriticalOpt {
