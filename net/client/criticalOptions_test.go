@@ -21,6 +21,17 @@ func TestGetUnknownCriticalOptions(t *testing.T) {
 	require.Equal(t, []message.OptionID{13, 99}, unknownCriticalOpts)
 }
 
+func TestGetUnknownCriticalOptionsIllegalLength(t *testing.T) {
+	options := message.Options{
+		{ID: message.IfNoneMatch, Value: []byte{0x00}},
+		{ID: message.URIPath, Value: make([]byte, 256)},
+		{ID: message.ETag, Value: make([]byte, 9)},
+	}
+
+	unknownCriticalOpts := GetUnknownCriticalOptions(options)
+	require.Equal(t, []message.OptionID{message.IfNoneMatch, message.URIPath}, unknownCriticalOpts)
+}
+
 func TestFormatUnknownCriticalOptionsDiagnostic(t *testing.T) {
 	diagnostic := FormatUnknownCriticalOptionsDiagnostic([]message.OptionID{13, 99})
 	require.Equal(t, "unknown critical option(s): 13,99", diagnostic)

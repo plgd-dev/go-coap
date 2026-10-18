@@ -375,6 +375,16 @@ func TestGetUint32s(t *testing.T) {
 	require.Equal(t, uint32(0xAA), r[0])
 }
 
+func TestUnmarshalIllegalLengthOptions(t *testing.T) {
+	// ETag (elective) with 9-byte value, If-None-Match (critical) with 1-byte value
+	data := append([]byte{0x49}, make([]byte, 9)...)
+	data = append(data, 0x11, 0x00)
+	options := make(Options, 0, 10)
+	_, err := options.Unmarshal(data, CoapOptionDefs)
+	require.NoError(t, err)
+	require.Equal(t, Options{{ID: IfNoneMatch, Value: []byte{0x00}}}, options)
+}
+
 func FuzzUnmarshalData(f *testing.F) {
 	f.Fuzz(func(_ *testing.T, input_data []byte) {
 		uoptions := make(Options, 0, 10)
