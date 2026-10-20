@@ -992,6 +992,89 @@ func TestConnRejectUnknownCriticalOptions(t *testing.T) {
 	}
 }
 
+func TestConnDropNonConfirmableWithUnknownCriticalOptions(t *testing.T) {
+	l, err := coapNet.NewListenUDP("udp", "")
+	require.NoError(t, err)
+	defer func() {
+		errC := l.Close()
+		require.NoError(t, errC)
+	}()
+	var wg sync.WaitGroup
+	defer wg.Wait()
+
+	storeMu := sync.Mutex{}
+	storeValue := []byte("atlas-critical-A")
+
+	m := mux.NewRouter()
+	err = m.Handle("/store", mux.HandlerFunc(func(w mux.ResponseWriter, r *mux.Message) {
+		switch r.Code() {
+		case codes.PUT:
+			storeMu.Lock()
+			storeValue = append(storeValue[:0], bodyToBytes(t, r.Body())...)
+			storeMu.Unlock()
+			errS := w.SetResponse(codes.Changed, message.TextPlain, nil)
+			require.NoError(t, errS)
+		case codes.GET:
+			storeMu.Lock()
+			payload := append([]byte(nil), storeValue...)
+			storeMu.Unlock()
+			errS := w.SetResponse(codes.Content, message.TextPlain, bytes.NewReader(payload))
+			require.NoError(t, errS)
+		default:
+			errS := w.SetResponse(codes.MethodNotAllowed, message.TextPlain, nil)
+			require.NoError(t, errS)
+		}
+	}))
+	require.NoError(t, err)
+
+	s := udp.NewServer(options.WithMux(m))
+	defer s.Stop()
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		errS := s.Serve(l)
+		assert.NoError(t, errS)
+	}()
+
+	cc, err := udp.Dial(l.LocalAddr().String())
+	require.NoError(t, err)
+	defer func() {
+		errC := cc.Close()
+		require.NoError(t, errC)
+	}()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	// NON PUT /store with unknown critical option 99 and payload "atlas-critical-B"
+	rawReq, err := hex.DecodeString("53036f1166f302b573746f726510d14a01ff61746c61732d637269746963616c2d42")
+	require.NoError(t, err)
+
+	conn, err := net.Dial("udp", l.LocalAddr().String())
+	require.NoError(t, err)
+	defer func() {
+		errC := conn.Close()
+		require.NoError(t, errC)
+	}()
+	_, err = conn.Write(rawReq)
+	require.NoError(t, err)
+
+	// RFC 7252 section 5.4.1: the message is rejected, so the handler must not answer it.
+	err = conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
+	require.NoError(t, err)
+	buf := make([]byte, 4096)
+	_, err = conn.Read(buf)
+	var netErr net.Error
+	require.ErrorAs(t, err, &netErr)
+	require.True(t, netErr.Timeout())
+
+	getResp, err := cc.Get(ctx, "/store")
+	require.NoError(t, err)
+	require.Equal(t, codes.Content, getResp.Code())
+	require.Equal(t, []byte("atlas-critical-A"), bodyToBytes(t, getResp.Body()))
+}
+
 func sendRawUDPDatagram(t *testing.T, target string, rawReq []byte) []byte {
 	t.Helper()
 	conn, err := net.Dial("udp", target)

@@ -935,10 +935,14 @@ func (cc *Conn) Process(cm *coapNet.ControlMessage, datagram []byte) error {
 	}
 	req.SetControlMessage(cm)
 	req.SetSequence(cc.Sequence())
-	if req.Type() == message.Confirmable && req.Code() >= codes.GET && req.Code() <= codes.DELETE {
+	if (req.Type() == message.Confirmable || req.Type() == message.NonConfirmable) && req.Code() >= codes.GET && req.Code() <= codes.DELETE {
 		unknownCriticalOpts := client.GetUnknownCriticalOptions(req.Options())
 		if len(unknownCriticalOpts) > 0 {
-			err = cc.respondUnknownCriticalOptions(req, unknownCriticalOpts)
+			// RFC 7252 section 5.4.1: a NON message with an unrecognized critical
+			// option must be rejected (section 4.3), so it is dropped without a reply.
+			if req.Type() == message.Confirmable {
+				err = cc.respondUnknownCriticalOptions(req, unknownCriticalOpts)
+			}
 			cc.ReleaseMessage(req)
 			return err
 		}
