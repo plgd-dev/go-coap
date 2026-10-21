@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"sync"
 	"time"
 
 	"github.com/dsnet/golib/memfile"
@@ -137,10 +138,20 @@ type Client interface {
 type BlockWise[C Client] struct {
 	cc                        C
 	receivingMessagesCache    *cache.Cache[uint64, *messageGuard]
-	sendingMessagesCache      *cache.Cache[uint64, *pool.Message]
+	sendingMessagesCache      *cache.Cache[uint64, *sendingMessage]
 	errors                    func(error)
 	getSentRequestFromOutside func(token message.Token) (*pool.Message, bool)
 	expiration                time.Duration
+}
+
+type sendingMessage struct {
+	*pool.Message
+	// mutex protects Message's lifetime and the body's seek position.
+	mutex sync.Mutex
+}
+
+func newSendingMessage(msg *pool.Message) *sendingMessage {
+	return &sendingMessage{Message: msg}
 }
 
 type messageGuard struct {
@@ -169,7 +180,7 @@ func New[C Client](
 	return &BlockWise[C]{
 		cc:                        cc,
 		receivingMessagesCache:    cache.NewCache[uint64, *messageGuard](),
-		sendingMessagesCache:      cache.NewCache[uint64, *pool.Message](),
+		sendingMessagesCache:      cache.NewCache[uint64, *sendingMessage](),
 		errors:                    errors,
 		getSentRequestFromOutside: getSentRequestFromOutside,
 		expiration:                expiration,
@@ -215,20 +226,42 @@ func (b *BlockWise[C]) Do(r *pool.Message, maxSzx SZX, maxMessageSize uint32, do
 	if !ok {
 		expire = time.Now().Add(b.expiration)
 	}
-	_, loaded := b.sendingMessagesCache.LoadOrStore(r.Token().Hash(), cache.NewElement(r, expire, nil))
+	token := r.Token().Hash()
+	sending := newSendingMessage(r)
+	sending.mutex.Lock()
+	_, loaded := b.sendingMessagesCache.LoadOrStore(token, cache.NewElement(sending, expire, nil))
 	if loaded {
+		sending.mutex.Unlock()
 		return nil, errors.New("invalid token")
 	}
-	defer b.sendingMessagesCache.Delete(r.Token().Hash())
+	defer func() {
+		sending.mutex.Lock()
+		defer sending.mutex.Unlock()
+		b.sendingMessagesCache.Delete(token)
+		// A continuation may have loaded this entry before it was removed.
+		sending.Message = nil
+	}()
+	req, err := b.prepareSendingRequest(r, maxSzx, maxMessageSize)
+	sending.mutex.Unlock()
+	if err != nil {
+		return nil, err
+	}
+	if req != r {
+		defer b.cc.ReleaseMessage(req)
+	}
+	return do(req)
+}
+
+func (b *BlockWise[C]) prepareSendingRequest(r *pool.Message, maxSzx SZX, maxMessageSize uint32) (_ *pool.Message, err error) {
 	if r.Body() == nil {
-		return do(r)
+		return r, nil
 	}
 	payloadSize, err := r.BodySize()
 	if err != nil {
 		return nil, payloadSizeError(err)
 	}
 	if payloadSize <= maxSzx.Size() {
-		return do(r)
+		return r, nil
 	}
 
 	switch r.Code() {
@@ -238,7 +271,11 @@ func (b *BlockWise[C]) Do(r *pool.Message, maxSzx SZX, maxMessageSize uint32, do
 		return nil, fmt.Errorf("unsupported command(%v)", r.Code())
 	}
 	req := b.cloneMessage(r)
-	defer b.cc.ReleaseMessage(req)
+	defer func() {
+		if err != nil {
+			b.cc.ReleaseMessage(req)
+		}
+	}()
 	payloadSizeUint32, err := math.SafeCastTo[uint32](payloadSize)
 	if err != nil {
 		return nil, fmt.Errorf("cannot set payload size: %w", err)
@@ -266,7 +303,7 @@ func (b *BlockWise[C]) Do(r *pool.Message, maxSzx SZX, maxMessageSize uint32, do
 	}
 	buf = buf[:readed]
 	req.SetBody(bytes.NewReader(buf))
-	return do(req)
+	return req, nil
 }
 
 func newWriteRequestResponse[C Client](cc C, request *pool.Message) *responsewriter.ResponseWriter[C] {
@@ -343,7 +380,13 @@ func (b *BlockWise[C]) getSendingMessageCode(token uint64) (codes.Code, bool) {
 	if v == nil {
 		return codes.Empty, false
 	}
-	return v.Data().Code(), true
+	sending := v.Data()
+	sending.mutex.Lock()
+	defer sending.mutex.Unlock()
+	if sending.Message == nil {
+		return codes.Empty, false
+	}
+	return sending.Code(), true
 }
 
 // Handle middleware which constructs COAP request from blockwise transfer and send COAP response via blockwise.
@@ -508,20 +551,20 @@ func (b *BlockWise[C]) continueSendingMessage(w *responsewriter.ResponseWriter[C
 	if err != nil {
 		return false, fmt.Errorf("cannot get %v option: %w", blockType, err)
 	}
-	var sendMessage *pool.Message
-	var more bool
-	b.sendingMessagesCache.LoadWithFunc(r.Token().Hash(), func(value *cache.Element[*pool.Message]) *cache.Element[*pool.Message] {
-		sendMessage, more, err = b.createSendingMessage(value.Data(), maxSZX, maxMessageSize, block)
-		if err != nil {
-			err = fmt.Errorf("cannot create sending message: %w", err)
-		}
-		return nil
-	})
-	if err == nil && sendMessage == nil {
-		err = fmt.Errorf("cannot find sending message for token(%v)", r.Token())
+	value := b.sendingMessagesCache.Load(r.Token().Hash())
+	if value == nil {
+		return false, fmt.Errorf("handleSendingMessage: cannot find sending message for token(%v)", r.Token())
 	}
+	sending := value.Data()
+	// Do not hold the cache lock while waiting for or reading a body.
+	sending.mutex.Lock()
+	defer sending.mutex.Unlock()
+	if sending.Message == nil {
+		return false, fmt.Errorf("handleSendingMessage: cannot find sending message for token(%v)", r.Token())
+	}
+	sendMessage, more, err := b.createSendingMessage(sending.Message, maxSZX, maxMessageSize, block)
 	if err != nil {
-		return false, fmt.Errorf("handleSendingMessage: %w", err)
+		return false, fmt.Errorf("handleSendingMessage: cannot create sending message: %w", err)
 	}
 	w.SetMessage(sendMessage)
 	return more, err
@@ -558,29 +601,27 @@ func (b *BlockWise[C]) startSendingMessage(w *responsewriter.ResponseWriter[C], 
 	if !ok {
 		expire = time.Now().Add(b.expiration)
 	}
-	el, loaded := b.sendingMessagesCache.LoadOrStore(sendingMessage.Token().Hash(), cache.NewElement(originalSendingMessage, expire, nil))
+	el, loaded := b.sendingMessagesCache.LoadOrStore(sendingMessage.Token().Hash(), cache.NewElement(newSendingMessage(originalSendingMessage), expire, nil))
 	if loaded {
 		defer b.cc.ReleaseMessage(originalSendingMessage)
-		return fmt.Errorf("cannot add message (%v) to sending message cache: message(%v) with token(%v) already exist", originalSendingMessage, el.Data(), sendingMessage.Token())
+		existing := el.Data()
+		existing.mutex.Lock()
+		defer existing.mutex.Unlock()
+		return fmt.Errorf("cannot add message (%v) to sending message cache: message(%v) with token(%v) already exist", originalSendingMessage, existing.Message, sendingMessage.Token())
 	}
 	return nil
 }
 
 func (b *BlockWise[C]) getSentRequest(token message.Token) *pool.Message {
-	data, ok := b.sendingMessagesCache.LoadWithFunc(token.Hash(), func(value *cache.Element[*pool.Message]) *cache.Element[*pool.Message] {
-		if value == nil {
-			return nil
+	if value := b.sendingMessagesCache.Load(token.Hash()); value != nil {
+		sending := value.Data()
+		sending.mutex.Lock()
+		if sending.Message != nil {
+			msg := b.cloneMessage(sending.Message)
+			sending.mutex.Unlock()
+			return msg
 		}
-		v := value.Data()
-		msg := b.cc.AcquireMessage(v.Context())
-		msg.SetCode(v.Code())
-		msg.SetToken(v.Token())
-		msg.ResetOptionsTo(v.Options())
-		msg.SetType(v.Type())
-		return cache.NewElement(msg, value.ValidUntil.Load(), nil)
-	})
-	if ok {
-		return data.Data()
+		sending.mutex.Unlock()
 	}
 	globalRequest, ok := b.getSentRequestFromOutside(token)
 	if ok {
@@ -601,7 +642,7 @@ func (b *BlockWise[C]) handleObserveResponse(sentRequest *pool.Message) (message
 	validUntil := time.Now().Add(b.expiration) // context of observation can be expired.
 	bwSentRequest := b.cloneMessage(sentRequest)
 	bwSentRequest.SetToken(token)
-	_, loaded := b.sendingMessagesCache.LoadOrStore(token.Hash(), cache.NewElement(bwSentRequest, validUntil, nil))
+	_, loaded := b.sendingMessagesCache.LoadOrStore(token.Hash(), cache.NewElement(newSendingMessage(bwSentRequest), validUntil, nil))
 	if loaded {
 		return nil, time.Time{}, errors.New("cannot process message: message with token already exist")
 	}
