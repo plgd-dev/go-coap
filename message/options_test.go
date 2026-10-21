@@ -186,6 +186,13 @@ func TestLocationPath(t *testing.T) {
 	require.Equal(t, "/foo/bar", path)
 }
 
+func TestPathRejectsInvalidUTF8(t *testing.T) {
+	options := Options{{ID: URIPath, Value: []byte{0xbf, 'g'}}}
+
+	_, err := options.Path()
+	require.ErrorIs(t, err, ErrInvalidEncoding)
+}
+
 func TestSetLocationPath(t *testing.T) {
 	options := make(Options, 0, 10)
 	options, _, err := options.SetLocationPath(make([]byte, 32), "/light/2")
