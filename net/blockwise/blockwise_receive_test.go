@@ -18,15 +18,17 @@ type block1Receiver struct {
 	t         *testing.T
 	cc        *testClient
 	bw        *BlockWise[*testClient]
+	token     message.Token
 	delivered [][]byte
 }
 
 func newBlock1Receiver(t *testing.T, expiration time.Duration) *block1Receiver {
 	cc := newTestClient()
 	return &block1Receiver{
-		t:  t,
-		cc: cc,
-		bw: New(cc, expiration, func(error) {}, nil),
+		t:     t,
+		cc:    cc,
+		bw:    New(cc, expiration, func(error) {}, nil),
+		token: message.Token{0x01},
 	}
 }
 
@@ -43,7 +45,7 @@ func (b *block1Receiver) sendPayload(num int64, more bool, payload []byte, size1
 	req := b.cc.AcquireMessage(b.t.Context())
 	defer b.cc.ReleaseMessage(req)
 	req.SetCode(codes.PUT)
-	req.SetToken(message.Token{0x01})
+	req.SetToken(b.token)
 	req.SetType(message.Confirmable)
 	block, err := EncodeBlockOption(SZX1024, num, more)
 	require.NoError(b.t, err)
@@ -127,11 +129,6 @@ func TestBlockWiseReceiveDuplicateBlock(t *testing.T) {
 }
 
 func TestBlockWiseReceiveRollingExpiration(t *testing.T) {
-	const (
-		expiration = 100 * time.Millisecond
-		interval   = 40 * time.Millisecond
-		blocks     = 8 // total duration exceeds expiration
-	)
 	tests := []struct {
 		name     string
 		rolling  bool
@@ -142,21 +139,21 @@ func TestBlockWiseReceiveRollingExpiration(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			r := newBlock1Receiver(t, expiration)
+			r := newBlock1Receiver(t, time.Hour)
 			r.bw.SetRollingExpiration(tt.rolling)
-			var got codes.Code
-			for num := int64(0); num < blocks; num++ {
-				got = r.send(num, num != blocks-1).code
-				if got != codes.Continue {
-					break
-				}
-				time.Sleep(interval)
-				r.bw.CheckExpirations(time.Now())
-			}
-			require.Equal(t, tt.wantLast, got)
+			r.sendBlocks(1)
+			e := r.bw.receivingMessagesCache.Load(r.token.Hash())
+			require.NotNil(t, e)
+			pinned := time.Now().Add(time.Minute)
+			e.ValidUntil.Store(pinned)
+			require.Equal(t, codes.Continue, r.send(1, true).code)
+			r.bw.CheckExpirations(pinned.Add(time.Nanosecond))
+			require.Equal(t, tt.wantLast, r.send(2, false).code)
 			if tt.rolling {
 				require.Len(t, r.delivered, 1)
-				require.Len(t, r.delivered[0], blocks*testBlock1Size)
+				require.Len(t, r.delivered[0], 3*testBlock1Size)
+			} else {
+				require.Empty(t, r.delivered)
 			}
 		})
 	}
@@ -262,6 +259,45 @@ func TestBlockWiseReceiveMaxBodySizeSingleBlock(t *testing.T) {
 			}
 			require.Len(t, r.delivered, 1)
 			require.Len(t, r.delivered[0], tt.size)
+		})
+	}
+}
+
+func TestBlockWiseReceiveTokenless(t *testing.T) {
+	const limit = testBlock1Size / 2
+	tests := []struct {
+		name     string
+		num      int64
+		more     bool
+		size     int
+		size1    []uint32
+		wantCode codes.Code
+	}{
+		{name: "last block without context", num: 1, size: limit, wantCode: codes.RequestEntityIncomplete},
+		{name: "intermediate block without context", num: 1, more: true, size: testBlock1Size, wantCode: codes.RequestEntityIncomplete},
+		{name: "first block", more: true, size: testBlock1Size, wantCode: codes.RequestEntityIncomplete},
+		{name: "payload exceeds limit", size: testBlock1Size, wantCode: codes.RequestEntityTooLarge},
+		{name: "size1 exceeds limit", size: limit, size1: []uint32{limit + 1}, wantCode: codes.RequestEntityTooLarge},
+		{name: "within limit", size: limit, wantCode: codes.Changed},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			r := newBlock1Receiver(t, time.Minute)
+			r.token = nil
+			r.bw.SetMaxReceiveBodySize(limit)
+			resp := r.sendPayload(tt.num, tt.more, make([]byte, tt.size), tt.size1...)
+			require.Equal(t, tt.wantCode, resp.code)
+			if tt.wantCode == codes.Changed {
+				require.Len(t, r.delivered, 1)
+				require.Len(t, r.delivered[0], tt.size)
+			} else {
+				require.Empty(t, r.delivered)
+			}
+			if tt.wantCode == codes.RequestEntityTooLarge {
+				require.Equal(t, uint32(limit), resp.size1)
+			}
+			require.Nil(t, r.bw.receivingMessagesCache.Load(r.token.Hash()))
+			require.Nil(t, r.bw.sendingMessagesCache.Load(r.token.Hash()))
 		})
 	}
 }
