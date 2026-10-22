@@ -136,7 +136,9 @@ func (s *Server) Serve(l *coapNet.UDPConn) error {
 		s.serverStartedChan = make(chan struct{}, 1)
 	}()
 
-	m := make([]byte, s.cfg.MaxMessageSize)
+	// One extra byte so that an oversized datagram is not silently truncated to
+	// MaxMessageSize and is rejected by Process instead.
+	m := make([]byte, uint64(s.cfg.MaxMessageSize)+1)
 
 	s.cfg.PeriodicRunner(func(now time.Time) bool {
 		s.handleInactivityMonitors(now)

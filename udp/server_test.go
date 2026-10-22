@@ -16,12 +16,14 @@ import (
 	"github.com/plgd-dev/go-coap/v3/message/pool"
 	"github.com/plgd-dev/go-coap/v3/mux"
 	coapNet "github.com/plgd-dev/go-coap/v3/net"
+	"github.com/plgd-dev/go-coap/v3/net/blockwise"
 	"github.com/plgd-dev/go-coap/v3/net/responsewriter"
 	"github.com/plgd-dev/go-coap/v3/options"
 	"github.com/plgd-dev/go-coap/v3/options/config"
 	"github.com/plgd-dev/go-coap/v3/pkg/runner/periodic"
 	"github.com/plgd-dev/go-coap/v3/udp"
 	"github.com/plgd-dev/go-coap/v3/udp/client"
+	"github.com/plgd-dev/go-coap/v3/udp/coder"
 	"github.com/plgd-dev/go-coap/v3/udp/server"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -803,5 +805,113 @@ func handleA(w mux.ResponseWriter, _ *mux.Message) {
 	err := w.SetResponse(codes.Content, message.TextPlain, bytes.NewReader([]byte("hello world")))
 	if err != nil {
 		log.Printf("cannot set response: %v", err)
+	}
+}
+
+func TestServerRejectsOversizedDatagram(t *testing.T) {
+	l, err := coapNet.NewListenUDP("udp", "127.0.0.1:0")
+	require.NoError(t, err)
+	defer func() {
+		errC := l.Close()
+		require.NoError(t, errC)
+	}()
+
+	var handlerCalled atomic.Bool
+	r := mux.NewRouter()
+	err = r.Handle("/a", mux.HandlerFunc(func(w mux.ResponseWriter, _ *mux.Message) {
+		handlerCalled.Store(true)
+		errS := w.SetResponse(codes.Changed, message.TextPlain, nil)
+		require.NoError(t, errS)
+	}))
+	require.NoError(t, err)
+
+	const maxMessageSize = 1024
+	s := udp.NewServer(options.WithMux(r), options.WithMaxMessageSize(maxMessageSize), options.WithBlockwise(false, blockwise.SZX1024, time.Second))
+	var wg sync.WaitGroup
+	defer func() {
+		s.Stop()
+		wg.Wait()
+	}()
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		errS := s.Serve(l)
+		assert.NoError(t, errS)
+	}()
+
+	req := pool.NewMessage(context.Background())
+	req.SetCode(codes.PUT)
+	req.SetType(message.Confirmable)
+	req.SetMessageID(1)
+	req.SetToken([]byte{1})
+	err = req.SetPath("/a")
+	require.NoError(t, err)
+	req.SetBody(bytes.NewReader(make([]byte, 2*maxMessageSize)))
+	data, err := req.MarshalWithEncoder(coder.DefaultCoder)
+	require.NoError(t, err)
+	require.Greater(t, len(data), maxMessageSize)
+
+	c, err := net.Dial("udp", l.LocalAddr().String())
+	require.NoError(t, err)
+	defer func() {
+		errC := c.Close()
+		require.NoError(t, errC)
+	}()
+	_, err = c.Write(data)
+	require.NoError(t, err)
+
+	// the datagram must be rejected, not truncated to maxMessageSize and dispatched
+	err = c.SetReadDeadline(time.Now().Add(time.Second))
+	require.NoError(t, err)
+	_, err = c.Read(make([]byte, 1500))
+	require.Error(t, err)
+	require.False(t, handlerCalled.Load())
+}
+
+func TestConnGetResponseLargerThanMTU(t *testing.T) {
+	l, err := coapNet.NewListenUDP("udp", "127.0.0.1:0")
+	require.NoError(t, err)
+	defer func() {
+		errC := l.Close()
+		require.NoError(t, errC)
+	}()
+
+	payload := make([]byte, 3000)
+	r := mux.NewRouter()
+	err = r.Handle("/a", mux.HandlerFunc(func(w mux.ResponseWriter, _ *mux.Message) {
+		errS := w.SetResponse(codes.Content, message.TextPlain, bytes.NewReader(payload))
+		require.NoError(t, errS)
+	}))
+	require.NoError(t, err)
+
+	s := udp.NewServer(options.WithMux(r), options.WithBlockwise(false, blockwise.SZX1024, time.Second))
+	var wg sync.WaitGroup
+	defer func() {
+		s.Stop()
+		wg.Wait()
+	}()
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		errS := s.Serve(l)
+		assert.NoError(t, errS)
+	}()
+
+	cc, err := udp.Dial(l.LocalAddr().String(), options.WithBlockwise(false, blockwise.SZX1024, time.Second))
+	require.NoError(t, err)
+	defer func() {
+		errC := cc.Close()
+		require.NoError(t, errC)
+	}()
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second*2)
+	defer cancel()
+	// the response does not fit into the MTU sized read buffer, so it must not
+	// be delivered truncated as a successful response
+	resp, err := cc.Get(ctx, "/a")
+	if err == nil {
+		body, errR := resp.ReadBody()
+		require.NoError(t, errR)
+		require.Equal(t, payload, body)
 	}
 }
