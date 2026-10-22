@@ -132,13 +132,18 @@ func (s *Session) Run(cc *client.Conn) (err error) {
 		}
 		s.shutdown()
 	}()
-	m := make([]byte, s.mtu)
+	// One extra byte so that a datagram larger than the MTU is detected
+	// instead of being silently truncated and processed.
+	m := make([]byte, int(s.mtu)+1)
 	for {
 		buf := m
 		var cm *coapNet.ControlMessage
 		n, err := s.connection.ReadWithOptions(buf, coapNet.WithContext(s.Context()), coapNet.WithGetControlMessage(&cm))
 		if err != nil {
 			return err
+		}
+		if n > int(s.mtu) {
+			return fmt.Errorf("datagram exceeds MTU(%v)", s.mtu)
 		}
 		buf = buf[:n]
 		err = cc.Process(cm, buf)
