@@ -193,6 +193,17 @@ func TestPathRejectsInvalidUTF8(t *testing.T) {
 	require.ErrorIs(t, err, ErrInvalidEncoding)
 }
 
+func TestPathRejectsSlashInSegment(t *testing.T) {
+	// A single segment "a/b" must not be joined into the two-segment path "/a/b".
+	options := Options{{ID: URIPath, Value: []byte("a/b")}}
+	_, err := options.Path()
+	require.ErrorIs(t, err, ErrInvalidEncoding)
+
+	options = Options{{ID: LocationPath, Value: []byte("a/b")}}
+	_, err = options.LocationPath()
+	require.ErrorIs(t, err, ErrInvalidEncoding)
+}
+
 func TestSetLocationPath(t *testing.T) {
 	options := make(Options, 0, 10)
 	options, _, err := options.SetLocationPath(make([]byte, 32), "/light/2")

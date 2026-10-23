@@ -1,6 +1,7 @@
 package message
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"strings"
@@ -104,6 +105,10 @@ func (options Options) path(buf []byte, id OptionID) (int, error) {
 	}
 	var needed int
 	for i := firstIdx; i < lastIdx; i++ {
+		// A '/' inside a segment would be indistinguishable from a segment separator once joined.
+		if bytes.IndexByte(options[i].Value, '/') >= 0 {
+			return -1, ErrInvalidEncoding
+		}
 		needed += len(options[i].Value)
 		needed++
 	}
