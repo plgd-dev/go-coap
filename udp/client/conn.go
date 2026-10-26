@@ -700,9 +700,9 @@ func (cc *Conn) getResponseFromCache(mid int32, resp *pool.Message) (bool, error
 	return cc.responseMsgCache.Load(strconv.Itoa(int(mid)), resp)
 }
 
-// addResponseToCache adds a message to the response message cache.
-func (cc *Conn) addResponseToCache(resp *pool.Message) error {
-	return cc.responseMsgCache.Store(strconv.Itoa(int(resp.MessageID())), resp)
+// addResponseToCache adds a message to the response message cache under the request's message ID.
+func (cc *Conn) addResponseToCache(reqMessageID int32, resp *pool.Message) error {
+	return cc.responseMsgCache.Store(strconv.Itoa(int(reqMessageID)), resp)
 }
 
 // checkMyMessageID compare client msgID against peer messageID and if it is near < 0xffff/4 then increase msgID.
@@ -767,7 +767,7 @@ func (cc *Conn) processResponse(reqType message.Type, reqMessageID int32, w *res
 		w.Message().SetMessageID(reqMessageID)
 		w.Message().SetToken(nil)
 
-		err := cc.addResponseToCache(w.Message())
+		err := cc.addResponseToCache(reqMessageID, w.Message())
 		if err != nil {
 			return fmt.Errorf("cannot cache response: %w", err)
 		}
@@ -785,7 +785,7 @@ func (cc *Conn) processResponse(reqType message.Type, reqMessageID int32, w *res
 		w.Message().SetMessageID(reqMessageID)
 	}
 	if reqType == message.Confirmable || reqType == message.NonConfirmable {
-		err := cc.addResponseToCache(w.Message())
+		err := cc.addResponseToCache(reqMessageID, w.Message())
 		if err != nil {
 			return fmt.Errorf("cannot cache response: %w", err)
 		}
