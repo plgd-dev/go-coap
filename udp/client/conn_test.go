@@ -199,6 +199,83 @@ func TestConnDeduplicationRetransmission(t *testing.T) {
 	require.Equal(t, []byte{2}, bodyToBytes(t, got.Body()))
 }
 
+func TestConnDeduplicationNonConfirmable(t *testing.T) {
+	l, err := coapNet.NewListenUDP("udp", "")
+	require.NoError(t, err)
+	defer func() {
+		errC := l.Close()
+		require.NoError(t, errC)
+	}()
+	var wg sync.WaitGroup
+	defer wg.Wait()
+
+	m := mux.NewRouter()
+
+	var cnt atomic.Int32
+	err = m.Handle("/count", mux.HandlerFunc(func(w mux.ResponseWriter, _ *mux.Message) {
+		cnt.Add(1)
+		errH := w.SetResponse(codes.Content, message.AppOctets, bytes.NewReader([]byte{byte(cnt.Load())}))
+		require.NoError(t, errH)
+	}))
+	require.NoError(t, err)
+
+	s := udp.NewServer(options.WithMux(m))
+	defer s.Stop()
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		errS := s.Serve(l)
+		assert.NoError(t, errS)
+	}()
+
+	conn, err := net.Dial("udp", l.LocalAddr().String())
+	require.NoError(t, err)
+	defer func() {
+		errC := conn.Close()
+		require.NoError(t, errC)
+	}()
+
+	exchange := func(typ message.Type, mid int32, token message.Token) *pool.Message {
+		req := pool.NewMessage(context.Background())
+		errS := req.SetupGet("/count", token)
+		require.NoError(t, errS)
+		req.SetType(typ)
+		req.SetMessageID(mid)
+		data, errM := req.MarshalWithEncoder(coder.DefaultCoder)
+		require.NoError(t, errM)
+		_, errW := conn.Write(data)
+		require.NoError(t, errW)
+		errD := conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+		require.NoError(t, errD)
+		buf := make([]byte, 4096)
+		n, errR := conn.Read(buf)
+		require.NoError(t, errR)
+		resp := pool.NewMessage(context.Background())
+		_, errU := resp.UnmarshalWithDecoder(coder.DefaultCoder, buf[:n])
+		require.NoError(t, errU)
+		return resp
+	}
+
+	// A duplicated NON request must be answered from the cache, not processed again.
+	got := exchange(message.NonConfirmable, 0x1000, message.Token{0x0a})
+	require.Equal(t, message.Token{0x0a}, got.Token())
+	require.Equal(t, []byte{1}, bodyToBytes(t, got.Body()))
+	responseMID := got.MessageID()
+
+	got = exchange(message.NonConfirmable, 0x1000, message.Token{0x0a})
+	require.Equal(t, message.Token{0x0a}, got.Token())
+	require.Equal(t, []byte{1}, bodyToBytes(t, got.Body()))
+	require.Equal(t, int32(1), cnt.Load())
+
+	// A new request that happens to reuse the message ID of the server's
+	// response must be processed, not answered with the cached response.
+	got = exchange(message.Confirmable, responseMID, message.Token{0x0b})
+	require.Equal(t, message.Acknowledgement, got.Type())
+	require.Equal(t, message.Token{0x0b}, got.Token())
+	require.Equal(t, []byte{2}, bodyToBytes(t, got.Body()))
+	require.Equal(t, int32(2), cnt.Load())
+}
+
 func testParallelConnGet(t *testing.T, numParallel int) {
 	type args struct {
 		path string
