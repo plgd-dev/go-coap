@@ -137,7 +137,7 @@ func (s *Server) Serve(l *coapNet.UDPConn) error {
 	}()
 
 	// One extra byte so that an oversized datagram is not silently truncated to
-	// MaxMessageSize and is rejected by Process instead.
+	// MaxMessageSize and is rejected before selecting a peer connection.
 	m := make([]byte, uint64(s.cfg.MaxMessageSize)+1)
 
 	s.cfg.PeriodicRunner(func(now time.Time) bool {
@@ -154,7 +154,15 @@ func (s *Server) Serve(l *coapNet.UDPConn) error {
 			if !s.shouldPropagateError(err) {
 				return nil
 			}
+			if coapNet.IsMessageSizeError(err) {
+				s.cfg.Errors(fmt.Errorf("cannot read oversized datagram: %w", err))
+				continue
+			}
 			return err
+		}
+		if int64(n) > int64(s.cfg.MaxMessageSize) {
+			s.cfg.Errors(fmt.Errorf("%v: max message size(%v) was exceeded %v", raddr, s.cfg.MaxMessageSize, n))
+			continue
 		}
 		buf = buf[:n]
 
@@ -361,6 +369,7 @@ func (s *Server) getOrCreateConn(udpConn *coapNet.UDPConn, raddr *net.UDPAddr, l
 		s.cfg.MaxMessageSize,
 		s.cfg.MTU,
 		false,
+		s.cfg.Errors,
 	)
 	monitor := s.cfg.CreateInactivityMonitor()
 	cfg := client.DefaultConfig

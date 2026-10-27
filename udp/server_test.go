@@ -816,17 +816,26 @@ func TestServerRejectsOversizedDatagram(t *testing.T) {
 		require.NoError(t, errC)
 	}()
 
-	var handlerCalled atomic.Bool
+	var handlerCalls atomic.Int32
 	r := mux.NewRouter()
 	err = r.Handle("/a", mux.HandlerFunc(func(w mux.ResponseWriter, _ *mux.Message) {
-		handlerCalled.Store(true)
+		handlerCalls.Inc()
 		errS := w.SetResponse(codes.Changed, message.TextPlain, nil)
 		require.NoError(t, errS)
 	}))
 	require.NoError(t, err)
 
 	const maxMessageSize = 1024
-	s := udp.NewServer(options.WithMux(r), options.WithMaxMessageSize(maxMessageSize), options.WithBlockwise(false, blockwise.SZX1024, time.Second))
+	packetErrors := make(chan error, 4)
+	peerConnections := make(chan *client.Conn, 4)
+	s := udp.NewServer(options.WithMux(r), options.WithMaxMessageSize(maxMessageSize),
+		options.WithBlockwise(false, blockwise.SZX1024, time.Second),
+		options.WithOnNewConn(func(cc *client.Conn) {
+			peerConnections <- cc
+		}),
+		options.WithErrors(func(err error) {
+			packetErrors <- err
+		}))
 	var wg sync.WaitGroup
 	defer func() {
 		s.Stop()
@@ -857,15 +866,149 @@ func TestServerRejectsOversizedDatagram(t *testing.T) {
 		errC := c.Close()
 		require.NoError(t, errC)
 	}()
-	_, err = c.Write(data)
-	require.NoError(t, err)
+	exchange := func(mid int32) {
+		t.Helper()
+		validReq := pool.NewMessage(context.Background())
+		err = validReq.SetupPut("/a", message.Token{byte(mid)}, message.TextPlain, bytes.NewReader([]byte("valid")))
+		require.NoError(t, err)
+		validReq.SetType(message.Confirmable)
+		validReq.SetMessageID(mid)
+		validData, errM := validReq.MarshalWithEncoder(coder.DefaultCoder)
+		require.NoError(t, errM)
+		_, err = c.Write(validData)
+		require.NoError(t, err)
+		err = c.SetReadDeadline(time.Now().Add(2 * time.Second))
+		require.NoError(t, err)
+		buf := make([]byte, 1500)
+		n, errR := c.Read(buf)
+		require.NoError(t, errR)
+		resp := pool.NewMessage(context.Background())
+		_, err = resp.UnmarshalWithDecoder(coder.DefaultCoder, buf[:n])
+		require.NoError(t, err)
+		require.Equal(t, codes.Changed, resp.Code())
+		require.Equal(t, message.Acknowledgement, resp.Type())
+		require.Equal(t, validReq.MessageID(), resp.MessageID())
+		require.Equal(t, validReq.Token(), resp.Token())
+	}
 
-	// the datagram must be rejected, not truncated to maxMessageSize and dispatched
-	err = c.SetReadDeadline(time.Now().Add(time.Second))
-	require.NoError(t, err)
-	_, err = c.Read(make([]byte, 1500))
-	require.Error(t, err)
-	require.False(t, handlerCalled.Load())
+	exchange(2)
+	var peer *client.Conn
+	select {
+	case peer = <-peerConnections:
+	case <-time.After(2 * time.Second):
+		t.Fatal("peer connection was not created")
+	}
+	// The second size also exceeds the read buffer, triggering WSAEMSGSIZE on Windows.
+	for i, size := range []int{maxMessageSize + 1, maxMessageSize + 2} {
+		_, err = c.Write(data[:size])
+		require.NoError(t, err)
+
+		select {
+		case packetErr := <-packetErrors:
+			require.Error(t, packetErr)
+		case <-time.After(2 * time.Second):
+			t.Fatalf("oversized datagram of %d bytes was not reported", size)
+		}
+		require.Equal(t, int32(i+1), handlerCalls.Load())
+		require.NoError(t, peer.Context().Err())
+
+		exchange(int32(i + 3))
+		require.Equal(t, int32(i+2), handlerCalls.Load())
+		require.NoError(t, peer.Context().Err())
+		select {
+		case <-peerConnections:
+			t.Fatal("oversized datagram replaced the existing peer connection")
+		default:
+		}
+	}
+}
+
+func TestConnDiscardsOversizedDatagram(t *testing.T) {
+	for _, tt := range []struct {
+		name           string
+		mtu            uint16
+		maxMessageSize uint32
+		datagramSize   int
+	}{
+		{name: "MTU plus one", mtu: 1024, maxMessageSize: 2048, datagramSize: 1025},
+		{name: "larger than read buffer", mtu: 1024, maxMessageSize: 2048, datagramSize: 1026},
+		{name: "max message size plus one", mtu: 2048, maxMessageSize: 1024, datagramSize: 1025},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			peer, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+			require.NoError(t, err)
+			defer func() {
+				require.NoError(t, peer.Close())
+			}()
+
+			packetErrors := make(chan error, 4)
+			cc, err := udp.Dial(peer.LocalAddr().String(),
+				options.WithMTU(tt.mtu), options.WithMaxMessageSize(tt.maxMessageSize),
+				options.WithBlockwise(false, blockwise.SZX1024, time.Second),
+				options.WithErrors(func(err error) {
+					packetErrors <- err
+				}))
+			require.NoError(t, err)
+			defer func() {
+				require.NoError(t, cc.Close())
+			}()
+
+			exchange := func() {
+				t.Helper()
+				ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+				defer cancel()
+				type result struct {
+					resp *pool.Message
+					err  error
+				}
+				results := make(chan result, 1)
+				go func() {
+					resp, errG := cc.Get(ctx, "/a")
+					results <- result{resp: resp, err: errG}
+				}()
+
+				require.NoError(t, peer.SetReadDeadline(time.Now().Add(2*time.Second)))
+				buf := make([]byte, 4096)
+				n, addr, errR := peer.ReadFromUDP(buf)
+				require.NoError(t, errR)
+				req := pool.NewMessage(ctx)
+				_, errU := req.UnmarshalWithDecoder(coder.DefaultCoder, buf[:n])
+				require.NoError(t, errU)
+				resp := pool.NewMessage(ctx)
+				resp.SetCode(codes.Content)
+				resp.SetType(message.Acknowledgement)
+				resp.SetMessageID(req.MessageID())
+				resp.SetToken(req.Token())
+				resp.SetBody(bytes.NewReader([]byte("valid")))
+				data, errM := resp.MarshalWithEncoder(coder.DefaultCoder)
+				require.NoError(t, errM)
+				_, errW := peer.WriteToUDP(data, addr)
+				require.NoError(t, errW)
+
+				got := <-results
+				require.NoError(t, got.err)
+				body, errB := got.resp.ReadBody()
+				require.NoError(t, errB)
+				require.Equal(t, []byte("valid"), body)
+				cc.ReleaseMessage(got.resp)
+			}
+
+			exchange()
+			addr, ok := cc.LocalAddr().(*net.UDPAddr)
+			require.True(t, ok)
+			_, err = peer.WriteToUDP(make([]byte, tt.datagramSize), addr)
+			require.NoError(t, err)
+			select {
+			case packetErr := <-packetErrors:
+				require.Error(t, packetErr)
+			case <-time.After(2 * time.Second):
+				t.Fatal("oversized datagram was not reported")
+			}
+			require.NoError(t, cc.Context().Err())
+			exchange()
+			require.NoError(t, cc.Context().Err())
+		})
+	}
 }
 
 func TestConnGetResponseLargerThanMTU(t *testing.T) {

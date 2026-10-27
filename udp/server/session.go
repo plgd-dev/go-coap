@@ -32,8 +32,11 @@ type Session struct {
 	mtu            uint16
 
 	closeSocket bool
+	errors      client.ErrorFunc
 }
 
+// NewSession creates a UDP session. Optional error handlers receive recoverable
+// datagram errors; otherwise the default client error handler is used.
 func NewSession(
 	ctx context.Context,
 	doneCtx context.Context,
@@ -42,6 +45,7 @@ func NewSession(
 	maxMessageSize uint32,
 	mtu uint16,
 	closeSocket bool,
+	errorHandlers ...client.ErrorFunc,
 ) *Session {
 	ctx, cancel := context.WithCancel(ctx)
 
@@ -55,6 +59,16 @@ func NewSession(
 		closeSocket:    closeSocket,
 		doneCtx:        doneCtx,
 		doneCancel:     doneCancel,
+		errors:         client.DefaultConfig.Errors,
+	}
+	if len(errorHandlers) > 0 {
+		s.errors = func(err error) {
+			for _, handler := range errorHandlers {
+				if handler != nil {
+					handler(err)
+				}
+			}
+		}
 	}
 	s.ctx.Store(&ctx)
 	return s
@@ -140,10 +154,19 @@ func (s *Session) Run(cc *client.Conn) (err error) {
 		var cm *coapNet.ControlMessage
 		n, err := s.connection.ReadWithOptions(buf, coapNet.WithContext(s.Context()), coapNet.WithGetControlMessage(&cm))
 		if err != nil {
+			if coapNet.IsMessageSizeError(err) {
+				s.errors(fmt.Errorf("cannot read oversized datagram: %w", err))
+				continue
+			}
 			return err
 		}
 		if n > int(s.mtu) {
-			return fmt.Errorf("datagram exceeds MTU(%v)", s.mtu)
+			s.errors(fmt.Errorf("datagram exceeds MTU(%v)", s.mtu))
+			continue
+		}
+		if int64(n) > int64(s.maxMessageSize) {
+			s.errors(fmt.Errorf("max message size(%v) was exceeded %v", s.maxMessageSize, n))
+			continue
 		}
 		buf = buf[:n]
 		err = cc.Process(cm, buf)
