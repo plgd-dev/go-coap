@@ -298,7 +298,7 @@ func (s *Server) Serve(l *coapNet.UDPConn) error {
 			return err
 		}
 
-		cc, err := s.getConn(l, packet.raddr, laddr, true)
+		cc, created, err := s.getConn(l, packet.raddr, laddr, true)
 		if err != nil {
 			s.cfg.Errors(fmt.Errorf("%v: cannot get client connection: %w", packet.raddr, err))
 			continue
@@ -306,6 +306,9 @@ func (s *Server) Serve(l *coapNet.UDPConn) error {
 		err = cc.Process(packet.cm, packet.buf)
 		if err != nil {
 			s.handleProcessError(l, cc, packet.cm, err)
+			if created && isMalformedMessageError(err) {
+				s.closeConnection(cc)
+			}
 			continue
 		}
 	}
@@ -538,15 +541,15 @@ func (s *Server) getOrCreateConn(udpConn *coapNet.UDPConn, raddr *net.UDPAddr, l
 	return cc, true
 }
 
-func (s *Server) getConn(l *coapNet.UDPConn, raddr *net.UDPAddr, laddr *net.UDPAddr, firstTime bool) (*client.Conn, error) {
+func (s *Server) getConn(l *coapNet.UDPConn, raddr *net.UDPAddr, laddr *net.UDPAddr, firstTime bool) (*client.Conn, bool, error) {
 	if raddr == nil {
-		return nil, errors.New("invalid remote address")
+		return nil, false, errors.New("invalid remote address")
 	}
 	if laddr == nil {
 		var err error
 		laddr, err = s.getListenerLocalAddr(l)
 		if err != nil {
-			return nil, err
+			return nil, false, err
 		}
 	}
 
@@ -573,9 +576,9 @@ func (s *Server) getConn(l *coapNet.UDPConn, raddr *net.UDPAddr, laddr *net.UDPA
 		if firstTime {
 			return s.getConn(l, raddr, laddr, false)
 		}
-		return nil, errors.New("connection is closed")
+		return nil, false, errors.New("connection is closed")
 	}
-	return cc, nil
+	return cc, created, nil
 }
 
 // NewConn creates or gets a connection for the provided remote address.
@@ -597,5 +600,6 @@ func (s *Server) NewConn(addr *net.UDPAddr, laddr ...*net.UDPAddr) (*client.Conn
 		// server is not started/stopped
 		return nil, errors.New("server is not running")
 	}
-	return s.getConn(l, addr, localAddr, true)
+	cc, _, err := s.getConn(l, addr, localAddr, true)
+	return cc, err
 }

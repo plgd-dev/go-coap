@@ -314,6 +314,53 @@ func TestServerRejectsMalformedConfirmableWithoutTearingDownConnection(t *testin
 	require.Equal(t, int32(1), newConnCount.Load(), "malformed datagram must not recreate per-peer connection")
 }
 
+func TestServerDoesNotRetainConnectionForMalformedFirstPacket(t *testing.T) {
+	ld, err := coapNet.NewListenUDP("udp4", "")
+	require.NoError(t, err)
+	defer func() {
+		errC := ld.Close()
+		require.NoError(t, errC)
+	}()
+
+	var newConnCount atomic.Int32
+	s := udp.NewServer(options.WithOnNewConn(func(*client.Conn) {
+		newConnCount.Inc()
+	}))
+	t.Cleanup(func() {
+		s.Stop()
+	})
+
+	var wg sync.WaitGroup
+	t.Cleanup(func() {
+		wg.Wait()
+	})
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		errS := s.Serve(ld)
+		assert.NoError(t, errS)
+	}()
+
+	serverAddr, ok := ld.LocalAddr().(*net.UDPAddr)
+	require.True(t, ok)
+	cli, err := net.DialUDP("udp4", nil, serverAddr)
+	require.NoError(t, err)
+	defer func() {
+		errC := cli.Close()
+		require.NoError(t, errC)
+	}()
+
+	// Malformed CON: version=1, type=CON, TKL=9 (invalid), MID=0x4444.
+	rst := sendAndReadUDPDatagram(t, cli, []byte{0x49, 0x01, 0x44, 0x44})
+	requireResetWithMID(t, rst, 0x4444)
+	require.Equal(t, int32(1), newConnCount.Load())
+
+	// A valid packet from the same peer must create a new connection.
+	rst = sendAndReadUDPDatagram(t, cli, []byte{0x40, 0x00, 0x55, 0x55})
+	requireResetWithMID(t, rst, 0x5555)
+	require.Equal(t, int32(2), newConnCount.Load())
+}
+
 func TestServerCleanUpConns(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*5)
 	defer cancel()
