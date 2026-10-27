@@ -338,6 +338,69 @@ func TestServerKeepAliveMonitor(t *testing.T) {
 	require.True(t, inactivityDetected.Load())
 }
 
+func TestServerRejectsMalformedConfirmableWithoutClosingSession(t *testing.T) {
+	serverCgf, clientCgf, _, err := createDTLSConfig()
+	require.NoError(t, err)
+
+	ld, err := coapNet.NewDTLSListener("udp4", "", serverCgf)
+	require.NoError(t, err)
+	defer func() {
+		errC := ld.Close()
+		require.NoError(t, errC)
+	}()
+
+	var newConnCount atomic.Int32
+	var closed atomic.Bool
+	sd := dtls.NewServer(options.WithOnNewConn(func(cc *client.Conn) {
+		newConnCount.Inc()
+		cc.AddOnClose(func() {
+			closed.Store(true)
+		})
+	}))
+	var serverWg sync.WaitGroup
+	defer func() {
+		sd.Stop()
+		serverWg.Wait()
+	}()
+	serverWg.Add(1)
+	go func() {
+		defer serverWg.Done()
+		errS := sd.Serve(ld)
+		assert.NoError(t, errS)
+	}()
+
+	cc, err := piondtls.Dial("udp4", &net.UDPAddr{IP: []byte{127, 0, 0, 1}, Port: ld.Addr().(*net.UDPAddr).Port}, clientCgf)
+	require.NoError(t, err)
+	defer func() {
+		errC := cc.Close()
+		require.NoError(t, errC)
+	}()
+
+	sendAndRead := func(req []byte) []byte {
+		require.NoError(t, cc.SetDeadline(time.Now().Add(time.Second)))
+		_, errW := cc.Write(req)
+		require.NoError(t, errW)
+		buf := make([]byte, 1500)
+		n, errR := cc.Read(buf)
+		require.NoError(t, errR)
+		return buf[:n]
+	}
+	requireReset := func(datagram []byte, mid uint16) {
+		require.Len(t, datagram, 4)
+		require.Equal(t, byte(0x70), datagram[0])
+		require.Equal(t, byte(0x00), datagram[1])
+		require.Equal(t, mid, uint16(datagram[2])<<8|uint16(datagram[3]))
+	}
+
+	// Malformed CON: version=1, type=CON, TKL=9 (invalid), MID=0x2222.
+	requireReset(sendAndRead([]byte{0x49, 0x01, 0x22, 0x22}), 0x2222)
+	// The same session still answers a valid CoAP ping.
+	requireReset(sendAndRead([]byte{0x40, 0x00, 0x33, 0x33}), 0x3333)
+
+	require.Equal(t, int32(1), newConnCount.Load())
+	require.False(t, closed.Load())
+}
+
 // createDTLSOptionsConfig builds DTLSServerOptions / DTLSClientOptions using
 // PKI certificates — mirrors createDTLSConfig but returns the options-based
 // wrappers instead of deprecated *piondtls.Config pointers.
