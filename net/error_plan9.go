@@ -8,3 +8,8 @@ package net
 func IsConnectionBrokenError(err error) bool {
 	return false
 }
+
+// IsMessageSizeError reports whether a socket operation failed because a datagram exceeded the buffer or network limit.
+func IsMessageSizeError(err error) bool {
+	return false
+}
