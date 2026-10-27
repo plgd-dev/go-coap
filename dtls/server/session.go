@@ -2,14 +2,17 @@ package server
 
 import (
 	"context"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"net"
 	"sync"
 	"sync/atomic"
 
+	"github.com/plgd-dev/go-coap/v3/message"
 	"github.com/plgd-dev/go-coap/v3/message/pool"
 	coapNet "github.com/plgd-dev/go-coap/v3/net"
+	pkgMath "github.com/plgd-dev/go-coap/v3/pkg/math"
 	"github.com/plgd-dev/go-coap/v3/udp/client"
 	"github.com/plgd-dev/go-coap/v3/udp/coder"
 )
@@ -129,6 +132,22 @@ func (s *Session) LocalAddr() net.Addr {
 	return s.connection.LocalAddr()
 }
 
+// rejectMalformedConfirmable replies with RST to a malformed confirmable message
+// whose header could be parsed (RFC 7252 section 4.2). Unknown versions are silently ignored (section 3).
+func (s *Session) rejectMalformedConfirmable(malformedErr *client.MalformedMessageError) {
+	if malformedErr.InvalidVersion || !malformedErr.HasHeader || malformedErr.Type != message.Confirmable {
+		return
+	}
+	mid, err := pkgMath.SafeCastTo[uint16](malformedErr.MessageID)
+	if err != nil {
+		return
+	}
+	// Ver=1, Type=RST(3), TKL=0, Code=0.00 Empty
+	rst := []byte{0x70, 0x00, 0, 0}
+	binary.BigEndian.PutUint16(rst[2:4], mid)
+	_ = s.connection.WriteWithContext(s.Context(), rst)
+}
+
 // Run reads and processes requests from a connection, until the connection is closed.
 func (s *Session) Run(cc *client.Conn) (err error) {
 	defer func() {
@@ -148,7 +167,12 @@ func (s *Session) Run(cc *client.Conn) (err error) {
 		readBuf = readBuf[:readLen]
 		err = cc.Process(nil, readBuf)
 		if err != nil {
-			return err
+			var malformedErr *client.MalformedMessageError
+			if !errors.As(err, &malformedErr) {
+				return err
+			}
+			// Malformed datagram must not tear down the DTLS session.
+			s.rejectMalformedConfirmable(malformedErr)
 		}
 	}
 }

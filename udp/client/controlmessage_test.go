@@ -12,6 +12,7 @@ import (
 	"github.com/plgd-dev/go-coap/v3/message/pool"
 	coapNet "github.com/plgd-dev/go-coap/v3/net"
 	"github.com/plgd-dev/go-coap/v3/net/responsewriter"
+	"github.com/plgd-dev/go-coap/v3/udp/coder"
 	"github.com/stretchr/testify/require"
 )
 
@@ -269,4 +270,47 @@ func TestAsyncPingUsesStoredOriginalDestinationIP(t *testing.T) {
 	require.Equal(t, 4, cm.IfIndex)
 	require.Equal(t, codes.Empty, written.Code())
 	require.Equal(t, message.Confirmable, written.Type())
+}
+
+func TestProcessReturnsMalformedMessageErrorForDecodeFailures(t *testing.T) {
+	tests := []struct {
+		name      string
+		datagram  []byte
+		wantErr   error
+		hasHeader bool
+		invalidV  bool
+	}{
+		{name: "truncated header", datagram: []byte{0x40, 0x00, 0x11}, wantErr: coder.ErrMessageTruncated},
+		{name: "truncated token", datagram: []byte{0x42, 0x01, 0x11, 0x11, 0x01}, wantErr: coder.ErrMessageTruncated, hasHeader: true},
+		{name: "invalid version", datagram: []byte{0x00, 0x01, 0x11, 0x11}, wantErr: coder.ErrMessageInvalidVersion, invalidV: true},
+		{name: "invalid token length", datagram: []byte{0x49, 0x01, 0x11, 0x11}, wantErr: message.ErrInvalidTokenLen, hasHeader: true},
+		{name: "option truncated", datagram: []byte{0x40, 0x01, 0x11, 0x11, 0x05}, wantErr: message.ErrOptionTruncated, hasHeader: true},
+		{name: "option extended delta truncated", datagram: []byte{0x40, 0x01, 0x11, 0x11, 0xD0}, wantErr: message.ErrOptionTruncated, hasHeader: true},
+		{name: "option unexpected extend marker", datagram: []byte{0x40, 0x01, 0x11, 0x11, 0xF0}, wantErr: message.ErrOptionUnexpectedExtendMarker, hasHeader: true},
+		{name: "option id overflow", datagram: []byte{0x40, 0x01, 0x11, 0x11, 0xE0, 0xFF, 0xFF}, wantErr: message.ErrOptionNotFound, hasHeader: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cc, _ := newTestConnWithSession(t)
+			err := cc.Process(nil, tt.datagram)
+			require.Error(t, err)
+			require.ErrorIs(t, err, tt.wantErr)
+			var malformedErr *MalformedMessageError
+			require.ErrorAs(t, err, &malformedErr)
+			require.Equal(t, tt.hasHeader, malformedErr.HasHeader)
+			require.Equal(t, tt.invalidV, malformedErr.InvalidVersion)
+			if tt.hasHeader {
+				require.Equal(t, message.Confirmable, malformedErr.Type)
+				require.Equal(t, int32(0x1111), malformedErr.MessageID)
+			}
+		})
+	}
+}
+
+func TestProcessNonDecodeErrorsAreNotMalformedMessageError(t *testing.T) {
+	cc, session := newTestConnWithSession(t)
+	err := cc.Process(nil, make([]byte, session.MaxMessageSize()+1))
+	require.Error(t, err)
+	var malformedErr *MalformedMessageError
+	require.NotErrorAs(t, err, &malformedErr)
 }
