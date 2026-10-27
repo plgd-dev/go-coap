@@ -121,14 +121,8 @@ func (s *Server) shouldPropagateError(err error) bool {
 }
 
 func isMalformedMessageError(err error) bool {
-	return errors.Is(err, coder.ErrMessageTruncated) ||
-		errors.Is(err, coder.ErrMessageInvalidVersion) ||
-		errors.Is(err, message.ErrInvalidTokenLen) ||
-		errors.Is(err, message.ErrInvalidOptionHeaderExt) ||
-		errors.Is(err, message.ErrOptionTruncated) ||
-		errors.Is(err, message.ErrOptionUnexpectedExtendMarker) ||
-		errors.Is(err, message.ErrOptionsTooSmall) ||
-		errors.Is(err, message.ErrInvalidEncoding)
+	var malformedErr *client.MalformedMessageError
+	return errors.As(err, &malformedErr)
 }
 
 func makeResetDatagram(mid int32) ([]byte, error) {
