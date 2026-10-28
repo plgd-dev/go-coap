@@ -30,7 +30,7 @@ linters:
     # - goerr113         # Golang linter to check the errors handling expressions
     - goheader         # Checks is file header matches to pattern
     # - gomoddirectives  # Manage the use of 'replace', 'retract', and 'excludes' directives in go.mod.
-    - gomodguard       # Allow and block list linter for direct Go module dependencies. This is different from depguard where there are different block types for example version constraints and module recommendations.
+    - gomodguard_v2    # Allow and block list linter for direct Go module dependencies. This is different from depguard where there are different block types for example version constraints and module recommendations.
     - goprintffuncname # Checks that printf-like functions are named with `f` at the end
     - gosec            # Inspects source code for security problems
     - gosmopolitan     # Report certain i18n/l10n anti-patterns in your Go codebase
@@ -141,10 +141,6 @@ linters:
           - godox
         path: .*/client/conn.go
       - linters:
-          - godox
-        path: .*.go
-        text: replace with standard maps package
-      - linters:
           - revive
         path: '^dtls/clientoptions\.go'
         text: 'stutters; consider calling this Client(Options|Config)'
@@ -155,7 +151,7 @@ linters:
       - linters:
           - staticcheck
         path: '^(dtls/client\.go|dtls/client_test\.go|dtls/clientoptions\.go|dtls/server_test\.go|dtls/example_test\.go|net/dtlslistener\.go|net/dtlsoptions\.go)$'
-        text: 'SA1019: (piondtls\.(Config|Dial)|dtls\.Config) is deprecated'
+        text: 'SA1019: github\.com/pion/dtls/v3\.(Config|Dial) is deprecated'
     # Which file paths to exclude: they will be analyzed, but issues from them won't be reported.
     # "/" will be replaced by the current OS file path separator to properly work on Windows.
     # Default: []

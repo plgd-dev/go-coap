@@ -97,8 +97,9 @@ func TestDecodeHeaderRejectsReservedTokenLength(t *testing.T) {
 	// TKL (lower nibble of the first byte) 9-15 is reserved and must be
 	// rejected as a message format error (RFC 8323 section 3.2).
 	for tkl := 0; tkl <= 15; tkl++ {
-		data := []byte{byte(tkl), byte(codes.GET)}
-		data = append(data, make([]byte, tkl)...)
+		data := make([]byte, 2+tkl)
+		data[0] = byte(tkl)
+		data[1] = byte(codes.GET)
 		var h MessageHeader
 		_, err := DefaultCoder.DecodeHeader(data, &h)
 		if tkl > message.MaxTokenSize {

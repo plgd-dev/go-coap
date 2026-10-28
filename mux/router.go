@@ -4,12 +4,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"sync"
 
 	"github.com/plgd-dev/go-coap/v3/message"
 	"github.com/plgd-dev/go-coap/v3/message/codes"
 	"github.com/plgd-dev/go-coap/v3/message/pool"
-	"golang.org/x/exp/maps" // TODO: replace with standard maps package as soon as Go dependency hits 1.21
 )
 
 type ResponseWriter = interface {

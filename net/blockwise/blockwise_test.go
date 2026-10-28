@@ -18,6 +18,17 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+const (
+	testNameSZX16   = "SZX16"
+	testNameSZX32   = "SZX32"
+	testNameSZX64   = "SZX64"
+	testNameSZX128  = "SZX128"
+	testNameSZX256  = "SZX256"
+	testNameSZX512  = "SZX512"
+	testNameSZX1024 = "SZX1024"
+	testNameSZXBERT = "SZXBERT"
+)
+
 type testmessage struct {
 	code     codes.Code
 	ctx      context.Context
@@ -415,22 +426,22 @@ func TestEncodeBlockOption(t *testing.T) {
 		want    uint32
 		wantErr bool
 	}{
-		{name: "SZX16", args: args{szx: SZX16, blockNumber: 0, moreBlocksFollowing: false}, want: uint32(0)},
-		{name: "SZX16", args: args{szx: SZX16, blockNumber: 0, moreBlocksFollowing: true}, want: uint32(8)},
-		{name: "SZX32", args: args{szx: SZX32, blockNumber: 0, moreBlocksFollowing: false}, want: uint32(1)},
-		{name: "SZX32", args: args{szx: SZX32, blockNumber: 0, moreBlocksFollowing: true}, want: uint32(9)},
-		{name: "SZX64", args: args{szx: SZX64, blockNumber: 0, moreBlocksFollowing: false}, want: uint32(2)},
-		{name: "SZX64", args: args{szx: SZX64, blockNumber: 0, moreBlocksFollowing: true}, want: uint32(10)},
-		{name: "SZX128", args: args{szx: SZX128, blockNumber: 0, moreBlocksFollowing: false}, want: uint32(3)},
-		{name: "SZX128", args: args{szx: SZX128, blockNumber: 0, moreBlocksFollowing: true}, want: uint32(11)},
-		{name: "SZX256", args: args{szx: SZX256, blockNumber: 0, moreBlocksFollowing: false}, want: uint32(4)},
-		{name: "SZX256", args: args{szx: SZX256, blockNumber: 0, moreBlocksFollowing: true}, want: uint32(12)},
-		{name: "SZX512", args: args{szx: SZX512, blockNumber: 0, moreBlocksFollowing: false}, want: uint32(5)},
-		{name: "SZX512", args: args{szx: SZX512, blockNumber: 0, moreBlocksFollowing: true}, want: uint32(13)},
-		{name: "SZX1024", args: args{szx: SZX1024, blockNumber: 0, moreBlocksFollowing: false}, want: uint32(6)},
-		{name: "SZX1024", args: args{szx: SZX1024, blockNumber: 0, moreBlocksFollowing: true}, want: uint32(14)},
-		{name: "SZXBERT", args: args{szx: SZXBERT, blockNumber: 0, moreBlocksFollowing: false}, want: uint32(7)},
-		{name: "SZXBERT", args: args{szx: SZXBERT, blockNumber: 0, moreBlocksFollowing: true}, want: uint32(15)},
+		{name: testNameSZX16, args: args{szx: SZX16, blockNumber: 0, moreBlocksFollowing: false}, want: uint32(0)},
+		{name: testNameSZX16, args: args{szx: SZX16, blockNumber: 0, moreBlocksFollowing: true}, want: uint32(8)},
+		{name: testNameSZX32, args: args{szx: SZX32, blockNumber: 0, moreBlocksFollowing: false}, want: uint32(1)},
+		{name: testNameSZX32, args: args{szx: SZX32, blockNumber: 0, moreBlocksFollowing: true}, want: uint32(9)},
+		{name: testNameSZX64, args: args{szx: SZX64, blockNumber: 0, moreBlocksFollowing: false}, want: uint32(2)},
+		{name: testNameSZX64, args: args{szx: SZX64, blockNumber: 0, moreBlocksFollowing: true}, want: uint32(10)},
+		{name: testNameSZX128, args: args{szx: SZX128, blockNumber: 0, moreBlocksFollowing: false}, want: uint32(3)},
+		{name: testNameSZX128, args: args{szx: SZX128, blockNumber: 0, moreBlocksFollowing: true}, want: uint32(11)},
+		{name: testNameSZX256, args: args{szx: SZX256, blockNumber: 0, moreBlocksFollowing: false}, want: uint32(4)},
+		{name: testNameSZX256, args: args{szx: SZX256, blockNumber: 0, moreBlocksFollowing: true}, want: uint32(12)},
+		{name: testNameSZX512, args: args{szx: SZX512, blockNumber: 0, moreBlocksFollowing: false}, want: uint32(5)},
+		{name: testNameSZX512, args: args{szx: SZX512, blockNumber: 0, moreBlocksFollowing: true}, want: uint32(13)},
+		{name: testNameSZX1024, args: args{szx: SZX1024, blockNumber: 0, moreBlocksFollowing: false}, want: uint32(6)},
+		{name: testNameSZX1024, args: args{szx: SZX1024, blockNumber: 0, moreBlocksFollowing: true}, want: uint32(14)},
+		{name: testNameSZXBERT, args: args{szx: SZXBERT, blockNumber: 0, moreBlocksFollowing: false}, want: uint32(7)},
+		{name: testNameSZXBERT, args: args{szx: SZXBERT, blockNumber: 0, moreBlocksFollowing: true}, want: uint32(15)},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -457,22 +468,22 @@ func TestDecodeBlockOption(t *testing.T) {
 		wantMoreBlocksFollowing bool
 		wantErr                 bool
 	}{
-		{name: "SZX16", args: args{blockVal: uint32(0)}, wantSzx: SZX16, wantBlockNumber: 0, wantMoreBlocksFollowing: false},
-		{name: "SZX16", args: args{blockVal: uint32(8)}, wantSzx: SZX16, wantBlockNumber: 0, wantMoreBlocksFollowing: true},
-		{name: "SZX32", args: args{blockVal: uint32(1)}, wantSzx: SZX32, wantBlockNumber: 0, wantMoreBlocksFollowing: false},
-		{name: "SZX32", args: args{blockVal: uint32(9)}, wantSzx: SZX32, wantBlockNumber: 0, wantMoreBlocksFollowing: true},
-		{name: "SZX64", args: args{blockVal: uint32(2)}, wantSzx: SZX64, wantBlockNumber: 0, wantMoreBlocksFollowing: false},
-		{name: "SZX64", args: args{blockVal: uint32(10)}, wantSzx: SZX64, wantBlockNumber: 0, wantMoreBlocksFollowing: true},
-		{name: "SZX128", args: args{blockVal: uint32(3)}, wantSzx: SZX128, wantBlockNumber: 0, wantMoreBlocksFollowing: false},
-		{name: "SZX128", args: args{blockVal: uint32(11)}, wantSzx: SZX128, wantBlockNumber: 0, wantMoreBlocksFollowing: true},
-		{name: "SZX256", args: args{blockVal: uint32(4)}, wantSzx: SZX256, wantBlockNumber: 0, wantMoreBlocksFollowing: false},
-		{name: "SZX256", args: args{blockVal: uint32(12)}, wantSzx: SZX256, wantBlockNumber: 0, wantMoreBlocksFollowing: true},
-		{name: "SZX512", args: args{blockVal: uint32(5)}, wantSzx: SZX512, wantBlockNumber: 0, wantMoreBlocksFollowing: false},
-		{name: "SZX512", args: args{blockVal: uint32(13)}, wantSzx: SZX512, wantBlockNumber: 0, wantMoreBlocksFollowing: true},
-		{name: "SZX1024", args: args{blockVal: uint32(6)}, wantSzx: SZX1024, wantBlockNumber: 0, wantMoreBlocksFollowing: false},
-		{name: "SZX1024", args: args{blockVal: uint32(14)}, wantSzx: SZX1024, wantBlockNumber: 0, wantMoreBlocksFollowing: true},
-		{name: "SZXBERT", args: args{blockVal: uint32(7)}, wantSzx: SZXBERT, wantBlockNumber: 0, wantMoreBlocksFollowing: false},
-		{name: "SZXBERT", args: args{blockVal: uint32(15)}, wantSzx: SZXBERT, wantBlockNumber: 0, wantMoreBlocksFollowing: true},
+		{name: testNameSZX16, args: args{blockVal: uint32(0)}, wantSzx: SZX16, wantBlockNumber: 0, wantMoreBlocksFollowing: false},
+		{name: testNameSZX16, args: args{blockVal: uint32(8)}, wantSzx: SZX16, wantBlockNumber: 0, wantMoreBlocksFollowing: true},
+		{name: testNameSZX32, args: args{blockVal: uint32(1)}, wantSzx: SZX32, wantBlockNumber: 0, wantMoreBlocksFollowing: false},
+		{name: testNameSZX32, args: args{blockVal: uint32(9)}, wantSzx: SZX32, wantBlockNumber: 0, wantMoreBlocksFollowing: true},
+		{name: testNameSZX64, args: args{blockVal: uint32(2)}, wantSzx: SZX64, wantBlockNumber: 0, wantMoreBlocksFollowing: false},
+		{name: testNameSZX64, args: args{blockVal: uint32(10)}, wantSzx: SZX64, wantBlockNumber: 0, wantMoreBlocksFollowing: true},
+		{name: testNameSZX128, args: args{blockVal: uint32(3)}, wantSzx: SZX128, wantBlockNumber: 0, wantMoreBlocksFollowing: false},
+		{name: testNameSZX128, args: args{blockVal: uint32(11)}, wantSzx: SZX128, wantBlockNumber: 0, wantMoreBlocksFollowing: true},
+		{name: testNameSZX256, args: args{blockVal: uint32(4)}, wantSzx: SZX256, wantBlockNumber: 0, wantMoreBlocksFollowing: false},
+		{name: testNameSZX256, args: args{blockVal: uint32(12)}, wantSzx: SZX256, wantBlockNumber: 0, wantMoreBlocksFollowing: true},
+		{name: testNameSZX512, args: args{blockVal: uint32(5)}, wantSzx: SZX512, wantBlockNumber: 0, wantMoreBlocksFollowing: false},
+		{name: testNameSZX512, args: args{blockVal: uint32(13)}, wantSzx: SZX512, wantBlockNumber: 0, wantMoreBlocksFollowing: true},
+		{name: testNameSZX1024, args: args{blockVal: uint32(6)}, wantSzx: SZX1024, wantBlockNumber: 0, wantMoreBlocksFollowing: false},
+		{name: testNameSZX1024, args: args{blockVal: uint32(14)}, wantSzx: SZX1024, wantBlockNumber: 0, wantMoreBlocksFollowing: true},
+		{name: testNameSZXBERT, args: args{blockVal: uint32(7)}, wantSzx: SZXBERT, wantBlockNumber: 0, wantMoreBlocksFollowing: false},
+		{name: testNameSZXBERT, args: args{blockVal: uint32(15)}, wantSzx: SZXBERT, wantBlockNumber: 0, wantMoreBlocksFollowing: true},
 		{name: "error", args: args{blockVal: 0x1000000}, wantErr: true},
 	}
 	for _, tt := range tests {

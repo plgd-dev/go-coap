@@ -9,6 +9,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+const testPathABC = "/a/b/c"
+
 func testFindPositionBytesOption(t *testing.T, options Options, id OptionID, prepend bool, expectedIdx int) int {
 	prepIdx, idx := options.findPosition(id)
 	if prepend {
@@ -112,8 +114,8 @@ func TestGetPathBufferSize(t *testing.T) {
 		},
 		{
 			name: "Basic path",
-			args: args{p: "/a/b/c"},
-			want: "/a/b/c",
+			args: args{p: testPathABC},
+			want: testPathABC,
 		},
 		{
 			name: "Bath with duplicit slashes",
@@ -341,7 +343,7 @@ func TestRemoveBytesOption(t *testing.T) {
 
 func TestPathOption(t *testing.T) {
 	options := make(Options, 0, 10)
-	path := "/a/b/c"
+	path := testPathABC
 	buf := make([]byte, 256)
 	options, bufLen, err := options.SetPath(buf, path)
 	if err != nil {

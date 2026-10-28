@@ -29,6 +29,12 @@ import (
 
 const testNumParallel = 64
 
+const (
+	testNameOKA      = "ok-a"
+	testNameOKB      = "ok-b"
+	testNameNotFound = "notfound"
+)
+
 func bodyToBytes(t *testing.T, r io.Reader) []byte {
 	t.Helper()
 	buf := bytes.NewBuffer(nil)
@@ -290,7 +296,7 @@ func testParallelConnGet(t *testing.T, numParallel int) {
 		wantErr           bool
 	}{
 		{
-			name: "ok-a",
+			name: testNameOKA,
 			args: args{
 				path: "/a",
 			},
@@ -299,7 +305,7 @@ func testParallelConnGet(t *testing.T, numParallel int) {
 			wantPayload:       make([]byte, 5330),
 		},
 		{
-			name: "ok-b",
+			name: testNameOKB,
 			args: args{
 				path: "/b",
 			},
@@ -308,7 +314,7 @@ func testParallelConnGet(t *testing.T, numParallel int) {
 			wantPayload:       []byte("b"),
 		},
 		{
-			name: "notfound",
+			name: testNameNotFound,
 			args: args{
 				path: "/c",
 			},
@@ -489,7 +495,7 @@ func testConnPost(t *testing.T, numParallel int) {
 		wantErr           bool
 	}{
 		{
-			name: "ok-a",
+			name: testNameOKA,
 			args: args{
 				path:          "/a",
 				contentFormat: message.TextPlain,
@@ -500,7 +506,7 @@ func testConnPost(t *testing.T, numParallel int) {
 			wantPayload:       make([]byte, 5330),
 		},
 		{
-			name: "ok-b",
+			name: testNameOKB,
 			args: args{
 				path:          "/b",
 				contentFormat: message.TextPlain,
@@ -511,7 +517,7 @@ func testConnPost(t *testing.T, numParallel int) {
 			wantPayload:       []byte("b"),
 		},
 		{
-			name: "notfound",
+			name: testNameNotFound,
 			args: args{
 				path:          "/c",
 				contentFormat: message.TextPlain,
@@ -632,7 +638,7 @@ func testConnPut(t *testing.T, numParallel int) {
 		wantErr           bool
 	}{
 		{
-			name: "ok-a",
+			name: testNameOKA,
 			args: args{
 				path:          "/a",
 				contentFormat: message.TextPlain,
@@ -643,7 +649,7 @@ func testConnPut(t *testing.T, numParallel int) {
 			wantPayload:       make([]byte, 5330),
 		},
 		{
-			name: "ok-b",
+			name: testNameOKB,
 			args: args{
 				path:          "/b",
 				contentFormat: message.TextPlain,
@@ -654,7 +660,7 @@ func testConnPut(t *testing.T, numParallel int) {
 			wantPayload:       []byte("b"),
 		},
 		{
-			name: "notfound",
+			name: testNameNotFound,
 			args: args{
 				path:          "/c",
 				contentFormat: message.TextPlain,
@@ -772,7 +778,7 @@ func testConnDelete(t *testing.T, numParallel int) {
 		wantErr           bool
 	}{
 		{
-			name: "ok-a",
+			name: testNameOKA,
 			args: args{
 				path: "/a",
 			},
@@ -781,7 +787,7 @@ func testConnDelete(t *testing.T, numParallel int) {
 			wantPayload:       make([]byte, 5330),
 		},
 		{
-			name: "ok-b",
+			name: testNameOKB,
 			args: args{
 				path: "/b",
 			},
@@ -790,7 +796,7 @@ func testConnDelete(t *testing.T, numParallel int) {
 			wantPayload:       []byte("b"),
 		},
 		{
-			name: "notfound",
+			name: testNameNotFound,
 			args: args{
 				path: "/c",
 			},
