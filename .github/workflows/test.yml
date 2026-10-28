@@ -110,39 +110,3 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
-<<<<<<< HEAD
-=======
-
-  # test on oldest supported major Go version
-  test1_20:
-    # don't run for forks
-    if: github.event_name == 'push' ||
-      (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) ||
-      github.event_name == 'workflow_dispatch'
-
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Set up Go 1.20
-        uses: actions/setup-go@v6
-        with:
-          go-version: "~1.20"
-
-      - run: go version
-
-      - name: Install coap-client
-        run: |
-            sudo apt-get update
-            sudo apt-get install -y libcoap3-bin
-            sudo ln -s /usr/bin/coap-client-notls /usr/bin/coap-client 
-        shell: bash
-
-      - name: Checkout
-        uses: actions/checkout@v5
-
-      - name: Run a build
-        run: go build ./...
-
-      - name: Run a test
-        run: go test -v -race ./... -coverpkg=./... -covermode=atomic -coverprofile=./coverage.txt
->>>>>>> 4afa3a5 (fix coap-client in tests)

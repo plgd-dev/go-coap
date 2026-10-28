@@ -35,6 +35,17 @@ func newBlock1Receiver(t *testing.T, expiration time.Duration) *block1Receiver {
 	}
 }
 
+func (b *block1Receiver) exchangeKey() uint64 {
+	req := b.cc.AcquireMessage(b.t.Context())
+	defer b.cc.ReleaseMessage(req)
+	req.SetCode(codes.PUT)
+	req.SetToken(b.token)
+	req.SetOptionUint32(message.Block1, 0)
+	key, err := getMessageExchangeKey(req, b.remote)
+	require.NoError(b.t, err)
+	return key
+}
+
 type block1Response struct {
 	code  codes.Code
 	size1 uint32
@@ -45,11 +56,18 @@ func (b *block1Receiver) send(num int64, more bool, size1 ...uint32) block1Respo
 }
 
 func (b *block1Receiver) sendPayload(num int64, more bool, payload []byte, size1 ...uint32) block1Response {
+	return b.sendPayloadWithPath(num, more, payload, "", size1...)
+}
+
+func (b *block1Receiver) sendPayloadWithPath(num int64, more bool, payload []byte, path string, size1 ...uint32) block1Response {
 	req := b.cc.AcquireMessage(b.t.Context())
 	defer b.cc.ReleaseMessage(req)
 	req.SetCode(codes.PUT)
 	req.SetToken(b.token)
 	req.SetType(message.Confirmable)
+	if path != "" {
+		require.NoError(b.t, req.SetPath(path))
+	}
 	block, err := EncodeBlockOption(SZX1024, num, more)
 	require.NoError(b.t, err)
 	req.SetOptionUint32(message.Block1, block)
@@ -145,7 +163,7 @@ func TestBlockWiseReceiveRollingExpiration(t *testing.T) {
 			r := newBlock1Receiver(t, time.Hour)
 			r.bw.SetRollingExpiration(tt.rolling)
 			r.sendBlocks(1)
-			e := r.bw.receivingMessagesCache.Load(r.token.Hash())
+			e := r.bw.receivingMessagesCache.Load(r.exchangeKey())
 			require.NotNil(t, e)
 			pinned := time.Now().Add(time.Minute)
 			e.ValidUntil.Store(pinned)
@@ -174,7 +192,7 @@ func TestBlockWiseReceiveRollingExpirationOnlyOnNewData(t *testing.T) {
 	r := newBlock1Receiver(t, time.Minute)
 	r.bw.SetRollingExpiration(true)
 	r.sendBlocks(2)
-	e := r.bw.receivingMessagesCache.Load(message.Token{0x01}.Hash())
+	e := r.bw.receivingMessagesCache.Load(r.exchangeKey())
 	require.NotNil(t, e)
 	pinned := time.Now().Add(time.Second)
 	e.ValidUntil.Store(pinned)
@@ -196,14 +214,14 @@ func TestBlockWiseReceiveInvalidNonFinalBlock(t *testing.T) {
 		t.Run(name+" first block", func(t *testing.T) {
 			r := newBlock1Receiver(t, time.Minute)
 			require.Equal(t, codes.RequestEntityIncomplete, r.sendPayload(0, true, payload).code)
-			require.Nil(t, r.bw.receivingMessagesCache.Load(message.Token{0x01}.Hash()))
+			require.Nil(t, r.bw.receivingMessagesCache.Load(r.exchangeKey()))
 		})
 		t.Run(name+" next block", func(t *testing.T) {
 			r := newBlock1Receiver(t, time.Minute)
 			r.bw.SetRollingExpiration(true)
 			r.sendBlocks(2)
 			require.Equal(t, codes.RequestEntityIncomplete, r.sendPayload(2, true, payload).code)
-			require.Nil(t, r.bw.receivingMessagesCache.Load(message.Token{0x01}.Hash()), "state must be discarded")
+			require.Nil(t, r.bw.receivingMessagesCache.Load(r.exchangeKey()), "state must be discarded")
 			require.Empty(t, r.delivered)
 		})
 	}
@@ -300,4 +318,22 @@ func TestBlockWiseReceiveTokenless(t *testing.T) {
 		require.Equal(t, codes.RequestEntityIncomplete, resp.code)
 		require.Empty(t, r.delivered)
 	})
+}
+
+func TestBlockWiseReceiveBlock1ContinuationWithoutPath(t *testing.T) {
+	r := newBlock1Receiver(t, time.Minute)
+	r.token = message.Token{0x01}
+	require.Equal(t, codes.Continue, r.send(0, true).code)
+
+	r.token = message.Token{0x02}
+	require.Equal(t, codes.Changed, r.send(1, false).code)
+	require.Len(t, r.delivered, 1)
+	require.Len(t, r.delivered[0], 2*testBlock1Size)
+}
+
+func TestBlockWiseReceiveBlock1DifferentPath(t *testing.T) {
+	r := newBlock1Receiver(t, time.Minute)
+	require.Equal(t, codes.Continue, r.sendPayloadWithPath(0, true, bytes.Repeat([]byte{0}, testBlock1Size), "/first").code)
+	require.Equal(t, codes.RequestEntityIncomplete, r.sendPayloadWithPath(1, false, bytes.Repeat([]byte{1}, testBlock1Size), "/second").code)
+	require.Empty(t, r.delivered)
 }

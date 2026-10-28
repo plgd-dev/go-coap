@@ -2,6 +2,7 @@ package udp
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"math/rand"
@@ -9,6 +10,7 @@ import (
 	"strconv"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/plgd-dev/go-coap/v3/message"
 	"github.com/plgd-dev/go-coap/v3/message/codes"
@@ -18,6 +20,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+const libcoapBlockwisePath = "/big"
 
 func TestConnGetBlockwise(t *testing.T) {
 	type args struct {
@@ -35,7 +39,7 @@ func TestConnGetBlockwise(t *testing.T) {
 		{
 			name: "block-with-token",
 			args: args{
-				path: "/big",
+				path: libcoapBlockwisePath,
 			},
 			wantCode:          codes.Content,
 			wantContentFormat: &message.TextPlain,
@@ -46,7 +50,7 @@ func TestConnGetBlockwise(t *testing.T) {
 		{
 			name: "block-without-token",
 			args: args{
-				path: "/big",
+				path: libcoapBlockwisePath,
 			},
 			wantCode:          codes.Content,
 			wantContentFormat: &message.TextPlain,
@@ -74,7 +78,7 @@ func TestConnGetBlockwise(t *testing.T) {
 
 	m := mux.NewRouter()
 
-	err = m.Handle("/big", mux.HandlerFunc(func(w mux.ResponseWriter, r *mux.Message) {
+	err = m.Handle(libcoapBlockwisePath, mux.HandlerFunc(func(w mux.ResponseWriter, r *mux.Message) {
 		assert.Equal(t, codes.GET, r.Code())
 		errS := w.SetResponse(codes.Content, message.AppOctets, bytes.NewReader([]byte(bigPayload10KiB)))
 		require.NoError(t, errS)
@@ -136,7 +140,7 @@ func TestConnPutBlockwise(t *testing.T) {
 		{
 			name: "block-put-with-token",
 			args: args{
-				path: "/big",
+				path: libcoapBlockwisePath,
 			},
 			wantCode: codes.Changed,
 			wantErr:  false,
@@ -145,7 +149,7 @@ func TestConnPutBlockwise(t *testing.T) {
 		{
 			name: "block-put-without-token",
 			args: args{
-				path: "/big",
+				path: libcoapBlockwisePath,
 			},
 			wantCode: codes.Changed,
 			wantErr:  false,
@@ -170,12 +174,12 @@ func TestConnPutBlockwise(t *testing.T) {
 
 	m := mux.NewRouter()
 
-	err = m.Handle("/big", mux.HandlerFunc(func(w mux.ResponseWriter, r *mux.Message) {
+	err = m.Handle(libcoapBlockwisePath, mux.HandlerFunc(func(w mux.ResponseWriter, r *mux.Message) {
 		assert.Equal(t, codes.PUT, r.Code())
 		errS := w.SetResponse(codes.Changed, message.TextPlain, nil)
 		received, err2 := r.ReadBody()
 		require.NoError(t, err2)
-		assert.Equal(t, bigPayload10KiB, received)
+		assert.Equal(t, []byte(bigPayload10KiB), received)
 		require.NoError(t, errS)
 		assert.NotEmpty(t, w.Conn())
 		assert.Equal(t, message.Confirmable, r.Type())
@@ -228,7 +232,7 @@ func TestConnPostBlockwise(t *testing.T) {
 		{
 			name: "block-post-with-token",
 			args: args{
-				path: "/big",
+				path: libcoapBlockwisePath,
 			},
 			wantCode:    codes.Content,
 			wantErr:     false,
@@ -238,7 +242,7 @@ func TestConnPostBlockwise(t *testing.T) {
 		{
 			name: "block-post-without-token",
 			args: args{
-				path: "/big",
+				path: libcoapBlockwisePath,
 			},
 			wantCode:    codes.Content,
 			wantErr:     false,
@@ -264,12 +268,12 @@ func TestConnPostBlockwise(t *testing.T) {
 
 	m := mux.NewRouter()
 
-	err = m.Handle("/big", mux.HandlerFunc(func(w mux.ResponseWriter, r *mux.Message) {
+	err = m.Handle(libcoapBlockwisePath, mux.HandlerFunc(func(w mux.ResponseWriter, r *mux.Message) {
 		assert.Equal(t, codes.POST, r.Code())
 		received, err2 := r.ReadBody()
 		errS := w.SetResponse(codes.Content, message.TextPlain, bytes.NewReader([]byte(bigPayload10KiB)))
 		require.NoError(t, err2)
-		assert.Equal(t, bigPayload10KiB, received)
+		assert.Equal(t, []byte(bigPayload10KiB), received)
 		require.NoError(t, errS)
 		assert.NotEmpty(t, w.Conn())
 		assert.Equal(t, message.Confirmable, r.Type())
@@ -322,8 +326,7 @@ func sendCoAPRequestLibCoAP(address string, method string, path string, payload 
 	var args []string
 	args = append(args, "-m", method)
 	if token {
-		rand.Uint64()
-		args = append(args, "-T", strconv.FormatUint(rand.Uint64(), 10))
+		args = append(args, "-T", strconv.FormatUint(rand.Uint64()&0xffffffff, 16))
 	}
 	if payload {
 		args = append(args, "-b", "1024")
@@ -334,7 +337,9 @@ func sendCoAPRequestLibCoAP(address string, method string, path string, payload 
 	args = append(args, uri)
 
 	// Prepare command
-	cmd := exec.Command(coapClientPath, args...)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, coapClientPath, args...)
 	var out bytes.Buffer
 	cmd.Stdout = &out
 	cmd.Stderr = &out
