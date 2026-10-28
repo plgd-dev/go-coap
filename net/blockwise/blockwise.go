@@ -46,7 +46,7 @@ const (
 	moreBlocksFollowingMask = 0x8
 	// szxMask last 3bits represents SZX (SZX)
 	szxMask                                 = 0x7
-	DefaultReceivingMessagesCacheMaxEntries = 1024
+	DefaultReceivingMessagesCacheMaxEntries = 4096
 )
 
 // SZX enum representation for the size of the block: https://tools.ietf.org/html/rfc7959#section-2.2
