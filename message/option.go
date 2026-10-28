@@ -278,7 +278,7 @@ func marshalOptionHeaderExt(buf []byte, opt, ext int) (int, error) {
 	switch opt {
 	case ExtendOptionByteCode:
 		if len(buf) > 0 {
-			buf[0] = byte(ext)
+			buf[0] = math.CastTo[byte](ext)
 			return 1, nil
 		}
 		return 1, ErrTooSmall
@@ -299,7 +299,7 @@ func marshalOptionHeader(buf []byte, delta, length int) (int, error) {
 	l, lx := extendOpt(length)
 
 	if len(buf) > 0 {
-		buf[0] = byte(d<<4) | byte(l)
+		buf[0] = math.CastTo[byte](d<<4) | math.CastTo[byte](l)
 		size++
 	} else {
 		buf = nil

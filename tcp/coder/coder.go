@@ -122,7 +122,7 @@ func (c *Coder) Encode(m message.Message, buf []byte) (int, error) {
 	hdrOff = copyToHdr(hdrOff, extLenBytes)
 
 	// Code.
-	hdr[hdrOff] = byte(m.Code)
+	hdr[hdrOff] = math.CastTo[byte](m.Code)
 	hdrOff++
 
 	// Token.

@@ -38,13 +38,13 @@ func (c *ControlMessage) String() string {
 	}
 	var sb strings.Builder
 	if c.Dst != nil {
-		sb.WriteString(fmt.Sprintf("Dst: %s, ", c.Dst))
+		fmt.Fprintf(&sb, "Dst: %s, ", c.Dst)
 	}
 	if c.Src != nil {
-		sb.WriteString(fmt.Sprintf("Src: %s, ", c.Src))
+		fmt.Fprintf(&sb, "Src: %s, ", c.Src)
 	}
 	if c.IfIndex >= 1 {
-		sb.WriteString(fmt.Sprintf("IfIndex: %d, ", c.IfIndex))
+		fmt.Fprintf(&sb, "IfIndex: %d, ", c.IfIndex)
 	}
 	return sb.String()
 }

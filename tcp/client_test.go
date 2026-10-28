@@ -25,6 +25,12 @@ import (
 	"golang.org/x/sync/semaphore"
 )
 
+const (
+	testNameOKA      = "ok-a"
+	testNameOKB      = "ok-b"
+	testNameNotFound = "notfound"
+)
+
 func bodyToBytes(t *testing.T, r io.Reader) []byte {
 	t.Helper()
 	buf := bytes.NewBuffer(nil)
@@ -47,7 +53,7 @@ func TestConnGet(t *testing.T) {
 		wantErr           bool
 	}{
 		{
-			name: "ok-a",
+			name: testNameOKA,
 			args: args{
 				path: "/a",
 			},
@@ -56,7 +62,7 @@ func TestConnGet(t *testing.T) {
 			wantPayload:       make([]byte, 5330),
 		},
 		{
-			name: "ok-b",
+			name: testNameOKB,
 			args: args{
 				path: "/b",
 			},
@@ -65,7 +71,7 @@ func TestConnGet(t *testing.T) {
 			wantPayload:       []byte("b"),
 		},
 		{
-			name: "notfound",
+			name: testNameNotFound,
 			args: args{
 				path: "/c",
 			},
@@ -156,7 +162,7 @@ func TestConnPost(t *testing.T) {
 		wantErr           bool
 	}{
 		{
-			name: "ok-a",
+			name: testNameOKA,
 			args: args{
 				path:          "/a",
 				contentFormat: message.TextPlain,
@@ -167,7 +173,7 @@ func TestConnPost(t *testing.T) {
 			wantPayload:       make([]byte, 5330),
 		},
 		{
-			name: "ok-b",
+			name: testNameOKB,
 			args: args{
 				path:          "/b",
 				contentFormat: message.TextPlain,
@@ -178,7 +184,7 @@ func TestConnPost(t *testing.T) {
 			wantPayload:       []byte("b"),
 		},
 		{
-			name: "notfound",
+			name: testNameNotFound,
 			args: args{
 				path:          "/c",
 				contentFormat: message.TextPlain,
@@ -284,7 +290,7 @@ func TestConnPut(t *testing.T) {
 		wantErr           bool
 	}{
 		{
-			name: "ok-a",
+			name: testNameOKA,
 			args: args{
 				path:          "/a",
 				contentFormat: message.TextPlain,
@@ -295,7 +301,7 @@ func TestConnPut(t *testing.T) {
 			wantPayload:       make([]byte, 5330),
 		},
 		{
-			name: "ok-b",
+			name: testNameOKB,
 			args: args{
 				path:          "/b",
 				contentFormat: message.TextPlain,
@@ -306,7 +312,7 @@ func TestConnPut(t *testing.T) {
 			wantPayload:       []byte("b"),
 		},
 		{
-			name: "notfound",
+			name: testNameNotFound,
 			args: args{
 				path:          "/c",
 				contentFormat: message.TextPlain,
@@ -410,7 +416,7 @@ func TestConnDelete(t *testing.T) {
 		wantErr           bool
 	}{
 		{
-			name: "ok-a",
+			name: testNameOKA,
 			args: args{
 				path: "/a",
 			},
@@ -419,7 +425,7 @@ func TestConnDelete(t *testing.T) {
 			wantPayload:       make([]byte, 5330),
 		},
 		{
-			name: "ok-b",
+			name: testNameOKB,
 			args: args{
 				path: "/b",
 			},
@@ -428,7 +434,7 @@ func TestConnDelete(t *testing.T) {
 			wantPayload:       []byte("b"),
 		},
 		{
-			name: "notfound",
+			name: testNameNotFound,
 			args: args{
 				path: "/c",
 			},

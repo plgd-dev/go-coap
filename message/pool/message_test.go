@@ -15,6 +15,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+const testPathABC = "/a/b/c"
+
 func TestMessageSetPath(t *testing.T) {
 	type args struct {
 		p string
@@ -42,18 +44,18 @@ func TestMessageSetPath(t *testing.T) {
 		},
 		{
 			name: "Basic path",
-			args: args{p: "/a/b/c"},
-			want: "/a/b/c",
+			args: args{p: testPathABC},
+			want: testPathABC,
 		},
 		{
 			name: "Bath with duplicit slashes",
 			args: args{p: "/a///b//c/"},
-			want: "/a/b/c",
+			want: testPathABC,
 		},
 		{
 			name: "Path without first slash",
 			args: args{p: "a/b/c"},
-			want: "/a/b/c",
+			want: testPathABC,
 		},
 	}
 	for _, tt := range tests {
@@ -122,18 +124,18 @@ func TestMessageMustSetPath(t *testing.T) {
 	}{
 		{
 			name: "Basic path",
-			args: args{p: "/a/b/c"},
-			want: "/a/b/c",
+			args: args{p: testPathABC},
+			want: testPathABC,
 		},
 		{
 			name: "Bath with duplicit slashes",
 			args: args{p: "/a///b//c/"},
-			want: "/a/b/c",
+			want: testPathABC,
 		},
 		{
 			name: "Path without first slash",
 			args: args{p: "a/b/c"},
-			want: "/a/b/c",
+			want: testPathABC,
 		},
 	}
 	for _, tt := range tests {

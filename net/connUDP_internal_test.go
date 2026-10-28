@@ -65,7 +65,7 @@ func TestUDPConnWriteWithContext(t *testing.T) {
 			},
 		},
 		{
-			name: "cancelled",
+			name: testNameCancelled,
 			args: args{
 				ctx:           ctxCanceled,
 				listenNetwork: udp4Network,
@@ -194,7 +194,7 @@ func TestUDPConnwriteMulticastWithContext(t *testing.T) {
 			},
 		},
 		{
-			name: "cancelled",
+			name: testNameCancelled,
 			args: multicastWriteArgs{
 				ctx:     ctxCanceled,
 				udpAddr: b,
