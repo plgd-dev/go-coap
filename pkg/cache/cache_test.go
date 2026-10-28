@@ -1,11 +1,161 @@
 package cache
 
 import (
+	"fmt"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/require"
+	"go.uber.org/atomic"
 )
+
+func TestLoadOrStoreWithLimit(t *testing.T) {
+	c := NewCache[int, string]()
+	first := NewElement("first", time.Time{}, nil)
+	actual, loaded, err := c.LoadOrStoreWithLimit(1, first, 1)
+	require.NoError(t, err)
+	require.False(t, loaded)
+	require.Same(t, first, actual)
+
+	actual, loaded, err = c.LoadOrStoreWithLimit(1, NewElement("unused", time.Time{}, nil), 1)
+	require.NoError(t, err)
+	require.True(t, loaded)
+	require.Same(t, first, actual)
+
+	actual, loaded, err = c.LoadOrStoreWithLimit(2, NewElement("second", time.Time{}, nil), 1)
+	require.ErrorIs(t, err, ErrCacheFull)
+	require.False(t, loaded)
+	require.Nil(t, actual)
+	require.Equal(t, 1, c.Length())
+
+	c.Delete(1)
+	_, loaded, err = c.LoadOrStoreWithLimit(2, NewElement("second", time.Time{}, nil), 1)
+	require.NoError(t, err)
+	require.False(t, loaded)
+	require.Equal(t, 1, c.Length())
+}
+
+func TestLoadOrStoreWithLimitExpiration(t *testing.T) {
+	for _, limit := range []int{0, 1} {
+		for _, sameKey := range []bool{false, true} {
+			t.Run(fmt.Sprintf("limit=%d/sameKey=%t", limit, sameKey), func(t *testing.T) {
+				c := NewCache[int, string]()
+				expiredCalls := 0
+				c.Store(1, NewElement("expired", time.Now().Add(-time.Second), func(value string) {
+					require.Equal(t, "expired", value)
+					// Expiration callbacks must run outside the map lock.
+					_ = c.Length()
+					expiredCalls++
+				}))
+				key := 2
+				if sameKey {
+					key = 1
+				}
+				fresh := NewElement("fresh", time.Time{}, nil)
+				actual, loaded, err := c.LoadOrStoreWithLimit(key, fresh, limit)
+				require.NoError(t, err)
+				require.False(t, loaded)
+				require.Same(t, fresh, actual)
+				if sameKey || limit > 0 {
+					require.Equal(t, 1, expiredCalls)
+					require.Equal(t, 1, c.Length())
+				} else {
+					require.Zero(t, expiredCalls)
+				}
+			})
+		}
+	}
+}
+
+func TestLoadOrStoreWithLimitConcurrent(t *testing.T) {
+	for _, limit := range []int{-1, 0, 1, 8} {
+		for _, sameKey := range []bool{false, true} {
+			t.Run(fmt.Sprintf("limit=%d/sameKey=%t", limit, sameKey), func(t *testing.T) {
+				testLoadOrStoreWithLimitConcurrent(t, limit, sameKey)
+			})
+		}
+	}
+}
+
+func testLoadOrStoreWithLimitConcurrent(t *testing.T, limit int, sameKey bool) {
+	t.Helper()
+	const requests = 128
+	c := NewCache[int, int]()
+	start := make(chan struct{})
+	results := make(chan error, requests)
+	var wg sync.WaitGroup
+	for i := 0; i < requests; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			key := i
+			if sameKey {
+				key = 0
+			}
+			<-start
+			_, _, err := c.LoadOrStoreWithLimit(key, NewElement(i, time.Time{}, nil), limit)
+			results <- err
+		}(i)
+	}
+	close(start)
+	wg.Wait()
+	close(results)
+	accepted := 0
+	for err := range results {
+		if err == nil {
+			accepted++
+		} else {
+			require.ErrorIs(t, err, ErrCacheFull)
+		}
+	}
+	expected := limit
+	if limit <= 0 || sameKey {
+		expected = requests
+	}
+	require.Equal(t, expected, accepted)
+	if sameKey {
+		expected = 1
+	}
+	require.Equal(t, expected, c.Length())
+}
+
+func TestLoadOrStoreWithLimitConcurrentExpiration(t *testing.T) {
+	c := NewCache[int, string]()
+	var expiredCalls atomic.Int32
+	c.Store(1, NewElement("expired", time.Now().Add(-time.Second), func(string) {
+		expiredCalls.Inc()
+	}))
+	const requests = 128
+	start := make(chan struct{})
+	results := make(chan *Element[string], requests)
+	errs := make(chan error, requests)
+	var wg sync.WaitGroup
+	for i := 0; i < requests; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			actual, _, err := c.LoadOrStoreWithLimit(1, NewElement("fresh", time.Time{}, nil), 1)
+			results <- actual
+			errs <- err
+		}()
+	}
+	close(start)
+	wg.Wait()
+	close(results)
+	close(errs)
+	for err := range errs {
+		require.NoError(t, err)
+	}
+	actual := c.Load(1)
+	require.NotNil(t, actual)
+	for result := range results {
+		require.Same(t, actual, result)
+	}
+	require.Equal(t, int32(1), expiredCalls.Load())
+	require.Equal(t, 1, c.Length())
+}
 
 func TestAddElement(t *testing.T) {
 	cache := NewCache[string, string]()

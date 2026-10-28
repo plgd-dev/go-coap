@@ -3,7 +3,9 @@ package blockwise
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"io"
+	"sync"
 	"testing"
 	"time"
 
@@ -612,6 +614,229 @@ func TestBlockWiseWriteTestMessage(t *testing.T) {
 				return
 			}
 			require.NoError(t, err)
+		})
+	}
+}
+
+func TestProcessReceivedMessageReturnsEntityIncompleteForMissingPreviousFinalBlock(t *testing.T) {
+	bw := New(newTestClient(), time.Second*3600, func(error) {}, nil)
+	ctx := context.Background()
+	token := message.Token{0xAA}
+
+	block0, err := EncodeBlockOption(SZX16, 0, true)
+	require.NoError(t, err)
+	first := bw.cc.AcquireMessage(ctx)
+	first.SetCode(codes.POST)
+	first.SetToken(token)
+	first.SetOptionUint32(message.Block1, block0)
+	first.SetBody(bytes.NewReader(make([]byte, int(SZX16.Size()))))
+	w1 := responsewriter.New(bw.cc.AcquireMessage(ctx), bw.cc)
+	bw.Handle(w1, first, SZX16, uint32(SZX16.Size()), func(_ *responsewriter.ResponseWriter[*testClient], _ *pool.Message) {
+		require.Fail(t, "next must not be called while more blocks follow")
+	})
+	require.Equal(t, codes.Continue, w1.Message().Code())
+
+	block2Final, err := EncodeBlockOption(SZX16, 2, false)
+	require.NoError(t, err)
+	second := bw.cc.AcquireMessage(ctx)
+	second.SetCode(codes.POST)
+	second.SetToken(token)
+	second.SetOptionUint32(message.Block1, block2Final)
+	second.SetBody(bytes.NewReader(make([]byte, int(SZX16.Size()))))
+	w2 := responsewriter.New(bw.cc.AcquireMessage(ctx), bw.cc)
+	bw.Handle(w2, second, SZX16, uint32(SZX16.Size()), func(_ *responsewriter.ResponseWriter[*testClient], _ *pool.Message) {
+		require.Fail(t, "next must not be called for incomplete transfer")
+	})
+	require.Equal(t, codes.RequestEntityIncomplete, w2.Message().Code())
+	require.Empty(t, bw.receivingMessagesCache.LoadAndDeleteAll())
+}
+
+func TestProcessReceivedMessageReturnsEntityIncompleteForSingleFinalNonZeroBlock(t *testing.T) {
+	bw := New(newTestClient(), time.Second*3600, func(error) {}, nil)
+	ctx := context.Background()
+	block2Final, err := EncodeBlockOption(SZX16, 2, false)
+	require.NoError(t, err)
+
+	req := bw.cc.AcquireMessage(ctx)
+	req.SetCode(codes.POST)
+	req.SetToken(message.Token{0xAB})
+	req.SetOptionUint32(message.Block1, block2Final)
+	req.SetBody(bytes.NewReader(make([]byte, int(SZX16.Size()))))
+
+	w := responsewriter.New(bw.cc.AcquireMessage(ctx), bw.cc)
+	bw.Handle(w, req, SZX16, uint32(SZX16.Size()), func(_ *responsewriter.ResponseWriter[*testClient], _ *pool.Message) {
+		require.Fail(t, "next must not be called for incomplete transfer")
+	})
+	require.Equal(t, codes.RequestEntityIncomplete, w.Message().Code())
+}
+
+func TestReceivingMessagesCacheIsBounded(t *testing.T) {
+	var gotErr error
+	bw := New(newTestClient(), time.Second*3600, func(err error) { gotErr = err }, nil)
+	bw.SetReceivingMessagesCacheMaxEntries(1)
+	ctx := context.Background()
+
+	block0, err := EncodeBlockOption(SZX16, 0, true)
+	require.NoError(t, err)
+
+	first := bw.cc.AcquireMessage(ctx)
+	first.SetCode(codes.POST)
+	first.SetToken(message.Token{0x01})
+	first.SetOptionUint32(message.Block1, block0)
+	first.SetBody(bytes.NewReader(make([]byte, int(SZX16.Size()))))
+	w1 := responsewriter.New(bw.cc.AcquireMessage(ctx), bw.cc)
+	bw.Handle(w1, first, SZX16, uint32(SZX16.Size()), func(_ *responsewriter.ResponseWriter[*testClient], _ *pool.Message) {
+		require.Fail(t, "next must not be called while more blocks follow")
+	})
+	require.Equal(t, codes.Continue, w1.Message().Code())
+
+	second := bw.cc.AcquireMessage(ctx)
+	second.SetCode(codes.POST)
+	second.SetToken(message.Token{0x02})
+	second.SetOptionUint32(message.Block1, block0)
+	second.SetBody(bytes.NewReader(make([]byte, int(SZX16.Size()))))
+	w2 := responsewriter.New(bw.cc.AcquireMessage(ctx), bw.cc)
+	bw.Handle(w2, second, SZX16, uint32(SZX16.Size()), func(_ *responsewriter.ResponseWriter[*testClient], _ *pool.Message) {
+		require.Fail(t, "next must not be called when cache is full")
+	})
+	require.Equal(t, codes.ServiceUnavailable, w2.Message().Code())
+	require.Error(t, gotErr)
+	require.ErrorContains(t, gotErr, "receiving messages cache is full")
+	require.Len(t, bw.receivingMessagesCache.LoadAndDeleteAll(), 1)
+}
+
+func TestReceivingMessagesCacheConcurrentLimit(t *testing.T) {
+	for _, limit := range []int{0, 1, 8} {
+		t.Run(fmt.Sprint(limit), func(t *testing.T) {
+			testReceivingMessagesCacheConcurrentLimit(t, limit)
+		})
+	}
+}
+
+func testReceivingMessagesCacheConcurrentLimit(t *testing.T, limit int) {
+	t.Helper()
+	const requests = 128
+	bw := New(newTestClient(), time.Hour, func(error) {}, nil)
+	bw.SetReceivingMessagesCacheMaxEntries(limit)
+	start := make(chan struct{})
+	results := make(chan error, requests)
+	var wg sync.WaitGroup
+	for i := 0; i < requests; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			req := bw.cc.AcquireMessage(context.Background())
+			defer bw.cc.ReleaseMessage(req)
+			req.SetToken(message.Token{byte(i)})
+			<-start
+			_, closeFn, err := bw.getCachedReceivedMessage(nil, req, req.Token().Hash(), time.Now().Add(time.Hour))
+			if err == nil {
+				closeFn()
+			}
+			results <- err
+		}(i)
+	}
+	close(start)
+	wg.Wait()
+	close(results)
+	accepted := 0
+	for err := range results {
+		if err == nil {
+			accepted++
+		} else {
+			require.ErrorIs(t, err, errReceivingMessagesCacheFull)
+		}
+	}
+	expected := limit
+	if limit == 0 {
+		expected = requests
+	}
+	require.Equal(t, expected, accepted)
+	require.Equal(t, expected, bw.receivingMessagesCache.Length())
+}
+
+func TestReceivingMessagesCacheReusesExistingAndExpiredEntries(t *testing.T) {
+	bw := New(newTestClient(), time.Hour, func(error) {}, nil)
+	bw.SetReceivingMessagesCacheMaxEntries(1)
+	req := bw.cc.AcquireMessage(context.Background())
+	defer bw.cc.ReleaseMessage(req)
+	req.SetToken(message.Token{1})
+	key := req.Token().Hash()
+	msg, closeFn, err := bw.getCachedReceivedMessage(nil, req, key, time.Now().Add(time.Hour))
+	require.NoError(t, err)
+	closeFn()
+
+	cached, closeFn, err := bw.getCachedReceivedMessage(nil, req, key, time.Now().Add(time.Hour))
+	require.NoError(t, err)
+	require.Same(t, msg, cached)
+	closeFn()
+
+	bw.receivingMessagesCache.Load(key).ValidUntil.Store(time.Now().Add(-time.Second))
+	req.SetToken(message.Token{2})
+	_, closeFn, err = bw.getCachedReceivedMessage(nil, req, req.Token().Hash(), time.Now().Add(time.Hour))
+	require.NoError(t, err)
+	closeFn()
+	require.Equal(t, 1, bw.receivingMessagesCache.Length())
+}
+
+func TestBlock1MissingBlocksAndRetransmission(t *testing.T) {
+	tests := []struct {
+		name  string
+		nums  []int64
+		more  []bool
+		codes []codes.Code
+	}{
+		{
+			name: "missing first non-final block", nums: []int64{1}, more: []bool{true},
+			codes: []codes.Code{codes.RequestEntityIncomplete},
+		},
+		{
+			name: "missing intermediate non-final block", nums: []int64{0, 2}, more: []bool{true, true},
+			codes: []codes.Code{codes.Continue, codes.RequestEntityIncomplete},
+		},
+		{
+			name: "missing intermediate final block", nums: []int64{0, 2}, more: []bool{true, false},
+			codes: []codes.Code{codes.Continue, codes.RequestEntityIncomplete},
+		},
+		{
+			name: "duplicate non-final block", nums: []int64{0, 0, 1}, more: []bool{true, true, false},
+			codes: []codes.Code{codes.Continue, codes.Continue, codes.Changed},
+		},
+		{
+			name: "contiguous blocks", nums: []int64{0, 1, 2}, more: []bool{true, true, false},
+			codes: []codes.Code{codes.Continue, codes.Continue, codes.Changed},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			bw := New(newTestClient(), time.Hour, func(error) {}, nil)
+			for i, num := range tt.nums {
+				block, err := EncodeBlockOption(SZX128, num, tt.more[i])
+				require.NoError(t, err)
+				req := bw.cc.AcquireMessage(context.Background())
+				req.SetCode(codes.PUT)
+				req.SetToken(message.Token{0xDD})
+				req.SetOptionUint32(message.Block1, block)
+				req.SetBody(bytes.NewReader(bytes.Repeat([]byte{byte(num)}, int(SZX128.Size()))))
+				w := responsewriter.New(bw.cc.AcquireMessage(req.Context()), bw.cc)
+				called := false
+				bw.Handle(w, req, SZX128, uint32(SZX128.Size()), func(w *responsewriter.ResponseWriter[*testClient], r *pool.Message) {
+					called = true
+					body, err := io.ReadAll(r.Body())
+					require.NoError(t, err)
+					var expected []byte
+					for n := int64(0); n <= num; n++ {
+						expected = append(expected, bytes.Repeat([]byte{byte(n)}, int(SZX128.Size()))...)
+					}
+					require.Equal(t, expected, body)
+					require.NoError(t, w.SetResponse(codes.Changed, message.TextPlain, nil))
+				})
+				require.Equal(t, tt.codes[i], w.Message().Code())
+				require.Equal(t, tt.codes[i] == codes.Changed, called)
+				bw.cc.ReleaseMessage(req)
+				bw.cc.ReleaseMessage(w.Message())
+			}
+			require.Zero(t, bw.receivingMessagesCache.Length())
 		})
 	}
 }
