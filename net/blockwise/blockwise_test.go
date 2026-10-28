@@ -706,48 +706,53 @@ func TestReceivingMessagesCacheIsBounded(t *testing.T) {
 }
 
 func TestReceivingMessagesCacheConcurrentLimit(t *testing.T) {
-	const requests = 128
 	for _, limit := range []int{0, 1, 8} {
 		t.Run(fmt.Sprint(limit), func(t *testing.T) {
-			bw := New(newTestClient(), time.Hour, func(error) {}, nil)
-			bw.SetReceivingMessagesCacheMaxEntries(limit)
-			start := make(chan struct{})
-			results := make(chan error, requests)
-			var wg sync.WaitGroup
-			for i := 0; i < requests; i++ {
-				wg.Add(1)
-				go func(i int) {
-					defer wg.Done()
-					req := bw.cc.AcquireMessage(context.Background())
-					defer bw.cc.ReleaseMessage(req)
-					req.SetToken(message.Token{byte(i)})
-					<-start
-					_, closeFn, err := bw.getCachedReceivedMessage(nil, req, req.Token().Hash(), time.Now().Add(time.Hour))
-					if err == nil {
-						closeFn()
-					}
-					results <- err
-				}(i)
-			}
-			close(start)
-			wg.Wait()
-			close(results)
-			accepted := 0
-			for err := range results {
-				if err == nil {
-					accepted++
-				} else {
-					require.ErrorIs(t, err, errReceivingMessagesCacheFull)
-				}
-			}
-			expected := limit
-			if limit == 0 {
-				expected = requests
-			}
-			require.Equal(t, expected, accepted)
-			require.Equal(t, expected, bw.receivingMessagesCache.Length())
+			testReceivingMessagesCacheConcurrentLimit(t, limit)
 		})
 	}
+}
+
+func testReceivingMessagesCacheConcurrentLimit(t *testing.T, limit int) {
+	t.Helper()
+	const requests = 128
+	bw := New(newTestClient(), time.Hour, func(error) {}, nil)
+	bw.SetReceivingMessagesCacheMaxEntries(limit)
+	start := make(chan struct{})
+	results := make(chan error, requests)
+	var wg sync.WaitGroup
+	for i := 0; i < requests; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			req := bw.cc.AcquireMessage(context.Background())
+			defer bw.cc.ReleaseMessage(req)
+			req.SetToken(message.Token{byte(i)})
+			<-start
+			_, closeFn, err := bw.getCachedReceivedMessage(nil, req, req.Token().Hash(), time.Now().Add(time.Hour))
+			if err == nil {
+				closeFn()
+			}
+			results <- err
+		}(i)
+	}
+	close(start)
+	wg.Wait()
+	close(results)
+	accepted := 0
+	for err := range results {
+		if err == nil {
+			accepted++
+		} else {
+			require.ErrorIs(t, err, errReceivingMessagesCacheFull)
+		}
+	}
+	expected := limit
+	if limit == 0 {
+		expected = requests
+	}
+	require.Equal(t, expected, accepted)
+	require.Equal(t, expected, bw.receivingMessagesCache.Length())
 }
 
 func TestReceivingMessagesCacheReusesExistingAndExpiredEntries(t *testing.T) {

@@ -69,50 +69,55 @@ func TestLoadOrStoreWithLimitExpiration(t *testing.T) {
 }
 
 func TestLoadOrStoreWithLimitConcurrent(t *testing.T) {
-	const requests = 128
 	for _, limit := range []int{-1, 0, 1, 8} {
 		for _, sameKey := range []bool{false, true} {
 			t.Run(fmt.Sprintf("limit=%d/sameKey=%t", limit, sameKey), func(t *testing.T) {
-				c := NewCache[int, int]()
-				start := make(chan struct{})
-				results := make(chan error, requests)
-				var wg sync.WaitGroup
-				for i := 0; i < requests; i++ {
-					wg.Add(1)
-					go func(i int) {
-						defer wg.Done()
-						key := i
-						if sameKey {
-							key = 0
-						}
-						<-start
-						_, _, err := c.LoadOrStoreWithLimit(key, NewElement(i, time.Time{}, nil), limit)
-						results <- err
-					}(i)
-				}
-				close(start)
-				wg.Wait()
-				close(results)
-				accepted := 0
-				for err := range results {
-					if err == nil {
-						accepted++
-					} else {
-						require.ErrorIs(t, err, ErrCacheFull)
-					}
-				}
-				expected := limit
-				if limit <= 0 || sameKey {
-					expected = requests
-				}
-				require.Equal(t, expected, accepted)
-				if sameKey {
-					expected = 1
-				}
-				require.Equal(t, expected, c.Length())
+				testLoadOrStoreWithLimitConcurrent(t, limit, sameKey)
 			})
 		}
 	}
+}
+
+func testLoadOrStoreWithLimitConcurrent(t *testing.T, limit int, sameKey bool) {
+	t.Helper()
+	const requests = 128
+	c := NewCache[int, int]()
+	start := make(chan struct{})
+	results := make(chan error, requests)
+	var wg sync.WaitGroup
+	for i := 0; i < requests; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			key := i
+			if sameKey {
+				key = 0
+			}
+			<-start
+			_, _, err := c.LoadOrStoreWithLimit(key, NewElement(i, time.Time{}, nil), limit)
+			results <- err
+		}(i)
+	}
+	close(start)
+	wg.Wait()
+	close(results)
+	accepted := 0
+	for err := range results {
+		if err == nil {
+			accepted++
+		} else {
+			require.ErrorIs(t, err, ErrCacheFull)
+		}
+	}
+	expected := limit
+	if limit <= 0 || sameKey {
+		expected = requests
+	}
+	require.Equal(t, expected, accepted)
+	if sameKey {
+		expected = 1
+	}
+	require.Equal(t, expected, c.Length())
 }
 
 func TestLoadOrStoreWithLimitConcurrentExpiration(t *testing.T) {
