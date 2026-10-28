@@ -123,7 +123,7 @@ func (r *Router) Match(path string, routeParams *RouteParams) (matchedRoute *Rou
 	r.m.RUnlock()
 
 	if matchedRoute == nil {
-		return
+		return matchedRoute, matchedPattern
 	}
 
 	routeParams.Path = path
@@ -133,7 +133,7 @@ func (r *Router) Match(path string, routeParams *RouteParams) (matchedRoute *Rou
 	routeParams.PathTemplate = matchedPattern
 	matchedRoute.regexMatcher.extractRouteParams(path, routeParams)
 
-	return
+	return matchedRoute, matchedPattern
 }
 
 // Handle adds a handler to the Router for pattern.

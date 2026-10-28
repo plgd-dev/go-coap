@@ -86,21 +86,21 @@ func createTLSConfig() (serverConfig *tls.Config, clientConfig *tls.Config, clie
 	// root cert
 	ca, rootBytes, _, caPriv, err := pki.GenerateCA()
 	if err != nil {
-		return
+		return serverConfig, clientConfig, clientSerial, err
 	}
 	// server cert
 	certBytes, keyBytes, err := pki.GenerateCertificate(ca, caPriv, "server@test.com")
 	if err != nil {
-		return
+		return serverConfig, clientConfig, clientSerial, err
 	}
 	certificate, err := pki.LoadKeyAndCertificate(keyBytes, certBytes)
 	if err != nil {
-		return
+		return serverConfig, clientConfig, clientSerial, err
 	}
 	// cert pool
 	certPool, err := pki.LoadCertPool(rootBytes)
 	if err != nil {
-		return
+		return serverConfig, clientConfig, clientSerial, err
 	}
 
 	serverConfig = &tls.Config{
@@ -112,15 +112,15 @@ func createTLSConfig() (serverConfig *tls.Config, clientConfig *tls.Config, clie
 	// client cert
 	certBytes, keyBytes, err = pki.GenerateCertificate(ca, caPriv, "client@test.com")
 	if err != nil {
-		return
+		return serverConfig, clientConfig, clientSerial, err
 	}
 	certificate, err = pki.LoadKeyAndCertificate(keyBytes, certBytes)
 	if err != nil {
-		return
+		return serverConfig, clientConfig, clientSerial, err
 	}
 	clientInfo, err := x509.ParseCertificate(certificate.Certificate[0])
 	if err != nil {
-		return
+		return serverConfig, clientConfig, clientSerial, err
 	}
 	clientSerial = clientInfo.SerialNumber
 
@@ -130,7 +130,7 @@ func createTLSConfig() (serverConfig *tls.Config, clientConfig *tls.Config, clie
 		InsecureSkipVerify: true,
 	}
 
-	return
+	return serverConfig, clientConfig, clientSerial, err
 }
 
 func TestServerSetContextValueWithPKI(t *testing.T) {
