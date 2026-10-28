@@ -187,14 +187,19 @@ func newSendingMessage(msg *pool.Message) *sendingMessage {
 type messageGuard struct {
 	*pool.Message
 	*semaphore.Weighted
+	// matchingKey (RFC 9175 §3.3) and received are read without the semaphore,
+	// so a token-changed continuation never waits for another transfer.
+	matchingKey uint64
+	received    atomic.Int64
 }
 
 var errReceivingMessagesCacheFull = errors.New("receiving messages cache is full")
 
-func newRequestGuard(request *pool.Message) *messageGuard {
+func newRequestGuard(request *pool.Message, matchingKey uint64) *messageGuard {
 	return &messageGuard{
-		Message:  request,
-		Weighted: semaphore.NewWeighted(1),
+		Message:     request,
+		Weighted:    semaphore.NewWeighted(1),
+		matchingKey: matchingKey,
 	}
 }
 
@@ -375,10 +380,7 @@ func (b *BlockWise[C]) resolveBlock1ExchangeKey(r *pool.Message, remoteAddr net.
 	}
 	expectedOffset := num * szx.Size()
 	requestKey := getRequestMatchingKey(r, remoteAddr)
-	matchingKey, matches, err := b.findMatchingBlock1Transfer(r, remoteAddr, requestKey, expectedOffset)
-	if err != nil {
-		return 0, err
-	}
+	matchingKey, matches := b.findMatchingBlock1Transfer(requestKey, expectedOffset)
 	if matches > 1 {
 		return 0, errors.New("cannot identify Block1 continuation: multiple transfers match")
 	}
@@ -388,44 +390,24 @@ func (b *BlockWise[C]) resolveBlock1ExchangeKey(r *pool.Message, remoteAddr net.
 	return exchangeKey, nil
 }
 
-func (b *BlockWise[C]) findMatchingBlock1Transfer(r *pool.Message, remoteAddr net.Addr, requestKey uint64, expectedOffset int64) (uint64, int, error) {
+// findMatchingBlock1Transfer does not lock the transfers: the received offset is
+// published before the 2.31 response is sent, so it is current for the next block.
+func (b *BlockWise[C]) findMatchingBlock1Transfer(requestKey uint64, expectedOffset int64) (uint64, int) {
 	now := time.Now()
 	var matchingKey uint64
 	matches := 0
-	var scanErr error
 	b.receivingMessagesCache.Range(func(key uint64, element *cache.Element[*messageGuard]) bool {
 		if element.IsExpired(now) {
 			return true
 		}
 		guard := element.Data()
-		if guard.Code() != r.Code() {
-			return true
-		}
-		if err := acquireMessageGuard(guard); err != nil {
-			scanErr = err
-			return false
-		}
-		candidateKey := getRequestMatchingKey(guard.Message, remoteAddr)
-		if candidateKey != requestKey {
-			guard.Release(1)
-			return true
-		}
-		payloadSize, err := guard.BodySize()
-		guard.Release(1)
-		if err != nil {
-			scanErr = payloadSizeError(err)
-			return false
-		}
-		if payloadSize == expectedOffset {
+		if guard.matchingKey == requestKey && guard.received.Load() == expectedOffset {
 			matchingKey = key
 			matches++
 		}
 		return matches < 2
 	})
-	if scanErr != nil {
-		return 0, 0, scanErr
-	}
-	return matchingKey, matches, nil
+	return matchingKey, matches
 }
 
 // isBlock2Continuation reports whether r requests a later block of a representation (RFC 7959 §2.4).
@@ -750,7 +732,7 @@ func (b *BlockWise[C]) handleReceivedMessage(w *responsewriter.ResponseWriter[C]
 		}
 	case codes.POST, codes.PUT:
 		maxSZX = fitSZX(r, message.Block1, maxSZX)
-		errP := b.processReceivedMessage(w, r, maxSZX, next, exchangeKey, message.Block1, message.Size1)
+		errP := b.processReceivedMessage(w, r, maxSZX, next, transferKeys{exchange: exchangeKey, matching: requestMatchingKey(r, remoteAddr)}, message.Block1, message.Size1)
 		if errP != nil {
 			return errP
 		}
@@ -760,7 +742,7 @@ func (b *BlockWise[C]) handleReceivedMessage(w *responsewriter.ResponseWriter[C]
 			r.Remove(message.Block1)
 		}
 		maxSZX = fitSZX(r, message.Block2, maxSZX)
-		errP := b.processReceivedMessage(w, r, maxSZX, next, exchangeKey, message.Block2, message.Size2)
+		errP := b.processReceivedMessage(w, r, maxSZX, next, transferKeys{exchange: exchangeKey}, message.Block2, message.Size2)
 		if errP != nil {
 			return errP
 		}
@@ -1134,7 +1116,7 @@ func cachedReceivedMessageGuardByToken[C Client](b *BlockWise[C], exchangeKey ui
 	return nil
 }
 
-func (b *BlockWise[C]) getOrCreateReceivedMessageGuard(r *pool.Message, exchangeKey uint64, validUntil time.Time) (*messageGuard, bool, error) {
+func (b *BlockWise[C]) getOrCreateReceivedMessageGuard(r *pool.Message, exchangeKey, matchingKey uint64, validUntil time.Time) (*messageGuard, bool, error) {
 	if mg := cachedReceivedMessageGuardByToken(b, exchangeKey); mg != nil {
 		return mg, false, nil
 	}
@@ -1144,7 +1126,7 @@ func (b *BlockWise[C]) getOrCreateReceivedMessageGuard(r *pool.Message, exchange
 	msg.SetSequence(r.Sequence())
 	msg.SetBody(memfile.New(make([]byte, 0, 1024)))
 	msg.SetCode(r.Code())
-	mg := newRequestGuard(msg)
+	mg := newRequestGuard(msg, matchingKey)
 	// Lock before publishing so later blocks cannot overtake the first block.
 	if err := acquireMessageGuard(mg); err != nil {
 		b.cc.ReleaseMessage(msg)
@@ -1170,11 +1152,11 @@ func (b *BlockWise[C]) getOrCreateReceivedMessageGuard(r *pool.Message, exchange
 	return mg, true, nil
 }
 
-func (b *BlockWise[C]) getCachedReceivedMessage(mg *messageGuard, r *pool.Message, exchangeKey uint64, validUntil time.Time) (*pool.Message, func(), error) {
+func (b *BlockWise[C]) getCachedReceivedMessage(mg *messageGuard, r *pool.Message, block receivedBlock, validUntil time.Time) (*messageGuard, func(), error) {
 	locked := false
 	if mg == nil {
 		var err error
-		mg, locked, err = b.getOrCreateReceivedMessageGuard(r, exchangeKey, validUntil)
+		mg, locked, err = b.getOrCreateReceivedMessageGuard(r, block.exchangeKey, block.matchingKey, validUntil)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -1184,11 +1166,12 @@ func (b *BlockWise[C]) getCachedReceivedMessage(mg *messageGuard, r *pool.Messag
 			return nil, nil, err
 		}
 	}
-	return mg.Message, func() { mg.Release(1) }, nil
+	return mg, func() { mg.Release(1) }, nil
 }
 
 type receivedBlock struct {
 	exchangeKey uint64
+	matchingKey uint64
 	token       message.Token
 	blockType   message.OptionID
 	sizeType    message.OptionID
@@ -1199,7 +1182,21 @@ type receivedBlock struct {
 	more        bool
 }
 
-func (b *BlockWise[C]) processReceivedMessage(w *responsewriter.ResponseWriter[C], r *pool.Message, maxSzx SZX, next func(w *responsewriter.ResponseWriter[C], r *pool.Message), exchangeKey uint64, blockType message.OptionID, sizeType message.OptionID) error {
+// transferKeys identify a received transfer: exchange is the cache key, matching
+// (RFC 9175 §3.3) finds it for a continuation with a changed token, 0 disables it.
+type transferKeys struct {
+	exchange uint64
+	matching uint64
+}
+
+func requestMatchingKey(r *pool.Message, remoteAddr net.Addr) uint64 {
+	if remoteAddr == nil {
+		return 0
+	}
+	return getRequestMatchingKey(r, remoteAddr)
+}
+
+func (b *BlockWise[C]) processReceivedMessage(w *responsewriter.ResponseWriter[C], r *pool.Message, maxSzx SZX, next func(w *responsewriter.ResponseWriter[C], r *pool.Message), keys transferKeys, blockType message.OptionID, sizeType message.OptionID) error {
 	token := r.Token()
 	if r.Code() == codes.GET || r.Code() == codes.DELETE {
 		next(w, r)
@@ -1218,7 +1215,7 @@ func (b *BlockWise[C]) processReceivedMessage(w *responsewriter.ResponseWriter[C
 		return fmt.Errorf("cannot decode block option: %w", err)
 	}
 	return b.processReceivedBlock(w, r, next, receivedBlock{
-		exchangeKey: exchangeKey, token: token, blockType: blockType, sizeType: sizeType,
+		exchangeKey: keys.exchange, matchingKey: keys.matching, token: token, blockType: blockType, sizeType: sizeType,
 		szx: szx, reqSzx: szx, maxSzx: maxSzx, num: num, more: more,
 	})
 }
@@ -1260,22 +1257,22 @@ func (b *BlockWise[C]) processReceivedBlock(w *responsewriter.ResponseWriter[C],
 		}
 		block.szx = getSzx(block.szx, block.maxSzx)
 	}
-	cachedReceivedMessage, closeCachedReceivedMessage, err := b.getCachedReceivedMessage(cachedReceivedMessageGuard, r, block.exchangeKey, validUntil)
+	cachedReceivedMessageGuard, closeCachedReceivedMessage, err := b.getCachedReceivedMessage(cachedReceivedMessageGuard, r, block, validUntil)
 	if err != nil {
 		return err
 	}
 	defer closeCachedReceivedMessage()
 
-	return b.processCachedReceivedBlock(w, r, cachedReceivedMessage, next, block, sentRequest)
+	return b.processCachedReceivedBlock(w, r, cachedReceivedMessageGuard, next, block, sentRequest)
 }
 
-func (b *BlockWise[C]) processCachedReceivedBlock(w *responsewriter.ResponseWriter[C], r, cachedReceivedMessage *pool.Message, next func(w *responsewriter.ResponseWriter[C], r *pool.Message), block receivedBlock, sentRequest *pool.Message) (err error) {
+func (b *BlockWise[C]) processCachedReceivedBlock(w *responsewriter.ResponseWriter[C], r *pool.Message, mg *messageGuard, next func(w *responsewriter.ResponseWriter[C], r *pool.Message), block receivedBlock, sentRequest *pool.Message) (err error) {
 	defer func() {
 		if err != nil {
 			b.receivingMessagesCache.Delete(block.exchangeKey)
 		}
 	}()
-	payloadFile, payloadSize, err := b.getPayloadFromCachedReceivedMessage(r, cachedReceivedMessage)
+	payloadFile, payloadSize, err := b.getPayloadFromCachedReceivedMessage(r, mg.Message)
 	if err != nil {
 		return fmt.Errorf("cannot get payload: %w", err)
 	}
@@ -1292,10 +1289,10 @@ func (b *BlockWise[C]) processCachedReceivedBlock(w *responsewriter.ResponseWrit
 		b.receivingMessagesCache.Delete(block.exchangeKey)
 		return errS
 	}
-	return b.appendReceivedBlock(w, r, cachedReceivedMessage, next, block, sentRequest, payloadFile, payloadSize, off)
+	return b.appendReceivedBlock(w, r, mg, next, block, sentRequest, payloadFile, payloadSize, off)
 }
 
-func (b *BlockWise[C]) appendReceivedBlock(w *responsewriter.ResponseWriter[C], r, cachedReceivedMessage *pool.Message, next func(w *responsewriter.ResponseWriter[C], r *pool.Message), block receivedBlock, sentRequest *pool.Message, payloadFile *memfile.File, payloadSize, off int64) error {
+func (b *BlockWise[C]) appendReceivedBlock(w *responsewriter.ResponseWriter[C], r *pool.Message, mg *messageGuard, next func(w *responsewriter.ResponseWriter[C], r *pool.Message), block receivedBlock, sentRequest *pool.Message, payloadFile *memfile.File, payloadSize, off int64) error {
 	if off != payloadSize {
 		return b.sendReceivedBlockContinue(w, r, block, sentRequest, payloadSize)
 	}
@@ -1303,6 +1300,8 @@ func (b *BlockWise[C]) appendReceivedBlock(w *responsewriter.ResponseWriter[C], 
 	if err != nil {
 		return fmt.Errorf("cannot copy data to payload: %w", err)
 	}
+	mg.received.Store(payloadSize)
+	cachedReceivedMessage := mg.Message
 	b.refreshReceiveExpiration(block, payloadSize > off)
 	if block.more {
 		return b.sendReceivedBlockContinue(w, r, block, sentRequest, payloadSize)

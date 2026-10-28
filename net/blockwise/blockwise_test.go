@@ -740,7 +740,7 @@ func testReceivingMessagesCacheConcurrentLimit(t *testing.T, limit int) {
 			defer bw.cc.ReleaseMessage(req)
 			req.SetToken(message.Token{byte(i)})
 			<-start
-			_, closeFn, err := bw.getCachedReceivedMessage(nil, req, req.Token().Hash(), time.Now().Add(time.Hour))
+			_, closeFn, err := bw.getCachedReceivedMessage(nil, req, receivedBlock{exchangeKey: req.Token().Hash()}, time.Now().Add(time.Hour))
 			if err == nil {
 				closeFn()
 			}
@@ -773,18 +773,18 @@ func TestReceivingMessagesCacheReusesExistingAndExpiredEntries(t *testing.T) {
 	defer bw.cc.ReleaseMessage(req)
 	req.SetToken(message.Token{1})
 	key := req.Token().Hash()
-	msg, closeFn, err := bw.getCachedReceivedMessage(nil, req, key, time.Now().Add(time.Hour))
+	msg, closeFn, err := bw.getCachedReceivedMessage(nil, req, receivedBlock{exchangeKey: key}, time.Now().Add(time.Hour))
 	require.NoError(t, err)
 	closeFn()
 
-	cached, closeFn, err := bw.getCachedReceivedMessage(nil, req, key, time.Now().Add(time.Hour))
+	cached, closeFn, err := bw.getCachedReceivedMessage(nil, req, receivedBlock{exchangeKey: key}, time.Now().Add(time.Hour))
 	require.NoError(t, err)
 	require.Same(t, msg, cached)
 	closeFn()
 
 	bw.receivingMessagesCache.Load(key).ValidUntil.Store(time.Now().Add(-time.Second))
 	req.SetToken(message.Token{2})
-	_, closeFn, err = bw.getCachedReceivedMessage(nil, req, req.Token().Hash(), time.Now().Add(time.Hour))
+	_, closeFn, err = bw.getCachedReceivedMessage(nil, req, receivedBlock{exchangeKey: req.Token().Hash()}, time.Now().Add(time.Hour))
 	require.NoError(t, err)
 	closeFn()
 	require.Equal(t, 1, bw.receivingMessagesCache.Length())

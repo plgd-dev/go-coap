@@ -10,6 +10,7 @@ import (
 	"github.com/plgd-dev/go-coap/v3/message/codes"
 	"github.com/plgd-dev/go-coap/v3/message/pool"
 	"github.com/plgd-dev/go-coap/v3/net/responsewriter"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -36,10 +37,17 @@ func newBlock1Receiver(t *testing.T, expiration time.Duration) *block1Receiver {
 }
 
 func (b *block1Receiver) exchangeKey() uint64 {
+	return b.exchangeKeyWithPath("")
+}
+
+func (b *block1Receiver) exchangeKeyWithPath(path string) uint64 {
 	req := b.cc.AcquireMessage(b.t.Context())
 	defer b.cc.ReleaseMessage(req)
 	req.SetCode(codes.PUT)
 	req.SetToken(b.token)
+	if path != "" {
+		require.NoError(b.t, req.SetPath(path))
+	}
 	req.SetOptionUint32(message.Block1, 0)
 	key, err := getMessageExchangeKey(req, b.remote)
 	require.NoError(b.t, err)
@@ -692,4 +700,59 @@ func TestBlockWiseReceivePostBlock2ZeroIsNewRequest(t *testing.T) {
 	require.Equal(t, codes.Content, second.code)
 	require.Equal(t, 2, handlerCalls)
 	require.Equal(t, bytes.Repeat([]byte{2}, testBlock1Size), second.payload)
+}
+
+// TestBlockWiseReceiveBlock1ContinuationDoesNotWaitForBusyTransfer checks that matching a
+// token-changed Block1 continuation does not lock other transfers, so a busy transfer
+// cannot stall message processing, while a busy matching transfer is still found.
+func TestBlockWiseReceiveBlock1ContinuationDoesNotWaitForBusyTransfer(t *testing.T) {
+	r := newBlock1Receiver(t, time.Minute)
+	r.token = message.Token{0x01}
+	require.Equal(t, codes.Continue, r.sendPayloadWithPath(0, true, bytes.Repeat([]byte{0}, testBlock1Size), "/busy").code)
+	busyKey := r.exchangeKeyWithPath("/busy")
+	r.token = message.Token{0x02}
+	require.Equal(t, codes.Continue, r.sendPayloadWithPath(0, true, bytes.Repeat([]byte{0}, testBlock1Size), "/next").code)
+	nextKey := r.exchangeKeyWithPath("/next")
+
+	busy := r.bw.receivingMessagesCache.Load(busyKey).Data()
+	require.NoError(t, acquireMessageGuard(busy))
+	defer busy.Release(1)
+	next := r.bw.receivingMessagesCache.Load(nextKey).Data()
+	require.NoError(t, acquireMessageGuard(next))
+
+	resolve := func(path string) uint64 {
+		req := r.cc.AcquireMessage(t.Context())
+		defer r.cc.ReleaseMessage(req)
+		req.SetCode(codes.PUT)
+		req.SetToken(message.Token{0x03})
+		require.NoError(t, req.SetPath(path))
+		block, err := EncodeBlockOption(SZX1024, 1, false)
+		require.NoError(t, err)
+		req.SetOptionUint32(message.Block1, block)
+		key, err := getMessageExchangeKey(req, r.remote)
+		require.NoError(t, err)
+		done := make(chan uint64, 1)
+		go func() {
+			resolved, errR := r.bw.resolveBlock1ExchangeKey(req, r.remote, key)
+			assert.NoError(t, errR)
+			done <- resolved
+		}()
+		select {
+		case resolved := <-done:
+			return resolved
+		case <-time.After(time.Second):
+			require.FailNow(t, "resolveBlock1ExchangeKey waits for a busy transfer")
+			return 0
+		}
+	}
+	// the matching transfer is busy, e.g. still processing a retransmission
+	require.Equal(t, nextKey, resolve("/next"))
+	next.Release(1)
+	require.Equal(t, nextKey, resolve("/next"))
+
+	r.token = message.Token{0x03}
+	resp := r.sendPayloadWithPath(1, false, bytes.Repeat([]byte{1}, testBlock1Size), "/next")
+	require.Equal(t, codes.Changed, resp.code)
+	require.Len(t, r.delivered, 1)
+	require.Len(t, r.delivered[0], 2*testBlock1Size)
 }
