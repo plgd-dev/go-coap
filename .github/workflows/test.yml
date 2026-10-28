@@ -23,18 +23,10 @@ jobs:
         os: [ubuntu-latest, windows-latest, macOS-latest]
 
     steps:
-      - name: Set up Go >=1.25 (Windows)
-        if: runner.os == 'Windows'
+      - name: Set up Go >=1.26
         uses: actions/setup-go@v6
         with:
-          go-version: ">=1.25"
-          check-latest: true
-
-      - name: Set up Go >=1.25 (Non-Windows)
-        if: runner.os != 'Windows'
-        uses: actions/setup-go@v6
-        with:
-          go-version: ">=1.25"
+          go-version: ">=1.26"
           check-latest: true
 
       - run: go version
@@ -108,29 +100,3 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
-
-  # test on oldest supported major Go version
-  test1_24:
-    # don't run for forks
-    if: github.event_name == 'push' ||
-      (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) ||
-      github.event_name == 'workflow_dispatch'
-
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Set up Go >=1.25
-        uses: actions/setup-go@v6
-        with:
-          go-version: ">=1.25"
-
-      - run: go version
-
-      - name: Checkout
-        uses: actions/checkout@v7
-
-      - name: Run a build
-        run: go build ./...
-
-      - name: Run a test
-        run: go test -v -race ./... -coverpkg=./... -covermode=atomic -coverprofile=./coverage.txt
