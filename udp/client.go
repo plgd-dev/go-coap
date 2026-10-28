@@ -96,6 +96,7 @@ func Client(conn *net.UDPConn, opts ...Option) *client.Conn {
 		cfg.MaxMessageSize,
 		cfg.MTU,
 		cfg.CloseSocket,
+		cfg.Errors,
 	)
 	cc := client.NewConnWithOpts(session, &cfg,
 		client.WithBlockWise(createBlockWise),

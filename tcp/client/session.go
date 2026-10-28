@@ -13,6 +13,7 @@ import (
 	"github.com/plgd-dev/go-coap/v3/message/codes"
 	"github.com/plgd-dev/go-coap/v3/message/pool"
 	coapNet "github.com/plgd-dev/go-coap/v3/net"
+	netClient "github.com/plgd-dev/go-coap/v3/net/client"
 	"github.com/plgd-dev/go-coap/v3/net/monitor/inactivity"
 	"github.com/plgd-dev/go-coap/v3/pkg/math"
 	"github.com/plgd-dev/go-coap/v3/tcp/coder"
@@ -162,39 +163,103 @@ func seekBufferToNextMessage(buffer *bytes.Buffer, msgSize int) *bytes.Buffer {
 	return buffer
 }
 
+func (s *Session) decodeMessageFromBuffer(buffer *bytes.Buffer) (*pool.Message, bool, error) {
+	var header coder.MessageHeader
+	_, err := coder.DefaultCoder.DecodeHeader(buffer.Bytes(), &header)
+	if errors.Is(err, message.ErrShortRead) {
+		return nil, false, nil
+	}
+	if err != nil {
+		return nil, false, fmt.Errorf("cannot decode header: %w", err)
+	}
+	if header.MessageLength > s.maxMessageSize {
+		return nil, false, fmt.Errorf("max message size(%v) was exceeded %v", s.maxMessageSize, header.MessageLength)
+	}
+	if math.CastTo[uint32](buffer.Len()) < header.MessageLength {
+		return nil, false, nil
+	}
+
+	req := s.messagePool.AcquireMessage(s.Context())
+	read, err := req.UnmarshalWithDecoder(coder.DefaultCoder, buffer.Bytes()[:header.MessageLength])
+	if err != nil {
+		s.messagePool.ReleaseMessage(req)
+		return nil, false, fmt.Errorf("cannot unmarshal with header: %w", err)
+	}
+
+	seekBufferToNextMessage(buffer, read)
+	req.SetSequence(s.Sequence())
+	return req, true, nil
+}
+
+func (s *Session) shouldDropRequest(req *pool.Message) (bool, error) {
+	if req.Code() < codes.GET || req.Code() > codes.DELETE {
+		return false, nil
+	}
+	unknownCriticalOpts := netClient.GetUnknownCriticalOptions(req.Options())
+	if len(unknownCriticalOpts) == 0 {
+		return false, nil
+	}
+	if err := s.respondUnknownCriticalOptions(req, unknownCriticalOpts); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func (s *Session) handleReceivedRequest(cc *Conn, req *pool.Message) (bool, error) {
+	drop, err := s.shouldDropRequest(req)
+	if err != nil {
+		return false, err
+	}
+	if drop {
+		return true, nil
+	}
+
+	drop, err = s.requestMonitor(cc, req)
+	if err != nil {
+		return false, fmt.Errorf("request monitor: %w", err)
+	}
+	if drop {
+		return true, nil
+	}
+
+	s.inactivityMonitor.Notify()
+	cc.pushToReceivedMessageQueue(req)
+	return false, nil
+}
+
 func (s *Session) processBuffer(buffer *bytes.Buffer, cc *Conn) error {
 	for buffer.Len() > 0 {
-		var header coder.MessageHeader
-		_, err := coder.DefaultCoder.DecodeHeader(buffer.Bytes(), &header)
-		if errors.Is(err, message.ErrShortRead) {
-			return nil
-		}
-		if header.MessageLength > s.maxMessageSize {
-			return fmt.Errorf("max message size(%v) was exceeded %v", s.maxMessageSize, header.MessageLength)
-		}
-		if math.CastTo[uint32](buffer.Len()) < header.MessageLength {
-			return nil
-		}
-		req := s.messagePool.AcquireMessage(s.Context())
-		read, err := req.UnmarshalWithDecoder(coder.DefaultCoder, buffer.Bytes()[:header.MessageLength])
+		req, ready, err := s.decodeMessageFromBuffer(buffer)
 		if err != nil {
-			s.messagePool.ReleaseMessage(req)
-			return fmt.Errorf("cannot unmarshal with header: %w", err)
+			return err
 		}
-		buffer = seekBufferToNextMessage(buffer, read)
-		req.SetSequence(s.Sequence())
+		if !ready {
+			return nil
+		}
 
-		drop, err := s.requestMonitor(cc, req)
+		drop, err := s.handleReceivedRequest(cc, req)
 		if err != nil {
 			s.messagePool.ReleaseMessage(req)
-			return fmt.Errorf("request monitor: %w", err)
+			return err
 		}
 		if drop {
 			s.messagePool.ReleaseMessage(req)
-			continue
 		}
-		s.inactivityMonitor.Notify()
-		cc.pushToReceivedMessageQueue(req)
+	}
+	return nil
+}
+
+func (s *Session) respondUnknownCriticalOptions(req *pool.Message, unknownCriticalOpts []message.OptionID) error {
+	resp := s.messagePool.AcquireMessage(req.Context())
+	defer s.messagePool.ReleaseMessage(resp)
+
+	resp.SetCode(codes.BadOption)
+	resp.SetToken(req.Token())
+	resp.SetContentFormat(message.TextPlain)
+	resp.SetBody(bytes.NewReader([]byte(netClient.FormatUnknownCriticalOptionsDiagnostic(unknownCriticalOpts))))
+
+	if err := s.WriteMessage(resp); err != nil {
+		return fmt.Errorf("cannot write bad option response: %w", err)
 	}
 	return nil
 }

@@ -23,4 +23,10 @@ var (
 
 	// ErrInvalidSZX invalid block-wise transfer szx
 	ErrInvalidSZX = errors.New("invalid block-wise transfer szx")
+
+	// ErrRequestEntityIncomplete request body is missing blocks
+	ErrRequestEntityIncomplete = errors.New("request entity incomplete")
+
+	// ErrRequestEntityTooLarge request body exceeds the size limit
+	ErrRequestEntityTooLarge = errors.New("request entity too large")
 )

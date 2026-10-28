@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/plgd-dev/go-coap/v3/pkg/math"
 )
@@ -134,6 +135,9 @@ func (options Options) Path() (string, error) {
 		return "", err
 	}
 	buf = buf[:m]
+	if !utf8.Valid(buf) {
+		return "", ErrInvalidEncoding
+	}
 	return string(buf), nil
 }
 
@@ -186,7 +190,7 @@ func (options Options) GetUint32s(id OptionID, r []uint32) (int, error) {
 		return lastIdx - firstIdx, ErrTooSmall
 	}
 	var idx int
-	for i := firstIdx; i <= lastIdx; i++ {
+	for i := firstIdx; i < lastIdx; i++ {
 		val, _, err := DecodeUint32(options[i].Value)
 		if err == nil {
 			r[idx] = val

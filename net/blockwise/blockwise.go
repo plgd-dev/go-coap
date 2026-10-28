@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"sync"
 	"time"
 
 	"github.com/dsnet/golib/memfile"
@@ -44,8 +45,7 @@ const (
 	// moreBlocksFollowingMask is represented by one bit (M)
 	moreBlocksFollowingMask = 0x8
 	// szxMask last 3bits represents SZX (SZX)
-	szxMask = 0x7
-	// max number of concurrent in-flight incoming block-wise assemblies.
+	szxMask                                 = 0x7
 	DefaultReceivingMessagesCacheMaxEntries = 1024
 )
 
@@ -141,10 +141,32 @@ type BlockWise[C Client] struct {
 	cc                               C
 	receivingMessagesCache           *cache.Cache[uint64, *messageGuard]
 	receivingMessagesCacheMaxEntries *atomic.Int64
-	sendingMessagesCache             *cache.Cache[uint64, *pool.Message]
+	sendingMessagesCache             *cache.Cache[uint64, *sendingMessage]
 	errors                           func(error)
 	getSentRequestFromOutside        func(token message.Token) (*pool.Message, bool)
 	expiration                       time.Duration
+	rollingExpiration                bool
+	maxReceiveBodySize               int64
+}
+
+// SetRollingExpiration resets the Block1 transfer expiration on each new block.
+func (b *BlockWise[C]) SetRollingExpiration(enabled bool) {
+	b.rollingExpiration = enabled
+}
+
+// SetMaxReceiveBodySize limits the Block1 body size, 0 means unlimited.
+func (b *BlockWise[C]) SetMaxReceiveBodySize(size int64) {
+	b.maxReceiveBodySize = max(size, 0)
+}
+
+type sendingMessage struct {
+	*pool.Message
+	// mutex protects Message's lifetime and the body's seek position.
+	mutex sync.Mutex
+}
+
+func newSendingMessage(msg *pool.Message) *sendingMessage {
+	return &sendingMessage{Message: msg}
 }
 
 type messageGuard struct {
@@ -176,7 +198,7 @@ func New[C Client](
 		cc:                               cc,
 		receivingMessagesCache:           cache.NewCache[uint64, *messageGuard](),
 		receivingMessagesCacheMaxEntries: atomic.NewInt64(DefaultReceivingMessagesCacheMaxEntries),
-		sendingMessagesCache:             cache.NewCache[uint64, *pool.Message](),
+		sendingMessagesCache:             cache.NewCache[uint64, *sendingMessage](),
 		errors:                           errors,
 		getSentRequestFromOutside:        getSentRequestFromOutside,
 		expiration:                       expiration,
@@ -187,10 +209,7 @@ func New[C Client](
 // block-wise assemblies per connection, including concurrent transfers.
 // Value 0 means unlimited.
 func (b *BlockWise[C]) SetReceivingMessagesCacheMaxEntries(maxEntries int) {
-	if maxEntries < 0 {
-		maxEntries = 0
-	}
-	b.receivingMessagesCacheMaxEntries.Store(int64(maxEntries))
+	b.receivingMessagesCacheMaxEntries.Store(int64(max(maxEntries, 0)))
 }
 
 func bufferSize(szx SZX, maxMessageSize uint32) int64 {
@@ -232,20 +251,42 @@ func (b *BlockWise[C]) Do(r *pool.Message, maxSzx SZX, maxMessageSize uint32, do
 	if !ok {
 		expire = time.Now().Add(b.expiration)
 	}
-	_, loaded := b.sendingMessagesCache.LoadOrStore(r.Token().Hash(), cache.NewElement(r, expire, nil))
+	token := r.Token().Hash()
+	sending := newSendingMessage(r)
+	sending.mutex.Lock()
+	_, loaded := b.sendingMessagesCache.LoadOrStore(token, cache.NewElement(sending, expire, nil))
 	if loaded {
+		sending.mutex.Unlock()
 		return nil, errors.New("invalid token")
 	}
-	defer b.sendingMessagesCache.Delete(r.Token().Hash())
+	defer func() {
+		sending.mutex.Lock()
+		defer sending.mutex.Unlock()
+		b.sendingMessagesCache.Delete(token)
+		// A continuation may have loaded this entry before it was removed.
+		sending.Message = nil
+	}()
+	req, err := b.prepareSendingRequest(r, maxSzx, maxMessageSize)
+	sending.mutex.Unlock()
+	if err != nil {
+		return nil, err
+	}
+	if req != r {
+		defer b.cc.ReleaseMessage(req)
+	}
+	return do(req)
+}
+
+func (b *BlockWise[C]) prepareSendingRequest(r *pool.Message, maxSzx SZX, maxMessageSize uint32) (_ *pool.Message, err error) {
 	if r.Body() == nil {
-		return do(r)
+		return r, nil
 	}
 	payloadSize, err := r.BodySize()
 	if err != nil {
 		return nil, payloadSizeError(err)
 	}
 	if payloadSize <= maxSzx.Size() {
-		return do(r)
+		return r, nil
 	}
 
 	switch r.Code() {
@@ -255,7 +296,11 @@ func (b *BlockWise[C]) Do(r *pool.Message, maxSzx SZX, maxMessageSize uint32, do
 		return nil, fmt.Errorf("unsupported command(%v)", r.Code())
 	}
 	req := b.cloneMessage(r)
-	defer b.cc.ReleaseMessage(req)
+	defer func() {
+		if err != nil {
+			b.cc.ReleaseMessage(req)
+		}
+	}()
 	payloadSizeUint32, err := math.SafeCastTo[uint32](payloadSize)
 	if err != nil {
 		return nil, fmt.Errorf("cannot set payload size: %w", err)
@@ -283,7 +328,7 @@ func (b *BlockWise[C]) Do(r *pool.Message, maxSzx SZX, maxMessageSize uint32, do
 	}
 	buf = buf[:readed]
 	req.SetBody(bytes.NewReader(buf))
-	return do(req)
+	return req, nil
 }
 
 func newWriteRequestResponse[C Client](cc C, request *pool.Message) *responsewriter.ResponseWriter[C] {
@@ -346,6 +391,17 @@ func (b *BlockWise[C]) sendServiceUnavailable(w *responsewriter.ResponseWriter[C
 	w.SetMessage(sendMessage)
 }
 
+// sendEntityTooLarge responds with 4.13 and the size limit in Size1 (RFC 7959 §4).
+func (b *BlockWise[C]) sendEntityTooLarge(w *responsewriter.ResponseWriter[C], token message.Token) {
+	sendMessage := b.cc.AcquireMessage(w.Message().Context())
+	sendMessage.SetCode(codes.RequestEntityTooLarge)
+	sendMessage.SetToken(token)
+	sendMessage.SetType(message.NonConfirmable)
+	size1 := min(b.maxReceiveBodySize, int64(^uint32(0)))
+	sendMessage.SetOptionUint32(message.Size1, math.CastTo[uint32](size1))
+	w.SetMessage(sendMessage)
+}
+
 func wantsToBeReceived(r *pool.Message) bool {
 	hasBlock1 := r.HasOption(message.Block1)
 	hasBlock2 := r.HasOption(message.Block2)
@@ -368,31 +424,13 @@ func (b *BlockWise[C]) getSendingMessageCode(token uint64) (codes.Code, bool) {
 	if v == nil {
 		return codes.Empty, false
 	}
-	return v.Data().Code(), true
-}
-
-type receiveRequestCall[C Client] struct {
-	w    *responsewriter.ResponseWriter[C]
-	r    *pool.Message
-	next func(w *responsewriter.ResponseWriter[C], r *pool.Message)
-}
-
-func (c receiveRequestCall[C]) forward() {
-	c.next(c.w, c.r)
-}
-
-func (b *BlockWise[C]) handleReceivedMessageWithErrorResponse(call receiveRequestCall[C], maxSZX SZX, maxMessageSize uint32) {
-	err := b.handleReceivedMessage(call.w, call.r, maxSZX, maxMessageSize, call.next)
-	if err == nil {
-		return
+	sending := v.Data()
+	sending.mutex.Lock()
+	defer sending.mutex.Unlock()
+	if sending.Message == nil {
+		return codes.Empty, false
 	}
-	token := call.r.Token()
-	if errors.Is(err, errReceivingMessagesCacheFull) {
-		b.sendServiceUnavailable(call.w, token)
-	} else {
-		b.sendEntityIncomplete(call.w, token)
-	}
-	b.errors(fmt.Errorf("handleReceivedMessage(%v): %w", call.r, err))
+	return sending.Code(), true
 }
 
 // Handle middleware which constructs COAP request from blockwise transfer and send COAP response via blockwise.
@@ -400,22 +438,33 @@ func (b *BlockWise[C]) Handle(w *responsewriter.ResponseWriter[C], r *pool.Messa
 	if maxSZX > SZXBERT {
 		panic("invalid maxSZX")
 	}
-	call := receiveRequestCall[C]{
-		w:    w,
-		r:    r,
-		next: next,
-	}
 	token := r.Token()
 
 	if len(token) == 0 {
-		b.handleReceivedMessageWithErrorResponse(call, maxSZX, maxMessageSize)
+		err := b.handleReceivedMessage(w, r, maxSZX, maxMessageSize, next)
+		if err != nil {
+			if errors.Is(err, errReceivingMessagesCacheFull) {
+				b.sendServiceUnavailable(w, token)
+			} else {
+				b.sendEntityIncomplete(w, token)
+			}
+			b.errors(fmt.Errorf("handleReceivedMessage(%v): %w", r, err))
+		}
 		return
 	}
 	tokenStr := token.Hash()
 
 	sendingMessageCode, sendingMessageExist := b.getSendingMessageCode(tokenStr)
 	if !sendingMessageExist || wantsToBeReceived(r) {
-		b.handleReceivedMessageWithErrorResponse(call, maxSZX, maxMessageSize)
+		err := b.handleReceivedMessage(w, r, maxSZX, maxMessageSize, next)
+		if err != nil {
+			if errors.Is(err, errReceivingMessagesCacheFull) {
+				b.sendServiceUnavailable(w, token)
+			} else {
+				b.sendEntityIncomplete(w, token)
+			}
+			b.errors(fmt.Errorf("handleReceivedMessage(%v): %w", r, err))
+		}
 		return
 	}
 	more, err := b.continueSendingMessage(w, r, maxSZX, maxMessageSize, sendingMessageCode)
@@ -554,20 +603,20 @@ func (b *BlockWise[C]) continueSendingMessage(w *responsewriter.ResponseWriter[C
 	if err != nil {
 		return false, fmt.Errorf("cannot get %v option: %w", blockType, err)
 	}
-	var sendMessage *pool.Message
-	var more bool
-	b.sendingMessagesCache.LoadWithFunc(r.Token().Hash(), func(value *cache.Element[*pool.Message]) *cache.Element[*pool.Message] {
-		sendMessage, more, err = b.createSendingMessage(value.Data(), maxSZX, maxMessageSize, block)
-		if err != nil {
-			err = fmt.Errorf("cannot create sending message: %w", err)
-		}
-		return nil
-	})
-	if err == nil && sendMessage == nil {
-		err = fmt.Errorf("cannot find sending message for token(%v)", r.Token())
+	value := b.sendingMessagesCache.Load(r.Token().Hash())
+	if value == nil {
+		return false, fmt.Errorf("handleSendingMessage: cannot find sending message for token(%v)", r.Token())
 	}
+	sending := value.Data()
+	// Do not hold the cache lock while waiting for or reading a body.
+	sending.mutex.Lock()
+	defer sending.mutex.Unlock()
+	if sending.Message == nil {
+		return false, fmt.Errorf("handleSendingMessage: cannot find sending message for token(%v)", r.Token())
+	}
+	sendMessage, more, err := b.createSendingMessage(sending.Message, maxSZX, maxMessageSize, block)
 	if err != nil {
-		return false, fmt.Errorf("handleSendingMessage: %w", err)
+		return false, fmt.Errorf("handleSendingMessage: cannot create sending message: %w", err)
 	}
 	w.SetMessage(sendMessage)
 	return more, err
@@ -604,29 +653,27 @@ func (b *BlockWise[C]) startSendingMessage(w *responsewriter.ResponseWriter[C], 
 	if !ok {
 		expire = time.Now().Add(b.expiration)
 	}
-	el, loaded := b.sendingMessagesCache.LoadOrStore(sendingMessage.Token().Hash(), cache.NewElement(originalSendingMessage, expire, nil))
+	el, loaded := b.sendingMessagesCache.LoadOrStore(sendingMessage.Token().Hash(), cache.NewElement(newSendingMessage(originalSendingMessage), expire, nil))
 	if loaded {
 		defer b.cc.ReleaseMessage(originalSendingMessage)
-		return fmt.Errorf("cannot add message (%v) to sending message cache: message(%v) with token(%v) already exist", originalSendingMessage, el.Data(), sendingMessage.Token())
+		existing := el.Data()
+		existing.mutex.Lock()
+		defer existing.mutex.Unlock()
+		return fmt.Errorf("cannot add message (%v) to sending message cache: message(%v) with token(%v) already exist", originalSendingMessage, existing.Message, sendingMessage.Token())
 	}
 	return nil
 }
 
 func (b *BlockWise[C]) getSentRequest(token message.Token) *pool.Message {
-	data, ok := b.sendingMessagesCache.LoadWithFunc(token.Hash(), func(value *cache.Element[*pool.Message]) *cache.Element[*pool.Message] {
-		if value == nil {
-			return nil
+	if value := b.sendingMessagesCache.Load(token.Hash()); value != nil {
+		sending := value.Data()
+		sending.mutex.Lock()
+		if sending.Message != nil {
+			msg := b.cloneMessage(sending.Message)
+			sending.mutex.Unlock()
+			return msg
 		}
-		v := value.Data()
-		msg := b.cc.AcquireMessage(v.Context())
-		msg.SetCode(v.Code())
-		msg.SetToken(v.Token())
-		msg.ResetOptionsTo(v.Options())
-		msg.SetType(v.Type())
-		return cache.NewElement(msg, value.ValidUntil.Load(), nil)
-	})
-	if ok {
-		return data.Data()
+		sending.mutex.Unlock()
 	}
 	globalRequest, ok := b.getSentRequestFromOutside(token)
 	if ok {
@@ -647,7 +694,7 @@ func (b *BlockWise[C]) handleObserveResponse(sentRequest *pool.Message) (message
 	validUntil := time.Now().Add(b.expiration) // context of observation can be expired.
 	bwSentRequest := b.cloneMessage(sentRequest)
 	bwSentRequest.SetToken(token)
-	_, loaded := b.sendingMessagesCache.LoadOrStore(token.Hash(), cache.NewElement(bwSentRequest, validUntil, nil))
+	_, loaded := b.sendingMessagesCache.LoadOrStore(token.Hash(), cache.NewElement(newSendingMessage(bwSentRequest), validUntil, nil))
 	if loaded {
 		return nil, time.Time{}, errors.New("cannot process message: message with token already exist")
 	}
@@ -702,6 +749,52 @@ func (b *BlockWise[C]) getPayloadFromCachedReceivedMessage(r, cachedReceivedMess
 	return payloadFile, payloadSize, nil
 }
 
+// receiveBodySize returns the body size after appending r at off, or Size1 if larger.
+func receiveBodySize(r *pool.Message, off int64) (int64, error) {
+	size := off
+	if r.Body() != nil {
+		n, err := r.BodySize()
+		if err != nil {
+			return 0, payloadSizeError(err)
+		}
+		size += n
+	}
+	if size1, err := r.GetOptionUint32(message.Size1); err == nil {
+		size = max(size, int64(size1))
+	}
+	return size, nil
+}
+
+// rejectTooLarge responds with 4.13 if appending the Block1 request r at off exceeds
+// maxReceiveBodySize, and reports whether it did.
+func (b *BlockWise[C]) rejectTooLarge(w *responsewriter.ResponseWriter[C], r *pool.Message, blockType message.OptionID, token message.Token, off int64) (bool, error) {
+	if blockType != message.Block1 || b.maxReceiveBodySize <= 0 {
+		return false, nil
+	}
+	size, err := receiveBodySize(r, off)
+	if err != nil {
+		return false, err
+	}
+	if size <= b.maxReceiveBodySize {
+		return false, nil
+	}
+	b.sendEntityTooLarge(w, token)
+	b.errors(fmt.Errorf("handleReceivedMessage(%v): %w: %v bytes", r, ErrRequestEntityTooLarge, size))
+	return true, nil
+}
+
+// checkFullBlock verifies that a non-final block carries a full block (RFC 7959 §2.2, RFC 8323 §6).
+func checkFullBlock(r *pool.Message, szx SZX) error {
+	n, err := r.BodySize()
+	if err != nil {
+		return payloadSizeError(err)
+	}
+	if n == szx.Size() || (szx == SZXBERT && n > 0 && n%szx.Size() == 0) {
+		return nil
+	}
+	return fmt.Errorf("%w: non-final block has %v bytes, expected %v", ErrRequestEntityIncomplete, n, szx.Size())
+}
+
 func copyToPayloadFromOffset(r *pool.Message, payloadFile *memfile.File, offset int64) (int64, error) {
 	copyn, err := payloadFile.Seek(offset, io.SeekStart)
 	if err != nil {
@@ -729,6 +822,13 @@ func copyToPayloadFromOffset(r *pool.Message, payloadFile *memfile.File, offset 
 func acquireMessageGuard(mg *messageGuard) error {
 	if err := mg.Acquire(mg.Context(), 1); err != nil {
 		return fmt.Errorf("processReceivedMessage: cannot lock message: %w", err)
+	}
+	return nil
+}
+
+func cachedReceivedMessageGuardByToken[C Client](b *BlockWise[C], tokenStr uint64) *messageGuard {
+	if e := b.receivingMessagesCache.Load(tokenStr); e != nil {
+		return e.Data()
 	}
 	return nil
 }
@@ -786,201 +886,102 @@ func (b *BlockWise[C]) getCachedReceivedMessage(mg *messageGuard, r *pool.Messag
 	return mg.Message, func() { mg.Release(1) }, nil
 }
 
-func getRequestBlock[C Client](r *pool.Message, blockType message.OptionID, next func(w *responsewriter.ResponseWriter[C], r *pool.Message), w *responsewriter.ResponseWriter[C]) (szx SZX, num int64, more bool, done bool, err error) {
-	if len(r.Token()) == 0 || r.Code() == codes.GET || r.Code() == codes.DELETE {
+func (b *BlockWise[C]) validateTokenlessBlock1(w *responsewriter.ResponseWriter[C], r *pool.Message, blockType message.OptionID) (bool, error) {
+	if blockType != message.Block1 || !r.HasOption(message.Block1) {
+		return false, nil
+	}
+	block, err := r.GetOptionUint32(blockType)
+	if err != nil {
+		return false, fmt.Errorf("cannot get Block(optionID=%d) option: %w", blockType, err)
+	}
+	_, num, more, err := DecodeBlockOption(block)
+	if err != nil {
+		return false, fmt.Errorf("cannot decode block option: %w", err)
+	}
+	if num != 0 || more {
+		return false, fmt.Errorf("%w: tokenless multi-block transfer is not supported", ErrRequestEntityIncomplete)
+	}
+	return b.rejectTooLarge(w, r, blockType, r.Token(), 0)
+}
+
+type receivedBlock struct {
+	token     message.Token
+	blockType message.OptionID
+	sizeType  message.OptionID
+	szx       SZX
+	reqSzx    SZX
+	maxSzx    SZX
+	num       int64
+	more      bool
+}
+
+func (b *BlockWise[C]) processReceivedMessage(w *responsewriter.ResponseWriter[C], r *pool.Message, maxSzx SZX, next func(w *responsewriter.ResponseWriter[C], r *pool.Message), blockType message.OptionID, sizeType message.OptionID) error {
+	token := r.Token()
+	if len(token) == 0 {
+		if handled, err := b.validateTokenlessBlock1(w, r, blockType); handled || err != nil {
+			return err
+		}
 		next(w, r)
-		return 0, 0, false, true, nil
+		return nil
+	}
+	if r.Code() == codes.GET || r.Code() == codes.DELETE {
+		next(w, r)
+		return nil
 	}
 	block, err := r.GetOptionUint32(blockType)
 	if err != nil {
 		if errors.Is(err, message.ErrOptionNotFound) {
 			next(w, r)
-			return 0, 0, false, true, nil
+			return nil
 		}
-		return 0, 0, false, false, fmt.Errorf("cannot get Block(optionID=%d) option: %w", blockType, err)
+		return fmt.Errorf("cannot get Block(optionID=%d) option: %w", blockType, err)
 	}
-	szx, num, more, err = DecodeBlockOption(block)
+	szx, num, more, err := DecodeBlockOption(block)
 	if err != nil {
-		return 0, 0, false, false, fmt.Errorf("cannot decode block option: %w", err)
+		return fmt.Errorf("cannot decode block option: %w", err)
 	}
-	return szx, num, more, false, nil
+	return b.processReceivedBlock(w, r, next, receivedBlock{
+		token: token, blockType: blockType, sizeType: sizeType,
+		szx: szx, reqSzx: szx, maxSzx: maxSzx, num: num, more: more,
+	})
 }
 
-func (b *BlockWise[C]) resolveReceivedToken(r *pool.Message, sentRequest *pool.Message, blockType message.OptionID) (message.Token, time.Time, error) {
-	token := r.Token()
+func (b *BlockWise[C]) processReceivedBlock(w *responsewriter.ResponseWriter[C], r *pool.Message, next func(w *responsewriter.ResponseWriter[C], r *pool.Message), block receivedBlock) error {
+	sentRequest := b.getSentRequest(block.token)
+	if sentRequest != nil {
+		defer b.cc.ReleaseMessage(sentRequest)
+	}
 	validUntil := b.getValidUntil(sentRequest)
-	if blockType == message.Block2 && sentRequest == nil {
-		return nil, time.Time{}, errors.New("cannot request body without paired request")
+	if block.blockType == message.Block2 && sentRequest == nil {
+		return errors.New("cannot request body without paired request")
 	}
-	if !isObserveResponse(r) {
-		return token, validUntil, nil
-	}
-	observeToken, observeValidUntil, err := b.handleObserveResponse(sentRequest)
-	if err != nil {
-		return nil, time.Time{}, fmt.Errorf("cannot process message: %w", err)
-	}
-	return observeToken, observeValidUntil, nil
-}
-
-func tryForwardWithoutCache[C Client](cachedGuard *messageGuard, blockType message.OptionID, more bool, num int64, szx SZX, maxSzx SZX, call receiveRequestCall[C]) (SZX, bool, error) {
-	szx = getSzx(szx, maxSzx)
-	if cachedGuard == nil && blockType == message.Block1 && num != 0 {
-		return szx, false, fmt.Errorf("received incomplete body: block %v received without transfer context", num)
-	}
-	if cachedGuard != nil || more {
-		return szx, false, nil
-	}
-	if num != 0 {
-		return szx, false, fmt.Errorf("received incomplete body: expected block number 0 for single-block transfer, got %v", num)
-	}
-	call.forward()
-	return szx, true, nil
-}
-
-type receivedFinalizeState struct {
-	tokenStr              uint64
-	token                 message.Token
-	cachedReceivedMessage *pool.Message
-	blockType             message.OptionID
-	sizeType              message.OptionID
-	msgType               message.Type
-}
-
-func (b *BlockWise[C]) finalizeReceivedRequest(state receivedFinalizeState, call receiveRequestCall[C]) error {
-	b.receivingMessagesCache.Delete(state.tokenStr)
-	state.cachedReceivedMessage.Remove(state.blockType)
-	state.cachedReceivedMessage.Remove(state.sizeType)
-	state.cachedReceivedMessage.SetType(state.msgType)
-	if !bytes.Equal(state.cachedReceivedMessage.Token(), state.token) {
-		b.sendingMessagesCache.Delete(state.tokenStr)
-	}
-	if _, err := state.cachedReceivedMessage.Body().Seek(0, io.SeekStart); err != nil {
-		return fmt.Errorf("cannot seek to start of cachedReceivedMessage request: %w", err)
-	}
-	call.next(call.w, state.cachedReceivedMessage)
-	return nil
-}
-
-type receivedContinueState struct {
-	token       message.Token
-	blockType   message.OptionID
-	sentRequest *pool.Message
-	num         int64
-	payloadSize int64
-	szx         SZX
-	more        bool
-}
-
-func (b *BlockWise[C]) continueReceivedRequest(call receiveRequestCall[C], state receivedContinueState) error {
-	sendMessage := b.cc.AcquireMessage(call.r.Context())
-	sendMessage.SetToken(state.token)
-	if state.blockType == message.Block2 {
-		state.num = state.payloadSize / state.szx.Size()
-		sendMessage.ResetOptionsTo(state.sentRequest.Options())
-		sendMessage.SetCode(state.sentRequest.Code())
-		sendMessage.Remove(message.Observe)
-		sendMessage.Remove(message.Block1)
-		sendMessage.Remove(message.Size1)
-		respBlock, err := EncodeBlockOption(state.szx, state.num, state.more)
+	if isObserveResponse(r) {
+		token, deadline, err := b.handleObserveResponse(sentRequest)
 		if err != nil {
-			b.cc.ReleaseMessage(sendMessage)
-			return fmt.Errorf("cannot encode block option(%v,%v,%v): %w", state.szx, state.num, state.more, err)
+			return fmt.Errorf("cannot process message: %w", err)
 		}
-		sendMessage.SetOptionUint32(state.blockType, respBlock)
-		call.w.SetMessage(sendMessage)
-		return nil
+		block.token, validUntil = token, deadline
 	}
 
-	sendMessage.SetCode(codes.Continue)
-	respBlock, err := EncodeBlockOption(state.szx, state.num, state.more)
-	if err != nil {
-		b.cc.ReleaseMessage(sendMessage)
-		return fmt.Errorf("cannot encode block option(%v,%v,%v): %w", state.szx, state.num, state.more, err)
-	}
-	sendMessage.SetOptionUint32(state.blockType, respBlock)
-	call.w.SetMessage(sendMessage)
-	return nil
-}
-
-func releaseMessageIfNotNil[C Client](cc C, msg *pool.Message) {
-	if msg != nil {
-		cc.ReleaseMessage(msg)
-	}
-}
-
-func cachedReceivedMessageGuardByToken[C Client](b *BlockWise[C], tokenStr uint64) *messageGuard {
+	tokenStr := block.token.Hash()
+	var cachedReceivedMessageGuard *messageGuard
 	if e := b.receivingMessagesCache.Load(tokenStr); e != nil {
-		return e.Data()
+		cachedReceivedMessageGuard = e.Data()
 	}
-	return nil
-}
-
-func (b *BlockWise[C]) copyReceivedPayload(r, cachedReceivedMessage *pool.Message) (*memfile.File, int64, error) {
-	payloadFile, payloadSize, err := b.getPayloadFromCachedReceivedMessage(r, cachedReceivedMessage)
-	if err != nil {
-		return nil, 0, fmt.Errorf("cannot get payload: %w", err)
-	}
-	return payloadFile, payloadSize, nil
-}
-
-func (b *BlockWise[C]) continueOrFinalizeReceivedRequest(call receiveRequestCall[C], state receivedContinueState, tokenStr uint64, sizeType message.OptionID, cachedReceivedMessage *pool.Message) error {
-	off := state.num * state.szx.Size()
-	payloadFile, payloadSize, err := b.copyReceivedPayload(call.r, cachedReceivedMessage)
-	if err != nil {
-		return err
-	}
-	if state.blockType == message.Block1 && off > payloadSize {
-		return fmt.Errorf("received incomplete body: missing previous blocks (offset=%v, payloadSize=%v)", off, payloadSize)
-	}
-	if off == payloadSize {
-		payloadSize, err = copyToPayloadFromOffset(call.r, payloadFile, off)
-		if err != nil {
-			return fmt.Errorf("cannot copy data to payload: %w", err)
+	if cachedReceivedMessageGuard == nil {
+		// RFC 7959 §2.9.2: reject non-initial blocks without transfer state.
+		if block.blockType == message.Block1 && block.num != 0 {
+			return fmt.Errorf("%w: block %v received without transfer context", ErrRequestEntityIncomplete, block.num)
 		}
-		if !state.more {
-			return b.finalizeReceivedRequest(receivedFinalizeState{
-				tokenStr:              tokenStr,
-				token:                 state.token,
-				cachedReceivedMessage: cachedReceivedMessage,
-				blockType:             state.blockType,
-				sizeType:              sizeType,
-				msgType:               call.r.Type(),
-			}, call)
+		// if there is no more then just forward req to next handler
+		if !block.more {
+			if tooLarge, errS := b.rejectTooLarge(w, r, block.blockType, block.token, 0); tooLarge || errS != nil {
+				return errS
+			}
+			next(w, r)
+			return nil
 		}
-	}
-	if off != payloadSize && !state.more {
-		return fmt.Errorf("received incomplete body: missing previous blocks (offset=%v, payloadSize=%v)", off, payloadSize)
-	}
-	state.payloadSize = payloadSize
-	return b.continueReceivedRequest(call, state)
-}
-
-func (b *BlockWise[C]) processReceivedMessage(w *responsewriter.ResponseWriter[C], r *pool.Message, maxSzx SZX, next func(w *responsewriter.ResponseWriter[C], r *pool.Message), blockType message.OptionID, sizeType message.OptionID) (err error) {
-	call := receiveRequestCall[C]{
-		w:    w,
-		r:    r,
-		next: next,
-	}
-	szx, num, more, done, err := getRequestBlock(r, blockType, next, w)
-	if done {
-		return nil
-	}
-	if err != nil {
-		return err
-	}
-	token := r.Token()
-	sentRequest := b.getSentRequest(token)
-	defer releaseMessageIfNotNil(b.cc, sentRequest)
-	token, validUntil, err := b.resolveReceivedToken(r, sentRequest, blockType)
-	if err != nil {
-		return err
-	}
-
-	tokenStr := token.Hash()
-	cachedReceivedMessageGuard := cachedReceivedMessageGuardByToken(b, tokenStr)
-	szx, done, err = tryForwardWithoutCache(cachedReceivedMessageGuard, blockType, more, num, szx, maxSzx, call)
-	if done || err != nil {
-		return err
+		block.szx = getSzx(block.szx, block.maxSzx)
 	}
 	cachedReceivedMessage, closeCachedReceivedMessage, err := b.getCachedReceivedMessage(cachedReceivedMessageGuard, r, tokenStr, validUntil)
 	if err != nil {
@@ -988,18 +989,94 @@ func (b *BlockWise[C]) processReceivedMessage(w *responsewriter.ResponseWriter[C
 	}
 	defer closeCachedReceivedMessage()
 
+	return b.processCachedReceivedBlock(w, r, cachedReceivedMessage, next, block, sentRequest)
+}
+
+func (b *BlockWise[C]) processCachedReceivedBlock(w *responsewriter.ResponseWriter[C], r, cachedReceivedMessage *pool.Message, next func(w *responsewriter.ResponseWriter[C], r *pool.Message), block receivedBlock, sentRequest *pool.Message) (err error) {
+	tokenStr := block.token.Hash()
 	defer func() {
 		if err != nil {
 			b.receivingMessagesCache.Delete(tokenStr)
 		}
 	}()
-	continueState := receivedContinueState{
-		token:       token,
-		blockType:   blockType,
-		sentRequest: sentRequest,
-		num:         num,
-		szx:         getSzx(szx, maxSzx),
-		more:        more,
+	payloadFile, payloadSize, err := b.getPayloadFromCachedReceivedMessage(r, cachedReceivedMessage)
+	if err != nil {
+		return fmt.Errorf("cannot get payload: %w", err)
 	}
-	return b.continueOrFinalizeReceivedRequest(call, continueState, tokenStr, sizeType, cachedReceivedMessage)
+	if block.blockType == message.Block1 && block.more {
+		if err = checkFullBlock(r, block.reqSzx); err != nil {
+			return err
+		}
+	}
+	off := block.num * block.szx.Size()
+	if block.blockType == message.Block1 && (off > payloadSize || (off < payloadSize && !block.more)) {
+		return fmt.Errorf("%w: block %v at offset %v, have %v bytes", ErrRequestEntityIncomplete, block.num, off, payloadSize)
+	}
+	if tooLarge, errS := b.rejectTooLarge(w, r, block.blockType, block.token, off); tooLarge || errS != nil {
+		b.receivingMessagesCache.Delete(tokenStr)
+		return errS
+	}
+	return b.appendReceivedBlock(w, r, cachedReceivedMessage, next, block, sentRequest, payloadFile, payloadSize, off)
+}
+
+func (b *BlockWise[C]) appendReceivedBlock(w *responsewriter.ResponseWriter[C], r, cachedReceivedMessage *pool.Message, next func(w *responsewriter.ResponseWriter[C], r *pool.Message), block receivedBlock, sentRequest *pool.Message, payloadFile *memfile.File, payloadSize, off int64) error {
+	if off != payloadSize {
+		return b.sendReceivedBlockContinue(w, r, block, sentRequest, payloadSize)
+	}
+	payloadSize, err := copyToPayloadFromOffset(r, payloadFile, off)
+	if err != nil {
+		return fmt.Errorf("cannot copy data to payload: %w", err)
+	}
+	b.refreshReceiveExpiration(block, payloadSize > off)
+	if block.more {
+		return b.sendReceivedBlockContinue(w, r, block, sentRequest, payloadSize)
+	}
+	tokenStr := block.token.Hash()
+	b.receivingMessagesCache.Delete(tokenStr)
+	cachedReceivedMessage.Remove(block.blockType)
+	cachedReceivedMessage.Remove(block.sizeType)
+	cachedReceivedMessage.SetType(r.Type())
+	if !bytes.Equal(cachedReceivedMessage.Token(), block.token) {
+		b.sendingMessagesCache.Delete(tokenStr)
+	}
+	_, err = cachedReceivedMessage.Body().Seek(0, io.SeekStart)
+	if err != nil {
+		return fmt.Errorf("cannot seek to start of cachedReceivedMessage request: %w", err)
+	}
+	next(w, cachedReceivedMessage)
+	return nil
+}
+
+func (b *BlockWise[C]) refreshReceiveExpiration(block receivedBlock, newData bool) {
+	if !block.more || block.blockType != message.Block1 || !b.rollingExpiration || !newData {
+		return
+	}
+	if e := b.receivingMessagesCache.Load(block.token.Hash()); e != nil {
+		e.ValidUntil.Store(time.Now().Add(b.expiration))
+	}
+}
+
+func (b *BlockWise[C]) sendReceivedBlockContinue(w *responsewriter.ResponseWriter[C], r *pool.Message, block receivedBlock, sentRequest *pool.Message, payloadSize int64) error {
+	szx := getSzx(block.szx, block.maxSzx)
+	num := block.num
+	sendMessage := b.cc.AcquireMessage(r.Context())
+	sendMessage.SetToken(block.token)
+	if block.blockType == message.Block2 {
+		num = payloadSize / szx.Size()
+		sendMessage.ResetOptionsTo(sentRequest.Options())
+		sendMessage.SetCode(sentRequest.Code())
+		sendMessage.Remove(message.Observe)
+		sendMessage.Remove(message.Block1)
+		sendMessage.Remove(message.Size1)
+	} else {
+		sendMessage.SetCode(codes.Continue)
+	}
+	respBlock, err := EncodeBlockOption(szx, num, block.more)
+	if err != nil {
+		b.cc.ReleaseMessage(sendMessage)
+		return fmt.Errorf("cannot encode block option(%v,%v,%v): %w", szx, num, block.more, err)
+	}
+	sendMessage.SetOptionUint32(block.blockType, respBlock)
+	w.SetMessage(sendMessage)
+	return nil
 }

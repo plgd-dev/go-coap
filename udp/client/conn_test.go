@@ -3,6 +3,7 @@ package client_test
 import (
 	"bytes"
 	"context"
+	"encoding/hex"
 	"errors"
 	"io"
 	"log"
@@ -20,6 +21,7 @@ import (
 	"github.com/plgd-dev/go-coap/v3/options"
 	"github.com/plgd-dev/go-coap/v3/udp"
 	"github.com/plgd-dev/go-coap/v3/udp/client"
+	"github.com/plgd-dev/go-coap/v3/udp/coder"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/atomic"
@@ -195,6 +197,83 @@ func TestConnDeduplicationRetransmission(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, message.AppOctets, ct)
 	require.Equal(t, []byte{2}, bodyToBytes(t, got.Body()))
+}
+
+func TestConnDeduplicationNonConfirmable(t *testing.T) {
+	l, err := coapNet.NewListenUDP("udp", "")
+	require.NoError(t, err)
+	defer func() {
+		errC := l.Close()
+		require.NoError(t, errC)
+	}()
+	var wg sync.WaitGroup
+	defer wg.Wait()
+
+	m := mux.NewRouter()
+
+	var cnt atomic.Int32
+	err = m.Handle("/count", mux.HandlerFunc(func(w mux.ResponseWriter, _ *mux.Message) {
+		cnt.Add(1)
+		errH := w.SetResponse(codes.Content, message.AppOctets, bytes.NewReader([]byte{byte(cnt.Load())}))
+		require.NoError(t, errH)
+	}))
+	require.NoError(t, err)
+
+	s := udp.NewServer(options.WithMux(m))
+	defer s.Stop()
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		errS := s.Serve(l)
+		assert.NoError(t, errS)
+	}()
+
+	conn, err := net.Dial("udp", l.LocalAddr().String())
+	require.NoError(t, err)
+	defer func() {
+		errC := conn.Close()
+		require.NoError(t, errC)
+	}()
+
+	exchange := func(typ message.Type, mid int32, token message.Token) *pool.Message {
+		req := pool.NewMessage(context.Background())
+		errS := req.SetupGet("/count", token)
+		require.NoError(t, errS)
+		req.SetType(typ)
+		req.SetMessageID(mid)
+		data, errM := req.MarshalWithEncoder(coder.DefaultCoder)
+		require.NoError(t, errM)
+		_, errW := conn.Write(data)
+		require.NoError(t, errW)
+		errD := conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+		require.NoError(t, errD)
+		buf := make([]byte, 4096)
+		n, errR := conn.Read(buf)
+		require.NoError(t, errR)
+		resp := pool.NewMessage(context.Background())
+		_, errU := resp.UnmarshalWithDecoder(coder.DefaultCoder, buf[:n])
+		require.NoError(t, errU)
+		return resp
+	}
+
+	// A duplicated NON request must be answered from the cache, not processed again.
+	got := exchange(message.NonConfirmable, 0x1000, message.Token{0x0a})
+	require.Equal(t, message.Token{0x0a}, got.Token())
+	require.Equal(t, []byte{1}, bodyToBytes(t, got.Body()))
+	responseMID := got.MessageID()
+
+	got = exchange(message.NonConfirmable, 0x1000, message.Token{0x0a})
+	require.Equal(t, message.Token{0x0a}, got.Token())
+	require.Equal(t, []byte{1}, bodyToBytes(t, got.Body()))
+	require.Equal(t, int32(1), cnt.Load())
+
+	// A new request that happens to reuse the message ID of the server's
+	// response must be processed, not answered with the cached response.
+	got = exchange(message.Confirmable, responseMID, message.Token{0x0b})
+	require.Equal(t, message.Acknowledgement, got.Type())
+	require.Equal(t, message.Token{0x0b}, got.Token())
+	require.Equal(t, []byte{2}, bodyToBytes(t, got.Body()))
+	require.Equal(t, int32(2), cnt.Load())
 }
 
 func testParallelConnGet(t *testing.T, numParallel int) {
@@ -885,6 +964,213 @@ func TestConnPingResponseIsReset(t *testing.T) {
 	require.Equal(t, message.Reset, respType, "CoAP Ping response must be RST per RFC 7252 §4.2")
 	require.Equal(t, codes.Empty, respCode, "CoAP Ping response code must be 0.00 (Empty)")
 	require.Equal(t, uint16(0x04d2), respMID, "CoAP Ping response MID must match request MID")
+}
+
+func TestConnRejectUnknownCriticalOptions(t *testing.T) {
+	l, err := coapNet.NewListenUDP("udp", "")
+	require.NoError(t, err)
+	defer func() {
+		errC := l.Close()
+		require.NoError(t, errC)
+	}()
+	var wg sync.WaitGroup
+	defer wg.Wait()
+
+	storeMu := sync.Mutex{}
+	storeValue := []byte("atlas-critical-A")
+
+	m := mux.NewRouter()
+	err = m.Handle("/store", mux.HandlerFunc(func(w mux.ResponseWriter, r *mux.Message) {
+		switch r.Code() {
+		case codes.PUT:
+			storeMu.Lock()
+			storeValue = append(storeValue[:0], bodyToBytes(t, r.Body())...)
+			storeMu.Unlock()
+			errS := w.SetResponse(codes.Changed, message.TextPlain, nil)
+			require.NoError(t, errS)
+		case codes.GET:
+			storeMu.Lock()
+			payload := append([]byte(nil), storeValue...)
+			storeMu.Unlock()
+			errS := w.SetResponse(codes.Content, message.TextPlain, bytes.NewReader(payload))
+			require.NoError(t, errS)
+		default:
+			errS := w.SetResponse(codes.MethodNotAllowed, message.TextPlain, nil)
+			require.NoError(t, errS)
+		}
+	}))
+	require.NoError(t, err)
+
+	s := udp.NewServer(options.WithMux(m))
+	defer s.Stop()
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		errS := s.Serve(l)
+		assert.NoError(t, errS)
+	}()
+
+	cc, err := udp.Dial(l.LocalAddr().String())
+	require.NoError(t, err)
+	defer func() {
+		errC := cc.Close()
+		require.NoError(t, errC)
+	}()
+
+	testCases := []struct {
+		name          string
+		rawRequestHex string
+		optionID      string
+	}{
+		{
+			name:          "unknown critical option 99",
+			rawRequestHex: "43036f1166f302b573746f726510d14a01ff61746c61732d637269746963616c2d42",
+			optionID:      "99",
+		},
+		{
+			name:          "unknown critical option 13 after content format",
+			rawRequestHex: "43036f1166f302b573746f7265101101ff61746c61732d637269746963616c2d42",
+			optionID:      "13",
+		},
+		{
+			name:          "if-none-match with illegal length",
+			rawRequestHex: "43036f1166f30251006573746f726510ff61746c61732d637269746963616c2d42",
+			optionID:      "5",
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			defer cancel()
+
+			setupResp, err := cc.Put(ctx, "/store", message.TextPlain, bytes.NewReader([]byte("atlas-critical-A")))
+			require.NoError(t, err)
+			require.Equal(t, codes.Changed, setupResp.Code())
+
+			rawReq, err := hex.DecodeString(tc.rawRequestHex)
+			require.NoError(t, err)
+			rawResp := sendRawUDPDatagram(t, l.LocalAddr().String(), rawReq)
+
+			decodedResp := pool.NewMessage(context.Background())
+			_, err = decodedResp.UnmarshalWithDecoder(coder.DefaultCoder, rawResp)
+			require.NoError(t, err)
+
+			require.Equal(t, message.Acknowledgement, decodedResp.Type())
+			require.Equal(t, codes.BadOption, decodedResp.Code())
+			require.Contains(t, string(bodyToBytes(t, decodedResp.Body())), tc.optionID)
+
+			getResp, err := cc.Get(ctx, "/store")
+			require.NoError(t, err)
+			require.Equal(t, codes.Content, getResp.Code())
+			require.Equal(t, []byte("atlas-critical-A"), bodyToBytes(t, getResp.Body()))
+		})
+	}
+}
+
+func TestConnDropNonConfirmableWithUnknownCriticalOptions(t *testing.T) {
+	l, err := coapNet.NewListenUDP("udp", "")
+	require.NoError(t, err)
+	defer func() {
+		errC := l.Close()
+		require.NoError(t, errC)
+	}()
+	var wg sync.WaitGroup
+	defer wg.Wait()
+
+	storeMu := sync.Mutex{}
+	storeValue := []byte("atlas-critical-A")
+
+	m := mux.NewRouter()
+	err = m.Handle("/store", mux.HandlerFunc(func(w mux.ResponseWriter, r *mux.Message) {
+		switch r.Code() {
+		case codes.PUT:
+			storeMu.Lock()
+			storeValue = append(storeValue[:0], bodyToBytes(t, r.Body())...)
+			storeMu.Unlock()
+			errS := w.SetResponse(codes.Changed, message.TextPlain, nil)
+			require.NoError(t, errS)
+		case codes.GET:
+			storeMu.Lock()
+			payload := append([]byte(nil), storeValue...)
+			storeMu.Unlock()
+			errS := w.SetResponse(codes.Content, message.TextPlain, bytes.NewReader(payload))
+			require.NoError(t, errS)
+		default:
+			errS := w.SetResponse(codes.MethodNotAllowed, message.TextPlain, nil)
+			require.NoError(t, errS)
+		}
+	}))
+	require.NoError(t, err)
+
+	s := udp.NewServer(options.WithMux(m))
+	defer s.Stop()
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		errS := s.Serve(l)
+		assert.NoError(t, errS)
+	}()
+
+	cc, err := udp.Dial(l.LocalAddr().String())
+	require.NoError(t, err)
+	defer func() {
+		errC := cc.Close()
+		require.NoError(t, errC)
+	}()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	// NON PUT /store with unknown critical option 99 and payload "atlas-critical-B"
+	rawReq, err := hex.DecodeString("53036f1166f302b573746f726510d14a01ff61746c61732d637269746963616c2d42")
+	require.NoError(t, err)
+
+	conn, err := net.Dial("udp", l.LocalAddr().String())
+	require.NoError(t, err)
+	defer func() {
+		errC := conn.Close()
+		require.NoError(t, errC)
+	}()
+	_, err = conn.Write(rawReq)
+	require.NoError(t, err)
+
+	// RFC 7252 section 5.4.1: the message is rejected, so the handler must not answer it.
+	err = conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
+	require.NoError(t, err)
+	buf := make([]byte, 4096)
+	_, err = conn.Read(buf)
+	var netErr net.Error
+	require.ErrorAs(t, err, &netErr)
+	require.True(t, netErr.Timeout())
+
+	getResp, err := cc.Get(ctx, "/store")
+	require.NoError(t, err)
+	require.Equal(t, codes.Content, getResp.Code())
+	require.Equal(t, []byte("atlas-critical-A"), bodyToBytes(t, getResp.Body()))
+}
+
+func sendRawUDPDatagram(t *testing.T, target string, rawReq []byte) []byte {
+	t.Helper()
+	conn, err := net.Dial("udp", target)
+	require.NoError(t, err)
+	defer func() {
+		errC := conn.Close()
+		require.NoError(t, errC)
+	}()
+
+	err = conn.SetDeadline(time.Now().Add(2 * time.Second))
+	require.NoError(t, err)
+
+	_, err = conn.Write(rawReq)
+	require.NoError(t, err)
+
+	buf := make([]byte, 4096)
+	n, err := conn.Read(buf)
+	require.NoError(t, err)
+	return append([]byte(nil), buf[:n]...)
 }
 
 func TestConnRequestMonitorCloseConnection(t *testing.T) {

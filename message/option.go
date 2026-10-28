@@ -451,8 +451,9 @@ func (o *Option) Unmarshal(data []byte, optionDefs map[OptionID]OptionDef, optio
 			return len(data), nil
 		}
 		dataLen := math.CastTo[uint32](len(data))
-		if dataLen < def.MinLen || dataLen > def.MaxLen {
-			// Skip options with illegal value length (RFC7252 section 5.4.3)
+		if (dataLen < def.MinLen || dataLen > def.MaxLen) && optionID%2 == 0 {
+			// Skip elective options with illegal value length (RFC7252 section 5.4.3).
+			// Critical ones are kept so they can be rejected as unrecognized (RFC7252 section 5.4.1).
 			return len(data), nil
 		}
 	}

@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"net"
@@ -14,8 +15,10 @@ import (
 	"github.com/plgd-dev/go-coap/v3/net/blockwise"
 	"github.com/plgd-dev/go-coap/v3/net/monitor/inactivity"
 	"github.com/plgd-dev/go-coap/v3/net/responsewriter"
+	pkgMath "github.com/plgd-dev/go-coap/v3/pkg/math"
 	coapSync "github.com/plgd-dev/go-coap/v3/pkg/sync"
 	"github.com/plgd-dev/go-coap/v3/udp/client"
+	"github.com/plgd-dev/go-coap/v3/udp/coder"
 )
 
 type Server struct {
@@ -117,6 +120,128 @@ func (s *Server) shouldPropagateError(err error) bool {
 	return s.ctx.Err() == nil && !coapNet.IsCancelOrCloseError(err)
 }
 
+func isMalformedMessageError(err error) bool {
+	var malformedErr *client.MalformedMessageError
+	return errors.As(err, &malformedErr)
+}
+
+func makeResetDatagram(mid int32) ([]byte, error) {
+	if !message.ValidateMID(mid) {
+		return nil, fmt.Errorf("invalid reset mid: %v", mid)
+	}
+	d := make([]byte, 4)
+	// Ver=1, Type=RST(3), TKL=0
+	d[0] = 0x70
+	// Code=0.00 Empty
+	d[1] = 0x00
+	midU16, err := pkgMath.SafeCastTo[uint16](mid)
+	if err != nil {
+		return nil, fmt.Errorf("invalid reset mid: %w", err)
+	}
+	binary.BigEndian.PutUint16(d[2:4], midU16)
+	return d, nil
+}
+
+func (s *Server) maybeRejectMalformedConfirmable(l *coapNet.UDPConn, cc *client.Conn, cm *coapNet.ControlMessage, processErr error) {
+	if !isMalformedMessageError(processErr) {
+		return
+	}
+	var malformedErr *client.MalformedMessageError
+	if !errors.As(processErr, &malformedErr) {
+		return
+	}
+	if malformedErr.InvalidVersion {
+		// RFC 7252 §3: unknown CoAP versions MUST be silently ignored.
+		return
+	}
+	if !malformedErr.HasHeader {
+		return
+	}
+	if malformedErr.Type != message.Confirmable {
+		return
+	}
+	if !message.ValidateMID(malformedErr.MessageID) {
+		return
+	}
+
+	raddr, ok := cc.RemoteAddr().(*net.UDPAddr)
+	if !ok || raddr == nil {
+		return
+	}
+
+	resetDatagram, err := makeResetDatagram(malformedErr.MessageID)
+	if err != nil {
+		s.cfg.Errors(fmt.Errorf("%v: cannot build reset for malformed confirmable packet: %w", cc.RemoteAddr(), err))
+		return
+	}
+	writeOpts := []coapNet.UDPWriteOption{coapNet.WithContext(s.ctx), coapNet.WithRemoteAddr(raddr)}
+	if cm != nil {
+		writeOpts = append(writeOpts, coapNet.WithControlMessage(&coapNet.ControlMessage{
+			IfIndex: cm.GetIfIndex(),
+			Src:     cm.Dst,
+		}))
+	}
+	if err := l.WriteWithOptions(resetDatagram, writeOpts...); err != nil {
+		s.cfg.Errors(fmt.Errorf("%v: cannot send reset for malformed confirmable packet: %w", cc.RemoteAddr(), err))
+	}
+}
+
+func isUnknownVersionError(err error) bool {
+	var malformedErr *client.MalformedMessageError
+	if errors.As(err, &malformedErr) {
+		return malformedErr.InvalidVersion
+	}
+	return errors.Is(err, coder.ErrMessageInvalidVersion)
+}
+
+type incomingDatagram struct {
+	buf   []byte
+	raddr *net.UDPAddr
+	cm    *coapNet.ControlMessage
+}
+
+func (s *Server) readIncomingDatagram(l *coapNet.UDPConn, buf []byte) (incomingDatagram, error) {
+	var raddr *net.UDPAddr
+	var cm *coapNet.ControlMessage
+	n, err := l.ReadWithOptions(buf, coapNet.WithContext(s.ctx), coapNet.WithGetControlMessage(&cm), coapNet.WithGetRemoteAddr(&raddr))
+	if err != nil {
+		return incomingDatagram{}, err
+	}
+	return incomingDatagram{
+		buf:   buf[:n],
+		raddr: raddr,
+		cm:    cm,
+	}, nil
+}
+
+func (s *Server) resolvePacketLocalAddr(l *coapNet.UDPConn, cm *coapNet.ControlMessage) (*net.UDPAddr, error) {
+	// UDPConn.LocalAddr() only takes into account the address it is bound to.
+	// In the case of a wildcard address, the actual destination address is in the control message.
+	// On server-initiated exchanges, listener's LocalAddr can be used as the client has no assumptions of the source.
+	laddr, err := s.getListenerLocalAddr(l)
+	if err != nil {
+		return nil, err
+	}
+	if cm != nil && len(cm.Dst) > 0 && !cm.Dst.IsMulticast() {
+		laddr.IP = cm.Dst
+	}
+	return laddr, nil
+}
+
+func (s *Server) handleProcessError(l *coapNet.UDPConn, cc *client.Conn, cm *coapNet.ControlMessage, err error) {
+	if isMalformedMessageError(err) {
+		s.maybeRejectMalformedConfirmable(l, cc, cm, err)
+		if isUnknownVersionError(err) {
+			// RFC 7252 §3: unknown CoAP versions MUST be silently ignored.
+			return
+		}
+		s.cfg.Errors(fmt.Errorf("%v: dropping malformed packet: %w", cc.RemoteAddr(), err))
+		return
+	}
+	s.closeConnection(cc)
+	s.cfg.Errors(fmt.Errorf("%v: cannot process packet: %w", cc.RemoteAddr(), err))
+}
+
 func (s *Server) Serve(l *coapNet.UDPConn) error {
 	if s.cfg.BlockwiseSZX > blockwise.SZX1024 {
 		return errors.New("invalid blockwiseSZX")
@@ -136,7 +261,9 @@ func (s *Server) Serve(l *coapNet.UDPConn) error {
 		s.serverStartedChan = make(chan struct{}, 1)
 	}()
 
-	m := make([]byte, s.cfg.MaxMessageSize)
+	// One extra byte so that an oversized datagram is not silently truncated to
+	// MaxMessageSize and is rejected before selecting a peer connection.
+	m := make([]byte, uint64(s.cfg.MaxMessageSize)+1)
 
 	s.cfg.PeriodicRunner(func(now time.Time) bool {
 		s.handleInactivityMonitors(now)
@@ -144,38 +271,39 @@ func (s *Server) Serve(l *coapNet.UDPConn) error {
 	})
 
 	for {
-		buf := m
-		var raddr *net.UDPAddr
-		var cm *coapNet.ControlMessage
-		n, err := l.ReadWithOptions(buf, coapNet.WithContext(s.ctx), coapNet.WithGetControlMessage(&cm), coapNet.WithGetRemoteAddr(&raddr))
+		packet, err := s.readIncomingDatagram(l, m)
 		if err != nil {
 			if !s.shouldPropagateError(err) {
 				return nil
 			}
+			if coapNet.IsMessageSizeError(err) {
+				s.cfg.Errors(fmt.Errorf("cannot read oversized datagram: %w", err))
+				continue
+			}
 			return err
 		}
-		buf = buf[:n]
-
-		// UDPConn.LocalAddr() only takes into account the address it is bound to.
-		// In the case of a wildcard address, the actual destination address is in the control message.
-		// On server-initiated exchanges, listener's LocalAddr can be used as the client has no assumptions of the source.
-		laddr, err := s.getListenerLocalAddr(l)
-		if err != nil {
-			return err
-		}
-		if cm != nil && len(cm.Dst) > 0 && !cm.Dst.IsMulticast() {
-			laddr.IP = cm.Dst
-		}
-
-		cc, err := s.getConn(l, raddr, laddr, true)
-		if err != nil {
-			s.cfg.Errors(fmt.Errorf("%v: cannot get client connection: %w", raddr, err))
+		if int64(len(packet.buf)) > int64(s.cfg.MaxMessageSize) {
+			s.cfg.Errors(fmt.Errorf("%v: max message size(%v) was exceeded %v", packet.raddr, s.cfg.MaxMessageSize, len(packet.buf)))
 			continue
 		}
-		err = cc.Process(cm, buf)
+
+		laddr, err := s.resolvePacketLocalAddr(l, packet.cm)
 		if err != nil {
-			s.closeConnection(cc)
-			s.cfg.Errors(fmt.Errorf("%v: cannot process packet: %w", cc.RemoteAddr(), err))
+			return err
+		}
+
+		cc, created, err := s.getConn(l, packet.raddr, laddr, true)
+		if err != nil {
+			s.cfg.Errors(fmt.Errorf("%v: cannot get client connection: %w", packet.raddr, err))
+			continue
+		}
+		err = cc.Process(packet.cm, packet.buf)
+		if err != nil {
+			s.handleProcessError(l, cc, packet.cm, err)
+			if created && isMalformedMessageError(err) {
+				s.closeConnection(cc)
+			}
+			continue
 		}
 	}
 }
@@ -362,6 +490,7 @@ func (s *Server) getOrCreateConn(udpConn *coapNet.UDPConn, raddr *net.UDPAddr, l
 		s.cfg.MaxMessageSize,
 		s.cfg.MTU,
 		false,
+		s.cfg.Errors,
 	)
 	monitor := s.cfg.CreateInactivityMonitor()
 	cfg := client.DefaultConfig
@@ -409,15 +538,15 @@ func (s *Server) getOrCreateConn(udpConn *coapNet.UDPConn, raddr *net.UDPAddr, l
 	return cc, true
 }
 
-func (s *Server) getConn(l *coapNet.UDPConn, raddr *net.UDPAddr, laddr *net.UDPAddr, firstTime bool) (*client.Conn, error) {
+func (s *Server) getConn(l *coapNet.UDPConn, raddr *net.UDPAddr, laddr *net.UDPAddr, firstTime bool) (*client.Conn, bool, error) {
 	if raddr == nil {
-		return nil, errors.New("invalid remote address")
+		return nil, false, errors.New("invalid remote address")
 	}
 	if laddr == nil {
 		var err error
 		laddr, err = s.getListenerLocalAddr(l)
 		if err != nil {
-			return nil, err
+			return nil, false, err
 		}
 	}
 
@@ -444,9 +573,9 @@ func (s *Server) getConn(l *coapNet.UDPConn, raddr *net.UDPAddr, laddr *net.UDPA
 		if firstTime {
 			return s.getConn(l, raddr, laddr, false)
 		}
-		return nil, errors.New("connection is closed")
+		return nil, false, errors.New("connection is closed")
 	}
-	return cc, nil
+	return cc, created, nil
 }
 
 // NewConn creates or gets a connection for the provided remote address.
@@ -468,5 +597,6 @@ func (s *Server) NewConn(addr *net.UDPAddr, laddr ...*net.UDPAddr) (*client.Conn
 		// server is not started/stopped
 		return nil, errors.New("server is not running")
 	}
-	return s.getConn(l, addr, localAddr, true)
+	cc, _, err := s.getConn(l, addr, localAddr, true)
+	return cc, err
 }

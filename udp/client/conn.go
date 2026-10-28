@@ -1,6 +1,7 @@
 package client
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -46,6 +47,25 @@ type (
 type InactivityMonitor interface {
 	Notify()
 	CheckInactivity(now time.Time, cc *Conn)
+}
+
+// MalformedMessageError contains best-effort CoAP header metadata extracted
+// during decode failure. HasHeader indicates whether Type and MessageID are
+// valid and can be used by callers for protocol-level decisions.
+type MalformedMessageError struct {
+	Type           message.Type
+	MessageID      int32
+	HasHeader      bool
+	InvalidVersion bool
+	Err            error
+}
+
+func (e *MalformedMessageError) Error() string {
+	return e.Err.Error()
+}
+
+func (e *MalformedMessageError) Unwrap() error {
+	return e.Err
 }
 
 type Session interface {
@@ -602,6 +622,9 @@ func (cc *Conn) AsyncPing(receivedPong func()) (func(), error) {
 	req.SetCode(codes.Empty)
 	mid := cc.GetMessageID()
 	req.SetMessageID(mid)
+	// Keepalive pings must reuse the original destination IP as the packet source
+	// (e.g. Fly.io public IP), same as regular request/response writes.
+	cc.upsertControlInformation(req)
 	if _, loaded := cc.midHandlerContainer.LoadOrStore(mid, &midElement{
 		handler: func(_ *responsewriter.ResponseWriter[*Conn], r *pool.Message) {
 			if r.Type() == message.Reset || r.Type() == message.Acknowledgement {
@@ -696,9 +719,9 @@ func (cc *Conn) getResponseFromCache(mid int32, resp *pool.Message) (bool, error
 	return cc.responseMsgCache.Load(strconv.Itoa(int(mid)), resp)
 }
 
-// addResponseToCache adds a message to the response message cache.
-func (cc *Conn) addResponseToCache(resp *pool.Message) error {
-	return cc.responseMsgCache.Store(strconv.Itoa(int(resp.MessageID())), resp)
+// addResponseToCache adds a message to the response message cache under the request's message ID.
+func (cc *Conn) addResponseToCache(reqMessageID int32, resp *pool.Message) error {
+	return cc.responseMsgCache.Store(strconv.Itoa(int(reqMessageID)), resp)
 }
 
 // checkMyMessageID compare client msgID against peer messageID and if it is near < 0xffff/4 then increase msgID.
@@ -763,7 +786,7 @@ func (cc *Conn) processResponse(reqType message.Type, reqMessageID int32, w *res
 		w.Message().SetMessageID(reqMessageID)
 		w.Message().SetToken(nil)
 
-		err := cc.addResponseToCache(w.Message())
+		err := cc.addResponseToCache(reqMessageID, w.Message())
 		if err != nil {
 			return fmt.Errorf("cannot cache response: %w", err)
 		}
@@ -781,7 +804,7 @@ func (cc *Conn) processResponse(reqType message.Type, reqMessageID int32, w *res
 		w.Message().SetMessageID(reqMessageID)
 	}
 	if reqType == message.Confirmable || reqType == message.NonConfirmable {
-		err := cc.addResponseToCache(w.Message())
+		err := cc.addResponseToCache(reqMessageID, w.Message())
 		if err != nil {
 			return fmt.Errorf("cannot cache response: %w", err)
 		}
@@ -922,6 +945,20 @@ func (cc *Conn) handleSpecialMessages(r *pool.Message) bool {
 	return false
 }
 
+func newMalformedMessageError(err error, datagram []byte, req *pool.Message) *MalformedMessageError {
+	malformedErr := &MalformedMessageError{Err: err}
+	if len(datagram) >= 1 && datagram[0]>>6 != 1 {
+		malformedErr.InvalidVersion = true
+		return malformedErr
+	}
+	if len(datagram) >= 4 {
+		malformedErr.HasHeader = true
+		malformedErr.Type = req.Type()
+		malformedErr.MessageID = req.MessageID()
+	}
+	return malformedErr
+}
+
 func (cc *Conn) Process(cm *coapNet.ControlMessage, datagram []byte) error {
 	if pkgMath.CastTo[uint32](len(datagram)) > cc.session.MaxMessageSize() {
 		return fmt.Errorf("max message size(%v) was exceeded %v", cc.session.MaxMessageSize(), len(datagram))
@@ -929,11 +966,24 @@ func (cc *Conn) Process(cm *coapNet.ControlMessage, datagram []byte) error {
 	req := cc.AcquireMessage(cc.Context())
 	_, err := req.UnmarshalWithDecoder(coder.DefaultCoder, datagram)
 	if err != nil {
+		malformedErr := newMalformedMessageError(err, datagram, req)
 		cc.ReleaseMessage(req)
-		return err
+		return malformedErr
 	}
 	req.SetControlMessage(cm)
 	req.SetSequence(cc.Sequence())
+	if (req.Type() == message.Confirmable || req.Type() == message.NonConfirmable) && req.Code() >= codes.GET && req.Code() <= codes.DELETE {
+		unknownCriticalOpts := client.GetUnknownCriticalOptions(req.Options())
+		if len(unknownCriticalOpts) > 0 {
+			// RFC 7252 section 5.4.1: a NON message with an unrecognized critical
+			// option must be rejected (section 4.3), so it is dropped without a reply.
+			if req.Type() == message.Confirmable {
+				err = cc.respondUnknownCriticalOptions(req, unknownCriticalOpts)
+			}
+			cc.ReleaseMessage(req)
+			return err
+		}
+	}
 	cc.checkMyMessageID(req)
 	drop, err := cc.requestMonitor(cc, req)
 	if err != nil {
@@ -951,6 +1001,26 @@ func (cc *Conn) Process(cm *coapNet.ControlMessage, datagram []byte) error {
 	select {
 	case cc.receivedMessageReader.C() <- req:
 	case <-cc.Context().Done():
+	}
+	return nil
+}
+
+func (cc *Conn) respondUnknownCriticalOptions(req *pool.Message, unknownCriticalOpts []message.OptionID) error {
+	resp := cc.AcquireMessage(req.Context())
+	defer cc.ReleaseMessage(resp)
+
+	resp.SetCode(codes.BadOption)
+	resp.SetToken(req.Token())
+	resp.SetType(message.Acknowledgement)
+	resp.SetMessageID(req.MessageID())
+	resp.SetContentFormat(message.TextPlain)
+	resp.SetBody(bytes.NewReader([]byte(client.FormatUnknownCriticalOptionsDiagnostic(unknownCriticalOpts))))
+
+	cc.setControlInformation(req.ControlMessage())
+	cc.upsertControlInformation(resp)
+
+	if err := cc.session.WriteMessage(resp); err != nil {
+		return fmt.Errorf(errFmtWriteResponse, err)
 	}
 	return nil
 }
