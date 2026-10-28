@@ -801,3 +801,48 @@ func TestClientKeepAliveMonitor(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, inactivityDetected.Load())
 }
+
+func TestClientRejectsMalformedConfirmableWithoutClosingConnection(t *testing.T) {
+	peer, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	require.NoError(t, err)
+	defer func() {
+		errC := peer.Close()
+		require.NoError(t, errC)
+	}()
+
+	cc, err := Dial(peer.LocalAddr().String())
+	require.NoError(t, err)
+	defer func() {
+		errC := cc.Close()
+		require.NoError(t, errC)
+		<-cc.Done()
+	}()
+	clientAddr, ok := cc.LocalAddr().(*net.UDPAddr)
+	require.True(t, ok)
+
+	sendAndRead := func(req []byte) []byte {
+		errD := peer.SetDeadline(time.Now().Add(time.Second))
+		require.NoError(t, errD)
+		_, errW := peer.WriteToUDP(req, clientAddr)
+		require.NoError(t, errW)
+		buf := make([]byte, 1500)
+		n, _, errR := peer.ReadFromUDP(buf)
+		require.NoError(t, errR)
+		return buf[:n]
+	}
+	requireReset := func(datagram []byte, mid uint16) {
+		require.Len(t, datagram, 4)
+		require.Equal(t, byte(0x70), datagram[0])
+		require.Equal(t, byte(0x00), datagram[1])
+		require.Equal(t, mid, uint16(datagram[2])<<8|uint16(datagram[3]))
+	}
+
+	// Unknown version (RFC 7252 section 3) is silently ignored.
+	_, err = peer.WriteToUDP([]byte{0x09, 0x01, 0x11, 0x11}, clientAddr)
+	require.NoError(t, err)
+	// Malformed CON: version=1, type=CON, TKL=9 (invalid), MID=0x2222.
+	requireReset(sendAndRead([]byte{0x49, 0x01, 0x22, 0x22}), 0x2222)
+	// The same connection still answers a valid CoAP ping.
+	requireReset(sendAndRead([]byte{0x40, 0x00, 0x33, 0x33}), 0x3333)
+	require.NoError(t, cc.Context().Err())
+}
