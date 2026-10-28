@@ -64,8 +64,8 @@ func (c *Coder) Encode(m message.Message, buf []byte) (int, error) {
 	// safe: checked by message.ValidateMID above
 	binary.BigEndian.PutUint16(tmpbuf, math.CastTo[uint16](m.MessageID))
 
-	buf[0] = (1 << 6) | byte(m.Type)<<4 | byte(0xf&len(m.Token))
-	buf[1] = byte(m.Code)
+	buf[0] = (1 << 6) | math.CastTo[byte](m.Type)<<4 | byte(0xf&len(m.Token))
+	buf[1] = math.CastTo[byte](m.Code)
 	buf[2] = tmpbuf[0]
 	buf[3] = tmpbuf[1]
 	buf = buf[4:]

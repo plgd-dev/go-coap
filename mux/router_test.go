@@ -1,12 +1,14 @@
 package mux_test
 
 import (
+	"maps"
 	"testing"
 
 	"github.com/plgd-dev/go-coap/v3/mux"
 	"github.com/stretchr/testify/require"
-	"golang.org/x/exp/maps" // TODO: replace with standard maps package as soon as Go dependency hits 1.21
 )
+
+const testRoutePath = "/111/222/333"
 
 type routeTest struct {
 	title        string // title of the test
@@ -22,21 +24,21 @@ func TestMux(t *testing.T) {
 	tests := []routeTest{
 		{
 			title:        "Path route match",
-			path:         "/111/222/333",
-			pathTemplate: "/111/222/333",
+			path:         testRoutePath,
+			pathTemplate: testRoutePath,
 			shouldMatch:  true,
 			vars:         map[string]string{},
 		},
 		{
 			title:        "Path route with pattern no constraints, match",
-			path:         "/111/222/333",
+			path:         testRoutePath,
 			pathTemplate: "/111/{v1}/333",
 			shouldMatch:  true,
 			vars:         map[string]string{"v1": "222"},
 		},
 		{
 			title:        "Path route with pattern, match",
-			path:         "/111/222/333",
+			path:         testRoutePath,
 			pathTemplate: "/111/{v1:[0-9]{3}}/333",
 			shouldMatch:  true,
 			vars:         map[string]string{"v1": "222"},
@@ -52,7 +54,7 @@ func TestMux(t *testing.T) {
 		{
 			title:        "Path route with multiple patterns, match",
 			vars:         map[string]string{"test": "111", "v2": "222", "v3": "333"},
-			path:         "/111/222/333",
+			path:         testRoutePath,
 			pathTemplate: `/{test:[0-9]{3}}/{v2:[0-9]{3}}/{v3:[0-9]{3}}`,
 			shouldMatch:  true,
 		},

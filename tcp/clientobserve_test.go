@@ -19,6 +19,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+const testObservePath = "/tmp"
+
 func TestConnObserve(t *testing.T) {
 	type args struct {
 		path      string
@@ -35,7 +37,7 @@ func TestConnObserve(t *testing.T) {
 		{
 			name: "10bytes",
 			args: args{
-				path:      "/tmp",
+				path:      testObservePath,
 				numEvents: 1,
 				payload:   make([]byte, 10),
 			},
@@ -43,7 +45,7 @@ func TestConnObserve(t *testing.T) {
 		{
 			name: "5000bytes",
 			args: args{
-				path:      "/tmp",
+				path:      testObservePath,
 				numEvents: 20,
 				payload:   make([]byte, 5000),
 			},
@@ -51,7 +53,7 @@ func TestConnObserve(t *testing.T) {
 		{
 			name: "5000bytes - in go routine",
 			args: args{
-				path:      "/tmp",
+				path:      testObservePath,
 				numEvents: 20,
 				payload:   make([]byte, 5000),
 				goFunc:    func(f func()) { go f() },
@@ -60,7 +62,7 @@ func TestConnObserve(t *testing.T) {
 		{
 			name: "5000bytes with ETag",
 			args: args{
-				path:      "/tmp",
+				path:      testObservePath,
 				numEvents: 20,
 				payload:   make([]byte, 5000),
 				etag:      []byte("1337"),
@@ -209,14 +211,14 @@ func TestConnObserveNotSupported(t *testing.T) {
 		{
 			name: "10bytes",
 			args: args{
-				path:    "/tmp",
+				path:    testObservePath,
 				payload: make([]byte, 10),
 			},
 		},
 		{
 			name: "5000bytes",
 			args: args{
-				path:    "/tmp",
+				path:    testObservePath,
 				payload: make([]byte, 5000),
 			},
 		},
@@ -393,7 +395,7 @@ func TestConnObserveCancel(t *testing.T) {
 				require.NoError(t, errC)
 			}
 			defer closeClient()
-			_, err = cc.Observe(ctx, "/tmp", func(*pool.Message) {
+			_, err = cc.Observe(ctx, testObservePath, func(*pool.Message) {
 				// no-op
 			})
 			require.Error(t, err)

@@ -582,7 +582,7 @@ func (b *BlockWise[C]) createSendingMessage(sendingMessage *pool.Message, maxSZX
 	if offSeek+int64(readed) == payloadSize {
 		more = false
 	}
-	num = (offSeek) / szx.Size()
+	num = offSeek / szx.Size()
 	block, err = EncodeBlockOption(szx, num, more)
 	if err != nil {
 		b.cc.ReleaseMessage(sendMessage)

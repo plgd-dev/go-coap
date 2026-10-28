@@ -9,6 +9,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+const testNameCancelled = "cancelled"
+
 func TestConnWriteWithContext(t *testing.T) {
 	ctxCanceled, ctxCancel := context.WithCancel(context.Background())
 	ctxCancel()
@@ -31,7 +33,7 @@ func TestConnWriteWithContext(t *testing.T) {
 			},
 		},
 		{
-			name: "cancelled",
+			name: testNameCancelled,
 			args: args{
 				ctx:  ctxCanceled,
 				data: helloWorld,
