@@ -1,23 +1,21 @@
 module github.com/plgd-dev/go-coap/v3
 
-go 1.25.0
+go 1.26.0
 
 require (
 	github.com/dsnet/golib/memfile v1.0.0
-	github.com/pion/dtls/v3 v3.1.5
-	github.com/stretchr/testify v1.11.1
-	go.uber.org/atomic v1.11.0
-	golang.org/x/exp v0.0.0-20260611194520-c48552f49976
-	golang.org/x/net v0.56.0
-	golang.org/x/sync v0.21.0
-	golang.org/x/sys v0.46.0
+	github.com/pion/dtls/v3 v3.1.15
+	github.com/stretchr/testify v1.12.1
+	go.uber.org/atomic v1.12.0
+	golang.org/x/exp v0.0.0-20261014143641-f0251eb4aa3e
+	golang.org/x/net v0.62.0
+	golang.org/x/sync v0.24.0
+	golang.org/x/sys v0.49.0
 )
 
 require (
-	github.com/davecgh/go-spew v1.1.1 // indirect
 	github.com/pion/logging v0.2.4 // indirect
-	github.com/pion/transport/v4 v4.0.2 // indirect
-	github.com/pmezard/go-difflib v1.0.0 // indirect
-	golang.org/x/crypto v0.53.0 // indirect
-	gopkg.in/yaml.v3 v3.0.1 // indirect
+	github.com/pion/transport/v5 v5.1.4 // indirect
+	go.yaml.in/yaml/v3 v3.0.5 // indirect
+	golang.org/x/crypto v0.58.0 // indirect
 )
