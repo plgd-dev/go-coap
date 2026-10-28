@@ -2,11 +2,13 @@ package server
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"sync"
 	"sync/atomic"
 
+	"github.com/plgd-dev/go-coap/v3/message"
 	"github.com/plgd-dev/go-coap/v3/message/pool"
 	coapNet "github.com/plgd-dev/go-coap/v3/net"
 	"github.com/plgd-dev/go-coap/v3/udp/client"
@@ -138,6 +140,32 @@ func (s *Session) WriteMulticastMessage(req *pool.Message, address *net.UDPAddr,
 	return s.connection.WriteMulticast(req.Context(), address, data, opts...)
 }
 
+// rejectMalformedConfirmable replies with RST to a malformed confirmable message
+// whose header could be parsed (RFC 7252 section 4.2). Unknown versions are silently ignored (section 3).
+func (s *Session) rejectMalformedConfirmable(cm *coapNet.ControlMessage, malformedErr *client.MalformedMessageError) {
+	if malformedErr.InvalidVersion {
+		return
+	}
+	s.errors(fmt.Errorf("%v: dropping malformed packet: %w", s.raddr, malformedErr))
+	if !malformedErr.HasHeader || malformedErr.Type != message.Confirmable {
+		return
+	}
+	rst, err := makeResetDatagram(malformedErr.MessageID)
+	if err != nil {
+		return
+	}
+	writeOpts := []coapNet.UDPWriteOption{coapNet.WithContext(s.Context()), coapNet.WithRemoteAddr(s.raddr)}
+	if cm != nil {
+		writeOpts = append(writeOpts, coapNet.WithControlMessage(&coapNet.ControlMessage{
+			IfIndex: cm.GetIfIndex(),
+			Src:     cm.Dst,
+		}))
+	}
+	if err := s.connection.WriteWithOptions(rst, writeOpts...); err != nil {
+		s.errors(fmt.Errorf("%v: cannot send reset for malformed confirmable packet: %w", s.raddr, err))
+	}
+}
+
 func (s *Session) Run(cc *client.Conn) (err error) {
 	defer func() {
 		err1 := s.Close()
@@ -171,7 +199,12 @@ func (s *Session) Run(cc *client.Conn) (err error) {
 		buf = buf[:n]
 		err = cc.Process(cm, buf)
 		if err != nil {
-			return err
+			var malformedErr *client.MalformedMessageError
+			if !errors.As(err, &malformedErr) {
+				return err
+			}
+			// Malformed datagram must not tear down the session.
+			s.rejectMalformedConfirmable(cm, malformedErr)
 		}
 	}
 }
