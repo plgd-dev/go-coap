@@ -165,8 +165,19 @@ func (b *BlockWise[C]) SetMaxReceiveBodySize(size int64) {
 type sendingMessage struct {
 	*pool.Message
 	// mutex protects Message's lifetime and the body's seek position.
-	mutex       sync.Mutex
+	mutex sync.Mutex
+	// matchingKey allows a Block2 continuation with a changed token to resume the
+	// transfer (RFC 9175 §3.3), 0 disables it.
 	matchingKey uint64
+	requestCode codes.Code
+	endpoint    string
+}
+
+// sendingMatch describes the request whose response is sent block-wise.
+type sendingMatch struct {
+	key      uint64
+	code     codes.Code
+	endpoint string
 }
 
 func newSendingMessage(msg *pool.Message) *sendingMessage {
@@ -293,14 +304,24 @@ func getExchangeKey(token message.Token, remoteAddr net.Addr) (uint64, error) {
 	return h.Sum64(), nil
 }
 
+// isRequestCode reports whether code is a request method code (class 0, RFC 7252 §12.1.1).
+func isRequestCode(code codes.Code) bool {
+	return code >= codes.GET && code < 32
+}
+
 func getMessageExchangeKey(r *pool.Message, remoteAddr net.Addr) (uint64, error) {
-	if remoteAddr == nil || (r.Code() != codes.POST && r.Code() != codes.PUT) {
+	if remoteAddr == nil || !isRequestCode(r.Code()) {
 		return getExchangeKey(r.Token(), remoteAddr)
 	}
-	requestKey := getBlock1RequestExchangeKey(r, remoteAddr)
 	if len(r.Token()) == 0 {
-		return requestKey, nil
+		// Without a token, the request itself identifies the transfer, so tokenless
+		// requests for different resources from one endpoint do not share state.
+		return getRequestMatchingKey(r, remoteAddr), nil
 	}
+	if r.Code() != codes.POST && r.Code() != codes.PUT {
+		return getExchangeKey(r.Token(), remoteAddr)
+	}
+	requestKey := getRequestMatchingKey(r, remoteAddr)
 	h := fnv.New64a()
 	var key [8]byte
 	binary.BigEndian.PutUint64(key[:], requestKey)
@@ -309,7 +330,9 @@ func getMessageExchangeKey(r *pool.Message, remoteAddr net.Addr) (uint64, error)
 	return h.Sum64(), nil
 }
 
-func getBlock1RequestExchangeKey(r *pool.Message, remoteAddr net.Addr) uint64 {
+// getRequestMatchingKey identifies "matchable" requests (RFC 9175 §3.3): same endpoint,
+// code and options, ignoring block-wise and elective NoCacheKey options.
+func getRequestMatchingKey(r *pool.Message, remoteAddr net.Addr) uint64 {
 	h := fnv.New64a()
 	writeExchangeKeyPart(h, []byte(remoteAddr.String()))
 	var code [2]byte
@@ -319,8 +342,8 @@ func getBlock1RequestExchangeKey(r *pool.Message, remoteAddr net.Addr) uint64 {
 		if option.ID == message.Block1 || option.ID == message.Block2 {
 			continue
 		}
-		// RFC 9175 defines request matching without elective NoCacheKey options.
-		if option.ID&0x05 == 0x04 {
+		// RFC 9175 §3.3 matches requests without elective NoCacheKey options (RFC 7252 §5.4.6).
+		if option.ID&0x1f == 0x1c {
 			continue
 		}
 		var optionHeader [10]byte
@@ -351,7 +374,7 @@ func (b *BlockWise[C]) resolveBlock1ExchangeKey(r *pool.Message, remoteAddr net.
 		return exchangeKey, nil
 	}
 	expectedOffset := num * szx.Size()
-	requestKey := getBlock1RequestExchangeKey(r, remoteAddr)
+	requestKey := getRequestMatchingKey(r, remoteAddr)
 	matchingKey, matches, err := b.findMatchingBlock1Transfer(r, remoteAddr, requestKey, expectedOffset)
 	if err != nil {
 		return 0, err
@@ -382,7 +405,7 @@ func (b *BlockWise[C]) findMatchingBlock1Transfer(r *pool.Message, remoteAddr ne
 			scanErr = err
 			return false
 		}
-		candidateKey := getBlock1RequestExchangeKey(guard.Message, remoteAddr)
+		candidateKey := getRequestMatchingKey(guard.Message, remoteAddr)
 		if candidateKey != requestKey {
 			guard.Release(1)
 			return true
@@ -405,12 +428,38 @@ func (b *BlockWise[C]) findMatchingBlock1Transfer(r *pool.Message, remoteAddr ne
 	return matchingKey, matches, nil
 }
 
+// isBlock2Continuation reports whether r requests a later block of a representation (RFC 7959 §2.4).
+// Block2 num 0 starts a new request, e.g. early block size negotiation.
+func isBlock2Continuation(r *pool.Message) bool {
+	block, err := r.GetOptionUint32(message.Block2)
+	if err != nil {
+		return false
+	}
+	_, num, _, err := DecodeBlockOption(block)
+	return err == nil && num > 0
+}
+
+// mayResumeBlock2 reports whether r can continue a stored Block2 response.
+// An observe registration always starts a new transfer.
+func mayResumeBlock2(r *pool.Message) bool {
+	switch r.Code() {
+	case codes.POST, codes.PUT:
+		return isBlock2Continuation(r)
+	case codes.GET:
+		return !r.HasOption(message.Observe) && isBlock2Continuation(r)
+	}
+	return false
+}
+
+// resolveBlock2ExchangeKey finds the Block2 transfer continued by a request with a
+// changed token. A GET continuation is optional state: when it cannot be resolved
+// unambiguously, the handler regenerates the representation (RFC 7959 §2.4).
 func (b *BlockWise[C]) resolveBlock2ExchangeKey(r *pool.Message, remoteAddr net.Addr, exchangeKey uint64) (uint64, error) {
-	if (r.Code() != codes.POST && r.Code() != codes.PUT) || !r.HasOption(message.Block2) ||
-		b.sendingMessagesCache.Load(exchangeKey) != nil || remoteAddr == nil {
+	if !mayResumeBlock2(r) || b.sendingMessagesCache.Load(exchangeKey) != nil || remoteAddr == nil {
 		return exchangeKey, nil
 	}
-	requestKey := getBlock1RequestExchangeKey(r, remoteAddr)
+	isGet := r.Code() == codes.GET
+	requestKey := getRequestMatchingKey(r, remoteAddr)
 	now := time.Now()
 	var matchingKey uint64
 	matches := 0
@@ -429,6 +478,9 @@ func (b *BlockWise[C]) resolveBlock2ExchangeKey(r *pool.Message, remoteAddr net.
 		return matches < 2
 	})
 	if matches > 1 {
+		if isGet {
+			return exchangeKey, nil
+		}
 		return 0, errors.New("cannot identify Block2 continuation: multiple transfers match")
 	}
 	if matches == 1 {
@@ -521,12 +573,38 @@ func (b *BlockWise[C]) WriteMessage(request *pool.Message, maxSZX SZX, maxMessag
 		return fmt.Errorf("cannot get exchange key from request(%v): %w", request, err)
 	}
 
+	if isObserveResponse(request) && remoteAddr != nil {
+		b.invalidateGetTransfers(remoteAddr.String())
+	}
 	w := newWriteRequestResponse(b.cc, request)
-	err = b.startSendingMessage(w, maxSZX, maxMessageSize, startSendingMessageBlock, exchangeKey, 0)
+	err = b.startSendingMessage(w, maxSZX, maxMessageSize, startSendingMessageBlock, exchangeKey, sendingMatch{})
 	if err != nil {
 		return fmt.Errorf("cannot start writing request: %w", err)
 	}
 	return writeMessage(w.Message())
+}
+
+// invalidateGetTransfers is called when a notification announces a new representation
+// (RFC 7641 §4.2). Continuations of notifications (RFC 7959 §2.6, §3.4) must not be
+// resumed from an older GET response: transfers keyed by the request itself
+// (tokenless) are dropped, others are only kept for continuations with their own token.
+func (b *BlockWise[C]) invalidateGetTransfers(endpoint string) {
+	var drop []uint64
+	b.sendingMessagesCache.Range(func(key uint64, element *cache.Element[*sendingMessage]) bool {
+		sending := element.Data()
+		sending.mutex.Lock()
+		if sending.requestCode == codes.GET && sending.endpoint == endpoint && sending.matchingKey != 0 {
+			if key == sending.matchingKey {
+				drop = append(drop, key)
+			}
+			sending.matchingKey = 0
+		}
+		sending.mutex.Unlock()
+		return true
+	})
+	for _, key := range drop {
+		b.sendingMessagesCache.Delete(key)
+	}
 }
 
 func fitSZX(r *pool.Message, blockType message.OptionID, maxSZX SZX) SZX {
@@ -677,17 +755,50 @@ func (b *BlockWise[C]) handleReceivedMessage(w *responsewriter.ResponseWriter[C]
 			return errP
 		}
 	default:
+		if r.Code() >= codes.Created {
+			// Block1 in a response only acknowledges the request transfer (RFC 7959 §2.3).
+			r.Remove(message.Block1)
+		}
 		maxSZX = fitSZX(r, message.Block2, maxSZX)
 		errP := b.processReceivedMessage(w, r, maxSZX, next, exchangeKey, message.Block2, message.Size2)
 		if errP != nil {
 			return errP
 		}
 	}
-	var matchingKey uint64
-	if remoteAddr != nil && (r.Code() == codes.POST || r.Code() == codes.PUT) {
-		matchingKey = getBlock1RequestExchangeKey(r, remoteAddr)
+	var match sendingMatch
+	if remoteAddr != nil && (r.Code() == codes.GET || r.Code() == codes.POST || r.Code() == codes.PUT) {
+		match = sendingMatch{key: getRequestMatchingKey(r, remoteAddr), code: r.Code(), endpoint: remoteAddr.String()}
 	}
-	return b.startSendingMessage(w, maxSZX, maxMessageSize, startSendingMessageBlock, exchangeKey, matchingKey)
+	if err = b.startSendingMessage(w, maxSZX, maxMessageSize, startSendingMessageBlock, exchangeKey, match); err != nil {
+		return err
+	}
+	echoFinalBlock1(w.Message(), r)
+	return nil
+}
+
+// echoFinalBlock1 adds the Block1 option of the last request block to the final
+// response (RFC 7959 §2.3, §3.2). It is set after startSendingMessage so the
+// stored Block2 response body does not carry Block1 in follow-up blocks.
+func echoFinalBlock1(resp, r *pool.Message) {
+	if r.Code() != codes.POST && r.Code() != codes.PUT {
+		return
+	}
+	block, err := r.GetOptionUint32(message.Block1)
+	if err != nil {
+		return
+	}
+	_, _, more, err := DecodeBlockOption(block)
+	if err != nil || more {
+		return
+	}
+	switch resp.Code() {
+	case codes.Empty, codes.Continue, codes.RequestEntityIncomplete, codes.RequestEntityTooLarge:
+		return
+	}
+	if resp.HasOption(message.Block1) {
+		return
+	}
+	resp.SetOptionUint32(message.Block1, block)
 }
 
 func (b *BlockWise[C]) createSendingMessage(sendingMessage *pool.Message, maxSZX SZX, maxMessageSize uint32, block uint32) (sendMessage *pool.Message, more bool, err error) {
@@ -797,6 +908,10 @@ func (b *BlockWise[C]) continueSendingMessage(w *responsewriter.ResponseWriter[C
 	if err != nil {
 		return false, fmt.Errorf("handleSendingMessage: cannot create sending message: %w", err)
 	}
+	if isRequestCode(r.Code()) {
+		// the continuation may use a new token, the response must echo it (RFC 7252 §5.3.2)
+		sendMessage.SetToken(r.Token())
+	}
 	w.SetMessage(sendMessage)
 	return more, err
 }
@@ -809,7 +924,7 @@ func isObserveResponse(msg *pool.Message) bool {
 	return msg.Code() >= codes.Created
 }
 
-func (b *BlockWise[C]) startSendingMessage(w *responsewriter.ResponseWriter[C], maxSZX SZX, maxMessageSize uint32, block uint32, exchangeKey, matchingKey uint64) error {
+func (b *BlockWise[C]) startSendingMessage(w *responsewriter.ResponseWriter[C], maxSZX SZX, maxMessageSize uint32, block uint32, exchangeKey uint64, match sendingMatch) error {
 	payloadSize, err := w.Message().BodySize()
 	if err != nil {
 		return payloadSizeError(err)
@@ -833,7 +948,9 @@ func (b *BlockWise[C]) startSendingMessage(w *responsewriter.ResponseWriter[C], 
 		expire = time.Now().Add(b.expiration)
 	}
 	sending := newSendingMessage(originalSendingMessage)
-	sending.matchingKey = matchingKey
+	sending.matchingKey = match.key
+	sending.requestCode = match.code
+	sending.endpoint = match.endpoint
 	el, loaded := b.sendingMessagesCache.LoadOrStore(exchangeKey, cache.NewElement(sending, expire, nil))
 	if loaded {
 		defer b.cc.ReleaseMessage(originalSendingMessage)

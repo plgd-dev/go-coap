@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -32,7 +33,7 @@ func TestConnGetBlockwise(t *testing.T) {
 		args              args
 		wantCode          codes.Code
 		wantContentFormat *message.MediaType
-		wantPayload       interface{}
+		wantPayload       []byte
 		wantErr           bool
 		useToken          bool
 	}{
@@ -43,7 +44,7 @@ func TestConnGetBlockwise(t *testing.T) {
 			},
 			wantCode:          codes.Content,
 			wantContentFormat: &message.TextPlain,
-			wantPayload:       bigPayload10KiB,
+			wantPayload:       []byte(bigPayload10KiB),
 			wantErr:           false,
 			useToken:          true,
 		},
@@ -54,7 +55,7 @@ func TestConnGetBlockwise(t *testing.T) {
 			},
 			wantCode:          codes.Content,
 			wantContentFormat: &message.TextPlain,
-			wantPayload:       bigPayload10KiB,
+			wantPayload:       []byte(bigPayload10KiB),
 			wantErr:           false,
 			useToken:          false,
 		},
@@ -78,7 +79,9 @@ func TestConnGetBlockwise(t *testing.T) {
 
 	m := mux.NewRouter()
 
+	var handlerCalls atomic.Int32
 	err = m.Handle(libcoapBlockwisePath, mux.HandlerFunc(func(w mux.ResponseWriter, r *mux.Message) {
+		handlerCalls.Add(1)
 		assert.Equal(t, codes.GET, r.Code())
 		errS := w.SetResponse(codes.Content, message.AppOctets, bytes.NewReader([]byte(bigPayload10KiB)))
 		require.NoError(t, errS)
@@ -108,6 +111,7 @@ func TestConnGetBlockwise(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			laddr := l.LocalAddr().String()
+			handlerCalls.Store(0)
 			receivedBody, err := sendCoAPRequestLibCoAP(laddr, "get", tt.args.path, false, tt.useToken)
 			if tt.wantErr {
 				require.Error(t, err)
@@ -115,12 +119,12 @@ func TestConnGetBlockwise(t *testing.T) {
 			}
 			require.NoError(t, err)
 			if tt.wantPayload != nil {
-				if wantPayloadBytes, ok := tt.wantPayload.([]byte); ok {
-					// add 1 for the extra newline added by coap-client
-					require.Len(t, receivedBody, len(wantPayloadBytes)+1)
-					require.Equal(t, wantPayloadBytes, receivedBody[0:len(wantPayloadBytes)])
-				}
+				// add 1 for the extra newline added by coap-client
+				require.Len(t, receivedBody, len(tt.wantPayload)+1)
+				require.Equal(t, tt.wantPayload, receivedBody[0:len(tt.wantPayload)])
 			}
+			// libcoap changes the token per block, the continuations resume the stored representation
+			require.Equal(t, int32(1), handlerCalls.Load())
 		})
 	}
 }
@@ -311,6 +315,112 @@ func TestConnPostBlockwise(t *testing.T) {
 				// add 1 for the extra newline added by coap-client
 				require.Len(t, receivedBody, len(tt.wantPayload)+1)
 				require.Equal(t, tt.wantPayload, receivedBody[0:len(tt.wantPayload)])
+			}
+		})
+	}
+}
+
+// libcoapObserveServer serves /obs: the registration response, notifications and
+// a final response without Observe, which ends the observation (RFC 7641 §3.2).
+type libcoapObserveServer struct {
+	t        *testing.T
+	payloads [][]byte
+	current  atomic.Int32
+	wg       sync.WaitGroup
+}
+
+func (o *libcoapObserveServer) handle(w mux.ResponseWriter, r *mux.Message) {
+	obs, err := r.Options().Observe()
+	if err != nil || obs != 0 {
+		// deregistration or Block2 follow-up (RFC 7959 §2.6)
+		assert.NoError(o.t, w.SetResponse(codes.Content, message.TextPlain, bytes.NewReader(o.payloads[o.current.Load()])))
+		return
+	}
+	o.wg.Add(1)
+	go o.notify(w.Conn(), append(message.Token(nil), r.Token()...))
+	assert.NoError(o.t, w.SetResponse(codes.Content, message.TextPlain, bytes.NewReader(o.payloads[0]), message.Option{ID: message.Observe, Value: []byte{2}}))
+}
+
+func (o *libcoapObserveServer) notify(cc mux.Conn, token message.Token) {
+	defer o.wg.Done()
+	for i := 1; i < len(o.payloads); i++ {
+		time.Sleep(100 * time.Millisecond)
+		o.current.Store(int32(i))
+		msg := cc.AcquireMessage(cc.Context())
+		msg.SetCode(codes.Content)
+		msg.SetToken(token)
+		msg.SetContentFormat(message.TextPlain)
+		if i < len(o.payloads)-1 {
+			msg.SetObserve(uint32(i + 2))
+		}
+		msg.SetBody(bytes.NewReader(o.payloads[i]))
+		err := cc.WriteMessage(msg)
+		cc.ReleaseMessage(msg)
+		if err != nil {
+			return
+		}
+	}
+}
+
+func startLibCoAPObserveServer(t *testing.T, payloadSize int) (string, [][]byte) {
+	// registration response, two notifications and a final response without Observe
+	o := &libcoapObserveServer{t: t, payloads: make([][]byte, 4)}
+	for i := range o.payloads {
+		// distinct, position-dependent content detects mixed or misordered blocks
+		o.payloads[i] = []byte(bigPayload10KiB[i*100 : i*100+payloadSize])
+	}
+	l, err := coapNet.NewListenUDP("udp", "127.0.0.1:0")
+	require.NoError(t, err)
+	m := mux.NewRouter()
+	require.NoError(t, m.Handle("/obs", mux.HandlerFunc(o.handle)))
+	s := NewServer(options.WithMux(m))
+	o.wg.Add(1)
+	go func() {
+		defer o.wg.Done()
+		assert.NoError(t, s.Serve(l))
+	}()
+	t.Cleanup(func() {
+		s.Stop()
+		o.wg.Wait()
+		assert.NoError(t, l.Close())
+	})
+	return l.LocalAddr().String(), o.payloads
+}
+
+func TestConnObserveLibCoAP(t *testing.T) {
+	_, err := exec.LookPath("coap-client")
+	if err != nil {
+		t.Skip("coap-client not found in PATH")
+		return
+	}
+	tests := []struct {
+		name        string
+		payloadSize int
+		useToken    bool
+	}{
+		{name: "small-with-token", payloadSize: 16, useToken: true},
+		{name: "small-without-token", payloadSize: 16},
+		{name: "blockwise-with-token", payloadSize: 3000, useToken: true},
+		{name: "blockwise-without-token", payloadSize: 3000},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			addr, payloads := startLibCoAPObserveServer(t, tt.payloadSize)
+
+			// coap-client measures -s and -B on the wall clock, which can jump (e.g. WSL2
+			// time sync moves it ~2s forward). A long -s keeps the observation alive until
+			// the final response; -B 3 still leaves time for the ~0.3s of notifications.
+			args := []string{"-m", "get", "-s", "10", "-B", "3"}
+			if tt.useToken {
+				args = append(args, "-T", strconv.FormatUint(rand.Uint64()&0xffffffff, 16))
+			}
+			args = append(args, "coap://"+addr+"/obs")
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			out, err := exec.CommandContext(ctx, "coap-client", args...).CombinedOutput()
+			require.NoError(t, err, string(out))
+			for i, payload := range payloads {
+				require.True(t, bytes.Contains(out, payload), "notification %d missing in output", i)
 			}
 		})
 	}

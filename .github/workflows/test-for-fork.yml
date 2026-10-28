@@ -27,9 +27,15 @@ jobs:
           if [ "${{ matrix.os }}" == "ubuntu-latest" ]; then
             sudo apt-get update
             sudo apt-get install -y libcoap3-bin
-            sudo ln -s /usr/bin/coap-client-notls /usr/bin/coap-client 
+            sudo ln -sf /usr/bin/coap-client-notls /usr/bin/coap-client
           elif [ "${{ matrix.os }}" == "macOS-latest" ]; then
             brew install libcoap
+          fi
+          if [ "${{ matrix.os }}" != "windows-latest" ]; then
+            # fail instead of silently skipping the libcoap tests
+            command -v coap-client
+            coap-client -h 2>&1 | head -n 1 || true
+            test -x "$(command -v coap-client)"
           fi
         shell: bash
 
