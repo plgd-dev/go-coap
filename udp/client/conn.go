@@ -223,6 +223,7 @@ type Conn struct {
 
 	tokenHandlerContainer *coapSync.Map[uint64, HandlerFunc]
 	midHandlerContainer   *coapSync.Map[int32, *midElement]
+	tokenlessHandler      client.TokenlessHandler[HandlerFunc]
 	msgID                 atomic.Uint32
 	blockwiseSZX          blockwise.SZX
 
@@ -419,26 +420,16 @@ func (cc *Conn) Close() error {
 	return err
 }
 
-func (cc *Conn) doInternal(req *pool.Message) (*pool.Message, error) {
-	token := req.Token()
-	if token == nil {
-		return nil, errors.New("invalid token")
-	}
-
-	respChan := make(chan *pool.Message, 1)
-	if _, loaded := cc.tokenHandlerContainer.LoadOrStore(token.Hash(), func(_ *responsewriter.ResponseWriter[*Conn], r *pool.Message) {
-		r.Hijack()
-		select {
-		case respChan <- r:
-		default:
-		}
-	}); loaded {
-		return nil, fmt.Errorf("cannot add token(%v) handler: %w", token, coapErrors.ErrKeyAlreadyExists)
+func (cc *Conn) doInternal(req *pool.Message) (_ *pool.Message, err error) {
+	respChan, removeHandler, err := client.RegisterRequestHandler(req.Token(), cc.tokenHandlerContainer, &cc.tokenlessHandler)
+	if err != nil {
+		return nil, err
 	}
 	defer func() {
-		_, _ = cc.tokenHandlerContainer.LoadAndDelete(token.Hash())
+		err = removeHandler(err)
 	}()
-	err := cc.writeMessage(req)
+
+	err = cc.writeMessage(req)
 	if err != nil {
 		return nil, fmt.Errorf(errFmtWriteRequest, err)
 	}
@@ -561,7 +552,7 @@ func (cc *Conn) writeMessageAsync(req *pool.Message) error {
 		// do nothing
 	})
 	if err != nil {
-		return err
+		return &client.RequestNotSentError{Err: err}
 	}
 	defer closeFn()
 	if err := cc.session.WriteMessage(req); err != nil {
@@ -583,7 +574,7 @@ func (cc *Conn) writeMessage(req *pool.Message) error {
 		close(respChan)
 	})
 	if err != nil {
-		return err
+		return &client.RequestNotSentError{Err: err}
 	}
 	defer closeFn()
 	if err := cc.session.WriteMessage(req); err != nil {
@@ -692,21 +683,25 @@ func (cc *Conn) handle(w *responsewriter.ResponseWriter[*Conn], m *pool.Message)
 		// msg was processed by token handler - just drop it.
 		return
 	}
-	if cc.blockWise != nil {
-		cc.blockWise.Handle(w, m, cc.blockwiseSZX, cc.session.MaxMessageSize(), cc.RemoteAddr(), func(rw *responsewriter.ResponseWriter[*Conn], rm *pool.Message) {
-			if h, ok := cc.tokenHandlerContainer.LoadAndDelete(rm.Token().Hash()); ok {
+	handleResponse := func(rw *responsewriter.ResponseWriter[*Conn], rm *pool.Message) {
+		if len(rm.Token()) == 0 && rm.Code() >= codes.Created {
+			if h, ok := cc.tokenlessHandler.Load(true); ok {
 				h(rw, rm)
 				return
 			}
-			cc.observationHandler.Handle(rw, rm)
+		} else if h, ok := cc.tokenHandlerContainer.LoadAndDelete(rm.Token().Hash()); ok {
+			h(rw, rm)
+			return
+		}
+		cc.observationHandler.Handle(rw, rm)
+	}
+	if cc.blockWise != nil {
+		cc.blockWise.Handle(w, m, cc.blockwiseSZX, cc.session.MaxMessageSize(), cc.RemoteAddr(), func(rw *responsewriter.ResponseWriter[*Conn], rm *pool.Message) {
+			handleResponse(rw, rm)
 		})
 		return
 	}
-	if h, ok := cc.tokenHandlerContainer.LoadAndDelete(m.Token().Hash()); ok {
-		h(w, m)
-		return
-	}
-	cc.observationHandler.Handle(w, m)
+	handleResponse(w, m)
 }
 
 // Sequence acquires sequence number.

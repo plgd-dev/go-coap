@@ -22,7 +22,7 @@ jobs:
 
       - run: go version
 
-      - name: Install coap-client
+      - name: Install libcoap tools
         run: |
           if [ "${{ matrix.os }}" == "ubuntu-latest" ]; then
             sudo apt-get update
@@ -36,6 +36,7 @@ jobs:
             command -v coap-client
             coap-client -h 2>&1 | head -n 1 || true
             test -x "$(command -v coap-client)"
+            command -v coap-server || command -v coap-server-notls
           fi
         shell: bash
 

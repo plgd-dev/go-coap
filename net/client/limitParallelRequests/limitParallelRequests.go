@@ -107,6 +107,12 @@ func (c *LimitParallelRequests) releaseEndpoint(endpointLimitKey uint64) {
 	})
 }
 
+// Do sends a request and returns its response. Set the request token to nil to
+// send a tokenless request. Only one such request can be outstanding per
+// connection because its response cannot be correlated by token.
+// If a tokenless request may have been sent but fails without a response,
+// further tokenless requests are blocked to prevent late-response miscorrelation. Recreate the connection
+// to unblock tokenless requests; token-based requests remain usable.
 func (c *LimitParallelRequests) Do(req *pool.Message) (*pool.Message, error) {
 	endpointLimitKey := hash(req.Options())
 	if err := c.acquireEndpoint(req.Context(), endpointLimitKey); err != nil {

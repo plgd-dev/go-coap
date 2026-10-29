@@ -267,7 +267,7 @@ func (s *Session) respondUnknownCriticalOptions(req *pool.Message, unknownCritic
 func (s *Session) WriteMessage(req *pool.Message) error {
 	data, err := req.MarshalWithEncoder(coder.DefaultCoder)
 	if err != nil {
-		return fmt.Errorf("cannot marshal: %w", err)
+		return &netClient.RequestNotSentError{Err: fmt.Errorf("cannot marshal: %w", err)}
 	}
 	err = s.connection.WriteWithContext(req.Context(), data)
 	if err != nil {

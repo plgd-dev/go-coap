@@ -277,6 +277,9 @@ func (b *BlockWise[C]) Do(r *pool.Message, maxSzx SZX, maxMessageSize uint32, re
 	_, loaded := b.sendingMessagesCache.LoadOrStore(exchangeKey, cache.NewElement(sending, expire, nil))
 	if loaded {
 		sending.mutex.Unlock()
+		if len(r.Token()) == 0 {
+			return nil, errors.New("tokenless request already in progress")
+		}
 		return nil, errors.New("invalid token")
 	}
 	defer func() {
