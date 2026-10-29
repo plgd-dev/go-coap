@@ -11,6 +11,7 @@ import (
 	"github.com/plgd-dev/go-coap/v3/message"
 	"github.com/plgd-dev/go-coap/v3/message/pool"
 	coapNet "github.com/plgd-dev/go-coap/v3/net"
+	netClient "github.com/plgd-dev/go-coap/v3/net/client"
 	"github.com/plgd-dev/go-coap/v3/udp/client"
 	"github.com/plgd-dev/go-coap/v3/udp/coder"
 )
@@ -123,7 +124,7 @@ func (s *Session) Context() context.Context {
 func (s *Session) WriteMessage(req *pool.Message) error {
 	data, err := req.MarshalWithEncoder(coder.DefaultCoder)
 	if err != nil {
-		return fmt.Errorf("cannot marshal: %w", err)
+		return &netClient.RequestNotSentError{Err: fmt.Errorf("cannot marshal: %w", err)}
 	}
 	return s.connection.WriteWithOptions(data, coapNet.WithContext(req.Context()), coapNet.WithRemoteAddr(s.raddr), coapNet.WithControlMessage(req.ControlMessage()))
 }

@@ -404,6 +404,55 @@ func TestConnGet(t *testing.T) {
 	testParallelConnGet(t, 1)
 }
 
+func TestConnPostWithoutToken(t *testing.T) {
+	l, err := coapNet.NewListenUDP("udp", "")
+	require.NoError(t, err)
+	defer func() {
+		require.NoError(t, l.Close())
+	}()
+
+	payload := bytes.Repeat([]byte("payload"), 500)
+	receivedBody := make(chan []byte, 1)
+	m := mux.NewRouter()
+	require.NoError(t, m.Handle("/tokenless", mux.HandlerFunc(func(w mux.ResponseWriter, r *mux.Message) {
+		require.Empty(t, r.Token())
+		body, readErr := r.ReadBody()
+		require.NoError(t, readErr)
+		receivedBody <- body
+		require.NoError(t, w.SetResponse(codes.Changed, message.TextPlain, bytes.NewReader([]byte("ok"))))
+	})))
+
+	s := udp.NewServer(options.WithMux(m))
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		assert.NoError(t, s.Serve(l))
+	}()
+	defer wg.Wait()
+	defer s.Stop()
+
+	cc, err := udp.Dial(l.LocalAddr().String())
+	require.NoError(t, err)
+	defer func() {
+		require.NoError(t, cc.Close())
+	}()
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
+	defer cancel()
+	req, err := cc.NewPostRequest(ctx, "/tokenless", message.AppOctets, bytes.NewReader(payload))
+	require.NoError(t, err)
+	defer cc.ReleaseMessage(req)
+	req.SetToken(nil)
+
+	resp, err := cc.Do(req)
+	require.NoError(t, err)
+	defer cc.ReleaseMessage(resp)
+	require.Equal(t, codes.Changed, resp.Code())
+	require.Empty(t, resp.Token())
+	require.Equal(t, payload, <-receivedBody)
+}
+
 func TestConnGetSeparateMessage(t *testing.T) {
 	l, err := coapNet.NewListenUDP("udp", "")
 	require.NoError(t, err)

@@ -50,6 +50,7 @@ type Conn struct {
 	observationHandler              *observation.Handler[*Conn]
 	processReceivedMessage          func(req *pool.Message, cc *Conn, handler HandlerFunc)
 	tokenHandlerContainer           *coapSync.Map[uint64, HandlerFunc]
+	tokenlessHandler                client.TokenlessHandler[HandlerFunc]
 	blockWise                       *blockwise.BlockWise[*Conn]
 	blockwiseSZX                    blockwise.SZX
 	peerMaxMessageSize              atomic.Uint32
@@ -168,25 +169,16 @@ func (cc *Conn) Close() error {
 	return err
 }
 
-func (cc *Conn) doInternal(req *pool.Message) (*pool.Message, error) {
-	token := req.Token()
-	if token == nil {
-		return nil, errors.New("invalid token")
-	}
-	respChan := make(chan *pool.Message, 1)
-	if _, loaded := cc.tokenHandlerContainer.LoadOrStore(token.Hash(), func(_ *responsewriter.ResponseWriter[*Conn], r *pool.Message) {
-		r.Hijack()
-		select {
-		case respChan <- r:
-		default:
-		}
-	}); loaded {
-		return nil, fmt.Errorf("cannot add token handler: %w", coapErrors.ErrKeyAlreadyExists)
+func (cc *Conn) doInternal(req *pool.Message) (_ *pool.Message, err error) {
+	respChan, removeHandler, err := client.RegisterRequestHandler(req.Token(), cc.tokenHandlerContainer, &cc.tokenlessHandler)
+	if err != nil {
+		return nil, err
 	}
 	defer func() {
-		_, _ = cc.tokenHandlerContainer.LoadAndDelete(token.Hash())
+		err = removeHandler(err)
 	}()
-	if err := cc.session.WriteMessage(req); err != nil {
+
+	if err = cc.session.WriteMessage(req); err != nil {
 		return nil, fmt.Errorf("cannot write request: %w", err)
 	}
 
@@ -354,7 +346,21 @@ func (cc *Conn) ProcessReceivedMessageWithHandler(req *pool.Message, handler Han
 }
 
 func (cc *Conn) blockwiseHandle(w *responsewriter.ResponseWriter[*Conn], r *pool.Message) {
-	if h, ok := cc.tokenHandlerContainer.Load(r.Token().Hash()); ok {
+	cc.handleResponse(w, r, false)
+}
+
+func (cc *Conn) handleResponse(w *responsewriter.ResponseWriter[*Conn], r *pool.Message, removeHandler bool) {
+	if len(r.Token()) == 0 && r.Code() >= codes.Created {
+		if h, ok := cc.tokenlessHandler.Load(removeHandler); ok {
+			h(w, r)
+			return
+		}
+	} else if removeHandler {
+		if h, ok := cc.tokenHandlerContainer.LoadAndDelete(r.Token().Hash()); ok {
+			h(w, r)
+			return
+		}
+	} else if h, ok := cc.tokenHandlerContainer.Load(r.Token().Hash()); ok {
 		h(w, r)
 		return
 	}
@@ -366,11 +372,7 @@ func (cc *Conn) handle(w *responsewriter.ResponseWriter[*Conn], r *pool.Message)
 		cc.blockWise.Handle(w, r, cc.blockwiseSZX, cc.Session().maxMessageSize, cc.RemoteAddr(), cc.blockwiseHandle)
 		return
 	}
-	if h, ok := cc.tokenHandlerContainer.LoadAndDelete(r.Token().Hash()); ok {
-		h(w, r)
-		return
-	}
-	cc.observationHandler.Handle(w, r)
+	cc.handleResponse(w, r, true)
 }
 
 func (cc *Conn) sendPong(token message.Token) error {

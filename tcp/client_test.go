@@ -146,6 +146,51 @@ func TestConnGet(t *testing.T) {
 	}
 }
 
+func TestConnGetWithoutToken(t *testing.T) {
+	l, err := coapNet.NewTCPListener("tcp", "")
+	require.NoError(t, err)
+	defer func() {
+		require.NoError(t, l.Close())
+	}()
+	var wg sync.WaitGroup
+	defer wg.Wait()
+
+	m := mux.NewRouter()
+	require.NoError(t, m.Handle("/tokenless", mux.HandlerFunc(func(w mux.ResponseWriter, r *mux.Message) {
+		require.Empty(t, r.Token())
+		require.NoError(t, w.SetResponse(codes.Content, message.TextPlain, bytes.NewReader([]byte("ok"))))
+	})))
+	s := NewServer(options.WithMux(m))
+	defer s.Stop()
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		assert.NoError(t, s.Serve(l))
+	}()
+
+	cc, err := Dial(l.Addr().String())
+	require.NoError(t, err)
+	defer func() {
+		require.NoError(t, cc.Close())
+		<-cc.Done()
+	}()
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
+	defer cancel()
+	req, err := cc.NewGetRequest(ctx, "/tokenless")
+	require.NoError(t, err)
+	defer cc.ReleaseMessage(req)
+	req.SetToken(nil)
+
+	resp, err := cc.Do(req)
+	require.NoError(t, err)
+	defer cc.ReleaseMessage(resp)
+	require.Equal(t, codes.Content, resp.Code())
+	require.Empty(t, resp.Token())
+	require.Equal(t, []byte("ok"), bodyToBytes(t, resp.Body()))
+}
+
 func TestConnPost(t *testing.T) {
 	type args struct {
 		path          string
