@@ -4,7 +4,6 @@
 [![Quality Gate Status](https://sonarcloud.io/api/project_badges/measure?project=plgd-dev_go-coap&metric=alert_status)](https://sonarcloud.io/summary/new_code?id=plgd-dev_go-coap)
 [![Coverage](https://img.shields.io/sonar/coverage/plgd-dev_go-coap?server=https%3A%2F%2Fsonarcloud.io)](https://sonarcloud.io/summary/overall?id=plgd-dev_go-coap)
 [![FOSSA Status](https://app.fossa.io/api/projects/git%2Bgithub.com%2Fplgd-dev%2Fgo-coap.svg?type=shield)](https://app.fossa.io/projects/git%2Bgithub.com%2Fplgd-dev%2Fgo-coap?ref=badge_shield)
-[![sponsors](https://opencollective.com/go-coap/sponsors/badge.svg)](https://opencollective.com/go-coap#sponsors)
 [![contributors](https://img.shields.io/github/contributors/plgd-dev/go-coap)](https://github.com/plgd-dev/go-coap/graphs/contributors)
 [![GitHub stars](https://img.shields.io/github/stars/plgd-dev/go-coap)](https://github.com/plgd-dev/go-coap/stargazers)
 [![GitHub license](https://img.shields.io/github/license/plgd-dev/go-coap)](https://github.com/plgd-dev/go-coap/blob/master/LICENSE)
@@ -179,20 +178,8 @@ Apache 2.0
 
 [![FOSSA Status](https://app.fossa.io/api/projects/git%2Bgithub.com%2Fplgd-dev%2Fgo-coap.svg?type=large)](https://app.fossa.io/projects/git%2Bgithub.com%2Fplgd-dev%2Fgo-coap?ref=badge_large)
 
-<!-- markdownlint-disable MD033 -->
+## Support go-coap
 
-<h2 align="center">Sponsors</h2>
+If go-coap is useful to you, you can buy us a coffee for $3 or choose another amount.
 
-[Become a sponsor](https://opencollective.com/go-coap#sponsor) and get your logo on our README on Github with a link to your site.
-
-<div align="center">
-
-<a href="https://opencollective.com/go-coap/sponsor/0/website?requireActive=false" target="_blank"><img src="https://opencollective.com/go-coap/sponsor/0/avatar.svg?requireActive=false"></a>
-
-</div>
-
-<h2 align="center">Backers</h2>
-
-[Become a backer](https://opencollective.com/go-coap#backer) and get your image on our README on Github with a link to your site.
-
-<a href="https://opencollective.com/go-coap/backer/0/website?requireActive=false" target="_blank"><img src="https://opencollective.com/go-coap/backer/0/avatar.svg?requireActive=false"></a>
+- **By card:** [Sponsor plgd-dev on GitHub](https://github.com/sponsors/plgd-dev) and choose a one-time $3 sponsorship or enter a custom amount. This requires GitHub Sponsors to be enabled for the `plgd-dev` organization.
