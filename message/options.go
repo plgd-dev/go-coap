@@ -556,6 +556,11 @@ func (options *Options) Unmarshal(data []byte, optionDefs map[OptionID]OptionDef
 	processed := 0
 	for len(data) > 0 {
 		if data[0] == 0xff {
+			// RFC 7252 section 3.1: a payload marker followed by a zero-length
+			// payload must be processed as a message format error.
+			if len(data) == 1 {
+				return -1, ErrPayloadMarkerWithoutPayload
+			}
 			processed++
 			break
 		}

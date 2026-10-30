@@ -111,6 +111,15 @@ func TestDecodeHeaderRejectsReservedTokenLength(t *testing.T) {
 	}
 }
 
+func TestDecodeRejectsPayloadMarkerWithoutPayload(t *testing.T) {
+	// Len=1 (one byte after the header), TKL=0 | Code=GET | payload marker with no
+	// payload. RFC 7252 section 3.1 requires this to be a message format error.
+	data := []byte{0x10, byte(codes.GET), 0xff}
+	msg := message.Message{Options: make(message.Options, 0, 16)}
+	_, err := DefaultCoder.Decode(data, &msg)
+	require.ErrorIs(t, err, message.ErrPayloadMarkerWithoutPayload)
+}
+
 func FuzzDecode(f *testing.F) {
 	f.Add([]byte{211, 0, 1, 1, 2, 3, 177, 97, 1, 98, 1, 99, 1, 100, 1, 101, 16, 255, 1})
 
