@@ -19,7 +19,7 @@ jobs:
         uses: actions/checkout@v7
 
       - name: Set up Go from go.mod
-        uses: actions/setup-go@v6
+        uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
           # Keep CI on the module's declared Go line instead of floating to new majors.
