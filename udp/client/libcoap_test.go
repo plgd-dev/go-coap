@@ -66,6 +66,7 @@ func TestConnPutBlockwiseWithoutTokenLibCoAP(t *testing.T) {
 
 	cc, err := udp.Dial(net.JoinHostPort("127.0.0.1", strconv.Itoa(port)),
 		options.WithBlockwise(true, blockwise.SZX1024, 5*time.Second),
+		options.WithTransmission(1, 200*time.Millisecond, 4, 1.5),
 	)
 	require.NoError(t, err)
 	defer func() {
