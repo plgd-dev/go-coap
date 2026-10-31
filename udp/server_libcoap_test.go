@@ -373,7 +373,10 @@ func startLibCoAPObserveServer(t *testing.T, payloadSize int) (string, [][]byte)
 	require.NoError(t, err)
 	m := mux.NewRouter()
 	require.NoError(t, m.Handle("/obs", mux.HandlerFunc(o.handle)))
-	s := NewServer(options.WithMux(m))
+	s := NewServer(
+		options.WithMux(m),
+		options.WithTransmission(1, 200*time.Millisecond, 4, 1.5),
+	)
 	o.wg.Add(1)
 	go func() {
 		defer o.wg.Done()

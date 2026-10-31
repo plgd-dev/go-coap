@@ -40,12 +40,13 @@ var DefaultConfig = func() Config {
 		OnNewConn: func(*udpClient.Conn) {
 			// do nothing by default
 		},
-		TransmissionNStart:             1,
-		TransmissionAcknowledgeTimeout: time.Second * 2,
-		TransmissionMaxRetransmit:      4,
-		HandshakeTimeout:               30 * time.Second,
-		GetMID:                         message.GetMID,
-		MTU:                            udpClient.DefaultMTU,
+		TransmissionNStart:                  1,
+		TransmissionAcknowledgeTimeout:      time.Second * 2,
+		TransmissionAcknowledgeRandomFactor: 1.5,
+		TransmissionMaxRetransmit:           4,
+		HandshakeTimeout:                    30 * time.Second,
+		GetMID:                              message.GetMID,
+		MTU:                                 udpClient.DefaultMTU,
 	}
 	opts.Handler = func(w *responsewriter.ResponseWriter[*udpClient.Conn], _ *pool.Message) {
 		if err := w.SetResponse(codes.NotFound, message.TextPlain, nil); err != nil {
@@ -57,14 +58,15 @@ var DefaultConfig = func() Config {
 
 type Config struct {
 	config.Common[*udpClient.Conn]
-	CreateInactivityMonitor        func() udpClient.InactivityMonitor
-	GetMID                         GetMIDFunc
-	Handler                        HandlerFunc
-	OnNewConn                      OnNewConnFunc
-	RequestMonitor                 udpClient.RequestMonitorFunc
-	TransmissionNStart             uint32
-	TransmissionAcknowledgeTimeout time.Duration
-	TransmissionMaxRetransmit      uint32
-	HandshakeTimeout               time.Duration
-	MTU                            uint16
+	CreateInactivityMonitor             func() udpClient.InactivityMonitor
+	GetMID                              GetMIDFunc
+	Handler                             HandlerFunc
+	OnNewConn                           OnNewConnFunc
+	RequestMonitor                      udpClient.RequestMonitorFunc
+	TransmissionNStart                  uint32
+	TransmissionAcknowledgeTimeout      time.Duration
+	TransmissionAcknowledgeRandomFactor float64
+	TransmissionMaxRetransmit           uint32
+	HandshakeTimeout                    time.Duration
+	MTU                                 uint16
 }

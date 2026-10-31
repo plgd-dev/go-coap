@@ -15,7 +15,7 @@ import (
 func TestUDPServerApply(t *testing.T) {
 	cfg := udpServer.Config{}
 	opt := []udpServer.Option{
-		options.WithTransmission(10, time.Second, 5),
+		options.WithTransmission(10, time.Second, 5, 2.0),
 		options.WithMTU(1500),
 	}
 	for _, o := range opt {
@@ -24,6 +24,7 @@ func TestUDPServerApply(t *testing.T) {
 	// WithTransmission
 	require.Equal(t, uint32(10), cfg.TransmissionNStart)
 	require.Equal(t, time.Second, cfg.TransmissionAcknowledgeTimeout)
+	require.Equal(t, 2.0, cfg.TransmissionAcknowledgeRandomFactor)
 	require.Equal(t, uint32(5), cfg.TransmissionMaxRetransmit)
 	// WithMTU
 	require.Equal(t, uint16(1500), cfg.MTU)
@@ -32,7 +33,7 @@ func TestUDPServerApply(t *testing.T) {
 func TestDTLSServerApply(t *testing.T) {
 	cfg := dtlsServer.Config{}
 	opt := []dtlsServer.Option{
-		options.WithTransmission(10, time.Second, 5),
+		options.WithTransmission(10, time.Second, 5, 2.0),
 		options.WithMTU(1500),
 		options.WithDTLSHandshakeTimeout(12 * time.Second),
 	}
@@ -42,6 +43,7 @@ func TestDTLSServerApply(t *testing.T) {
 	// WithTransmission
 	require.Equal(t, uint32(10), cfg.TransmissionNStart)
 	require.Equal(t, time.Second, cfg.TransmissionAcknowledgeTimeout)
+	require.Equal(t, 2.0, cfg.TransmissionAcknowledgeRandomFactor)
 	require.Equal(t, uint32(5), cfg.TransmissionMaxRetransmit)
 	// WithMTU
 	require.Equal(t, uint16(1500), cfg.MTU)
@@ -52,7 +54,7 @@ func TestDTLSServerApply(t *testing.T) {
 func TestUDPClientApply(t *testing.T) {
 	cfg := client.Config{}
 	opt := []udp.Option{
-		options.WithTransmission(10, time.Second, 5),
+		options.WithTransmission(10, time.Second, 5, 2.0),
 		options.WithMTU(1500),
 	}
 	for _, o := range opt {
@@ -61,6 +63,7 @@ func TestUDPClientApply(t *testing.T) {
 	// WithTransmission
 	require.Equal(t, uint32(10), cfg.TransmissionNStart)
 	require.Equal(t, time.Second, cfg.TransmissionAcknowledgeTimeout)
+	require.Equal(t, 2.0, cfg.TransmissionAcknowledgeRandomFactor)
 	require.Equal(t, uint32(5), cfg.TransmissionMaxRetransmit)
 	// WithMTU
 	require.Equal(t, uint16(1500), cfg.MTU)
