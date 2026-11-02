@@ -1229,8 +1229,11 @@ func (cc *Conn) ReleaseMessage(m *pool.Message) {
 }
 
 func (cc *Conn) deletePendingMessage(m *pool.Message, reqMessageID int32) {
-	if registeredMessageID, ok := cc.pendingMessageIDs.LoadAndDelete(m); ok {
-		reqMessageID = registeredMessageID.(int32)
+	if registeredMessageIDI, ok := cc.pendingMessageIDs.LoadAndDelete(m); ok {
+		registeredMessageID, ok := registeredMessageIDI.(int32)
+		if ok {
+			reqMessageID = registeredMessageID
+		}
 	}
 	cc.pendingMessages.CompareAndDelete(reqMessageID, m)
 }
