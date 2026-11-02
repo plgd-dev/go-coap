@@ -123,6 +123,7 @@ type midElement struct {
 	retransmitMu       sync.Mutex
 	retransmitting     bool
 	retransmitFailures uint32
+	waitForAcknowledge chan error
 
 	private struct {
 		sync.Mutex
@@ -567,11 +568,21 @@ func (cc *Conn) acquireOutstandingInteraction(ctx context.Context) error {
 	return nil
 }
 
-func (cc *Conn) waitForAcknowledge(req *pool.Message, waitForResponseChan chan struct{}) error {
+func notifyWaitForAcknowledge(waitForAcknowledge chan error, err error) {
+	if waitForAcknowledge == nil {
+		return
+	}
+	select {
+	case waitForAcknowledge <- err:
+	default:
+	}
+}
+
+func (cc *Conn) waitForAcknowledge(req *pool.Message, waitForResponseChan chan error) error {
 	cc.receivedMessageReader.TryToReplaceLoop()
 	select {
-	case <-waitForResponseChan:
-		return nil
+	case err := <-waitForResponseChan:
+		return err
 	case <-req.Context().Done():
 		return req.Context().Err()
 	case <-cc.Context().Done():
@@ -579,7 +590,7 @@ func (cc *Conn) waitForAcknowledge(req *pool.Message, waitForResponseChan chan s
 	}
 }
 
-func (cc *Conn) prepareWriteMessage(req *pool.Message, handler HandlerFunc) (func(), error) {
+func (cc *Conn) prepareWriteMessage(req *pool.Message, handler HandlerFunc, waitForAcknowledge chan error) (func(), error) {
 	var closeFns fn.FuncList
 
 	// Only confirmable messages ever match an message ID
@@ -604,6 +615,7 @@ func (cc *Conn) prepareWriteMessage(req *pool.Message, handler HandlerFunc) (fun
 			start:              time.Now(),
 			deadline:           deadline,
 			acknowledgeTimeout: cc.transmission.nextAcknowledgeTimeout(),
+			waitForAcknowledge: waitForAcknowledge,
 			private: struct {
 				sync.Mutex
 				msg *pool.Message
@@ -629,7 +641,7 @@ func (cc *Conn) writeMessageAsync(req *pool.Message) error {
 	req.UpsertMessageID(cc.GetMessageID())
 	closeFn, err := cc.prepareWriteMessage(req, func(*responsewriter.ResponseWriter[*Conn], *pool.Message) {
 		// do nothing
-	})
+	}, nil)
 	if err != nil {
 		return &client.RequestNotSentError{Err: err}
 	}
@@ -648,10 +660,10 @@ func (cc *Conn) writeMessage(req *pool.Message) error {
 	if req.Type() != message.Confirmable {
 		return cc.writeMessageAsync(req)
 	}
-	respChan := make(chan struct{})
+	respChan := make(chan error, 1)
 	closeFn, err := cc.prepareWriteMessage(req, func(*responsewriter.ResponseWriter[*Conn], *pool.Message) {
-		close(respChan)
-	})
+		notifyWaitForAcknowledge(respChan, nil)
+	}, respChan)
 	if err != nil {
 		return &client.RequestNotSentError{Err: err}
 	}
@@ -1132,6 +1144,7 @@ func (cc *Conn) checkMidHandlerContainer(now time.Time, maxRetransmit uint32, ke
 		err := cc.session.WriteMessage(msg)
 		if err != nil {
 			if value.MarkRetransmissionFailed(maxRetransmit) {
+				notifyWaitForAcknowledge(value.waitForAcknowledge, err)
 				cc.midHandlerContainer.Delete(key)
 				value.ReleaseMessage(cc)
 			}

@@ -84,9 +84,11 @@ func TestMidElementRepeatedRetransmissionFailuresAreBounded(t *testing.T) {
 		mid           = 1
 		maxRetransmit = 2
 	)
+	waitForAcknowledge := make(chan error, 1)
 	element := &midElement{
 		start:              time.Now().Add(-time.Second),
 		acknowledgeTimeout: 100 * time.Millisecond,
+		waitForAcknowledge: waitForAcknowledge,
 		private: struct {
 			sync.Mutex
 			msg *pool.Message
@@ -98,6 +100,10 @@ func TestMidElementRepeatedRetransmissionFailuresAreBounded(t *testing.T) {
 	for range maxRetransmit {
 		cc.checkMidHandlerContainer(now, maxRetransmit, mid, element)
 	}
+
+	req := cc.AcquireMessage(context.Background())
+	defer cc.ReleaseMessage(req)
+	require.ErrorIs(t, cc.waitForAcknowledge(req, waitForAcknowledge), context.DeadlineExceeded)
 
 	_, ok := cc.midHandlerContainer.Load(mid)
 	require.False(t, ok)
