@@ -98,3 +98,42 @@ func TestConnDropsPendingDuplicates(t *testing.T) {
 		})
 	}
 }
+
+func TestConnPendingDuplicateCustomProcessor(t *testing.T) {
+	for _, name := range []string{"synchronous", "asynchronous"} {
+		t.Run(name, func(t *testing.T) {
+			session := newRecordingSession()
+			defer func() { require.NoError(t, session.Close()) }()
+			completed := make(chan struct{}, 1)
+			cfg := DefaultConfig
+			cfg.ProcessReceivedMessage = func(req *pool.Message, cc *Conn, _ config.HandlerFunc[*Conn]) {
+				release := func() {
+					cc.ReleaseMessage(req)
+					completed <- struct{}{}
+				}
+				if name == "asynchronous" {
+					go release()
+				} else {
+					release()
+				}
+			}
+			cc := NewConnWithOpts(session, &cfg)
+			req := cc.AcquireMessage(context.Background())
+			defer cc.ReleaseMessage(req)
+			req.SetType(message.Confirmable)
+			req.SetCode(codes.GET)
+			req.SetToken([]byte{1})
+			req.SetMessageID(42)
+			datagram, err := req.MarshalWithEncoder(coder.DefaultCoder)
+			require.NoError(t, err)
+			for i := 0; i < 2; i++ {
+				require.NoError(t, cc.Process(nil, datagram))
+				select {
+				case <-completed:
+				case <-time.After(time.Second):
+					t.Fatal("released message ID remained pending")
+				}
+			}
+		})
+	}
+}

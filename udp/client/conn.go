@@ -285,7 +285,7 @@ type Conn struct {
 
 	tokenHandlerContainer *coapSync.Map[uint64, HandlerFunc]
 	midHandlerContainer   *coapSync.Map[int32, *midElement]
-	pendingMessages       *coapSync.Map[int32, struct{}]
+	pendingMessages       sync.Map
 	tokenlessHandler      client.TokenlessHandler[HandlerFunc]
 	msgID                 atomic.Uint32
 	blockwiseSZX          blockwise.SZX
@@ -444,7 +444,6 @@ func NewConnWithOpts(session Session, cfg *Config, opts ...Option) *Conn {
 
 		tokenHandlerContainer:     coapSync.NewMap[uint64, HandlerFunc](),
 		midHandlerContainer:       coapSync.NewMap[int32, *midElement](),
-		pendingMessages:           coapSync.NewMap[int32, struct{}](),
 		processReceivedMessage:    cfg.ProcessReceivedMessage,
 		errors:                    cfg.Errors,
 		msgIDMutex:                NewMutexMap(),
@@ -943,10 +942,9 @@ func (cc *Conn) closeConnection() {
 }
 
 func (cc *Conn) ProcessReceivedMessageWithHandler(req *pool.Message, handler config.HandlerFunc[*Conn]) {
-	if req.Type() == message.Confirmable || req.Type() == message.NonConfirmable {
-		defer cc.pendingMessages.Delete(req.MessageID())
-	}
+	reqMessageID := req.MessageID()
 	defer func() {
+		cc.pendingMessages.CompareAndDelete(reqMessageID, req)
 		if !req.IsHijacked() {
 			cc.ReleaseMessage(req)
 		}
@@ -1098,7 +1096,7 @@ func (cc *Conn) Process(cm *coapNet.ControlMessage, datagram []byte) error {
 	}
 	if req.Type() == message.Confirmable || req.Type() == message.NonConfirmable {
 		// Retransmissions received before the response is sent need no queued reply.
-		if _, loaded := cc.pendingMessages.LoadOrStore(req.MessageID(), struct{}{}); loaded {
+		if _, loaded := cc.pendingMessages.LoadOrStore(req.MessageID(), req); loaded {
 			cc.ReleaseMessage(req)
 			return nil
 		}
@@ -1106,9 +1104,6 @@ func (cc *Conn) Process(cm *coapNet.ControlMessage, datagram []byte) error {
 	select {
 	case cc.receivedMessageReader.C() <- req:
 	case <-cc.Context().Done():
-		if req.Type() == message.Confirmable || req.Type() == message.NonConfirmable {
-			cc.pendingMessages.Delete(req.MessageID())
-		}
 		cc.ReleaseMessage(req)
 	}
 	return nil
@@ -1216,6 +1211,7 @@ func (cc *Conn) AcquireMessage(ctx context.Context) *pool.Message {
 }
 
 func (cc *Conn) ReleaseMessage(m *pool.Message) {
+	cc.pendingMessages.CompareAndDelete(m.MessageID(), m)
 	cc.messagePool.ReleaseMessage(m)
 }
 
