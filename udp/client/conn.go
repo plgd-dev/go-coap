@@ -1055,6 +1055,24 @@ func newMalformedMessageError(err error, datagram []byte, req *pool.Message) *Ma
 	return malformedErr
 }
 
+func (cc *Conn) processUnknownCriticalOptions(req *pool.Message) (bool, error) {
+	if (req.Type() != message.Confirmable && req.Type() != message.NonConfirmable) || req.Code() < codes.GET || req.Code() > codes.DELETE {
+		return false, nil
+	}
+	unknownCriticalOpts := client.GetUnknownCriticalOptions(req.Options())
+	if len(unknownCriticalOpts) == 0 {
+		return false, nil
+	}
+	var err error
+	if req.Type() == message.Confirmable {
+		// RFC 7252 section 5.4.1: a NON message with an unrecognized critical
+		// option must be rejected (section 4.3), so it is dropped without a reply.
+		err = cc.respondUnknownCriticalOptions(req, unknownCriticalOpts)
+	}
+	cc.ReleaseMessage(req)
+	return true, err
+}
+
 func (cc *Conn) Process(cm *coapNet.ControlMessage, datagram []byte) error {
 	if pkgMath.CastTo[uint32](len(datagram)) > cc.session.MaxMessageSize() {
 		return fmt.Errorf("max message size(%v) was exceeded %v", cc.session.MaxMessageSize(), len(datagram))
@@ -1068,17 +1086,8 @@ func (cc *Conn) Process(cm *coapNet.ControlMessage, datagram []byte) error {
 	}
 	req.SetControlMessage(cm)
 	req.SetSequence(cc.Sequence())
-	if (req.Type() == message.Confirmable || req.Type() == message.NonConfirmable) && req.Code() >= codes.GET && req.Code() <= codes.DELETE {
-		unknownCriticalOpts := client.GetUnknownCriticalOptions(req.Options())
-		if len(unknownCriticalOpts) > 0 {
-			// RFC 7252 section 5.4.1: a NON message with an unrecognized critical
-			// option must be rejected (section 4.3), so it is dropped without a reply.
-			if req.Type() == message.Confirmable {
-				err = cc.respondUnknownCriticalOptions(req, unknownCriticalOpts)
-			}
-			cc.ReleaseMessage(req)
-			return err
-		}
+	if handled, processErr := cc.processUnknownCriticalOptions(req); handled {
+		return processErr
 	}
 	cc.checkMyMessageID(req)
 	drop, err := cc.requestMonitor(cc, req)
