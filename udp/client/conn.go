@@ -122,6 +122,7 @@ type midElement struct {
 	retransmit         atomic.Uint32
 	retransmitMu       sync.Mutex
 	retransmitting     bool
+	retransmitFailures uint32
 
 	private struct {
 		sync.Mutex
@@ -165,10 +166,13 @@ func (m *midElement) MarkRetransmitted(now time.Time) {
 	m.retransmitMu.Unlock()
 }
 
-func (m *midElement) MarkRetransmissionFailed() {
+func (m *midElement) MarkRetransmissionFailed(maxRetransmit uint32) bool {
 	m.retransmitMu.Lock()
+	m.retransmitFailures++
+	exhausted := m.retransmitFailures >= maxRetransmit
 	m.retransmitting = false
 	m.retransmitMu.Unlock()
+	return exhausted
 }
 
 func retransmissionDelay(acknowledgeTimeout time.Duration, retransmit uint32) time.Duration {
@@ -1127,7 +1131,10 @@ func (cc *Conn) checkMidHandlerContainer(now time.Time, maxRetransmit uint32, ke
 		defer cc.ReleaseMessage(msg)
 		err := cc.session.WriteMessage(msg)
 		if err != nil {
-			value.MarkRetransmissionFailed()
+			if value.MarkRetransmissionFailed(maxRetransmit) {
+				cc.midHandlerContainer.Delete(key)
+				value.ReleaseMessage(cc)
+			}
 			cc.errors(fmt.Errorf(errFmtWriteRequest, err))
 			return
 		}

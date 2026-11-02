@@ -76,6 +76,37 @@ func TestMidElementFailedRetransmissionDoesNotAdvanceBackoff(t *testing.T) {
 	require.Equal(t, uint32(1), element.retransmit.Load())
 }
 
+func TestMidElementRepeatedRetransmissionFailuresAreBounded(t *testing.T) {
+	cc, session := newTestConnWithSession(t)
+	session.setWriteError(context.DeadlineExceeded)
+	msg := cc.AcquireMessage(context.Background())
+	const (
+		mid           = 1
+		maxRetransmit = 2
+	)
+	element := &midElement{
+		start:              time.Now().Add(-time.Second),
+		acknowledgeTimeout: 100 * time.Millisecond,
+		private: struct {
+			sync.Mutex
+			msg *pool.Message
+		}{msg: msg},
+	}
+	cc.midHandlerContainer.Store(mid, element)
+
+	now := time.Now()
+	for range maxRetransmit {
+		cc.checkMidHandlerContainer(now, maxRetransmit, mid, element)
+	}
+
+	_, ok := cc.midHandlerContainer.Load(mid)
+	require.False(t, ok)
+	require.Zero(t, element.retransmit.Load())
+	element.private.Lock()
+	require.Nil(t, element.private.msg)
+	element.private.Unlock()
+}
+
 type inactivityMonitorRecorder struct {
 	checks int
 }
