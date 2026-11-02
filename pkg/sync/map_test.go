@@ -1,6 +1,7 @@
 package sync
 
 import (
+	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -99,6 +100,41 @@ func TestLoadOrStore(t *testing.T) {
 	value, loaded := m.LoadOrStore(1, "first")
 	require.True(t, loaded)
 	require.NotEqual(t, "first", value)
+}
+
+// TestLoadOrStoreConcurrent checks that concurrent LoadOrStore calls for the
+// same key are atomic: exactly one caller stores its value (loaded=false) and
+// every other caller observes that stored value (loaded=true). Callers such as
+// the token, message-ID and observation handler registries use loaded to reject
+// duplicate keys, so a non-atomic LoadOrStore would let two callers both store
+// and lose one value.
+func TestLoadOrStoreConcurrent(t *testing.T) {
+	for attempt := 0; attempt < 1000; attempt++ {
+		m := NewMap[int, int]()
+		const goroutines = 8
+		var start, done sync.WaitGroup
+		start.Add(1)
+		results := make([]bool, goroutines)
+		for i := range goroutines {
+			done.Add(1)
+			go func(idx int) {
+				defer done.Done()
+				start.Wait()
+				_, loaded := m.LoadOrStore(1, idx)
+				results[idx] = loaded
+			}(i)
+		}
+		start.Done()
+		done.Wait()
+
+		stored := 0
+		for _, loaded := range results {
+			if !loaded {
+				stored++
+			}
+		}
+		require.Equal(t, 1, stored, "exactly one caller must store the value")
+	}
 }
 
 func testRange(t *testing.T, m *Map[int, string], rangeFn func(f func(key int, value string) bool)) {
