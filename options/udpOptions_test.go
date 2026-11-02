@@ -24,7 +24,7 @@ func TestUDPServerApply(t *testing.T) {
 	// WithTransmission
 	require.Equal(t, uint32(10), cfg.TransmissionNStart)
 	require.Equal(t, time.Second, cfg.TransmissionAcknowledgeTimeout)
-	require.Equal(t, 2.0, cfg.TransmissionAcknowledgeRandomFactor)
+	require.InDelta(t, 2.0, cfg.TransmissionAcknowledgeRandomFactor, 1e-9)
 	require.Equal(t, uint32(5), cfg.TransmissionMaxRetransmit)
 	// WithMTU
 	require.Equal(t, uint16(1500), cfg.MTU)
@@ -43,7 +43,7 @@ func TestDTLSServerApply(t *testing.T) {
 	// WithTransmission
 	require.Equal(t, uint32(10), cfg.TransmissionNStart)
 	require.Equal(t, time.Second, cfg.TransmissionAcknowledgeTimeout)
-	require.Equal(t, 2.0, cfg.TransmissionAcknowledgeRandomFactor)
+	require.InDelta(t, 2.0, cfg.TransmissionAcknowledgeRandomFactor, 1e-9)
 	require.Equal(t, uint32(5), cfg.TransmissionMaxRetransmit)
 	// WithMTU
 	require.Equal(t, uint16(1500), cfg.MTU)
@@ -63,7 +63,7 @@ func TestUDPClientApply(t *testing.T) {
 	// WithTransmission
 	require.Equal(t, uint32(10), cfg.TransmissionNStart)
 	require.Equal(t, time.Second, cfg.TransmissionAcknowledgeTimeout)
-	require.Equal(t, 2.0, cfg.TransmissionAcknowledgeRandomFactor)
+	require.InDelta(t, 2.0, cfg.TransmissionAcknowledgeRandomFactor, 1e-9)
 	require.Equal(t, uint32(5), cfg.TransmissionMaxRetransmit)
 	// WithMTU
 	require.Equal(t, uint16(1500), cfg.MTU)

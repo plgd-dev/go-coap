@@ -1,12 +1,12 @@
 package client
 
 import (
+	"math"
 	"testing"
 	"time"
 
-	"go.uber.org/atomic"
-
 	"github.com/stretchr/testify/require"
+	"go.uber.org/atomic"
 )
 
 func TestMidElementRetransmitExponentialBackoff(t *testing.T) {
@@ -35,4 +35,24 @@ func TestTransmissionNextAcknowledgeTimeoutRandomFactor(t *testing.T) {
 		require.GreaterOrEqual(t, timeout, 100*time.Millisecond)
 		require.Less(t, timeout, 150*time.Millisecond)
 	}
+}
+
+func TestTransmissionNextAcknowledgeTimeoutInvalidFactor(t *testing.T) {
+	for _, factor := range []float64{math.NaN(), math.Inf(1)} {
+		transmission := Transmission{
+			acknowledgeTimeout:      atomic.NewDuration(100 * time.Millisecond),
+			acknowledgeRandomFactor: atomic.NewFloat64(factor),
+		}
+
+		require.Equal(t, 100*time.Millisecond, transmission.nextAcknowledgeTimeout())
+	}
+}
+
+func TestTransmissionNextAcknowledgeTimeoutDurationLimit(t *testing.T) {
+	transmission := Transmission{
+		acknowledgeTimeout:      atomic.NewDuration(time.Duration(math.MaxInt64)),
+		acknowledgeRandomFactor: atomic.NewFloat64(2),
+	}
+
+	require.Equal(t, time.Duration(math.MaxInt64), transmission.nextAcknowledgeTimeout())
 }

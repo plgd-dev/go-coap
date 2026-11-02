@@ -294,8 +294,15 @@ func (t *Transmission) nextAcknowledgeTimeout() time.Duration {
 	if timeout <= 0 || factor <= 1 {
 		return timeout
 	}
+	if math.IsNaN(factor) || math.IsInf(factor, 0) {
+		return timeout
+	}
 	random := float64(retransmissionRNG.Uint32()) / (1 << 32)
-	return time.Duration(float64(timeout) * (1 + random*(factor-1)))
+	randomizedTimeout := float64(timeout) * (1 + random*(factor-1))
+	if randomizedTimeout >= float64(math.MaxInt64) {
+		return time.Duration(math.MaxInt64)
+	}
+	return time.Duration(randomizedTimeout)
 }
 
 type ConnOptions struct {
