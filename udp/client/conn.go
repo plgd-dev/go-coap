@@ -1156,7 +1156,15 @@ func (cc *Conn) checkMidHandlerContainer(now time.Time, maxRetransmit uint32, ke
 		return
 	}
 	if value.MarkRetransmissionFailed(maxRetransmit) {
-		if removed, ok := cc.midHandlerContainer.LoadAndDelete(key); ok && removed == value {
+		removed := false
+		cc.midHandlerContainer.ReplaceWithFunc(key, func(current *midElement, loaded bool) (*midElement, bool) {
+			if loaded && current == value {
+				removed = true
+				return current, true
+			}
+			return current, !loaded
+		})
+		if removed {
 			notifyWaitForAcknowledge(value.waitForAcknowledge, err)
 			value.ReleaseMessage(cc)
 		}
