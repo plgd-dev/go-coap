@@ -28,11 +28,11 @@ var DefaultConfig = func() Config {
 	opts := Config{
 		Common: config.NewCommon[*udpClient.Conn](),
 		CreateInactivityMonitor: func() udpClient.InactivityMonitor {
-			timeout := time.Second * 60
+			timeout := time.Second * 16
 			onInactive := func(cc *udpClient.Conn) {
 				_ = cc.Close()
 			}
-			return inactivity.New(timeout, onInactive)
+			return udpClient.DeferInactivityWhileConfirmableMessagesPending(inactivity.New(timeout, onInactive))
 		},
 		RequestMonitor: func(*udpClient.Conn, *pool.Message) (bool, error) {
 			return false, nil

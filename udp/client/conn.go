@@ -52,6 +52,23 @@ type InactivityMonitor interface {
 	CheckInactivity(now time.Time, cc *Conn)
 }
 
+type pendingConfirmableInactivityMonitor struct {
+	InactivityMonitor
+}
+
+// DeferInactivityWhileConfirmableMessagesPending postpones inactivity checks
+// until all outstanding Confirmable messages have completed.
+func DeferInactivityWhileConfirmableMessagesPending(monitor InactivityMonitor) InactivityMonitor {
+	return pendingConfirmableInactivityMonitor{InactivityMonitor: monitor}
+}
+
+func (m pendingConfirmableInactivityMonitor) CheckInactivity(now time.Time, cc *Conn) {
+	if cc.midHandlerContainer.Length() > 0 {
+		return
+	}
+	m.InactivityMonitor.CheckInactivity(now, cc)
+}
+
 // MalformedMessageError contains best-effort CoAP header metadata extracted
 // during decode failure. HasHeader indicates whether Type and MessageID are
 // valid and can be used by callers for protocol-level decisions.
@@ -144,6 +161,12 @@ func (m *midElement) MarkRetransmitted(now time.Time) {
 	m.retransmitMu.Lock()
 	m.start = now
 	m.retransmit.Inc()
+	m.retransmitting = false
+	m.retransmitMu.Unlock()
+}
+
+func (m *midElement) MarkRetransmissionFailed() {
+	m.retransmitMu.Lock()
 	m.retransmitting = false
 	m.retransmitMu.Unlock()
 }
@@ -1102,11 +1125,13 @@ func (cc *Conn) checkMidHandlerContainer(now time.Time, maxRetransmit uint32, ke
 	}
 	if ok {
 		defer cc.ReleaseMessage(msg)
-		defer value.MarkRetransmitted(time.Now())
 		err := cc.session.WriteMessage(msg)
 		if err != nil {
+			value.MarkRetransmissionFailed()
 			cc.errors(fmt.Errorf(errFmtWriteRequest, err))
+			return
 		}
+		value.MarkRetransmitted(time.Now())
 	} else {
 		value.MarkRetransmitted(time.Now())
 	}

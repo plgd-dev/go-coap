@@ -1,10 +1,14 @@
 package client
 
 import (
+	"context"
 	"math"
+	"sync"
 	"testing"
 	"time"
 
+	"github.com/plgd-dev/go-coap/v3/message/pool"
+	coapSync "github.com/plgd-dev/go-coap/v3/pkg/sync"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/atomic"
 )
@@ -41,6 +45,59 @@ func TestMidElementRetransmitDelayedExpirationCheck(t *testing.T) {
 	require.False(t, m.Retransmit(start.Add(8*time.Second)))
 	require.False(t, m.Retransmit(start.Add(9*time.Second)))
 	require.True(t, m.Retransmit(start.Add(9*time.Second+time.Millisecond)))
+}
+
+func TestMidElementFailedRetransmissionDoesNotAdvanceBackoff(t *testing.T) {
+	cc, session := newTestConnWithSession(t)
+	session.setWriteError(context.DeadlineExceeded)
+	msg := cc.AcquireMessage(context.Background())
+	const mid = 1
+	element := &midElement{
+		start:              time.Now().Add(-time.Second),
+		acknowledgeTimeout: 100 * time.Millisecond,
+		private: struct {
+			sync.Mutex
+			msg *pool.Message
+		}{msg: msg},
+	}
+	cc.midHandlerContainer.Store(mid, element)
+	defer func() {
+		cc.midHandlerContainer.Delete(mid)
+		element.ReleaseMessage(cc)
+	}()
+
+	now := time.Now()
+	cc.checkMidHandlerContainer(now, 4, mid, element)
+	require.Zero(t, element.retransmit.Load())
+	require.False(t, element.retransmitting)
+
+	session.setWriteError(nil)
+	cc.checkMidHandlerContainer(now, 4, mid, element)
+	require.Equal(t, uint32(1), element.retransmit.Load())
+}
+
+type inactivityMonitorRecorder struct {
+	checks int
+}
+
+func (m *inactivityMonitorRecorder) Notify() {}
+
+func (m *inactivityMonitorRecorder) CheckInactivity(time.Time, *Conn) {
+	m.checks++
+}
+
+func TestInactivityDeferredWhileConfirmableMessagesPending(t *testing.T) {
+	monitor := &inactivityMonitorRecorder{}
+	cc := Conn{midHandlerContainer: coapSync.NewMap[int32, *midElement]()}
+	wrapped := DeferInactivityWhileConfirmableMessagesPending(monitor)
+
+	cc.midHandlerContainer.Store(1, &midElement{})
+	wrapped.CheckInactivity(time.Now(), &cc)
+	require.Zero(t, monitor.checks)
+
+	cc.midHandlerContainer.Delete(1)
+	wrapped.CheckInactivity(time.Now(), &cc)
+	require.Equal(t, 1, monitor.checks)
 }
 
 func TestTransmissionNextAcknowledgeTimeoutRandomFactor(t *testing.T) {
