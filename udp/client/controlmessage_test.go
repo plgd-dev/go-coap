@@ -99,12 +99,14 @@ func TestUpsertControlInformationDoesNotOverrideExistingControlMessage(t *testin
 
 // recordingSession captures WriteMessage payloads for control-message assertions.
 type recordingSession struct {
-	mu      sync.Mutex
-	written []*pool.Message
-	ctx     context.Context
-	cancel  context.CancelFunc
-	raddr   *net.UDPAddr
-	done    chan struct{}
+	mu             sync.Mutex
+	written        []*pool.Message
+	ctx            context.Context
+	cancel         context.CancelFunc
+	raddr          *net.UDPAddr
+	done           chan struct{}
+	writeErr       error
+	writeErrorHook func()
 }
 
 func newRecordingSession() *recordingSession {
@@ -135,14 +137,30 @@ func (s *recordingSession) LocalAddr() net.Addr {
 func (s *recordingSession) NetConn() net.Conn { return nil }
 func (s *recordingSession) WriteMessage(req *pool.Message) error {
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	if s.writeErr != nil {
+		err := s.writeErr
+		hook := s.writeErrorHook
+		s.mu.Unlock()
+		if hook != nil {
+			hook()
+		}
+		return err
+	}
 	// Capture a snapshot of the control message; the pool may reuse the Message later.
 	cloned := pool.NewMessage(req.Context())
 	if err := req.Clone(cloned); err != nil {
+		s.mu.Unlock()
 		return err
 	}
 	s.written = append(s.written, cloned)
+	s.mu.Unlock()
 	return nil
+}
+
+func (s *recordingSession) setWriteError(err error) {
+	s.mu.Lock()
+	s.writeErr = err
+	s.mu.Unlock()
 }
 
 func (s *recordingSession) WriteMulticastMessage(*pool.Message, *net.UDPAddr, ...coapNet.MulticastOption) error {

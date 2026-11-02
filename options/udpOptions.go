@@ -10,39 +10,57 @@ import (
 
 // TransmissionOpt transmission options.
 type TransmissionOpt struct {
-	transmissionNStart             uint32
-	transmissionAcknowledgeTimeout time.Duration
-	transmissionMaxRetransmit      uint32
+	transmissionNStart                  uint32
+	transmissionAcknowledgeTimeout      time.Duration
+	transmissionAcknowledgeRandomFactor float64
+	hasAcknowledgeRandomFactor          bool
+	transmissionMaxRetransmit           uint32
 }
 
 func (o TransmissionOpt) UDPServerApply(cfg *udpServer.Config) {
 	cfg.TransmissionNStart = o.transmissionNStart
 	cfg.TransmissionAcknowledgeTimeout = o.transmissionAcknowledgeTimeout
+	if o.hasAcknowledgeRandomFactor {
+		cfg.TransmissionAcknowledgeRandomFactor = o.transmissionAcknowledgeRandomFactor
+	}
 	cfg.TransmissionMaxRetransmit = o.transmissionMaxRetransmit
 }
 
 func (o TransmissionOpt) DTLSServerApply(cfg *dtlsServer.Config) {
 	cfg.TransmissionNStart = o.transmissionNStart
 	cfg.TransmissionAcknowledgeTimeout = o.transmissionAcknowledgeTimeout
+	if o.hasAcknowledgeRandomFactor {
+		cfg.TransmissionAcknowledgeRandomFactor = o.transmissionAcknowledgeRandomFactor
+	}
 	cfg.TransmissionMaxRetransmit = o.transmissionMaxRetransmit
 }
 
 func (o TransmissionOpt) UDPClientApply(cfg *udpClient.Config) {
 	cfg.TransmissionNStart = o.transmissionNStart
 	cfg.TransmissionAcknowledgeTimeout = o.transmissionAcknowledgeTimeout
+	if o.hasAcknowledgeRandomFactor {
+		cfg.TransmissionAcknowledgeRandomFactor = o.transmissionAcknowledgeRandomFactor
+	}
 	cfg.TransmissionMaxRetransmit = o.transmissionMaxRetransmit
 }
 
-// WithTransmission set options for (re)transmission for Confirmable message-s.
+// WithTransmission sets options for (re)transmission of Confirmable messages.
+// The optional acknowledgeRandomFactor defaults to the value in the config (1.5).
 func WithTransmission(transmissionNStart uint32,
 	transmissionAcknowledgeTimeout time.Duration,
 	transmissionMaxRetransmit uint32,
+	acknowledgeRandomFactor ...float64,
 ) TransmissionOpt {
-	return TransmissionOpt{
+	opt := TransmissionOpt{
 		transmissionNStart:             transmissionNStart,
 		transmissionAcknowledgeTimeout: transmissionAcknowledgeTimeout,
 		transmissionMaxRetransmit:      transmissionMaxRetransmit,
 	}
+	if len(acknowledgeRandomFactor) > 0 {
+		opt.transmissionAcknowledgeRandomFactor = acknowledgeRandomFactor[0]
+		opt.hasAcknowledgeRandomFactor = true
+	}
+	return opt
 }
 
 // MTUOpt transmission options.

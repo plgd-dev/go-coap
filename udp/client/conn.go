@@ -26,6 +26,7 @@ import (
 	coapErrors "github.com/plgd-dev/go-coap/v3/pkg/errors"
 	"github.com/plgd-dev/go-coap/v3/pkg/fn"
 	pkgMath "github.com/plgd-dev/go-coap/v3/pkg/math"
+	pkgRand "github.com/plgd-dev/go-coap/v3/pkg/rand"
 	coapSync "github.com/plgd-dev/go-coap/v3/pkg/sync"
 	"github.com/plgd-dev/go-coap/v3/udp/coder"
 	"go.uber.org/atomic"
@@ -34,6 +35,8 @@ import (
 
 // https://datatracker.ietf.org/doc/html/rfc7252#section-4.8.2
 const ExchangeLifetime = 247 * time.Second
+
+var retransmissionRNG = pkgRand.NewRand(time.Now().UnixNano())
 
 type (
 	HandlerFunc                 = func(*responsewriter.ResponseWriter[*Conn], *pool.Message)
@@ -47,6 +50,23 @@ type (
 type InactivityMonitor interface {
 	Notify()
 	CheckInactivity(now time.Time, cc *Conn)
+}
+
+type pendingConfirmableInactivityMonitor struct {
+	InactivityMonitor
+}
+
+// DeferInactivityWhileConfirmableMessagesPending postpones inactivity checks
+// until all outstanding Confirmable messages have completed.
+func DeferInactivityWhileConfirmableMessagesPending(monitor InactivityMonitor) InactivityMonitor {
+	return pendingConfirmableInactivityMonitor{InactivityMonitor: monitor}
+}
+
+func (m pendingConfirmableInactivityMonitor) CheckInactivity(now time.Time, cc *Conn) {
+	if cc.midHandlerContainer.Length() > 0 {
+		return
+	}
+	m.InactivityMonitor.CheckInactivity(now, cc)
 }
 
 // MalformedMessageError contains best-effort CoAP header metadata extracted
@@ -95,10 +115,15 @@ const (
 )
 
 type midElement struct {
-	handler    HandlerFunc
-	start      time.Time
-	deadline   time.Time
-	retransmit atomic.Uint32
+	handler            HandlerFunc
+	start              time.Time
+	deadline           time.Time
+	acknowledgeTimeout time.Duration
+	retransmit         atomic.Uint32
+	retransmitMu       sync.Mutex
+	retransmitting     bool
+	retransmitFailures uint32
+	waitForAcknowledge chan error
 
 	private struct {
 		sync.Mutex
@@ -120,18 +145,55 @@ func (m *midElement) IsExpired(now time.Time, maxRetransmit uint32) bool {
 		// remove element if deadline is exceeded
 		return true
 	}
+	m.retransmitMu.Lock()
+	defer m.retransmitMu.Unlock()
 	retransmit := m.retransmit.Load()
-	return retransmit >= maxRetransmit
-}
-
-func (m *midElement) Retransmit(now time.Time, acknowledgeTimeout time.Duration) bool {
-	if now.After(m.start.Add(acknowledgeTimeout * time.Duration(m.retransmit.Load()+1))) {
-		m.retransmit.Inc()
-		// retransmit
+	if retransmit > maxRetransmit {
 		return true
 	}
-	// wait for next retransmit
-	return false
+	return retransmit == maxRetransmit &&
+		now.After(m.start.Add(retransmissionDelay(m.acknowledgeTimeout, retransmit)))
+}
+
+func (m *midElement) Retransmit(now time.Time) bool {
+	m.retransmitMu.Lock()
+	defer m.retransmitMu.Unlock()
+	if m.retransmitting || !now.After(m.start.Add(retransmissionDelay(m.acknowledgeTimeout, m.retransmit.Load()))) {
+		return false
+	}
+	m.retransmitting = true
+	return true
+}
+
+func (m *midElement) MarkRetransmitted(now time.Time) {
+	m.retransmitMu.Lock()
+	m.start = now
+	m.retransmit.Inc()
+	m.retransmitting = false
+	m.retransmitMu.Unlock()
+}
+
+func (m *midElement) MarkRetransmissionFailed(maxRetransmit uint32) bool {
+	m.retransmitMu.Lock()
+	m.retransmitFailures++
+	exhausted := m.retransmitFailures >= maxRetransmit
+	m.retransmitting = false
+	m.retransmitMu.Unlock()
+	return exhausted
+}
+
+func retransmissionDelay(acknowledgeTimeout time.Duration, retransmit uint32) time.Duration {
+	if acknowledgeTimeout <= 0 {
+		return acknowledgeTimeout
+	}
+	if retransmit >= 63 {
+		return time.Duration(math.MaxInt64)
+	}
+	multiplier := int64(1) << retransmit
+	if int64(acknowledgeTimeout) > math.MaxInt64/multiplier {
+		return time.Duration(math.MaxInt64)
+	}
+	return acknowledgeTimeout * time.Duration(multiplier)
 }
 
 func (m *midElement) GetMessage(cc *Conn) (*pool.Message, bool, error) {
@@ -243,9 +305,10 @@ type Conn struct {
 
 // Transmission is a threadsafe container for transmission related parameters
 type Transmission struct {
-	nStart             *atomic.Uint32
-	acknowledgeTimeout *atomic.Duration
-	maxRetransmit      *atomic.Uint32
+	nStart                  *atomic.Uint32
+	acknowledgeTimeout      *atomic.Duration
+	acknowledgeRandomFactor *atomic.Float64
+	maxRetransmit           *atomic.Uint32
 }
 
 // SetTransmissionNStart changing the nStart value will only effect requests queued after the change. The requests waiting here already before the change will get unblocked when enough weight has been released.
@@ -257,12 +320,33 @@ func (t *Transmission) SetTransmissionAcknowledgeTimeout(d time.Duration) {
 	t.acknowledgeTimeout.Store(d)
 }
 
+func (t *Transmission) SetTransmissionAcknowledgeRandomFactor(factor float64) {
+	t.acknowledgeRandomFactor.Store(factor)
+}
+
 func (t *Transmission) SetTransmissionMaxRetransmit(d uint32) {
 	t.maxRetransmit.Store(d)
 }
 
 func (cc *Conn) Transmission() *Transmission {
 	return cc.transmission
+}
+
+func (t *Transmission) nextAcknowledgeTimeout() time.Duration {
+	timeout := t.acknowledgeTimeout.Load()
+	factor := t.acknowledgeRandomFactor.Load()
+	if timeout <= 0 || factor <= 1 {
+		return timeout
+	}
+	if math.IsNaN(factor) || math.IsInf(factor, 0) {
+		return timeout
+	}
+	random := float64(retransmissionRNG.Uint32()) / (1 << 32)
+	randomizedTimeout := float64(timeout) * (1 + random*(factor-1))
+	if randomizedTimeout >= float64(math.MaxInt64) {
+		return time.Duration(math.MaxInt64)
+	}
+	return time.Duration(randomizedTimeout)
 }
 
 type ConnOptions struct {
@@ -350,9 +434,10 @@ func NewConnWithOpts(session Session, cfg *Config, opts ...Option) *Conn {
 	cc := Conn{
 		session: session,
 		transmission: &Transmission{
-			atomic.NewUint32(cfg.TransmissionNStart),
-			atomic.NewDuration(cfg.TransmissionAcknowledgeTimeout),
-			atomic.NewUint32(cfg.TransmissionMaxRetransmit),
+			nStart:                  atomic.NewUint32(cfg.TransmissionNStart),
+			acknowledgeTimeout:      atomic.NewDuration(cfg.TransmissionAcknowledgeTimeout),
+			acknowledgeRandomFactor: atomic.NewFloat64(cfg.TransmissionAcknowledgeRandomFactor),
+			maxRetransmit:           atomic.NewUint32(cfg.TransmissionMaxRetransmit),
 		},
 		blockwiseSZX: cfg.BlockwiseSZX,
 
@@ -489,11 +574,21 @@ func (cc *Conn) acquireOutstandingInteraction(ctx context.Context) error {
 	return nil
 }
 
-func (cc *Conn) waitForAcknowledge(req *pool.Message, waitForResponseChan chan struct{}) error {
+func notifyWaitForAcknowledge(waitForAcknowledge chan error, err error) {
+	if waitForAcknowledge == nil {
+		return
+	}
+	select {
+	case waitForAcknowledge <- err:
+	default:
+	}
+}
+
+func (cc *Conn) waitForAcknowledge(req *pool.Message, waitForResponseChan chan error) error {
 	cc.receivedMessageReader.TryToReplaceLoop()
 	select {
-	case <-waitForResponseChan:
-		return nil
+	case err := <-waitForResponseChan:
+		return err
 	case <-req.Context().Done():
 		return req.Context().Err()
 	case <-cc.Context().Done():
@@ -501,7 +596,7 @@ func (cc *Conn) waitForAcknowledge(req *pool.Message, waitForResponseChan chan s
 	}
 }
 
-func (cc *Conn) prepareWriteMessage(req *pool.Message, handler HandlerFunc) (func(), error) {
+func (cc *Conn) prepareWriteMessage(req *pool.Message, handler HandlerFunc, waitForAcknowledge chan error) (func(), error) {
 	var closeFns fn.FuncList
 
 	// Only confirmable messages ever match an message ID
@@ -522,9 +617,11 @@ func (cc *Conn) prepareWriteMessage(req *pool.Message, handler HandlerFunc) (fun
 		}
 		deadline, _ := req.Context().Deadline()
 		if _, loaded := cc.midHandlerContainer.LoadOrStore(req.MessageID(), &midElement{
-			handler:  handler,
-			start:    time.Now(),
-			deadline: deadline,
+			handler:            handler,
+			start:              time.Now(),
+			deadline:           deadline,
+			acknowledgeTimeout: cc.transmission.nextAcknowledgeTimeout(),
+			waitForAcknowledge: waitForAcknowledge,
 			private: struct {
 				sync.Mutex
 				msg *pool.Message
@@ -550,7 +647,7 @@ func (cc *Conn) writeMessageAsync(req *pool.Message) error {
 	req.UpsertMessageID(cc.GetMessageID())
 	closeFn, err := cc.prepareWriteMessage(req, func(*responsewriter.ResponseWriter[*Conn], *pool.Message) {
 		// do nothing
-	})
+	}, nil)
 	if err != nil {
 		return &client.RequestNotSentError{Err: err}
 	}
@@ -569,10 +666,10 @@ func (cc *Conn) writeMessage(req *pool.Message) error {
 	if req.Type() != message.Confirmable {
 		return cc.writeMessageAsync(req)
 	}
-	respChan := make(chan struct{})
+	respChan := make(chan error, 1)
 	closeFn, err := cc.prepareWriteMessage(req, func(*responsewriter.ResponseWriter[*Conn], *pool.Message) {
-		close(respChan)
-	})
+		notifyWaitForAcknowledge(respChan, nil)
+	}, respChan)
 	if err != nil {
 		return &client.RequestNotSentError{Err: err}
 	}
@@ -622,8 +719,9 @@ func (cc *Conn) AsyncPing(receivedPong func()) (func(), error) {
 				receivedPong()
 			}
 		},
-		start:    time.Now(),
-		deadline: time.Time{}, // no deadline
+		start:              time.Now(),
+		deadline:           time.Time{}, // no deadline
+		acknowledgeTimeout: cc.transmission.nextAcknowledgeTimeout(),
 		private: struct {
 			sync.Mutex
 			msg *pool.Message
@@ -1030,14 +1128,14 @@ func (cc *Conn) Done() <-chan struct{} {
 	return cc.session.Done()
 }
 
-func (cc *Conn) checkMidHandlerContainer(now time.Time, maxRetransmit uint32, acknowledgeTimeout time.Duration, key int32, value *midElement) {
+func (cc *Conn) checkMidHandlerContainer(now time.Time, maxRetransmit uint32, key int32, value *midElement) {
 	if value.IsExpired(now, maxRetransmit) {
 		cc.midHandlerContainer.Delete(key)
 		value.ReleaseMessage(cc)
 		cc.errors(fmt.Errorf(errFmtWriteRequest, context.DeadlineExceeded))
 		return
 	}
-	if !value.Retransmit(now, acknowledgeTimeout) {
+	if !value.Retransmit(now) {
 		return
 	}
 	msg, ok, err := value.GetMessage(cc)
@@ -1047,13 +1145,31 @@ func (cc *Conn) checkMidHandlerContainer(now time.Time, maxRetransmit uint32, ac
 		cc.errors(fmt.Errorf(errFmtWriteRequest, err))
 		return
 	}
-	if ok {
-		defer cc.ReleaseMessage(msg)
-		err := cc.session.WriteMessage(msg)
-		if err != nil {
-			cc.errors(fmt.Errorf(errFmtWriteRequest, err))
+	if !ok {
+		value.MarkRetransmitted(time.Now())
+		return
+	}
+	defer cc.ReleaseMessage(msg)
+	err = cc.session.WriteMessage(msg)
+	if err == nil {
+		value.MarkRetransmitted(time.Now())
+		return
+	}
+	if value.MarkRetransmissionFailed(maxRetransmit) {
+		removed := false
+		cc.midHandlerContainer.ReplaceWithFunc(key, func(current *midElement, loaded bool) (*midElement, bool) {
+			if loaded && current == value {
+				removed = true
+				return current, true
+			}
+			return current, !loaded
+		})
+		if removed {
+			notifyWaitForAcknowledge(value.waitForAcknowledge, err)
+			value.ReleaseMessage(cc)
 		}
 	}
+	cc.errors(fmt.Errorf(errFmtWriteRequest, err))
 }
 
 // CheckExpirations checks and remove expired items from caches.
@@ -1064,20 +1180,17 @@ func (cc *Conn) CheckExpirations(now time.Time) {
 		cc.blockWise.CheckExpirations(now)
 	}
 	maxRetransmit := cc.transmission.maxRetransmit.Load()
-	acknowledgeTimeout := cc.transmission.acknowledgeTimeout.Load()
 	x := struct {
-		now                time.Time
-		maxRetransmit      uint32
-		acknowledgeTimeout time.Duration
-		cc                 *Conn
+		now           time.Time
+		maxRetransmit uint32
+		cc            *Conn
 	}{
-		now:                now,
-		maxRetransmit:      maxRetransmit,
-		acknowledgeTimeout: acknowledgeTimeout,
-		cc:                 cc,
+		now:           now,
+		maxRetransmit: maxRetransmit,
+		cc:            cc,
 	}
 	cc.midHandlerContainer.Range(func(key int32, value *midElement) bool {
-		x.cc.checkMidHandlerContainer(x.now, x.maxRetransmit, x.acknowledgeTimeout, key, value)
+		x.cc.checkMidHandlerContainer(x.now, x.maxRetransmit, key, value)
 		return true
 	})
 }

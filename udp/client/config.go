@@ -24,13 +24,14 @@ var DefaultConfig = func() Config {
 		RequestMonitor: func(*Conn, *pool.Message) (bool, error) {
 			return false, nil
 		},
-		Dialer:                         &net.Dialer{Timeout: time.Second * 3},
-		Net:                            "udp",
-		TransmissionNStart:             1,
-		TransmissionAcknowledgeTimeout: time.Second * 2,
-		TransmissionMaxRetransmit:      4,
-		GetMID:                         message.GetMID,
-		MTU:                            DefaultMTU,
+		Dialer:                              &net.Dialer{Timeout: time.Second * 3},
+		Net:                                 "udp",
+		TransmissionNStart:                  1,
+		TransmissionAcknowledgeTimeout:      time.Second * 2,
+		TransmissionAcknowledgeRandomFactor: 1.5,
+		TransmissionMaxRetransmit:           4,
+		GetMID:                              message.GetMID,
+		MTU:                                 DefaultMTU,
 	}
 	opts.Handler = func(w *responsewriter.ResponseWriter[*Conn], r *pool.Message) {
 		switch r.Code() {
@@ -45,15 +46,16 @@ var DefaultConfig = func() Config {
 
 type Config struct {
 	config.Common[*Conn]
-	CreateInactivityMonitor        CreateInactivityMonitorFunc
-	RequestMonitor                 RequestMonitorFunc
-	Net                            string
-	GetMID                         GetMIDFunc
-	Handler                        HandlerFunc
-	Dialer                         *net.Dialer
-	TransmissionNStart             uint32
-	TransmissionAcknowledgeTimeout time.Duration
-	TransmissionMaxRetransmit      uint32
-	CloseSocket                    bool
-	MTU                            uint16
+	CreateInactivityMonitor             CreateInactivityMonitorFunc
+	RequestMonitor                      RequestMonitorFunc
+	Net                                 string
+	GetMID                              GetMIDFunc
+	Handler                             HandlerFunc
+	Dialer                              *net.Dialer
+	TransmissionNStart                  uint32
+	TransmissionAcknowledgeTimeout      time.Duration
+	TransmissionAcknowledgeRandomFactor float64
+	TransmissionMaxRetransmit           uint32
+	CloseSocket                         bool
+	MTU                                 uint16
 }
