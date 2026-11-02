@@ -145,8 +145,14 @@ func (m *midElement) IsExpired(now time.Time, maxRetransmit uint32) bool {
 		// remove element if deadline is exceeded
 		return true
 	}
+	m.retransmitMu.Lock()
+	defer m.retransmitMu.Unlock()
 	retransmit := m.retransmit.Load()
-	return retransmit >= maxRetransmit
+	if retransmit > maxRetransmit {
+		return true
+	}
+	return retransmit == maxRetransmit &&
+		now.After(m.start.Add(retransmissionDelay(m.acknowledgeTimeout, retransmit)))
 }
 
 func (m *midElement) Retransmit(now time.Time) bool {
@@ -1139,22 +1145,23 @@ func (cc *Conn) checkMidHandlerContainer(now time.Time, maxRetransmit uint32, ke
 		cc.errors(fmt.Errorf(errFmtWriteRequest, err))
 		return
 	}
-	if ok {
-		defer cc.ReleaseMessage(msg)
-		err := cc.session.WriteMessage(msg)
-		if err != nil {
-			if value.MarkRetransmissionFailed(maxRetransmit) {
-				notifyWaitForAcknowledge(value.waitForAcknowledge, err)
-				cc.midHandlerContainer.Delete(key)
-				value.ReleaseMessage(cc)
-			}
-			cc.errors(fmt.Errorf(errFmtWriteRequest, err))
-			return
-		}
+	if !ok {
 		value.MarkRetransmitted(time.Now())
-	} else {
-		value.MarkRetransmitted(time.Now())
+		return
 	}
+	defer cc.ReleaseMessage(msg)
+	err = cc.session.WriteMessage(msg)
+	if err == nil {
+		value.MarkRetransmitted(time.Now())
+		return
+	}
+	if value.MarkRetransmissionFailed(maxRetransmit) {
+		if removed, ok := cc.midHandlerContainer.LoadAndDelete(key); ok && removed == value {
+			notifyWaitForAcknowledge(value.waitForAcknowledge, err)
+			value.ReleaseMessage(cc)
+		}
+	}
+	cc.errors(fmt.Errorf(errFmtWriteRequest, err))
 }
 
 // CheckExpirations checks and remove expired items from caches.

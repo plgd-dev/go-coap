@@ -47,6 +47,20 @@ func TestMidElementRetransmitDelayedExpirationCheck(t *testing.T) {
 	require.True(t, m.Retransmit(start.Add(9*time.Second+time.Millisecond)))
 }
 
+func TestMidElementExpiresAfterFinalAcknowledgmentWait(t *testing.T) {
+	start := time.Now()
+	m := midElement{
+		start:              start,
+		acknowledgeTimeout: 2500 * time.Millisecond,
+	}
+	m.retransmit.Store(4)
+
+	finalAckDeadline := start.Add(40 * time.Second)
+	require.False(t, m.IsExpired(finalAckDeadline.Add(-time.Nanosecond), 4))
+	require.False(t, m.IsExpired(finalAckDeadline, 4))
+	require.True(t, m.IsExpired(finalAckDeadline.Add(time.Nanosecond), 4))
+}
+
 func TestMidElementFailedRetransmissionDoesNotAdvanceBackoff(t *testing.T) {
 	cc, session := newTestConnWithSession(t)
 	session.setWriteError(context.DeadlineExceeded)
@@ -74,6 +88,39 @@ func TestMidElementFailedRetransmissionDoesNotAdvanceBackoff(t *testing.T) {
 	session.setWriteError(nil)
 	cc.checkMidHandlerContainer(now, 4, mid, element)
 	require.Equal(t, uint32(1), element.retransmit.Load())
+}
+
+func TestRetransmissionFailureDoesNotOverrideAcknowledgment(t *testing.T) {
+	cc, session := newTestConnWithSession(t)
+	session.setWriteError(context.DeadlineExceeded)
+	msg := cc.AcquireMessage(context.Background())
+	const mid = 1
+	waitForAcknowledge := make(chan error, 1)
+	element := &midElement{
+		start:              time.Now().Add(-time.Second),
+		acknowledgeTimeout: 100 * time.Millisecond,
+		waitForAcknowledge: waitForAcknowledge,
+		private: struct {
+			sync.Mutex
+			msg *pool.Message
+		}{msg: msg},
+	}
+	cc.midHandlerContainer.Store(mid, element)
+	session.writeErrorHook = func() {
+		if acknowledged, ok := cc.midHandlerContainer.LoadAndDelete(mid); ok {
+			acknowledged.ReleaseMessage(cc)
+			notifyWaitForAcknowledge(acknowledged.waitForAcknowledge, nil)
+		}
+	}
+
+	cc.checkMidHandlerContainer(time.Now(), 4, mid, element)
+
+	require.NoError(t, <-waitForAcknowledge)
+	_, ok := cc.midHandlerContainer.Load(mid)
+	require.False(t, ok)
+	element.private.Lock()
+	require.Nil(t, element.private.msg)
+	element.private.Unlock()
 }
 
 func TestMidElementRepeatedRetransmissionFailuresAreBounded(t *testing.T) {
