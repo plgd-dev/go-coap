@@ -286,6 +286,7 @@ type Conn struct {
 	tokenHandlerContainer *coapSync.Map[uint64, HandlerFunc]
 	midHandlerContainer   *coapSync.Map[int32, *midElement]
 	pendingMessages       sync.Map
+	pendingMessageIDs     sync.Map
 	tokenlessHandler      client.TokenlessHandler[HandlerFunc]
 	msgID                 atomic.Uint32
 	blockwiseSZX          blockwise.SZX
@@ -944,10 +945,11 @@ func (cc *Conn) closeConnection() {
 func (cc *Conn) ProcessReceivedMessageWithHandler(req *pool.Message, handler config.HandlerFunc[*Conn]) {
 	reqMessageID := req.MessageID()
 	defer func() {
-		cc.pendingMessages.CompareAndDelete(reqMessageID, req)
-		if !req.IsHijacked() {
-			cc.ReleaseMessage(req)
+		if req.IsHijacked() {
+			cc.deletePendingMessage(req, reqMessageID)
+			return
 		}
+		cc.ReleaseMessage(req)
 	}()
 	resp := cc.AcquireMessage(cc.Context())
 	resp.SetToken(req.Token())
@@ -1105,10 +1107,12 @@ func (cc *Conn) Process(cm *coapNet.ControlMessage, datagram []byte) error {
 	}
 	if req.Type() == message.Confirmable || req.Type() == message.NonConfirmable {
 		// Retransmissions received before the response is sent need no queued reply.
-		if _, loaded := cc.pendingMessages.LoadOrStore(req.MessageID(), req); loaded {
+		reqMessageID := req.MessageID()
+		if _, loaded := cc.pendingMessages.LoadOrStore(reqMessageID, req); loaded {
 			cc.ReleaseMessage(req)
 			return nil
 		}
+		cc.pendingMessageIDs.Store(req, reqMessageID)
 	}
 	select {
 	case cc.receivedMessageReader.C() <- req:
@@ -1220,8 +1224,15 @@ func (cc *Conn) AcquireMessage(ctx context.Context) *pool.Message {
 }
 
 func (cc *Conn) ReleaseMessage(m *pool.Message) {
-	cc.pendingMessages.CompareAndDelete(m.MessageID(), m)
+	cc.deletePendingMessage(m, m.MessageID())
 	cc.messagePool.ReleaseMessage(m)
+}
+
+func (cc *Conn) deletePendingMessage(m *pool.Message, reqMessageID int32) {
+	if registeredMessageID, ok := cc.pendingMessageIDs.LoadAndDelete(m); ok {
+		reqMessageID = registeredMessageID.(int32)
+	}
+	cc.pendingMessages.CompareAndDelete(reqMessageID, m)
 }
 
 // WriteMulticastMessage sends multicast to the remote multicast address.

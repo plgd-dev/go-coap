@@ -108,6 +108,7 @@ func TestConnPendingDuplicateCustomProcessor(t *testing.T) {
 			cfg := DefaultConfig
 			cfg.ProcessReceivedMessage = func(req *pool.Message, cc *Conn, _ config.HandlerFunc[*Conn]) {
 				release := func() {
+					req.Reset()
 					cc.ReleaseMessage(req)
 					completed <- struct{}{}
 				}
