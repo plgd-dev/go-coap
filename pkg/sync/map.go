@@ -37,15 +37,12 @@ func (m *Map[K, V]) Load(key K) (V, bool) {
 // LoadOrStore returns the existing value for the key if present. The loaded value is read-only and should not be modified.
 // Otherwise, it stores and returns the given value. The loaded result is true if the value was loaded, false if stored.
 func (m *Map[K, V]) LoadOrStore(key K, value V) (actual V, loaded bool) {
-	m.mutex.RLock()
-	v, ok := m.data[key]
-	m.mutex.RUnlock()
-	if ok {
+	m.mutex.Lock()
+	defer m.mutex.Unlock()
+	if v, ok := m.data[key]; ok {
 		return v, true
 	}
-	m.mutex.Lock()
 	m.data[key] = value
-	m.mutex.Unlock()
 	return value, false
 }
 
