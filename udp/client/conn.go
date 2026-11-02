@@ -103,6 +103,8 @@ type midElement struct {
 	deadline           time.Time
 	acknowledgeTimeout time.Duration
 	retransmit         atomic.Uint32
+	retransmitMu       sync.Mutex
+	retransmitting     bool
 
 	private struct {
 		sync.Mutex
@@ -129,23 +131,31 @@ func (m *midElement) IsExpired(now time.Time, maxRetransmit uint32) bool {
 }
 
 func (m *midElement) Retransmit(now time.Time) bool {
-	if now.After(m.start.Add(retransmissionDelay(m.acknowledgeTimeout, m.retransmit.Load()))) {
-		m.retransmit.Inc()
-		// retransmit
-		return true
+	m.retransmitMu.Lock()
+	defer m.retransmitMu.Unlock()
+	if m.retransmitting || !now.After(m.start.Add(retransmissionDelay(m.acknowledgeTimeout, m.retransmit.Load()))) {
+		return false
 	}
-	// wait for next retransmit
-	return false
+	m.retransmitting = true
+	return true
+}
+
+func (m *midElement) MarkRetransmitted(now time.Time) {
+	m.retransmitMu.Lock()
+	m.start = now
+	m.retransmit.Inc()
+	m.retransmitting = false
+	m.retransmitMu.Unlock()
 }
 
 func retransmissionDelay(acknowledgeTimeout time.Duration, retransmit uint32) time.Duration {
 	if acknowledgeTimeout <= 0 {
 		return acknowledgeTimeout
 	}
-	if retransmit >= 62 {
+	if retransmit >= 63 {
 		return time.Duration(math.MaxInt64)
 	}
-	multiplier := (int64(1) << (retransmit + 1)) - 1
+	multiplier := int64(1) << retransmit
 	if int64(acknowledgeTimeout) > math.MaxInt64/multiplier {
 		return time.Duration(math.MaxInt64)
 	}
@@ -1092,10 +1102,13 @@ func (cc *Conn) checkMidHandlerContainer(now time.Time, maxRetransmit uint32, ke
 	}
 	if ok {
 		defer cc.ReleaseMessage(msg)
+		defer value.MarkRetransmitted(time.Now())
 		err := cc.session.WriteMessage(msg)
 		if err != nil {
 			cc.errors(fmt.Errorf(errFmtWriteRequest, err))
 		}
+	} else {
+		value.MarkRetransmitted(time.Now())
 	}
 }
 

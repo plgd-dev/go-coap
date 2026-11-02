@@ -18,10 +18,29 @@ func TestMidElementRetransmitExponentialBackoff(t *testing.T) {
 
 	require.False(t, m.Retransmit(start.Add(100*time.Millisecond)))
 	require.True(t, m.Retransmit(start.Add(101*time.Millisecond)))
+	m.MarkRetransmitted(start.Add(101 * time.Millisecond))
 	require.False(t, m.Retransmit(start.Add(300*time.Millisecond)))
-	require.True(t, m.Retransmit(start.Add(301*time.Millisecond)))
-	require.False(t, m.Retransmit(start.Add(700*time.Millisecond)))
-	require.True(t, m.Retransmit(start.Add(701*time.Millisecond)))
+	require.False(t, m.Retransmit(start.Add(301*time.Millisecond)))
+	require.True(t, m.Retransmit(start.Add(302*time.Millisecond)))
+	m.MarkRetransmitted(start.Add(302 * time.Millisecond))
+	require.False(t, m.Retransmit(start.Add(701*time.Millisecond)))
+	require.False(t, m.Retransmit(start.Add(702*time.Millisecond)))
+	require.True(t, m.Retransmit(start.Add(703*time.Millisecond)))
+}
+
+func TestMidElementRetransmitDelayedExpirationCheck(t *testing.T) {
+	start := time.Now()
+	m := midElement{
+		start:              start,
+		acknowledgeTimeout: 2500 * time.Millisecond,
+	}
+
+	retransmittedAt := start.Add(4 * time.Second)
+	require.True(t, m.Retransmit(retransmittedAt))
+	m.MarkRetransmitted(retransmittedAt)
+	require.False(t, m.Retransmit(start.Add(8*time.Second)))
+	require.False(t, m.Retransmit(start.Add(9*time.Second)))
+	require.True(t, m.Retransmit(start.Add(9*time.Second+time.Millisecond)))
 }
 
 func TestTransmissionNextAcknowledgeTimeoutRandomFactor(t *testing.T) {

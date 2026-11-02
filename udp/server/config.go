@@ -28,7 +28,7 @@ var DefaultConfig = func() Config {
 	opts := Config{
 		Common: config.NewCommon[*udpClient.Conn](),
 		CreateInactivityMonitor: func() udpClient.InactivityMonitor {
-			timeout := time.Second * 16
+			timeout := time.Second * 60
 			onInactive := func(cc *udpClient.Conn) {
 				_ = cc.Close()
 			}
