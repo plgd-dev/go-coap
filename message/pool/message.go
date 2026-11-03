@@ -285,6 +285,49 @@ func (r *Message) ETags(b [][]byte) (int, error) {
 	return r.GetOptionAllBytes(message.ETag, b)
 }
 
+// SetEcho replaces the Echo option with an opaque value of 1-40 bytes (RFC 9175).
+func (r *Message) SetEcho(value []byte) error {
+	if !message.VerifyOptLen(message.Echo, len(value)) {
+		return message.ErrInvalidValueLength
+	}
+	r.SetOptionBytes(message.Echo, value)
+	return nil
+}
+
+// Echo returns the Echo value.
+func (r *Message) Echo() ([]byte, error) {
+	return r.GetOptionBytes(message.Echo)
+}
+
+// AddRequestTag appends an opaque Request-Tag value of 0-8 bytes (RFC 9175).
+func (r *Message) AddRequestTag(value []byte) error {
+	if !message.VerifyOptLen(message.RequestTag, len(value)) {
+		return message.ErrInvalidValueLength
+	}
+	r.AddOptionBytes(message.RequestTag, value)
+	return nil
+}
+
+// SetRequestTag replaces all Request-Tag options with a single opaque value of
+// 0-8 bytes. An empty value sets an empty tag; use Remove to omit the option.
+func (r *Message) SetRequestTag(value []byte) error {
+	if !message.VerifyOptLen(message.RequestTag, len(value)) {
+		return message.ErrInvalidValueLength
+	}
+	r.SetOptionBytes(message.RequestTag, value)
+	return nil
+}
+
+// RequestTag returns the first Request-Tag value.
+func (r *Message) RequestTag() ([]byte, error) {
+	return r.GetOptionBytes(message.RequestTag)
+}
+
+// RequestTags writes all Request-Tag values to b and returns their count or an error.
+func (r *Message) RequestTags(b [][]byte) (int, error) {
+	return r.GetOptionAllBytes(message.RequestTag, b)
+}
+
 func (r *Message) AddQuery(query string) {
 	r.AddOptionString(message.URIQuery, query)
 }

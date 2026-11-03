@@ -514,6 +514,7 @@ func TestGetRequestMatchingKey(t *testing.T) {
 		message.Option{ID: message.Block2, Value: []byte{0x16}},
 		message.Option{ID: message.Size2, Value: []byte{0x0b, 0xb8}},
 		message.Option{ID: message.Size1, Value: []byte{0x0b, 0xb8}},
+		message.Option{ID: message.Echo, Value: []byte{0x01}},
 	), remote))
 
 	// Everything else distinguishes requests.
@@ -524,9 +525,17 @@ func TestGetRequestMatchingKey(t *testing.T) {
 		"content-format": newRequest(codes.GET, "/a", message.Option{ID: message.ContentFormat, Value: []byte{50}}),
 		"etag":           newRequest(codes.GET, "/a", message.Option{ID: message.ETag, Value: []byte{1}}),
 		"accept":         newRequest(codes.GET, "/a", message.Option{ID: message.Accept, Value: []byte{50}}),
+		"request-tag":    newRequest(codes.GET, "/a", message.Option{ID: message.RequestTag, Value: []byte{1}}),
+		"unsafe-option":  newRequest(codes.GET, "/a", message.Option{ID: 30, Value: []byte{2}}),
 	} {
 		require.NotEqual(t, base, getRequestMatchingKey(req, remote), name)
 	}
+	require.NotEqual(t, getRequestMatchingKey(newRequest(codes.GET, "/a", message.Option{ID: message.RequestTag, Value: []byte{1}}), remote),
+		getRequestMatchingKey(newRequest(codes.GET, "/a", message.Option{ID: message.RequestTag, Value: []byte{2}}), remote),
+		"different request tags identify different operations")
+	require.NotEqual(t, getRequestMatchingKey(newRequest(codes.GET, "/a", message.Option{ID: 30, Value: []byte{1}}), remote),
+		getRequestMatchingKey(newRequest(codes.GET, "/a", message.Option{ID: 30, Value: []byte{2}}), remote),
+		"different unsafe option values identify different operations")
 	require.NotEqual(t, base, getRequestMatchingKey(newRequest(codes.GET, "/a"), &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 5684}), "remote")
 }
 
