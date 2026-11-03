@@ -100,11 +100,12 @@ func TestMarshalMessage(t *testing.T) {
 }
 
 func TestUnmarshalMessage(t *testing.T) {
-	testUnmarshalMessage(t, message.Message{Options: make(message.Options, 0, 32)}, []byte{88, 128, 107, 170, 134, 237, 158, 132, 150, 19, 19, 159, 72, 20, 210, 14, 23, 231, 160, 183, 145, 128, 177, 14, 82, 20, 210, 255}, message.Message{
+	testUnmarshalMessage(t, message.Message{Options: make(message.Options, 0, 32)}, []byte{88, 128, 107, 170, 134, 237, 158, 132, 150, 19, 19, 159, 72, 20, 210, 14, 23, 231, 160, 183, 145, 128, 177, 14, 82, 20, 210, 255, 1}, message.Message{
 		Code:      codes.BadRequest,
 		Token:     []byte{0x86, 0xed, 0x9e, 0x84, 0x96, 0x13, 0x13, 0x9f},
 		MessageID: 27562,
 		Type:      message.NonConfirmable,
+		Payload:   []byte{0x1},
 		Options: message.Options{
 			{
 				ID:    message.ETag,
@@ -193,6 +194,15 @@ func TestUnmarshalMessage(t *testing.T) {
 		Token:   []byte{0x1, 0x2, 0x3},
 		Options: []message.Option{{ID: 11, Value: []byte{97}}, {ID: 11, Value: []byte{98}}, {ID: 11, Value: []byte{99}}, {ID: 11, Value: []byte{100}}, {ID: 11, Value: []byte{101}}, {ID: 12, Value: []byte{}}},
 	})
+}
+
+func TestDecodeRejectsPayloadMarkerWithoutPayload(t *testing.T) {
+	// Ver=1, Type=CON, TKL=0 | Code=GET | MID=0x0001 | payload marker with no payload.
+	// RFC 7252 section 3.1 requires this to be a message format error.
+	data := []byte{0x40, byte(codes.GET), 0x00, 0x01, 0xff}
+	msg := message.Message{Options: make(message.Options, 0, 16)}
+	_, err := DefaultCoder.Decode(data, &msg)
+	require.ErrorIs(t, err, message.ErrPayloadMarkerWithoutPayload)
 }
 
 func FuzzDecode(f *testing.F) {

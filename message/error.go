@@ -14,4 +14,5 @@ var (
 	ErrInvalidEncoding              = errors.New("invalid encoding")
 	ErrOptionNotFound               = errors.New("option not found")
 	ErrOptionDuplicate              = errors.New("duplicated option")
+	ErrPayloadMarkerWithoutPayload  = errors.New("payload marker followed by zero-length payload")
 )

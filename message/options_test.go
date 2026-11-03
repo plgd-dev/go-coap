@@ -405,6 +405,25 @@ func TestUnmarshalIllegalLengthOptions(t *testing.T) {
 	require.Equal(t, Options{{ID: IfNoneMatch, Value: []byte{0x00}}}, options)
 }
 
+func TestUnmarshalRejectsPayloadMarkerWithoutPayload(t *testing.T) {
+	// A lone payload marker (0xff) with no payload following it is a message
+	// format error (RFC 7252 section 3.1).
+	options := make(Options, 0, 10)
+	_, err := options.Unmarshal([]byte{0xff}, CoapOptionDefs)
+	require.ErrorIs(t, err, ErrPayloadMarkerWithoutPayload)
+
+	// An option followed by a lone payload marker is rejected the same way.
+	options = make(Options, 0, 10)
+	_, err = options.Unmarshal([]byte{0x11, 0x01, 0xff}, CoapOptionDefs)
+	require.ErrorIs(t, err, ErrPayloadMarkerWithoutPayload)
+
+	// A payload marker with a non-empty payload stays valid.
+	options = make(Options, 0, 10)
+	n, err := options.Unmarshal([]byte{0xff, 0x01}, CoapOptionDefs)
+	require.NoError(t, err)
+	require.Equal(t, 1, n)
+}
+
 func FuzzUnmarshalData(f *testing.F) {
 	f.Fuzz(func(_ *testing.T, input_data []byte) {
 		uoptions := make(Options, 0, 10)
