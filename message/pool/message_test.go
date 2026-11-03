@@ -365,6 +365,93 @@ func TestMessageETag(t *testing.T) {
 	require.Equal(t, etag, value)
 }
 
+func TestMessageEcho(t *testing.T) {
+	msg := pool.NewMessage(context.Background())
+	value, err := msg.Echo()
+	require.ErrorIs(t, err, message.ErrOptionNotFound)
+	require.Nil(t, value)
+
+	for size := 1; size <= 40; size++ {
+		echo := bytes.Repeat([]byte{byte(size)}, size)
+		require.NoError(t, msg.SetEcho(echo))
+		echo[0] = 99
+		value, err = msg.Echo()
+		require.NoError(t, err)
+		require.Equal(t, bytes.Repeat([]byte{byte(size)}, size), value)
+		require.Len(t, msg.Options(), 1)
+	}
+
+	for _, invalid := range [][]byte{nil, {}, make([]byte, 41)} {
+		require.ErrorIs(t, msg.SetEcho(invalid), message.ErrInvalidValueLength)
+		value, err = msg.Echo()
+		require.NoError(t, err)
+		require.Equal(t, bytes.Repeat([]byte{40}, 40), value)
+	}
+
+	msg.Remove(message.Echo)
+	require.False(t, msg.HasOption(message.Echo))
+	_, err = msg.Echo()
+	require.ErrorIs(t, err, message.ErrOptionNotFound)
+}
+
+func TestMessageRequestTags(t *testing.T) {
+	msg := pool.NewMessage(context.Background())
+	_, err := msg.RequestTag()
+	require.ErrorIs(t, err, message.ErrOptionNotFound)
+
+	first := []byte{1, 2}
+	require.NoError(t, msg.AddRequestTag(first))
+	first[0] = 9
+	require.NoError(t, msg.AddRequestTag([]byte{3}))
+	value, err := msg.RequestTag()
+	require.NoError(t, err)
+	require.Equal(t, []byte{1, 2}, value)
+
+	n, err := msg.RequestTags(nil)
+	require.Error(t, err)
+	require.Equal(t, 2, n)
+	values := make([][]byte, n)
+	n, err = msg.RequestTags(values)
+	require.NoError(t, err)
+	require.Equal(t, 2, n)
+	require.Equal(t, [][]byte{{1, 2}, {3}}, values)
+
+	require.ErrorIs(t, msg.AddRequestTag(make([]byte, 9)), message.ErrInvalidValueLength)
+	require.ErrorIs(t, msg.SetRequestTag(make([]byte, 9)), message.ErrInvalidValueLength)
+	n, err = msg.RequestTags(values)
+	require.NoError(t, err)
+	require.Equal(t, 2, n)
+	require.Equal(t, [][]byte{{1, 2}, {3}}, values)
+
+	for size := 0; size <= 8; size++ {
+		tag := bytes.Repeat([]byte{byte(size)}, size)
+		require.NoError(t, msg.SetRequestTag(tag))
+		if size > 0 {
+			tag[0] = 99
+		}
+		n, err = msg.RequestTags(values)
+		require.NoError(t, err)
+		require.Equal(t, 1, n)
+		require.Equal(t, bytes.Repeat([]byte{byte(size)}, size), values[0])
+		require.True(t, msg.HasOption(message.RequestTag))
+	}
+
+	require.NoError(t, msg.SetRequestTag(nil))
+	require.True(t, msg.HasOption(message.RequestTag))
+	value, err = msg.RequestTag()
+	require.NoError(t, err)
+	require.Empty(t, value)
+	require.NoError(t, msg.AddRequestTag(nil))
+	n, err = msg.RequestTags(values)
+	require.NoError(t, err)
+	require.Equal(t, 2, n)
+
+	msg.Remove(message.RequestTag)
+	require.False(t, msg.HasOption(message.RequestTag))
+	_, err = msg.RequestTag()
+	require.ErrorIs(t, err, message.ErrOptionNotFound)
+}
+
 type malFuncSeeker struct{}
 
 func (m malFuncSeeker) Read([]byte) (int, error) {

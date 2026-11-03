@@ -405,6 +405,33 @@ func TestUnmarshalIllegalLengthOptions(t *testing.T) {
 	require.Equal(t, Options{{ID: IfNoneMatch, Value: []byte{0x00}}}, options)
 }
 
+func TestRFC9175Options(t *testing.T) {
+	options := Options{
+		{ID: Echo, Value: []byte{1, 2, 3}},
+		{ID: RequestTag, Value: []byte{4, 5}},
+		{ID: RequestTag, Value: []byte{6}},
+	}
+	marshaled := make([]byte, 128)
+	n, err := options.Marshal(marshaled)
+	require.NoError(t, err)
+
+	decoded := make(Options, 0, len(options))
+	decodedLen, err := decoded.Unmarshal(marshaled[:n], CoapOptionDefs)
+	require.NoError(t, err)
+	require.Equal(t, n, decodedLen)
+	require.Equal(t, options, decoded)
+
+	require.Equal(t, Echo, OptionID(252))
+	require.Equal(t, RequestTag, OptionID(292))
+	require.True(t, VerifyOptLen(Echo, 1))
+	require.True(t, VerifyOptLen(Echo, 40))
+	require.False(t, VerifyOptLen(Echo, 0))
+	require.False(t, VerifyOptLen(Echo, 41))
+	require.True(t, VerifyOptLen(RequestTag, 0))
+	require.True(t, VerifyOptLen(RequestTag, 8))
+	require.False(t, VerifyOptLen(RequestTag, 9))
+}
+
 func TestUnmarshalRejectsPayloadMarkerWithoutPayload(t *testing.T) {
 	// A lone payload marker (0xff) with no payload following it is a message
 	// format error (RFC 7252 section 3.1).
