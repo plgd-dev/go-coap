@@ -498,6 +498,7 @@ func (s *Server) getOrCreateConn(udpConn *coapNet.UDPConn, raddr *net.UDPAddr, l
 	cfg.TransmissionAcknowledgeTimeout = s.cfg.TransmissionAcknowledgeTimeout
 	cfg.TransmissionAcknowledgeRandomFactor = s.cfg.TransmissionAcknowledgeRandomFactor
 	cfg.TransmissionMaxRetransmit = s.cfg.TransmissionMaxRetransmit
+	cfg.MaxPendingMessages = s.cfg.MaxPendingMessages
 	cfg.Handler = func(w *responsewriter.ResponseWriter[*client.Conn], r *pool.Message) {
 		h, ok := s.multicastHandler.Load(r.Token().Hash())
 		if ok {

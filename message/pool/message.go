@@ -24,6 +24,9 @@ type Decoder interface {
 }
 
 type Message struct {
+	// The low bit marks release; the remaining bits identify the acquisition.
+	// Keep the 64-bit atomic first for alignment on 32-bit platforms.
+	lifetime atomic.Uint64
 	// Context context of request.
 	ctx             context.Context
 	msg             message.Message
@@ -60,6 +63,12 @@ func NewMessage(ctx context.Context) *Message {
 
 func (r *Message) Context() context.Context {
 	return r.ctx
+}
+
+// Generation identifies the current acquisition of this message from a pool.
+// Capture it before transferring ownership to a handler.
+func (r *Message) Generation() uint64 {
+	return r.lifetime.Load() >> 1
 }
 
 func (r *Message) SetContext(ctx context.Context) {

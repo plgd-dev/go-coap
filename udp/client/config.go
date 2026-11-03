@@ -15,6 +15,8 @@ import (
 
 const DefaultMTU = 1472
 
+const DefaultMaxPendingMessages uint32 = 1024
+
 var DefaultConfig = func() Config {
 	opts := Config{
 		Common: config.NewCommon[*Conn](),
@@ -32,6 +34,7 @@ var DefaultConfig = func() Config {
 		TransmissionMaxRetransmit:           4,
 		GetMID:                              message.GetMID,
 		MTU:                                 DefaultMTU,
+		MaxPendingMessages:                  DefaultMaxPendingMessages,
 	}
 	opts.Handler = func(w *responsewriter.ResponseWriter[*Conn], r *pool.Message) {
 		switch r.Code() {
@@ -58,4 +61,7 @@ type Config struct {
 	TransmissionMaxRetransmit           uint32
 	CloseSocket                         bool
 	MTU                                 uint16
+	// MaxPendingMessages limits in-flight duplicate suppression per connection.
+	// Zero disables in-flight tracking.
+	MaxPendingMessages uint32
 }

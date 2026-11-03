@@ -8,6 +8,30 @@ import (
 	udpServer "github.com/plgd-dev/go-coap/v3/udp/server"
 )
 
+// MaxPendingMessagesOpt configures in-flight duplicate suppression.
+type MaxPendingMessagesOpt struct {
+	maxPendingMessages uint32
+}
+
+func (o MaxPendingMessagesOpt) UDPServerApply(cfg *udpServer.Config) {
+	cfg.MaxPendingMessages = o.maxPendingMessages
+}
+
+func (o MaxPendingMessagesOpt) DTLSServerApply(cfg *dtlsServer.Config) {
+	cfg.MaxPendingMessages = o.maxPendingMessages
+}
+
+func (o MaxPendingMessagesOpt) UDPClientApply(cfg *udpClient.Config) {
+	cfg.MaxPendingMessages = o.maxPendingMessages
+}
+
+// WithMaxPendingMessages limits the number of in-flight Message IDs tracked per
+// UDP/DTLS connection (default: 1024). Zero disables in-flight duplicate
+// suppression without disabling the completed-response cache.
+func WithMaxPendingMessages(maxPendingMessages uint32) MaxPendingMessagesOpt {
+	return MaxPendingMessagesOpt{maxPendingMessages: maxPendingMessages}
+}
+
 // TransmissionOpt transmission options.
 type TransmissionOpt struct {
 	transmissionNStart                  uint32

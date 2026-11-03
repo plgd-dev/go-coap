@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/plgd-dev/go-coap/v3/message"
@@ -16,6 +17,68 @@ import (
 )
 
 const testPathABC = "/a/b/c"
+
+func TestPoolAcquireClearsHijack(t *testing.T) {
+	p := pool.New(1, 2048)
+	for i := 0; i < 64; i++ {
+		msg := p.AcquireMessage(context.Background())
+		require.False(t, msg.IsHijacked(), "a recycled message must not retain its previous owner's hijack")
+		msg.Hijack()
+		p.ReleaseMessage(msg)
+	}
+}
+
+func TestPoolReleaseMessageIfNotHijacked(t *testing.T) {
+	p := pool.New(1, 2048)
+	for i := 0; i < 64; i++ {
+		msg := p.AcquireMessage(context.Background())
+		generation := msg.Generation()
+		msg.Hijack()
+		p.ReleaseMessageIfNotHijacked(msg, generation)
+		require.True(t, msg.IsHijacked())
+		p.ReleaseMessage(msg)
+
+		next := p.AcquireMessage(context.Background())
+		next.SetMessageID(42)
+		p.ReleaseMessageIfNotHijacked(msg, generation)
+		require.Equal(t, int32(42), next.MessageID(), "stale cleanup must not reset a reused acquisition")
+		p.ReleaseMessageIfNotHijacked(next, next.Generation())
+	}
+}
+
+func TestPoolConcurrentReleaseClaimsMessageOnce(t *testing.T) {
+	p := pool.New(2, 2048)
+	for i := 0; i < 64; i++ {
+		msg := p.AcquireMessage(context.Background())
+		generation := msg.Generation()
+		start := make(chan struct{})
+		var wg sync.WaitGroup
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			<-start
+			p.ReleaseMessage(msg)
+		}()
+		go func() {
+			defer wg.Done()
+			<-start
+			p.ReleaseMessageIfNotHijacked(msg, generation)
+		}()
+		close(start)
+		wg.Wait()
+
+		first := p.AcquireMessage(context.Background())
+		second := p.AcquireMessage(context.Background())
+		require.NotSame(t, first, second, "release must not publish the same message twice")
+		first.SetMessageID(42)
+		second.SetMessageID(43)
+		p.ReleaseMessageIfNotHijacked(msg, generation)
+		require.Equal(t, int32(42), first.MessageID())
+		require.Equal(t, int32(43), second.MessageID())
+		p.ReleaseMessage(first)
+		p.ReleaseMessage(second)
+	}
+}
 
 func TestMessageSetPath(t *testing.T) {
 	type args struct {
