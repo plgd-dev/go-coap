@@ -222,6 +222,8 @@ func (c *Coder) DecodeHeader(data []byte, h *MessageHeader) (int, error) {
 	return int(h.Length), nil
 }
 
+// DecodeWithHeader decodes options and payload from data containing only the
+// current frame's bytes after the header.
 func (c *Coder) DecodeWithHeader(data []byte, header MessageHeader, m *message.Message) (int, error) {
 	optionDefs := message.CoapOptionDefs
 	processed := header.Length
@@ -253,6 +255,7 @@ func (c *Coder) DecodeWithHeader(data []byte, header MessageHeader, m *message.M
 	return int(processed), nil
 }
 
+// Decode decodes the first frame in data and returns the number of consumed bytes.
 func (c *Coder) Decode(data []byte, m *message.Message) (int, error) {
 	var header MessageHeader
 	_, err := c.DecodeHeader(data, &header)
@@ -262,5 +265,5 @@ func (c *Coder) Decode(data []byte, m *message.Message) (int, error) {
 	if math.CastTo[uint32](len(data)) < header.MessageLength {
 		return -1, message.ErrShortRead
 	}
-	return c.DecodeWithHeader(data[header.Length:], header, m)
+	return c.DecodeWithHeader(data[header.Length:header.MessageLength], header, m)
 }

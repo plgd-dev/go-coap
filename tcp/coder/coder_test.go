@@ -120,6 +120,53 @@ func TestDecodeRejectsPayloadMarkerWithoutPayload(t *testing.T) {
 	require.ErrorIs(t, err, message.ErrPayloadMarkerWithoutPayload)
 }
 
+func TestDecodeConcatenatedFrames(t *testing.T) {
+	nextFrame := []byte{0x20, byte(codes.POST), 0xff, 0x02}
+	tests := []struct {
+		name    string
+		frame   []byte
+		want    message.Message
+		wantErr error
+	}{
+		{
+			name:    "payload marker without payload",
+			frame:   []byte{0x10, byte(codes.GET), 0xff},
+			wantErr: message.ErrPayloadMarkerWithoutPayload,
+		},
+		{
+			name:  "with payload",
+			frame: []byte{0x20, byte(codes.GET), 0xff, 0x01},
+			want:  message.Message{Code: codes.GET, Payload: []byte{0x01}},
+		},
+		{
+			name:  "without payload",
+			frame: []byte{0x00, byte(codes.GET)},
+			want:  message.Message{Code: codes.GET},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			data := append(append([]byte(nil), tt.frame...), nextFrame...)
+			var msg message.Message
+			n, err := DefaultCoder.Decode(data, &msg)
+			if tt.wantErr != nil {
+				require.ErrorIs(t, err, tt.wantErr)
+				require.Equal(t, -1, n)
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, len(tt.frame), n)
+			require.Equal(t, tt.want, msg)
+
+			var next message.Message
+			n, err = DefaultCoder.Decode(data[n:], &next)
+			require.NoError(t, err)
+			require.Equal(t, len(nextFrame), n)
+			require.Equal(t, message.Message{Code: codes.POST, Payload: []byte{0x02}}, next)
+		})
+	}
+}
+
 func FuzzDecode(f *testing.F) {
 	f.Add([]byte{211, 0, 1, 1, 2, 3, 177, 97, 1, 98, 1, 99, 1, 100, 1, 101, 16, 255, 1})
 
