@@ -102,39 +102,63 @@ func TestLoadOrStore(t *testing.T) {
 	require.NotEqual(t, "first", value)
 }
 
-// TestLoadOrStoreConcurrent checks that concurrent LoadOrStore calls for the
-// same key are atomic: exactly one caller stores its value (loaded=false) and
-// every other caller observes that stored value (loaded=true). Callers such as
-// the token, message-ID and observation handler registries use loaded to reject
-// duplicate keys, so a non-atomic LoadOrStore would let two callers both store
-// and lose one value.
 func TestLoadOrStoreConcurrent(t *testing.T) {
+	const goroutines = 8
 	for attempt := 0; attempt < 1000; attempt++ {
 		m := NewMap[int, int]()
-		const goroutines = 8
 		var start, done sync.WaitGroup
 		start.Add(1)
-		results := make([]bool, goroutines)
-		for i := range goroutines {
-			done.Add(1)
+		done.Add(goroutines)
+
+		type result struct {
+			value  int
+			loaded bool
+		}
+		results := make([]result, goroutines)
+		for i := 0; i < goroutines; i++ {
 			go func(idx int) {
 				defer done.Done()
 				start.Wait()
-				_, loaded := m.LoadOrStore(1, idx)
-				results[idx] = loaded
+				results[idx].value, results[idx].loaded = m.LoadOrStore(1, idx)
 			}(i)
 		}
 		start.Done()
 		done.Wait()
 
+		var storedValue int
 		stored := 0
-		for _, loaded := range results {
-			if !loaded {
+		for _, result := range results {
+			if !result.loaded {
 				stored++
+				storedValue = result.value
 			}
+		}
+		for _, result := range results {
+			require.Equal(t, storedValue, result.value)
 		}
 		require.Equal(t, 1, stored, "exactly one caller must store the value")
 	}
+}
+
+func TestLoadOrStoreFromReadLockedCallback(t *testing.T) {
+	m := NewMap[int, string]()
+	m.Store(1, "one")
+
+	m.Range2(func(key int, value string) bool {
+		actual, loaded := m.LoadOrStore(key, "replacement")
+		require.True(t, loaded)
+		require.Equal(t, value, actual)
+		return true
+	})
+
+	value, loaded := m.LoadWithFunc(1, func(value string) string {
+		actual, loaded := m.LoadOrStore(1, "replacement")
+		require.True(t, loaded)
+		require.Equal(t, value, actual)
+		return value
+	})
+	require.True(t, loaded)
+	require.Equal(t, "one", value)
 }
 
 func testRange(t *testing.T, m *Map[int, string], rangeFn func(f func(key int, value string) bool)) {
