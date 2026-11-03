@@ -1,6 +1,7 @@
 package sync
 
 import (
+	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -99,6 +100,65 @@ func TestLoadOrStore(t *testing.T) {
 	value, loaded := m.LoadOrStore(1, "first")
 	require.True(t, loaded)
 	require.NotEqual(t, "first", value)
+}
+
+func TestLoadOrStoreConcurrent(t *testing.T) {
+	const goroutines = 8
+	for attempt := 0; attempt < 1000; attempt++ {
+		m := NewMap[int, int]()
+		var start, done sync.WaitGroup
+		start.Add(1)
+		done.Add(goroutines)
+
+		type result struct {
+			value  int
+			loaded bool
+		}
+		results := make([]result, goroutines)
+		for i := 0; i < goroutines; i++ {
+			go func(idx int) {
+				defer done.Done()
+				start.Wait()
+				results[idx].value, results[idx].loaded = m.LoadOrStore(1, idx)
+			}(i)
+		}
+		start.Done()
+		done.Wait()
+
+		var storedValue int
+		stored := 0
+		for _, result := range results {
+			if !result.loaded {
+				stored++
+				storedValue = result.value
+			}
+		}
+		for _, result := range results {
+			require.Equal(t, storedValue, result.value)
+		}
+		require.Equal(t, 1, stored, "exactly one caller must store the value")
+	}
+}
+
+func TestLoadOrStoreFromReadLockedCallback(t *testing.T) {
+	m := NewMap[int, string]()
+	m.Store(1, "one")
+
+	m.Range2(func(key int, value string) bool {
+		actual, loaded := m.LoadOrStore(key, "replacement")
+		require.True(t, loaded)
+		require.Equal(t, value, actual)
+		return true
+	})
+
+	value, loaded := m.LoadWithFunc(1, func(value string) string {
+		actual, loaded := m.LoadOrStore(1, "replacement")
+		require.True(t, loaded)
+		require.Equal(t, value, actual)
+		return value
+	})
+	require.True(t, loaded)
+	require.Equal(t, "one", value)
 }
 
 func testRange(t *testing.T, m *Map[int, string], rangeFn func(f func(key int, value string) bool)) {

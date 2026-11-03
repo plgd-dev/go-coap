@@ -43,9 +43,13 @@ func (m *Map[K, V]) LoadOrStore(key K, value V) (actual V, loaded bool) {
 	if ok {
 		return v, true
 	}
+
 	m.mutex.Lock()
+	defer m.mutex.Unlock()
+	if v, ok := m.data[key]; ok {
+		return v, true
+	}
 	m.data[key] = value
-	m.mutex.Unlock()
 	return value, false
 }
 
