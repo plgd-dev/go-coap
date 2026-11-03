@@ -262,6 +262,11 @@ func (m *messageCache) CheckExpirations(now time.Time) {
 	m.c.CheckExpirations(now)
 }
 
+type pendingMessage struct {
+	sequence uint64
+	expires  time.Time
+}
+
 // Conn represents a virtual connection to a conceptual endpoint, to perform COAPs commands.
 type Conn struct {
 	// This field needs to be the first in the struct to ensure proper word alignment on 32-bit platforms.
@@ -285,8 +290,9 @@ type Conn struct {
 
 	tokenHandlerContainer *coapSync.Map[uint64, HandlerFunc]
 	midHandlerContainer   *coapSync.Map[int32, *midElement]
-	pendingMessages       sync.Map
-	pendingMessageIDs     sync.Map
+	pendingMessagesMutex  sync.Mutex
+	pendingMessages       map[int32]pendingMessage
+	maxPendingMessages    uint32
 	tokenlessHandler      client.TokenlessHandler[HandlerFunc]
 	msgID                 atomic.Uint32
 	blockwiseSZX          blockwise.SZX
@@ -452,6 +458,7 @@ func NewConnWithOpts(session Session, cfg *Config, opts ...Option) *Conn {
 		inactivityMonitor:         cfgOpts.inactivityMonitor,
 		requestMonitor:            cfgOpts.requestMonitor,
 		messagePool:               cfg.MessagePool,
+		maxPendingMessages:        cfg.MaxPendingMessages,
 		numOutstandingInteraction: semaphore.NewWeighted(math.MaxInt64),
 	}
 	cc.msgID.Store(pkgMath.CastTo[uint32](cfg.GetMID() - 0xffff/2))
@@ -481,6 +488,8 @@ func processReceivedMessage(req *pool.Message, cc *Conn, handler config.HandlerF
 }
 
 func (cc *Conn) ProcessReceivedMessage(req *pool.Message) {
+	mid, sequence := req.MessageID(), req.Sequence()
+	defer cc.deletePendingMessage(mid, sequence)
 	cc.processReceivedMessage(req, cc, cc.handleReq)
 }
 
@@ -501,6 +510,9 @@ func (cc *Conn) GetMessageID() int32 {
 // Close closes connection without waiting for the end of the Run function.
 func (cc *Conn) Close() error {
 	err := cc.session.Close()
+	cc.pendingMessagesMutex.Lock()
+	clear(cc.pendingMessages)
+	cc.pendingMessagesMutex.Unlock()
 	if errors.Is(err, net.ErrClosed) {
 		return nil
 	}
@@ -943,13 +955,9 @@ func (cc *Conn) closeConnection() {
 }
 
 func (cc *Conn) ProcessReceivedMessageWithHandler(req *pool.Message, handler config.HandlerFunc[*Conn]) {
-	reqMessageID := req.MessageID()
+	generation := req.Generation()
 	defer func() {
-		if req.IsHijacked() {
-			cc.deletePendingMessage(req, reqMessageID)
-			return
-		}
-		cc.ReleaseMessage(req)
+		cc.messagePool.ReleaseMessageIfNotHijacked(req, generation)
 	}()
 	resp := cc.AcquireMessage(cc.Context())
 	resp.SetToken(req.Token())
@@ -1107,16 +1115,22 @@ func (cc *Conn) Process(cm *coapNet.ControlMessage, datagram []byte) error {
 	}
 	if req.Type() == message.Confirmable || req.Type() == message.NonConfirmable {
 		// Retransmissions received before the response is sent need no queued reply.
-		reqMessageID := req.MessageID()
-		if _, loaded := cc.pendingMessages.LoadOrStore(reqMessageID, req); loaded {
+		duplicate, err := cc.addPendingMessage(req.MessageID(), req.Sequence(), time.Now())
+		if err != nil {
+			cc.ReleaseMessage(req)
+			cc.errors(err)
+			return nil
+		}
+		if duplicate {
 			cc.ReleaseMessage(req)
 			return nil
 		}
-		cc.pendingMessageIDs.Store(req, reqMessageID)
 	}
+	reqMessageID, sequence := req.MessageID(), req.Sequence()
 	select {
 	case cc.receivedMessageReader.C() <- req:
 	case <-cc.Context().Done():
+		cc.deletePendingMessage(reqMessageID, sequence)
 		cc.ReleaseMessage(req)
 	}
 	return nil
@@ -1198,6 +1212,9 @@ func (cc *Conn) checkMidHandlerContainer(now time.Time, maxRetransmit uint32, ke
 
 // CheckExpirations checks and remove expired items from caches.
 func (cc *Conn) CheckExpirations(now time.Time) {
+	cc.pendingMessagesMutex.Lock()
+	cc.expirePendingMessages(now)
+	cc.pendingMessagesMutex.Unlock()
 	cc.inactivityMonitor.CheckInactivity(now, cc)
 	cc.responseMsgCache.CheckExpirations(now)
 	if cc.blockWise != nil {
@@ -1223,19 +1240,53 @@ func (cc *Conn) AcquireMessage(ctx context.Context) *pool.Message {
 	return cc.messagePool.AcquireMessage(ctx)
 }
 
+// ReleaseMessage returns m to the message pool. Owners must release hijacked
+// messages when they are no longer needed; this does not affect deduplication.
 func (cc *Conn) ReleaseMessage(m *pool.Message) {
-	cc.deletePendingMessage(m, m.MessageID())
 	cc.messagePool.ReleaseMessage(m)
 }
 
-func (cc *Conn) deletePendingMessage(m *pool.Message, reqMessageID int32) {
-	if registeredMessageIDI, ok := cc.pendingMessageIDs.LoadAndDelete(m); ok {
-		registeredMessageID, ok := registeredMessageIDI.(int32)
-		if ok {
-			reqMessageID = registeredMessageID
+func (cc *Conn) addPendingMessage(mid int32, sequence uint64, now time.Time) (bool, error) {
+	if cc.maxPendingMessages == 0 {
+		return false, nil
+	}
+	cc.pendingMessagesMutex.Lock()
+	defer cc.pendingMessagesMutex.Unlock()
+	if pending, ok := cc.pendingMessages[mid]; ok {
+		if now.Before(pending.expires) {
+			return true, nil
+		}
+		delete(cc.pendingMessages, mid)
+	}
+	if uint64(len(cc.pendingMessages)) >= uint64(cc.maxPendingMessages) {
+		// Reclaim capacity without scanning on every admission.
+		cc.expirePendingMessages(now)
+		if uint64(len(cc.pendingMessages)) >= uint64(cc.maxPendingMessages) {
+			return false, fmt.Errorf("in-flight message limit (%d) exceeded", cc.maxPendingMessages)
 		}
 	}
-	cc.pendingMessages.CompareAndDelete(reqMessageID, m)
+	if cc.pendingMessages == nil {
+		cc.pendingMessages = make(map[int32]pendingMessage)
+	}
+	cc.pendingMessages[mid] = pendingMessage{sequence: sequence, expires: now.Add(ExchangeLifetime)}
+	return false, nil
+}
+
+// expirePendingMessages requires pendingMessagesMutex to be held.
+func (cc *Conn) expirePendingMessages(now time.Time) {
+	for mid, pending := range cc.pendingMessages {
+		if !now.Before(pending.expires) {
+			delete(cc.pendingMessages, mid)
+		}
+	}
+}
+
+func (cc *Conn) deletePendingMessage(mid int32, sequence uint64) {
+	cc.pendingMessagesMutex.Lock()
+	defer cc.pendingMessagesMutex.Unlock()
+	if pending, ok := cc.pendingMessages[mid]; ok && pending.sequence == sequence {
+		delete(cc.pendingMessages, mid)
+	}
 }
 
 // WriteMulticastMessage sends multicast to the remote multicast address.

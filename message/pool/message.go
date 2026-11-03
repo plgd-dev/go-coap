@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"sync"
 
 	"github.com/plgd-dev/go-coap/v3/message"
 	"github.com/plgd-dev/go-coap/v3/message/codes"
@@ -24,6 +25,9 @@ type Decoder interface {
 }
 
 type Message struct {
+	lifetimeMutex sync.Mutex
+	generation    uint64
+	released      bool
 	// Context context of request.
 	ctx             context.Context
 	msg             message.Message
@@ -45,7 +49,8 @@ const valueBufferSize = 256
 func NewMessage(ctx context.Context) *Message {
 	valueBuffer := make([]byte, valueBufferSize)
 	return &Message{
-		ctx: ctx,
+		generation: 1,
+		ctx:        ctx,
 		msg: message.Message{
 			Options:   make(message.Options, 0, 16),
 			MessageID: -1,
@@ -60,6 +65,14 @@ func NewMessage(ctx context.Context) *Message {
 
 func (r *Message) Context() context.Context {
 	return r.ctx
+}
+
+// Generation identifies the current acquisition of this message from a pool.
+// Capture it before transferring ownership to a handler.
+func (r *Message) Generation() uint64 {
+	r.lifetimeMutex.Lock()
+	defer r.lifetimeMutex.Unlock()
+	return r.generation
 }
 
 func (r *Message) SetContext(ctx context.Context) {

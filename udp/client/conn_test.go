@@ -467,6 +467,7 @@ func TestConnGetSeparateMessage(t *testing.T) {
 	err = m.Handle("/a", mux.HandlerFunc(func(w mux.ResponseWriter, r *mux.Message) {
 		r.Hijack()
 		go func() {
+			defer w.Conn().ReleaseMessage(r.Message)
 			time.Sleep(time.Second * 1)
 			assert.Equal(t, codes.GET, r.Code())
 			customResp := message.Message{

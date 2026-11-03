@@ -17,6 +17,34 @@ import (
 
 const testPathABC = "/a/b/c"
 
+func TestPoolAcquireClearsHijack(t *testing.T) {
+	p := pool.New(1, 2048)
+	for i := 0; i < 64; i++ {
+		msg := p.AcquireMessage(context.Background())
+		require.False(t, msg.IsHijacked(), "a recycled message must not retain its previous owner's hijack")
+		msg.Hijack()
+		p.ReleaseMessage(msg)
+	}
+}
+
+func TestPoolReleaseMessageIfNotHijacked(t *testing.T) {
+	p := pool.New(1, 2048)
+	for i := 0; i < 64; i++ {
+		msg := p.AcquireMessage(context.Background())
+		generation := msg.Generation()
+		msg.Hijack()
+		p.ReleaseMessageIfNotHijacked(msg, generation)
+		require.True(t, msg.IsHijacked())
+		p.ReleaseMessage(msg)
+
+		next := p.AcquireMessage(context.Background())
+		next.SetMessageID(42)
+		p.ReleaseMessageIfNotHijacked(msg, generation)
+		require.Equal(t, int32(42), next.MessageID(), "stale cleanup must not reset a reused acquisition")
+		p.ReleaseMessageIfNotHijacked(next, next.Generation())
+	}
+}
+
 func TestMessageSetPath(t *testing.T) {
 	type args struct {
 		p string

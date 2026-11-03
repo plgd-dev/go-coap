@@ -46,6 +46,7 @@ var DefaultConfig = func() Config {
 		TransmissionMaxRetransmit:           4,
 		GetMID:                              message.GetMID,
 		MTU:                                 udpClient.DefaultMTU,
+		MaxPendingMessages:                  udpClient.DefaultMaxPendingMessages,
 	}
 	opts.Handler = func(w *responsewriter.ResponseWriter[*udpClient.Conn], _ *pool.Message) {
 		if err := w.SetResponse(codes.NotFound, message.TextPlain, nil); err != nil {
@@ -67,4 +68,7 @@ type Config struct {
 	TransmissionAcknowledgeRandomFactor float64
 	TransmissionMaxRetransmit           uint32
 	MTU                                 uint16
+	// MaxPendingMessages limits in-flight duplicate suppression per connection.
+	// Zero disables in-flight tracking.
+	MaxPendingMessages uint32
 }
