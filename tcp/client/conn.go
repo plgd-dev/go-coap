@@ -326,14 +326,13 @@ func (cc *Conn) doObserve(req *pool.Message, observeFunc func(req *pool.Message)
 }
 
 func (cc *Conn) ProcessReceivedMessageWithHandler(req *pool.Message, handler HandlerFunc) {
+	generation := req.Generation()
 	origResp := cc.AcquireMessage(cc.Context())
 	origResp.SetToken(req.Token())
 	w := responsewriter.New(origResp, cc, req.Options()...)
 	handler(w, req)
 	defer cc.ReleaseMessage(w.Message())
-	if !req.IsHijacked() {
-		cc.ReleaseMessage(req)
-	}
+	cc.session.messagePool.ReleaseMessageIfNotHijacked(req, generation)
 	if w.Message().IsModified() {
 		err := cc.Session().WriteMessage(w.Message())
 		if err != nil {

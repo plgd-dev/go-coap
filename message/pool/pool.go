@@ -39,12 +39,11 @@ func (p *Pool) AcquireMessage(ctx context.Context) *Message {
 		panic(fmt.Errorf("invalid message type(%T) for pool", v))
 	}
 	p.currentMessagesInPool.Dec()
-	r.lifetimeMutex.Lock()
-	defer r.lifetimeMutex.Unlock()
-	r.generation++
-	r.released = false
 	r.ctx = ctx
 	r.hijacked.Store(false)
+	// Pooled messages have an odd (released) state. Advance to the next
+	// even state only after initializing the new acquisition.
+	r.lifetime.Add(1)
 	return r
 }
 
@@ -53,9 +52,8 @@ func (p *Pool) AcquireMessage(ctx context.Context) *Message {
 // It is forbidden accessing req and/or its' members after returning
 // it to Message pool.
 func (p *Pool) ReleaseMessage(req *Message) {
-	req.lifetimeMutex.Lock()
-	defer req.lifetimeMutex.Unlock()
-	if req.released {
+	state := req.lifetime.Load()
+	if state&1 != 0 || !req.lifetime.CompareAndSwap(state, state|1) {
 		return
 	}
 	p.releaseMessage(req)
@@ -65,16 +63,14 @@ func (p *Pool) ReleaseMessage(req *Message) {
 // its handler did not transfer ownership. It is safe after an owner has released
 // the message, even if the pool has subsequently reused it.
 func (p *Pool) ReleaseMessageIfNotHijacked(req *Message, generation uint64) {
-	req.lifetimeMutex.Lock()
-	defer req.lifetimeMutex.Unlock()
-	if req.released || req.generation != generation || req.IsHijacked() {
+	state := generation << 1
+	if req.IsHijacked() || !req.lifetime.CompareAndSwap(state, state|1) {
 		return
 	}
 	p.releaseMessage(req)
 }
 
 func (p *Pool) releaseMessage(req *Message) {
-	req.released = true
 	for {
 		v := p.currentMessagesInPool.Load()
 		if v >= int64(p.maxNumMessages) {

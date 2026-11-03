@@ -152,6 +152,60 @@ func TestConnPendingDuplicateCustomProcessor(t *testing.T) {
 	}
 }
 
+func TestConnAsyncProcessorReturnEndsPendingTracking(t *testing.T) {
+	session := newRecordingSession()
+	defer func() { require.NoError(t, session.Close()) }()
+	started := make(chan struct{}, 2)
+	completed := make(chan struct{}, 2)
+	release := make(chan struct{})
+	var unblock atomic.Bool
+	unblockHandlers := func() {
+		if unblock.CompareAndSwap(false, true) {
+			close(release)
+		}
+	}
+	defer unblockHandlers()
+	cfg := DefaultConfig
+	cfg.Errors = func(err error) { assert.NoError(t, err) }
+	cfg.ProcessReceivedMessage = func(req *pool.Message, cc *Conn, _ config.HandlerFunc[*Conn]) {
+		go func() {
+			cc.ProcessReceivedMessageWithHandler(req, func(w *responsewriter.ResponseWriter[*Conn], _ *pool.Message) {
+				w.Message().SetModified(false)
+				started <- struct{}{}
+				<-release
+			})
+			completed <- struct{}{}
+		}()
+	}
+	cc := NewConnWithOpts(session, &cfg)
+	req := cc.AcquireMessage(context.Background())
+	defer cc.ReleaseMessage(req)
+	req.SetType(message.Confirmable)
+	req.SetCode(codes.GET)
+	req.SetMessageID(42)
+	datagram, err := req.MarshalWithEncoder(coder.DefaultCoder)
+	require.NoError(t, err)
+	for i := 0; i < 2; i++ {
+		require.NoError(t, cc.Process(nil, datagram))
+		select {
+		case <-started:
+		case <-time.After(time.Second):
+			t.Fatal("asynchronous handler did not start")
+		}
+		waitForNoPendingMessages(t, cc)
+	}
+	// Both handlers are still blocked, but their dispatch callbacks returned.
+	require.Empty(t, completed)
+	unblockHandlers()
+	for i := 0; i < 2; i++ {
+		select {
+		case <-completed:
+		case <-time.After(time.Second):
+			t.Fatal("asynchronous handler did not finish")
+		}
+	}
+}
+
 func TestConnHijackedRequestDoesNotRetainPendingState(t *testing.T) {
 	for _, typ := range []message.Type{message.Confirmable, message.NonConfirmable} {
 		t.Run(typ.String(), func(t *testing.T) {

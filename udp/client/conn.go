@@ -487,6 +487,9 @@ func processReceivedMessage(req *pool.Message, cc *Conn, handler config.HandlerF
 	cc.ProcessReceivedMessageWithHandler(req, handler)
 }
 
+// ProcessReceivedMessage tracks in-flight duplicates until the configured
+// processor returns. Processors dispatching asynchronous work must either wait
+// for completion before returning or manage subsequent deduplication themselves.
 func (cc *Conn) ProcessReceivedMessage(req *pool.Message) {
 	mid, sequence := req.MessageID(), req.Sequence()
 	defer cc.deletePendingMessage(mid, sequence)
