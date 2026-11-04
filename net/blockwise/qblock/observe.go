@@ -132,8 +132,10 @@ func (b *Engine[C]) WriteNotification(response *pool.Message, remote net.Addr) (
 		return true, err
 	}
 	nums, deadline := b.firstNotificationSet(key, mode, count)
-	return true, b.scheduleQ2Set(response.Context(), transport, key, response.Token(), szx, mode,
-		nums, count, true, false, deadline)
+	return true, b.scheduleQ2Set(response.Context(), &q2SetJob[C]{
+		transport: transport, key: key, token: response.Token(), szx: szx, mode: mode,
+		nums: nums, count: count, wholeBody: true,
+	}, deadline)
 }
 
 func (b *Engine[C]) registeredQNotification(response *pool.Message, remote net.Addr) (*pool.Message, *qObservation, bool, error) {

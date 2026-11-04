@@ -85,38 +85,12 @@ func testQBlockObserveTerminalDuringIncompleteBody(t *testing.T, terminalCode co
 	})
 
 	var lostTerminalPayload atomic.Bool
+	monitor := qTerminalMonitor{
+		terminalCode: terminalCode, losePayload: losePayload,
+		lostTerminalPayload: &lostTerminalPayload, partialReceived: partialReceived,
+	}
 	clientMonitor := options.WithRequestMonitor(func(_ *client.Conn, response *pool.Message) (bool, error) {
-		if !response.HasOption(message.QBlock2) {
-			return false, nil
-		}
-		if !response.HasOption(message.Observe) {
-			return dropQTerminalPayload(response, terminalCode, losePayload, &lostTerminalPayload)
-		}
-		sequence, sequenceErr := response.Observe()
-		if sequenceErr != nil {
-			return false, sequenceErr
-		}
-		if sequence != 11 {
-			return false, nil
-		}
-		value, optionErr := response.GetOptionUint32(message.QBlock2)
-		if optionErr != nil {
-			return false, optionErr
-		}
-		_, num, _, decodeErr := blockwise.DecodeQBlockOption(value)
-		if decodeErr != nil {
-			return false, decodeErr
-		}
-		if num == 0 {
-			return false, nil
-		}
-		if num == 1 {
-			select {
-			case partialReceived <- struct{}{}:
-			default:
-			}
-		}
-		return true, nil
+		return monitor.check(response)
 	})
 	cc, dialErr := udp.Dial(listener.LocalAddr().String(),
 		options.WithQBlockwise(options.QBlockwiseOnly),
@@ -202,6 +176,47 @@ func testQBlockObserveTerminalDuringIncompleteBody(t *testing.T, terminalCode co
 	secondObservation, secondObserveErr := cc.DoObserve(secondReq, func(*pool.Message) {})
 	require.NoError(t, secondObserveErr)
 	require.NoError(t, secondObservation.Cancel(ctx))
+}
+
+type qTerminalMonitor struct {
+	terminalCode        codes.Code
+	losePayload         bool
+	lostTerminalPayload *atomic.Bool
+	partialReceived     chan<- struct{}
+}
+
+func (m qTerminalMonitor) check(response *pool.Message) (bool, error) {
+	if !response.HasOption(message.QBlock2) {
+		return false, nil
+	}
+	if !response.HasOption(message.Observe) {
+		return dropQTerminalPayload(response, m.terminalCode, m.losePayload, m.lostTerminalPayload)
+	}
+	sequence, sequenceErr := response.Observe()
+	if sequenceErr != nil {
+		return false, sequenceErr
+	}
+	if sequence != 11 {
+		return false, nil
+	}
+	value, optionErr := response.GetOptionUint32(message.QBlock2)
+	if optionErr != nil {
+		return false, optionErr
+	}
+	_, num, _, decodeErr := blockwise.DecodeQBlockOption(value)
+	if decodeErr != nil {
+		return false, decodeErr
+	}
+	if num == 0 {
+		return false, nil
+	}
+	if num == 1 {
+		select {
+		case m.partialReceived <- struct{}{}:
+		default:
+		}
+	}
+	return true, nil
 }
 
 func dropQTerminalPayload(response *pool.Message, terminalCode codes.Code, enabled bool, dropped *atomic.Bool) (bool, error) {

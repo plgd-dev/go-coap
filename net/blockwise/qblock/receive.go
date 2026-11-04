@@ -247,7 +247,7 @@ func (b *Engine[C]) handleQBlock1(
 	if !complete {
 		return b.respondQ1Incomplete(w, r, key, transfer, assembly, p, duplicate)
 	}
-	return b.completeQ1(w, r, key, transfer, assembly, p, maxSZX, remoteAddr, next)
+	return b.completeQ1(w, r, key, transfer, maxSZX, remoteAddr, next)
 }
 
 func (b *Engine[C]) addQ1PayloadLocked(key string, transfer *q1ReceiveTransfer, assembly *Assembly,
@@ -350,10 +350,10 @@ func (b *Engine[C]) respondQ1Missing(w *responsewriter.ResponseWriter[C], transf
 }
 
 func (b *Engine[C]) completeQ1(w *responsewriter.ResponseWriter[C], r *pool.Message, key string,
-	transfer *q1ReceiveTransfer, assembly *Assembly, p q1Parameters, maxSZX SZX, remoteAddr net.Addr,
+	transfer *q1ReceiveTransfer, maxSZX SZX, remoteAddr net.Addr,
 	next func(*responsewriter.ResponseWriter[C], *pool.Message),
 ) error {
-	szx := p.szx
+	szx := transfer.szx
 	b.q1ReceiveMu.Lock()
 	if b.q1Receivers[key] != transfer {
 		b.q1ReceiveMu.Unlock()
@@ -364,6 +364,7 @@ func (b *Engine[C]) completeQ1(w *responsewriter.ResponseWriter[C], r *pool.Mess
 		return nil
 	}
 	transfer.completed = true
+	assembly := transfer.assembly
 	transfer.completionSequence = r.Sequence()
 	transfer.completionToken = string(r.Token())
 	b.q1ReceiveMu.Unlock()

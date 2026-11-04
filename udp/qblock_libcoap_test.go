@@ -187,25 +187,7 @@ func qDial(t *testing.T, addr string, secure bool, szx blockwise.SZX, mode optio
 
 func startQLibcoapServer(t *testing.T, binary string, enabled bool, sizes ...blockwise.SZX) string {
 	t.Helper()
-	// libcoap listens on port for UDP and port+1 for DTLS.
-	var port int
-	for attempt := 0; attempt < 20; attempt++ {
-		l, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
-		require.NoError(t, err)
-		port = l.LocalAddr().(*net.UDPAddr).Port
-		if port == 65535 {
-			require.NoError(t, l.Close())
-			continue
-		}
-		next, nextErr := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: port + 1})
-		require.NoError(t, l.Close())
-		if nextErr == nil {
-			require.NoError(t, next.Close())
-			break
-		}
-		port = 0
-	}
-	require.NotZero(t, port, "could not reserve consecutive libcoap ports")
+	port := reserveQLibcoapPort(t)
 	mode := "3" // USE_LIBCOAP | SINGLE_BODY
 	if enabled {
 		mode = "7" // plus TRY_Q_BLOCK
@@ -226,26 +208,60 @@ func startQLibcoapServer(t *testing.T, binary string, enabled bool, sizes ...blo
 	var exited bool
 	t.Cleanup(func() {
 		cancel()
-		if !exited {
-			select {
-			case err := <-done:
-				if err != nil && ctx.Err() == nil {
-					t.Errorf("libcoap server exited unexpectedly: %v", err)
-				}
-			case <-time.After(5 * time.Second):
-				t.Error("libcoap server failed to stop after cancellation")
-			}
-		}
-		if t.Failed() {
-			t.Logf("libcoap server log:\n%s", log.String())
-		}
+		stopQLibcoapServer(ctx, t, done, exited, log)
 	})
 	addr := net.JoinHostPort("127.0.0.1", strconv.Itoa(port))
+	waitQLibcoapServer(t, addr, done, &exited, log)
+	return addr
+}
+
+func reserveQLibcoapPort(t *testing.T) int {
+	t.Helper()
+	// libcoap listens on port for UDP and port+1 for DTLS.
+	var port int
+	for attempt := 0; attempt < 20; attempt++ {
+		l, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+		require.NoError(t, err)
+		port = l.LocalAddr().(*net.UDPAddr).Port
+		if port == 65535 {
+			require.NoError(t, l.Close())
+			continue
+		}
+		next, nextErr := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: port + 1})
+		require.NoError(t, l.Close())
+		if nextErr == nil {
+			require.NoError(t, next.Close())
+			break
+		}
+		port = 0
+	}
+	require.NotZero(t, port, "could not reserve consecutive libcoap ports")
+	return port
+}
+
+func stopQLibcoapServer(ctx context.Context, t *testing.T, done <-chan error, exited bool, log *boundedCommandLog) {
+	if !exited {
+		select {
+		case err := <-done:
+			if err != nil && ctx.Err() == nil {
+				t.Errorf("libcoap server exited unexpectedly: %v", err)
+			}
+		case <-time.After(5 * time.Second):
+			t.Error("libcoap server failed to stop after cancellation")
+		}
+	}
+	if t.Failed() {
+		t.Logf("libcoap server log:\n%s", log.String())
+	}
+}
+
+func waitQLibcoapServer(t *testing.T, addr string, done <-chan error, exited *bool, log *boundedCommandLog) {
+	t.Helper()
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
 		select {
 		case err := <-done:
-			exited = true
+			*exited = true
 			t.Fatalf("libcoap server exited before readiness: %v\n%s", err, log.String())
 		default:
 		}
@@ -261,13 +277,12 @@ func startQLibcoapServer(t *testing.T, binary string, enabled bool, sizes ...blo
 		if probeErr == nil {
 			cc.ReleaseMessage(resp)
 			require.NoError(t, cc.Close())
-			return addr
+			return
 		}
 		require.NoError(t, cc.Close())
 		time.Sleep(10 * time.Millisecond)
 	}
 	t.Fatalf("libcoap server did not become ready:\n%s", log.String())
-	return ""
 }
 
 func qSecureAddr(t *testing.T, addr string, secure bool) string {
@@ -311,44 +326,7 @@ func TestQBlockLibcoapGoClient(t *testing.T) {
 		for _, typ := range []message.Type{message.NonConfirmable, message.Confirmable} {
 			for szx := blockwise.SZX16; szx <= blockwise.SZX1024; szx++ {
 				t.Run(fmt.Sprintf("secure=%v/type=%v/block=%d", secure, typ, szx.Size()), func(t *testing.T) {
-					counts := new(qWireCounts)
-					mode := options.QBlockwiseAuto
-					if enabled {
-						mode = options.QBlockwiseOnly
-					}
-					serverAddr := addr
-					if !enabled && szx != blockwise.SZX1024 {
-						serverAddr = startQLibcoapServer(t, binary, false, szx)
-					}
-					cc := qDial(t, qSecureAddr(t, serverAddr, secure), secure, szx, mode, counts)
-					path := fmt.Sprintf("/q-%v-%v-%d", secure, typ, szx)
-					var initialOptions []message.Option
-					if !enabled && szx == blockwise.SZX16 {
-						// libcoap's -b 16 maps to its zero/default sentinel;
-						// explicitly request the sixteen-byte response size.
-						initialOptions = []message.Option{{ID: message.Block2, Value: []byte{}}}
-					}
-					t.Run("upload", func(t *testing.T) {
-						resp := qDo(t, cc, codes.PUT, path, payload, typ, initialOptions...)
-						require.Contains(t, []codes.Code{codes.Created, codes.Changed}, resp.Code())
-						got, err := resp.ReadBody()
-						require.NoError(t, err)
-						require.Equal(t, payload, got, "libcoap PUT echo must match exact binary body")
-					})
-					before := counts.q2.Load()
-					t.Run("download", func(t *testing.T) {
-						resp := qDo(t, cc, codes.GET, path, nil, typ, initialOptions...)
-						require.Equal(t, codes.Content, resp.Code())
-						got, err := resp.ReadBody()
-						require.NoError(t, err)
-						require.Equal(t, payload, got)
-						if enabled {
-							require.Greater(t, counts.q2.Load(), before, "must receive Q-Block2, not silently use legacy")
-						} else {
-							require.Zero(t, counts.q2.Load())
-							require.Positive(t, counts.legacy.Load())
-						}
-					})
+					testQLibcoapGoClient(t, binary, addr, payload, qLibcoapClientCase{enabled, secure, typ, szx})
 				})
 			}
 		}
@@ -367,17 +345,71 @@ func TestQBlockLibcoapGoClient(t *testing.T) {
 	}
 }
 
-func startQGoServer(t *testing.T, secure bool, szx blockwise.SZX, payload []byte, counts *qWireCounts, calls *atomic.Int32, parameters ...options.QBlockwiseConfig) string {
-	t.Helper()
-	return startQGoServerWithMTU(t, secure, szx, payload, counts, calls, client.DefaultConfig.MTU, parameters...)
+type qLibcoapClientCase struct {
+	enabled bool
+	secure  bool
+	typ     message.Type
+	szx     blockwise.SZX
 }
 
-func startQGoServerWithMTU(t *testing.T, secure bool, szx blockwise.SZX, payload []byte, counts *qWireCounts, calls *atomic.Int32, mtu uint16, parameters ...options.QBlockwiseConfig) string {
-	t.Helper()
-	var config options.QBlockwiseConfig
-	if len(parameters) > 0 {
-		config = parameters[0]
+func testQLibcoapGoClient(t *testing.T, binary, addr string, payload []byte, test qLibcoapClientCase) {
+	enabled, secure, typ, szx := test.enabled, test.secure, test.typ, test.szx
+	counts := new(qWireCounts)
+	mode := options.QBlockwiseAuto
+	if enabled {
+		mode = options.QBlockwiseOnly
 	}
+	serverAddr := addr
+	if !enabled && szx != blockwise.SZX1024 {
+		serverAddr = startQLibcoapServer(t, binary, false, szx)
+	}
+	cc := qDial(t, qSecureAddr(t, serverAddr, secure), secure, szx, mode, counts)
+	path := fmt.Sprintf("/q-%v-%v-%d", secure, typ, szx)
+	var initialOptions []message.Option
+	if !enabled && szx == blockwise.SZX16 {
+		// libcoap's -b 16 maps to its zero/default sentinel;
+		// explicitly request the sixteen-byte response size.
+		initialOptions = []message.Option{{ID: message.Block2, Value: []byte{}}}
+	}
+	t.Run("upload", func(t *testing.T) {
+		resp := qDo(t, cc, codes.PUT, path, payload, typ, initialOptions...)
+		require.Contains(t, []codes.Code{codes.Created, codes.Changed}, resp.Code())
+		got, err := resp.ReadBody()
+		require.NoError(t, err)
+		require.Equal(t, payload, got, "libcoap PUT echo must match exact binary body")
+	})
+	before := counts.q2.Load()
+	t.Run("download", func(t *testing.T) {
+		resp := qDo(t, cc, codes.GET, path, nil, typ, initialOptions...)
+		require.Equal(t, codes.Content, resp.Code())
+		got, err := resp.ReadBody()
+		require.NoError(t, err)
+		require.Equal(t, payload, got)
+		if enabled {
+			require.Greater(t, counts.q2.Load(), before, "must receive Q-Block2, not silently use legacy")
+		} else {
+			require.Zero(t, counts.q2.Load())
+			require.Positive(t, counts.legacy.Load())
+		}
+	})
+}
+
+func startQGoServer(t *testing.T, secure bool, szx blockwise.SZX, payload []byte, counts *qWireCounts, calls *atomic.Int32, parameters ...options.QBlockwiseConfig) string {
+	t.Helper()
+	config := qGoServerOptions{mtu: client.DefaultConfig.MTU}
+	if len(parameters) > 0 {
+		config.blockwise = parameters[0]
+	}
+	return startQGoServerWithMTU(t, secure, szx, payload, counts, calls, config)
+}
+
+type qGoServerOptions struct {
+	mtu       uint16
+	blockwise options.QBlockwiseConfig
+}
+
+func startQGoServerWithMTU(t *testing.T, secure bool, szx blockwise.SZX, payload []byte, counts *qWireCounts, calls *atomic.Int32, config qGoServerOptions) string {
+	t.Helper()
 	router := mux.NewRouter()
 	require.NoError(t, router.Handle("/q", mux.HandlerFunc(func(w mux.ResponseWriter, r *mux.Message) {
 		calls.Add(1)
@@ -410,10 +442,10 @@ func startQGoServerWithMTU(t *testing.T, secure bool, szx blockwise.SZX, payload
 			piondtls.WithCipherSuites(piondtls.TLS_PSK_WITH_AES_128_GCM_SHA256)))
 		require.NoError(t, err)
 		s := dtls.NewServer(options.WithMux(router),
-			options.WithMTU(mtu),
+			options.WithMTU(config.mtu),
 			options.WithBlockwise(true, szx, 30*time.Second),
 			options.WithQBlockwise(options.QBlockwiseAuto),
-			options.WithQBlockwiseConfig(config),
+			options.WithQBlockwiseConfig(config.blockwise),
 			options.WithRequestMonitor(counts.monitor),
 		)
 		go func() { served <- s.Serve(l) }()
@@ -427,9 +459,9 @@ func startQGoServerWithMTU(t *testing.T, secure bool, szx blockwise.SZX, payload
 	l, err := coapNet.NewListenUDP("udp4", "127.0.0.1:0")
 	require.NoError(t, err)
 	s := udp.NewServer(options.WithMux(router),
-		options.WithMTU(mtu),
+		options.WithMTU(config.mtu),
 		options.WithBlockwise(true, szx, 30*time.Second),
-		options.WithQBlockwise(options.QBlockwiseAuto), options.WithQBlockwiseConfig(config), options.WithRequestMonitor(counts.monitor),
+		options.WithQBlockwise(options.QBlockwiseAuto), options.WithQBlockwiseConfig(config.blockwise), options.WithRequestMonitor(counts.monitor),
 	)
 	go func() { served <- s.Serve(l) }()
 	t.Cleanup(func() {
@@ -565,52 +597,56 @@ func TestQBlockLibcoapSelectiveRecovery(t *testing.T) {
 		return
 	}
 	payload := qPayload()
-	const szx = blockwise.SZX128
 	for _, goClient := range []bool{true, false} {
 		for _, upload := range []bool{true, false} {
 			t.Run(fmt.Sprintf("go-client=%v/upload=%v", goClient, upload), func(t *testing.T) {
-				option := message.QBlock2
-				if upload {
-					option = message.QBlock1
-				}
-				var response []byte
-				var relay *qDropRelay
-				if goClient {
-					serverAddr := startQLibcoapServer(t, serverBinary, true, szx)
-					// Seed a replayable resource without fault injection.
-					seed := qDial(t, serverAddr, false, szx, options.QBlockwiseOnly, new(qWireCounts))
-					qDo(t, seed, codes.PUT, "/loss", payload, message.NonConfirmable)
-					addr, fault := newQDropRelay(t, serverAddr, option, 3)
-					relay = fault
-					cc := qDial(t, addr, false, szx, options.QBlockwiseOnly, new(qWireCounts))
-					method := codes.GET
-					var body []byte
-					if upload {
-						method, body = codes.PUT, payload
-					}
-					resp := qDo(t, cc, method, "/loss", body, message.NonConfirmable)
-					var err error
-					response, err = resp.ReadBody()
-					require.NoError(t, err)
-				} else {
-					calls := new(atomic.Int32)
-					uri := startQGoServer(t, false, szx, payload, new(qWireCounts), calls)
-					addr, fault := newQDropRelay(t, strings.TrimPrefix(uri, "coap://"), option, 3)
-					relay = fault
-					var body []byte
-					if upload {
-						body = payload
-					}
-					response = runQLibcoapClient(t, clientBinary, "coap://"+addr+"/q", false,
-						message.NonConfirmable, szx, body)
-					require.Equal(t, int32(1), calls.Load())
-				}
-				require.Equal(t, payload, response)
-				relay.mu.Lock()
-				defer relay.mu.Unlock()
-				require.True(t, relay.dropped, "native test must drop a real Q payload")
-				require.GreaterOrEqual(t, relay.observed[3], 2, "lost Q NUM must be recovered")
+				testQLibcoapSelectiveRecovery(t, serverBinary, clientBinary, payload, goClient, upload)
 			})
 		}
 	}
+}
+
+func testQLibcoapSelectiveRecovery(t *testing.T, serverBinary, clientBinary string, payload []byte, goClient, upload bool) {
+	const szx = blockwise.SZX128
+	option := message.QBlock2
+	if upload {
+		option = message.QBlock1
+	}
+	var response []byte
+	var relay *qDropRelay
+	if goClient {
+		serverAddr := startQLibcoapServer(t, serverBinary, true, szx)
+		// Seed a replayable resource without fault injection.
+		seed := qDial(t, serverAddr, false, szx, options.QBlockwiseOnly, new(qWireCounts))
+		qDo(t, seed, codes.PUT, "/loss", payload, message.NonConfirmable)
+		addr, fault := newQDropRelay(t, serverAddr, option, 3)
+		relay = fault
+		cc := qDial(t, addr, false, szx, options.QBlockwiseOnly, new(qWireCounts))
+		method := codes.GET
+		var body []byte
+		if upload {
+			method, body = codes.PUT, payload
+		}
+		resp := qDo(t, cc, method, "/loss", body, message.NonConfirmable)
+		var err error
+		response, err = resp.ReadBody()
+		require.NoError(t, err)
+	} else {
+		calls := new(atomic.Int32)
+		uri := startQGoServer(t, false, szx, payload, new(qWireCounts), calls)
+		addr, fault := newQDropRelay(t, strings.TrimPrefix(uri, "coap://"), option, 3)
+		relay = fault
+		var body []byte
+		if upload {
+			body = payload
+		}
+		response = runQLibcoapClient(t, clientBinary, "coap://"+addr+"/q", false,
+			message.NonConfirmable, szx, body)
+		require.Equal(t, int32(1), calls.Load())
+	}
+	require.Equal(t, payload, response)
+	relay.mu.Lock()
+	defer relay.mu.Unlock()
+	require.True(t, relay.dropped, "native test must drop a real Q payload")
+	require.GreaterOrEqual(t, relay.observed[3], 2, "lost Q NUM must be recovered")
 }

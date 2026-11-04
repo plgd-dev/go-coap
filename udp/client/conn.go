@@ -654,52 +654,50 @@ func (cc *Conn) qBlockCapability(request *pool.Message) (bool, error) {
 			cc.qProbeMu.Unlock()
 			return false, nil
 		}
-		if wait := cc.qProbeWait; wait != nil {
-			result := cc.qProbeResult
-			cc.qProbeMu.Unlock()
-			select {
-			case <-ctx.Done():
-				return false, ctx.Err()
-			case <-cc.Context().Done():
-				return false, cc.Context().Err()
-			case <-wait:
-				if result.route != routeKey {
-					continue
-				}
-				return result.supported, result.err
-			}
+		wait, result := cc.qProbeWait, cc.qProbeResult
+		if wait == nil {
+			wait = make(chan struct{})
+			result = &qCapabilityResult{route: routeKey}
+			cc.qProbeWait, cc.qProbeResult = wait, result
+			cc.qProbeRoute = routeKey
+			cc.qProbeExpires, cc.qProbeRetry = time.Time{}, time.Time{}
+			// A caller does not own the lifetime of the shared probe.
+			go cc.runQBlockProbe(originOptions, result, wait)
 		}
-		wait := make(chan struct{})
-		cc.qProbeWait = wait
-		result := &qCapabilityResult{route: routeKey}
-		cc.qProbeResult = result
-		cc.qProbeRoute = routeKey
-		cc.qProbeExpires, cc.qProbeRetry = time.Time{}, time.Time{}
 		cc.qProbeMu.Unlock()
-		// The leader is not the lifetime owner: canceling one caller cannot
-		// cancel the shared probe for the other waiters.
-		go func() {
-			supported, err := cc.probeQBlock(cc.Context(), originOptions)
-			cc.qProbeMu.Lock()
-			cc.qProbeSupported = supported
-			result.supported, result.err = supported, err
-			if err == nil {
-				cc.qProbeExpires = time.Now().Add(10 * time.Minute)
-			} else {
-				cc.qProbeRetry = time.Now().Add(time.Second)
-			}
-			cc.qProbeWait = nil
-			close(wait)
-			cc.qProbeMu.Unlock()
-		}()
-		select {
-		case <-ctx.Done():
-			return false, ctx.Err()
-		case <-cc.Context().Done():
-			return false, cc.Context().Err()
-		case <-wait:
-			return result.supported, result.err
+		if err := cc.waitQBlockCapability(ctx, wait); err != nil {
+			return false, err
 		}
+		if result.route != routeKey {
+			continue
+		}
+		return result.supported, result.err
+	}
+}
+
+func (cc *Conn) runQBlockProbe(originOptions message.Options, result *qCapabilityResult, wait chan struct{}) {
+	supported, err := cc.probeQBlock(cc.Context(), originOptions)
+	cc.qProbeMu.Lock()
+	cc.qProbeSupported = supported
+	result.supported, result.err = supported, err
+	if err == nil {
+		cc.qProbeExpires = time.Now().Add(10 * time.Minute)
+	} else {
+		cc.qProbeRetry = time.Now().Add(time.Second)
+	}
+	cc.qProbeWait = nil
+	close(wait)
+	cc.qProbeMu.Unlock()
+}
+
+func (cc *Conn) waitQBlockCapability(ctx context.Context, wait <-chan struct{}) error {
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-cc.Context().Done():
+		return cc.Context().Err()
+	case <-wait:
+		return nil
 	}
 }
 

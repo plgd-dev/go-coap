@@ -118,10 +118,8 @@ func (a *Assembly) Add(num int64, more bool, payload []byte) (complete, duplicat
 		return false, false, ErrQBlockInvalidSize
 	}
 	if !more {
-		for receivedNum := range a.blocks {
-			if receivedNum > num {
-				return false, false, ErrQBlockInvalidSize
-			}
+		if a.hasBlockAfterLocked(num) {
+			return false, false, ErrQBlockInvalidSize
 		}
 		a.finalBlock = num
 	}
@@ -134,6 +132,15 @@ func (a *Assembly) Add(num int64, more bool, payload []byte) (complete, duplicat
 		a.firstMissing++
 	}
 	return a.completeLocked(), false, nil
+}
+
+func (a *Assembly) hasBlockAfterLocked(num int64) bool {
+	for receivedNum := range a.blocks {
+		if receivedNum > num {
+			return true
+		}
+	}
+	return false
 }
 
 func (a *Assembly) validatePayloadLocked(num int64, more bool, payload []byte) error {

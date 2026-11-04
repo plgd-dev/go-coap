@@ -2,7 +2,6 @@ package qblock
 
 import (
 	"bytes"
-	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -212,9 +211,7 @@ func (s *q1BodySender[C]) final(response *pool.Message) (*pool.Message, error) {
 }
 
 func (s *q1BodySender[C]) receive() (*pool.Message, error) {
-	ctx, cancel := context.WithDeadline(s.request.Context(), s.deadline)
-	defer cancel()
-	return s.exchange.Receive(ctx)
+	return receiveQBlockResponse(s.request.Context(), s.exchange, s.deadline)
 }
 
 func (s *q1BodySender[C]) run() (*pool.Message, error) {

@@ -95,9 +95,7 @@ func (s *q2BodyReceiver[C]) receive() (*pool.Message, error) {
 	if !s.partialExpires.IsZero() && s.partialExpires.Before(deadline) {
 		deadline = s.partialExpires
 	}
-	ctx, cancel := context.WithDeadline(s.req.Context(), deadline)
-	defer cancel()
-	return s.exchange.Receive(ctx)
+	return receiveQBlockResponse(s.req.Context(), s.exchange, deadline)
 }
 
 func (s *q2BodyReceiver[C]) recover(receiveErr error) error {

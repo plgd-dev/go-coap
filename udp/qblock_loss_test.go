@@ -2,7 +2,6 @@ package udp_test
 
 import (
 	"bytes"
-	"errors"
 	"net"
 	"strings"
 	"sync"
@@ -70,50 +69,10 @@ func newQDropRelay(t *testing.T, target string, option message.OptionID, block i
 	relay := &qDropRelay{drops: drops, option: option, observed: make(map[int64]int)}
 	var wg sync.WaitGroup
 	wg.Go(func() {
-		buf := make([]byte, 65535)
-		for {
-			n, peer, err := local.ReadFromUDP(buf)
-			if err != nil {
-				if !errors.Is(err, net.ErrClosed) {
-					t.Errorf("read relay request: %v", err)
-				}
-				return
-			}
-			relay.mu.Lock()
-			relay.peer = peer
-			relay.mu.Unlock()
-			if !relay.drop(buf[:n]) {
-				if _, err := upstream.Write(buf[:n]); err != nil {
-					if !errors.Is(err, net.ErrClosed) {
-						t.Errorf("forward relay request: %v", err)
-					}
-					return
-				}
-			}
-		}
+		relay.forwardRequests(t, local, upstream)
 	})
 	wg.Go(func() {
-		buf := make([]byte, 65535)
-		for {
-			n, err := upstream.Read(buf)
-			if err != nil {
-				if !errors.Is(err, net.ErrClosed) {
-					t.Errorf("read relay response: %v", err)
-				}
-				return
-			}
-			relay.mu.Lock()
-			peer := relay.peer
-			relay.mu.Unlock()
-			if peer != nil && !relay.drop(buf[:n]) {
-				if _, err := local.WriteToUDP(buf[:n], peer); err != nil {
-					if !errors.Is(err, net.ErrClosed) {
-						t.Errorf("forward relay response: %v", err)
-					}
-					return
-				}
-			}
-		}
+		relay.forwardResponses(t, local, upstream)
 	})
 	t.Cleanup(func() {
 		require.NoError(t, upstream.Close())
@@ -121,6 +80,46 @@ func newQDropRelay(t *testing.T, target string, option message.OptionID, block i
 		wg.Wait()
 	})
 	return local.LocalAddr().String(), relay
+}
+
+func (r *qDropRelay) forwardRequests(t *testing.T, local, upstream *net.UDPConn) {
+	buf := make([]byte, 65535)
+	for {
+		n, peer, err := local.ReadFromUDP(buf)
+		if err != nil {
+			qRelayError(t, "read relay request", err)
+			return
+		}
+		r.mu.Lock()
+		r.peer = peer
+		r.mu.Unlock()
+		if !r.drop(buf[:n]) {
+			if _, err := upstream.Write(buf[:n]); err != nil {
+				qRelayError(t, "forward relay request", err)
+				return
+			}
+		}
+	}
+}
+
+func (r *qDropRelay) forwardResponses(t *testing.T, local, upstream *net.UDPConn) {
+	buf := make([]byte, 65535)
+	for {
+		n, err := upstream.Read(buf)
+		if err != nil {
+			qRelayError(t, "read relay response", err)
+			return
+		}
+		r.mu.Lock()
+		peer := r.peer
+		r.mu.Unlock()
+		if peer != nil && !r.drop(buf[:n]) {
+			if _, err := local.WriteToUDP(buf[:n], peer); err != nil {
+				qRelayError(t, "forward relay response", err)
+				return
+			}
+		}
+	}
 }
 
 func TestQBlockSelectiveRecovery(t *testing.T) {

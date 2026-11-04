@@ -36,109 +36,186 @@ func benchmarkBlockwiseDownload(b *testing.B, rtt time.Duration) {
 	for _, mode := range []options.QBlockwiseMode{options.QBlockwiseDisabled, options.QBlockwiseAuto} {
 		for _, size := range []int{10 * 1024, 1024 * 1024} {
 			b.Run(fmt.Sprintf("mode=%d/bytes=%d", mode, size), func(b *testing.B) {
-				payload := make([]byte, size)
-				for i := range payload {
-					payload[i] = byte(i*37 + i/251)
-				}
-				router := mux.NewRouter()
-				if err := router.Handle("/bench", mux.HandlerFunc(func(w mux.ResponseWriter, _ *mux.Message) {
-					if err := w.SetResponse(codes.Content, message.AppOctets, bytes.NewReader(payload)); err != nil {
-						b.Errorf("set benchmark response: %v", err)
-					}
-				})); err != nil {
-					b.Fatal(err)
-				}
-				listener, err := coapNet.NewListenUDP("udp4", "127.0.0.1:0")
-				if err != nil {
-					b.Fatal(err)
-				}
-				var peer atomic.Pointer[client.Conn]
-				server := udp.NewServer(options.WithMux(router),
-					options.WithQBlockwise(mode), options.WithBlockwise(true, blockwise.SZX1024, time.Minute),
-					options.WithOnNewConn(func(cc *client.Conn) { peer.Store(cc) }),
-				)
-				done := make(chan error, 1)
-				go func() { done <- server.Serve(listener) }()
-				b.Cleanup(func() {
-					server.Stop()
-					if closeErr := listener.Close(); closeErr != nil {
-						b.Error(closeErr)
-					}
-					if serveErr := <-done; serveErr != nil {
-						b.Error(serveErr)
-					}
-				})
-				addr := listener.LocalAddr().String()
-				if rtt > 0 {
-					addr = qLatencyRelay(b, addr, rtt/2)
-				}
-				dial := func() *client.Conn {
-					conn, dialErr := udp.Dial(addr,
-						options.WithQBlockwise(mode), options.WithBlockwise(true, blockwise.SZX1024, time.Minute))
-					if dialErr != nil {
-						b.Fatal(dialErr)
-					}
-					return conn
-				}
-				conn := dial()
-				b.Cleanup(func() {
-					if err := conn.Close(); err != nil {
-						b.Error(err)
-					}
-				})
-				download := func() {
-					ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
-					defer cancel()
-					req, err := conn.NewGetRequest(ctx, "/bench")
-					if err != nil {
-						b.Fatal(err)
-					}
-					defer conn.ReleaseMessage(req)
-					req.SetType(message.NonConfirmable)
-					resp, err := conn.Do(req)
-					if err != nil {
-						b.Fatal(err)
-					}
-					defer conn.ReleaseMessage(resp)
-					if resp.Code() != codes.Content {
-						b.Fatalf("unexpected response: %v", resp.Code())
-					}
-					got, err := resp.ReadBody()
-					if err != nil {
-						b.Fatal(err)
-					}
-					if !bytes.Equal(payload, got) {
-						b.Fatalf("benchmark payload differs: got %d bytes, want %d", len(got), size)
-					}
-				}
-
-				download()
-				reset := func() {
-					if closeErr := conn.Close(); closeErr != nil {
-						b.Fatal(closeErr)
-					}
-					if cc := peer.Swap(nil); cc != nil {
-						if closeErr := cc.Close(); closeErr != nil {
-							b.Fatal(closeErr)
-						}
-					}
-					conn = dial()
-					download()
-				}
-				b.SetBytes(int64(size))
-				b.ReportAllocs()
-				b.ResetTimer()
-				for i := range b.N {
-					if i > 0 && i%8 == 0 {
-						b.StopTimer()
-						reset()
-						b.StartTimer()
-					}
-					download()
-				}
-				b.StopTimer()
+				benchmarkQDownload(b, mode, size, rtt)
 			})
 		}
+	}
+}
+
+func benchmarkQDownload(b *testing.B, mode options.QBlockwiseMode, size int, rtt time.Duration) {
+	payload := make([]byte, size)
+	for i := range payload {
+		payload[i] = byte(i*37 + i/251)
+	}
+	var peer atomic.Pointer[client.Conn]
+	addr := startQBenchmarkServer(b, payload, mode, &peer)
+	if rtt > 0 {
+		addr = qLatencyRelay(b, addr, rtt/2)
+	}
+	dial := func() *client.Conn {
+		conn, dialErr := udp.Dial(addr,
+			options.WithQBlockwise(mode), options.WithBlockwise(true, blockwise.SZX1024, time.Minute))
+		if dialErr != nil {
+			b.Fatal(dialErr)
+		}
+		return conn
+	}
+	conn := dial()
+	b.Cleanup(func() {
+		if err := conn.Close(); err != nil {
+			b.Error(err)
+		}
+	})
+	download := func() { qBenchmarkDownload(b, conn, payload) }
+
+	download()
+	reset := func() {
+		conn = resetQBenchmarkConn(b, conn, &peer, dial)
+		download()
+	}
+	b.SetBytes(int64(size))
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := range b.N {
+		if i > 0 && i%8 == 0 {
+			b.StopTimer()
+			reset()
+			b.StartTimer()
+		}
+		download()
+	}
+	b.StopTimer()
+}
+
+func resetQBenchmarkConn(b *testing.B, conn *client.Conn, peer *atomic.Pointer[client.Conn], dial func() *client.Conn) *client.Conn {
+	if closeErr := conn.Close(); closeErr != nil {
+		b.Fatal(closeErr)
+	}
+	if cc := peer.Swap(nil); cc != nil {
+		if closeErr := cc.Close(); closeErr != nil {
+			b.Fatal(closeErr)
+		}
+	}
+	return dial()
+}
+
+func startQBenchmarkServer(b *testing.B, payload []byte, mode options.QBlockwiseMode, peer *atomic.Pointer[client.Conn]) string {
+	router := mux.NewRouter()
+	if err := router.Handle("/bench", mux.HandlerFunc(func(w mux.ResponseWriter, _ *mux.Message) {
+		if err := w.SetResponse(codes.Content, message.AppOctets, bytes.NewReader(payload)); err != nil {
+			b.Errorf("set benchmark response: %v", err)
+		}
+	})); err != nil {
+		b.Fatal(err)
+	}
+	listener, err := coapNet.NewListenUDP("udp4", "127.0.0.1:0")
+	if err != nil {
+		b.Fatal(err)
+	}
+	server := udp.NewServer(options.WithMux(router),
+		options.WithQBlockwise(mode), options.WithBlockwise(true, blockwise.SZX1024, time.Minute),
+		options.WithOnNewConn(func(cc *client.Conn) { peer.Store(cc) }),
+	)
+	done := make(chan error, 1)
+	go func() { done <- server.Serve(listener) }()
+	b.Cleanup(func() {
+		server.Stop()
+		if closeErr := listener.Close(); closeErr != nil {
+			b.Error(closeErr)
+		}
+		if serveErr := <-done; serveErr != nil {
+			b.Error(serveErr)
+		}
+	})
+	return listener.LocalAddr().String()
+}
+
+func qBenchmarkDownload(b *testing.B, conn *client.Conn, payload []byte) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	req, err := conn.NewGetRequest(ctx, "/bench")
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer conn.ReleaseMessage(req)
+	req.SetType(message.NonConfirmable)
+	resp, err := conn.Do(req)
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer conn.ReleaseMessage(resp)
+	if resp.Code() != codes.Content {
+		b.Fatalf("unexpected response: %v", resp.Code())
+	}
+	got, err := resp.ReadBody()
+	if err != nil {
+		b.Fatal(err)
+	}
+	if !bytes.Equal(payload, got) {
+		b.Fatalf("benchmark payload differs: got %d bytes, want %d", len(got), len(payload))
+	}
+}
+
+type qDelayedPacket struct {
+	data []byte
+	due  time.Time
+}
+
+func qReadDelayedPackets(b *testing.B, read func([]byte) (int, error), packets chan<- qDelayedPacket, done <-chan struct{}, delay time.Duration) {
+	defer close(packets)
+	buf := make([]byte, 65535)
+	for {
+		n, err := read(buf)
+		if err != nil {
+			qRelayError(b, "read latency relay", err)
+			return
+		}
+		p := qDelayedPacket{data: bytes.Clone(buf[:n]), due: time.Now().Add(delay)}
+		select {
+		case packets <- p:
+		case <-done:
+			return
+		}
+	}
+}
+
+func qWriteDelayedPackets(b *testing.B, write func([]byte) error, packets <-chan qDelayedPacket, done <-chan struct{}) {
+	timer := time.NewTimer(time.Hour)
+	defer timer.Stop()
+	for {
+		select {
+		case <-done:
+			return
+		case p, ok := <-packets:
+			if !ok {
+				return
+			}
+			if !qWaitDelayedPacket(timer, p.due, done) {
+				return
+			}
+			if err := write(p.data); err != nil {
+				qRelayError(b, "write latency relay", err)
+				return
+			}
+		}
+	}
+}
+
+func qWaitDelayedPacket(timer *time.Timer, due time.Time, done <-chan struct{}) bool {
+	if wait := time.Until(due); wait > 0 {
+		timer.Reset(wait)
+		select {
+		case <-timer.C:
+		case <-done:
+			return false
+		}
+	}
+	return true
+}
+
+func qRelayError(t testing.TB, operation string, err error) {
+	if !errors.Is(err, net.ErrClosed) {
+		t.Errorf("%s: %v", operation, err)
 	}
 }
 
@@ -160,62 +237,17 @@ func qLatencyRelay(b *testing.B, target string, delay time.Duration) string {
 		local.Close()
 		b.Fatal(err)
 	}
-	type packet struct {
-		data []byte
-		due  time.Time
-	}
 	done := make(chan struct{})
 	var wg sync.WaitGroup
 	var peerMu sync.Mutex
 	var peer *net.UDPAddr
 	direction := func(read func([]byte) (int, error), write func([]byte) error) {
-		packets := make(chan packet, 256)
+		packets := make(chan qDelayedPacket, 256)
 		wg.Go(func() {
-			defer close(packets)
-			buf := make([]byte, 65535)
-			for {
-				n, err := read(buf)
-				if err != nil {
-					if !errors.Is(err, net.ErrClosed) {
-						b.Errorf("read latency relay: %v", err)
-					}
-					return
-				}
-				p := packet{data: bytes.Clone(buf[:n]), due: time.Now().Add(delay)}
-				select {
-				case packets <- p:
-				case <-done:
-					return
-				}
-			}
+			qReadDelayedPackets(b, read, packets, done, delay)
 		})
 		wg.Go(func() {
-			timer := time.NewTimer(time.Hour)
-			defer timer.Stop()
-			for {
-				select {
-				case <-done:
-					return
-				case p, ok := <-packets:
-					if !ok {
-						return
-					}
-					if wait := time.Until(p.due); wait > 0 {
-						timer.Reset(wait)
-						select {
-						case <-timer.C:
-						case <-done:
-							return
-						}
-					}
-					if err := write(p.data); err != nil {
-						if !errors.Is(err, net.ErrClosed) {
-							b.Errorf("write latency relay: %v", err)
-						}
-						return
-					}
-				}
-			}
+			qWriteDelayedPackets(b, write, packets, done)
 		})
 	}
 	direction(func(buf []byte) (int, error) {

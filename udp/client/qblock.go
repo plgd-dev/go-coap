@@ -108,13 +108,15 @@ func (cc *Conn) prepareQObservation(req *pool.Message) error {
 }
 
 type qBlockRoute struct {
-	cc       *Conn
-	ctx      context.Context
-	tokens   map[string]struct{}
-	mu       sync.Mutex
-	closed   bool
-	messages chan *pool.Message
-	done     chan struct{}
+	cc          *Conn
+	tokens      map[string]struct{}
+	mu          sync.Mutex
+	closed      bool
+	closeErr    error
+	contextDone <-chan struct{}
+	stopContext func() bool
+	messages    chan *pool.Message
+	done        chan struct{}
 }
 
 func hasQBlock(msg *pool.Message) bool {
@@ -153,8 +155,13 @@ func (r *qBlockRoute) NewToken() (message.Token, error) {
 	defer r.cc.qRoutesMu.Unlock()
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if r.closed || r.ctx.Err() != nil || r.cc.Context().Err() != nil {
+	if r.closed || r.cc.Context().Err() != nil {
 		return nil, context.Canceled
+	}
+	select {
+	case <-r.contextDone:
+		return nil, context.Canceled
+	default:
 	}
 	key := string(token)
 	if r.cc.qRoutes[key] != nil {
@@ -182,24 +189,31 @@ func (r *qBlockRoute) Receive(ctx context.Context) (*pool.Message, error) {
 	r.cc.receivedMessageReader.TryToReplaceLoop()
 	select {
 	case msg := <-r.messages:
+		msg.SetContext(ctx)
 		return msg, nil
 	default:
 	}
 	select {
 	case <-ctx.Done():
 		return nil, ctx.Err()
-	case <-r.ctx.Done():
-		return nil, r.ctx.Err()
 	case <-r.cc.Context().Done():
 		return nil, r.cc.Context().Err()
 	case <-r.done:
-		return nil, context.Canceled
+		r.mu.Lock()
+		err := r.closeErr
+		r.mu.Unlock()
+		return nil, err
 	case msg := <-r.messages:
+		msg.SetContext(ctx)
 		return msg, nil
 	}
 }
 
 func (r *qBlockRoute) Close() {
+	r.closeWithError(context.Canceled)
+}
+
+func (r *qBlockRoute) closeWithError(err error) {
 	r.cc.qRoutesMu.Lock()
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -208,6 +222,8 @@ func (r *qBlockRoute) Close() {
 		return
 	}
 	r.closed = true
+	r.closeErr = err
+	r.stopContext()
 	close(r.done)
 	for token := range r.tokens {
 		delete(r.cc.qRoutes, token)
@@ -263,7 +279,11 @@ func (cc *Conn) OpenQBlockExchange(ctx context.Context, token message.Token) (bl
 	if !reserveQBlockToken() {
 		return nil, errors.New("Q-Block token capacity exhausted")
 	}
-	route := &qBlockRoute{cc: cc, ctx: ctx, tokens: map[string]struct{}{key: {}}, messages: make(chan *pool.Message, max(32, 2*cc.qParameters.MaxPayloads)), done: make(chan struct{})}
+	route := &qBlockRoute{
+		cc: cc, contextDone: ctx.Done(), tokens: map[string]struct{}{key: {}},
+		messages: make(chan *pool.Message, max(32, 2*cc.qParameters.MaxPayloads)), done: make(chan struct{}),
+	}
+	route.stopContext = context.AfterFunc(ctx, func() { route.closeWithError(ctx.Err()) })
 	cc.qRoutes[key] = route
 	cc.qActiveRoutes++
 	return route, nil
@@ -285,7 +305,7 @@ func (cc *Conn) routeQBlockResponse(msg *pool.Message) bool {
 	if route.closed {
 		return true
 	}
-	copyMsg := cc.AcquireMessage(route.ctx)
+	copyMsg := cc.AcquireMessage(cc.Context())
 	if err := msg.Clone(copyMsg); err != nil {
 		cc.ReleaseMessage(copyMsg)
 		cc.errors(fmt.Errorf("clone Q-Block response: %w", err))
@@ -792,13 +812,7 @@ func (cc *Conn) runQBlockJobs() {
 	defer timer.Stop()
 	for {
 		cc.qJobsMu.Lock()
-		var next string
-		var job qBlockJob
-		for key, candidate := range cc.qJobs {
-			if next == "" || candidate.deadline.Before(job.deadline) {
-				next, job = key, candidate
-			}
-		}
+		next, job := cc.nextQBlockJobLocked()
 		if next != "" && !job.deadline.After(time.Now()) {
 			delete(cc.qJobs, next)
 			cc.qJobsMu.Unlock()
@@ -820,13 +834,28 @@ func (cc *Conn) runQBlockJobs() {
 			cc.qJobsMu.Unlock()
 			return
 		case <-cc.qJobsWake:
-			if !timer.Stop() {
-				select {
-				case <-timer.C:
-				default:
-				}
-			}
+			stopQBlockTimer(timer)
 		case <-timer.C:
+		}
+	}
+}
+
+func (cc *Conn) nextQBlockJobLocked() (string, qBlockJob) {
+	var next string
+	var job qBlockJob
+	for key, candidate := range cc.qJobs {
+		if next == "" || candidate.deadline.Before(job.deadline) {
+			next, job = key, candidate
+		}
+	}
+	return next, job
+}
+
+func stopQBlockTimer(timer *time.Timer) {
+	if !timer.Stop() {
+		select {
+		case <-timer.C:
+		default:
 		}
 	}
 }

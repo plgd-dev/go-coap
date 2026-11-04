@@ -28,11 +28,24 @@ type Transport interface {
 	SendQBlock(*pool.Message) error
 }
 
-// AsyncTransport permits scheduled CON payloads to await ACKs without blocking
+// AsyncSender permits scheduled CON payloads to await ACKs without blocking
 // the shared deadline worker. Implementations retain their own message copy and
 // bound pending sends. On a nil return, done is called exactly once.
-type AsyncTransport interface {
+type AsyncSender interface {
 	SendQBlockAsync(*pool.Message, func(error)) error
+}
+
+// AsyncTransport is retained for compatibility.
+type AsyncTransport = AsyncSender
+
+func receiveQBlockResponse(ctx context.Context, exchange Exchange, deadline time.Time) (*pool.Message, error) {
+	receiveCtx, cancel := context.WithDeadline(ctx, deadline)
+	defer cancel()
+	response, err := exchange.Receive(receiveCtx)
+	if response != nil {
+		response.SetContext(ctx)
+	}
+	return response, err
 }
 
 func qBodyMethod(code codes.Code) bool {

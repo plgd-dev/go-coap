@@ -101,6 +101,10 @@ for an Internet deployment.
 Direct engine users can call `Engine.SetConfig` or the compatibility facade's
 `BlockWise.SetQBlockwiseConfig`. These setters are setup-only, before concurrent
 transfers; an invalid update leaves the previous configuration unchanged.
+Custom transports can implement `qblock.AsyncSender` to keep CON ACK waits off
+the shared deadline worker; `qblock.AsyncTransport` remains a compatibility alias.
+Exchange context cancellation releases its routes, aliases, and queued messages.
+Messages returned by `Exchange.Receive(ctx)` use the supplied receive context.
 
 ## Run the client and server
 

@@ -133,16 +133,10 @@ func (b *Engine[C]) q2ResponseKey(r *pool.Message, remoteAddr net.Addr, num int6
 	identity := qTransferKey(r, remoteAddr, nil, true)
 	b.q2SendMu.Lock()
 	if b.q2Senders[key] == nil && (num != 0 || !more || r.HasOption(message.RequestTag) || r.Code() != codes.GET) {
-		found := ""
-		for candidateKey, transfer := range b.q2Senders {
-			if transfer.identity != identity || !transfer.expires.After(time.Now()) {
-				continue
-			}
-			if found != "" {
-				b.q2SendMu.Unlock()
-				return "", ErrInvalidOptionBlock2
-			}
-			found = candidateKey
+		found, err := b.findQ2ResponseLocked(identity)
+		if err != nil {
+			b.q2SendMu.Unlock()
+			return "", err
 		}
 		if found != "" {
 			key = found
@@ -154,6 +148,20 @@ func (b *Engine[C]) q2ResponseKey(r *pool.Message, remoteAddr net.Addr, num int6
 	}
 	b.q2SendMu.Unlock()
 	return key, nil
+}
+
+func (b *Engine[C]) findQ2ResponseLocked(identity string) (string, error) {
+	found := ""
+	for key, transfer := range b.q2Senders {
+		if transfer.identity != identity || !transfer.expires.After(time.Now()) {
+			continue
+		}
+		if found != "" {
+			return "", ErrInvalidOptionBlock2
+		}
+		found = key
+	}
+	return found, nil
 }
 
 func (b *Engine[C]) loadQ2Response(w *responsewriter.ResponseWriter[C], r *pool.Message, remote net.Addr,
@@ -217,8 +225,10 @@ func (b *Engine[C]) prepareQ2NonSend(r *pool.Message, key string, szx SZX, nums 
 	b.q2SendMu.Unlock()
 	transport.DelayQBlock("q2:"+key, recoveryUntil)
 	if wholeBody && recoveryUntil.After(time.Now()) {
-		return true, b.scheduleQ2Set(r.Context(), transport, key, r.Token(), szx, r.Type(),
-			nums, count, true, false, recoveryUntil)
+		return true, b.scheduleQ2Set(r.Context(), &q2SetJob[C]{
+			transport: transport, key: key, token: r.Token(), szx: szx, mode: r.Type(),
+			nums: nums, count: count, wholeBody: true,
+		}, recoveryUntil)
 	}
 	return false, nil
 }
@@ -244,8 +254,10 @@ func (b *Engine[C]) continueQ2Response(r *pool.Message, key string, szx SZX, num
 		if mode == message.NonConfirmable && len(remaining) > 0 && remaining[0]/b.config.MaxPayloads != nums[0]/b.config.MaxPayloads {
 			delay = b.q2SetDelay(key)
 		}
-		return b.scheduleQ2Set(r.Context(), transport, key, token, szx, mode, remaining,
-			count, wholeBody, !wholeBody, time.Now().Add(delay))
+		return b.scheduleQ2Set(r.Context(), &q2SetJob[C]{
+			transport: transport, key: key, token: token, szx: szx, mode: mode, nums: remaining,
+			count: count, wholeBody: wholeBody, recovery: !wholeBody,
+		}, time.Now().Add(delay))
 	}
 	return nil
 }
@@ -274,14 +286,19 @@ func (b *Engine[C]) q2RequestedBlocks(r *pool.Message, szx SZX, count int64) ([]
 				wholeBody = true
 			}
 		}
-		for i := num; i <= last; i++ {
-			if !slices.Contains(nums, i) {
-				nums = append(nums, i)
-			}
-		}
+		nums = appendQ2Range(nums, num, last)
 	}
-	slices.Sort(nums)
 	return nums, wholeBody, nil
+}
+
+func appendQ2Range(nums []int64, first, last int64) []int64 {
+	if len(nums) > 0 {
+		first = max(first, nums[len(nums)-1]+1)
+	}
+	for num := first; num <= last; num++ {
+		nums = append(nums, num)
+	}
+	return nums
 }
 
 func (b *Engine[C]) q2SetDelay(key string) time.Duration {
