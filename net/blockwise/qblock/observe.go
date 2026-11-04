@@ -13,9 +13,10 @@ import (
 )
 
 type qObservation struct {
-	request *pool.Message
-	key     string
-	szx     SZX
+	request         *pool.Message
+	key             string
+	szx             SZX
+	registrationKey string
 }
 
 func qObservationKey(token message.Token, remote net.Addr) string {
@@ -85,14 +86,14 @@ func (b *Engine[C]) registerQObservation(r *pool.Message, remote net.Addr, szx S
 	} else if len(b.qObservations) >= 128 || !b.qReserveTransfer() {
 		return ErrQBlockTooLarge
 	}
-	b.qObservations[key] = &qObservation{request: b.cloneMessage(r), key: q2TransferKey(r, remote), szx: szx}
+	b.qObservations[key] = &qObservation{request: b.cloneMessage(r), key: q2TransferKey(r, remote), szx: szx, registrationKey: key}
 	return nil
 }
 
 // WriteNotification sends a registered Q notification and reports whether it
 // handled the message. A false result leaves non-Q notifications to the caller.
 func (b *Engine[C]) WriteNotification(response *pool.Message, remote net.Addr) (bool, error) {
-	request, key, szx, handled, err := b.registeredQNotification(response, remote)
+	request, generation, handled, err := b.registeredQNotification(response, remote)
 	if !handled {
 		return false, err
 	}
@@ -100,6 +101,7 @@ func (b *Engine[C]) WriteNotification(response *pool.Message, remote net.Addr) (
 		return true, err
 	}
 	defer b.cc.ReleaseMessage(request)
+	key, szx := generation.key, generation.szx
 	transport, ok := any(b.cc).(Transport)
 	if !ok {
 		return true, errors.New("Q-Block notification transport is unavailable")
@@ -110,7 +112,7 @@ func (b *Engine[C]) WriteNotification(response *pool.Message, remote net.Addr) (
 		mode = message.Confirmable
 	}
 	request.SetType(mode)
-	err = b.cacheQBlock2Response(response.Context(), key, qTransferKey(request, remote, nil, true), response, mode)
+	err = b.cacheQBlock2Notification(response.Context(), key, qTransferKey(request, remote, nil, true), response, mode, generation)
 	if err != nil {
 		return true, err
 	}
@@ -134,13 +136,9 @@ func (b *Engine[C]) WriteNotification(response *pool.Message, remote net.Addr) (
 		nums, count, true, false, deadline)
 }
 
-func (b *Engine[C]) registeredQNotification(response *pool.Message, remote net.Addr) (*pool.Message, string, SZX, bool, error) {
+func (b *Engine[C]) registeredQNotification(response *pool.Message, remote net.Addr) (*pool.Message, *qObservation, bool, error) {
 	if isRequestCode(response.Code()) {
-		return nil, "", 0, false, nil
-	}
-	if !response.HasOption(message.Observe) {
-		b.CancelQBlockObservation(response.Token(), remote)
-		return nil, "", 0, false, nil
+		return nil, nil, false, nil
 	}
 	b.q2SendMu.Lock()
 	observationKey := qObservationKey(response.Token(), remote)
@@ -149,14 +147,13 @@ func (b *Engine[C]) registeredQNotification(response *pool.Message, remote net.A
 		canceled := b.qCanceledObservations[observationKey].After(time.Now())
 		b.q2SendMu.Unlock()
 		if canceled {
-			return nil, "", 0, true, context.Canceled
+			return nil, nil, true, context.Canceled
 		}
-		return nil, "", 0, false, nil
+		return nil, nil, false, nil
 	}
 	request := b.cloneMessage(observation.request)
-	key, szx := observation.key, observation.szx
 	b.q2SendMu.Unlock()
-	return request, key, szx, true, nil
+	return request, observation, true, nil
 }
 
 func (b *Engine[C]) firstNotificationSet(key string, mode message.Type, count int64) ([]int64, time.Time) {
@@ -164,6 +161,7 @@ func (b *Engine[C]) firstNotificationSet(key string, mode message.Type, count in
 	for num := int64(1); num <= b.config.setLast(0, count); num++ {
 		nums = append(nums, num)
 	}
+
 	deadline := time.Now()
 	if len(nums) == 0 {
 		next := b.config.setLast(0, count) + 1
@@ -175,4 +173,22 @@ func (b *Engine[C]) firstNotificationSet(key string, mode message.Type, count in
 		}
 	}
 	return nums, deadline
+}
+
+func (b *Engine[C]) validateQNotificationLocked(generation *qObservation) error {
+	if generation != nil && b.qObservations[generation.registrationKey] != generation {
+		return context.Canceled
+	}
+	return nil
+}
+
+func (b *Engine[C]) finishQNotificationLocked(generation *qObservation, observePresent bool) {
+	if generation == nil || observePresent {
+		return
+	}
+	// Retire the registration, but leave the terminal body available to recovery.
+	delete(b.qObservations, generation.registrationKey)
+	b.rememberQCancellationLocked(generation.registrationKey)
+	b.cc.ReleaseMessage(generation.request)
+	b.qReleaseTransfer()
 }

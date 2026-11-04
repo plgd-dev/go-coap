@@ -263,6 +263,9 @@ func readQBody(r *pool.Message) ([]byte, error) {
 		return nil, nil
 	}
 	body := r.Body()
+	if _, err := body.Seek(0, io.SeekStart); err != nil {
+		return nil, err
+	}
 	data, err := io.ReadAll(body)
 	_, seekErr := body.Seek(0, io.SeekStart)
 	if err != nil {

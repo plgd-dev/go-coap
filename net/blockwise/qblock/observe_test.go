@@ -81,6 +81,9 @@ func qObservePayload(t *testing.T, szx SZX, num int64, size int, value byte, seq
 	response := pool.NewMessage(context.Background())
 	response.SetCode(codes.Content)
 	response.SetToken([]byte("observe"))
+	if sequence == nil {
+		response.SetToken([]byte("recovery"))
+	}
 	response.SetType(message.NonConfirmable)
 	more := (num+1)*szx.Size() < int64(size)
 	option, err := EncodeQBlockOption(szx, num, more)

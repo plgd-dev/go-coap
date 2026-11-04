@@ -347,6 +347,10 @@ func (b *Engine[C]) buildQBlock2ResponseFrom(ctx context.Context, key string, to
 }
 
 func (b *Engine[C]) cacheQBlock2Response(ctx context.Context, key, identity string, response *pool.Message, mode message.Type) error {
+	return b.cacheQBlock2Notification(ctx, key, identity, response, mode, nil)
+}
+
+func (b *Engine[C]) cacheQBlock2Notification(ctx context.Context, key, identity string, response *pool.Message, mode message.Type, generation *qObservation) error {
 	size, err := response.BodySize()
 	if err != nil {
 		return err
@@ -384,6 +388,11 @@ func (b *Engine[C]) cacheQBlock2Response(ctx context.Context, key, identity stri
 		b.cc.ReleaseMessage(stored)
 		return err
 	}
+	if err := b.validateQNotificationLocked(generation); err != nil {
+		b.q2SendMu.Unlock()
+		b.cc.ReleaseMessage(stored)
+		return err
+	}
 	if old := b.q2Senders[key]; old != nil {
 		b.q2SendBytes -= old.size
 		b.qReleaseBytes(old.size)
@@ -406,6 +415,7 @@ func (b *Engine[C]) cacheQBlock2Response(ctx context.Context, key, identity stri
 		message: stored, expires: time.Now().Add(lifetime),
 		size: size, identity: identity, mode: mode, sentThrough: -1, delay: b.config.nonDelay(),
 	}
+	b.finishQNotificationLocked(generation, response.HasOption(message.Observe))
 	b.q2SendMu.Unlock()
 	return nil
 }

@@ -179,11 +179,12 @@ func newObservation[C Client](req message.Message, observationHandler *Handler[C
 }
 
 func (o *Observation[C]) handle(r *pool.Message) {
+	hasObserve := r.HasOption(message.Observe)
 	if o.waitForResponse.CompareAndSwap(true, false) {
 		select {
 		case o.respObservationChan <- respObservationMessage{
 			code:         r.Code(),
-			notSupported: !r.HasOption(message.Observe),
+			notSupported: !hasObserve,
 		}:
 		default:
 		}
@@ -192,7 +193,7 @@ func (o *Observation[C]) handle(r *pool.Message) {
 	if o.wantBeNotified(r) {
 		o.observeFunc(r)
 	}
-	if !r.HasOption(message.Observe) {
+	if !hasObserve {
 		o.cleanUp()
 	}
 }

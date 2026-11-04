@@ -43,23 +43,25 @@ func (b *Engine[C]) DoQBlock2(req *pool.Message, szx SZX,
 }
 
 type q2BodyReceiver[C Client] struct {
-	b               *Engine[C]
-	req             *pool.Message
-	exchange        Exchange
-	szx, maxSZX     SZX
-	assembly        *Assembly
-	etag            []byte
-	continued       int64
-	partialExpires  time.Time
-	retries         int
-	requestedSet    int64
-	retainedBytes   int64
-	sentRequests    int
-	observeSequence uint32
-	observePresent  bool
-	observeTime     time.Time
-	bodyType        message.Type
-	bodyTypeSet     bool
+	b                  *Engine[C]
+	req                *pool.Message
+	exchange           Exchange
+	szx, maxSZX        SZX
+	assembly           *Assembly
+	etag               []byte
+	continued          int64
+	partialExpires     time.Time
+	retries            int
+	requestedSet       int64
+	retainedBytes      int64
+	sentRequests       int
+	observeSequence    uint32
+	observePresent     bool
+	observeTime        time.Time
+	bodyType           message.Type
+	bodyTypeSet        bool
+	terminal           bool
+	representationCode codes.Code
 }
 
 func (s *q2BodyReceiver[C]) send(nums []int64, more bool) error {
@@ -130,6 +132,8 @@ func (s *q2BodyReceiver[C]) newRepresentation(response *pool.Message, szx SZX, s
 	}
 	s.szx, s.assembly, s.etag = szx, assembly, bytes.Clone(etag)
 	s.bodyTypeSet = false
+	s.observePresent = false
+	s.representationCode = response.Code()
 	if sequence, sequenceErr := response.Observe(); sequenceErr == nil {
 		s.observeSequence, s.observePresent, s.observeTime = sequence, true, time.Now()
 	}
@@ -148,16 +152,19 @@ func (s *q2BodyReceiver[C]) newRepresentation(response *pool.Message, szx SZX, s
 // representation checks identity before retaining bytes; older representations
 // can still arrive on retained recovery tokens after a newer notification starts.
 func (s *q2BodyReceiver[C]) representation(response *pool.Message, szx SZX) (bool, error) {
-	size, sizeErr := response.GetOptionUint32(message.Size2)
-	etag, etagErr := response.GetOptionBytes(message.ETag)
-	if sizeErr != nil || etagErr != nil || len(etag) == 0 || len(etag) > 8 {
-		return false, ErrInvalidOptionBlock2
+	size, etag, err := q2RepresentationIdentity(response)
+	if err != nil {
+		return false, err
 	}
 	sequence, sequenceErr := response.Observe()
-	changed := s.assembly != nil && (!bytes.Equal(s.etag, etag) || int64(size) != s.assembly.bodySize)
+	changed := s.representationChanged(response.Code(), size, etag)
+	if s.skipAfterTerminal(response, changed) {
+		return true, nil
+	}
+	terminal := s.registrationTerminal(response)
 	if changed && s.observePresent {
 		newer := sequenceErr == nil && observation.ValidSequenceNumber(s.observeSequence, sequence, s.observeTime, time.Now())
-		if !newer {
+		if !newer && !terminal {
 			return true, nil
 		}
 		s.b.qReleaseBytes(s.retainedBytes)
@@ -165,15 +172,37 @@ func (s *q2BodyReceiver[C]) representation(response *pool.Message, szx SZX) (boo
 		s.continued, s.retries, s.requestedSet = 0, 0, -1
 	}
 	if s.assembly == nil {
+		s.terminal = terminal
 		return false, s.newRepresentation(response, szx, size, etag)
 	}
 	if changed || szx != s.szx {
 		return false, ErrQBlockConflict
 	}
+	if terminal {
+		s.terminal, s.observePresent = true, false
+	}
 	if s.isNewerSequence(sequence, sequenceErr) {
 		s.observeSequence, s.observeTime = sequence, time.Now()
 	}
 	return false, nil
+}
+
+func q2RepresentationIdentity(response *pool.Message) (uint32, []byte, error) {
+	size, sizeErr := response.GetOptionUint32(message.Size2)
+	etag, etagErr := response.GetOptionBytes(message.ETag)
+	if sizeErr != nil || etagErr != nil || len(etag) == 0 || len(etag) > 8 {
+		return 0, nil, ErrInvalidOptionBlock2
+	}
+	return size, etag, nil
+}
+
+func (s *q2BodyReceiver[C]) representationChanged(code codes.Code, size uint32, etag []byte) bool {
+	return s.assembly != nil && (!bytes.Equal(s.etag, etag) ||
+		int64(size) != s.assembly.bodySize || code != s.representationCode)
+}
+
+func (s *q2BodyReceiver[C]) skipAfterTerminal(response *pool.Message, changed bool) bool {
+	return s.terminal && (response.HasOption(message.Observe) || changed && !s.registrationTerminal(response))
 }
 
 func (s *q2BodyReceiver[C]) isNewerSequence(sequence uint32, err error) bool {
@@ -228,6 +257,7 @@ func (s *q2BodyReceiver[C]) acceptBodyType(response *pool.Message) error {
 		return ErrInvalidOptionBlock2
 	}
 	s.bodyType, s.bodyTypeSet = mode, true
+	s.req.SetType(mode)
 	return nil
 }
 
@@ -326,15 +356,36 @@ func (b *Engine[C]) ReceiveQBlock2(req *pool.Message, szx SZX, exchange Exchange
 }
 
 func (s *q2BodyReceiver[C]) unblocked(response *pool.Message) (*pool.Message, error) {
-	if response.Code() >= codes.BadRequest && response.Code() != codes.BadOption {
+	if s.registrationTerminal(response) ||
+		response.Code() >= codes.BadRequest && response.Code() != codes.BadOption {
 		response.SetToken(s.req.Token())
 		return response, nil
 	}
+
 	s.b.cc.ReleaseMessage(response)
 	if s.assembly == nil {
 		return nil, ErrQBlockUnsupported
 	}
 	return nil, ErrInvalidOptionBlock2
+}
+
+func (s *q2BodyReceiver[C]) registrationTerminal(response *pool.Message) bool {
+	observe, err := s.req.Observe()
+	return err == nil && observe == 0 && !response.HasOption(message.Observe) &&
+		bytes.Equal(response.Token(), s.req.Token()) && response.Code() >= codes.Created &&
+		q2StartsRepresentation(response)
+}
+
+func q2StartsRepresentation(response *pool.Message) bool {
+	if !response.HasOption(message.QBlock2) {
+		return true
+	}
+	value, err := response.GetOptionUint32(message.QBlock2)
+	if err != nil {
+		return false
+	}
+	_, num, _, err := DecodeQBlockOption(value)
+	return err == nil && num == 0
 }
 
 func qMissingSet(missing []uint32, maxPayloads int64) []int64 {

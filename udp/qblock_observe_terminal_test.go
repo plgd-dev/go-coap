@@ -20,6 +20,20 @@ import (
 )
 
 func TestQBlockObserveTerminalNotificationDuringIncompleteBody(t *testing.T) {
+	for _, code := range []codes.Code{codes.Content, codes.BadOption, codes.NotFound} {
+		t.Run(code.String(), func(t *testing.T) {
+			t.Run("single", func(t *testing.T) {
+				testQBlockObserveTerminalDuringIncompleteBody(t, code, []byte("finished"), false)
+			})
+			t.Run("multiblock-recovery", func(t *testing.T) {
+				testQBlockObserveTerminalDuringIncompleteBody(t, code, bytes.Repeat([]byte{9}, 2563), true)
+			})
+		})
+	}
+}
+
+func testQBlockObserveTerminalDuringIncompleteBody(t *testing.T, terminalCode codes.Code, terminalBody []byte, losePayload bool) {
+	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
@@ -70,15 +84,13 @@ func TestQBlockObserveTerminalNotificationDuringIncompleteBody(t *testing.T) {
 		require.NoError(t, <-serverDone)
 	})
 
+	var lostTerminalPayload atomic.Bool
 	clientMonitor := options.WithRequestMonitor(func(_ *client.Conn, response *pool.Message) (bool, error) {
-		if response.Code() == codes.NotFound {
-			return false, nil
-		}
 		if !response.HasOption(message.QBlock2) {
 			return false, nil
 		}
 		if !response.HasOption(message.Observe) {
-			return false, nil
+			return dropQTerminalPayload(response, terminalCode, losePayload, &lostTerminalPayload)
 		}
 		sequence, sequenceErr := response.Observe()
 		if sequenceErr != nil {
@@ -117,6 +129,8 @@ func TestQBlockObserveTerminalNotificationDuringIncompleteBody(t *testing.T) {
 	type event struct {
 		code     codes.Code
 		sequence uint32
+		body     []byte
+		observe  bool
 	}
 	events := make(chan event, 8)
 	req, requestErr := cc.NewObserveRequest(ctx, "/observe-terminal")
@@ -125,10 +139,12 @@ func TestQBlockObserveTerminalNotificationDuringIncompleteBody(t *testing.T) {
 	observationToken := bytes.Clone(req.Token())
 	observation, observeErr := cc.DoObserve(req, func(response *pool.Message) {
 		sequence, _ := response.Observe()
-		if response.Code() == codes.NotFound {
+		if !response.HasOption(message.Observe) {
 			terminalDeliveries.Add(1)
 		}
-		events <- event{code: response.Code(), sequence: sequence}
+		body, bodyErr := response.ReadBody()
+		require.NoError(t, bodyErr)
+		events <- event{code: response.Code(), sequence: sequence, body: body, observe: response.HasOption(message.Observe)}
 	})
 	require.NoError(t, observeErr)
 
@@ -158,15 +174,20 @@ func TestQBlockObserveTerminalNotificationDuringIncompleteBody(t *testing.T) {
 		t.Fatal(ctx.Err())
 	}
 
-	require.NoError(t, writeNotification(codes.NotFound, 0, nil))
+	require.NoError(t, writeNotification(terminalCode, 0, terminalBody))
 	select {
 	case got := <-events:
-		require.Equal(t, codes.NotFound, got.code)
+		require.Equal(t, terminalCode, got.code)
 		require.Zero(t, got.sequence, "terminal response has no Observe option")
+		require.False(t, got.observe)
+		require.Equal(t, terminalBody, got.body, "deliver the complete terminal representation, not a legacy Block2 fragment")
 	case <-ctx.Done():
 		t.Fatal(ctx.Err())
 	}
 	require.EqualValues(t, 1, terminalDeliveries.Load(), "the incomplete notification's terminal result is delivered exactly once")
+	if losePayload {
+		require.True(t, lostTerminalPayload.Load(), "the terminal body must exercise missing-payload recovery")
+	}
 	require.Eventually(t, observation.Canceled, time.Second, time.Millisecond,
 		"terminal delivery must clean up the observation handler")
 	require.Never(t, func() bool { return terminalDeliveries.Load() > 1 }, 100*time.Millisecond, time.Millisecond,
@@ -181,4 +202,19 @@ func TestQBlockObserveTerminalNotificationDuringIncompleteBody(t *testing.T) {
 	secondObservation, secondObserveErr := cc.DoObserve(secondReq, func(*pool.Message) {})
 	require.NoError(t, secondObserveErr)
 	require.NoError(t, secondObservation.Cancel(ctx))
+}
+
+func dropQTerminalPayload(response *pool.Message, terminalCode codes.Code, enabled bool, dropped *atomic.Bool) (bool, error) {
+	if !enabled || response.Code() != terminalCode {
+		return false, nil
+	}
+	value, err := response.GetOptionUint32(message.QBlock2)
+	if err != nil {
+		return false, err
+	}
+	_, num, _, err := blockwise.DecodeQBlockOption(value)
+	if err != nil {
+		return false, err
+	}
+	return num == 1 && dropped.CompareAndSwap(false, true), nil
 }

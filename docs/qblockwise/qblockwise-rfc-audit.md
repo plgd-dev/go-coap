@@ -112,9 +112,24 @@ against the configured server budget. Download benchmarks rotate warmed peers
 outside timed batches so retained response caches cannot exhaust the quotas as
 the benchmark runner increases its iteration count.
 [Terminal Observe integration](../../udp/qblock_observe_terminal_test.go) keeps
-a notification body incomplete, asserts exactly-once terminal 4.04 delivery and
-observation cancellation, and reuses the registration token to verify route
-cleanup.
+a notification body incomplete, asserts exactly-once terminal 2.05/4.02/4.04
+delivery and observation cancellation, recovers lost terminal-body payloads,
+and reuses the registration token to verify route cleanup. Terminal bodies stay
+on Q-Block2; the server retires the registration but retains the bounded response
+cache for recovery. [Generation regressions](../../net/blockwise/qblock/observe_generation_test.go)
+also cancel and re-register during notification snapshot reads: cache installation
+must still match the exact registration generation. An absent Observe option on
+the registration token in an unblocked response or Q-Block2 NUM=0 terminates
+reception; later payloads can omit Observe even on that token. Omission on a recovery token
+does not itself terminate a notification or turn 4.02 into a terminal response.
+
+Additional [receiver regressions](../../net/blockwise/qblock/review_regression_test.go)
+cover request monitors consuming upload bodies, effective default/custom Size1
+limits in 4.13 responses, and recovery after an Observe replacement changes
+between NON and CON (including piggyback ACK normalization).
+[Observation ownership tests](../../net/observation/ownership_test.go) verify that
+callback release/reuse cannot change whether a notification terminates the
+observation.
 
 ### Separate feature scope
 

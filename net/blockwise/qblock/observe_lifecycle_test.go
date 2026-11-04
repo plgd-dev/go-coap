@@ -39,10 +39,10 @@ func TestQBlockObserveTerminalWriteCancelsRegistrationAndBody(t *testing.T) {
 	terminal.SetCode(codes.NotFound)
 	terminal.SetToken(request.Token())
 	handled, err = b.WriteNotification(terminal, nil)
-	require.False(t, handled, "the terminal message should use the ordinary writer")
+	require.True(t, handled, "terminal bodies must stay on the Q route")
 	require.NoError(t, err)
 	require.Empty(t, b.qObservations)
-	require.Empty(t, b.q2Senders)
+	require.Len(t, b.q2Senders, 1, "retain terminal payloads for bounded recovery")
 	require.Empty(t, cc.jobs, "a pending Q body must be canceled before fallthrough")
 
 	for i := range 128 {
@@ -50,10 +50,12 @@ func TestQBlockObserveTerminalWriteCancelsRegistrationAndBody(t *testing.T) {
 		require.NoError(t, b.registerQObservation(request, nil, SZX16))
 		terminal.SetToken(request.Token())
 		handled, err = b.WriteNotification(terminal, nil)
-		require.False(t, handled)
+		require.True(t, handled)
 		require.NoError(t, err)
+		b.CheckExpirations(time.Now().Add(b.config.NonPartialTimeout()))
 	}
 	require.Empty(t, b.qObservations, "repeated terminations must not consume registration capacity")
+	b.CloseQBlockTransfers()
 	require.Equal(t, bytesBefore, qRetainedBytes.Load())
 	require.Equal(t, transfersBefore, qRetainedTransfers.Load())
 }

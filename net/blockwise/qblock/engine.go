@@ -149,5 +149,9 @@ func (b *Engine[C]) sendServiceUnavailable(w *responsewriter.ResponseWriter[C], 
 }
 
 func (b *Engine[C]) sendEntityTooLarge(w *responsewriter.ResponseWriter[C], token message.Token) {
-	blocks.SendEntityTooLarge(b.cc, w, token, b.maxReceiveBodySize)
+	limit := b.maxReceiveBodySize
+	if limit <= 0 {
+		limit = q1DefaultMaxBodySize
+	}
+	blocks.SendEntityTooLarge(b.cc, w, token, limit)
 }
