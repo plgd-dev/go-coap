@@ -37,11 +37,19 @@ type Handler[C Client] struct {
 }
 
 func (h *Handler[C]) Handle(w *responsewriter.ResponseWriter[C], r *pool.Message) {
-	if o, ok := h.observations.Load(r.Token().Hash()); ok {
-		o.handle(r)
+	if h.HandleNotification(r) {
 		return
 	}
 	h.next(w, r)
+}
+
+// HandleNotification delivers a complete notification only while its observation exists.
+func (h *Handler[C]) HandleNotification(r *pool.Message) bool {
+	if o, ok := h.observations.Load(r.Token().Hash()); ok {
+		o.handle(r)
+		return true
+	}
+	return false
 }
 
 func (h *Handler[C]) client() C {
@@ -184,12 +192,20 @@ func (o *Observation[C]) handle(r *pool.Message) {
 	if o.wantBeNotified(r) {
 		o.observeFunc(r)
 	}
+	if !r.HasOption(message.Observe) {
+		o.cleanUp()
+	}
 }
 
 func (o *Observation[C]) cleanUp() bool {
 	// we can ignore err during cleanUp, if err != nil then some other
 	// part of code already removed the handler for the token
 	_, ok := o.observationHandler.pullOutObservation(o.req.Token.Hash())
+	if ok {
+		if client, supports := any(o.client()).(interface{ CancelObservation(message.Token) }); supports {
+			client.CancelObservation(o.req.Token)
+		}
+	}
 	return ok
 }
 

@@ -246,6 +246,12 @@ func (s *Server) Serve(l *coapNet.UDPConn) error {
 	if s.cfg.BlockwiseSZX > blockwise.SZX1024 {
 		return errors.New("invalid blockwiseSZX")
 	}
+	if _, err := s.cfg.QBlockwiseConfig.Resolve(); err != nil {
+		return err
+	}
+	if err := blockwise.ValidateQBlockwiseConfig(s.cfg.QBlockwiseMode, s.cfg.BlockwiseEnable); err != nil {
+		return err
+	}
 
 	err := s.checkAndSetListener(l)
 	if err != nil {
@@ -499,6 +505,9 @@ func (s *Server) getOrCreateConn(udpConn *coapNet.UDPConn, raddr *net.UDPAddr, l
 	cfg.TransmissionAcknowledgeRandomFactor = s.cfg.TransmissionAcknowledgeRandomFactor
 	cfg.TransmissionMaxRetransmit = s.cfg.TransmissionMaxRetransmit
 	cfg.MaxPendingMessages = s.cfg.MaxPendingMessages
+	cfg.QBlockwiseMode = s.cfg.QBlockwiseMode
+	cfg.QBlockwiseConfig = s.cfg.QBlockwiseConfig
+	cfg.QBlockwiseSecure = false
 	cfg.Handler = func(w *responsewriter.ResponseWriter[*client.Conn], r *pool.Message) {
 		h, ok := s.multicastHandler.Load(r.Token().Hash())
 		if ok {
