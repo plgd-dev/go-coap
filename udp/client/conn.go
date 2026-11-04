@@ -1269,9 +1269,10 @@ func (cc *Conn) handleReq(w *responsewriter.ResponseWriter[*Conn], req *pool.Mes
 	w.Message().SetModified(false)
 	reqType := req.Type()
 	reqMessageID := req.MessageID()
+	qResponse := req.HasOption(message.QBlock1) || req.HasOption(message.QBlock2)
 	cc.handle(w, req)
 
-	err := cc.processResponse(reqType, reqMessageID, req.HasOption(message.QBlock1) || req.HasOption(message.QBlock2), w)
+	err := cc.processResponse(reqType, reqMessageID, qResponse, w)
 	if err != nil {
 		cc.closeConnection()
 		cc.errors(fmt.Errorf(errFmtWriteResponse, err))
@@ -1286,6 +1287,7 @@ func (cc *Conn) closeConnection() {
 
 func (cc *Conn) ProcessReceivedMessageWithHandler(req *pool.Message, handler config.HandlerFunc[*Conn]) {
 	generation := req.Generation()
+	qResponse := req.HasOption(message.QBlock1) || req.HasOption(message.QBlock2)
 	defer func() {
 		cc.messagePool.ReleaseMessageIfNotHijacked(req, generation)
 	}()
@@ -1307,7 +1309,7 @@ func (cc *Conn) ProcessReceivedMessageWithHandler(req *pool.Message, handler con
 		// nothing to send
 		return
 	}
-	if req.HasOption(message.QBlock1) || req.HasOption(message.QBlock2) {
+	if qResponse {
 		if err := cc.validateQBlockDatagram(w.Message()); err != nil {
 			cc.errors(err)
 			w.Message().SetCode(codes.RequestEntityTooLarge)

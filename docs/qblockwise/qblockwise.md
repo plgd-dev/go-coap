@@ -175,7 +175,8 @@ surfaces. In particular:
 - Recovery lists are bounded by MAX_PAYLOADS but are not automatically shortened
   to the remaining datagram budget. Large sets, high NUMs, long options, or a
   small MTU can fail recovery rather than produce a fitting report/request.
-- Q2 server retention has a one-second minimum even for Max-Age=0; freshness
+- Q2 server retention has a `NonReceiveTimeout` minimum even for Max-Age=0
+  and is capped by `NonPartialTimeout`; freshness
   and retransmission retention are separate policies. Zero-age assembly and
   terminal Observe cleanup have regression tests, but broader freshness and
   expiry-during-recovery coverage remain release work.

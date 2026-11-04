@@ -698,7 +698,8 @@ func (b *BlockWise[C]) handleReceivedMessage(w *responsewriter.ResponseWriter[C]
 	if err != nil {
 		return fmt.Errorf("cannot encode start sending message block option(%v,%v,%v): %w", maxSZX, 0, true, err)
 	}
-	switch r.Code() {
+	receivedCode := r.Code()
+	switch receivedCode {
 	case codes.Empty, codes.CSM, codes.Ping, codes.Pong, codes.Release, codes.Abort:
 		next(w, r)
 		return nil
@@ -727,21 +728,21 @@ func (b *BlockWise[C]) handleReceivedMessage(w *responsewriter.ResponseWriter[C]
 		}
 	}
 	var match sendingMatch
-	if remoteAddr != nil && (r.Code() == codes.GET || r.Code() == codes.POST || r.Code() == codes.PUT) {
-		match = sendingMatch{key: getRequestMatchingKey(r, remoteAddr), code: r.Code(), endpoint: remoteAddr.String()}
+	if remoteAddr != nil && (receivedCode == codes.GET || receivedCode == codes.POST || receivedCode == codes.PUT) {
+		match = sendingMatch{key: getRequestMatchingKey(r, remoteAddr), code: receivedCode, endpoint: remoteAddr.String()}
 	}
 	if err = b.startSendingMessage(w, maxSZX, maxMessageSize, startSendingMessageBlock, exchangeKey, match); err != nil {
 		return err
 	}
-	echoFinalBlock1(w.Message(), r)
+	echoFinalBlock1(w.Message(), r, receivedCode)
 	return nil
 }
 
 // echoFinalBlock1 adds the Block1 option of the last request block to the final
 // response (RFC 7959 §2.3, §3.2). It is set after startSendingMessage so the
 // stored Block2 response body does not carry Block1 in follow-up blocks.
-func echoFinalBlock1(resp, r *pool.Message) {
-	if r.Code() != codes.POST && r.Code() != codes.PUT {
+func echoFinalBlock1(resp, r *pool.Message, receivedCode codes.Code) {
+	if receivedCode != codes.POST && receivedCode != codes.PUT {
 		return
 	}
 	block, err := r.GetOptionUint32(message.Block1)

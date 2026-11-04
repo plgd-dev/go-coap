@@ -401,7 +401,7 @@ func (b *Engine[C]) cacheQBlock2Response(ctx context.Context, key, identity stri
 	if maxAgeErr != nil {
 		maxAge = 60
 	}
-	lifetime := min(b.config.NonPartialTimeout(), max(time.Second, time.Duration(maxAge)*time.Second))
+	lifetime := min(b.config.NonPartialTimeout(), max(b.config.NonReceiveTimeout, time.Duration(maxAge)*time.Second))
 	b.q2Senders[key] = &q2SendTransfer{
 		message: stored, expires: time.Now().Add(lifetime),
 		size: size, identity: identity, mode: mode, sentThrough: -1, delay: b.config.nonDelay(),
