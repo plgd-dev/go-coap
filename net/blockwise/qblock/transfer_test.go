@@ -60,6 +60,63 @@ func TestQBlockAssemblyBoundsAndValidation(t *testing.T) {
 	require.ErrorIs(t, err, ErrQBlockIncomplete)
 }
 
+func TestQBlockAssemblyEmptyBody(t *testing.T) {
+	assembly, err := NewAssembly(SZX16, 0, 16, 1)
+	require.NoError(t, err)
+	require.False(t, assembly.Complete())
+	require.Equal(t, []uint32{0}, assembly.Missing())
+	require.Equal(t, []uint32{0}, assembly.MissingSet())
+	num, missing := assembly.FirstMissing()
+	require.Zero(t, num)
+	require.True(t, missing)
+
+	_, _, err = assembly.Add(1, false, nil)
+	require.ErrorIs(t, err, ErrQBlockInvalidNUM)
+	complete, duplicate, err := assembly.Add(0, false, nil)
+	require.NoError(t, err)
+	require.True(t, complete)
+	require.False(t, duplicate)
+	require.Empty(t, assembly.Missing())
+	require.Empty(t, assembly.MissingSet())
+	_, missing = assembly.FirstMissing()
+	require.False(t, missing)
+	reader, err := assembly.ReadSeeker()
+	require.NoError(t, err)
+	body, err := io.ReadAll(reader)
+	require.NoError(t, err)
+	require.Empty(t, body)
+
+	complete, duplicate, err = assembly.Add(0, false, nil)
+	require.NoError(t, err)
+	require.True(t, complete)
+	require.True(t, duplicate)
+	require.Empty(t, assembly.Missing())
+}
+
+func TestQBlockAssemblyRejectsNUMBeyondBody(t *testing.T) {
+	for _, szx := range []SZX{SZX16, SZX1024} {
+		for _, size := range []int64{szx.Size(), 2 * szx.Size(), 2*szx.Size() + 1} {
+			assembly, err := NewAssembly(szx, size, size, 3)
+			require.NoError(t, err)
+			count := (size-1)/szx.Size() + 1
+			for _, num := range []int64{count, count + 1} {
+				_, _, err = assembly.Add(num, false, nil)
+				require.ErrorIs(t, err, ErrQBlockInvalidNUM)
+				require.Equal(t, int64(-1), assembly.finalBlock)
+			}
+			for num := int64(0); num < count; num++ {
+				payload := make([]byte, min(szx.Size(), size-num*szx.Size()))
+				complete, duplicate, err := assembly.Add(num, num < count-1, payload)
+				require.NoError(t, err)
+				require.Equal(t, num == count-1, complete)
+				require.False(t, duplicate)
+			}
+			require.True(t, assembly.Complete())
+			require.Empty(t, assembly.Missing())
+		}
+	}
+}
+
 func TestQBlockAssemblyConflictingDuplicate(t *testing.T) {
 	assembly, err := NewAssembly(SZX16, 16, 16, 1)
 	require.NoError(t, err)

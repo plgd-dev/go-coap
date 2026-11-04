@@ -252,6 +252,7 @@ func (s *Server) createConn(connection *coapNet.Conn, inactivityMonitor udpClien
 	cfg.QBlockwiseMode = s.cfg.QBlockwiseMode
 	cfg.QBlockwiseConfig = s.cfg.QBlockwiseConfig
 	cfg.QBlockwiseSecure = true
+	cfg.MTU = s.cfg.MTU
 	cfg.Handler = s.cfg.Handler
 	cfg.BlockwiseSZX = s.cfg.BlockwiseSZX
 	cfg.Errors = s.cfg.Errors

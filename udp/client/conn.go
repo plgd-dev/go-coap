@@ -324,6 +324,7 @@ type Conn struct {
 	qJobsMu               sync.Mutex
 	qJobs                 map[string]qBlockJob
 	qJobsWake             chan struct{}
+	qAsyncSends           int
 
 	localAddr      atomic.Pointer[net.IP]
 	interfaceIndex atomic.Int64
@@ -1082,13 +1083,30 @@ func (cc *Conn) handle(w *responsewriter.ResponseWriter[*Conn], m *pool.Message)
 		}
 		cc.observationHandler.Handle(rw, rm)
 	}
-	if cc.blockWise != nil {
-		cc.blockWise.Handle(w, m, cc.blockwiseSZX, cc.session.MaxMessageSize(), cc.RemoteAddr(), func(rw *responsewriter.ResponseWriter[*Conn], rm *pool.Message) {
-			handleResponse(rw, rm)
-		})
+	if cc.handleBlockwise(w, m, handleResponse) {
 		return
 	}
 	handleResponse(w, m)
+}
+
+func (cc *Conn) handleBlockwise(w *responsewriter.ResponseWriter[*Conn], m *pool.Message, next HandlerFunc) bool {
+	if cc.blockWise == nil {
+		return false
+	}
+	maxSZX := cc.blockwiseSZX
+	if m.HasOption(message.QBlock1) || m.HasOption(message.QBlock2) {
+		responseSZX, err := cc.qBlockResponseSZX()
+		if err != nil {
+			cc.errors(fmt.Errorf("cannot size Q-Block response: %w", err))
+			if responseErr := w.SetResponse(codes.RequestEntityTooLarge, message.TextPlain, nil); responseErr != nil {
+				cc.errors(responseErr)
+			}
+			return true
+		}
+		maxSZX = min(maxSZX, responseSZX)
+	}
+	cc.blockWise.Handle(w, m, maxSZX, cc.session.MaxMessageSize(), cc.RemoteAddr(), next)
+	return true
 }
 
 func (cc *Conn) qBlockAllowed() bool {

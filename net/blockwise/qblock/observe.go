@@ -36,12 +36,12 @@ func (b *Engine[C]) CancelQBlockObservation(token message.Token, remote net.Addr
 		delete(b.qObservations, qObservationKey(token, remote))
 		b.rememberQCancellationLocked(qObservationKey(token, remote))
 		b.cc.ReleaseMessage(observation.request)
-		qRetainedTransfers.Add(-1)
+		b.qReleaseTransfer()
 		if transfer := b.q2Senders[observation.key]; transfer != nil {
 			delete(b.q2Senders, observation.key)
 			b.q2SendBytes -= transfer.size
-			qRetainedBytes.Add(-transfer.size)
-			qRetainedTransfers.Add(-1)
+			b.qReleaseBytes(transfer.size)
+			b.qReleaseTransfer()
 			b.cc.ReleaseMessage(transfer.message)
 		}
 	}
@@ -82,7 +82,7 @@ func (b *Engine[C]) registerQObservation(r *pool.Message, remote net.Addr, szx S
 	delete(b.qCanceledObservations, key)
 	if previous := b.qObservations[key]; previous != nil {
 		b.cc.ReleaseMessage(previous.request)
-	} else if len(b.qObservations) >= 128 || !qReserveTransfer() {
+	} else if len(b.qObservations) >= 128 || !b.qReserveTransfer() {
 		return ErrQBlockTooLarge
 	}
 	b.qObservations[key] = &qObservation{request: b.cloneMessage(r), key: q2TransferKey(r, remote), szx: szx}
@@ -92,23 +92,13 @@ func (b *Engine[C]) registerQObservation(r *pool.Message, remote net.Addr, szx S
 // WriteNotification sends a registered Q notification and reports whether it
 // handled the message. A false result leaves non-Q notifications to the caller.
 func (b *Engine[C]) WriteNotification(response *pool.Message, remote net.Addr) (bool, error) {
-	if !response.HasOption(message.Observe) || isRequestCode(response.Code()) {
-		return false, nil
+	request, key, szx, handled, err := b.registeredQNotification(response, remote)
+	if !handled {
+		return false, err
 	}
-	b.q2SendMu.Lock()
-	observationKey := qObservationKey(response.Token(), remote)
-	observation := b.qObservations[observationKey]
-	if observation == nil {
-		canceled := b.qCanceledObservations[observationKey].After(time.Now())
-		b.q2SendMu.Unlock()
-		if canceled {
-			return true, context.Canceled
-		}
-		return false, nil
+	if err != nil {
+		return true, err
 	}
-	request := b.cloneMessage(observation.request)
-	key, szx := observation.key, observation.szx
-	b.q2SendMu.Unlock()
 	defer b.cc.ReleaseMessage(request)
 	transport, ok := any(b.cc).(Transport)
 	if !ok {
@@ -120,7 +110,8 @@ func (b *Engine[C]) WriteNotification(response *pool.Message, remote net.Addr) (
 		mode = message.Confirmable
 	}
 	request.SetType(mode)
-	if err := b.cacheQBlock2Response(response.Context(), key, qTransferKey(request, remote, nil, true), response, mode); err != nil {
+	err = b.cacheQBlock2Response(response.Context(), key, qTransferKey(request, remote, nil, true), response, mode)
+	if err != nil {
 		return true, err
 	}
 	size, err := response.BodySize()
@@ -138,10 +129,50 @@ func (b *Engine[C]) WriteNotification(response *pool.Message, remote net.Addr) (
 	if err != nil || count == 1 {
 		return true, err
 	}
+	nums, deadline := b.firstNotificationSet(key, mode, count)
+	return true, b.scheduleQ2Set(response.Context(), transport, key, response.Token(), szx, mode,
+		nums, count, true, false, deadline)
+}
+
+func (b *Engine[C]) registeredQNotification(response *pool.Message, remote net.Addr) (*pool.Message, string, SZX, bool, error) {
+	if isRequestCode(response.Code()) {
+		return nil, "", 0, false, nil
+	}
+	if !response.HasOption(message.Observe) {
+		b.CancelQBlockObservation(response.Token(), remote)
+		return nil, "", 0, false, nil
+	}
+	b.q2SendMu.Lock()
+	observationKey := qObservationKey(response.Token(), remote)
+	observation := b.qObservations[observationKey]
+	if observation == nil {
+		canceled := b.qCanceledObservations[observationKey].After(time.Now())
+		b.q2SendMu.Unlock()
+		if canceled {
+			return nil, "", 0, true, context.Canceled
+		}
+		return nil, "", 0, false, nil
+	}
+	request := b.cloneMessage(observation.request)
+	key, szx := observation.key, observation.szx
+	b.q2SendMu.Unlock()
+	return request, key, szx, true, nil
+}
+
+func (b *Engine[C]) firstNotificationSet(key string, mode message.Type, count int64) ([]int64, time.Time) {
 	var nums []int64
 	for num := int64(1); num <= b.config.setLast(0, count); num++ {
 		nums = append(nums, num)
 	}
-	return true, b.scheduleQ2Set(response.Context(), transport, key, response.Token(), szx, mode,
-		nums, count, true, false, time.Now())
+	deadline := time.Now()
+	if len(nums) == 0 {
+		next := b.config.setLast(0, count) + 1
+		for num := next; num <= b.config.setLast(next, count); num++ {
+			nums = append(nums, num)
+		}
+		if mode == message.NonConfirmable {
+			deadline = deadline.Add(b.q2SetDelay(key))
+		}
+	}
+	return nums, deadline
 }

@@ -424,6 +424,47 @@ func (cc *Conn) nextQBlockNotification(token message.Token, exchange blockwise.Q
 	}
 }
 
+// SendQBlockAsync retains a message copy and awaits its ACK outside the shared
+// deadline worker. Pending writes, including NSTART waiters, are bounded.
+func (cc *Conn) SendQBlockAsync(msg *pool.Message, done func(error)) error {
+	cc.qJobsMu.Lock()
+	if err := cc.Context().Err(); err != nil {
+		cc.qJobsMu.Unlock()
+		return err
+	}
+	if cc.qAsyncSends >= 128 {
+		cc.qJobsMu.Unlock()
+		return blockwise.ErrQBlockScheduleFull
+	}
+	cc.qAsyncSends++
+	cc.qJobsMu.Unlock()
+	release := func() {
+		cc.qJobsMu.Lock()
+		cc.qAsyncSends--
+		cc.qJobsMu.Unlock()
+	}
+	ctx, cancel := context.WithCancel(msg.Context())
+	stop := context.AfterFunc(cc.Context(), cancel)
+	copyMsg := cc.AcquireMessage(ctx)
+	if err := msg.Clone(copyMsg); err != nil {
+		cc.ReleaseMessage(copyMsg)
+		stop()
+		cancel()
+		release()
+		return err
+	}
+	copyMsg.SetContext(ctx)
+	go func() {
+		err := cc.SendQBlock(copyMsg)
+		cc.ReleaseMessage(copyMsg)
+		stop()
+		cancel()
+		release()
+		done(err)
+	}()
+	return nil
+}
+
 // SendQBlock uses normal CON retransmission and NSTART handling. NON stays NON.
 func (cc *Conn) SendQBlock(msg *pool.Message) error {
 	if !cc.qBlockAllowed() {

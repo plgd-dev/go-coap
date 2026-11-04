@@ -74,6 +74,28 @@ func TestConfigRejectsInvalidAndOverflowingParameters(t *testing.T) {
 	}
 }
 
+func TestConfigQBlock1BackoffOverflowBoundary(t *testing.T) {
+	for _, retries := range []int{0, 1, 4, 20} {
+		config := DefaultConfig()
+		config.NonMaxRetransmit = retries
+		maxBase := time.Duration(1<<63-1) >> retries
+		config.NonReceiveTimeout = maxBase - time.Second
+		resolved, err := config.Resolve()
+		require.NoError(t, err)
+		require.Equal(t, maxBase<<retries, (resolved.NonReceiveTimeout+time.Second)<<retries)
+		require.Positive(t, (resolved.NonReceiveTimeout+time.Second)<<retries)
+
+		for _, timeout := range []time.Duration{maxBase - time.Second + time.Nanosecond, maxBase} {
+			config.NonReceiveTimeout = timeout
+			_, err = config.Resolve()
+			require.ErrorIs(t, err, ErrInvalidConfig)
+			engine := New(newTestClient(), nil)
+			require.ErrorIs(t, engine.SetConfig(config), ErrInvalidConfig)
+			require.Equal(t, DefaultConfig(), engine.config)
+		}
+	}
+}
+
 func TestConfiguredSetBoundariesAndMissingReports(t *testing.T) {
 	for _, size := range []int64{1, 3, 16, 64, 256} {
 		engine := New(newTestClient(), nil)

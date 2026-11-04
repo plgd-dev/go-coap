@@ -29,7 +29,10 @@ func (e *qObserveExchange) Send(request *pool.Message) error {
 	return nil
 }
 func (*qObserveExchange) Close() {}
-func (e *qObserveExchange) Receive(_ context.Context) (*pool.Message, error) {
+func (e *qObserveExchange) Receive(ctx context.Context) (*pool.Message, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if len(e.messages) == 0 {
 		if e.cancel != nil {
 			e.cancel()
@@ -118,6 +121,60 @@ func TestQBlockObservePartialReplacement(t *testing.T) {
 	sequence, err := response.Observe()
 	require.NoError(t, err)
 	require.Equal(t, newSequence, sequence, "a recovery's omitted Observe must not lose notification ordering")
+	require.Equal(t, bytesBefore, qRetainedBytes.Load())
+	require.Equal(t, transfersBefore, qRetainedTransfers.Load())
+}
+
+func TestQBlockObserveTerminalNotificationDuringPartialBody(t *testing.T) {
+	bytesBefore, transfersBefore := qRetainedBytes.Load(), qRetainedTransfers.Load()
+	cc := &qTestTransport{testClient: newTestClient(), jobs: make(map[string]qBlockTestJob)}
+	b := New(cc, nil)
+	defer b.CloseQBlockTransfers()
+	req := pool.NewMessage(context.Background())
+	req.SetCode(codes.GET)
+	req.SetToken([]byte("observe"))
+	req.SetObserve(0)
+	sequence := uint32(10)
+	terminal := pool.NewMessage(context.Background())
+	terminal.SetCode(codes.NotFound)
+	terminal.SetToken([]byte("recovery"))
+	exchange := &qObserveExchange{messages: []*pool.Message{terminal}}
+
+	response, err := b.ReceiveQBlock2(req, SZX16, exchange,
+		qObservePayload(t, SZX16, 0, 48, 1, &sequence))
+	require.NoError(t, err)
+	defer cc.ReleaseMessage(response)
+	require.Equal(t, codes.NotFound, response.Code())
+	require.Equal(t, message.Token("observe"), response.Token(),
+		"the terminal notification must route through the registration token")
+	require.False(t, response.HasOption(message.Observe))
+	require.Equal(t, bytesBefore, qRetainedBytes.Load())
+	require.Equal(t, transfersBefore, qRetainedTransfers.Load())
+}
+
+func TestQBlockObserveZeroMaxAgeAllowsMultiblockBody(t *testing.T) {
+	bytesBefore, transfersBefore := qRetainedBytes.Load(), qRetainedTransfers.Load()
+	cc := &qTestTransport{testClient: newTestClient(), jobs: make(map[string]qBlockTestJob)}
+	b := New(cc, nil)
+	defer b.CloseQBlockTransfers()
+	req := pool.NewMessage(context.Background())
+	req.SetCode(codes.GET)
+	req.SetToken([]byte("observe"))
+	req.SetObserve(0)
+	sequence := uint32(10)
+	first := qObservePayload(t, SZX16, 0, 48, 1, &sequence)
+	first.SetOptionUint32(message.MaxAge, 0)
+	exchange := &qObserveExchange{messages: []*pool.Message{
+		qObservePayload(t, SZX16, 1, 48, 1, nil),
+		qObservePayload(t, SZX16, 2, 48, 1, nil),
+	}}
+
+	response, err := b.ReceiveQBlock2(req, SZX16, exchange, first)
+	require.NoError(t, err)
+	defer cc.ReleaseMessage(response)
+	body, err := response.ReadBody()
+	require.NoError(t, err)
+	require.Equal(t, bytes.Repeat([]byte{1}, 48), body)
 	require.Equal(t, bytesBefore, qRetainedBytes.Load())
 	require.Equal(t, transfersBefore, qRetainedTransfers.Load())
 }

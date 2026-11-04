@@ -103,6 +103,10 @@ type qWireCounts struct {
 }
 
 func (c *qWireCounts) monitor(_ *client.Conn, msg *pool.Message) (bool, error) {
+	// Bad Option may echo the rejected Q option; it is not Q transfer traffic.
+	if msg.Code() >= codes.BadRequest {
+		return false, nil
+	}
 	if msg.HasOption(message.QBlock1) {
 		c.q1.Add(1)
 	}
@@ -113,6 +117,35 @@ func (c *qWireCounts) monitor(_ *client.Conn, msg *pool.Message) (bool, error) {
 		c.legacy.Add(1)
 	}
 	return false, nil
+}
+
+func TestQBlockWireCountsExcludeRejectedOptions(t *testing.T) {
+	counts := new(qWireCounts)
+	msg := pool.NewMessage(context.Background())
+	msg.SetCode(codes.BadOption)
+	msg.SetOptionUint32(message.QBlock2, 0)
+	_, err := counts.monitor(nil, msg)
+	require.NoError(t, err)
+	require.Zero(t, counts.q2.Load())
+
+	msg.SetCode(codes.Content)
+	_, err = counts.monitor(nil, msg)
+	require.NoError(t, err)
+	require.EqualValues(t, 1, counts.q2.Load())
+
+	msg.Remove(message.QBlock2)
+	msg.SetCode(codes.PUT)
+	msg.SetOptionUint32(message.QBlock1, 0)
+	_, err = counts.monitor(nil, msg)
+	require.NoError(t, err)
+	require.EqualValues(t, 1, counts.q1.Load())
+
+	msg.Remove(message.QBlock1)
+	msg.SetCode(codes.Content)
+	msg.SetOptionUint32(message.Block2, 0)
+	_, err = counts.monitor(nil, msg)
+	require.NoError(t, err)
+	require.EqualValues(t, 1, counts.legacy.Load())
 }
 
 func qPayload() []byte {
@@ -336,6 +369,11 @@ func TestQBlockLibcoapGoClient(t *testing.T) {
 
 func startQGoServer(t *testing.T, secure bool, szx blockwise.SZX, payload []byte, counts *qWireCounts, calls *atomic.Int32, parameters ...options.QBlockwiseConfig) string {
 	t.Helper()
+	return startQGoServerWithMTU(t, secure, szx, payload, counts, calls, client.DefaultConfig.MTU, parameters...)
+}
+
+func startQGoServerWithMTU(t *testing.T, secure bool, szx blockwise.SZX, payload []byte, counts *qWireCounts, calls *atomic.Int32, mtu uint16, parameters ...options.QBlockwiseConfig) string {
+	t.Helper()
 	var config options.QBlockwiseConfig
 	if len(parameters) > 0 {
 		config = parameters[0]
@@ -372,6 +410,7 @@ func startQGoServer(t *testing.T, secure bool, szx blockwise.SZX, payload []byte
 			piondtls.WithCipherSuites(piondtls.TLS_PSK_WITH_AES_128_GCM_SHA256)))
 		require.NoError(t, err)
 		s := dtls.NewServer(options.WithMux(router),
+			options.WithMTU(mtu),
 			options.WithBlockwise(true, szx, 30*time.Second),
 			options.WithQBlockwise(options.QBlockwiseAuto),
 			options.WithQBlockwiseConfig(config),
@@ -388,6 +427,7 @@ func startQGoServer(t *testing.T, secure bool, szx blockwise.SZX, payload []byte
 	l, err := coapNet.NewListenUDP("udp4", "127.0.0.1:0")
 	require.NoError(t, err)
 	s := udp.NewServer(options.WithMux(router),
+		options.WithMTU(mtu),
 		options.WithBlockwise(true, szx, 30*time.Second),
 		options.WithQBlockwise(options.QBlockwiseAuto), options.WithQBlockwiseConfig(config), options.WithRequestMonitor(counts.monitor),
 	)

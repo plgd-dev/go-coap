@@ -47,6 +47,25 @@ func TestQBlockConfiguredTransfers(t *testing.T) {
 	}
 }
 
+func TestQBlockConfiguredSinglePayloadSetsWithoutRecovery(t *testing.T) {
+	for _, secure := range []bool{false, true} {
+		t.Run(fmt.Sprintf("secure=%v", secure), func(t *testing.T) {
+			config := qblock.DefaultConfig()
+			config.MaxPayloads, config.NonMaxRetransmit = 1, 0
+			calls := new(atomic.Int32)
+			payload := qPayload()
+			uri := startQGoServer(t, secure, blockwise.SZX128, payload, new(qWireCounts), calls, config)
+			cc := qDial(t, strings.TrimPrefix(strings.TrimPrefix(uri, "coaps://"), "coap://"),
+				secure, blockwise.SZX128, options.QBlockwiseOnly, new(qWireCounts), config)
+			response := qDo(t, cc, codes.GET, "/q", nil, message.Confirmable)
+			body, err := response.ReadBody()
+			require.NoError(t, err)
+			require.Equal(t, payload, body)
+			require.EqualValues(t, 1, calls.Load())
+		})
+	}
+}
+
 func TestQBlockConfiguredSelectiveRecovery(t *testing.T) {
 	payload := qPayload()
 	for _, upload := range []bool{false, true} {

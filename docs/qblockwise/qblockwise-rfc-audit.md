@@ -28,7 +28,7 @@ Links below are relative to this document.
 | 4.3: stable Request-Tag per body, unique for different bodies. | Implemented with caller responsibility | [Sender](../../net/blockwise/qblock/client.go) generates a tag when absent and preserves it on retransmissions. Caller-supplied tags must not be reused for different concurrent bodies. [Raw-wire tests](../../udp/qblock_semantics_test.go) cover tag semantics, including empty tags. |
 | 4.3: initial and retransmitted payloads in increasing NUM order. | Implemented for scheduled sets; cross-set report coverage incomplete | [Sender](../../net/blockwise/qblock/client.go) and [configured recovery tests](../../udp/qblock_config_test.go). A report spanning multiple sets is reduced to its first set; remaining losses depend on later reports. Add explicit cross-set foreign-report tests. |
 | 4.3: final/Continue/4.08 responses use a received exchange token. | Implemented | [Q1 receiver](../../net/blockwise/qblock/receive.go), [token routing](../../udp/client/qblock.go), [token lifecycle tests](../../udp/client/qblock_internal_test.go). |
-| 4.3: FETCH Observe response token remains the notification token. | Unverified | GET Observe is exercised; dedicated body-bearing FETCH Observe registration, notification, recovery, and cancellation tests are still required. |
+| 4.3: FETCH Observe response token remains the notification token. | Unsupported by Q selection | `qBlockEligible` rejects non-GET Observe requests: Only returns `ErrQBlockUnsupported`, Auto uses legacy handling. Implement body-bearing FETCH Observe registration, notification, recovery, and cancellation before claiming support. |
 | 4.3: Continue MUST NOT be generated for every received Q1 request; SHOULD only acknowledge complete NON sets, SHOULD NOT be generated for CON. | Partial/gap | NON sets are acknowledged at boundaries. [Q1 receiver](../../net/blockwise/qblock/receive.go) emits per-block CON Continue responses. This is a normative gap, not just a missing test or a permissible SHOULD deviation. Current sender/interop behavior depends on CON progress; migrate to empty ACK progress and final responses before claiming conformance. |
 | 4.3: missing Request-Tag/Size1 returns 4.00; unsupported CON Q returns 4.02. | Implemented | [Receiver validation](../../net/blockwise/qblock/receive.go), [wire-negative tests](../../udp/qblock_semantics_test.go), [disabled critical-option tests](../../net/client/qblock_critical_test.go). |
 | 4.3, 5: CBOR 4.08 selects retransmission with identical NUM/SZX/M/Tag/Size1; non-CBOR 4.08 is ordinary incomplete handling. | Implemented selective path; ordinary 4.08 recovery unverified | [Sender](../../net/blockwise/qblock/client.go), [loss tests](../../udp/qblock_loss_test.go), [native loss tests](../../udp/qblock_libcoap_test.go). Non-CBOR 4.08 currently surfaces as an operation error; restart behavior needs explicit interoperability tests. |
@@ -37,10 +37,10 @@ Links below are relative to this document.
 | 4.4: all body blocks have the same ETag; different representations have different ETags. | Implemented with application responsibility | [Response cache](../../net/blockwise/qblock/send.go) preserves an application ETag or generates one from the body. Applications must not reuse an explicit ETag for different data. [Observe replacement tests](../../net/blockwise/qblock/observe_test.go). Hash-generated ETags do not provide mathematical collision freedom. |
 | 4.4: recovery requests contain increasing, duplicate-free Q2 values; invalid order SHOULD get 4.00. | Implemented | [Receiver requests](../../net/blockwise/qblock/client_receive.go), [server validation](../../net/blockwise/qblock/send.go), [wire negatives](../../udp/qblock_semantics_test.go). |
 | 4.4: ignore duplicate Q2 payloads with the same ETag. | Implemented | [Assembly](../../net/blockwise/qblock/transfer.go), [receiver](../../net/blockwise/qblock/client_receive.go), [assembly tests](../../net/blockwise/qblock/transfer_test.go). Conflicting data at an already received NUM is treated as invalid input, not a second delivery. |
-| 4.4: client SHOULD retain partial data for min(NON_PARTIAL_TIMEOUT, Max-Age), release tokens, omit ETag from missing requests. | Implemented; boundary coverage incomplete | [Receiver](../../net/blockwise/qblock/client_receive.go) uses the smaller lifetime and removes ETag from control requests; [Observe cancellation](../../net/blockwise/qblock/observe_test.go). Add Max-Age=0, 1, default, and expiry-during-recovery tests. |
+| 4.4: client SHOULD retain partial data for min(NON_PARTIAL_TIMEOUT, Max-Age), release tokens, omit ETag from missing requests. | Implemented for positive Max-Age; intentional zero-age SHOULD deviation | [Receiver](../../net/blockwise/qblock/client_receive.go) uses the smaller lifetime for positive Max-Age and removes ETag from control requests. Max-Age=0 retains assembly for NON_PARTIAL_TIMEOUT so an immediately stale representation can still complete; it does not become fresh cached data. [Lifecycle regressions](../../net/blockwise/qblock/observe_lifecycle_test.go) cover zero-age assembly and terminal responses. Short positive age and expiry-during-recovery tests remain open. |
 | 4.4, 8: cache a response for recovery; changed data uses latest ETag/Size2, invalidates the old partial body. | Implemented; policy edge open | [Response cache](../../net/blockwise/qblock/send.go), [Observe replacement](../../net/blockwise/qblock/observe_test.go). Server retention has a one-second minimum even at Max-Age=0. Section 8 leaves cache lifetime implementation-specific; document freshness separately from retransmission retention and test the distinction. |
 | 4.4: CON piggyback ACK then CON payloads; failed transmission SHOULD terminate body transfer. | Implemented path; exhaustive failure timing unverified | [Scheduler](../../net/blockwise/qblock/schedule.go), [native matrix](../../udp/qblock_libcoap_test.go), [stable recovery regression](../../udp/qblock_stable_test.go). ACK payloads are interpreted as the CON family by [receiver type tests](../../net/blockwise/qblock/rfc_test.go). |
-| 4.5: consistent Observe value on all original payloads; omit Observe from Q2 missing requests and responses. | Implemented for tested GET observations | [Observe engine](../../net/blockwise/qblock/observe.go), [receiver](../../net/blockwise/qblock/client_receive.go), [scheduler](../../net/blockwise/qblock/schedule.go), [Go/libcoap Observe tests](../../udp/qblock_observe_test.go). FETCH-specific coverage remains open. |
+| 4.5: consistent Observe value on all original payloads; omit Observe from Q2 missing requests and responses. | Implemented for tested GET observations | [Observe engine](../../net/blockwise/qblock/observe.go), [receiver](../../net/blockwise/qblock/client_receive.go), [scheduler](../../net/blockwise/qblock/schedule.go), [Go/libcoap Observe tests](../../udp/qblock_observe_test.go). FETCH Observe is unsupported by Q selection. |
 | 4.6: exact Size1/Size2 on every applicable payload, invariant within a body. | Implemented | [Q1 receiver](../../net/blockwise/qblock/receive.go), [Q2 receiver](../../net/blockwise/qblock/client_receive.go), [assembly tests](../../net/blockwise/qblock/transfer_test.go), [wire negatives](../../udp/qblock_semantics_test.go). |
 | 4.7: Q1 request body and Q2 response body together. | Implemented | [Completion path](../../net/blockwise/qblock/receive.go), PUT echo in [native matrix](../../udp/qblock_libcoap_test.go) and [configured transfers](../../udp/qblock_config_test.go). |
 | 4.8: server MUST ignore multicast Q2 requests. | Implemented | [Transport](../../udp/client/qblock.go), `TestQBlockMulticastRequestsAreIgnored` in [transport tests](../../udp/client/qblock_internal_test.go). Existing legacy multicast is unchanged. |
@@ -74,8 +74,8 @@ Links below are relative to this document.
 
 ### P2: complete normative edge-case evidence
 
-- Add all body-bearing methods (POST/FETCH/PATCH/iPATCH), especially FETCH
-  Observe's registration/final-token semantics. Existing GET/PUT success is not
+- Add all body-bearing methods (POST/FETCH/PATCH/iPATCH), and implement FETCH
+  Observe's registration/final-token semantics (currently unsupported by Q selection). Existing GET/PUT success is not
   evidence for every supported method.
 - Test external 4.08 reports spanning sets and ordinary non-CBOR 4.08 behavior;
   verify ascending retransmission, stale tokens, retry exhaustion, and cleanup.
@@ -97,6 +97,24 @@ Links below are relative to this document.
   limits and MAX_PAYLOADS cap are deliberate resource policies, not failures of
   wire-option range support. Application delivery still needs body-sized storage;
   this is not a streaming API.
+
+Review regressions additionally cover combined per-engine quotas (32 MiB and
+128 transfer/observation slots, below the process-wide 256 MiB/8,192 limits),
+atomic reservation rollback and cleanup, empty-body missing lists, rejection of
+NUM at the end of a nonempty body, terminal Observe delivery/cleanup,
+single-payload CON sets without recovery, and Q1 timer overflow guards.
+[Budget tests](../../net/blockwise/qblock/budget_test.go) exercise isolation and
+cleanup. [Scheduler tests](../../udp/qblock_scheduler_test.go) withhold a CON ACK
+while an unrelated NON body progresses; scheduled CON sends use bounded
+asynchronous ACK waits without changing NSTART.
+[MTU tests](../../udp/qblock_mtu_test.go) assert actual UDP/DTLS Q response sizes
+against the configured server budget. Download benchmarks rotate warmed peers
+outside timed batches so retained response caches cannot exhaust the quotas as
+the benchmark runner increases its iteration count.
+[Terminal Observe integration](../../udp/qblock_observe_terminal_test.go) keeps
+a notification body incomplete, asserts exactly-once terminal 4.04 delivery and
+observation cancellation, and reuses the registration token to verify route
+cleanup.
 
 ### Separate feature scope
 

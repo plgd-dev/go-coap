@@ -137,7 +137,11 @@ func (s *q2BodyReceiver[C]) newRepresentation(response *pool.Message, szx SZX, s
 	if maxAgeErr != nil {
 		maxAge = 60
 	}
-	s.partialExpires = time.Now().Add(min(s.b.config.NonPartialTimeout(), time.Duration(maxAge)*time.Second))
+	partialLifetime := time.Duration(maxAge) * time.Second
+	if maxAge == 0 {
+		partialLifetime = s.b.config.NonPartialTimeout()
+	}
+	s.partialExpires = time.Now().Add(min(s.b.config.NonPartialTimeout(), partialLifetime))
 	return nil
 }
 
@@ -156,7 +160,7 @@ func (s *q2BodyReceiver[C]) representation(response *pool.Message, szx SZX) (boo
 		if !newer {
 			return true, nil
 		}
-		qRetainedBytes.Add(-s.retainedBytes)
+		s.b.qReleaseBytes(s.retainedBytes)
 		s.retainedBytes, s.assembly = 0, nil
 		s.continued, s.retries, s.requestedSet = 0, 0, -1
 	}
@@ -182,12 +186,12 @@ func (s *q2BodyReceiver[C]) add(response *pool.Message, num int64, more bool) (b
 	if err != nil {
 		return false, false, err
 	}
-	if !qReserveBytes(int64(len(payload))) {
+	if !s.b.qReserveBytes(int64(len(payload))) {
 		return false, false, ErrQBlockTooLarge
 	}
 	complete, duplicate, err := s.assembly.Add(num, more, payload)
 	if duplicate || err != nil {
-		qRetainedBytes.Add(-int64(len(payload)))
+		s.b.qReleaseBytes(int64(len(payload)))
 	} else {
 		s.retainedBytes += int64(len(payload))
 	}
@@ -278,7 +282,7 @@ func (s *q2BodyReceiver[C]) finish(response *pool.Message) (*pool.Message, error
 // ReceiveQBlock2 consumes a Q body through an existing exchange, taking ownership
 // of initial when supplied. Notification exchanges retain the observation token.
 func (b *Engine[C]) ReceiveQBlock2(req *pool.Message, szx SZX, exchange Exchange, initial *pool.Message) (*pool.Message, error) {
-	if !qReserveTransfer() {
+	if !b.qReserveTransfer() {
 		if initial != nil {
 			b.cc.ReleaseMessage(initial)
 		}
@@ -286,8 +290,8 @@ func (b *Engine[C]) ReceiveQBlock2(req *pool.Message, szx SZX, exchange Exchange
 	}
 	s := &q2BodyReceiver[C]{b: b, req: req, exchange: exchange, szx: szx, maxSZX: szx, requestedSet: -1}
 	defer func() {
-		qRetainedTransfers.Add(-1)
-		qRetainedBytes.Add(-s.retainedBytes)
+		b.qReleaseTransfer()
+		b.qReleaseBytes(s.retainedBytes)
 	}()
 	if initial != nil {
 		s.sentRequests = 1
@@ -322,7 +326,7 @@ func (b *Engine[C]) ReceiveQBlock2(req *pool.Message, szx SZX, exchange Exchange
 }
 
 func (s *q2BodyReceiver[C]) unblocked(response *pool.Message) (*pool.Message, error) {
-	if s.assembly == nil && response.Code() >= codes.BadRequest && response.Code() != codes.BadOption {
+	if response.Code() >= codes.BadRequest && response.Code() != codes.BadOption {
 		response.SetToken(s.req.Token())
 		return response, nil
 	}

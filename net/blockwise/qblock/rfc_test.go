@@ -37,7 +37,7 @@ func TestRFC9177ResponseFamilyAndConsistentBodyType(t *testing.T) {
 				exchange: new(qObserveExchange),
 			}
 			defer func() {
-				qRetainedBytes.Add(-receiver.retainedBytes)
+				receiver.b.qReleaseBytes(receiver.retainedBytes)
 				require.Equal(t, bytesBefore, qRetainedBytes.Load())
 				require.Equal(t, transfersBefore, qRetainedTransfers.Load())
 			}()

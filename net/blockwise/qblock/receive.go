@@ -168,8 +168,8 @@ func (b *Engine[C]) q1TransferLocked(r *pool.Message, key string, p q1Parameters
 	if transfer != nil && !transfer.expires.After(now) {
 		delete(b.q1Receivers, key)
 		b.q1ReceiveBytes -= transfer.bytes
-		qRetainedBytes.Add(-transfer.bytes)
-		qRetainedTransfers.Add(-1)
+		b.qReleaseBytes(transfer.bytes)
+		b.qReleaseTransfer()
 		if transfer.response != nil {
 			b.cc.ReleaseMessage(transfer.response)
 		}
@@ -184,7 +184,7 @@ func (b *Engine[C]) q1TransferLocked(r *pool.Message, key string, p q1Parameters
 		if createErr != nil {
 			return nil, createErr
 		}
-		if !qReserveTransfer() {
+		if !b.qReserveTransfer() {
 			return nil, errReceivingMessagesCacheFull
 		}
 		transfer = &q1ReceiveTransfer{assembly: assembly, bodySize: int64(p.bodySize), szx: p.szx, mode: r.Type(), reportedSet: -1, continuedThrough: -1}
@@ -253,7 +253,7 @@ func (b *Engine[C]) handleQBlock1(
 func (b *Engine[C]) addQ1PayloadLocked(key string, transfer *q1ReceiveTransfer, assembly *Assembly,
 	p q1Parameters, payload []byte,
 ) (bool, bool, error) {
-	if b.q1ReceiveBytes+int64(len(payload)) > 64<<20 || !qReserveBytes(int64(len(payload))) {
+	if !b.qReserveBytes(int64(len(payload))) {
 		return false, false, ErrQBlockTooLarge
 	}
 	b.q1ReceiveBytes += int64(len(payload))
@@ -269,13 +269,13 @@ func (b *Engine[C]) addQ1PayloadLocked(key string, transfer *q1ReceiveTransfer, 
 	if duplicate || err != nil {
 		b.q1ReceiveBytes -= int64(len(payload))
 		transfer.bytes -= int64(len(payload))
-		qRetainedBytes.Add(-int64(len(payload)))
+		b.qReleaseBytes(int64(len(payload)))
 	}
 	if err != nil {
 		delete(b.q1Receivers, key)
 		b.q1ReceiveBytes -= transfer.bytes
-		qRetainedBytes.Add(-transfer.bytes)
-		qRetainedTransfers.Add(-1)
+		b.qReleaseBytes(transfer.bytes)
+		b.qReleaseTransfer()
 		return false, duplicate, err
 	}
 	return complete, duplicate, nil
@@ -412,7 +412,7 @@ func (b *Engine[C]) completeQ1(w *responsewriter.ResponseWriter[C], r *pool.Mess
 	// Sparse chunks are no longer retained after delivering the body. The
 	// completed marker and small final response suppress application replay.
 	b.q1ReceiveBytes -= transfer.bytes
-	qRetainedBytes.Add(-transfer.bytes)
+	b.qReleaseBytes(transfer.bytes)
 	transfer.bytes = 0
 	transfer.assembly = nil
 	transfer.continues = nil
@@ -448,8 +448,8 @@ func (b *Engine[C]) scheduleQ1Missing(ctx context.Context, key string) error {
 		if !transfer.expires.After(time.Now()) || transfer.retries >= b.config.NonMaxRetransmit {
 			delete(b.q1Receivers, key)
 			b.q1ReceiveBytes -= transfer.bytes
-			qRetainedBytes.Add(-transfer.bytes)
-			qRetainedTransfers.Add(-1)
+			b.qReleaseBytes(transfer.bytes)
+			b.qReleaseTransfer()
 			b.q1ReceiveMu.Unlock()
 			return nil
 		}
@@ -518,7 +518,7 @@ func (b *Engine[C]) cacheQ1FinalError(r *pool.Message, remoteAddr net.Addr, resp
 	}
 	transfer.response = stored
 	b.q1ReceiveBytes -= transfer.bytes
-	qRetainedBytes.Add(-transfer.bytes)
+	b.qReleaseBytes(transfer.bytes)
 	transfer.bytes = 0
 	transfer.assembly = nil
 	transfer.continues = nil

@@ -80,10 +80,16 @@ NON_PROBING_WAIT    = NON_PARTIAL_TIMEOUT - NonTimeout + NON_TIMEOUT_RANDOM
 Time-to-Wait       = NonReceiveTimeout * 2^(Re-Request-Count - 1)
 ```
 
-Default partial retention is 247 s, subject to Max-Age for Q2; default probing
+Default partial retention is 247 s, subject to positive Max-Age for Q2; default probing
 wait is 247-248 s. `Config.NonPartialTimeout()` and `Config.NonProbingWait(delay)`
 expose these calculations for a resolved configuration. Explicit overrides for
 the derived lifetimes and jitter factor are not exposed.
+Max-Age=0 marks the representation immediately stale for caching, but does not
+abort an ongoing multi-block assembly: it retains the partial body for
+`NonPartialTimeout`. Positive Max-Age limits retention to the smaller of that
+age and `NonPartialTimeout`. This deliberately separates transfer completion
+from cache freshness and differs from Section 4.4's recommended zero-age
+partial-retention limit.
 
 `WithQBlockwiseConfig` does not enable Q, alter legacy blockwise timeouts, change
 the selected CON/NON type, or tune CON retransmission/NSTART parameters.
@@ -139,12 +145,17 @@ valid and replayable until the operation completes, including retransmissions.
 Peers must coordinate nondefault MAX_PAYLOADS values; RFC 9177 does not define
 in-band negotiation for that parameter.
 
-Q-Block Observe supports registration, notifications, missing-payload recovery,
+Q-Block GET Observe supports registration, notifications, missing-payload recovery,
 representation replacement, and cancellation on UDP and DTLS. Original
 notification payloads carry Observe; recovery traffic does not re-register.
+FETCH and other non-GET Observe requests are unsupported by the Q selection
+path: Only returns `ErrQBlockUnsupported`, while Auto uses legacy handling.
 
 Experimental limits are 16 MiB and 65,536 blocks per body, with separate
-per-peer and process-wide body, transfer, and token budgets. Q transfer state
+per-peer and process-wide body, transfer, and token budgets. A connection has
+a combined 32 MiB retained-body budget and 128 transfer/observation slots across
+both directions; process-wide limits are 256 MiB and 8,192 slots. Failed
+reservations roll back both counters. Q transfer state
 uses its own recovery/retention lifetime, not the legacy `WithBlockwise`
 timeout. Congestion and recovery defaults can be customized as described above.
 Proxy and tokenless Q operations are unsupported.
@@ -164,17 +175,19 @@ surfaces. In particular:
 - Recovery lists are bounded by MAX_PAYLOADS but are not automatically shortened
   to the remaining datagram budget. Large sets, high NUMs, long options, or a
   small MTU can fail recovery rather than produce a fitting report/request.
-- Q2 server retention has a one-second minimum even for Max-Age=0; freshness and
-  retransmission-retention policy need dedicated tests.
-- Exhaustive method/Observe-FETCH coverage, prolonged asymmetric loss, timer
+- Q2 server retention has a one-second minimum even for Max-Age=0; freshness
+  and retransmission retention are separate policies. Zero-age assembly and
+  terminal Observe cleanup have regression tests, but broader freshness and
+  expiry-during-recovery coverage remain release work.
+- FETCH Observe support, exhaustive method coverage, prolonged asymmetric loss, timer
   exhaustion, concurrent discovery/scheduler scaling, retained-heap profiling,
   and unchanged-legacy-path performance thresholds remain release gates.
 - Proxy, tokenless Q, reliable-transport Q, and OSCORE are outside the current
   scope, not capabilities implied by Auto.
 
-The audit includes prioritized follow-up work and acceptance criteria. The
-broader implementation/performance checklist remains in
-[RFC9177-PLAN.md](../../RFC9177-PLAN.md). Local body/resource limits are policy, not
+The audit includes the maintained
+[follow-up checklist and acceptance criteria](qblockwise-rfc-audit.md#prioritized-remaining-work).
+Local body/resource limits are policy, not
 in themselves RFC violations. Do not treat successful legacy fallback as evidence
 of Q-Block interoperability.
 

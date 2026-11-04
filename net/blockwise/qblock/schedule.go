@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/plgd-dev/go-coap/v3/message"
+	"github.com/plgd-dev/go-coap/v3/message/pool"
 	"github.com/plgd-dev/go-coap/v3/net/blockwise/internal/blocks"
 )
 
@@ -80,12 +81,11 @@ func (s *q2SetJob[C]) recoveryDeadline() time.Time {
 	return time.Time{}
 }
 
-func (s *q2SetJob[C]) send(num int64) error {
+func (s *q2SetJob[C]) response(num int64) (*pool.Message, error) {
 	response, err := s.b.buildQBlock2ResponseFrom(s.ctx, s.key, s.token, s.szx, num, s.generation)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	defer s.b.cc.ReleaseMessage(response)
 	response.SetType(s.mode)
 	if s.recovery {
 		response.Remove(message.Observe)
@@ -97,7 +97,38 @@ func (s *q2SetJob[C]) send(num int64) error {
 		}
 		s.b.q2SendMu.Unlock()
 	}
+	return response, nil
+}
+
+func (s *q2SetJob[C]) send(num int64) error {
+	response, err := s.response(num)
+	if err != nil {
+		return err
+	}
+	defer s.b.cc.ReleaseMessage(response)
 	return s.transport.SendQBlock(response)
+}
+
+func (s *q2SetJob[C]) sendAsync(transport AsyncTransport) error {
+	response, err := s.response(s.nums[0])
+	if err != nil {
+		if errors.Is(err, errQBlock2ResponseNotFound) {
+			return nil
+		}
+		return err
+	}
+	defer s.b.cc.ReleaseMessage(response)
+	return transport.SendQBlockAsync(response, func(sendErr error) {
+		if !s.current() || s.ctx.Err() != nil {
+			return
+		}
+		if sendErr == nil {
+			sendErr = s.following(1)
+		}
+		if sendErr != nil {
+			s.b.errors(sendErr)
+		}
+	})
 }
 
 func (s *q2SetJob[C]) pauseNormalUntil(deadline time.Time) {
@@ -133,8 +164,11 @@ func (s *q2SetJob[C]) following(end int) error {
 }
 
 func (s *q2SetJob[C]) run() error {
-	if !s.current() {
+	if !s.current() || len(s.nums) == 0 {
 		return nil
+	}
+	if transport, ok := s.transport.(AsyncTransport); ok && s.mode == message.Confirmable {
+		return s.sendAsync(transport)
 	}
 	end := s.q2SetEnd(s.nums)
 	for i, num := range s.nums[:end] {

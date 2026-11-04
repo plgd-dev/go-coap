@@ -235,6 +235,12 @@ func (b *Engine[C]) continueQ2Response(r *pool.Message, key string, szx SZX, num
 		mode := r.Type()
 		remaining := slices.Clone(nums[1:])
 		delay := time.Duration(0)
+		if len(remaining) == 0 && wholeBody {
+			next := nums[0] + 1
+			for num := next; num <= b.config.setLast(next, count); num++ {
+				remaining = append(remaining, num)
+			}
+		}
 		if mode == message.NonConfirmable && len(remaining) > 0 && remaining[0]/b.config.MaxPayloads != nums[0]/b.config.MaxPayloads {
 			delay = b.q2SetDelay(key)
 		}
@@ -303,8 +309,8 @@ func (b *Engine[C]) buildQBlock2ResponseFrom(ctx context.Context, key string, to
 	if !transfer.expires.After(time.Now()) {
 		delete(b.q2Senders, key)
 		b.q2SendBytes -= transfer.size
-		qRetainedBytes.Add(-transfer.size)
-		qRetainedTransfers.Add(-1)
+		b.qReleaseBytes(transfer.size)
+		b.qReleaseTransfer()
 		b.cc.ReleaseMessage(transfer.message)
 		return nil, errQBlock2ResponseNotFound
 	}
@@ -351,18 +357,18 @@ func (b *Engine[C]) cacheQBlock2Response(ctx context.Context, key, identity stri
 	if size > q1DefaultMaxBodySize {
 		return ErrQBlockTooLarge
 	}
-	if !qReserveBytes(size) {
+	if !b.qReserveBytes(size) {
 		return ErrQBlockTooLarge
 	}
-	if !qReserveTransfer() {
-		qRetainedBytes.Add(-size)
+	if !b.qReserveTransfer() {
+		b.qReleaseBytes(size)
 		return ErrQBlockTooLarge
 	}
 	retained := false
 	defer func() {
 		if !retained {
-			qRetainedBytes.Add(-size)
-			qRetainedTransfers.Add(-1)
+			b.qReleaseBytes(size)
+			b.qReleaseTransfer()
 		}
 	}()
 	stored, err := b.snapshotQ2Body(ctx, response, size)
@@ -380,16 +386,11 @@ func (b *Engine[C]) cacheQBlock2Response(ctx context.Context, key, identity stri
 	}
 	if old := b.q2Senders[key]; old != nil {
 		b.q2SendBytes -= old.size
-		qRetainedBytes.Add(-old.size)
-		qRetainedTransfers.Add(-1)
+		b.qReleaseBytes(old.size)
+		b.qReleaseTransfer()
 		delete(b.q2Senders, key)
 		b.cc.ReleaseMessage(old.message)
 	} else if len(b.q2Senders) >= 4096 {
-		b.q2SendMu.Unlock()
-		b.cc.ReleaseMessage(stored)
-		return ErrQBlockTooLarge
-	}
-	if b.q2SendBytes+size > 64<<20 {
 		b.q2SendMu.Unlock()
 		b.cc.ReleaseMessage(stored)
 		return ErrQBlockTooLarge

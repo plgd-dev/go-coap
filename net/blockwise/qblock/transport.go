@@ -28,6 +28,13 @@ type Transport interface {
 	SendQBlock(*pool.Message) error
 }
 
+// AsyncTransport permits scheduled CON payloads to await ACKs without blocking
+// the shared deadline worker. Implementations retain their own message copy and
+// bound pending sends. On a nil return, done is called exactly once.
+type AsyncTransport interface {
+	SendQBlockAsync(*pool.Message, func(error)) error
+}
+
 func qBodyMethod(code codes.Code) bool {
 	return code == codes.POST || code == codes.PUT || code >= 5 && code <= 7
 }

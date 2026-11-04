@@ -138,7 +138,8 @@ func (a *Assembly) Add(num int64, more bool, payload []byte) (complete, duplicat
 
 func (a *Assembly) validatePayloadLocked(num int64, more bool, payload []byte) error {
 	blockSize := a.szx.Size()
-	if num > (a.bodySize / blockSize) {
+	lastNUM := (max(a.bodySize, 1) - 1) / blockSize
+	if num > lastNUM {
 		return ErrQBlockInvalidNUM
 	}
 	offset := num * blockSize
@@ -151,9 +152,6 @@ func (a *Assembly) validatePayloadLocked(num int64, more bool, payload []byte) e
 			return ErrQBlockInvalidSize
 		}
 	} else if end != a.bodySize {
-		return ErrQBlockInvalidSize
-	}
-	if a.bodySize == 0 && (num != 0 || more || len(payload) != 0) {
 		return ErrQBlockInvalidSize
 	}
 	if len(a.blocks) >= a.maxBlocks {
@@ -196,7 +194,7 @@ func (a *Assembly) Complete() bool {
 func (a *Assembly) Missing() []uint32 {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	blockCount := int64(0)
+	blockCount := int64(1)
 	if a.bodySize > 0 {
 		blockCount = (a.bodySize-1)/a.szx.Size() + 1
 	}

@@ -58,6 +58,8 @@ type Engine[C Client] struct {
 	errors                           func(error)
 	maxReceiveBodySize               int64
 	receivingMessagesCacheMaxEntries atomic.Int64
+	qRetainedBytes                   atomic.Int64
+	qRetainedTransfers               atomic.Int64
 	q1ReceiveMu                      sync.Mutex
 	q1Receivers                      map[string]*q1ReceiveTransfer
 	q1ReceiveBytes                   int64
@@ -113,8 +115,8 @@ func (b *Engine[C]) CheckExpirations(now time.Time) {
 		if !transfer.expires.After(now) {
 			delete(b.q1Receivers, key)
 			b.q1ReceiveBytes -= transfer.bytes
-			qRetainedBytes.Add(-transfer.bytes)
-			qRetainedTransfers.Add(-1)
+			b.qReleaseBytes(transfer.bytes)
+			b.qReleaseTransfer()
 			if transfer.response != nil {
 				b.cc.ReleaseMessage(transfer.response)
 			}
@@ -126,8 +128,8 @@ func (b *Engine[C]) CheckExpirations(now time.Time) {
 		if !transfer.expires.After(now) {
 			delete(b.q2Senders, key)
 			b.q2SendBytes -= transfer.size
-			qRetainedBytes.Add(-transfer.size)
-			qRetainedTransfers.Add(-1)
+			b.qReleaseBytes(transfer.size)
+			b.qReleaseTransfer()
 			b.cc.ReleaseMessage(transfer.message)
 		}
 	}

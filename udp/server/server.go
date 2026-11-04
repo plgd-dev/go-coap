@@ -508,6 +508,7 @@ func (s *Server) getOrCreateConn(udpConn *coapNet.UDPConn, raddr *net.UDPAddr, l
 	cfg.QBlockwiseMode = s.cfg.QBlockwiseMode
 	cfg.QBlockwiseConfig = s.cfg.QBlockwiseConfig
 	cfg.QBlockwiseSecure = false
+	cfg.MTU = s.cfg.MTU
 	cfg.Handler = func(w *responsewriter.ResponseWriter[*client.Conn], r *pool.Message) {
 		h, ok := s.multicastHandler.Load(r.Token().Hash())
 		if ok {

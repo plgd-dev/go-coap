@@ -47,7 +47,7 @@ func (c Config) Resolve() (Config, error) {
 		return c, fmt.Errorf("%w: MaxLatency must be positive and at most 24 hours", ErrInvalidConfig)
 	}
 	if c.NonReceiveTimeout < c.NonTimeout+c.NonTimeout/2+time.Second ||
-		c.NonReceiveTimeout > time.Duration(1<<63-1)>>c.NonMaxRetransmit {
+		c.NonReceiveTimeout > (time.Duration(1<<63-1)>>c.NonMaxRetransmit)-time.Second {
 		return c, fmt.Errorf("%w: NonReceiveTimeout must exceed 1.5*NonTimeout by at least one second and allow retry backoff", ErrInvalidConfig)
 	}
 	return c, nil

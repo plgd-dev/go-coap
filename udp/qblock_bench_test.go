@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -17,6 +18,7 @@ import (
 	"github.com/plgd-dev/go-coap/v3/net/blockwise"
 	"github.com/plgd-dev/go-coap/v3/options"
 	"github.com/plgd-dev/go-coap/v3/udp"
+	"github.com/plgd-dev/go-coap/v3/udp/client"
 )
 
 // BenchmarkBlockwiseDownload measures complete application-visible transfers.
@@ -50,8 +52,10 @@ func benchmarkBlockwiseDownload(b *testing.B, rtt time.Duration) {
 				if err != nil {
 					b.Fatal(err)
 				}
+				var peer atomic.Pointer[client.Conn]
 				server := udp.NewServer(options.WithMux(router),
 					options.WithQBlockwise(mode), options.WithBlockwise(true, blockwise.SZX1024, time.Minute),
+					options.WithOnNewConn(func(cc *client.Conn) { peer.Store(cc) }),
 				)
 				done := make(chan error, 1)
 				go func() { done <- server.Serve(listener) }()
@@ -68,12 +72,15 @@ func benchmarkBlockwiseDownload(b *testing.B, rtt time.Duration) {
 				if rtt > 0 {
 					addr = qLatencyRelay(b, addr, rtt/2)
 				}
-				conn, err := udp.Dial(addr,
-					options.WithQBlockwise(mode), options.WithBlockwise(true, blockwise.SZX1024, time.Minute),
-				)
-				if err != nil {
-					b.Fatal(err)
+				dial := func() *client.Conn {
+					conn, dialErr := udp.Dial(addr,
+						options.WithQBlockwise(mode), options.WithBlockwise(true, blockwise.SZX1024, time.Minute))
+					if dialErr != nil {
+						b.Fatal(dialErr)
+					}
+					return conn
 				}
+				conn := dial()
 				b.Cleanup(func() {
 					if err := conn.Close(); err != nil {
 						b.Error(err)
@@ -106,10 +113,27 @@ func benchmarkBlockwiseDownload(b *testing.B, rtt time.Duration) {
 				}
 
 				download()
+				reset := func() {
+					if closeErr := conn.Close(); closeErr != nil {
+						b.Fatal(closeErr)
+					}
+					if cc := peer.Swap(nil); cc != nil {
+						if closeErr := cc.Close(); closeErr != nil {
+							b.Fatal(closeErr)
+						}
+					}
+					conn = dial()
+					download()
+				}
 				b.SetBytes(int64(size))
 				b.ReportAllocs()
 				b.ResetTimer()
-				for range b.N {
+				for i := range b.N {
+					if i > 0 && i%8 == 0 {
+						b.StopTimer()
+						reset()
+						b.StartTimer()
+					}
 					download()
 				}
 				b.StopTimer()
