@@ -60,24 +60,36 @@ General protocol interoperability issues, RFC compliance problems without securi
 
 ## Response and Disclosure Process
 
-The maintainers will:
+The go-coap maintainers aim to handle security reports promptly and transparently.
 
-1. Acknowledge receipt of a vulnerability report as soon as reasonably possible.
-2. Investigate and assess the reported security impact.
-3. Determine affected versions and identify possible mitigations.
-4. Develop and test a security fix where appropriate.
-5. Coordinate disclosure with the reporter.
-6. Publish a security advisory and release a patched version when appropriate.
+We follow these response targets:
 
-We aim to handle security reports promptly and communicate progress throughout the process.
+- **Acknowledgement:** We aim to acknowledge receipt of a vulnerability report within 5 business days.
+- **Initial assessment:** We aim to provide an initial assessment within 10 business days.
+- **Status updates:** We aim to keep the reporter informed about investigation progress and remediation plans.
+- **Target disclosure timeline:** We aim to resolve and disclose reported vulnerabilities within 90 calendar days of the initial report.
 
-Disclosure timelines may depend on the complexity and severity of the vulnerability and the availability of a suitable fix.
+These are target timelines rather than guaranteed deadlines. Complex vulnerabilities may require additional investigation or coordination.
 
-## Coordinated Disclosure
+## Coordinated Disclosure and Disclosure Deadlines
 
-We request that reporters keep vulnerability details confidential until a fix or mitigation is available and coordinated disclosure has been agreed upon.
+We request that reporters keep vulnerability details confidential while a fix or mitigation is being developed.
 
-The maintainers will respect responsible disclosure practices and will credit reporters in security advisories when requested and appropriate.
+The reporter and maintainers should coordinate a reasonable disclosure date, taking into account the vulnerability severity, affected users and availability of a fix.
+
+The default disclosure target is 90 calendar days from the initial report.
+
+If the maintainers do not acknowledge the report, fail to provide meaningful updates, or are unable to develop a fix or mitigation within a reasonable timeframe, the reporter may proceed with coordinated public disclosure after the 90-day period.
+
+If additional time is necessary, the maintainers should communicate the reason and propose a revised disclosure date. Any extension should be agreed upon with the reporter.
+
+For actively exploited vulnerabilities or situations presenting an immediate risk to users, an earlier disclosure timeline may be appropriate.
+
+If the maintainers become unresponsive, the reporter is encouraged to make reasonable attempts to contact them through the alternative reporting channel listed above before proceeding with public disclosure.
+
+The maintainers will make reasonable efforts to coordinate disclosure, publish a security advisory and provide a patched release when appropriate.
+
+Reporters will be credited in security advisories when requested and appropriate.
 
 ## Security Advisories
 
