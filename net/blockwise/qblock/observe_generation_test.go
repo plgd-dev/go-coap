@@ -3,6 +3,7 @@ package qblock
 import (
 	"bytes"
 	"context"
+	"sync"
 	"testing"
 
 	"github.com/plgd-dev/go-coap/v3/message"
@@ -15,6 +16,41 @@ import (
 type qObservationReadHook struct {
 	*bytes.Reader
 	beforeRead func()
+}
+
+type blockingQBlockTransport struct {
+	*qTestTransport
+	mu           sync.Mutex
+	sendCalls    int
+	firstStarted chan struct{}
+	releaseFirst chan struct{}
+}
+
+type observeCancelLockTransport struct {
+	*qTestTransport
+	engine      *Engine[*observeCancelLockTransport]
+	lockWasFree chan bool
+}
+
+func (c *observeCancelLockTransport) CancelQBlock(key string) {
+	lockWasFree := c.engine.q2SendMu.TryLock()
+	if lockWasFree {
+		c.engine.q2SendMu.Unlock()
+	}
+	c.lockWasFree <- lockWasFree
+	c.qTestTransport.CancelQBlock(key)
+}
+
+func (c *blockingQBlockTransport) SendQBlock(msg *pool.Message) error {
+	c.mu.Lock()
+	c.sendCalls++
+	call := c.sendCalls
+	c.mu.Unlock()
+	if call == 1 {
+		close(c.firstStarted)
+		<-c.releaseFirst
+	}
+	return c.qTestTransport.SendQBlock(msg)
 }
 
 func (r *qObservationReadHook) Read(p []byte) (int, error) {
@@ -107,18 +143,33 @@ func TestQBlockObserveCancellationDuringNotificationSnapshot(t *testing.T) {
 					b.CancelQBlockObservation(request.Token(), nil)
 					if replace {
 						require.NoError(t, b.registerQObservation(request, nil, SZX16))
+						replacement := pool.NewMessage(context.Background())
+						replacement.SetCode(codes.Content)
+						replacement.SetType(message.NonConfirmable)
+						replacement.SetToken(request.Token())
+						replacement.SetObserve(11)
+						replacement.SetBody(bytes.NewReader(bytes.Repeat([]byte{9}, 48)))
+						handled, replacementErr := b.WriteNotification(replacement, nil)
+						require.NoError(t, replacementErr)
+						require.True(t, handled)
 					}
 				},
 			})
 			handled, err := b.WriteNotification(notification, nil)
 			require.True(t, handled)
 			require.ErrorIs(t, err, context.Canceled)
-			require.Empty(t, b.q2Senders)
-			require.Empty(t, cc.jobs)
-			require.Empty(t, cc.sent)
 			if replace {
+				require.Len(t, b.q2Senders, 1)
+				require.Contains(t, cc.jobs, "q2:"+q2TransferKey(request, nil))
+				require.Len(t, cc.sent, 1)
+				body, readErr := b.q2Senders[q2TransferKey(request, nil)].message.ReadBody()
+				require.NoError(t, readErr)
+				require.Equal(t, bytes.Repeat([]byte{9}, 48), body)
 				require.Len(t, b.qObservations, 1, "an older writer must not retire a new registration")
 			} else {
+				require.Empty(t, b.q2Senders)
+				require.Empty(t, cc.jobs)
+				require.Empty(t, cc.sent)
 				require.Empty(t, b.qObservations)
 			}
 			b.CloseQBlockTransfers()
@@ -126,6 +177,93 @@ func TestQBlockObserveCancellationDuringNotificationSnapshot(t *testing.T) {
 			require.Equal(t, transfersBefore, qRetainedTransfers.Load())
 		})
 	}
+}
+
+func TestQBlockSupersededNotificationCannotScheduleOldContinuation(t *testing.T) {
+	testTransport := &qTestTransport{testClient: newTestClient(), jobs: make(map[string]qBlockTestJob)}
+	cc := &blockingQBlockTransport{
+		qTestTransport: testTransport,
+		firstStarted:   make(chan struct{}),
+		releaseFirst:   make(chan struct{}),
+	}
+	b := New(cc, nil)
+	defer b.CloseQBlockTransfers()
+	request := pool.NewMessage(context.Background())
+	request.SetCode(codes.GET)
+	request.SetToken([]byte("observe-race"))
+	request.SetObserve(0)
+	require.NoError(t, b.registerQObservation(request, nil, SZX16))
+
+	makeNotification := func(value byte, mode message.Type, size int) *pool.Message {
+		response := pool.NewMessage(context.Background())
+		response.SetCode(codes.Content)
+		response.SetType(mode)
+		response.SetToken(request.Token())
+		response.SetObserve(uint32(value))
+		response.SetBody(bytes.NewReader(bytes.Repeat([]byte{value}, size)))
+		return response
+	}
+
+	firstDone := make(chan error, 1)
+	go func() {
+		_, err := b.WriteNotification(makeNotification(1, message.Confirmable, 48), nil)
+		firstDone <- err
+	}()
+	<-cc.firstStarted
+
+	handled, err := b.WriteNotification(makeNotification(2, message.NonConfirmable, 16), nil)
+	require.NoError(t, err)
+	require.True(t, handled)
+	key := q2TransferKey(request, nil)
+	close(cc.releaseFirst)
+	require.NoError(t, <-firstDone)
+
+	require.Empty(t, cc.jobs, "the stale writer must not schedule an old continuation")
+	require.Len(t, cc.sent, 2)
+	require.ElementsMatch(t, []message.Type{message.Confirmable, message.NonConfirmable}, []message.Type{cc.sent[0].Type(), cc.sent[1].Type()})
+	body, err := b.q2Senders[key].message.ReadBody()
+	require.NoError(t, err)
+	require.Equal(t, bytes.Repeat([]byte{2}, 16), body)
+	require.Empty(t, cc.jobs)
+}
+
+func TestQBlockObservationCancellationAndReplacementSchedulingAreOrdered(t *testing.T) {
+	testTransport := &qTestTransport{testClient: newTestClient(), jobs: make(map[string]qBlockTestJob)}
+	cc := &observeCancelLockTransport{
+		qTestTransport: testTransport,
+		lockWasFree:    make(chan bool, 1),
+	}
+	b := New(cc, nil)
+	cc.engine = b
+	defer b.CloseQBlockTransfers()
+	request := pool.NewMessage(context.Background())
+	request.SetCode(codes.GET)
+	request.SetToken([]byte("observe-cancel-race"))
+	request.SetObserve(0)
+	require.NoError(t, b.registerQObservation(request, nil, SZX16))
+
+	notification := func(value byte) *pool.Message {
+		response := pool.NewMessage(context.Background())
+		response.SetCode(codes.Content)
+		response.SetType(message.NonConfirmable)
+		response.SetToken(request.Token())
+		response.SetObserve(uint32(value))
+		response.SetBody(bytes.NewReader(bytes.Repeat([]byte{value}, 48)))
+		return response
+	}
+	handled, err := b.WriteNotification(notification(1), nil)
+	require.NoError(t, err)
+	require.True(t, handled)
+	key := q2TransferKey(request, nil)
+	require.Contains(t, cc.jobs, "q2:"+key)
+
+	b.CancelQBlockObservation(request.Token(), nil)
+	require.False(t, <-cc.lockWasFree, "job cancellation must run under the sender lock")
+	require.NoError(t, b.registerQObservation(request, nil, SZX16))
+	handled, err = b.WriteNotification(notification(2), nil)
+	require.NoError(t, err)
+	require.True(t, handled)
+	require.Contains(t, cc.jobs, "q2:"+key, "the replacement continuation must survive old-job cancellation")
 }
 
 func TestQBlockObserveRegistrationTokenTerminalDuringPartialBody(t *testing.T) {

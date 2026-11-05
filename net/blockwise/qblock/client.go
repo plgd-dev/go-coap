@@ -192,7 +192,7 @@ func (s *q1BodySender[C]) missing(response *pool.Message) error {
 }
 
 func (s *q1BodySender[C]) final(response *pool.Message) (*pool.Message, error) {
-	if response.Code() == codes.BadOption {
+	if response.Code() == codes.BadOption && !response.HasOption(message.QBlock2) {
 		s.b.cc.ReleaseMessage(response)
 		return nil, ErrQBlockUnsupported
 	}

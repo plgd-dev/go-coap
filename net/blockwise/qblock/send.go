@@ -119,10 +119,10 @@ func (b *Engine[C]) invalidateTerminalQ2Observation(r *pool.Message, remoteAddr 
 	b.qReleaseBytes(transfer.size)
 	b.qReleaseTransfer()
 	b.cc.ReleaseMessage(transfer.message)
-	b.q2SendMu.Unlock()
 	if transport, ok := any(b.cc).(Transport); ok {
 		transport.CancelQBlock("q2:" + key)
 	}
+	b.q2SendMu.Unlock()
 }
 
 func validQ2First(nums []int64, first int64) bool {
@@ -397,26 +397,27 @@ func (b *Engine[C]) buildQBlock2ResponseFrom(ctx context.Context, key string, to
 }
 
 func (b *Engine[C]) cacheQBlock2Response(ctx context.Context, key, identity string, response *pool.Message, mode message.Type) error {
-	return b.cacheQBlock2Notification(ctx, key, identity, response, mode, nil)
+	_, err := b.cacheQBlock2Notification(ctx, key, identity, response, mode, nil)
+	return err
 }
 
-func (b *Engine[C]) cacheQBlock2Notification(ctx context.Context, key, identity string, response *pool.Message, mode message.Type, generation *qObservation) error {
+func (b *Engine[C]) cacheQBlock2Notification(ctx context.Context, key, identity string, response *pool.Message, mode message.Type, generation *qObservation) (*q2SendTransfer, error) {
 	size, err := response.BodySize()
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if size < 0 {
-		return ErrQBlockInvalidSize
+		return nil, ErrQBlockInvalidSize
 	}
 	if size > q1DefaultMaxBodySize {
-		return ErrQBlockTooLarge
+		return nil, ErrQBlockTooLarge
 	}
 	if !b.qReserveBytes(size) {
-		return ErrQBlockTooLarge
+		return nil, ErrQBlockTooLarge
 	}
 	if !b.qReserveTransfer() {
 		b.qReleaseBytes(size)
-		return ErrQBlockTooLarge
+		return nil, ErrQBlockTooLarge
 	}
 	retained := false
 	defer func() {
@@ -427,7 +428,7 @@ func (b *Engine[C]) cacheQBlock2Notification(ctx context.Context, key, identity 
 	}()
 	stored, err := b.snapshotQ2Body(ctx, response, size)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	etag, _ := stored.GetOptionBytes(message.ETag)
 	response.SetOptionBytes(message.ETag, etag)
@@ -436,14 +437,17 @@ func (b *Engine[C]) cacheQBlock2Notification(ctx context.Context, key, identity 
 	if err := qClosedError(b.q2Closed); err != nil {
 		b.q2SendMu.Unlock()
 		b.cc.ReleaseMessage(stored)
-		return err
+		return nil, err
 	}
 	if err := b.validateQNotificationLocked(generation); err != nil {
 		b.q2SendMu.Unlock()
 		b.cc.ReleaseMessage(stored)
-		return err
+		return nil, err
 	}
 	if old := b.q2Senders[key]; old != nil {
+		if transport, ok := any(b.cc).(Transport); ok {
+			transport.CancelQBlock("q2:" + key)
+		}
 		b.q2SendBytes -= old.size
 		b.qReleaseBytes(old.size)
 		b.qReleaseTransfer()
@@ -452,7 +456,7 @@ func (b *Engine[C]) cacheQBlock2Notification(ctx context.Context, key, identity 
 	} else if len(b.q2Senders) >= 4096 {
 		b.q2SendMu.Unlock()
 		b.cc.ReleaseMessage(stored)
-		return ErrQBlockTooLarge
+		return nil, ErrQBlockTooLarge
 	}
 	b.q2SendBytes += size
 	retained = true
@@ -461,17 +465,18 @@ func (b *Engine[C]) cacheQBlock2Notification(ctx context.Context, key, identity 
 		maxAge = 60
 	}
 	lifetime := min(b.config.NonPartialTimeout(), max(b.config.NonReceiveTimeout, time.Duration(maxAge)*time.Second))
-	b.q2Senders[key] = &q2SendTransfer{
+	transfer := &q2SendTransfer{
 		message: stored, expires: time.Now().Add(lifetime),
 		size: size, identity: identity, mode: mode, sentThrough: -1, delay: b.config.nonDelay(),
 	}
+	b.q2Senders[key] = transfer
 	observePresent := response.HasOption(message.Observe)
 	if generation != nil && !observePresent {
-		b.q2Senders[key].terminalObservationKey = generation.registrationKey
+		transfer.terminalObservationKey = generation.registrationKey
 	}
 	b.finishQNotificationLocked(generation, observePresent)
 	b.q2SendMu.Unlock()
-	return nil
+	return transfer, nil
 }
 
 func (b *Engine[C]) snapshotQ2Body(ctx context.Context, response *pool.Message, size int64) (*pool.Message, error) {

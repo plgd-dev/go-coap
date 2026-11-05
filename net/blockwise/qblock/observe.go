@@ -32,10 +32,11 @@ func qObservationKey(token message.Token, remote net.Addr) string {
 // an Observe cancellation or a transport-correlated Reset.
 func (b *Engine[C]) CancelQBlockObservation(token message.Token, remote net.Addr) {
 	b.q2SendMu.Lock()
-	observation := b.qObservations[qObservationKey(token, remote)]
+	key := qObservationKey(token, remote)
+	observation := b.qObservations[key]
 	if observation != nil {
-		delete(b.qObservations, qObservationKey(token, remote))
-		b.rememberQCancellationLocked(qObservationKey(token, remote))
+		delete(b.qObservations, key)
+		b.rememberQCancellationLocked(key)
 		b.cc.ReleaseMessage(observation.request)
 		b.qReleaseTransfer()
 		if transfer := b.q2Senders[observation.key]; transfer != nil {
@@ -45,13 +46,11 @@ func (b *Engine[C]) CancelQBlockObservation(token message.Token, remote net.Addr
 			b.qReleaseTransfer()
 			b.cc.ReleaseMessage(transfer.message)
 		}
-	}
-	b.q2SendMu.Unlock()
-	if observation != nil {
 		if transport, ok := any(b.cc).(Transport); ok {
 			transport.CancelQBlock("q2:" + observation.key)
 		}
 	}
+	b.q2SendMu.Unlock()
 }
 
 func (b *Engine[C]) rememberQCancellationLocked(key string) {
@@ -82,7 +81,17 @@ func (b *Engine[C]) registerQObservation(r *pool.Message, remote net.Addr, szx S
 	key := qObservationKey(r.Token(), remote)
 	delete(b.qCanceledObservations, key)
 	if previous := b.qObservations[key]; previous != nil {
+		if transport, ok := any(b.cc).(Transport); ok {
+			transport.CancelQBlock("q2:" + previous.key)
+		}
 		b.cc.ReleaseMessage(previous.request)
+		if transfer := b.q2Senders[previous.key]; transfer != nil {
+			delete(b.q2Senders, previous.key)
+			b.q2SendBytes -= transfer.size
+			b.qReleaseBytes(transfer.size)
+			b.qReleaseTransfer()
+			b.cc.ReleaseMessage(transfer.message)
+		}
 	} else if len(b.qObservations) >= 128 || !b.qReserveTransfer() {
 		return ErrQBlockTooLarge
 	}
@@ -106,22 +115,20 @@ func (b *Engine[C]) WriteNotification(response *pool.Message, remote net.Addr) (
 	if !ok {
 		return true, errors.New("Q-Block notification transport is unavailable")
 	}
-	transport.CancelQBlock("q2:" + key)
 	mode := response.Type()
 	if mode != message.NonConfirmable {
 		mode = message.Confirmable
 	}
 	request.SetType(mode)
-	err = b.cacheQBlock2Notification(response.Context(), key, qTransferKey(request, remote, nil, true), response, mode, generation)
+	transfer, err := b.cacheQBlock2Notification(response.Context(), key, qTransferKey(request, remote, nil, true), response, mode, generation)
 	if err != nil {
 		return true, err
 	}
-	size, err := response.BodySize()
-	if err != nil {
-		return true, err
+	count := max(int64(1), (transfer.size+szx.Size()-1)/szx.Size())
+	first, err := b.buildQBlock2ResponseFrom(response.Context(), key, response.Token(), szx, 0, transfer)
+	if errors.Is(err, errQBlock2ResponseNotFound) {
+		return true, nil
 	}
-	count := max(int64(1), (size+szx.Size()-1)/szx.Size())
-	first, err := b.buildQBlock2Response(response.Context(), key, response.Token(), szx, 0)
 	if err != nil {
 		return true, err
 	}
@@ -134,7 +141,7 @@ func (b *Engine[C]) WriteNotification(response *pool.Message, remote net.Addr) (
 	nums, deadline := b.firstNotificationSet(key, mode, count)
 	return true, b.scheduleQ2Set(response.Context(), &q2SetJob[C]{
 		transport: transport, key: key, token: response.Token(), szx: szx, mode: mode,
-		nums: nums, count: count, wholeBody: true,
+		nums: nums, count: count, wholeBody: true, generation: transfer,
 	}, deadline)
 }
 
