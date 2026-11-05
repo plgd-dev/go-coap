@@ -19,14 +19,15 @@ import (
 )
 
 type q2SendTransfer struct {
-	message       *pool.Message
-	expires       time.Time
-	size          int64
-	sentThrough   int64
-	delay         time.Duration
-	identity      string
-	mode          message.Type
-	recoveryUntil time.Time
+	message                *pool.Message
+	expires                time.Time
+	size                   int64
+	sentThrough            int64
+	delay                  time.Duration
+	identity               string
+	mode                   message.Type
+	terminalObservationKey string
+	recoveryUntil          time.Time
 }
 
 func q2TransferKey(r *pool.Message, remoteAddr net.Addr) string {
@@ -57,9 +58,7 @@ func (b *Engine[C]) handleQBlock2(
 		request.SetOptionUint32(message.QBlock2, value)
 		return b.handleQBlock2(w, request, maxSZX, remoteAddr, next)
 	}
-	if r.HasOption(message.Observe) {
-		b.CancelQBlockObservation(r.Token(), remoteAddr)
-	}
+	b.prepareQ2ObservationRequest(r, remoteAddr, num)
 	key, err := b.q2ResponseKey(r, remoteAddr, num, more)
 	if err != nil {
 		return err
@@ -90,6 +89,40 @@ func (b *Engine[C]) handleQBlock2(
 	}
 	w.SetMessage(response)
 	return b.continueQ2Response(r, key, szx, nums, count, wholeBody)
+}
+
+func (b *Engine[C]) prepareQ2ObservationRequest(r *pool.Message, remoteAddr net.Addr, num int64) {
+	if !r.HasOption(message.Observe) {
+		return
+	}
+	observe, err := r.Observe()
+	if err != nil {
+		return
+	}
+	b.CancelQBlockObservation(r.Token(), remoteAddr)
+	if observe == 0 && num == 0 {
+		b.invalidateTerminalQ2Observation(r, remoteAddr)
+	}
+}
+
+func (b *Engine[C]) invalidateTerminalQ2Observation(r *pool.Message, remoteAddr net.Addr) {
+	key := q2TransferKey(r, remoteAddr)
+	registrationKey := qObservationKey(r.Token(), remoteAddr)
+	b.q2SendMu.Lock()
+	transfer := b.q2Senders[key]
+	if transfer == nil || transfer.terminalObservationKey != registrationKey {
+		b.q2SendMu.Unlock()
+		return
+	}
+	delete(b.q2Senders, key)
+	b.q2SendBytes -= transfer.size
+	b.qReleaseBytes(transfer.size)
+	b.qReleaseTransfer()
+	b.cc.ReleaseMessage(transfer.message)
+	b.q2SendMu.Unlock()
+	if transport, ok := any(b.cc).(Transport); ok {
+		transport.CancelQBlock("q2:" + key)
+	}
 }
 
 func validQ2First(nums []int64, first int64) bool {
@@ -432,7 +465,11 @@ func (b *Engine[C]) cacheQBlock2Notification(ctx context.Context, key, identity 
 		message: stored, expires: time.Now().Add(lifetime),
 		size: size, identity: identity, mode: mode, sentThrough: -1, delay: b.config.nonDelay(),
 	}
-	b.finishQNotificationLocked(generation, response.HasOption(message.Observe))
+	observePresent := response.HasOption(message.Observe)
+	if generation != nil && !observePresent {
+		b.q2Senders[key].terminalObservationKey = generation.registrationKey
+	}
+	b.finishQNotificationLocked(generation, observePresent)
 	b.q2SendMu.Unlock()
 	return nil
 }

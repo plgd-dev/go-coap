@@ -29,6 +29,12 @@ jobs:
         os: [ubuntu-latest, windows-latest, macOS-latest]
 
     steps:
+      # Checks-out repository under $GITHUB_WORKSPACE with tags and history (needed by "SonarCloud Scan" step)
+      - name: Full checkout
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0 # Full clone for SonarCloud
+
       - name: Set up Go >=1.26
         uses: actions/setup-go@v7
         with:
@@ -54,12 +60,6 @@ jobs:
             command -v coap-server || command -v coap-server-notls
           fi
         shell: bash
-      # Checks-out repository under $GITHUB_WORKSPACE with tags and history (needed by "SonarCloud Scan" step)
-      - name: Full checkout
-        uses: actions/checkout@v7
-        with:
-          fetch-depth: 0 # Full clone for SonarCloud
-
       # Build everything
       - name: Run a build
         run: go build ./...

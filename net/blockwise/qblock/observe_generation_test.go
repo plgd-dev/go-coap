@@ -8,6 +8,7 @@ import (
 	"github.com/plgd-dev/go-coap/v3/message"
 	"github.com/plgd-dev/go-coap/v3/message/codes"
 	"github.com/plgd-dev/go-coap/v3/message/pool"
+	"github.com/plgd-dev/go-coap/v3/net/responsewriter"
 	"github.com/stretchr/testify/require"
 )
 
@@ -23,6 +24,64 @@ func (r *qObservationReadHook) Read(p []byte) (int, error) {
 		hook()
 	}
 	return r.Reader.Read(p)
+}
+
+func TestQBlockFreshObserveRegistrationInvalidatesTerminalBody(t *testing.T) {
+	cc := &qTestTransport{testClient: newTestClient(), jobs: make(map[string]qBlockTestJob)}
+	b := New(cc, nil)
+	defer b.CloseQBlockTransfers()
+	request := pool.NewMessage(context.Background())
+	request.SetCode(codes.GET)
+	request.SetType(message.NonConfirmable)
+	request.SetToken([]byte("observe-reuse"))
+	request.SetObserve(0)
+	require.NoError(t, request.SetPath("/observe"))
+	require.NoError(t, request.SetRequestTag([]byte("same-tag")))
+	require.NoError(t, b.registerQObservation(request, nil, SZX16))
+
+	terminal := pool.NewMessage(context.Background())
+	terminal.SetCode(codes.NotFound)
+	terminal.SetType(message.NonConfirmable)
+	terminal.SetToken(request.Token())
+	terminal.SetBody(bytes.NewReader(bytes.Repeat([]byte{1}, 48)))
+	handled, err := b.WriteNotification(terminal, nil)
+	require.NoError(t, err)
+	require.True(t, handled)
+	key := q2TransferKey(request, nil)
+	require.Empty(t, b.qObservations)
+	cachedTerminal, exists := b.q2Senders[key]
+	require.True(t, exists)
+	require.NotEmpty(t, cachedTerminal.terminalObservationKey)
+
+	fresh := pool.NewMessage(context.Background())
+	fresh.SetCode(codes.GET)
+	fresh.SetType(message.NonConfirmable)
+	fresh.SetToken(request.Token())
+	fresh.SetObserve(0)
+	require.NoError(t, fresh.SetPath("/observe"))
+	require.NoError(t, fresh.SetRequestTag([]byte("same-tag")))
+	value, err := EncodeQBlockOption(SZX16, 0, true)
+	require.NoError(t, err)
+	fresh.SetOptionUint32(message.QBlock2, value)
+	var handlerCalls int
+	writer := responsewriter.New(cc.AcquireMessage(fresh.Context()), cc)
+	defer cc.ReleaseMessage(writer.Message())
+	handler := func(w *responsewriter.ResponseWriter[*qTestTransport], _ *pool.Message) {
+		handlerCalls++
+		require.NoError(t, w.SetResponse(codes.Content, message.TextPlain, bytes.NewReader([]byte("fresh body"))))
+		w.Message().SetObserve(20)
+	}
+	require.NoError(t, b.handleQBlock2(writer, fresh, SZX16, nil, handler))
+	require.Equal(t, 1, handlerCalls, "the fresh Observe request must reach the handler")
+	require.Equal(t, codes.Content, writer.Message().Code())
+	require.True(t, writer.Message().HasOption(message.Observe))
+	body, err := writer.Message().ReadBody()
+	require.NoError(t, err)
+	require.Equal(t, []byte("fresh body"), body)
+	require.Len(t, cc.sent, 1, "the terminal set was sent only before replacement")
+	require.Len(t, b.qObservations, 1)
+	require.NotEqual(t, codes.NotFound, b.q2Senders[key].message.Code())
+	require.Empty(t, cc.jobs, "the terminal sender's scheduled transfer must be canceled")
 }
 
 func TestQBlockObserveCancellationDuringNotificationSnapshot(t *testing.T) {

@@ -37,7 +37,7 @@ func TestQBlockExchangeCancellationReleasesRoutes(t *testing.T) {
 			wantErr := context.Canceled
 			if deadline {
 				cancel()
-				ctx, cancel = context.WithTimeout(context.Background(), 20*time.Millisecond)
+				ctx, cancel = context.WithTimeout(context.Background(), 250*time.Millisecond)
 				wantErr = context.DeadlineExceeded
 			}
 			defer cancel()
