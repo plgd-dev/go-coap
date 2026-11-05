@@ -402,22 +402,9 @@ func (b *Engine[C]) cacheQBlock2Response(ctx context.Context, key, identity stri
 }
 
 func (b *Engine[C]) cacheQBlock2Notification(ctx context.Context, key, identity string, response *pool.Message, mode message.Type, generation *qObservation) (*q2SendTransfer, error) {
-	size, err := response.BodySize()
+	stored, size, err := b.snapshotQ2NotificationBody(ctx, response)
 	if err != nil {
 		return nil, err
-	}
-	if size < 0 {
-		return nil, ErrQBlockInvalidSize
-	}
-	if size > q1DefaultMaxBodySize {
-		return nil, ErrQBlockTooLarge
-	}
-	if !b.qReserveBytes(size) {
-		return nil, ErrQBlockTooLarge
-	}
-	if !b.qReserveTransfer() {
-		b.qReleaseBytes(size)
-		return nil, ErrQBlockTooLarge
 	}
 	retained := false
 	defer func() {
@@ -426,10 +413,6 @@ func (b *Engine[C]) cacheQBlock2Notification(ctx context.Context, key, identity 
 			b.qReleaseTransfer()
 		}
 	}()
-	stored, err := b.snapshotQ2Body(ctx, response, size)
-	if err != nil {
-		return nil, err
-	}
 	etag, _ := stored.GetOptionBytes(message.ETag)
 	response.SetOptionBytes(message.ETag, etag)
 	stored.SetType(mode)
@@ -477,6 +460,33 @@ func (b *Engine[C]) cacheQBlock2Notification(ctx context.Context, key, identity 
 	b.finishQNotificationLocked(generation, observePresent)
 	b.q2SendMu.Unlock()
 	return transfer, nil
+}
+
+func (b *Engine[C]) snapshotQ2NotificationBody(ctx context.Context, response *pool.Message) (*pool.Message, int64, error) {
+	size, err := response.BodySize()
+	if err != nil {
+		return nil, 0, err
+	}
+	if size < 0 {
+		return nil, 0, ErrQBlockInvalidSize
+	}
+	if size > q1DefaultMaxBodySize {
+		return nil, 0, ErrQBlockTooLarge
+	}
+	if !b.qReserveBytes(size) {
+		return nil, 0, ErrQBlockTooLarge
+	}
+	if !b.qReserveTransfer() {
+		b.qReleaseBytes(size)
+		return nil, 0, ErrQBlockTooLarge
+	}
+	stored, err := b.snapshotQ2Body(ctx, response, size)
+	if err != nil {
+		b.qReleaseBytes(size)
+		b.qReleaseTransfer()
+		return nil, 0, err
+	}
+	return stored, size, nil
 }
 
 func (b *Engine[C]) snapshotQ2Body(ctx context.Context, response *pool.Message, size int64) (*pool.Message, error) {

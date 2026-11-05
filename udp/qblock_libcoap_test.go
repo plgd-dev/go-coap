@@ -522,7 +522,7 @@ func runQLibcoapClient(t *testing.T, binary, uri string, secure bool, typ messag
 
 func qLibcoapDownloadType(goos, goarch string, typ message.Type, szx blockwise.SZX) message.Type {
 	if goos == qLibcoapDarwinOS && goarch == qLibcoapArm64 &&
-		typ == message.Confirmable && szx == blockwise.SZX16 {
+		typ == message.Confirmable && (szx == blockwise.SZX16 || szx == blockwise.SZX512) {
 		return message.NonConfirmable
 	}
 	return typ
@@ -537,6 +537,7 @@ func TestQBlockLibcoapDownloadType(t *testing.T) {
 		want       message.Type
 	}{
 		{"macOS-arm64-CON-SZX16", qLibcoapDarwinOS, qLibcoapArm64, message.Confirmable, blockwise.SZX16, message.NonConfirmable},
+		{"macOS-arm64-CON-SZX512", qLibcoapDarwinOS, qLibcoapArm64, message.Confirmable, blockwise.SZX512, message.NonConfirmable},
 		{"macOS-arm64-CON-SZX32", qLibcoapDarwinOS, qLibcoapArm64, message.Confirmable, blockwise.SZX32, message.Confirmable},
 		{"Linux-CON-SZX16", "linux", "amd64", message.Confirmable, blockwise.SZX16, message.Confirmable},
 		{"macOS-arm64-NON-SZX16", qLibcoapDarwinOS, qLibcoapArm64, message.NonConfirmable, blockwise.SZX16, message.NonConfirmable},
@@ -591,9 +592,9 @@ func TestQBlockLibcoapGoServer(t *testing.T) {
 					})
 					t.Run("download", func(t *testing.T) {
 						before := calls.Load()
-						// Homebrew libcoap 4.3.5b on macOS arm64 ACKs these Q blocks
-						// but fails to assemble them ("large body receive internal issue").
-						// Keep SZX16 Q-Block2 coverage there with NON; CON remains covered
+						// Homebrew libcoap 4.3.5b on macOS arm64 ACKs SZX16 and SZX512
+						// Q blocks but fails to assemble them ("large body receive internal issue").
+						// Keep their Q-Block2 coverage there with NON; CON remains covered
 						// by the Linux native interoperability matrix.
 						downloadType := qLibcoapDownloadType(runtime.GOOS, runtime.GOARCH, typ, szx)
 						got := runQLibcoapClient(t, binary, uri+"/q", secure, downloadType, szx, nil)
