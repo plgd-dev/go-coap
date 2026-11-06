@@ -1289,6 +1289,8 @@ func (cc *Conn) ProcessReceivedMessageWithHandler(req *pool.Message, handler con
 	defer func() {
 		cc.messagePool.ReleaseMessageIfNotHijacked(req, generation)
 	}()
+	ctx, afterWrite := responsewriter.WithPostWriteCallbacks(req.Context())
+	req.SetContext(ctx)
 	resp := cc.AcquireMessage(cc.Context())
 	resp.SetToken(req.Token())
 	cc.setControlInformation(req.ControlMessage())
@@ -1320,7 +1322,9 @@ func (cc *Conn) ProcessReceivedMessageWithHandler(req *pool.Message, handler con
 	if errW != nil {
 		cc.closeConnection()
 		cc.errors(fmt.Errorf(errFmtWriteResponse, errW))
+		return
 	}
+	afterWrite()
 }
 
 func (cc *Conn) handlePong(w *responsewriter.ResponseWriter[*Conn], r *pool.Message) {

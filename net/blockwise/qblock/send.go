@@ -287,10 +287,21 @@ func (b *Engine[C]) continueQ2Response(r *pool.Message, key string, szx SZX, num
 		if mode == message.NonConfirmable && len(remaining) > 0 && remaining[0]/b.config.MaxPayloads != nums[0]/b.config.MaxPayloads {
 			delay = b.q2SetDelay(key)
 		}
-		return b.scheduleQ2Set(r.Context(), &q2SetJob[C]{
+		job := &q2SetJob[C]{
 			transport: transport, key: key, token: token, szx: szx, mode: mode, nums: remaining,
 			count: count, wholeBody: wholeBody, recovery: !wholeBody,
-		}, time.Now().Add(delay))
+		}
+		schedule := func() error {
+			return b.scheduleQ2Set(r.Context(), job, time.Now().Add(delay))
+		}
+		if responsewriter.AfterWrite(r.Context(), func() {
+			if err := schedule(); err != nil {
+				b.errors(err)
+			}
+		}) {
+			return nil
+		}
+		return schedule()
 	}
 	return nil
 }

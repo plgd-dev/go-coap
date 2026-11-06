@@ -40,12 +40,16 @@ func TestQBlockConfirmableSchedulerWaitsOutsideWorker(t *testing.T) {
 				more bool
 			}{0, true})
 			req.SetType(message.Confirmable)
+			ctx, afterWrite := responsewriter.WithPostWriteCallbacks(req.Context())
+			req.SetContext(ctx)
 			writer := responsewriter.New(cc.AcquireMessage(req.Context()), cc)
 			defer cc.ReleaseMessage(writer.Message())
 			require.NoError(t, engine.handleQBlock2(writer, req, SZX16, nil,
 				func(w *responsewriter.ResponseWriter[*asyncTestTransport], _ *pool.Message) {
 					require.NoError(t, w.SetResponse(codes.Content, message.AppOctets, bytes.NewReader(make([]byte, 64))))
 				}))
+			require.Empty(t, cc.jobs, "follow-up waits until the initial response is written")
+			afterWrite()
 			require.Len(t, cc.jobs, 1)
 			for key, job := range cc.jobs {
 				delete(cc.jobs, key)

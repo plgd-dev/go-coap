@@ -41,20 +41,12 @@ func TestQBlockMissingACKDoesNotBlockOtherBody(t *testing.T) {
 		require.NoError(t, decodeErr)
 		return resp
 	}
-	gotACK, gotConfirmable := false, false
-	for !gotACK || !gotConfirmable {
-		resp := read()
-		switch resp.Type {
-		case message.Acknowledgement:
-			require.Equal(t, int32(1), resp.MessageID)
-			gotACK = true
-		case message.Confirmable:
-			require.Equal(t, message.Token("blocked"), resp.Token)
-			gotConfirmable = true
-		default:
-			require.FailNowf(t, "unexpected response type", "got %v", resp.Type)
-		}
-	}
+	first := read()
+	require.Equal(t, message.Acknowledgement, first.Type)
+	require.Equal(t, int32(1), first.MessageID)
+	pending := read()
+	require.Equal(t, message.Confirmable, pending.Type)
+	require.Equal(t, message.Token("blocked"), pending.Token)
 	// Deliberately do not ACK the CON body. Its first retransmission is not due
 	// until at least two seconds; the other body's scheduler must run now.
 	req.Type, req.MessageID, req.Token = message.NonConfirmable, 2, message.Token("free")
