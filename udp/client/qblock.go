@@ -30,7 +30,8 @@ func (cc *Conn) qBlockEligible(req *pool.Message) bool {
 	if req.HasOption(message.Observe) && req.Code() != codes.GET {
 		return false
 	}
-	bodyMethod := req.Code() == codes.POST || req.Code() == codes.PUT || req.Code() >= 5 && req.Code() <= 7
+	bodyMethod := req.Code() == codes.POST || req.Code() == codes.PUT ||
+		req.Code() == codes.FETCH || req.Code() == codes.PATCH || req.Code() == codes.IPATCH
 	return (req.Code() == codes.GET || bodyMethod) && (req.Body() == nil || bodyMethod)
 }
 
@@ -334,24 +335,45 @@ func (cc *Conn) startQBlockNotification(msg *pool.Message) bool {
 	if !cc.qBlockAllowed() || msg.Code() < codes.Created || !msg.HasOption(message.QBlock2) {
 		return false
 	}
+	req, szx, consume := cc.qBlockNotificationRequest(msg)
+	if !consume {
+		return false
+	}
+	if req == nil {
+		return true
+	}
+	exchange, initial := cc.prepareQBlockNotification(req, msg)
+	if exchange == nil {
+		return true
+	}
+	cc.receivedMessageReader.TryToReplaceLoop()
+	go cc.runQBlockObservation(req, szx, exchange, initial)
+	return true
+}
+
+func (cc *Conn) qBlockNotificationRequest(msg *pool.Message) (*pool.Message, blockwise.SZX, bool) {
 	req, ok := cc.observationHandler.GetObservationRequest(msg.Token())
 	if !ok {
-		return false
+		return nil, 0, false
 	}
 	if !req.HasOption(message.QBlock2) {
 		cc.ReleaseMessage(req)
-		return false
+		return nil, 0, false
 	}
 	value, err := req.GetOptionUint32(message.QBlock2)
 	if err != nil {
 		cc.ReleaseMessage(req)
-		return true
+		return nil, 0, true
 	}
 	szx, _, _, err := blockwise.DecodeQBlockOption(value)
 	if err != nil {
 		cc.ReleaseMessage(req)
-		return true
+		return nil, 0, true
 	}
+	return req, szx, true
+}
+
+func (cc *Conn) prepareQBlockNotification(req, msg *pool.Message) (blockwise.QBlockExchange, *pool.Message) {
 	req.SetType(message.Confirmable)
 	if msg.Type() == message.NonConfirmable {
 		req.SetType(message.NonConfirmable)
@@ -360,12 +382,12 @@ func (cc *Conn) startQBlockNotification(msg *pool.Message) bool {
 	if err != nil {
 		cc.ReleaseMessage(req)
 		cc.errors(err)
-		return true
+		return nil, nil
 	}
 	if _, active := cc.observationHandler.GetObservation(req.Token().Hash()); !active {
 		exchange.Close()
 		cc.ReleaseMessage(req)
-		return true
+		return nil, nil
 	}
 	initial := cc.AcquireMessage(cc.Context())
 	if err := msg.Clone(initial); err != nil {
@@ -373,11 +395,9 @@ func (cc *Conn) startQBlockNotification(msg *pool.Message) bool {
 		cc.ReleaseMessage(initial)
 		cc.ReleaseMessage(req)
 		cc.errors(err)
-		return true
+		return nil, nil
 	}
-	cc.receivedMessageReader.TryToReplaceLoop()
-	go cc.runQBlockObservation(req, szx, exchange, initial)
-	return true
+	return exchange, initial
 }
 
 func (cc *Conn) runQBlockObservation(req *pool.Message, szx blockwise.SZX, exchange blockwise.QBlockExchange, initial *pool.Message) {
@@ -386,34 +406,48 @@ func (cc *Conn) runQBlockObservation(req *pool.Message, szx blockwise.SZX, excha
 	var sequence uint32
 	var lastEvent time.Time
 	for {
-		req.SetType(message.Confirmable)
-		if initial.Type() == message.NonConfirmable {
-			req.SetType(message.NonConfirmable)
-		}
-		response, err := cc.receiveQNotification(req, szx, exchange, initial)
-		if route, ok := exchange.(*qBlockRoute); ok {
-			route.retireAliases(req.Token())
-		}
-		if errors.Is(err, context.Canceled) || cc.Context().Err() != nil {
-			return
-		}
-		if err != nil {
-			cc.errors(fmt.Errorf("receive Q Observe notification: %w", err))
-		} else {
-			if nextSequence, observeErr := response.Observe(); observeErr == nil {
-				sequence, lastEvent = nextSequence, time.Now()
-			}
-			active := cc.observationHandler.HandleNotification(response)
-			cc.ReleaseMessage(response)
-			if !active {
-				return
-			}
-		}
-		initial, err = cc.nextQBlockNotification(req.Token(), exchange, sequence, lastEvent)
-		if err != nil {
+		setQObservationRequestType(req, initial.Type())
+		var keepRunning bool
+		initial, sequence, lastEvent, keepRunning = cc.advanceQBlockObservation(req, szx, exchange, initial, sequence, lastEvent)
+		if !keepRunning {
 			return
 		}
 	}
+}
+
+func setQObservationRequestType(req *pool.Message, notificationType message.Type) {
+	requestType := message.Confirmable
+	if notificationType == message.NonConfirmable {
+		requestType = message.NonConfirmable
+	}
+	req.SetType(requestType)
+}
+
+func (cc *Conn) advanceQBlockObservation(req *pool.Message, szx blockwise.SZX, exchange blockwise.QBlockExchange, initial *pool.Message, sequence uint32, lastEvent time.Time) (*pool.Message, uint32, time.Time, bool) {
+	response, err := cc.receiveQNotification(req, szx, exchange, initial)
+	if route, ok := exchange.(*qBlockRoute); ok {
+		route.retireAliases(req.Token())
+	}
+	if errors.Is(err, context.Canceled) || cc.Context().Err() != nil {
+		return nil, sequence, lastEvent, false
+	}
+	if err != nil {
+		cc.errors(fmt.Errorf("receive Q Observe notification: %w", err))
+	} else {
+		if nextSequence, observeErr := response.Observe(); observeErr == nil {
+			sequence, lastEvent = nextSequence, time.Now()
+		}
+		active := cc.observationHandler.HandleNotification(response)
+		cc.ReleaseMessage(response)
+		if !active {
+			return nil, sequence, lastEvent, false
+		}
+	}
+	next, err := cc.nextQBlockNotification(req.Token(), exchange, sequence, lastEvent)
+	if err != nil {
+		return nil, sequence, lastEvent, false
+	}
+	return next, sequence, lastEvent, true
 }
 
 func (cc *Conn) receiveQNotification(req *pool.Message, szx blockwise.SZX, exchange blockwise.QBlockExchange, initial *pool.Message) (*pool.Message, error) {
@@ -608,7 +642,7 @@ func (cc *Conn) qBlockProbeRate(msg *pool.Message) error {
 
 func qBlockRateIdentity(msg *pool.Message) (bool, string, int64, bool, error) {
 	control := msg.Code() == codes.RequestEntityIncomplete ||
-		(msg.Code() == codes.GET || msg.Code() == 5 /* FETCH */) && msg.HasOption(message.QBlock2)
+		(msg.Code() == codes.GET || msg.Code() == codes.FETCH) && msg.HasOption(message.QBlock2)
 	if control {
 		wire, err := msg.MarshalWithEncoder(coder.DefaultCoder)
 		if err != nil {

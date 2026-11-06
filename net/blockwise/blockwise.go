@@ -240,6 +240,15 @@ func payloadSizeError(err error) error {
 	return fmt.Errorf("cannot get size of payload: %w", err)
 }
 
+func isBodyMethod(code codes.Code) bool {
+	switch code {
+	case codes.POST, codes.PUT, codes.FETCH, codes.PATCH, codes.IPATCH:
+		return true
+	default:
+		return false
+	}
+}
+
 // Do sends an coap message and returns an coap response via blockwise transfer.
 func (b *BlockWise[C]) Do(r *pool.Message, maxSzx SZX, maxMessageSize uint32, remoteAddr net.Addr, do func(req *pool.Message) (*pool.Message, error)) (*pool.Message, error) {
 	if maxSzx > SZXBERT {
@@ -308,7 +317,7 @@ func getMessageExchangeKey(r *pool.Message, remoteAddr net.Addr) (uint64, error)
 		// requests for different resources from one endpoint do not share state.
 		return getRequestMatchingKey(r, remoteAddr), nil
 	}
-	if r.Code() != codes.POST && r.Code() != codes.PUT {
+	if !isBodyMethod(r.Code()) {
 		return getExchangeKey(r.Token(), remoteAddr)
 	}
 	requestKey := getRequestMatchingKey(r, remoteAddr)
@@ -323,12 +332,19 @@ func getMessageExchangeKey(r *pool.Message, remoteAddr net.Addr) (uint64, error)
 // getRequestMatchingKey identifies "matchable" requests (RFC 9175 §3.3): same endpoint,
 // code and options, ignoring block-wise and elective NoCacheKey options.
 func getRequestMatchingKey(r *pool.Message, remoteAddr net.Addr) uint64 {
+	return getRequestMatchingKeyWithObserve(r, remoteAddr, true)
+}
+
+func getRequestMatchingKeyWithObserve(r *pool.Message, remoteAddr net.Addr, includeObserve bool) uint64 {
 	h := fnv.New64a()
 	writeExchangeKeyPart(h, []byte(remoteAddr.String()))
 	var code [2]byte
 	binary.BigEndian.PutUint16(code[:], uint16(r.Code()))
 	_, _ = h.Write(code[:])
 	for _, option := range r.Options() {
+		if !includeObserve && option.ID == message.Observe {
+			continue
+		}
 		if option.ID == message.Block1 || option.ID == message.Block2 ||
 			option.ID == message.QBlock1 || option.ID == message.QBlock2 {
 			continue
@@ -346,8 +362,21 @@ func getRequestMatchingKey(r *pool.Message, remoteAddr net.Addr) uint64 {
 	return h.Sum64()
 }
 
+func getSendingMatch(r, response *pool.Message, requestCode codes.Code, remoteAddr net.Addr) sendingMatch {
+	if remoteAddr == nil || (requestCode != codes.GET && !isBodyMethod(requestCode)) {
+		return sendingMatch{}
+	}
+	matchKey := getRequestMatchingKey(r, remoteAddr)
+	if requestCode == codes.FETCH && isObserveResponse(response) {
+		// Block2 continuation requests omit Observe; key FETCH notifications
+		// the same way so a changed-token continuation finds its response.
+		matchKey = getRequestMatchingKeyWithObserve(r, remoteAddr, false)
+	}
+	return sendingMatch{key: matchKey, code: requestCode, endpoint: remoteAddr.String()}
+}
+
 func (b *BlockWise[C]) resolveBlock1ExchangeKey(r *pool.Message, remoteAddr net.Addr, exchangeKey uint64) (uint64, error) {
-	if (r.Code() != codes.POST && r.Code() != codes.PUT) || !r.HasOption(message.Block1) {
+	if !isBodyMethod(r.Code()) || !r.HasOption(message.Block1) {
 		return exchangeKey, nil
 	}
 	if b.receivingMessagesCache.Load(exchangeKey) != nil || len(r.Token()) == 0 || remoteAddr == nil {
@@ -411,22 +440,22 @@ func isBlock2Continuation(r *pool.Message) bool {
 // An observe registration always starts a new transfer.
 func mayResumeBlock2(r *pool.Message) bool {
 	switch r.Code() {
-	case codes.POST, codes.PUT:
+	case codes.POST, codes.PUT, codes.PATCH, codes.IPATCH:
 		return isBlock2Continuation(r)
-	case codes.GET:
+	case codes.GET, codes.FETCH:
 		return !r.HasOption(message.Observe) && isBlock2Continuation(r)
 	}
 	return false
 }
 
 // resolveBlock2ExchangeKey finds the Block2 transfer continued by a request with a
-// changed token. A GET continuation is optional state: when it cannot be resolved
+// changed token. GET and FETCH continuations are optional state: when they cannot be resolved
 // unambiguously, the handler regenerates the representation (RFC 7959 §2.4).
 func (b *BlockWise[C]) resolveBlock2ExchangeKey(r *pool.Message, remoteAddr net.Addr, exchangeKey uint64) (uint64, error) {
 	if !mayResumeBlock2(r) || b.sendingMessagesCache.Load(exchangeKey) != nil || remoteAddr == nil {
 		return exchangeKey, nil
 	}
-	isGet := r.Code() == codes.GET
+	isGet := r.Code() == codes.GET || r.Code() == codes.FETCH
 	requestKey := getRequestMatchingKey(r, remoteAddr)
 	now := time.Now()
 	var matchingKey uint64
@@ -473,10 +502,7 @@ func (b *BlockWise[C]) prepareSendingRequest(r *pool.Message, maxSzx SZX, maxMes
 		return r, nil
 	}
 
-	switch r.Code() {
-	case codes.POST, codes.PUT:
-		break
-	default:
+	if !isBodyMethod(r.Code()) {
 		return nil, fmt.Errorf("unsupported command(%v)", r.Code())
 	}
 	req := b.cloneMessage(r)
@@ -542,7 +568,7 @@ func (b *BlockWise[C]) WriteMessage(request *pool.Message, maxSZX SZX, maxMessag
 	}
 
 	if isObserveResponse(request) && remoteAddr != nil {
-		b.invalidateGetTransfers(remoteAddr.String())
+		b.invalidateObservationTransfers(remoteAddr.String())
 	}
 	w := newWriteRequestResponse(b.cc, request)
 	err = b.startSendingMessage(w, maxSZX, maxMessageSize, startSendingMessageBlock, exchangeKey, sendingMatch{})
@@ -552,16 +578,17 @@ func (b *BlockWise[C]) WriteMessage(request *pool.Message, maxSZX SZX, maxMessag
 	return writeMessage(w.Message())
 }
 
-// invalidateGetTransfers is called when a notification announces a new representation
+// invalidateObservationTransfers is called when a notification announces a new representation
 // (RFC 7641 §4.2). Continuations of notifications (RFC 7959 §2.6, §3.4) must not be
-// resumed from an older GET response: transfers keyed by the request itself
+// resumed from an older GET or FETCH response: transfers keyed by the request itself
 // (tokenless) are dropped, others are only kept for continuations with their own token.
-func (b *BlockWise[C]) invalidateGetTransfers(endpoint string) {
+func (b *BlockWise[C]) invalidateObservationTransfers(endpoint string) {
 	var drop []uint64
 	b.sendingMessagesCache.Range(func(key uint64, element *cache.Element[*sendingMessage]) bool {
 		sending := element.Data()
 		sending.mutex.Lock()
-		if sending.requestCode == codes.GET && sending.endpoint == endpoint && sending.matchingKey != 0 {
+		if (sending.requestCode == codes.GET || sending.requestCode == codes.FETCH) &&
+			sending.endpoint == endpoint && sending.matchingKey != 0 {
 			if key == sending.matchingKey {
 				drop = append(drop, key)
 			}
@@ -612,11 +639,11 @@ func (b *BlockWise[C]) sendEntityTooLarge(w *responsewriter.ResponseWriter[C], t
 func wantsToBeReceived(r *pool.Message) bool {
 	hasBlock1 := r.HasOption(message.Block1)
 	hasBlock2 := r.HasOption(message.Block2)
-	if hasBlock1 && (r.Code() == codes.POST || r.Code() == codes.PUT) {
+	if hasBlock1 && isBodyMethod(r.Code()) {
 		// r contains payload which we received
 		return true
 	}
-	if hasBlock2 && (r.Code() >= codes.GET && r.Code() <= codes.DELETE) {
+	if hasBlock2 && isRequestCode(r.Code()) {
 		// r is command to get next block
 		return false
 	}
@@ -687,8 +714,8 @@ func (b *BlockWise[C]) Handle(w *responsewriter.ResponseWriter[C], r *pool.Messa
 		b.errors(fmt.Errorf("continueSendingMessage(%v): %w", r, err))
 		return
 	}
-	// For codes GET,POST,PUT,DELETE, we want them to wait for pairing response and then delete them when the full response comes in or when timeout occurs.
-	if !more && sendingMessageCode > codes.DELETE {
+	// Keep request transfers until their paired response completes; clean up completed responses.
+	if !more && !isRequestCode(sendingMessageCode) {
 		b.sendingMessagesCache.Delete(exchangeKey)
 	}
 }
@@ -710,7 +737,7 @@ func (b *BlockWise[C]) handleReceivedMessage(w *responsewriter.ResponseWriter[C]
 		if w.Message().Code() == codes.Content && errG == nil {
 			startSendingMessageBlock = block
 		}
-	case codes.POST, codes.PUT:
+	case codes.POST, codes.PUT, codes.FETCH, codes.PATCH, codes.IPATCH:
 		maxSZX = fitSZX(r, message.Block1, maxSZX)
 		errP := b.processReceivedMessage(w, r, maxSZX, next, transferKeys{exchange: exchangeKey, matching: requestMatchingKey(r, remoteAddr)}, message.Block1, message.Size1)
 		if errP != nil {
@@ -727,10 +754,7 @@ func (b *BlockWise[C]) handleReceivedMessage(w *responsewriter.ResponseWriter[C]
 			return errP
 		}
 	}
-	var match sendingMatch
-	if remoteAddr != nil && (receivedCode == codes.GET || receivedCode == codes.POST || receivedCode == codes.PUT) {
-		match = sendingMatch{key: getRequestMatchingKey(r, remoteAddr), code: receivedCode, endpoint: remoteAddr.String()}
-	}
+	match := getSendingMatch(r, w.Message(), receivedCode, remoteAddr)
 	if err = b.startSendingMessage(w, maxSZX, maxMessageSize, startSendingMessageBlock, exchangeKey, match); err != nil {
 		return err
 	}
@@ -742,7 +766,7 @@ func (b *BlockWise[C]) handleReceivedMessage(w *responsewriter.ResponseWriter[C]
 // response (RFC 7959 §2.3, §3.2). It is set after startSendingMessage so the
 // stored Block2 response body does not carry Block1 in follow-up blocks.
 func echoFinalBlock1(resp, r *pool.Message, receivedCode codes.Code) {
-	if receivedCode != codes.POST && receivedCode != codes.PUT {
+	if !isBodyMethod(receivedCode) {
 		return
 	}
 	block, err := r.GetOptionUint32(message.Block1)
@@ -767,8 +791,7 @@ func (b *BlockWise[C]) createSendingMessage(sendingMessage *pool.Message, maxSZX
 	blockType := message.Block2
 	sizeType := message.Size2
 	token := sendingMessage.Token()
-	switch sendingMessage.Code() {
-	case codes.POST, codes.PUT:
+	if isBodyMethod(sendingMessage.Code()) {
 		blockType = message.Block1
 		sizeType = message.Size1
 	}
@@ -846,8 +869,7 @@ func (b *BlockWise[C]) createSendingMessage(sendingMessage *pool.Message, maxSZX
 
 func (b *BlockWise[C]) continueSendingMessage(w *responsewriter.ResponseWriter[C], r *pool.Message, maxSZX SZX, maxMessageSize uint32, sendingMessageCode codes.Code, exchangeKey uint64) (bool, error) {
 	blockType := message.Block2
-	switch sendingMessageCode {
-	case codes.POST, codes.PUT:
+	if isBodyMethod(sendingMessageCode) {
 		blockType = message.Block1
 	}
 
@@ -900,9 +922,10 @@ func (b *BlockWise[C]) startSendingMessage(w *responsewriter.ResponseWriter[C], 
 		return fmt.Errorf("handleSendingMessage: cannot create sending message: %w", err)
 	}
 	originalSendingMessage := w.Swap(sendingMessage)
-	if isObserveResponse(w.Message()) {
+	if isObserveResponse(w.Message()) && match.code != codes.FETCH {
 		b.cc.ReleaseMessage(originalSendingMessage)
-		// https://tools.ietf.org/html/rfc7959#section-2.6 - we don't need store it because client will be get values via GET.
+		// GET Observe clients can retrieve a notification representation with a new GET.
+		// FETCH continuations need the response body because they do not repeat the FETCH payload.
 		return nil
 	}
 	expire, ok := sendingMessage.Context().Deadline()

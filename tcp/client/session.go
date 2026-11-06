@@ -192,7 +192,7 @@ func (s *Session) decodeMessageFromBuffer(buffer *bytes.Buffer) (*pool.Message, 
 }
 
 func (s *Session) shouldDropRequest(req *pool.Message) (bool, error) {
-	if req.Code() < codes.GET || req.Code() > codes.DELETE {
+	if req.Code() < codes.GET || req.Code() >= 32 {
 		return false, nil
 	}
 	unknownCriticalOpts := netClient.GetUnknownCriticalOptions(req.Options())

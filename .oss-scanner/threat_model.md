@@ -21,6 +21,7 @@ The implementation also provides functionality including:
 - CoAP request multiplexing and routing
 - Observe (RFC 7641)
 - Block-wise transfers (RFC 7959)
+- FETCH, PATCH, and iPATCH methods (RFC 8132)
 - Q-Block transfers (RFC 9177), including Q-Block1 and Q-Block2
 - Multicast
 - NoResponse option (RFC 7967)
@@ -68,6 +69,16 @@ Important attack surfaces include:
 - Invalid and truncated messages.
 - Unexpected option values.
 - Malformed packet handling.
+
+### Request methods and payload formats
+
+- Handling of GET, POST, PUT, DELETE, FETCH, PATCH, and iPATCH request codes.
+- Content-Format and payload validation for body-bearing methods, especially
+  FETCH, PATCH, and iPATCH.
+- Preservation of request method semantics while requests are fragmented and
+  reassembled by Blockwise or Q-Block transfers.
+- Application handlers are responsible for validating method payload formats
+  and enforcing the atomic update semantics required for PATCH and iPATCH.
 
 ### UDP and TCP transports
 
@@ -163,8 +174,11 @@ Please investigate and test:
 - Integer overflow and underflow in length and offset calculations.
 - Extremely large option and payload lengths.
 - Block-wise transfer boundary conditions.
+- Large and fragmented FETCH, PATCH, and iPATCH requests over Blockwise.
 - Q-Block1/Q-Block2 malformed options, block boundaries, duplicates,
   out-of-order delivery, selective recovery, and concurrent transfers.
+- Interoperability of Blockwise and Q-Blockwise FETCH, PATCH, and iPATCH with
+  libcoap.
 - Q-Block resource limits, transfer expiration, and cancellation under load.
 - Concurrent request and subscription handling.
 - Connection and session cleanup.

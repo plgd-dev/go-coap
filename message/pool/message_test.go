@@ -5,11 +5,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"strings"
 	"sync"
 	"testing"
 
 	"github.com/plgd-dev/go-coap/v3/message"
+	"github.com/plgd-dev/go-coap/v3/message/codes"
 	"github.com/plgd-dev/go-coap/v3/message/pool"
 	"github.com/plgd-dev/go-coap/v3/tcp/coder"
 	"github.com/plgd-dev/go-coap/v3/test/net"
@@ -17,6 +19,58 @@ import (
 )
 
 const testPathABC = "/a/b/c"
+
+func TestSetupRFC8132Requests(t *testing.T) {
+	tests := []struct {
+		name  string
+		code  codes.Code
+		setup func(*pool.Message, string, message.Token, io.ReadSeeker) error
+	}{
+		{"FETCH", codes.FETCH, func(m *pool.Message, path string, token message.Token, body io.ReadSeeker) error {
+			return m.SetupFetch(path, token, message.AppOctets, body)
+		}},
+		{"PATCH", codes.PATCH, func(m *pool.Message, path string, token message.Token, body io.ReadSeeker) error {
+			return m.SetupPatch(path, token, message.AppOctets, body)
+		}},
+		{"iPATCH", codes.IPATCH, func(m *pool.Message, path string, token message.Token, body io.ReadSeeker) error {
+			return m.SetupIPatch(path, token, message.AppOctets, body)
+		}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := pool.NewMessage(context.Background())
+			token := message.Token{1, 2}
+			require.NoError(t, tt.setup(req, "/resource", token, bytes.NewReader([]byte("payload"))))
+			require.Equal(t, tt.code, req.Code())
+			require.Equal(t, token, req.Token())
+			path, err := req.Path()
+			require.NoError(t, err)
+			require.Equal(t, "/resource", path)
+			format, err := req.ContentFormat()
+			require.NoError(t, err)
+			require.Equal(t, message.AppOctets, format)
+			body, err := req.ReadBody()
+			require.NoError(t, err)
+			require.Equal(t, []byte("payload"), body)
+
+			invalidPath := pool.NewMessage(context.Background())
+			require.Error(t, tt.setup(invalidPath, strings.Repeat("x", 256), token, bytes.NewReader([]byte("payload"))))
+		})
+	}
+
+	fetch := pool.NewMessage(context.Background())
+	require.NoError(t, fetch.SetupFetch("/resource", message.Token{1}, message.AppOctets, nil))
+	require.False(t, fetch.HasOption(message.ContentFormat), "empty FETCH requests do not need Content-Format")
+
+	for _, setup := range []func() error{
+		func() error { return fetch.SetupFetch("/resource", message.Token{1}, message.AppOctets, nil) },
+		func() error { return fetch.SetupPatch("/resource", message.Token{1}, message.AppOctets, nil) },
+		func() error { return fetch.SetupIPatch("/resource", message.Token{1}, message.AppOctets, nil) },
+	} {
+		require.NoError(t, setup())
+		require.False(t, fetch.HasOption(message.ContentFormat), "empty requests do not need Content-Format")
+	}
+}
 
 func TestPoolAcquireClearsHijack(t *testing.T) {
 	p := pool.New(1, 2048)

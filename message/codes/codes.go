@@ -17,6 +17,9 @@ const (
 	POST   Code = 2
 	PUT    Code = 3
 	DELETE Code = 4
+	FETCH  Code = 5
+	PATCH  Code = 6
+	IPATCH Code = 7
 )
 
 // Response Codes
@@ -36,9 +39,11 @@ const (
 	MethodNotAllowed        Code = 133
 	NotAcceptable           Code = 134
 	RequestEntityIncomplete Code = 136
+	Conflict                Code = 137
 	PreconditionFailed      Code = 140
 	RequestEntityTooLarge   Code = 141
 	UnsupportedMediaType    Code = 143
+	UnprocessableEntity     Code = 150
 	TooManyRequests         Code = 157
 	InternalServerError     Code = 160
 	NotImplemented          Code = 161
@@ -66,6 +71,9 @@ var strToCode = map[string]Code{
 	`"POST"`:                               POST,
 	`"PUT"`:                                PUT,
 	`"DELETE"`:                             DELETE,
+	`"FETCH"`:                              FETCH,
+	`"PATCH"`:                              PATCH,
+	`"iPATCH"`:                             IPATCH,
 	`"Created"`:                            Created,
 	`"Deleted"`:                            Deleted,
 	`"Valid"`:                              Valid,
@@ -78,9 +86,11 @@ var strToCode = map[string]Code{
 	`"NotFound"`:                           NotFound,
 	`"MethodNotAllowed"`:                   MethodNotAllowed,
 	`"NotAcceptable"`:                      NotAcceptable,
+	`"Conflict"`:                           Conflict,
 	`"PreconditionFailed"`:                 PreconditionFailed,
 	`"RequestEntityTooLarge"`:              RequestEntityTooLarge,
 	`"UnsupportedMediaType"`:               UnsupportedMediaType,
+	`"UnprocessableEntity"`:                UnprocessableEntity,
 	`"TooManyRequests"`:                    TooManyRequests,
 	`"InternalServerError"`:                InternalServerError,
 	`"NotImplemented"`:                     NotImplemented,

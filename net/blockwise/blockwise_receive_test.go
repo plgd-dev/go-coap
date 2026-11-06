@@ -494,6 +494,96 @@ func TestBlockWiseReceivePostBlock1ThenBlock2(t *testing.T) {
 	}
 }
 
+func TestBlockWiseFetchObserveResponseBlock2(t *testing.T) {
+	cc := newTestClient()
+	bw := New(cc, time.Minute, func(err error) {
+		require.NoError(t, err)
+	}, nil)
+	remote := &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 5683}
+	responseBody := bytes.Repeat([]byte("fetch-observe"), 32)
+	handlerCalls := 0
+	handler := func(w *responsewriter.ResponseWriter[*testClient], req *pool.Message) {
+		handlerCalls++
+		require.Equal(t, codes.FETCH, req.Code())
+		if handlerCalls == 1 {
+			body, err := req.ReadBody()
+			require.NoError(t, err)
+			require.Equal(t, []byte("query"), body)
+		}
+		require.NoError(t, w.SetResponse(codes.Content, message.AppOctets, bytes.NewReader(responseBody)))
+		w.Message().SetOptionUint32(message.Observe, 1)
+	}
+
+	type result struct {
+		code     codes.Code
+		token    message.Token
+		body     []byte
+		block2   uint32
+		hasBlock bool
+	}
+	send := func(req *pool.Message) result {
+		t.Helper()
+		defer cc.ReleaseMessage(req)
+		w := responsewriter.New(cc.AcquireMessage(req.Context()), cc)
+		defer func() { cc.ReleaseMessage(w.Message()) }()
+		bw.Handle(w, req, SZX128, 1024, remote, handler)
+		body, err := w.Message().ReadBody()
+		require.NoError(t, err)
+		block2, blockErr := w.Message().GetOptionUint32(message.Block2)
+		return result{
+			code:     w.Message().Code(),
+			token:    w.Message().Token(),
+			body:     body,
+			block2:   block2,
+			hasBlock: blockErr == nil,
+		}
+	}
+	newRequest := func(blockNum int64, initial bool) *pool.Message {
+		req := cc.AcquireMessage(t.Context())
+		req.SetCode(codes.FETCH)
+		req.SetToken(message.Token{byte(blockNum + 1)})
+		require.NoError(t, req.SetPath("/resource"))
+		if initial {
+			req.SetContentFormat(message.AppJSON)
+			req.SetOptionUint32(message.Observe, 0)
+			req.SetBody(bytes.NewReader([]byte("query")))
+			return req
+		}
+		req.SetContentFormat(message.AppJSON)
+		block, err := EncodeBlockOption(SZX128, blockNum, false)
+		require.NoError(t, err)
+		req.SetOptionUint32(message.Block2, block)
+		return req
+	}
+
+	got := send(newRequest(0, true))
+	require.Equal(t, codes.Content, got.code)
+	require.True(t, got.hasBlock)
+	_, num, more, err := DecodeBlockOption(got.block2)
+	require.NoError(t, err)
+	require.Equal(t, int64(0), num)
+	require.True(t, more)
+	require.Equal(t, responseBody[:SZX128.Size()], got.body)
+
+	var assembled []byte
+	assembled = append(assembled, got.body...)
+	for blockNum := int64(1); ; blockNum++ {
+		got = send(newRequest(blockNum, false))
+		require.Equal(t, codes.Content, got.code, "Block2 %d", blockNum)
+		require.Equal(t, message.Token{byte(blockNum + 1)}, got.token, "Block2 %d token", blockNum)
+		require.True(t, got.hasBlock, "Block2 %d", blockNum)
+		_, num, more, err = DecodeBlockOption(got.block2)
+		require.NoError(t, err)
+		require.Equal(t, blockNum, num)
+		assembled = append(assembled, got.body...)
+		if !more {
+			break
+		}
+	}
+	require.Equal(t, responseBody, assembled)
+	require.Equal(t, 1, handlerCalls, "Block2 continuations must use the cached FETCH Observe representation")
+}
+
 func TestGetRequestMatchingKey(t *testing.T) {
 	cc := newTestClient()
 	remote := &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 5683}

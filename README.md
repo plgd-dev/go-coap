@@ -18,26 +18,28 @@ The go-coap provides servers and clients for DTLS, TCP-TLS, UDP, TCP in golang l
 ## Features
 
 * CoAP over UDP [RFC 7252][coap].
-* CoAP over TCP/TLS [RFC 8232][coap-tcp]
 * Observe resources in CoAP [RFC 7641][coap-observe]
 * Block-wise transfers in CoAP [RFC 7959][coap-block-wise-transfers]
+* CoAP NoResponse option in CoAP [RFC 7967][coap-noresponse]
+* FETCH, PATCH, and iPATCH methods [RFC 8132][coap-fetch-patch]
+* CoAP over TCP/TLS [RFC 8323][coap-tcp]
+* Too many requests response code [RFC 8516][coap-429]
+* CoAP Echo and Request-Tag options [RFC 9175][coap-echo-request-tag]
 * Experimental Q-Block datagram transfers [RFC 9177][coap-q-block-wise-transfers]
+* CoAP over DTLS [pion/dtls][pion-dtls]
 * request multiplexer
 * multicast
-* CoAP NoResponse option in CoAP [RFC 7967][coap-noresponse]
-* CoAP Echo and Request-Tag options [RFC 9175][coap-echo-request-tag]
-* CoAP over DTLS [pion/dtls][pion-dtls]
-* Too many requests response code [RFC 8516][coap-429]
 
 [coap]: http://tools.ietf.org/html/rfc7252
-[coap-tcp]: https://tools.ietf.org/html/rfc8323
-[coap-block-wise-transfers]: https://tools.ietf.org/html/rfc7959
-[coap-q-block-wise-transfers]: https://www.rfc-editor.org/rfc/rfc9177.html
 [coap-observe]: https://tools.ietf.org/html/rfc7641
+[coap-block-wise-transfers]: https://tools.ietf.org/html/rfc7959
 [coap-noresponse]: https://tools.ietf.org/html/rfc7967
-[coap-echo-request-tag]: https://www.rfc-editor.org/rfc/rfc9175.html
-[pion-dtls]: https://github.com/pion/dtls
+[coap-fetch-patch]: https://www.rfc-editor.org/rfc/rfc8132.html
+[coap-tcp]: https://tools.ietf.org/html/rfc8323
 [coap-429]: https://datatracker.ietf.org/doc/html/rfc8516
+[coap-echo-request-tag]: https://www.rfc-editor.org/rfc/rfc9175.html
+[coap-q-block-wise-transfers]: https://www.rfc-editor.org/rfc/rfc9177.html
+[pion-dtls]: https://github.com/pion/dtls
 
 ## Requirements
 
@@ -47,11 +49,35 @@ The go-coap provides servers and clients for DTLS, TCP-TLS, UDP, TCP in golang l
 
 Q-Block is opt-in for UDP/DTLS; existing blockwise defaults are unchanged.
 See the [QBlockwise guide](docs/qblockwise/qblockwise.md) for configuration, limits,
-libcoap interoperability, and a runnable
+libcoap interoperability tests for Blockwise and Q-Block transfers (including the
+RFC 8132 methods), and a runnable
 [client](examples/qblockwise/client/main.go) /
 [server](examples/qblockwise/server/main.go) example.
 
 ## Samples
+
+### FETCH, PATCH, and iPATCH (RFC 8132)
+
+The [simple client](examples/simple/client/main.go) and
+[server](examples/simple/server/main.go) demonstrate all three methods on
+`/object`: FETCH selects a JSON field, PATCH appends with JSON Patch, and iPATCH
+replaces the value with JSON Merge Patch. The
+[Q-Blockwise client](examples/qblockwise/client/main.go) and
+[server](examples/qblockwise/server/main.go) demonstrate the methods with large
+payloads; their application-defined octet-stream behavior uses FETCH to read,
+PATCH to append, and iPATCH to replace data.
+
+Run either pair in separate terminals:
+
+```sh
+go run ./examples/simple/server
+go run ./examples/simple/client
+```
+
+```sh
+go run ./examples/qblockwise/server
+go run ./examples/qblockwise/client
+```
 
 ### Simple
 
@@ -194,4 +220,4 @@ Apache 2.0
 
 If go-coap is useful to you, you can buy us a coffee for $3 or choose another amount.
 
-- **By card:** [Sponsor plgd-dev on GitHub](https://github.com/sponsors/plgd-dev) and choose a one-time $3 sponsorship or enter a custom amount. This requires GitHub Sponsors to be enabled for the `plgd-dev` organization.
+* **By card:** [Sponsor plgd-dev on GitHub](https://github.com/sponsors/plgd-dev) and choose a one-time $3 sponsorship or enter a custom amount. This requires GitHub Sponsors to be enabled for the `plgd-dev` organization.

@@ -102,6 +102,8 @@ func qLibcoapPSKCallback([]byte) ([]byte, error) {
 type qWireCounts struct {
 	q1     atomic.Int32
 	q2     atomic.Int32
+	block1 atomic.Int32
+	block2 atomic.Int32
 	legacy atomic.Int32
 }
 
@@ -116,7 +118,12 @@ func (c *qWireCounts) monitor(_ *client.Conn, msg *pool.Message) (bool, error) {
 	if msg.HasOption(message.QBlock2) {
 		c.q2.Add(1)
 	}
-	if msg.HasOption(message.Block1) || msg.HasOption(message.Block2) {
+	if msg.HasOption(message.Block1) {
+		c.block1.Add(1)
+		c.legacy.Add(1)
+	}
+	if msg.HasOption(message.Block2) {
+		c.block2.Add(1)
 		c.legacy.Add(1)
 	}
 	return false, nil
@@ -427,7 +434,7 @@ func startQGoServerWithMTU(t *testing.T, secure bool, szx blockwise.SZX, payload
 	require.NoError(t, router.Handle("/q", mux.HandlerFunc(func(w mux.ResponseWriter, r *mux.Message) {
 		calls.Add(1)
 		switch r.Code() {
-		case codes.PUT:
+		case codes.PUT, codes.FETCH, codes.PATCH, codes.IPATCH:
 			got, err := r.ReadBody()
 			if err != nil {
 				t.Errorf("read Q request body: %v", err)
@@ -436,7 +443,11 @@ func startQGoServerWithMTU(t *testing.T, secure bool, szx blockwise.SZX, payload
 			if !bytes.Equal(payload, got) {
 				t.Errorf("Q request differs: received %d bytes, want %d", len(got), len(payload))
 			}
-			if err := w.SetResponse(codes.Changed, message.AppOctets, bytes.NewReader(payload)); err != nil {
+			responseCode := codes.Changed
+			if r.Code() == codes.FETCH {
+				responseCode = codes.Content
+			}
+			if err := w.SetResponse(responseCode, message.AppOctets, bytes.NewReader(payload)); err != nil {
 				t.Errorf("set Q response: %v", err)
 			}
 		case codes.GET:
@@ -486,30 +497,58 @@ func startQGoServerWithMTU(t *testing.T, secure bool, szx blockwise.SZX, payload
 }
 
 func runQLibcoapClient(t *testing.T, binary, uri string, secure bool, typ message.Type, szx blockwise.SZX, upload []byte) []byte {
+	method := "get"
+	if upload != nil {
+		method = "put"
+	}
+	return runQLibcoapRequest(t, qLibcoapRequest{
+		binary: binary,
+		uri:    uri,
+		secure: secure,
+		typ:    typ,
+		szx:    szx,
+		mode:   "7",
+		method: method,
+		upload: upload,
+	})
+}
+
+type qLibcoapRequest struct {
+	binary string
+	uri    string
+	secure bool
+	typ    message.Type
+	szx    blockwise.SZX
+	mode   string
+	method string
+	upload []byte
+}
+
+func runQLibcoapRequest(t *testing.T, request qLibcoapRequest) []byte {
 	t.Helper()
 	dir := t.TempDir()
 	output := filepath.Join(dir, "response.bin")
 	args := []string{
-		"-L", "7", "-b", strconv.FormatInt(szx.Size(), 10),
+		"-L", request.mode, "-b", strconv.FormatInt(request.szx.Size(), 10),
 		"-B", "30", "-v", "7", "-o", output,
 	}
-	if upload == nil {
-		args = append(args, "-m", "get")
+	if request.upload == nil {
+		args = append(args, "-m", request.method)
 	} else {
 		input := filepath.Join(dir, "request.bin")
-		require.NoError(t, os.WriteFile(input, upload, 0o600))
-		args = append(args, "-m", "put", "-t", "42", "-f", input)
+		require.NoError(t, os.WriteFile(input, request.upload, 0o600))
+		args = append(args, "-m", request.method, "-t", "42", "-f", input)
 	}
-	if typ == message.NonConfirmable {
+	if request.typ == message.NonConfirmable {
 		args = append(args, "-N")
 	}
-	if secure {
+	if request.secure {
 		args = append(args, "-u", "qblock-test", "-k", qLibcoapPSK)
 	}
-	args = append(args, uri)
+	args = append(args, request.uri)
 	ctx, cancel := context.WithTimeout(context.Background(), 35*time.Second)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, binary, args...)
+	cmd := exec.CommandContext(ctx, request.binary, args...)
 	log := new(boundedCommandLog)
 	cmd.Stdout, cmd.Stderr = log, log
 	err := cmd.Run()
@@ -517,6 +556,62 @@ func runQLibcoapClient(t *testing.T, binary, uri string, secure bool, typ messag
 	body, err := os.ReadFile(output)
 	require.NoError(t, err, "libcoap client did not write response:\n%s", log.String())
 	return body
+}
+
+func TestQBlockLibcoapRFC8132Methods(t *testing.T) {
+	binary := qLibcoapBinary(t, "coap-client")
+	modes := []struct {
+		name string
+		flag string
+		q    bool
+	}{{name: "blockwise", flag: "3"}}
+	if qLibcoapMode(t) == qLibcoapEnabled {
+		modes = append(modes, struct {
+			name string
+			flag string
+			q    bool
+		}{name: "qblockwise", flag: "7", q: true})
+	}
+
+	payload := qPayload()
+	methods := []struct {
+		name string
+		code codes.Code
+	}{
+		{name: "fetch", code: codes.FETCH},
+		{name: "patch", code: codes.PATCH},
+		{name: "ipatch", code: codes.IPATCH},
+	}
+	for _, mode := range modes {
+		for _, method := range methods {
+			t.Run(mode.name+"/"+method.name, func(t *testing.T) {
+				counts := new(qWireCounts)
+				calls := new(atomic.Int32)
+				uri := startQGoServer(t, false, blockwise.SZX128, payload, counts, calls)
+				got := runQLibcoapRequest(t, qLibcoapRequest{
+					binary: binary,
+					uri:    uri + "/q",
+					typ:    message.NonConfirmable,
+					szx:    blockwise.SZX128,
+					mode:   mode.flag,
+					method: method.name,
+					upload: payload,
+				})
+
+				require.Equal(t, payload, got, "libcoap response body")
+				require.Equal(t, int32(1), calls.Load(), "application sees one assembled request")
+				if mode.q {
+					require.Positive(t, counts.q1.Load(), "request body must use Q-Block1")
+					require.Positive(t, counts.q2.Load(), "response body must use Q-Block2")
+					require.Zero(t, counts.legacy.Load())
+				} else {
+					require.Zero(t, counts.q1.Load()+counts.q2.Load())
+					require.Positive(t, counts.block1.Load(), "large request must use Block1")
+					require.Positive(t, counts.block2.Load(), "large response must use Block2")
+				}
+			})
+		}
+	}
 }
 
 func TestQBlockLibcoapGoServer(t *testing.T) {

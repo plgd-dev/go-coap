@@ -327,6 +327,39 @@ func TestBlockWiseDo(t *testing.T) {
 	}
 }
 
+func TestBlockWiseRFC8132BodyMethods(t *testing.T) {
+	for _, code := range []codes.Code{codes.FETCH, codes.PATCH, codes.IPATCH} {
+		t.Run(code.String(), func(t *testing.T) {
+			sender := New(newTestClient(), time.Hour, func(error) {}, nil)
+			receiver := New(newTestClient(), time.Hour, func(error) {}, nil)
+			payload := bytes.Repeat([]byte{0x42}, 64)
+			do := makeDo(t, sender, receiver, SZX16, uint32(SZX16.Size()), SZX16, uint32(SZX16.Size()),
+				func(w *responsewriter.ResponseWriter[*testClient], r *pool.Message) {
+					require.Equal(t, code, r.Code())
+					require.True(t, r.HasOption(message.ContentFormat))
+					got, err := r.ReadBody()
+					require.NoError(t, err)
+					require.Equal(t, payload, got)
+					w.SetMessage(toPoolMessage(&testmessage{
+						ctx:   context.Background(),
+						token: r.Token(),
+						code:  codes.Changed,
+					}))
+				})
+
+			req := pool.NewMessage(context.Background())
+			req.SetCode(code)
+			req.SetToken(message.Token{byte(code)})
+			req.MustSetPath("/resource")
+			req.SetContentFormat(message.AppOctets)
+			req.SetBody(bytes.NewReader(payload))
+			resp, err := sender.Do(req, SZX16, uint32(SZX16.Size()), nil, do)
+			require.NoError(t, err)
+			require.Equal(t, codes.Changed, resp.Code())
+		})
+	}
+}
+
 /*
 func TestBlockWiseParallel(t *testing.T) {
 	sender := New(newTestClient(), time.Second*3600, func(err error) { t.Log(err) }, nil)
