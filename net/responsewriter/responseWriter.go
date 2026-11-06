@@ -22,6 +22,9 @@ type postWriteCallbacks struct {
 // WithPostWriteCallbacks returns a context that supports callbacks after the
 // response has been written, and a function to run those callbacks.
 func WithPostWriteCallbacks(ctx context.Context) (context.Context, func()) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	callbacks := new(postWriteCallbacks)
 	ctx = context.WithValue(ctx, postWriteCallbacksKey{}, callbacks)
 	return ctx, func() {
@@ -39,6 +42,9 @@ func WithPostWriteCallbacks(ctx context.Context) (context.Context, func()) {
 // AfterWrite registers callback to run after the response is written. It
 // returns false when ctx was not created by WithPostWriteCallbacks.
 func AfterWrite(ctx context.Context, callback func()) bool {
+	if ctx == nil {
+		return false
+	}
 	callbacks, ok := ctx.Value(postWriteCallbacksKey{}).(*postWriteCallbacks)
 	if !ok {
 		return false

@@ -41,6 +41,9 @@ func q2JobKey(key string, token message.Token, nums []int64, recovery bool) stri
 }
 
 func (b *Engine[C]) scheduleQ2Set(ctx context.Context, job *q2SetJob[C], deadline time.Time) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	b.q2SendMu.Lock()
 	defer b.q2SendMu.Unlock()
 	generation := b.q2Senders[job.key]

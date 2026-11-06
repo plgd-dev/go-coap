@@ -61,6 +61,9 @@ func (c *qTestTransport) DelayQBlock(key string, deadline time.Time) {
 }
 
 func (c *qTestTransport) SendQBlock(msg *pool.Message) error {
+	if msg.Context() == nil {
+		return errors.New("scheduled Q-Block response has nil context")
+	}
 	cloned := pool.NewMessage(context.Background())
 	if err := msg.Clone(cloned); err != nil {
 		return err
