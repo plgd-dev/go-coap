@@ -501,34 +501,54 @@ func runQLibcoapClient(t *testing.T, binary, uri string, secure bool, typ messag
 	if upload != nil {
 		method = "put"
 	}
-	return runQLibcoapRequest(t, binary, uri, secure, typ, szx, "7", method, upload)
+	return runQLibcoapRequest(t, qLibcoapRequest{
+		binary: binary,
+		uri:    uri,
+		secure: secure,
+		typ:    typ,
+		szx:    szx,
+		mode:   "7",
+		method: method,
+		upload: upload,
+	})
 }
 
-func runQLibcoapRequest(t *testing.T, binary, uri string, secure bool, typ message.Type, szx blockwise.SZX, mode, method string, upload []byte) []byte {
+type qLibcoapRequest struct {
+	binary string
+	uri    string
+	secure bool
+	typ    message.Type
+	szx    blockwise.SZX
+	mode   string
+	method string
+	upload []byte
+}
+
+func runQLibcoapRequest(t *testing.T, request qLibcoapRequest) []byte {
 	t.Helper()
 	dir := t.TempDir()
 	output := filepath.Join(dir, "response.bin")
 	args := []string{
-		"-L", mode, "-b", strconv.FormatInt(szx.Size(), 10),
+		"-L", request.mode, "-b", strconv.FormatInt(request.szx.Size(), 10),
 		"-B", "30", "-v", "7", "-o", output,
 	}
-	if upload == nil {
-		args = append(args, "-m", method)
+	if request.upload == nil {
+		args = append(args, "-m", request.method)
 	} else {
 		input := filepath.Join(dir, "request.bin")
-		require.NoError(t, os.WriteFile(input, upload, 0o600))
-		args = append(args, "-m", method, "-t", "42", "-f", input)
+		require.NoError(t, os.WriteFile(input, request.upload, 0o600))
+		args = append(args, "-m", request.method, "-t", "42", "-f", input)
 	}
-	if typ == message.NonConfirmable {
+	if request.typ == message.NonConfirmable {
 		args = append(args, "-N")
 	}
-	if secure {
+	if request.secure {
 		args = append(args, "-u", "qblock-test", "-k", qLibcoapPSK)
 	}
-	args = append(args, uri)
+	args = append(args, request.uri)
 	ctx, cancel := context.WithTimeout(context.Background(), 35*time.Second)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, binary, args...)
+	cmd := exec.CommandContext(ctx, request.binary, args...)
 	log := new(boundedCommandLog)
 	cmd.Stdout, cmd.Stderr = log, log
 	err := cmd.Run()
@@ -568,8 +588,15 @@ func TestQBlockLibcoapRFC8132Methods(t *testing.T) {
 				counts := new(qWireCounts)
 				calls := new(atomic.Int32)
 				uri := startQGoServer(t, false, blockwise.SZX128, payload, counts, calls)
-				got := runQLibcoapRequest(t, binary, uri+"/q", false, message.NonConfirmable,
-					blockwise.SZX128, mode.flag, method.name, payload)
+				got := runQLibcoapRequest(t, qLibcoapRequest{
+					binary: binary,
+					uri:    uri + "/q",
+					typ:    message.NonConfirmable,
+					szx:    blockwise.SZX128,
+					mode:   mode.flag,
+					method: method.name,
+					upload: payload,
+				})
 
 				require.Equal(t, payload, got, "libcoap response body")
 				require.Equal(t, int32(1), calls.Load(), "application sees one assembled request")

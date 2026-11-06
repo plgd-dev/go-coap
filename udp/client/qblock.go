@@ -335,24 +335,45 @@ func (cc *Conn) startQBlockNotification(msg *pool.Message) bool {
 	if !cc.qBlockAllowed() || msg.Code() < codes.Created || !msg.HasOption(message.QBlock2) {
 		return false
 	}
+	req, szx, consume := cc.qBlockNotificationRequest(msg)
+	if !consume {
+		return false
+	}
+	if req == nil {
+		return true
+	}
+	exchange, initial := cc.prepareQBlockNotification(req, msg)
+	if exchange == nil {
+		return true
+	}
+	cc.receivedMessageReader.TryToReplaceLoop()
+	go cc.runQBlockObservation(req, szx, exchange, initial)
+	return true
+}
+
+func (cc *Conn) qBlockNotificationRequest(msg *pool.Message) (*pool.Message, blockwise.SZX, bool) {
 	req, ok := cc.observationHandler.GetObservationRequest(msg.Token())
 	if !ok {
-		return false
+		return nil, 0, false
 	}
 	if !req.HasOption(message.QBlock2) {
 		cc.ReleaseMessage(req)
-		return false
+		return nil, 0, false
 	}
 	value, err := req.GetOptionUint32(message.QBlock2)
 	if err != nil {
 		cc.ReleaseMessage(req)
-		return true
+		return nil, 0, true
 	}
 	szx, _, _, err := blockwise.DecodeQBlockOption(value)
 	if err != nil {
 		cc.ReleaseMessage(req)
-		return true
+		return nil, 0, true
 	}
+	return req, szx, true
+}
+
+func (cc *Conn) prepareQBlockNotification(req, msg *pool.Message) (blockwise.QBlockExchange, *pool.Message) {
 	req.SetType(message.Confirmable)
 	if msg.Type() == message.NonConfirmable {
 		req.SetType(message.NonConfirmable)
@@ -361,12 +382,12 @@ func (cc *Conn) startQBlockNotification(msg *pool.Message) bool {
 	if err != nil {
 		cc.ReleaseMessage(req)
 		cc.errors(err)
-		return true
+		return nil, nil
 	}
 	if _, active := cc.observationHandler.GetObservation(req.Token().Hash()); !active {
 		exchange.Close()
 		cc.ReleaseMessage(req)
-		return true
+		return nil, nil
 	}
 	initial := cc.AcquireMessage(cc.Context())
 	if err := msg.Clone(initial); err != nil {
@@ -374,11 +395,9 @@ func (cc *Conn) startQBlockNotification(msg *pool.Message) bool {
 		cc.ReleaseMessage(initial)
 		cc.ReleaseMessage(req)
 		cc.errors(err)
-		return true
+		return nil, nil
 	}
-	cc.receivedMessageReader.TryToReplaceLoop()
-	go cc.runQBlockObservation(req, szx, exchange, initial)
-	return true
+	return exchange, initial
 }
 
 func (cc *Conn) runQBlockObservation(req *pool.Message, szx blockwise.SZX, exchange blockwise.QBlockExchange, initial *pool.Message) {
