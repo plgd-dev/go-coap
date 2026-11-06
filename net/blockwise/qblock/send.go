@@ -267,43 +267,47 @@ func (b *Engine[C]) prepareQ2NonSend(r *pool.Message, key string, szx SZX, nums 
 }
 
 func (b *Engine[C]) continueQ2Response(r *pool.Message, key string, szx SZX, nums []int64, count int64, wholeBody bool) error {
-	if len(nums) > 1 || wholeBody && nums[len(nums)-1]+1 < count {
-		transport, ok := any(b.cc).(Transport)
-		if !ok {
-			return errors.New("Q-Block burst transport is unavailable")
-		}
-		// The first payload is piggybacked by the caller. Subsequent payloads
-		// share its reliability mode and pass through the connection worker.
-		token := r.Token()
-		mode := r.Type()
-		remaining := slices.Clone(nums[1:])
-		delay := time.Duration(0)
-		if len(remaining) == 0 && wholeBody {
-			next := nums[0] + 1
-			for num := next; num <= b.config.setLast(next, count); num++ {
-				remaining = append(remaining, num)
-			}
-		}
-		if mode == message.NonConfirmable && len(remaining) > 0 && remaining[0]/b.config.MaxPayloads != nums[0]/b.config.MaxPayloads {
-			delay = b.q2SetDelay(key)
-		}
-		job := &q2SetJob[C]{
-			transport: transport, key: key, token: token, szx: szx, mode: mode, nums: remaining,
-			count: count, wholeBody: wholeBody, recovery: !wholeBody,
-		}
-		schedule := func() error {
-			return b.scheduleQ2Set(r.Context(), job, time.Now().Add(delay))
-		}
-		if responsewriter.AfterWrite(r.Context(), func() {
-			if err := schedule(); err != nil {
-				b.errors(err)
-			}
-		}) {
-			return nil
-		}
-		return schedule()
+	if len(nums) <= 1 && (!wholeBody || nums[len(nums)-1]+1 >= count) {
+		return nil
 	}
-	return nil
+	return b.scheduleQ2Continuation(r, key, szx, nums, count, wholeBody)
+}
+
+func (b *Engine[C]) scheduleQ2Continuation(r *pool.Message, key string, szx SZX, nums []int64, count int64, wholeBody bool) error {
+	transport, ok := any(b.cc).(Transport)
+	if !ok {
+		return errors.New("Q-Block burst transport is unavailable")
+	}
+	// The first payload is piggybacked by the caller. Subsequent payloads
+	// share its reliability mode and pass through the connection worker.
+	token := r.Token()
+	mode := r.Type()
+	remaining := slices.Clone(nums[1:])
+	delay := time.Duration(0)
+	if len(remaining) == 0 && wholeBody {
+		next := nums[0] + 1
+		for num := next; num <= b.config.setLast(next, count); num++ {
+			remaining = append(remaining, num)
+		}
+	}
+	if mode == message.NonConfirmable && len(remaining) > 0 && remaining[0]/b.config.MaxPayloads != nums[0]/b.config.MaxPayloads {
+		delay = b.q2SetDelay(key)
+	}
+	job := &q2SetJob[C]{
+		transport: transport, key: key, token: token, szx: szx, mode: mode, nums: remaining,
+		count: count, wholeBody: wholeBody, recovery: !wholeBody,
+	}
+	schedule := func() error {
+		return b.scheduleQ2Set(r.Context(), job, time.Now().Add(delay))
+	}
+	if responsewriter.AfterWrite(r.Context(), func() {
+		if err := schedule(); err != nil {
+			b.errors(err)
+		}
+	}) {
+		return nil
+	}
+	return schedule()
 }
 
 func (b *Engine[C]) q2RequestedBlocks(r *pool.Message, szx SZX, count int64) ([]int64, bool, error) {
