@@ -220,4 +220,4 @@ Apache 2.0
 
 If go-coap is useful to you, you can buy us a coffee for $3 or choose another amount.
 
-- **By card:** [Sponsor plgd-dev on GitHub](https://github.com/sponsors/plgd-dev) and choose a one-time $3 sponsorship or enter a custom amount. This requires GitHub Sponsors to be enabled for the `plgd-dev` organization.
+* **By card:** [Sponsor plgd-dev on GitHub](https://github.com/sponsors/plgd-dev) and choose a one-time $3 sponsorship or enter a custom amount. This requires GitHub Sponsors to be enabled for the `plgd-dev` organization.
