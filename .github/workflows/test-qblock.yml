@@ -6,13 +6,12 @@ on:
   schedule:
     - cron: "23 3 * * 1"
 
-permissions:
-  contents: read
-  pull-requests: read
-
 jobs:
   interoperability:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
     strategy:
       fail-fast: false
       matrix:

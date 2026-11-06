@@ -4,19 +4,21 @@ name: Test for forked repository
 # Run on pull requests events from forked repository
 on: [pull_request]
 
-permissions:
-  contents: read
-  pull-requests: read
-
 jobs:
   qblock:
     if: github.event.pull_request.head.repo.full_name != github.repository
+    permissions:
+      contents: read
+      pull-requests: read
     uses: ./.github/workflows/test-qblock.yml
 
   test-for-fork:
     # Run only for forked repository
     if: github.event.pull_request.head.repo.full_name != github.repository
     runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+      pull-requests: read
     strategy:
       matrix:
         os: [ubuntu-latest, windows-latest, macOS-latest]
