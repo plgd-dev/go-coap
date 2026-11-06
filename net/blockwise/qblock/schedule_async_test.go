@@ -70,3 +70,34 @@ func TestQBlockConfirmableSchedulerWaitsOutsideWorker(t *testing.T) {
 		})
 	}
 }
+
+func TestQBlockScheduledResponseRetainsToken(t *testing.T) {
+	cc := &qTestTransport{testClient: newTestClient(), jobs: make(map[string]qBlockTestJob)}
+	engine := New(cc, func(error) {})
+	defer engine.CloseQBlockTransfers()
+
+	req := qTestRequest(t, "original-token", struct {
+		num  int64
+		more bool
+	}{0, true})
+	req.SetType(message.Confirmable)
+	writer := responsewriter.New(cc.AcquireMessage(req.Context()), cc)
+	defer cc.ReleaseMessage(writer.Message())
+
+	require.NoError(t, engine.handleQBlock2(writer, req, SZX16, nil,
+		func(w *responsewriter.ResponseWriter[*qTestTransport], _ *pool.Message) {
+			require.NoError(t, w.SetResponse(codes.Content, message.AppOctets, bytes.NewReader(make([]byte, 64))))
+		}))
+	require.Len(t, cc.jobs, 1)
+
+	req.SetToken([]byte("overwritten"))
+	for key, job := range cc.jobs {
+		delete(cc.jobs, key)
+		require.NoError(t, job.run())
+	}
+
+	require.Len(t, cc.sent, 3)
+	for _, response := range cc.sent {
+		require.Equal(t, message.Token("original-token"), response.Token())
+	}
+}

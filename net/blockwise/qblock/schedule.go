@@ -48,6 +48,7 @@ func (b *Engine[C]) scheduleQ2Set(ctx context.Context, job *q2SetJob[C], deadlin
 		return nil
 	}
 	job.b, job.generation = b, generation
+	job.token = bytes.Clone(job.token)
 	return job.transport.ScheduleQBlock(q2JobKey(job.key, job.token, job.nums, job.recovery), deadline,
 		func() error { return job.run(ctx) })
 }
