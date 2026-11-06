@@ -1,0 +1,22 @@
+name: OSS scanner image
+
+on:
+  pull_request:
+  push:
+    branches:
+      - master
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Build and verify image
+        run: docker build --progress=plain -f .oss-scanner/Dockerfile .

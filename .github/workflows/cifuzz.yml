@@ -4,7 +4,8 @@ on:
   pull_request:
   workflow_dispatch:
 
-permissions: {}
+permissions:
+  pull-requests: read
 
 jobs:
  Fuzzing:
@@ -12,6 +13,7 @@ jobs:
 
    permissions:
      security-events: write
+     pull-requests: read
 
    steps:
    - name: Build Fuzzers

@@ -4,6 +4,10 @@ name: Test for forked repository
 # Run on pull requests events from forked repository
 on: [pull_request]
 
+permissions:
+  contents: read
+  pull-requests: read
+
 jobs:
   qblock:
     if: github.event.pull_request.head.repo.full_name != github.repository

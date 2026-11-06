@@ -21,6 +21,7 @@ The implementation also provides functionality including:
 - CoAP request multiplexing and routing
 - Observe (RFC 7641)
 - Block-wise transfers (RFC 7959)
+- Q-Block transfers (RFC 9177), including Q-Block1 and Q-Block2
 - Multicast
 - NoResponse option (RFC 7967)
 - DTLS-based communication
@@ -86,6 +87,18 @@ Important attack surfaces include:
 - Excessive payload allocation.
 - Resource exhaustion through large or incomplete transfers.
 
+### Q-Block transfers (RFC 9177)
+
+- Validation of Q-Block1 and Q-Block2 options, including NUM, SZX, M,
+  Request-Tag, Size1, and Size2.
+- Reassembly of out-of-order, duplicate, missing, and conflicting blocks.
+- Selective recovery requests and handling of repeated or malicious recovery
+  traffic.
+- Bounded payload bursts, transfer state, queued work, and retained response
+  bodies.
+- Isolation of transfer state between peers, tokens, and representations.
+- Cancellation, expiration, and cleanup during concurrent transfers.
+
 ### Observe functionality
 
 - Subscription lifecycle management.
@@ -150,12 +163,17 @@ Please investigate and test:
 - Integer overflow and underflow in length and offset calculations.
 - Extremely large option and payload lengths.
 - Block-wise transfer boundary conditions.
+- Q-Block1/Q-Block2 malformed options, block boundaries, duplicates,
+  out-of-order delivery, selective recovery, and concurrent transfers.
+- Q-Block resource limits, transfer expiration, and cancellation under load.
 - Concurrent request and subscription handling.
 - Connection and session cleanup.
 - UDP amplification and resource exhaustion scenarios.
 - DTLS configuration and authentication edge cases.
 
 Use existing tests and fuzz tests as a starting point.
+Run the Q-Block interoperability tests against a Q-enabled libcoap build; they
+exercise both client and server behavior, including UDP and DTLS.
 
 When possible, create a minimal reproducible proof of concept.
 
