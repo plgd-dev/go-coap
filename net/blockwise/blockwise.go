@@ -332,12 +332,19 @@ func getMessageExchangeKey(r *pool.Message, remoteAddr net.Addr) (uint64, error)
 // getRequestMatchingKey identifies "matchable" requests (RFC 9175 §3.3): same endpoint,
 // code and options, ignoring block-wise and elective NoCacheKey options.
 func getRequestMatchingKey(r *pool.Message, remoteAddr net.Addr) uint64 {
+	return getRequestMatchingKeyWithObserve(r, remoteAddr, true)
+}
+
+func getRequestMatchingKeyWithObserve(r *pool.Message, remoteAddr net.Addr, includeObserve bool) uint64 {
 	h := fnv.New64a()
 	writeExchangeKeyPart(h, []byte(remoteAddr.String()))
 	var code [2]byte
 	binary.BigEndian.PutUint16(code[:], uint16(r.Code()))
 	_, _ = h.Write(code[:])
 	for _, option := range r.Options() {
+		if !includeObserve && option.ID == message.Observe {
+			continue
+		}
 		if option.ID == message.Block1 || option.ID == message.Block2 ||
 			option.ID == message.QBlock1 || option.ID == message.QBlock2 {
 			continue
@@ -353,6 +360,19 @@ func getRequestMatchingKey(r *pool.Message, remoteAddr net.Addr) uint64 {
 		_, _ = h.Write(option.Value)
 	}
 	return h.Sum64()
+}
+
+func getSendingMatch(r, response *pool.Message, requestCode codes.Code, remoteAddr net.Addr) sendingMatch {
+	if remoteAddr == nil || (requestCode != codes.GET && !isBodyMethod(requestCode)) {
+		return sendingMatch{}
+	}
+	matchKey := getRequestMatchingKey(r, remoteAddr)
+	if requestCode == codes.FETCH && isObserveResponse(response) {
+		// Block2 continuation requests omit Observe; key FETCH notifications
+		// the same way so a changed-token continuation finds its response.
+		matchKey = getRequestMatchingKeyWithObserve(r, remoteAddr, false)
+	}
+	return sendingMatch{key: matchKey, code: requestCode, endpoint: remoteAddr.String()}
 }
 
 func (b *BlockWise[C]) resolveBlock1ExchangeKey(r *pool.Message, remoteAddr net.Addr, exchangeKey uint64) (uint64, error) {
@@ -734,10 +754,7 @@ func (b *BlockWise[C]) handleReceivedMessage(w *responsewriter.ResponseWriter[C]
 			return errP
 		}
 	}
-	var match sendingMatch
-	if remoteAddr != nil && (receivedCode == codes.GET || isBodyMethod(receivedCode)) {
-		match = sendingMatch{key: getRequestMatchingKey(r, remoteAddr), code: receivedCode, endpoint: remoteAddr.String()}
-	}
+	match := getSendingMatch(r, w.Message(), receivedCode, remoteAddr)
 	if err = b.startSendingMessage(w, maxSZX, maxMessageSize, startSendingMessageBlock, exchangeKey, match); err != nil {
 		return err
 	}
@@ -905,9 +922,10 @@ func (b *BlockWise[C]) startSendingMessage(w *responsewriter.ResponseWriter[C], 
 		return fmt.Errorf("handleSendingMessage: cannot create sending message: %w", err)
 	}
 	originalSendingMessage := w.Swap(sendingMessage)
-	if isObserveResponse(w.Message()) {
+	if isObserveResponse(w.Message()) && match.code != codes.FETCH {
 		b.cc.ReleaseMessage(originalSendingMessage)
-		// https://tools.ietf.org/html/rfc7959#section-2.6 - we don't need store it because client will be get values via GET.
+		// GET Observe clients can retrieve a notification representation with a new GET.
+		// FETCH continuations need the response body because they do not repeat the FETCH payload.
 		return nil
 	}
 	expire, ok := sendingMessage.Context().Deadline()

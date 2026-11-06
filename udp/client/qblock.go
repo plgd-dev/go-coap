@@ -406,34 +406,48 @@ func (cc *Conn) runQBlockObservation(req *pool.Message, szx blockwise.SZX, excha
 	var sequence uint32
 	var lastEvent time.Time
 	for {
-		req.SetType(message.Confirmable)
-		if initial.Type() == message.NonConfirmable {
-			req.SetType(message.NonConfirmable)
-		}
-		response, err := cc.receiveQNotification(req, szx, exchange, initial)
-		if route, ok := exchange.(*qBlockRoute); ok {
-			route.retireAliases(req.Token())
-		}
-		if errors.Is(err, context.Canceled) || cc.Context().Err() != nil {
-			return
-		}
-		if err != nil {
-			cc.errors(fmt.Errorf("receive Q Observe notification: %w", err))
-		} else {
-			if nextSequence, observeErr := response.Observe(); observeErr == nil {
-				sequence, lastEvent = nextSequence, time.Now()
-			}
-			active := cc.observationHandler.HandleNotification(response)
-			cc.ReleaseMessage(response)
-			if !active {
-				return
-			}
-		}
-		initial, err = cc.nextQBlockNotification(req.Token(), exchange, sequence, lastEvent)
-		if err != nil {
+		setQObservationRequestType(req, initial.Type())
+		var keepRunning bool
+		initial, sequence, lastEvent, keepRunning = cc.advanceQBlockObservation(req, szx, exchange, initial, sequence, lastEvent)
+		if !keepRunning {
 			return
 		}
 	}
+}
+
+func setQObservationRequestType(req *pool.Message, notificationType message.Type) {
+	requestType := message.Confirmable
+	if notificationType == message.NonConfirmable {
+		requestType = message.NonConfirmable
+	}
+	req.SetType(requestType)
+}
+
+func (cc *Conn) advanceQBlockObservation(req *pool.Message, szx blockwise.SZX, exchange blockwise.QBlockExchange, initial *pool.Message, sequence uint32, lastEvent time.Time) (*pool.Message, uint32, time.Time, bool) {
+	response, err := cc.receiveQNotification(req, szx, exchange, initial)
+	if route, ok := exchange.(*qBlockRoute); ok {
+		route.retireAliases(req.Token())
+	}
+	if errors.Is(err, context.Canceled) || cc.Context().Err() != nil {
+		return nil, sequence, lastEvent, false
+	}
+	if err != nil {
+		cc.errors(fmt.Errorf("receive Q Observe notification: %w", err))
+	} else {
+		if nextSequence, observeErr := response.Observe(); observeErr == nil {
+			sequence, lastEvent = nextSequence, time.Now()
+		}
+		active := cc.observationHandler.HandleNotification(response)
+		cc.ReleaseMessage(response)
+		if !active {
+			return nil, sequence, lastEvent, false
+		}
+	}
+	next, err := cc.nextQBlockNotification(req.Token(), exchange, sequence, lastEvent)
+	if err != nil {
+		return nil, sequence, lastEvent, false
+	}
+	return next, sequence, lastEvent, true
 }
 
 func (cc *Conn) receiveQNotification(req *pool.Message, szx blockwise.SZX, exchange blockwise.QBlockExchange, initial *pool.Message) (*pool.Message, error) {
