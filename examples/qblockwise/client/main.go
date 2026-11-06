@@ -35,6 +35,18 @@ func exchange(cc *client.Conn, req *pool.Message, want codes.Code) ([]byte, erro
 	return body, nil
 }
 
+func methodResponse(cc *client.Conn, method string, resp *pool.Message, want codes.Code) ([]byte, error) {
+	defer cc.ReleaseMessage(resp)
+	if resp.Code() != want {
+		return nil, fmt.Errorf("%s returned %v, want %v", method, resp.Code(), want)
+	}
+	body, err := resp.ReadBody()
+	if err != nil {
+		return nil, fmt.Errorf("read %s response: %w", method, err)
+	}
+	return body, nil
+}
+
 func run(ctx context.Context, addr string) error {
 	var qPayloads atomic.Int64
 	cc, err := udp.Dial(addr,
@@ -80,7 +92,47 @@ func run(ctx context.Context, addr string) error {
 	if !bytes.Equal(body, echo) {
 		return fmt.Errorf("upload echo differs: sent %d bytes, received %d bytes", len(body), len(echo))
 	}
-	log.Printf("Uploaded and verified %d bytes; received %d Q-Block messages", len(body), qPayloads.Load())
+
+	fetch, err := cc.Fetch(ctx, "/data", message.AppOctets, bytes.NewReader([]byte("read current data")))
+	if err != nil {
+		return fmt.Errorf("FETCH: %w", err)
+	}
+	fetched, err := methodResponse(cc, "FETCH", fetch, codes.Content)
+	if err != nil {
+		return err
+	}
+	if !bytes.Equal(body, fetched) {
+		return fmt.Errorf("FETCH body differs: expected %d bytes, received %d bytes", len(body), len(fetched))
+	}
+
+	appendData := bytes.Repeat([]byte{0xa5, 0x5a}, 32768)
+	patch, err := cc.Patch(ctx, "/data", message.AppOctets, bytes.NewReader(appendData))
+	if err != nil {
+		return fmt.Errorf("PATCH: %w", err)
+	}
+	patched, err := methodResponse(cc, "PATCH", patch, codes.Changed)
+	if err != nil {
+		return err
+	}
+	expectedPatched := append(append([]byte(nil), body...), appendData...)
+	if !bytes.Equal(expectedPatched, patched) {
+		return fmt.Errorf("PATCH result differs: expected %d bytes, received %d bytes", len(expectedPatched), len(patched))
+	}
+
+	replacement := bytes.Repeat([]byte("replacement-data-"), 4096)
+	ipatch, err := cc.IPatch(ctx, "/data", message.AppOctets, bytes.NewReader(replacement))
+	if err != nil {
+		return fmt.Errorf("iPATCH: %w", err)
+	}
+	replaced, err := methodResponse(cc, "iPATCH", ipatch, codes.Changed)
+	if err != nil {
+		return err
+	}
+	if !bytes.Equal(replacement, replaced) {
+		return fmt.Errorf("iPATCH result differs: expected %d bytes, received %d bytes", len(replacement), len(replaced))
+	}
+
+	log.Printf("Uploaded and verified %d bytes; FETCH, PATCH, and iPATCH completed with %d Q-Block messages", len(body), qPayloads.Load())
 	return nil
 }
 

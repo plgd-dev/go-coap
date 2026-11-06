@@ -29,7 +29,7 @@ var DefaultConfig = func() Config {
 	}
 	opts.Handler = func(w *responsewriter.ResponseWriter[*Conn], r *pool.Message) {
 		switch r.Code() {
-		case codes.POST, codes.PUT, codes.GET, codes.DELETE:
+		case codes.GET, codes.POST, codes.PUT, codes.DELETE, codes.FETCH, codes.PATCH, codes.IPATCH:
 			if err := w.SetResponse(codes.NotFound, message.TextPlain, nil); err != nil {
 				opts.Errors(fmt.Errorf("client handler: cannot set response: %w", err))
 			}

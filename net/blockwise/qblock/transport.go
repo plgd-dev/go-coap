@@ -49,5 +49,6 @@ func receiveQBlockResponse(ctx context.Context, exchange Exchange, deadline time
 }
 
 func qBodyMethod(code codes.Code) bool {
-	return code == codes.POST || code == codes.PUT || code >= 5 && code <= 7
+	return code == codes.POST || code == codes.PUT ||
+		code == codes.FETCH || code == codes.PATCH || code == codes.IPATCH
 }

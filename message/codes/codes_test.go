@@ -10,8 +10,8 @@ import (
 
 func TestJSONUnmarshal(t *testing.T) {
 	var got []Code
-	want := []Code{GET, NotFound, InternalServerError, Abort}
-	in := `["GET", "NotFound", "InternalServerError", "Abort"]`
+	want := []Code{GET, FETCH, PATCH, IPATCH, Conflict, UnprocessableEntity, NotFound, InternalServerError, Abort}
+	in := `["GET", "FETCH", "PATCH", "iPATCH", "Conflict", "UnprocessableEntity", "NotFound", "InternalServerError", "Abort"]`
 	err := json.Unmarshal([]byte(in), &got)
 	require.NoError(t, err)
 	require.Equal(t, want, got)

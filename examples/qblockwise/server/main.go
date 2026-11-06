@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"flag"
 	"log"
+	"sync"
 	"time"
 
 	"github.com/plgd-dev/go-coap/v3/message"
@@ -16,23 +17,59 @@ import (
 )
 
 func newRouter() (*mux.Router, error) {
-	payload := bytes.Repeat([]byte("0123456789abcdef"), 4096)
+	objectData := bytes.Repeat([]byte("0123456789abcdef"), 4096)
+	var payloadMu sync.Mutex
 	router := mux.NewRouter()
 	err := router.Handle("/data", mux.HandlerFunc(func(w mux.ResponseWriter, r *mux.Message) {
-		body, code := payload, codes.Content
+		var body []byte
+		code := codes.Content
 		switch r.Code() {
 		case codes.GET:
+			payloadMu.Lock()
+			body = append([]byte(nil), objectData...)
+			payloadMu.Unlock()
+		case codes.FETCH:
+			if _, err := r.ReadBody(); err != nil {
+				log.Printf("read FETCH query: %v", err)
+				if responseErr := w.SetResponse(codes.BadRequest, message.TextPlain, nil); responseErr != nil {
+					log.Printf("set error response: %v", responseErr)
+				}
+				return
+			}
+			payloadMu.Lock()
+			body = append([]byte(nil), objectData...)
+			payloadMu.Unlock()
 		case codes.PUT:
 			var err error
 			body, err = r.ReadBody()
 			if err != nil {
-				log.Printf("read upload: %v", err)
+				log.Printf("read %v body: %v", r.Code(), err)
 				if responseErr := w.SetResponse(codes.BadRequest, message.TextPlain, nil); responseErr != nil {
 					log.Printf("set error response: %v", responseErr)
 				}
 				return
 			}
 			code = codes.Changed
+		case codes.PATCH, codes.IPATCH:
+			var err error
+			body, err = r.ReadBody()
+			if err != nil {
+				log.Printf("read %v body: %v", r.Code(), err)
+				if responseErr := w.SetResponse(codes.BadRequest, message.TextPlain, nil); responseErr != nil {
+					log.Printf("set error response: %v", responseErr)
+				}
+				return
+			}
+			code = codes.Changed
+			payloadMu.Lock()
+			switch r.Code() {
+			case codes.PATCH:
+				objectData = append(objectData, body...)
+			case codes.IPATCH:
+				objectData = append(objectData[:0], body...)
+			}
+			body = append([]byte(nil), objectData...)
+			payloadMu.Unlock()
 		default:
 			if err := w.SetResponse(codes.MethodNotAllowed, message.TextPlain, nil); err != nil {
 				log.Printf("set method error response: %v", err)

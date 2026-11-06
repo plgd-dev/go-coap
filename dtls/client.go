@@ -23,7 +23,7 @@ var DefaultConfig = func() udpClient.Config {
 	cfg := udpClient.DefaultConfig
 	cfg.Handler = func(w *responsewriter.ResponseWriter[*udpClient.Conn], r *pool.Message) {
 		switch r.Code() {
-		case codes.POST, codes.PUT, codes.GET, codes.DELETE:
+		case codes.GET, codes.POST, codes.PUT, codes.DELETE, codes.FETCH, codes.PATCH, codes.IPATCH:
 			if err := w.SetResponse(codes.NotFound, message.TextPlain, nil); err != nil {
 				cfg.Errors(fmt.Errorf("dtls client: cannot set response: %w", err))
 			}

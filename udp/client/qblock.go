@@ -30,7 +30,8 @@ func (cc *Conn) qBlockEligible(req *pool.Message) bool {
 	if req.HasOption(message.Observe) && req.Code() != codes.GET {
 		return false
 	}
-	bodyMethod := req.Code() == codes.POST || req.Code() == codes.PUT || req.Code() >= 5 && req.Code() <= 7
+	bodyMethod := req.Code() == codes.POST || req.Code() == codes.PUT ||
+		req.Code() == codes.FETCH || req.Code() == codes.PATCH || req.Code() == codes.IPATCH
 	return (req.Code() == codes.GET || bodyMethod) && (req.Body() == nil || bodyMethod)
 }
 
@@ -608,7 +609,7 @@ func (cc *Conn) qBlockProbeRate(msg *pool.Message) error {
 
 func qBlockRateIdentity(msg *pool.Message) (bool, string, int64, bool, error) {
 	control := msg.Code() == codes.RequestEntityIncomplete ||
-		(msg.Code() == codes.GET || msg.Code() == 5 /* FETCH */) && msg.HasOption(message.QBlock2)
+		(msg.Code() == codes.GET || msg.Code() == codes.FETCH) && msg.HasOption(message.QBlock2)
 	if control {
 		wire, err := msg.MarshalWithEncoder(coder.DefaultCoder)
 		if err != nil {

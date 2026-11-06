@@ -5,11 +5,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"strings"
 	"sync"
 	"testing"
 
 	"github.com/plgd-dev/go-coap/v3/message"
+	"github.com/plgd-dev/go-coap/v3/message/codes"
 	"github.com/plgd-dev/go-coap/v3/message/pool"
 	"github.com/plgd-dev/go-coap/v3/tcp/coder"
 	"github.com/plgd-dev/go-coap/v3/test/net"
@@ -17,6 +19,46 @@ import (
 )
 
 const testPathABC = "/a/b/c"
+
+func TestSetupRFC8132Requests(t *testing.T) {
+	tests := []struct {
+		name  string
+		code  codes.Code
+		setup func(*pool.Message, message.Token, io.ReadSeeker) error
+	}{
+		{"FETCH", codes.FETCH, func(m *pool.Message, token message.Token, body io.ReadSeeker) error {
+			return m.SetupFetch("/resource", token, message.AppOctets, body)
+		}},
+		{"PATCH", codes.PATCH, func(m *pool.Message, token message.Token, body io.ReadSeeker) error {
+			return m.SetupPatch("/resource", token, message.AppOctets, body)
+		}},
+		{"iPATCH", codes.IPATCH, func(m *pool.Message, token message.Token, body io.ReadSeeker) error {
+			return m.SetupIPatch("/resource", token, message.AppOctets, body)
+		}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := pool.NewMessage(context.Background())
+			token := message.Token{1, 2}
+			require.NoError(t, tt.setup(req, token, bytes.NewReader([]byte("payload"))))
+			require.Equal(t, tt.code, req.Code())
+			require.Equal(t, token, req.Token())
+			path, err := req.Path()
+			require.NoError(t, err)
+			require.Equal(t, "/resource", path)
+			format, err := req.ContentFormat()
+			require.NoError(t, err)
+			require.Equal(t, message.AppOctets, format)
+			body, err := req.ReadBody()
+			require.NoError(t, err)
+			require.Equal(t, []byte("payload"), body)
+		})
+	}
+
+	fetch := pool.NewMessage(context.Background())
+	require.NoError(t, fetch.SetupFetch("/resource", message.Token{1}, message.AppOctets, nil))
+	require.True(t, fetch.HasOption(message.ContentFormat), "FETCH requires Content-Format even without a payload reader")
+}
 
 func TestPoolAcquireClearsHijack(t *testing.T) {
 	p := pool.New(1, 2048)
