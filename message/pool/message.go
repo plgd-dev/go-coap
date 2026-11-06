@@ -651,8 +651,8 @@ func (r *Message) SetupFetch(path string, token message.Token, contentFormat mes
 	if err := r.setupCommon(codes.FETCH, path, token, opts...); err != nil {
 		return err
 	}
-	r.SetContentFormat(contentFormat)
 	if payload != nil {
+		r.SetContentFormat(contentFormat)
 		r.SetBody(payload)
 	}
 	return nil

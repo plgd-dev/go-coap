@@ -31,8 +31,8 @@ func main() {
 	if err != nil {
 		log.Fatalf("Error sending request: %v", err)
 	}
-	defer co.ReleaseMessage(resp)
 	log.Printf("Response payload: %v", resp.String())
+	co.ReleaseMessage(resp)
 
 	fetch, err := co.Fetch(ctx, "/object", message.AppJSON, bytes.NewReader([]byte(`{"field":"value"}`)))
 	if err != nil {

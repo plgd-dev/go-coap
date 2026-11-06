@@ -78,7 +78,7 @@ func (o *object) handle(w mux.ResponseWriter, r *mux.Message) {
 			return
 		}
 		o.Lock()
-		o.values = append(o.values[:0], (*patch.Value)...)
+		o.values = append([]string(nil), (*patch.Value)...)
 		values := append([]string(nil), o.values...)
 		o.Unlock()
 		o.respondJSON(w, codes.Changed, map[string][]string{"value": values})

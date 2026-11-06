@@ -22,7 +22,7 @@ The go-coap provides servers and clients for DTLS, TCP-TLS, UDP, TCP in golang l
 * Block-wise transfers in CoAP [RFC 7959][coap-block-wise-transfers]
 * CoAP NoResponse option in CoAP [RFC 7967][coap-noresponse]
 * FETCH, PATCH, and iPATCH methods [RFC 8132][coap-fetch-patch]
-* CoAP over TCP/TLS [RFC 8232][coap-tcp]
+* CoAP over TCP/TLS [RFC 8323][coap-tcp]
 * Too many requests response code [RFC 8516][coap-429]
 * CoAP Echo and Request-Tag options [RFC 9175][coap-echo-request-tag]
 * Experimental Q-Block datagram transfers [RFC 9177][coap-q-block-wise-transfers]

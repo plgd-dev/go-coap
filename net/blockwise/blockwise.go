@@ -623,7 +623,7 @@ func wantsToBeReceived(r *pool.Message) bool {
 		// r contains payload which we received
 		return true
 	}
-	if hasBlock2 && r.Code() >= codes.GET && r.Code() <= codes.IPATCH {
+	if hasBlock2 && isRequestCode(r.Code()) {
 		// r is command to get next block
 		return false
 	}
