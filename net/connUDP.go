@@ -601,7 +601,9 @@ type ContextOption struct {
 }
 
 func (o ContextOption) ApplyWrite(cfg *UDPWriteCfg) {
-	cfg.Ctx = o.Ctx
+	if o.Ctx != nil {
+		cfg.Ctx = o.Ctx
+	}
 }
 
 // WithContext sets the context of operation.
@@ -610,7 +612,9 @@ func WithContext(ctx context.Context) ContextOption {
 }
 
 func (o ContextOption) ApplyRead(cfg *UDPReadCfg) {
-	cfg.Ctx = o.Ctx
+	if o.Ctx != nil {
+		cfg.Ctx = o.Ctx
+	}
 }
 
 // WithRemoteAddr sets the remote address to packet.

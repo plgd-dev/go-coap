@@ -16,6 +16,8 @@ import (
 	"github.com/plgd-dev/go-coap/v3/message"
 	"github.com/plgd-dev/go-coap/v3/message/codes"
 	"github.com/plgd-dev/go-coap/v3/message/pool"
+	"github.com/plgd-dev/go-coap/v3/net/blockwise/internal/blocks"
+	"github.com/plgd-dev/go-coap/v3/net/blockwise/qblock"
 	"github.com/plgd-dev/go-coap/v3/net/responsewriter"
 	"github.com/plgd-dev/go-coap/v3/pkg/cache"
 	"github.com/plgd-dev/go-coap/v3/pkg/math"
@@ -53,46 +55,26 @@ const (
 )
 
 // SZX enum representation for the size of the block: https://tools.ietf.org/html/rfc7959#section-2.2
-type SZX uint8
+type SZX = blocks.SZX
 
 const (
 	// SZX16 block of size 16bytes
-	SZX16 SZX = 0
+	SZX16 = blocks.SZX16
 	// SZX32 block of size 32bytes
-	SZX32 SZX = 1
+	SZX32 = blocks.SZX32
 	// SZX64 block of size 64bytes
-	SZX64 SZX = 2
+	SZX64 = blocks.SZX64
 	// SZX128 block of size 128bytes
-	SZX128 SZX = 3
+	SZX128 = blocks.SZX128
 	// SZX256 block of size 256bytes
-	SZX256 SZX = 4
+	SZX256 = blocks.SZX256
 	// SZX512 block of size 512bytes
-	SZX512 SZX = 5
+	SZX512 = blocks.SZX512
 	// SZX1024 block of size 1024bytes
-	SZX1024 SZX = 6
+	SZX1024 = blocks.SZX1024
 	// SZXBERT block of size n*1024bytes
-	SZXBERT SZX = 7
+	SZXBERT = blocks.SZXBERT
 )
-
-var szxToSize = map[SZX]int64{
-	SZX16:   16,
-	SZX32:   32,
-	SZX64:   64,
-	SZX128:  128,
-	SZX256:  256,
-	SZX512:  512,
-	SZX1024: 1024,
-	SZXBERT: 1024,
-}
-
-// Size number of bytes.
-func (s SZX) Size() int64 {
-	val, ok := szxToSize[s]
-	if ok {
-		return val
-	}
-	return -1
-}
 
 // EncodeBlockOption encodes block values to coap option.
 func EncodeBlockOption(szx SZX, blockNumber int64, moreBlocksFollowing bool) (uint32, error) {
@@ -150,6 +132,7 @@ type BlockWise[C Client] struct {
 	expiration                       time.Duration
 	rollingExpiration                bool
 	maxReceiveBodySize               int64
+	qblock                           *qblock.Engine[C]
 }
 
 // SetRollingExpiration resets the Block1 transfer expiration on each new block.
@@ -160,6 +143,7 @@ func (b *BlockWise[C]) SetRollingExpiration(enabled bool) {
 // SetMaxReceiveBodySize limits the Block1 body size, 0 means unlimited.
 func (b *BlockWise[C]) SetMaxReceiveBodySize(size int64) {
 	b.maxReceiveBodySize = max(size, 0)
+	b.qblock.SetMaxReceiveBodySize(size)
 }
 
 type sendingMessage struct {
@@ -222,6 +206,7 @@ func New[C Client](
 		errors:                           errors,
 		getSentRequestFromOutside:        getSentRequestFromOutside,
 		expiration:                       expiration,
+		qblock:                           qblock.New(cc, errors),
 	}
 }
 
@@ -230,6 +215,7 @@ func New[C Client](
 // Value 0 means unlimited.
 func (b *BlockWise[C]) SetReceivingMessagesCacheMaxEntries(maxEntries int) {
 	b.receivingMessagesCacheMaxEntries.Store(int64(max(maxEntries, 0)))
+	b.qblock.SetReceivingMessagesCacheMaxEntries(maxEntries)
 }
 
 func bufferSize(szx SZX, maxMessageSize uint32) int64 {
@@ -243,15 +229,11 @@ func bufferSize(szx SZX, maxMessageSize uint32) int64 {
 func (b *BlockWise[C]) CheckExpirations(now time.Time) {
 	b.receivingMessagesCache.CheckExpirations(now)
 	b.sendingMessagesCache.CheckExpirations(now)
+	b.qblock.CheckExpirations(now)
 }
 
 func (b *BlockWise[C]) cloneMessage(r *pool.Message) *pool.Message {
-	req := b.cc.AcquireMessage(r.Context())
-	req.SetCode(r.Code())
-	req.SetToken(r.Token())
-	req.ResetOptionsTo(r.Options())
-	req.SetType(r.Type())
-	return req
+	return blocks.CloneMessage(b.cc, r)
 }
 
 func payloadSizeError(err error) error {
@@ -314,7 +296,7 @@ func getExchangeKey(token message.Token, remoteAddr net.Addr) (uint64, error) {
 
 // isRequestCode reports whether code is a request method code (class 0, RFC 7252 §12.1.1).
 func isRequestCode(code codes.Code) bool {
-	return code >= codes.GET && code < 32
+	return blocks.IsRequestCode(code)
 }
 
 func getMessageExchangeKey(r *pool.Message, remoteAddr net.Addr) (uint64, error) {
@@ -347,7 +329,8 @@ func getRequestMatchingKey(r *pool.Message, remoteAddr net.Addr) uint64 {
 	binary.BigEndian.PutUint16(code[:], uint16(r.Code()))
 	_, _ = h.Write(code[:])
 	for _, option := range r.Options() {
-		if option.ID == message.Block1 || option.ID == message.Block2 {
+		if option.ID == message.Block1 || option.ID == message.Block2 ||
+			option.ID == message.QBlock1 || option.ID == message.QBlock2 {
 			continue
 		}
 		// RFC 9175 §3.3 matches requests without elective NoCacheKey options (RFC 7252 §5.4.6).
@@ -475,10 +458,7 @@ func (b *BlockWise[C]) resolveBlock2ExchangeKey(r *pool.Message, remoteAddr net.
 }
 
 func writeExchangeKeyPart(h io.Writer, value []byte) {
-	var size [8]byte
-	binary.BigEndian.PutUint64(size[:], uint64(len(value)))
-	_, _ = h.Write(size[:])
-	_, _ = h.Write(value)
+	blocks.WriteExchangeKeyPart(h, value)
 }
 
 func (b *BlockWise[C]) prepareSendingRequest(r *pool.Message, maxSzx SZX, maxMessageSize uint32) (_ *pool.Message, err error) {
@@ -549,6 +529,9 @@ func newWriteRequestResponse[C Client](cc C, request *pool.Message) *responsewri
 
 // WriteMessage sends an coap message via blockwise transfer.
 func (b *BlockWise[C]) WriteMessage(request *pool.Message, maxSZX SZX, maxMessageSize uint32, remoteAddr net.Addr, writeMessage func(r *pool.Message) error) error {
+	if handled, err := b.qblock.WriteNotification(request, remoteAddr); handled {
+		return err
+	}
 	startSendingMessageBlock, err := EncodeBlockOption(maxSZX, 0, true)
 	if err != nil {
 		return fmt.Errorf("cannot encode start sending message block option(%v,%v,%v): %w", maxSZX, 0, true, err)
@@ -618,22 +601,12 @@ func (b *BlockWise[C]) sendEntityIncomplete(w *responsewriter.ResponseWriter[C],
 }
 
 func (b *BlockWise[C]) sendServiceUnavailable(w *responsewriter.ResponseWriter[C], token message.Token) {
-	sendMessage := b.cc.AcquireMessage(w.Message().Context())
-	sendMessage.SetCode(codes.ServiceUnavailable)
-	sendMessage.SetToken(token)
-	sendMessage.SetType(message.NonConfirmable)
-	w.SetMessage(sendMessage)
+	blocks.SendServiceUnavailable(b.cc, w, token)
 }
 
 // sendEntityTooLarge responds with 4.13 and the size limit in Size1 (RFC 7959 §4).
 func (b *BlockWise[C]) sendEntityTooLarge(w *responsewriter.ResponseWriter[C], token message.Token) {
-	sendMessage := b.cc.AcquireMessage(w.Message().Context())
-	sendMessage.SetCode(codes.RequestEntityTooLarge)
-	sendMessage.SetToken(token)
-	sendMessage.SetType(message.NonConfirmable)
-	size1 := min(b.maxReceiveBodySize, int64(^uint32(0)))
-	sendMessage.SetOptionUint32(message.Size1, math.CastTo[uint32](size1))
-	w.SetMessage(sendMessage)
+	blocks.SendEntityTooLarge(b.cc, w, token, b.maxReceiveBodySize)
 }
 
 func wantsToBeReceived(r *pool.Message) bool {
@@ -671,6 +644,9 @@ func (b *BlockWise[C]) getSendingMessageCode(token uint64) (codes.Code, bool) {
 func (b *BlockWise[C]) Handle(w *responsewriter.ResponseWriter[C], r *pool.Message, maxSZX SZX, maxMessageSize uint32, remoteAddr net.Addr, next func(w *responsewriter.ResponseWriter[C], r *pool.Message)) {
 	if maxSZX > SZXBERT {
 		panic("invalid maxSZX")
+	}
+	if b.qblock.Handle(w, r, maxSZX, remoteAddr, next) {
+		return
 	}
 	token := r.Token()
 
@@ -722,7 +698,8 @@ func (b *BlockWise[C]) handleReceivedMessage(w *responsewriter.ResponseWriter[C]
 	if err != nil {
 		return fmt.Errorf("cannot encode start sending message block option(%v,%v,%v): %w", maxSZX, 0, true, err)
 	}
-	switch r.Code() {
+	receivedCode := r.Code()
+	switch receivedCode {
 	case codes.Empty, codes.CSM, codes.Ping, codes.Pong, codes.Release, codes.Abort:
 		next(w, r)
 		return nil
@@ -751,21 +728,21 @@ func (b *BlockWise[C]) handleReceivedMessage(w *responsewriter.ResponseWriter[C]
 		}
 	}
 	var match sendingMatch
-	if remoteAddr != nil && (r.Code() == codes.GET || r.Code() == codes.POST || r.Code() == codes.PUT) {
-		match = sendingMatch{key: getRequestMatchingKey(r, remoteAddr), code: r.Code(), endpoint: remoteAddr.String()}
+	if remoteAddr != nil && (receivedCode == codes.GET || receivedCode == codes.POST || receivedCode == codes.PUT) {
+		match = sendingMatch{key: getRequestMatchingKey(r, remoteAddr), code: receivedCode, endpoint: remoteAddr.String()}
 	}
 	if err = b.startSendingMessage(w, maxSZX, maxMessageSize, startSendingMessageBlock, exchangeKey, match); err != nil {
 		return err
 	}
-	echoFinalBlock1(w.Message(), r)
+	echoFinalBlock1(w.Message(), r, receivedCode)
 	return nil
 }
 
 // echoFinalBlock1 adds the Block1 option of the last request block to the final
 // response (RFC 7959 §2.3, §3.2). It is set after startSendingMessage so the
 // stored Block2 response body does not carry Block1 in follow-up blocks.
-func echoFinalBlock1(resp, r *pool.Message) {
-	if r.Code() != codes.POST && r.Code() != codes.PUT {
+func echoFinalBlock1(resp, r *pool.Message, receivedCode codes.Code) {
+	if receivedCode != codes.POST && receivedCode != codes.PUT {
 		return
 	}
 	block, err := r.GetOptionUint32(message.Block1)

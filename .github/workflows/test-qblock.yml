@@ -1,0 +1,91 @@
+name: Q-Block interoperability
+
+on:
+  workflow_call:
+  workflow_dispatch:
+  schedule:
+    - cron: "23 3 * * 1"
+
+jobs:
+  interoperability:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: develop-q
+            revision: 3a2cdb1582bc39fc8beed948c555065b2862a4ca
+            qblock: "ON"
+            mode: enabled
+          - name: stable-q
+            revision: 7cf7465b784baded4de183290c547d582becfd28
+            qblock: "ON"
+            mode: enabled
+          - name: stable-legacy
+            revision: 7cf7465b784baded4de183290c547d582becfd28
+            qblock: "OFF"
+            mode: disabled
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version: ">=1.26"
+          check-latest: true
+      - name: Install native build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends build-essential cmake libssl-dev
+      - name: Build pinned libcoap
+        env:
+          LIBCOAP_REVISION: ${{ matrix.revision }}
+          LIBCOAP_QBLOCK: ${{ matrix.qblock }}
+        run: |
+          source_dir="$RUNNER_TEMP/libcoap-source"
+          build_dir="$RUNNER_TEMP/libcoap-build"
+          prefix="$RUNNER_TEMP/libcoap-install"
+          tools="$RUNNER_TEMP/libcoap-tools"
+          git init "$source_dir"
+          git -C "$source_dir" remote add origin https://github.com/obgm/libcoap.git
+          git -C "$source_dir" fetch --depth=1 origin "$LIBCOAP_REVISION"
+          git -C "$source_dir" checkout --detach FETCH_HEAD
+          test "$(git -C "$source_dir" rev-parse HEAD)" = "$LIBCOAP_REVISION"
+          cmake -S "$source_dir" -B "$build_dir" \
+            -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="$prefix" \
+            -DENABLE_Q_BLOCK="$LIBCOAP_QBLOCK" \
+            -DENABLE_DTLS=ON -DDTLS_BACKEND=openssl \
+            -DENABLE_OSCORE=OFF -DENABLE_DOCS=OFF -DENABLE_TESTS=OFF \
+            -DENABLE_EXAMPLES=ON -DBUILD_SHARED_LIBS=OFF
+          cmake --build "$build_dir" --parallel 2
+          cmake --install "$build_dir"
+          mkdir -p "$tools"
+          clients=("$prefix"/bin/coap-client*)
+          servers=("$prefix"/bin/coap-server*)
+          test -x "${clients[0]}"
+          test -x "${servers[0]}"
+          ln -s "${clients[0]}" "$tools/coap-client"
+          ln -s "${servers[0]}" "$tools/coap-server"
+          echo "$tools" >> "$GITHUB_PATH"
+          git -C "$source_dir" rev-parse HEAD
+      - name: Run mandatory interoperability tests
+        env:
+          LIBCOAP_QBLOCK_REQUIRED: "1"
+          LIBCOAP_QBLOCK_MODE: ${{ matrix.mode }}
+          CGO_ENABLED: "1"
+        run: |
+          set -o pipefail
+          go test -race ./udp -run '^TestQBlockLibcoap' -count=1 -timeout=15m -json | tee qblock-report.json
+          if grep -q '"Action":"skip"' qblock-report.json; then
+            echo "Required libcoap tests must not skip"
+            exit 1
+          fi
+      - name: Upload interoperability report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: qblock-${{ matrix.name }}
+          path: qblock-report.json
+          if-no-files-found: error
+          retention-days: 7

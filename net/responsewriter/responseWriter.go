@@ -1,13 +1,64 @@
 package responsewriter
 
 import (
+	"context"
 	"io"
+	"sync"
 
 	"github.com/plgd-dev/go-coap/v3/message"
 	"github.com/plgd-dev/go-coap/v3/message/codes"
 	"github.com/plgd-dev/go-coap/v3/message/noresponse"
 	"github.com/plgd-dev/go-coap/v3/message/pool"
 )
+
+type postWriteCallbacksKey struct{}
+
+type postWriteCallbacks struct {
+	mutex     sync.Mutex
+	callbacks []func()
+	complete  bool
+}
+
+// WithPostWriteCallbacks returns a context that supports callbacks after the
+// response has been written, and a function to run those callbacks.
+func WithPostWriteCallbacks(ctx context.Context) (context.Context, func()) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	callbacks := new(postWriteCallbacks)
+	ctx = context.WithValue(ctx, postWriteCallbacksKey{}, callbacks)
+	return ctx, func() {
+		callbacks.mutex.Lock()
+		callbacks.complete = true
+		pending := callbacks.callbacks
+		callbacks.callbacks = nil
+		callbacks.mutex.Unlock()
+		for _, callback := range pending {
+			callback()
+		}
+	}
+}
+
+// AfterWrite registers callback to run after the response is written. It
+// returns false when ctx was not created by WithPostWriteCallbacks.
+func AfterWrite(ctx context.Context, callback func()) bool {
+	if ctx == nil {
+		return false
+	}
+	callbacks, ok := ctx.Value(postWriteCallbacksKey{}).(*postWriteCallbacks)
+	if !ok {
+		return false
+	}
+	callbacks.mutex.Lock()
+	if callbacks.complete {
+		callbacks.mutex.Unlock()
+		callback()
+		return true
+	}
+	callbacks.callbacks = append(callbacks.callbacks, callback)
+	callbacks.mutex.Unlock()
+	return true
+}
 
 type Client interface {
 	ReleaseMessage(msg *pool.Message)

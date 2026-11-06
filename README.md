@@ -21,6 +21,7 @@ The go-coap provides servers and clients for DTLS, TCP-TLS, UDP, TCP in golang l
 * CoAP over TCP/TLS [RFC 8232][coap-tcp]
 * Observe resources in CoAP [RFC 7641][coap-observe]
 * Block-wise transfers in CoAP [RFC 7959][coap-block-wise-transfers]
+* Experimental Q-Block datagram transfers [RFC 9177][coap-q-block-wise-transfers]
 * request multiplexer
 * multicast
 * CoAP NoResponse option in CoAP [RFC 7967][coap-noresponse]
@@ -31,6 +32,7 @@ The go-coap provides servers and clients for DTLS, TCP-TLS, UDP, TCP in golang l
 [coap]: http://tools.ietf.org/html/rfc7252
 [coap-tcp]: https://tools.ietf.org/html/rfc8323
 [coap-block-wise-transfers]: https://tools.ietf.org/html/rfc7959
+[coap-q-block-wise-transfers]: https://www.rfc-editor.org/rfc/rfc9177.html
 [coap-observe]: https://tools.ietf.org/html/rfc7641
 [coap-noresponse]: https://tools.ietf.org/html/rfc7967
 [coap-echo-request-tag]: https://www.rfc-editor.org/rfc/rfc9175.html
@@ -40,6 +42,14 @@ The go-coap provides servers and clients for DTLS, TCP-TLS, UDP, TCP in golang l
 ## Requirements
 
 * Go 1.26 or higher
+
+## Experimental Q-Block transfers
+
+Q-Block is opt-in for UDP/DTLS; existing blockwise defaults are unchanged.
+See the [QBlockwise guide](docs/qblockwise/qblockwise.md) for configuration, limits,
+libcoap interoperability, and a runnable
+[client](examples/qblockwise/client/main.go) /
+[server](examples/qblockwise/server/main.go) example.
 
 ## Samples
 

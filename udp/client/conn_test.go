@@ -17,6 +17,7 @@ import (
 	"github.com/plgd-dev/go-coap/v3/message/pool"
 	"github.com/plgd-dev/go-coap/v3/mux"
 	coapNet "github.com/plgd-dev/go-coap/v3/net"
+	"github.com/plgd-dev/go-coap/v3/net/blockwise"
 	"github.com/plgd-dev/go-coap/v3/net/responsewriter"
 	"github.com/plgd-dev/go-coap/v3/options"
 	"github.com/plgd-dev/go-coap/v3/udp"
@@ -41,6 +42,62 @@ func bodyToBytes(t *testing.T, r io.Reader) []byte {
 	_, err := buf.ReadFrom(r)
 	require.NoError(t, err)
 	return buf.Bytes()
+}
+
+func TestQBlockAutoDiscoveryUsesQBlock2(t *testing.T) {
+	listener, err := coapNet.NewListenUDP("udp", "127.0.0.1:0")
+	require.NoError(t, err)
+	defer listener.Close()
+
+	server := udp.NewServer(
+		options.WithQBlockwise(options.QBlockwiseAuto),
+	)
+	defer server.Stop()
+	serverDone := make(chan error, 1)
+	go func() {
+		serverDone <- server.Serve(listener)
+	}()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	conn, err := udp.Dial(listener.LocalAddr().String(),
+		options.WithQBlockwise(options.QBlockwiseAuto),
+	)
+	require.NoError(t, err)
+	defer conn.Close()
+
+	req, err := conn.NewGetRequest(ctx, "/.well-known/core")
+	require.NoError(t, err)
+	qBlock, err := blockwise.EncodeQBlockOption(blockwise.SZX16, 0, false)
+	require.NoError(t, err)
+	req.SetOptionUint32(message.QBlock2, qBlock)
+	response, err := conn.Do(req)
+	require.NoError(t, err)
+	defer conn.ReleaseMessage(response)
+	require.Equal(t, codes.Content, response.Code())
+	responseQBlock := mustGetOptionUint32(t, response, message.QBlock2)
+	responseSZX, responseNUM, responseMore, err := blockwise.DecodeQBlockOption(responseQBlock)
+	require.NoError(t, err)
+	require.Equal(t, blockwise.SZX16, responseSZX)
+	require.Zero(t, responseNUM)
+	require.False(t, responseMore)
+	require.Equal(t, []byte("</>;rt=\"core\""), bodyToBytes(t, response.Body()))
+
+	conn.Close()
+	server.Stop()
+	select {
+	case err = <-serverDone:
+		require.NoError(t, err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("server did not stop")
+	}
+}
+
+func mustGetOptionUint32(t *testing.T, msg *pool.Message, option message.OptionID) uint32 {
+	t.Helper()
+	value, err := msg.GetOptionUint32(option)
+	require.NoError(t, err)
+	return value
 }
 
 func TestConnDeduplication(t *testing.T) {

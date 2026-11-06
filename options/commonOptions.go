@@ -669,6 +669,16 @@ func (o WithRequestMonitorOpt[F]) TCPServerApply(cfg *tcpServer.Config) {
 	}
 }
 
+func (o WithRequestMonitorOpt[F]) UDPClientApply(cfg *udpClient.Config) {
+	switch v := any(o.f).(type) {
+	case udpClient.RequestMonitorFunc:
+		cfg.RequestMonitor = v
+	default:
+		var exp udpClient.RequestMonitorFunc
+		panicForInvalidWithRequestMonitorFunc(v, exp)
+	}
+}
+
 // WithRequestMonitor enables request monitoring for the connection.
 // It is called for each CoAP message received from the peer before it is processed.
 // If it returns an error, the connection is closed.

@@ -7,6 +7,7 @@ import (
 	"github.com/plgd-dev/go-coap/v3/message"
 	"github.com/plgd-dev/go-coap/v3/message/codes"
 	"github.com/plgd-dev/go-coap/v3/message/pool"
+	"github.com/plgd-dev/go-coap/v3/net/blockwise"
 	"github.com/plgd-dev/go-coap/v3/net/monitor/inactivity"
 	"github.com/plgd-dev/go-coap/v3/net/responsewriter"
 	"github.com/plgd-dev/go-coap/v3/options/config"
@@ -71,4 +72,7 @@ type Config struct {
 	// MaxPendingMessages limits in-flight duplicate suppression per connection.
 	// Zero disables in-flight tracking.
 	MaxPendingMessages uint32
+	// QBlockwiseMode is Disabled by default and supports plain UDP.
+	QBlockwiseMode   blockwise.QBlockwiseMode
+	QBlockwiseConfig blockwise.QBlockwiseConfig
 }

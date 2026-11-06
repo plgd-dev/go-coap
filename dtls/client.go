@@ -40,6 +40,12 @@ func Dial[T DTLSClientConfig](target string, cfg T, opts ...udp.Option) (*udpCli
 	for _, o := range opts {
 		o.UDPClientApply(&defaultCfg)
 	}
+	if _, err := defaultCfg.QBlockwiseConfig.Resolve(); err != nil {
+		return nil, err
+	}
+	if err := blockwise.ValidateQBlockwiseConfig(defaultCfg.QBlockwiseMode, defaultCfg.BlockwiseEnable); err != nil {
+		return nil, err
+	}
 
 	c, err := defaultCfg.Dialer.DialContext(defaultCfg.Ctx, defaultCfg.Net, target)
 	if err != nil {
@@ -69,10 +75,17 @@ func Client(conn *dtls.Conn, opts ...udp.Option) *udpClient.Conn {
 	for _, o := range opts {
 		o.UDPClientApply(&cfg)
 	}
+	cfg.QBlockwiseSecure = true
 	if cfg.Errors == nil {
 		cfg.Errors = func(error) {
 			// default no-op
 		}
+	}
+	if _, err := cfg.QBlockwiseConfig.Resolve(); err != nil {
+		cfg.Errors(err)
+	}
+	if err := blockwise.ValidateQBlockwiseConfig(cfg.QBlockwiseMode, cfg.BlockwiseEnable); err != nil {
+		cfg.Errors(err)
 	}
 	if cfg.CreateInactivityMonitor == nil {
 		cfg.CreateInactivityMonitor = func() udpClient.InactivityMonitor {

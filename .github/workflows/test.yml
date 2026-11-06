@@ -10,6 +10,15 @@ on:
   workflow_dispatch:
 
 jobs:
+  qblock:
+    if: github.event_name == 'push' ||
+      (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) ||
+      github.event_name == 'workflow_dispatch'
+    permissions:
+      contents: read
+      pull-requests: read
+    uses: ./.github/workflows/test-qblock.yml
+
   test:
     # don't run for forks
     if: github.event_name == 'push' ||
@@ -17,12 +26,20 @@ jobs:
       github.event_name == 'workflow_dispatch'
 
     runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest, macOS-latest]
 
     steps:
+      # Checks-out repository under $GITHUB_WORKSPACE with tags and history (needed by "SonarCloud Scan" step)
+      - name: Full checkout
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0 # Full clone for SonarCloud
+
       - name: Set up Go >=1.26
         uses: actions/setup-go@v7
         with:
@@ -36,9 +53,38 @@ jobs:
           if [ "${{ matrix.os }}" == "ubuntu-latest" ]; then
             sudo apt-get update
             sudo apt-get install -y libcoap3-bin
-            sudo ln -sf /usr/bin/coap-client-notls /usr/bin/coap-client
+            sudo ln -sf /usr/bin/coap-client-openssl /usr/bin/coap-client
           elif [ "${{ matrix.os }}" == "macOS-latest" ]; then
-            brew install libcoap
+            brew install cmake openssl@3
+            source_dir="$RUNNER_TEMP/libcoap-source"
+            build_dir="$RUNNER_TEMP/libcoap-build"
+            prefix="$RUNNER_TEMP/libcoap-install"
+            tools="$RUNNER_TEMP/libcoap-tools"
+            # Upstream fix for Q-Block2 reassembled-body length handling.
+            revision="cfa1cf3d1721c1598c40a624b3b0028dd1bbe178"
+            git init "$source_dir"
+            git -C "$source_dir" remote add origin https://github.com/obgm/libcoap.git
+            git -C "$source_dir" fetch --depth=1 origin "$revision"
+            git -C "$source_dir" checkout --detach FETCH_HEAD
+            test "$(git -C "$source_dir" rev-parse HEAD)" = "$revision"
+            cmake -S "$source_dir" -B "$build_dir" \
+              -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="$prefix" \
+              -DOPENSSL_ROOT_DIR="$(brew --prefix openssl@3)" \
+              -DENABLE_Q_BLOCK=ON -DENABLE_DTLS=ON -DDTLS_BACKEND=openssl \
+              -DENABLE_OSCORE=OFF -DENABLE_DOCS=OFF -DENABLE_TESTS=OFF \
+              -DENABLE_EXAMPLES=ON -DBUILD_SHARED_LIBS=OFF
+            cmake --build "$build_dir" --parallel 2
+            cmake --install "$build_dir"
+            mkdir -p "$tools"
+            clients=("$prefix"/bin/coap-client*)
+            servers=("$prefix"/bin/coap-server*)
+            test -x "${clients[0]}"
+            test -x "${servers[0]}"
+            ln -s "${clients[0]}" "$tools/coap-client"
+            ln -s "${servers[0]}" "$tools/coap-server"
+            echo "$tools" >> "$GITHUB_PATH"
+            export PATH="$tools:$PATH"
+            git -C "$source_dir" rev-parse HEAD
           fi
           if [ "${{ matrix.os }}" != "windows-latest" ]; then
             # fail instead of silently skipping the libcoap tests
@@ -48,12 +94,6 @@ jobs:
             command -v coap-server || command -v coap-server-notls
           fi
         shell: bash
-      # Checks-out repository under $GITHUB_WORKSPACE with tags and history (needed by "SonarCloud Scan" step)
-      - name: Full checkout
-        uses: actions/checkout@v7
-        with:
-          fetch-depth: 0 # Full clone for SonarCloud
-
       # Build everything
       - name: Run a build
         run: go build ./...
@@ -88,6 +128,9 @@ jobs:
     needs: test
     # The type of runner that the job will run on
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
     steps:
       # Checks-out your repository under $GITHUB_WORKSPACE, so your job can access it
       - uses: actions/checkout@v7

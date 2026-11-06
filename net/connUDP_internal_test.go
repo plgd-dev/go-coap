@@ -20,6 +20,17 @@ const (
 	udp6Network = "udp6"
 )
 
+func TestWithNilContextPreservesDefault(t *testing.T) {
+	defaultContext := context.Background()
+	writeCfg := UDPWriteCfg{Ctx: defaultContext}
+	WithContext(nil).ApplyWrite(&writeCfg) //nolint:staticcheck // Verify nil leaves the default write context unchanged.
+	require.Equal(t, defaultContext, writeCfg.Ctx)
+
+	readCfg := UDPReadCfg{Ctx: defaultContext}
+	WithContext(nil).ApplyRead(&readCfg) //nolint:staticcheck // Verify nil leaves the default read context unchanged.
+	require.Equal(t, defaultContext, readCfg.Ctx)
+}
+
 type multicastWriteArgs struct {
 	ctx     context.Context
 	udpAddr *net.UDPAddr

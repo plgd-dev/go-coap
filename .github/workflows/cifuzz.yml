@@ -4,14 +4,13 @@ on:
   pull_request:
   workflow_dispatch:
 
-permissions: {}
-
 jobs:
  Fuzzing:
    runs-on: ubuntu-latest
 
    permissions:
      security-events: write
+     pull-requests: read
 
    steps:
    - name: Build Fuzzers

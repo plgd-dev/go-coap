@@ -3,11 +3,13 @@ package client
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"math"
 	"net"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -296,6 +298,33 @@ type Conn struct {
 	tokenlessHandler      client.TokenlessHandler[HandlerFunc]
 	msgID                 atomic.Uint32
 	blockwiseSZX          blockwise.SZX
+	qBlockwiseMode        blockwise.QBlockwiseMode
+	qParameters           blockwise.QBlockwiseConfig
+	qProbeMu              sync.Mutex
+	qProbeWait            chan struct{}
+	qProbeSupported       bool
+	qProbeExpires         time.Time
+	qProbeRetry           time.Time
+	qProbeRoute           string
+	qProbeResult          *qCapabilityResult
+	qConfigErr            error
+	qDatagramLimit        uint32
+	qRateMu               sync.Mutex
+	qRateWake             chan struct{}
+	qPeerActivity         time.Time
+	qLastControl          time.Time
+	qControlNotBefore     time.Time
+	qLastBody             time.Time
+	qBodyNotBefore        time.Time
+	qBodyTag              string
+	qRoutesMu             sync.Mutex
+	qRoutes               map[string]*qBlockRoute
+	qNotificationMIDs     map[int32]qNotificationMID
+	qActiveRoutes         int
+	qJobsMu               sync.Mutex
+	qJobs                 map[string]qBlockJob
+	qJobsWake             chan struct{}
+	qAsyncSends           int
 
 	localAddr      atomic.Pointer[net.IP]
 	interfaceIndex atomic.Int64
@@ -447,7 +476,8 @@ func NewConnWithOpts(session Session, cfg *Config, opts ...Option) *Conn {
 			acknowledgeRandomFactor: atomic.NewFloat64(cfg.TransmissionAcknowledgeRandomFactor),
 			maxRetransmit:           atomic.NewUint32(cfg.TransmissionMaxRetransmit),
 		},
-		blockwiseSZX: cfg.BlockwiseSZX,
+		blockwiseSZX:   cfg.BlockwiseSZX,
+		qBlockwiseMode: cfg.QBlockwiseMode,
 
 		tokenHandlerContainer:     coapSync.NewMap[uint64, HandlerFunc](),
 		midHandlerContainer:       coapSync.NewMap[int32, *midElement](),
@@ -470,6 +500,28 @@ func NewConnWithOpts(session Session, cfg *Config, opts ...Option) *Conn {
 		cc.processReceivedMessage = processReceivedMessage
 	}
 	cc.receivedMessageReader = client.NewReceivedMessageReader(&cc, cfg.ReceivedMessageQueueSize)
+	cc.qConfigErr = blockwise.ValidateQBlockwiseConfig(cfg.QBlockwiseMode, cfg.BlockwiseEnable)
+	parameters, parametersErr := cfg.QBlockwiseConfig.Resolve()
+	if parametersErr != nil {
+		cc.qConfigErr = parametersErr
+	} else {
+		cc.qParameters = parameters
+		if cc.blockWise != nil {
+			cc.qConfigErr = errors.Join(cc.qConfigErr, cc.blockWise.SetQBlockwiseConfig(parameters))
+		}
+	}
+	cc.qDatagramLimit = session.MaxMessageSize()
+	if cfg.MTU != 0 {
+		cc.qDatagramLimit = min(cc.qDatagramLimit, uint32(cfg.MTU))
+		if cfg.QBlockwiseSecure {
+			// Reserve a conservative DTLS record/header/MAC allowance; cipher
+			// suites have different record expansion, unlike plain UDP.
+			cc.qDatagramLimit -= min(cc.qDatagramLimit, 128)
+		}
+	}
+	cc.AddOnClose(func() {
+		cc.closeQBlocks()
+	})
 	return &cc
 }
 
@@ -553,8 +605,28 @@ func (cc *Conn) doInternal(req *pool.Message) (_ *pool.Message, err error) {
 //
 // Caller is responsible to release request and response.
 func (cc *Conn) do(req *pool.Message) (*pool.Message, error) {
+	if cc.qConfigErr != nil {
+		return nil, cc.qConfigErr
+	}
+	hasQOption := req.HasOption(message.QBlock1) || req.HasOption(message.QBlock2)
+	if hasQOption && !cc.qBlockAllowed() {
+		return nil, blockwise.ErrQBlockDisabled
+	}
+	if hasQOption && (req.HasOption(message.Block1) || req.HasOption(message.Block2)) {
+		return nil, blockwise.ErrInvalidOptionBlock1
+	}
+	if hasQOption {
+		return cc.doInternal(req)
+	}
 	if cc.blockWise == nil {
 		return cc.doInternal(req)
+	}
+	useQ, selectErr := cc.selectQBlock(req)
+	if selectErr != nil {
+		return nil, selectErr
+	}
+	if useQ {
+		return cc.doQBlock(req)
 	}
 	resp, err := cc.blockWise.Do(req, cc.blockwiseSZX, cc.session.MaxMessageSize(), cc.RemoteAddr(), func(bwReq *pool.Message) (*pool.Message, error) {
 		if bwReq.Options().HasOption(message.Block1) || bwReq.Options().HasOption(message.Block2) {
@@ -568,8 +640,160 @@ func (cc *Conn) do(req *pool.Message) (*pool.Message, error) {
 	return resp, nil
 }
 
+func (cc *Conn) qBlockCapability(request *pool.Message) (bool, error) {
+	ctx := request.Context()
+	routeKey, originOptions := qBlockOrigin(request.Options())
+	for {
+		cc.qProbeMu.Lock()
+		if cc.qProbeRoute == routeKey && time.Now().Before(cc.qProbeExpires) {
+			supported := cc.qProbeSupported
+			cc.qProbeMu.Unlock()
+			return supported, nil
+		}
+		if cc.qProbeRoute == routeKey && time.Now().Before(cc.qProbeRetry) {
+			cc.qProbeMu.Unlock()
+			return false, nil
+		}
+		wait, result := cc.qProbeWait, cc.qProbeResult
+		if wait == nil {
+			wait = make(chan struct{})
+			result = &qCapabilityResult{route: routeKey}
+			cc.qProbeWait, cc.qProbeResult = wait, result
+			cc.qProbeRoute = routeKey
+			cc.qProbeExpires, cc.qProbeRetry = time.Time{}, time.Time{}
+			// A caller does not own the lifetime of the shared probe.
+			go cc.runQBlockProbe(originOptions, result, wait)
+		}
+		cc.qProbeMu.Unlock()
+		if err := cc.waitQBlockCapability(ctx, wait); err != nil {
+			return false, err
+		}
+		if result.route != routeKey {
+			continue
+		}
+		return result.supported, result.err
+	}
+}
+
+func (cc *Conn) runQBlockProbe(originOptions message.Options, result *qCapabilityResult, wait chan struct{}) {
+	supported, err := cc.probeQBlock(cc.Context(), originOptions)
+	cc.qProbeMu.Lock()
+	cc.qProbeSupported = supported
+	result.supported, result.err = supported, err
+	if err == nil {
+		cc.qProbeExpires = time.Now().Add(10 * time.Minute)
+	} else {
+		cc.qProbeRetry = time.Now().Add(time.Second)
+	}
+	cc.qProbeWait = nil
+	close(wait)
+	cc.qProbeMu.Unlock()
+}
+
+func (cc *Conn) waitQBlockCapability(ctx context.Context, wait <-chan struct{}) error {
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-cc.Context().Done():
+		return cc.Context().Err()
+	case <-wait:
+		return nil
+	}
+}
+
+func (cc *Conn) probeQBlock(ctx context.Context, originOptions message.Options) (bool, error) {
+	probeCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	req := cc.AcquireMessage(probeCtx)
+	defer cc.ReleaseMessage(req)
+	req.SetCode(codes.GET)
+	req.SetType(message.Confirmable)
+	token, err := message.GetToken()
+	if err != nil {
+		return false, err
+	}
+	req.SetToken(token)
+	req.ResetOptionsTo(originOptions)
+	if pathErr := req.SetPath("/.well-known/core"); pathErr != nil {
+		return false, pathErr
+	}
+	option, err := blockwise.EncodeQBlockOption(blockwise.SZX16, 0, false)
+	if err != nil {
+		return false, err
+	}
+	req.SetOptionUint32(message.QBlock2, option)
+	response, err := cc.doInternal(req)
+	if err != nil {
+		return false, err
+	}
+	defer cc.ReleaseMessage(response)
+	if response.Code() == codes.BadOption {
+		if len(originOptions) != 0 && !qProbeBadOptionRelevant(response) {
+			return false, blockwise.ErrQBlockUnsupported
+		}
+		return false, nil
+	}
+	if response.Code() < codes.Created || response.Code() >= codes.BadRequest {
+		return false, blockwise.ErrQBlockUnsupported
+	}
+	if qOptionCount(response, message.QBlock2) != 1 {
+		return false, blockwise.ErrQBlockUnsupported
+	}
+	responseOption, err := response.GetOptionUint32(message.QBlock2)
+	if err != nil {
+		return false, blockwise.ErrQBlockUnsupported
+	}
+	szx, num, _, err := blockwise.DecodeQBlockOption(responseOption)
+	if err != nil || szx != blockwise.SZX16 || num != 0 {
+		return false, blockwise.ErrQBlockUnsupported
+	}
+	return true, nil
+}
+
+func qProbeBadOptionRelevant(response *pool.Message) bool {
+	diagnostic, err := response.ReadBody()
+	if err != nil {
+		return false
+	}
+	text := strings.ToLower(string(diagnostic))
+	if strings.Contains(text, "q-block2") {
+		return true
+	}
+	if !strings.Contains(text, "option") {
+		return false
+	}
+	for _, number := range strings.FieldsFunc(text, func(r rune) bool { return r < '0' || r > '9' }) {
+		if number == "31" {
+			return true
+		}
+	}
+	return false
+}
+
+func qOptionCount(msg *pool.Message, id message.OptionID) int {
+	count := 0
+	for _, option := range msg.Options() {
+		if option.ID == id {
+			count++
+		}
+	}
+	return count
+}
+
 // DoObserve subscribes for every change with request.
 func (cc *Conn) doObserve(req *pool.Message, observeFunc func(req *pool.Message)) (client.Observation, error) {
+	if cc.qConfigErr != nil {
+		return nil, cc.qConfigErr
+	}
+	useQ, err := cc.selectQBlock(req)
+	if err != nil {
+		return nil, err
+	}
+	if useQ {
+		if prepareErr := cc.prepareQObservation(req); prepareErr != nil {
+			return nil, prepareErr
+		}
+	}
 	return cc.observationHandler.NewObservation(req, observeFunc)
 }
 
@@ -624,8 +848,9 @@ func (cc *Conn) prepareWriteMessage(req *pool.Message, handler HandlerFunc, wait
 			cc.ReleaseMessage(msg)
 			return nil, fmt.Errorf("cannot clone message: %w", err)
 		}
-		if req.Code() >= codes.GET && req.Code() <= codes.DELETE {
+		if req.Code() >= codes.GET && req.Code() < 32 || req.HasOption(message.QBlock1) || req.HasOption(message.QBlock2) {
 			if err := cc.acquireOutstandingInteraction(req.Context()); err != nil {
+				cc.ReleaseMessage(msg)
 				return nil, err
 			}
 			closeFns = append(closeFns, func() {
@@ -662,6 +887,9 @@ func (cc *Conn) prepareWriteMessage(req *pool.Message, handler HandlerFunc, wait
 func (cc *Conn) writeMessageAsync(req *pool.Message) error {
 	req.UpsertType(message.Confirmable)
 	req.UpsertMessageID(cc.GetMessageID())
+	if err := cc.rememberQNotification(req); err != nil {
+		return err
+	}
 	closeFn, err := cc.prepareWriteMessage(req, func(*responsewriter.ResponseWriter[*Conn], *pool.Message) {
 		// do nothing
 	}, nil)
@@ -684,8 +912,15 @@ func (cc *Conn) writeMessage(req *pool.Message) error {
 		return cc.writeMessageAsync(req)
 	}
 	respChan := make(chan error, 1)
-	closeFn, err := cc.prepareWriteMessage(req, func(*responsewriter.ResponseWriter[*Conn], *pool.Message) {
-		notifyWaitForAcknowledge(respChan, nil)
+	if err := cc.rememberQNotification(req); err != nil {
+		return err
+	}
+	closeFn, err := cc.prepareWriteMessage(req, func(_ *responsewriter.ResponseWriter[*Conn], response *pool.Message) {
+		var responseErr error
+		if response.Type() == message.Reset && req.HasOption(message.Observe) && req.HasOption(message.QBlock2) {
+			responseErr = errors.New("q-block Observe notification reset by peer")
+		}
+		notifyWaitForAcknowledge(respChan, responseErr)
 	}, respChan)
 	if err != nil {
 		return &client.RequestNotSentError{Err: err}
@@ -702,6 +937,18 @@ func (cc *Conn) writeMessage(req *pool.Message) error {
 
 // WriteMessage sends an coap message.
 func (cc *Conn) WriteMessage(req *pool.Message) error {
+	if cc.qConfigErr != nil {
+		return cc.qConfigErr
+	}
+	if req.HasOption(message.QBlock1) || req.HasOption(message.QBlock2) {
+		if !cc.qBlockAllowed() {
+			return blockwise.ErrQBlockDisabled
+		}
+		if req.HasOption(message.Block1) || req.HasOption(message.Block2) {
+			return blockwise.ErrInvalidOptionBlock1
+		}
+		return cc.writeMessage(req)
+	}
 	if cc.blockWise == nil {
 		return cc.writeMessage(req)
 	}
@@ -794,8 +1041,32 @@ func (cc *Conn) sendPong(w *responsewriter.ResponseWriter[*Conn], r *pool.Messag
 }
 
 func (cc *Conn) handle(w *responsewriter.ResponseWriter[*Conn], m *pool.Message) {
+	cc.checkQObservationCancellation(m)
 	if m.IsSeparateMessage() {
 		// msg was processed by token handler - just drop it.
+		return
+	}
+	if cc.routeQBlockResponse(m) {
+		return
+	}
+	if cc.startQBlockNotification(m) {
+		return
+	}
+	if probeSZX, ok := cc.qDiscoveryRequestSZX(m); ok && cc.qBlockAllowed() {
+		const discovery = "</>;rt=\"core\""
+		if err := w.SetResponse(codes.Content, message.AppLinkFormat, bytes.NewReader([]byte(discovery))); err != nil {
+			cc.errors(fmt.Errorf("cannot set Q-Block discovery response: %w", err))
+			return
+		}
+		option, err := blockwise.EncodeQBlockOption(probeSZX, 0, false)
+		if err != nil {
+			cc.errors(fmt.Errorf("cannot encode Q-Block discovery response: %w", err))
+			return
+		}
+		w.Message().SetOptionUint32(message.QBlock2, option)
+		w.Message().SetOptionUint32(message.Size2, uint32(len(discovery)))
+		etag := sha256.Sum256([]byte(discovery))
+		w.Message().SetOptionBytes(message.ETag, etag[:8])
 		return
 	}
 	handleResponse := func(rw *responsewriter.ResponseWriter[*Conn], rm *pool.Message) {
@@ -810,13 +1081,55 @@ func (cc *Conn) handle(w *responsewriter.ResponseWriter[*Conn], m *pool.Message)
 		}
 		cc.observationHandler.Handle(rw, rm)
 	}
-	if cc.blockWise != nil {
-		cc.blockWise.Handle(w, m, cc.blockwiseSZX, cc.session.MaxMessageSize(), cc.RemoteAddr(), func(rw *responsewriter.ResponseWriter[*Conn], rm *pool.Message) {
-			handleResponse(rw, rm)
-		})
+	if cc.handleBlockwise(w, m, handleResponse) {
 		return
 	}
 	handleResponse(w, m)
+}
+
+func (cc *Conn) handleBlockwise(w *responsewriter.ResponseWriter[*Conn], m *pool.Message, next HandlerFunc) bool {
+	if cc.blockWise == nil {
+		return false
+	}
+	maxSZX := cc.blockwiseSZX
+	if m.HasOption(message.QBlock1) || m.HasOption(message.QBlock2) {
+		responseSZX, err := cc.qBlockResponseSZX()
+		if err != nil {
+			cc.errors(fmt.Errorf("cannot size Q-Block response: %w", err))
+			if responseErr := w.SetResponse(codes.RequestEntityTooLarge, message.TextPlain, nil); responseErr != nil {
+				cc.errors(responseErr)
+			}
+			return true
+		}
+		maxSZX = min(maxSZX, responseSZX)
+	}
+	cc.blockWise.Handle(w, m, maxSZX, cc.session.MaxMessageSize(), cc.RemoteAddr(), next)
+	return true
+}
+
+func (cc *Conn) qBlockAllowed() bool {
+	return cc.qConfigErr == nil && cc.blockWise != nil && cc.qBlockwiseMode != blockwise.QBlockwiseDisabled
+}
+
+func (cc *Conn) qDiscoveryRequestSZX(r *pool.Message) (blockwise.SZX, bool) {
+	if r.Code() != codes.GET || r.HasOption(message.QBlock1) || r.HasOption(message.Block1) || r.HasOption(message.Block2) {
+		return 0, false
+	}
+	path := make([]string, 0, 2)
+	for _, option := range r.Options() {
+		if option.ID == message.URIPath {
+			path = append(path, string(option.Value))
+		}
+	}
+	if len(path) != 2 || path[0] != ".well-known" || path[1] != "core" {
+		return 0, false
+	}
+	value, err := r.GetOptionUint32(message.QBlock2)
+	if err != nil || qOptionCount(r, message.QBlock2) != 1 {
+		return 0, false
+	}
+	szx, num, _, err := blockwise.DecodeQBlockOption(value)
+	return szx, err == nil && szx <= blockwise.SZX1024 && num == 0
 }
 
 // Sequence acquires sequence number.
@@ -876,7 +1189,7 @@ func sendJustAcknowledgeMessage(reqType message.Type, w *responsewriter.Response
 	return reqType == message.Confirmable && !w.Message().IsModified()
 }
 
-func (cc *Conn) processResponse(reqType message.Type, reqMessageID int32, w *responsewriter.ResponseWriter[*Conn]) error {
+func (cc *Conn) processResponse(reqType message.Type, reqMessageID int32, qResponse bool, w *responsewriter.ResponseWriter[*Conn]) error {
 	switch {
 	case isPongOrResetResponse(w):
 		if reqType == message.Confirmable {
@@ -901,6 +1214,13 @@ func (cc *Conn) processResponse(reqType message.Type, reqMessageID int32, w *res
 			return fmt.Errorf("cannot cache response: %w", err)
 		}
 		return nil
+	case isQNonResponse(reqType, qResponse, w.Message()):
+		w.Message().SetType(message.NonConfirmable)
+		w.Message().SetMessageID(cc.GetMessageID())
+		if err := cc.addResponseToCache(reqMessageID, w.Message()); err != nil {
+			return fmt.Errorf("cannot cache Q-Block response: %w", err)
+		}
+		return nil
 	case !w.Message().IsModified():
 		// don't send response
 		return nil
@@ -920,6 +1240,11 @@ func (cc *Conn) processResponse(reqType message.Type, reqMessageID int32, w *res
 		}
 	}
 	return nil
+}
+
+func isQNonResponse(reqType message.Type, qResponse bool, response *pool.Message) bool {
+	return reqType == message.NonConfirmable && response.IsModified() &&
+		(qResponse || response.HasOption(message.QBlock1) || response.HasOption(message.QBlock2))
 }
 
 func (cc *Conn) handleReq(w *responsewriter.ResponseWriter[*Conn], req *pool.Message) {
@@ -942,9 +1267,10 @@ func (cc *Conn) handleReq(w *responsewriter.ResponseWriter[*Conn], req *pool.Mes
 	w.Message().SetModified(false)
 	reqType := req.Type()
 	reqMessageID := req.MessageID()
+	qResponse := req.HasOption(message.QBlock1) || req.HasOption(message.QBlock2)
 	cc.handle(w, req)
 
-	err := cc.processResponse(reqType, reqMessageID, w)
+	err := cc.processResponse(reqType, reqMessageID, qResponse, w)
 	if err != nil {
 		cc.closeConnection()
 		cc.errors(fmt.Errorf(errFmtWriteResponse, err))
@@ -959,9 +1285,12 @@ func (cc *Conn) closeConnection() {
 
 func (cc *Conn) ProcessReceivedMessageWithHandler(req *pool.Message, handler config.HandlerFunc[*Conn]) {
 	generation := req.Generation()
+	qResponse := req.HasOption(message.QBlock1) || req.HasOption(message.QBlock2)
 	defer func() {
 		cc.messagePool.ReleaseMessageIfNotHijacked(req, generation)
 	}()
+	ctx, afterWrite := responsewriter.WithPostWriteCallbacks(req.Context())
+	req.SetContext(ctx)
 	resp := cc.AcquireMessage(cc.Context())
 	resp.SetToken(req.Token())
 	cc.setControlInformation(req.ControlMessage())
@@ -980,12 +1309,22 @@ func (cc *Conn) ProcessReceivedMessageWithHandler(req *pool.Message, handler con
 		// nothing to send
 		return
 	}
+	if qResponse {
+		if err := cc.validateQBlockDatagram(w.Message()); err != nil {
+			cc.errors(err)
+			w.Message().SetCode(codes.RequestEntityTooLarge)
+			w.Message().ResetOptionsTo(nil)
+			w.Message().SetBody(nil)
+		}
+	}
 	cc.upsertControlInformation(w.Message())
 	errW := cc.writeMessageAsync(w.Message())
 	if errW != nil {
 		cc.closeConnection()
 		cc.errors(fmt.Errorf(errFmtWriteResponse, errW))
+		return
 	}
+	afterWrite()
 }
 
 func (cc *Conn) handlePong(w *responsewriter.ResponseWriter[*Conn], r *pool.Message) {
@@ -1026,6 +1365,7 @@ func (cc *Conn) upsertControlInformation(msg *pool.Message) {
 }
 
 func (cc *Conn) handleSpecialMessages(r *pool.Message) bool {
+	cc.handleQNotificationAcknowledgement(r)
 	// ping request
 	if r.IsPing(false) {
 		cc.ProcessReceivedMessageWithHandler(r, cc.handlePong)
@@ -1069,10 +1409,15 @@ func newMalformedMessageError(err error, datagram []byte, req *pool.Message) *Ma
 }
 
 func (cc *Conn) processUnknownCriticalOptions(req *pool.Message) (bool, error) {
-	if (req.Type() != message.Confirmable && req.Type() != message.NonConfirmable) || req.Code() < codes.GET || req.Code() > codes.DELETE {
+	if (req.Type() != message.Confirmable && req.Type() != message.NonConfirmable) || req.Code() < codes.GET || req.Code() >= 32 {
 		return false, nil
 	}
-	unknownCriticalOpts := client.GetUnknownCriticalOptions(req.Options())
+	qAllowed := cc.qBlockAllowed() && !req.HasOption(message.ProxyURI) && !req.HasOption(message.ProxyScheme) &&
+		!req.HasOption(message.Block1) && !req.HasOption(message.Block2)
+	if req.HasOption(message.Observe) && (req.Code() != codes.GET || req.HasOption(message.QBlock1)) {
+		qAllowed = false
+	}
+	unknownCriticalOpts := client.GetUnknownCriticalOptionsWithQBlock(req.Options(), qAllowed)
 	if len(unknownCriticalOpts) == 0 {
 		return false, nil
 	}
@@ -1099,6 +1444,10 @@ func (cc *Conn) Process(cm *coapNet.ControlMessage, datagram []byte) error {
 	}
 	req.SetControlMessage(cm)
 	req.SetSequence(cc.Sequence())
+	if isQMulticastRequest(req, cm) {
+		cc.ReleaseMessage(req)
+		return nil
+	}
 	if handled, processErr := cc.processUnknownCriticalOptions(req); handled {
 		return processErr
 	}
@@ -1111,6 +1460,9 @@ func (cc *Conn) Process(cm *coapNet.ControlMessage, datagram []byte) error {
 	if drop {
 		cc.ReleaseMessage(req)
 		return nil
+	}
+	if hasQBlock(req) {
+		cc.qBlockPeerProgress()
 	}
 	cc.inactivityMonitor.Notify()
 	if cc.handleSpecialMessages(req) {
@@ -1137,6 +1489,10 @@ func (cc *Conn) Process(cm *coapNet.ControlMessage, datagram []byte) error {
 		cc.ReleaseMessage(req)
 	}
 	return nil
+}
+
+func isQMulticastRequest(req *pool.Message, cm *coapNet.ControlMessage) bool {
+	return req.Code() >= codes.GET && req.Code() < 32 && req.HasOption(message.QBlock2) && cm != nil && cm.Dst.IsMulticast()
 }
 
 func (cc *Conn) respondUnknownCriticalOptions(req *pool.Message, unknownCriticalOpts []message.OptionID) error {

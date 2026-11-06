@@ -4,9 +4,75 @@ import (
 	"time"
 
 	dtlsServer "github.com/plgd-dev/go-coap/v3/dtls/server"
+	"github.com/plgd-dev/go-coap/v3/net/blockwise"
 	udpClient "github.com/plgd-dev/go-coap/v3/udp/client"
 	udpServer "github.com/plgd-dev/go-coap/v3/udp/server"
 )
+
+// QBlockwiseMode selects datagram Q-Block behavior. Disabled remains the default.
+type QBlockwiseMode = blockwise.QBlockwiseMode
+
+// QBlockwiseConfig contains RFC 9177 Section 7.2 transfer parameters.
+type QBlockwiseConfig = blockwise.QBlockwiseConfig
+
+// QBlockwiseConfigOpt configures Q transfers independently of legacy blockwise.
+type QBlockwiseConfigOpt struct {
+	config QBlockwiseConfig
+}
+
+func (o QBlockwiseConfigOpt) UDPClientApply(cfg *udpClient.Config) {
+	cfg.QBlockwiseConfig = o.config
+}
+
+func (o QBlockwiseConfigOpt) UDPServerApply(cfg *udpServer.Config) {
+	cfg.QBlockwiseConfig = o.config
+}
+
+func (o QBlockwiseConfigOpt) DTLSServerApply(cfg *dtlsServer.Config) {
+	cfg.QBlockwiseConfig = o.config
+}
+
+// WithQBlockwiseConfig sets Q transfer parameters. Start from qblock.DefaultConfig
+// for customization; a zero config uses defaults. MaxPayloads must match at both
+// endpoints. Invalid parameters fail connection/server startup.
+func WithQBlockwiseConfig(config QBlockwiseConfig) QBlockwiseConfigOpt {
+	return QBlockwiseConfigOpt{config: config}
+}
+
+const (
+	QBlockwiseDisabled = blockwise.QBlockwiseDisabled
+	QBlockwiseAuto     = blockwise.QBlockwiseAuto
+	QBlockwiseOnly     = blockwise.QBlockwiseOnly
+)
+
+// QBlockwiseOpt configures RFC 9177 selection on UDP and DTLS datagrams.
+type QBlockwiseOpt struct {
+	mode QBlockwiseMode
+}
+
+func (o QBlockwiseOpt) UDPServerApply(cfg *udpServer.Config) {
+	cfg.QBlockwiseMode = o.mode
+}
+
+func (o QBlockwiseOpt) DTLSServerApply(cfg *dtlsServer.Config) {
+	cfg.QBlockwiseMode = o.mode
+}
+
+func (o QBlockwiseOpt) UDPClientApply(cfg *udpClient.Config) {
+	cfg.QBlockwiseMode = o.mode
+}
+
+// WithQBlockwise selects Disabled, Auto, or Only for unicast datagram traffic.
+// Auto and QOnly are experimental until the full RFC 9177 transfer lifecycle
+// and interoperability suite are complete.
+// Q Observe notifications use the registration token and recover missing payloads
+// without re-registering. Proxy, multicast, and tokenless Q operations are rejected.
+// Bodies are limited to 16 MiB and 65536 blocks.
+// Q state is independently retained for RFC 9177 lifetimes rather than the
+// legacy WithBlockwise timeout, with bounded per-peer and process-wide budgets.
+func WithQBlockwise(mode QBlockwiseMode) QBlockwiseOpt {
+	return QBlockwiseOpt{mode: mode}
+}
 
 // MaxPendingMessagesOpt configures in-flight duplicate suppression.
 type MaxPendingMessagesOpt struct {

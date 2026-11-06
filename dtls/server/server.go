@@ -162,6 +162,12 @@ func (s *Server) serveConnection(connections *connections.Connections, rw net.Co
 }
 
 func (s *Server) Serve(l Listener) error {
+	if _, err := s.cfg.QBlockwiseConfig.Resolve(); err != nil {
+		return err
+	}
+	if err := blockwise.ValidateQBlockwiseConfig(s.cfg.QBlockwiseMode, s.cfg.BlockwiseEnable); err != nil {
+		return err
+	}
 	if s.cfg.BlockwiseSZX > blockwise.SZX1024 {
 		return errors.New("invalid blockwiseSZX")
 	}
@@ -243,6 +249,10 @@ func (s *Server) createConn(connection *coapNet.Conn, inactivityMonitor udpClien
 	cfg.TransmissionAcknowledgeRandomFactor = s.cfg.TransmissionAcknowledgeRandomFactor
 	cfg.TransmissionMaxRetransmit = s.cfg.TransmissionMaxRetransmit
 	cfg.MaxPendingMessages = s.cfg.MaxPendingMessages
+	cfg.QBlockwiseMode = s.cfg.QBlockwiseMode
+	cfg.QBlockwiseConfig = s.cfg.QBlockwiseConfig
+	cfg.QBlockwiseSecure = true
+	cfg.MTU = s.cfg.MTU
 	cfg.Handler = s.cfg.Handler
 	cfg.BlockwiseSZX = s.cfg.BlockwiseSZX
 	cfg.Errors = s.cfg.Errors

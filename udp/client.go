@@ -27,6 +27,12 @@ func Dial(target string, opts ...Option) (*client.Conn, error) {
 	for _, o := range opts {
 		o.UDPClientApply(&cfg)
 	}
+	if _, err := cfg.QBlockwiseConfig.Resolve(); err != nil {
+		return nil, err
+	}
+	if err := blockwise.ValidateQBlockwiseConfig(cfg.QBlockwiseMode, cfg.BlockwiseEnable); err != nil {
+		return nil, err
+	}
 	c, err := cfg.Dialer.DialContext(cfg.Ctx, cfg.Net, target)
 	if err != nil {
 		return nil, err
@@ -49,6 +55,12 @@ func Client(conn *net.UDPConn, opts ...Option) *client.Conn {
 		cfg.Errors = func(error) {
 			// default no-op
 		}
+	}
+	if _, err := cfg.QBlockwiseConfig.Resolve(); err != nil {
+		cfg.Errors(err)
+	}
+	if err := blockwise.ValidateQBlockwiseConfig(cfg.QBlockwiseMode, cfg.BlockwiseEnable); err != nil {
+		cfg.Errors(err)
 	}
 	if cfg.CreateInactivityMonitor == nil {
 		cfg.CreateInactivityMonitor = func() client.InactivityMonitor {
