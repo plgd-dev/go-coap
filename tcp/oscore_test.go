@@ -559,7 +559,7 @@ func TestOSCORETCPClassicBlockwise(t *testing.T) {
 	responseBody := bytes.Repeat([]byte("response-block-"), 500)
 	server := tcp.NewServer(
 		options.WithOSCORE(newTCPOSCOREProcessor(t, "server", "client", false)),
-		options.WithBlockwise(true, blockwise.SZX256, 5*time.Second),
+		options.WithBlockwise(true, blockwise.SZX1024, 5*time.Second),
 		options.WithHandlerFunc(func(w *responsewriter.ResponseWriter[*client.Conn], req *pool.Message) {
 			got, readErr := req.ReadBody()
 			if readErr != nil {
@@ -588,7 +588,7 @@ func TestOSCORETCPClassicBlockwise(t *testing.T) {
 
 	cc, err := tcp.Dial(listener.Addr().String(),
 		options.WithOSCORE(newTCPOSCOREProcessor(t, "client", "server", false)),
-		options.WithBlockwise(true, blockwise.SZX256, 5*time.Second),
+		options.WithBlockwise(true, blockwise.SZX1024, 5*time.Second),
 	)
 	require.NoError(t, err)
 	defer func() { require.NoError(t, cc.Close()) }()

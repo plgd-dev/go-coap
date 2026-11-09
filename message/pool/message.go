@@ -582,7 +582,11 @@ func (r *Message) decode(decoder Decoder) (int, error) {
 		n, err = decoder.Decode(r.bufferUnmarshal, &r.msg)
 		if errors.Is(err, message.ErrOptionsTooSmall) {
 			// increase buffer size and try again
-			r.msg.Options = make(message.Options, 0, len(r.msg.Options)*2)
+			capacity := cap(r.msg.Options) * 2
+			if capacity == 0 {
+				capacity = 1
+			}
+			r.msg.Options = make(message.Options, 0, capacity)
 			continue
 		}
 		return n, err

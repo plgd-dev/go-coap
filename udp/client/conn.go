@@ -1247,7 +1247,9 @@ func sendJustAcknowledgeMessage(reqType message.Type, w *responsewriter.Response
 	return reqType == message.Confirmable && !w.Message().IsModified()
 }
 
-func (cc *Conn) processResponse(reqType message.Type, reqMessageID int32, qResponse bool, w *responsewriter.ResponseWriter[*Conn]) error {
+func (cc *Conn) processResponse(reqType message.Type, reqMessageID int32, qResponse bool,
+	cacheResponse bool, w *responsewriter.ResponseWriter[*Conn],
+) error {
 	switch {
 	case isPongOrResetResponse(w):
 		if reqType == message.Confirmable {
@@ -1267,16 +1269,19 @@ func (cc *Conn) processResponse(reqType message.Type, reqMessageID int32, qRespo
 		w.Message().SetMessageID(reqMessageID)
 		w.Message().SetToken(nil)
 
-		err := cc.addResponseToCache(reqMessageID, w.Message())
-		if err != nil {
-			return fmt.Errorf("cannot cache response: %w", err)
+		if cacheResponse {
+			if err := cc.addResponseToCache(reqMessageID, w.Message()); err != nil {
+				return fmt.Errorf("cannot cache response: %w", err)
+			}
 		}
 		return nil
 	case isQNonResponse(reqType, qResponse, w.Message()):
 		w.Message().SetType(message.NonConfirmable)
 		w.Message().SetMessageID(cc.GetMessageID())
-		if err := cc.addResponseToCache(reqMessageID, w.Message()); err != nil {
-			return fmt.Errorf("cannot cache Q-Block response: %w", err)
+		if cacheResponse {
+			if err := cc.addResponseToCache(reqMessageID, w.Message()); err != nil {
+				return fmt.Errorf("cannot cache Q-Block response: %w", err)
+			}
 		}
 		return nil
 	case !w.Message().IsModified():
@@ -1292,12 +1297,32 @@ func (cc *Conn) processResponse(reqType message.Type, reqMessageID int32, qRespo
 		w.Message().SetMessageID(reqMessageID)
 	}
 	if reqType == message.Confirmable || reqType == message.NonConfirmable {
-		err := cc.addResponseToCache(reqMessageID, w.Message())
-		if err != nil {
-			return fmt.Errorf("cannot cache response: %w", err)
+		if cacheResponse {
+			if err := cc.addResponseToCache(reqMessageID, w.Message()); err != nil {
+				return fmt.Errorf("cannot cache response: %w", err)
+			}
 		}
 	}
 	return nil
+}
+
+func shouldCacheResponse(reqType message.Type, response *pool.Message) bool {
+	if reqType != message.Confirmable && reqType != message.NonConfirmable {
+		return false
+	}
+	if response.Code() == codes.Empty {
+		return response.Type() == message.Acknowledgement
+	}
+	return response.Code() >= codes.Created && response.Code() < 192 &&
+		response.Type() != message.Reset
+}
+
+func hasOSCORERequestContext(req *pool.Message) bool {
+	if req.Context() == nil {
+		return false
+	}
+	_, ok := req.Context().Value(udpOSCORERequestContextKey{}).(udpOSCORERequestContext)
+	return ok
 }
 
 func isQNonResponse(reqType message.Type, qResponse bool, response *pool.Message) bool {
@@ -1328,7 +1353,8 @@ func (cc *Conn) handleReq(w *responsewriter.ResponseWriter[*Conn], req *pool.Mes
 	qResponse := req.HasOption(message.QBlock1) || req.HasOption(message.QBlock2)
 	cc.handle(w, req)
 
-	err := cc.processResponse(reqType, reqMessageID, qResponse, w)
+	cacheResponse := !hasOSCORERequestContext(req)
+	err := cc.processResponse(reqType, reqMessageID, qResponse, cacheResponse, w)
 	if err != nil {
 		cc.closeConnection()
 		cc.errors(fmt.Errorf(errFmtWriteResponse, err))
@@ -1343,6 +1369,7 @@ func (cc *Conn) closeConnection() {
 
 func (cc *Conn) ProcessReceivedMessageWithHandler(req *pool.Message, handler config.HandlerFunc[*Conn]) {
 	generation := req.Generation()
+	reqType, reqMessageID := req.Type(), req.MessageID()
 	qResponse := req.HasOption(message.QBlock1) || req.HasOption(message.QBlock2)
 	defer func() {
 		cc.messagePool.ReleaseMessageIfNotHijacked(req, generation)
@@ -1379,6 +1406,13 @@ func (cc *Conn) ProcessReceivedMessageWithHandler(req *pool.Message, handler con
 		cc.closeConnection()
 		cc.errors(fmt.Errorf(errFmtWriteResponse, err))
 		return
+	}
+	if hasOSCORERequestContext(req) && shouldCacheResponse(reqType, w.Message()) {
+		if err := cc.addResponseToCache(reqMessageID, w.Message()); err != nil {
+			cc.closeConnection()
+			cc.errors(fmt.Errorf("cannot cache protected response: %w", err))
+			return
+		}
 	}
 	cc.upsertControlInformation(w.Message())
 	errW := cc.writeMessageAsync(w.Message())

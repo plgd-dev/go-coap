@@ -4,13 +4,16 @@ import (
 	"bytes"
 	"context"
 	"testing"
+	"time"
 
 	"github.com/plgd-dev/go-coap/v3/message"
 	"github.com/plgd-dev/go-coap/v3/message/codes"
 	"github.com/plgd-dev/go-coap/v3/message/pool"
 	"github.com/plgd-dev/go-coap/v3/net/oscore"
+	"github.com/plgd-dev/go-coap/v3/net/responsewriter"
 	"github.com/plgd-dev/go-coap/v3/udp/coder"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/atomic"
 )
 
 func TestRetransmitCachedOSCOREResponse(t *testing.T) {
@@ -230,4 +233,89 @@ func TestDuplicateOSCOREConfirmableResponseIsAcknowledged(t *testing.T) {
 	require.Equal(t, int32(mid), written.MessageID())
 	cc.ReleaseMessage(duplicate)
 	require.NoError(t, cc.Close())
+}
+
+func TestProtectedRequestCachesProtectedResponseForRetransmission(t *testing.T) {
+	const mid = 2345
+	masterSecret := []byte("protected response cache test secret")
+	clientContext, err := oscore.NewContext(oscore.ContextConfig{
+		MasterSecret: masterSecret,
+		SenderID:     []byte("client"),
+		RecipientID:  []byte("server"),
+	})
+	require.NoError(t, err)
+	serverContext, err := oscore.NewContext(oscore.ContextConfig{
+		MasterSecret: masterSecret,
+		SenderID:     []byte("server"),
+		RecipientID:  []byte("client"),
+	})
+	require.NoError(t, err)
+	processor, err := oscore.NewProcessor(oscore.ProcessorConfig{
+		Contexts:      []*oscore.Context{serverContext},
+		RequireOSCORE: true,
+	})
+	require.NoError(t, err)
+	const secret = "sensitive protected response"
+	var handlerCalls atomic.Int32
+	session := newRecordingSession()
+	defer session.Close()
+	cfg := DefaultConfig
+	cfg.OSCORE = processor
+	cfg.Errors = func(err error) { require.NoError(t, err) }
+	cfg.Handler = func(w *responsewriter.ResponseWriter[*Conn], _ *pool.Message) {
+		handlerCalls.Inc()
+		require.NoError(t, w.SetResponse(codes.Content, message.TextPlain, bytes.NewReader([]byte(secret))))
+	}
+	cc := NewConnWithOpts(session, &cfg)
+	defer cc.Close()
+
+	protectedRequest, exchange, err := clientContext.ProtectRequest(message.Message{
+		Code:      codes.GET,
+		Token:     message.Token{0x42},
+		Type:      message.Confirmable,
+		MessageID: mid,
+	})
+	require.NoError(t, err)
+	wireRequest := pool.NewMessage(context.Background())
+	wireRequest.SetMessage(protectedRequest)
+	datagram, err := wireRequest.MarshalWithEncoder(coder.DefaultCoder)
+	require.NoError(t, err)
+	require.NoError(t, cc.Process(nil, datagram))
+	require.Eventually(t, func() bool { return session.writtenCount() == 1 }, time.Second, time.Millisecond)
+
+	cachedResponse := cc.AcquireMessage(context.Background())
+	ok, err := cc.getResponseFromCache(mid, cachedResponse)
+	require.NoError(t, err)
+	require.True(t, ok, "the protected response should be cached")
+	require.True(t, cachedResponse.HasOption(message.OSCORE), "cache must contain the protected response")
+	cachedBody, err := cachedResponse.ReadBody()
+	require.NoError(t, err)
+	require.NotEqual(t, []byte(secret), cachedBody, "plaintext response must never enter the retransmission cache")
+
+	firstResponse := session.lastWritten()
+	require.NotNil(t, firstResponse)
+	require.True(t, firstResponse.HasOption(message.OSCORE))
+	firstBody, err := firstResponse.ReadBody()
+	require.NoError(t, err)
+	opened, err := clientContext.UnprotectResponse(message.Message{
+		Code:      firstResponse.Code(),
+		Token:     firstResponse.Token(),
+		Options:   firstResponse.Options(),
+		Payload:   firstBody,
+		Type:      firstResponse.Type(),
+		MessageID: firstResponse.MessageID(),
+	}, exchange)
+	require.NoError(t, err)
+	require.Equal(t, []byte(secret), opened.Payload)
+
+	require.NoError(t, cc.Process(nil, datagram))
+	require.Eventually(t, func() bool { return session.writtenCount() == 2 }, time.Second, time.Millisecond)
+	require.EqualValues(t, 1, handlerCalls.Load(), "retransmitted request must not invoke the handler again")
+	retransmittedResponse := session.lastWritten()
+	require.NotNil(t, retransmittedResponse)
+	require.True(t, retransmittedResponse.HasOption(message.OSCORE))
+	retransmittedBody, err := retransmittedResponse.ReadBody()
+	require.NoError(t, err)
+	require.Equal(t, firstBody, retransmittedBody, "retransmission must return the original ciphertext")
+	cc.ReleaseMessage(cachedResponse)
 }
