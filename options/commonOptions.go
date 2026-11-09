@@ -12,6 +12,7 @@ import (
 	"github.com/plgd-dev/go-coap/v3/net/blockwise"
 	"github.com/plgd-dev/go-coap/v3/net/client"
 	"github.com/plgd-dev/go-coap/v3/net/monitor/inactivity"
+	"github.com/plgd-dev/go-coap/v3/net/oscore"
 	"github.com/plgd-dev/go-coap/v3/net/responsewriter"
 	"github.com/plgd-dev/go-coap/v3/options/config"
 	"github.com/plgd-dev/go-coap/v3/pkg/runner/periodic"
@@ -22,6 +23,49 @@ import (
 )
 
 type ErrorFunc = config.ErrorFunc
+
+// OSCOREOpt applies an OSCORE processor to client or server configuration.
+type OSCOREOpt struct {
+	processor *oscore.Processor
+}
+
+func (o OSCOREOpt) TCPServerApply(cfg *tcpServer.Config) {
+	cfg.OSCORE = o.processor
+}
+
+func (o OSCOREOpt) TCPClientApply(cfg *tcpClient.Config) {
+	cfg.OSCORE = o.processor
+}
+
+func (o OSCOREOpt) UDPServerApply(cfg *udpServer.Config) {
+	cfg.OSCORE = o.processor
+}
+
+func (o OSCOREOpt) DTLSServerApply(cfg *dtlsServer.Config) {
+	cfg.OSCORE = o.processor
+}
+
+func (o OSCOREOpt) UDPClientApply(cfg *udpClient.Config) {
+	cfg.OSCORE = o.processor
+}
+
+// WithOSCORE configures a pre-established OSCORE processor.
+func WithOSCORE(processor *oscore.Processor) OSCOREOpt {
+	return OSCOREOpt{processor: processor}
+}
+
+// OSCOREProxyOpt enables opaque OSCORE option forwarding on server endpoints.
+// The configured handler must validate and forward protected messages.
+type OSCOREProxyOpt struct{}
+
+func (OSCOREProxyOpt) UDPServerApply(cfg *udpServer.Config) { cfg.OSCOREProxy = true }
+
+// WithOSCOREProxy allows OSCORE to reach the application handler without
+// decryption. Use only with a handler that validates and forwards OSCORE
+// messages; this option does not itself provide proxy behavior.
+func WithOSCOREProxy() OSCOREProxyOpt {
+	return OSCOREProxyOpt{}
+}
 
 type Handler interface {
 	tcpClient.HandlerFunc | udpClient.HandlerFunc

@@ -22,6 +22,7 @@ import (
 	limitparallelrequests "github.com/plgd-dev/go-coap/v3/net/client/limitParallelRequests"
 	"github.com/plgd-dev/go-coap/v3/net/monitor/inactivity"
 	"github.com/plgd-dev/go-coap/v3/net/observation"
+	"github.com/plgd-dev/go-coap/v3/net/oscore"
 	"github.com/plgd-dev/go-coap/v3/net/responsewriter"
 	"github.com/plgd-dev/go-coap/v3/options/config"
 	"github.com/plgd-dev/go-coap/v3/pkg/cache"
@@ -326,6 +327,13 @@ type Conn struct {
 	qJobsWake             chan struct{}
 	qAsyncSends           int
 
+	oscoreProcessor    *oscore.Processor
+	oscoreProxy        bool
+	oscoreMu           sync.Mutex
+	oscoreExchanges    map[string]udpOSCOREExchange
+	oscoreRequests     map[int32]udpOSCORERequest
+	oscoreObservations map[string]udpOSCORERequestContext
+
 	localAddr      atomic.Pointer[net.IP]
 	interfaceIndex atomic.Int64
 
@@ -482,6 +490,11 @@ func NewConnWithOpts(session Session, cfg *Config, opts ...Option) *Conn {
 		tokenHandlerContainer:     coapSync.NewMap[uint64, HandlerFunc](),
 		midHandlerContainer:       coapSync.NewMap[int32, *midElement](),
 		processReceivedMessage:    cfg.ProcessReceivedMessage,
+		oscoreProcessor:           cfg.OSCORE,
+		oscoreProxy:               cfg.OSCOREProxy,
+		oscoreExchanges:           make(map[string]udpOSCOREExchange),
+		oscoreRequests:            make(map[int32]udpOSCORERequest),
+		oscoreObservations:        make(map[string]udpOSCORERequestContext),
 		errors:                    cfg.Errors,
 		msgIDMutex:                NewMutexMap(),
 		responseMsgCache:          cfgOpts.responseMsgCache,
@@ -890,14 +903,19 @@ func (cc *Conn) writeMessageAsync(req *pool.Message) error {
 	if err := cc.rememberQNotification(req); err != nil {
 		return err
 	}
-	closeFn, err := cc.prepareWriteMessage(req, func(*responsewriter.ResponseWriter[*Conn], *pool.Message) {
+	wireReq, releaseWireReq, err := cc.protectOutgoingRequest(req)
+	if err != nil {
+		return &client.RequestNotSentError{Err: err}
+	}
+	defer releaseWireReq()
+	closeFn, err := cc.prepareWriteMessage(wireReq, func(*responsewriter.ResponseWriter[*Conn], *pool.Message) {
 		// do nothing
 	}, nil)
 	if err != nil {
 		return &client.RequestNotSentError{Err: err}
 	}
 	defer closeFn()
-	if err := cc.session.WriteMessage(req); err != nil {
+	if err := cc.session.WriteMessage(wireReq); err != nil {
 		return fmt.Errorf(errFmtWriteRequest, err)
 	}
 	return nil
@@ -915,7 +933,12 @@ func (cc *Conn) writeMessage(req *pool.Message) error {
 	if err := cc.rememberQNotification(req); err != nil {
 		return err
 	}
-	closeFn, err := cc.prepareWriteMessage(req, func(_ *responsewriter.ResponseWriter[*Conn], response *pool.Message) {
+	wireReq, releaseWireReq, err := cc.protectOutgoingRequest(req)
+	if err != nil {
+		return &client.RequestNotSentError{Err: err}
+	}
+	defer releaseWireReq()
+	closeFn, err := cc.prepareWriteMessage(wireReq, func(_ *responsewriter.ResponseWriter[*Conn], response *pool.Message) {
 		var responseErr error
 		if response.Type() == message.Reset && req.HasOption(message.Observe) && req.HasOption(message.QBlock2) {
 			responseErr = errors.New("q-block Observe notification reset by peer")
@@ -926,7 +949,7 @@ func (cc *Conn) writeMessage(req *pool.Message) error {
 		return &client.RequestNotSentError{Err: err}
 	}
 	defer closeFn()
-	if err := cc.session.WriteMessage(req); err != nil {
+	if err := cc.session.WriteMessage(wireReq); err != nil {
 		return fmt.Errorf(errFmtWriteRequest, err)
 	}
 	if err := cc.waitForAcknowledge(req, respChan); err != nil {
@@ -939,6 +962,9 @@ func (cc *Conn) writeMessage(req *pool.Message) error {
 func (cc *Conn) WriteMessage(req *pool.Message) error {
 	if cc.qConfigErr != nil {
 		return cc.qConfigErr
+	}
+	if handled, err := cc.writeQBlockFetchObserve(req); handled {
+		return err
 	}
 	if req.HasOption(message.QBlock1) || req.HasOption(message.QBlock2) {
 		if !cc.qBlockAllowed() {
@@ -958,6 +984,32 @@ func (cc *Conn) WriteMessage(req *pool.Message) error {
 		}
 		return cc.writeMessage(bwReq)
 	})
+}
+
+func (cc *Conn) writeQBlockFetchObserve(req *pool.Message) (bool, error) {
+	if req.Code() != codes.FETCH || req.Body() == nil || !req.HasOption(message.QBlock2) {
+		return false, nil
+	}
+	observe, err := req.Observe()
+	if err != nil || observe != 0 {
+		return false, nil
+	}
+	if !cc.qBlockAllowed() {
+		return true, blockwise.ErrQBlockDisabled
+	}
+	szx, err := cc.qBlockRequestSZX(req)
+	if err != nil {
+		return true, err
+	}
+	response, err := cc.blockWise.DoQBlock1(req, szx, 16<<20, cc.doInternal)
+	if err != nil {
+		return true, err
+	}
+	defer cc.ReleaseMessage(response)
+	if !cc.observationHandler.HandleNotification(response) {
+		return true, errors.New("Q-Block FETCH Observe response has no active observation")
+	}
+	return true, nil
 }
 
 // Context returns the client's context.
@@ -1317,6 +1369,11 @@ func (cc *Conn) ProcessReceivedMessageWithHandler(req *pool.Message, handler con
 			w.Message().SetBody(nil)
 		}
 	}
+	if err := cc.protectResponseForRequest(req, w.Message()); err != nil {
+		cc.closeConnection()
+		cc.errors(fmt.Errorf(errFmtWriteResponse, err))
+		return
+	}
 	cc.upsertControlInformation(w.Message())
 	errW := cc.writeMessageAsync(w.Message())
 	if errW != nil {
@@ -1412,12 +1469,17 @@ func (cc *Conn) processUnknownCriticalOptions(req *pool.Message) (bool, error) {
 	if (req.Type() != message.Confirmable && req.Type() != message.NonConfirmable) || req.Code() < codes.GET || req.Code() >= 32 {
 		return false, nil
 	}
-	qAllowed := cc.qBlockAllowed() && !req.HasOption(message.ProxyURI) && !req.HasOption(message.ProxyScheme) &&
-		!req.HasOption(message.Block1) && !req.HasOption(message.Block2)
-	if req.HasOption(message.Observe) && (req.Code() != codes.GET || req.HasOption(message.QBlock1)) {
-		qAllowed = false
-	}
+	qAllowed := cc.qBlockAllowed() && qBlockCanUseUnknownCriticalOption(req)
 	unknownCriticalOpts := client.GetUnknownCriticalOptionsWithQBlock(req.Options(), qAllowed)
+	if cc.oscoreProxy && req.HasOption(message.OSCORE) {
+		filtered := unknownCriticalOpts[:0]
+		for _, optionID := range unknownCriticalOpts {
+			if optionID != message.OSCORE {
+				filtered = append(filtered, optionID)
+			}
+		}
+		unknownCriticalOpts = filtered
+	}
 	if len(unknownCriticalOpts) == 0 {
 		return false, nil
 	}
@@ -1429,6 +1491,20 @@ func (cc *Conn) processUnknownCriticalOptions(req *pool.Message) (bool, error) {
 	}
 	cc.ReleaseMessage(req)
 	return true, err
+}
+
+func qBlockCanUseUnknownCriticalOption(req *pool.Message) bool {
+	if req.HasOption(message.ProxyURI) || req.HasOption(message.ProxyScheme) ||
+		req.HasOption(message.Block1) || req.HasOption(message.Block2) {
+		return false
+	}
+	if !req.HasOption(message.Observe) {
+		return true
+	}
+	if req.Code() != codes.GET && req.Code() != codes.FETCH {
+		return false
+	}
+	return req.Code() != codes.GET || !req.HasOption(message.QBlock1)
 }
 
 func (cc *Conn) Process(cm *coapNet.ControlMessage, datagram []byte) error {
@@ -1445,22 +1521,33 @@ func (cc *Conn) Process(cm *coapNet.ControlMessage, datagram []byte) error {
 	req.SetControlMessage(cm)
 	req.SetSequence(cc.Sequence())
 	if isQMulticastRequest(req, cm) {
+		if cc.oscoreProcessor != nil {
+			cc.ReleaseMessage(req)
+			return oscore.ErrUnsupportedOption
+		}
 		cc.ReleaseMessage(req)
+		return nil
+	}
+	if cc.processIncomingOSCOREMessage(req, datagram) {
 		return nil
 	}
 	if handled, processErr := cc.processUnknownCriticalOptions(req); handled {
 		return processErr
 	}
 	cc.checkMyMessageID(req)
-	drop, err := cc.requestMonitor(cc, req)
-	if err != nil {
+	drop, monitorErr := cc.requestMonitor(cc, req)
+	if monitorErr != nil {
 		cc.ReleaseMessage(req)
-		return fmt.Errorf("request monitor: %w", err)
+		return fmt.Errorf("request monitor: %w", monitorErr)
 	}
 	if drop {
 		cc.ReleaseMessage(req)
 		return nil
 	}
+	return cc.enqueueIncomingRequest(req)
+}
+
+func (cc *Conn) enqueueIncomingRequest(req *pool.Message) error {
 	if hasQBlock(req) {
 		cc.qBlockPeerProgress()
 	}
@@ -1489,6 +1576,32 @@ func (cc *Conn) Process(cm *coapNet.ControlMessage, datagram []byte) error {
 		cc.ReleaseMessage(req)
 	}
 	return nil
+}
+
+func (cc *Conn) processIncomingOSCOREMessage(req *pool.Message, datagram []byte) bool {
+	if cc.oscoreProcessor == nil {
+		return false
+	}
+	switch {
+	case req.Code() >= codes.Created && req.Code() < 192:
+		if err := cc.unprotectIncomingResponse(req); err != nil {
+			cc.ReleaseMessage(req)
+			cc.errors(fmt.Errorf("cannot unprotect OSCORE response: %w", err))
+			return true
+		}
+	case req.Code() >= codes.GET && req.Code() <= codes.IPATCH:
+		drop, err := cc.processIncomingOSCORERequest(req, datagram)
+		if err != nil {
+			cc.ReleaseMessage(req)
+			cc.errors(fmt.Errorf("cannot process incoming OSCORE request: %w", err))
+			return true
+		}
+		if drop || req.Code() == codes.Empty {
+			cc.ReleaseMessage(req)
+			return true
+		}
+	}
+	return false
 }
 
 func isQMulticastRequest(req *pool.Message, cm *coapNet.ControlMessage) bool {
@@ -1527,9 +1640,14 @@ func (cc *Conn) Done() <-chan struct{} {
 
 func (cc *Conn) checkMidHandlerContainer(now time.Time, maxRetransmit uint32, key int32, value *midElement) {
 	if value.IsExpired(now, maxRetransmit) {
-		cc.midHandlerContainer.Delete(key)
+		current, loaded := cc.midHandlerContainer.LoadAndDelete(key)
+		if !loaded || current != value {
+			return
+		}
 		value.ReleaseMessage(cc)
-		cc.errors(fmt.Errorf(errFmtWriteRequest, context.DeadlineExceeded))
+		expired := fmt.Errorf(errFmtWriteRequest, context.DeadlineExceeded)
+		notifyWaitForAcknowledge(value.waitForAcknowledge, expired)
+		cc.errors(expired)
 		return
 	}
 	if !value.Retransmit(now) {
@@ -1574,6 +1692,7 @@ func (cc *Conn) CheckExpirations(now time.Time) {
 	cc.pendingMessagesMutex.Lock()
 	cc.expirePendingMessages(now)
 	cc.pendingMessagesMutex.Unlock()
+	cc.expireOSCORERequests(now)
 	cc.inactivityMonitor.CheckInactivity(now, cc)
 	cc.responseMsgCache.CheckExpirations(now)
 	if cc.blockWise != nil {
@@ -1652,6 +1771,9 @@ func (cc *Conn) deletePendingMessage(mid int32, sequence uint64) {
 // By default it is sent over all network interfaces and all compatible source IP addresses with hop limit 1.
 // Via opts you can specify the network interface, source IP address, and hop limit.
 func (cc *Conn) WriteMulticastMessage(req *pool.Message, address *net.UDPAddr, options ...coapNet.MulticastOption) error {
+	if cc.oscoreProcessor != nil {
+		return oscore.ErrUnsupportedOption
+	}
 	if req.Type() == message.Confirmable {
 		return errors.New("multicast messages cannot be confirmable")
 	}

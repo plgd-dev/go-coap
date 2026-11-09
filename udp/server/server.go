@@ -522,6 +522,8 @@ func (s *Server) getOrCreateConn(udpConn *coapNet.UDPConn, raddr *net.UDPAddr, l
 	cfg.GetMID = s.cfg.GetMID
 	cfg.GetToken = s.cfg.GetToken
 	cfg.MessagePool = s.cfg.MessagePool
+	cfg.OSCORE = s.cfg.OSCORE
+	cfg.OSCOREProxy = s.cfg.OSCOREProxy
 	cfg.ProcessReceivedMessage = s.cfg.ProcessReceivedMessage
 	cfg.ReceivedMessageQueueSize = s.cfg.ReceivedMessageQueueSize
 

@@ -187,7 +187,14 @@ func (s *q1BodySender[C]) missing(response *pool.Message) error {
 	if err != nil || len(missing) > q1MaxTrackedBlocks {
 		return errors.New("invalid Q-Block1 missing-block sequence")
 	}
-	s.pendingRecovery = qMissingSet(missing, s.b.config.MaxPayloads)
+	s.pendingRecovery = make([]int64, len(missing))
+	for i, num := range missing {
+		if int64(num) >= s.blockCount {
+			s.pendingRecovery = nil
+			return errors.New("invalid Q-Block1 missing-block sequence")
+		}
+		s.pendingRecovery[i] = int64(num)
+	}
 	return s.send(s.pendingRecovery)
 }
 
@@ -218,41 +225,78 @@ func (s *q1BodySender[C]) run() (*pool.Message, error) {
 	if err := s.sendSet(); err != nil {
 		return nil, err
 	}
+	if s.request.Type() == message.Confirmable {
+		if err := s.sendRemaining(); err != nil {
+			return nil, err
+		}
+	}
 	s.deadline = time.Now().Add(s.delay)
 	if s.next == s.blockCount {
 		s.deadline = time.Now().Add(s.b.config.NonReceiveTimeout + time.Second)
 	}
-	for {
-		response, receiveErr := s.receive()
-		switch {
-		case receiveErr != nil:
-			if err := s.timeout(receiveErr); err != nil {
-				return nil, err
-			}
-		default:
-			switch response.Code() {
-			case codes.Continue:
-				advance, err := s.continuation(response)
-				if err != nil {
-					return nil, err
-				}
-				if !advance {
-					continue
-				}
-			case codes.RequestEntityIncomplete:
-				if err := s.missing(response); err != nil {
-					return nil, err
-				}
-			default:
-				return s.final(response)
-			}
+	return s.runResponses()
+}
+
+func (s *q1BodySender[C]) sendRemaining() error {
+	for s.next < s.blockCount {
+		if err := s.sendSet(); err != nil {
+			return err
 		}
-		wait := s.delay
-		if s.next == s.blockCount || len(s.pendingRecovery) > 0 {
-			wait = (s.b.config.NonReceiveTimeout + time.Second) << s.retries
-		}
-		s.deadline = time.Now().Add(wait)
 	}
+	return nil
+}
+
+func (s *q1BodySender[C]) runResponses() (*pool.Message, error) {
+	for {
+		final, done, again, err := s.processResponse()
+		if err != nil {
+			return nil, err
+		}
+		if done {
+			return final, nil
+		}
+		if again {
+			continue
+		}
+		s.updateDeadline()
+	}
+}
+
+func (s *q1BodySender[C]) processResponse() (*pool.Message, bool, bool, error) {
+	response, receiveErr := s.receive()
+	if receiveErr != nil {
+		return nil, false, false, s.timeout(receiveErr)
+	}
+	return s.handleResponse(response)
+}
+
+func (s *q1BodySender[C]) handleResponse(response *pool.Message) (*pool.Message, bool, bool, error) {
+	switch response.Code() {
+	case codes.Continue:
+		advance, err := s.continuation(response)
+		return nil, false, !advance, err
+	case codes.RequestEntityIncomplete:
+		format, formatErr := response.ContentFormat()
+		if formatErr != nil || format != message.AppMissingBlocksCBORSeq {
+			final, err := s.final(response)
+			return final, true, false, err
+		}
+		if err := s.missing(response); err != nil {
+			return nil, false, false, err
+		}
+		return nil, false, false, nil
+	default:
+		final, err := s.final(response)
+		return final, true, false, err
+	}
+}
+
+func (s *q1BodySender[C]) updateDeadline() {
+	wait := s.delay
+	if s.next == s.blockCount || len(s.pendingRecovery) > 0 {
+		wait = (s.b.config.NonReceiveTimeout + time.Second) << s.retries
+	}
+	s.deadline = time.Now().Add(wait)
 }
 
 func readQBody(r *pool.Message) ([]byte, error) {

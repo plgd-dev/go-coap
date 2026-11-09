@@ -212,6 +212,7 @@ func (s *Server) createConn(connection *coapNet.Conn, inactivityMonitor client.I
 	cfg.ConnectionCacheSize = s.cfg.ConnectionCacheSize
 	cfg.MessagePool = s.cfg.MessagePool
 	cfg.GetToken = s.cfg.GetToken
+	cfg.OSCORE = s.cfg.OSCORE
 	cfg.ProcessReceivedMessage = s.cfg.ProcessReceivedMessage
 	cfg.ReceivedMessageQueueSize = s.cfg.ReceivedMessageQueueSize
 	cc := client.NewConnWithOpts(

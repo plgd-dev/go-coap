@@ -1,13 +1,13 @@
 
 FROM golang:1.27.3-bookworm
 
-# Build pinned Q-enabled libcoap tools and prepare writable directories for UID 1000.
+# Build pinned Q-Block/OSCORE-enabled libcoap tools and prepare writable directories for UID 1000.
 RUN set -eux; \
     apt-get update; \
     apt-get install -y --no-install-recommends build-essential cmake git libssl-dev; \
     source_dir=/tmp/libcoap-source; \
     build_dir=/tmp/libcoap-build; \
-    revision=3a2cdb1582bc39fc8beed948c555065b2862a4ca; \
+    revision=cfa1cf3d1721c1598c40a624b3b0028dd1bbe178; \
     git init "$source_dir"; \
     git -C "$source_dir" remote add origin https://github.com/obgm/libcoap.git; \
     git -C "$source_dir" fetch --depth=1 origin "$revision"; \
@@ -17,10 +17,18 @@ RUN set -eux; \
         -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr/local \
         -DENABLE_Q_BLOCK=ON \
         -DENABLE_DTLS=ON -DDTLS_BACKEND=openssl \
-        -DENABLE_OSCORE=OFF -DENABLE_DOCS=OFF -DENABLE_TESTS=OFF \
+        -DENABLE_OSCORE=ON -DENABLE_DOCS=OFF -DENABLE_TESTS=OFF \
         -DENABLE_EXAMPLES=ON -DBUILD_SHARED_LIBS=OFF; \
     cmake --build "$build_dir" --parallel 2; \
     cmake --install "$build_dir"; \
+    client="$(command -v coap-client-openssl || command -v coap-client-notls || command -v coap-client)"; \
+    server="$(command -v coap-server-openssl || command -v coap-server-notls || command -v coap-server)"; \
+    if ! command -v coap-client >/dev/null 2>&1; then ln -s "$client" /usr/local/bin/coap-client; fi; \
+    if ! command -v coap-client-notls >/dev/null 2>&1; then ln -s "$client" /usr/local/bin/coap-client-notls; fi; \
+    if ! command -v coap-server >/dev/null 2>&1; then ln -s "$server" /usr/local/bin/coap-server; fi; \
+    if ! command -v coap-server-notls >/dev/null 2>&1; then ln -s "$server" /usr/local/bin/coap-server-notls; fi; \
+    command -v coap-client-notls; \
+    command -v coap-server-notls; \
     command -v coap-client; \
     command -v coap-server; \
     install -d -o 1000 -g 1000 \
@@ -37,6 +45,7 @@ ENV GOMODCACHE=/home/1000/go/pkg/mod
 ENV GOTOOLCHAIN=local
 ENV LIBCOAP_QBLOCK_REQUIRED=1
 ENV LIBCOAP_QBLOCK_MODE=enabled
+ENV GOCOAP_REQUIRE_LIBCOAP_OSCORE=1
 
 WORKDIR /src
 
@@ -54,7 +63,7 @@ COPY --chown=1000:1000 . .
 ENV GOPROXY=off
 ENV GOSUMDB=off
 
-# Q-Block integration tests are mandatory because the required flag prevents skips.
+# Q-Block and OSCORE integration tests are mandatory because their required flags prevent skips.
 RUN go build ./... && CGO_ENABLED=1 go test -timeout=15m ./...
 
 CMD ["/bin/bash"]

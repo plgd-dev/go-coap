@@ -27,6 +27,7 @@ The go-coap provides servers and clients for DTLS, TCP-TLS, UDP, TCP in golang l
 * CoAP Echo and Request-Tag options [RFC 9175][coap-echo-request-tag]
 * Experimental Q-Block datagram transfers [RFC 9177][coap-q-block-wise-transfers]
 * CoAP over DTLS [pion/dtls][pion-dtls]
+* Object Security for Constrained RESTful Environments (OSCORE) [RFC 8613][oscore]
 * request multiplexer
 * multicast
 
@@ -40,6 +41,7 @@ The go-coap provides servers and clients for DTLS, TCP-TLS, UDP, TCP in golang l
 [coap-echo-request-tag]: https://www.rfc-editor.org/rfc/rfc9175.html
 [coap-q-block-wise-transfers]: https://www.rfc-editor.org/rfc/rfc9177.html
 [pion-dtls]: https://github.com/pion/dtls
+[oscore]: https://www.rfc-editor.org/rfc/rfc8613.html
 
 ## Requirements
 
@@ -53,6 +55,14 @@ libcoap interoperability tests for Blockwise and Q-Block transfers (including th
 RFC 8132 methods), and a runnable
 [client](examples/qblockwise/client/main.go) /
 [server](examples/qblockwise/server/main.go) example.
+
+## OSCORE
+
+OSCORE protects CoAP messages using application-provisioned security contexts.
+See the [OSCORE guide](docs/oscore/oscore.md) for configuration, sequence persistence,
+supported transports, and limitations. A runnable UDP
+[client/server example](examples/oscore/README.md) demonstrates protected
+requests and durable sender/replay state.
 
 ## Samples
 

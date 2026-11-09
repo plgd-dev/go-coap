@@ -259,6 +259,7 @@ func (s *Server) createConn(connection *coapNet.Conn, inactivityMonitor udpClien
 	cfg.GetMID = s.cfg.GetMID
 	cfg.GetToken = s.cfg.GetToken
 	cfg.MessagePool = s.cfg.MessagePool
+	cfg.OSCORE = s.cfg.OSCORE
 	cfg.ReceivedMessageQueueSize = s.cfg.ReceivedMessageQueueSize
 	cfg.ProcessReceivedMessage = s.cfg.ProcessReceivedMessage
 

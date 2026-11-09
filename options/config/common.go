@@ -9,6 +9,7 @@ import (
 	"github.com/plgd-dev/go-coap/v3/message/pool"
 	"github.com/plgd-dev/go-coap/v3/net/blockwise"
 	"github.com/plgd-dev/go-coap/v3/net/client"
+	"github.com/plgd-dev/go-coap/v3/net/oscore"
 	"github.com/plgd-dev/go-coap/v3/net/responsewriter"
 	"github.com/plgd-dev/go-coap/v3/pkg/runner/periodic"
 )
@@ -34,6 +35,8 @@ type Common[C responsewriter.Client] struct {
 	BlockwiseEnable                           bool
 	ProcessReceivedMessage                    ProcessReceivedMessageFunc[C]
 	ReceivedMessageQueueSize                  int
+	OSCORE                                    *oscore.Processor
+	OSCOREProxy                               bool
 }
 
 func NewCommon[C responsewriter.Client]() Common[C] {

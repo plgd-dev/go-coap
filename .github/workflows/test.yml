@@ -19,6 +19,68 @@ jobs:
       pull-requests: read
     uses: ./.github/workflows/test-qblock.yml
 
+  oscore-interop:
+    if: github.event_name == 'push' ||
+      (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) ||
+      github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up Go >=1.26
+        uses: actions/setup-go@v7
+        with:
+          go-version: ">=1.26"
+          check-latest: true
+
+      - name: Install libcoap build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake build-essential libssl-dev
+        shell: bash
+
+      - name: Build pinned libcoap with OSCORE
+        run: |
+          source_dir="$RUNNER_TEMP/libcoap-source"
+          build_dir="$RUNNER_TEMP/libcoap-build"
+          prefix="$RUNNER_TEMP/libcoap-install"
+          tools="$RUNNER_TEMP/libcoap-tools"
+          revision="cfa1cf3d1721c1598c40a624b3b0028dd1bbe178"
+          git init "$source_dir"
+          git -C "$source_dir" remote add origin https://github.com/obgm/libcoap.git
+          git -C "$source_dir" fetch --depth=1 origin "$revision"
+          git -C "$source_dir" checkout --detach FETCH_HEAD
+          test "$(git -C "$source_dir" rev-parse HEAD)" = "$revision"
+          cmake -S "$source_dir" -B "$build_dir" \
+            -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="$prefix" \
+            -DENABLE_Q_BLOCK=ON -DENABLE_DTLS=ON -DDTLS_BACKEND=openssl \
+            -DENABLE_OSCORE=ON -DENABLE_DOCS=OFF -DENABLE_TESTS=OFF \
+            -DENABLE_EXAMPLES=ON -DBUILD_SHARED_LIBS=OFF
+          cmake --build "$build_dir" --parallel 2
+          cmake --install "$build_dir"
+          mkdir -p "$tools"
+          clients=("$prefix"/bin/coap-client*)
+          servers=("$prefix"/bin/coap-server*)
+          test -x "${clients[0]}"
+          test -x "${servers[0]}"
+          ln -s "${clients[0]}" "$tools/coap-client"
+          ln -s "${clients[0]}" "$tools/coap-client-notls"
+          ln -s "${servers[0]}" "$tools/coap-server"
+          ln -s "${servers[0]}" "$tools/coap-server-notls"
+          echo "$tools" >> "$GITHUB_PATH"
+          git -C "$source_dir" rev-parse HEAD
+        shell: bash
+
+      - name: Run bidirectional OSCORE interoperability tests
+        run: go test ./udp/client -run 'TestLibCoAP(Server|Client).*OSCORE' -count=1 -v
+        env:
+          GOCOAP_REQUIRE_LIBCOAP_OSCORE: "1"
+          LIBCOAP_QBLOCK_REQUIRED: "1"
+          LIBCOAP_QBLOCK_MODE: enabled
+        shell: bash
+
   test:
     # don't run for forks
     if: github.event_name == 'push' ||

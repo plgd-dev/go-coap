@@ -297,6 +297,117 @@ func testQObserveLifecycle(t *testing.T, secure bool, mode options.QBlockwiseMod
 	require.Zero(t, state.invalidObserve.Load())
 }
 
+func TestQBlockFETCHObserveLifecycle(t *testing.T) {
+	for _, initialSize := range []int{32, 2103} {
+		t.Run(fmt.Sprintf("initial-response-size=%d", initialSize), func(t *testing.T) {
+			testQBlockFETCHObserveLifecycle(t, initialSize)
+		})
+	}
+}
+
+func testQBlockFETCHObserveLifecycle(t *testing.T, initialSize int) {
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	requestBody := bytes.Repeat([]byte{1, 2, 3}, 901)
+	initialBody := bytes.Repeat([]byte{4}, initialSize)
+	updatedBody := bytes.Repeat([]byte{7, 8, 9}, 801)
+	var registrations, cancellations atomic.Int32
+	notifications := make(chan func() error, 1)
+	router := mux.NewRouter()
+	require.NoError(t, router.Handle("/fetch-observe", mux.HandlerFunc(func(w mux.ResponseWriter, r *mux.Message) {
+		observe, err := r.Observe()
+		if err != nil {
+			t.Errorf("cannot read Observe: %v", err)
+			return
+		}
+		switch {
+		case r.Code() == codes.FETCH && observe == 0:
+			body, readErr := r.ReadBody()
+			if readErr != nil {
+				t.Errorf("cannot read FETCH body: %v", readErr)
+				return
+			}
+			if !bytes.Equal(body, requestBody) {
+				t.Errorf("FETCH body mismatch: got %d bytes, want %d", len(body), len(requestBody))
+				return
+			}
+			registrations.Add(1)
+			require.NoError(t, w.SetResponse(codes.Content, message.AppOctets, bytes.NewReader(initialBody)))
+			w.Message().SetObserve(10)
+			token := bytes.Clone(r.Token())
+			serverConn := w.Conn()
+			notifications <- func() error {
+				response := serverConn.AcquireMessage(ctx)
+				defer serverConn.ReleaseMessage(response)
+				response.SetCode(codes.Content)
+				response.SetToken(token)
+				response.SetObserve(11)
+				response.SetContentFormat(message.AppOctets)
+				response.SetBody(bytes.NewReader(updatedBody))
+				return serverConn.WriteMessage(response)
+			}
+		case observe == 1:
+			cancellations.Add(1)
+			require.NoError(t, w.SetResponse(codes.Content, message.AppOctets, bytes.NewReader(nil)))
+		default:
+			t.Errorf("unexpected request method/Observe: %v/%v", r.Code(), observe)
+		}
+	})))
+	uri := startQObserveEndpoint(t, false, router, func(*client.Conn, *pool.Message) (bool, error) {
+		return false, nil
+	})
+	addr := strings.TrimPrefix(uri, "coap://")
+	cc := qDialWithOptions(t, addr, false, options.WithQBlockwise(options.QBlockwiseOnly),
+		options.WithBlockwise(true, blockwise.SZX128, time.Second))
+	defer func() { require.NoError(t, cc.Close()) }()
+
+	req := cc.AcquireMessage(ctx)
+	defer cc.ReleaseMessage(req)
+	req.SetCode(codes.FETCH)
+	req.SetType(message.Confirmable)
+	req.SetToken([]byte("fetchobs"))
+	require.NoError(t, req.SetPath("/fetch-observe"))
+	req.SetObserve(0)
+	req.SetContentFormat(message.AppOctets)
+	req.SetBody(bytes.NewReader(requestBody))
+	type event struct {
+		sequence uint32
+		body     []byte
+	}
+	events := make(chan event, 4)
+	observation, err := cc.DoObserve(req, func(response *pool.Message) {
+		body, readErr := response.ReadBody()
+		if readErr != nil {
+			t.Errorf("cannot read Observe body: %v", readErr)
+			return
+		}
+		sequence, _ := response.Observe()
+		events <- event{sequence: sequence, body: body}
+	})
+	require.NoError(t, err)
+	assertEvent := func(sequence uint32, expected []byte) {
+		t.Helper()
+		select {
+		case got := <-events:
+			require.Equal(t, sequence, got.sequence)
+			require.Equal(t, expected, got.body)
+		case <-ctx.Done():
+			t.Fatal(ctx.Err())
+		}
+	}
+	assertEvent(10, initialBody)
+	select {
+	case notify := <-notifications:
+		require.NoError(t, notify())
+	case <-ctx.Done():
+		t.Fatal(ctx.Err())
+	}
+	assertEvent(11, updatedBody)
+	require.NoError(t, observation.Cancel(ctx))
+	require.Equal(t, int32(1), registrations.Load())
+	require.Equal(t, int32(1), cancellations.Load())
+}
+
 type qObserveLifecycleMonitor struct {
 	recoveries, qPayloads, invalidObserve atomic.Int32
 	dropped, canceling                    atomic.Bool

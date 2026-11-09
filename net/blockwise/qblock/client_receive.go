@@ -65,29 +65,94 @@ type q2BodyReceiver[C Client] struct {
 }
 
 func (s *q2BodyReceiver[C]) send(nums []int64, more bool) error {
+	for offset := 0; offset < len(nums); {
+		part, added, err := s.buildRequestPart(nums[offset:], more)
+		if err != nil {
+			return err
+		}
+		offset += added
+		s.sentRequests++
+		err = s.exchange.Send(part)
+		s.b.cc.ReleaseMessage(part)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *q2BodyReceiver[C]) buildRequestPart(nums []int64, more bool) (*pool.Message, int, error) {
+	part, err := s.newRequest()
+	if err != nil {
+		return nil, 0, err
+	}
+	added := 0
+	for _, num := range nums {
+		value, err := EncodeQBlockOption(s.szx, num, more)
+		if err != nil {
+			s.b.cc.ReleaseMessage(part)
+			return nil, 0, err
+		}
+		part.AddOptionUint32(message.QBlock2, value)
+		if err = validateQBlockDatagram(s.b.cc, part); err != nil {
+			part.Remove(message.QBlock2)
+			if added == 0 {
+				s.b.cc.ReleaseMessage(part)
+				return nil, 0, err
+			}
+			if err := addQBlockOptions(part, s.szx, nums[:added], more); err != nil {
+				s.b.cc.ReleaseMessage(part)
+				return nil, 0, err
+			}
+			break
+		}
+		added++
+	}
+	if added == 0 {
+		s.b.cc.ReleaseMessage(part)
+		return nil, 0, ErrQBlockTooLarge
+	}
+	return part, added, nil
+}
+
+func (s *q2BodyReceiver[C]) newRequest() (*pool.Message, error) {
 	part := s.b.cloneMessage(s.req)
-	defer s.b.cc.ReleaseMessage(part)
+	part.SetMessageID(0)
+	part.Remove(message.ETag)
+	part.Remove(message.QBlock1)
+	part.Remove(message.QBlock2)
+	part.SetBody(nil)
 	if s.sentRequests > 0 {
 		token, err := s.exchange.NewToken()
 		if err != nil {
-			return err
+			s.b.cc.ReleaseMessage(part)
+			return nil, err
 		}
 		part.SetToken(token)
 		part.Remove(message.Observe)
 	}
-	s.sentRequests++
-	part.Remove(message.QBlock2)
-	part.Remove(message.ETag)
-	part.Remove(message.QBlock1)
-	part.SetBody(nil)
+	return part, nil
+}
+
+func validateQBlockDatagram(client any, part *pool.Message) error {
+	validator, ok := client.(interface {
+		ValidateQBlockDatagram(*pool.Message) error
+	})
+	if !ok {
+		return nil
+	}
+	return validator.ValidateQBlockDatagram(part)
+}
+
+func addQBlockOptions(part *pool.Message, szx SZX, nums []int64, more bool) error {
 	for _, num := range nums {
-		value, err := EncodeQBlockOption(s.szx, num, more)
+		value, err := EncodeQBlockOption(szx, num, more)
 		if err != nil {
 			return err
 		}
 		part.AddOptionUint32(message.QBlock2, value)
 	}
-	return s.exchange.Send(part)
+	return nil
 }
 
 func (s *q2BodyReceiver[C]) receive() (*pool.Message, error) {

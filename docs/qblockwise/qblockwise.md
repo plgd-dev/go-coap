@@ -150,10 +150,11 @@ Peers must coordinate nondefault MAX_PAYLOADS values; RFC 9177 does not define
 in-band negotiation for that parameter.
 
 Q-Block GET Observe supports registration, notifications, missing-payload recovery,
-representation replacement, and cancellation on UDP and DTLS. Original
-notification payloads carry Observe; recovery traffic does not re-register.
-FETCH and other non-GET Observe requests are unsupported by the Q selection
-path: Only returns `ErrQBlockUnsupported`, while Auto uses legacy handling.
+representation replacement, and cancellation on UDP and DTLS. Body-bearing FETCH
+Observe is also supported: the registration body is uploaded with Q-Block1, and
+the initial response and subsequent notifications use Q-Block2. The registration
+token is preserved across the FETCH upload. Original notification payloads carry
+Observe; recovery traffic does not re-register.
 
 Experimental limits are 16 MiB and 65,536 blocks per body, with separate
 per-peer and process-wide body, transfer, and token budgets. A connection has
@@ -162,8 +163,12 @@ both directions; process-wide limits are 256 MiB and 8,192 slots. Failed
 reservations roll back both counters. Q transfer state
 uses its own recovery/retention lifetime, not the legacy `WithBlockwise`
 timeout. Congestion and recovery defaults can be customized as described above.
-Proxy and tokenless Q operations are unsupported.
-Reliable-transport Q and OSCORE integration are outside this implementation.
+Proxy and tokenless Q operations are unsupported. Reliable-transport Q is
+outside this implementation. UDP Q-Block1 uploads and Q-Block2 downloads can
+be protected end to end with OSCORE; Q-Block options remain encrypted as
+Class E options. This implementation supports the same OSCORE flow over DTLS.
+RFC 9177 Q-Block applies to datagram transports; TCP/TLS use reliable-transport
+Blockwise instead. Proxy forwarding remains unsupported.
 
 ## Why this remains experimental
 
@@ -172,23 +177,30 @@ RFC conformance. The [RFC requirements audit](qblockwise-rfc-audit.md) distingui
 implemented behavior, gaps, unverified clauses, and intentionally unsupported
 surfaces. In particular:
 
-- Q1 currently sends Continue responses to individual CON blocks. This conflicts
-  with Section 4.3's prohibition on a response for every block; replacing it
-  requires separating empty ACK progress from application responses and testing
-  both libcoap references.
-- Recovery lists are bounded by MAX_PAYLOADS but are not automatically shortened
-  to the remaining datagram budget. Large sets, high NUMs, long options, or a
-  small MTU can fail recovery rather than produce a fitting report/request.
+- Incomplete CON Q-Block1 payloads receive only empty transport ACKs; the sender
+  advances across acknowledged sets and waits for the final application
+  response. NON set Continue and missing-block recovery remain separate. Dropped
+  and duplicated empty ACK/final Q2 response fault tests verify retransmission,
+  exact body delivery, and single application dispatch. Retry exhaustion now
+  returns an error rather than leaving a CON send waiter blocked.
+- Q1 missing-block reports are shortened to the largest ascending CBOR prefix
+  that fits the datagram budget, including token/options and the configured MTU
+  (with DTLS and OSCORE overhead reserves). Further reports progress as blocks arrive.
+  Q2 repeated-option recovery requests are similarly split to fit the datagram
+  budget; tests cover out-of-order responses, exhaustion, and a small-MTU
+  transfer requiring multiple recovery requests.
 - Q2 server retention has a `NonReceiveTimeout` minimum even for Max-Age=0
   and is capped by `NonPartialTimeout`; freshness
   and retransmission retention are separate policies. Zero-age assembly and
   terminal Observe cleanup have regression tests, but broader freshness and
   expiry-during-recovery coverage remain release work.
-- FETCH Observe support, exhaustive method coverage, prolonged asymmetric loss, timer
-  exhaustion, concurrent discovery/scheduler scaling, retained-heap profiling,
-  and unchanged-legacy-path performance thresholds remain release gates.
-- Proxy, tokenless Q, reliable-transport Q, and OSCORE are outside the current
-  scope, not capabilities implied by Auto.
+- Exhaustive body-method interoperability coverage, prolonged asymmetric loss,
+  timer exhaustion, concurrent discovery/scheduler scaling, retained-heap
+  profiling, and unchanged-legacy-path performance thresholds remain release
+  gates.
+- Proxy, tokenless Q, and reliable-transport Q are outside the current scope.
+  UDP/DTLS endpoint-to-endpoint Q-Block with OSCORE is supported; TCP/TLS use
+  reliable-transport Blockwise and do not claim RFC 9177 support.
 
 The audit includes the maintained
 [follow-up checklist and acceptance criteria](qblockwise-rfc-audit.md#prioritized-remaining-work).
