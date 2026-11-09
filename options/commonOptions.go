@@ -54,11 +54,12 @@ func WithOSCORE(processor *oscore.Processor) OSCOREOpt {
 	return OSCOREOpt{processor: processor}
 }
 
-// OSCOREProxyOpt enables opaque OSCORE option forwarding on server endpoints.
+// OSCOREProxyOpt enables opaque OSCORE option forwarding on UDP and DTLS server endpoints.
 // The configured handler must validate and forward protected messages.
 type OSCOREProxyOpt struct{}
 
-func (OSCOREProxyOpt) UDPServerApply(cfg *udpServer.Config) { cfg.OSCOREProxy = true }
+func (OSCOREProxyOpt) UDPServerApply(cfg *udpServer.Config)   { cfg.OSCOREProxy = true }
+func (OSCOREProxyOpt) DTLSServerApply(cfg *dtlsServer.Config) { cfg.OSCOREProxy = true }
 
 // WithOSCOREProxy allows OSCORE to reach the application handler without
 // decryption. Use only with a handler that validates and forwards OSCORE

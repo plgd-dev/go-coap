@@ -9,6 +9,7 @@ import (
 	"github.com/plgd-dev/go-coap/v3/message/codes"
 	"github.com/plgd-dev/go-coap/v3/message/pool"
 	"github.com/plgd-dev/go-coap/v3/net/oscore"
+	"github.com/plgd-dev/go-coap/v3/udp/coder"
 	"github.com/stretchr/testify/require"
 )
 
@@ -147,4 +148,86 @@ func TestOSCOREObserveNotificationNumberRejectsOutOfOrder(t *testing.T) {
 	require.NoError(t, deliver(notifications[1]))
 	require.ErrorIs(t, deliver(notifications[0]), oscore.ErrReplay)
 	require.ErrorIs(t, deliver(notifications[1]), oscore.ErrReplay)
+}
+
+func TestDuplicateOSCOREConfirmableResponseIsAcknowledged(t *testing.T) {
+	const mid = 1234
+	masterSecret := []byte("duplicate OSCORE response test secret")
+	clientContext, err := oscore.NewContext(oscore.ContextConfig{
+		MasterSecret: masterSecret,
+		SenderID:     []byte("client"),
+		RecipientID:  []byte("server"),
+	})
+	require.NoError(t, err)
+	serverContext, err := oscore.NewContext(oscore.ContextConfig{
+		MasterSecret: masterSecret,
+		SenderID:     []byte("server"),
+		RecipientID:  []byte("client"),
+	})
+	require.NoError(t, err)
+	processor, err := oscore.NewProcessor(oscore.ProcessorConfig{Contexts: []*oscore.Context{clientContext}})
+	require.NoError(t, err)
+	observeOptions, _, err := (message.Options{}).SetObserve(nil, 0)
+	require.NoError(t, err)
+	outerRequest, exchange, err := clientContext.ProtectRequest(message.Message{
+		Code:      codes.GET,
+		Token:     message.Token{1},
+		Options:   observeOptions,
+		Type:      message.Confirmable,
+		MessageID: 1,
+	})
+	require.NoError(t, err)
+	_, serverExchange, err := serverContext.UnprotectRequest(outerRequest)
+	require.NoError(t, err)
+	notificationOptions, _, err := (message.Options{}).SetObserve(make([]byte, 4), 1)
+	require.NoError(t, err)
+	notification, err := serverContext.ProtectResponseWithPartialIV(message.Message{
+		Code:      codes.Content,
+		Token:     outerRequest.Token,
+		Options:   notificationOptions,
+		Type:      message.Confirmable,
+		MessageID: mid,
+	}, serverExchange)
+	require.NoError(t, err)
+	wireMessage := pool.NewMessage(context.Background())
+	wireMessage.SetMessage(notification)
+	datagram, err := wireMessage.MarshalWithEncoder(coder.DefaultCoder)
+	require.NoError(t, err)
+
+	session := newRecordingSession()
+	defer session.Close()
+	cfg := DefaultConfig
+	cfg.OSCORE = processor
+	cfg.Errors = func(err error) { require.NoError(t, err) }
+	cc := NewConnWithOpts(session, &cfg)
+	cc.oscoreExchanges[string(outerRequest.Token)] = udpOSCOREExchange{
+		context:  clientContext,
+		exchange: exchange,
+		observe:  true,
+	}
+	ack := cc.AcquireMessage(context.Background())
+	ack.SetCode(codes.Empty)
+	ack.SetType(message.Acknowledgement)
+	ack.SetMessageID(mid)
+	require.NoError(t, cc.addResponseToCache(mid, ack))
+	cc.ReleaseMessage(ack)
+
+	first := cc.AcquireMessage(context.Background())
+	first.SetMessage(notification)
+	require.False(t, cc.processIncomingOSCOREMessage(first, datagram),
+		"the first protected notification must continue to normal processing")
+	cc.ReleaseMessage(first)
+
+	duplicate := cc.AcquireMessage(context.Background())
+	duplicate.SetMessage(notification)
+	require.True(t, cc.processIncomingOSCOREMessage(duplicate, datagram),
+		"an exact retransmission must be handled before application delivery")
+	require.Equal(t, 1, session.writtenCount())
+	written := session.lastWritten()
+	require.NotNil(t, written)
+	require.Equal(t, codes.Empty, written.Code())
+	require.Equal(t, message.Acknowledgement, written.Type())
+	require.Equal(t, int32(mid), written.MessageID())
+	cc.ReleaseMessage(duplicate)
+	require.NoError(t, cc.Close())
 }

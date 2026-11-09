@@ -155,9 +155,10 @@ Important attack surfaces include:
   reliable-transport framing.
 - Q-Block options are encrypted with OSCORE on the tested UDP/DTLS endpoint
   paths; verify this remains true across retransmission and recovery flows.
-- Unsupported combinations that must not be silently treated as plaintext:
-  proxy forwarding, multicast OSCORE, and group OSCORE. RFC 9177 Q-Block over
-  TCP/TLS is not supported; those transports use reliable-transport Blockwise.
+- Proxy forwarding is supported only by the minimal opaque forwarder; caching,
+  Observe, and blockwise proxy sessions are not implemented. Multicast OSCORE
+  and group OSCORE remain unsupported. RFC 9177 Q-Block over TCP/TLS is not
+  supported; those transports use reliable-transport Blockwise.
 
 ## 4. Vulnerability classes of interest
 

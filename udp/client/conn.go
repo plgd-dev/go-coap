@@ -332,6 +332,7 @@ type Conn struct {
 	oscoreMu           sync.Mutex
 	oscoreExchanges    map[string]udpOSCOREExchange
 	oscoreRequests     map[int32]udpOSCORERequest
+	oscoreResponses    map[int32]udpOSCOREResponse
 	oscoreObservations map[string]udpOSCORERequestContext
 
 	localAddr      atomic.Pointer[net.IP]
@@ -494,6 +495,7 @@ func NewConnWithOpts(session Session, cfg *Config, opts ...Option) *Conn {
 		oscoreProxy:               cfg.OSCOREProxy,
 		oscoreExchanges:           make(map[string]udpOSCOREExchange),
 		oscoreRequests:            make(map[int32]udpOSCORERequest),
+		oscoreResponses:           make(map[int32]udpOSCOREResponse),
 		oscoreObservations:        make(map[string]udpOSCORERequestContext),
 		errors:                    cfg.Errors,
 		msgIDMutex:                NewMutexMap(),
@@ -1584,10 +1586,26 @@ func (cc *Conn) processIncomingOSCOREMessage(req *pool.Message, datagram []byte)
 	}
 	switch {
 	case req.Code() >= codes.Created && req.Code() < 192:
+		protectedConfirmable := req.Type() == message.Confirmable && req.HasOption(message.OSCORE)
+		if protectedConfirmable {
+			handled, err := cc.processIncomingOSCOREResponseRetransmission(req, datagram)
+			if err != nil {
+				cc.ReleaseMessage(req)
+				cc.errors(fmt.Errorf("cannot acknowledge duplicate OSCORE response: %w", err))
+				return true
+			}
+			if handled {
+				cc.ReleaseMessage(req)
+				return true
+			}
+		}
 		if err := cc.unprotectIncomingResponse(req); err != nil {
 			cc.ReleaseMessage(req)
 			cc.errors(fmt.Errorf("cannot unprotect OSCORE response: %w", err))
 			return true
+		}
+		if protectedConfirmable {
+			cc.recordIncomingOSCOREResponse(req.MessageID(), datagram)
 		}
 	case req.Code() >= codes.GET && req.Code() <= codes.IPATCH:
 		drop, err := cc.processIncomingOSCORERequest(req, datagram)
@@ -1602,6 +1620,44 @@ func (cc *Conn) processIncomingOSCOREMessage(req *pool.Message, datagram []byte)
 		}
 	}
 	return false
+}
+
+func (cc *Conn) processIncomingOSCOREResponseRetransmission(req *pool.Message, datagram []byte) (bool, error) {
+	digest := sha256.Sum256(datagram)
+	cc.oscoreMu.Lock()
+	cached, exists := cc.oscoreResponses[req.MessageID()]
+	if exists && time.Now().After(cached.expires) {
+		delete(cc.oscoreResponses, req.MessageID())
+		exists = false
+	}
+	cc.oscoreMu.Unlock()
+	if !exists || cached.digest != digest {
+		return false, nil
+	}
+
+	resp := cc.AcquireMessage(req.Context())
+	defer cc.ReleaseMessage(resp)
+	ok, err := cc.getResponseFromCache(req.MessageID(), resp)
+	if err != nil {
+		return true, fmt.Errorf("load cached acknowledgment: %w", err)
+	}
+	if !ok || resp.Code() != codes.Empty || resp.Type() != message.Acknowledgement {
+		return true, nil
+	}
+	resp.SetMessageID(req.MessageID())
+	return true, cc.session.WriteMessage(resp)
+}
+
+func (cc *Conn) recordIncomingOSCOREResponse(mid int32, datagram []byte) {
+	cc.oscoreMu.Lock()
+	if cc.oscoreResponses == nil {
+		cc.oscoreResponses = make(map[int32]udpOSCOREResponse)
+	}
+	cc.oscoreResponses[mid] = udpOSCOREResponse{
+		digest:  sha256.Sum256(datagram),
+		expires: time.Now().Add(ExchangeLifetime),
+	}
+	cc.oscoreMu.Unlock()
 }
 
 func isQMulticastRequest(req *pool.Message, cm *coapNet.ControlMessage) bool {

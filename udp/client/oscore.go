@@ -39,6 +39,11 @@ type udpOSCORERequest struct {
 	expires time.Time
 }
 
+type udpOSCOREResponse struct {
+	digest  [sha256.Size]byte
+	expires time.Time
+}
+
 func udpPoolMessageToOSCOREMessage(msg *pool.Message) (message.Message, error) {
 	payload, err := msg.ReadBody()
 	if err != nil {
@@ -430,6 +435,11 @@ func (cc *Conn) expireOSCORERequests(now time.Time) {
 	for mid, request := range cc.oscoreRequests {
 		if !now.Before(request.expires) {
 			delete(cc.oscoreRequests, mid)
+		}
+	}
+	for mid, response := range cc.oscoreResponses {
+		if !now.Before(response.expires) {
+			delete(cc.oscoreResponses, mid)
 		}
 	}
 	cc.oscoreMu.Unlock()

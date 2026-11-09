@@ -475,6 +475,9 @@ func (b *Engine[C]) completeQ1Response(w *responsewriter.ResponseWriter[C], r *p
 		q2Request.SetOptionUint32(message.QBlock2, capability)
 	}
 	if sizeErr == nil && responseSize > transfer.szx.Size() {
+		if observe, observeErr := q2Request.Observe(); observeErr == nil && observe == 0 {
+			b.CancelQBlockObservation(q2Request.Token(), remoteAddr)
+		}
 		if err := b.cacheQBlock2Response(r.Context(), q2TransferKey(q2Request, remoteAddr), qTransferKey(q2Request, remoteAddr, nil, true), w.Message(), r.Type()); err != nil {
 			return err
 		}
