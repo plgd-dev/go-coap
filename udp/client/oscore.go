@@ -59,6 +59,12 @@ func udpPoolMessageToOSCOREMessage(msg *pool.Message) (message.Message, error) {
 	}, nil
 }
 
+func setMessagePreservingControlMessage(msg *pool.Message, replacement message.Message) {
+	controlMessage := msg.ControlMessage()
+	msg.SetMessage(replacement)
+	msg.SetControlMessage(controlMessage)
+}
+
 func (cc *Conn) protectOutgoingRequest(req *pool.Message) (*pool.Message, func(), error) {
 	if cc.oscoreProcessor == nil {
 		return req, nil, nil
@@ -138,7 +144,7 @@ func (cc *Conn) unprotectIncomingResponse(resp *pool.Message) error {
 	if err := cc.updateOSCOREExchangeResponse(key, exchange, responseOption, usedCancelExchange, hasObserve, plaintext.Options); err != nil {
 		return err
 	}
-	resp.SetMessage(plaintext)
+	setMessagePreservingControlMessage(resp, plaintext)
 	return nil
 }
 
@@ -279,7 +285,7 @@ func (cc *Conn) processIncomingOSCORERequest(req *pool.Message, datagram []byte)
 		}
 		cc.oscoreMu.Unlock()
 	}
-	req.SetMessage(plaintext)
+	setMessagePreservingControlMessage(req, plaintext)
 	return false, nil
 }
 
@@ -318,7 +324,7 @@ func (cc *Conn) protectResponseForRequest(req, resp *pool.Message) error {
 	if err != nil {
 		return fmt.Errorf("protect OSCORE response: %w", err)
 	}
-	resp.SetMessage(protected)
+	setMessagePreservingControlMessage(resp, protected)
 	return cc.updateOSCOREObservationForResponse(req, resp, binding)
 }
 
@@ -373,7 +379,7 @@ func (cc *Conn) protectObservationResponse(resp *pool.Message) error {
 	if err != nil {
 		return fmt.Errorf("protect OSCORE Observe notification: %w", err)
 	}
-	resp.SetMessage(protected)
+	setMessagePreservingControlMessage(resp, protected)
 	if !resp.HasOption(message.Observe) {
 		cc.oscoreMu.Lock()
 		delete(cc.oscoreObservations, key)
@@ -398,7 +404,7 @@ func (cc *Conn) protectContextQBlockResponse(resp *pool.Message) (bool, error) {
 	if err != nil {
 		return true, fmt.Errorf("protect Q-Block response: %w", err)
 	}
-	resp.SetMessage(protected)
+	setMessagePreservingControlMessage(resp, protected)
 	return true, nil
 }
 

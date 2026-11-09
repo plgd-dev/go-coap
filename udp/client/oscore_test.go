@@ -57,6 +57,91 @@ func TestProtectOutgoingRequestPreservesControlMessage(t *testing.T) {
 	require.Equal(t, request.ControlMessage().IfIndex, controlMessage.IfIndex)
 }
 
+func TestOSCOREMessageTransformsPreserveControlMessage(t *testing.T) {
+	masterSecret := []byte("OSCORE control message preservation test")
+	clientContext, err := oscore.NewContext(oscore.ContextConfig{
+		MasterSecret: masterSecret,
+		SenderID:     []byte("client"),
+		RecipientID:  []byte("server"),
+	})
+	require.NoError(t, err)
+	serverContext, err := oscore.NewContext(oscore.ContextConfig{
+		MasterSecret: masterSecret,
+		SenderID:     []byte("server"),
+		RecipientID:  []byte("client"),
+	})
+	require.NoError(t, err)
+	processor, err := oscore.NewProcessor(oscore.ProcessorConfig{
+		Contexts:      []*oscore.Context{serverContext},
+		RequireOSCORE: true,
+	})
+	require.NoError(t, err)
+	session := newRecordingSession()
+	defer session.Close()
+	cfg := DefaultConfig
+	cfg.OSCORE = processor
+	cc := NewConnWithOpts(session, &cfg)
+	defer cc.Close()
+
+	requestOptions, _, err := (message.Options{}).SetObserve(nil, 0)
+	require.NoError(t, err)
+	protectedRequest, _, err := clientContext.ProtectRequest(message.Message{
+		Code:      codes.GET,
+		Token:     message.Token{0x51},
+		Options:   requestOptions,
+		Type:      message.Confirmable,
+		MessageID: 51,
+	})
+	require.NoError(t, err)
+	request := cc.AcquireMessage(context.Background())
+	defer cc.ReleaseMessage(request)
+	request.SetMessage(protectedRequest)
+	requestControl := &coapNet.ControlMessage{
+		Dst:     net.IPv4(203, 0, 113, 51),
+		IfIndex: 5,
+	}
+	request.SetControlMessage(requestControl)
+	wireRequest := pool.NewMessage(context.Background())
+	wireRequest.SetMessage(protectedRequest)
+	datagram, err := wireRequest.MarshalWithEncoder(coder.DefaultCoder)
+	require.NoError(t, err)
+
+	drop, err := cc.processIncomingOSCORERequest(request, datagram)
+	require.NoError(t, err)
+	require.False(t, drop)
+	require.Same(t, requestControl, request.ControlMessage(), "request decryption must preserve receive metadata")
+
+	responseOptions, _, err := (message.Options{}).SetObserve(nil, 0)
+	require.NoError(t, err)
+	response := cc.AcquireMessage(context.Background())
+	defer cc.ReleaseMessage(response)
+	response.SetCode(codes.Content)
+	response.SetToken(request.Token())
+	response.ResetOptionsTo(responseOptions)
+	responseControl := &coapNet.ControlMessage{
+		Src:     net.IPv4(203, 0, 113, 52),
+		IfIndex: 6,
+	}
+	response.SetControlMessage(responseControl)
+	require.NoError(t, cc.protectResponseForRequest(request, response))
+	require.Same(t, responseControl, response.ControlMessage(), "response protection must preserve selected egress metadata")
+
+	notificationOptions, _, err := (message.Options{}).SetObserve(make([]byte, 4), 1)
+	require.NoError(t, err)
+	notification := cc.AcquireMessage(context.Background())
+	defer cc.ReleaseMessage(notification)
+	notification.SetCode(codes.Content)
+	notification.SetToken(request.Token())
+	notification.ResetOptionsTo(notificationOptions)
+	notificationControl := &coapNet.ControlMessage{
+		Src:     net.IPv4(203, 0, 113, 53),
+		IfIndex: 7,
+	}
+	notification.SetControlMessage(notificationControl)
+	require.NoError(t, cc.protectObservationResponse(notification))
+	require.Same(t, notificationControl, notification.ControlMessage(), "notification protection must preserve selected egress metadata")
+}
+
 func TestRetransmitCachedOSCOREResponse(t *testing.T) {
 	const mid = 1234
 	masterSecret := []byte{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16}
