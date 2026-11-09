@@ -961,10 +961,10 @@ func (cc *Conn) writeMessage(req *pool.Message) error {
 	if err := cc.session.WriteMessage(wireReq); err != nil {
 		return fmt.Errorf(errFmtWriteRequest, err)
 	}
+	sent = true
 	if err := cc.waitForAcknowledge(req, respChan); err != nil {
 		return fmt.Errorf(errFmtWriteRequest, err)
 	}
-	sent = true
 	return nil
 }
 

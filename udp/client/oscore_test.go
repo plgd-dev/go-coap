@@ -89,6 +89,37 @@ func TestFailedOSCOREWriteRemovesExchange(t *testing.T) {
 	require.False(t, exists, "failed writes must not retain an OSCORE exchange")
 }
 
+func TestOSCOREExchangeSurvivesAcknowledgmentTimeoutAfterWrite(t *testing.T) {
+	securityContext, err := oscore.NewContext(oscore.ContextConfig{
+		MasterSecret: []byte("OSCORE acknowledgment timeout test"),
+		SenderID:     []byte("client"),
+		RecipientID:  []byte("server"),
+	})
+	require.NoError(t, err)
+	processor, err := oscore.NewProcessor(oscore.ProcessorConfig{Contexts: []*oscore.Context{securityContext}})
+	require.NoError(t, err)
+	session := newRecordingSession()
+	defer session.Close()
+	cfg := DefaultConfig
+	cfg.OSCORE = processor
+	cc := NewConnWithOpts(session, &cfg)
+	defer cc.Close()
+
+	requestCtx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+	defer cancel()
+	request := cc.AcquireMessage(requestCtx)
+	defer cc.ReleaseMessage(request)
+	request.SetCode(codes.GET)
+	request.SetToken(message.Token{0x75})
+	err = cc.WriteMessage(request)
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	require.Equal(t, 1, session.writtenCount(), "the protected request was sent before the ACK wait expired")
+	cc.oscoreMu.Lock()
+	_, exists := cc.oscoreExchanges[string(request.Token())]
+	cc.oscoreMu.Unlock()
+	require.True(t, exists, "ACK timeout must not roll back an exchange for a request already sent")
+}
+
 func TestFailedOSCOREWriteDoesNotRemoveReplacementExchange(t *testing.T) {
 	securityContext, err := oscore.NewContext(oscore.ContextConfig{
 		MasterSecret: []byte("replacement OSCORE exchange test"),
@@ -115,23 +146,65 @@ func TestFailedOSCOREWriteDoesNotRemoveReplacementExchange(t *testing.T) {
 	defer cc.ReleaseMessage(firstRequest)
 	first, finishFirst, err := cc.protectOutgoingRequest(firstRequest)
 	require.NoError(t, err)
+	finishFirst(true)
+	cc.oscoreMu.Lock()
+	firstExchange := cc.oscoreExchanges[string(first.Token())].exchange
+	cc.oscoreMu.Unlock()
 	secondRequest := makeRequest()
 	defer cc.ReleaseMessage(secondRequest)
 	second, finishSecond, err := cc.protectOutgoingRequest(secondRequest)
 	require.NoError(t, err)
-	defer finishSecond(false)
-	defer cc.ReleaseMessage(first)
-	defer cc.ReleaseMessage(second)
 
 	cc.oscoreMu.Lock()
 	secondExchange := cc.oscoreExchanges[string(second.Token())].exchange
 	cc.oscoreMu.Unlock()
-	finishFirst(false)
+	finishSecond(false)
 	cc.oscoreMu.Lock()
 	current := cc.oscoreExchanges[string(second.Token())].exchange
 	cc.oscoreMu.Unlock()
-	require.Equal(t, secondExchange.RequestPartialIV, current.RequestPartialIV,
-		"cleanup for a failed older request must not remove a replacement")
+	require.Equal(t, firstExchange.RequestPartialIV, current.RequestPartialIV,
+		"failed replacement must restore the earlier request that was sent")
+	require.NotEqual(t, firstExchange.RequestPartialIV, secondExchange.RequestPartialIV)
+}
+
+func TestFailedConcurrentOSCOREExchangesDoNotRestoreFailedEntry(t *testing.T) {
+	securityContext, err := oscore.NewContext(oscore.ContextConfig{
+		MasterSecret: []byte("failed concurrent OSCORE exchanges test"),
+		SenderID:     []byte("client"),
+		RecipientID:  []byte("server"),
+	})
+	require.NoError(t, err)
+	processor, err := oscore.NewProcessor(oscore.ProcessorConfig{Contexts: []*oscore.Context{securityContext}})
+	require.NoError(t, err)
+	session := newRecordingSession()
+	defer session.Close()
+	cfg := DefaultConfig
+	cfg.OSCORE = processor
+	cc := NewConnWithOpts(session, &cfg)
+	defer cc.Close()
+
+	makeRequest := func() *pool.Message {
+		request := cc.AcquireMessage(context.Background())
+		request.SetCode(codes.GET)
+		request.SetToken(message.Token{0x76})
+		return request
+	}
+	firstRequest := makeRequest()
+	defer cc.ReleaseMessage(firstRequest)
+	first, finishFirst, err := cc.protectOutgoingRequest(firstRequest)
+	require.NoError(t, err)
+	defer cc.ReleaseMessage(first)
+	secondRequest := makeRequest()
+	defer cc.ReleaseMessage(secondRequest)
+	second, finishSecond, err := cc.protectOutgoingRequest(secondRequest)
+	require.NoError(t, err)
+
+	finishFirst(false)
+	finishSecond(false)
+	cc.oscoreMu.Lock()
+	_, exists := cc.oscoreExchanges[string(second.Token())]
+	cc.oscoreMu.Unlock()
+	require.False(t, exists, "rolling back a newer failed request must not restore an older failed request")
 }
 
 func TestOSCOREMessageTransformsPreserveControlMessage(t *testing.T) {

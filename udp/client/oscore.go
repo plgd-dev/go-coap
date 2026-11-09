@@ -18,6 +18,7 @@ import (
 type udpOSCOREExchange struct {
 	context               *oscore.Context
 	exchange              oscore.Exchange
+	record                *udpOSCOREExchangeRecord
 	observe               bool
 	qBlock2               bool
 	expires               time.Time
@@ -28,6 +29,20 @@ type udpOSCOREExchange struct {
 	cancelExchange        oscore.Exchange
 	cancelExpires         time.Time
 }
+
+type udpOSCOREExchangeRecord struct {
+	exchange udpOSCOREExchange
+	previous *udpOSCOREExchangeRecord
+	state    udpOSCOREExchangeState
+}
+
+type udpOSCOREExchangeState uint8
+
+const (
+	udpOSCOREExchangePending udpOSCOREExchangeState = iota
+	udpOSCOREExchangeSent
+	udpOSCOREExchangeFailed
+)
 
 type udpOSCORERequestContextKey struct{}
 
@@ -108,6 +123,16 @@ func (cc *Conn) trackOSCOREExchange(
 	expires := time.Now().Add(ExchangeLifetime)
 	cc.oscoreMu.Lock()
 	previous, hadPrevious := cc.oscoreExchanges[key]
+	var previousRecord *udpOSCOREExchangeRecord
+	if hadPrevious {
+		previousRecord = previous.record
+		if previousRecord == nil {
+			previousRecord = &udpOSCOREExchangeRecord{
+				exchange: previous,
+				state:    udpOSCOREExchangeSent,
+			}
+		}
+	}
 	next := udpOSCOREExchange{
 		context:  context,
 		exchange: exchange,
@@ -121,41 +146,46 @@ func (cc *Conn) trackOSCOREExchange(
 		next.cancelExchange = exchange
 		next.cancelExpires = expires
 	}
+	record := &udpOSCOREExchangeRecord{
+		exchange: next,
+		previous: previousRecord,
+		state:    udpOSCOREExchangePending,
+	}
+	next.record = record
+	record.exchange = next
 	cc.oscoreExchanges[key] = next
 	cc.oscoreMu.Unlock()
 	return func(sent bool) {
-		if sent {
-			return
-		}
-		cc.rollbackOSCOREExchange(key, previous, hadPrevious, context, exchange)
+		cc.finishOSCOREExchange(key, record, sent)
 	}
 }
 
-func (cc *Conn) rollbackOSCOREExchange(
-	key string,
-	previous udpOSCOREExchange,
-	hadPrevious bool,
-	context *oscore.Context,
-	exchange oscore.Exchange,
-) {
+func (cc *Conn) finishOSCOREExchange(key string, record *udpOSCOREExchangeRecord, sent bool) {
 	cc.oscoreMu.Lock()
 	defer cc.oscoreMu.Unlock()
+	if sent {
+		if record.state == udpOSCOREExchangePending {
+			record.state = udpOSCOREExchangeSent
+			record.previous = nil
+		}
+		return
+	}
+	record.state = udpOSCOREExchangeFailed
 	current, exists := cc.oscoreExchanges[key]
-	if !exists || !matchesOSCOREExchange(current.context, current.exchange, context, exchange) &&
-		!matchesOSCOREExchange(current.cancelContext, current.cancelExchange, context, exchange) {
+	if !exists || current.record != record {
 		return
 	}
-	if hadPrevious {
-		cc.oscoreExchanges[key] = previous
+	previous := record.previous
+	now := time.Now()
+	for previous != nil && (previous.state == udpOSCOREExchangeFailed ||
+		!previous.exchange.expires.IsZero() && now.After(previous.exchange.expires)) {
+		previous = previous.previous
+	}
+	if previous == nil {
+		delete(cc.oscoreExchanges, key)
 		return
 	}
-	delete(cc.oscoreExchanges, key)
-}
-
-func matchesOSCOREExchange(context *oscore.Context, exchange oscore.Exchange, expectedContext *oscore.Context, expectedExchange oscore.Exchange) bool {
-	return context == expectedContext &&
-		bytes.Equal(exchange.RequestID, expectedExchange.RequestID) &&
-		bytes.Equal(exchange.RequestPartialIV, expectedExchange.RequestPartialIV)
+	cc.oscoreExchanges[key] = previous.exchange
 }
 
 func (cc *Conn) unprotectIncomingResponse(resp *pool.Message) error {
@@ -241,6 +271,9 @@ func (cc *Conn) updateOSCOREExchangeResponse(
 		return nil
 	}
 	cc.oscoreExchanges[key] = current
+	if current.record != nil {
+		current.record.exchange = current
+	}
 	return nil
 }
 
