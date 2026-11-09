@@ -11,6 +11,8 @@ import (
 	"github.com/plgd-dev/go-coap/v3/message/codes"
 	"github.com/plgd-dev/go-coap/v3/message/pool"
 	coapNet "github.com/plgd-dev/go-coap/v3/net"
+	"github.com/plgd-dev/go-coap/v3/net/blockwise"
+	"github.com/plgd-dev/go-coap/v3/net/observation"
 	"github.com/plgd-dev/go-coap/v3/net/oscore"
 	"github.com/plgd-dev/go-coap/v3/net/responsewriter"
 	"github.com/plgd-dev/go-coap/v3/udp/coder"
@@ -277,6 +279,135 @@ func TestOSCOREObserveNotificationNumberRejectsOutOfOrder(t *testing.T) {
 	require.NoError(t, deliver(notifications[1]))
 	require.ErrorIs(t, deliver(notifications[0]), oscore.ErrReplay)
 	require.ErrorIs(t, deliver(notifications[1]), oscore.ErrReplay)
+}
+
+func TestOSCOREObserveNotificationPreservesFullPartialIVForOrdering(t *testing.T) {
+	const masterSecret = "OSCORE Observe full Partial IV test"
+	clientContext, err := oscore.NewContext(oscore.ContextConfig{
+		MasterSecret: []byte(masterSecret),
+		SenderID:     []byte("client"),
+		RecipientID:  []byte("server"),
+	})
+	require.NoError(t, err)
+	serverContext, err := oscore.NewContext(oscore.ContextConfig{
+		MasterSecret:         []byte(masterSecret),
+		SenderID:             []byte("server"),
+		RecipientID:          []byte("client"),
+		SenderSequenceNumber: 0x1000000,
+	})
+	require.NoError(t, err)
+	processor, err := oscore.NewProcessor(oscore.ProcessorConfig{Contexts: []*oscore.Context{clientContext}})
+	require.NoError(t, err)
+	requestOptions, _, err := (message.Options{}).SetObserve(nil, 0)
+	require.NoError(t, err)
+	request, clientExchange, err := clientContext.ProtectRequest(message.Message{
+		Code:    codes.GET,
+		Token:   message.Token{0x72},
+		Options: requestOptions,
+	})
+	require.NoError(t, err)
+	_, serverExchange, err := serverContext.UnprotectRequest(request)
+	require.NoError(t, err)
+	protected, err := serverContext.ProtectResponseWithPartialIV(message.Message{
+		Code:    codes.Content,
+		Token:   request.Token,
+		Options: message.Options{{ID: message.Observe}},
+	}, serverExchange)
+	require.NoError(t, err)
+
+	cc := Conn{
+		oscoreProcessor: processor,
+		oscoreExchanges: map[string]udpOSCOREExchange{
+			string(request.Token): {context: clientContext, exchange: clientExchange, observe: true},
+		},
+	}
+	response := pool.NewMessage(context.Background())
+	response.SetMessage(protected)
+	require.NoError(t, cc.unprotectIncomingResponse(response))
+	sequence, ok := observation.AuthenticatedSequenceNumber(response.Context())
+	require.True(t, ok)
+	require.Equal(t, uint64(0x1000000), sequence)
+	observeValue, err := response.Observe()
+	require.NoError(t, err)
+	require.Zero(t, observeValue, "the on-wire Observe sequence remains the low 24 bits")
+}
+
+func TestOSCOREQBlockRecoveryExchangeSurvivesFinalBlockFirst(t *testing.T) {
+	const masterSecret = "OSCORE Q-Block recovery exchange test"
+	clientContext, err := oscore.NewContext(oscore.ContextConfig{
+		MasterSecret: []byte(masterSecret),
+		SenderID:     []byte("client"),
+		RecipientID:  []byte("server"),
+	})
+	require.NoError(t, err)
+	serverContext, err := oscore.NewContext(oscore.ContextConfig{
+		MasterSecret: []byte(masterSecret),
+		SenderID:     []byte("server"),
+		RecipientID:  []byte("client"),
+	})
+	require.NoError(t, err)
+	processor, err := oscore.NewProcessor(oscore.ProcessorConfig{Contexts: []*oscore.Context{clientContext}})
+	require.NoError(t, err)
+	session := newRecordingSession()
+	defer session.Close()
+	cfg := DefaultConfig
+	cfg.OSCORE = processor
+	cc := NewConnWithOpts(session, &cfg)
+	defer cc.Close()
+
+	request := cc.AcquireMessage(context.Background())
+	defer cc.ReleaseMessage(request)
+	request.SetCode(codes.GET)
+	request.SetToken(message.Token{0x71})
+	requestOption, err := blockwise.EncodeQBlockOption(blockwise.SZX16, 0, true)
+	require.NoError(t, err)
+	request.SetOptionUint32(message.QBlock2, requestOption)
+	wireRequest, releaseWireRequest, err := cc.protectOutgoingRequest(request)
+	require.NoError(t, err)
+	defer releaseWireRequest()
+	cc.oscoreMu.Lock()
+	qBlock2Tracked := cc.oscoreExchanges[string(request.Token())].qBlock2
+	cc.oscoreMu.Unlock()
+	require.True(t, qBlock2Tracked)
+
+	requestPayload, err := wireRequest.ReadBody()
+	require.NoError(t, err)
+	_, serverExchange, err := serverContext.UnprotectRequest(message.Message{
+		Code:    wireRequest.Code(),
+		Token:   wireRequest.Token(),
+		Options: wireRequest.Options(),
+		Payload: requestPayload,
+	})
+	require.NoError(t, err)
+	deliver := func(num int64, more bool) {
+		responseOptions := message.Options{}
+		option, encodeErr := blockwise.EncodeQBlockOption(blockwise.SZX16, num, more)
+		require.NoError(t, encodeErr)
+		responseOptions, _, encodeErr = responseOptions.SetUint32(make([]byte, 4), message.QBlock2, option)
+		require.NoError(t, encodeErr)
+		protected, protectErr := serverContext.ProtectResponseWithPartialIV(message.Message{
+			Code:    codes.Content,
+			Token:   request.Token(),
+			Options: responseOptions,
+			Payload: []byte{byte(num)},
+		}, serverExchange)
+		require.NoError(t, protectErr)
+		response := pool.NewMessage(context.Background())
+		response.SetMessage(protected)
+		require.NoError(t, cc.unprotectIncomingResponse(response))
+	}
+
+	deliver(4, false)
+	cc.oscoreMu.Lock()
+	_, retained := cc.oscoreExchanges[string(request.Token())]
+	cc.oscoreMu.Unlock()
+	require.True(t, retained, "final Q-Block2 response must not retire the recovery exchange")
+
+	deliver(2, true)
+	cc.oscoreMu.Lock()
+	_, retained = cc.oscoreExchanges[string(request.Token())]
+	cc.oscoreMu.Unlock()
+	require.True(t, retained, "recovery exchange remains available for all requested blocks")
 }
 
 func TestDuplicateOSCOREConfirmableResponseIsAcknowledged(t *testing.T) {

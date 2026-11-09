@@ -43,25 +43,27 @@ func (b *Engine[C]) DoQBlock2(req *pool.Message, szx SZX,
 }
 
 type q2BodyReceiver[C Client] struct {
-	b                  *Engine[C]
-	req                *pool.Message
-	exchange           Exchange
-	szx, maxSZX        SZX
-	assembly           *Assembly
-	etag               []byte
-	continued          int64
-	partialExpires     time.Time
-	retries            int
-	requestedSet       int64
-	retainedBytes      int64
-	sentRequests       int
-	observeSequence    uint32
-	observePresent     bool
-	observeTime        time.Time
-	bodyType           message.Type
-	bodyTypeSet        bool
-	terminal           bool
-	representationCode codes.Code
+	b                        *Engine[C]
+	req                      *pool.Message
+	exchange                 Exchange
+	szx, maxSZX              SZX
+	assembly                 *Assembly
+	etag                     []byte
+	continued                int64
+	partialExpires           time.Time
+	retries                  int
+	requestedSet             int64
+	retainedBytes            int64
+	sentRequests             int
+	observeSequence          uint32
+	observePresent           bool
+	observeTime              time.Time
+	authenticatedSequence    uint64
+	hasAuthenticatedSequence bool
+	bodyType                 message.Type
+	bodyTypeSet              bool
+	terminal                 bool
+	representationCode       codes.Code
 }
 
 func (s *q2BodyReceiver[C]) send(nums []int64, more bool) error {
@@ -200,6 +202,9 @@ func (s *q2BodyReceiver[C]) newRepresentation(response *pool.Message, szx SZX, s
 	if sequence, sequenceErr := response.Observe(); sequenceErr == nil {
 		s.observeSequence, s.observePresent, s.observeTime = sequence, true, time.Now()
 	}
+	if sequence, ok := observation.AuthenticatedSequenceNumber(response.Context()); ok {
+		s.authenticatedSequence, s.hasAuthenticatedSequence = sequence, true
+	}
 	maxAge, maxAgeErr := response.GetOptionUint32(message.MaxAge)
 	if maxAgeErr != nil {
 		maxAge = 60
@@ -226,7 +231,7 @@ func (s *q2BodyReceiver[C]) representation(response *pool.Message, szx SZX) (boo
 	}
 	terminal := s.registrationTerminal(response)
 	if changed && s.observePresent {
-		newer := sequenceErr == nil && observation.ValidSequenceNumber(s.observeSequence, sequence, s.observeTime, time.Now())
+		newer := s.isNewerSequence(response, sequence, sequenceErr)
 		if !newer && !terminal {
 			return true, nil
 		}
@@ -244,8 +249,11 @@ func (s *q2BodyReceiver[C]) representation(response *pool.Message, szx SZX) (boo
 	if terminal {
 		s.terminal, s.observePresent = true, false
 	}
-	if s.isNewerSequence(sequence, sequenceErr) {
+	if s.isNewerSequence(response, sequence, sequenceErr) {
 		s.observeSequence, s.observeTime = sequence, time.Now()
+		if authenticatedSequence, ok := observation.AuthenticatedSequenceNumber(response.Context()); ok {
+			s.authenticatedSequence, s.hasAuthenticatedSequence = authenticatedSequence, true
+		}
 	}
 	return false, nil
 }
@@ -268,7 +276,10 @@ func (s *q2BodyReceiver[C]) skipAfterTerminal(response *pool.Message, changed bo
 	return s.terminal && (response.HasOption(message.Observe) || changed && !s.registrationTerminal(response))
 }
 
-func (s *q2BodyReceiver[C]) isNewerSequence(sequence uint32, err error) bool {
+func (s *q2BodyReceiver[C]) isNewerSequence(response *pool.Message, sequence uint32, err error) bool {
+	if authenticatedSequence, ok := observation.AuthenticatedSequenceNumber(response.Context()); ok {
+		return !s.hasAuthenticatedSequence || authenticatedSequence > s.authenticatedSequence
+	}
 	return s.observePresent && err == nil && sequence != s.observeSequence &&
 		observation.ValidSequenceNumber(s.observeSequence, sequence, s.observeTime, time.Now())
 }

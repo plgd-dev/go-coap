@@ -245,6 +245,30 @@ func TestProtectObserveRequestAndNotifications(t *testing.T) {
 	assertObserveCancellation(t, client, server)
 }
 
+func TestProtectFetchObserveRequest(t *testing.T) {
+	client, server := pairedContexts(t, 3, 5)
+	request := message.Message{
+		Code:    codes.FETCH,
+		Token:   message.Token{0x56},
+		Options: observeOptions(t, 0),
+		Payload: []byte("query"),
+	}
+	protected, _, err := client.ProtectRequest(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if protected.Code != codes.FETCH {
+		t.Fatalf("outer request code = %v, want FETCH", protected.Code)
+	}
+	opened, exchange, err := server.UnprotectRequest(protected)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if opened.Code != codes.FETCH || !exchange.Observe || !optionsEqual(opened.Options, request.Options) {
+		t.Fatalf("opened FETCH Observe request = %+v, exchange %+v", opened, exchange)
+	}
+}
+
 type observeTestExchange struct {
 	client         *Context
 	server         *Context

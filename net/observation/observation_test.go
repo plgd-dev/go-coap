@@ -1,10 +1,13 @@
 package observation
 
 import (
+	"context"
 	"testing"
 	"time"
 
+	"github.com/plgd-dev/go-coap/v3/message/pool"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestValidSequenceNumber(t *testing.T) {
@@ -14,6 +17,7 @@ func TestValidSequenceNumber(t *testing.T) {
 		lastEventOccurs time.Time
 		now             time.Time
 	}
+
 	tests := []struct {
 		name string
 		args args
@@ -104,4 +108,34 @@ func TestValidSequenceNumber(t *testing.T) {
 			assert.Equal(t, tt.want, got)
 		})
 	}
+}
+
+func TestAuthenticatedSequenceNumberUsesFullValue(t *testing.T) {
+	o := &Observation[*ownershipClient]{}
+	for _, test := range []struct {
+		sequence uint64
+		observe  uint32
+		want     bool
+	}{
+		{sequence: 0x800000, observe: 0x800000, want: true},
+		{sequence: 0x1000000, observe: 0, want: true},
+		{sequence: 0x800001, observe: 1, want: false},
+	} {
+		response := pool.NewMessage(context.Background())
+		response.SetObserve(test.observe)
+		SetAuthenticatedSequenceNumber(response, test.sequence)
+		assert.Equal(t, test.want, o.wantBeNotified(response))
+	}
+
+	unprotected := &Observation[*ownershipClient]{}
+	first := pool.NewMessage(context.Background())
+	first.SetObserve(0x800000)
+	require.True(t, unprotected.wantBeNotified(first))
+	wrapped := pool.NewMessage(context.Background())
+	wrapped.SetObserve(0)
+	require.False(t, unprotected.wantBeNotified(wrapped), "unprotected Observe keeps 24-bit serial ordering")
+
+	got, ok := AuthenticatedSequenceNumber(context.Background())
+	require.False(t, ok)
+	require.Zero(t, got)
 }

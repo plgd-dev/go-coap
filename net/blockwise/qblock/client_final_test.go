@@ -5,16 +5,31 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/plgd-dev/go-coap/v3/message"
 	"github.com/plgd-dev/go-coap/v3/message/codes"
 	"github.com/plgd-dev/go-coap/v3/message/pool"
+	"github.com/plgd-dev/go-coap/v3/net/observation"
 	"github.com/stretchr/testify/require"
 )
 
 type q1RecoveryTestExchange struct {
 	nums []int64
 }
+
+type q2AuthenticatedSequenceExchange struct {
+	response *pool.Message
+}
+
+func (*q2AuthenticatedSequenceExchange) NewToken() (message.Token, error) {
+	return message.Token("sequence"), nil
+}
+func (*q2AuthenticatedSequenceExchange) Send(*pool.Message) error { return nil }
+func (e *q2AuthenticatedSequenceExchange) Receive(context.Context) (*pool.Message, error) {
+	return e.response, nil
+}
+func (*q2AuthenticatedSequenceExchange) Close() {}
 
 func (*q1RecoveryTestExchange) NewToken() (message.Token, error) {
 	return message.Token("recovery"), nil
@@ -63,6 +78,40 @@ func (e *q1IncompleteTestExchange) Receive(context.Context) (*pool.Message, erro
 }
 
 func (*q1IncompleteTestExchange) Close() {}
+
+func TestQBlockObserveUsesAuthenticatedFullSequence(t *testing.T) {
+	receiver := q2BodyReceiver[Client]{
+		observePresent:           true,
+		observeSequence:          0x800000,
+		observeTime:              time.Now(),
+		authenticatedSequence:    0x800000,
+		hasAuthenticatedSequence: true,
+	}
+	response := pool.NewMessage(context.Background())
+	response.SetObserve(0)
+	observation.SetAuthenticatedSequenceNumber(response, 0x1000000)
+	sequence, err := response.Observe()
+	require.NoError(t, err)
+	require.True(t, receiver.isNewerSequence(response, sequence, err))
+
+	receiver.authenticatedSequence = 0x1000000
+	observation.SetAuthenticatedSequenceNumber(response, 0x800001)
+	require.False(t, receiver.isNewerSequence(response, sequence, err))
+}
+
+func TestReceiveQBlockResponsePreservesAuthenticatedSequence(t *testing.T) {
+	response := pool.NewMessage(context.Background())
+	observation.SetAuthenticatedSequenceNumber(response, 0x1000000)
+	received, err := receiveQBlockResponse(
+		context.Background(),
+		&q2AuthenticatedSequenceExchange{response: response},
+		time.Now().Add(time.Second),
+	)
+	require.NoError(t, err)
+	sequence, ok := observation.AuthenticatedSequenceNumber(received.Context())
+	require.True(t, ok)
+	require.Equal(t, uint64(0x1000000), sequence)
+}
 
 type q1IncompleteTestTransport struct {
 	*qTestTransport

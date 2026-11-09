@@ -11,6 +11,7 @@ import (
 	"github.com/plgd-dev/go-coap/v3/message/codes"
 	"github.com/plgd-dev/go-coap/v3/message/pool"
 	"github.com/plgd-dev/go-coap/v3/net/blockwise"
+	"github.com/plgd-dev/go-coap/v3/net/observation"
 	"github.com/plgd-dev/go-coap/v3/net/oscore"
 )
 
@@ -18,6 +19,7 @@ type udpOSCOREExchange struct {
 	context               *oscore.Context
 	exchange              oscore.Exchange
 	observe               bool
+	qBlock2               bool
 	expires               time.Time
 	hasObserveResponse    bool
 	hasNotificationNumber bool
@@ -98,6 +100,7 @@ func (cc *Conn) protectOutgoingRequest(req *pool.Message) (*pool.Message, func()
 		context:  context,
 		exchange: exchange,
 		observe:  isObserveRequest,
+		qBlock2:  req.HasOption(message.QBlock2),
 		expires:  expires,
 	}
 	if isObserveRequest && observeValue == 1 {
@@ -143,6 +146,9 @@ func (cc *Conn) unprotectIncomingResponse(resp *pool.Message) error {
 	hasObserve := plaintext.Options.HasOption(message.Observe)
 	if err := cc.updateOSCOREExchangeResponse(key, exchange, responseOption, usedCancelExchange, hasObserve, plaintext.Options); err != nil {
 		return err
+	}
+	if hasObserve && len(responseOption.PartialIV) > 0 {
+		observation.SetAuthenticatedSequenceNumber(resp, partialIVNumber(responseOption.PartialIV))
 	}
 	setMessagePreservingControlMessage(resp, plaintext)
 	return nil
@@ -191,7 +197,7 @@ func (cc *Conn) updateOSCOREExchangeResponse(
 		return err
 	}
 	qBlock2More := !usedCancelExchange && !hasObserve && qBlockResponseHasMore(options)
-	if usedCancelExchange || !hasObserve && !qBlock2More {
+	if usedCancelExchange || !hasObserve && !current.qBlock2 && !qBlock2More {
 		delete(cc.oscoreExchanges, key)
 		return nil
 	}

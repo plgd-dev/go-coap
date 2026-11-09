@@ -141,7 +141,7 @@ func (c *Context) ProtectRequest(request message.Message) (message.Message, Exch
 	if err != nil {
 		return message.Message{}, Exchange{}, err
 	}
-	if observes && request.Code != codes.GET {
+	if observes && request.Code != codes.GET && request.Code != codes.FETCH {
 		return message.Message{}, Exchange{}, ErrUnsupportedOption
 	}
 	if observes {
@@ -265,7 +265,7 @@ func validateInnerRequest(inner message.Message, outerObserveOption message.Opti
 		if outerErr != nil || innerErr != nil || outerValue > 1 || innerValue > 1 || outerValue != innerValue {
 			return false, fmt.Errorf("%w: inner and outer Observe options must match", ErrInvalidOSCOREMessage)
 		}
-		if inner.Code != codes.GET {
+		if inner.Code != codes.GET && inner.Code != codes.FETCH {
 			return false, ErrUnsupportedOption
 		}
 	}
