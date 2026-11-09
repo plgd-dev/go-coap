@@ -82,6 +82,7 @@ func (cc *Conn) protectOutgoingRequest(req *pool.Message) (*pool.Message, func()
 	}
 	wireRequest := cc.AcquireMessage(req.Context())
 	wireRequest.SetMessage(protected)
+	wireRequest.SetControlMessage(req.ControlMessage())
 	key := string(req.Token())
 	observeValue, observeErr := req.Options().Observe()
 	isObserveRequest := observeErr == nil

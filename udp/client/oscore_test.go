@@ -3,18 +3,59 @@ package client
 import (
 	"bytes"
 	"context"
+	"net"
 	"testing"
 	"time"
 
 	"github.com/plgd-dev/go-coap/v3/message"
 	"github.com/plgd-dev/go-coap/v3/message/codes"
 	"github.com/plgd-dev/go-coap/v3/message/pool"
+	coapNet "github.com/plgd-dev/go-coap/v3/net"
 	"github.com/plgd-dev/go-coap/v3/net/oscore"
 	"github.com/plgd-dev/go-coap/v3/net/responsewriter"
 	"github.com/plgd-dev/go-coap/v3/udp/coder"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/atomic"
 )
+
+func TestProtectOutgoingRequestPreservesControlMessage(t *testing.T) {
+	securityContext, err := oscore.NewContext(oscore.ContextConfig{
+		MasterSecret: []byte("control message test secret"),
+		SenderID:     []byte("client"),
+		RecipientID:  []byte("server"),
+	})
+	require.NoError(t, err)
+	processor, err := oscore.NewProcessor(oscore.ProcessorConfig{Contexts: []*oscore.Context{securityContext}})
+	require.NoError(t, err)
+
+	session := newRecordingSession()
+	defer session.Close()
+	cfg := DefaultConfig
+	cfg.OSCORE = processor
+	cc := NewConnWithOpts(session, &cfg)
+	defer cc.Close()
+
+	request := cc.AcquireMessage(context.Background())
+	defer cc.ReleaseMessage(request)
+	request.SetCode(codes.GET)
+	request.SetToken(message.Token{0x42})
+	request.SetControlMessage(&coapNet.ControlMessage{
+		Dst:     net.IPv4(203, 0, 113, 10),
+		Src:     net.IPv4(192, 0, 2, 20),
+		IfIndex: 7,
+	})
+
+	wireRequest, release, err := cc.protectOutgoingRequest(request)
+	require.NoError(t, err)
+	require.NotNil(t, release)
+	defer release()
+
+	controlMessage := wireRequest.ControlMessage()
+	require.NotNil(t, controlMessage)
+	require.True(t, controlMessage.Dst.Equal(request.ControlMessage().Dst))
+	require.True(t, controlMessage.Src.Equal(request.ControlMessage().Src))
+	require.Equal(t, request.ControlMessage().IfIndex, controlMessage.IfIndex)
+}
 
 func TestRetransmitCachedOSCOREResponse(t *testing.T) {
 	const mid = 1234
@@ -318,4 +359,66 @@ func TestProtectedRequestCachesProtectedResponseForRetransmission(t *testing.T) 
 	require.NoError(t, err)
 	require.Equal(t, firstBody, retransmittedBody, "retransmission must return the original ciphertext")
 	cc.ReleaseMessage(cachedResponse)
+}
+
+func TestProtectedRequestCachesEmptyAcknowledgementForRetransmission(t *testing.T) {
+	const mid = 3456
+	masterSecret := []byte("protected empty ACK cache test secret")
+	clientContext, err := oscore.NewContext(oscore.ContextConfig{
+		MasterSecret: masterSecret,
+		SenderID:     []byte("client"),
+		RecipientID:  []byte("server"),
+	})
+	require.NoError(t, err)
+	serverContext, err := oscore.NewContext(oscore.ContextConfig{
+		MasterSecret: masterSecret,
+		SenderID:     []byte("server"),
+		RecipientID:  []byte("client"),
+	})
+	require.NoError(t, err)
+	processor, err := oscore.NewProcessor(oscore.ProcessorConfig{
+		Contexts:      []*oscore.Context{serverContext},
+		RequireOSCORE: true,
+	})
+	require.NoError(t, err)
+
+	var handlerCalls atomic.Int32
+	session := newRecordingSession()
+	defer session.Close()
+	cfg := DefaultConfig
+	cfg.OSCORE = processor
+	cfg.Errors = func(err error) { require.NoError(t, err) }
+	cfg.Handler = func(_ *responsewriter.ResponseWriter[*Conn], _ *pool.Message) {
+		handlerCalls.Inc()
+	}
+	cc := NewConnWithOpts(session, &cfg)
+	defer cc.Close()
+
+	protectedRequest, _, err := clientContext.ProtectRequest(message.Message{
+		Code:      codes.GET,
+		Token:     message.Token{0x43},
+		Type:      message.Confirmable,
+		MessageID: mid,
+	})
+	require.NoError(t, err)
+	wireRequest := pool.NewMessage(context.Background())
+	wireRequest.SetMessage(protectedRequest)
+	datagram, err := wireRequest.MarshalWithEncoder(coder.DefaultCoder)
+	require.NoError(t, err)
+
+	require.NoError(t, cc.Process(nil, datagram))
+	require.Eventually(t, func() bool { return session.writtenCount() == 1 }, time.Second, time.Millisecond)
+	firstAck := session.lastWritten()
+	require.NotNil(t, firstAck)
+	require.Equal(t, codes.Empty, firstAck.Code())
+	require.Equal(t, message.Acknowledgement, firstAck.Type())
+
+	require.NoError(t, cc.Process(nil, datagram))
+	require.Eventually(t, func() bool { return session.writtenCount() == 2 }, time.Second, time.Millisecond)
+	retransmittedAck := session.lastWritten()
+	require.NotNil(t, retransmittedAck)
+	require.Equal(t, codes.Empty, retransmittedAck.Code())
+	require.Equal(t, message.Acknowledgement, retransmittedAck.Type())
+	require.Equal(t, int32(mid), retransmittedAck.MessageID())
+	require.EqualValues(t, 1, handlerCalls.Load(), "duplicate protected request must not invoke the handler again")
 }

@@ -1268,7 +1268,9 @@ func (cc *Conn) processResponse(reqType message.Type, reqMessageID int32, qRespo
 		w.Message().SetType(message.Acknowledgement)
 		w.Message().SetMessageID(reqMessageID)
 		w.Message().SetToken(nil)
-		return cc.cacheResponseIfRequested(cacheResponse, reqMessageID, "cannot cache response", w.Message())
+		// Empty ACKs are unprotected and must be cached so duplicate protected
+		// CON requests can be acknowledged while a separate response is pending.
+		return cc.cacheResponseIfRequested(true, reqMessageID, "cannot cache response", w.Message())
 	case isQNonResponse(reqType, qResponse, w.Message()):
 		w.Message().SetType(message.NonConfirmable)
 		w.Message().SetMessageID(cc.GetMessageID())
