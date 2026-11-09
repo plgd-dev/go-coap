@@ -57,19 +57,22 @@ type ContextConfig struct {
 	SenderID             []byte
 	RecipientID          []byte
 	SenderSequenceNumber uint64
-	SenderSequenceStore  SenderSequenceStore
+	SenderSequenceStore  SenderSequenceReserver
 	ReplayWindowSize     uint8
 	ReplayWindowStore    ReplayWindowStore
 }
 
-// SenderSequenceStore atomically and durably reserves the next sequence
-// number for a sender. Implementations shared by multiple Context instances
-// must coordinate reservations so that a number is never returned more than
-// once. A successfully reserved number is consumed even if message protection
-// or transmission later fails.
-type SenderSequenceStore interface {
+// SenderSequenceReserver returns sender sequence numbers from durably reserved
+// space. Implementations shared by multiple Context instances must coordinate
+// reservations so that a number is never returned more than once. Values may
+// be skipped, including after a restart. A returned number remains consumed
+// even if message protection or transmission later fails.
+type SenderSequenceReserver interface {
 	Reserve() (uint64, error)
 }
+
+// SenderSequenceStore is kept as an alias for source compatibility.
+type SenderSequenceStore = SenderSequenceReserver
 
 // Context holds the derived keys and mutable sender and recipient state for one
 // pair of OSCORE endpoints.
@@ -85,7 +88,7 @@ type Context struct {
 
 	sequenceMu    sync.Mutex
 	nextSeq       uint64
-	sequenceStore SenderSequenceStore
+	sequenceStore SenderSequenceReserver
 	exhausted     bool
 	replay        *ReplayWindow
 }

@@ -128,11 +128,18 @@ across receiver restarts, configure a `ReplayWindowStore` on `ContextConfig`.
 The store must load the state for that recipient context and atomically persist
 each new state before returning success from `Save`; otherwise the protected
 request is not accepted. Use one store per context and coordinate access if
-multiple receiver processes can use that context. Without a replay store, a
-restart loses the in-memory replay state.
+multiple receiver processes can use that context. Persisting a replay-window
+advance requires durable storage on every accepted protected message and can
+limit throughput. Omitting the replay store avoids that write cost, but a
+receiver restart then loses its replay state. After such a restart, do not
+continue using the same context without restoring replay protection; use the
+RFC 8613 Appendix B.1.2 recovery approach (for example, Echo) or establish a
+fresh security context.
 
-The `net/oscore/store` package provides a basic file-backed implementation of both
-interfaces:
+The `net/oscore/store` package provides a file-backed implementation of both
+interfaces. Its sender sequence store durably reserves windows of 256 values
+and serves them from memory; unused values are skipped when the store is
+recreated. Its replay store still durably records each accepted window advance:
 
 ```go
 import (

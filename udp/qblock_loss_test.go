@@ -132,45 +132,52 @@ func (r *qDropRelay) applyResponseFault(data []byte) (drop, duplicate bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.faulted {
-		if r.fault == qRelayDropEmptyACKForever &&
-			msg.Code == codes.Empty && msg.Type == message.Acknowledgement {
-			return true, false
-		}
-		return false, false
+		return r.applyRepeatedResponseFaultLocked(msg)
 	}
-	switch r.fault {
-	case qRelayDropEmptyACK, qRelayDuplicateEmptyACK:
-		if msg.Code != codes.Empty || msg.Type != message.Acknowledgement {
-			return false, false
-		}
-		r.faulted = true
-		return r.fault == qRelayDropEmptyACK, r.fault == qRelayDuplicateEmptyACK
-	case qRelayDropEmptyACKForever:
-		if msg.Code != codes.Empty || msg.Type != message.Acknowledgement {
-			return false, false
-		}
-		r.faulted = true
+	if handled, drop, duplicate := r.applyEmptyACKFaultLocked(msg); handled {
+		return drop, duplicate
+	}
+	return r.applyFinalResponseFaultLocked(msg)
+}
+
+func (r *qDropRelay) applyRepeatedResponseFaultLocked(msg message.Message) (bool, bool) {
+	if r.fault == qRelayDropEmptyACKForever &&
+		msg.Code == codes.Empty && msg.Type == message.Acknowledgement {
 		return true, false
-	case qRelayDropFinalResponse, qRelayDuplicateFinalResponse:
-		if msg.Code < codes.Created || !msg.Options.HasOption(message.QBlock2) {
-			return false, false
-		}
-		value, err := msg.Options.GetUint32(message.QBlock2)
-		if err != nil {
-			return false, false
-		}
-		_, num, more, err := blockwise.DecodeQBlockOption(value)
-		if err != nil || num != r.faultNum || more {
-			return false, false
-		}
-		r.faulted = true
-		if r.fault == qRelayDuplicateFinalResponse {
-			r.observed[num]++
-		}
-		return r.fault == qRelayDropFinalResponse, r.fault == qRelayDuplicateFinalResponse
-	default:
+	}
+	return false, false
+}
+
+func (r *qDropRelay) applyEmptyACKFaultLocked(msg message.Message) (bool, bool, bool) {
+	if r.fault != qRelayDropEmptyACK && r.fault != qRelayDuplicateEmptyACK &&
+		r.fault != qRelayDropEmptyACKForever {
+		return false, false, false
+	}
+	if msg.Code != codes.Empty || msg.Type != message.Acknowledgement {
+		return false, false, false
+	}
+	r.faulted = true
+	return true, r.fault != qRelayDuplicateEmptyACK, r.fault == qRelayDuplicateEmptyACK
+}
+
+func (r *qDropRelay) applyFinalResponseFaultLocked(msg message.Message) (bool, bool) {
+	if r.fault != qRelayDropFinalResponse && r.fault != qRelayDuplicateFinalResponse ||
+		msg.Code < codes.Created || !msg.Options.HasOption(message.QBlock2) {
 		return false, false
 	}
+	value, err := msg.Options.GetUint32(message.QBlock2)
+	if err != nil {
+		return false, false
+	}
+	_, num, more, err := blockwise.DecodeQBlockOption(value)
+	if err != nil || num != r.faultNum || more {
+		return false, false
+	}
+	r.faulted = true
+	if r.fault == qRelayDuplicateFinalResponse {
+		r.observed[num]++
+	}
+	return r.fault == qRelayDropFinalResponse, r.fault == qRelayDuplicateFinalResponse
 }
 
 func (r *qDropRelay) reorderResponse(data []byte) (forward, delayed []byte) {
@@ -473,82 +480,105 @@ func TestQBlock1ConfirmableACKExhaustionReturnsError(t *testing.T) {
 	require.Equal(t, 2, relay.q1Seen[0], "one initial transmission and one configured retry")
 }
 
+type qBlockConfirmableFaultCase struct {
+	name        string
+	fault       qRelayFault
+	finalNUM    bool
+	retransmits int
+}
+
 func TestQBlockConfirmableACKAndFinalResponseFaults(t *testing.T) {
-	tests := []struct {
-		name        string
-		fault       qRelayFault
-		finalNUM    bool
-		retransmits int
-	}{
+	tests := []qBlockConfirmableFaultCase{
 		{name: "dropped-empty-ACK", fault: qRelayDropEmptyACK, retransmits: 2},
 		{name: "duplicated-empty-ACK", fault: qRelayDuplicateEmptyACK, retransmits: 1},
 		{name: "dropped-final-response", fault: qRelayDropFinalResponse, finalNUM: true, retransmits: 2},
 		{name: "duplicated-final-response", fault: qRelayDuplicateFinalResponse, finalNUM: true, retransmits: 2},
 	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			runQBlockConfirmableFaultCase(t, tt)
+		})
+	}
+}
+
+func runQBlockConfirmableFaultCase(t *testing.T, tt qBlockConfirmableFaultCase) {
+	t.Helper()
 	payload := bytes.Repeat([]byte{0x5a}, 47)
 	config := qblock.DefaultConfig()
 	config.MaxPayloads = 3
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			calls := new(atomic.Int32)
-			server := strings.TrimPrefix(startQGoServer(t, false, blockwise.SZX16, payload,
-				new(qWireCounts), calls, config), "coap://")
-			addr, relay := newQDropRelay(t, server, message.QBlock2, -1)
-			relay.mu.Lock()
-			relay.fault = tt.fault
-			relay.faultNum = int64((len(payload) - 1) / int(blockwise.SZX16.Size()))
-			relay.mu.Unlock()
+	calls := new(atomic.Int32)
+	server := strings.TrimPrefix(startQGoServer(t, false, blockwise.SZX16, payload,
+		new(qWireCounts), calls, config), "coap://")
+	addr, relay := newQDropRelay(t, server, message.QBlock2, -1)
+	relay.mu.Lock()
+	relay.fault = tt.fault
+	relay.faultNum = int64((len(payload) - 1) / int(blockwise.SZX16.Size()))
+	relay.mu.Unlock()
 
-			counts := new(qWireCounts)
-			cc, err := udp.Dial(addr,
-				options.WithBlockwise(true, blockwise.SZX16, 30*time.Second),
-				options.WithQBlockwise(options.QBlockwiseOnly),
-				options.WithQBlockwiseConfig(config),
-				options.WithRequestMonitor(counts.monitor),
-				options.WithTransmission(1, 50*time.Millisecond, 3, 1),
-			)
-			require.NoError(t, err)
-			t.Cleanup(func() { require.NoError(t, cc.Close()) })
+	counts := new(qWireCounts)
+	cc, err := udp.Dial(addr,
+		options.WithBlockwise(true, blockwise.SZX16, 30*time.Second),
+		options.WithQBlockwise(options.QBlockwiseOnly),
+		options.WithQBlockwiseConfig(config),
+		options.WithRequestMonitor(counts.monitor),
+		options.WithTransmission(1, 50*time.Millisecond, 3, 1),
+	)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, cc.Close()) })
 
-			response := qDo(t, cc, codes.PUT, "/q", payload, message.Confirmable)
-			body, err := response.ReadBody()
-			require.NoError(t, err)
-			require.Equal(t, payload, body)
-			require.EqualValues(t, 1, calls.Load(), "duplicate CON traffic must not redispatch the completed upload")
+	response := qDo(t, cc, codes.PUT, "/q", payload, message.Confirmable)
+	body, err := response.ReadBody()
+	require.NoError(t, err)
+	require.Equal(t, payload, body)
+	require.EqualValues(t, 1, calls.Load(), "duplicate CON traffic must not redispatch the completed upload")
+	assertQBlockConfirmableFaultCounts(t, relay, tt)
+}
 
-			relay.mu.Lock()
-			defer relay.mu.Unlock()
-			require.True(t, relay.faulted, "the configured wire fault must be injected")
-			if tt.finalNUM {
-				finalCount := relay.observed[relay.faultNum]
-				if tt.fault == qRelayDropFinalResponse {
-					require.GreaterOrEqual(t, finalCount, tt.retransmits,
-						"the dropped final Q2 payload must be retransmitted")
-					require.LessOrEqual(t, finalCount, 5,
-						"final Q2 retransmissions must stay within the default CoAP retry limit")
-				} else {
-					require.Equal(t, tt.retransmits, finalCount,
-						"only the final Q2 payload should be retransmitted or duplicated")
-				}
-			} else {
-				require.Equal(t, tt.retransmits, relay.q1Seen[0],
-					"only the Q1 block whose empty ACK was lost should be retransmitted")
-			}
-			for num, count := range relay.q1Seen {
-				want := 1
-				if !tt.finalNUM && num == 0 {
-					want = tt.retransmits
-				}
-				require.Equal(t, want, count, "unexpected retry/duplicate for Q1 NUM %d", num)
-			}
-			if tt.finalNUM {
-				for num, count := range relay.observed {
-					if num == relay.faultNum {
-						continue
-					}
-					require.Equal(t, 1, count, "unexpected retry/duplicate for Q2 NUM %d", num)
-				}
-			}
-		})
+func assertQBlockConfirmableFaultCounts(t *testing.T, relay *qDropRelay, tt qBlockConfirmableFaultCase) {
+	t.Helper()
+	relay.mu.Lock()
+	defer relay.mu.Unlock()
+	require.True(t, relay.faulted, "the configured wire fault must be injected")
+	if tt.finalNUM {
+		assertFinalQBlockFaultCount(t, relay, tt)
+	} else {
+		require.Equal(t, tt.retransmits, relay.q1Seen[0],
+			"only the Q1 block whose empty ACK was lost should be retransmitted")
+	}
+	assertQBlockQ1Counts(t, relay, tt)
+	if tt.finalNUM {
+		assertQBlockQ2Counts(t, relay)
+	}
+}
+
+func assertFinalQBlockFaultCount(t *testing.T, relay *qDropRelay, tt qBlockConfirmableFaultCase) {
+	finalCount := relay.observed[relay.faultNum]
+	if tt.fault == qRelayDropFinalResponse {
+		require.GreaterOrEqual(t, finalCount, tt.retransmits,
+			"the dropped final Q2 payload must be retransmitted")
+		require.LessOrEqual(t, finalCount, 5,
+			"final Q2 retransmissions must stay within the default CoAP retry limit")
+		return
+	}
+	require.Equal(t, tt.retransmits, finalCount,
+		"only the final Q2 payload should be retransmitted or duplicated")
+}
+
+func assertQBlockQ1Counts(t *testing.T, relay *qDropRelay, tt qBlockConfirmableFaultCase) {
+	for num, count := range relay.q1Seen {
+		want := 1
+		if !tt.finalNUM && num == 0 {
+			want = tt.retransmits
+		}
+		require.Equal(t, want, count, "unexpected retry/duplicate for Q1 NUM %d", num)
+	}
+}
+
+func assertQBlockQ2Counts(t *testing.T, relay *qDropRelay) {
+	for num, count := range relay.observed {
+		if num == relay.faultNum {
+			continue
+		}
+		require.Equal(t, 1, count, "unexpected retry/duplicate for Q2 NUM %d", num)
 	}
 }

@@ -24,10 +24,10 @@ The go-coap provides servers and clients for DTLS, TCP-TLS, UDP, TCP in golang l
 * FETCH, PATCH, and iPATCH methods [RFC 8132][coap-fetch-patch]
 * CoAP over TCP/TLS [RFC 8323][coap-tcp]
 * Too many requests response code [RFC 8516][coap-429]
+* Object Security for Constrained RESTful Environments (OSCORE) [RFC 8613][oscore]
 * CoAP Echo and Request-Tag options [RFC 9175][coap-echo-request-tag]
 * Experimental Q-Block datagram transfers [RFC 9177][coap-q-block-wise-transfers]
 * CoAP over DTLS [pion/dtls][pion-dtls]
-* Object Security for Constrained RESTful Environments (OSCORE) [RFC 8613][oscore]
 * request multiplexer
 * multicast
 

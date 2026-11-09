@@ -909,7 +909,9 @@ func (cc *Conn) writeMessageAsync(req *pool.Message) error {
 	if err != nil {
 		return &client.RequestNotSentError{Err: err}
 	}
-	defer releaseWireReq()
+	if releaseWireReq != nil {
+		defer releaseWireReq()
+	}
 	closeFn, err := cc.prepareWriteMessage(wireReq, func(*responsewriter.ResponseWriter[*Conn], *pool.Message) {
 		// do nothing
 	}, nil)
@@ -939,7 +941,9 @@ func (cc *Conn) writeMessage(req *pool.Message) error {
 	if err != nil {
 		return &client.RequestNotSentError{Err: err}
 	}
-	defer releaseWireReq()
+	if releaseWireReq != nil {
+		defer releaseWireReq()
+	}
 	closeFn, err := cc.prepareWriteMessage(wireReq, func(_ *responsewriter.ResponseWriter[*Conn], response *pool.Message) {
 		var responseErr error
 		if response.Type() == message.Reset && req.HasOption(message.Observe) && req.HasOption(message.QBlock2) {

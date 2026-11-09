@@ -157,103 +157,88 @@ func TestProcessorRejectsInvalidConfiguration(t *testing.T) {
 }
 
 func TestProcessorSelectsOutgoingContext(t *testing.T) {
-	const masterSecret = "shared master secret"
-	clientA, err := NewContext(ContextConfig{
-		MasterSecret: []byte(masterSecret),
-		SenderID:     []byte{0x10},
-		RecipientID:  []byte{0x20},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	serverA, err := NewContext(ContextConfig{
-		MasterSecret: []byte(masterSecret),
-		SenderID:     []byte{0x20},
-		RecipientID:  []byte{0x10},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	clientB, err := NewContext(ContextConfig{
-		MasterSecret: []byte(masterSecret),
-		SenderID:     []byte{0x11},
-		RecipientID:  []byte{0x21},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	serverB, err := NewContext(ContextConfig{
-		MasterSecret: []byte(masterSecret),
-		SenderID:     []byte{0x21},
-		RecipientID:  []byte{0x11},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	clientA := newTestContext(t, []byte{0x10}, []byte{0x20})
+	serverA := newTestContext(t, []byte{0x20}, []byte{0x10})
+	clientB := newTestContext(t, []byte{0x11}, []byte{0x21})
+	serverB := newTestContext(t, []byte{0x21}, []byte{0x11})
 	processor, err := NewProcessor(ProcessorConfig{
-		Contexts: []*Context{clientA, clientB},
-		OutgoingContextSelector: func(request message.Message, contexts []*Context) (*Context, error) {
-			if len(contexts) != 2 {
-				t.Fatalf("selector received %d contexts, want 2", len(contexts))
-			}
-			host, hostErr := request.Options.GetString(message.URIHost)
-			if hostErr != nil {
-				return nil, hostErr
-			}
-			switch host {
-			case "peer-a.example":
-				request.Code = codes.PUT
-				request.Options[0].Value[0] = 'x'
-				request.Payload = append(request.Payload, 0xff)
-				return clientA, nil
-			case "peer-b.example":
-				return clientB, nil
-			default:
-				return nil, ErrNoSecurityContext
-			}
-		},
+		Contexts:                []*Context{clientA, clientB},
+		OutgoingContextSelector: outgoingContextSelector(t, clientA, clientB),
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
+	assertOutgoingContextSelection(t, processor, "peer-a.example", clientA, serverA)
+	assertOutgoingContextSelection(t, processor, "peer-b.example", clientB, serverB)
+}
 
-	for _, tt := range []struct {
-		host        string
-		wantContext *Context
-		server      *Context
-	}{
-		{host: "peer-a.example", wantContext: clientA, server: serverA},
-		{host: "peer-b.example", wantContext: clientB, server: serverB},
-	} {
-		t.Run(tt.host, func(t *testing.T) {
-			request := message.Message{
-				Code: codes.GET,
-				Options: message.Options{
-					{ID: message.URIHost, Value: []byte(tt.host)},
-					{ID: message.URIPath, Value: []byte("resource")},
-				},
-				Payload: []byte("original"),
-			}
-			protected, selected, _, err := processor.ProtectRequestWithContext(request)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if selected != tt.wantContext {
-				t.Fatalf("selected context %p, want %p", selected, tt.wantContext)
-			}
-			if request.Code != codes.GET || string(request.Options[0].Value) != tt.host ||
-				string(request.Payload) != "original" {
-				t.Fatalf("selector mutated caller request: %+v", request)
-			}
-			opened, _, err := tt.server.UnprotectRequest(protected)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if opened.Code != codes.GET {
-				t.Fatalf("opened request code = %v, want GET", opened.Code)
-			}
-		})
+func newTestContext(t *testing.T, senderID, recipientID []byte) *Context {
+	t.Helper()
+	context, err := NewContext(ContextConfig{
+		MasterSecret: []byte("shared master secret"),
+		SenderID:     senderID,
+		RecipientID:  recipientID,
+	})
+	if err != nil {
+		t.Fatal(err)
 	}
+	return context
+}
+
+func outgoingContextSelector(t *testing.T, clientA, clientB *Context) OutgoingContextSelector {
+	t.Helper()
+	return func(request message.Message, contexts []*Context) (*Context, error) {
+		if len(contexts) != 2 {
+			t.Fatalf("selector received %d contexts, want 2", len(contexts))
+		}
+		host, err := request.Options.GetString(message.URIHost)
+		if err != nil {
+			return nil, err
+		}
+		switch host {
+		case "peer-a.example":
+			request.Code = codes.PUT
+			request.Options[0].Value[0] = 'x'
+			request.Payload = append(request.Payload, 0xff)
+			return clientA, nil
+		case "peer-b.example":
+			return clientB, nil
+		default:
+			return nil, ErrNoSecurityContext
+		}
+	}
+}
+
+func assertOutgoingContextSelection(t *testing.T, processor *Processor, host string, wantContext, server *Context) {
+	t.Helper()
+	t.Run(host, func(t *testing.T) {
+		request := message.Message{
+			Code: codes.GET,
+			Options: message.Options{
+				{ID: message.URIHost, Value: []byte(host)},
+				{ID: message.URIPath, Value: []byte("resource")},
+			},
+			Payload: []byte("original"),
+		}
+		protected, selected, _, err := processor.ProtectRequestWithContext(request)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if selected != wantContext {
+			t.Fatalf("selected context %p, want %p", selected, wantContext)
+		}
+		if request.Code != codes.GET || string(request.Options[0].Value) != host ||
+			string(request.Payload) != "original" {
+			t.Fatalf("selector mutated caller request: %+v", request)
+		}
+		opened, _, err := server.UnprotectRequest(protected)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if opened.Code != codes.GET {
+			t.Fatalf("opened request code = %v, want GET", opened.Code)
+		}
+	})
 }
 
 func TestProcessorOutgoingSelectorRejectsInvalidSelection(t *testing.T) {

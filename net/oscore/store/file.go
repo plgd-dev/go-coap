@@ -10,14 +10,16 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sync"
 
 	"github.com/plgd-dev/go-coap/v3/net/oscore"
 )
 
 const (
-	fileVersion   = 1
-	maxPartialIV  = uint64(1<<40 - 1)
-	maxStateBytes = 4096
+	fileVersion        = 1
+	maxPartialIV       = uint64(1<<40 - 1)
+	maxStateBytes      = 4096
+	sequenceWindowSize = uint64(256)
 )
 
 var ErrInvalidStoreID = errors.New("OSCORE file store ID must not be empty")
@@ -36,6 +38,9 @@ type FileStore struct {
 	replayPath   string
 	sequenceLock string
 	replayLock   string
+	mu           sync.Mutex
+	next         uint64
+	limit        uint64
 }
 
 type sequenceFile struct {
@@ -77,10 +82,18 @@ func NewFileStore(dir, id string) (*FileStore, error) {
 	}, nil
 }
 
-// Reserve atomically persists the next sender sequence number before
-// returning the reserved value.
+// Reserve returns a sender sequence number from a durably reserved window.
+// Unused values in a window are skipped when the store is recreated.
 func (s *FileStore) Reserve() (uint64, error) {
-	var reserved uint64
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.next < s.limit {
+		reserved := s.next
+		s.next++
+		return reserved, nil
+	}
+
+	var reserved, limit uint64
 	err := withFileLock(s.sequenceLock, func() error {
 		state, err := readSequence(s.sequencePath)
 		if err != nil {
@@ -90,15 +103,20 @@ func (s *FileStore) Reserve() (uint64, error) {
 			return oscore.ErrSenderSequenceExhausted
 		}
 		reserved = state.Next
-		state.Next++
+		remaining := maxPartialIV + 1 - reserved
+		windowSize := min(sequenceWindowSize, remaining)
+		limit = reserved + windowSize
+		state.Next = limit
 		if err := writeStateFile(s.dir, s.sequencePath, state); err != nil {
-			return fmt.Errorf("persist sender sequence: %w", err)
+			return fmt.Errorf("persist sender sequence window: %w", err)
 		}
 		return nil
 	})
 	if err != nil {
 		return 0, fmt.Errorf("reserve OSCORE sender sequence: %w", err)
 	}
+	s.next = reserved + 1
+	s.limit = limit
 	return reserved, nil
 }
 

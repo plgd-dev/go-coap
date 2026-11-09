@@ -47,6 +47,24 @@ func TestProtectRequestAndResponse(t *testing.T) {
 		},
 		Payload: []byte{0xa1, 0x01, 0x02},
 	}
+	_, clientExchange, _, serverExchange := assertProtectedRequestRoundTrip(t, client, server, request)
+	response := message.Message{
+		Token:     request.Token,
+		Code:      codes.Content,
+		Type:      message.Acknowledgement,
+		MessageID: request.MessageID,
+		Options: message.Options{
+			{ID: message.ContentFormat, Value: []byte{byte(message.AppCBOR)}},
+		},
+		Payload: []byte{0xa1, 0x03, 0x04},
+	}
+	assertProtectedResponseRoundTrip(t, client, server, clientExchange, serverExchange, response)
+}
+
+func assertProtectedRequestRoundTrip(
+	t *testing.T, client, server *Context, request message.Message,
+) (message.Message, Exchange, message.Message, Exchange) {
+	t.Helper()
 	protectedRequest, clientExchange, err := client.ProtectRequest(request)
 	if err != nil {
 		t.Fatal(err)
@@ -76,17 +94,14 @@ func TestProtectRequestAndResponse(t *testing.T) {
 		!bytes.Equal(clientExchange.RequestPartialIV, serverExchange.RequestPartialIV) {
 		t.Fatalf("request exchange mismatch: client=%+v server=%+v", clientExchange, serverExchange)
 	}
+	return protectedRequest, clientExchange, openedRequest, serverExchange
+}
 
-	response := message.Message{
-		Token:     request.Token,
-		Code:      codes.Content,
-		Type:      message.Acknowledgement,
-		MessageID: request.MessageID,
-		Options: message.Options{
-			{ID: message.ContentFormat, Value: []byte{byte(message.AppCBOR)}},
-		},
-		Payload: []byte{0xa1, 0x03, 0x04},
-	}
+func assertProtectedResponseRoundTrip(
+	t *testing.T, client, server *Context, clientExchange, serverExchange Exchange,
+	response message.Message,
+) {
+	t.Helper()
 	protectedResponse, err := server.ProtectResponse(response, serverExchange)
 	if err != nil {
 		t.Fatal(err)
@@ -223,15 +238,24 @@ func TestProtectQBlockRequestAndResponse(t *testing.T) {
 
 func TestProtectObserveRequestAndNotifications(t *testing.T) {
 	client, server := pairedContexts(t, 3, 5)
-	requestOptions, _, err := (message.Options{}).SetObserve(nil, 0)
+	request := message.Message{Code: codes.GET, Token: message.Token{0x12, 0x34}, Options: observeOptions(t, 0)}
+	clientExchange, serverExchange := assertObserveRegistration(t, client, server, request)
+	assertObserveNotification(t, client, server, request, clientExchange, serverExchange, 20, 5)
+	assertObserveNotification(t, client, server, request, clientExchange, serverExchange, 21, 6)
+	assertObserveCancellation(t, client, server)
+}
+
+func observeOptions(t *testing.T, value uint32) message.Options {
+	t.Helper()
+	options, _, err := (message.Options{}).SetObserve(make([]byte, 4), value)
 	if err != nil {
 		t.Fatal(err)
 	}
-	request := message.Message{
-		Code:    codes.GET,
-		Token:   message.Token{0x12, 0x34},
-		Options: requestOptions,
-	}
+	return options
+}
+
+func assertObserveRegistration(t *testing.T, client, server *Context, request message.Message) (Exchange, Exchange) {
+	t.Helper()
 	protectedRequest, clientExchange, err := client.ProtectRequest(request)
 	if err != nil {
 		t.Fatal(err)
@@ -249,70 +273,77 @@ func TestProtectObserveRequestAndNotifications(t *testing.T) {
 	if !serverExchange.Observe || !optionsEqual(openedRequest.Options, request.Options) {
 		t.Fatalf("opened Observe request = %+v, exchange %+v", openedRequest, serverExchange)
 	}
+	return clientExchange, serverExchange
+}
 
-	for _, responseSequence := range []uint32{20, 21} {
-		responseOptions, _, optionsErr := (message.Options{}).SetObserve(make([]byte, 4), responseSequence)
-		if optionsErr != nil {
-			t.Fatal(optionsErr)
-		}
-		protectedResponse, protectionErr := server.ProtectResponse(
-			message.Message{
-				Code:    codes.Content,
-				Token:   request.Token,
-				Options: responseOptions,
-			},
-			serverExchange,
-		)
-		if protectionErr != nil {
-			t.Fatal(protectionErr)
-		}
-		if protectedResponse.Code != codes.Content {
-			t.Fatalf("outer response code = %v, want Content", protectedResponse.Code)
-		}
-		responseOption, optionErr := UnmarshalOption(optionValue(t, protectedResponse.Options, message.OSCORE))
-		if optionErr != nil {
-			t.Fatal(optionErr)
-		}
-		if len(responseOption.PartialIV) == 0 {
-			t.Fatal("Observe notification omitted Partial IV")
-		}
-		outerObserve, outerObserveErr := protectedResponse.Options.Observe()
-		if outerObserveErr != nil || outerObserve != responseSequence {
-			t.Fatalf("outer Observe = %d, %v; want %d", outerObserve, outerObserveErr, responseSequence)
-		}
-		openedResponse, unprotectErr := client.UnprotectResponse(protectedResponse, clientExchange)
-		if unprotectErr != nil {
-			t.Fatal(unprotectErr)
-		}
-		sequence, sequenceErr := openedResponse.Options.Observe()
-		wantSequence := uint32(5)
-		if responseSequence == 21 {
-			wantSequence = 6
-		}
-		if sequenceErr != nil || sequence != wantSequence {
-			t.Fatalf("decrypted Observe = %d, %v; want Partial-IV sequence %d", sequence, sequenceErr, wantSequence)
-		}
-	}
-
-	cancelOptions, _, err := (message.Options{}).SetObserve(make([]byte, 4), 1)
+func assertObserveNotification(
+	t *testing.T, client, server *Context, request message.Message,
+	clientExchange, serverExchange Exchange, responseSequence, wantSequence uint32,
+) {
+	t.Helper()
+	protectedResponse, err := server.ProtectResponse(message.Message{
+		Code:    codes.Content,
+		Token:   request.Token,
+		Options: observeOptions(t, responseSequence),
+	}, serverExchange)
 	if err != nil {
 		t.Fatal(err)
 	}
-	cancelRequest, _, err := client.ProtectRequest(message.Message{Code: codes.GET, Options: cancelOptions})
+	if protectedResponse.Code != codes.Content {
+		t.Fatalf("outer response code = %v, want Content", protectedResponse.Code)
+	}
+	responseOption, err := UnmarshalOption(optionValue(t, protectedResponse.Options, message.OSCORE))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(responseOption.PartialIV) == 0 {
+		t.Fatal("Observe notification omitted Partial IV")
+	}
+	outerObserve, err := protectedResponse.Options.Observe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if outerObserve != responseSequence {
+		t.Fatalf("outer Observe = %d, want %d", outerObserve, responseSequence)
+	}
+	openedResponse, err := client.UnprotectResponse(protectedResponse, clientExchange)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sequence, err := openedResponse.Options.Observe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sequence != wantSequence {
+		t.Fatalf("decrypted Observe = %d, want Partial-IV sequence %d", sequence, wantSequence)
+	}
+}
+
+func assertObserveCancellation(t *testing.T, client, server *Context) {
+	t.Helper()
+	cancelRequest, _, err := client.ProtectRequest(message.Message{
+		Code: codes.GET, Options: observeOptions(t, 1),
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	outerObserve, err := cancelRequest.Options.Observe()
-	if err != nil || outerObserve != 1 {
-		t.Fatalf("cancellation outer Observe = %d, %v; want 1", outerObserve, err)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if outerObserve != 1 {
+		t.Fatalf("cancellation outer Observe = %d, want 1", outerObserve)
 	}
 	openedCancel, cancelExchange, err := server.UnprotectRequest(cancelRequest)
 	if err != nil {
 		t.Fatal(err)
 	}
 	cancelObserve, err := openedCancel.Options.Observe()
-	if err != nil || cancelObserve != 1 || !cancelExchange.Observe {
-		t.Fatalf("decrypted cancellation Observe = %d, %v; exchange %+v", cancelObserve, err, cancelExchange)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cancelObserve != 1 || !cancelExchange.Observe {
+		t.Fatalf("decrypted cancellation Observe = %d; exchange %+v", cancelObserve, cancelExchange)
 	}
 }
 

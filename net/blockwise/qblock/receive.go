@@ -157,45 +157,54 @@ func parseQBlock1(r *pool.Message) (q1Parameters, error) {
 
 // q1TransferLocked creates or validates a transfer while q1ReceiveMu is held.
 func (b *Engine[C]) q1TransferLocked(r *pool.Message, key string, p q1Parameters) (*q1ReceiveTransfer, error) {
-	maxBodySize := b.maxReceiveBodySize
-	if maxBodySize <= 0 {
-		maxBodySize = q1DefaultMaxBodySize
-	}
-	now := time.Now()
 	if b.q1Closed {
 		return nil, context.Canceled
 	}
 	transfer := b.q1Receivers[key]
-	if transfer != nil && !transfer.expires.After(now) {
-		delete(b.q1Receivers, key)
-		b.q1ReceiveBytes -= transfer.bytes
-		b.qReleaseBytes(transfer.bytes)
-		b.qReleaseTransfer()
-		if transfer.response != nil {
-			b.cc.ReleaseMessage(transfer.response)
-		}
+	if transfer != nil && !transfer.expires.After(time.Now()) {
+		b.removeExpiredQ1TransferLocked(key, transfer)
 		transfer = nil
 	}
-	if transfer == nil {
-		if len(b.q1Receivers) >= 4096 || b.receivingMessagesCacheMaxEntries.Load() > 0 &&
-			int64(len(b.q1Receivers)) >= b.receivingMessagesCacheMaxEntries.Load() {
-			return nil, errReceivingMessagesCacheFull
+	if transfer != nil {
+		if transfer.bodySize != int64(p.bodySize) || transfer.szx != p.szx || transfer.mode != r.Type() {
+			return nil, ErrInvalidOptionBlock1
 		}
-		assembly, createErr := NewAssembly(p.szx, int64(p.bodySize), maxBodySize, q1MaxTrackedBlocks)
-		if createErr != nil {
-			return nil, createErr
-		}
-		if !b.qReserveTransfer() {
-			return nil, errReceivingMessagesCacheFull
-		}
-		transfer = &q1ReceiveTransfer{
-			assembly: assembly, bodySize: int64(p.bodySize), szx: p.szx, mode: r.Type(),
-			initialToken: bytes.Clone(r.Token()), continuedThrough: -1,
-		}
-		b.q1Receivers[key] = transfer
-	} else if transfer.bodySize != int64(p.bodySize) || transfer.szx != p.szx || transfer.mode != r.Type() {
-		return nil, ErrInvalidOptionBlock1
+		return transfer, nil
 	}
+	return b.newQ1TransferLocked(r, key, p)
+}
+
+func (b *Engine[C]) removeExpiredQ1TransferLocked(key string, transfer *q1ReceiveTransfer) {
+	delete(b.q1Receivers, key)
+	b.q1ReceiveBytes -= transfer.bytes
+	b.qReleaseBytes(transfer.bytes)
+	b.qReleaseTransfer()
+	if transfer.response != nil {
+		b.cc.ReleaseMessage(transfer.response)
+	}
+}
+
+func (b *Engine[C]) newQ1TransferLocked(r *pool.Message, key string, p q1Parameters) (*q1ReceiveTransfer, error) {
+	maxBodySize := b.maxReceiveBodySize
+	if maxBodySize <= 0 {
+		maxBodySize = q1DefaultMaxBodySize
+	}
+	maxEntries := b.receivingMessagesCacheMaxEntries.Load()
+	if len(b.q1Receivers) >= 4096 || maxEntries > 0 && int64(len(b.q1Receivers)) >= maxEntries {
+		return nil, errReceivingMessagesCacheFull
+	}
+	assembly, err := NewAssembly(p.szx, int64(p.bodySize), maxBodySize, q1MaxTrackedBlocks)
+	if err != nil {
+		return nil, err
+	}
+	if !b.qReserveTransfer() {
+		return nil, errReceivingMessagesCacheFull
+	}
+	transfer := &q1ReceiveTransfer{
+		assembly: assembly, bodySize: int64(p.bodySize), szx: p.szx, mode: r.Type(),
+		initialToken: bytes.Clone(r.Token()), continuedThrough: -1,
+	}
+	b.q1Receivers[key] = transfer
 	return transfer, nil
 }
 
@@ -470,29 +479,54 @@ func (b *Engine[C]) completeQ1Response(w *responsewriter.ResponseWriter[C], r *p
 ) error {
 	defer b.cc.ReleaseMessage(q2Request)
 	responseSize, sizeErr := w.Message().BodySize()
-	if !q2Request.HasOption(message.QBlock2) {
-		capability, _ := EncodeQBlockOption(transfer.szx, 0, true)
-		q2Request.SetOptionUint32(message.QBlock2, capability)
-	}
+	b.ensureQBlock2Capability(q2Request, transfer.szx)
 	if sizeErr == nil && responseSize > transfer.szx.Size() {
-		if observe, observeErr := q2Request.Observe(); observeErr == nil && observe == 0 {
-			b.CancelQBlockObservation(q2Request.Token(), remoteAddr)
-		}
-		if err := b.cacheQBlock2Response(r.Context(), q2TransferKey(q2Request, remoteAddr), qTransferKey(q2Request, remoteAddr, nil, true), w.Message(), r.Type()); err != nil {
-			return err
-		}
-		if err := b.handleQBlock2(w, q2Request, maxSZX, remoteAddr, next); err != nil {
+		if err := b.prepareQBlock2Response(w, r, q2Request, maxSZX, remoteAddr, next); err != nil {
 			return err
 		}
 	}
-	if w.Message().HasOption(message.Observe) {
-		if observe, observeErr := q2Request.Observe(); observeErr == nil && observe == 0 {
-			if err := b.registerQObservation(q2Request, remoteAddr, transfer.szx); err != nil {
-				return err
-			}
-		}
+	if err := b.registerCompletedQ1Observation(w, q2Request, transfer, remoteAddr); err != nil {
+		return err
 	}
 	return nil
+}
+
+func (b *Engine[C]) ensureQBlock2Capability(request *pool.Message, szx SZX) {
+	if request.HasOption(message.QBlock2) {
+		return
+	}
+	capability, _ := EncodeQBlockOption(szx, 0, true)
+	request.SetOptionUint32(message.QBlock2, capability)
+}
+
+func (b *Engine[C]) prepareQBlock2Response(
+	w *responsewriter.ResponseWriter[C], r, q2Request *pool.Message, maxSZX SZX, remoteAddr net.Addr,
+	next func(*responsewriter.ResponseWriter[C], *pool.Message),
+) error {
+	if observe, observeErr := q2Request.Observe(); observeErr == nil && observe == 0 {
+		b.CancelQBlockObservation(q2Request.Token(), remoteAddr)
+	}
+	if err := b.cacheQBlock2Response(r.Context(), q2TransferKey(q2Request, remoteAddr),
+		qTransferKey(q2Request, remoteAddr, nil, true), w.Message(), r.Type()); err != nil {
+		return err
+	}
+	return b.handleQBlock2(w, q2Request, maxSZX, remoteAddr, next)
+}
+
+func (b *Engine[C]) registerCompletedQ1Observation(
+	w *responsewriter.ResponseWriter[C], q2Request *pool.Message, transfer *q1ReceiveTransfer, remoteAddr net.Addr,
+) error {
+	if !w.Message().HasOption(message.Observe) {
+		return nil
+	}
+	observe, err := q2Request.Observe()
+	if err != nil {
+		return err
+	}
+	if observe != 0 {
+		return nil
+	}
+	return b.registerQObservation(q2Request, remoteAddr, transfer.szx)
 }
 
 func (b *Engine[C]) storeQ1Response(w *responsewriter.ResponseWriter[C], r *pool.Message, key string,

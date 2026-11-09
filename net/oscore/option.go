@@ -81,28 +81,35 @@ func UnmarshalOption(value []byte) (OptionValue, error) {
 		}
 	}
 
-	offset := 1 + pivLen
+	offset, err := decodeOptionFields(value, 1+pivLen, &decoded)
+	if err != nil {
+		return OptionValue{}, err
+	}
+	if offset != len(value) {
+		return OptionValue{}, fmt.Errorf("%w: trailing bytes in OSCORE option", ErrInvalidContext)
+	}
+	return decoded, nil
+}
+
+func decodeOptionFields(value []byte, offset int, decoded *OptionValue) (int, error) {
 	if decoded.IDContextSet {
 		if offset >= len(value) {
-			return OptionValue{}, fmt.Errorf("%w: missing ID Context length", ErrInvalidContext)
+			return offset, fmt.Errorf("%w: missing ID Context length", ErrInvalidContext)
 		}
 		contextLen := int(value[offset])
 		offset++
 		if len(value)-offset < contextLen {
-			return OptionValue{}, fmt.Errorf("%w: truncated ID Context", ErrInvalidContext)
+			return offset, fmt.Errorf("%w: truncated ID Context", ErrInvalidContext)
 		}
 		decoded.IDContext = append([]byte{}, value[offset:offset+contextLen]...)
 		offset += contextLen
 	}
 	if decoded.SenderIDSet {
 		if len(value)-offset > maxIdentifierSize {
-			return OptionValue{}, fmt.Errorf("%w: sender ID exceeds %d bytes", ErrInvalidContext, maxIdentifierSize)
+			return offset, fmt.Errorf("%w: sender ID exceeds %d bytes", ErrInvalidContext, maxIdentifierSize)
 		}
 		decoded.SenderID = append([]byte{}, value[offset:]...)
 		offset = len(value)
 	}
-	if offset != len(value) {
-		return OptionValue{}, fmt.Errorf("%w: trailing bytes in OSCORE option", ErrInvalidContext)
-	}
-	return decoded, nil
+	return offset, nil
 }

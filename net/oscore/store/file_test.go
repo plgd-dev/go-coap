@@ -50,12 +50,78 @@ func TestFileStoreSequenceReservationsAcrossInstances(t *testing.T) {
 	if len(seen) != count {
 		t.Fatalf("reserved %d values, want %d", len(seen), count)
 	}
-	next, err := first.Reserve()
+	maxReserved := uint64(0)
+	for value := range seen {
+		maxReserved = max(maxReserved, value)
+	}
+	restarted, err := NewFileStore(first.dir, "peer-a")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if next != count {
-		t.Fatalf("next sequence = %d, want %d", next, count)
+	next, err := restarted.Reserve()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if next <= maxReserved {
+		t.Fatalf("restarted sequence = %d, want greater than %d", next, maxReserved)
+	}
+}
+
+func TestFileStoreSequenceWindowSkipsUnusedValuesAfterRestart(t *testing.T) {
+	first, err := NewFileStore(t.TempDir(), "peer-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	initial, err := first.Reserve()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if initial != 0 {
+		t.Fatalf("initial sequence = %d, want 0", initial)
+	}
+	nextInWindow, err := first.Reserve()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if nextInWindow != 1 {
+		t.Fatalf("next sequence in window = %d, want 1", nextInWindow)
+	}
+
+	restarted, err := NewFileStore(first.dir, "peer-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	nextAfterRestart, err := restarted.Reserve()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if nextAfterRestart != sequenceWindowSize {
+		t.Fatalf("sequence after restart = %d, want %d", nextAfterRestart, sequenceWindowSize)
+	}
+}
+
+func TestFileStoreSequenceWindowExhaustsAtMaximumPartialIV(t *testing.T) {
+	store, err := NewFileStore(t.TempDir(), "peer-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := writeStateFile(store.dir, store.sequencePath, sequenceFile{
+		Version: fileVersion,
+		Next:    maxPartialIV - 1,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	for expected := maxPartialIV - 1; expected <= maxPartialIV; expected++ {
+		got, reserveErr := store.Reserve()
+		if reserveErr != nil {
+			t.Fatalf("reserve sequence %d: %v", expected, reserveErr)
+		}
+		if got != expected {
+			t.Fatalf("reserved sequence = %d, want %d", got, expected)
+		}
+	}
+	if _, err := store.Reserve(); !errors.Is(err, oscore.ErrSenderSequenceExhausted) {
+		t.Fatalf("reserve after maximum Partial IV error = %v, want ErrSenderSequenceExhausted", err)
 	}
 }
 

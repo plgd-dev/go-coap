@@ -61,16 +61,16 @@ func udpPoolMessageToOSCOREMessage(msg *pool.Message) (message.Message, error) {
 
 func (cc *Conn) protectOutgoingRequest(req *pool.Message) (*pool.Message, func(), error) {
 	if cc.oscoreProcessor == nil {
-		return req, func() {}, nil
+		return req, nil, nil
 	}
 	if req.Code() >= codes.Created && req.Code() < 192 {
 		if err := cc.protectObservationResponse(req); err != nil {
 			return nil, nil, err
 		}
-		return req, func() {}, nil
+		return req, nil, nil
 	}
 	if req.Code() < codes.GET || req.Code() > codes.IPATCH {
-		return req, func() {}, nil
+		return req, nil, nil
 	}
 	original, err := udpPoolMessageToOSCOREMessage(req)
 	if err != nil {
