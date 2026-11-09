@@ -67,7 +67,7 @@ func setMessagePreservingControlMessage(msg *pool.Message, replacement message.M
 	msg.SetControlMessage(controlMessage)
 }
 
-func (cc *Conn) protectOutgoingRequest(req *pool.Message) (*pool.Message, func(), error) {
+func (cc *Conn) protectOutgoingRequest(req *pool.Message) (*pool.Message, func(bool), error) {
 	if cc.oscoreProcessor == nil {
 		return req, nil, nil
 	}
@@ -91,11 +91,23 @@ func (cc *Conn) protectOutgoingRequest(req *pool.Message) (*pool.Message, func()
 	wireRequest := cc.AcquireMessage(req.Context())
 	wireRequest.SetMessage(protected)
 	wireRequest.SetControlMessage(req.ControlMessage())
+	cleanupExchange := cc.trackOSCOREExchange(req, context, exchange)
+	finish := func(sent bool) {
+		cleanupExchange(sent)
+		cc.ReleaseMessage(wireRequest)
+	}
+	return wireRequest, finish, nil
+}
+
+func (cc *Conn) trackOSCOREExchange(
+	req *pool.Message, context *oscore.Context, exchange oscore.Exchange,
+) func(bool) {
 	key := string(req.Token())
 	observeValue, observeErr := req.Options().Observe()
 	isObserveRequest := observeErr == nil
 	expires := time.Now().Add(ExchangeLifetime)
 	cc.oscoreMu.Lock()
+	previous, hadPrevious := cc.oscoreExchanges[key]
 	next := udpOSCOREExchange{
 		context:  context,
 		exchange: exchange,
@@ -103,20 +115,47 @@ func (cc *Conn) protectOutgoingRequest(req *pool.Message) (*pool.Message, func()
 		qBlock2:  req.HasOption(message.QBlock2),
 		expires:  expires,
 	}
-	if isObserveRequest && observeValue == 1 {
-		if previous, ok := cc.oscoreExchanges[key]; ok && previous.observe {
-			previous.cancelContext = context
-			previous.cancelExchange = exchange
-			previous.cancelExpires = time.Now().Add(ExchangeLifetime)
-			next = previous
-		}
+	if isObserveRequest && observeValue == 1 && hadPrevious && previous.observe {
+		next = previous
+		next.cancelContext = context
+		next.cancelExchange = exchange
+		next.cancelExpires = expires
 	}
 	cc.oscoreExchanges[key] = next
 	cc.oscoreMu.Unlock()
-	release := func() {
-		cc.ReleaseMessage(wireRequest)
+	return func(sent bool) {
+		if sent {
+			return
+		}
+		cc.rollbackOSCOREExchange(key, previous, hadPrevious, context, exchange)
 	}
-	return wireRequest, release, nil
+}
+
+func (cc *Conn) rollbackOSCOREExchange(
+	key string,
+	previous udpOSCOREExchange,
+	hadPrevious bool,
+	context *oscore.Context,
+	exchange oscore.Exchange,
+) {
+	cc.oscoreMu.Lock()
+	defer cc.oscoreMu.Unlock()
+	current, exists := cc.oscoreExchanges[key]
+	if !exists || !matchesOSCOREExchange(current.context, current.exchange, context, exchange) &&
+		!matchesOSCOREExchange(current.cancelContext, current.cancelExchange, context, exchange) {
+		return
+	}
+	if hadPrevious {
+		cc.oscoreExchanges[key] = previous
+		return
+	}
+	delete(cc.oscoreExchanges, key)
+}
+
+func matchesOSCOREExchange(context *oscore.Context, exchange oscore.Exchange, expectedContext *oscore.Context, expectedExchange oscore.Exchange) bool {
+	return context == expectedContext &&
+		bytes.Equal(exchange.RequestID, expectedExchange.RequestID) &&
+		bytes.Equal(exchange.RequestPartialIV, expectedExchange.RequestPartialIV)
 }
 
 func (cc *Conn) unprotectIncomingResponse(resp *pool.Message) error {

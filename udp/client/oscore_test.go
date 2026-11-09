@@ -3,6 +3,7 @@ package client
 import (
 	"bytes"
 	"context"
+	"errors"
 	"net"
 	"testing"
 	"time"
@@ -50,13 +51,87 @@ func TestProtectOutgoingRequestPreservesControlMessage(t *testing.T) {
 	wireRequest, release, err := cc.protectOutgoingRequest(request)
 	require.NoError(t, err)
 	require.NotNil(t, release)
-	defer release()
+	defer release(false)
 
 	controlMessage := wireRequest.ControlMessage()
 	require.NotNil(t, controlMessage)
 	require.True(t, controlMessage.Dst.Equal(request.ControlMessage().Dst))
 	require.True(t, controlMessage.Src.Equal(request.ControlMessage().Src))
 	require.Equal(t, request.ControlMessage().IfIndex, controlMessage.IfIndex)
+}
+
+func TestFailedOSCOREWriteRemovesExchange(t *testing.T) {
+	securityContext, err := oscore.NewContext(oscore.ContextConfig{
+		MasterSecret: []byte("failed OSCORE write test"),
+		SenderID:     []byte("client"),
+		RecipientID:  []byte("server"),
+	})
+	require.NoError(t, err)
+	processor, err := oscore.NewProcessor(oscore.ProcessorConfig{Contexts: []*oscore.Context{securityContext}})
+	require.NoError(t, err)
+	session := newRecordingSession()
+	defer session.Close()
+	writeErr := errors.New("write failed")
+	session.writeErr = writeErr
+	cfg := DefaultConfig
+	cfg.OSCORE = processor
+	cc := NewConnWithOpts(session, &cfg)
+	defer cc.Close()
+
+	request := cc.AcquireMessage(context.Background())
+	defer cc.ReleaseMessage(request)
+	request.SetCode(codes.GET)
+	request.SetToken(message.Token{0x73})
+	require.ErrorIs(t, cc.WriteMessage(request), writeErr)
+	cc.oscoreMu.Lock()
+	_, exists := cc.oscoreExchanges[string(request.Token())]
+	cc.oscoreMu.Unlock()
+	require.False(t, exists, "failed writes must not retain an OSCORE exchange")
+}
+
+func TestFailedOSCOREWriteDoesNotRemoveReplacementExchange(t *testing.T) {
+	securityContext, err := oscore.NewContext(oscore.ContextConfig{
+		MasterSecret: []byte("replacement OSCORE exchange test"),
+		SenderID:     []byte("client"),
+		RecipientID:  []byte("server"),
+	})
+	require.NoError(t, err)
+	processor, err := oscore.NewProcessor(oscore.ProcessorConfig{Contexts: []*oscore.Context{securityContext}})
+	require.NoError(t, err)
+	session := newRecordingSession()
+	defer session.Close()
+	cfg := DefaultConfig
+	cfg.OSCORE = processor
+	cc := NewConnWithOpts(session, &cfg)
+	defer cc.Close()
+
+	makeRequest := func() *pool.Message {
+		request := cc.AcquireMessage(context.Background())
+		request.SetCode(codes.GET)
+		request.SetToken(message.Token{0x74})
+		return request
+	}
+	firstRequest := makeRequest()
+	defer cc.ReleaseMessage(firstRequest)
+	first, finishFirst, err := cc.protectOutgoingRequest(firstRequest)
+	require.NoError(t, err)
+	secondRequest := makeRequest()
+	defer cc.ReleaseMessage(secondRequest)
+	second, finishSecond, err := cc.protectOutgoingRequest(secondRequest)
+	require.NoError(t, err)
+	defer finishSecond(false)
+	defer cc.ReleaseMessage(first)
+	defer cc.ReleaseMessage(second)
+
+	cc.oscoreMu.Lock()
+	secondExchange := cc.oscoreExchanges[string(second.Token())].exchange
+	cc.oscoreMu.Unlock()
+	finishFirst(false)
+	cc.oscoreMu.Lock()
+	current := cc.oscoreExchanges[string(second.Token())].exchange
+	cc.oscoreMu.Unlock()
+	require.Equal(t, secondExchange.RequestPartialIV, current.RequestPartialIV,
+		"cleanup for a failed older request must not remove a replacement")
 }
 
 func TestOSCOREMessageTransformsPreserveControlMessage(t *testing.T) {
@@ -364,7 +439,7 @@ func TestOSCOREQBlockRecoveryExchangeSurvivesFinalBlockFirst(t *testing.T) {
 	request.SetOptionUint32(message.QBlock2, requestOption)
 	wireRequest, releaseWireRequest, err := cc.protectOutgoingRequest(request)
 	require.NoError(t, err)
-	defer releaseWireRequest()
+	defer releaseWireRequest(false)
 	cc.oscoreMu.Lock()
 	qBlock2Tracked := cc.oscoreExchanges[string(request.Token())].qBlock2
 	cc.oscoreMu.Unlock()
@@ -456,9 +531,10 @@ func TestDuplicateOSCOREConfirmableResponseIsAcknowledged(t *testing.T) {
 
 	session := newRecordingSession()
 	defer session.Close()
+	var reportedErrors []error
 	cfg := DefaultConfig
 	cfg.OSCORE = processor
-	cfg.Errors = func(err error) { require.NoError(t, err) }
+	cfg.Errors = func(err error) { reportedErrors = append(reportedErrors, err) }
 	cc := NewConnWithOpts(session, &cfg)
 	cc.oscoreExchanges[string(outerRequest.Token)] = udpOSCOREExchange{
 		context:  clientContext,
@@ -489,6 +565,31 @@ func TestDuplicateOSCOREConfirmableResponseIsAcknowledged(t *testing.T) {
 	require.Equal(t, message.Acknowledgement, written.Type())
 	require.Equal(t, int32(mid), written.MessageID())
 	cc.ReleaseMessage(duplicate)
+
+	changedOptions, _, err := (message.Options{}).SetObserve(make([]byte, 4), 2)
+	require.NoError(t, err)
+	changedNotification, err := serverContext.ProtectResponseWithPartialIV(message.Message{
+		Code:      codes.Content,
+		Token:     outerRequest.Token,
+		Options:   changedOptions,
+		Type:      message.Confirmable,
+		MessageID: mid,
+		Payload:   []byte("different PIV"),
+	}, serverExchange)
+	require.NoError(t, err)
+	changedWireMessage := pool.NewMessage(context.Background())
+	changedWireMessage.SetMessage(changedNotification)
+	changedDatagram, err := changedWireMessage.MarshalWithEncoder(coder.DefaultCoder)
+	require.NoError(t, err)
+
+	conflictingResponse := cc.AcquireMessage(context.Background())
+	conflictingResponse.SetMessage(changedNotification)
+	require.True(t, cc.processIncomingOSCOREMessage(conflictingResponse, changedDatagram),
+		"reuse of an active Message ID with a different response must not reach the application")
+	require.Len(t, reportedErrors, 1)
+	require.ErrorIs(t, reportedErrors[0], oscore.ErrInvalidOSCOREMessage)
+	require.Equal(t, 2, session.writtenCount(), "the cached ACK must also be retransmitted")
+	cc.ReleaseMessage(conflictingResponse)
 	require.NoError(t, cc.Close())
 }
 

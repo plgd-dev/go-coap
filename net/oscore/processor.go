@@ -44,6 +44,7 @@ type contextKey struct {
 type Processor struct {
 	mu               sync.RWMutex
 	contexts         map[contextKey]*Context
+	senderContexts   map[[32]byte]struct{}
 	outgoingContexts []*Context
 	outgoingSelector OutgoingContextSelector
 	allowUnprotected bool
@@ -56,6 +57,7 @@ func NewProcessor(cfg ProcessorConfig) (*Processor, error) {
 	}
 	processor := &Processor{
 		contexts:         make(map[contextKey]*Context, len(cfg.Contexts)),
+		senderContexts:   make(map[[32]byte]struct{}, len(cfg.Contexts)),
 		outgoingSelector: cfg.OutgoingContextSelector,
 		allowUnprotected: cfg.AllowUnprotected,
 		requireOSCORE:    cfg.RequireOSCORE,
@@ -68,7 +70,11 @@ func NewProcessor(cfg ProcessorConfig) (*Processor, error) {
 		if _, exists := processor.contexts[key]; exists {
 			return nil, fmt.Errorf("%w: duplicate recipient ID and ID Context", ErrInvalidContext)
 		}
+		if _, exists := processor.senderContexts[context.senderContextFingerprint]; exists {
+			return nil, fmt.Errorf("%w: duplicate sender key and common IV", ErrInvalidContext)
+		}
 		processor.contexts[key] = context
+		processor.senderContexts[context.senderContextFingerprint] = struct{}{}
 		processor.outgoingContexts = append(processor.outgoingContexts, context)
 	}
 	if cfg.RequireOSCORE && len(cfg.Contexts) == 0 {
@@ -106,7 +112,11 @@ func (p *Processor) AddContext(context *Context) error {
 	if _, exists := p.contexts[key]; exists {
 		return fmt.Errorf("%w: duplicate recipient ID and ID Context", ErrInvalidContext)
 	}
+	if _, exists := p.senderContexts[context.senderContextFingerprint]; exists {
+		return fmt.Errorf("%w: duplicate sender key and common IV", ErrInvalidContext)
+	}
 	p.contexts[key] = context
+	p.senderContexts[context.senderContextFingerprint] = struct{}{}
 	p.outgoingContexts = append(p.outgoingContexts, context)
 	return nil
 }

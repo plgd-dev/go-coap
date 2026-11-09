@@ -909,8 +909,9 @@ func (cc *Conn) writeMessageAsync(req *pool.Message) error {
 	if err != nil {
 		return &client.RequestNotSentError{Err: err}
 	}
+	sent := false
 	if releaseWireReq != nil {
-		defer releaseWireReq()
+		defer func() { releaseWireReq(sent) }()
 	}
 	closeFn, err := cc.prepareWriteMessage(wireReq, func(*responsewriter.ResponseWriter[*Conn], *pool.Message) {
 		// do nothing
@@ -922,6 +923,7 @@ func (cc *Conn) writeMessageAsync(req *pool.Message) error {
 	if err := cc.session.WriteMessage(wireReq); err != nil {
 		return fmt.Errorf(errFmtWriteRequest, err)
 	}
+	sent = true
 	return nil
 }
 
@@ -941,8 +943,9 @@ func (cc *Conn) writeMessage(req *pool.Message) error {
 	if err != nil {
 		return &client.RequestNotSentError{Err: err}
 	}
+	sent := false
 	if releaseWireReq != nil {
-		defer releaseWireReq()
+		defer func() { releaseWireReq(sent) }()
 	}
 	closeFn, err := cc.prepareWriteMessage(wireReq, func(_ *responsewriter.ResponseWriter[*Conn], response *pool.Message) {
 		var responseErr error
@@ -961,6 +964,7 @@ func (cc *Conn) writeMessage(req *pool.Message) error {
 	if err := cc.waitForAcknowledge(req, respChan); err != nil {
 		return fmt.Errorf(errFmtWriteRequest, err)
 	}
+	sent = true
 	return nil
 }
 
@@ -1666,21 +1670,29 @@ func (cc *Conn) processIncomingOSCOREResponseRetransmission(req *pool.Message, d
 		exists = false
 	}
 	cc.oscoreMu.Unlock()
-	if !exists || cached.digest != digest {
+	if !exists {
 		return false, nil
 	}
+	if cached.digest != digest {
+		ackErr := cc.retransmitCachedOSCOREAcknowledgment(req)
+		protocolErr := fmt.Errorf("%w: Message ID reused for different protected response", oscore.ErrInvalidOSCOREMessage)
+		return true, errors.Join(protocolErr, ackErr)
+	}
+	return true, cc.retransmitCachedOSCOREAcknowledgment(req)
+}
 
+func (cc *Conn) retransmitCachedOSCOREAcknowledgment(req *pool.Message) error {
 	resp := cc.AcquireMessage(req.Context())
 	defer cc.ReleaseMessage(resp)
 	ok, err := cc.getResponseFromCache(req.MessageID(), resp)
 	if err != nil {
-		return true, fmt.Errorf("load cached acknowledgment: %w", err)
+		return fmt.Errorf("load cached acknowledgment: %w", err)
 	}
 	if !ok || resp.Code() != codes.Empty || resp.Type() != message.Acknowledgement {
-		return true, nil
+		return nil
 	}
 	resp.SetMessageID(req.MessageID())
-	return true, cc.session.WriteMessage(resp)
+	return cc.session.WriteMessage(resp)
 }
 
 func (cc *Conn) recordIncomingOSCOREResponse(mid int32, datagram []byte) {

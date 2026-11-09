@@ -78,14 +78,15 @@ type SenderSequenceStore = SenderSequenceReserver
 // Context holds the derived keys and mutable sender and recipient state for one
 // pair of OSCORE endpoints.
 type Context struct {
-	commonIV      []byte
-	senderID      []byte
-	recipientID   []byte
-	idContext     []byte
-	idContextSet  bool
-	algorithm     AEADAlgorithm
-	senderAEAD    ccm.CCM
-	recipientAEAD ccm.CCM
+	commonIV                 []byte
+	senderContextFingerprint [sha256.Size]byte
+	senderID                 []byte
+	recipientID              []byte
+	idContext                []byte
+	idContextSet             bool
+	algorithm                AEADAlgorithm
+	senderAEAD               ccm.CCM
+	recipientAEAD            ccm.CCM
 
 	sequenceMu    sync.Mutex
 	nextSeq       uint64
@@ -122,6 +123,10 @@ func NewContext(cfg ContextConfig) (*Context, error) {
 	if err != nil {
 		return nil, err
 	}
+	fingerprintInput := make([]byte, 0, len(senderKey)+len(commonIV))
+	fingerprintInput = append(fingerprintInput, senderKey...)
+	fingerprintInput = append(fingerprintInput, commonIV...)
+	senderContextFingerprint := sha256.Sum256(fingerprintInput)
 
 	senderAEAD, err := newContextAEAD(senderKey, algorithm.tagSize, "sender")
 	if err != nil {
@@ -137,17 +142,18 @@ func NewContext(cfg ContextConfig) (*Context, error) {
 		return nil, err
 	}
 	return &Context{
-		commonIV:      commonIV,
-		senderID:      senderID,
-		recipientID:   recipientID,
-		idContext:     idContext,
-		idContextSet:  cfg.IDContext != nil,
-		algorithm:     cfg.Algorithm,
-		senderAEAD:    senderAEAD,
-		recipientAEAD: recipientAEAD,
-		nextSeq:       cfg.SenderSequenceNumber,
-		sequenceStore: cfg.SenderSequenceStore,
-		replay:        replay,
+		commonIV:                 commonIV,
+		senderContextFingerprint: senderContextFingerprint,
+		senderID:                 senderID,
+		recipientID:              recipientID,
+		idContext:                idContext,
+		idContextSet:             cfg.IDContext != nil,
+		algorithm:                cfg.Algorithm,
+		senderAEAD:               senderAEAD,
+		recipientAEAD:            recipientAEAD,
+		nextSeq:                  cfg.SenderSequenceNumber,
+		sequenceStore:            cfg.SenderSequenceStore,
+		replay:                   replay,
 	}, nil
 }
 

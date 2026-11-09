@@ -156,6 +156,46 @@ func TestProcessorRejectsInvalidConfiguration(t *testing.T) {
 	}
 }
 
+func TestProcessorRejectsDuplicateSenderSecurityContext(t *testing.T) {
+	newContext := func(recipientID, masterSalt, idContext []byte) *Context {
+		t.Helper()
+		context, err := NewContext(ContextConfig{
+			MasterSecret: []byte("duplicate sender context test"),
+			MasterSalt:   masterSalt,
+			IDContext:    idContext,
+			SenderID:     []byte{1},
+			RecipientID:  recipientID,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return context
+	}
+
+	first := newContext([]byte{2}, []byte{3}, []byte{4})
+	duplicate := newContext([]byte{5}, []byte{3}, []byte{4})
+	if _, err := NewProcessor(ProcessorConfig{Contexts: []*Context{first, duplicate}}); !errors.Is(err, ErrInvalidContext) {
+		t.Fatalf("duplicate sender security context error = %v, want %v", err, ErrInvalidContext)
+	}
+
+	processor, err := NewProcessor(ProcessorConfig{Contexts: []*Context{first}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := processor.AddContext(duplicate); !errors.Is(err, ErrInvalidContext) {
+		t.Fatalf("AddContext duplicate sender security context error = %v, want %v", err, ErrInvalidContext)
+	}
+
+	differentSalt := newContext([]byte{6}, []byte{7}, []byte{4})
+	if err := processor.AddContext(differentSalt); err != nil {
+		t.Fatalf("AddContext context with different Master Salt: %v", err)
+	}
+	differentIDContext := newContext([]byte{8}, []byte{3}, []byte{9})
+	if err := processor.AddContext(differentIDContext); err != nil {
+		t.Fatalf("AddContext context with different ID Context: %v", err)
+	}
+}
+
 func TestProcessorSelectsOutgoingContext(t *testing.T) {
 	clientA := newTestContext(t, []byte{0x10}, []byte{0x20})
 	serverA := newTestContext(t, []byte{0x20}, []byte{0x10})
