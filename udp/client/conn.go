@@ -1268,22 +1268,11 @@ func (cc *Conn) processResponse(reqType message.Type, reqMessageID int32, qRespo
 		w.Message().SetType(message.Acknowledgement)
 		w.Message().SetMessageID(reqMessageID)
 		w.Message().SetToken(nil)
-
-		if cacheResponse {
-			if err := cc.addResponseToCache(reqMessageID, w.Message()); err != nil {
-				return fmt.Errorf("cannot cache response: %w", err)
-			}
-		}
-		return nil
+		return cc.cacheResponseIfRequested(cacheResponse, reqMessageID, "cannot cache response", w.Message())
 	case isQNonResponse(reqType, qResponse, w.Message()):
 		w.Message().SetType(message.NonConfirmable)
 		w.Message().SetMessageID(cc.GetMessageID())
-		if cacheResponse {
-			if err := cc.addResponseToCache(reqMessageID, w.Message()); err != nil {
-				return fmt.Errorf("cannot cache Q-Block response: %w", err)
-			}
-		}
-		return nil
+		return cc.cacheResponseIfRequested(cacheResponse, reqMessageID, "cannot cache Q-Block response", w.Message())
 	case !w.Message().IsModified():
 		// don't send response
 		return nil
@@ -1297,11 +1286,17 @@ func (cc *Conn) processResponse(reqType message.Type, reqMessageID int32, qRespo
 		w.Message().SetMessageID(reqMessageID)
 	}
 	if reqType == message.Confirmable || reqType == message.NonConfirmable {
-		if cacheResponse {
-			if err := cc.addResponseToCache(reqMessageID, w.Message()); err != nil {
-				return fmt.Errorf("cannot cache response: %w", err)
-			}
-		}
+		return cc.cacheResponseIfRequested(cacheResponse, reqMessageID, "cannot cache response", w.Message())
+	}
+	return nil
+}
+
+func (cc *Conn) cacheResponseIfRequested(cacheResponse bool, reqMessageID int32, errorMessage string, response *pool.Message) error {
+	if !cacheResponse {
+		return nil
+	}
+	if err := cc.addResponseToCache(reqMessageID, response); err != nil {
+		return fmt.Errorf("%s: %w", errorMessage, err)
 	}
 	return nil
 }
@@ -1351,9 +1346,9 @@ func (cc *Conn) handleReq(w *responsewriter.ResponseWriter[*Conn], req *pool.Mes
 	reqType := req.Type()
 	reqMessageID := req.MessageID()
 	qResponse := req.HasOption(message.QBlock1) || req.HasOption(message.QBlock2)
+	cacheResponse := !hasOSCORERequestContext(req)
 	cc.handle(w, req)
 
-	cacheResponse := !hasOSCORERequestContext(req)
 	err := cc.processResponse(reqType, reqMessageID, qResponse, cacheResponse, w)
 	if err != nil {
 		cc.closeConnection()
