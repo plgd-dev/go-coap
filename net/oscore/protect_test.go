@@ -239,10 +239,18 @@ func TestProtectQBlockRequestAndResponse(t *testing.T) {
 func TestProtectObserveRequestAndNotifications(t *testing.T) {
 	client, server := pairedContexts(t, 3, 5)
 	request := message.Message{Code: codes.GET, Token: message.Token{0x12, 0x34}, Options: observeOptions(t, 0)}
-	clientExchange, serverExchange := assertObserveRegistration(t, client, server, request)
-	assertObserveNotification(t, client, server, request, clientExchange, serverExchange, 20, 5)
-	assertObserveNotification(t, client, server, request, clientExchange, serverExchange, 21, 6)
+	observation := assertObserveRegistration(t, client, server, request)
+	assertObserveNotification(t, observation, 20, 5)
+	assertObserveNotification(t, observation, 21, 6)
 	assertObserveCancellation(t, client, server)
+}
+
+type observeTestExchange struct {
+	client         *Context
+	server         *Context
+	request        message.Message
+	clientExchange Exchange
+	serverExchange Exchange
 }
 
 func observeOptions(t *testing.T, value uint32) message.Options {
@@ -254,7 +262,9 @@ func observeOptions(t *testing.T, value uint32) message.Options {
 	return options
 }
 
-func assertObserveRegistration(t *testing.T, client, server *Context, request message.Message) (Exchange, Exchange) {
+func assertObserveRegistration(
+	t *testing.T, client, server *Context, request message.Message,
+) observeTestExchange {
 	t.Helper()
 	protectedRequest, clientExchange, err := client.ProtectRequest(request)
 	if err != nil {
@@ -273,19 +283,19 @@ func assertObserveRegistration(t *testing.T, client, server *Context, request me
 	if !serverExchange.Observe || !optionsEqual(openedRequest.Options, request.Options) {
 		t.Fatalf("opened Observe request = %+v, exchange %+v", openedRequest, serverExchange)
 	}
-	return clientExchange, serverExchange
+	return observeTestExchange{
+		client: client, server: server, request: request,
+		clientExchange: clientExchange, serverExchange: serverExchange,
+	}
 }
 
-func assertObserveNotification(
-	t *testing.T, client, server *Context, request message.Message,
-	clientExchange, serverExchange Exchange, responseSequence, wantSequence uint32,
-) {
+func assertObserveNotification(t *testing.T, exchange observeTestExchange, responseSequence, wantSequence uint32) {
 	t.Helper()
-	protectedResponse, err := server.ProtectResponse(message.Message{
+	protectedResponse, err := exchange.server.ProtectResponse(message.Message{
 		Code:    codes.Content,
-		Token:   request.Token,
+		Token:   exchange.request.Token,
 		Options: observeOptions(t, responseSequence),
-	}, serverExchange)
+	}, exchange.serverExchange)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -306,7 +316,7 @@ func assertObserveNotification(
 	if outerObserve != responseSequence {
 		t.Fatalf("outer Observe = %d, want %d", outerObserve, responseSequence)
 	}
-	openedResponse, err := client.UnprotectResponse(protectedResponse, clientExchange)
+	openedResponse, err := exchange.client.UnprotectResponse(protectedResponse, exchange.clientExchange)
 	if err != nil {
 		t.Fatal(err)
 	}

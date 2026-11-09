@@ -516,7 +516,7 @@ func (b *Engine[C]) prepareQBlock2Response(
 func (b *Engine[C]) registerCompletedQ1Observation(
 	w *responsewriter.ResponseWriter[C], q2Request *pool.Message, transfer *q1ReceiveTransfer, remoteAddr net.Addr,
 ) error {
-	if !w.Message().HasOption(message.Observe) {
+	if !w.Message().HasOption(message.Observe) || !q2Request.HasOption(message.Observe) {
 		return nil
 	}
 	observe, err := q2Request.Observe()

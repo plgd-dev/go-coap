@@ -121,6 +121,14 @@ persists a unique value before returning it. Coordinate reservations across all
 processes and `Context` instances that share a sender key. A reserved value
 remains consumed even if protection or transmission later fails.
 
+The file store reserves sender values in windows, so file locking prevents
+reuse but does not guarantee that independently active stores transmit in
+sequence order. For example, one instance may send sequence 256 before another
+sends sequence 1; a receiver with the default 32-entry replay window will
+reject the later low sequence as stale. Use a single active sender/store
+instance for each sender context, or coordinate transmission so messages arrive
+in sequence order.
+
 Alternatively, restore `SenderSequenceNumber` to the next unused value before
 constructing a context. Never restore an old or guessed value. The receiver
 replay window is independent of sender sequence persistence. To preserve it

@@ -81,6 +81,38 @@ func TestQBlockUploadAfterMonitorReadsBody(t *testing.T) {
 	require.Zero(t, offset)
 }
 
+func TestQBlock1ResponseObserveWithoutRequestObserveDoesNotFail(t *testing.T) {
+	cc := &qTestTransport{testClient: newTestClient(), jobs: make(map[string]qBlockTestJob)}
+	engine := New(cc, func(err error) { t.Error(err) })
+	defer engine.CloseQBlockTransfers()
+	payload := []byte("upload")
+	request := pool.NewMessage(context.Background())
+	request.SetCode(codes.FETCH)
+	request.SetType(message.NonConfirmable)
+	request.SetToken([]byte("no-observe"))
+	require.NoError(t, request.SetRequestTag([]byte("tag")))
+	value, err := EncodeQBlockOption(SZX16, 0, false)
+	require.NoError(t, err)
+	request.SetOptionUint32(message.QBlock1, value)
+	request.SetOptionUint32(message.Size1, uint32(len(payload)))
+	request.SetBody(bytes.NewReader(payload))
+
+	writer := responsewriter.New(cc.AcquireMessage(request.Context()), cc)
+	defer cc.ReleaseMessage(writer.Message())
+	var handlerCalls int
+	err = engine.handleQBlock1(writer, request, SZX16, nil,
+		func(w *responsewriter.ResponseWriter[*qTestTransport], _ *pool.Message) {
+			handlerCalls++
+			require.NoError(t, w.SetResponse(codes.Content, message.TextPlain, bytes.NewReader([]byte("ok"))))
+			w.Message().SetObserve(1)
+		})
+	require.NoError(t, err)
+	require.Equal(t, 1, handlerCalls)
+	require.Equal(t, codes.Content, writer.Message().Code())
+	require.True(t, writer.Message().HasOption(message.Observe))
+	require.Empty(t, engine.qObservations, "request without Observe must not create a registration")
+}
+
 func TestQBlockObserveReplacementRetainsNewResponseCache(t *testing.T) {
 	cc := &qTestTransport{testClient: newTestClient(), jobs: make(map[string]qBlockTestJob)}
 	engine := New(cc, func(err error) { t.Error(err) })
