@@ -271,6 +271,18 @@ func TestNewContextIDContextFitsMaximumRequestOption(t *testing.T) {
 	}
 }
 
+func TestNewContextIDContextUsesBothIDs(t *testing.T) {
+	_, err := NewContext(ContextConfig{
+		MasterSecret: []byte("0123456789abcdef"),
+		SenderID:     []byte{1},
+		RecipientID:  []byte{1, 2, 3, 4, 5, 6, 7},
+		IDContext:    bytes.Repeat([]byte{3}, 242),
+	})
+	if !errors.Is(err, ErrInvalidContext) {
+		t.Fatalf("oversized ID Context for recipient ID error = %v, want %v", err, ErrInvalidContext)
+	}
+}
+
 func TestContextSealOpenAndReplayProtection(t *testing.T) {
 	client, err := NewContext(ContextConfig{
 		MasterSecret: mustHex(t, "0102030405060708090a0b0c0d0e0f10"),

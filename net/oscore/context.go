@@ -167,7 +167,8 @@ func validateContextConfig(cfg ContextConfig) (ContextConfig, error) {
 	if bytes.Equal(cfg.SenderID, cfg.RecipientID) {
 		return cfg, fmt.Errorf("%w: sender and recipient IDs must differ", ErrInvalidContext)
 	}
-	maxIDContextSize := maxOSCOREOptionLength - 1 - 5 - 1 - len(cfg.SenderID)
+	maxIdentifierLength := max(len(cfg.SenderID), len(cfg.RecipientID))
+	maxIDContextSize := maxOSCOREOptionLength - 1 - 5 - 1 - maxIdentifierLength
 	if len(cfg.IDContext) > maxIDContextSize {
 		return cfg, fmt.Errorf("%w: ID Context exceeds %d bytes for the request OSCORE option", ErrInvalidContext, maxIDContextSize)
 	}
