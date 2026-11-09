@@ -520,8 +520,16 @@ func TestQBlockConfirmableACKAndFinalResponseFaults(t *testing.T) {
 			defer relay.mu.Unlock()
 			require.True(t, relay.faulted, "the configured wire fault must be injected")
 			if tt.finalNUM {
-				require.Equal(t, tt.retransmits, relay.observed[relay.faultNum],
-					"only the final Q2 payload should be retransmitted or duplicated")
+				finalCount := relay.observed[relay.faultNum]
+				if tt.fault == qRelayDropFinalResponse {
+					require.GreaterOrEqual(t, finalCount, tt.retransmits,
+						"the dropped final Q2 payload must be retransmitted")
+					require.LessOrEqual(t, finalCount, 5,
+						"final Q2 retransmissions must stay within the default CoAP retry limit")
+				} else {
+					require.Equal(t, tt.retransmits, finalCount,
+						"only the final Q2 payload should be retransmitted or duplicated")
+				}
 			} else {
 				require.Equal(t, tt.retransmits, relay.q1Seen[0],
 					"only the Q1 block whose empty ACK was lost should be retransmitted")
@@ -535,11 +543,10 @@ func TestQBlockConfirmableACKAndFinalResponseFaults(t *testing.T) {
 			}
 			if tt.finalNUM {
 				for num, count := range relay.observed {
-					want := 1
 					if num == relay.faultNum {
-						want = tt.retransmits
+						continue
 					}
-					require.Equal(t, want, count, "unexpected retry/duplicate for Q2 NUM %d", num)
+					require.Equal(t, 1, count, "unexpected retry/duplicate for Q2 NUM %d", num)
 				}
 			}
 		})

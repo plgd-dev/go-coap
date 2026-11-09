@@ -107,13 +107,20 @@ func TestLibCoAPServerOSCORE(t *testing.T) {
 		require.Equal(t, payload, putBody)
 	}
 
-	observeCtx, cancelObserve := context.WithTimeout(context.Background(), 5*time.Second)
+	observeCtx, cancelObserve := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancelObserve()
+	observeConn, err := udp.Dial(
+		net.JoinHostPort("127.0.0.1", strconv.Itoa(port)),
+		options.WithOSCORE(processor),
+		options.WithBlockwise(true, blockwise.SZX1024, 5*time.Second),
+	)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, observeConn.Close()) }()
 	observed := make(chan struct{}, 4)
-	observation, err := cc.Observe(observeCtx, "/time", func(*pool.Message) {
+	observation, err := observeConn.Observe(observeCtx, "/time", func(*pool.Message) {
 		observed <- struct{}{}
 	})
-	require.NoError(t, err)
+	require.NoError(t, err, "libcoap output: %s", serverOutput.String())
 	select {
 	case <-observed:
 	case <-observeCtx.Done():

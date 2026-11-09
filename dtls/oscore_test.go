@@ -238,6 +238,7 @@ func TestOSCOREDTLSObserveNotificationsAndCancellation(t *testing.T) {
 	listener, listenerErr := coapNet.NewDTLSListener("udp", "127.0.0.1:0", testOSCOREDTLSServerOptions())
 	require.NoError(t, listenerErr)
 	sendNotifications := make(chan struct{})
+	notificationsSent := make(chan error, 1)
 	server := dtls.NewServer(
 		options.WithOSCORE(newDTLSOSCOREProcessor(t, "server", "client")),
 		options.WithHandlerFunc(func(w *responsewriter.ResponseWriter[*client.Conn], req *pool.Message) {
@@ -265,10 +266,11 @@ func TestOSCOREDTLSObserveNotificationsAndCancellation(t *testing.T) {
 						err := cc.WriteMessage(notification)
 						cc.ReleaseMessage(notification)
 						if err != nil {
-							t.Errorf("write Observe notification: %v", err)
+							notificationsSent <- fmt.Errorf("write Observe notification: %w", err)
 							return
 						}
 					}
+					notificationsSent <- nil
 				}()
 			case 1:
 				if err := w.SetResponse(codes.Content, message.TextPlain, nil); err != nil {
@@ -318,6 +320,12 @@ func TestOSCOREDTLSObserveNotificationsAndCancellation(t *testing.T) {
 	close(sendNotifications)
 	require.Equal(t, "notification-1", <-received)
 	require.Equal(t, "notification-2", <-received)
+	select {
+	case err := <-notificationsSent:
+		require.NoError(t, err)
+	case <-ctx.Done():
+		require.FailNow(t, "DTLS Observe notifications were not acknowledged before cancellation")
+	}
 	require.NoError(t, observation.Cancel(ctx))
 }
 
