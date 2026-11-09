@@ -3,6 +3,7 @@
 package oscore
 
 import (
+	"bytes"
 	"crypto/aes"
 	"crypto/sha256"
 	"errors"
@@ -163,8 +164,12 @@ func validateContextConfig(cfg ContextConfig) (ContextConfig, error) {
 	if len(cfg.SenderID) > maxIdentifierSize || len(cfg.RecipientID) > maxIdentifierSize {
 		return cfg, fmt.Errorf("%w: AES-CCM sender and recipient IDs must be at most %d bytes", ErrInvalidContext, maxIdentifierSize)
 	}
-	if len(cfg.IDContext) > 255 {
-		return cfg, fmt.Errorf("%w: ID Context exceeds 255 bytes", ErrInvalidContext)
+	if bytes.Equal(cfg.SenderID, cfg.RecipientID) {
+		return cfg, fmt.Errorf("%w: sender and recipient IDs must differ", ErrInvalidContext)
+	}
+	maxIDContextSize := maxOSCOREOptionLength - 1 - 5 - 1 - len(cfg.SenderID)
+	if len(cfg.IDContext) > maxIDContextSize {
+		return cfg, fmt.Errorf("%w: ID Context exceeds %d bytes for the request OSCORE option", ErrInvalidContext, maxIDContextSize)
 	}
 	if cfg.SenderSequenceNumber > maxPartialIV {
 		return cfg, fmt.Errorf("%w: initial sender sequence number exceeds 40 bits", ErrInvalidContext)

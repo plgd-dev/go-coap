@@ -262,6 +262,31 @@ func observeOptions(t *testing.T, value uint32) message.Options {
 	return options
 }
 
+func TestValidateInnerRequestObserveValue(t *testing.T) {
+	for _, value := range []uint32{0, 1} {
+		options := observeOptions(t, value)
+		outerOption, hasOuterObserve, err := findObserveOption(options)
+		if err != nil || !hasOuterObserve {
+			t.Fatalf("find Observe option for %d: has=%t err=%v", value, hasOuterObserve, err)
+		}
+		_, err = validateInnerRequest(message.Message{Code: codes.GET, Options: options}, outerOption, true)
+		if err != nil {
+			t.Errorf("valid Observe value %d rejected: %v", value, err)
+		}
+	}
+
+	for _, value := range []uint32{2, 3, 0xffffff} {
+		options := observeOptions(t, value)
+		outerOption, hasOuterObserve, err := findObserveOption(options)
+		if err != nil || !hasOuterObserve {
+			t.Fatalf("find Observe option for %d: has=%t err=%v", value, hasOuterObserve, err)
+		}
+		if _, err := validateInnerRequest(message.Message{Code: codes.GET, Options: options}, outerOption, true); !errors.Is(err, ErrInvalidOSCOREMessage) {
+			t.Errorf("invalid Observe value %d error = %v, want %v", value, err, ErrInvalidOSCOREMessage)
+		}
+	}
+}
+
 func assertObserveRegistration(
 	t *testing.T, client, server *Context, request message.Message,
 ) observeTestExchange {

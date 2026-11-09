@@ -6,6 +6,9 @@ import (
 	"errors"
 	"sync"
 	"testing"
+
+	"github.com/plgd-dev/go-coap/v3/message"
+	"github.com/plgd-dev/go-coap/v3/message/codes"
 )
 
 func mustHex(t *testing.T, value string) []byte {
@@ -217,6 +220,57 @@ func TestNewContextRejectsUnsupportedAEADAlgorithm(t *testing.T) {
 	}
 }
 
+func TestNewContextRejectsIdenticalIDs(t *testing.T) {
+	_, err := NewContext(ContextConfig{
+		MasterSecret: []byte("0123456789abcdef"),
+		SenderID:     []byte{1},
+		RecipientID:  []byte{1},
+	})
+	if !errors.Is(err, ErrInvalidContext) {
+		t.Fatalf("identical IDs error = %v, want %v", err, ErrInvalidContext)
+	}
+}
+
+func TestNewContextIDContextFitsMaximumRequestOption(t *testing.T) {
+	senderID := bytes.Repeat([]byte{1}, maxIdentifierSize)
+	recipientID := bytes.Repeat([]byte{2}, maxIdentifierSize)
+	maxIDContextSize := maxOSCOREOptionLength - 1 - 5 - 1 - len(senderID)
+	context, err := NewContext(ContextConfig{
+		MasterSecret:         []byte("0123456789abcdef"),
+		IDContext:            bytes.Repeat([]byte{3}, maxIDContextSize),
+		SenderID:             senderID,
+		RecipientID:          recipientID,
+		SenderSequenceNumber: maxPartialIV,
+	})
+	if err != nil {
+		t.Fatalf("NewContext at maximum request option size: %v", err)
+	}
+	protected, _, err := context.ProtectRequest(message.Message{Code: codes.GET})
+	if err != nil {
+		t.Fatalf("ProtectRequest at maximum Partial IV: %v", err)
+	}
+	start, end, err := protected.Options.Find(message.OSCORE)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := len(protected.Options[start].Value); got != maxOSCOREOptionLength {
+		t.Fatalf("OSCORE option length = %d, want %d", got, maxOSCOREOptionLength)
+	}
+	if end-start != 1 {
+		t.Fatalf("OSCORE option count = %d, want 1", end-start)
+	}
+
+	_, err = NewContext(ContextConfig{
+		MasterSecret: []byte("0123456789abcdef"),
+		IDContext:    bytes.Repeat([]byte{3}, maxIDContextSize+1),
+		SenderID:     senderID,
+		RecipientID:  recipientID,
+	})
+	if !errors.Is(err, ErrInvalidContext) {
+		t.Fatalf("oversized ID Context error = %v, want %v", err, ErrInvalidContext)
+	}
+}
+
 func TestContextSealOpenAndReplayProtection(t *testing.T) {
 	client, err := NewContext(ContextConfig{
 		MasterSecret: mustHex(t, "0102030405060708090a0b0c0d0e0f10"),
@@ -360,6 +414,8 @@ func TestRFC8613AppendixC4Encryption(t *testing.T) {
 func TestContextSequenceExhaustion(t *testing.T) {
 	ctx, err := NewContext(ContextConfig{
 		MasterSecret:         []byte{1},
+		SenderID:             []byte{0},
+		RecipientID:          []byte{1},
 		SenderSequenceNumber: maxPartialIV,
 	})
 	if err != nil {
@@ -378,7 +434,11 @@ func TestContextSequenceExhaustion(t *testing.T) {
 }
 
 func TestContextRejectsOversizedPlaintextWithoutConsumingSequence(t *testing.T) {
-	ctx, err := NewContext(ContextConfig{MasterSecret: []byte{1}})
+	ctx, err := NewContext(ContextConfig{
+		MasterSecret: []byte{1},
+		SenderID:     []byte{0},
+		RecipientID:  []byte{1},
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -403,7 +463,11 @@ func TestContextRejectsOversizedPlaintextWithoutConsumingSequence(t *testing.T) 
 }
 
 func TestContextConcurrentSequenceAllocation(t *testing.T) {
-	ctx, err := NewContext(ContextConfig{MasterSecret: []byte{1}})
+	ctx, err := NewContext(ContextConfig{
+		MasterSecret: []byte{1},
+		SenderID:     []byte{0},
+		RecipientID:  []byte{1},
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -446,6 +510,8 @@ func TestContextPersistentSequenceStoreSurvivesRecreation(t *testing.T) {
 	newContext := func() *Context {
 		ctx, err := NewContext(ContextConfig{
 			MasterSecret:        []byte{1},
+			SenderID:            []byte{0},
+			RecipientID:         []byte{1},
 			SenderSequenceStore: store,
 		})
 		if err != nil {
@@ -472,6 +538,8 @@ func TestContextPersistentSequenceStoreConcurrentAcrossContexts(t *testing.T) {
 	newContext := func() *Context {
 		ctx, err := NewContext(ContextConfig{
 			MasterSecret:        []byte{1},
+			SenderID:            []byte{0},
+			RecipientID:         []byte{1},
 			SenderSequenceStore: store,
 		})
 		if err != nil {
@@ -518,6 +586,8 @@ func TestContextPersistentSequenceStoreErrorsAndExhaustion(t *testing.T) {
 	storeErr := errors.New("storage unavailable")
 	ctx, err := NewContext(ContextConfig{
 		MasterSecret: []byte{1},
+		SenderID:     []byte{0},
+		RecipientID:  []byte{1},
 		SenderSequenceStore: &testSenderSequenceStore{
 			err: storeErr,
 		},
@@ -531,6 +601,8 @@ func TestContextPersistentSequenceStoreErrorsAndExhaustion(t *testing.T) {
 
 	exhausted, err := NewContext(ContextConfig{
 		MasterSecret: []byte{1},
+		SenderID:     []byte{0},
+		RecipientID:  []byte{1},
 		SenderSequenceStore: &testSenderSequenceStore{
 			next: maxPartialIV,
 		},

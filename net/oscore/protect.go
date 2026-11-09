@@ -262,7 +262,7 @@ func validateInnerRequest(inner message.Message, outerObserveOption message.Opti
 	if hasInnerObserve {
 		outerValue, outerErr := message.Options{outerObserveOption}.Observe()
 		innerValue, innerErr := inner.Options.Observe()
-		if outerErr != nil || innerErr != nil || outerValue != innerValue {
+		if outerErr != nil || innerErr != nil || outerValue > 1 || innerValue > 1 || outerValue != innerValue {
 			return false, fmt.Errorf("%w: inner and outer Observe options must match", ErrInvalidOSCOREMessage)
 		}
 		if inner.Code != codes.GET {

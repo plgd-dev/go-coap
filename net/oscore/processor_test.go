@@ -258,7 +258,11 @@ func TestProcessorOutgoingSelectorRejectsInvalidSelection(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	foreign, err := NewContext(ContextConfig{MasterSecret: []byte("foreign context")})
+	foreign, err := NewContext(ContextConfig{
+		MasterSecret: []byte("foreign context"),
+		SenderID:     []byte{0},
+		RecipientID:  []byte{1},
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
