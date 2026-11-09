@@ -6,6 +6,7 @@ import (
 	"sync"
 
 	"github.com/plgd-dev/go-coap/v3/message"
+	pkgMath "github.com/plgd-dev/go-coap/v3/pkg/math"
 )
 
 var (
@@ -171,6 +172,50 @@ func (p *Processor) ProtectRequestWithContext(request message.Message) (message.
 		return message.Message{}, nil, Exchange{}, err
 	}
 	return protected, context, exchange, nil
+}
+
+// MaxRequestOverhead returns a conservative bound for the additional wire size
+// OSCORE adds to a request with the given number of options. It accounts for
+// the largest configured request option (including ID Context and KID), the
+// inner code, AEAD tag, and option delta growth after class splitting.
+func (p *Processor) MaxRequestOverhead(optionCount int, observes bool) uint32 {
+	p.mu.RLock()
+	contexts := append([]*Context(nil), p.outgoingContexts...)
+	p.mu.RUnlock()
+
+	if optionCount < 0 {
+		optionCount = 0
+	}
+	const maxUint32 = uint64(^uint32(0))
+	optionCount64, err := pkgMath.SafeCastTo[uint64](optionCount)
+	if err != nil {
+		return ^uint32(0)
+	}
+	var maxOverhead uint32
+	for _, context := range contexts {
+		idContext, idContextSet := context.IDContext()
+		optionValueSize := 1 + 5 + len(context.SenderID())
+		if idContextSet {
+			optionValueSize += 1 + len(idContext)
+		}
+		fixedOverhead, err := pkgMath.SafeCastTo[uint64](3 + optionValueSize + 1 + algorithmParameters(context.algorithm).tagSize)
+		if err != nil {
+			return ^uint32(0)
+		}
+		if observes {
+			fixedOverhead += 5
+		}
+		if optionCount64 > (maxUint32-fixedOverhead)/2 {
+			return ^uint32(0)
+		}
+		overhead := fixedOverhead + 2*optionCount64
+		safeOverhead, err := pkgMath.SafeCastTo[uint32](overhead)
+		if err != nil {
+			return ^uint32(0)
+		}
+		maxOverhead = max(maxOverhead, safeOverhead)
+	}
+	return maxOverhead
 }
 
 func containsContext(contexts []*Context, selected *Context) bool {

@@ -15,6 +15,7 @@ import (
 	"github.com/plgd-dev/go-coap/v3/net/blockwise"
 	"github.com/plgd-dev/go-coap/v3/net/blockwise/qblock"
 	netclient "github.com/plgd-dev/go-coap/v3/net/client"
+	"github.com/plgd-dev/go-coap/v3/net/oscore"
 	"github.com/plgd-dev/go-coap/v3/udp/coder"
 	"github.com/stretchr/testify/require"
 )
@@ -119,6 +120,63 @@ func TestQBlockSZXAccountsForHeaderAndRecordBudget(t *testing.T) {
 	require.ErrorIs(t, err, blockwise.ErrQBlockTooLarge)
 	_, err = cc.qBlockResponseSZX()
 	require.ErrorIs(t, err, blockwise.ErrQBlockTooLarge)
+}
+
+func TestQBlockRequestBudgetIncludesOSCOREIDContext(t *testing.T) {
+	newProcessor := func(idContext []byte) *oscore.Processor {
+		t.Helper()
+		securityContext, err := oscore.NewContext(oscore.ContextConfig{
+			MasterSecret: []byte("Q-Block OSCORE sizing test"),
+			IDContext:    idContext,
+			SenderID:     []byte("client"),
+			RecipientID:  []byte("server"),
+		})
+		require.NoError(t, err)
+		processor, err := oscore.NewProcessor(oscore.ProcessorConfig{Contexts: []*oscore.Context{securityContext}})
+		require.NoError(t, err)
+		return processor
+	}
+
+	msg := qControlMessage()
+	msg.SetCode(codes.PUT)
+	msg.Remove(message.QBlock2)
+	require.NoError(t, msg.SetPath("/data"))
+	shortContext := &Conn{
+		session:         qContextSession{ctx: context.Background()},
+		messagePool:     pool.New(0, 0),
+		blockwiseSZX:    blockwise.SZX1024,
+		qDatagramLimit:  400,
+		oscoreProcessor: newProcessor([]byte{1}),
+	}
+	longContext := &Conn{
+		session:         qContextSession{ctx: context.Background()},
+		messagePool:     pool.New(0, 0),
+		blockwiseSZX:    blockwise.SZX1024,
+		qDatagramLimit:  400,
+		oscoreProcessor: newProcessor(bytes.Repeat([]byte{2}, 128)),
+	}
+	shortSZX, err := shortContext.qBlockRequestSZX(msg)
+	require.NoError(t, err)
+	longSZX, err := longContext.qBlockRequestSZX(msg)
+	require.NoError(t, err)
+	require.Less(t, longSZX, shortSZX, "long ID Context must reduce the request block size")
+
+	msg.SetOptionUint32(message.QBlock1, 0)
+	msg.SetOptionUint32(message.Size1, 128)
+	require.NoError(t, msg.SetRequestTag([]byte("tag")))
+	msg.SetBody(bytes.NewReader(bytes.Repeat([]byte{7}, 128)))
+	wire, err := msg.MarshalWithEncoder(coder.DefaultCoder)
+	require.NoError(t, err)
+	longContext.qDatagramLimit = uint32(len(wire) + 32)
+	require.ErrorIs(t, longContext.validateQBlockDatagram(msg), blockwise.ErrQBlockTooLarge,
+		"validation must include the selected context's larger OSCORE request option")
+
+	longContext.qDatagramLimit = shortContext.qDatagramLimit
+	shortResponseSZX, err := shortContext.qBlockResponseSZX()
+	require.NoError(t, err)
+	longResponseSZX, err := longContext.qBlockResponseSZX()
+	require.NoError(t, err)
+	require.Equal(t, shortResponseSZX, longResponseSZX, "response sizing must not include request ID Context")
 }
 
 func TestQBlockConnectionDeadlineCapacityAndClose(t *testing.T) {

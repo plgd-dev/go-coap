@@ -564,7 +564,9 @@ func (cc *Conn) validateQBlockDatagram(msg *pool.Message) error {
 		return err
 	}
 	size := uint64(len(wire))
-	if cc.oscoreProcessor != nil {
+	if cc.oscoreProcessor != nil && isQBlockMethod(msg.Code()) {
+		size += uint64(cc.oscoreProcessor.MaxRequestOverhead(len(msg.Options()), msg.HasOption(message.Observe)))
+	} else if cc.oscoreProcessor != nil {
 		size += 32
 	}
 	if size > uint64(cc.qDatagramLimit) {
@@ -623,9 +625,7 @@ func (cc *Conn) qBlockRequestSZX(req *pool.Message) (blockwise.SZX, error) {
 	}
 	wireSize := int64(len(wire))
 	if cc.oscoreProcessor != nil {
-		// Account for the OSCORE option and AEAD tag added after Q-Block
-		// options and the payload are moved into the protected inner message.
-		wireSize += 32
+		wireSize += int64(cc.oscoreProcessor.MaxRequestOverhead(len(header.Options()), header.HasOption(message.Observe)))
 	}
 	for szx := min(cc.blockwiseSZX, blockwise.SZX1024); ; szx-- {
 		if wireSize+1+szx.Size() <= int64(cc.qDatagramLimit) {
