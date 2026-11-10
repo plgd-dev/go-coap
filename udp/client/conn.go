@@ -706,7 +706,9 @@ func (cc *Conn) doOuterBlockwise(req *pool.Message) (*pool.Message, error) {
 	}
 	wireReq.SetContext(context.WithValue(wireReq.Context(), oscoreOuterBlockwiseContextKey{}, true))
 	sent := false
-	defer func() { finish(sent) }()
+	if finish != nil {
+		defer func() { finish(sent) }()
+	}
 	resp, blockwiseErr := cc.blockWise.Do(wireReq, cc.blockwiseSZX, cc.session.MaxMessageSize(), cc.RemoteAddr(), func(bwReq *pool.Message) (*pool.Message, error) {
 		if bwReq.Options().HasOption(message.Block1) || bwReq.Options().HasOption(message.Block2) {
 			bwReq.SetMessageID(cc.GetMessageID())
@@ -1100,7 +1102,9 @@ func (cc *Conn) writeOuterBlockwise(req *pool.Message) error {
 	}
 	wireReq.SetContext(context.WithValue(wireReq.Context(), oscoreOuterBlockwiseContextKey{}, true))
 	sent := false
-	defer func() { finish(sent) }()
+	if finish != nil {
+		defer func() { finish(sent) }()
+	}
 	err = cc.blockWise.WriteMessage(wireReq, cc.blockwiseSZX, cc.session.MaxMessageSize(), cc.RemoteAddr(), func(bwReq *pool.Message) error {
 		if bwReq.Options().HasOption(message.Block1) || bwReq.Options().HasOption(message.Block2) {
 			bwReq.SetMessageID(cc.GetMessageID())

@@ -198,6 +198,56 @@ func TestOSCOREOuterBlockwiseUsesConfiguredMaxReassembledPayloadSize(t *testing.
 	}
 }
 
+func TestOSCOREOuterBlockwiseProxyWithoutProcessorDoesNotPanic(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		run  func(*Conn, *pool.Message) error
+	}{
+		{
+			name: "WriteMessage",
+			run: func(cc *Conn, request *pool.Message) error {
+				request.SetType(message.NonConfirmable)
+				return cc.WriteMessage(request)
+			},
+		},
+		{
+			name: "Do",
+			run: func(cc *Conn, request *pool.Message) error {
+				ctx, cancel := context.WithCancel(request.Context())
+				cancel()
+				request.SetContext(ctx)
+				_, err := cc.doOuterBlockwise(request)
+				return err
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			session := newRecordingSession()
+			defer session.Close()
+			cfg := DefaultConfig
+			cfg.OSCOREProxy = true
+			cfg.OSCOREOuterBlockwise = true
+			createBlockWise := func(cc *Conn) *blockwise.BlockWise[*Conn] {
+				return blockwise.New(cc, time.Minute, func(error) {}, nil)
+			}
+			cc := NewConnWithOpts(session, &cfg, WithBlockWise(createBlockWise))
+			defer cc.Close()
+
+			request := cc.AcquireMessage(context.Background())
+			defer cc.ReleaseMessage(request)
+			request.SetCode(codes.GET)
+			request.SetToken(message.Token{0x42})
+
+			err := test.run(cc, request)
+			if test.name == "Do" {
+				require.Error(t, err)
+			} else {
+				require.NoError(t, err)
+			}
+		})
+	}
+}
+
 func TestFailedOSCOREWriteRemovesExchange(t *testing.T) {
 	securityContext, err := oscore.NewContext(oscore.ContextConfig{
 		MasterSecret: []byte("failed OSCORE write test"),
