@@ -95,6 +95,16 @@ func setMessagePreservingControlMessage(msg *pool.Message, replacement message.M
 
 type oscoreOuterBlockwiseContextKey struct{}
 
+type oscoreResponseUnprotectedContextKey struct{}
+
+func isOSCOREResponseUnprotected(resp *pool.Message) bool {
+	if resp.Context() == nil {
+		return false
+	}
+	unprotected, _ := resp.Context().Value(oscoreResponseUnprotectedContextKey{}).(bool)
+	return unprotected
+}
+
 func (cc *Conn) protectOutgoingRequest(req *pool.Message) (*pool.Message, func(bool), error) {
 	if cc.oscoreProcessor == nil {
 		return req, nil, nil
@@ -326,6 +336,7 @@ func (cc *Conn) unprotectIncomingResponse(resp *pool.Message) error {
 		observation.SetAuthenticatedSequenceNumber(resp, partialIVNumber(responseOption.PartialIV))
 	}
 	setMessagePreservingControlMessage(resp, plaintext)
+	resp.SetContext(context.WithValue(resp.Context(), oscoreResponseUnprotectedContextKey{}, true))
 	return nil
 }
 
@@ -660,6 +671,14 @@ func partialIVNumber(partialIV []byte) uint64 {
 
 func (cc *Conn) expireOSCORERequests(now time.Time) {
 	cc.oscoreMu.Lock()
+	cc.expireOSCOREExchanges(now)
+	cc.expireOSCORERequiredResponses()
+	cc.expireOSCORERequestCache(now)
+	cc.expireOSCOREResponseCache(now)
+	cc.oscoreMu.Unlock()
+}
+
+func (cc *Conn) expireOSCOREExchanges(now time.Time) {
 	for token, exchange := range cc.oscoreExchanges {
 		if !exchange.expires.IsZero() && !now.Before(exchange.expires) {
 			delete(cc.oscoreExchanges, token)
@@ -672,25 +691,37 @@ func (cc *Conn) expireOSCORERequests(now time.Time) {
 			cc.oscoreExchanges[token] = exchange
 		}
 	}
+}
+
+func (cc *Conn) expireOSCORERequiredResponses() {
 	for token := range cc.oscoreRequiredResponses {
 		if _, hasExchange := cc.oscoreExchanges[token]; hasExchange {
 			continue
 		}
-		_, hasHandler := cc.tokenHandlerContainer.Load(message.Token(token).Hash())
-		_, hasObservation := cc.oscoreObservations[token]
-		if !hasHandler && !hasObservation {
+		if !cc.hasOSCOREResponseConsumer(token) {
 			delete(cc.oscoreRequiredResponses, token)
 		}
 	}
+}
+
+func (cc *Conn) hasOSCOREResponseConsumer(token string) bool {
+	_, hasHandler := cc.tokenHandlerContainer.Load(message.Token(token).Hash())
+	_, hasObservation := cc.oscoreObservations[token]
+	return hasHandler || hasObservation
+}
+
+func (cc *Conn) expireOSCORERequestCache(now time.Time) {
 	for mid, request := range cc.oscoreRequests {
 		if !now.Before(request.expires) {
 			delete(cc.oscoreRequests, mid)
 		}
 	}
+}
+
+func (cc *Conn) expireOSCOREResponseCache(now time.Time) {
 	for mid, response := range cc.oscoreResponses {
 		if !now.Before(response.expires) {
 			delete(cc.oscoreResponses, mid)
 		}
 	}
-	cc.oscoreMu.Unlock()
 }

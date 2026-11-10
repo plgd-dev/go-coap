@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"net"
 	"testing"
 	"time"
@@ -20,6 +21,18 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.uber.org/atomic"
 )
+
+type responseRecordingSession struct {
+	*recordingSession
+	onWrite func(*pool.Message) error
+}
+
+func (s *responseRecordingSession) WriteMessage(req *pool.Message) error {
+	if s.onWrite != nil {
+		return s.onWrite(req)
+	}
+	return s.recordingSession.WriteMessage(req)
+}
 
 func TestObserveCancellationRequiresMatchingRegistrationOptions(t *testing.T) {
 	const token = "observe-token"
@@ -480,6 +493,78 @@ func TestOSCOREOuterBlockwiseProxyRejectsOversizedResponse(t *testing.T) {
 	require.ErrorIs(t, reported, blockwise.ErrRequestEntityTooLarge)
 }
 
+func TestOSCOREOuterBlockwiseObserveResponseIsUnprotectedOnce(t *testing.T) {
+	const masterSecret = "outer blockwise observe response"
+	clientContext, err := oscore.NewContext(oscore.ContextConfig{
+		MasterSecret: []byte(masterSecret),
+		SenderID:     []byte("client"),
+		RecipientID:  []byte("server"),
+	})
+	require.NoError(t, err)
+	serverContext, err := oscore.NewContext(oscore.ContextConfig{
+		MasterSecret: []byte(masterSecret),
+		SenderID:     []byte("server"),
+		RecipientID:  []byte("client"),
+	})
+	require.NoError(t, err)
+	processor, err := oscore.NewProcessor(oscore.ProcessorConfig{Contexts: []*oscore.Context{clientContext}})
+	require.NoError(t, err)
+	session := newRecordingSession()
+	defer session.Close()
+	cfg := DefaultConfig
+	cfg.OSCORE = processor
+	cfg.OSCOREOuterBlockwise = true
+	cc := NewConnWithOpts(session, &cfg, WithBlockWise(func(cc *Conn) *blockwise.BlockWise[*Conn] {
+		return blockwise.New(cc, time.Minute, func(error) {}, nil)
+	}))
+	defer cc.Close()
+
+	request := cc.AcquireMessage(context.Background())
+	defer cc.ReleaseMessage(request)
+	request.SetCode(codes.GET)
+	request.SetToken(message.Token{0x46})
+	request.SetOptionUint32(message.Observe, 0)
+	wireRequest, finish, err := cc.protectOutgoingRequest(request)
+	require.NoError(t, err)
+	require.NotNil(t, finish)
+	outerRequest, err := udpPoolMessageToOSCOREMessage(wireRequest)
+	require.NoError(t, err)
+	finish(true)
+	_, exchange, err := serverContext.UnprotectRequest(outerRequest)
+	require.NoError(t, err)
+	protectedResponse, err := serverContext.ProtectResponse(message.Message{
+		Code:  codes.Content,
+		Token: request.Token(),
+		Options: message.Options{
+			{ID: message.Observe},
+		},
+		Payload: []byte("observe"),
+	}, exchange)
+	require.NoError(t, err)
+
+	response := cc.AcquireMessage(context.Background())
+	defer cc.ReleaseMessage(response)
+	response.SetMessage(protectedResponse)
+	response.SetCode(codes.Content)
+	datagram, err := response.MarshalWithEncoder(coder.DefaultCoder)
+	require.NoError(t, err)
+	require.False(t, cc.processIncomingOSCOREMessage(response, datagram))
+	require.True(t, isOSCOREResponseUnprotected(response))
+
+	delivered := false
+	cc.tokenHandlerContainer.Store(request.Token().Hash(), func(_ *responsewriter.ResponseWriter[*Conn], got *pool.Message) {
+		delivered = true
+		observe, observeErr := got.Observe()
+		require.NoError(t, observeErr)
+		require.Zero(t, observe)
+	})
+	writer := responsewriter.New(cc.AcquireMessage(context.Background()), cc)
+	defer cc.ReleaseMessage(writer.Message())
+
+	cc.handleResponse(writer, response)
+	require.True(t, delivered, "authenticated Observe response must be delivered")
+}
+
 func TestOSCOREOuterBlockwiseProxyWithoutProcessorDoesNotPanic(t *testing.T) {
 	for _, test := range []struct {
 		name string
@@ -517,6 +602,7 @@ func TestOSCOREOuterBlockwiseProxyWithoutProcessorDoesNotPanic(t *testing.T) {
 
 			request := cc.AcquireMessage(context.Background())
 			defer cc.ReleaseMessage(request)
+			request.SetType(message.NonConfirmable)
 			request.SetCode(codes.GET)
 			request.SetToken(message.Token{0x42})
 
@@ -528,6 +614,41 @@ func TestOSCOREOuterBlockwiseProxyWithoutProcessorDoesNotPanic(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestOSCOREOuterBlockwiseProxyResponseDoesNotUnprotectWithoutProcessor(t *testing.T) {
+	recording := newRecordingSession()
+	defer recording.Close()
+	session := &responseRecordingSession{recordingSession: recording}
+	cfg := DefaultConfig
+	cfg.OSCOREProxy = true
+	cfg.OSCOREOuterBlockwise = true
+	cc := NewConnWithOpts(session, &cfg, WithBlockWise(func(cc *Conn) *blockwise.BlockWise[*Conn] {
+		return blockwise.New(cc, time.Minute, func(error) {}, nil)
+	}))
+	defer cc.Close()
+	session.onWrite = func(req *pool.Message) error {
+		response := pool.NewMessage(req.Context())
+		response.SetCode(codes.Content)
+		response.SetToken(req.Token())
+		response.SetOptionBytes(message.OSCORE, nil)
+		handler, ok := cc.tokenHandlerContainer.Load(req.Token().Hash())
+		if !ok {
+			return fmt.Errorf("response handler is not registered")
+		}
+		handler(responsewriter.New(response, cc), response)
+		return nil
+	}
+
+	request := cc.AcquireMessage(context.Background())
+	defer cc.ReleaseMessage(request)
+	request.SetType(message.NonConfirmable)
+	request.SetCode(codes.GET)
+	request.SetToken(message.Token{0x47})
+	response, err := cc.doOuterBlockwise(request)
+	require.NoError(t, err)
+	defer cc.ReleaseMessage(response)
+	require.True(t, response.HasOption(message.OSCORE))
 }
 
 func TestFailedOSCOREWriteRemovesExchange(t *testing.T) {

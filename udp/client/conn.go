@@ -729,7 +729,8 @@ func (cc *Conn) doOuterBlockwise(req *pool.Message) (*pool.Message, error) {
 	if blockwiseErr != nil {
 		return nil, blockwiseErr
 	}
-	if resp.HasOption(message.OSCORE) || cc.requiresOSCOREResponse(resp.Token()) {
+	if cc.oscoreProcessor != nil && !isOSCOREResponseUnprotected(resp) &&
+		(resp.HasOption(message.OSCORE) || cc.requiresOSCOREResponse(resp.Token())) {
 		if err = cc.unprotectIncomingResponse(resp); err != nil {
 			cc.ReleaseMessage(resp)
 			return nil, fmt.Errorf("cannot unprotect reassembled OSCORE response: %w", err)
@@ -1300,7 +1301,7 @@ func (cc *Conn) handleQDiscovery(w *responsewriter.ResponseWriter[*Conn], probeS
 }
 
 func (cc *Conn) handleResponse(rw *responsewriter.ResponseWriter[*Conn], rm *pool.Message) {
-	if cc.oscoreOuterBlockwise && cc.oscoreProcessor != nil &&
+	if cc.oscoreOuterBlockwise && cc.oscoreProcessor != nil && !isOSCOREResponseUnprotected(rm) &&
 		(rm.HasOption(message.OSCORE) || cc.requiresOSCOREResponse(rm.Token())) {
 		if err := cc.unprotectIncomingResponse(rm); err != nil {
 			cc.errors(fmt.Errorf("cannot unprotect reassembled OSCORE response: %w", err))
@@ -1354,20 +1355,28 @@ func (cc *Conn) outerBlockwiseRequestHandler(m *pool.Message, next HandlerFunc) 
 		return next
 	}
 	if cc.oscoreProcessor == nil {
-		if !cc.oscoreProxy {
-			return next
+		return cc.outerBlockwiseProxyRequestHandler(next)
+	}
+	return cc.outerBlockwiseOSCORERequestHandler(m, next)
+}
+
+func (cc *Conn) outerBlockwiseProxyRequestHandler(next HandlerFunc) HandlerFunc {
+	if !cc.oscoreProxy {
+		return next
+	}
+	return func(rw *responsewriter.ResponseWriter[*Conn], rm *pool.Message) {
+		next(rw, rm)
+		if !rw.Message().HasOption(message.OSCORE) {
+			return
 		}
-		return func(rw *responsewriter.ResponseWriter[*Conn], rm *pool.Message) {
-			next(rw, rm)
-			if !rw.Message().HasOption(message.OSCORE) {
-				return
-			}
-			if err := cc.checkOuterBlockwisePayloadSize(rw.Message()); err != nil {
-				cc.errors(err)
-				clearResponse(rw.Message())
-			}
+		if err := cc.checkOuterBlockwisePayloadSize(rw.Message()); err != nil {
+			cc.errors(err)
+			clearResponse(rw.Message())
 		}
 	}
+}
+
+func (cc *Conn) outerBlockwiseOSCORERequestHandler(m *pool.Message, next HandlerFunc) HandlerFunc {
 	return func(rw *responsewriter.ResponseWriter[*Conn], rm *pool.Message) {
 		if !hasOSCORERequestContext(rm) {
 			processed, err := cc.processReassembledOuterOSCORERequest(rw, rm, m.MessageID())
@@ -1382,31 +1391,34 @@ func (cc *Conn) outerBlockwiseRequestHandler(m *pool.Message, next HandlerFunc) 
 			m.SetContext(rm.Context())
 		}
 		next(rw, rm)
-		if !hasOSCORERequestContext(rm) {
-			return
-		}
-		oversized, err := cc.oscoreResponseExceedsOuterBlockwiseLimit(rm, rw.Message())
-		if err != nil {
-			cc.errors(fmt.Errorf("cannot size OSCORE response: %w", err))
-			clearResponse(rw.Message())
-			return
-		}
-		if oversized {
-			cc.errors(fmt.Errorf("%w: protected OSCORE response exceeds configured Outer Blockwise limit",
-				blockwise.ErrRequestEntityTooLarge))
-			clearResponse(rw.Message())
-			rw.Message().SetCode(codes.RequestEntityTooLarge)
-		}
-		if err := cc.protectResponseForRequest(rm, rw.Message()); err != nil {
-			cc.errors(fmt.Errorf("cannot protect response to reassembled OSCORE request: %w", err))
-			clearResponse(rw.Message())
-			return
-		}
-		if err := cc.checkOuterBlockwisePayloadSize(rw.Message()); err != nil {
-			cc.errors(err)
-			clearResponse(rw.Message())
+		if hasOSCORERequestContext(rm) {
+			cc.protectOuterBlockwiseResponse(rw, rm)
 		}
 		m.SetContext(rm.Context())
+	}
+}
+
+func (cc *Conn) protectOuterBlockwiseResponse(rw *responsewriter.ResponseWriter[*Conn], req *pool.Message) {
+	oversized, err := cc.oscoreResponseExceedsOuterBlockwiseLimit(req, rw.Message())
+	if err != nil {
+		cc.errors(fmt.Errorf("cannot size OSCORE response: %w", err))
+		clearResponse(rw.Message())
+		return
+	}
+	if oversized {
+		cc.errors(fmt.Errorf("%w: protected OSCORE response exceeds configured Outer Blockwise limit",
+			blockwise.ErrRequestEntityTooLarge))
+		clearResponse(rw.Message())
+		rw.Message().SetCode(codes.RequestEntityTooLarge)
+	}
+	if err := cc.protectResponseForRequest(req, rw.Message()); err != nil {
+		cc.errors(fmt.Errorf("cannot protect response to reassembled OSCORE request: %w", err))
+		clearResponse(rw.Message())
+		return
+	}
+	if err := cc.checkOuterBlockwisePayloadSize(rw.Message()); err != nil {
+		cc.errors(err)
+		clearResponse(rw.Message())
 	}
 }
 
