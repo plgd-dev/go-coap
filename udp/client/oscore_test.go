@@ -217,7 +217,7 @@ func TestThreeConcurrentOSCOREExchangeRollbacksRestoreLatestSentEntry(t *testing
 		wantIndex   int
 	}{
 		{
-			name: "sent first request",
+			name: "first sent, second and third fail",
 			finishOrder: func(finish [3]func(bool)) {
 				finish[0](true)
 				finish[1](false)
@@ -226,7 +226,7 @@ func TestThreeConcurrentOSCOREExchangeRollbacksRestoreLatestSentEntry(t *testing
 			wantIndex: 0,
 		},
 		{
-			name: "sent second request",
+			name: "second sent, first and third fail",
 			finishOrder: func(finish [3]func(bool)) {
 				finish[1](true)
 				finish[0](false)
@@ -276,6 +276,68 @@ func TestThreeConcurrentOSCOREExchangeRollbacksRestoreLatestSentEntry(t *testing
 			require.Equal(t, piv[tt.wantIndex], current.exchange.RequestPartialIV)
 		})
 	}
+}
+
+func TestOSCOREExchangeChainIsBoundedPerToken(t *testing.T) {
+	securityContext, err := oscore.NewContext(oscore.ContextConfig{
+		MasterSecret: []byte("bounded OSCORE exchange chain test"),
+		SenderID:     []byte("client"),
+		RecipientID:  []byte("server"),
+	})
+	require.NoError(t, err)
+	processor, err := oscore.NewProcessor(oscore.ProcessorConfig{Contexts: []*oscore.Context{securityContext}})
+	require.NoError(t, err)
+	session := newRecordingSession()
+	defer session.Close()
+	cfg := DefaultConfig
+	cfg.OSCORE = processor
+	cc := NewConnWithOpts(session, &cfg)
+	defer cc.Close()
+
+	finish := make([]func(bool), 0, maxOSCOREExchangeRecordsPerToken)
+	for range maxOSCOREExchangeRecordsPerToken {
+		request := cc.AcquireMessage(context.Background())
+		request.SetCode(codes.GET)
+		request.SetToken(message.Token{0x78})
+		_, release, protectErr := cc.protectOutgoingRequest(request)
+		cc.ReleaseMessage(request)
+		require.NoError(t, protectErr)
+		finish = append(finish, release)
+	}
+
+	finish[0](false)
+	request := cc.AcquireMessage(context.Background())
+	request.SetCode(codes.GET)
+	request.SetToken(message.Token{0x78})
+	_, release, err := cc.protectOutgoingRequest(request)
+	cc.ReleaseMessage(request)
+	require.NoError(t, err, "failed ancestors must be pruned to make room")
+	finish = append(finish, release)
+
+	request = cc.AcquireMessage(context.Background())
+	request.SetCode(codes.GET)
+	request.SetToken(message.Token{0x78})
+	_, release, err = cc.protectOutgoingRequest(request)
+	cc.ReleaseMessage(request)
+	require.ErrorContains(t, err, "too many pending OSCORE exchanges")
+	require.Nil(t, release)
+
+	cc.oscoreMu.Lock()
+	record := cc.oscoreExchanges[string(message.Token{0x78})].record
+	count := 0
+	for ; record != nil; record = record.previous {
+		count++
+	}
+	cc.oscoreMu.Unlock()
+	require.Equal(t, maxOSCOREExchangeRecordsPerToken, count)
+
+	for i := len(finish) - 1; i >= 0; i-- {
+		finish[i](false)
+	}
+	cc.oscoreMu.Lock()
+	_, exists := cc.oscoreExchanges[string(message.Token{0x78})]
+	cc.oscoreMu.Unlock()
+	require.False(t, exists)
 }
 
 func TestOSCOREMessageTransformsPreserveControlMessage(t *testing.T) {

@@ -42,6 +42,8 @@ const (
 	udpOSCOREExchangePending udpOSCOREExchangeState = iota
 	udpOSCOREExchangeSent
 	udpOSCOREExchangeFailed
+
+	maxOSCOREExchangeRecordsPerToken = 64
 )
 
 type udpOSCORERequestContextKey struct{}
@@ -103,10 +105,13 @@ func (cc *Conn) protectOutgoingRequest(req *pool.Message) (*pool.Message, func(b
 	if err != nil {
 		return nil, nil, err
 	}
+	cleanupExchange, err := cc.trackOSCOREExchange(req, context, exchange)
+	if err != nil {
+		return nil, nil, err
+	}
 	wireRequest := cc.AcquireMessage(req.Context())
 	wireRequest.SetMessage(protected)
 	wireRequest.SetControlMessage(req.ControlMessage())
-	cleanupExchange := cc.trackOSCOREExchange(req, context, exchange)
 	finish := func(sent bool) {
 		cleanupExchange(sent)
 		cc.ReleaseMessage(wireRequest)
@@ -116,7 +121,7 @@ func (cc *Conn) protectOutgoingRequest(req *pool.Message) (*pool.Message, func(b
 
 func (cc *Conn) trackOSCOREExchange(
 	req *pool.Message, context *oscore.Context, exchange oscore.Exchange,
-) func(bool) {
+) (func(bool), error) {
 	key := string(req.Token())
 	observeValue, observeErr := req.Options().Observe()
 	isObserveRequest := observeErr == nil
@@ -132,6 +137,18 @@ func (cc *Conn) trackOSCOREExchange(
 				state:    udpOSCOREExchangeSent,
 			}
 		}
+	}
+	previousRecord, previousCount := pruneOSCOREExchangeRecords(previousRecord, time.Now())
+	hadPrevious = previousRecord != nil
+	if previousCount >= maxOSCOREExchangeRecordsPerToken {
+		cc.oscoreMu.Unlock()
+		return nil, fmt.Errorf(
+			"too many pending OSCORE exchanges for token: limit %d",
+			maxOSCOREExchangeRecordsPerToken,
+		)
+	}
+	if hadPrevious {
+		previous = previousRecord.exchange
 	}
 	next := udpOSCOREExchange{
 		context:  context,
@@ -157,7 +174,33 @@ func (cc *Conn) trackOSCOREExchange(
 	cc.oscoreMu.Unlock()
 	return func(sent bool) {
 		cc.finishOSCOREExchange(key, record, sent)
+	}, nil
+}
+
+func pruneOSCOREExchangeRecords(
+	record *udpOSCOREExchangeRecord,
+	now time.Time,
+) (*udpOSCOREExchangeRecord, int) {
+	var head, tail *udpOSCOREExchangeRecord
+	count := 0
+	for current := record; current != nil; {
+		next := current.previous
+		expired := !current.exchange.expires.IsZero() && !now.Before(current.exchange.expires)
+		if current.state != udpOSCOREExchangeFailed && !expired {
+			if head == nil {
+				head = current
+			} else {
+				tail.previous = current
+			}
+			tail = current
+			count++
+		}
+		current = next
 	}
+	if tail != nil {
+		tail.previous = nil
+	}
+	return head, count
 }
 
 func (cc *Conn) finishOSCOREExchange(key string, record *udpOSCOREExchangeRecord, sent bool) {
