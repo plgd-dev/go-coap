@@ -122,8 +122,7 @@ func parseOSCOREOuter(options message.Options) (OptionValue, message.Options, er
 	}
 	filteredOuterFields := make(message.Options, 0, len(outerUserFields))
 	for _, option := range outerUserFields {
-		if option.ID == message.Observe || option.ID == message.MaxAge ||
-			ClassifyOption(option.ID) != ClassE {
+		if option.ID == message.Observe || ClassifyOption(option.ID) != ClassE {
 			filteredOuterFields = append(filteredOuterFields, option)
 		}
 	}
@@ -239,7 +238,7 @@ func (c *Context) UnprotectRequest(request message.Message) (message.Message, Ex
 	if optionErr := c.validateRequestOption(option); optionErr != nil {
 		return message.Message{}, Exchange{}, optionErr
 	}
-	outerOptions = removeOption(outerOptions, message.Observe)
+	outerOptions = removeObserveOption(outerOptions)
 	exchange := Exchange{
 		RequestID:        append([]byte(nil), option.SenderID...),
 		RequestPartialIV: append([]byte(nil), option.PartialIV...),
@@ -323,10 +322,10 @@ func observeOptionValue(option message.Option) (uint32, error) {
 	return message.Options{option}.Observe()
 }
 
-func removeOption(options message.Options, id message.OptionID) message.Options {
+func removeObserveOption(options message.Options) message.Options {
 	result := make(message.Options, 0, len(options))
 	for _, option := range options {
-		if option.ID != id {
+		if option.ID != message.Observe {
 			result = append(result, option)
 		}
 	}
@@ -338,7 +337,7 @@ func setObserve(options message.Options, value uint32) (message.Options, error) 
 	if err != nil {
 		return nil, err
 	}
-	return mergeOptions(removeOption(options, message.Observe), result), nil
+	return mergeOptions(removeObserveOption(options), result), nil
 }
 
 func containsProxyOption(options message.Options) bool {
@@ -575,7 +574,7 @@ func (c *Context) openResponse(response message.Message, exchange Exchange) (Opt
 			return OptionValue{}, nil, message.Message{}, observeErr
 		}
 	}
-	outerOptions = removeOption(outerOptions, message.Observe)
+	outerOptions = removeObserveOption(outerOptions)
 	aad, err := BuildAADWithAlgorithm(c.algorithm, exchange.RequestID, exchange.RequestPartialIV, nil)
 	if err != nil {
 		return OptionValue{}, nil, message.Message{}, err

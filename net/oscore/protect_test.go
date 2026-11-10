@@ -687,7 +687,7 @@ func TestObserveNotificationWithoutOuterObserveUsesInnerObserveAndPartialIV(t *t
 	if err != nil {
 		t.Fatal(err)
 	}
-	protectedNotification.Options = removeOption(protectedNotification.Options, message.Observe)
+	protectedNotification.Options = removeObserveOption(protectedNotification.Options)
 
 	notification, err := client.UnprotectResponse(protectedNotification, clientExchange)
 	if err != nil {
@@ -996,11 +996,16 @@ func TestUnprotectDiscardsClassEOptionsFromOuterMessages(t *testing.T) {
 	if request.Options.HasOption(message.URIPath) || request.Options.HasOption(message.ContentFormat) {
 		t.Fatalf("outer Class E options were not discarded: %v", request.Options)
 	}
-	if maxAge, maxAgeErr := request.Options.GetUint32(message.MaxAge); maxAgeErr != nil || maxAge != 0 {
-		t.Fatalf("outer Max-Age = %d, error = %v; want 0", maxAge, maxAgeErr)
+	if request.Options.HasOption(message.MaxAge) {
+		t.Fatal("outer Max-Age was not discarded from the request")
 	}
 
-	protectedResponse, err := server.ProtectResponse(message.Message{Code: codes.Content}, serverExchange)
+	protectedResponse, err := server.ProtectResponse(message.Message{
+		Code: codes.Content,
+		Options: message.Options{
+			{ID: message.MaxAge, Value: []byte{42}},
+		},
+	}, serverExchange)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1015,8 +1020,8 @@ func TestUnprotectDiscardsClassEOptionsFromOuterMessages(t *testing.T) {
 	if plaintext.Options.HasOption(message.URIPath) {
 		t.Fatalf("outer Class E option was not discarded: %v", plaintext.Options)
 	}
-	if maxAge, err := plaintext.Options.GetUint32(message.MaxAge); err != nil || maxAge != 0 {
-		t.Fatalf("outer response Max-Age = %d, error = %v; want 0", maxAge, err)
+	if maxAge, err := plaintext.Options.GetUint32(message.MaxAge); err != nil || maxAge != 42 {
+		t.Fatalf("authenticated response Max-Age = %d, error = %v; want 42", maxAge, err)
 	}
 }
 
