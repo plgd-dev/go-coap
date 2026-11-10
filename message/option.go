@@ -38,7 +38,7 @@ type OptionID uint16
    |   7 | x  | x | - |   | Uri-Port       | uint   | 0-2    | (see    |
    |     |    |   |   |   |                |        |        | below)  |
    |   8 |    |   |   | x | Location-Path  | string | 0-255  | (none)  |
-   |   9 | x  |   |   |   | OSCORE         | opaque | 0-255  | (none)  |
+   |   9 | x  |   |   |   | OSCORE         | opaque | 0-269  | (none)  |
    |  11 | x  | x | - | x | Uri-Path       | string | 0-255  | (none)  |
    |  12 |    |   |   |   | Content-Format | uint   | 0-2    | (none)  |
    |  14 |    | x | - |   | Max-Age        | uint   | 0-4    | 60      |

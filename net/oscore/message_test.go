@@ -43,6 +43,26 @@ func TestRFC8613ExternalAAD(t *testing.T) {
 	}
 }
 
+func TestMatchesObserveRegistrationIgnoresOnlyObserveAndETag(t *testing.T) {
+	registration := message.Options{
+		{ID: message.Observe, Value: []byte{0}},
+		{ID: message.ETag, Value: []byte("first")},
+		{ID: message.URIPath, Value: []byte("resource")},
+	}
+	cancellation := message.Options{
+		{ID: message.Observe, Value: []byte{1}},
+		{ID: message.ETag, Value: []byte("second")},
+		{ID: message.URIPath, Value: []byte("resource")},
+	}
+	if !MatchesObserveRegistration(registration, cancellation) {
+		t.Fatal("cancellation with matching options did not match registration")
+	}
+	cancellation[2].Value = []byte("different")
+	if MatchesObserveRegistration(registration, cancellation) {
+		t.Fatal("cancellation with a different Uri-Path matched registration")
+	}
+}
+
 func TestBuildAADWithAlgorithm(t *testing.T) {
 	defaultAAD, err := BuildAAD(nil, []byte{1}, nil)
 	if err != nil {

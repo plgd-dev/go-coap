@@ -1,11 +1,13 @@
 package oscore
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"sync"
 
 	"github.com/plgd-dev/go-coap/v3/message"
+	"github.com/plgd-dev/go-coap/v3/message/codes"
 	pkgMath "github.com/plgd-dev/go-coap/v3/pkg/math"
 )
 
@@ -15,6 +17,35 @@ var (
 	ErrPlaintextDisabled = errors.New("unprotected CoAP is not permitted")
 	ErrOSCORERequired    = errors.New("OSCORE protection is required")
 )
+
+type unprotectedProcessingErrorKey struct{}
+
+// IsUnprotectedProcessingErrorCode reports whether RFC 8613 permits this
+// response code for an OSCORE processing error without OSCORE protection.
+func IsUnprotectedProcessingErrorCode(code codes.Code) bool {
+	switch code {
+	case codes.BadRequest, codes.Unauthorized, codes.BadOption:
+		return true
+	default:
+		return false
+	}
+}
+
+// ContextWithUnprotectedProcessingError marks a received response as an
+// unprotected OSCORE processing error. The caller must pass a non-nil context.
+func ContextWithUnprotectedProcessingError(ctx context.Context) context.Context {
+	return context.WithValue(ctx, unprotectedProcessingErrorKey{}, true)
+}
+
+// IsUnprotectedProcessingError reports whether the response context was marked
+// as an unprotected OSCORE processing error by a client transport.
+func IsUnprotectedProcessingError(ctx context.Context) bool {
+	if ctx == nil {
+		return false
+	}
+	marked, _ := ctx.Value(unprotectedProcessingErrorKey{}).(bool)
+	return marked
+}
 
 // OutgoingContextSelector chooses a security context for an outgoing request.
 // The contexts slice is a snapshot of the processor's configured contexts.

@@ -401,7 +401,7 @@ func assertObserveCancellation(t *testing.T, client, server *Context) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cancelObserve != 1 || !cancelExchange.Observe {
+	if cancelObserve != 1 || cancelExchange.Observe {
 		t.Fatalf("decrypted cancellation Observe = %d; exchange %+v", cancelObserve, cancelExchange)
 	}
 }
@@ -508,6 +508,7 @@ func TestRFC8613AppendixC7ProtectedResponse(t *testing.T) {
 	exchange := Exchange{
 		RequestID:        []byte{},
 		RequestPartialIV: mustHex(t, "14"),
+		responseState:    &exchangeResponseState{},
 	}
 	response := message.Message{
 		Type:      message.Acknowledgement,
@@ -538,6 +539,110 @@ func TestRFC8613AppendixC7ProtectedResponse(t *testing.T) {
 	if opened.Code != response.Code || !bytes.Equal(opened.Payload, response.Payload) {
 		t.Fatalf("opened response = %+v, want code %v and payload %q", opened, response.Code, response.Payload)
 	}
+	if _, err := client.UnprotectResponse(protected, exchange); !errors.Is(err, ErrReplay) {
+		t.Fatalf("replayed response error = %v, want ErrReplay", err)
+	}
+}
+
+func TestUnprotectResponseWithoutPartialIVRejectsReplay(t *testing.T) {
+	client, server := pairedContexts(t, 0, 0)
+	request, clientExchange, err := client.ProtectRequest(message.Message{Code: codes.GET})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, serverExchange, err := server.UnprotectRequest(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response, err := server.ProtectResponse(
+		message.Message{Code: codes.Content, Payload: []byte("response")},
+		serverExchange,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := server.ProtectResponse(
+		message.Message{Code: codes.Content, Payload: []byte("second response")},
+		serverExchange,
+	); !errors.Is(err, ErrReplay) {
+		t.Fatalf("reused response nonce error = %v, want ErrReplay", err)
+	}
+	exchangeCopy := clientExchange
+	if _, err := client.UnprotectResponse(response, exchangeCopy); err != nil {
+		t.Fatalf("first response failed: %v", err)
+	}
+	if _, err := client.UnprotectResponse(response, clientExchange); !errors.Is(err, ErrReplay) {
+		t.Fatalf("replayed response error = %v, want ErrReplay", err)
+	}
+}
+
+func TestObserveAllowsInitialResponseWithoutPartialIV(t *testing.T) {
+	client, server := pairedContexts(t, 0, 0)
+	observeOptions, _, err := (message.Options{}).SetObserve(nil, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request, clientExchange, err := client.ProtectRequest(message.Message{
+		Code:    codes.GET,
+		Token:   message.Token{1},
+		Options: observeOptions,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, serverExchange, err := server.UnprotectRequest(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	inner, err := EncodeInner(codes.Content, message.Options{{ID: message.Observe}}, []byte("initial"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	aad, err := BuildAADWithAlgorithm(server.algorithm, serverExchange.RequestID, serverExchange.RequestPartialIV, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ciphertext, err := server.SealResponseWithRequestNonce(
+		inner,
+		serverExchange.RequestPartialIV,
+		func([]byte) ([]byte, error) { return aad, nil },
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstResponse := message.Message{
+		Code:    codes.Content,
+		Token:   request.Token,
+		Options: message.Options{{ID: message.OSCORE}},
+		Payload: ciphertext,
+	}
+	opened, err := client.UnprotectResponse(firstResponse, clientExchange)
+	if err != nil {
+		t.Fatalf("first Observe response without Partial IV failed: %v", err)
+	}
+	if got, observeErr := opened.Options.Observe(); observeErr != nil || got != 0x00ffffff {
+		t.Fatalf("Observe sequence = %d, error = %v, want 0xffffff", got, observeErr)
+	}
+	if _, replayErr := client.UnprotectResponse(firstResponse, clientExchange); !errors.Is(replayErr, ErrReplay) {
+		t.Fatalf("replayed initial Observe response error = %v, want ErrReplay", replayErr)
+	}
+
+	notificationOptions, _, err := (message.Options{}).SetObserve(make([]byte, 4), 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	notification, err := server.ProtectResponseWithPartialIV(message.Message{
+		Code:    codes.Content,
+		Token:   request.Token,
+		Options: notificationOptions,
+		Payload: []byte("notification"),
+	}, serverExchange)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.UnprotectResponse(notification, clientExchange); err != nil {
+		t.Fatalf("notification with Partial IV after initial response failed: %v", err)
+	}
 }
 
 func TestRFC8613AppendixC8ProtectedResponseWithPartialIV(t *testing.T) {
@@ -562,6 +667,7 @@ func TestRFC8613AppendixC8ProtectedResponseWithPartialIV(t *testing.T) {
 	exchange := Exchange{
 		RequestID:        []byte{},
 		RequestPartialIV: mustHex(t, "14"),
+		responseState:    &exchangeResponseState{},
 	}
 	response := message.Message{
 		Type:      message.Acknowledgement,
@@ -698,6 +804,70 @@ func TestUnprotectRejectsTamperingAndReplay(t *testing.T) {
 	}
 }
 
+func TestObserveRejectsOutOfOrderFullWidthPartialIV(t *testing.T) {
+	requestContext, err := NewContext(ContextConfig{
+		MasterSecret: []byte("OSCORE observe sequence test"),
+		SenderID:     []byte("client"),
+		RecipientID:  []byte("server"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	serverContext, err := NewContext(ContextConfig{
+		MasterSecret:         []byte("OSCORE observe sequence test"),
+		SenderID:             []byte("server"),
+		RecipientID:          []byte("client"),
+		SenderSequenceNumber: 0x800000,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	laterServerContext, err := NewContext(ContextConfig{
+		MasterSecret:         []byte("OSCORE observe sequence test"),
+		SenderID:             []byte("server"),
+		RecipientID:          []byte("client"),
+		SenderSequenceNumber: 0x1000000,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	requestOptions := observeOptions(t, 0)
+	protectedRequest, clientExchange, err := requestContext.ProtectRequest(message.Message{
+		Code:    codes.GET,
+		Token:   message.Token{1},
+		Options: requestOptions,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, serverExchange, err := serverContext.UnprotectRequest(protectedRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	makeResponse := func(ctx *Context, body string) message.Message {
+		t.Helper()
+		response, protectErr := ctx.ProtectResponseWithPartialIV(message.Message{
+			Code:    codes.Content,
+			Token:   protectedRequest.Token,
+			Options: message.Options{{ID: message.Observe}},
+			Payload: []byte(body),
+		}, serverExchange)
+		if protectErr != nil {
+			t.Fatal(protectErr)
+		}
+		return response
+	}
+	lowerResponse := makeResponse(serverContext, "lower")
+	higherResponse := makeResponse(laterServerContext, "higher")
+	if _, err := requestContext.UnprotectResponse(higherResponse, clientExchange); err != nil {
+		t.Fatalf("newer full-width Partial IV response failed: %v", err)
+	}
+	if _, err := requestContext.UnprotectResponse(lowerResponse, clientExchange); !errors.Is(err, ErrReplay) {
+		t.Fatalf("out-of-order response error = %v, want ErrReplay", err)
+	}
+}
+
 func TestUnprotectRejectsMalformedOuterMessage(t *testing.T) {
 	client, server := pairedContexts(t, 0, 0)
 	protected, _, err := client.ProtectRequest(message.Message{Code: codes.GET})
@@ -706,12 +876,6 @@ func TestUnprotectRejectsMalformedOuterMessage(t *testing.T) {
 	}
 	for name, mutate := range map[string]func(*message.Message){
 		"wrong outer code": func(msg *message.Message) { msg.Code = codes.PUT },
-		"wrong content format": func(msg *message.Message) {
-			msg.Options = msg.Options.Set(message.Option{ID: message.ContentFormat, Value: []byte{0}})
-		},
-		"class E outer option": func(msg *message.Message) {
-			msg.Options = msg.Options.Set(message.Option{ID: message.URIPath, Value: []byte("unexpected")})
-		},
 		"missing KID": func(msg *message.Message) {
 			msg.Options = msg.Options.Set(message.Option{ID: message.OSCORE, Value: []byte{1}})
 		},
@@ -727,13 +891,44 @@ func TestUnprotectRejectsMalformedOuterMessage(t *testing.T) {
 	}
 }
 
+func TestUnprotectDiscardsClassEOptionsFromOuterMessages(t *testing.T) {
+	client, server := pairedContexts(t, 0, 0)
+	protectedRequest, exchange, err := client.ProtectRequest(message.Message{Code: codes.GET})
+	if err != nil {
+		t.Fatal(err)
+	}
+	protectedRequest.Options = append(protectedRequest.Options,
+		message.Option{ID: message.URIPath, Value: []byte("unexpected")},
+		message.Option{ID: message.ContentFormat, Value: []byte{0}},
+	)
+	request, serverExchange, err := server.UnprotectRequest(protectedRequest)
+	if err != nil {
+		t.Fatalf("UnprotectRequest with outer Class E options: %v", err)
+	}
+	if request.Options.HasOption(message.URIPath) || request.Options.HasOption(message.ContentFormat) {
+		t.Fatalf("outer Class E options were not discarded: %v", request.Options)
+	}
+
+	protectedResponse, err := server.ProtectResponse(message.Message{Code: codes.Content}, serverExchange)
+	if err != nil {
+		t.Fatal(err)
+	}
+	protectedResponse.Options = append(protectedResponse.Options,
+		message.Option{ID: message.URIPath, Value: []byte("unexpected")},
+	)
+	plaintext, err := client.UnprotectResponse(protectedResponse, exchange)
+	if err != nil {
+		t.Fatalf("UnprotectResponse with outer Class E option: %v", err)
+	}
+	if plaintext.Options.HasOption(message.URIPath) {
+		t.Fatalf("outer Class E option was not discarded: %v", plaintext.Options)
+	}
+}
+
 func TestUnprotectRejectsMalformedOrTamperedResponse(t *testing.T) {
 	tests := map[string]func(*testing.T, *message.Message){
 		"wrong outer code": func(_ *testing.T, response *message.Message) {
 			response.Code = codes.Content
-		},
-		"Class E option outside": func(_ *testing.T, response *message.Message) {
-			response.Options = append(response.Options, message.Option{ID: message.URIPath, Value: []byte("unexpected")})
 		},
 		"duplicate OSCORE option": func(_ *testing.T, response *message.Message) {
 			response.Options = append(response.Options, message.Option{

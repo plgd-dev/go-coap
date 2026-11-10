@@ -451,18 +451,27 @@ func (c *Context) Open(partialIV, ciphertext, aad []byte) ([]byte, error) {
 }
 
 // OpenResponse authenticates a response with its own Partial IV, using the
-// response sender ID for nonce construction.
+// response sender ID for nonce construction. It does not update request replay
+// state; use UnprotectResponse for exchange-scoped response replay protection.
 func (c *Context) OpenResponse(partialIV, ciphertext, aad []byte) ([]byte, error) {
-	return c.openWithNonceID(partialIV, ciphertext, aad, c.recipientID)
+	nonce, err := c.nonce(partialIV, c.recipientID)
+	if err != nil {
+		return nil, err
+	}
+	return c.recipientAEAD.Open(nil, nonce, ciphertext, aad)
 }
 
 // OpenResponseForExchange opens a response that is bound to an original
 // request. Responses without a Partial IV use the request nonce and do not
-// advance the recipient replay window. Responses that carry a Partial IV use
-// their sender nonce and the ordinary replay window.
+// advance the recipient replay window. This primitive does not track exchange
+// completion; use UnprotectResponse to enforce response replay protection.
 func (c *Context) OpenResponseForExchange(responsePartialIV, requestPartialIV, ciphertext, aad []byte) ([]byte, error) {
 	if len(responsePartialIV) > 0 {
-		return c.OpenResponse(responsePartialIV, ciphertext, aad)
+		nonce, err := c.nonce(responsePartialIV, c.recipientID)
+		if err != nil {
+			return nil, err
+		}
+		return c.recipientAEAD.Open(nil, nonce, ciphertext, aad)
 	}
 	if _, err := decodePartialIV(requestPartialIV); err != nil {
 		return nil, err

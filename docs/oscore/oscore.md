@@ -233,7 +233,9 @@ timeouts, and response-size limits.
   AES-CCM-16-128-128, and AES-CCM-16-128-256. The default remains
   AES-CCM-16-64-128; IoTivity Lite currently interoperates with algorithm 10.
 - UDP, DTLS, TCP, and TLS transports.
-- Classic Block1/Block2 and Observe flows. Observe notifications use fresh
+- Classic Block1/Block2 and Observe flows. Block options are protected as
+  Class E options; only inner Blockwise is supported. Outer Blockwise
+  fragmentation/reassembly is not implemented. Observe notifications use fresh
   Partial IVs; stale or duplicate notifications are rejected.
 - No-Response suppression is preserved for protected requests over UDP, DTLS,
   TCP, and TLS; the application processes each request while the suppressed

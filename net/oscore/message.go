@@ -1,6 +1,7 @@
 package oscore
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 
@@ -89,6 +90,32 @@ func SplitOptions(options message.Options) (OptionSplit, error) {
 		}
 	}
 	return split, nil
+}
+
+// MatchesObserveRegistration reports whether options describe the same
+// Observe registration, ignoring Observe and ETag as required for cancellation.
+func MatchesObserveRegistration(registration, cancellation message.Options) bool {
+	filter := func(options message.Options) message.Options {
+		result := make(message.Options, 0, len(options))
+		for _, option := range options {
+			if option.ID != message.Observe && option.ID != message.ETag {
+				result = append(result, option)
+			}
+		}
+		return result
+	}
+	registration = filter(registration)
+	cancellation = filter(cancellation)
+	if len(registration) != len(cancellation) {
+		return false
+	}
+	for i := range registration {
+		if registration[i].ID != cancellation[i].ID ||
+			!bytes.Equal(registration[i].Value, cancellation[i].Value) {
+			return false
+		}
+	}
+	return true
 }
 
 // EncodeInner serializes the CoAP request/response fields that RFC 8613 puts in

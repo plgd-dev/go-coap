@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"sync"
 
 	"github.com/plgd-dev/go-coap/v3/message"
 	"github.com/plgd-dev/go-coap/v3/message/codes"
@@ -18,11 +19,25 @@ var (
 const outerResponseCode = codes.Changed
 
 // Exchange binds a response to the request that established its OSCORE AAD
-// and nonce context. Keep it with the CoAP token until the exchange completes.
+// and nonce context. Keep the exact value returned by ProtectRequest or
+// UnprotectRequest with the CoAP token until the exchange completes; response
+// replay state is shared by copies of this value.
 type Exchange struct {
 	RequestID        []byte
 	RequestPartialIV []byte
 	Observe          bool
+	responseState    *exchangeResponseState
+}
+
+type exchangeResponseState struct {
+	mu                     sync.Mutex
+	started                bool
+	observeComplete        bool
+	multipleResponses      bool
+	responseNonceUsed      bool
+	hasNotificationNumber  bool
+	notificationNumber     uint64
+	seenResponsePartialIVs map[uint64]struct{}
 }
 
 func cloneOptions(options message.Options) message.Options {
@@ -42,6 +57,17 @@ func isRequestCode(code codes.Code) bool {
 
 func isResponseCode(code codes.Code) bool {
 	return code >= 64 && code < 192
+}
+
+func observeRegistrationFromOptions(options message.Options) (bool, error) {
+	if !options.HasOption(message.Observe) {
+		return false, nil
+	}
+	value, err := options.Observe()
+	if err != nil || value > 1 {
+		return false, fmt.Errorf("%w: Observe request value must be 0 or 1", ErrInvalidOSCOREMessage)
+	}
+	return value == 0, nil
 }
 
 func mergeOptions(first, second message.Options) message.Options {
@@ -86,16 +112,17 @@ func parseOSCOREOuter(options message.Options) (OptionValue, message.Options, er
 	if !optionFound {
 		return OptionValue{}, nil, fmt.Errorf("%w: missing OSCORE option", ErrInvalidOSCOREMessage)
 	}
-	split, err := SplitOptions(outerUserFields)
+	_, err := SplitOptions(outerUserFields)
 	if err != nil {
 		return OptionValue{}, nil, err
 	}
-	for _, option := range split.Inner {
-		if option.ID != message.Observe {
-			return OptionValue{}, nil, fmt.Errorf("%w: Class E option in outer message", ErrInvalidOSCOREMessage)
+	filteredOuterFields := make(message.Options, 0, len(outerUserFields))
+	for _, option := range outerUserFields {
+		if option.ID == message.Observe || ClassifyOption(option.ID) != ClassE {
+			filteredOuterFields = append(filteredOuterFields, option)
 		}
 	}
-	return optionValue, cloneOptions(outerUserFields), nil
+	return optionValue, cloneOptions(filteredOuterFields), nil
 }
 
 func (c *Context) requestOption(partialIV []byte) ([]byte, error) {
@@ -144,11 +171,9 @@ func (c *Context) ProtectRequest(request message.Message) (message.Message, Exch
 	if observes && request.Code != codes.GET && request.Code != codes.FETCH {
 		return message.Message{}, Exchange{}, ErrUnsupportedOption
 	}
-	if observes {
-		value, observeErr := request.Options.Observe()
-		if observeErr != nil || value > 1 {
-			return message.Message{}, Exchange{}, fmt.Errorf("%w: Observe request value must be 0 or 1", ErrInvalidOSCOREMessage)
-		}
+	observeRegistration, err := observeRegistrationFromOptions(request.Options)
+	if err != nil {
+		return message.Message{}, Exchange{}, err
 	}
 	options, err := normalizeProxyURI(request.Options)
 	if err != nil {
@@ -168,7 +193,12 @@ func (c *Context) ProtectRequest(request message.Message) (message.Message, Exch
 		exchange = Exchange{
 			RequestID:        c.SenderID(),
 			RequestPartialIV: append([]byte(nil), partialIV...),
-			Observe:          observes,
+			Observe:          observeRegistration,
+			responseState: &exchangeResponseState{
+				multipleResponses: observeRegistration ||
+					request.Options.HasOption(message.QBlock1) ||
+					request.Options.HasOption(message.QBlock2),
+			},
 		}
 		return BuildAADWithAlgorithm(c.algorithm, exchange.RequestID, exchange.RequestPartialIV, nil)
 	})
@@ -212,6 +242,7 @@ func (c *Context) UnprotectRequest(request message.Message) (message.Message, Ex
 	exchange := Exchange{
 		RequestID:        append([]byte(nil), option.SenderID...),
 		RequestPartialIV: append([]byte(nil), option.PartialIV...),
+		responseState:    &exchangeResponseState{},
 	}
 	aad, err := BuildAADWithAlgorithm(c.algorithm, exchange.RequestID, exchange.RequestPartialIV, nil)
 	if err != nil {
@@ -229,7 +260,13 @@ func (c *Context) UnprotectRequest(request message.Message) (message.Message, Ex
 	if err != nil {
 		return message.Message{}, Exchange{}, err
 	}
-	exchange.Observe = hasInnerObserve
+	if hasInnerObserve {
+		observeValue, _ := inner.Options.Observe()
+		exchange.Observe = observeValue == 0
+	}
+	exchange.responseState.multipleResponses = exchange.Observe ||
+		inner.Options.HasOption(message.QBlock1) ||
+		inner.Options.HasOption(message.QBlock2)
 	inner.Token = append(message.Token(nil), request.Token...)
 	inner.Type = request.Type
 	inner.MessageID = request.MessageID
@@ -342,7 +379,21 @@ func (c *Context) protectResponse(response message.Message, exchange Exchange, u
 	if err != nil {
 		return message.Message{}, err
 	}
-	partialIV, ciphertext, err := c.sealResponse(plaintext, exchange, usePartialIV || exchange.Observe || observes)
+	needsPartialIV := usePartialIV || exchange.Observe || observes
+	if !needsPartialIV {
+		state := exchange.responseState
+		if state == nil {
+			return message.Message{}, fmt.Errorf("%w: exchange has no response state", ErrInvalidContext)
+		}
+		state.mu.Lock()
+		if state.responseNonceUsed {
+			state.mu.Unlock()
+			return message.Message{}, ErrReplay
+		}
+		state.responseNonceUsed = true
+		state.mu.Unlock()
+	}
+	partialIV, ciphertext, err := c.sealResponse(plaintext, exchange, needsPartialIV)
 	if err != nil {
 		return message.Message{}, err
 	}
@@ -413,6 +464,78 @@ func (c *Context) sealResponse(plaintext []byte, exchange Exchange, usePartialIV
 }
 
 func (c *Context) UnprotectResponse(response message.Message, exchange Exchange) (message.Message, error) {
+	option, _, err := parseOSCOREOuter(response.Options)
+	if err != nil {
+		return message.Message{}, err
+	}
+	if exchange.responseState == nil {
+		return message.Message{}, fmt.Errorf("%w: exchange has no response replay state", ErrInvalidContext)
+	}
+	state := exchange.responseState
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	responseSequence, err := state.checkResponse(exchange, option)
+	if err != nil {
+		return message.Message{}, err
+	}
+	plaintext, err := c.unprotectResponse(response, exchange)
+	if err != nil {
+		return message.Message{}, err
+	}
+	state.recordResponse(exchange, option, responseSequence, plaintext.Options.HasOption(message.Observe))
+	return plaintext, nil
+}
+
+func (state *exchangeResponseState) checkResponse(exchange Exchange, option OptionValue) (uint64, error) {
+	if state.observeComplete || state.started && !state.multipleResponses {
+		return 0, ErrReplay
+	}
+	if len(option.PartialIV) == 0 {
+		if state.started {
+			return 0, ErrReplay
+		}
+		return 0, nil
+	}
+	responseSequence, err := decodePartialIV(option.PartialIV)
+	if err != nil {
+		return 0, err
+	}
+	if exchange.Observe {
+		if state.hasNotificationNumber && responseSequence <= state.notificationNumber {
+			return 0, ErrReplay
+		}
+	} else if state.multipleResponses && state.seenResponsePartialIVs != nil {
+		if _, exists := state.seenResponsePartialIVs[responseSequence]; exists {
+			return 0, ErrReplay
+		}
+	}
+	return responseSequence, nil
+}
+
+func (state *exchangeResponseState) recordResponse(
+	exchange Exchange,
+	option OptionValue,
+	responseSequence uint64,
+	hasObserve bool,
+) {
+	state.started = true
+	if exchange.Observe {
+		if !hasObserve {
+			state.observeComplete = true
+		}
+		if len(option.PartialIV) > 0 {
+			state.hasNotificationNumber = true
+			state.notificationNumber = responseSequence
+		}
+	} else if state.multipleResponses && len(option.PartialIV) > 0 {
+		if state.seenResponsePartialIVs == nil {
+			state.seenResponsePartialIVs = make(map[uint64]struct{})
+		}
+		state.seenResponsePartialIVs[responseSequence] = struct{}{}
+	}
+}
+
+func (c *Context) unprotectResponse(response message.Message, exchange Exchange) (message.Message, error) {
 	option, outerOptions, inner, err := c.openResponse(response, exchange)
 	if err != nil {
 		return message.Message{}, err

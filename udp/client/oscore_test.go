@@ -21,6 +21,93 @@ import (
 	"go.uber.org/atomic"
 )
 
+func TestObserveCancellationRequiresMatchingRegistrationOptions(t *testing.T) {
+	const token = "observe-token"
+	registrationOptions := message.Options{
+		{ID: message.Observe, Value: []byte{0}},
+		{ID: message.URIPath, Value: []byte("resource")},
+	}
+	cc := &Conn{
+		oscoreObservations: map[string]udpOSCORERequestContext{
+			token: {options: registrationOptions, exchange: oscore.Exchange{Observe: true}},
+		},
+	}
+	req := pool.NewMessage(context.Background())
+	resp := pool.NewMessage(context.Background())
+	cancellationOptions := message.Options{
+		{ID: message.Observe, Value: []byte{1}},
+		{ID: message.URIPath, Value: []byte("different-resource")},
+	}
+	req.SetMessage(message.Message{Code: codes.GET, Token: message.Token(token), Options: cancellationOptions})
+	resp.SetCode(codes.Content)
+	binding := udpOSCORERequestContext{options: cancellationOptions}
+	require.NoError(t, cc.updateOSCOREObservationForResponse(req, resp, binding))
+	if _, exists := cc.oscoreObservations[token]; !exists {
+		t.Fatal("cancellation with different request options removed the Observe registration")
+	}
+
+	cancellationOptions[1].Value = []byte("resource")
+	req.SetMessage(message.Message{Code: codes.GET, Token: message.Token(token), Options: cancellationOptions})
+	binding.options = cancellationOptions
+	require.NoError(t, cc.updateOSCOREObservationForResponse(req, resp, binding))
+	if _, exists := cc.oscoreObservations[token]; exists {
+		t.Fatal("cancellation with matching request options did not remove the Observe registration")
+	}
+}
+
+func TestUnprotectedErrorResponseOnlyTerminatesOSCOREExchange(t *testing.T) {
+	for _, test := range []struct {
+		name                string
+		code                codes.Code
+		wantErr             error
+		wantRetained        bool
+		wantProcessingError bool
+	}{
+		{name: "decryption error", code: codes.BadRequest, wantProcessingError: true},
+		{name: "unknown context", code: codes.Unauthorized, wantProcessingError: true},
+		{name: "decode error", code: codes.BadOption, wantProcessingError: true},
+		{name: "application not found", code: codes.NotFound, wantErr: oscore.ErrOSCORERequired, wantRetained: true},
+		{name: "application server error", code: codes.InternalServerError, wantErr: oscore.ErrOSCORERequired, wantRetained: true},
+		{name: "plaintext success", code: codes.Content, wantErr: oscore.ErrOSCORERequired, wantRetained: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			securityContext, err := oscore.NewContext(oscore.ContextConfig{
+				MasterSecret: []byte("processing error response test"),
+				SenderID:     []byte("client"),
+				RecipientID:  []byte("server"),
+			})
+			require.NoError(t, err)
+			request, exchange, err := securityContext.ProtectRequest(message.Message{
+				Code: codes.GET, Token: message.Token{1},
+			})
+			require.NoError(t, err)
+			cc := &Conn{oscoreExchanges: make(map[string]udpOSCOREExchange)}
+			record := &udpOSCOREExchangeRecord{
+				exchange: udpOSCOREExchange{
+					context:  securityContext,
+					exchange: exchange,
+					expires:  time.Now().Add(time.Minute),
+				},
+				state: udpOSCOREExchangeSent,
+			}
+			record.exchange.record = record
+			cc.oscoreExchanges[string(request.Token)] = record.exchange
+			response := pool.NewMessage(context.Background())
+			response.SetMessage(message.Message{Code: test.code, Token: request.Token})
+
+			err = cc.unprotectIncomingResponse(response)
+			if test.wantErr != nil {
+				require.ErrorIs(t, err, test.wantErr)
+			} else {
+				require.NoError(t, err)
+			}
+			_, retained := cc.oscoreExchanges[string(request.Token)]
+			require.Equal(t, test.wantRetained, retained)
+			require.Equal(t, test.wantProcessingError, oscore.IsUnprotectedProcessingError(response.Context()))
+		})
+	}
+}
+
 func TestProtectOutgoingRequestPreservesControlMessage(t *testing.T) {
 	securityContext, err := oscore.NewContext(oscore.ContextConfig{
 		MasterSecret: []byte("control message test secret"),

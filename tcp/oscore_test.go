@@ -14,6 +14,7 @@ import (
 	"github.com/plgd-dev/go-coap/v3/message/pool"
 	coapNet "github.com/plgd-dev/go-coap/v3/net"
 	"github.com/plgd-dev/go-coap/v3/net/blockwise"
+	observationNet "github.com/plgd-dev/go-coap/v3/net/observation"
 	"github.com/plgd-dev/go-coap/v3/net/oscore"
 	"github.com/plgd-dev/go-coap/v3/net/responsewriter"
 	"github.com/plgd-dev/go-coap/v3/options"
@@ -129,14 +130,6 @@ func testOSCOREMalformedStreamMessages(
 			name:    "wrong outer request code",
 			code:    codes.PUT,
 			options: message.Options{{ID: message.OSCORE, Value: validOSCOREOption}},
-		},
-		{
-			name: "Class E option outside ciphertext",
-			code: codes.POST,
-			options: message.Options{
-				{ID: message.OSCORE, Value: validOSCOREOption},
-				{ID: message.URIPath, Value: []byte("unexpected")},
-			},
 		},
 	}
 	for i, test := range malformedMessages {
@@ -364,7 +357,20 @@ func TestOSCORETCPMultipleOutgoingContexts(t *testing.T) {
 func TestOSCORETCPObserveNotificationsAndCancellation(t *testing.T) {
 	listener, err := coapNet.NewTCPListener("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
-	clientContext, serverContext := newTCPOSCOREContextPair(t, "client", "server")
+	masterSecret := []byte{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16}
+	clientContext, err := oscore.NewContext(oscore.ContextConfig{
+		MasterSecret: masterSecret,
+		SenderID:     []byte("client"),
+		RecipientID:  []byte("server"),
+	})
+	require.NoError(t, err)
+	serverContext, err := oscore.NewContext(oscore.ContextConfig{
+		MasterSecret:         masterSecret,
+		SenderID:             []byte("server"),
+		RecipientID:          []byte("client"),
+		SenderSequenceNumber: 0xffffff,
+	})
+	require.NoError(t, err)
 	serverProcessor, err := oscore.NewProcessor(oscore.ProcessorConfig{Contexts: []*oscore.Context{serverContext}})
 	require.NoError(t, err)
 	sendNotifications := make(chan struct{})
@@ -427,7 +433,12 @@ func TestOSCORETCPObserveNotificationsAndCancellation(t *testing.T) {
 	require.NoError(t, err)
 	defer func() { require.NoError(t, cc.Close()) }()
 
-	received := make(chan string, 3)
+	type observedResponse struct {
+		body     string
+		sequence uint64
+		ok       bool
+	}
+	received := make(chan observedResponse, 3)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	observation, err := cc.Observe(ctx, "/oscore-observe", func(response *pool.Message) {
@@ -439,13 +450,23 @@ func TestOSCORETCPObserveNotificationsAndCancellation(t *testing.T) {
 		if response.HasOption(message.OSCORE) {
 			t.Errorf("Observe callback received an OSCORE envelope")
 		}
-		received <- string(body)
+		sequence, ok := observationNet.AuthenticatedSequenceNumber(response.Context())
+		received <- observedResponse{body: string(body), sequence: sequence, ok: ok}
 	})
 	require.NoError(t, err)
-	require.Equal(t, "initial", <-received)
+	initial := <-received
+	require.Equal(t, "initial", initial.body)
+	require.True(t, initial.ok)
+	require.Equal(t, uint64(0xffffff), initial.sequence)
 	close(sendNotifications)
-	require.Equal(t, "notification-1", <-received)
-	require.Equal(t, "notification-2", <-received)
+	first := <-received
+	require.Equal(t, "notification-1", first.body)
+	require.True(t, first.ok)
+	require.Equal(t, uint64(0x1000000), first.sequence)
+	second := <-received
+	require.Equal(t, "notification-2", second.body)
+	require.True(t, second.ok)
+	require.Equal(t, uint64(0x1000001), second.sequence)
 	require.NoError(t, observation.Cancel(ctx))
 }
 

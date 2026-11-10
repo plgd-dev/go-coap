@@ -2,7 +2,7 @@ package oscore
 
 import "fmt"
 
-const maxOSCOREOptionLength = 255
+const maxOSCOREOptionLength = 1 + 5 + 1 + 255 + maxIdentifierSize
 
 // OptionValue contains the fields encoded by the RFC 8613 OSCORE option.
 // Presence booleans distinguish an absent field from a present empty value.

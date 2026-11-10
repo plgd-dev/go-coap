@@ -51,6 +51,7 @@ type udpOSCORERequestContextKey struct{}
 type udpOSCORERequestContext struct {
 	context  *oscore.Context
 	exchange oscore.Exchange
+	options  message.Options
 }
 
 type udpOSCORERequest struct {
@@ -61,6 +62,14 @@ type udpOSCORERequest struct {
 type udpOSCOREResponse struct {
 	digest  [sha256.Size]byte
 	expires time.Time
+}
+
+func cloneUDPOSCOREOptions(options message.Options) message.Options {
+	cloned := make(message.Options, len(options))
+	for i, option := range options {
+		cloned[i] = message.Option{ID: option.ID, Value: append([]byte(nil), option.Value...)}
+	}
+	return cloned
 }
 
 func udpPoolMessageToOSCOREMessage(msg *pool.Message) (message.Message, error) {
@@ -241,6 +250,15 @@ func (cc *Conn) unprotectIncomingResponse(resp *pool.Message) error {
 		return oscore.ErrNoSecurityContext
 	}
 	if !resp.HasOption(message.OSCORE) {
+		if oscore.IsUnprotectedProcessingErrorCode(resp.Code()) {
+			cc.oscoreMu.Lock()
+			if current, exists := cc.oscoreExchanges[key]; exists && current.record == exchange.record {
+				delete(cc.oscoreExchanges, key)
+			}
+			cc.oscoreMu.Unlock()
+			resp.SetContext(oscore.ContextWithUnprotectedProcessingError(resp.Context()))
+			return nil
+		}
 		return oscore.ErrOSCORERequired
 	}
 	outer, err := udpPoolMessageToOSCOREMessage(resp)
@@ -398,6 +416,7 @@ func (cc *Conn) processIncomingOSCORERequest(req *pool.Message, datagram []byte)
 		req.SetContext(context.WithValue(req.Context(), udpOSCORERequestContextKey{}, udpOSCORERequestContext{
 			context:  securityContext,
 			exchange: exchange,
+			options:  cloneUDPOSCOREOptions(plaintext.Options),
 		}))
 		cc.oscoreMu.Lock()
 		cc.oscoreRequests[req.MessageID()] = udpOSCORERequest{
@@ -467,7 +486,10 @@ func (cc *Conn) updateOSCOREObservationForResponse(
 	defer cc.oscoreMu.Unlock()
 	switch {
 	case observeErr == nil && observeValue == 1:
-		delete(cc.oscoreObservations, key)
+		if current, exists := cc.oscoreObservations[key]; exists &&
+			oscore.MatchesObserveRegistration(current.options, binding.options) {
+			delete(cc.oscoreObservations, key)
+		}
 	case observeErr == nil && observeValue == 0 &&
 		resp.Code() >= codes.Created && resp.Code() < codes.BadRequest && resp.HasOption(message.Observe):
 		cc.oscoreObservations[key] = binding

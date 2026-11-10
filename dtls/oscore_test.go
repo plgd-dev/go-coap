@@ -138,14 +138,6 @@ func TestOSCOREDTLSRejectsMalformedTransportMessages(t *testing.T) {
 			code:    codes.PUT,
 			options: message.Options{{ID: message.OSCORE, Value: validOSCOREOption}},
 		},
-		{
-			name: "Class E option outside ciphertext",
-			code: codes.POST,
-			options: message.Options{
-				{ID: message.OSCORE, Value: validOSCOREOption},
-				{ID: message.URIPath, Value: []byte("unexpected")},
-			},
-		},
 	}
 	for i, test := range malformedMessages {
 		t.Run(test.name, func(t *testing.T) {

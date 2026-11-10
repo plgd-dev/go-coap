@@ -36,6 +36,17 @@ func TestOSCOREAndPlaintextUDPExchange(t *testing.T) {
 				}
 				return
 			}
+			path, pathErr := req.Path()
+			if pathErr != nil {
+				t.Errorf("get request path: %v", pathErr)
+				return
+			}
+			if path == "/error" {
+				if err := w.SetResponse(codes.BadRequest, message.TextPlain, nil); err != nil {
+					t.Errorf("set application-error response: %v", err)
+				}
+				return
+			}
 			if err := w.SetResponse(codes.Content, message.TextPlain, bytes.NewReader([]byte("ok"))); err != nil {
 				t.Errorf("set content response: %v", err)
 			}
@@ -63,6 +74,17 @@ func TestOSCOREAndPlaintextUDPExchange(t *testing.T) {
 
 	assertUDPGetResponse(t, secureClient)
 	assertUDPGetResponse(t, plaintextClient)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	request, err := secureClient.NewGetRequest(ctx, "/error")
+	require.NoError(t, err)
+	defer secureClient.ReleaseMessage(request)
+	response, err := secureClient.Do(request)
+	require.NoError(t, err)
+	defer secureClient.ReleaseMessage(response)
+	require.Equal(t, codes.BadRequest, response.Code())
+	require.False(t, response.HasOption(message.OSCORE))
 }
 
 func TestOSCOREUDPRejectsMalformedTransportMessages(t *testing.T) {
@@ -121,14 +143,6 @@ func TestOSCOREUDPRejectsMalformedTransportMessages(t *testing.T) {
 			name:    "wrong outer request code",
 			code:    codes.PUT,
 			options: message.Options{{ID: message.OSCORE, Value: validOSCOREOption}},
-		},
-		{
-			name: "Class E option outside ciphertext",
-			code: codes.POST,
-			options: message.Options{
-				{ID: message.OSCORE, Value: validOSCOREOption},
-				{ID: message.URIPath, Value: []byte("unexpected")},
-			},
 		},
 	}
 	for i, test := range malformedMessages {

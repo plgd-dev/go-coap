@@ -87,6 +87,20 @@ type tcpOSCORERequestContextKey struct{}
 type tcpOSCORERequestContext struct {
 	context  *oscore.Context
 	exchange oscore.Exchange
+	options  message.Options
+}
+
+func cloneTCPOSCOREOptions(options message.Options) message.Options {
+	cloned := make(message.Options, len(options))
+	for i, option := range options {
+		cloned[i] = message.Option{ID: option.ID, Value: append([]byte(nil), option.Value...)}
+	}
+	return cloned
+}
+
+func tcpOSCOREResponseNeedsPartialIV(binding tcpOSCORERequestContext, options message.Options) bool {
+	return binding.exchange.Observe || options.HasOption(message.Observe) ||
+		options.HasOption(message.QBlock1) || options.HasOption(message.QBlock2)
 }
 
 type ConnOptions struct {
@@ -334,6 +348,16 @@ func (cc *Conn) unprotectResponse(response *pool.Message) error {
 		return oscore.ErrNoSecurityContext
 	}
 	if !response.HasOption(message.OSCORE) {
+		if oscore.IsUnprotectedProcessingErrorCode(response.Code()) {
+			cc.oscoreMu.Lock()
+			if current, exists := cc.oscoreExchanges[key]; exists &&
+				bytes.Equal(current.exchange.RequestPartialIV, exchange.exchange.RequestPartialIV) {
+				delete(cc.oscoreExchanges, key)
+			}
+			cc.oscoreMu.Unlock()
+			response.SetContext(oscore.ContextWithUnprotectedProcessingError(response.Context()))
+			return nil
+		}
 		return oscore.ErrOSCORERequired
 	}
 	outer, err := poolMessageToOSCOREMessage(response)
@@ -353,6 +377,9 @@ func (cc *Conn) unprotectResponse(response *pool.Message) error {
 		return err
 	}
 	response.SetMessage(plaintext)
+	if hasObserve && len(responseOption.PartialIV) > 0 {
+		observation.SetAuthenticatedSequenceNumber(response, tcpPartialIVNumber(responseOption.PartialIV))
+	}
 	return nil
 }
 
@@ -451,6 +478,7 @@ func (cc *Conn) unprotectIncomingRequest(req *pool.Message) error {
 		req.SetContext(context.WithValue(req.Context(), tcpOSCORERequestContextKey{}, tcpOSCORERequestContext{
 			context:  securityContext,
 			exchange: exchange,
+			options:  cloneTCPOSCOREOptions(plaintext.Options),
 		}))
 	}
 	req.SetMessage(plaintext)
@@ -687,7 +715,7 @@ func (cc *Conn) protectTCPResponseForRequest(
 		return fmt.Errorf("read response for OSCORE: %w", err)
 	}
 	var protected message.Message
-	if binding.exchange.Observe || outer.Options.HasOption(message.Observe) {
+	if tcpOSCOREResponseNeedsPartialIV(binding, outer.Options) {
 		protected, err = binding.context.ProtectResponseWithPartialIV(outer, binding.exchange)
 	} else {
 		protected, err = binding.context.ProtectResponse(outer, binding.exchange)
@@ -700,7 +728,10 @@ func (cc *Conn) protectTCPResponseForRequest(
 	defer cc.oscoreMu.Unlock()
 	switch {
 	case observeErr == nil && observeValue == 1:
-		delete(cc.oscoreObservations, token)
+		if current, exists := cc.oscoreObservations[token]; exists &&
+			oscore.MatchesObserveRegistration(current.options, binding.options) {
+			delete(cc.oscoreObservations, token)
+		}
 	case observeErr == nil && observeValue == 0 &&
 		response.Code() >= codes.Created && response.Code() < codes.BadRequest &&
 		response.HasOption(message.Observe):
