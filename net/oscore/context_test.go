@@ -276,7 +276,7 @@ func TestNewContextIDContextUsesBothIDs(t *testing.T) {
 		MasterSecret: []byte("0123456789abcdef"),
 		SenderID:     []byte{1},
 		RecipientID:  []byte{1, 2, 3, 4, 5, 6, 7},
-		IDContext:    bytes.Repeat([]byte{3}, 256),
+		IDContext:    bytes.Repeat([]byte{3}, 242),
 	})
 	if !errors.Is(err, ErrInvalidContext) {
 		t.Fatalf("oversized ID Context for recipient ID error = %v, want %v", err, ErrInvalidContext)

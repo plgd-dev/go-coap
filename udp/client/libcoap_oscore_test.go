@@ -286,17 +286,19 @@ func TestLibCoAPServerRejectsWrongOSCOREContext(t *testing.T) {
 	require.NoError(t, err)
 	defer cc.ReleaseMessage(request)
 	response, err := cc.Do(request)
-	if response != nil {
-		cc.ReleaseMessage(response)
-	}
-	require.Error(t, err, "go-coap accepted a plaintext response to a request protected with an invalid OSCORE context")
+	require.NoError(t, err)
+	require.NotNil(t, response)
+	defer cc.ReleaseMessage(response)
+	require.True(t, oscore.IsUnprotectedProcessingError(response.Context()),
+		"plaintext OSCORE processing errors must be identified as unauthenticated")
+	require.True(t, oscore.IsUnprotectedProcessingErrorCode(response.Code()),
+		"unexpected unprotected response code: %v", response.Code())
 	select {
 	case clientErr := <-clientErrors:
-		require.ErrorIs(t, clientErr, oscore.ErrOSCORERequired)
-	case <-time.After(time.Second):
-		require.Fail(t, "go-coap client did not report the rejected plaintext response")
+		require.Fail(t, "client reported an error for an allowed OSCORE processing error", "error: %v", clientErr)
+	default:
 	}
-	require.NoError(t, cc.Context().Err(), "rejecting an unauthenticated response closed the UDP connection")
+	require.NoError(t, cc.Context().Err(), "handling an unauthenticated processing error closed the UDP connection")
 }
 
 func TestLibCoAPClientOSCORE(t *testing.T) {

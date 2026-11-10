@@ -60,10 +60,14 @@ func isResponseCode(code codes.Code) bool {
 }
 
 func observeRegistrationFromOptions(options message.Options) (bool, error) {
-	if !options.HasOption(message.Observe) {
+	option, found, err := findObserveOption(options)
+	if err != nil {
+		return false, err
+	}
+	if !found {
 		return false, nil
 	}
-	value, err := options.Observe()
+	value, err := observeOptionValue(option)
 	if err != nil || value > 1 {
 		return false, fmt.Errorf("%w: Observe request value must be 0 or 1", ErrInvalidOSCOREMessage)
 	}
@@ -118,7 +122,8 @@ func parseOSCOREOuter(options message.Options) (OptionValue, message.Options, er
 	}
 	filteredOuterFields := make(message.Options, 0, len(outerUserFields))
 	for _, option := range outerUserFields {
-		if option.ID == message.Observe || ClassifyOption(option.ID) != ClassE {
+		if option.ID == message.Observe || option.ID == message.MaxAge ||
+			ClassifyOption(option.ID) != ClassE {
 			filteredOuterFields = append(filteredOuterFields, option)
 		}
 	}
@@ -231,10 +236,6 @@ func (c *Context) UnprotectRequest(request message.Message) (message.Message, Ex
 	if err != nil {
 		return message.Message{}, Exchange{}, err
 	}
-	err = validateOuterRequestCode(request.Code, hasOuterObserve)
-	if err != nil {
-		return message.Message{}, Exchange{}, err
-	}
 	if optionErr := c.validateRequestOption(option); optionErr != nil {
 		return message.Message{}, Exchange{}, optionErr
 	}
@@ -274,17 +275,6 @@ func (c *Context) UnprotectRequest(request message.Message) (message.Message, Ex
 	return inner, exchange, nil
 }
 
-func validateOuterRequestCode(code codes.Code, hasObserve bool) error {
-	if hasObserve {
-		if code != codes.FETCH {
-			return fmt.Errorf("%w: outer request code with Observe must be FETCH", ErrInvalidOSCOREMessage)
-		}
-	} else if code != codes.POST {
-		return fmt.Errorf("%w: outer request code must be POST", ErrInvalidOSCOREMessage)
-	}
-	return nil
-}
-
 func validateInnerRequest(inner message.Message, outerObserveOption message.Option, hasOuterObserve bool) (bool, error) {
 	if !isRequestCode(inner.Code) {
 		return false, fmt.Errorf("%w: decrypted code %d is not a request", ErrInvalidOSCOREMessage, inner.Code)
@@ -297,8 +287,12 @@ func validateInnerRequest(inner message.Message, outerObserveOption message.Opti
 		return false, fmt.Errorf("%w: inner and outer Observe options must match", ErrInvalidOSCOREMessage)
 	}
 	if hasInnerObserve {
-		outerValue, outerErr := message.Options{outerObserveOption}.Observe()
-		innerValue, innerErr := inner.Options.Observe()
+		innerObserve, _, err := findObserveOption(inner.Options)
+		if err != nil {
+			return false, err
+		}
+		outerValue, outerErr := observeOptionValue(outerObserveOption)
+		innerValue, innerErr := observeOptionValue(innerObserve)
 		if outerErr != nil || innerErr != nil || outerValue > 1 || innerValue > 1 || outerValue != innerValue {
 			return false, fmt.Errorf("%w: inner and outer Observe options must match", ErrInvalidOSCOREMessage)
 		}
@@ -320,6 +314,13 @@ func findObserveOption(options message.Options) (message.Option, bool, error) {
 	}
 	option := options[start]
 	return message.Option{ID: option.ID, Value: append([]byte(nil), option.Value...)}, true, nil
+}
+
+func observeOptionValue(option message.Option) (uint32, error) {
+	if len(option.Value) > 3 || len(option.Value) > 0 && option.Value[0] == 0 {
+		return 0, fmt.Errorf("%w: invalid Observe option encoding", ErrInvalidOSCOREMessage)
+	}
+	return message.Options{option}.Observe()
 }
 
 func removeOption(options message.Options, id message.OptionID) message.Options {
@@ -420,7 +421,7 @@ func prepareResponsePlaintext(response message.Message, exchange Exchange) (mess
 		return message.Option{}, false, OptionSplit{}, nil, err
 	}
 	if observes {
-		if _, observeErr := response.Options.Observe(); observeErr != nil {
+		if _, observeErr := observeOptionValue(observeOption); observeErr != nil {
 			return message.Option{}, false, OptionSplit{}, nil, fmt.Errorf("%w: invalid Observe response option: %w", ErrInvalidOSCOREMessage, observeErr)
 		}
 		if !exchange.Observe {
@@ -540,7 +541,7 @@ func (c *Context) unprotectResponse(response message.Message, exchange Exchange)
 	if err != nil {
 		return message.Message{}, err
 	}
-	inner.Options, err = validateInnerResponse(inner, response, exchange, option)
+	inner.Options, err = validateInnerResponse(inner, exchange, option)
 	if err != nil {
 		return message.Message{}, err
 	}
@@ -552,9 +553,6 @@ func (c *Context) unprotectResponse(response message.Message, exchange Exchange)
 }
 
 func (c *Context) openResponse(response message.Message, exchange Exchange) (OptionValue, message.Options, message.Message, error) {
-	if response.Code != outerResponseCode && response.Code != codes.Content {
-		return OptionValue{}, nil, message.Message{}, fmt.Errorf("%w: unexpected outer response code %d", ErrInvalidOSCOREMessage, response.Code)
-	}
 	if err := validateExchange(exchange); err != nil {
 		return OptionValue{}, nil, message.Message{}, err
 	}
@@ -568,8 +566,14 @@ func (c *Context) openResponse(response message.Message, exchange Exchange) (Opt
 	if containsProxyOption(outerOptions) {
 		return OptionValue{}, nil, message.Message{}, ErrUnsupportedOption
 	}
-	if _, _, observeErr := findObserveOption(outerOptions); observeErr != nil {
+	outerObserveOption, hasOuterObserve, observeErr := findObserveOption(outerOptions)
+	if observeErr != nil {
 		return OptionValue{}, nil, message.Message{}, observeErr
+	}
+	if hasOuterObserve {
+		if _, observeErr := observeOptionValue(outerObserveOption); observeErr != nil {
+			return OptionValue{}, nil, message.Message{}, observeErr
+		}
 	}
 	outerOptions = removeOption(outerOptions, message.Observe)
 	aad, err := BuildAADWithAlgorithm(c.algorithm, exchange.RequestID, exchange.RequestPartialIV, nil)
@@ -587,7 +591,7 @@ func (c *Context) openResponse(response message.Message, exchange Exchange) (Opt
 	return option, outerOptions, inner, nil
 }
 
-func validateInnerResponse(inner message.Message, response message.Message, exchange Exchange, option OptionValue) (message.Options, error) {
+func validateInnerResponse(inner message.Message, exchange Exchange, option OptionValue) (message.Options, error) {
 	if !isResponseCode(inner.Code) {
 		return nil, fmt.Errorf("%w: decrypted code %d is not a response", ErrInvalidOSCOREMessage, inner.Code)
 	}
@@ -600,12 +604,6 @@ func validateInnerResponse(inner message.Message, response message.Message, exch
 	}
 	if hasInnerObserve && len(innerObserve.Value) != 0 {
 		return nil, fmt.Errorf("%w: inner Observe notification value must be empty", ErrInvalidOSCOREMessage)
-	}
-	if hasInnerObserve && response.Code != codes.Content {
-		return nil, fmt.Errorf("%w: Observe response outer code must be Content", ErrInvalidOSCOREMessage)
-	}
-	if !hasInnerObserve && response.Code != outerResponseCode {
-		return nil, fmt.Errorf("%w: non-Observe response outer code must be Changed", ErrInvalidOSCOREMessage)
 	}
 	if hasInnerObserve {
 		sequence := uint32(0x00ffffff)

@@ -111,6 +111,13 @@ plaintext. Outgoing requests with multiple configured contexts require an
 `OutgoingContextSelector`; without one, protection returns
 `oscore.ErrAmbiguousContext`.
 
+For an outstanding protected request, clients may receive the RFC 8613
+processing errors 4.00, 4.01, or 4.02 without OSCORE protection. Such responses
+are unauthenticated and may be spoofed by an on-path attacker; they can cause
+denial of service but must not be treated as authenticated peer statements.
+Check `oscore.IsUnprotectedProcessingError(response.Context())` before acting
+on one.
+
 ## Sender sequence and receiver replay state
 
 Partial IV values must never be reused with the same sender key. The default

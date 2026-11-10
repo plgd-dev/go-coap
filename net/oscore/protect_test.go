@@ -309,6 +309,24 @@ func TestValidateInnerRequestObserveValue(t *testing.T) {
 			t.Errorf("invalid Observe value %d error = %v, want %v", value, err, ErrInvalidOSCOREMessage)
 		}
 	}
+
+	options := observeOptions(t, 0)
+	outerOption, _, err := findObserveOption(options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, validationErr := validateInnerRequest(message.Message{Code: codes.POST, Options: options}, outerOption, true); !errors.Is(validationErr, ErrUnsupportedOption) {
+		t.Fatalf("POST with Observe error = %v, want ErrUnsupportedOption", validationErr)
+	}
+
+	malformedObserve := message.Options{{ID: message.Observe, Value: []byte{0, 0, 0, 0, 0}}}
+	outerOption, _, err = findObserveOption(malformedObserve)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := validateInnerRequest(message.Message{Code: codes.GET, Options: malformedObserve}, outerOption, true); !errors.Is(err, ErrInvalidOSCOREMessage) {
+		t.Fatalf("malformed Observe error = %v, want ErrInvalidOSCOREMessage", err)
+	}
 }
 
 func assertObserveRegistration(
@@ -875,7 +893,6 @@ func TestUnprotectRejectsMalformedOuterMessage(t *testing.T) {
 		t.Fatal(err)
 	}
 	for name, mutate := range map[string]func(*message.Message){
-		"wrong outer code": func(msg *message.Message) { msg.Code = codes.PUT },
 		"missing KID": func(msg *message.Message) {
 			msg.Options = msg.Options.Set(message.Option{ID: message.OSCORE, Value: []byte{1}})
 		},
@@ -891,6 +908,38 @@ func TestUnprotectRejectsMalformedOuterMessage(t *testing.T) {
 	}
 }
 
+func TestUnprotectDiscardsOuterCode(t *testing.T) {
+	client, server := pairedContexts(t, 0, 0)
+	protectedRequest, exchange, err := client.ProtectRequest(message.Message{Code: codes.GET})
+	if err != nil {
+		t.Fatal(err)
+	}
+	protectedRequest.Code = codes.PUT
+	plaintextRequest, serverExchange, err := server.UnprotectRequest(protectedRequest)
+	if err != nil {
+		t.Fatalf("UnprotectRequest after outer Code change: %v", err)
+	}
+	if plaintextRequest.Code != codes.GET {
+		t.Fatalf("decrypted request Code = %v, want GET", plaintextRequest.Code)
+	}
+
+	protectedResponse, err := server.ProtectResponse(
+		message.Message{Code: codes.Content, Payload: []byte("response")},
+		serverExchange,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	protectedResponse.Code = codes.NotFound
+	plaintextResponse, err := client.UnprotectResponse(protectedResponse, exchange)
+	if err != nil {
+		t.Fatalf("UnprotectResponse after outer Code change: %v", err)
+	}
+	if plaintextResponse.Code != codes.Content {
+		t.Fatalf("decrypted response Code = %v, want Content", plaintextResponse.Code)
+	}
+}
+
 func TestUnprotectDiscardsClassEOptionsFromOuterMessages(t *testing.T) {
 	client, server := pairedContexts(t, 0, 0)
 	protectedRequest, exchange, err := client.ProtectRequest(message.Message{Code: codes.GET})
@@ -900,6 +949,7 @@ func TestUnprotectDiscardsClassEOptionsFromOuterMessages(t *testing.T) {
 	protectedRequest.Options = append(protectedRequest.Options,
 		message.Option{ID: message.URIPath, Value: []byte("unexpected")},
 		message.Option{ID: message.ContentFormat, Value: []byte{0}},
+		message.Option{ID: message.MaxAge, Value: []byte{0}},
 	)
 	request, serverExchange, err := server.UnprotectRequest(protectedRequest)
 	if err != nil {
@@ -908,6 +958,9 @@ func TestUnprotectDiscardsClassEOptionsFromOuterMessages(t *testing.T) {
 	if request.Options.HasOption(message.URIPath) || request.Options.HasOption(message.ContentFormat) {
 		t.Fatalf("outer Class E options were not discarded: %v", request.Options)
 	}
+	if maxAge, maxAgeErr := request.Options.GetUint32(message.MaxAge); maxAgeErr != nil || maxAge != 0 {
+		t.Fatalf("outer Max-Age = %d, error = %v; want 0", maxAge, maxAgeErr)
+	}
 
 	protectedResponse, err := server.ProtectResponse(message.Message{Code: codes.Content}, serverExchange)
 	if err != nil {
@@ -915,6 +968,7 @@ func TestUnprotectDiscardsClassEOptionsFromOuterMessages(t *testing.T) {
 	}
 	protectedResponse.Options = append(protectedResponse.Options,
 		message.Option{ID: message.URIPath, Value: []byte("unexpected")},
+		message.Option{ID: message.MaxAge, Value: []byte{0}},
 	)
 	plaintext, err := client.UnprotectResponse(protectedResponse, exchange)
 	if err != nil {
@@ -923,13 +977,13 @@ func TestUnprotectDiscardsClassEOptionsFromOuterMessages(t *testing.T) {
 	if plaintext.Options.HasOption(message.URIPath) {
 		t.Fatalf("outer Class E option was not discarded: %v", plaintext.Options)
 	}
+	if maxAge, err := plaintext.Options.GetUint32(message.MaxAge); err != nil || maxAge != 0 {
+		t.Fatalf("outer response Max-Age = %d, error = %v; want 0", maxAge, err)
+	}
 }
 
 func TestUnprotectRejectsMalformedOrTamperedResponse(t *testing.T) {
 	tests := map[string]func(*testing.T, *message.Message){
-		"wrong outer code": func(_ *testing.T, response *message.Message) {
-			response.Code = codes.Content
-		},
 		"duplicate OSCORE option": func(_ *testing.T, response *message.Message) {
 			response.Options = append(response.Options, message.Option{
 				ID:    message.OSCORE,

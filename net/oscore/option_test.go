@@ -80,9 +80,38 @@ func TestUnmarshalOptionRejectsMalformedValues(t *testing.T) {
 		{0x10, 0x04, 0xaa},
 		{0x11, 0x00, 0, 1, 2, 3, 4, 5, 6, 7, 8},
 	}
+
 	for _, value := range tests {
 		if _, err := UnmarshalOption(value); err == nil {
 			t.Errorf("UnmarshalOption(%x) succeeded", value)
 		}
+	}
+}
+
+func TestOSCOREOptionMaximumLengthIs255(t *testing.T) {
+	option := OptionValue{
+		PartialIV:    bytes.Repeat([]byte{1}, 5),
+		IDContext:    bytes.Repeat([]byte{2}, 241),
+		SenderID:     bytes.Repeat([]byte{3}, maxIdentifierSize),
+		IDContextSet: true,
+		SenderIDSet:  true,
+	}
+	encoded, err := option.MarshalBinary()
+	if err != nil {
+		t.Fatalf("marshal maximum-length OSCORE option: %v", err)
+	}
+	if len(encoded) != 255 {
+		t.Fatalf("encoded option length = %d, want 255", len(encoded))
+	}
+	if _, err := UnmarshalOption(encoded); err != nil {
+		t.Fatalf("unmarshal maximum-length OSCORE option: %v", err)
+	}
+
+	option.IDContext = append(option.IDContext, 4)
+	if _, err := option.MarshalBinary(); err == nil {
+		t.Fatal("MarshalBinary accepted an OSCORE option longer than 255 bytes")
+	}
+	if _, err := UnmarshalOption(append(encoded, 4)); err == nil {
+		t.Fatal("UnmarshalOption accepted an OSCORE option longer than 255 bytes")
 	}
 }

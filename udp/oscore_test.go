@@ -84,7 +84,8 @@ func TestOSCOREAndPlaintextUDPExchange(t *testing.T) {
 	require.NoError(t, err)
 	defer secureClient.ReleaseMessage(response)
 	require.Equal(t, codes.BadRequest, response.Code())
-	require.False(t, response.HasOption(message.OSCORE))
+	require.False(t, oscore.IsUnprotectedProcessingError(response.Context()),
+		"application errors to protected requests must be protected, not treated as OSCORE processing errors")
 }
 
 func TestOSCOREUDPRejectsMalformedTransportMessages(t *testing.T) {
