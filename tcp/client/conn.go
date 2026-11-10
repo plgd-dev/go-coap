@@ -641,6 +641,7 @@ func (cc *Conn) ProcessReceivedMessageWithHandler(req *pool.Message, handler Han
 	generation := req.Generation()
 	requestObserve, requestObserveErr := req.Observe()
 	requestToken := string(req.Token())
+	reqContext := req.Context()
 	origResp := cc.AcquireMessage(cc.Context())
 	origResp.SetToken(req.Token())
 	w := responsewriter.New(origResp, cc, req.Options()...)
@@ -650,7 +651,7 @@ func (cc *Conn) ProcessReceivedMessageWithHandler(req *pool.Message, handler Han
 		requestBinding    tcpOSCORERequestContext
 		hasRequestBinding bool
 	)
-	if reqContext := req.Context(); reqContext != nil {
+	if reqContext != nil {
 		requestBinding, hasRequestBinding = reqContext.Value(tcpOSCORERequestContextKey{}).(tcpOSCORERequestContext)
 	}
 	cc.session.messagePool.ReleaseMessageIfNotHijacked(req, generation)
