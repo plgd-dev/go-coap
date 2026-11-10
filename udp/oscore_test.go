@@ -47,6 +47,18 @@ func TestOSCOREAndPlaintextUDPExchange(t *testing.T) {
 				}
 				return
 			}
+			if path == "/unauthorized" {
+				if err := w.SetResponse(codes.Unauthorized, message.TextPlain, nil); err != nil {
+					t.Errorf("set application-error response: %v", err)
+				}
+				return
+			}
+			if path == "/server-error" {
+				if err := w.SetResponse(codes.InternalServerError, message.TextPlain, nil); err != nil {
+					t.Errorf("set application-error response: %v", err)
+				}
+				return
+			}
 			if err := w.SetResponse(codes.Content, message.TextPlain, bytes.NewReader([]byte("ok"))); err != nil {
 				t.Errorf("set content response: %v", err)
 			}
@@ -75,17 +87,95 @@ func TestOSCOREAndPlaintextUDPExchange(t *testing.T) {
 	assertUDPGetResponse(t, secureClient)
 	assertUDPGetResponse(t, plaintextClient)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-	defer cancel()
-	request, err := secureClient.NewGetRequest(ctx, "/error")
+	for _, test := range []struct {
+		path string
+		code codes.Code
+	}{
+		{path: "/error", code: codes.BadRequest},
+		{path: "/unauthorized", code: codes.Unauthorized},
+		{path: "/server-error", code: codes.InternalServerError},
+	} {
+		t.Run(test.path, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			defer cancel()
+			request, err := secureClient.NewGetRequest(ctx, test.path)
+			require.NoError(t, err)
+			defer secureClient.ReleaseMessage(request)
+			response, err := secureClient.Do(request)
+			require.NoError(t, err)
+			defer secureClient.ReleaseMessage(response)
+			require.Equal(t, test.code, response.Code())
+			require.False(t, oscore.IsUnprotectedProcessingError(response.Context()),
+				"application errors to protected requests must be protected, not treated as OSCORE processing errors")
+		})
+	}
+}
+
+func TestOSCOREUDPObserveWithPOSTIsRejectedBeforeDispatch(t *testing.T) {
+	listener, err := coapNet.NewListenUDP("udp", "127.0.0.1:0")
 	require.NoError(t, err)
-	defer secureClient.ReleaseMessage(request)
-	response, err := secureClient.Do(request)
+	serverErrors := make(chan error, 1)
+	var handled atomic.Int32
+	server := udp.NewServer(
+		options.WithOSCORE(newUDPOSCOREProcessor(t, "server", "client", false)),
+		options.WithErrors(func(err error) { serverErrors <- err }),
+		options.WithHandlerFunc(func(_ *responsewriter.ResponseWriter[*client.Conn], _ *pool.Message) {
+			handled.Add(1)
+		}),
+	)
+	serverDone := make(chan error, 1)
+	go func() { serverDone <- server.Serve(listener) }()
+	defer func() {
+		server.Stop()
+		select {
+		case serverErr := <-serverDone:
+			require.NoError(t, serverErr)
+		case <-time.After(5 * time.Second):
+			require.Fail(t, "UDP Observe validation server did not stop")
+		}
+	}()
+
+	rawClient, err := udp.Dial(listener.LocalAddr().String())
 	require.NoError(t, err)
-	defer secureClient.ReleaseMessage(response)
-	require.Equal(t, codes.BadRequest, response.Code())
-	require.False(t, oscore.IsUnprotectedProcessingError(response.Context()),
-		"application errors to protected requests must be protected, not treated as OSCORE processing errors")
+	defer func() { require.NoError(t, rawClient.Close()) }()
+	senderContext, _ := newUDPOSCOREContextPair(t, "client", "server")
+	innerOptions, _, err := (message.Options{}).SetObserve(nil, 0)
+	require.NoError(t, err)
+	inner, err := oscore.EncodeInner(codes.POST, innerOptions, nil)
+	require.NoError(t, err)
+	partialIV, ciphertext, err := senderContext.Seal(inner, func(partialIV []byte) ([]byte, error) {
+		return oscore.BuildAADWithAlgorithm(senderContext.Algorithm(), senderContext.SenderID(), partialIV, nil)
+	})
+	require.NoError(t, err)
+	oscoreOption, err := (oscore.OptionValue{
+		PartialIV:   partialIV,
+		SenderID:    []byte("client"),
+		SenderIDSet: true,
+	}).MarshalBinary()
+	require.NoError(t, err)
+	outerOptions, _, err := (message.Options{}).SetObserve(nil, 0)
+	require.NoError(t, err)
+	request := rawClient.AcquireMessage(context.Background())
+	request.SetMessage(message.Message{
+		Code:  codes.FETCH,
+		Type:  message.NonConfirmable,
+		Token: message.Token{0x71},
+		Options: append(outerOptions, message.Option{
+			ID:    message.OSCORE,
+			Value: oscoreOption,
+		}),
+		Payload: ciphertext,
+	})
+	require.NoError(t, rawClient.WriteMessage(request))
+	rawClient.ReleaseMessage(request)
+
+	select {
+	case serverErr := <-serverErrors:
+		require.ErrorIs(t, serverErr, oscore.ErrUnsupportedOption)
+	case <-time.After(time.Second):
+		t.Fatal("server did not reject Observe on POST")
+	}
+	require.Zero(t, handled.Load(), "invalid Observe+POST request reached the application")
 }
 
 func TestOSCOREUDPRejectsMalformedTransportMessages(t *testing.T) {

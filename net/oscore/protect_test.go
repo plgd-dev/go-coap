@@ -3,6 +3,7 @@ package oscore
 import (
 	"bytes"
 	"errors"
+	"sync"
 	"testing"
 
 	"github.com/plgd-dev/go-coap/v3/message"
@@ -663,6 +664,43 @@ func TestObserveAllowsInitialResponseWithoutPartialIV(t *testing.T) {
 	}
 }
 
+func TestObserveNotificationWithoutOuterObserveUsesInnerObserveAndPartialIV(t *testing.T) {
+	client, server := pairedContexts(t, 0, 0x1234)
+	request, clientExchange, err := client.ProtectRequest(message.Message{
+		Code:    codes.GET,
+		Token:   message.Token{0x41},
+		Options: observeOptions(t, 0),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, serverExchange, err := server.UnprotectRequest(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	protectedNotification, err := server.ProtectResponseWithPartialIV(message.Message{
+		Code:    codes.Content,
+		Token:   request.Token,
+		Options: message.Options{{ID: message.Observe}},
+		Payload: []byte("notification"),
+	}, serverExchange)
+	if err != nil {
+		t.Fatal(err)
+	}
+	protectedNotification.Options = removeOption(protectedNotification.Options, message.Observe)
+
+	notification, err := client.UnprotectResponse(protectedNotification, clientExchange)
+	if err != nil {
+		t.Fatalf("notification without Outer Observe failed: %v", err)
+	}
+	if got, err := notification.Options.Observe(); err != nil || got != 0x1234 {
+		t.Fatalf("reconstructed Observe value = %d, error = %v; want Partial IV 0x1234", got, err)
+	}
+	if !bytes.Equal(notification.Payload, []byte("notification")) {
+		t.Fatalf("notification payload = %q", notification.Payload)
+	}
+}
+
 func TestRFC8613AppendixC8ProtectedResponseWithPartialIV(t *testing.T) {
 	server, err := NewContext(ContextConfig{
 		MasterSecret: mustHex(t, "0102030405060708090a0b0c0d0e0f10"),
@@ -1062,6 +1100,63 @@ func TestUnprotectResponseWithPartialIVRejectsReplay(t *testing.T) {
 	}
 	if _, err := client.UnprotectResponse(response, clientExchange); !errors.Is(err, ErrReplay) {
 		t.Fatalf("replayed response error = %v, want ErrReplay", err)
+	}
+}
+
+func TestQBlockDuplicatePartialIVRejectedWhenDeliveredConcurrently(t *testing.T) {
+	client, server := pairedContexts(t, 0, 0)
+	request, clientExchange, err := client.ProtectRequest(message.Message{
+		Code:  codes.GET,
+		Token: message.Token{0x52},
+		Options: message.Options{
+			{ID: message.QBlock2, Value: []byte{0x0e}},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, serverExchange, err := server.UnprotectRequest(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response, err := server.ProtectResponseWithPartialIV(message.Message{
+		Code:  codes.Content,
+		Token: request.Token,
+		Options: message.Options{
+			{ID: message.QBlock2, Value: []byte{0x06}},
+		},
+		Payload: []byte("block"),
+	}, serverExchange)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	errs := make(chan error, 2)
+	var wg sync.WaitGroup
+	for i := 0; i < 2; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, unprotectErr := client.UnprotectResponse(response, clientExchange)
+			errs <- unprotectErr
+		}()
+	}
+	wg.Wait()
+	close(errs)
+
+	var accepted, rejected int
+	for unprotectErr := range errs {
+		switch {
+		case unprotectErr == nil:
+			accepted++
+		case errors.Is(unprotectErr, ErrReplay):
+			rejected++
+		default:
+			t.Fatalf("unexpected concurrent response error: %v", unprotectErr)
+		}
+	}
+	if accepted != 1 || rejected != 1 {
+		t.Fatalf("duplicate Q-Block response: accepted=%d rejected=%d; want one of each", accepted, rejected)
 	}
 }
 
