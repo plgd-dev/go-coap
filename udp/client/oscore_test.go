@@ -198,6 +198,244 @@ func TestOSCOREOuterBlockwiseUsesConfiguredMaxReassembledPayloadSize(t *testing.
 	}
 }
 
+func TestOSCOREOuterBlockwiseRejectsOutgoingPayloadOverLimit(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		run  func(*Conn, *pool.Message) error
+	}{
+		{
+			name: "Do",
+			run: func(cc *Conn, request *pool.Message) error {
+				_, err := cc.doOuterBlockwise(request)
+				return err
+			},
+		},
+		{
+			name: "WriteMessage",
+			run: func(cc *Conn, request *pool.Message) error {
+				request.SetType(message.NonConfirmable)
+				return cc.WriteMessage(request)
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			session := newRecordingSession()
+			defer session.Close()
+			cfg := DefaultConfig
+			securityContext, err := oscore.NewContext(oscore.ContextConfig{
+				MasterSecret: []byte("outer blockwise outgoing limit"),
+				SenderID:     []byte("client"),
+				RecipientID:  []byte("server"),
+			})
+			require.NoError(t, err)
+			cfg.OSCORE, err = oscore.NewProcessor(oscore.ProcessorConfig{Contexts: []*oscore.Context{securityContext}})
+			require.NoError(t, err)
+			cfg.OSCOREOuterBlockwise = true
+			cfg.OSCOREOuterBlockwiseMaxReassembledPayloadSize = 4096
+			cc := NewConnWithOpts(session, &cfg, WithBlockWise(func(cc *Conn) *blockwise.BlockWise[*Conn] {
+				return blockwise.New(cc, time.Minute, func(error) {}, nil)
+			}))
+			defer cc.Close()
+
+			request := cc.AcquireMessage(context.Background())
+			defer cc.ReleaseMessage(request)
+			request.SetCode(codes.POST)
+			request.SetToken(message.Token{0x42})
+			request.SetBody(bytes.NewReader(make([]byte, 4097)))
+
+			require.ErrorIs(t, test.run(cc, request), blockwise.ErrRequestEntityTooLarge)
+			session.mu.Lock()
+			defer session.mu.Unlock()
+			require.Empty(t, session.written, "oversized envelope must be rejected before sending")
+		})
+	}
+}
+
+func TestOSCOREOuterBlockwiseResponseRequiresProtection(t *testing.T) {
+	for _, test := range []struct {
+		name                string
+		code                codes.Code
+		wantDelivered       bool
+		wantProcessingError bool
+	}{
+		{name: "plaintext success is rejected", code: codes.Content},
+		{name: "plaintext application error is rejected", code: codes.InternalServerError},
+		{name: "plaintext processing error is delivered", code: codes.BadRequest, wantDelivered: true, wantProcessingError: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			session := newRecordingSession()
+			defer session.Close()
+			cfg := DefaultConfig
+			securityContext, err := oscore.NewContext(oscore.ContextConfig{
+				MasterSecret: []byte("outer blockwise response policy"),
+				SenderID:     []byte("client"),
+				RecipientID:  []byte("server"),
+			})
+			require.NoError(t, err)
+			cfg.OSCORE, err = oscore.NewProcessor(oscore.ProcessorConfig{
+				Contexts:      []*oscore.Context{securityContext},
+				RequireOSCORE: true,
+			})
+			require.NoError(t, err)
+			cfg.OSCOREOuterBlockwise = true
+			cc := NewConnWithOpts(session, &cfg)
+			defer cc.Close()
+
+			request := cc.AcquireMessage(context.Background())
+			defer cc.ReleaseMessage(request)
+			request.SetCode(codes.GET)
+			request.SetToken(message.Token{0x43})
+			_, finish, err := cc.protectOutgoingRequest(request)
+			require.NoError(t, err)
+			require.NotNil(t, finish)
+			finish(true)
+
+			delivered := false
+			processingError := false
+			cc.tokenHandlerContainer.Store(request.Token().Hash(), func(_ *responsewriter.ResponseWriter[*Conn], response *pool.Message) {
+				delivered = true
+				processingError = oscore.IsUnprotectedProcessingError(response.Context())
+			})
+			response := cc.AcquireMessage(context.Background())
+			defer cc.ReleaseMessage(response)
+			response.SetCode(test.code)
+			response.SetToken(request.Token())
+			writer := responsewriter.New(cc.AcquireMessage(context.Background()), cc)
+			defer cc.ReleaseMessage(writer.Message())
+
+			cc.handleResponse(writer, response)
+			require.Equal(t, test.wantDelivered, delivered)
+			if test.wantProcessingError {
+				require.True(t, processingError)
+			}
+		})
+	}
+}
+
+func TestProcessIncomingOSCOREMessageUsesOSCOREOptionDirection(t *testing.T) {
+	const masterSecret = "outer code direction"
+
+	t.Run("request outer code changed to response", func(t *testing.T) {
+		clientContext, err := oscore.NewContext(oscore.ContextConfig{
+			MasterSecret: []byte(masterSecret),
+			SenderID:     []byte("client"),
+			RecipientID:  []byte("server"),
+		})
+		require.NoError(t, err)
+		serverContext, err := oscore.NewContext(oscore.ContextConfig{
+			MasterSecret: []byte(masterSecret),
+			SenderID:     []byte("server"),
+			RecipientID:  []byte("client"),
+		})
+		require.NoError(t, err)
+		processor, err := oscore.NewProcessor(oscore.ProcessorConfig{Contexts: []*oscore.Context{serverContext}})
+		require.NoError(t, err)
+		session := newRecordingSession()
+		defer session.Close()
+		cfg := DefaultConfig
+		cfg.OSCORE = processor
+		cc := NewConnWithOpts(session, &cfg)
+		defer cc.Close()
+
+		protected, _, err := clientContext.ProtectRequest(message.Message{
+			Code: codes.GET, Token: message.Token{0x44},
+		})
+		require.NoError(t, err)
+		req := cc.AcquireMessage(context.Background())
+		defer cc.ReleaseMessage(req)
+		req.SetMessage(protected)
+		req.SetCode(codes.Content)
+		datagram, err := req.MarshalWithEncoder(coder.DefaultCoder)
+		require.NoError(t, err)
+
+		require.False(t, cc.processIncomingOSCOREMessage(req, datagram))
+		require.Equal(t, codes.GET, req.Code())
+	})
+
+	t.Run("response outer code changed to request", func(t *testing.T) {
+		clientContext, err := oscore.NewContext(oscore.ContextConfig{
+			MasterSecret: []byte(masterSecret),
+			SenderID:     []byte("client"),
+			RecipientID:  []byte("server"),
+		})
+		require.NoError(t, err)
+		serverContext, err := oscore.NewContext(oscore.ContextConfig{
+			MasterSecret: []byte(masterSecret),
+			SenderID:     []byte("server"),
+			RecipientID:  []byte("client"),
+		})
+		require.NoError(t, err)
+		processor, err := oscore.NewProcessor(oscore.ProcessorConfig{Contexts: []*oscore.Context{clientContext}})
+		require.NoError(t, err)
+		session := newRecordingSession()
+		defer session.Close()
+		cfg := DefaultConfig
+		cfg.OSCORE = processor
+		cc := NewConnWithOpts(session, &cfg)
+		defer cc.Close()
+
+		request := cc.AcquireMessage(context.Background())
+		defer cc.ReleaseMessage(request)
+		request.SetCode(codes.GET)
+		request.SetToken(message.Token{0x45})
+		wireRequest, finish, err := cc.protectOutgoingRequest(request)
+		require.NoError(t, err)
+		require.NotNil(t, finish)
+		outerRequest, err := udpPoolMessageToOSCOREMessage(wireRequest)
+		require.NoError(t, err)
+		finish(true)
+		_, exchange, err := serverContext.UnprotectRequest(outerRequest)
+		require.NoError(t, err)
+		protectedResponse, err := serverContext.ProtectResponse(message.Message{
+			Code: codes.Content, Token: request.Token(), Payload: []byte("ok"),
+		}, exchange)
+		require.NoError(t, err)
+
+		response := cc.AcquireMessage(context.Background())
+		defer cc.ReleaseMessage(response)
+		response.SetMessage(protectedResponse)
+		response.SetCode(codes.GET)
+		datagram, err := response.MarshalWithEncoder(coder.DefaultCoder)
+		require.NoError(t, err)
+
+		require.False(t, cc.processIncomingOSCOREMessage(response, datagram))
+		require.Equal(t, codes.Content, response.Code())
+		body, err := response.ReadBody()
+		require.NoError(t, err)
+		require.Equal(t, []byte("ok"), body)
+	})
+}
+
+func TestOSCOREOuterBlockwiseProxyRejectsOversizedResponse(t *testing.T) {
+	option, err := (oscore.OptionValue{
+		PartialIV:   []byte{1},
+		SenderID:    []byte("client"),
+		SenderIDSet: true,
+	}).MarshalBinary()
+	require.NoError(t, err)
+	cc := &Conn{
+		oscoreProxy:          true,
+		oscoreOuterBlockwise: true,
+		oscoreOuterBlockwiseMaxReassembledPayloadSize: 4096,
+	}
+	var reported error
+	cc.errors = func(err error) { reported = err }
+	request := pool.NewMessage(context.Background())
+	request.SetCode(codes.POST)
+	request.SetOptionBytes(message.OSCORE, option)
+	response := pool.NewMessage(context.Background())
+	writer := responsewriter.New(response, cc)
+	next := cc.outerBlockwiseRequestHandler(request, func(w *responsewriter.ResponseWriter[*Conn], _ *pool.Message) {
+		w.Message().SetCode(codes.Content)
+		w.Message().SetOptionBytes(message.OSCORE, nil)
+		w.Message().SetBody(bytes.NewReader(make([]byte, 4097)))
+	})
+
+	next(writer, request)
+	require.Equal(t, codes.Empty, response.Code())
+	require.ErrorIs(t, reported, blockwise.ErrRequestEntityTooLarge)
+}
+
 func TestOSCOREOuterBlockwiseProxyWithoutProcessorDoesNotPanic(t *testing.T) {
 	for _, test := range []struct {
 		name string

@@ -1243,6 +1243,7 @@ func (b *BlockWise[C]) processReceivedBlock(w *responsewriter.ResponseWriter[C],
 		defer b.cc.ReleaseMessage(sentRequest)
 	}
 	if err := b.checkReassembledPayloadSize(r, block.num*block.szx.Size(), block.sizeType); err != nil {
+		b.receivingMessagesCache.Delete(block.exchangeKey)
 		return err
 	}
 	validUntil := b.getValidUntil(sentRequest)

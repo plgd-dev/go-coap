@@ -247,9 +247,13 @@ timeouts, and response-size limits.
   `options.WithOSCOREOuterBlockwiseMaxReassembledPayloadSize(size)`; a size
   of zero selects the default. This is a general reassembly cap; the existing
   Block1 body-size limit remains independent, and the stricter cap applies to
-  Block1 uploads. The option requires Blockwise to be enabled and OSCORE
-  processing or proxy mode. Observe notifications use fresh Partial IVs; stale
-  or duplicate notifications are rejected.
+  Block1 uploads. Protected client requests exceeding the cap are rejected
+  locally, and UDP/DTLS endpoints replace oversized protected responses with
+  a protected 4.13 response. Proxies reject oversized protected responses
+  locally because they cannot create a protected error response. The option
+  requires Blockwise to be enabled and OSCORE processing or proxy mode.
+  Observe notifications use fresh Partial IVs; stale or duplicate
+  notifications are rejected.
 - No-Response suppression is preserved for protected requests over UDP, DTLS,
   TCP, and TLS; the application processes each request while the suppressed
   response is not sent.

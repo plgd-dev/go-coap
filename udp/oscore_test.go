@@ -112,6 +112,72 @@ func TestOSCOREAndPlaintextUDPExchange(t *testing.T) {
 	}
 }
 
+func TestOSCOREOuterBlockwiseStrictRejectsPlaintextRequests(t *testing.T) {
+	listener, err := coapNet.NewListenUDP("udp", "127.0.0.1:0")
+	require.NoError(t, err)
+	var handled atomic.Int32
+	serverErrors := make(chan error, 8)
+	server := udp.NewServer(
+		options.WithOSCORE(newUDPOSCOREProcessor(t, "server", "client", false)),
+		options.WithOSCOREOuterBlockwise(),
+		options.WithErrors(func(err error) {
+			select {
+			case serverErrors <- err:
+			default:
+			}
+		}),
+		options.WithHandlerFunc(func(_ *responsewriter.ResponseWriter[*client.Conn], _ *pool.Message) {
+			handled.Add(1)
+		}),
+	)
+	serverDone := make(chan error, 1)
+	go func() { serverDone <- server.Serve(listener) }()
+	defer func() {
+		server.Stop()
+		select {
+		case serverErr := <-serverDone:
+			require.NoError(t, serverErr)
+		case <-time.After(5 * time.Second):
+			require.Fail(t, "strict OSCORE Outer Blockwise server did not stop")
+		}
+	}()
+
+	rawClient, err := udp.Dial(listener.LocalAddr().String())
+	require.NoError(t, err)
+	defer func() { require.NoError(t, rawClient.Close()) }()
+	for i, test := range []struct {
+		name     string
+		code     codes.Code
+		optionID message.OptionID
+	}{
+		{name: "Block1", code: codes.POST, optionID: message.Block1},
+		{name: "Block2", code: codes.GET, optionID: message.Block2},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			request := rawClient.AcquireMessage(context.Background())
+			defer rawClient.ReleaseMessage(request)
+			request.SetCode(test.code)
+			request.SetType(message.NonConfirmable)
+			request.SetToken(message.Token{byte(i + 1)})
+			block, encodeErr := blockwise.EncodeBlockOption(blockwise.SZX1024, 0, false)
+			require.NoError(t, encodeErr)
+			request.SetOptionUint32(test.optionID, block)
+			if test.optionID == message.Block1 {
+				request.SetBody(bytes.NewReader([]byte("plaintext")))
+			}
+			require.NoError(t, rawClient.WriteMessage(request))
+
+			select {
+			case serverErr := <-serverErrors:
+				require.ErrorIs(t, serverErr, oscore.ErrPlaintextDisabled)
+			case <-time.After(2 * time.Second):
+				require.Fail(t, "strict OSCORE policy did not reject plaintext "+test.name)
+			}
+			require.Zero(t, handled.Load(), "plaintext request reached the application")
+		})
+	}
+}
+
 func TestOSCOREOuterBlockwiseUDPExchange(t *testing.T) {
 	listener, err := coapNet.NewListenUDP("udp", "127.0.0.1:0")
 	require.NoError(t, err)
@@ -171,6 +237,131 @@ func TestOSCOREOuterBlockwiseUDPExchange(t *testing.T) {
 	require.Equal(t, payload, body)
 	require.False(t, response.HasOption(message.OSCORE))
 	require.False(t, response.HasOption(message.Block2))
+}
+
+func TestOSCOREOuterBlockwiseRejectsOversizedProtectedResponse(t *testing.T) {
+	listener, err := coapNet.NewListenUDP("udp", "127.0.0.1:0")
+	require.NoError(t, err)
+	const maxPayloadSize = 4096
+	server := udp.NewServer(
+		options.WithOSCORE(newUDPOSCOREProcessor(t, "server", "client", false)),
+		options.WithOSCOREOuterBlockwise(),
+		options.WithOSCOREOuterBlockwiseMaxReassembledPayloadSize(maxPayloadSize),
+		options.WithHandlerFunc(func(w *responsewriter.ResponseWriter[*client.Conn], _ *pool.Message) {
+			if responseErr := w.SetResponse(codes.Content, message.AppOctets, bytes.NewReader(make([]byte, maxPayloadSize+1))); responseErr != nil {
+				t.Errorf("set oversized OSCORE response: %v", responseErr)
+			}
+		}),
+	)
+	serverDone := make(chan error, 1)
+	go func() { serverDone <- server.Serve(listener) }()
+	defer func() {
+		server.Stop()
+		select {
+		case serverErr := <-serverDone:
+			require.NoError(t, serverErr)
+		case <-time.After(5 * time.Second):
+			require.Fail(t, "UDP Outer Blockwise server did not stop")
+		}
+	}()
+
+	cc, err := udp.Dial(listener.LocalAddr().String(),
+		options.WithOSCORE(newUDPOSCOREProcessor(t, "client", "server", false)),
+		options.WithOSCOREOuterBlockwise(),
+		options.WithOSCOREOuterBlockwiseMaxReassembledPayloadSize(maxPayloadSize),
+	)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, cc.Close()) }()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	request, err := cc.NewGetRequest(ctx, "/oversized-response")
+	require.NoError(t, err)
+	defer cc.ReleaseMessage(request)
+	response, err := cc.Do(request)
+	require.NoError(t, err)
+	defer cc.ReleaseMessage(response)
+	require.Equal(t, codes.RequestEntityTooLarge, response.Code())
+	body, err := response.ReadBody()
+	require.NoError(t, err)
+	require.Empty(t, body)
+	require.False(t, response.HasOption(message.OSCORE))
+}
+
+func TestOSCOREOuterBlockwiseClientRejectsPlaintextBlock2Responses(t *testing.T) {
+	listener, err := coapNet.NewListenUDP("udp", "127.0.0.1:0")
+	require.NoError(t, err)
+	payload := bytes.Repeat([]byte("plaintext-block2-"), 128)
+	var handled atomic.Int32
+	server := udp.NewServer(
+		options.WithOSCOREProxy(),
+		options.WithOSCOREOuterBlockwise(),
+		options.WithHandlerFunc(func(w *responsewriter.ResponseWriter[*client.Conn], _ *pool.Message) {
+			requestNumber := handled.Add(1)
+			code := codes.Content
+			if requestNumber == 2 {
+				code = codes.InternalServerError
+			}
+			if responseErr := w.SetResponse(code, message.AppOctets, bytes.NewReader(payload)); responseErr != nil {
+				t.Errorf("set plaintext Block2 response: %v", responseErr)
+			}
+		}),
+	)
+	serverDone := make(chan error, 1)
+	go func() { serverDone <- server.Serve(listener) }()
+	defer func() {
+		server.Stop()
+		select {
+		case serverErr := <-serverDone:
+			require.NoError(t, serverErr)
+		case <-time.After(5 * time.Second):
+			require.Fail(t, "plaintext-response server did not stop")
+		}
+	}()
+
+	clientErrors := make(chan error, 8)
+	cc, err := udp.Dial(listener.LocalAddr().String(),
+		options.WithOSCORE(newUDPOSCOREProcessor(t, "client", "server", false)),
+		options.WithOSCOREOuterBlockwise(),
+		options.WithErrors(func(err error) {
+			select {
+			case clientErrors <- err:
+			default:
+			}
+		}),
+	)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, cc.Close()) }()
+
+	for _, test := range []struct {
+		name string
+		path string
+	}{
+		{name: "success", path: "/success"},
+		{name: "application error", path: "/application-error"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			request, requestErr := cc.NewGetRequest(ctx, test.path)
+			require.NoError(t, requestErr)
+			defer cc.ReleaseMessage(request)
+
+			response, doErr := cc.Do(request)
+			if response != nil {
+				cc.ReleaseMessage(response)
+			}
+			require.ErrorIs(t, doErr, context.DeadlineExceeded,
+				"plaintext Block2 response must not complete the protected request")
+			select {
+			case clientErr := <-clientErrors:
+				require.ErrorIs(t, clientErr, oscore.ErrOSCORERequired)
+			case <-time.After(time.Second):
+				require.Fail(t, "strict OSCORE client did not report the plaintext response")
+			}
+		})
+	}
+	require.Equal(t, int32(2), handled.Load(), "both requests should reach the test server")
 }
 
 type outerBlockwiseProxyRoundTripper struct {

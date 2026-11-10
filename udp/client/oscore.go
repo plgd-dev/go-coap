@@ -413,7 +413,8 @@ func qBlockResponseHasMore(options message.Options) bool {
 }
 
 func (cc *Conn) processIncomingOSCORERequest(req *pool.Message, datagram []byte) (bool, error) {
-	if cc.oscoreProcessor == nil || req.Code() < codes.GET || req.Code() > codes.IPATCH {
+	if cc.oscoreProcessor == nil ||
+		!req.HasOption(message.OSCORE) && (req.Code() < codes.GET || req.Code() > codes.IPATCH) {
 		return false, nil
 	}
 	digest := sha256.Sum256(datagram)
@@ -496,6 +497,47 @@ func (cc *Conn) protectResponseForRequest(req, resp *pool.Message) error {
 	}
 	setMessagePreservingControlMessage(resp, protected)
 	return cc.updateOSCOREObservationForResponse(req, resp, binding)
+}
+
+func (cc *Conn) oscoreResponseExceedsOuterBlockwiseLimit(req, resp *pool.Message) (bool, error) {
+	limit := int64(cc.oscoreOuterBlockwiseMaxReassembledPayloadSize)
+	if limit <= 0 {
+		return false, nil
+	}
+	if req.Context() == nil {
+		return false, nil
+	}
+	binding, ok := req.Context().Value(udpOSCORERequestContextKey{}).(udpOSCORERequestContext)
+	if !ok {
+		return false, nil
+	}
+	response, err := udpPoolMessageToOSCOREMessage(resp)
+	if err != nil {
+		return false, fmt.Errorf("read response: %w", err)
+	}
+	split, err := oscore.SplitOptions(response.Options)
+	if err != nil {
+		return false, fmt.Errorf("split response options: %w", err)
+	}
+	for i := range split.Inner {
+		if split.Inner[i].ID == message.Observe {
+			split.Inner[i].Value = nil
+		}
+	}
+	plaintext, err := oscore.EncodeInner(response.Code, split.Inner, response.Payload)
+	if err != nil {
+		return false, fmt.Errorf("encode response inner message: %w", err)
+	}
+	var tagLength int
+	switch binding.context.Algorithm() {
+	case oscore.AEADAlgorithmAESCCM16_64_128, oscore.AEADAlgorithmAESCCM16_64_256:
+		tagLength = 8
+	case oscore.AEADAlgorithmAESCCM16_128_128, oscore.AEADAlgorithmAESCCM16_128_256:
+		tagLength = 16
+	default:
+		return false, fmt.Errorf("unsupported OSCORE AEAD algorithm %d", binding.context.Algorithm())
+	}
+	return int64(len(plaintext)+tagLength) > limit, nil
 }
 
 func protectOSCOREResponse(binding udpOSCORERequestContext, response message.Message) (message.Message, error) {

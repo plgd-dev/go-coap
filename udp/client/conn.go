@@ -704,6 +704,13 @@ func (cc *Conn) doOuterBlockwise(req *pool.Message) (*pool.Message, error) {
 	if err != nil {
 		return nil, err
 	}
+	err = cc.checkOuterBlockwisePayloadSize(wireReq)
+	if err != nil {
+		if finish != nil {
+			finish(false)
+		}
+		return nil, err
+	}
 	wireReq.SetContext(context.WithValue(wireReq.Context(), oscoreOuterBlockwiseContextKey{}, true))
 	sent := false
 	if finish != nil {
@@ -720,7 +727,7 @@ func (cc *Conn) doOuterBlockwise(req *pool.Message) (*pool.Message, error) {
 	if blockwiseErr != nil {
 		return nil, blockwiseErr
 	}
-	if resp.HasOption(message.OSCORE) {
+	if resp.HasOption(message.OSCORE) || cc.hasOSCOREExchange(resp.Token()) {
 		if err = cc.unprotectIncomingResponse(resp); err != nil {
 			cc.ReleaseMessage(resp)
 			return nil, fmt.Errorf("cannot unprotect reassembled OSCORE response: %w", err)
@@ -1095,9 +1102,29 @@ func (cc *Conn) shouldUseOuterBlockwise(req *pool.Message) bool {
 	return cc.oscoreOuterBlockwise && req.Code() >= codes.GET && req.Code() <= codes.IPATCH
 }
 
+func (cc *Conn) checkOuterBlockwisePayloadSize(req *pool.Message) error {
+	size, err := req.BodySize()
+	if err != nil {
+		return fmt.Errorf("cannot determine OSCORE Outer Blockwise payload size: %w", err)
+	}
+	limit := int64(cc.oscoreOuterBlockwiseMaxReassembledPayloadSize)
+	if limit > 0 && size > limit {
+		return fmt.Errorf("%w: OSCORE Outer Blockwise payload size %d exceeds configured limit %d",
+			blockwise.ErrRequestEntityTooLarge, size, limit)
+	}
+	return nil
+}
+
 func (cc *Conn) writeOuterBlockwise(req *pool.Message) error {
 	wireReq, finish, err := cc.protectOutgoingRequest(req)
 	if err != nil {
+		return err
+	}
+	err = cc.checkOuterBlockwisePayloadSize(wireReq)
+	if err != nil {
+		if finish != nil {
+			finish(false)
+		}
 		return err
 	}
 	wireReq.SetContext(context.WithValue(wireReq.Context(), oscoreOuterBlockwiseContextKey{}, true))
@@ -1271,7 +1298,8 @@ func (cc *Conn) handleQDiscovery(w *responsewriter.ResponseWriter[*Conn], probeS
 }
 
 func (cc *Conn) handleResponse(rw *responsewriter.ResponseWriter[*Conn], rm *pool.Message) {
-	if cc.oscoreOuterBlockwise && cc.oscoreProcessor != nil && rm.HasOption(message.OSCORE) {
+	if cc.oscoreOuterBlockwise && cc.oscoreProcessor != nil &&
+		(rm.HasOption(message.OSCORE) || cc.hasOSCOREExchange(rm.Token())) {
 		if err := cc.unprotectIncomingResponse(rm); err != nil {
 			cc.errors(fmt.Errorf("cannot unprotect reassembled OSCORE response: %w", err))
 			return
@@ -1320,12 +1348,26 @@ func (cc *Conn) messageBlockwiseSZX(m *pool.Message) (blockwise.SZX, error) {
 }
 
 func (cc *Conn) outerBlockwiseRequestHandler(m *pool.Message, next HandlerFunc) HandlerFunc {
-	if !cc.oscoreOuterBlockwise || cc.oscoreProcessor == nil ||
-		m.Code() < codes.GET || m.Code() > codes.IPATCH {
+	if !cc.oscoreOuterBlockwise || !cc.isOSCORERequestMessage(m) {
 		return next
 	}
+	if cc.oscoreProcessor == nil {
+		if !cc.oscoreProxy {
+			return next
+		}
+		return func(rw *responsewriter.ResponseWriter[*Conn], rm *pool.Message) {
+			next(rw, rm)
+			if !rw.Message().HasOption(message.OSCORE) {
+				return
+			}
+			if err := cc.checkOuterBlockwisePayloadSize(rw.Message()); err != nil {
+				cc.errors(err)
+				clearResponse(rw.Message())
+			}
+		}
+	}
 	return func(rw *responsewriter.ResponseWriter[*Conn], rm *pool.Message) {
-		if rm.HasOption(message.OSCORE) && !hasOSCORERequestContext(rm) {
+		if !hasOSCORERequestContext(rm) {
 			processed, err := cc.processReassembledOuterOSCORERequest(rw, rm, m.MessageID())
 			if err != nil {
 				cc.errors(err)
@@ -1341,8 +1383,25 @@ func (cc *Conn) outerBlockwiseRequestHandler(m *pool.Message, next HandlerFunc) 
 		if !hasOSCORERequestContext(rm) {
 			return
 		}
+		oversized, err := cc.oscoreResponseExceedsOuterBlockwiseLimit(rm, rw.Message())
+		if err != nil {
+			cc.errors(fmt.Errorf("cannot size OSCORE response: %w", err))
+			clearResponse(rw.Message())
+			return
+		}
+		if oversized {
+			cc.errors(fmt.Errorf("%w: protected OSCORE response exceeds configured Outer Blockwise limit",
+				blockwise.ErrRequestEntityTooLarge))
+			clearResponse(rw.Message())
+			rw.Message().SetCode(codes.RequestEntityTooLarge)
+		}
 		if err := cc.protectResponseForRequest(rm, rw.Message()); err != nil {
 			cc.errors(fmt.Errorf("cannot protect response to reassembled OSCORE request: %w", err))
+			clearResponse(rw.Message())
+			return
+		}
+		if err := cc.checkOuterBlockwisePayloadSize(rw.Message()); err != nil {
+			cc.errors(err)
 			clearResponse(rw.Message())
 		}
 		m.SetContext(rm.Context())
@@ -1835,15 +1894,57 @@ func (cc *Conn) processIncomingOSCOREMessage(req *pool.Message, datagram []byte)
 		return false
 	}
 	if cc.oscoreOuterBlockwise && (req.HasOption(message.Block1) || req.HasOption(message.Block2)) {
+		cc.normalizeOuterBlockwiseCode(req)
 		return false
 	}
-	if req.Code() >= codes.Created && req.Code() < 192 {
-		return cc.processIncomingOSCOREResponse(req, datagram)
-	}
-	if req.Code() >= codes.GET && req.Code() <= codes.IPATCH {
+	if cc.isOSCORERequestMessage(req) {
 		return cc.processIncomingOSCORERequestMessage(req, datagram)
 	}
+	if req.Code() >= codes.Created && req.Code() < 192 ||
+		req.HasOption(message.OSCORE) || cc.hasOSCOREExchange(req.Token()) {
+		return cc.processIncomingOSCOREResponse(req, datagram)
+	}
 	return false
+}
+
+func (cc *Conn) isOSCORERequestMessage(req *pool.Message) bool {
+	if req.HasOption(message.OSCORE) {
+		start, end, err := req.Options().Find(message.OSCORE)
+		if err != nil || end-start != 1 {
+			return req.Code() >= codes.GET && req.Code() <= codes.IPATCH
+		}
+		option, err := oscore.UnmarshalOption(req.Options()[start].Value)
+		if err == nil {
+			return option.SenderIDSet
+		}
+		return req.Code() >= codes.GET && req.Code() <= codes.IPATCH
+	}
+	if cc.hasOSCOREExchange(req.Token()) {
+		return false
+	}
+	return req.Code() >= codes.GET && req.Code() <= codes.IPATCH
+}
+
+func (cc *Conn) normalizeOuterBlockwiseCode(req *pool.Message) {
+	if req.HasOption(message.OSCORE) {
+		start, end, err := req.Options().Find(message.OSCORE)
+		if err != nil || end-start != 1 {
+			return
+		}
+		option, err := oscore.UnmarshalOption(req.Options()[start].Value)
+		if err != nil {
+			return
+		}
+		if option.SenderIDSet && req.Code() >= codes.Created && req.Code() < 192 {
+			req.SetCode(codes.POST)
+		} else if !option.SenderIDSet && req.Code() >= codes.GET && req.Code() <= codes.IPATCH {
+			req.SetCode(codes.Content)
+		}
+		return
+	}
+	if cc.hasOSCOREExchange(req.Token()) && req.Code() >= codes.GET && req.Code() <= codes.IPATCH {
+		req.SetCode(codes.Content)
+	}
 }
 
 func (cc *Conn) processIncomingOSCOREResponse(req *pool.Message, datagram []byte) bool {
