@@ -1692,7 +1692,19 @@ func (cc *Conn) retransmitCachedOSCOREAcknowledgment(req *pool.Message) error {
 		return nil
 	}
 	resp.SetMessageID(req.MessageID())
+	resp.SetControlMessage(responseControlMessage(req.ControlMessage()))
 	return cc.session.WriteMessage(resp)
+}
+
+func responseControlMessage(request *coapNet.ControlMessage) *coapNet.ControlMessage {
+	if request == nil {
+		return nil
+	}
+	response := &coapNet.ControlMessage{IfIndex: request.GetIfIndex()}
+	if len(request.Dst) > 0 && !request.Dst.IsMulticast() {
+		response.Src = append(net.IP(nil), request.Dst...)
+	}
+	return response
 }
 
 func (cc *Conn) recordIncomingOSCOREResponse(mid int32, datagram []byte) {

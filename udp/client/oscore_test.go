@@ -144,23 +144,23 @@ func TestFailedOSCOREWriteDoesNotRemoveReplacementExchange(t *testing.T) {
 	}
 	firstRequest := makeRequest()
 	defer cc.ReleaseMessage(firstRequest)
-	first, finishFirst, err := cc.protectOutgoingRequest(firstRequest)
+	_, finishFirst, err := cc.protectOutgoingRequest(firstRequest)
 	require.NoError(t, err)
 	finishFirst(true)
 	cc.oscoreMu.Lock()
-	firstExchange := cc.oscoreExchanges[string(first.Token())].exchange
+	firstExchange := cc.oscoreExchanges[string(message.Token{0x74})].exchange
 	cc.oscoreMu.Unlock()
 	secondRequest := makeRequest()
 	defer cc.ReleaseMessage(secondRequest)
-	second, finishSecond, err := cc.protectOutgoingRequest(secondRequest)
+	_, finishSecond, err := cc.protectOutgoingRequest(secondRequest)
 	require.NoError(t, err)
 
 	cc.oscoreMu.Lock()
-	secondExchange := cc.oscoreExchanges[string(second.Token())].exchange
+	secondExchange := cc.oscoreExchanges[string(message.Token{0x74})].exchange
 	cc.oscoreMu.Unlock()
 	finishSecond(false)
 	cc.oscoreMu.Lock()
-	current := cc.oscoreExchanges[string(second.Token())].exchange
+	current := cc.oscoreExchanges[string(message.Token{0x74})].exchange
 	cc.oscoreMu.Unlock()
 	require.Equal(t, firstExchange.RequestPartialIV, current.RequestPartialIV,
 		"failed replacement must restore the earlier request that was sent")
@@ -191,20 +191,91 @@ func TestFailedConcurrentOSCOREExchangesDoNotRestoreFailedEntry(t *testing.T) {
 	}
 	firstRequest := makeRequest()
 	defer cc.ReleaseMessage(firstRequest)
-	first, finishFirst, err := cc.protectOutgoingRequest(firstRequest)
+	_, finishFirst, err := cc.protectOutgoingRequest(firstRequest)
 	require.NoError(t, err)
-	defer cc.ReleaseMessage(first)
 	secondRequest := makeRequest()
 	defer cc.ReleaseMessage(secondRequest)
-	second, finishSecond, err := cc.protectOutgoingRequest(secondRequest)
+	_, finishSecond, err := cc.protectOutgoingRequest(secondRequest)
 	require.NoError(t, err)
 
+	cc.oscoreMu.Lock()
+	_, exists := cc.oscoreExchanges[string(message.Token{0x76})]
+	cc.oscoreMu.Unlock()
+	require.True(t, exists, "the newer pending exchange must be tracked before rollback")
 	finishFirst(false)
 	finishSecond(false)
 	cc.oscoreMu.Lock()
-	_, exists := cc.oscoreExchanges[string(second.Token())]
+	_, exists = cc.oscoreExchanges[string(message.Token{0x76})]
 	cc.oscoreMu.Unlock()
 	require.False(t, exists, "rolling back a newer failed request must not restore an older failed request")
+}
+
+func TestThreeConcurrentOSCOREExchangeRollbacksRestoreLatestSentEntry(t *testing.T) {
+	tests := []struct {
+		name        string
+		finishOrder func(finish [3]func(bool))
+		wantIndex   int
+	}{
+		{
+			name: "sent first request",
+			finishOrder: func(finish [3]func(bool)) {
+				finish[0](true)
+				finish[1](false)
+				finish[2](false)
+			},
+			wantIndex: 0,
+		},
+		{
+			name: "sent second request",
+			finishOrder: func(finish [3]func(bool)) {
+				finish[1](true)
+				finish[0](false)
+				finish[2](false)
+			},
+			wantIndex: 1,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			securityContext, err := oscore.NewContext(oscore.ContextConfig{
+				MasterSecret: []byte("three concurrent OSCORE exchanges test"),
+				SenderID:     []byte("client"),
+				RecipientID:  []byte("server"),
+			})
+			require.NoError(t, err)
+			processor, err := oscore.NewProcessor(oscore.ProcessorConfig{Contexts: []*oscore.Context{securityContext}})
+			require.NoError(t, err)
+			session := newRecordingSession()
+			defer session.Close()
+			cfg := DefaultConfig
+			cfg.OSCORE = processor
+			cc := NewConnWithOpts(session, &cfg)
+			defer cc.Close()
+
+			var finish [3]func(bool)
+			var piv [3][]byte
+			for i := range finish {
+				request := cc.AcquireMessage(context.Background())
+				defer cc.ReleaseMessage(request)
+				request.SetCode(codes.GET)
+				request.SetToken(message.Token{0x77})
+				_, release, protectErr := cc.protectOutgoingRequest(request)
+				require.NoError(t, protectErr)
+				finish[i] = release
+				cc.oscoreMu.Lock()
+				piv[i] = append([]byte(nil), cc.oscoreExchanges[string(request.Token())].exchange.RequestPartialIV...)
+				cc.oscoreMu.Unlock()
+			}
+
+			tt.finishOrder(finish)
+			cc.oscoreMu.Lock()
+			current, exists := cc.oscoreExchanges[string(message.Token{0x77})]
+			cc.oscoreMu.Unlock()
+			require.True(t, exists)
+			require.Equal(t, piv[tt.wantIndex], current.exchange.RequestPartialIV)
+		})
+	}
 }
 
 func TestOSCOREMessageTransformsPreserveControlMessage(t *testing.T) {
@@ -629,6 +700,8 @@ func TestDuplicateOSCOREConfirmableResponseIsAcknowledged(t *testing.T) {
 
 	duplicate := cc.AcquireMessage(context.Background())
 	duplicate.SetMessage(notification)
+	localAddress := net.ParseIP("203.0.113.12").To4()
+	duplicate.SetControlMessage(&coapNet.ControlMessage{Dst: localAddress, IfIndex: 6})
 	require.True(t, cc.processIncomingOSCOREMessage(duplicate, datagram),
 		"an exact retransmission must be handled before application delivery")
 	require.Equal(t, 1, session.writtenCount())
@@ -637,6 +710,10 @@ func TestDuplicateOSCOREConfirmableResponseIsAcknowledged(t *testing.T) {
 	require.Equal(t, codes.Empty, written.Code())
 	require.Equal(t, message.Acknowledgement, written.Type())
 	require.Equal(t, int32(mid), written.MessageID())
+	controlMessage := written.ControlMessage()
+	require.NotNil(t, controlMessage)
+	require.True(t, controlMessage.Src.Equal(localAddress))
+	require.Equal(t, 6, controlMessage.IfIndex)
 	cc.ReleaseMessage(duplicate)
 
 	changedOptions, _, err := (message.Options{}).SetObserve(make([]byte, 4), 2)
