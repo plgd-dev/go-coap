@@ -95,14 +95,14 @@ func setMessagePreservingControlMessage(msg *pool.Message, replacement message.M
 
 type oscoreOuterBlockwiseContextKey struct{}
 
-type oscoreResponseUnprotectedContextKey struct{}
+type oscoreResponseAlreadyProcessedContextKey struct{}
 
-func isOSCOREResponseUnprotected(resp *pool.Message) bool {
+func isOSCOREResponseAlreadyProcessed(resp *pool.Message) bool {
 	if resp.Context() == nil {
 		return false
 	}
-	unprotected, _ := resp.Context().Value(oscoreResponseUnprotectedContextKey{}).(bool)
-	return unprotected
+	processed, _ := resp.Context().Value(oscoreResponseAlreadyProcessedContextKey{}).(bool)
+	return processed
 }
 
 func (cc *Conn) protectOutgoingRequest(req *pool.Message) (*pool.Message, func(bool), error) {
@@ -336,7 +336,7 @@ func (cc *Conn) unprotectIncomingResponse(resp *pool.Message) error {
 		observation.SetAuthenticatedSequenceNumber(resp, partialIVNumber(responseOption.PartialIV))
 	}
 	setMessagePreservingControlMessage(resp, plaintext)
-	resp.SetContext(context.WithValue(resp.Context(), oscoreResponseUnprotectedContextKey{}, true))
+	resp.SetContext(context.WithValue(resp.Context(), oscoreResponseAlreadyProcessedContextKey{}, true))
 	return nil
 }
 

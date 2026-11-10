@@ -729,7 +729,7 @@ func (cc *Conn) doOuterBlockwise(req *pool.Message) (*pool.Message, error) {
 	if blockwiseErr != nil {
 		return nil, blockwiseErr
 	}
-	if cc.oscoreProcessor != nil && !isOSCOREResponseUnprotected(resp) &&
+	if cc.oscoreProcessor != nil && !isOSCOREResponseAlreadyProcessed(resp) &&
 		(resp.HasOption(message.OSCORE) || cc.requiresOSCOREResponse(resp.Token())) {
 		if err = cc.unprotectIncomingResponse(resp); err != nil {
 			cc.ReleaseMessage(resp)
@@ -1301,7 +1301,7 @@ func (cc *Conn) handleQDiscovery(w *responsewriter.ResponseWriter[*Conn], probeS
 }
 
 func (cc *Conn) handleResponse(rw *responsewriter.ResponseWriter[*Conn], rm *pool.Message) {
-	if cc.oscoreOuterBlockwise && cc.oscoreProcessor != nil && !isOSCOREResponseUnprotected(rm) &&
+	if cc.oscoreOuterBlockwise && cc.oscoreProcessor != nil && !isOSCOREResponseAlreadyProcessed(rm) &&
 		(rm.HasOption(message.OSCORE) || cc.requiresOSCOREResponse(rm.Token())) {
 		if err := cc.unprotectIncomingResponse(rm); err != nil {
 			cc.errors(fmt.Errorf("cannot unprotect reassembled OSCORE response: %w", err))

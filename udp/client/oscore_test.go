@@ -356,6 +356,9 @@ func TestOSCOREOuterBlockwiseRequiresProtectionAfterExchangeExpiry(t *testing.T)
 	})
 	var reported error
 	cc.errors = func(err error) { reported = err }
+	cc.expireOSCORERequests(time.Now())
+	require.NotContains(t, cc.oscoreExchanges, token, "expired cryptographic exchange should be removed")
+	require.Contains(t, cc.oscoreRequiredResponses, token, "active response handler should keep OSCORE required")
 
 	response := cc.AcquireMessage(context.Background())
 	defer cc.ReleaseMessage(response)
@@ -549,7 +552,7 @@ func TestOSCOREOuterBlockwiseObserveResponseIsUnprotectedOnce(t *testing.T) {
 	datagram, err := response.MarshalWithEncoder(coder.DefaultCoder)
 	require.NoError(t, err)
 	require.False(t, cc.processIncomingOSCOREMessage(response, datagram))
-	require.True(t, isOSCOREResponseUnprotected(response))
+	require.True(t, isOSCOREResponseAlreadyProcessed(response))
 
 	delivered := false
 	cc.tokenHandlerContainer.Store(request.Token().Hash(), func(_ *responsewriter.ResponseWriter[*Conn], got *pool.Message) {

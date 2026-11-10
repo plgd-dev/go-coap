@@ -266,6 +266,33 @@ func TestBlockWiseReceiveMaxReassembledPayloadSizeClearsTransfer(t *testing.T) {
 	require.Empty(t, r.delivered)
 }
 
+func TestBlockWiseReceiveMaxReassembledPayloadSizeClearsOnlyExceededTransfer(t *testing.T) {
+	const limit = 2 * testBlock1Size
+	r := newBlock1Receiver(t, time.Minute)
+	r.bw.SetMaxReassembledPayloadSize(limit)
+
+	firstToken := r.token
+	firstKey := r.exchangeKey()
+	require.Equal(t, codes.Continue, r.send(0, true).code)
+
+	r.token = message.Token{0x02}
+	secondKey := r.exchangeKey()
+	require.Equal(t, codes.Continue, r.send(0, true).code)
+	require.NotNil(t, r.bw.receivingMessagesCache.Load(firstKey))
+	require.NotNil(t, r.bw.receivingMessagesCache.Load(secondKey))
+
+	r.token = firstToken
+	require.Equal(t, codes.Continue, r.send(1, true).code)
+	require.Equal(t, codes.RequestEntityTooLarge, r.send(2, true).code)
+	require.Nil(t, r.bw.receivingMessagesCache.Load(firstKey), "exceeded transfer must be removed immediately")
+	require.NotNil(t, r.bw.receivingMessagesCache.Load(secondKey), "unrelated transfer must remain intact")
+
+	r.token = message.Token{0x02}
+	require.Equal(t, codes.Continue, r.send(1, true).code)
+	require.NotNil(t, r.bw.receivingMessagesCache.Load(secondKey))
+	require.Empty(t, r.delivered)
+}
+
 func TestBlockWiseReceiveMaxBodySize(t *testing.T) {
 	const limit = 2 * testBlock1Size
 	t.Run("payload exceeds limit", func(t *testing.T) {
