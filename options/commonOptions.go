@@ -54,6 +54,55 @@ func WithOSCORE(processor *oscore.Processor) OSCOREOpt {
 	return OSCOREOpt{processor: processor}
 }
 
+// OSCOREOuterBlockwiseOpt enables Outer Blockwise fragmentation and
+// reassembly for OSCORE messages over UDP and DTLS.
+type OSCOREOuterBlockwiseOpt struct{}
+
+func (OSCOREOuterBlockwiseOpt) UDPClientApply(cfg *udpClient.Config) {
+	cfg.OSCOREOuterBlockwise = true
+}
+
+func (OSCOREOuterBlockwiseOpt) UDPServerApply(cfg *udpServer.Config) {
+	cfg.OSCOREOuterBlockwise = true
+}
+
+func (OSCOREOuterBlockwiseOpt) DTLSServerApply(cfg *dtlsServer.Config) {
+	cfg.OSCOREOuterBlockwise = true
+}
+
+// WithOSCOREOuterBlockwise enables hop-by-hop fragmentation of complete
+// OSCORE envelopes. Inner Blockwise remains the default when this option is
+// not set. Requires OSCORE processing (or OSCORE proxy mode) and Blockwise.
+func WithOSCOREOuterBlockwise() OSCOREOuterBlockwiseOpt {
+	return OSCOREOuterBlockwiseOpt{}
+}
+
+// OSCOREOuterBlockwiseMaxReassembledPayloadSizeOpt sets the maximum reassembled
+// payload size for Outer Blockwise OSCORE messages.
+type OSCOREOuterBlockwiseMaxReassembledPayloadSizeOpt struct {
+	size uint32
+}
+
+func (o OSCOREOuterBlockwiseMaxReassembledPayloadSizeOpt) UDPClientApply(cfg *udpClient.Config) {
+	cfg.OSCOREOuterBlockwiseMaxReassembledPayloadSize = o.size
+}
+
+func (o OSCOREOuterBlockwiseMaxReassembledPayloadSizeOpt) UDPServerApply(cfg *udpServer.Config) {
+	cfg.OSCOREOuterBlockwiseMaxReassembledPayloadSize = o.size
+}
+
+func (o OSCOREOuterBlockwiseMaxReassembledPayloadSizeOpt) DTLSServerApply(cfg *dtlsServer.Config) {
+	cfg.OSCOREOuterBlockwiseMaxReassembledPayloadSize = o.size
+}
+
+// WithOSCOREOuterBlockwiseMaxReassembledPayloadSize sets the maximum reassembled payload size
+// for Outer Blockwise OSCORE messages over UDP and DTLS. A size of 0 uses the
+// default of 65,536 bytes. Enable Outer Blockwise separately with
+// WithOSCOREOuterBlockwise.
+func WithOSCOREOuterBlockwiseMaxReassembledPayloadSize(size uint32) OSCOREOuterBlockwiseMaxReassembledPayloadSizeOpt {
+	return OSCOREOuterBlockwiseMaxReassembledPayloadSizeOpt{size: size}
+}
+
 // OSCOREProxyOpt enables opaque OSCORE option forwarding on UDP and DTLS server endpoints.
 // The configured handler must validate and forward protected messages.
 type OSCOREProxyOpt struct{}

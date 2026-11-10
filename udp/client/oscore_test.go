@@ -147,6 +147,57 @@ func TestProtectOutgoingRequestPreservesControlMessage(t *testing.T) {
 	require.Equal(t, request.ControlMessage().IfIndex, controlMessage.IfIndex)
 }
 
+func TestOSCOREOuterBlockwiseUsesConfiguredMaxReassembledPayloadSize(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		size uint32
+		want int64
+	}{
+		{name: "configured", size: 4096, want: 4096},
+		{name: "zero uses default", size: 0, want: oscore.MaxUnfragmentedSize},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			session := newRecordingSession()
+			defer session.Close()
+			cfg := DefaultConfig
+			securityContext, err := oscore.NewContext(oscore.ContextConfig{
+				MasterSecret: []byte("outer blockwise limit test"),
+				SenderID:     []byte("client"),
+				RecipientID:  []byte("server"),
+			})
+			require.NoError(t, err)
+			cfg.OSCORE, err = oscore.NewProcessor(oscore.ProcessorConfig{Contexts: []*oscore.Context{securityContext}})
+			require.NoError(t, err)
+			cfg.OSCOREOuterBlockwise = true
+			cfg.OSCOREOuterBlockwiseMaxReassembledPayloadSize = test.size
+			createBlockWise := func(cc *Conn) *blockwise.BlockWise[*Conn] {
+				return blockwise.New(cc, time.Minute, func(error) {}, nil)
+			}
+			cc := NewConnWithOpts(session, &cfg, WithBlockWise(createBlockWise))
+			defer cc.Close()
+
+			request := cc.AcquireMessage(context.Background())
+			defer cc.ReleaseMessage(request)
+			request.SetCode(codes.POST)
+			request.SetToken(message.Token{0x42})
+			request.SetType(message.Confirmable)
+			block, err := blockwise.EncodeBlockOption(blockwise.SZX1024, 0, true)
+			require.NoError(t, err)
+			request.SetOptionUint32(message.Block1, block)
+			request.SetOptionUint32(message.Size1, uint32(test.want+1))
+			request.SetBody(bytes.NewReader(make([]byte, blockwise.SZX1024.Size())))
+			response := cc.AcquireMessage(context.Background())
+			defer cc.ReleaseMessage(response)
+			w := responsewriter.New(response, cc)
+			called := false
+			cc.blockWise.Handle(w, request, blockwise.SZX1024, 64*1024, &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 5683},
+				func(*responsewriter.ResponseWriter[*Conn], *pool.Message) { called = true })
+			require.False(t, called)
+			require.Equal(t, codes.RequestEntityTooLarge, w.Message().Code())
+		})
+	}
+}
+
 func TestFailedOSCOREWriteRemovesExchange(t *testing.T) {
 	securityContext, err := oscore.NewContext(oscore.ContextConfig{
 		MasterSecret: []byte("failed OSCORE write test"),

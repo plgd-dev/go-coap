@@ -93,8 +93,13 @@ func setMessagePreservingControlMessage(msg *pool.Message, replacement message.M
 	msg.SetControlMessage(controlMessage)
 }
 
+type oscoreOuterBlockwiseContextKey struct{}
+
 func (cc *Conn) protectOutgoingRequest(req *pool.Message) (*pool.Message, func(bool), error) {
 	if cc.oscoreProcessor == nil {
+		return req, nil, nil
+	}
+	if cc.isOuterBlockwiseContinuation(req) {
 		return req, nil, nil
 	}
 	if req.Code() >= codes.Created && req.Code() < 192 {
@@ -106,6 +111,21 @@ func (cc *Conn) protectOutgoingRequest(req *pool.Message) (*pool.Message, func(b
 	if req.Code() < codes.GET || req.Code() > codes.IPATCH {
 		return req, nil, nil
 	}
+	return cc.protectRequestMessage(req)
+}
+
+func (cc *Conn) isOuterBlockwiseContinuation(req *pool.Message) bool {
+	if req.Context() != nil {
+		if outerBlockwise, _ := req.Context().Value(oscoreOuterBlockwiseContextKey{}).(bool); outerBlockwise {
+			return true
+		}
+	}
+	return cc.oscoreOuterBlockwise && req.HasOption(message.OSCORE) &&
+		(req.HasOption(message.Block1) || req.HasOption(message.Block2)) &&
+		cc.hasOSCOREExchange(req.Token())
+}
+
+func (cc *Conn) protectRequestMessage(req *pool.Message) (*pool.Message, func(bool), error) {
 	original, err := udpPoolMessageToOSCOREMessage(req)
 	if err != nil {
 		return nil, nil, fmt.Errorf("read request for OSCORE: %w", err)
@@ -126,6 +146,13 @@ func (cc *Conn) protectOutgoingRequest(req *pool.Message) (*pool.Message, func(b
 		cc.ReleaseMessage(wireRequest)
 	}
 	return wireRequest, finish, nil
+}
+
+func (cc *Conn) hasOSCOREExchange(token message.Token) bool {
+	cc.oscoreMu.Lock()
+	defer cc.oscoreMu.Unlock()
+	exchange, ok := cc.oscoreExchanges[string(token)]
+	return ok && (exchange.expires.IsZero() || time.Now().Before(exchange.expires))
 }
 
 func (cc *Conn) trackOSCOREExchange(
@@ -450,6 +477,9 @@ func (cc *Conn) retransmitOSCOREResponse(req *pool.Message) error {
 
 func (cc *Conn) protectResponseForRequest(req, resp *pool.Message) error {
 	if cc.oscoreProcessor == nil || req.Context() == nil {
+		return nil
+	}
+	if resp.HasOption(message.OSCORE) {
 		return nil
 	}
 	binding, ok := req.Context().Value(udpOSCORERequestContextKey{}).(udpOSCORERequestContext)

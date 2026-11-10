@@ -327,13 +327,16 @@ type Conn struct {
 	qJobsWake             chan struct{}
 	qAsyncSends           int
 
-	oscoreProcessor    *oscore.Processor
-	oscoreProxy        bool
-	oscoreMu           sync.Mutex
-	oscoreExchanges    map[string]udpOSCOREExchange
-	oscoreRequests     map[int32]udpOSCORERequest
-	oscoreResponses    map[int32]udpOSCOREResponse
-	oscoreObservations map[string]udpOSCORERequestContext
+	oscoreProcessor                               *oscore.Processor
+	oscoreProxy                                   bool
+	oscoreOuterBlockwise                          bool
+	oscoreOuterBlockwiseMaxReassembledPayloadSize uint32
+	oscoreOuterBlockwiseErr                       error
+	oscoreMu                                      sync.Mutex
+	oscoreExchanges                               map[string]udpOSCOREExchange
+	oscoreRequests                                map[int32]udpOSCORERequest
+	oscoreResponses                               map[int32]udpOSCOREResponse
+	oscoreObservations                            map[string]udpOSCORERequestContext
 
 	localAddr      atomic.Pointer[net.IP]
 	interfaceIndex atomic.Int64
@@ -446,6 +449,27 @@ func WithResponseMessageCache(cache MessageCache) Option {
 }
 
 func NewConnWithOpts(session Session, cfg *Config, opts ...Option) *Conn {
+	normalizeConnConfig(cfg)
+	cfgOpts := resolveConnOptions(opts)
+	cc := newConn(session, cfg, cfgOpts)
+	cc.initializeBlockwise()
+	cc.initializeQBlockwise(cfg)
+	cc.qDatagramLimit = session.MaxMessageSize()
+	if cfg.MTU != 0 {
+		cc.qDatagramLimit = min(cc.qDatagramLimit, uint32(cfg.MTU))
+		if cfg.QBlockwiseSecure {
+			// Reserve a conservative DTLS record/header/MAC allowance; cipher
+			// suites have different record expansion, unlike plain UDP.
+			cc.qDatagramLimit -= min(cc.qDatagramLimit, 128)
+		}
+	}
+	cc.AddOnClose(func() {
+		cc.closeQBlocks()
+	})
+	return cc
+}
+
+func normalizeConnConfig(cfg *Config) {
 	if cfg.Errors == nil {
 		cfg.Errors = func(error) {
 			// default no-op
@@ -460,7 +484,9 @@ func NewConnWithOpts(session Session, cfg *Config, opts ...Option) *Conn {
 	if cfg.ReceivedMessageQueueSize < 0 {
 		cfg.ReceivedMessageQueueSize = 0
 	}
+}
 
+func resolveConnOptions(opts []Option) ConnOptions {
 	cfgOpts := ConnOptions{
 		createBlockWise: func(*Conn) *blockwise.BlockWise[*Conn] {
 			return nil
@@ -477,6 +503,10 @@ func NewConnWithOpts(session Session, cfg *Config, opts ...Option) *Conn {
 	if cfgOpts.responseMsgCache == nil {
 		cfgOpts.responseMsgCache = newMessageCache()
 	}
+	return cfgOpts
+}
+
+func newConn(session Session, cfg *Config, cfgOpts ConnOptions) *Conn {
 	cc := Conn{
 		session: session,
 		transmission: &Transmission{
@@ -488,11 +518,13 @@ func NewConnWithOpts(session Session, cfg *Config, opts ...Option) *Conn {
 		blockwiseSZX:   cfg.BlockwiseSZX,
 		qBlockwiseMode: cfg.QBlockwiseMode,
 
-		tokenHandlerContainer:     coapSync.NewMap[uint64, HandlerFunc](),
-		midHandlerContainer:       coapSync.NewMap[int32, *midElement](),
-		processReceivedMessage:    cfg.ProcessReceivedMessage,
-		oscoreProcessor:           cfg.OSCORE,
-		oscoreProxy:               cfg.OSCOREProxy,
+		tokenHandlerContainer:  coapSync.NewMap[uint64, HandlerFunc](),
+		midHandlerContainer:    coapSync.NewMap[int32, *midElement](),
+		processReceivedMessage: cfg.ProcessReceivedMessage,
+		oscoreProcessor:        cfg.OSCORE,
+		oscoreProxy:            cfg.OSCOREProxy,
+		oscoreOuterBlockwise:   cfg.OSCOREOuterBlockwise,
+		oscoreOuterBlockwiseMaxReassembledPayloadSize: cfg.OSCOREOuterBlockwiseMaxReassembledPayloadSize,
 		oscoreExchanges:           make(map[string]udpOSCOREExchange),
 		oscoreRequests:            make(map[int32]udpOSCORERequest),
 		oscoreResponses:           make(map[int32]udpOSCOREResponse),
@@ -508,13 +540,36 @@ func NewConnWithOpts(session Session, cfg *Config, opts ...Option) *Conn {
 	}
 	cc.msgID.Store(pkgMath.CastTo[uint32](cfg.GetMID() - 0xffff/2))
 	cc.blockWise = cfgOpts.createBlockWise(&cc)
+	return &cc
+}
+
+func (cc *Conn) initializeBlockwise() {
+	if cc.oscoreOuterBlockwise {
+		switch {
+		case cc.oscoreProcessor == nil && !cc.oscoreProxy:
+			cc.oscoreOuterBlockwiseErr = errors.New("OSCORE Outer Blockwise requires OSCORE or OSCORE proxy mode")
+		case cc.blockWise == nil:
+			cc.oscoreOuterBlockwiseErr = errors.New("OSCORE Outer Blockwise requires Blockwise")
+		default:
+			if cc.oscoreOuterBlockwiseMaxReassembledPayloadSize == 0 {
+				cc.oscoreOuterBlockwiseMaxReassembledPayloadSize = oscore.MaxUnfragmentedSize
+			}
+			cc.blockWise.SetMaxReassembledPayloadSize(int64(cc.oscoreOuterBlockwiseMaxReassembledPayloadSize))
+		}
+		if cc.oscoreOuterBlockwiseErr != nil {
+			cc.errors(cc.oscoreOuterBlockwiseErr)
+		}
+	}
+}
+
+func (cc *Conn) initializeQBlockwise(cfg *Config) {
 	limitParallelRequests := limitparallelrequests.New(cfg.LimitClientParallelRequests, cfg.LimitClientEndpointParallelRequests, cc.do, cc.doObserve)
-	cc.observationHandler = observation.NewHandler(&cc, cfg.Handler, limitParallelRequests.Do)
-	cc.Client = client.New(&cc, cc.observationHandler, cfg.GetToken, limitParallelRequests)
+	cc.observationHandler = observation.NewHandler(cc, cfg.Handler, limitParallelRequests.Do)
+	cc.Client = client.New(cc, cc.observationHandler, cfg.GetToken, limitParallelRequests)
 	if cc.processReceivedMessage == nil {
 		cc.processReceivedMessage = processReceivedMessage
 	}
-	cc.receivedMessageReader = client.NewReceivedMessageReader(&cc, cfg.ReceivedMessageQueueSize)
+	cc.receivedMessageReader = client.NewReceivedMessageReader(cc, cfg.ReceivedMessageQueueSize)
 	cc.qConfigErr = blockwise.ValidateQBlockwiseConfig(cfg.QBlockwiseMode, cfg.BlockwiseEnable)
 	parameters, parametersErr := cfg.QBlockwiseConfig.Resolve()
 	if parametersErr != nil {
@@ -525,19 +580,6 @@ func NewConnWithOpts(session Session, cfg *Config, opts ...Option) *Conn {
 			cc.qConfigErr = errors.Join(cc.qConfigErr, cc.blockWise.SetQBlockwiseConfig(parameters))
 		}
 	}
-	cc.qDatagramLimit = session.MaxMessageSize()
-	if cfg.MTU != 0 {
-		cc.qDatagramLimit = min(cc.qDatagramLimit, uint32(cfg.MTU))
-		if cfg.QBlockwiseSecure {
-			// Reserve a conservative DTLS record/header/MAC allowance; cipher
-			// suites have different record expansion, unlike plain UDP.
-			cc.qDatagramLimit -= min(cc.qDatagramLimit, 128)
-		}
-	}
-	cc.AddOnClose(func() {
-		cc.closeQBlocks()
-	})
-	return &cc
 }
 
 // NewConn creates connection over session and observation.
@@ -613,6 +655,11 @@ func (cc *Conn) doInternal(req *pool.Message) (_ *pool.Message, err error) {
 	}
 }
 
+func requestMayHaveBeenSent(err error) bool {
+	var notSent *client.RequestNotSentError
+	return !errors.As(err, &notSent)
+}
+
 // Do sends an coap message and returns an coap response.
 //
 // An error is returned if by failure to speak COAP (such as a network connectivity problem).
@@ -620,6 +667,9 @@ func (cc *Conn) doInternal(req *pool.Message) (_ *pool.Message, err error) {
 //
 // Caller is responsible to release request and response.
 func (cc *Conn) do(req *pool.Message) (*pool.Message, error) {
+	if cc.oscoreOuterBlockwiseErr != nil {
+		return nil, cc.oscoreOuterBlockwiseErr
+	}
 	if cc.qConfigErr != nil {
 		return nil, cc.qConfigErr
 	}
@@ -643,6 +693,41 @@ func (cc *Conn) do(req *pool.Message) (*pool.Message, error) {
 	if useQ {
 		return cc.doQBlock(req)
 	}
+	if cc.oscoreOuterBlockwise {
+		return cc.doOuterBlockwise(req)
+	}
+	return cc.doBlockwise(req)
+}
+
+func (cc *Conn) doOuterBlockwise(req *pool.Message) (*pool.Message, error) {
+	wireReq, finish, err := cc.protectOutgoingRequest(req)
+	if err != nil {
+		return nil, err
+	}
+	wireReq.SetContext(context.WithValue(wireReq.Context(), oscoreOuterBlockwiseContextKey{}, true))
+	sent := false
+	defer func() { finish(sent) }()
+	resp, blockwiseErr := cc.blockWise.Do(wireReq, cc.blockwiseSZX, cc.session.MaxMessageSize(), cc.RemoteAddr(), func(bwReq *pool.Message) (*pool.Message, error) {
+		if bwReq.Options().HasOption(message.Block1) || bwReq.Options().HasOption(message.Block2) {
+			bwReq.SetMessageID(cc.GetMessageID())
+		}
+		response, requestErr := cc.doInternal(bwReq)
+		sent = sent || requestMayHaveBeenSent(requestErr)
+		return response, requestErr
+	})
+	if blockwiseErr != nil {
+		return nil, blockwiseErr
+	}
+	if resp.HasOption(message.OSCORE) {
+		if err = cc.unprotectIncomingResponse(resp); err != nil {
+			cc.ReleaseMessage(resp)
+			return nil, fmt.Errorf("cannot unprotect reassembled OSCORE response: %w", err)
+		}
+	}
+	return resp, nil
+}
+
+func (cc *Conn) doBlockwise(req *pool.Message) (*pool.Message, error) {
 	resp, err := cc.blockWise.Do(req, cc.blockwiseSZX, cc.session.MaxMessageSize(), cc.RemoteAddr(), func(bwReq *pool.Message) (*pool.Message, error) {
 		if bwReq.Options().HasOption(message.Block1) || bwReq.Options().HasOption(message.Block2) {
 			bwReq.SetMessageID(cc.GetMessageID())
@@ -970,24 +1055,64 @@ func (cc *Conn) writeMessage(req *pool.Message) error {
 
 // WriteMessage sends an coap message.
 func (cc *Conn) WriteMessage(req *pool.Message) error {
+	if cc.oscoreOuterBlockwiseErr != nil {
+		return cc.oscoreOuterBlockwiseErr
+	}
 	if cc.qConfigErr != nil {
 		return cc.qConfigErr
 	}
-	if handled, err := cc.writeQBlockFetchObserve(req); handled {
+	if handled, err := cc.writeQBlockMessage(req); handled {
 		return err
-	}
-	if req.HasOption(message.QBlock1) || req.HasOption(message.QBlock2) {
-		if !cc.qBlockAllowed() {
-			return blockwise.ErrQBlockDisabled
-		}
-		if req.HasOption(message.Block1) || req.HasOption(message.Block2) {
-			return blockwise.ErrInvalidOptionBlock1
-		}
-		return cc.writeMessage(req)
 	}
 	if cc.blockWise == nil {
 		return cc.writeMessage(req)
 	}
+	if cc.shouldUseOuterBlockwise(req) {
+		return cc.writeOuterBlockwise(req)
+	}
+	return cc.writeBlockwise(req)
+}
+
+func (cc *Conn) writeQBlockMessage(req *pool.Message) (bool, error) {
+	if handled, err := cc.writeQBlockFetchObserve(req); handled {
+		return true, err
+	}
+	if !req.HasOption(message.QBlock1) && !req.HasOption(message.QBlock2) {
+		return false, nil
+	}
+	if !cc.qBlockAllowed() {
+		return true, blockwise.ErrQBlockDisabled
+	}
+	if req.HasOption(message.Block1) || req.HasOption(message.Block2) {
+		return true, blockwise.ErrInvalidOptionBlock1
+	}
+	return true, cc.writeMessage(req)
+}
+
+func (cc *Conn) shouldUseOuterBlockwise(req *pool.Message) bool {
+	return cc.oscoreOuterBlockwise && req.Code() >= codes.GET && req.Code() <= codes.IPATCH
+}
+
+func (cc *Conn) writeOuterBlockwise(req *pool.Message) error {
+	wireReq, finish, err := cc.protectOutgoingRequest(req)
+	if err != nil {
+		return err
+	}
+	wireReq.SetContext(context.WithValue(wireReq.Context(), oscoreOuterBlockwiseContextKey{}, true))
+	sent := false
+	defer func() { finish(sent) }()
+	err = cc.blockWise.WriteMessage(wireReq, cc.blockwiseSZX, cc.session.MaxMessageSize(), cc.RemoteAddr(), func(bwReq *pool.Message) error {
+		if bwReq.Options().HasOption(message.Block1) || bwReq.Options().HasOption(message.Block2) {
+			bwReq.SetMessageID(cc.GetMessageID())
+		}
+		writeErr := cc.writeMessage(bwReq)
+		sent = sent || requestMayHaveBeenSent(writeErr)
+		return writeErr
+	})
+	return err
+}
+
+func (cc *Conn) writeBlockwise(req *pool.Message) error {
 	return cc.blockWise.WriteMessage(req, cc.blockwiseSZX, cc.session.MaxMessageSize(), cc.RemoteAddr(), func(bwReq *pool.Message) error {
 		if bwReq.Options().HasOption(message.Block1) || bwReq.Options().HasOption(message.Block2) {
 			bwReq.SetMessageID(cc.GetMessageID())
@@ -1115,58 +1240,135 @@ func (cc *Conn) handle(w *responsewriter.ResponseWriter[*Conn], m *pool.Message)
 		return
 	}
 	if probeSZX, ok := cc.qDiscoveryRequestSZX(m); ok && cc.qBlockAllowed() {
-		const discovery = "</>;rt=\"core\""
-		if err := w.SetResponse(codes.Content, message.AppLinkFormat, bytes.NewReader([]byte(discovery))); err != nil {
-			cc.errors(fmt.Errorf("cannot set Q-Block discovery response: %w", err))
-			return
-		}
-		option, err := blockwise.EncodeQBlockOption(probeSZX, 0, false)
-		if err != nil {
-			cc.errors(fmt.Errorf("cannot encode Q-Block discovery response: %w", err))
-			return
-		}
-		w.Message().SetOptionUint32(message.QBlock2, option)
-		w.Message().SetOptionUint32(message.Size2, uint32(len(discovery)))
-		etag := sha256.Sum256([]byte(discovery))
-		w.Message().SetOptionBytes(message.ETag, etag[:8])
+		cc.handleQDiscovery(w, probeSZX)
 		return
 	}
-	handleResponse := func(rw *responsewriter.ResponseWriter[*Conn], rm *pool.Message) {
-		if len(rm.Token()) == 0 && rm.Code() >= codes.Created {
-			if h, ok := cc.tokenlessHandler.Load(true); ok {
-				h(rw, rm)
-				return
-			}
-		} else if h, ok := cc.tokenHandlerContainer.LoadAndDelete(rm.Token().Hash()); ok {
+	if cc.handleBlockwise(w, m, cc.handleResponse) {
+		return
+	}
+	cc.handleResponse(w, m)
+}
+
+func (cc *Conn) handleQDiscovery(w *responsewriter.ResponseWriter[*Conn], probeSZX blockwise.SZX) {
+	const discovery = "</>;rt=\"core\""
+	if err := w.SetResponse(codes.Content, message.AppLinkFormat, bytes.NewReader([]byte(discovery))); err != nil {
+		cc.errors(fmt.Errorf("cannot set Q-Block discovery response: %w", err))
+		return
+	}
+	option, err := blockwise.EncodeQBlockOption(probeSZX, 0, false)
+	if err != nil {
+		cc.errors(fmt.Errorf("cannot encode Q-Block discovery response: %w", err))
+		return
+	}
+	w.Message().SetOptionUint32(message.QBlock2, option)
+	w.Message().SetOptionUint32(message.Size2, uint32(len(discovery)))
+	etag := sha256.Sum256([]byte(discovery))
+	w.Message().SetOptionBytes(message.ETag, etag[:8])
+}
+
+func (cc *Conn) handleResponse(rw *responsewriter.ResponseWriter[*Conn], rm *pool.Message) {
+	if cc.oscoreOuterBlockwise && cc.oscoreProcessor != nil && rm.HasOption(message.OSCORE) {
+		if err := cc.unprotectIncomingResponse(rm); err != nil {
+			cc.errors(fmt.Errorf("cannot unprotect reassembled OSCORE response: %w", err))
+			return
+		}
+	}
+	if len(rm.Token()) == 0 && rm.Code() >= codes.Created {
+		if h, ok := cc.tokenlessHandler.Load(true); ok {
 			h(rw, rm)
 			return
 		}
-		cc.observationHandler.Handle(rw, rm)
 	}
-	if cc.handleBlockwise(w, m, handleResponse) {
+	if h, ok := cc.tokenHandlerContainer.LoadAndDelete(rm.Token().Hash()); ok {
+		h(rw, rm)
 		return
 	}
-	handleResponse(w, m)
+	cc.observationHandler.Handle(rw, rm)
 }
 
 func (cc *Conn) handleBlockwise(w *responsewriter.ResponseWriter[*Conn], m *pool.Message, next HandlerFunc) bool {
 	if cc.blockWise == nil {
 		return false
 	}
-	maxSZX := cc.blockwiseSZX
-	if m.HasOption(message.QBlock1) || m.HasOption(message.QBlock2) {
-		responseSZX, err := cc.qBlockResponseSZX()
-		if err != nil {
-			cc.errors(fmt.Errorf("cannot size Q-Block response: %w", err))
-			if responseErr := w.SetResponse(codes.RequestEntityTooLarge, message.TextPlain, nil); responseErr != nil {
-				cc.errors(responseErr)
-			}
-			return true
+	maxSZX, err := cc.messageBlockwiseSZX(m)
+	if err != nil {
+		cc.errors(fmt.Errorf("cannot size Q-Block response: %w", err))
+		if responseErr := w.SetResponse(codes.RequestEntityTooLarge, message.TextPlain, nil); responseErr != nil {
+			cc.errors(responseErr)
 		}
-		maxSZX = min(maxSZX, responseSZX)
+		return true
 	}
+	next = cc.outerBlockwiseRequestHandler(m, next)
 	cc.blockWise.Handle(w, m, maxSZX, cc.session.MaxMessageSize(), cc.RemoteAddr(), next)
 	return true
+}
+
+func (cc *Conn) messageBlockwiseSZX(m *pool.Message) (blockwise.SZX, error) {
+	maxSZX := cc.blockwiseSZX
+	if !m.HasOption(message.QBlock1) && !m.HasOption(message.QBlock2) {
+		return maxSZX, nil
+	}
+	responseSZX, err := cc.qBlockResponseSZX()
+	if err != nil {
+		return 0, err
+	}
+	return min(maxSZX, responseSZX), nil
+}
+
+func (cc *Conn) outerBlockwiseRequestHandler(m *pool.Message, next HandlerFunc) HandlerFunc {
+	if !cc.oscoreOuterBlockwise || cc.oscoreProcessor == nil ||
+		m.Code() < codes.GET || m.Code() > codes.IPATCH {
+		return next
+	}
+	return func(rw *responsewriter.ResponseWriter[*Conn], rm *pool.Message) {
+		if rm.HasOption(message.OSCORE) && !hasOSCORERequestContext(rm) {
+			processed, err := cc.processReassembledOuterOSCORERequest(rw, rm, m.MessageID())
+			if err != nil {
+				cc.errors(err)
+				return
+			}
+			if !processed {
+				return
+			}
+			rw.Message().ResetOptionsTo(rm.Options())
+			m.SetContext(rm.Context())
+		}
+		next(rw, rm)
+		if !hasOSCORERequestContext(rm) {
+			return
+		}
+		if err := cc.protectResponseForRequest(rm, rw.Message()); err != nil {
+			cc.errors(fmt.Errorf("cannot protect response to reassembled OSCORE request: %w", err))
+			clearResponse(rw.Message())
+		}
+		m.SetContext(rm.Context())
+	}
+}
+
+func (cc *Conn) processReassembledOuterOSCORERequest(
+	rw *responsewriter.ResponseWriter[*Conn], rm *pool.Message, messageID int32,
+) (bool, error) {
+	rm.SetMessageID(messageID)
+	datagram, err := rm.MarshalWithEncoder(coder.DefaultCoder)
+	if err != nil {
+		return false, fmt.Errorf("cannot marshal reassembled OSCORE request: %w", err)
+	}
+	drop, err := cc.processIncomingOSCORERequest(rm, datagram)
+	if err != nil {
+		return false, fmt.Errorf("cannot process reassembled OSCORE request: %w", err)
+	}
+	if drop {
+		return false, nil
+	}
+	rw.Message().ResetOptionsTo(rm.Options())
+	return true, nil
+}
+
+func clearResponse(response *pool.Message) {
+	response.SetCode(codes.Empty)
+	response.ResetOptionsTo(nil)
+	response.SetBody(nil)
+	response.SetModified(false)
 }
 
 func (cc *Conn) qBlockAllowed() bool {
@@ -1403,10 +1605,12 @@ func (cc *Conn) ProcessReceivedMessageWithHandler(req *pool.Message, handler con
 			w.Message().SetBody(nil)
 		}
 	}
-	if err := cc.protectResponseForRequest(req, w.Message()); err != nil {
-		cc.closeConnection()
-		cc.errors(fmt.Errorf(errFmtWriteResponse, err))
-		return
+	if req.Code() >= codes.GET && req.Code() <= codes.IPATCH {
+		if err := cc.protectResponseForRequest(req, w.Message()); err != nil {
+			cc.closeConnection()
+			cc.errors(fmt.Errorf(errFmtWriteResponse, err))
+			return
+		}
 	}
 	if hasOSCORERequestContext(req) && shouldCacheResponse(reqType, w.Message()) {
 		if err := cc.addResponseToCache(reqMessageID, w.Message()); err != nil {
@@ -1512,7 +1716,7 @@ func (cc *Conn) processUnknownCriticalOptions(req *pool.Message) (bool, error) {
 	}
 	qAllowed := cc.qBlockAllowed() && qBlockCanUseUnknownCriticalOption(req)
 	unknownCriticalOpts := client.GetUnknownCriticalOptionsWithQBlock(req.Options(), qAllowed)
-	if cc.oscoreProxy && req.HasOption(message.OSCORE) {
+	if (cc.oscoreProxy || cc.oscoreOuterBlockwise) && req.HasOption(message.OSCORE) {
 		filtered := unknownCriticalOpts[:0]
 		for _, optionID := range unknownCriticalOpts {
 			if optionID != message.OSCORE {
@@ -1549,6 +1753,9 @@ func qBlockCanUseUnknownCriticalOption(req *pool.Message) bool {
 }
 
 func (cc *Conn) Process(cm *coapNet.ControlMessage, datagram []byte) error {
+	if cc.oscoreOuterBlockwiseErr != nil {
+		return cc.oscoreOuterBlockwiseErr
+	}
 	if pkgMath.CastTo[uint32](len(datagram)) > cc.session.MaxMessageSize() {
 		return fmt.Errorf("max message size(%v) was exceeded %v", cc.session.MaxMessageSize(), len(datagram))
 	}
@@ -1623,40 +1830,53 @@ func (cc *Conn) processIncomingOSCOREMessage(req *pool.Message, datagram []byte)
 	if cc.oscoreProcessor == nil {
 		return false
 	}
-	switch {
-	case req.Code() >= codes.Created && req.Code() < 192:
-		protectedConfirmable := req.Type() == message.Confirmable && req.HasOption(message.OSCORE)
-		if protectedConfirmable {
-			handled, err := cc.processIncomingOSCOREResponseRetransmission(req, datagram)
-			if err != nil {
-				cc.ReleaseMessage(req)
-				cc.errors(fmt.Errorf("cannot acknowledge duplicate OSCORE response: %w", err))
-				return true
-			}
-			if handled {
-				cc.ReleaseMessage(req)
-				return true
-			}
-		}
-		if err := cc.unprotectIncomingResponse(req); err != nil {
-			cc.ReleaseMessage(req)
-			cc.errors(fmt.Errorf("cannot unprotect OSCORE response: %w", err))
-			return true
-		}
-		if protectedConfirmable {
-			cc.recordIncomingOSCOREResponse(req.MessageID(), datagram)
-		}
-	case req.Code() >= codes.GET && req.Code() <= codes.IPATCH:
-		drop, err := cc.processIncomingOSCORERequest(req, datagram)
+	if cc.oscoreOuterBlockwise && (req.HasOption(message.Block1) || req.HasOption(message.Block2)) {
+		return false
+	}
+	if req.Code() >= codes.Created && req.Code() < 192 {
+		return cc.processIncomingOSCOREResponse(req, datagram)
+	}
+	if req.Code() >= codes.GET && req.Code() <= codes.IPATCH {
+		return cc.processIncomingOSCORERequestMessage(req, datagram)
+	}
+	return false
+}
+
+func (cc *Conn) processIncomingOSCOREResponse(req *pool.Message, datagram []byte) bool {
+	protectedConfirmable := req.Type() == message.Confirmable && req.HasOption(message.OSCORE)
+	if protectedConfirmable {
+		handled, err := cc.processIncomingOSCOREResponseRetransmission(req, datagram)
 		if err != nil {
 			cc.ReleaseMessage(req)
-			cc.errors(fmt.Errorf("cannot process incoming OSCORE request: %w", err))
+			cc.errors(fmt.Errorf("cannot acknowledge duplicate OSCORE response: %w", err))
 			return true
 		}
-		if drop || req.Code() == codes.Empty {
+		if handled {
 			cc.ReleaseMessage(req)
 			return true
 		}
+	}
+	if err := cc.unprotectIncomingResponse(req); err != nil {
+		cc.ReleaseMessage(req)
+		cc.errors(fmt.Errorf("cannot unprotect OSCORE response: %w", err))
+		return true
+	}
+	if protectedConfirmable {
+		cc.recordIncomingOSCOREResponse(req.MessageID(), datagram)
+	}
+	return false
+}
+
+func (cc *Conn) processIncomingOSCORERequestMessage(req *pool.Message, datagram []byte) bool {
+	drop, err := cc.processIncomingOSCORERequest(req, datagram)
+	if err != nil {
+		cc.ReleaseMessage(req)
+		cc.errors(fmt.Errorf("cannot process incoming OSCORE request: %w", err))
+		return true
+	}
+	if drop || req.Code() == codes.Empty {
+		cc.ReleaseMessage(req)
+		return true
 	}
 	return false
 }

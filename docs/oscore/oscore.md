@@ -238,12 +238,18 @@ timeouts, and response-size limits.
 
 - HKDF-SHA-256 and AES-CCM-16-64-128, AES-CCM-16-64-256,
   AES-CCM-16-128-128, and AES-CCM-16-128-256. The default remains
-  AES-CCM-16-64-128; IoTivity Lite currently interoperates with algorithm 10.
+  AES-CCM-16-64-128.
 - UDP, DTLS, TCP, and TLS transports.
-- Classic Block1/Block2 and Observe flows. Block options are protected as
-  Class E options; only inner Blockwise is supported. Outer Blockwise
-  fragmentation/reassembly is not implemented. Observe notifications use fresh
-  Partial IVs; stale or duplicate notifications are rejected.
+- Classic Block1/Block2 and Observe flows. Inner Blockwise remains the
+  default. UDP and DTLS also support opt-in Outer Blockwise fragmentation and
+  reassembly with `options.WithOSCOREOuterBlockwise()`; reassembled payloads
+  default to a 65,536-byte limit. Configure a different cap with
+  `options.WithOSCOREOuterBlockwiseMaxReassembledPayloadSize(size)`; a size
+  of zero selects the default. This is a general reassembly cap; the existing
+  Block1 body-size limit remains independent, and the stricter cap applies to
+  Block1 uploads. The option requires Blockwise to be enabled and OSCORE
+  processing or proxy mode. Observe notifications use fresh Partial IVs; stale
+  or duplicate notifications are rejected.
 - No-Response suppression is preserved for protected requests over UDP, DTLS,
   TCP, and TLS; the application processes each request while the suppressed
   response is not sent.
@@ -256,7 +262,9 @@ timeouts, and response-size limits.
 - Pre-established unicast contexts only. Group OSCORE, automatic context
   establishment (including EDHOC), and multicast OSCORE are unsupported. The
   `net/oscore/proxy` package provides only the minimal forwarding scope above;
-  it is not a full-featured CoAP proxy server.
+  the surrounding UDP/DTLS Blockwise transport handles Outer Blockwise
+  fragments. A `RoundTripper` forwarding large envelopes must likewise use a
+  Blockwise-enabled transport; the package is not a full-featured CoAP proxy.
 - Sender sequence and optional receiver replay-state persistence are provided
   by the application; safe operation depends on the stores' atomicity and
   durability.

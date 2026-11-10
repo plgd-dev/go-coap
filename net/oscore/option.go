@@ -4,6 +4,10 @@ import "fmt"
 
 const maxOSCOREOptionLength = 255
 
+// MaxUnfragmentedSize is the maximum reassembled OSCORE payload size used for
+// Outer Blockwise transfers.
+const MaxUnfragmentedSize = 65536
+
 // OptionValue contains the fields encoded by the RFC 8613 OSCORE option.
 // Presence booleans distinguish an absent field from a present empty value.
 type OptionValue struct {

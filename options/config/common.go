@@ -21,28 +21,31 @@ type (
 )
 
 type Common[C responsewriter.Client] struct {
-	LimitClientParallelRequests               int64
-	LimitClientEndpointParallelRequests       int64
-	Ctx                                       context.Context
-	Errors                                    ErrorFunc
-	PeriodicRunner                            periodic.Func
-	MessagePool                               *pool.Pool
-	GetToken                                  client.GetTokenFunc
-	MaxMessageSize                            uint32
-	BlockwiseTransferTimeout                  time.Duration
-	BlockwiseReceivingMessagesCacheMaxEntries int
-	BlockwiseSZX                              blockwise.SZX
-	BlockwiseEnable                           bool
-	ProcessReceivedMessage                    ProcessReceivedMessageFunc[C]
-	ReceivedMessageQueueSize                  int
-	OSCORE                                    *oscore.Processor
-	OSCOREProxy                               bool
+	LimitClientParallelRequests                   int64
+	LimitClientEndpointParallelRequests           int64
+	Ctx                                           context.Context
+	Errors                                        ErrorFunc
+	PeriodicRunner                                periodic.Func
+	MessagePool                                   *pool.Pool
+	GetToken                                      client.GetTokenFunc
+	MaxMessageSize                                uint32
+	BlockwiseTransferTimeout                      time.Duration
+	BlockwiseReceivingMessagesCacheMaxEntries     int
+	BlockwiseSZX                                  blockwise.SZX
+	BlockwiseEnable                               bool
+	ProcessReceivedMessage                        ProcessReceivedMessageFunc[C]
+	ReceivedMessageQueueSize                      int
+	OSCORE                                        *oscore.Processor
+	OSCOREProxy                                   bool
+	OSCOREOuterBlockwise                          bool
+	OSCOREOuterBlockwiseMaxReassembledPayloadSize uint32
 }
 
 func NewCommon[C responsewriter.Client]() Common[C] {
 	return Common[C]{
 		Ctx:            context.Background(),
 		MaxMessageSize: 64 * 1024,
+		OSCOREOuterBlockwiseMaxReassembledPayloadSize: oscore.MaxUnfragmentedSize,
 		Errors: func(err error) {
 			fmt.Println(err)
 		},

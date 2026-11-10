@@ -82,6 +82,69 @@ func TestOSCOREDTLSExchange(t *testing.T) {
 	}
 }
 
+func TestOSCOREOuterBlockwiseDTLSExchange(t *testing.T) {
+	listener, err := coapNet.NewDTLSListener("udp", "127.0.0.1:0", testOSCOREDTLSServerOptions())
+	require.NoError(t, err)
+	payload := bytes.Repeat([]byte("dtls-outer-blockwise-"), 384)
+	server := dtls.NewServer(
+		options.WithOSCORE(newDTLSOSCOREProcessor(t, "server", "client")),
+		options.WithOSCOREOuterBlockwise(),
+		options.WithHandlerFunc(func(w *responsewriter.ResponseWriter[*client.Conn], req *pool.Message) {
+			if req.HasOption(message.OSCORE) || req.HasOption(message.Block1) || req.HasOption(message.Block2) {
+				t.Errorf("handler received outer OSCORE or Blockwise options: %v", req.Options())
+				return
+			}
+			body, readErr := req.ReadBody()
+			if readErr != nil {
+				t.Errorf("read reassembled DTLS OSCORE request body: %v", readErr)
+				return
+			}
+			if !bytes.Equal(body, payload) {
+				t.Errorf("request body length %d, want %d", len(body), len(payload))
+				return
+			}
+			if responseErr := w.SetResponse(codes.Content, message.AppOctets, bytes.NewReader(payload)); responseErr != nil {
+				t.Errorf("set large DTLS OSCORE response: %v", responseErr)
+			}
+		}),
+	)
+	serverDone := make(chan error, 1)
+	go func() { serverDone <- server.Serve(listener) }()
+	defer func() {
+		server.Stop()
+		select {
+		case serverErr := <-serverDone:
+			require.NoError(t, serverErr)
+		case <-time.After(5 * time.Second):
+			require.Fail(t, "DTLS Outer Blockwise server did not stop")
+		}
+	}()
+
+	cc, err := dtls.Dial(
+		listener.Addr().String(),
+		testOSCOREDTLSClientOptions(),
+		options.WithOSCORE(newDTLSOSCOREProcessor(t, "client", "server")),
+		options.WithOSCOREOuterBlockwise(),
+	)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, cc.Close()) }()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	request, err := cc.NewPostRequest(ctx, "/outer-blockwise", message.AppOctets, bytes.NewReader(payload))
+	require.NoError(t, err)
+	defer cc.ReleaseMessage(request)
+	response, err := cc.Do(request)
+	require.NoError(t, err)
+	defer cc.ReleaseMessage(response)
+	require.Equal(t, codes.Content, response.Code())
+	body, err := response.ReadBody()
+	require.NoError(t, err)
+	require.Equal(t, payload, body)
+	require.False(t, response.HasOption(message.OSCORE))
+	require.False(t, response.HasOption(message.Block2))
+}
+
 func TestOSCOREDTLSRejectsMalformedTransportMessages(t *testing.T) {
 	listener, err := coapNet.NewDTLSListener("udp", "127.0.0.1:0", testOSCOREDTLSServerOptions())
 	require.NoError(t, err)

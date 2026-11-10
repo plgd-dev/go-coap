@@ -16,6 +16,7 @@ import (
 	coapNet "github.com/plgd-dev/go-coap/v3/net"
 	"github.com/plgd-dev/go-coap/v3/net/blockwise"
 	"github.com/plgd-dev/go-coap/v3/net/oscore"
+	"github.com/plgd-dev/go-coap/v3/net/oscore/proxy"
 	"github.com/plgd-dev/go-coap/v3/net/responsewriter"
 	"github.com/plgd-dev/go-coap/v3/options"
 	"github.com/plgd-dev/go-coap/v3/udp"
@@ -109,6 +110,171 @@ func TestOSCOREAndPlaintextUDPExchange(t *testing.T) {
 				"application errors to protected requests must be protected, not treated as OSCORE processing errors")
 		})
 	}
+}
+
+func TestOSCOREOuterBlockwiseUDPExchange(t *testing.T) {
+	listener, err := coapNet.NewListenUDP("udp", "127.0.0.1:0")
+	require.NoError(t, err)
+	payload := bytes.Repeat([]byte("outer-blockwise-"), 512)
+	server := udp.NewServer(
+		options.WithOSCORE(newUDPOSCOREProcessor(t, "server", "client", false)),
+		options.WithOSCOREOuterBlockwise(),
+		options.WithHandlerFunc(func(w *responsewriter.ResponseWriter[*client.Conn], req *pool.Message) {
+			if req.HasOption(message.OSCORE) || req.HasOption(message.Block1) || req.HasOption(message.Block2) {
+				t.Errorf("handler received outer OSCORE or Blockwise options: %v", req.Options())
+				return
+			}
+			body, readErr := req.ReadBody()
+			if readErr != nil {
+				t.Errorf("read reassembled OSCORE request body: %v", readErr)
+				return
+			}
+			if !bytes.Equal(body, payload) {
+				t.Errorf("request body length %d, want %d", len(body), len(payload))
+				return
+			}
+			if responseErr := w.SetResponse(codes.Content, message.AppOctets, bytes.NewReader(payload)); responseErr != nil {
+				t.Errorf("set large OSCORE response: %v", responseErr)
+			}
+		}),
+	)
+	serverDone := make(chan error, 1)
+	go func() { serverDone <- server.Serve(listener) }()
+	defer func() {
+		server.Stop()
+		select {
+		case serverErr := <-serverDone:
+			require.NoError(t, serverErr)
+		case <-time.After(5 * time.Second):
+			require.Fail(t, "UDP Outer Blockwise server did not stop")
+		}
+	}()
+
+	cc, err := udp.Dial(listener.LocalAddr().String(),
+		options.WithOSCORE(newUDPOSCOREProcessor(t, "client", "server", false)),
+		options.WithOSCOREOuterBlockwise(),
+	)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, cc.Close()) }()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	request, err := cc.NewPostRequest(ctx, "/outer-blockwise", message.AppOctets, bytes.NewReader(payload))
+	require.NoError(t, err)
+	defer cc.ReleaseMessage(request)
+	response, err := cc.Do(request)
+	require.NoError(t, err)
+	defer cc.ReleaseMessage(response)
+	require.Equal(t, codes.Content, response.Code())
+	body, err := response.ReadBody()
+	require.NoError(t, err)
+	require.Equal(t, payload, body)
+	require.False(t, response.HasOption(message.OSCORE))
+	require.False(t, response.HasOption(message.Block2))
+}
+
+type outerBlockwiseProxyRoundTripper struct {
+	context         *oscore.Context
+	expectedPayload []byte
+	called          bool
+}
+
+func (r *outerBlockwiseProxyRoundTripper) RoundTrip(
+	_ context.Context, target oscore.ProxyTarget, request message.Message,
+) (message.Message, error) {
+	r.called = true
+	if target.Host != "origin.example" {
+		return message.Message{}, fmt.Errorf("unexpected origin target %q", target.Host)
+	}
+	plaintext, exchange, err := r.context.UnprotectRequest(request)
+	if err != nil {
+		return message.Message{}, err
+	}
+	if !bytes.Equal(plaintext.Payload, r.expectedPayload) {
+		return message.Message{}, fmt.Errorf("origin received %d bytes, want %d", len(plaintext.Payload), len(r.expectedPayload))
+	}
+	return r.context.ProtectResponse(message.Message{
+		Code:    codes.Content,
+		Token:   append(message.Token(nil), request.Token...),
+		Payload: append([]byte(nil), r.expectedPayload...),
+	}, exchange)
+}
+
+func TestOSCOREOuterBlockwiseUDPProxy(t *testing.T) {
+	listener, err := coapNet.NewListenUDP("udp", "127.0.0.1:0")
+	require.NoError(t, err)
+	clientContext, originContext := newUDPOSCOREContextPair(t, "client", "origin")
+	processor, err := oscore.NewProcessor(oscore.ProcessorConfig{Contexts: []*oscore.Context{clientContext}})
+	require.NoError(t, err)
+	payload := bytes.Repeat([]byte("proxied-outer-blockwise-"), 384)
+	origin := &outerBlockwiseProxyRoundTripper{context: originContext, expectedPayload: payload}
+	forwarder := &proxy.Forwarder{
+		RoundTripper: origin,
+		AllowTarget: func(target oscore.ProxyTarget) bool {
+			return target.Host == "origin.example"
+		},
+	}
+	server := udp.NewServer(
+		options.WithOSCOREProxy(),
+		options.WithOSCOREOuterBlockwise(),
+		options.WithHandlerFunc(func(w *responsewriter.ResponseWriter[*client.Conn], req *pool.Message) {
+			requestBody, readErr := req.ReadBody()
+			if readErr != nil {
+				t.Errorf("read reassembled proxy request: %v", readErr)
+				return
+			}
+			response, forwardErr := forwarder.Forward(req.Context(), message.Message{
+				Token:   append(message.Token(nil), req.Token()...),
+				Code:    req.Code(),
+				Type:    req.Type(),
+				Options: req.Options(),
+				Payload: requestBody,
+			})
+			if forwardErr != nil {
+				t.Errorf("forward reassembled OSCORE request: %v", forwardErr)
+				return
+			}
+			w.Message().SetCode(response.Code)
+			w.Message().ResetOptionsTo(response.Options)
+			w.Message().SetBody(bytes.NewReader(response.Payload))
+		}),
+	)
+	serverDone := make(chan error, 1)
+	go func() { serverDone <- server.Serve(listener) }()
+	defer func() {
+		server.Stop()
+		select {
+		case serverErr := <-serverDone:
+			require.NoError(t, serverErr)
+		case <-time.After(5 * time.Second):
+			require.Fail(t, "UDP OSCORE proxy did not stop")
+		}
+	}()
+
+	cc, err := udp.Dial(listener.LocalAddr().String(),
+		options.WithOSCORE(processor),
+		options.WithOSCOREOuterBlockwise(),
+	)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, cc.Close()) }()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	request := cc.AcquireMessage(ctx)
+	defer cc.ReleaseMessage(request)
+	request.SetCode(codes.POST)
+	request.SetOptionBytes(message.ProxyURI, []byte("coap://origin.example/resource"))
+	request.SetBody(bytes.NewReader(payload))
+	response, err := cc.Do(request)
+	require.NoError(t, err)
+	defer cc.ReleaseMessage(response)
+	require.True(t, origin.called, "proxy did not forward the reassembled request")
+	require.Equal(t, codes.Content, response.Code())
+	body, err := response.ReadBody()
+	require.NoError(t, err)
+	require.Equal(t, payload, body)
+	require.False(t, response.HasOption(message.OSCORE))
+	require.False(t, response.HasOption(message.Block2))
 }
 
 func TestOSCOREUDPObserveWithPOSTIsRejectedBeforeDispatch(t *testing.T) {

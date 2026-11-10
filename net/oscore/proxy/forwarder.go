@@ -44,7 +44,9 @@ func (f RoundTripperFunc) RoundTrip(ctx context.Context, target oscore.ProxyTarg
 type TargetPolicy func(oscore.ProxyTarget) bool
 
 // Forwarder implements a one-request/one-response OSCORE forwarding path.
-// It does not provide caching, Observe, or block-wise session management.
+// The surrounding CoAP transport handles Outer Blockwise when enabled.
+// RoundTripper implementations should use Blockwise for large envelopes.
+// The forwarder does not provide caching, Observe, or proxy session management.
 type Forwarder struct {
 	RoundTripper RoundTripper
 	AllowTarget  TargetPolicy

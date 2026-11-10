@@ -132,6 +132,7 @@ type BlockWise[C Client] struct {
 	expiration                       time.Duration
 	rollingExpiration                bool
 	maxReceiveBodySize               int64
+	maxReassembledPayloadSize        int64
 	qblock                           *qblock.Engine[C]
 }
 
@@ -144,6 +145,12 @@ func (b *BlockWise[C]) SetRollingExpiration(enabled bool) {
 func (b *BlockWise[C]) SetMaxReceiveBodySize(size int64) {
 	b.maxReceiveBodySize = max(size, 0)
 	b.qblock.SetMaxReceiveBodySize(size)
+}
+
+// SetMaxReassembledPayloadSize limits the payload size of any reassembled
+// Block1 or Block2 message. A value of 0 means unlimited.
+func (b *BlockWise[C]) SetMaxReassembledPayloadSize(size int64) {
+	b.maxReassembledPayloadSize = max(size, 0)
 }
 
 type sendingMessage struct {
@@ -633,7 +640,11 @@ func (b *BlockWise[C]) sendServiceUnavailable(w *responsewriter.ResponseWriter[C
 
 // sendEntityTooLarge responds with 4.13 and the size limit in Size1 (RFC 7959 §4).
 func (b *BlockWise[C]) sendEntityTooLarge(w *responsewriter.ResponseWriter[C], token message.Token) {
-	blocks.SendEntityTooLarge(b.cc, w, token, b.maxReceiveBodySize)
+	limit := b.maxReceiveBodySize
+	if limit <= 0 || (b.maxReassembledPayloadSize > 0 && b.maxReassembledPayloadSize < limit) {
+		limit = b.maxReassembledPayloadSize
+	}
+	blocks.SendEntityTooLarge(b.cc, w, token, limit)
 }
 
 func wantsToBeReceived(r *pool.Message) bool {
@@ -699,9 +710,12 @@ func (b *BlockWise[C]) Handle(w *responsewriter.ResponseWriter[C], r *pool.Messa
 	if !sendingMessageExist || wantsToBeReceived(r) {
 		err = b.handleReceivedMessage(w, r, maxSZX, maxMessageSize, remoteAddr, exchangeKey, next)
 		if err != nil {
-			if errors.Is(err, errReceivingMessagesCacheFull) {
+			switch {
+			case errors.Is(err, errReceivingMessagesCacheFull):
 				b.sendServiceUnavailable(w, token)
-			} else {
+			case errors.Is(err, ErrRequestEntityTooLarge) && r.HasOption(message.Block1):
+				b.sendEntityTooLarge(w, token)
+			default:
 				b.sendEntityIncomplete(w, token)
 			}
 			b.errors(fmt.Errorf("handleReceivedMessage(%v): %w", r, err))
@@ -1228,6 +1242,9 @@ func (b *BlockWise[C]) processReceivedBlock(w *responsewriter.ResponseWriter[C],
 	if sentRequest != nil {
 		defer b.cc.ReleaseMessage(sentRequest)
 	}
+	if err := b.checkReassembledPayloadSize(r, block.num*block.szx.Size(), block.sizeType); err != nil {
+		return err
+	}
 	validUntil := b.getValidUntil(sentRequest)
 	if block.blockType == message.Block2 && sentRequest == nil {
 		return errors.New("cannot request body without paired request")
@@ -1285,14 +1302,40 @@ func (b *BlockWise[C]) processCachedReceivedBlock(w *responsewriter.ResponseWrit
 		}
 	}
 	off := block.num * block.szx.Size()
+	if err = b.checkReassembledPayloadSize(r, off, block.sizeType); err != nil {
+		return err
+	}
 	if block.blockType == message.Block1 && (off > payloadSize || (off < payloadSize && !block.more)) {
 		return fmt.Errorf("%w: block %v at offset %v, have %v bytes", ErrRequestEntityIncomplete, block.num, off, payloadSize)
 	}
+
 	if tooLarge, errS := b.rejectTooLarge(w, r, block.blockType, block.token, off); tooLarge || errS != nil {
 		b.receivingMessagesCache.Delete(block.exchangeKey)
 		return errS
 	}
 	return b.appendReceivedBlock(w, r, mg, next, block, sentRequest, payloadFile, payloadSize, off)
+}
+
+func (b *BlockWise[C]) checkReassembledPayloadSize(r *pool.Message, off int64, sizeOption message.OptionID) error {
+	if b.maxReassembledPayloadSize <= 0 {
+		return nil
+	}
+	size := off
+	if r.Body() != nil {
+		bodySize, err := r.BodySize()
+		if err != nil {
+			return payloadSizeError(err)
+		}
+		size += bodySize
+	}
+	if expectedSize, err := r.GetOptionUint32(sizeOption); err == nil {
+		size = max(size, int64(expectedSize))
+	}
+	if size > b.maxReassembledPayloadSize {
+		return fmt.Errorf("%w: reassembled payload size %d exceeds limit %d",
+			ErrRequestEntityTooLarge, size, b.maxReassembledPayloadSize)
+	}
+	return nil
 }
 
 func (b *BlockWise[C]) appendReceivedBlock(w *responsewriter.ResponseWriter[C], r *pool.Message, mg *messageGuard, next func(w *responsewriter.ResponseWriter[C], r *pool.Message), block receivedBlock, sentRequest *pool.Message, payloadFile *memfile.File, payloadSize, off int64) error {
