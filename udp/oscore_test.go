@@ -239,6 +239,52 @@ func TestOSCOREOuterBlockwiseUDPExchange(t *testing.T) {
 	require.False(t, response.HasOption(message.Block2))
 }
 
+func TestOSCOREOuterBlockwiseProtectsApplicationErrorResponses(t *testing.T) {
+	listener, err := coapNet.NewListenUDP("udp", "127.0.0.1:0")
+	require.NoError(t, err)
+	server := udp.NewServer(
+		options.WithOSCORE(newUDPOSCOREProcessor(t, "server", "client", false)),
+		options.WithOSCOREOuterBlockwise(),
+		options.WithHandlerFunc(func(w *responsewriter.ResponseWriter[*client.Conn], _ *pool.Message) {
+			if responseErr := w.SetResponse(codes.InternalServerError, message.TextPlain, bytes.NewReader([]byte("application error"))); responseErr != nil {
+				t.Errorf("set application-error response: %v", responseErr)
+			}
+		}),
+	)
+	serverDone := make(chan error, 1)
+	go func() { serverDone <- server.Serve(listener) }()
+	defer func() {
+		server.Stop()
+		select {
+		case serverErr := <-serverDone:
+			require.NoError(t, serverErr)
+		case <-time.After(5 * time.Second):
+			require.Fail(t, "UDP Outer Blockwise server did not stop")
+		}
+	}()
+
+	cc, err := udp.Dial(listener.LocalAddr().String(),
+		options.WithOSCORE(newUDPOSCOREProcessor(t, "client", "server", false)),
+		options.WithOSCOREOuterBlockwise(),
+	)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, cc.Close()) }()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	request, err := cc.NewGetRequest(ctx, "/application-error")
+	require.NoError(t, err)
+	defer cc.ReleaseMessage(request)
+	response, err := cc.Do(request)
+	require.NoError(t, err)
+	defer cc.ReleaseMessage(response)
+	require.Equal(t, codes.InternalServerError, response.Code())
+	require.False(t, oscore.IsUnprotectedProcessingError(response.Context()))
+	body, err := response.ReadBody()
+	require.NoError(t, err)
+	require.Equal(t, []byte("application error"), body)
+}
+
 func TestOSCOREOuterBlockwiseRejectsOversizedProtectedResponse(t *testing.T) {
 	listener, err := coapNet.NewListenUDP("udp", "127.0.0.1:0")
 	require.NoError(t, err)
@@ -286,6 +332,7 @@ func TestOSCOREOuterBlockwiseRejectsOversizedProtectedResponse(t *testing.T) {
 	require.NoError(t, err)
 	require.Empty(t, body)
 	require.False(t, response.HasOption(message.OSCORE))
+	require.False(t, oscore.IsUnprotectedProcessingError(response.Context()))
 }
 
 func TestOSCOREOuterBlockwiseClientRejectsPlaintextBlock2Responses(t *testing.T) {

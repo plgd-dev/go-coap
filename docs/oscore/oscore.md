@@ -251,6 +251,9 @@ timeouts, and response-size limits.
   locally, and UDP/DTLS endpoints replace oversized protected responses with
   a protected 4.13 response. Proxies reject oversized protected responses
   locally because they cannot create a protected error response. The option
+  does not automatically fall back to Inner Blockwise when an Outer
+  reassembled payload would exceed the cap; this is a documented deviation
+  from RFC 8613's SHOULD to use Inner Blockwise for such messages. The option
   requires Blockwise to be enabled and OSCORE processing or proxy mode.
   Observe notifications use fresh Partial IVs; stale or duplicate
   notifications are rejected.

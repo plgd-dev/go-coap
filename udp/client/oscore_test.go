@@ -312,6 +312,50 @@ func TestOSCOREOuterBlockwiseResponseRequiresProtection(t *testing.T) {
 	}
 }
 
+func TestOSCOREOuterBlockwiseRequiresProtectionAfterExchangeExpiry(t *testing.T) {
+	session := newRecordingSession()
+	defer session.Close()
+	cfg := DefaultConfig
+	securityContext, err := oscore.NewContext(oscore.ContextConfig{
+		MasterSecret: []byte("expired outer blockwise exchange"),
+		SenderID:     []byte("client"),
+		RecipientID:  []byte("server"),
+	})
+	require.NoError(t, err)
+	cfg.OSCORE, err = oscore.NewProcessor(oscore.ProcessorConfig{
+		Contexts:      []*oscore.Context{securityContext},
+		RequireOSCORE: true,
+	})
+	require.NoError(t, err)
+	cfg.OSCOREOuterBlockwise = true
+	cc := NewConnWithOpts(session, &cfg)
+	defer cc.Close()
+
+	const token = "expired-token"
+	cc.oscoreExchanges[token] = udpOSCOREExchange{
+		context: securityContext,
+		expires: time.Now().Add(-time.Second),
+	}
+	cc.oscoreRequiredResponses[token] = struct{}{}
+	delivered := false
+	cc.tokenHandlerContainer.Store(message.Token(token).Hash(), func(*responsewriter.ResponseWriter[*Conn], *pool.Message) {
+		delivered = true
+	})
+	var reported error
+	cc.errors = func(err error) { reported = err }
+
+	response := cc.AcquireMessage(context.Background())
+	defer cc.ReleaseMessage(response)
+	response.SetCode(codes.Content)
+	response.SetToken(message.Token(token))
+	writer := responsewriter.New(cc.AcquireMessage(context.Background()), cc)
+	defer cc.ReleaseMessage(writer.Message())
+
+	cc.handleResponse(writer, response)
+	require.False(t, delivered, "plaintext response was delivered after OSCORE exchange expiry")
+	require.ErrorIs(t, reported, oscore.ErrOSCORERequired)
+}
+
 func TestProcessIncomingOSCOREMessageUsesOSCOREOptionDirection(t *testing.T) {
 	const masterSecret = "outer code direction"
 

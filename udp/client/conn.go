@@ -334,6 +334,7 @@ type Conn struct {
 	oscoreOuterBlockwiseErr                       error
 	oscoreMu                                      sync.Mutex
 	oscoreExchanges                               map[string]udpOSCOREExchange
+	oscoreRequiredResponses                       map[string]struct{}
 	oscoreRequests                                map[int32]udpOSCORERequest
 	oscoreResponses                               map[int32]udpOSCOREResponse
 	oscoreObservations                            map[string]udpOSCORERequestContext
@@ -526,6 +527,7 @@ func newConn(session Session, cfg *Config, cfgOpts ConnOptions) *Conn {
 		oscoreOuterBlockwise:   cfg.OSCOREOuterBlockwise,
 		oscoreOuterBlockwiseMaxReassembledPayloadSize: cfg.OSCOREOuterBlockwiseMaxReassembledPayloadSize,
 		oscoreExchanges:           make(map[string]udpOSCOREExchange),
+		oscoreRequiredResponses:   make(map[string]struct{}),
 		oscoreRequests:            make(map[int32]udpOSCORERequest),
 		oscoreResponses:           make(map[int32]udpOSCOREResponse),
 		oscoreObservations:        make(map[string]udpOSCORERequestContext),
@@ -727,7 +729,7 @@ func (cc *Conn) doOuterBlockwise(req *pool.Message) (*pool.Message, error) {
 	if blockwiseErr != nil {
 		return nil, blockwiseErr
 	}
-	if resp.HasOption(message.OSCORE) || cc.hasOSCOREExchange(resp.Token()) {
+	if resp.HasOption(message.OSCORE) || cc.requiresOSCOREResponse(resp.Token()) {
 		if err = cc.unprotectIncomingResponse(resp); err != nil {
 			cc.ReleaseMessage(resp)
 			return nil, fmt.Errorf("cannot unprotect reassembled OSCORE response: %w", err)
@@ -1299,7 +1301,7 @@ func (cc *Conn) handleQDiscovery(w *responsewriter.ResponseWriter[*Conn], probeS
 
 func (cc *Conn) handleResponse(rw *responsewriter.ResponseWriter[*Conn], rm *pool.Message) {
 	if cc.oscoreOuterBlockwise && cc.oscoreProcessor != nil &&
-		(rm.HasOption(message.OSCORE) || cc.hasOSCOREExchange(rm.Token())) {
+		(rm.HasOption(message.OSCORE) || cc.requiresOSCOREResponse(rm.Token())) {
 		if err := cc.unprotectIncomingResponse(rm); err != nil {
 			cc.errors(fmt.Errorf("cannot unprotect reassembled OSCORE response: %w", err))
 			return
@@ -1901,7 +1903,7 @@ func (cc *Conn) processIncomingOSCOREMessage(req *pool.Message, datagram []byte)
 		return cc.processIncomingOSCORERequestMessage(req, datagram)
 	}
 	if req.Code() >= codes.Created && req.Code() < 192 ||
-		req.HasOption(message.OSCORE) || cc.hasOSCOREExchange(req.Token()) {
+		req.HasOption(message.OSCORE) || cc.requiresOSCOREResponse(req.Token()) {
 		return cc.processIncomingOSCOREResponse(req, datagram)
 	}
 	return false
@@ -1919,7 +1921,7 @@ func (cc *Conn) isOSCORERequestMessage(req *pool.Message) bool {
 		}
 		return req.Code() >= codes.GET && req.Code() <= codes.IPATCH
 	}
-	if cc.hasOSCOREExchange(req.Token()) {
+	if cc.requiresOSCOREResponse(req.Token()) {
 		return false
 	}
 	return req.Code() >= codes.GET && req.Code() <= codes.IPATCH
@@ -1942,7 +1944,7 @@ func (cc *Conn) normalizeOuterBlockwiseCode(req *pool.Message) {
 		}
 		return
 	}
-	if cc.hasOSCOREExchange(req.Token()) && req.Code() >= codes.GET && req.Code() <= codes.IPATCH {
+	if cc.requiresOSCOREResponse(req.Token()) && req.Code() >= codes.GET && req.Code() <= codes.IPATCH {
 		req.SetCode(codes.Content)
 	}
 }

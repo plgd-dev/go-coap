@@ -155,6 +155,16 @@ func (cc *Conn) hasOSCOREExchange(token message.Token) bool {
 	return ok && (exchange.expires.IsZero() || time.Now().Before(exchange.expires))
 }
 
+func (cc *Conn) requiresOSCOREResponse(token message.Token) bool {
+	cc.oscoreMu.Lock()
+	defer cc.oscoreMu.Unlock()
+	if _, ok := cc.oscoreRequiredResponses[string(token)]; ok {
+		return true
+	}
+	exchange, ok := cc.oscoreExchanges[string(token)]
+	return ok && (exchange.expires.IsZero() || time.Now().Before(exchange.expires))
+}
+
 func (cc *Conn) trackOSCOREExchange(
 	req *pool.Message, context *oscore.Context, exchange oscore.Exchange,
 ) (func(bool), error) {
@@ -207,6 +217,10 @@ func (cc *Conn) trackOSCOREExchange(
 	next.record = record
 	record.exchange = next
 	cc.oscoreExchanges[key] = next
+	if cc.oscoreRequiredResponses == nil {
+		cc.oscoreRequiredResponses = make(map[string]struct{})
+	}
+	cc.oscoreRequiredResponses[key] = struct{}{}
 	cc.oscoreMu.Unlock()
 	return func(sent bool) {
 		cc.finishOSCOREExchange(key, record, sent)
@@ -272,6 +286,9 @@ func (cc *Conn) unprotectIncomingResponse(resp *pool.Message) error {
 	exchange, ok := cc.oscoreExchangeForResponse(key)
 	if !ok {
 		if !resp.HasOption(message.OSCORE) {
+			if cc.requiresOSCOREResponse(resp.Token()) {
+				return oscore.ErrOSCORERequired
+			}
 			return nil
 		}
 		return oscore.ErrNoSecurityContext
@@ -282,6 +299,7 @@ func (cc *Conn) unprotectIncomingResponse(resp *pool.Message) error {
 			if current, exists := cc.oscoreExchanges[key]; exists && current.record == exchange.record {
 				delete(cc.oscoreExchanges, key)
 			}
+			delete(cc.oscoreRequiredResponses, key)
 			cc.oscoreMu.Unlock()
 			resp.SetContext(oscore.ContextWithUnprotectedProcessingError(resp.Context()))
 			return nil
@@ -356,6 +374,7 @@ func (cc *Conn) updateOSCOREExchangeResponse(
 	qBlock2More := !usedCancelExchange && !hasObserve && qBlockResponseHasMore(options)
 	if usedCancelExchange || !hasObserve && !current.qBlock2 && !qBlock2More {
 		delete(cc.oscoreExchanges, key)
+		delete(cc.oscoreRequiredResponses, key)
 		return nil
 	}
 	cc.oscoreExchanges[key] = current
@@ -644,7 +663,6 @@ func (cc *Conn) expireOSCORERequests(now time.Time) {
 	for token, exchange := range cc.oscoreExchanges {
 		if !exchange.expires.IsZero() && !now.Before(exchange.expires) {
 			delete(cc.oscoreExchanges, token)
-			continue
 		}
 		if exchange.cancelContext != nil && !exchange.cancelExpires.IsZero() &&
 			!now.Before(exchange.cancelExpires) {
@@ -652,6 +670,16 @@ func (cc *Conn) expireOSCORERequests(now time.Time) {
 			exchange.cancelExchange = oscore.Exchange{}
 			exchange.cancelExpires = time.Time{}
 			cc.oscoreExchanges[token] = exchange
+		}
+	}
+	for token := range cc.oscoreRequiredResponses {
+		if _, hasExchange := cc.oscoreExchanges[token]; hasExchange {
+			continue
+		}
+		_, hasHandler := cc.tokenHandlerContainer.Load(message.Token(token).Hash())
+		_, hasObservation := cc.oscoreObservations[token]
+		if !hasHandler && !hasObservation {
+			delete(cc.oscoreRequiredResponses, token)
 		}
 	}
 	for mid, request := range cc.oscoreRequests {
