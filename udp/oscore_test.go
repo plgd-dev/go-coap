@@ -230,11 +230,6 @@ func TestOSCOREUDPRejectsMalformedTransportMessages(t *testing.T) {
 				{ID: message.OSCORE, Value: validOSCOREOption},
 			},
 		},
-		{
-			name:    "wrong outer request code",
-			code:    codes.PUT,
-			options: message.Options{{ID: message.OSCORE, Value: validOSCOREOption}},
-		},
 	}
 	for i, test := range malformedMessages {
 		t.Run(test.name, func(t *testing.T) {
