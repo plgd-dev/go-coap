@@ -4,7 +4,7 @@ import (
 	"sync"
 
 	"github.com/plgd-dev/go-coap/v3/message/pool"
-	"go.uber.org/atomic"
+	"github.com/plgd-dev/go-coap/v3/pkg/sync/atomic"
 )
 
 type ReceivedMessageReaderClient interface {

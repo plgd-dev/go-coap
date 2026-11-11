@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/plgd-dev/go-coap/v3/pkg/sync/atomic"
 	"github.com/stretchr/testify/require"
-	"go.uber.org/atomic"
 )
 
 func TestLoadOrStoreWithLimit(t *testing.T) {
@@ -124,7 +124,7 @@ func TestLoadOrStoreWithLimitConcurrentExpiration(t *testing.T) {
 	c := NewCache[int, string]()
 	var expiredCalls atomic.Int32
 	c.Store(1, NewElement("expired", time.Now().Add(-time.Second), func(string) {
-		expiredCalls.Inc()
+		expiredCalls.Add(1)
 	}))
 	const requests = 128
 	start := make(chan struct{})

@@ -53,23 +53,24 @@ var errReceivingMessagesCacheFull = errors.New("receiving messages cache is full
 // Engine owns Q-Block transfer and observation state for one connection.
 // The transport owns its deadline worker and response-token routing.
 type Engine[C Client] struct {
-	config                           Config
-	cc                               C
-	errors                           func(error)
-	maxReceiveBodySize               int64
 	receivingMessagesCacheMaxEntries atomic.Int64
 	qRetainedBytes                   atomic.Int64
 	qRetainedTransfers               atomic.Int64
-	q1ReceiveMu                      sync.Mutex
-	q1Receivers                      map[string]*q1ReceiveTransfer
-	q1ReceiveBytes                   int64
-	q1Closed                         bool
-	q2SendMu                         sync.Mutex
-	q2Senders                        map[string]*q2SendTransfer
-	qObservations                    map[string]*qObservation
-	qCanceledObservations            map[string]time.Time
-	q2SendBytes                      int64
-	q2Closed                         bool
+
+	config                Config
+	cc                    C
+	errors                func(error)
+	maxReceiveBodySize    int64
+	q1ReceiveMu           sync.Mutex
+	q1Receivers           map[string]*q1ReceiveTransfer
+	q1ReceiveBytes        int64
+	q1Closed              bool
+	q2SendMu              sync.Mutex
+	q2Senders             map[string]*q2SendTransfer
+	qObservations         map[string]*qObservation
+	qCanceledObservations map[string]time.Time
+	q2SendBytes           int64
+	q2Closed              bool
 }
 
 // New creates an engine. reportError must be non-nil when using server request

@@ -5,7 +5,7 @@ import (
 	"time"
 
 	"github.com/plgd-dev/go-coap/v3/pkg/sync"
-	"go.uber.org/atomic"
+	"github.com/plgd-dev/go-coap/v3/pkg/sync/atomic"
 )
 
 var ErrCacheFull = errors.New("cache is full")

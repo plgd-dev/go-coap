@@ -6,7 +6,7 @@ import (
 	"net"
 	"sync"
 
-	"go.uber.org/atomic"
+	"github.com/plgd-dev/go-coap/v3/pkg/sync/atomic"
 )
 
 // Conn is a generic stream-oriented network connection that provides Read/Write with context.

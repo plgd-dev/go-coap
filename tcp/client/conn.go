@@ -20,7 +20,7 @@ import (
 	"github.com/plgd-dev/go-coap/v3/net/responsewriter"
 	coapErrors "github.com/plgd-dev/go-coap/v3/pkg/errors"
 	coapSync "github.com/plgd-dev/go-coap/v3/pkg/sync"
-	"go.uber.org/atomic"
+	"github.com/plgd-dev/go-coap/v3/pkg/sync/atomic"
 )
 
 type InactivityMonitor interface {

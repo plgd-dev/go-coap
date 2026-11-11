@@ -3,7 +3,7 @@ package inactivity
 import (
 	"unsafe"
 
-	"go.uber.org/atomic"
+	"github.com/plgd-dev/go-coap/v3/pkg/sync/atomic"
 )
 
 type cancelPingFunc func()

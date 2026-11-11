@@ -10,10 +10,10 @@ import (
 	"github.com/plgd-dev/go-coap/v3/message/pool"
 	"github.com/plgd-dev/go-coap/v3/net/responsewriter"
 	"github.com/plgd-dev/go-coap/v3/options/config"
+	"github.com/plgd-dev/go-coap/v3/pkg/sync/atomic"
 	"github.com/plgd-dev/go-coap/v3/udp/coder"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"go.uber.org/atomic"
 )
 
 func pendingMessageCount(cc *Conn) int {
@@ -47,7 +47,7 @@ func TestConnDropsPendingDuplicates(t *testing.T) {
 			cfg.Errors = func(err error) { assert.NoError(t, err) }
 			cfg.ReceivedMessageQueueSize = 8
 			cfg.Handler = func(w *responsewriter.ResponseWriter[*Conn], _ *pool.Message) {
-				if calls.Inc() == 1 {
+				if calls.Add(1) == 1 {
 					close(started)
 					<-release
 				}
@@ -217,7 +217,7 @@ func TestConnHijackedRequestDoesNotRetainPendingState(t *testing.T) {
 			cfg := DefaultConfig
 			cfg.Errors = func(err error) { assert.NoError(t, err) }
 			cfg.Handler = func(w *responsewriter.ResponseWriter[*Conn], r *pool.Message) {
-				calls.Inc()
+				calls.Add(1)
 				r.Hijack()
 				hijacked <- r
 				assert.NoError(t, w.SetResponse(codes.Content, message.TextPlain, nil))

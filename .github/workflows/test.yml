@@ -10,6 +10,21 @@ on:
   workflow_dispatch:
 
 jobs:
+  test-32-bit:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version: ">=1.26"
+          check-latest: true
+      - name: Run tests on 32-bit architecture
+        env:
+          GOARCH: "386"
+        run: go test ./...
+
   qblock:
     if: github.event_name == 'push' ||
       (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) ||

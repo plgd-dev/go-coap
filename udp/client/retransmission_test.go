@@ -9,8 +9,8 @@ import (
 
 	"github.com/plgd-dev/go-coap/v3/message/pool"
 	coapSync "github.com/plgd-dev/go-coap/v3/pkg/sync"
+	"github.com/plgd-dev/go-coap/v3/pkg/sync/atomic"
 	"github.com/stretchr/testify/require"
-	"go.uber.org/atomic"
 )
 
 func TestMidElementRetransmitExponentialBackoff(t *testing.T) {

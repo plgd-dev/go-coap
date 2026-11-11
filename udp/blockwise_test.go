@@ -16,11 +16,11 @@ import (
 	"github.com/plgd-dev/go-coap/v3/net/blockwise"
 	"github.com/plgd-dev/go-coap/v3/net/responsewriter"
 	"github.com/plgd-dev/go-coap/v3/options"
+	"github.com/plgd-dev/go-coap/v3/pkg/sync/atomic"
 	"github.com/plgd-dev/go-coap/v3/udp"
 	"github.com/plgd-dev/go-coap/v3/udp/client"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"go.uber.org/atomic"
 )
 
 type rawOption struct {
@@ -127,7 +127,7 @@ func TestServerBlockwiseLargeResponse(t *testing.T) {
 	sd := udp.NewServer(
 		options.WithBlockwise(true, blockwise.SZX1024, time.Second*5),
 		options.WithHandlerFunc(func(w *responsewriter.ResponseWriter[*client.Conn], _ *pool.Message) {
-			handlerCalls.Inc()
+			handlerCalls.Add(1)
 			errH := w.SetResponse(codes.Content, message.TextPlain, bytes.NewReader(payload))
 			assert.NoError(t, errH)
 		}),
@@ -189,7 +189,7 @@ func TestServerBlockwiseMissingPreviousBlockReturnsRequestEntityIncomplete(t *te
 		options.WithBlockwise(true, blockwise.SZX1024, time.Second*5),
 		options.WithBlockwiseReceivingMessagesCacheMaxEntries(1),
 		options.WithHandlerFunc(func(w *responsewriter.ResponseWriter[*client.Conn], _ *pool.Message) {
-			handlerCalls.Inc()
+			handlerCalls.Add(1)
 			errSet := w.SetResponse(codes.Changed, message.TextPlain, bytes.NewReader([]byte("ok")))
 			require.NoError(t, errSet)
 		}),

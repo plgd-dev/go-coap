@@ -6,7 +6,7 @@ import (
 	"net"
 
 	dtls "github.com/pion/dtls/v3"
-	"go.uber.org/atomic"
+	"github.com/plgd-dev/go-coap/v3/pkg/sync/atomic"
 )
 
 // DTLSListener is a DTLS listener that provides accept with context.
