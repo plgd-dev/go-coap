@@ -57,20 +57,20 @@ type Engine[C Client] struct {
 	qRetainedBytes                   atomic.Int64
 	qRetainedTransfers               atomic.Int64
 
-	config                           Config
-	cc                               C
-	errors                           func(error)
-	maxReceiveBodySize               int64
-	q1ReceiveMu                      sync.Mutex
-	q1Receivers                      map[string]*q1ReceiveTransfer
-	q1ReceiveBytes                   int64
-	q1Closed                         bool
-	q2SendMu                         sync.Mutex
-	q2Senders                        map[string]*q2SendTransfer
-	qObservations                    map[string]*qObservation
-	qCanceledObservations            map[string]time.Time
-	q2SendBytes                      int64
-	q2Closed                         bool
+	config                Config
+	cc                    C
+	errors                func(error)
+	maxReceiveBodySize    int64
+	q1ReceiveMu           sync.Mutex
+	q1Receivers           map[string]*q1ReceiveTransfer
+	q1ReceiveBytes        int64
+	q1Closed              bool
+	q2SendMu              sync.Mutex
+	q2Senders             map[string]*q2SendTransfer
+	qObservations         map[string]*qObservation
+	qCanceledObservations map[string]time.Time
+	q2SendBytes           int64
+	q2Closed              bool
 }
 
 // New creates an engine. reportError must be non-nil when using server request

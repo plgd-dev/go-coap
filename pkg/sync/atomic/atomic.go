@@ -74,12 +74,12 @@ func (v *Duration) Sub(delta time.Duration) time.Duration {
 	return v.Add(-delta)
 }
 
-func (v *Duration) CompareAndSwap(old, new time.Duration) bool {
-	return v.value.CompareAndSwap(int64(old), int64(new))
+func (v *Duration) CompareAndSwap(old, newValue time.Duration) bool {
+	return v.value.CompareAndSwap(int64(old), int64(newValue))
 }
 
-func (v *Duration) CAS(old, new time.Duration) bool {
-	return v.CompareAndSwap(old, new)
+func (v *Duration) CAS(old, newValue time.Duration) bool {
+	return v.CompareAndSwap(old, newValue)
 }
 
 func (v *Duration) Swap(value time.Duration) time.Duration {
@@ -131,12 +131,12 @@ func (v *Float64) Sub(delta float64) float64 {
 	return v.Add(-delta)
 }
 
-func (v *Float64) CompareAndSwap(old, new float64) bool {
-	return v.value.CompareAndSwap(math.Float64bits(old), math.Float64bits(new))
+func (v *Float64) CompareAndSwap(old, newValue float64) bool {
+	return v.value.CompareAndSwap(math.Float64bits(old), math.Float64bits(newValue))
 }
 
-func (v *Float64) CAS(old, new float64) bool {
-	return v.CompareAndSwap(old, new)
+func (v *Float64) CAS(old, newValue float64) bool {
+	return v.CompareAndSwap(old, newValue)
 }
 
 func (v *Float64) Swap(value float64) float64 {
@@ -207,6 +207,6 @@ func (v *UnsafePointer) Swap(value unsafe.Pointer) unsafe.Pointer {
 	return unsafe.Pointer(v.value.Swap((*byte)(value)))
 }
 
-func (v *UnsafePointer) CompareAndSwap(old, new unsafe.Pointer) bool {
-	return v.value.CompareAndSwap((*byte)(old), (*byte)(new))
+func (v *UnsafePointer) CompareAndSwap(old, newValue unsafe.Pointer) bool {
+	return v.value.CompareAndSwap((*byte)(old), (*byte)(newValue))
 }

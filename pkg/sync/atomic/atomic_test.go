@@ -20,12 +20,12 @@ func TestDuration(t *testing.T) {
 
 func TestFloat64(t *testing.T) {
 	value := NewFloat64(1.5)
-	require.Equal(t, 3.5, value.Add(2))
+	require.InDelta(t, 3.5, value.Add(2), 1e-12)
 	require.True(t, value.CompareAndSwap(3.5, 4))
-	require.Equal(t, 3.0, value.Sub(1))
-	require.Equal(t, 3.0, value.Load())
-	require.Equal(t, 3.0, value.Swap(math.Pi))
-	require.Equal(t, math.Pi, value.Load())
+	require.InDelta(t, 3.0, value.Sub(1), 1e-12)
+	require.InDelta(t, 3.0, value.Load(), 1e-12)
+	require.InDelta(t, 3.0, value.Swap(math.Pi), 1e-12)
+	require.InDelta(t, math.Pi, value.Load(), 1e-12)
 }
 
 func TestTime(t *testing.T) {
