@@ -273,6 +273,7 @@ func TestOSCOREOuterBlockwiseResponseRequiresProtection(t *testing.T) {
 	}{
 		{name: "plaintext success is rejected", code: codes.Content},
 		{name: "plaintext application error is rejected", code: codes.InternalServerError},
+		{name: "plaintext oversized-response replacement is rejected", code: codes.RequestEntityTooLarge},
 		{name: "plaintext processing error is delivered", code: codes.BadRequest, wantDelivered: true, wantProcessingError: true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
