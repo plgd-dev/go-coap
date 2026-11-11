@@ -53,13 +53,14 @@ var errReceivingMessagesCacheFull = errors.New("receiving messages cache is full
 // Engine owns Q-Block transfer and observation state for one connection.
 // The transport owns its deadline worker and response-token routing.
 type Engine[C Client] struct {
+	receivingMessagesCacheMaxEntries atomic.Int64
+	qRetainedBytes                   atomic.Int64
+	qRetainedTransfers               atomic.Int64
+
 	config                           Config
 	cc                               C
 	errors                           func(error)
 	maxReceiveBodySize               int64
-	receivingMessagesCacheMaxEntries atomic.Int64
-	qRetainedBytes                   atomic.Int64
-	qRetainedTransfers               atomic.Int64
 	q1ReceiveMu                      sync.Mutex
 	q1Receivers                      map[string]*q1ReceiveTransfer
 	q1ReceiveBytes                   int64

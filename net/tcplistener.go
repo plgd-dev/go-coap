@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"net"
 
-	"go.uber.org/atomic"
+	"github.com/plgd-dev/go-coap/v3/pkg/sync/atomic"
 )
 
 // TCPListener is a TCP network listener that provides accept with context.

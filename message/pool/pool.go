@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"sync"
 
-	"go.uber.org/atomic"
+	"github.com/plgd-dev/go-coap/v3/pkg/sync/atomic"
 )
 
 type Pool struct {
@@ -38,7 +38,7 @@ func (p *Pool) AcquireMessage(ctx context.Context) *Message {
 	if !ok {
 		panic(fmt.Errorf("invalid message type(%T) for pool", v))
 	}
-	p.currentMessagesInPool.Dec()
+	p.currentMessagesInPool.Add(-1)
 	r.ctx = ctx
 	r.hijacked.Store(false)
 	// Pooled messages have an odd (released) state. Advance to the next

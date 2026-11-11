@@ -21,7 +21,7 @@ import (
 	"github.com/plgd-dev/go-coap/v3/net/responsewriter"
 	"github.com/plgd-dev/go-coap/v3/pkg/cache"
 	"github.com/plgd-dev/go-coap/v3/pkg/math"
-	"go.uber.org/atomic"
+	"github.com/plgd-dev/go-coap/v3/pkg/sync/atomic"
 	"golang.org/x/sync/semaphore"
 )
 
@@ -169,12 +169,13 @@ func newSendingMessage(msg *pool.Message) *sendingMessage {
 }
 
 type messageGuard struct {
+	received atomic.Int64
+
 	*pool.Message
 	*semaphore.Weighted
 	// matchingKey (RFC 9175 §3.3) and received are read without the semaphore,
 	// so a token-changed continuation never waits for another transfer.
 	matchingKey uint64
-	received    atomic.Int64
 }
 
 var errReceivingMessagesCacheFull = errors.New("receiving messages cache is full")

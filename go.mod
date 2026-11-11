@@ -6,7 +6,6 @@ require (
 	github.com/dsnet/golib/memfile v1.0.0
 	github.com/pion/dtls/v3 v3.1.15
 	github.com/stretchr/testify v1.12.1
-	go.uber.org/atomic v1.12.0
 	golang.org/x/exp v0.0.0-20261014143641-f0251eb4aa3e
 	golang.org/x/net v0.62.0
 	golang.org/x/sync v0.24.0
