@@ -89,9 +89,10 @@ type contextKey struct {
 // endpoint's plaintext policy. Responses remain explicitly bound to the
 // context and Exchange returned by ProcessIncomingRequest.
 type Processor struct {
-	mu               sync.RWMutex
-	contexts         map[contextKey]*Context
-	senderContexts   map[[32]byte]struct{}
+	mu       sync.RWMutex
+	contexts map[contextKey]*Context
+	// senderContexts preserves nonce-space ownership without retaining removed keys.
+	senderContexts   map[[32]byte]*senderContextInstance
 	outgoingContexts []*Context
 	outgoingSelector OutgoingContextSelector
 	plaintextPolicy  PlaintextPolicy
@@ -107,7 +108,7 @@ func NewProcessor(cfg ProcessorConfig) (*Processor, error) {
 	}
 	processor := &Processor{
 		contexts:         make(map[contextKey]*Context, len(cfg.Contexts)),
-		senderContexts:   make(map[[32]byte]struct{}, len(cfg.Contexts)),
+		senderContexts:   make(map[[32]byte]*senderContextInstance, len(cfg.Contexts)),
 		outgoingSelector: cfg.OutgoingContextSelector,
 		plaintextPolicy:  policy,
 	}
@@ -119,11 +120,11 @@ func NewProcessor(cfg ProcessorConfig) (*Processor, error) {
 		if _, exists := processor.contexts[key]; exists {
 			return nil, fmt.Errorf("%w: duplicate recipient ID and ID Context", ErrInvalidContext)
 		}
-		if _, exists := processor.senderContexts[context.senderContextFingerprint]; exists {
+		if previous, exists := processor.senderContexts[context.senderContextFingerprint]; exists && previous != context.senderContextInstance {
 			return nil, fmt.Errorf("%w: duplicate sender key and common IV", ErrInvalidContext)
 		}
 		processor.contexts[key] = context
-		processor.senderContexts[context.senderContextFingerprint] = struct{}{}
+		processor.senderContexts[context.senderContextFingerprint] = context.senderContextInstance
 		processor.outgoingContexts = append(processor.outgoingContexts, context)
 	}
 	if policy == PlaintextDisabled && len(cfg.Contexts) == 0 {
@@ -161,11 +162,11 @@ func (p *Processor) AddContext(context *Context) error {
 	if _, exists := p.contexts[key]; exists {
 		return fmt.Errorf("%w: duplicate recipient ID and ID Context", ErrInvalidContext)
 	}
-	if _, exists := p.senderContexts[context.senderContextFingerprint]; exists {
+	if previous, exists := p.senderContexts[context.senderContextFingerprint]; exists && previous != context.senderContextInstance {
 		return fmt.Errorf("%w: duplicate sender key and common IV", ErrInvalidContext)
 	}
 	p.contexts[key] = context
-	p.senderContexts[context.senderContextFingerprint] = struct{}{}
+	p.senderContexts[context.senderContextFingerprint] = context.senderContextInstance
 	p.outgoingContexts = append(p.outgoingContexts, context)
 	return nil
 }
@@ -189,7 +190,6 @@ func (p *Processor) RemoveContext(recipientID, idContext []byte) error {
 		return ErrNoSecurityContext
 	}
 	delete(p.contexts, key)
-	delete(p.senderContexts, context.senderContextFingerprint)
 	for i, configured := range p.outgoingContexts {
 		if configured == context {
 			copy(p.outgoingContexts[i:], p.outgoingContexts[i+1:])

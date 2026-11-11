@@ -3,6 +3,7 @@ package client_test
 import (
 	"bytes"
 	"context"
+	"errors"
 	"net"
 	"os"
 	"os/exec"
@@ -13,6 +14,8 @@ import (
 	"testing"
 	"time"
 
+	piondtls "github.com/pion/dtls/v3"
+	coapDTLS "github.com/plgd-dev/go-coap/v3/dtls"
 	"github.com/plgd-dev/go-coap/v3/message"
 	"github.com/plgd-dev/go-coap/v3/message/codes"
 	"github.com/plgd-dev/go-coap/v3/message/pool"
@@ -360,6 +363,171 @@ func TestLibCoAPClientOSCORE(t *testing.T) {
 	response, err := os.ReadFile(responsePath)
 	require.NoError(t, err)
 	require.Equal(t, responsePayload, response)
+}
+
+func TestLibCoAPServerOSCOREDTLS(t *testing.T) {
+	serverPath, err := findLibCoAPServer()
+	if err != nil {
+		requireLibCoAPOSCORE(t, err.Error())
+	}
+	basePort := availableUDPPort(t)
+	serverPort := basePort + 1
+	serverConfig := writeLibCoAPOSCOREConfig(t, "server", "client")
+	ctx, cancel := context.WithCancel(context.Background())
+	server := exec.CommandContext(ctx, serverPath, "-A", "127.0.0.1", "-p", strconv.Itoa(basePort),
+		"-v", "8", "-k", "0xabc123", "-E", serverConfig, "-e")
+	var serverOutput lockedBuffer
+	server.Stdout = &serverOutput
+	server.Stderr = &serverOutput
+	require.NoError(t, server.Start())
+	serverDone := make(chan error, 1)
+	go func() { serverDone <- server.Wait() }()
+	serverExited := false
+	defer func() {
+		if !serverExited {
+			stopLibCoAPServer(t, cancel, serverDone)
+		}
+	}()
+
+	select {
+	case serverErr := <-serverDone:
+		serverExited = true
+		cancel()
+		if strings.Contains(serverOutput.String(), "OSCORE support not enabled") ||
+			strings.Contains(serverOutput.String(), "DTLS support not enabled") {
+			requireLibCoAPOSCORE(t, "libcoap server lacks OSCORE or DTLS support")
+		}
+		require.FailNow(t, "libcoap server exited before the DTLS test", "error: %v, output: %s", serverErr, serverOutput.String())
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	processor := newLibCoAPOSCOREProcessor(t, "client", "server")
+	cc, err := coapDTLS.Dial(
+		net.JoinHostPort("127.0.0.1", strconv.Itoa(serverPort)),
+		coapDTLS.NewDTLSClientOptions(
+			piondtls.WithPSK(func([]byte) ([]byte, error) { return []byte{0xab, 0xc1, 0x23}, nil }),
+			piondtls.WithPSKIdentityHint([]byte("go-coap-client")),
+			piondtls.WithCipherSuites(piondtls.TLS_PSK_WITH_AES_128_GCM_SHA256),
+		),
+		options.WithOSCORE(processor),
+	)
+	require.NoError(t, err, "libcoap output: %s", serverOutput.String())
+	defer func() { require.NoError(t, cc.Close()) }()
+
+	requestCtx, cancelRequest := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancelRequest()
+	request, err := cc.NewGetRequest(requestCtx, "/time")
+	require.NoError(t, err)
+	defer cc.ReleaseMessage(request)
+	response, err := cc.Do(request)
+	require.NoError(t, err, "libcoap output: %s", serverOutput.String())
+	defer cc.ReleaseMessage(response)
+	require.Equal(t, codes.Content, response.Code(), "libcoap output: %s", serverOutput.String())
+	body, err := response.ReadBody()
+	require.NoError(t, err)
+	require.NotEmpty(t, body)
+}
+
+func TestLibCoAPClientOSCOREDTLSRejectsInvalidContextAndReplay(t *testing.T) {
+	clientPath, err := exec.LookPath("coap-client-notls")
+	if err != nil {
+		clientPath, err = exec.LookPath("coap-client")
+	}
+	if err != nil {
+		requireLibCoAPOSCORE(t, "coap-client not found in PATH")
+	}
+
+	listener, err := coapNet.NewDTLSListener(
+		"udp",
+		"127.0.0.1:0",
+		coapNet.NewDTLSServerOptions(
+			piondtls.WithPSK(func([]byte) ([]byte, error) { return []byte{0xab, 0xc1, 0x23}, nil }),
+			piondtls.WithPSKIdentityHint([]byte("go-coap-server")),
+			piondtls.WithCipherSuites(piondtls.TLS_PSK_WITH_AES_128_GCM_SHA256),
+		),
+	)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, listener.Close()) }()
+
+	var handled atomic.Int32
+	serverErrors := make(chan error, 8)
+	server := coapDTLS.NewServer(
+		options.WithOSCORE(newLibCoAPOSCOREProcessor(t, "server", "client")),
+		options.WithErrors(func(serverErr error) {
+			select {
+			case serverErrors <- serverErr:
+			default:
+			}
+		}),
+		options.WithHandlerFunc(func(w *responsewriter.ResponseWriter[*client.Conn], _ *pool.Message) {
+			handled.Add(1)
+			if responseErr := w.SetResponse(codes.Content, message.TextPlain, bytes.NewReader([]byte("dtls oscore"))); responseErr != nil {
+				t.Errorf("set DTLS OSCORE response: %v", responseErr)
+			}
+		}),
+	)
+	serverDone := make(chan error, 1)
+	go func() { serverDone <- server.Serve(listener) }()
+	defer func() {
+		server.Stop()
+		select {
+		case serverErr := <-serverDone:
+			require.NoError(t, serverErr)
+		case <-time.After(5 * time.Second):
+			require.Fail(t, "go-coap DTLS server did not stop")
+		}
+	}()
+
+	validConfig := writeLibCoAPOSCOREConfig(t, "client", "server")
+	invalidConfig := writeLibCoAPOSCOREConfigWithSecret(t, "client", "server", "11111111111111111111111111111111")
+	runClient := func(config, responseName string) ([]byte, error) {
+		responsePath := t.TempDir() + "/" + responseName
+		commandCtx, cancel := context.WithTimeout(context.Background(), 6*time.Second)
+		defer cancel()
+		cmd := exec.CommandContext(
+			commandCtx,
+			clientPath,
+			"-E", config,
+			"-k", "0xabc123",
+			"-u", "libcoap-client",
+			"-o", responsePath,
+			"-B", "2",
+			"coaps://"+listener.Addr().String()+"/test",
+		)
+		output, commandErr := cmd.CombinedOutput()
+		if commandErr != nil && (strings.Contains(string(output), "OSCORE support not enabled") ||
+			strings.Contains(string(output), "DTLS support not enabled")) {
+			requireLibCoAPOSCORE(t, "libcoap client lacks OSCORE or DTLS support")
+		}
+		response, readErr := os.ReadFile(responsePath)
+		if readErr != nil && !errors.Is(readErr, os.ErrNotExist) {
+			require.NoError(t, readErr)
+		}
+		return response, commandErr
+	}
+
+	_, _ = runClient(invalidConfig, "invalid-response.txt")
+	select {
+	case serverErr := <-serverErrors:
+		require.ErrorContains(t, serverErr, "authentication failed")
+	case <-time.After(2 * time.Second):
+		require.Fail(t, "go-coap DTLS server did not report invalid OSCORE authentication")
+	}
+	require.Zero(t, handled.Load(), "invalid OSCORE context reached application handler")
+
+	response, commandErr := runClient(validConfig, "valid-response.txt")
+	require.NoError(t, commandErr)
+	require.Equal(t, []byte("dtls oscore"), response)
+	require.EqualValues(t, 1, handled.Load())
+
+	_, _ = runClient(validConfig, "replay-response.txt")
+	select {
+	case serverErr := <-serverErrors:
+		require.ErrorIs(t, serverErr, oscore.ErrReplay, "replayed OSCORE request error = %v", serverErr)
+	case <-time.After(2 * time.Second):
+		require.Fail(t, "go-coap DTLS server did not reject the replayed OSCORE request")
+	}
+	require.EqualValues(t, 1, handled.Load(), "replayed request reached application handler")
 }
 
 func TestLibCoAPClientRejectsWrongOSCOREContext(t *testing.T) {

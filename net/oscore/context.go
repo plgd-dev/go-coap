@@ -75,11 +75,14 @@ type SenderSequenceReserver interface {
 	Reserve() (uint64, error)
 }
 
+type senderContextInstance struct{}
+
 // Context holds the derived keys and mutable sender and recipient state for one
 // pair of OSCORE endpoints.
 type Context struct {
 	commonIV                 []byte
 	senderContextFingerprint [sha256.Size]byte
+	senderContextInstance    *senderContextInstance
 	senderID                 []byte
 	recipientID              []byte
 	idContext                []byte
@@ -147,6 +150,7 @@ func NewContext(cfg ContextConfig) (*Context, error) {
 	return &Context{
 		commonIV:                 commonIV,
 		senderContextFingerprint: senderContextFingerprint,
+		senderContextInstance:    &senderContextInstance{},
 		senderID:                 senderID,
 		recipientID:              recipientID,
 		idContext:                idContext,

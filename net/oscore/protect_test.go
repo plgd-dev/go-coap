@@ -655,7 +655,7 @@ func TestExchangeBindingIsImmutableAndSharedByCopies(t *testing.T) {
 	}
 }
 
-func TestProtectResponseFailureConsumesOrdinaryResponseNonce(t *testing.T) {
+func TestProtectResponseFailureDoesNotConsumeOrdinaryExchange(t *testing.T) {
 	client, server := pairedContexts(t, 0, 0)
 	protectedRequest, _, err := client.ProtectRequest(message.Message{Code: codes.GET})
 	if err != nil {
@@ -673,8 +673,49 @@ func TestProtectResponseFailureConsumesOrdinaryResponseNonce(t *testing.T) {
 	}
 	if _, err := server.ProtectResponse(message.Message{
 		Code: codes.Content, Payload: []byte("retry"),
-	}, exchange); !errors.Is(err, ErrReplay) {
-		t.Fatalf("response after failed encryption error = %v, want ErrReplay", err)
+	}, exchange); err != nil {
+		t.Fatalf("response after failed encryption: %v", err)
+	}
+}
+
+func TestProtectResponseSequenceReservationFailureCanRetry(t *testing.T) {
+	const masterSecret = "response sequence reservation retry"
+	client, err := NewContext(ContextConfig{
+		MasterSecret: []byte(masterSecret),
+		SenderID:     []byte("client"),
+		RecipientID:  []byte("server"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	storeErr := errors.New("temporary sequence storage failure")
+	store := &testSenderSequenceStore{err: storeErr}
+	server, err := NewContext(ContextConfig{
+		MasterSecret:        []byte(masterSecret),
+		SenderID:            []byte("server"),
+		RecipientID:         []byte("client"),
+		SenderSequenceStore: store,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request, _, err := client.ProtectRequest(message.Message{Code: codes.GET})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, exchange, err := server.UnprotectRequest(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response := message.Message{Code: codes.Content, Payload: []byte("retry")}
+	if _, err := server.ProtectResponseWithPartialIV(response, exchange); !errors.Is(err, storeErr) {
+		t.Fatalf("response sequence reservation error = %v, want %v", err, storeErr)
+	}
+	store.mu.Lock()
+	store.err = nil
+	store.mu.Unlock()
+	if _, err := server.ProtectResponseWithPartialIV(response, exchange); err != nil {
+		t.Fatalf("response after sequence store recovered: %v", err)
 	}
 }
 

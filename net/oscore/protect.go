@@ -447,11 +447,13 @@ func (c *Context) protectResponse(response message.Message, exchange Exchange, u
 		if state.responseProtected {
 			return message.Message{}, ErrReplay
 		}
-		state.responseProtected = true
 	}
 	partialIV, ciphertext, err := c.sealResponse(plaintext, exchange, needsPartialIV)
 	if err != nil {
 		return message.Message{}, err
+	}
+	if !state.multipleResponses || !needsPartialIV {
+		state.responseProtected = true
 	}
 	encodedOption, err := c.responseOption(partialIV)
 	if err != nil {

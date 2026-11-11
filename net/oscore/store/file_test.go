@@ -2,6 +2,8 @@ package store
 
 import (
 	"errors"
+	"os"
+	"path/filepath"
 	"sync"
 	"testing"
 
@@ -122,6 +124,133 @@ func TestFileStoreSequenceWindowExhaustsAtMaximumPartialIV(t *testing.T) {
 	}
 	if _, err := store.Reserve(); !errors.Is(err, oscore.ErrSenderSequenceExhausted) {
 		t.Fatalf("reserve after maximum Partial IV error = %v, want ErrSenderSequenceExhausted", err)
+	}
+}
+
+func TestFileStoreRejectsCorruptOrTruncatedState(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		run  func(*testing.T, *FileStore) error
+		path func(*FileStore) string
+	}{
+		{
+			name: "sender sequence",
+			run: func(_ *testing.T, store *FileStore) error {
+				_, err := store.Reserve()
+				return err
+			},
+			path: func(store *FileStore) string { return store.sequencePath },
+		},
+		{
+			name: "replay window",
+			run: func(_ *testing.T, store *FileStore) error {
+				_, err := store.Load()
+				return err
+			},
+			path: func(store *FileStore) string { return store.replayPath },
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			store, err := NewFileStore(t.TempDir(), "corrupt-"+test.name)
+			if err != nil {
+				t.Fatal(err)
+			}
+			path := test.path(store)
+			truncated := []byte(`{"version":1,"`)
+			err = os.WriteFile(path, truncated, 0o600)
+			if err != nil {
+				t.Fatal(err)
+			}
+			err = test.run(t, store)
+			if err == nil {
+				t.Fatal("corrupt state was accepted")
+			}
+			got, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(got) != string(truncated) {
+				t.Fatalf("corrupt state changed to %q", got)
+			}
+		})
+	}
+}
+
+func TestFileStoreReplayPersistenceFailureDoesNotAcceptRequest(t *testing.T) {
+	dir := t.TempDir()
+	store, err := NewFileStore(dir, "replay-failure")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sender, err := oscore.NewContext(oscore.ContextConfig{
+		MasterSecret: []byte("0123456789abcdef"),
+		SenderID:     []byte{0},
+		RecipientID:  []byte{1},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	receiver, err := oscore.NewContext(oscore.ContextConfig{
+		MasterSecret:      []byte("0123456789abcdef"),
+		SenderID:          []byte{1},
+		RecipientID:       []byte{0},
+		ReplayWindowStore: store,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	aad := []byte("persistent replay failure")
+	piv, ciphertext, err := sender.Seal([]byte("request"), func([]byte) ([]byte, error) {
+		return aad, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	offlineDir := filepath.Join(t.TempDir(), "offline")
+	if err := os.Rename(store.dir, offlineDir); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := receiver.Open(piv, ciphertext, aad); err == nil {
+		t.Fatal("request accepted while durable replay-state storage was unavailable")
+	}
+	if err := os.Rename(offlineDir, store.dir); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := receiver.Open(piv, ciphertext, aad); err != nil {
+		t.Fatalf("request was consumed despite persistence failure: %v", err)
+	}
+	if _, err := receiver.Open(piv, ciphertext, aad); !errors.Is(err, oscore.ErrReplay) {
+		t.Fatalf("replayed request error = %v, want ErrReplay", err)
+	}
+}
+
+func TestWriteStateFileRenameFailurePreservesExistingTarget(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "state.json")
+	if err := os.Mkdir(target, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	marker := filepath.Join(target, "marker")
+	if err := os.WriteFile(marker, []byte("existing"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeStateFile(dir, target, sequenceFile{Version: fileVersion, Next: 42}); err == nil {
+		t.Fatal("expected rename over directory to fail")
+	}
+	got, err := os.ReadFile(marker)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "existing" {
+		t.Fatalf("existing target content = %q, want existing", got)
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 || entries[0].Name() != "state.json" {
+		t.Fatalf("temporary files remain after failed atomic write: %v", entries)
 	}
 }
 

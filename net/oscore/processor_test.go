@@ -413,6 +413,19 @@ func TestProcessorRejectsDuplicateSenderSecurityContext(t *testing.T) {
 	if err := processor.AddContext(duplicate); !errors.Is(err, ErrInvalidContext) {
 		t.Fatalf("AddContext duplicate sender security context error = %v, want %v", err, ErrInvalidContext)
 	}
+	idContext, idContextSet := first.IDContext()
+	if !idContextSet {
+		t.Fatal("test context has no ID Context")
+	}
+	if err := processor.RemoveContext(first.RecipientID(), idContext); err != nil {
+		t.Fatal(err)
+	}
+	if err := processor.AddContext(duplicate); !errors.Is(err, ErrInvalidContext) {
+		t.Fatalf("AddContext retired sender security context error = %v, want %v", err, ErrInvalidContext)
+	}
+	if err := processor.AddContext(first); err != nil {
+		t.Fatalf("re-add exact Context instance: %v", err)
+	}
 
 	differentSalt := newContext([]byte{6}, []byte{7}, []byte{4})
 	if err := processor.AddContext(differentSalt); err != nil {
