@@ -94,17 +94,46 @@ The public API separates state by responsibility:
 identifiers are copied. The master secret must be high-entropy provisioned
 material, not a password. Go does not guarantee complete zeroization of all
 temporary secret copies. `Processor.RemoveContext(recipientID, idContext)`
-prevents future context selection while preserving the original Context for
-already-bound Exchanges and operations holding a pre-removal context snapshot.
-Removing a context does not make it safe to restart or reuse its sender
+prevents future context selection but is not immediate key zeroization or hard
+revocation: already-bound Exchanges and operations holding a pre-removal
+context snapshot may complete, and the original Context remains available to
+them. Removing a context does not make it safe to restart or reuse its sender
 sequence numbers.
+
+`Processor.UnprotectResponse(response, context, exchange)` accepts only the
+same Context instance that created the supplied Exchange. An Exchange remains
+usable for an in-flight response after that Context is removed from the
+Processor.
 
 Low-level primitives such as `SealResponseWithRequestNonce`,
 `OpenResponseForExchange`, `BuildAAD`, and `EncodeInner` remain exported for
-advanced use. They do not enforce Exchange lifecycle;
-repeated direct use of a request nonce can reuse an AEAD nonce. Prefer the
-high-level `ProtectRequest`, `ProtectResponse`, `UnprotectRequest`, and
-`UnprotectResponse` methods for message processing.
+advanced use. Encryption/decryption primitives do not provide the same
+Exchange binding, one-shot response, replay, and ordering guarantees as the
+high-level message methods. In particular, repeated direct use of a request
+nonce can reuse an AEAD nonce. Prefer the high-level `ProtectRequest`,
+`ProtectResponse`, `UnprotectRequest`, and `UnprotectResponse` methods for
+message processing.
+
+### API stability
+
+The OSCORE API is new and has not been released. Its API may therefore evolve
+before stabilization without preserving compatibility with intermediate
+unreleased revisions. This does not authorize changes to APIs that already
+exist in the repository's `master` branch; those remain unchanged.
+
+`Exchange` is intentionally opaque. Read its request metadata through
+`RequestIdentifier()`, `RequestPartialIVBytes()`, and `IsObserve()` rather than
+mutable fields. The endpoint plaintext booleans are replaced by
+`ProcessorConfig.PlaintextPolicy`: use `PlaintextDisabled` instead of
+`RequireOSCORE: true`, and `PlaintextAllowed` instead of
+`AllowUnprotected: true`. `SenderSequenceReserver` is the current name for the
+sequence-reservation interface.
+
+With the current API, a plaintext request rejected by
+`PlaintextDisabled` returns `oscore.ErrPlaintextDisabled`;
+`oscore.ErrOSCORERequired` continues to identify a plaintext response where a
+client transport requires an OSCORE-protected response. Match these errors
+with `errors.Is`.
 
 The following is a complete direct message-processing example. Application
 errors are protected in the same way as successful responses. A second attempt
@@ -223,7 +252,8 @@ defer cc.Close()
 
 OSCORE is opt-in. Endpoints that do not configure it retain their existing
 behavior. `ProcessorConfig.PlaintextPolicy` controls incoming message
-protection: its zero value, `PlaintextDisabled`, rejects plaintext;
+protection: its zero value, `PlaintextDisabled`, rejects plaintext with
+`oscore.ErrPlaintextDisabled`;
 `PlaintextAllowed` accepts both modes; and `PlaintextOnly` rejects
 OSCORE-protected messages. This is an endpoint-wide policy; use separate
 endpoints or application policy when some resources must not accept plaintext.

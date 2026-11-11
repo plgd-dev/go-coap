@@ -192,7 +192,10 @@ func (p *Processor) RemoveContext(recipientID, idContext []byte) error {
 	delete(p.senderContexts, context.senderContextFingerprint)
 	for i, configured := range p.outgoingContexts {
 		if configured == context {
-			p.outgoingContexts = append(p.outgoingContexts[:i], p.outgoingContexts[i+1:]...)
+			copy(p.outgoingContexts[i:], p.outgoingContexts[i+1:])
+			last := len(p.outgoingContexts) - 1
+			p.outgoingContexts[last] = nil
+			p.outgoingContexts = p.outgoingContexts[:last]
 			break
 		}
 	}
@@ -229,6 +232,7 @@ func (p *Processor) ProtectRequest(request message.Message) (message.Message, Ex
 // an OutgoingContextSelector.
 func (p *Processor) ProtectRequestWithContext(request message.Message) (message.Message, *Context, Exchange, error) {
 	p.mu.RLock()
+	// Keep a stable selection snapshot after releasing the lock.
 	contexts := append([]*Context(nil), p.outgoingContexts...)
 	selector := p.outgoingSelector
 	p.mu.RUnlock()
@@ -345,8 +349,11 @@ func (p *Processor) ProcessIncomingRequest(request message.Message) (message.Mes
 	return plaintext, context, exchange, nil
 }
 
-// UnprotectResponse decrypts a response using the context associated with its
-// outstanding request.
+// UnprotectResponse decrypts a response using the context bound to exchange.
+// The supplied context must be the same Context instance used to create the
+// Exchange; a context removed from this Processor remains valid for an
+// in-flight Exchange. Removing a context prevents future selection, but does
+// not zeroize its keys or revoke operations already holding it.
 func (p *Processor) UnprotectResponse(response message.Message, context *Context, exchange Exchange) (message.Message, error) {
 	if !exchange.matchesContext(context) {
 		return message.Message{}, ErrNoSecurityContext

@@ -521,6 +521,9 @@ func (c *Context) sealResponse(plaintext []byte, exchange Exchange, usePartialIV
 }
 
 // UnprotectResponse authenticates and decrypts a response bound to exchange.
+// The Exchange must have been created by this Context; it remains valid after
+// the Context is removed from a Processor because the Exchange retains that
+// Context for in-flight response processing.
 // Ordinary responses without a Partial IV and duplicate response Partial IVs
 // are accepted at most once per Exchange. Failed authentication does not
 // consume the Exchange.

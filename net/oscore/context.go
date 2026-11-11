@@ -475,8 +475,9 @@ func (c *Context) OpenResponse(partialIV, ciphertext, aad []byte) ([]byte, error
 // OpenResponseForExchange opens a response that is bound to an original
 // request. Responses without a Partial IV use the request nonce and do not
 // advance the recipient replay window. This primitive does not track exchange
-// completion or authenticate the Exchange lifecycle; use UnprotectResponse
-// with the Exchange returned by ProtectRequest or UnprotectRequest.
+// completion, enforce response replay/order, or authenticate the Exchange
+// lifecycle; use UnprotectResponse with the Exchange returned by ProtectRequest
+// or UnprotectRequest.
 func (c *Context) OpenResponseForExchange(responsePartialIV, requestPartialIV, ciphertext, aad []byte) ([]byte, error) {
 	if len(responsePartialIV) > 0 {
 		nonce, err := c.nonce(responsePartialIV, c.recipientID)

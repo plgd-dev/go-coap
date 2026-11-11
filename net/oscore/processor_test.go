@@ -253,6 +253,24 @@ func TestProcessorRemoveContextPreservesInFlightExchange(t *testing.T) {
 	}
 }
 
+func TestProcessorRemoveContextClearsOutgoingBackingArray(t *testing.T) {
+	context := newTestContext(t, []byte{0x10}, []byte{0x20})
+	processor, err := NewProcessor(ProcessorConfig{Contexts: []*Context{context}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := processor.RemoveContext(context.RecipientID(), nil); err != nil {
+		t.Fatal(err)
+	}
+	if len(processor.outgoingContexts) != 0 {
+		t.Fatalf("outgoing context count = %d, want 0", len(processor.outgoingContexts))
+	}
+	backing := processor.outgoingContexts[:cap(processor.outgoingContexts)]
+	if len(backing) != 0 && backing[0] != nil {
+		t.Fatal("removed context remains in outgoingContexts backing array")
+	}
+}
+
 func TestProcessorRemoveContextIsScopedToIDContext(t *testing.T) {
 	newContext := func(senderID, recipientID, idContext byte) *Context {
 		t.Helper()
@@ -323,33 +341,46 @@ func TestProcessorContextLifecycleConcurrentWithProcessing(t *testing.T) {
 	wg.Add(2)
 	go func() {
 		defer wg.Done()
-		for _, request := range requests {
-			plaintext, selectedContext, exchange, processErr := processor.ProcessIncomingRequest(request)
-			if processErr != nil && !errors.Is(processErr, ErrNoSecurityContext) {
-				errs <- processErr
-			} else if processErr == nil &&
-				(plaintext.Code != codes.GET || selectedContext != server || len(exchange.RequestPartialIVBytes()) == 0) {
-				errs <- ErrInvalidContext
-			}
-		}
+		processRequestsDuringContextLifecycle(processor, server, requests, errs)
 	}()
 	go func() {
 		defer wg.Done()
-		for range 64 {
-			addErr := processor.AddContext(server)
-			if addErr != nil && !errors.Is(addErr, ErrInvalidContext) {
-				errs <- addErr
-			}
-			removeErr := processor.RemoveContext(server.RecipientID(), nil)
-			if removeErr != nil && !errors.Is(removeErr, ErrNoSecurityContext) {
-				errs <- removeErr
-			}
-		}
+		mutateContextDuringProcessing(processor, server, errs)
 	}()
 	wg.Wait()
 	close(errs)
 	for err := range errs {
 		t.Errorf("concurrent context lifecycle error: %v", err)
+	}
+}
+
+func processRequestsDuringContextLifecycle(
+	processor *Processor,
+	server *Context,
+	requests []message.Message,
+	errs chan<- error,
+) {
+	for _, request := range requests {
+		plaintext, selectedContext, exchange, err := processor.ProcessIncomingRequest(request)
+		switch {
+		case err != nil && !errors.Is(err, ErrNoSecurityContext):
+			errs <- err
+		case err == nil &&
+			(plaintext.Code != codes.GET || selectedContext != server || len(exchange.RequestPartialIVBytes()) == 0):
+			errs <- ErrInvalidContext
+		}
+	}
+}
+
+func mutateContextDuringProcessing(processor *Processor, server *Context, errs chan<- error) {
+	for range 64 {
+		if err := processor.AddContext(server); err != nil && !errors.Is(err, ErrInvalidContext) {
+			errs <- err
+		}
+		if err := processor.RemoveContext(server.RecipientID(), nil); err != nil &&
+			!errors.Is(err, ErrNoSecurityContext) {
+			errs <- err
+		}
 	}
 }
 
@@ -552,6 +583,61 @@ func TestProcessorOutgoingSelectorRejectsInvalidSelection(t *testing.T) {
 				t.Fatalf("ProtectRequest error = %v, want %v", err, tt.wantErr)
 			}
 		})
+	}
+}
+
+func TestProcessorOutgoingSelectorConcurrentContextChanges(t *testing.T) {
+	clientA := newTestContext(t, []byte{0x10}, []byte{0x20})
+	clientB := newTestContext(t, []byte{0x11}, []byte{0x21})
+	changing := newTestContext(t, []byte{0x12}, []byte{0x22})
+	processor, err := NewProcessor(ProcessorConfig{
+		Contexts: []*Context{clientA, clientB},
+		OutgoingContextSelector: func(_ message.Message, contexts []*Context) (*Context, error) {
+			if len(contexts) < 2 {
+				return nil, ErrNoSecurityContext
+			}
+			for _, context := range contexts {
+				if context == nil || len(context.SenderID()) == 0 {
+					return nil, ErrInvalidContext
+				}
+			}
+			return contexts[0], nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	errs := make(chan error, 256)
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		for i := range 128 {
+			_, _, protectErr := processor.ProtectRequest(message.Message{
+				Code: codes.GET, Token: message.Token{byte(i + 1)},
+			})
+			if protectErr != nil {
+				errs <- protectErr
+			}
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		for range 128 {
+			if addErr := processor.AddContext(changing); addErr != nil {
+				errs <- addErr
+				continue
+			}
+			if removeErr := processor.RemoveContext(changing.RecipientID(), nil); removeErr != nil {
+				errs <- removeErr
+			}
+		}
+	}()
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		t.Errorf("concurrent selection/context change error: %v", err)
 	}
 }
 
