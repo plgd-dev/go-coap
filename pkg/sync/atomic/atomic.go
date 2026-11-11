@@ -195,6 +195,12 @@ type UnsafePointer struct {
 	value atomic.Pointer[byte]
 }
 
+func NewUnsafePointer(value unsafe.Pointer) *UnsafePointer {
+	v := new(UnsafePointer)
+	v.Store(value)
+	return v
+}
+
 func (v *UnsafePointer) Load() unsafe.Pointer {
 	return unsafe.Pointer(v.value.Load())
 }
