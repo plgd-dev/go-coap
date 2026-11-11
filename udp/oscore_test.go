@@ -382,20 +382,6 @@ func TestOSCOREOuterBlockwiseClientRejectsPlaintextBlock2Responses(t *testing.T)
 		}
 	}()
 
-	clientErrors := make(chan error, 8)
-	cc, err := udp.Dial(listener.LocalAddr().String(),
-		options.WithOSCORE(newUDPOSCOREProcessor(t, "client", "server", false)),
-		options.WithOSCOREOuterBlockwise(),
-		options.WithErrors(func(err error) {
-			select {
-			case clientErrors <- err:
-			default:
-			}
-		}),
-	)
-	require.NoError(t, err)
-	defer func() { require.NoError(t, cc.Close()) }()
-
 	for _, test := range []struct {
 		name string
 		path string
@@ -404,6 +390,20 @@ func TestOSCOREOuterBlockwiseClientRejectsPlaintextBlock2Responses(t *testing.T)
 		{name: "application error", path: "/application-error"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
+			clientErrors := make(chan error, 8)
+			cc, dialErr := udp.Dial(listener.LocalAddr().String(),
+				options.WithOSCORE(newUDPOSCOREProcessor(t, "client", "server", false)),
+				options.WithOSCOREOuterBlockwise(),
+				options.WithErrors(func(err error) {
+					select {
+					case clientErrors <- err:
+					default:
+					}
+				}),
+			)
+			require.NoError(t, dialErr)
+			defer func() { require.NoError(t, cc.Close()) }()
+
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 			defer cancel()
 			request, requestErr := cc.NewGetRequest(ctx, test.path)
