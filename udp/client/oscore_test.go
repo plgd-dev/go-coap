@@ -383,6 +383,160 @@ func TestOSCOREOuterBlockwiseRequiresProtectionAfterExchangeExpiry(t *testing.T)
 	require.ErrorIs(t, reported, oscore.ErrOSCORERequired)
 }
 
+func TestOSCOREPendingObservationRetainsExchangeAfterExchangeLifetime(t *testing.T) {
+	session := &responseRecordingSession{recordingSession: newRecordingSession()}
+	defer session.Close()
+
+	cfg := DefaultConfig
+	const masterSecret = "expired observe exchange"
+	securityContext, err := oscore.NewContext(oscore.ContextConfig{
+		MasterSecret: []byte(masterSecret),
+		SenderID:     []byte("client"),
+		RecipientID:  []byte("server"),
+	})
+	require.NoError(t, err)
+	serverContext, err := oscore.NewContext(oscore.ContextConfig{
+		MasterSecret: []byte(masterSecret),
+		SenderID:     []byte("server"),
+		RecipientID:  []byte("client"),
+	})
+	require.NoError(t, err)
+	cfg.OSCORE, err = oscore.NewProcessor(oscore.ProcessorConfig{
+		Contexts:        []*oscore.Context{securityContext},
+		PlaintextPolicy: oscore.PlaintextDisabled,
+	})
+	require.NoError(t, err)
+	cfg.OSCOREOuterBlockwise = true
+	cc := NewConnWithOpts(session, &cfg, WithBlockWise(func(cc *Conn) *blockwise.BlockWise[*Conn] {
+		return blockwise.New(cc, time.Minute, func(error) {}, nil)
+	}))
+	defer cc.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	const token = "pending-observe-token"
+	request := cc.AcquireMessage(ctx)
+	defer cc.ReleaseMessage(request)
+	request.SetCode(codes.GET)
+	request.SetToken(message.Token(token))
+	request.SetOptionUint32(message.Observe, 0)
+
+	var serverExchange oscore.Exchange
+	writeResult := make(chan error, 1)
+	session.onWrite = func(req *pool.Message) (writeErr error) {
+		defer func() { writeResult <- writeErr }()
+		var wireRequest message.Message
+		wireRequest, err = udpPoolMessageToOSCOREMessage(req)
+		if err != nil {
+			return err
+		}
+		_, serverExchange, err = serverContext.UnprotectRequest(wireRequest)
+		if err != nil {
+			return err
+		}
+		ack := cc.AcquireMessage(context.Background())
+		defer cc.ReleaseMessage(ack)
+		ack.SetType(message.Acknowledgement)
+		ack.SetMessageID(req.MessageID())
+		cc.handleSpecialMessages(ack)
+		return nil
+	}
+
+	type notification struct {
+		code    codes.Code
+		payload []byte
+		observe bool
+		err     error
+	}
+	callback := make(chan notification, 1)
+	observationResult := make(chan error, 1)
+	go func() {
+		_, observeErr := cc.doObserve(request, func(response *pool.Message) {
+			payload, readErr := response.ReadBody()
+			callback <- notification{
+				code:    response.Code(),
+				payload: payload,
+				observe: response.HasOption(message.Observe),
+				err:     readErr,
+			}
+		})
+		observationResult <- observeErr
+	}()
+	require.Eventually(t, func() bool {
+		_, exists := cc.observationHandler.GetObservation(message.Token(token).Hash())
+		cc.oscoreMu.Lock()
+		_, hasExchange := cc.oscoreExchanges[token]
+		cc.oscoreMu.Unlock()
+		return exists && hasExchange
+	}, time.Second, time.Millisecond)
+	require.NoError(t, <-writeResult)
+
+	cc.oscoreMu.Lock()
+	exchange, exists := cc.oscoreExchanges[token]
+	if exists {
+		exchange.expires = time.Now().Add(-time.Second)
+		cc.oscoreExchanges[token] = exchange
+	}
+	cc.oscoreMu.Unlock()
+	require.True(t, exists, "OSCORE Observe request should create an exchange")
+
+	cc.expireOSCORERequests(time.Now())
+	require.Contains(t, cc.oscoreExchanges, token, "pending observation should keep its exchange alive")
+	require.Contains(t, cc.oscoreRequiredResponses, token, "pending observation should keep OSCORE required")
+
+	var reported error
+	cc.errors = func(err error) { reported = err }
+	response := cc.AcquireMessage(context.Background())
+	defer cc.ReleaseMessage(response)
+	response.SetCode(codes.Content)
+	response.SetToken(message.Token(token))
+	writer := responsewriter.New(cc.AcquireMessage(context.Background()), cc)
+	defer cc.ReleaseMessage(writer.Message())
+
+	cc.handleResponse(writer, response)
+	require.ErrorIs(t, reported, oscore.ErrOSCORERequired)
+	select {
+	case <-callback:
+		t.Fatal("plaintext response was delivered to pending observation")
+	default:
+	}
+
+	protectedResponse, err := serverContext.ProtectResponseWithPartialIV(message.Message{
+		Code:    codes.Content,
+		Token:   message.Token(token),
+		Options: message.Options{{ID: message.Observe}},
+		Payload: []byte("initial notification"),
+	}, serverExchange)
+	require.NoError(t, err)
+	response.SetMessage(protectedResponse)
+	cc.handleResponse(writer, response)
+	require.NoError(t, <-observationResult)
+	select {
+	case got := <-callback:
+		require.NoError(t, got.err)
+		require.Equal(t, codes.Content, got.code)
+		require.Equal(t, []byte("initial notification"), got.payload)
+		require.True(t, got.observe)
+	default:
+		t.Fatal("authenticated delayed initial response was not delivered")
+	}
+
+	activeObservation, exists := cc.observationHandler.GetObservation(message.Token(token).Hash())
+	require.True(t, exists, "successful initial Observe response should keep the registration active")
+	cancelObservationCtx, cancelObservation := context.WithCancel(context.Background())
+	cancelObservation()
+	require.ErrorIs(t, activeObservation.Cancel(cancelObservationCtx), context.Canceled)
+	cancel()
+	cc.oscoreMu.Lock()
+	exchange = cc.oscoreExchanges[token]
+	exchange.expires = time.Now().Add(-time.Second)
+	cc.oscoreExchanges[token] = exchange
+	cc.oscoreMu.Unlock()
+	cc.expireOSCORERequests(time.Now())
+	require.NotContains(t, cc.oscoreExchanges, token, "canceled observation should release its expired exchange")
+	require.NotContains(t, cc.oscoreRequiredResponses, token, "canceled observation should release its response guard")
+}
+
 func TestProcessIncomingOSCOREMessageUsesOSCOREOptionDirection(t *testing.T) {
 	const masterSecret = "outer code direction"
 

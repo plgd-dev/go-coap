@@ -161,8 +161,10 @@ func (cc *Conn) protectRequestMessage(req *pool.Message) (*pool.Message, func(bo
 func (cc *Conn) hasOSCOREExchange(token message.Token) bool {
 	cc.oscoreMu.Lock()
 	defer cc.oscoreMu.Unlock()
-	exchange, ok := cc.oscoreExchanges[string(token)]
-	return ok && (exchange.expires.IsZero() || time.Now().Before(exchange.expires))
+	key := string(token)
+	exchange, ok := cc.oscoreExchanges[key]
+	return ok && (exchange.expires.IsZero() || time.Now().Before(exchange.expires) ||
+		cc.hasPendingOSCOREObservation(key, exchange))
 }
 
 func (cc *Conn) requiresOSCOREResponse(token message.Token) bool {
@@ -171,8 +173,18 @@ func (cc *Conn) requiresOSCOREResponse(token message.Token) bool {
 	if _, ok := cc.oscoreRequiredResponses[string(token)]; ok {
 		return true
 	}
-	exchange, ok := cc.oscoreExchanges[string(token)]
-	return ok && (exchange.expires.IsZero() || time.Now().Before(exchange.expires))
+	key := string(token)
+	exchange, ok := cc.oscoreExchanges[key]
+	return ok && (exchange.expires.IsZero() || time.Now().Before(exchange.expires) ||
+		cc.hasPendingOSCOREObservation(key, exchange))
+}
+
+func (cc *Conn) hasPendingOSCOREObservation(token string, exchange udpOSCOREExchange) bool {
+	if !exchange.observe || exchange.hasObserveResponse || cc.observationHandler == nil {
+		return false
+	}
+	_, exists := cc.observationHandler.GetObservation(message.Token(token).Hash())
+	return exists
 }
 
 func (cc *Conn) trackOSCOREExchange(
@@ -343,7 +355,8 @@ func (cc *Conn) unprotectIncomingResponse(resp *pool.Message) error {
 func (cc *Conn) oscoreExchangeForResponse(key string) (udpOSCOREExchange, bool) {
 	cc.oscoreMu.Lock()
 	exchange, ok := cc.oscoreExchanges[key]
-	if ok && !exchange.expires.IsZero() && time.Now().After(exchange.expires) {
+	if ok && !exchange.expires.IsZero() && !time.Now().Before(exchange.expires) &&
+		!cc.hasPendingOSCOREObservation(key, exchange) {
 		delete(cc.oscoreExchanges, key)
 		ok = false
 	}
@@ -681,7 +694,9 @@ func (cc *Conn) expireOSCORERequests(now time.Time) {
 func (cc *Conn) expireOSCOREExchanges(now time.Time) {
 	for token, exchange := range cc.oscoreExchanges {
 		if !exchange.expires.IsZero() && !now.Before(exchange.expires) {
-			delete(cc.oscoreExchanges, token)
+			if !cc.hasPendingOSCOREObservation(token, exchange) {
+				delete(cc.oscoreExchanges, token)
+			}
 		}
 		if exchange.cancelContext != nil && !exchange.cancelExpires.IsZero() &&
 			!now.Before(exchange.cancelExpires) {
@@ -707,7 +722,11 @@ func (cc *Conn) expireOSCORERequiredResponses() {
 func (cc *Conn) hasOSCOREResponseConsumer(token string) bool {
 	_, hasHandler := cc.tokenHandlerContainer.Load(message.Token(token).Hash())
 	_, hasObservation := cc.oscoreObservations[token]
-	return hasHandler || hasObservation
+	hasObservationConsumer := false
+	if cc.observationHandler != nil {
+		_, hasObservationConsumer = cc.observationHandler.GetObservation(message.Token(token).Hash())
+	}
+	return hasHandler || hasObservation || hasObservationConsumer
 }
 
 func (cc *Conn) expireOSCORERequestCache(now time.Time) {
