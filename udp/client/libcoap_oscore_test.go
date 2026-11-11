@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"net"
 	"os"
 	"os/exec"
@@ -53,7 +54,7 @@ func TestLibCoAPServerOSCORE(t *testing.T) {
 	serverExited := false
 	defer func() {
 		if !serverExited {
-			stopLibCoAPServer(t, cancel, serverDone)
+			stopLibCoAPServerProcess(t, cancel, server, serverDone)
 		}
 	}()
 
@@ -241,7 +242,7 @@ func TestLibCoAPServerRejectsWrongOSCOREContext(t *testing.T) {
 	serverExited := false
 	defer func() {
 		if !serverExited {
-			stopLibCoAPServer(t, cancel, serverDone)
+			stopLibCoAPServerProcess(t, cancel, server, serverDone)
 		}
 	}()
 
@@ -370,7 +371,7 @@ func TestLibCoAPServerOSCOREDTLS(t *testing.T) {
 	if err != nil {
 		requireLibCoAPOSCORE(t, err.Error())
 	}
-	basePort := availableUDPPort(t)
+	basePort, releasePorts := reserveLibCoAPServerPorts(t)
 	serverPort := basePort + 1
 	serverConfig := writeLibCoAPOSCOREConfig(t, "server", "client")
 	ctx, cancel := context.WithCancel(context.Background())
@@ -379,48 +380,37 @@ func TestLibCoAPServerOSCOREDTLS(t *testing.T) {
 	var serverOutput lockedBuffer
 	server.Stdout = &serverOutput
 	server.Stderr = &serverOutput
+	releasePorts()
 	require.NoError(t, server.Start())
 	serverDone := make(chan error, 1)
 	go func() { serverDone <- server.Wait() }()
 	serverExited := false
 	defer func() {
 		if !serverExited {
-			stopLibCoAPServer(t, cancel, serverDone)
+			stopLibCoAPServerProcess(t, cancel, server, serverDone)
 		}
 	}()
 
-	select {
-	case serverErr := <-serverDone:
-		serverExited = true
+	processor := newLibCoAPOSCOREProcessor(t, "client", "server")
+	var cc *client.Conn
+	var response *pool.Message
+	var readyErr error
+	cc, response, serverExited, readyErr = waitForLibCoAPDTLSOSCORE(
+		serverDone,
+		net.JoinHostPort("127.0.0.1", strconv.Itoa(serverPort)),
+		processor,
+		&serverOutput,
+	)
+	if serverExited {
 		cancel()
 		if strings.Contains(serverOutput.String(), "OSCORE support not enabled") ||
 			strings.Contains(serverOutput.String(), "DTLS support not enabled") {
 			requireLibCoAPOSCORE(t, "libcoap server lacks OSCORE or DTLS support")
 		}
-		require.FailNow(t, "libcoap server exited before the DTLS test", "error: %v, output: %s", serverErr, serverOutput.String())
-	case <-time.After(100 * time.Millisecond):
+		require.FailNow(t, "libcoap server exited before becoming ready", "error: %v, output: %s", readyErr, serverOutput.String())
 	}
-
-	processor := newLibCoAPOSCOREProcessor(t, "client", "server")
-	cc, err := coapDTLS.Dial(
-		net.JoinHostPort("127.0.0.1", strconv.Itoa(serverPort)),
-		coapDTLS.NewDTLSClientOptions(
-			piondtls.WithPSK(func([]byte) ([]byte, error) { return []byte{0xab, 0xc1, 0x23}, nil }),
-			piondtls.WithPSKIdentityHint([]byte("go-coap-client")),
-			piondtls.WithCipherSuites(piondtls.TLS_PSK_WITH_AES_128_GCM_SHA256),
-		),
-		options.WithOSCORE(processor),
-	)
-	require.NoError(t, err, "libcoap output: %s", serverOutput.String())
+	require.NoError(t, readyErr, "libcoap output: %s", serverOutput.String())
 	defer func() { require.NoError(t, cc.Close()) }()
-
-	requestCtx, cancelRequest := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancelRequest()
-	request, err := cc.NewGetRequest(requestCtx, "/time")
-	require.NoError(t, err)
-	defer cc.ReleaseMessage(request)
-	response, err := cc.Do(request)
-	require.NoError(t, err, "libcoap output: %s", serverOutput.String())
 	defer cc.ReleaseMessage(response)
 	require.Equal(t, codes.Content, response.Code(), "libcoap output: %s", serverOutput.String())
 	body, err := response.ReadBody()
@@ -829,6 +819,137 @@ func availableUDPPort(t *testing.T) int {
 	return port
 }
 
+func reserveLibCoAPServerPorts(t *testing.T) (int, func()) {
+	t.Helper()
+	for range 64 {
+		base, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		basePort := base.LocalAddr().(*net.UDPAddr).Port
+		if basePort >= 65535 {
+			_ = base.Close()
+			continue
+		}
+		dtls, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: basePort + 1})
+		if err != nil {
+			_ = base.Close()
+			continue
+		}
+		tcpBase, err := net.ListenTCP("tcp", &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1), Port: basePort})
+		if err != nil {
+			_ = dtls.Close()
+			_ = base.Close()
+			continue
+		}
+		tcpDTLS, err := net.ListenTCP("tcp", &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1), Port: basePort + 1})
+		if err != nil {
+			_ = tcpBase.Close()
+			_ = dtls.Close()
+			_ = base.Close()
+			continue
+		}
+		var once sync.Once
+		release := func() {
+			once.Do(func() {
+				require.NoError(t, tcpDTLS.Close())
+				require.NoError(t, tcpBase.Close())
+				require.NoError(t, dtls.Close())
+				require.NoError(t, base.Close())
+			})
+		}
+		t.Cleanup(release)
+		return basePort, release
+	}
+	t.Fatal("could not reserve consecutive UDP/TCP ports for libcoap DTLS")
+	return 0, func() {}
+}
+
+func waitForLibCoAPDTLSOSCORE(
+	serverDone <-chan error,
+	address string,
+	processor *oscore.Processor,
+	serverOutput *lockedBuffer,
+) (*client.Conn, *pool.Message, bool, error) {
+	deadline := time.Now().Add(8 * time.Second)
+	lastErr := errors.New("no DTLS readiness attempt completed")
+	for time.Now().Before(deadline) {
+		select {
+		case serverErr := <-serverDone:
+			return nil, nil, true, libCoAPServerExitError(serverErr)
+		default:
+		}
+
+		requestCtx, cancel := context.WithTimeout(context.Background(), 750*time.Millisecond)
+		cc, err := coapDTLS.Dial(
+			address,
+			coapDTLS.NewDTLSClientOptions(
+				piondtls.WithPSK(func([]byte) ([]byte, error) { return []byte{0xab, 0xc1, 0x23}, nil }),
+				piondtls.WithPSKIdentityHint([]byte("go-coap-client")),
+				piondtls.WithCipherSuites(piondtls.TLS_PSK_WITH_AES_128_GCM_SHA256),
+			),
+			options.WithOSCORE(processor),
+		)
+		if err == nil {
+			var request *pool.Message
+			request, err = cc.NewGetRequest(requestCtx, "/time")
+			if err == nil {
+				var response *pool.Message
+				response, err = cc.Do(request)
+				cc.ReleaseMessage(request)
+				if err == nil {
+					cancel()
+					return cc, response, false, nil
+				}
+			}
+			_ = cc.Close()
+		}
+		cancel()
+		lastErr = err
+		select {
+		case serverErr := <-serverDone:
+			return nil, nil, true, libCoAPServerExitError(serverErr)
+		case <-time.After(50 * time.Millisecond):
+		}
+	}
+	return nil, nil, false, fmt.Errorf("libcoap DTLS OSCORE server did not become ready: %w; output: %s", lastErr, serverOutput.String())
+}
+
+func libCoAPServerExitError(err error) error {
+	if err != nil {
+		return fmt.Errorf("libcoap server exited: %w", err)
+	}
+	return errors.New("libcoap server exited before becoming ready")
+}
+
+func stopLibCoAPServerProcess(t *testing.T, cancel context.CancelFunc, command *exec.Cmd, done <-chan error) {
+	t.Helper()
+	cancel()
+	select {
+	case err := <-done:
+		if err != nil {
+			var exitErr *exec.ExitError
+			require.ErrorAs(t, err, &exitErr)
+		}
+	case <-time.After(5 * time.Second):
+		if command.Process != nil {
+			killErr := command.Process.Kill()
+			if killErr != nil && !errors.Is(killErr, os.ErrProcessDone) {
+				t.Errorf("kill libcoap server after shutdown timeout: %v", killErr)
+			}
+		}
+		select {
+		case err := <-done:
+			if err != nil {
+				var exitErr *exec.ExitError
+				require.ErrorAs(t, err, &exitErr)
+			}
+		case <-time.After(5 * time.Second):
+			require.Fail(t, "libcoap server was not reaped after termination")
+		}
+	}
+}
+
 func writeLibCoAPOSCOREConfig(t *testing.T, senderID, recipientID string) string {
 	return writeLibCoAPOSCOREConfigWithSecret(t, senderID, recipientID, "0102030405060708090a0b0c0d0e0f10")
 }
@@ -860,20 +981,6 @@ func newLibCoAPOSCOREProcessor(t *testing.T, senderID, recipientID string) *osco
 	})
 	require.NoError(t, err)
 	return processor
-}
-
-func stopLibCoAPServer(t *testing.T, cancel context.CancelFunc, done <-chan error) {
-	t.Helper()
-	cancel()
-	select {
-	case err := <-done:
-		if err != nil {
-			var exitErr *exec.ExitError
-			require.ErrorAs(t, err, &exitErr)
-		}
-	case <-time.After(5 * time.Second):
-		require.Fail(t, "libcoap server did not stop after cancellation")
-	}
 }
 
 func requireLibCoAPOSCORE(t *testing.T, reason string) {

@@ -1,5 +1,5 @@
 
-FROM golang:1.27.3-bookworm
+FROM golang:1.27.4-bookworm
 
 # Build pinned Q-Block/OSCORE-enabled libcoap tools and prepare writable directories for UID 1000.
 RUN set -eux; \

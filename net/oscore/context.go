@@ -75,14 +75,25 @@ type SenderSequenceReserver interface {
 	Reserve() (uint64, error)
 }
 
-type senderContextInstance [1]byte
+type noCopy struct{}
+
+func (*noCopy) Lock()   {}
+func (*noCopy) Unlock() {}
+
+type senderSequenceState struct {
+	mu        sync.Mutex
+	next      uint64
+	store     SenderSequenceReserver
+	exhausted bool
+}
 
 // Context holds the derived keys and mutable sender and recipient state for one
-// pair of OSCORE endpoints.
+// pair of OSCORE endpoints. A Context must not be copied after first use.
 type Context struct {
+	noCopy                   noCopy
 	commonIV                 []byte
 	senderContextFingerprint [sha256.Size]byte
-	senderContextInstance    *senderContextInstance
+	senderSequence           *senderSequenceState
 	senderID                 []byte
 	recipientID              []byte
 	idContext                []byte
@@ -90,12 +101,7 @@ type Context struct {
 	algorithm                AEADAlgorithm
 	senderAEAD               ccm.CCM
 	recipientAEAD            ccm.CCM
-
-	sequenceMu    sync.Mutex
-	nextSeq       uint64
-	sequenceStore SenderSequenceReserver
-	exhausted     bool
-	replay        *ReplayWindow
+	replay                   *ReplayWindow
 }
 
 // NewContext derives keys for the configured AEAD algorithm. The zero-value
@@ -150,17 +156,18 @@ func NewContext(cfg ContextConfig) (*Context, error) {
 	return &Context{
 		commonIV:                 commonIV,
 		senderContextFingerprint: senderContextFingerprint,
-		senderContextInstance:    &senderContextInstance{},
-		senderID:                 senderID,
-		recipientID:              recipientID,
-		idContext:                idContext,
-		idContextSet:             cfg.IDContext != nil,
-		algorithm:                cfg.Algorithm,
-		senderAEAD:               senderAEAD,
-		recipientAEAD:            recipientAEAD,
-		nextSeq:                  cfg.SenderSequenceNumber,
-		sequenceStore:            cfg.SenderSequenceStore,
-		replay:                   replay,
+		senderSequence: &senderSequenceState{
+			next:  cfg.SenderSequenceNumber,
+			store: cfg.SenderSequenceStore,
+		},
+		senderID:      senderID,
+		recipientID:   recipientID,
+		idContext:     idContext,
+		idContextSet:  cfg.IDContext != nil,
+		algorithm:     cfg.Algorithm,
+		senderAEAD:    senderAEAD,
+		recipientAEAD: recipientAEAD,
+		replay:        replay,
 	}, nil
 }
 
@@ -320,30 +327,31 @@ func appendCBORBytes(dst, value []byte) []byte {
 // minimal OSCORE Partial IV encoding. A reserved value remains consumed even if
 // the caller later fails to send a message.
 func (c *Context) NextPartialIV() ([]byte, error) {
-	c.sequenceMu.Lock()
-	defer c.sequenceMu.Unlock()
-	if c.exhausted {
+	state := c.senderSequence
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	if state.exhausted {
 		return nil, ErrSenderSequenceExhausted
 	}
-	if c.sequenceStore != nil {
-		seq, err := c.sequenceStore.Reserve()
+	if state.store != nil {
+		seq, err := state.store.Reserve()
 		if err != nil {
 			return nil, fmt.Errorf("reserve persistent OSCORE sender sequence number: %w", err)
 		}
 		if seq > maxPartialIV {
-			c.exhausted = true
+			state.exhausted = true
 			return nil, ErrSenderSequenceExhausted
 		}
 		if seq == maxPartialIV {
-			c.exhausted = true
+			state.exhausted = true
 		}
 		return encodePartialIV(seq), nil
 	}
-	seq := c.nextSeq
+	seq := state.next
 	if seq == maxPartialIV {
-		c.exhausted = true
+		state.exhausted = true
 	} else {
-		c.nextSeq++
+		state.next++
 	}
 	return encodePartialIV(seq), nil
 }

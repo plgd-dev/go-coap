@@ -92,7 +92,7 @@ type Processor struct {
 	mu       sync.RWMutex
 	contexts map[contextKey]*Context
 	// senderContexts preserves nonce-space ownership without retaining removed keys.
-	senderContexts   map[[32]byte]*senderContextInstance
+	senderContexts   map[[32]byte]*senderSequenceState
 	outgoingContexts []*Context
 	outgoingSelector OutgoingContextSelector
 	plaintextPolicy  PlaintextPolicy
@@ -108,7 +108,7 @@ func NewProcessor(cfg ProcessorConfig) (*Processor, error) {
 	}
 	processor := &Processor{
 		contexts:         make(map[contextKey]*Context, len(cfg.Contexts)),
-		senderContexts:   make(map[[32]byte]*senderContextInstance, len(cfg.Contexts)),
+		senderContexts:   make(map[[32]byte]*senderSequenceState, len(cfg.Contexts)),
 		outgoingSelector: cfg.OutgoingContextSelector,
 		plaintextPolicy:  policy,
 	}
@@ -120,11 +120,11 @@ func NewProcessor(cfg ProcessorConfig) (*Processor, error) {
 		if _, exists := processor.contexts[key]; exists {
 			return nil, fmt.Errorf("%w: duplicate recipient ID and ID Context", ErrInvalidContext)
 		}
-		if previous, exists := processor.senderContexts[context.senderContextFingerprint]; exists && previous != context.senderContextInstance {
+		if previous, exists := processor.senderContexts[context.senderContextFingerprint]; exists && previous != context.senderSequence {
 			return nil, fmt.Errorf("%w: duplicate sender key and common IV", ErrInvalidContext)
 		}
 		processor.contexts[key] = context
-		processor.senderContexts[context.senderContextFingerprint] = context.senderContextInstance
+		processor.senderContexts[context.senderContextFingerprint] = context.senderSequence
 		processor.outgoingContexts = append(processor.outgoingContexts, context)
 	}
 	if policy == PlaintextDisabled && len(cfg.Contexts) == 0 {
@@ -162,11 +162,11 @@ func (p *Processor) AddContext(context *Context) error {
 	if _, exists := p.contexts[key]; exists {
 		return fmt.Errorf("%w: duplicate recipient ID and ID Context", ErrInvalidContext)
 	}
-	if previous, exists := p.senderContexts[context.senderContextFingerprint]; exists && previous != context.senderContextInstance {
+	if previous, exists := p.senderContexts[context.senderContextFingerprint]; exists && previous != context.senderSequence {
 		return fmt.Errorf("%w: duplicate sender key and common IV", ErrInvalidContext)
 	}
 	p.contexts[key] = context
-	p.senderContexts[context.senderContextFingerprint] = context.senderContextInstance
+	p.senderContexts[context.senderContextFingerprint] = context.senderSequence
 	p.outgoingContexts = append(p.outgoingContexts, context)
 	return nil
 }

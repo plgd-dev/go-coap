@@ -27,20 +27,26 @@ var ErrInvalidStoreID = errors.New("OSCORE file store ID must not be empty")
 // FileStore persists an OSCORE sender sequence and receiver replay window in
 // separate files under Dir. Construct it with the same stable ID whenever the
 // corresponding OSCORE context is recreated.
+// The replay guard detects corruption and rollback of the replay-state file
+// independently. Backups must preserve the replay state and guard together;
+// rollback of the complete store directory cannot be detected without an
+// external monotonic trust anchor. Existing started replay state without a
+// guard is rejected and must be migrated from a trusted copy.
 //
 // On Unix systems, file locking serializes operations across goroutines,
 // FileStore instances, and processes. Keep the directory private to the
 // application. On other platforms, operations are serialized within the
 // process only and directory metadata syncing is unavailable.
 type FileStore struct {
-	dir          string
-	sequencePath string
-	replayPath   string
-	sequenceLock string
-	replayLock   string
-	mu           sync.Mutex
-	next         uint64
-	limit        uint64
+	dir             string
+	sequencePath    string
+	replayPath      string
+	replayGuardPath string
+	sequenceLock    string
+	replayLock      string
+	mu              sync.Mutex
+	next            uint64
+	limit           uint64
 }
 
 type sequenceFile struct {
@@ -74,11 +80,12 @@ func NewFileStore(dir, id string) (*FileStore, error) {
 	digest := sha256.Sum256([]byte(id))
 	prefix := filepath.Join(absoluteDir, hex.EncodeToString(digest[:]))
 	return &FileStore{
-		dir:          absoluteDir,
-		sequencePath: prefix + ".sequence.json",
-		replayPath:   prefix + ".replay.json",
-		sequenceLock: prefix + ".sequence.lock",
-		replayLock:   prefix + ".replay.lock",
+		dir:             absoluteDir,
+		sequencePath:    prefix + ".sequence.json",
+		replayPath:      prefix + ".replay.json",
+		replayGuardPath: prefix + ".replay.guard.json",
+		sequenceLock:    prefix + ".sequence.lock",
+		replayLock:      prefix + ".replay.lock",
 	}, nil
 }
 
@@ -126,7 +133,7 @@ func (s *FileStore) Load() (oscore.ReplayWindowState, error) {
 	var state oscore.ReplayWindowState
 	err := withFileLock(s.replayLock, func() error {
 		var err error
-		state, err = readReplay(s.replayPath)
+		state, err = s.loadReplayState()
 		return err
 	})
 	if err != nil {
@@ -143,22 +150,54 @@ func (s *FileStore) Save(state oscore.ReplayWindowState) error {
 		return err
 	}
 	err := withFileLock(s.replayLock, func() error {
-		current, err := readReplay(s.replayPath)
+		current, err := s.loadReplayState()
 		if err != nil {
 			return err
 		}
 		if err := validateReplayAdvance(current, state); err != nil {
 			return err
 		}
-		return writeStateFile(s.dir, s.replayPath, replayFile{
+		next := replayFile{
 			Version:           fileVersion,
 			ReplayWindowState: state,
-		})
+		}
+		if err := writeStateFile(s.dir, s.replayGuardPath, next); err != nil {
+			return err
+		}
+		return writeStateFile(s.dir, s.replayPath, next)
 	})
 	if err != nil {
 		return fmt.Errorf("save OSCORE replay state: %w", err)
 	}
 	return nil
+}
+
+func (s *FileStore) loadReplayState() (oscore.ReplayWindowState, error) {
+	current, err := readReplay(s.replayPath)
+	if err != nil {
+		return oscore.ReplayWindowState{}, err
+	}
+	guard, guardExists, err := readReplayWithExistence(s.replayGuardPath)
+	if err != nil {
+		return oscore.ReplayWindowState{}, err
+	}
+	if !guardExists {
+		if current.Started {
+			return oscore.ReplayWindowState{}, fmt.Errorf("%w: replay rollback guard is missing", oscore.ErrInvalidReplayState)
+		}
+		return current, nil
+	}
+	if replayStatesEqual(current, guard) {
+		return current, nil
+	}
+	return oscore.ReplayWindowState{}, fmt.Errorf("%w: replay state differs from its rollback guard", oscore.ErrInvalidReplayState)
+}
+
+func replayStatesEqual(left, right oscore.ReplayWindowState) bool {
+	return left.HighestSequence == right.HighestSequence &&
+		left.Bitmap == right.Bitmap &&
+		left.Started == right.Started &&
+		left.WindowSize == right.WindowSize
 }
 
 func validateReplayState(state oscore.ReplayWindowState) error {
@@ -226,24 +265,29 @@ func readSequence(path string) (sequenceFile, error) {
 }
 
 func readReplay(path string) (oscore.ReplayWindowState, error) {
+	state, _, err := readReplayWithExistence(path)
+	return state, err
+}
+
+func readReplayWithExistence(path string) (oscore.ReplayWindowState, bool, error) {
 	data, err := readStateFile(path)
 	if err != nil {
-		return oscore.ReplayWindowState{}, err
+		return oscore.ReplayWindowState{}, false, err
 	}
 	if data == nil {
-		return oscore.ReplayWindowState{}, nil
+		return oscore.ReplayWindowState{}, false, nil
 	}
 	var state replayFile
 	if err := json.Unmarshal(data, &state); err != nil {
-		return oscore.ReplayWindowState{}, fmt.Errorf("decode replay state file: %w", err)
+		return oscore.ReplayWindowState{}, false, fmt.Errorf("decode replay state file: %w", err)
 	}
 	if state.Version != fileVersion {
-		return oscore.ReplayWindowState{}, fmt.Errorf("unsupported OSCORE replay state file version %d", state.Version)
+		return oscore.ReplayWindowState{}, false, fmt.Errorf("unsupported OSCORE replay state file version %d", state.Version)
 	}
 	if err := validateReplayState(state.ReplayWindowState); err != nil {
-		return oscore.ReplayWindowState{}, err
+		return oscore.ReplayWindowState{}, false, err
 	}
-	return state.ReplayWindowState, nil
+	return state.ReplayWindowState, true, nil
 }
 
 func readStateFile(path string) ([]byte, error) {

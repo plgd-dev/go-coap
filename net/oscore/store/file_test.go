@@ -149,6 +149,14 @@ func TestFileStoreRejectsCorruptOrTruncatedState(t *testing.T) {
 			},
 			path: func(store *FileStore) string { return store.replayPath },
 		},
+		{
+			name: "replay rollback guard",
+			run: func(_ *testing.T, store *FileStore) error {
+				_, err := store.Load()
+				return err
+			},
+			path: func(store *FileStore) string { return store.replayGuardPath },
+		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			store, err := NewFileStore(t.TempDir(), "corrupt-"+test.name)
@@ -222,6 +230,156 @@ func TestFileStoreReplayPersistenceFailureDoesNotAcceptRequest(t *testing.T) {
 	}
 	if _, err := receiver.Open(piv, ciphertext, aad); !errors.Is(err, oscore.ErrReplay) {
 		t.Fatalf("replayed request error = %v, want ErrReplay", err)
+	}
+}
+
+func TestFileStoreRejectsReplayStateCorruptionDuringRuntime(t *testing.T) {
+	store, err := NewFileStore(t.TempDir(), "runtime-corruption")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sender, err := oscore.NewContext(oscore.ContextConfig{
+		MasterSecret: []byte("0123456789abcdef"),
+		SenderID:     []byte{0},
+		RecipientID:  []byte{1},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	receiver, err := oscore.NewContext(oscore.ContextConfig{
+		MasterSecret:      []byte("0123456789abcdef"),
+		SenderID:          []byte{1},
+		RecipientID:       []byte{0},
+		ReplayWindowStore: store,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	seal := func(payload string) ([]byte, []byte) {
+		t.Helper()
+		piv, ciphertext, sealErr := sender.Seal([]byte(payload), func([]byte) ([]byte, error) {
+			return []byte("runtime corruption AAD"), nil
+		})
+		if sealErr != nil {
+			t.Fatal(sealErr)
+		}
+		return piv, ciphertext
+	}
+
+	aad := []byte("runtime corruption AAD")
+	firstPIV, firstCiphertext := seal("first")
+	if _, openErr := receiver.Open(firstPIV, firstCiphertext, aad); openErr != nil {
+		t.Fatal(openErr)
+	}
+	validSnapshot, err := os.ReadFile(store.replayPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	corrupt := []byte(`{"version":1,"`)
+	if err := os.WriteFile(store.replayPath, corrupt, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	secondPIV, secondCiphertext := seal("second")
+	if _, err := receiver.Open(secondPIV, secondCiphertext, aad); err == nil {
+		t.Fatal("request accepted while replay state was corrupt at runtime")
+	}
+	if err := os.WriteFile(store.replayPath, validSnapshot, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := receiver.Open(secondPIV, secondCiphertext, aad); err != nil {
+		t.Fatalf("request was consumed despite runtime corruption: %v", err)
+	}
+	if _, err := receiver.Open(firstPIV, firstCiphertext, aad); !errors.Is(err, oscore.ErrReplay) {
+		t.Fatalf("previously authenticated request error = %v, want ErrReplay", err)
+	}
+}
+
+func TestFileStoreRejectsRestoredReplaySnapshot(t *testing.T) {
+	dir := t.TempDir()
+	store, err := NewFileStore(dir, "restored-replay-snapshot")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sender, err := oscore.NewContext(oscore.ContextConfig{
+		MasterSecret: []byte("0123456789abcdef"),
+		SenderID:     []byte{0},
+		RecipientID:  []byte{1},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	newReceiver := func() *oscore.Context {
+		t.Helper()
+		replayStore, storeErr := NewFileStore(dir, "restored-replay-snapshot")
+		if storeErr != nil {
+			t.Fatal(storeErr)
+		}
+		receiver, contextErr := oscore.NewContext(oscore.ContextConfig{
+			MasterSecret:      []byte("0123456789abcdef"),
+			SenderID:          []byte{1},
+			RecipientID:       []byte{0},
+			ReplayWindowStore: replayStore,
+		})
+		if contextErr != nil {
+			t.Fatal(contextErr)
+		}
+		return receiver
+	}
+	seal := func(payload string) ([]byte, []byte) {
+		t.Helper()
+		piv, ciphertext, sealErr := sender.Seal([]byte(payload), func([]byte) ([]byte, error) {
+			return []byte("rollback AAD"), nil
+		})
+		if sealErr != nil {
+			t.Fatal(sealErr)
+		}
+		return piv, ciphertext
+	}
+	aad := []byte("rollback AAD")
+
+	firstPIV, firstCiphertext := seal("first")
+	if _, openErr := newReceiver().Open(firstPIV, firstCiphertext, aad); openErr != nil {
+		t.Fatal(openErr)
+	}
+	oldSnapshot, err := os.ReadFile(store.replayPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondPIV, secondCiphertext := seal("second")
+	if _, openErr := newReceiver().Open(secondPIV, secondCiphertext, aad); openErr != nil {
+		t.Fatal(openErr)
+	}
+	if writeErr := os.WriteFile(store.replayPath, oldSnapshot, 0o600); writeErr != nil {
+		t.Fatal(writeErr)
+	}
+	restartedStore, err := NewFileStore(dir, "restored-replay-snapshot")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = oscore.NewContext(oscore.ContextConfig{
+		MasterSecret:      []byte("0123456789abcdef"),
+		SenderID:          []byte{1},
+		RecipientID:       []byte{0},
+		ReplayWindowStore: restartedStore,
+	})
+	if !errors.Is(err, oscore.ErrInvalidReplayState) {
+		t.Fatalf("context creation after restoring old replay snapshot error = %v, want ErrInvalidReplayState", err)
+	}
+	if removeErr := os.Remove(store.replayGuardPath); removeErr != nil {
+		t.Fatal(removeErr)
+	}
+	restartedStore, err = NewFileStore(dir, "restored-replay-snapshot")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = oscore.NewContext(oscore.ContextConfig{
+		MasterSecret:      []byte("0123456789abcdef"),
+		SenderID:          []byte{1},
+		RecipientID:       []byte{0},
+		ReplayWindowStore: restartedStore,
+	})
+	if !errors.Is(err, oscore.ErrInvalidReplayState) {
+		t.Fatalf("context creation with missing replay rollback guard error = %v, want ErrInvalidReplayState", err)
 	}
 }
 

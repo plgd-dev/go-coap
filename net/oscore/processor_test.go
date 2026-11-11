@@ -2,6 +2,7 @@ package oscore
 
 import (
 	"errors"
+	"reflect"
 	"sync"
 	"testing"
 
@@ -434,6 +435,62 @@ func TestProcessorRejectsDuplicateSenderSecurityContext(t *testing.T) {
 	differentIDContext := newContext([]byte{8}, []byte{3}, []byte{9})
 	if err := processor.AddContext(differentIDContext); err != nil {
 		t.Fatalf("AddContext context with different ID Context: %v", err)
+	}
+}
+
+func TestContextShallowCopySharesSenderSequenceState(t *testing.T) {
+	original, err := NewContext(ContextConfig{
+		MasterSecret: []byte("shallow copy sender sequence test"),
+		MasterSalt:   []byte{1, 2, 3},
+		SenderID:     []byte{1},
+		RecipientID:  []byte{2},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Exercise a shallow copy without bypassing go vet's copylocks check.
+	copiedValue := reflect.New(reflect.TypeOf(original).Elem())
+	copiedValue.Elem().Set(reflect.ValueOf(original).Elem())
+	copied := copiedValue.Interface().(*Context)
+
+	processor, err := NewProcessor(ProcessorConfig{Contexts: []*Context{original}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := original.NextPartialIV()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(first, encodePartialIV(0)) {
+		t.Fatalf("original Partial IV = %x, want 00", first)
+	}
+	idContext, _ := original.IDContext()
+	if removeErr := processor.RemoveContext(original.RecipientID(), idContext); removeErr != nil {
+		t.Fatal(removeErr)
+	}
+	if addErr := processor.AddContext(copied); addErr != nil {
+		t.Fatalf("register shallow copy sharing sender state: %v", addErr)
+	}
+	second, err := copied.NextPartialIV()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(second, encodePartialIV(1)) {
+		t.Fatalf("copied Context Partial IV = %x, want 01", second)
+	}
+	if removeErr := processor.RemoveContext(copied.RecipientID(), idContext); removeErr != nil {
+		t.Fatal(removeErr)
+	}
+	if addErr := processor.AddContext(original); addErr != nil {
+		t.Fatalf("re-register original Context: %v", addErr)
+	}
+	third, err := original.NextPartialIV()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(third, encodePartialIV(2)) {
+		t.Fatalf("re-registered original Partial IV = %x, want 02", third)
 	}
 }
 
