@@ -159,151 +159,169 @@ func TestAtomicTypesConcurrentOperations(t *testing.T) {
 	)
 
 	t.Run("Duration", func(t *testing.T) {
-		value := NewDuration(0)
-		var wg sync.WaitGroup
-		for i := 0; i < workers; i++ {
-			wg.Add(3)
-			go func() {
-				defer wg.Done()
-				for j := 0; j < iterations; j++ {
-					value.Add(time.Nanosecond)
-				}
-			}()
-			go func() {
-				defer wg.Done()
-				for j := 0; j < iterations; j++ {
-					value.Sub(time.Nanosecond)
-				}
-			}()
-			go func() {
-				defer wg.Done()
-				for j := 0; j < iterations; j++ {
-					for {
-						old := value.Load()
-						if value.CompareAndSwap(old, old+time.Nanosecond) {
-							break
-						}
-					}
-				}
-			}()
-		}
-		wg.Wait()
-		require.Equal(t, time.Duration(workers*iterations)*time.Nanosecond, value.Load())
+		testConcurrentDurationOperations(t, workers, iterations)
 	})
-
 	t.Run("Float64", func(t *testing.T) {
-		value := NewFloat64(0)
-		var wg sync.WaitGroup
-		for i := 0; i < workers; i++ {
-			wg.Add(3)
-			go func() {
-				defer wg.Done()
-				for j := 0; j < iterations; j++ {
-					value.Add(0.25)
-				}
-			}()
-			go func() {
-				defer wg.Done()
-				for j := 0; j < iterations; j++ {
-					value.Sub(0.25)
-				}
-			}()
-			go func() {
-				defer wg.Done()
-				for j := 0; j < iterations; j++ {
-					for {
-						old := value.Load()
-						if value.CompareAndSwap(old, old+0.5) {
-							break
-						}
+		testConcurrentFloat64Operations(t, workers, iterations)
+	})
+	t.Run("Time", func(t *testing.T) {
+		testConcurrentTimeOperations(t, workers, iterations)
+	})
+	t.Run("UnsafePointer", func(t *testing.T) {
+		testConcurrentUnsafePointerOperations(t, workers, iterations)
+	})
+}
+
+func testConcurrentDurationOperations(t *testing.T, workers, iterations int) {
+	t.Helper()
+	value := NewDuration(0)
+	var wg sync.WaitGroup
+	for i := 0; i < workers; i++ {
+		wg.Add(3)
+		go func() {
+			defer wg.Done()
+			for j := 0; j < iterations; j++ {
+				value.Add(time.Nanosecond)
+			}
+		}()
+		go func() {
+			defer wg.Done()
+			for j := 0; j < iterations; j++ {
+				value.Sub(time.Nanosecond)
+			}
+		}()
+		go func() {
+			defer wg.Done()
+			for j := 0; j < iterations; j++ {
+				for {
+					old := value.Load()
+					if value.CompareAndSwap(old, old+time.Nanosecond) {
+						break
 					}
 				}
-			}()
-		}
-		wg.Wait()
-		require.Equal(
-			t,
-			math.Float64bits(float64(workers*iterations)*0.5),
-			math.Float64bits(value.Load()),
-		)
-	})
+			}
+		}()
+	}
+	wg.Wait()
+	require.Equal(t, time.Duration(workers*iterations)*time.Nanosecond, value.Load())
+}
 
-	t.Run("Time", func(t *testing.T) {
-		values := []time.Time{
-			time.Unix(1, 1),
-			time.Unix(2, 2),
-			time.Unix(3, 3),
+func testConcurrentFloat64Operations(t *testing.T, workers, iterations int) {
+	t.Helper()
+	value := NewFloat64(0)
+	var wg sync.WaitGroup
+	for i := 0; i < workers; i++ {
+		wg.Add(3)
+		go func() {
+			defer wg.Done()
+			for j := 0; j < iterations; j++ {
+				value.Add(0.25)
+			}
+		}()
+		go func() {
+			defer wg.Done()
+			for j := 0; j < iterations; j++ {
+				value.Sub(0.25)
+			}
+		}()
+		go func() {
+			defer wg.Done()
+			for j := 0; j < iterations; j++ {
+				for {
+					old := value.Load()
+					if value.CompareAndSwap(old, old+0.5) {
+						break
+					}
+				}
+			}
+		}()
+	}
+	wg.Wait()
+	require.Equal(
+		t,
+		math.Float64bits(float64(workers*iterations)*0.5),
+		math.Float64bits(value.Load()),
+	)
+}
+
+func testConcurrentTimeOperations(t *testing.T, workers, iterations int) {
+	t.Helper()
+	values := []time.Time{
+		time.Unix(1, 1),
+		time.Unix(2, 2),
+		time.Unix(3, 3),
+	}
+	value := NewTime(values[0])
+	var wg sync.WaitGroup
+	var invalid Bool
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for i := 0; i < workers*iterations; i++ {
+			value.Store(values[i%len(values)])
 		}
-		value := NewTime(values[0])
-		var wg sync.WaitGroup
-		var invalid Bool
+	}()
+	for i := 0; i < workers; i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			for i := 0; i < workers*iterations; i++ {
-				value.Store(values[i%len(values)])
+			for j := 0; j < iterations; j++ {
+				if !containsTime(values, value.Load()) {
+					invalid.Store(true)
+					return
+				}
 			}
 		}()
-		for i := 0; i < workers; i++ {
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
-				for j := 0; j < iterations; j++ {
-					loaded := value.Load()
-					valid := false
-					for _, candidate := range values {
-						if loaded.Equal(candidate) {
-							valid = true
-							break
-						}
-					}
-					if !valid {
-						invalid.Store(true)
-						return
-					}
-				}
-			}()
-		}
-		wg.Wait()
-		require.False(t, invalid.Load(), "Load returned a torn or unexpected time")
-	})
+	}
+	wg.Wait()
+	require.False(t, invalid.Load(), "Load returned a torn or unexpected time")
+}
 
-	t.Run("UnsafePointer", func(t *testing.T) {
-		type pointedValue struct {
-			value int
+func containsTime(values []time.Time, value time.Time) bool {
+	for _, candidate := range values {
+		if value.Equal(candidate) {
+			return true
 		}
-		values := []*pointedValue{{value: 1}, {value: 2}, {value: 3}}
-		pointers := []unsafe.Pointer{
-			unsafe.Pointer(values[0]),
-			unsafe.Pointer(values[1]),
-			unsafe.Pointer(values[2]),
-		}
-		value := NewUnsafePointer(pointers[0])
-		var wg sync.WaitGroup
-		var invalid Bool
-		for i := 0; i < workers; i++ {
-			wg.Add(1)
-			go func(worker int) {
-				defer wg.Done()
-				for j := 0; j < iterations; j++ {
-					next := pointers[(worker+j)%len(pointers)]
-					value.Store(next)
-					old := value.Swap(next)
-					if !containsPointer(pointers, old) {
-						invalid.Store(true)
-					}
-					current := value.Load()
-					if !containsPointer(pointers, current) {
-						invalid.Store(true)
-					}
-					value.CompareAndSwap(current, next)
+	}
+	return false
+}
+
+func testConcurrentUnsafePointerOperations(t *testing.T, workers, iterations int) {
+	t.Helper()
+	type pointedValue struct {
+		value int
+	}
+	values := []*pointedValue{{value: 1}, {value: 2}, {value: 3}}
+	pointers := []unsafe.Pointer{
+		unsafe.Pointer(values[0]),
+		unsafe.Pointer(values[1]),
+		unsafe.Pointer(values[2]),
+	}
+	value := NewUnsafePointer(pointers[0])
+	var wg sync.WaitGroup
+	var invalid Bool
+	for i := 0; i < workers; i++ {
+		wg.Add(1)
+		go func(worker int) {
+			defer wg.Done()
+			for j := 0; j < iterations; j++ {
+				next := pointers[(worker+j)%len(pointers)]
+				value.Store(next)
+				old := value.Swap(next)
+				if !containsPointer(pointers, old) {
+					invalid.Store(true)
 				}
-			}(i)
-		}
-		wg.Wait()
-		require.False(t, invalid.Load(), "pointer operation returned an unknown pointer")
-		require.Contains(t, pointers, value.Load())
-	})
+				current := value.Load()
+				if !containsPointer(pointers, current) {
+					invalid.Store(true)
+				}
+				value.CompareAndSwap(current, next)
+			}
+		}(i)
+	}
+	wg.Wait()
+	require.False(t, invalid.Load(), "pointer operation returned an unknown pointer")
+	require.Contains(t, pointers, value.Load())
 }
 
 func containsPointer(values []unsafe.Pointer, value unsafe.Pointer) bool {
