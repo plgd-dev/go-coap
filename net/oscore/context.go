@@ -75,7 +75,9 @@ type SenderSequenceReserver interface {
 	Reserve() (uint64, error)
 }
 
-type senderContextInstance struct{}
+type senderContextInstance struct {
+	marker byte
+}
 
 // Context holds the derived keys and mutable sender and recipient state for one
 // pair of OSCORE endpoints.
