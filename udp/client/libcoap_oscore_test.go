@@ -261,8 +261,8 @@ func TestLibCoAPServerRejectsWrongOSCOREContext(t *testing.T) {
 	})
 	require.NoError(t, err)
 	processor, err := oscore.NewProcessor(oscore.ProcessorConfig{
-		Contexts:      []*oscore.Context{wrongContext},
-		RequireOSCORE: true,
+		Contexts:        []*oscore.Context{wrongContext},
+		PlaintextPolicy: oscore.PlaintextDisabled,
 	})
 	require.NoError(t, err)
 	clientErrors := make(chan error, 1)
@@ -687,8 +687,8 @@ func newLibCoAPOSCOREProcessor(t *testing.T, senderID, recipientID string) *osco
 	})
 	require.NoError(t, err)
 	processor, err := oscore.NewProcessor(oscore.ProcessorConfig{
-		Contexts:      []*oscore.Context{securityContext},
-		RequireOSCORE: true,
+		Contexts:        []*oscore.Context{securityContext},
+		PlaintextPolicy: oscore.PlaintextDisabled,
 	})
 	require.NoError(t, err)
 	return processor

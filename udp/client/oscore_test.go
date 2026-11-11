@@ -37,12 +37,22 @@ func (s *responseRecordingSession) WriteMessage(req *pool.Message) error {
 func TestObserveCancellationRequiresMatchingRegistrationOptions(t *testing.T) {
 	const token = "observe-token"
 	registrationOptions := message.Options{
-		{ID: message.Observe, Value: []byte{0}},
+		{ID: message.Observe},
 		{ID: message.URIPath, Value: []byte("resource")},
 	}
+	securityContext, err := oscore.NewContext(oscore.ContextConfig{
+		MasterSecret: []byte("observe cancellation test"),
+		SenderID:     []byte("client"),
+		RecipientID:  []byte("server"),
+	})
+	require.NoError(t, err)
+	_, observeExchange, err := securityContext.ProtectRequest(message.Message{
+		Code: codes.GET, Options: registrationOptions,
+	})
+	require.NoError(t, err)
 	cc := &Conn{
 		oscoreObservations: map[string]udpOSCORERequestContext{
-			token: {options: registrationOptions, exchange: oscore.Exchange{Observe: true}},
+			token: {options: registrationOptions, exchange: observeExchange},
 		},
 	}
 	req := pool.NewMessage(context.Background())
@@ -287,8 +297,8 @@ func TestOSCOREOuterBlockwiseResponseRequiresProtection(t *testing.T) {
 			})
 			require.NoError(t, err)
 			cfg.OSCORE, err = oscore.NewProcessor(oscore.ProcessorConfig{
-				Contexts:      []*oscore.Context{securityContext},
-				RequireOSCORE: true,
+				Contexts:        []*oscore.Context{securityContext},
+				PlaintextPolicy: oscore.PlaintextDisabled,
 			})
 			require.NoError(t, err)
 			cfg.OSCOREOuterBlockwise = true
@@ -337,8 +347,8 @@ func TestOSCOREOuterBlockwiseRequiresProtectionAfterExchangeExpiry(t *testing.T)
 	})
 	require.NoError(t, err)
 	cfg.OSCORE, err = oscore.NewProcessor(oscore.ProcessorConfig{
-		Contexts:      []*oscore.Context{securityContext},
-		RequireOSCORE: true,
+		Contexts:        []*oscore.Context{securityContext},
+		PlaintextPolicy: oscore.PlaintextDisabled,
 	})
 	require.NoError(t, err)
 	cfg.OSCOREOuterBlockwise = true
@@ -757,9 +767,9 @@ func TestFailedOSCOREWriteDoesNotRemoveReplacementExchange(t *testing.T) {
 	cc.oscoreMu.Lock()
 	current := cc.oscoreExchanges[string(message.Token{0x74})].exchange
 	cc.oscoreMu.Unlock()
-	require.Equal(t, firstExchange.RequestPartialIV, current.RequestPartialIV,
+	require.Equal(t, firstExchange.RequestPartialIVBytes(), current.RequestPartialIVBytes(),
 		"failed replacement must restore the earlier request that was sent")
-	require.NotEqual(t, firstExchange.RequestPartialIV, secondExchange.RequestPartialIV)
+	require.NotEqual(t, firstExchange.RequestPartialIVBytes(), secondExchange.RequestPartialIVBytes())
 }
 
 func TestFailedConcurrentOSCOREExchangesDoNotRestoreFailedEntry(t *testing.T) {
@@ -859,7 +869,7 @@ func TestThreeConcurrentOSCOREExchangeRollbacksRestoreLatestSentEntry(t *testing
 				require.NoError(t, protectErr)
 				finish[i] = release
 				cc.oscoreMu.Lock()
-				piv[i] = append([]byte(nil), cc.oscoreExchanges[string(request.Token())].exchange.RequestPartialIV...)
+				piv[i] = cc.oscoreExchanges[string(request.Token())].exchange.RequestPartialIVBytes()
 				cc.oscoreMu.Unlock()
 			}
 
@@ -868,7 +878,7 @@ func TestThreeConcurrentOSCOREExchangeRollbacksRestoreLatestSentEntry(t *testing
 			current, exists := cc.oscoreExchanges[string(message.Token{0x77})]
 			cc.oscoreMu.Unlock()
 			require.True(t, exists)
-			require.Equal(t, piv[tt.wantIndex], current.exchange.RequestPartialIV)
+			require.Equal(t, piv[tt.wantIndex], current.exchange.RequestPartialIVBytes())
 		})
 	}
 }
@@ -950,8 +960,8 @@ func TestOSCOREMessageTransformsPreserveControlMessage(t *testing.T) {
 	})
 	require.NoError(t, err)
 	processor, err := oscore.NewProcessor(oscore.ProcessorConfig{
-		Contexts:      []*oscore.Context{serverContext},
-		RequireOSCORE: true,
+		Contexts:        []*oscore.Context{serverContext},
+		PlaintextPolicy: oscore.PlaintextDisabled,
 	})
 	require.NoError(t, err)
 	session := newRecordingSession()
@@ -1036,8 +1046,8 @@ func TestRetransmitCachedOSCOREResponse(t *testing.T) {
 	})
 	require.NoError(t, err)
 	processor, err := oscore.NewProcessor(oscore.ProcessorConfig{
-		Contexts:      []*oscore.Context{serverContext},
-		RequireOSCORE: true,
+		Contexts:        []*oscore.Context{serverContext},
+		PlaintextPolicy: oscore.PlaintextDisabled,
 	})
 	require.NoError(t, err)
 
@@ -1416,8 +1426,8 @@ func TestProtectedRequestCachesProtectedResponseForRetransmission(t *testing.T) 
 	})
 	require.NoError(t, err)
 	processor, err := oscore.NewProcessor(oscore.ProcessorConfig{
-		Contexts:      []*oscore.Context{serverContext},
-		RequireOSCORE: true,
+		Contexts:        []*oscore.Context{serverContext},
+		PlaintextPolicy: oscore.PlaintextDisabled,
 	})
 	require.NoError(t, err)
 	const secret = "sensitive protected response"
@@ -1501,8 +1511,8 @@ func TestProtectedRequestCachesEmptyAcknowledgementForRetransmission(t *testing.
 	})
 	require.NoError(t, err)
 	processor, err := oscore.NewProcessor(oscore.ProcessorConfig{
-		Contexts:      []*oscore.Context{serverContext},
-		RequireOSCORE: true,
+		Contexts:        []*oscore.Context{serverContext},
+		PlaintextPolicy: oscore.PlaintextDisabled,
 	})
 	require.NoError(t, err)
 

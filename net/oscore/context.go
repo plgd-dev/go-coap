@@ -51,7 +51,10 @@ var (
 // AEAD nonce.
 type ContextConfig struct {
 	// Algorithm is a COSE AEAD algorithm. Zero selects AES-CCM-16-64-128.
-	Algorithm            AEADAlgorithm
+	Algorithm AEADAlgorithm
+	// MasterSecret is high-entropy secret material provisioned securely to
+	// both peers, not a human password. NewContext derives its keys immediately
+	// and does not retain this slice.
 	MasterSecret         []byte
 	MasterSalt           []byte
 	IDContext            []byte
@@ -71,9 +74,6 @@ type ContextConfig struct {
 type SenderSequenceReserver interface {
 	Reserve() (uint64, error)
 }
-
-// SenderSequenceStore is kept as an alias for source compatibility.
-type SenderSequenceStore = SenderSequenceReserver
 
 // Context holds the derived keys and mutable sender and recipient state for one
 // pair of OSCORE endpoints.
@@ -96,7 +96,10 @@ type Context struct {
 }
 
 // NewContext derives keys for the configured AEAD algorithm. The zero-value
-// Algorithm selects AES-CCM-16-64-128 for backward compatibility.
+// Algorithm selects AES-CCM-16-64-128. Input byte slices are consumed during
+// construction; identifier slices retained by the
+// Context are copied. Go cannot guarantee complete zeroization of temporary
+// secret copies.
 func NewContext(cfg ContextConfig) (*Context, error) {
 	cfg, err := validateContextConfig(cfg)
 	if err != nil {
@@ -388,6 +391,9 @@ type AADBuilder func(partialIV []byte) ([]byte, error)
 
 // Seal protects the serialized inner message with the sender context. The
 // method reserves a fresh sequence number before building the AAD or encrypting.
+// This low-level primitive does not enforce CoAP Exchange lifecycle; callers
+// must preserve Partial IV uniqueness and use high-level message methods for
+// exchange-bound messages.
 func (c *Context) Seal(plaintext []byte, buildAAD AADBuilder) (partialIV, ciphertext []byte, err error) {
 	return c.sealWithNonceID(plaintext, buildAAD, c.senderID)
 }
@@ -415,14 +421,17 @@ func (c *Context) sealWithNonceID(plaintext []byte, buildAAD AADBuilder, nonceID
 }
 
 // SealResponse protects a response with its own Partial IV, using the
-// response sender ID for nonce construction.
+// response sender ID for nonce construction. This low-level primitive does not
+// track Exchange lifecycle or response ordering.
 func (c *Context) SealResponse(plaintext []byte, buildAAD AADBuilder) (partialIV, ciphertext []byte, err error) {
 	return c.sealWithNonceID(plaintext, buildAAD, c.senderID)
 }
 
 // SealResponseWithRequestNonce protects a non-notification response using the
 // request Partial IV and request sender ID. No new sender sequence number is
-// consumed and the response OSCORE option can be empty.
+// consumed and the response OSCORE option can be empty. This low-level
+// primitive does not track Exchange lifecycle; repeated use with the same
+// request Partial IV can reuse an AEAD nonce. Prefer ProtectResponse.
 func (c *Context) SealResponseWithRequestNonce(plaintext, requestPartialIV []byte, buildAAD AADBuilder) ([]byte, error) {
 	if buildAAD == nil {
 		return nil, fmt.Errorf("%w: missing AAD builder", ErrInvalidContext)
@@ -445,14 +454,16 @@ func (c *Context) SealResponseWithRequestNonce(plaintext, requestPartialIV []byt
 }
 
 // Open authenticates and decrypts a serialized inner message. The recipient
-// replay window is updated only after authentication succeeds.
+// replay window is updated only after authentication succeeds. It does not
+// bind the plaintext to a CoAP request or response Exchange.
 func (c *Context) Open(partialIV, ciphertext, aad []byte) ([]byte, error) {
 	return c.openWithNonceID(partialIV, ciphertext, aad, c.recipientID)
 }
 
 // OpenResponse authenticates a response with its own Partial IV, using the
 // response sender ID for nonce construction. It does not update request replay
-// state; use UnprotectResponse for exchange-scoped response replay protection.
+// state or enforce response replay/order; use UnprotectResponse for
+// exchange-scoped response replay protection.
 func (c *Context) OpenResponse(partialIV, ciphertext, aad []byte) ([]byte, error) {
 	nonce, err := c.nonce(partialIV, c.recipientID)
 	if err != nil {
@@ -464,7 +475,8 @@ func (c *Context) OpenResponse(partialIV, ciphertext, aad []byte) ([]byte, error
 // OpenResponseForExchange opens a response that is bound to an original
 // request. Responses without a Partial IV use the request nonce and do not
 // advance the recipient replay window. This primitive does not track exchange
-// completion; use UnprotectResponse to enforce response replay protection.
+// completion or authenticate the Exchange lifecycle; use UnprotectResponse
+// with the Exchange returned by ProtectRequest or UnprotectRequest.
 func (c *Context) OpenResponseForExchange(responsePartialIV, requestPartialIV, ciphertext, aad []byte) ([]byte, error) {
 	if len(responsePartialIV) > 0 {
 		nonce, err := c.nonce(responsePartialIV, c.recipientID)

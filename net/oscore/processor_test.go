@@ -2,6 +2,7 @@ package oscore
 
 import (
 	"errors"
+	"sync"
 	"testing"
 
 	"github.com/plgd-dev/go-coap/v3/message"
@@ -11,8 +12,8 @@ import (
 func TestProcessorSupportsProtectedAndPlaintextRequests(t *testing.T) {
 	client, server := pairedContexts(t, 0, 0)
 	processor, err := NewProcessor(ProcessorConfig{
-		Contexts:         []*Context{server},
-		AllowUnprotected: true,
+		Contexts:        []*Context{server},
+		PlaintextPolicy: PlaintextAllowed,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -23,7 +24,7 @@ func TestProcessorSupportsProtectedAndPlaintextRequests(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if context != nil || len(exchange.RequestPartialIV) != 0 || gotPlaintext.Code != plaintext.Code {
+	if context != nil || len(exchange.RequestPartialIVBytes()) != 0 || gotPlaintext.Code != plaintext.Code {
 		t.Fatalf("plaintext result = %+v, context %p, exchange %+v", gotPlaintext, context, exchange)
 	}
 
@@ -35,8 +36,8 @@ func TestProcessorSupportsProtectedAndPlaintextRequests(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if context != server || gotProtected.Code != codes.GET || len(exchange.RequestPartialIV) == 0 ||
-		string(exchange.RequestPartialIV) != string(clientExchange.RequestPartialIV) {
+	if context != server || gotProtected.Code != codes.GET || len(exchange.RequestPartialIVBytes()) == 0 ||
+		string(exchange.RequestPartialIVBytes()) != string(clientExchange.RequestPartialIVBytes()) {
 		t.Fatalf("protected result = %+v, context %p, exchange %+v", gotProtected, context, exchange)
 	}
 }
@@ -44,28 +45,27 @@ func TestProcessorSupportsProtectedAndPlaintextRequests(t *testing.T) {
 func TestProcessorRequiresOSCOREOrRejectsPlaintext(t *testing.T) {
 	_, server := pairedContexts(t, 0, 0)
 	for _, cfg := range []ProcessorConfig{
-		{Contexts: []*Context{server}, RequireOSCORE: true},
-		{Contexts: []*Context{server}},
+		{Contexts: []*Context{server}, PlaintextPolicy: PlaintextDisabled},
 	} {
 		processor, err := NewProcessor(cfg)
 		if err != nil {
 			t.Fatal(err)
 		}
 		_, _, _, err = processor.ProcessIncomingRequest(message.Message{Code: codes.GET})
-		if cfg.RequireOSCORE && !errors.Is(err, ErrOSCORERequired) {
-			t.Fatalf("required-OSCORE plaintext error = %v", err)
-		}
-		if !cfg.RequireOSCORE && !errors.Is(err, ErrPlaintextDisabled) {
+		if !errors.Is(err, ErrPlaintextDisabled) {
 			t.Fatalf("strict-policy plaintext error = %v", err)
 		}
+	}
+	if _, err := NewProcessor(ProcessorConfig{PlaintextPolicy: PlaintextDisabled}); err == nil {
+		t.Fatal("expected required OSCORE without contexts to fail")
 	}
 }
 
 func TestProcessorNeverFallsBackAfterOSCOREFailure(t *testing.T) {
 	client, server := pairedContexts(t, 0, 0)
 	processor, err := NewProcessor(ProcessorConfig{
-		Contexts:         []*Context{server},
-		AllowUnprotected: true,
+		Contexts:        []*Context{server},
+		PlaintextPolicy: PlaintextAllowed,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -111,8 +111,8 @@ func TestProcessorSelectsContextByKIDAndIDContext(t *testing.T) {
 		t.Fatal(err)
 	}
 	processor, err := NewProcessor(ProcessorConfig{
-		Contexts:         []*Context{server, otherServer},
-		AllowUnprotected: true,
+		Contexts:        []*Context{server, otherServer},
+		PlaintextPolicy: PlaintextAllowed,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -148,11 +148,208 @@ func TestProcessorSelectsContextByKIDAndIDContext(t *testing.T) {
 }
 
 func TestProcessorRejectsInvalidConfiguration(t *testing.T) {
-	if _, err := NewProcessor(ProcessorConfig{AllowUnprotected: true, RequireOSCORE: true}); err == nil {
-		t.Fatal("expected conflicting plaintext policy to fail")
+	if _, err := NewProcessor(ProcessorConfig{PlaintextPolicy: PlaintextPolicy(99)}); err == nil {
+		t.Fatal("expected invalid plaintext policy to fail")
 	}
-	if _, err := NewProcessor(ProcessorConfig{RequireOSCORE: true}); err == nil {
-		t.Fatal("expected required OSCORE without contexts to fail")
+}
+
+func TestProcessorExplicitPlaintextPolicies(t *testing.T) {
+	plaintext := message.Message{Code: codes.GET}
+	for _, test := range []struct {
+		name         string
+		policy       PlaintextPolicy
+		plaintextErr error
+		protectedErr error
+	}{
+		{name: "disabled", policy: PlaintextDisabled, plaintextErr: ErrPlaintextDisabled},
+		{name: "allowed", policy: PlaintextAllowed},
+		{name: "only", policy: PlaintextOnly, protectedErr: ErrOSCOREDisabled},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			client, server := pairedContexts(t, 0, 0)
+			protected, _, err := client.ProtectRequest(message.Message{Code: codes.GET})
+			if err != nil {
+				t.Fatal(err)
+			}
+			processor, err := NewProcessor(ProcessorConfig{
+				Contexts: []*Context{server}, PlaintextPolicy: test.policy,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, _, _, plaintextErr := processor.ProcessIncomingRequest(plaintext)
+			if !errors.Is(plaintextErr, test.plaintextErr) {
+				t.Fatalf("plaintext error = %v, want %v", plaintextErr, test.plaintextErr)
+			}
+			_, _, _, protectedErr := processor.ProcessIncomingRequest(protected)
+			if !errors.Is(protectedErr, test.protectedErr) {
+				t.Fatalf("protected error = %v, want %v", protectedErr, test.protectedErr)
+			}
+		})
+	}
+}
+
+func TestProcessorRemoveContextPreservesInFlightExchange(t *testing.T) {
+	clientContext, serverContext := pairedContexts(t, 0, 0)
+	clientProcessor, err := NewProcessor(ProcessorConfig{
+		Contexts: []*Context{clientContext}, PlaintextPolicy: PlaintextDisabled,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	serverProcessor, err := NewProcessor(ProcessorConfig{
+		Contexts: []*Context{serverContext}, PlaintextPolicy: PlaintextDisabled,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	protectedRequest, exchange, err := clientProcessor.ProtectRequest(message.Message{
+		Code: codes.GET, Token: message.Token{1},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request, _, serverExchange, err := serverProcessor.ProcessIncomingRequest(protectedRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	removeErr := clientProcessor.RemoveContext(clientContext.RecipientID(), nil)
+	if removeErr != nil {
+		t.Fatal(removeErr)
+	}
+	removeErr = clientProcessor.RemoveContext(clientContext.RecipientID(), nil)
+	if !errors.Is(removeErr, ErrNoSecurityContext) {
+		t.Fatalf("duplicate removal error = %v, want ErrNoSecurityContext", removeErr)
+	}
+	_, _, protectErr := clientProcessor.ProtectRequest(message.Message{Code: codes.GET})
+	if !errors.Is(protectErr, ErrNoSecurityContext) {
+		t.Fatalf("outgoing request after removal error = %v, want ErrNoSecurityContext", protectErr)
+	}
+
+	protectedResponse, err := serverContext.ProtectResponse(message.Message{
+		Code: codes.Content, Token: request.Token, Payload: []byte("in flight"),
+	}, serverExchange)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response, err := clientProcessor.UnprotectResponse(protectedResponse, clientContext, exchange)
+	if err != nil {
+		t.Fatalf("in-flight response after removal failed: %v", err)
+	}
+	if string(response.Payload) != "in flight" {
+		t.Fatalf("response payload = %q, want in flight", response.Payload)
+	}
+
+	removeErr = serverProcessor.RemoveContext(serverContext.RecipientID(), nil)
+	if removeErr != nil {
+		t.Fatal(removeErr)
+	}
+	_, selectedContext, receivedExchange, processErr := serverProcessor.ProcessIncomingRequest(protectedRequest)
+	if !errors.Is(processErr, ErrNoSecurityContext) {
+		t.Fatalf("incoming request after removal error = %v, want ErrNoSecurityContext", processErr)
+	}
+	if selectedContext != nil || receivedExchange.responseState != nil {
+		t.Fatal("request after context removal returned authenticated state")
+	}
+}
+
+func TestProcessorRemoveContextIsScopedToIDContext(t *testing.T) {
+	newContext := func(senderID, recipientID, idContext byte) *Context {
+		t.Helper()
+		context, err := NewContext(ContextConfig{
+			MasterSecret: []byte("context removal scope"),
+			IDContext:    []byte{idContext},
+			SenderID:     []byte{senderID},
+			RecipientID:  []byte{recipientID},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return context
+	}
+	clientA, serverA := newContext(1, 2, 0xa1), newContext(2, 1, 0xa1)
+	clientB, serverB := newContext(1, 2, 0xa2), newContext(2, 1, 0xa2)
+	processor, err := NewProcessor(ProcessorConfig{
+		Contexts: []*Context{serverA, serverB}, PlaintextPolicy: PlaintextDisabled,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	requestA, _, err := clientA.ProtectRequest(message.Message{Code: codes.GET})
+	if err != nil {
+		t.Fatal(err)
+	}
+	requestB, _, err := clientB.ProtectRequest(message.Message{Code: codes.GET})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := processor.RemoveContext(serverA.RecipientID(), []byte{0xa1}); err != nil {
+		t.Fatal(err)
+	}
+	_, selectedA, exchangeA, processErr := processor.ProcessIncomingRequest(requestA)
+	if !errors.Is(processErr, ErrNoSecurityContext) {
+		t.Fatalf("removed context request error = %v, want ErrNoSecurityContext", processErr)
+	}
+	if selectedA != nil || exchangeA.responseState != nil {
+		t.Fatal("removed context returned authenticated state")
+	}
+	_, selectedB, _, processErr := processor.ProcessIncomingRequest(requestB)
+	if processErr != nil || selectedB != serverB {
+		t.Fatalf("other context after removal = %p, error %v; want %p, nil", selectedB, processErr, serverB)
+	}
+}
+
+func TestProcessorContextLifecycleConcurrentWithProcessing(t *testing.T) {
+	client, server := pairedContexts(t, 0, 0)
+	processor, err := NewProcessor(ProcessorConfig{
+		Contexts: []*Context{server}, PlaintextPolicy: PlaintextDisabled,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	requests := make([]message.Message, 32)
+	for i := range requests {
+		protected, _, protectErr := client.ProtectRequest(message.Message{
+			Code: codes.GET, Token: message.Token{byte(i + 1)},
+		})
+		if protectErr != nil {
+			t.Fatal(protectErr)
+		}
+		requests[i] = protected
+	}
+
+	errs := make(chan error, len(requests)+128)
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		for _, request := range requests {
+			plaintext, selectedContext, exchange, processErr := processor.ProcessIncomingRequest(request)
+			if processErr != nil && !errors.Is(processErr, ErrNoSecurityContext) {
+				errs <- processErr
+			} else if processErr == nil &&
+				(plaintext.Code != codes.GET || selectedContext != server || len(exchange.RequestPartialIVBytes()) == 0) {
+				errs <- ErrInvalidContext
+			}
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		for range 64 {
+			addErr := processor.AddContext(server)
+			if addErr != nil && !errors.Is(addErr, ErrInvalidContext) {
+				errs <- addErr
+			}
+			removeErr := processor.RemoveContext(server.RecipientID(), nil)
+			if removeErr != nil && !errors.Is(removeErr, ErrNoSecurityContext) {
+				errs <- removeErr
+			}
+		}
+	}()
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		t.Errorf("concurrent context lifecycle error: %v", err)
 	}
 }
 

@@ -283,6 +283,53 @@ func TestNewContextIDContextUsesBothIDs(t *testing.T) {
 	}
 }
 
+func TestNewContextOwnsConfigurationSlices(t *testing.T) {
+	masterSecret := []byte("caller-owned secret material")
+	masterSalt := []byte("salt")
+	idContext := []byte{0xa1}
+	senderID := []byte{0x10}
+	recipientID := []byte{0x20}
+	server, err := NewContext(ContextConfig{
+		MasterSecret: append([]byte(nil), masterSecret...),
+		MasterSalt:   append([]byte(nil), masterSalt...),
+		IDContext:    append([]byte(nil), idContext...),
+		SenderID:     append([]byte(nil), recipientID...),
+		RecipientID:  append([]byte(nil), senderID...),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	client, err := NewContext(ContextConfig{
+		MasterSecret: masterSecret,
+		MasterSalt:   masterSalt,
+		IDContext:    idContext,
+		SenderID:     senderID,
+		RecipientID:  recipientID,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	masterSecret[0] ^= 0xff
+	masterSalt[0] ^= 0xff
+	idContext[0] ^= 0xff
+	senderID[0] ^= 0xff
+	recipientID[0] ^= 0xff
+	if !bytes.Equal(client.SenderID(), []byte{0x10}) ||
+		!bytes.Equal(client.RecipientID(), []byte{0x20}) {
+		t.Fatal("mutating caller-owned identifiers changed Context identifiers")
+	}
+	if got, set := client.IDContext(); !set || !bytes.Equal(got, []byte{0xa1}) {
+		t.Fatalf("ID Context = %x, set=%t; want a1, true", got, set)
+	}
+	protected, _, err := client.ProtectRequest(message.Message{Code: codes.GET})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := server.UnprotectRequest(protected); err != nil {
+		t.Fatalf("peer could not authenticate using constructor-time values: %v", err)
+	}
+}
+
 func TestContextSealOpenAndReplayProtection(t *testing.T) {
 	client, err := NewContext(ContextConfig{
 		MasterSecret: mustHex(t, "0102030405060708090a0b0c0d0e0f10"),

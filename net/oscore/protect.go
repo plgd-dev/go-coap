@@ -23,21 +23,57 @@ const outerResponseCode = codes.Changed
 // UnprotectRequest with the CoAP token until the exchange completes; response
 // replay state is shared by copies of this value.
 type Exchange struct {
-	RequestID        []byte
-	RequestPartialIV []byte
-	Observe          bool
-	responseState    *exchangeResponseState
+	responseState *exchangeResponseState
 }
 
 type exchangeResponseState struct {
 	mu                     sync.Mutex
+	requestID              []byte
+	requestPartialIV       []byte
+	observe                bool
+	context                *Context
 	started                bool
 	observeComplete        bool
 	multipleResponses      bool
-	responseNonceUsed      bool
+	responseProtected      bool
 	hasNotificationNumber  bool
 	notificationNumber     uint64
 	seenResponsePartialIVs map[uint64]struct{}
+}
+
+// RequestIdentifier returns a copy of the request identifier bound to the
+// Exchange.
+func (e Exchange) RequestIdentifier() []byte {
+	if e.responseState == nil {
+		return nil
+	}
+	return append([]byte(nil), e.responseState.requestID...)
+}
+
+// RequestPartialIVBytes returns a copy of the request Partial IV bound to the
+// Exchange.
+func (e Exchange) RequestPartialIVBytes() []byte {
+	if e.responseState == nil {
+		return nil
+	}
+	return append([]byte(nil), e.responseState.requestPartialIV...)
+}
+
+// IsObserve reports whether the Exchange is bound to an Observe registration.
+func (e Exchange) IsObserve() bool {
+	return e.responseState != nil && e.responseState.observe
+}
+
+func (e Exchange) requestBinding() ([]byte, []byte, *Context) {
+	if e.responseState == nil {
+		return nil, nil, nil
+	}
+	state := e.responseState
+	return state.requestID, state.requestPartialIV, state.context
+}
+
+func (e Exchange) matchesContext(context *Context) bool {
+	return e.responseState != nil && context != nil && e.responseState.context == context
 }
 
 func cloneOptions(options message.Options) message.Options {
@@ -164,6 +200,10 @@ func (c *Context) validateResponseOption(option OptionValue) error {
 	return nil
 }
 
+// ProtectRequest protects an outgoing CoAP request and returns the Exchange
+// that must be retained for response processing. Keep the Exchange with the
+// request; retransmissions should reuse the protected message rather than
+// protecting a new request with the same application exchange.
 func (c *Context) ProtectRequest(request message.Message) (message.Message, Exchange, error) {
 	if !isRequestCode(request.Code) {
 		return message.Message{}, Exchange{}, fmt.Errorf("%w: code %d is not a request", ErrInvalidOSCOREMessage, request.Code)
@@ -195,16 +235,17 @@ func (c *Context) ProtectRequest(request message.Message) (message.Message, Exch
 	var exchange Exchange
 	partialIV, ciphertext, err := c.Seal(plaintext, func(partialIV []byte) ([]byte, error) {
 		exchange = Exchange{
-			RequestID:        c.SenderID(),
-			RequestPartialIV: append([]byte(nil), partialIV...),
-			Observe:          observeRegistration,
 			responseState: &exchangeResponseState{
+				requestID:        c.SenderID(),
+				requestPartialIV: append([]byte(nil), partialIV...),
+				observe:          observeRegistration,
+				context:          c,
 				multipleResponses: observeRegistration ||
 					request.Options.HasOption(message.QBlock1) ||
 					request.Options.HasOption(message.QBlock2),
 			},
 		}
-		return BuildAADWithAlgorithm(c.algorithm, exchange.RequestID, exchange.RequestPartialIV, nil)
+		return BuildAADWithAlgorithm(c.algorithm, exchange.responseState.requestID, exchange.responseState.requestPartialIV, nil)
 	})
 	if err != nil {
 		return message.Message{}, Exchange{}, err
@@ -226,6 +267,8 @@ func (c *Context) ProtectRequest(request message.Message) (message.Message, Exch
 	return protected, exchange, nil
 }
 
+// UnprotectRequest authenticates and decrypts an incoming OSCORE request and
+// returns the Exchange required to protect its response.
 func (c *Context) UnprotectRequest(request message.Message) (message.Message, Exchange, error) {
 	option, outerOptions, err := parseOSCOREOuter(request.Options)
 	if err != nil {
@@ -240,11 +283,13 @@ func (c *Context) UnprotectRequest(request message.Message) (message.Message, Ex
 	}
 	outerOptions = removeObserveOption(outerOptions)
 	exchange := Exchange{
-		RequestID:        append([]byte(nil), option.SenderID...),
-		RequestPartialIV: append([]byte(nil), option.PartialIV...),
-		responseState:    &exchangeResponseState{},
+		responseState: &exchangeResponseState{
+			requestID:        append([]byte(nil), option.SenderID...),
+			requestPartialIV: append([]byte(nil), option.PartialIV...),
+			context:          c,
+		},
 	}
-	aad, err := BuildAADWithAlgorithm(c.algorithm, exchange.RequestID, exchange.RequestPartialIV, nil)
+	aad, err := BuildAADWithAlgorithm(c.algorithm, exchange.responseState.requestID, exchange.responseState.requestPartialIV, nil)
 	if err != nil {
 		return message.Message{}, Exchange{}, err
 	}
@@ -262,9 +307,9 @@ func (c *Context) UnprotectRequest(request message.Message) (message.Message, Ex
 	}
 	if hasInnerObserve {
 		observeValue, _ := inner.Options.Observe()
-		exchange.Observe = observeValue == 0
+		exchange.responseState.observe = observeValue == 0
 	}
-	exchange.responseState.multipleResponses = exchange.Observe ||
+	exchange.responseState.multipleResponses = exchange.IsObserve() ||
 		inner.Options.HasOption(message.QBlock1) ||
 		inner.Options.HasOption(message.QBlock2)
 	inner.Token = append(message.Token(nil), request.Token...)
@@ -350,15 +395,23 @@ func containsProxyOption(options message.Options) bool {
 }
 
 func validateExchange(exchange Exchange) error {
-	if len(exchange.RequestID) > maxIdentifierSize {
+	requestID, requestPartialIV, context := exchange.requestBinding()
+	if exchange.responseState == nil || context == nil {
+		return fmt.Errorf("%w: exchange has no authenticated request binding", ErrInvalidContext)
+	}
+	if len(requestID) > maxIdentifierSize {
 		return fmt.Errorf("%w: request ID exceeds %d bytes", ErrInvalidOSCOREMessage, maxIdentifierSize)
 	}
-	if _, err := decodePartialIV(exchange.RequestPartialIV); err != nil {
+	if _, err := decodePartialIV(requestPartialIV); err != nil {
 		return fmt.Errorf("%w: invalid exchange Partial IV: %w", ErrInvalidOSCOREMessage, err)
 	}
 	return nil
 }
 
+// ProtectResponse protects the ordinary response bound to exchange. It uses
+// the request Partial IV as its nonce and therefore succeeds at most once per
+// Exchange, including across copies and concurrent calls. Resend the returned
+// protected message for retransmission.
 func (c *Context) ProtectResponse(response message.Message, exchange Exchange) (message.Message, error) {
 	return c.protectResponse(response, exchange, false)
 }
@@ -366,7 +419,8 @@ func (c *Context) ProtectResponse(response message.Message, exchange Exchange) (
 // ProtectResponseWithPartialIV protects a response with a fresh sender Partial
 // IV. Unlike ProtectResponse, it consumes a sequence number and includes that
 // Partial IV in the OSCORE option. The response AAD remains bound to the
-// original request exchange.
+// original request exchange. Repeated use is supported for Observe and
+// Q-Block Exchanges; an ordinary Exchange remains one-shot.
 func (c *Context) ProtectResponseWithPartialIV(response message.Message, exchange Exchange) (message.Message, error) {
 	return c.protectResponse(response, exchange, true)
 }
@@ -375,23 +429,25 @@ func (c *Context) protectResponse(response message.Message, exchange Exchange, u
 	if !isResponseCode(response.Code) {
 		return message.Message{}, fmt.Errorf("%w: code %d is not a response", ErrInvalidOSCOREMessage, response.Code)
 	}
+	if validationErr := validateExchange(exchange); validationErr != nil {
+		return message.Message{}, validationErr
+	}
+	if !exchange.matchesContext(c) {
+		return message.Message{}, fmt.Errorf("%w: exchange belongs to another security context", ErrInvalidContext)
+	}
 	observeOption, observes, split, plaintext, err := prepareResponsePlaintext(response, exchange)
 	if err != nil {
 		return message.Message{}, err
 	}
-	needsPartialIV := usePartialIV || exchange.Observe || observes
-	if !needsPartialIV {
-		state := exchange.responseState
-		if state == nil {
-			return message.Message{}, fmt.Errorf("%w: exchange has no response state", ErrInvalidContext)
-		}
-		state.mu.Lock()
-		if state.responseNonceUsed {
-			state.mu.Unlock()
+	needsPartialIV := usePartialIV || exchange.IsObserve() || observes
+	state := exchange.responseState
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	if !state.multipleResponses || !needsPartialIV {
+		if state.responseProtected {
 			return message.Message{}, ErrReplay
 		}
-		state.responseNonceUsed = true
-		state.mu.Unlock()
+		state.responseProtected = true
 	}
 	partialIV, ciphertext, err := c.sealResponse(plaintext, exchange, needsPartialIV)
 	if err != nil {
@@ -423,7 +479,7 @@ func prepareResponsePlaintext(response message.Message, exchange Exchange) (mess
 		if _, observeErr := observeOptionValue(observeOption); observeErr != nil {
 			return message.Option{}, false, OptionSplit{}, nil, fmt.Errorf("%w: invalid Observe response option: %w", ErrInvalidOSCOREMessage, observeErr)
 		}
-		if !exchange.Observe {
+		if !exchange.IsObserve() {
 			return message.Option{}, false, OptionSplit{}, nil, fmt.Errorf("%w: Observe response for a non-Observe request", ErrInvalidOSCOREMessage)
 		}
 	}
@@ -453,23 +509,31 @@ func prepareResponsePlaintext(response message.Message, exchange Exchange) (mess
 }
 
 func (c *Context) sealResponse(plaintext []byte, exchange Exchange, usePartialIV bool) ([]byte, []byte, error) {
+	requestID, requestPartialIV, _ := exchange.requestBinding()
 	buildAAD := func([]byte) ([]byte, error) {
-		return BuildAADWithAlgorithm(c.algorithm, exchange.RequestID, exchange.RequestPartialIV, nil)
+		return BuildAADWithAlgorithm(c.algorithm, requestID, requestPartialIV, nil)
 	}
 	if usePartialIV {
 		return c.SealResponse(plaintext, buildAAD)
 	}
-	ciphertext, err := c.SealResponseWithRequestNonce(plaintext, exchange.RequestPartialIV, buildAAD)
+	ciphertext, err := c.SealResponseWithRequestNonce(plaintext, requestPartialIV, buildAAD)
 	return nil, ciphertext, err
 }
 
+// UnprotectResponse authenticates and decrypts a response bound to exchange.
+// Ordinary responses without a Partial IV and duplicate response Partial IVs
+// are accepted at most once per Exchange. Failed authentication does not
+// consume the Exchange.
 func (c *Context) UnprotectResponse(response message.Message, exchange Exchange) (message.Message, error) {
 	option, _, err := parseOSCOREOuter(response.Options)
 	if err != nil {
 		return message.Message{}, err
 	}
-	if exchange.responseState == nil {
-		return message.Message{}, fmt.Errorf("%w: exchange has no response replay state", ErrInvalidContext)
+	if validationErr := validateExchange(exchange); validationErr != nil {
+		return message.Message{}, validationErr
+	}
+	if !exchange.matchesContext(c) {
+		return message.Message{}, fmt.Errorf("%w: exchange belongs to another security context", ErrInvalidContext)
 	}
 	state := exchange.responseState
 	state.mu.Lock()
@@ -500,7 +564,7 @@ func (state *exchangeResponseState) checkResponse(exchange Exchange, option Opti
 	if err != nil {
 		return 0, err
 	}
-	if exchange.Observe {
+	if exchange.IsObserve() {
 		if state.hasNotificationNumber && responseSequence <= state.notificationNumber {
 			return 0, ErrReplay
 		}
@@ -519,7 +583,7 @@ func (state *exchangeResponseState) recordResponse(
 	hasObserve bool,
 ) {
 	state.started = true
-	if exchange.Observe {
+	if exchange.IsObserve() {
 		if !hasObserve {
 			state.observeComplete = true
 		}
@@ -575,11 +639,12 @@ func (c *Context) openResponse(response message.Message, exchange Exchange) (Opt
 		}
 	}
 	outerOptions = removeObserveOption(outerOptions)
-	aad, err := BuildAADWithAlgorithm(c.algorithm, exchange.RequestID, exchange.RequestPartialIV, nil)
+	requestID, requestPartialIV, _ := exchange.requestBinding()
+	aad, err := BuildAADWithAlgorithm(c.algorithm, requestID, requestPartialIV, nil)
 	if err != nil {
 		return OptionValue{}, nil, message.Message{}, err
 	}
-	plaintext, err := c.OpenResponseForExchange(option.PartialIV, exchange.RequestPartialIV, response.Payload, aad)
+	plaintext, err := c.OpenResponseForExchange(option.PartialIV, requestPartialIV, response.Payload, aad)
 	if err != nil {
 		return OptionValue{}, nil, message.Message{}, err
 	}
@@ -598,7 +663,7 @@ func validateInnerResponse(inner message.Message, exchange Exchange, option Opti
 	if err != nil {
 		return nil, err
 	}
-	if hasInnerObserve && !exchange.Observe {
+	if hasInnerObserve && !exchange.IsObserve() {
 		return nil, fmt.Errorf("%w: Observe response for a non-Observe request", ErrInvalidOSCOREMessage)
 	}
 	if hasInnerObserve && len(innerObserve.Value) != 0 {

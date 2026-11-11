@@ -24,8 +24,8 @@ zero value preserves the existing AES-CCM-16-64-128 default:
 | `AEADAlgorithmAESCCM16_128_256` | 31 | 256 bits | 128 bits |
 
 For example, select `oscore.AEADAlgorithmAESCCM16_128_256` in both peers'
-`ContextConfig` values. Algorithm 10 remains the default for source and wire
-compatibility. Algorithm 11 has a 64-bit authentication tag and therefore
+`ContextConfig` values. Algorithm 10 is the default. Algorithm 11 has a
+64-bit authentication tag and therefore
 offers less forgery resistance than the 128-bit-tag variants. Peers must use
 matching algorithms; mismatches fail authentication. Other COSE AEAD suites
 and AES-CCM variants that require a nonce other than 13 bytes are unsupported.
@@ -64,8 +64,8 @@ func newOSCOREProcessor(senderID, recipientID string) (*oscore.Processor, error)
 		return nil, err
 	}
 	return oscore.NewProcessor(oscore.ProcessorConfig{
-		Contexts:      []*oscore.Context{ctx},
-		RequireOSCORE: true,
+		Contexts:        []*oscore.Context{ctx},
+		PlaintextPolicy: oscore.PlaintextDisabled,
 	})
 }
 ```
@@ -73,6 +73,129 @@ func newOSCOREProcessor(senderID, recipientID string) (*oscore.Processor, error)
 For this example, configure the server with
 `newOSCOREProcessor("server", "client")` and the client with
 `newOSCOREProcessor("client", "server")`.
+
+## Direct `net/oscore` API
+
+The public API separates state by responsibility:
+
+- `Context` owns derived keys, sender sequence allocation, recipient replay
+  state, algorithm, and identifiers.
+- `Processor` selects configured contexts and enforces the endpoint's
+  plaintext policy.
+- `Exchange` binds a request to response protection and replay handling.
+  Keep the returned value with its request; copies share lifecycle state.
+  Read request metadata through `RequestIdentifier()`,
+  `RequestPartialIVBytes()`, and `IsObserve()`.
+- A transport owns CoAP retransmission, Token/MID tracking, Observe delivery,
+  and Blockwise/Q-Block integration. Direct `net/oscore` calls do not provide
+  those transport services.
+
+`ContextConfig` byte slices are consumed during construction; retained
+identifiers are copied. The master secret must be high-entropy provisioned
+material, not a password. Go does not guarantee complete zeroization of all
+temporary secret copies. `Processor.RemoveContext(recipientID, idContext)`
+prevents future context selection while preserving the original Context for
+already-bound Exchanges and operations holding a pre-removal context snapshot.
+Removing a context does not make it safe to restart or reuse its sender
+sequence numbers.
+
+Low-level primitives such as `SealResponseWithRequestNonce`,
+`OpenResponseForExchange`, `BuildAAD`, and `EncodeInner` remain exported for
+advanced use. They do not enforce Exchange lifecycle;
+repeated direct use of a request nonce can reuse an AEAD nonce. Prefer the
+high-level `ProtectRequest`, `ProtectResponse`, `UnprotectRequest`, and
+`UnprotectResponse` methods for message processing.
+
+The following is a complete direct message-processing example. Application
+errors are protected in the same way as successful responses. A second attempt
+to protect an ordinary response on the same Exchange returns `oscore.ErrReplay`;
+retransmission must resend the already protected message instead of encrypting
+different plaintext.
+
+```go
+import (
+	"errors"
+
+	"github.com/plgd-dev/go-coap/v3/message"
+	"github.com/plgd-dev/go-coap/v3/message/codes"
+	"github.com/plgd-dev/go-coap/v3/net/oscore"
+)
+
+func directOSCOREExample() error {
+	masterSecret := []byte("public test-only secret")
+	clientContext, err := oscore.NewContext(oscore.ContextConfig{
+		MasterSecret: masterSecret,
+		SenderID:     []byte("client"),
+		RecipientID:  []byte("server"),
+	})
+	if err != nil {
+		return err
+	}
+	serverContext, err := oscore.NewContext(oscore.ContextConfig{
+		MasterSecret: masterSecret,
+		SenderID:     []byte("server"),
+		RecipientID:  []byte("client"),
+	})
+	if err != nil {
+		return err
+	}
+	clientProcessor, err := oscore.NewProcessor(oscore.ProcessorConfig{
+		Contexts:        []*oscore.Context{clientContext},
+		PlaintextPolicy: oscore.PlaintextDisabled,
+	})
+	if err != nil {
+		return err
+	}
+	serverProcessor, err := oscore.NewProcessor(oscore.ProcessorConfig{
+		Contexts:        []*oscore.Context{serverContext},
+		PlaintextPolicy: oscore.PlaintextDisabled,
+	})
+	if err != nil {
+		return err
+	}
+
+	protectedRequest, exchange, err := clientProcessor.ProtectRequest(
+		message.Message{Code: codes.GET, Token: message.Token{1}},
+	)
+	if err != nil {
+		return err
+	}
+	request, _, serverExchange, err := serverProcessor.ProcessIncomingRequest(protectedRequest)
+	if err != nil {
+		return err
+	}
+	// Dispatch the authenticated request to the application.
+	protectedResponse, err := serverContext.ProtectResponse(
+		message.Message{Code: codes.NotFound, Token: request.Token, Payload: []byte("not found")},
+		serverExchange,
+	)
+	if err != nil {
+		return err
+	}
+	_, duplicateErr := serverContext.ProtectResponse(
+		message.Message{Code: codes.NotFound, Token: request.Token, Payload: []byte("different plaintext")},
+		serverExchange,
+	)
+	if !errors.Is(duplicateErr, oscore.ErrReplay) {
+		return errors.New("duplicate response protection was not rejected")
+	}
+	response, err := clientProcessor.UnprotectResponse(protectedResponse, clientContext, exchange)
+	if err != nil {
+		return err
+	}
+	// The application receives the authenticated 4.04 response.
+	_ = response
+	return nil
+}
+```
+
+The matching executable example is `ExampleContext_directAPI` in
+[`net/oscore/example_test.go`](../../net/oscore/example_test.go).
+
+For Observe and Q-Block exchanges, use a fresh Partial IV for each subsequent
+notification or response with `ProtectResponseWithPartialIV`. The Context
+allocates unique Partial IVs; applications producing notifications
+concurrently should serialize them in intended notification order.
 
 ## Configure endpoints
 
@@ -99,11 +222,11 @@ defer cc.Close()
 ```
 
 OSCORE is opt-in. Endpoints that do not configure it retain their existing
-behavior. For incoming requests, `RequireOSCORE: true` rejects plaintext. To
-deliberately allow protected and plaintext requests on the same endpoint, set
-`AllowUnprotected: true` and leave `RequireOSCORE` false. This setting is an
-endpoint-wide policy; use separate endpoints or application policy when some
-resources must not accept plaintext.
+behavior. `ProcessorConfig.PlaintextPolicy` controls incoming message
+protection: its zero value, `PlaintextDisabled`, rejects plaintext;
+`PlaintextAllowed` accepts both modes; and `PlaintextOnly` rejects
+OSCORE-protected messages. This is an endpoint-wide policy; use separate
+endpoints or application policy when some resources must not accept plaintext.
 
 Once an OSCORE option is present, malformed messages, unknown contexts,
 authentication failures, and replays are rejected; they are never retried as

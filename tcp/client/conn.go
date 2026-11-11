@@ -99,7 +99,7 @@ func cloneTCPOSCOREOptions(options message.Options) message.Options {
 }
 
 func tcpOSCOREResponseNeedsPartialIV(binding tcpOSCORERequestContext, options message.Options) bool {
-	return binding.exchange.Observe || options.HasOption(message.Observe) ||
+	return binding.exchange.IsObserve() || options.HasOption(message.Observe) ||
 		options.HasOption(message.QBlock1) || options.HasOption(message.QBlock2)
 }
 
@@ -351,7 +351,7 @@ func (cc *Conn) unprotectResponse(response *pool.Message) error {
 		if oscore.IsUnprotectedProcessingErrorCode(response.Code()) {
 			cc.oscoreMu.Lock()
 			if current, exists := cc.oscoreExchanges[key]; exists &&
-				bytes.Equal(current.exchange.RequestPartialIV, exchange.exchange.RequestPartialIV) {
+				bytes.Equal(current.exchange.RequestPartialIVBytes(), exchange.exchange.RequestPartialIVBytes()) {
 				delete(cc.oscoreExchanges, key)
 			}
 			cc.oscoreMu.Unlock()
@@ -421,7 +421,7 @@ func (cc *Conn) updateTCPOSCOREExchangeResponse(
 	cc.oscoreMu.Lock()
 	defer cc.oscoreMu.Unlock()
 	current, exists := cc.oscoreExchanges[key]
-	if !exists || !bytes.Equal(current.exchange.RequestPartialIV, exchange.exchange.RequestPartialIV) {
+	if !exists || !bytes.Equal(current.exchange.RequestPartialIVBytes(), exchange.exchange.RequestPartialIVBytes()) {
 		return nil
 	}
 	if err := updateTCPObserveResponse(&current, responseOption, usedCancelExchange, hasObserve); err != nil {
@@ -736,7 +736,7 @@ func (cc *Conn) protectTCPResponseForRequest(
 		response.Code() >= codes.Created && response.Code() < codes.BadRequest &&
 		response.HasOption(message.Observe):
 		cc.oscoreObservations[token] = binding
-	case binding.exchange.Observe && !response.HasOption(message.Observe):
+	case binding.exchange.IsObserve() && !response.HasOption(message.Observe):
 		delete(cc.oscoreObservations, token)
 	}
 	return nil

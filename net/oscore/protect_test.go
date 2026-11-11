@@ -91,8 +91,8 @@ func assertProtectedRequestRoundTrip(
 		!bytes.Equal(openedRequest.Payload, request.Payload) || !optionsEqual(openedRequest.Options, request.Options) {
 		t.Fatalf("opened request = %+v, want %+v", openedRequest, request)
 	}
-	if !bytes.Equal(clientExchange.RequestID, serverExchange.RequestID) ||
-		!bytes.Equal(clientExchange.RequestPartialIV, serverExchange.RequestPartialIV) {
+	if !bytes.Equal(clientExchange.RequestIdentifier(), serverExchange.RequestIdentifier()) ||
+		!bytes.Equal(clientExchange.RequestPartialIVBytes(), serverExchange.RequestPartialIVBytes()) {
 		t.Fatalf("request exchange mismatch: client=%+v server=%+v", clientExchange, serverExchange)
 	}
 	return protectedRequest, clientExchange, openedRequest, serverExchange
@@ -265,7 +265,7 @@ func TestProtectFetchObserveRequest(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if opened.Code != codes.FETCH || !exchange.Observe || !optionsEqual(opened.Options, request.Options) {
+	if opened.Code != codes.FETCH || !exchange.IsObserve() || !optionsEqual(opened.Options, request.Options) {
 		t.Fatalf("opened FETCH Observe request = %+v, exchange %+v", opened, exchange)
 	}
 }
@@ -348,7 +348,7 @@ func assertObserveRegistration(
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !serverExchange.Observe || !optionsEqual(openedRequest.Options, request.Options) {
+	if !serverExchange.IsObserve() || !optionsEqual(openedRequest.Options, request.Options) {
 		t.Fatalf("opened Observe request = %+v, exchange %+v", openedRequest, serverExchange)
 	}
 	return observeTestExchange{
@@ -420,7 +420,7 @@ func assertObserveCancellation(t *testing.T, client, server *Context) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cancelObserve != 1 || cancelExchange.Observe {
+	if cancelObserve != 1 || cancelExchange.IsObserve() {
 		t.Fatalf("decrypted cancellation Observe = %d; exchange %+v", cancelObserve, cancelExchange)
 	}
 }
@@ -525,9 +525,18 @@ func TestRFC8613AppendixC7ProtectedResponse(t *testing.T) {
 		t.Fatal(err)
 	}
 	exchange := Exchange{
-		RequestID:        []byte{},
-		RequestPartialIV: mustHex(t, "14"),
-		responseState:    &exchangeResponseState{},
+		responseState: &exchangeResponseState{
+			requestID:        []byte{},
+			requestPartialIV: mustHex(t, "14"),
+			context:          server,
+		},
+	}
+	clientExchange := Exchange{
+		responseState: &exchangeResponseState{
+			requestID:        []byte{},
+			requestPartialIV: mustHex(t, "14"),
+			context:          client,
+		},
 	}
 	response := message.Message{
 		Type:      message.Acknowledgement,
@@ -551,14 +560,14 @@ func TestRFC8613AppendixC7ProtectedResponse(t *testing.T) {
 	if want := mustHex(t, "dbaad1e9a7e7b2a813d3c31524378303cdafae119106"); !bytes.Equal(protected.Payload, want) {
 		t.Fatalf("response ciphertext = %x, want %x", protected.Payload, want)
 	}
-	opened, err := client.UnprotectResponse(protected, exchange)
+	opened, err := client.UnprotectResponse(protected, clientExchange)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if opened.Code != response.Code || !bytes.Equal(opened.Payload, response.Payload) {
 		t.Fatalf("opened response = %+v, want code %v and payload %q", opened, response.Code, response.Payload)
 	}
-	if _, err := client.UnprotectResponse(protected, exchange); !errors.Is(err, ErrReplay) {
+	if _, err := client.UnprotectResponse(protected, clientExchange); !errors.Is(err, ErrReplay) {
 		t.Fatalf("replayed response error = %v, want ErrReplay", err)
 	}
 }
@@ -590,8 +599,190 @@ func TestUnprotectResponseWithoutPartialIVRejectsReplay(t *testing.T) {
 	if _, err := client.UnprotectResponse(response, exchangeCopy); err != nil {
 		t.Fatalf("first response failed: %v", err)
 	}
-	if _, err := client.UnprotectResponse(response, clientExchange); !errors.Is(err, ErrReplay) {
-		t.Fatalf("replayed response error = %v, want ErrReplay", err)
+	if _, replayErr := client.UnprotectResponse(response, clientExchange); !errors.Is(replayErr, ErrReplay) {
+		t.Fatalf("replayed response error = %v, want ErrReplay", replayErr)
+	}
+}
+
+func TestExchangeBindingIsImmutableAndSharedByCopies(t *testing.T) {
+	client, server := pairedContexts(t, 0, 0)
+	request, clientExchange, err := client.ProtectRequest(message.Message{Code: codes.GET})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, serverExchange, err := server.UnprotectRequest(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	expectedID := serverExchange.RequestIdentifier()
+	expectedPartialIV := serverExchange.RequestPartialIVBytes()
+	serverExchange.RequestIdentifier()[0] ^= 0xff
+	serverExchange.RequestPartialIVBytes()[0] ^= 0xff
+	if !bytes.Equal(serverExchange.RequestIdentifier(), expectedID) ||
+		!bytes.Equal(serverExchange.RequestPartialIVBytes(), expectedPartialIV) {
+		t.Fatal("mutating accessor results changed the Exchange binding")
+	}
+
+	exchangeCopy := serverExchange
+	protected, err := server.ProtectResponse(message.Message{
+		Code: codes.Content, Token: request.Token, Payload: []byte("response"),
+	}, exchangeCopy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, unprotectErr := client.UnprotectResponse(protected, clientExchange); unprotectErr != nil {
+		t.Fatalf("response did not use the immutable request binding: %v", unprotectErr)
+	}
+	if _, protectErr := server.ProtectResponse(message.Message{
+		Code: codes.Content, Token: request.Token, Payload: []byte("different"),
+	}, serverExchange); !errors.Is(protectErr, ErrReplay) {
+		t.Fatalf("second response protection error = %v, want ErrReplay", protectErr)
+	}
+
+	if _, protectErr := server.ProtectResponse(message.Message{Code: codes.Content}, Exchange{}); !errors.Is(protectErr, ErrInvalidContext) {
+		t.Fatalf("zero-value Exchange error = %v, want ErrInvalidContext", protectErr)
+	}
+	unrelated, err := NewContext(ContextConfig{
+		MasterSecret: []byte("unrelated context"),
+		SenderID:     []byte{2},
+		RecipientID:  []byte{3},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := unrelated.ProtectResponse(message.Message{Code: codes.Content}, serverExchange); !errors.Is(err, ErrInvalidContext) {
+		t.Fatalf("cross-context Exchange error = %v, want ErrInvalidContext", err)
+	}
+}
+
+func TestProtectResponseFailureConsumesOrdinaryResponseNonce(t *testing.T) {
+	client, server := pairedContexts(t, 0, 0)
+	protectedRequest, _, err := client.ProtectRequest(message.Message{Code: codes.GET})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, exchange, err := server.UnprotectRequest(protectedRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	oversized := make([]byte, server.senderAEAD.MaxLength()+1)
+	if _, err := server.ProtectResponse(message.Message{
+		Code: codes.Content, Payload: oversized,
+	}, exchange); !errors.Is(err, ErrPlaintextTooLarge) {
+		t.Fatalf("oversized response error = %v, want ErrPlaintextTooLarge", err)
+	}
+	if _, err := server.ProtectResponse(message.Message{
+		Code: codes.Content, Payload: []byte("retry"),
+	}, exchange); !errors.Is(err, ErrReplay) {
+		t.Fatalf("response after failed encryption error = %v, want ErrReplay", err)
+	}
+}
+
+func TestProtectResponseWithPartialIVIsOneShotForOrdinaryExchange(t *testing.T) {
+	client, server := pairedContexts(t, 0, 0)
+	request, _, err := client.ProtectRequest(message.Message{Code: codes.GET})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, exchange, err := server.UnprotectRequest(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response := message.Message{Code: codes.Content, Payload: []byte("first")}
+	if _, err := server.ProtectResponseWithPartialIV(response, exchange); err != nil {
+		t.Fatal(err)
+	}
+	response.Payload = []byte("different")
+	if _, err := server.ProtectResponseWithPartialIV(response, exchange); !errors.Is(err, ErrReplay) {
+		t.Fatalf("second Partial-IV response error = %v, want ErrReplay", err)
+	}
+}
+
+func TestConcurrentProtectResponseUsesOrdinaryNonceOnce(t *testing.T) {
+	client, server := pairedContexts(t, 0, 0)
+	request, _, err := client.ProtectRequest(message.Message{Code: codes.GET})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, exchange, err := server.UnprotectRequest(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	errs := make(chan error, 2)
+	var wg sync.WaitGroup
+	for _, payload := range []string{"first", "second"} {
+		wg.Add(1)
+		go func(payload string) {
+			defer wg.Done()
+			_, protectErr := server.ProtectResponse(message.Message{
+				Code: codes.Content, Payload: []byte(payload),
+			}, exchange)
+			errs <- protectErr
+		}(payload)
+	}
+	wg.Wait()
+	close(errs)
+
+	var protected, rejected int
+	for protectErr := range errs {
+		switch {
+		case protectErr == nil:
+			protected++
+		case errors.Is(protectErr, ErrReplay):
+			rejected++
+		default:
+			t.Fatalf("unexpected concurrent response protection error: %v", protectErr)
+		}
+	}
+	if protected != 1 || rejected != 1 {
+		t.Fatalf("concurrent protections: protected=%d rejected=%d; want one of each", protected, rejected)
+	}
+}
+
+func TestConcurrentUnprotectOrdinaryResponseAcceptsOnce(t *testing.T) {
+	client, server := pairedContexts(t, 0, 0)
+	protectedRequest, clientExchange, err := client.ProtectRequest(message.Message{Code: codes.GET})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, serverExchange, err := server.UnprotectRequest(protectedRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response, err := server.ProtectResponse(message.Message{
+		Code: codes.Content, Payload: []byte("response"),
+	}, serverExchange)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	errs := make(chan error, 2)
+	var wg sync.WaitGroup
+	for range 2 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, unprotectErr := client.UnprotectResponse(response, clientExchange)
+			errs <- unprotectErr
+		}()
+	}
+	wg.Wait()
+	close(errs)
+
+	var accepted, rejected int
+	for unprotectErr := range errs {
+		switch {
+		case unprotectErr == nil:
+			accepted++
+		case errors.Is(unprotectErr, ErrReplay):
+			rejected++
+		default:
+			t.Fatalf("unexpected concurrent response acceptance error: %v", unprotectErr)
+		}
+	}
+	if accepted != 1 || rejected != 1 {
+		t.Fatalf("concurrent response acceptance: accepted=%d rejected=%d; want one of each", accepted, rejected)
 	}
 }
 
@@ -617,13 +808,13 @@ func TestObserveAllowsInitialResponseWithoutPartialIV(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	aad, err := BuildAADWithAlgorithm(server.algorithm, serverExchange.RequestID, serverExchange.RequestPartialIV, nil)
+	aad, err := BuildAADWithAlgorithm(server.algorithm, serverExchange.RequestIdentifier(), serverExchange.RequestPartialIVBytes(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	ciphertext, err := server.SealResponseWithRequestNonce(
 		inner,
-		serverExchange.RequestPartialIV,
+		serverExchange.RequestPartialIVBytes(),
 		func([]byte) ([]byte, error) { return aad, nil },
 	)
 	if err != nil {
@@ -721,9 +912,18 @@ func TestRFC8613AppendixC8ProtectedResponseWithPartialIV(t *testing.T) {
 		t.Fatal(err)
 	}
 	exchange := Exchange{
-		RequestID:        []byte{},
-		RequestPartialIV: mustHex(t, "14"),
-		responseState:    &exchangeResponseState{},
+		responseState: &exchangeResponseState{
+			requestID:        []byte{},
+			requestPartialIV: mustHex(t, "14"),
+			context:          server,
+		},
+	}
+	clientExchange := Exchange{
+		responseState: &exchangeResponseState{
+			requestID:        []byte{},
+			requestPartialIV: mustHex(t, "14"),
+			context:          client,
+		},
 	}
 	response := message.Message{
 		Type:      message.Acknowledgement,
@@ -750,7 +950,7 @@ func TestRFC8613AppendixC8ProtectedResponseWithPartialIV(t *testing.T) {
 	if !bytes.Equal(nextPartialIV, mustHex(t, "01")) {
 		t.Fatalf("next sender Partial IV = %x, want 01", nextPartialIV)
 	}
-	opened, err := client.UnprotectResponse(protected, exchange)
+	opened, err := client.UnprotectResponse(protected, clientExchange)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -806,7 +1006,7 @@ func TestResponsePartialIVUsesResponseSenderID(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	aad, err := BuildAAD(serverExchange.RequestID, serverExchange.RequestPartialIV, nil)
+	aad, err := BuildAAD(serverExchange.RequestIdentifier(), serverExchange.RequestPartialIVBytes(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -835,7 +1035,7 @@ func TestResponsePartialIVUsesResponseSenderID(t *testing.T) {
 		t.Fatalf("opened response = %x", opened)
 	}
 
-	if len(exchange.RequestPartialIV) == 0 {
+	if len(exchange.RequestPartialIVBytes()) == 0 {
 		t.Fatal("request exchange has no Partial IV")
 	}
 }
@@ -873,16 +1073,7 @@ func TestObserveRejectsOutOfOrderFullWidthPartialIV(t *testing.T) {
 		MasterSecret:         []byte("OSCORE observe sequence test"),
 		SenderID:             []byte("server"),
 		RecipientID:          []byte("client"),
-		SenderSequenceNumber: 0x800000,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	laterServerContext, err := NewContext(ContextConfig{
-		MasterSecret:         []byte("OSCORE observe sequence test"),
-		SenderID:             []byte("server"),
-		RecipientID:          []byte("client"),
-		SenderSequenceNumber: 0x1000000,
+		SenderSequenceNumber: 0xffffff,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -901,9 +1092,9 @@ func TestObserveRejectsOutOfOrderFullWidthPartialIV(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	makeResponse := func(ctx *Context, body string) message.Message {
+	makeResponse := func(body string) message.Message {
 		t.Helper()
-		response, protectErr := ctx.ProtectResponseWithPartialIV(message.Message{
+		response, protectErr := serverContext.ProtectResponseWithPartialIV(message.Message{
 			Code:    codes.Content,
 			Token:   protectedRequest.Token,
 			Options: message.Options{{ID: message.Observe}},
@@ -914,8 +1105,8 @@ func TestObserveRejectsOutOfOrderFullWidthPartialIV(t *testing.T) {
 		}
 		return response
 	}
-	lowerResponse := makeResponse(serverContext, "lower")
-	higherResponse := makeResponse(laterServerContext, "higher")
+	lowerResponse := makeResponse("lower")
+	higherResponse := makeResponse("higher")
 	if _, err := requestContext.UnprotectResponse(higherResponse, clientExchange); err != nil {
 		t.Fatalf("newer full-width Partial IV response failed: %v", err)
 	}

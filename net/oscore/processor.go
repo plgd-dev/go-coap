@@ -16,6 +16,7 @@ var (
 	ErrAmbiguousContext  = errors.New("multiple OSCORE security contexts are configured")
 	ErrPlaintextDisabled = errors.New("unprotected CoAP is not permitted")
 	ErrOSCORERequired    = errors.New("OSCORE protection is required")
+	ErrOSCOREDisabled    = errors.New("OSCORE-protected CoAP is not permitted")
 )
 
 type unprotectedProcessingErrorKey struct{}
@@ -53,14 +54,29 @@ func IsUnprotectedProcessingError(ctx context.Context) bool {
 // treated as ErrNoSecurityContext.
 type OutgoingContextSelector func(request message.Message, contexts []*Context) (*Context, error)
 
+// PlaintextPolicy defines which incoming message protection modes a Processor
+// accepts. The zero value rejects plaintext.
+type PlaintextPolicy uint8
+
+const (
+	// PlaintextDisabled accepts only OSCORE-protected messages. It is the
+	// zero-value policy.
+	PlaintextDisabled PlaintextPolicy = iota
+	// PlaintextAllowed accepts both plaintext and OSCORE-protected messages.
+	PlaintextAllowed
+	// PlaintextOnly accepts only plaintext messages.
+	PlaintextOnly
+)
+
 // ProcessorConfig configures pre-established contexts and endpoint plaintext
 // policy. A Processor is opt-in; applications that do not create one retain
 // their existing CoAP behavior.
 type ProcessorConfig struct {
 	Contexts                []*Context
 	OutgoingContextSelector OutgoingContextSelector
-	AllowUnprotected        bool
-	RequireOSCORE           bool
+	// PlaintextPolicy selects the accepted incoming message protection modes.
+	// Its zero value is PlaintextDisabled.
+	PlaintextPolicy PlaintextPolicy
 }
 
 type contextKey struct {
@@ -78,20 +94,22 @@ type Processor struct {
 	senderContexts   map[[32]byte]struct{}
 	outgoingContexts []*Context
 	outgoingSelector OutgoingContextSelector
-	allowUnprotected bool
-	requireOSCORE    bool
+	plaintextPolicy  PlaintextPolicy
 }
 
+// NewProcessor validates the configured contexts and plaintext policy.
 func NewProcessor(cfg ProcessorConfig) (*Processor, error) {
-	if cfg.AllowUnprotected && cfg.RequireOSCORE {
-		return nil, fmt.Errorf("%w: plaintext cannot both be allowed and required to use OSCORE", ErrInvalidContext)
+	policy := cfg.PlaintextPolicy
+	switch policy {
+	case PlaintextDisabled, PlaintextAllowed, PlaintextOnly:
+	default:
+		return nil, fmt.Errorf("%w: invalid plaintext policy %d", ErrInvalidContext, policy)
 	}
 	processor := &Processor{
 		contexts:         make(map[contextKey]*Context, len(cfg.Contexts)),
 		senderContexts:   make(map[[32]byte]struct{}, len(cfg.Contexts)),
 		outgoingSelector: cfg.OutgoingContextSelector,
-		allowUnprotected: cfg.AllowUnprotected,
-		requireOSCORE:    cfg.RequireOSCORE,
+		plaintextPolicy:  policy,
 	}
 	for _, context := range cfg.Contexts {
 		if context == nil {
@@ -108,7 +126,7 @@ func NewProcessor(cfg ProcessorConfig) (*Processor, error) {
 		processor.senderContexts[context.senderContextFingerprint] = struct{}{}
 		processor.outgoingContexts = append(processor.outgoingContexts, context)
 	}
-	if cfg.RequireOSCORE && len(cfg.Contexts) == 0 {
+	if policy == PlaintextDisabled && len(cfg.Contexts) == 0 {
 		return nil, fmt.Errorf("%w: required OSCORE has no security contexts", ErrInvalidContext)
 	}
 	return processor, nil
@@ -149,6 +167,35 @@ func (p *Processor) AddContext(context *Context) error {
 	p.contexts[key] = context
 	p.senderContexts[context.senderContextFingerprint] = struct{}{}
 	p.outgoingContexts = append(p.outgoingContexts, context)
+	return nil
+}
+
+// RemoveContext removes the configured context identified by recipientID and
+// ID Context. A nil ID Context means absent; a non-nil empty slice means
+// present but empty. Operations that selected the context before removal, and
+// exchanges, may complete; subsequent selection does not include it. Operations
+// holding a pre-removal context snapshot may also complete. Key material is not
+// modified or zeroed while existing Exchanges may still reference the Context.
+func (p *Processor) RemoveContext(recipientID, idContext []byte) error {
+	key := contextKey{
+		recipientID:  string(recipientID),
+		idContext:    string(idContext),
+		idContextSet: idContext != nil,
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	context, exists := p.contexts[key]
+	if !exists {
+		return ErrNoSecurityContext
+	}
+	delete(p.contexts, key)
+	delete(p.senderContexts, context.senderContextFingerprint)
+	for i, configured := range p.outgoingContexts {
+		if configured == context {
+			p.outgoingContexts = append(p.outgoingContexts[:i], p.outgoingContexts[i+1:]...)
+			break
+		}
+	}
 	return nil
 }
 
@@ -275,13 +322,17 @@ func containsContext(contexts []*Context, selected *Context) bool {
 // to protect any corresponding response.
 func (p *Processor) ProcessIncomingRequest(request message.Message) (message.Message, *Context, Exchange, error) {
 	if !request.Options.HasOption(message.OSCORE) {
-		if p.requireOSCORE {
-			return message.Message{}, nil, Exchange{}, ErrOSCORERequired
-		}
-		if !p.allowUnprotected {
+		switch p.plaintextPolicy {
+		case PlaintextDisabled:
 			return message.Message{}, nil, Exchange{}, ErrPlaintextDisabled
+		case PlaintextOnly, PlaintextAllowed:
+			return request, nil, Exchange{}, nil
+		default:
+			return message.Message{}, nil, Exchange{}, fmt.Errorf("%w: invalid plaintext policy %d", ErrInvalidContext, p.plaintextPolicy)
 		}
-		return request, nil, Exchange{}, nil
+	}
+	if p.plaintextPolicy == PlaintextOnly {
+		return message.Message{}, nil, Exchange{}, ErrOSCOREDisabled
 	}
 	context, err := p.contextForRequest(request.Options)
 	if err != nil {
@@ -297,16 +348,8 @@ func (p *Processor) ProcessIncomingRequest(request message.Message) (message.Mes
 // UnprotectResponse decrypts a response using the context associated with its
 // outstanding request.
 func (p *Processor) UnprotectResponse(response message.Message, context *Context, exchange Exchange) (message.Message, error) {
-	if context == nil || !p.containsContext(context) {
+	if !exchange.matchesContext(context) {
 		return message.Message{}, ErrNoSecurityContext
 	}
 	return context.UnprotectResponse(response, exchange)
-}
-
-func (p *Processor) containsContext(context *Context) bool {
-	key := keyForContext(context)
-	p.mu.RLock()
-	configured := p.contexts[key]
-	p.mu.RUnlock()
-	return configured == context
 }

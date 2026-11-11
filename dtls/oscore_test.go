@@ -540,10 +540,12 @@ func newDTLSOSCOREProcessor(t *testing.T, senderID, recipientID string, allowPla
 		RecipientID:  []byte(recipientID),
 	})
 	require.NoError(t, err)
-	config := oscore.ProcessorConfig{Contexts: []*oscore.Context{securityContext}, RequireOSCORE: true}
+	config := oscore.ProcessorConfig{
+		Contexts:        []*oscore.Context{securityContext},
+		PlaintextPolicy: oscore.PlaintextDisabled,
+	}
 	if len(allowPlaintext) > 0 && allowPlaintext[0] {
-		config.RequireOSCORE = false
-		config.AllowUnprotected = true
+		config.PlaintextPolicy = oscore.PlaintextAllowed
 	}
 	processor, err := oscore.NewProcessor(config)
 	require.NoError(t, err)

@@ -64,6 +64,8 @@ func marshalOptions(options message.Options) ([]byte, error) {
 }
 
 // SplitOptions separates options according to their RFC 8613 default class.
+// It returns option values that alias the input and does not apply message
+// authentication or Exchange lifecycle checks.
 func SplitOptions(options message.Options) (OptionSplit, error) {
 	split := OptionSplit{
 		Inner: make(message.Options, 0, len(options)),
@@ -119,7 +121,8 @@ func MatchesObserveRegistration(registration, cancellation message.Options) bool
 }
 
 // EncodeInner serializes the CoAP request/response fields that RFC 8613 puts in
-// the COSE plaintext: Code, Class E options, and optionally payload.
+// the COSE plaintext: Code, Class E options, and optionally payload. It is a
+// serialization helper only and does not protect or authenticate the result.
 func EncodeInner(code codes.Code, options message.Options, payload []byte) ([]byte, error) {
 	if code > 255 {
 		return nil, fmt.Errorf("%w: code %d exceeds one byte", ErrInvalidInnerMessage, code)
@@ -148,7 +151,8 @@ func EncodeInner(code codes.Code, options message.Options, payload []byte) ([]by
 
 // DecodeInner parses a CoAP request/response plaintext produced by EncodeInner.
 // CoAP messaging-layer fields (type, token, and message ID) are not present in
-// the OSCORE plaintext and are left unset.
+// the OSCORE plaintext and are left unset. It does not authenticate plaintext;
+// callers should normally use UnprotectRequest or UnprotectResponse.
 func DecodeInner(plaintext []byte) (message.Message, error) {
 	if len(plaintext) == 0 {
 		return message.Message{}, fmt.Errorf("%w: missing code", ErrInvalidInnerMessage)
@@ -186,13 +190,15 @@ func DecodeInner(plaintext []byte) (message.Message, error) {
 // requestPartialIV identify the original request for response binding. options
 // must contain Class I options in RFC 7252 option encoding order; the current
 // RFC 8613 option set defines none, so this is normally empty.
+// This helper does not enforce nonce uniqueness or Exchange lifecycle.
 func BuildAAD(requestKid, requestPartialIV []byte, options message.Options) ([]byte, error) {
 	return BuildAADWithAlgorithm(AEADAlgorithmAESCCM16_64_128, requestKid, requestPartialIV, options)
 }
 
 // BuildAADWithAlgorithm creates the RFC 8613 COSE_Encrypt0 Enc_structure
 // using algorithm. requestKid and requestPartialIV identify the original
-// request for response binding.
+// request for response binding. It does not enforce nonce uniqueness or
+// Exchange lifecycle.
 func BuildAADWithAlgorithm(algorithm AEADAlgorithm, requestKid, requestPartialIV []byte, options message.Options) ([]byte, error) {
 	if algorithmParameters(algorithm).keySize == 0 {
 		return nil, fmt.Errorf("%w: COSE algorithm %d", ErrUnsupportedAlgorithm, algorithm)

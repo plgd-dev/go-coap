@@ -45,8 +45,8 @@ func main() {
 		log.Fatalf("create OSCORE context: %v", err)
 	}
 	processor, err := oscore.NewProcessor(oscore.ProcessorConfig{
-		Contexts:      []*oscore.Context{securityContext},
-		RequireOSCORE: true,
+		Contexts:        []*oscore.Context{securityContext},
+		PlaintextPolicy: oscore.PlaintextDisabled,
 	})
 	if err != nil {
 		log.Fatalf("create OSCORE processor: %v", err)

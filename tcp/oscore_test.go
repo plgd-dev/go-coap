@@ -687,9 +687,13 @@ func newTCPOSCOREProcessor(t *testing.T, senderID, recipientID string, allowPlai
 		RecipientID:  []byte(recipientID),
 	})
 	require.NoError(t, err)
+	policy := oscore.PlaintextDisabled
+	if allowPlaintext {
+		policy = oscore.PlaintextAllowed
+	}
 	processor, err := oscore.NewProcessor(oscore.ProcessorConfig{
-		Contexts:         []*oscore.Context{securityContext},
-		AllowUnprotected: allowPlaintext,
+		Contexts:        []*oscore.Context{securityContext},
+		PlaintextPolicy: policy,
 	})
 	require.NoError(t, err)
 	return processor

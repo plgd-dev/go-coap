@@ -376,7 +376,7 @@ func (cc *Conn) updateOSCOREExchangeResponse(
 	cc.oscoreMu.Lock()
 	defer cc.oscoreMu.Unlock()
 	current, exists := cc.oscoreExchanges[key]
-	if !exists || !bytes.Equal(current.exchange.RequestPartialIV, exchange.exchange.RequestPartialIV) {
+	if !exists || !bytes.Equal(current.exchange.RequestPartialIVBytes(), exchange.exchange.RequestPartialIVBytes()) {
 		return nil
 	}
 	if err := updateOSCOREObserveResponse(&current, responseOption, usedCancelExchange, hasObserve); err != nil {
@@ -571,7 +571,7 @@ func (cc *Conn) oscoreResponseExceedsOuterBlockwiseLimit(req, resp *pool.Message
 }
 
 func protectOSCOREResponse(binding udpOSCORERequestContext, response message.Message) (message.Message, error) {
-	if binding.exchange.Observe || response.Options.HasOption(message.Observe) ||
+	if binding.exchange.IsObserve() || response.Options.HasOption(message.Observe) ||
 		response.Options.HasOption(message.QBlock1) || response.Options.HasOption(message.QBlock2) {
 		return binding.context.ProtectResponseWithPartialIV(response, binding.exchange)
 	}
@@ -595,7 +595,7 @@ func (cc *Conn) updateOSCOREObservationForResponse(
 	case observeErr == nil && observeValue == 0 &&
 		resp.Code() >= codes.Created && resp.Code() < codes.BadRequest && resp.HasOption(message.Observe):
 		cc.oscoreObservations[key] = binding
-	case binding.exchange.Observe && !resp.HasOption(message.Observe):
+	case binding.exchange.IsObserve() && !resp.HasOption(message.Observe):
 		delete(cc.oscoreObservations, key)
 	}
 	return nil
