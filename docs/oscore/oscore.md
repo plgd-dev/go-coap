@@ -318,10 +318,10 @@ interfaces. Its sender sequence store durably reserves windows of 256 values
 and serves them from memory; unused values are skipped when the store is
 recreated. Sender reservations use a separate rollback guard and pending
 transaction, allowing startup to finish an interrupted reservation while
-skipping its entire reserved window. Missing, corrupt, or mismatched sender
-state and guard files are rejected; an existing sender sequence file without
-its guard is not treated as a fresh store. Its replay store still durably
-records each accepted window advance:
+skipping its entire reserved window. A missing individual sender state or guard
+file, corrupt files, and mismatched files are rejected; an existing sender
+sequence file without its guard is not treated as a fresh store. Its replay
+store still durably records each accepted window advance:
 
 ```go
 import (
@@ -362,11 +362,22 @@ or restoring a matching old state-and-guard pair, cannot be detected locally.
 Preventing that requires an external monotonic trust anchor or equivalent
 trusted state outside the rollback domain.
 
+Loss of only one sender sequence file is detected by the surviving counterpart.
+An active `FileStore` instance also remembers that it has committed a sender
+reservation: after both sequence and guard files disappear, it may consume the
+rest of its already-reserved in-memory window, but it rejects a subsequent
+reservation. A newly created instance has no such in-memory history and treats
+the absence of both files as an uninitialized store. Thus, paired deletion
+followed by process restart—and matching state-and-guard rollback—cannot be
+detected without trusted state outside the store directory. A complete
+directory rollback has the same limitation.
+
 On startup, a valid pending sender transaction is completed and its entire
 reserved window is treated as consumed, even if the original `Reserve` call
-did not return a value. Missing, malformed, or mismatched sender state without
-a valid pending transaction fails closed; do not recreate a missing guard from
-an existing sequence file or replace just one file with an older backup.
+did not return a value. A missing individual sender state or guard file,
+malformed files, or mismatched files without a valid pending transaction fails
+closed; do not recreate a missing guard from an existing sequence file or
+replace just one file with an older backup.
 Restore the complete set of sender state, guard, and pending transaction from
 a trusted backup, or provision a fresh OSCORE context with a new sender key.
 State created by an older FileStore version without a sender guard is rejected

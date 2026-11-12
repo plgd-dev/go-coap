@@ -52,6 +52,7 @@ type FileStore struct {
 	mu                  sync.Mutex
 	next                uint64
 	limit               uint64
+	sequenceInitialized bool
 	sequenceOps         sequenceFileOps
 }
 
@@ -167,6 +168,7 @@ func (s *FileStore) Reserve() (uint64, error) {
 	}
 	s.next = reserved + 1
 	s.limit = limit
+	s.sequenceInitialized = true
 	return reserved, nil
 }
 
@@ -183,6 +185,9 @@ func (s *FileStore) loadSequenceState() (sequenceFile, error) {
 		return sequenceFile{}, err
 	}
 	if !stateExists && !guardExists {
+		if s.sequenceInitialized {
+			return sequenceFile{}, errors.New("OSCORE sender sequence state and rollback guard are missing after initialization")
+		}
 		return sequenceFile{Version: fileVersion}, nil
 	}
 	if !stateExists || !guardExists {

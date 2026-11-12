@@ -136,6 +136,39 @@ func TestFileStoreRejectsMissingSenderSequenceStateOrGuard(t *testing.T) {
 	}
 }
 
+func TestFileStoreRejectsMissingSenderStateAndGuardAfterWindow(t *testing.T) {
+	store, err := NewFileStore(t.TempDir(), "missing-sequence-and-guard")
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := store.Reserve()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first != 0 {
+		t.Fatalf("first sequence = %d, want 0", first)
+	}
+	if err := os.Remove(store.sequencePath); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(store.sequenceGuardPath); err != nil {
+		t.Fatal(err)
+	}
+
+	for expected := uint64(1); expected < sequenceWindowSize; expected++ {
+		value, reserveErr := store.Reserve()
+		if reserveErr != nil {
+			t.Fatalf("reserve remaining in-memory sequence %d: %v", expected, reserveErr)
+		}
+		if value != expected {
+			t.Fatalf("remaining in-memory sequence = %d, want %d", value, expected)
+		}
+	}
+	if value, err := store.Reserve(); err == nil {
+		t.Fatalf("reservation after in-memory window was exhausted returned %d", value)
+	}
+}
+
 func TestFileStoreSequencePersistenceFailureDoesNotReturnAValue(t *testing.T) {
 	dir := t.TempDir()
 	store, err := NewFileStore(dir, "sender-sequence-storage-failure")
