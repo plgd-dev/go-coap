@@ -325,10 +325,10 @@ func (cc *Conn) writeProtectedRequest(req *pool.Message) error {
 	}
 	if isObserveRequest && observeValue == 1 {
 		if previousExchange, ok := cc.oscoreExchanges[key]; ok && previousExchange.observe {
-			previous.cancelContext = securityContext
-			previous.cancelExchange = exchange
-			previous.cancelExpires = time.Now().Add(247 * time.Second)
 			next = previous
+			next.cancelContext = securityContext
+			next.cancelExchange = exchange
+			next.cancelExpires = time.Now().Add(247 * time.Second)
 		}
 	}
 	cc.oscoreExchanges[key] = next
@@ -734,6 +734,12 @@ func (cc *Conn) CheckExpirations(now time.Time) {
 		cc.blockWise.CheckExpirations(now)
 	}
 	cc.oscoreMu.Lock()
+	cc.expireTCPOSCOREExchangesLocked(now)
+	cc.expireTCPOSCOREResponseRequirementsLocked(now)
+	cc.oscoreMu.Unlock()
+}
+
+func (cc *Conn) expireTCPOSCOREExchangesLocked(now time.Time) {
 	for token, exchange := range cc.oscoreExchanges {
 		if !exchange.expires.IsZero() && !now.Before(exchange.expires) {
 			delete(cc.oscoreExchanges, token)
@@ -747,6 +753,9 @@ func (cc *Conn) CheckExpirations(now time.Time) {
 			cc.oscoreExchanges[token] = exchange
 		}
 	}
+}
+
+func (cc *Conn) expireTCPOSCOREResponseRequirementsLocked(now time.Time) {
 	for token, requirements := range cc.oscoreRequiredResponses {
 		for exchange, expires := range requirements {
 			if !expires.IsZero() && !now.Before(expires) {
@@ -757,7 +766,6 @@ func (cc *Conn) CheckExpirations(now time.Time) {
 			delete(cc.oscoreRequiredResponses, token)
 		}
 	}
-	cc.oscoreMu.Unlock()
 }
 
 func (cc *Conn) AcquireMessage(ctx context.Context) *pool.Message {

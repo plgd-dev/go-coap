@@ -175,8 +175,8 @@ func TestFileStoreRemembersLoadedStateAfterPendingRemovalSyncFailure(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	if value, err := first.Reserve(); err != nil || value != 0 {
-		t.Fatalf("first reservation = %d, %v; want 0", value, err)
+	if value, reserveErr := first.Reserve(); reserveErr != nil || value != 0 {
+		t.Fatalf("first reservation = %d, %v; want 0", value, reserveErr)
 	}
 	second, err := NewFileStore(dir, "pending-removal-sync-failure")
 	if err != nil {
@@ -242,129 +242,131 @@ func TestFileStoreSequencePersistenceFailureDoesNotReturnAValue(t *testing.T) {
 func TestFileStoreSequencePersistenceFaultInjection(t *testing.T) {
 	tests := []struct {
 		name         string
-		inject       func(*FileStore, error)
+		point        sequencePersistenceFaultPoint
 		retryInPlace bool
 	}{
-		{
-			name: "pending transaction write",
-			inject: func(store *FileStore, failure error) {
-				store.sequenceOps.beforeWrite = func(path string) error {
-					if path == store.sequencePendingPath {
-						return failure
-					}
-					return nil
-				}
-			},
-			retryInPlace: true,
-		},
-		{
-			name: "sequence guard write",
-			inject: func(store *FileStore, failure error) {
-				store.sequenceOps.beforeWrite = func(path string) error {
-					if path == store.sequenceGuardPath {
-						return failure
-					}
-					return nil
-				}
-			},
-		},
-		{
-			name: "sequence state write",
-			inject: func(store *FileStore, failure error) {
-				store.sequenceOps.beforeWrite = func(path string) error {
-					if path == store.sequencePath {
-						return failure
-					}
-					return nil
-				}
-			},
-		},
-		{
-			name: "pending directory sync",
-			inject: func(store *FileStore, failure error) {
-				store.sequenceOps.syncDirectory = func(path, dir string) error {
-					if path == store.sequencePendingPath {
-						return failure
-					}
-					return syncDirectory(dir)
-				}
-			},
-		},
-		{
-			name: "guard directory sync",
-			inject: func(store *FileStore, failure error) {
-				store.sequenceOps.syncDirectory = func(path, dir string) error {
-					if path == store.sequenceGuardPath {
-						return failure
-					}
-					return syncDirectory(dir)
-				}
-			},
-		},
-		{
-			name: "sequence directory sync",
-			inject: func(store *FileStore, failure error) {
-				store.sequenceOps.syncDirectory = func(path, dir string) error {
-					if path == store.sequencePath {
-						return failure
-					}
-					return syncDirectory(dir)
-				}
-			},
-		},
-		{
-			name: "pending removal",
-			inject: func(store *FileStore, failure error) {
-				store.sequenceOps.beforeRemove = func(string) error {
-					return failure
-				}
-			},
-		},
-		{
-			name: "pending removal directory sync",
-			inject: func(store *FileStore, failure error) {
-				pendingSyncs := 0
-				store.sequenceOps.syncDirectory = func(path, dir string) error {
-					if path == store.sequencePendingPath {
-						pendingSyncs++
-						if pendingSyncs == 2 {
-							return failure
-						}
-					}
-					return syncDirectory(dir)
-				}
-			},
-		},
+		{name: "pending transaction write", point: sequencePendingWrite, retryInPlace: true},
+		{name: "sequence guard write", point: sequenceGuardWrite},
+		{name: "sequence state write", point: sequenceStateWrite},
+		{name: "pending directory sync", point: sequencePendingSync},
+		{name: "guard directory sync", point: sequenceGuardSync},
+		{name: "sequence directory sync", point: sequenceStateSync},
+		{name: "pending removal", point: sequencePendingRemove},
+		{name: "pending removal directory sync", point: sequencePendingRemoveSync},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			dir := t.TempDir()
-			id := "sequence-fault-" + test.name
-			store, err := NewFileStore(dir, id)
-			if err != nil {
-				t.Fatal(err)
-			}
-			injectedFailure := errors.New("injected sender sequence persistence failure")
-			test.inject(store, injectedFailure)
-			if value, reserveErr := store.Reserve(); !errors.Is(reserveErr, injectedFailure) {
-				t.Fatalf("reservation = %d, %v; want injected failure", value, reserveErr)
-			}
-
-			if test.retryInPlace {
-				store.sequenceOps = sequenceFileOps{}
-				if value, reserveErr := store.Reserve(); reserveErr != nil || value != 0 {
-					t.Fatalf("reservation after pre-transaction failure = %d, %v; want 0", value, reserveErr)
-				}
-				return
-			}
-			restarted, err := NewFileStore(dir, id)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if value, err := restarted.Reserve(); err != nil || value != sequenceWindowSize {
-				t.Fatalf("reservation after interrupted transaction = %d, %v; want %d", value, err, sequenceWindowSize)
-			}
+			runSequencePersistenceFaultCase(t, test.name, test.point, test.retryInPlace)
 		})
+	}
+}
+
+type sequencePersistenceFaultPoint uint8
+
+const (
+	sequencePendingWrite sequencePersistenceFaultPoint = iota
+	sequenceGuardWrite
+	sequenceStateWrite
+	sequencePendingSync
+	sequenceGuardSync
+	sequenceStateSync
+	sequencePendingRemove
+	sequencePendingRemoveSync
+)
+
+func runSequencePersistenceFaultCase(
+	t *testing.T,
+	name string,
+	point sequencePersistenceFaultPoint,
+	retryInPlace bool,
+) {
+	t.Helper()
+	dir := t.TempDir()
+	id := "sequence-fault-" + name
+	store, err := NewFileStore(dir, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	injectedFailure := errors.New("injected sender sequence persistence failure")
+	injectSequencePersistenceFault(store, point, injectedFailure)
+	if value, reserveErr := store.Reserve(); !errors.Is(reserveErr, injectedFailure) {
+		t.Fatalf("reservation = %d, %v; want injected failure", value, reserveErr)
+	}
+	if retryInPlace {
+		assertSequenceRetryInPlace(t, store)
+		return
+	}
+	assertSequenceRetryAfterRecovery(t, dir, id)
+}
+
+func injectSequencePersistenceFault(store *FileStore, point sequencePersistenceFaultPoint, failure error) {
+	switch point {
+	case sequencePendingWrite:
+		injectSequenceWriteFailure(store, store.sequencePendingPath, failure)
+	case sequenceGuardWrite:
+		injectSequenceWriteFailure(store, store.sequenceGuardPath, failure)
+	case sequenceStateWrite:
+		injectSequenceWriteFailure(store, store.sequencePath, failure)
+	case sequencePendingSync:
+		injectSequenceSyncFailure(store, store.sequencePendingPath, failure)
+	case sequenceGuardSync:
+		injectSequenceSyncFailure(store, store.sequenceGuardPath, failure)
+	case sequenceStateSync:
+		injectSequenceSyncFailure(store, store.sequencePath, failure)
+	case sequencePendingRemove:
+		store.sequenceOps.beforeRemove = func(string) error { return failure }
+	case sequencePendingRemoveSync:
+		injectPendingRemovalSyncFailure(store, failure)
+	}
+}
+
+func injectSequenceWriteFailure(store *FileStore, path string, failure error) {
+	store.sequenceOps.beforeWrite = func(writePath string) error {
+		if writePath == path {
+			return failure
+		}
+		return nil
+	}
+}
+
+func injectSequenceSyncFailure(store *FileStore, path string, failure error) {
+	store.sequenceOps.syncDirectory = func(syncPath, dir string) error {
+		if syncPath == path {
+			return failure
+		}
+		return syncDirectory(dir)
+	}
+}
+
+func injectPendingRemovalSyncFailure(store *FileStore, failure error) {
+	pendingSyncs := 0
+	store.sequenceOps.syncDirectory = func(path, dir string) error {
+		if path == store.sequencePendingPath {
+			pendingSyncs++
+			if pendingSyncs == 2 {
+				return failure
+			}
+		}
+		return syncDirectory(dir)
+	}
+}
+
+func assertSequenceRetryInPlace(t *testing.T, store *FileStore) {
+	t.Helper()
+	store.sequenceOps = sequenceFileOps{}
+	if value, err := store.Reserve(); err != nil || value != 0 {
+		t.Fatalf("reservation after pre-transaction failure = %d, %v; want 0", value, err)
+	}
+}
+
+func assertSequenceRetryAfterRecovery(t *testing.T, dir, id string) {
+	t.Helper()
+	restarted, err := NewFileStore(dir, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if value, err := restarted.Reserve(); err != nil || value != sequenceWindowSize {
+		t.Fatalf("reservation after interrupted transaction = %d, %v; want %d", value, err, sequenceWindowSize)
 	}
 }
 
@@ -402,12 +404,22 @@ func TestFileStoreRejectsRestoredSenderSequenceSnapshot(t *testing.T) {
 }
 
 func TestFileStoreRecoversInterruptedSequenceReservation(t *testing.T) {
-	stages := []struct {
-		name          string
-		initialized   bool
-		writeGuard    bool
-		writeSequence bool
-	}{
+	for _, stage := range interruptedSequenceReservationStages() {
+		t.Run(stage.name, func(t *testing.T) {
+			runInterruptedSequenceReservation(t, stage)
+		})
+	}
+}
+
+type sequenceReservationInterruption struct {
+	name          string
+	initialized   bool
+	writeGuard    bool
+	writeSequence bool
+}
+
+func interruptedSequenceReservationStages() []sequenceReservationInterruption {
+	return []sequenceReservationInterruption{
 		{name: "after pending transaction"},
 		{name: "after guard", writeGuard: true},
 		{name: "after sequence", writeGuard: true, writeSequence: true},
@@ -415,60 +427,61 @@ func TestFileStoreRecoversInterruptedSequenceReservation(t *testing.T) {
 		{name: "existing state after guard", initialized: true, writeGuard: true},
 		{name: "existing state after sequence", initialized: true, writeGuard: true, writeSequence: true},
 	}
-	for _, stage := range stages {
-		t.Run(stage.name, func(t *testing.T) {
-			dir := t.TempDir()
-			store, err := NewFileStore(dir, "interrupted-sequence-"+stage.name)
-			if err != nil {
-				t.Fatal(err)
-			}
-			previous := sequenceFile{Version: fileVersion}
-			previousExists := stage.initialized
-			if stage.initialized {
-				previous.Next = sequenceWindowSize
-				if writeErr := writeStateFile(dir, store.sequencePath, previous); writeErr != nil {
-					t.Fatal(writeErr)
-				}
-				if writeErr := writeStateFile(dir, store.sequenceGuardPath, previous); writeErr != nil {
-					t.Fatal(writeErr)
-				}
-			}
-			next := sequenceFile{Version: fileVersion, Next: previous.Next + sequenceWindowSize}
-			pending := sequencePendingFile{
-				Version:        fileVersion,
-				Previous:       previous,
-				PreviousExists: previousExists,
-				Next:           next,
-			}
-			if writeErr := writeStateFile(dir, store.sequencePendingPath, pending); writeErr != nil {
-				t.Fatal(writeErr)
-			}
-			if stage.writeGuard {
-				if writeErr := writeStateFile(dir, store.sequenceGuardPath, next); writeErr != nil {
-					t.Fatal(writeErr)
-				}
-			}
-			if stage.writeSequence {
-				if writeErr := writeStateFile(dir, store.sequencePath, next); writeErr != nil {
-					t.Fatal(writeErr)
-				}
-			}
+}
 
-			restarted, err := NewFileStore(dir, "interrupted-sequence-"+stage.name)
-			if err != nil {
-				t.Fatal(err)
-			}
-			value, err := restarted.Reserve()
-			if err != nil {
-				t.Fatalf("reserve after recovering interrupted transaction: %v", err)
-			}
-			if value != next.Next {
-				t.Fatalf("reservation after recovery = %d, want %d", value, next.Next)
-			}
-			if _, err := os.Stat(store.sequencePendingPath); !errors.Is(err, os.ErrNotExist) {
-				t.Fatalf("pending sequence transaction remains after recovery: %v", err)
-			}
-		})
+func runInterruptedSequenceReservation(t *testing.T, stage sequenceReservationInterruption) {
+	t.Helper()
+	dir := t.TempDir()
+	id := "interrupted-sequence-" + stage.name
+	store, err := NewFileStore(dir, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	previous := sequenceFile{Version: fileVersion}
+	if stage.initialized {
+		previous.Next = sequenceWindowSize
+		writeSequenceFile(t, dir, store.sequencePath, previous)
+		writeSequenceFile(t, dir, store.sequenceGuardPath, previous)
+	}
+	next := sequenceFile{Version: fileVersion, Next: previous.Next + sequenceWindowSize}
+	pending := sequencePendingFile{
+		Version:        fileVersion,
+		Previous:       previous,
+		PreviousExists: stage.initialized,
+		Next:           next,
+	}
+	writeSequenceFile(t, dir, store.sequencePendingPath, pending)
+	if stage.writeGuard {
+		writeSequenceFile(t, dir, store.sequenceGuardPath, next)
+	}
+	if stage.writeSequence {
+		writeSequenceFile(t, dir, store.sequencePath, next)
+	}
+	assertInterruptedSequenceRecovery(t, store, dir, id, next.Next)
+}
+
+func writeSequenceFile(t *testing.T, dir, path string, state any) {
+	t.Helper()
+	if err := writeStateFile(dir, path, state); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func assertInterruptedSequenceRecovery(t *testing.T, store *FileStore, dir, id string, want uint64) {
+	t.Helper()
+	restarted, err := NewFileStore(dir, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	value, err := restarted.Reserve()
+	if err != nil {
+		t.Fatalf("reserve after recovering interrupted transaction: %v", err)
+	}
+	if value != want {
+		t.Fatalf("reservation after recovery = %d, want %d", value, want)
+	}
+	if _, err := os.Stat(store.sequencePendingPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("pending sequence transaction remains after recovery: %v", err)
 	}
 }
 
@@ -811,7 +824,13 @@ func runInterruptedReplayStateSave(t *testing.T, test replaySaveInterruption) {
 	}
 
 	writeInterruptedReplayFiles(t, store, previous, next, test)
-	assertInterruptedReplayRecovery(t, dir, store, firstPIV, firstCiphertext, secondPIV, secondCiphertext, aad)
+	assertInterruptedReplayRecovery(t, dir, store, replayRecoveryMessages{
+		firstPIV:         firstPIV,
+		firstCiphertext:  firstCiphertext,
+		secondPIV:        secondPIV,
+		secondCiphertext: secondCiphertext,
+		aad:              aad,
+	})
 }
 
 func newReplaySaveContexts(t *testing.T, dir string) (*FileStore, *oscore.Context, *oscore.Context) {
@@ -882,11 +901,19 @@ func writeInterruptedReplayFiles(
 	}
 }
 
+type replayRecoveryMessages struct {
+	firstPIV         []byte
+	firstCiphertext  []byte
+	secondPIV        []byte
+	secondCiphertext []byte
+	aad              []byte
+}
+
 func assertInterruptedReplayRecovery(
 	t *testing.T,
 	dir string,
 	store *FileStore,
-	firstPIV, firstCiphertext, secondPIV, secondCiphertext, aad []byte,
+	messages replayRecoveryMessages,
 ) {
 	t.Helper()
 	restartedStore, err := NewFileStore(dir, "interrupted-replay-save")
@@ -902,8 +929,8 @@ func assertInterruptedReplayRecovery(
 	if err != nil {
 		t.Fatalf("recreate context after interrupted save: %v", err)
 	}
-	assertReplayRejected(t, restarted, secondPIV, secondCiphertext, aad, "replayed request after recovery")
-	assertReplayRejected(t, restarted, firstPIV, firstCiphertext, aad, "earlier accepted request after recovery")
+	assertReplayRejected(t, restarted, messages.secondPIV, messages.secondCiphertext, messages.aad, "replayed request after recovery")
+	assertReplayRejected(t, restarted, messages.firstPIV, messages.firstCiphertext, messages.aad, "earlier accepted request after recovery")
 	if _, err := os.Stat(store.replayPendingPath); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("pending replay transaction remains after recovery: %v", err)
 	}

@@ -2,12 +2,14 @@ package client
 
 import (
 	"context"
+	"net"
 	"testing"
 	"time"
 
 	"github.com/plgd-dev/go-coap/v3/message"
 	"github.com/plgd-dev/go-coap/v3/message/codes"
 	"github.com/plgd-dev/go-coap/v3/message/pool"
+	coapNet "github.com/plgd-dev/go-coap/v3/net"
 	"github.com/plgd-dev/go-coap/v3/net/oscore"
 	"github.com/plgd-dev/go-coap/v3/net/responsewriter"
 	"github.com/stretchr/testify/require"
@@ -197,6 +199,71 @@ func TestFailedTCPOSCOREObserveCancellationRestoresOnlyOwnedExchange(t *testing.
 	require.Empty(t, current.cancelExchange)
 	require.Contains(t, cc.oscoreRequiredResponses[key], previousExchange)
 	require.NotContains(t, cc.oscoreRequiredResponses[key], cancelExchange)
+}
+
+func TestFailedTCPOSCOREObserveCancellationPreservesPreviousCancellation(t *testing.T) {
+	ctx := context.Background()
+	const token = "token"
+	securityContext, err := oscore.NewContext(oscore.ContextConfig{
+		MasterSecret: []byte("failed TCP OSCORE cancellation write"),
+		SenderID:     []byte("client"),
+		RecipientID:  []byte("server"),
+	})
+	require.NoError(t, err)
+	processor, err := oscore.NewProcessor(oscore.ProcessorConfig{
+		Contexts: []*oscore.Context{securityContext},
+	})
+	require.NoError(t, err)
+
+	options, _, err := (message.Options{}).SetObserve(nil, 0)
+	require.NoError(t, err)
+	_, observeExchange, err := securityContext.ProtectRequest(message.Message{
+		Code: codes.GET, Token: message.Token(token), Options: options,
+	})
+	require.NoError(t, err)
+	options, _, err = (message.Options{}).SetObserve([]byte{0}, 1)
+	require.NoError(t, err)
+	_, previousCancelExchange, err := securityContext.ProtectRequest(message.Message{
+		Code: codes.GET, Token: message.Token(token), Options: options,
+	})
+	require.NoError(t, err)
+
+	clientConn, serverConn := net.Pipe()
+	require.NoError(t, serverConn.Close())
+	defer clientConn.Close()
+	session := &Session{
+		connection:  coapNet.NewConn(clientConn),
+		messagePool: pool.New(1, 2048),
+	}
+	previous := tcpOSCOREExchange{
+		context:        securityContext,
+		exchange:       observeExchange,
+		observe:        true,
+		cancelContext:  securityContext,
+		cancelExchange: previousCancelExchange,
+		cancelExpires:  time.Now().Add(time.Minute),
+	}
+	cc := &Conn{
+		session:         session,
+		oscoreProcessor: processor,
+		oscoreExchanges: map[string]tcpOSCOREExchange{token: previous},
+		oscoreRequiredResponses: map[string]map[oscore.Exchange]time.Time{
+			token: {
+				observeExchange:        time.Time{},
+				previousCancelExchange: time.Time{},
+			},
+		},
+	}
+	request := pool.NewMessage(ctx)
+	request.SetMessage(message.Message{
+		Code: codes.GET, Token: message.Token(token), Options: options,
+	})
+	request.SetContext(ctx)
+
+	err = cc.writeProtectedRequest(request)
+	require.Error(t, err)
+	require.Equal(t, previous, cc.oscoreExchanges[token])
+	require.Contains(t, cc.oscoreRequiredResponses[token], previousCancelExchange)
 }
 
 func TestExpiredTCPOSCOREExchangeStillRequiresProtection(t *testing.T) {

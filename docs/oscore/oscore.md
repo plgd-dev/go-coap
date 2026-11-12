@@ -381,7 +381,8 @@ malformed files, or mismatched files without a valid pending transaction fails
 closed; do not recreate a missing guard from an existing sequence file or
 replace just one file with an older backup.
 Restore the complete set of sender state, guard, and pending transaction from
-a trusted backup, or provision a fresh OSCORE context with a new sender key.
+a backup whose currentness is proven by an external monotonic trust anchor, or
+provision a fresh OSCORE context with a new sender key.
 State created by an older FileStore version without a sender guard is rejected
 and must be migrated only from a trusted next-sequence value. Reserved but
 unused values are intentionally skipped after restart. A stable FileStore ID

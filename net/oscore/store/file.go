@@ -225,6 +225,16 @@ func (s *FileStore) recoverSequenceReservation() error {
 	if stateExists && guardExists {
 		s.sequenceInitialized = true
 	}
+	return s.finishSequenceReservationRecovery(pending, state, stateExists, guard, guardExists)
+}
+
+func (s *FileStore) finishSequenceReservationRecovery(
+	pending sequencePendingFile,
+	state sequenceFile,
+	stateExists bool,
+	guard sequenceFile,
+	guardExists bool,
+) error {
 	if !guardExists || guard != pending.Next {
 		if err := s.writeSequenceState(s.sequenceGuardPath, pending.Next); err != nil {
 			return fmt.Errorf("recover sender sequence guard: %w", err)
