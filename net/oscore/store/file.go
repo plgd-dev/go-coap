@@ -196,6 +196,7 @@ func (s *FileStore) loadSequenceState() (sequenceFile, error) {
 	if state != guard {
 		return sequenceFile{}, errors.New("OSCORE sender sequence state differs from its rollback guard")
 	}
+	s.sequenceInitialized = true
 	return state, nil
 }
 
@@ -221,6 +222,9 @@ func (s *FileStore) recoverSequenceReservation() error {
 	if err := validateSequenceTransactionProgress(pending, state, stateExists, guard, guardExists); err != nil {
 		return err
 	}
+	if stateExists && guardExists {
+		s.sequenceInitialized = true
+	}
 	if !guardExists || guard != pending.Next {
 		if err := s.writeSequenceState(s.sequenceGuardPath, pending.Next); err != nil {
 			return fmt.Errorf("recover sender sequence guard: %w", err)
@@ -231,6 +235,7 @@ func (s *FileStore) recoverSequenceReservation() error {
 			return fmt.Errorf("recover sender sequence state: %w", err)
 		}
 	}
+	s.sequenceInitialized = true
 	if err := s.removeSequencePending(); err != nil {
 		return fmt.Errorf("complete sender sequence recovery: %w", err)
 	}

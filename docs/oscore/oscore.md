@@ -363,14 +363,16 @@ Preventing that requires an external monotonic trust anchor or equivalent
 trusted state outside the rollback domain.
 
 Loss of only one sender sequence file is detected by the surviving counterpart.
-An active `FileStore` instance also remembers that it has committed a sender
-reservation: after both sequence and guard files disappear, it may consume the
-rest of its already-reserved in-memory window, but it rejects a subsequent
-reservation. A newly created instance has no such in-memory history and treats
-the absence of both files as an uninitialized store. Thus, paired deletion
-followed by process restart—and matching state-and-guard rollback—cannot be
-detected without trusted state outside the store directory. A complete
-directory rollback has the same limitation.
+An active `FileStore` instance remembers initialization after validating an
+existing sequence/guard pair or completing a pending reservation, even if a
+later operation returns an error while syncing transaction cleanup. If both
+sequence and guard files then disappear, it may consume the rest of its
+already-reserved in-memory window, but rejects a subsequent reservation. A
+newly created instance has no such in-memory history and treats the absence of
+both files as an uninitialized store. Thus, paired deletion followed by process
+restart—and matching state-and-guard rollback—cannot be detected without
+trusted state outside the store directory. A complete directory rollback has
+the same limitation.
 
 On startup, a valid pending sender transaction is completed and its entire
 reserved window is treated as consumed, even if the original `Reserve` call

@@ -169,6 +169,47 @@ func TestFileStoreRejectsMissingSenderStateAndGuardAfterWindow(t *testing.T) {
 	}
 }
 
+func TestFileStoreRemembersLoadedStateAfterPendingRemovalSyncFailure(t *testing.T) {
+	dir := t.TempDir()
+	first, err := NewFileStore(dir, "pending-removal-sync-failure")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if value, err := first.Reserve(); err != nil || value != 0 {
+		t.Fatalf("first reservation = %d, %v; want 0", value, err)
+	}
+	second, err := NewFileStore(dir, "pending-removal-sync-failure")
+	if err != nil {
+		t.Fatal(err)
+	}
+	syncErr := errors.New("injected pending removal directory sync failure")
+	pendingSyncs := 0
+	second.sequenceOps.syncDirectory = func(path, syncDir string) error {
+		if path == second.sequencePendingPath {
+			pendingSyncs++
+			if pendingSyncs == 2 {
+				return syncErr
+			}
+		}
+		return syncDirectory(syncDir)
+	}
+	if value, err := second.Reserve(); !errors.Is(err, syncErr) {
+		t.Fatalf("reservation = %d, %v; want pending removal sync failure", value, err)
+	}
+	if pendingSyncs != 2 {
+		t.Fatalf("pending transaction directory syncs = %d, want 2", pendingSyncs)
+	}
+	if err := os.Remove(second.sequencePath); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(second.sequenceGuardPath); err != nil {
+		t.Fatal(err)
+	}
+	if value, err := second.Reserve(); err == nil {
+		t.Fatalf("reservation after losing state files returned %d", value)
+	}
+}
+
 func TestFileStoreSequencePersistenceFailureDoesNotReturnAValue(t *testing.T) {
 	dir := t.TempDir()
 	store, err := NewFileStore(dir, "sender-sequence-storage-failure")
