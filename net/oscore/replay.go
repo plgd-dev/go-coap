@@ -136,11 +136,58 @@ func (w *ReplayWindow) Accept(sequence uint64, verify func() error) error {
 	}
 	if w.store != nil {
 		if err := w.store.Save(next); err != nil {
+			reconcileErr := w.reconcileStoreState()
+			if reconcileErr != nil {
+				return fmt.Errorf("persist OSCORE replay state: %w (reload persisted state: %w)", err, reconcileErr)
+			}
 			return fmt.Errorf("persist OSCORE replay state: %w", err)
 		}
 	}
 	w.highest, w.bitmap, w.started = next.HighestSequence, next.Bitmap, next.Started
 	return nil
+}
+
+func (w *ReplayWindow) reconcileStoreState() error {
+	state, err := w.store.Load()
+	if err != nil {
+		return err
+	}
+	if err := validateReplayState(w.size, state); err != nil {
+		return err
+	}
+	if state.Started && state.WindowSize == 0 {
+		state.WindowSize = w.size
+	}
+	current := ReplayWindowState{
+		HighestSequence: w.highest,
+		Bitmap:          w.bitmap,
+		Started:         w.started,
+		WindowSize:      w.size,
+	}
+	if !replayStateAtLeast(current, state) {
+		return ErrInvalidReplayState
+	}
+	w.highest, w.bitmap, w.started = state.HighestSequence, state.Bitmap, state.Started
+	return nil
+}
+
+func replayStateAtLeast(current, candidate ReplayWindowState) bool {
+	if !current.Started {
+		return true
+	}
+	if !candidate.Started || candidate.HighestSequence < current.HighestSequence {
+		return false
+	}
+	required := current.Bitmap
+	if candidate.HighestSequence > current.HighestSequence {
+		shift := candidate.HighestSequence - current.HighestSequence
+		if shift >= uint64(current.WindowSize) {
+			required = 0
+		} else {
+			required = (required << shift) & replayWindowMask(current.WindowSize)
+		}
+	}
+	return candidate.Bitmap&required == required
 }
 
 func replayWindowMask(size uint8) uint64 {

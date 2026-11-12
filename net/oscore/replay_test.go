@@ -60,9 +60,10 @@ func TestReplayWindowConcurrentDuplicates(t *testing.T) {
 }
 
 type testReplayWindowStore struct {
-	state   ReplayWindowState
-	loadErr error
-	saveErr error
+	state             ReplayWindowState
+	loadErr           error
+	saveErr           error
+	commitOnSaveError bool
 }
 
 func (s *testReplayWindowStore) Load() (ReplayWindowState, error) {
@@ -71,6 +72,10 @@ func (s *testReplayWindowStore) Load() (ReplayWindowState, error) {
 
 func (s *testReplayWindowStore) Save(state ReplayWindowState) error {
 	if s.saveErr != nil {
+		if s.commitOnSaveError {
+			s.state = state
+			s.commitOnSaveError = false
+		}
 		return s.saveErr
 	}
 	s.state = state
@@ -110,6 +115,43 @@ func TestReplayWindowStoreFailureDoesNotAdvanceWindow(t *testing.T) {
 	store.saveErr = nil
 	if err := window.Accept(9, func() error { return nil }); err != nil {
 		t.Fatalf("sequence consumed after persistence failure: %v", err)
+	}
+}
+
+func TestReplayWindowRecoversLiveStateAfterInterruptedSave(t *testing.T) {
+	saveErr := errors.New("guard write failed after transaction journal")
+	store := &testReplayWindowStore{
+		state: ReplayWindowState{
+			HighestSequence: 0,
+			Bitmap:          1,
+			Started:         true,
+			WindowSize:      4,
+		},
+		saveErr:           saveErr,
+		commitOnSaveError: true,
+	}
+	window, err := newReplayWindow(4, store.state, store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := window.Accept(1, func() error { return nil }); !errors.Is(err, saveErr) {
+		t.Fatalf("interrupted save error = %v, want %v", err, saveErr)
+	}
+
+	store.saveErr = nil
+	if err := window.Accept(2, func() error { return nil }); err != nil {
+		t.Fatalf("accept next sequence after recovery: %v", err)
+	}
+	if got, want := store.state, (ReplayWindowState{
+		HighestSequence: 2,
+		Bitmap:          7,
+		Started:         true,
+		WindowSize:      4,
+	}); got != want {
+		t.Fatalf("persisted replay state = %+v, want %+v", got, want)
+	}
+	if err := window.Accept(1, func() error { return nil }); !errors.Is(err, ErrReplay) {
+		t.Fatalf("recovered sequence replay error = %v, want ErrReplay", err)
 	}
 }
 

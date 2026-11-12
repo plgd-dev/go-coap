@@ -143,6 +143,10 @@ Important attack surfaces include:
   unknown or ambiguous context identifiers.
 - Sender Partial IV allocation, exhaustion, process restart, and duplicate
   sequence reservations across contexts or processes sharing a sender key.
+- Sender sequence persistence files, including guard and pending transaction
+  integrity; deletion, corruption, stale backups, partial writes, or rollback
+  that could cause Partial IV reuse. Whole-directory rollback requires an
+  external monotonic trust anchor and is not detectable from local files alone.
 - Recipient replay-window state, duplicate and out-of-order messages, and replay
   state loss after process restart.
 - OSCORE option parsing, inner/outer message construction, option classes,

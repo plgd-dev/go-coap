@@ -368,14 +368,14 @@ func TestStaleOSCOREExchangeDoesNotRemoveReplacementOrProtectionRequirement(t *t
 	}
 	stale := udpOSCOREExchange{context: oldContext, exchange: oldExchange}
 
-	require.NoError(t, cc.updateOSCOREExchangeResponse(
+	require.ErrorIs(t, cc.updateOSCOREExchangeResponse(
 		key,
 		stale,
 		oscore.OptionValue{},
 		false,
 		false,
 		nil,
-	))
+	), oscore.ErrInvalidOSCOREMessage)
 	cc.removeOSCOREExchangeForProcessingError(key, oldExchange)
 
 	current, exists := cc.oscoreExchanges[key]
@@ -1697,14 +1697,17 @@ func TestProtectedRequestCachesProtectedResponseForRetransmission(t *testing.T) 
 	require.NoError(t, err)
 	const secret = "sensitive protected response"
 	var handlerCalls atomic.Int32
+	callbackErrors := make(chan error, 4)
 	session := newRecordingSession()
 	defer session.Close()
 	cfg := DefaultConfig
 	cfg.OSCORE = processor
-	cfg.Errors = func(err error) { require.NoError(t, err) }
+	cfg.Errors = func(err error) { callbackErrors <- err }
 	cfg.Handler = func(w *responsewriter.ResponseWriter[*Conn], _ *pool.Message) {
 		handlerCalls.Add(1)
-		require.NoError(t, w.SetResponse(codes.Content, message.TextPlain, bytes.NewReader([]byte(secret))))
+		if setResponseErr := w.SetResponse(codes.Content, message.TextPlain, bytes.NewReader([]byte(secret))); setResponseErr != nil {
+			callbackErrors <- setResponseErr
+		}
 	}
 	cc := NewConnWithOpts(session, &cfg)
 	defer cc.Close()
@@ -1750,6 +1753,7 @@ func TestProtectedRequestCachesProtectedResponseForRetransmission(t *testing.T) 
 
 	require.NoError(t, cc.Process(nil, datagram))
 	require.Eventually(t, func() bool { return session.writtenCount() == 2 }, time.Second, time.Millisecond)
+	assertNoCallbackErrors(t, callbackErrors)
 	require.EqualValues(t, 1, handlerCalls.Load(), "retransmitted request must not invoke the handler again")
 	retransmittedResponse := session.lastWritten()
 	require.NotNil(t, retransmittedResponse)
@@ -1782,11 +1786,12 @@ func TestProtectedRequestCachesEmptyAcknowledgementForRetransmission(t *testing.
 	require.NoError(t, err)
 
 	var handlerCalls atomic.Int32
+	callbackErrors := make(chan error, 4)
 	session := newRecordingSession()
 	defer session.Close()
 	cfg := DefaultConfig
 	cfg.OSCORE = processor
-	cfg.Errors = func(err error) { require.NoError(t, err) }
+	cfg.Errors = func(err error) { callbackErrors <- err }
 	cfg.Handler = func(_ *responsewriter.ResponseWriter[*Conn], _ *pool.Message) {
 		handlerCalls.Add(1)
 	}
@@ -1814,10 +1819,23 @@ func TestProtectedRequestCachesEmptyAcknowledgementForRetransmission(t *testing.
 
 	require.NoError(t, cc.Process(nil, datagram))
 	require.Eventually(t, func() bool { return session.writtenCount() == 2 }, time.Second, time.Millisecond)
+	assertNoCallbackErrors(t, callbackErrors)
 	retransmittedAck := session.lastWritten()
 	require.NotNil(t, retransmittedAck)
 	require.Equal(t, codes.Empty, retransmittedAck.Code())
 	require.Equal(t, message.Acknowledgement, retransmittedAck.Type())
 	require.Equal(t, int32(mid), retransmittedAck.MessageID())
 	require.EqualValues(t, 1, handlerCalls.Load(), "duplicate protected request must not invoke the handler again")
+}
+
+func assertNoCallbackErrors(t *testing.T, callbackErrors <-chan error) {
+	t.Helper()
+	for {
+		select {
+		case err := <-callbackErrors:
+			t.Errorf("connection callback failed: %v", err)
+		default:
+			return
+		}
+	}
 }

@@ -316,7 +316,12 @@ fresh security context.
 The `net/oscore/store` package provides a file-backed implementation of both
 interfaces. Its sender sequence store durably reserves windows of 256 values
 and serves them from memory; unused values are skipped when the store is
-recreated. Its replay store still durably records each accepted window advance:
+recreated. Sender reservations use a separate rollback guard and pending
+transaction, allowing startup to finish an interrupted reservation while
+skipping its entire reserved window. Missing, corrupt, or mismatched sender
+state and guard files are rejected; an existing sender sequence file without
+its guard is not treated as a fresh store. Its replay store still durably
+records each accepted window advance:
 
 ```go
 import (
@@ -351,9 +356,23 @@ Replay updates use a durable pending transaction file so startup can finish an
 update interrupted between writing the rollback guard and replay state. A
 replay-state/guard mismatch without a valid pending transaction is rejected;
 restoring only an old replay-state file is therefore detected. Back up or
-restore the replay state, guard, and any pending transaction together. Rolling
-back the complete store directory cannot be detected without an external
-monotonic trust anchor.
+restore the sender sequence, its guard, and any pending transaction together;
+do the same for replay state. Rolling back the complete store directory,
+or restoring a matching old state-and-guard pair, cannot be detected locally.
+Preventing that requires an external monotonic trust anchor or equivalent
+trusted state outside the rollback domain.
+
+On startup, a valid pending sender transaction is completed and its entire
+reserved window is treated as consumed, even if the original `Reserve` call
+did not return a value. Missing, malformed, or mismatched sender state without
+a valid pending transaction fails closed; do not recreate a missing guard from
+an existing sequence file or replace just one file with an older backup.
+Restore the complete set of sender state, guard, and pending transaction from
+a trusted backup, or provision a fresh OSCORE context with a new sender key.
+State created by an older FileStore version without a sender guard is rejected
+and must be migrated only from a trusted next-sequence value. Reserved but
+unused values are intentionally skipped after restart. A stable FileStore ID
+must be reused only for the same local OSCORE context.
 
 ## Minimal forward proxy
 

@@ -27,33 +27,50 @@ var ErrInvalidStoreID = errors.New("OSCORE file store ID must not be empty")
 // FileStore persists an OSCORE sender sequence and receiver replay window in
 // separate files under Dir. Construct it with the same stable ID whenever the
 // corresponding OSCORE context is recreated.
-// The replay guard detects corruption and rollback of the replay-state file
-// independently. A pending transaction lets the store finish an interrupted
-// replay update. Backups must preserve the replay state, guard, and pending
-// transaction together; rollback of the complete store directory cannot be
-// detected without an external monotonic trust anchor. Existing started replay
-// state without a guard is rejected and must be migrated from a trusted copy.
+// Sender sequence and replay guards detect individual state-file deletion,
+// corruption, or rollback. Pending transactions let the store finish
+// interrupted updates. Backups must preserve each state file, its guard, and
+// any pending transaction together; rollback of the complete store directory
+// or a state file and its guard together cannot be detected without an
+// external monotonic trust anchor. Existing initialized state without its
+// guard is rejected and must be migrated from a trusted copy.
 //
 // On Unix systems, file locking serializes operations across goroutines,
 // FileStore instances, and processes. Keep the directory private to the
 // application. On other platforms, operations are serialized within the
 // process only and directory metadata syncing is unavailable.
 type FileStore struct {
-	dir               string
-	sequencePath      string
-	replayPath        string
-	replayGuardPath   string
-	replayPendingPath string
-	sequenceLock      string
-	replayLock        string
-	mu                sync.Mutex
-	next              uint64
-	limit             uint64
+	dir                 string
+	sequencePath        string
+	sequenceGuardPath   string
+	sequencePendingPath string
+	replayPath          string
+	replayGuardPath     string
+	replayPendingPath   string
+	sequenceLock        string
+	replayLock          string
+	mu                  sync.Mutex
+	next                uint64
+	limit               uint64
+	sequenceOps         sequenceFileOps
+}
+
+type sequenceFileOps struct {
+	beforeWrite   func(path string) error
+	syncDirectory func(path, dir string) error
+	beforeRemove  func(path string) error
 }
 
 type sequenceFile struct {
 	Version uint8  `json:"version"`
 	Next    uint64 `json:"next"`
+}
+
+type sequencePendingFile struct {
+	Version        uint8        `json:"version"`
+	Previous       sequenceFile `json:"previous"`
+	PreviousExists bool         `json:"previousExists"`
+	Next           sequenceFile `json:"next"`
 }
 
 type replayFile struct {
@@ -88,13 +105,15 @@ func NewFileStore(dir, id string) (*FileStore, error) {
 	digest := sha256.Sum256([]byte(id))
 	prefix := filepath.Join(absoluteDir, hex.EncodeToString(digest[:]))
 	return &FileStore{
-		dir:               absoluteDir,
-		sequencePath:      prefix + ".sequence.json",
-		replayPath:        prefix + ".replay.json",
-		replayGuardPath:   prefix + ".replay.guard.json",
-		replayPendingPath: prefix + ".replay.pending.json",
-		sequenceLock:      prefix + ".sequence.lock",
-		replayLock:        prefix + ".replay.lock",
+		dir:                 absoluteDir,
+		sequencePath:        prefix + ".sequence.json",
+		sequenceGuardPath:   prefix + ".sequence.guard.json",
+		sequencePendingPath: prefix + ".sequence.pending.json",
+		replayPath:          prefix + ".replay.json",
+		replayGuardPath:     prefix + ".replay.guard.json",
+		replayPendingPath:   prefix + ".replay.pending.json",
+		sequenceLock:        prefix + ".sequence.lock",
+		replayLock:          prefix + ".replay.lock",
 	}, nil
 }
 
@@ -111,7 +130,7 @@ func (s *FileStore) Reserve() (uint64, error) {
 
 	var reserved, limit uint64
 	err := withFileLock(s.sequenceLock, func() error {
-		state, err := readSequence(s.sequencePath)
+		state, err := s.loadSequenceState()
 		if err != nil {
 			return err
 		}
@@ -122,9 +141,24 @@ func (s *FileStore) Reserve() (uint64, error) {
 		remaining := maxPartialIV + 1 - reserved
 		windowSize := min(sequenceWindowSize, remaining)
 		limit = reserved + windowSize
-		state.Next = limit
-		if err := writeStateFile(s.dir, s.sequencePath, state); err != nil {
-			return fmt.Errorf("persist sender sequence window: %w", err)
+		next := sequenceFile{Version: fileVersion, Next: limit}
+		pending := sequencePendingFile{
+			Version:        fileVersion,
+			Previous:       sequenceFile{Version: fileVersion, Next: reserved},
+			PreviousExists: reserved != 0,
+			Next:           next,
+		}
+		if err := s.writeSequenceState(s.sequencePendingPath, pending); err != nil {
+			return fmt.Errorf("persist sender sequence transaction: %w", err)
+		}
+		if err := s.writeSequenceState(s.sequenceGuardPath, next); err != nil {
+			return fmt.Errorf("persist sender sequence guard: %w", err)
+		}
+		if err := s.writeSequenceState(s.sequencePath, next); err != nil {
+			return fmt.Errorf("persist sender sequence state: %w", err)
+		}
+		if err := s.removeSequencePending(); err != nil {
+			return fmt.Errorf("complete sender sequence transaction: %w", err)
 		}
 		return nil
 	})
@@ -134,6 +168,168 @@ func (s *FileStore) Reserve() (uint64, error) {
 	s.next = reserved + 1
 	s.limit = limit
 	return reserved, nil
+}
+
+func (s *FileStore) loadSequenceState() (sequenceFile, error) {
+	if err := s.recoverSequenceReservation(); err != nil {
+		return sequenceFile{}, err
+	}
+	state, stateExists, err := readSequenceWithExistence(s.sequencePath)
+	if err != nil {
+		return sequenceFile{}, err
+	}
+	guard, guardExists, err := readSequenceWithExistence(s.sequenceGuardPath)
+	if err != nil {
+		return sequenceFile{}, err
+	}
+	if !stateExists && !guardExists {
+		return sequenceFile{Version: fileVersion}, nil
+	}
+	if !stateExists || !guardExists {
+		return sequenceFile{}, errors.New("OSCORE sender sequence state or rollback guard is missing")
+	}
+	if state != guard {
+		return sequenceFile{}, errors.New("OSCORE sender sequence state differs from its rollback guard")
+	}
+	return state, nil
+}
+
+func (s *FileStore) recoverSequenceReservation() error {
+	pending, pendingExists, err := readSequencePending(s.sequencePendingPath)
+	if err != nil {
+		return err
+	}
+	if !pendingExists {
+		return nil
+	}
+	if err = validateSequencePending(pending); err != nil {
+		return err
+	}
+	state, stateExists, err := readSequenceWithExistence(s.sequencePath)
+	if err != nil {
+		return err
+	}
+	guard, guardExists, err := readSequenceWithExistence(s.sequenceGuardPath)
+	if err != nil {
+		return err
+	}
+	if err := validateSequenceTransactionProgress(pending, state, stateExists, guard, guardExists); err != nil {
+		return err
+	}
+	if !guardExists || guard != pending.Next {
+		if err := s.writeSequenceState(s.sequenceGuardPath, pending.Next); err != nil {
+			return fmt.Errorf("recover sender sequence guard: %w", err)
+		}
+	}
+	if !stateExists || state != pending.Next {
+		if err := s.writeSequenceState(s.sequencePath, pending.Next); err != nil {
+			return fmt.Errorf("recover sender sequence state: %w", err)
+		}
+	}
+	if err := s.removeSequencePending(); err != nil {
+		return fmt.Errorf("complete sender sequence recovery: %w", err)
+	}
+	return nil
+}
+
+func validateSequencePending(pending sequencePendingFile) error {
+	if pending.Version != fileVersion {
+		return errors.New("invalid OSCORE sender sequence transaction version")
+	}
+	if err := validateSequence(pending.Previous); err != nil {
+		return err
+	}
+	if err := validateSequence(pending.Next); err != nil {
+		return err
+	}
+	if !pending.PreviousExists && pending.Previous.Next != 0 ||
+		pending.Next.Next <= pending.Previous.Next ||
+		pending.Next.Next-pending.Previous.Next > sequenceWindowSize {
+		return errors.New("invalid OSCORE sender sequence transaction")
+	}
+	expectedWindow := min(sequenceWindowSize, maxPartialIV+1-pending.Previous.Next)
+	if pending.Next.Next-pending.Previous.Next != expectedWindow {
+		return errors.New("invalid OSCORE sender sequence reservation window")
+	}
+	return nil
+}
+
+func validateSequenceTransactionProgress(
+	pending sequencePendingFile,
+	state sequenceFile,
+	stateExists bool,
+	guard sequenceFile,
+	guardExists bool,
+) error {
+	if sequenceTransactionProgressIsValid(pending, state, stateExists, guard, guardExists) {
+		return nil
+	}
+	return errors.New("OSCORE sender sequence files do not match pending transaction")
+}
+
+func sequenceTransactionProgressIsValid(
+	pending sequencePendingFile,
+	state sequenceFile,
+	stateExists bool,
+	guard sequenceFile,
+	guardExists bool,
+) bool {
+	stateIsPrevious := pending.PreviousExists && stateExists && state == pending.Previous
+	stateIsNext := stateExists && state == pending.Next
+	guardIsPrevious := pending.PreviousExists && guardExists && guard == pending.Previous
+	guardIsNext := guardExists && guard == pending.Next
+	return validPreviousSequenceTransaction(pending, stateIsPrevious, guardIsPrevious, guardIsNext) ||
+		stateIsNext && guardIsNext ||
+		validFreshSequenceTransaction(pending, stateExists, stateIsNext, guardExists, guardIsNext)
+}
+
+func validPreviousSequenceTransaction(
+	pending sequencePendingFile,
+	stateIsPrevious bool,
+	guardIsPrevious bool,
+	guardIsNext bool,
+) bool {
+	return pending.PreviousExists && stateIsPrevious && (guardIsPrevious || guardIsNext)
+}
+
+func validFreshSequenceTransaction(
+	pending sequencePendingFile,
+	stateExists bool,
+	stateIsNext bool,
+	guardExists bool,
+	guardIsNext bool,
+) bool {
+	return !pending.PreviousExists && pending.Previous.Next == 0 &&
+		(!stateExists || stateIsNext) && (!guardExists || guardIsNext)
+}
+
+func (s *FileStore) removeSequencePending() error {
+	if s.sequenceOps.beforeRemove != nil {
+		if err := s.sequenceOps.beforeRemove(s.sequencePendingPath); err != nil {
+			return err
+		}
+	}
+	if err := os.Remove(s.sequencePendingPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	if s.sequenceOps.syncDirectory != nil {
+		return s.sequenceOps.syncDirectory(s.sequencePendingPath, s.dir)
+	}
+	return syncDirectory(s.dir)
+}
+
+func (s *FileStore) writeSequenceState(path string, value any) error {
+	if s.sequenceOps.beforeWrite != nil {
+		if err := s.sequenceOps.beforeWrite(path); err != nil {
+			return err
+		}
+	}
+	return writeStateFileWithSync(s.dir, path, value, func() error {
+		if s.sequenceOps.syncDirectory != nil {
+			return s.sequenceOps.syncDirectory(path, s.dir)
+		}
+		return syncDirectory(s.dir)
+	})
 }
 
 // Load returns the persisted replay state, or an empty state when this
@@ -366,22 +562,45 @@ func validateReplayAdvance(current, next oscore.ReplayWindowState) error {
 	return nil
 }
 
-func readSequence(path string) (sequenceFile, error) {
+func validateSequence(state sequenceFile) error {
+	if state.Version != fileVersion || state.Next > maxPartialIV+1 ||
+		state.Next%sequenceWindowSize != 0 {
+		return errors.New("invalid OSCORE sender sequence file")
+	}
+	return nil
+}
+
+func readSequenceWithExistence(path string) (sequenceFile, bool, error) {
 	data, err := readStateFile(path)
 	if err != nil {
-		return sequenceFile{}, err
+		return sequenceFile{}, false, err
 	}
 	if data == nil {
-		return sequenceFile{Version: fileVersion}, nil
+		return sequenceFile{}, false, nil
 	}
 	var state sequenceFile
 	if err := json.Unmarshal(data, &state); err != nil {
-		return sequenceFile{}, fmt.Errorf("decode sender sequence file: %w", err)
+		return sequenceFile{}, false, fmt.Errorf("decode sender sequence file: %w", err)
 	}
-	if state.Version != fileVersion || state.Next > maxPartialIV+1 {
-		return sequenceFile{}, errors.New("invalid OSCORE sender sequence file")
+	if err := validateSequence(state); err != nil || state.Next == 0 {
+		return sequenceFile{}, false, errors.New("invalid OSCORE sender sequence file")
 	}
-	return state, nil
+	return state, true, nil
+}
+
+func readSequencePending(path string) (sequencePendingFile, bool, error) {
+	data, err := readStateFile(path)
+	if err != nil {
+		return sequencePendingFile{}, false, err
+	}
+	if data == nil {
+		return sequencePendingFile{}, false, nil
+	}
+	var pending sequencePendingFile
+	if err := json.Unmarshal(data, &pending); err != nil {
+		return sequencePendingFile{}, false, fmt.Errorf("decode sender sequence transaction file: %w", err)
+	}
+	return pending, true, nil
 }
 
 func readReplay(path string) (oscore.ReplayWindowState, error) {
@@ -430,6 +649,12 @@ func readStateFile(path string) ([]byte, error) {
 }
 
 func writeStateFile(dir, path string, value any) error {
+	return writeStateFileWithSync(dir, path, value, func() error {
+		return syncDirectory(dir)
+	})
+}
+
+func writeStateFileWithSync(dir, path string, value any, syncDir func() error) error {
 	data, err := json.Marshal(value)
 	if err != nil {
 		return fmt.Errorf("encode OSCORE state: %w", err)
@@ -458,7 +683,7 @@ func writeStateFile(dir, path string, value any) error {
 	if err := os.Rename(temporaryPath, path); err != nil {
 		return err
 	}
-	if err := syncDirectory(dir); err != nil {
+	if err := syncDir(); err != nil {
 		return err
 	}
 	return nil

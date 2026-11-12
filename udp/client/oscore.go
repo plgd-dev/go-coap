@@ -393,7 +393,7 @@ func (cc *Conn) updateOSCOREExchangeResponse(
 	defer cc.oscoreMu.Unlock()
 	current, exists := cc.oscoreExchanges[key]
 	if !exists || current.exchange != exchange.exchange {
-		return nil
+		return fmt.Errorf("%w: response belongs to a replaced OSCORE exchange", oscore.ErrInvalidOSCOREMessage)
 	}
 	if err := updateOSCOREObserveResponse(&current, responseOption, usedCancelExchange, hasObserve); err != nil {
 		return err

@@ -62,10 +62,12 @@ type Conn struct {
 
 	receivedMessageReader *client.ReceivedMessageReader[*Conn]
 
-	oscoreProcessor    *oscore.Processor
-	oscoreMu           sync.Mutex
-	oscoreExchanges    map[string]tcpOSCOREExchange
-	oscoreObservations map[string]tcpOSCORERequestContext
+	oscoreProcessor *oscore.Processor
+	oscoreMu        sync.Mutex
+	oscoreExchanges map[string]tcpOSCOREExchange
+	// A zero expiry means a live Do or Observe consumer still awaits a response.
+	oscoreRequiredResponses map[string]map[oscore.Exchange]time.Time
+	oscoreObservations      map[string]tcpOSCORERequestContext
 }
 
 type tcpOSCOREExchange struct {
@@ -81,7 +83,10 @@ type tcpOSCOREExchange struct {
 	cancelExpires         time.Time
 }
 
-type tcpOSCORERequestContextKey struct{}
+type (
+	tcpOSCORERequestContextKey      struct{}
+	tcpOSCOREResponseRequirementKey struct{}
+)
 
 type tcpOSCORERequestContext struct {
 	context  *oscore.Context
@@ -166,6 +171,7 @@ func NewConnWithOpts(connection *coapNet.Conn, cfg *Config, opts ...Option) *Con
 		disablePeerTCPSignalMessageCSMs: cfg.DisablePeerTCPSignalMessageCSMs,
 		oscoreProcessor:                 cfg.OSCORE,
 		oscoreExchanges:                 make(map[string]tcpOSCOREExchange),
+		oscoreRequiredResponses:         make(map[string]map[oscore.Exchange]time.Time),
 		oscoreObservations:              make(map[string]tcpOSCORERequestContext),
 	}
 	limitParallelRequests := limitparallelrequests.New(cfg.LimitClientParallelRequests, cfg.LimitClientEndpointParallelRequests, cc.do, cc.doObserve)
@@ -226,11 +232,13 @@ func (cc *Conn) doInternal(req *pool.Message) (_ *pool.Message, err error) {
 	}
 	defer func() {
 		err = removeHandler(err)
+		cc.releaseTCPOSCOREResponseRequirement(req)
 	}()
 
 	if err = cc.writeMessage(req); err != nil {
 		return nil, fmt.Errorf("cannot write request: %w", err)
 	}
+	cc.retainTCPOSCOREResponseRequirement(req)
 
 	cc.receivedMessageReader.TryToReplaceLoop()
 
@@ -293,7 +301,7 @@ func (cc *Conn) writeProtectedRequest(req *pool.Message) error {
 	if err != nil {
 		return fmt.Errorf("read request for OSCORE: %w", err)
 	}
-	protected, context, exchange, err := cc.oscoreProcessor.ProtectRequestWithContext(original)
+	protected, securityContext, exchange, err := cc.oscoreProcessor.ProtectRequestWithContext(original)
 	if err != nil {
 		return err
 	}
@@ -302,49 +310,84 @@ func (cc *Conn) writeProtectedRequest(req *pool.Message) error {
 	observeValue, observeErr := req.Options().Observe()
 	isObserveRequest := observeErr == nil
 	expires := time.Now().Add(247 * time.Second)
+	requestContext := req.Context()
+	if requestContext == nil {
+		requestContext = context.Background()
+	}
+	req.SetContext(context.WithValue(requestContext, tcpOSCOREResponseRequirementKey{}, exchange))
 	cc.oscoreMu.Lock()
 	previous, hadPrevious := cc.oscoreExchanges[key]
 	next := tcpOSCOREExchange{
-		context:  context,
+		context:  securityContext,
 		exchange: exchange,
 		observe:  observe,
 		expires:  expires,
 	}
 	if isObserveRequest && observeValue == 1 {
 		if previousExchange, ok := cc.oscoreExchanges[key]; ok && previousExchange.observe {
-			previous.cancelContext = context
+			previous.cancelContext = securityContext
 			previous.cancelExchange = exchange
 			previous.cancelExpires = time.Now().Add(247 * time.Second)
 			next = previous
 		}
 	}
 	cc.oscoreExchanges[key] = next
+	if cc.oscoreRequiredResponses[key] == nil {
+		cc.oscoreRequiredResponses[key] = make(map[oscore.Exchange]time.Time)
+	}
+	requirementExpiry := expires
+	if observeErr == nil && observeValue == 0 {
+		requirementExpiry = time.Time{}
+	}
+	cc.oscoreRequiredResponses[key][exchange] = requirementExpiry
 	cc.oscoreMu.Unlock()
 
 	wireMessage := cc.AcquireMessage(req.Context())
 	wireMessage.SetMessage(protected)
 	defer cc.ReleaseMessage(wireMessage)
 	if err := cc.session.WriteMessage(wireMessage); err != nil {
-		cc.oscoreMu.Lock()
-		if isObserveRequest && observeValue == 1 && hadPrevious {
+		cc.rollbackTCPOSCOREWrite(key, exchange, previous, hadPrevious, isObserveRequest && observeValue == 1)
+		return err
+	}
+	return nil
+}
+
+func (cc *Conn) rollbackTCPOSCOREWrite(
+	key string,
+	exchange oscore.Exchange,
+	previous tcpOSCOREExchange,
+	hadPrevious bool,
+	observeCancellation bool,
+) {
+	cc.oscoreMu.Lock()
+	defer cc.oscoreMu.Unlock()
+	if current, exists := cc.oscoreExchanges[key]; exists &&
+		(current.exchange == exchange || current.cancelExchange == exchange) {
+		if observeCancellation && hadPrevious {
 			cc.oscoreExchanges[key] = previous
 		} else {
 			delete(cc.oscoreExchanges, key)
 		}
-		cc.oscoreMu.Unlock()
-		return err
 	}
-	return nil
+	cc.clearTCPOSCOREResponseRequirementLocked(key, exchange)
 }
 
 func (cc *Conn) unprotectResponse(response *pool.Message) error {
 	key := string(response.Token())
 	exchange, ok := cc.oscoreExchangeForResponse(key)
 	if !ok {
-		if !response.HasOption(message.OSCORE) {
+		if response.HasOption(message.OSCORE) {
+			return oscore.ErrNoSecurityContext
+		}
+		if !cc.requiresTCPOSCOREResponse(key) {
 			return nil
 		}
-		return oscore.ErrNoSecurityContext
+		if !oscore.IsUnprotectedProcessingErrorCode(response.Code()) {
+			return oscore.ErrOSCORERequired
+		}
+		cc.clearAllTCPOSCOREResponseRequirements(key)
+		response.SetContext(oscore.ContextWithUnprotectedProcessingError(response.Context()))
+		return nil
 	}
 	if !response.HasOption(message.OSCORE) {
 		if oscore.IsUnprotectedProcessingErrorCode(response.Code()) {
@@ -410,6 +453,8 @@ func (cc *Conn) removeTCPOSCOREExchangeForProcessingError(key string, exchange o
 	defer cc.oscoreMu.Unlock()
 	if current, exists := cc.oscoreExchanges[key]; exists && current.exchange == exchange {
 		delete(cc.oscoreExchanges, key)
+		cc.clearTCPOSCOREResponseRequirementLocked(key, current.exchange)
+		cc.clearTCPOSCOREResponseRequirementLocked(key, current.cancelExchange)
 	}
 }
 
@@ -424,17 +469,84 @@ func (cc *Conn) updateTCPOSCOREExchangeResponse(
 	defer cc.oscoreMu.Unlock()
 	current, exists := cc.oscoreExchanges[key]
 	if !exists || current.exchange != exchange.exchange {
-		return nil
+		return fmt.Errorf("%w: response belongs to a replaced OSCORE exchange", oscore.ErrInvalidOSCOREMessage)
 	}
 	if err := updateTCPObserveResponse(&current, responseOption, usedCancelExchange, hasObserve); err != nil {
 		return err
 	}
 	if usedCancelExchange || !hasObserve {
 		delete(cc.oscoreExchanges, key)
+		cc.clearTCPOSCOREResponseRequirementLocked(key, current.exchange)
+		if usedCancelExchange {
+			cc.clearTCPOSCOREResponseRequirementLocked(key, current.cancelExchange)
+		}
 		return nil
 	}
 	cc.oscoreExchanges[key] = current
 	return nil
+}
+
+func (cc *Conn) requiresTCPOSCOREResponse(key string) bool {
+	cc.oscoreMu.Lock()
+	defer cc.oscoreMu.Unlock()
+	requirements := cc.oscoreRequiredResponses[key]
+	for exchange, expires := range requirements {
+		if !expires.IsZero() && !time.Now().Before(expires) {
+			delete(requirements, exchange)
+		}
+	}
+	if len(requirements) == 0 {
+		delete(cc.oscoreRequiredResponses, key)
+		return false
+	}
+	return true
+}
+
+func (cc *Conn) clearTCPOSCOREResponseRequirementLocked(key string, exchange oscore.Exchange) {
+	requirements := cc.oscoreRequiredResponses[key]
+	delete(requirements, exchange)
+	if len(requirements) == 0 {
+		delete(cc.oscoreRequiredResponses, key)
+	}
+}
+
+func (cc *Conn) clearAllTCPOSCOREResponseRequirements(key string) {
+	cc.oscoreMu.Lock()
+	delete(cc.oscoreRequiredResponses, key)
+	cc.oscoreMu.Unlock()
+}
+
+func (cc *Conn) tcpOSCORERequirement(req *pool.Message) (oscore.Exchange, bool) {
+	if req.Context() == nil {
+		return oscore.Exchange{}, false
+	}
+	exchange, ok := req.Context().Value(tcpOSCOREResponseRequirementKey{}).(oscore.Exchange)
+	return exchange, ok
+}
+
+func (cc *Conn) retainTCPOSCOREResponseRequirement(req *pool.Message) {
+	exchange, ok := cc.tcpOSCORERequirement(req)
+	if !ok {
+		return
+	}
+	cc.oscoreMu.Lock()
+	if requirements := cc.oscoreRequiredResponses[string(req.Token())]; requirements != nil {
+		if _, exists := requirements[exchange]; exists {
+			requirements[exchange] = time.Time{}
+		}
+	}
+	cc.oscoreMu.Unlock()
+}
+
+func (cc *Conn) releaseTCPOSCOREResponseRequirement(req *pool.Message) {
+	exchange, ok := cc.tcpOSCORERequirement(req)
+	if !ok {
+		return
+	}
+	key := string(req.Token())
+	cc.oscoreMu.Lock()
+	cc.clearTCPOSCOREResponseRequirementLocked(key, exchange)
+	cc.oscoreMu.Unlock()
 }
 
 func updateTCPObserveResponse(
@@ -635,6 +747,16 @@ func (cc *Conn) CheckExpirations(now time.Time) {
 			cc.oscoreExchanges[token] = exchange
 		}
 	}
+	for token, requirements := range cc.oscoreRequiredResponses {
+		for exchange, expires := range requirements {
+			if !expires.IsZero() && !now.Before(expires) {
+				delete(requirements, exchange)
+			}
+		}
+		if len(requirements) == 0 {
+			delete(cc.oscoreRequiredResponses, token)
+		}
+	}
 	cc.oscoreMu.Unlock()
 }
 
@@ -653,13 +775,22 @@ func (cc *Conn) NetConn() net.Conn {
 
 // DoObserve subscribes for every change with request.
 func (cc *Conn) doObserve(req *pool.Message, observeFunc func(req *pool.Message)) (client.Observation, error) {
-	return cc.observationHandler.NewObservation(req, observeFunc)
+	observation, err := cc.observationHandler.NewObservation(req, observeFunc)
+	if err != nil {
+		cc.releaseTCPOSCOREResponseRequirement(req)
+	}
+	return observation, err
 }
 
 func (cc *Conn) CancelObservation(token message.Token) {
 	key := string(token)
 	cc.oscoreMu.Lock()
 	delete(cc.oscoreObservations, key)
+	for exchange := range cc.oscoreRequiredResponses[key] {
+		if exchange.IsObserve() {
+			cc.clearTCPOSCOREResponseRequirementLocked(key, exchange)
+		}
+	}
 	if exchange, ok := cc.oscoreExchanges[key]; ok && exchange.observe {
 		exchange.expires = time.Now().Add(247 * time.Second)
 		cc.oscoreExchanges[key] = exchange
