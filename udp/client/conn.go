@@ -31,8 +31,8 @@ import (
 	pkgMath "github.com/plgd-dev/go-coap/v3/pkg/math"
 	pkgRand "github.com/plgd-dev/go-coap/v3/pkg/rand"
 	coapSync "github.com/plgd-dev/go-coap/v3/pkg/sync"
+	"github.com/plgd-dev/go-coap/v3/pkg/sync/atomic"
 	"github.com/plgd-dev/go-coap/v3/udp/coder"
-	"go.uber.org/atomic"
 	"golang.org/x/sync/semaphore"
 )
 
@@ -171,7 +171,7 @@ func (m *midElement) Retransmit(now time.Time) bool {
 func (m *midElement) MarkRetransmitted(now time.Time) {
 	m.retransmitMu.Lock()
 	m.start = now
-	m.retransmit.Inc()
+	m.retransmit.Add(1)
 	m.retransmitting = false
 	m.retransmitMu.Unlock()
 }
@@ -274,7 +274,8 @@ type pendingMessage struct {
 type Conn struct {
 	// This field needs to be the first in the struct to ensure proper word alignment on 32-bit platforms.
 	// See: https://golang.org/pkg/sync/atomic/#pkg-note-BUG
-	sequence atomic.Uint64
+	sequence       atomic.Uint64
+	interfaceIndex atomic.Int64
 
 	session Session
 	*client.Client[*Conn]
@@ -339,8 +340,7 @@ type Conn struct {
 	oscoreResponses                               map[int32]udpOSCOREResponse
 	oscoreObservations                            map[string]udpOSCORERequestContext
 
-	localAddr      atomic.Pointer[net.IP]
-	interfaceIndex atomic.Int64
+	localAddr atomic.Pointer[net.IP]
 
 	/*
 		An outstanding interaction is either a CON for which an ACK has not
@@ -355,9 +355,9 @@ type Conn struct {
 
 // Transmission is a threadsafe container for transmission related parameters
 type Transmission struct {
-	nStart                  *atomic.Uint32
-	acknowledgeTimeout      *atomic.Duration
 	acknowledgeRandomFactor *atomic.Float64
+	acknowledgeTimeout      *atomic.Duration
+	nStart                  *atomic.Uint32
 	maxRetransmit           *atomic.Uint32
 }
 
@@ -618,7 +618,7 @@ func (cc *Conn) GetMessageID() int32 {
 	// previous one, the receiver may mistakenly treat the incoming message as a duplicate and discard it.
 	// Hence, by incrementing the global counter, we can ensure unique message IDs and avoid such issues.
 	message.GetMID()
-	return int32(pkgMath.CastTo[uint16](cc.msgID.Inc()))
+	return int32(pkgMath.CastTo[uint16](cc.msgID.Add(1)))
 }
 
 // Close closes connection without waiting for the end of the Run function.

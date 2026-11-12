@@ -9,9 +9,9 @@ import (
 
 	"github.com/plgd-dev/go-coap/v3/message/codes"
 	"github.com/plgd-dev/go-coap/v3/message/pool"
+	"github.com/plgd-dev/go-coap/v3/pkg/sync/atomic"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"go.uber.org/atomic"
 )
 
 func newReq(ctx context.Context, t *testing.T) *pool.Message {
@@ -27,12 +27,12 @@ type mockClient struct {
 }
 
 func (c *mockClient) do(*pool.Message) (*pool.Message, error) {
-	c.num.Inc()
+	c.num.Add(1)
 	return nil, errors.New("not implemented")
 }
 
 func (c *mockClient) doObserve(*pool.Message, func(req *pool.Message)) (Observation, error) {
-	c.num.Inc()
+	c.num.Add(1)
 	return nil, errors.New("not implemented")
 }
 

@@ -16,8 +16,8 @@ import (
 	netClient "github.com/plgd-dev/go-coap/v3/net/client"
 	"github.com/plgd-dev/go-coap/v3/net/monitor/inactivity"
 	"github.com/plgd-dev/go-coap/v3/pkg/math"
+	"github.com/plgd-dev/go-coap/v3/pkg/sync/atomic"
 	"github.com/plgd-dev/go-coap/v3/tcp/coder"
-	"go.uber.org/atomic"
 )
 
 type Session struct {
@@ -136,7 +136,7 @@ func (s *Session) Close() error {
 }
 
 func (s *Session) Sequence() uint64 {
-	return s.sequence.Inc()
+	return s.sequence.Add(1)
 }
 
 func (s *Session) Context() context.Context {

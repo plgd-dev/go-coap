@@ -17,9 +17,9 @@ import (
 	"github.com/plgd-dev/go-coap/v3/net/observation"
 	"github.com/plgd-dev/go-coap/v3/net/oscore"
 	"github.com/plgd-dev/go-coap/v3/net/responsewriter"
+	"github.com/plgd-dev/go-coap/v3/pkg/sync/atomic"
 	"github.com/plgd-dev/go-coap/v3/udp/coder"
 	"github.com/stretchr/testify/require"
-	"go.uber.org/atomic"
 )
 
 type responseRecordingSession struct {
@@ -1592,7 +1592,7 @@ func TestProtectedRequestCachesProtectedResponseForRetransmission(t *testing.T) 
 	cfg.OSCORE = processor
 	cfg.Errors = func(err error) { require.NoError(t, err) }
 	cfg.Handler = func(w *responsewriter.ResponseWriter[*Conn], _ *pool.Message) {
-		handlerCalls.Inc()
+		handlerCalls.Add(1)
 		require.NoError(t, w.SetResponse(codes.Content, message.TextPlain, bytes.NewReader([]byte(secret))))
 	}
 	cc := NewConnWithOpts(session, &cfg)
@@ -1677,7 +1677,7 @@ func TestProtectedRequestCachesEmptyAcknowledgementForRetransmission(t *testing.
 	cfg.OSCORE = processor
 	cfg.Errors = func(err error) { require.NoError(t, err) }
 	cfg.Handler = func(_ *responsewriter.ResponseWriter[*Conn], _ *pool.Message) {
-		handlerCalls.Inc()
+		handlerCalls.Add(1)
 	}
 	cc := NewConnWithOpts(session, &cfg)
 	defer cc.Close()

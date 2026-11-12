@@ -21,13 +21,13 @@ import (
 	"github.com/plgd-dev/go-coap/v3/options"
 	"github.com/plgd-dev/go-coap/v3/options/config"
 	"github.com/plgd-dev/go-coap/v3/pkg/runner/periodic"
+	"github.com/plgd-dev/go-coap/v3/pkg/sync/atomic"
 	"github.com/plgd-dev/go-coap/v3/udp"
 	"github.com/plgd-dev/go-coap/v3/udp/client"
 	"github.com/plgd-dev/go-coap/v3/udp/coder"
 	"github.com/plgd-dev/go-coap/v3/udp/server"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"go.uber.org/atomic"
 	"golang.org/x/sync/semaphore"
 )
 
@@ -271,7 +271,7 @@ func TestServerRejectsMalformedConfirmableWithoutTearingDownConnection(t *testin
 
 	var newConnCount atomic.Int32
 	s := udp.NewServer(options.WithOnNewConn(func(*client.Conn) {
-		newConnCount.Inc()
+		newConnCount.Add(1)
 	}))
 	t.Cleanup(func() {
 		s.Stop()
@@ -324,7 +324,7 @@ func TestServerDoesNotRetainConnectionForMalformedFirstPacket(t *testing.T) {
 
 	var newConnCount atomic.Int32
 	s := udp.NewServer(options.WithOnNewConn(func(*client.Conn) {
-		newConnCount.Inc()
+		newConnCount.Add(1)
 	}))
 	t.Cleanup(func() {
 		s.Stop()
@@ -648,7 +648,7 @@ func TestServerNewConnWildcardBindRoutesResponseToClient(t *testing.T) {
 	var defaultHits atomic.Int32
 	routerA := mux.NewRouter()
 	routerA.DefaultHandleFunc(func(_ mux.ResponseWriter, req *mux.Message) {
-		defaultHits.Inc()
+		defaultHits.Add(1)
 		_, _ = req.ReadBody()
 	})
 
@@ -942,7 +942,7 @@ func TestServerRejectsOversizedDatagram(t *testing.T) {
 	var handlerCalls atomic.Int32
 	r := mux.NewRouter()
 	err = r.Handle("/a", mux.HandlerFunc(func(w mux.ResponseWriter, _ *mux.Message) {
-		handlerCalls.Inc()
+		handlerCalls.Add(1)
 		errS := w.SetResponse(codes.Changed, message.TextPlain, nil)
 		require.NoError(t, errS)
 	}))
