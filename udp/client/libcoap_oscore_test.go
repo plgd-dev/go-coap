@@ -259,10 +259,11 @@ func TestLibCoAPServerRejectsWrongOSCOREContext(t *testing.T) {
 	}
 
 	wrongContext, err := oscore.NewContext(oscore.ContextConfig{
-		MasterSecret: []byte("incorrect oscore secret"),
-		MasterSalt:   []byte{0x9e, 0x7c, 0xa9, 0x22, 0x23, 0x78, 0x63, 0x40},
-		SenderID:     []byte("client"),
-		RecipientID:  []byte("server"),
+		AcceptReplayStateLoss: true,
+		MasterSecret:          []byte("incorrect oscore secret"),
+		MasterSalt:            []byte{0x9e, 0x7c, 0xa9, 0x22, 0x23, 0x78, 0x63, 0x40},
+		SenderID:              []byte("client"),
+		RecipientID:           []byte("server"),
 	})
 	require.NoError(t, err)
 	processor, err := oscore.NewProcessor(oscore.ProcessorConfig{
@@ -1005,10 +1006,11 @@ func writeLibCoAPOSCOREConfigWithSecret(t *testing.T, senderID, recipientID, mas
 func newLibCoAPOSCOREProcessor(t *testing.T, senderID, recipientID string) *oscore.Processor {
 	t.Helper()
 	securityContext, err := oscore.NewContext(oscore.ContextConfig{
-		MasterSecret: []byte{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16},
-		MasterSalt:   []byte{0x9e, 0x7c, 0xa9, 0x22, 0x23, 0x78, 0x63, 0x40},
-		SenderID:     []byte(senderID),
-		RecipientID:  []byte(recipientID),
+		AcceptReplayStateLoss: true,
+		MasterSecret:          []byte{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16},
+		MasterSalt:            []byte{0x9e, 0x7c, 0xa9, 0x22, 0x23, 0x78, 0x63, 0x40},
+		SenderID:              []byte(senderID),
+		RecipientID:           []byte(recipientID),
 	})
 	require.NoError(t, err)
 	processor, err := oscore.NewProcessor(oscore.ProcessorConfig{

@@ -2,6 +2,7 @@ package oscore
 
 import (
 	"errors"
+	"fmt"
 	"reflect"
 	"sync"
 	"testing"
@@ -9,6 +10,66 @@ import (
 	"github.com/plgd-dev/go-coap/v3/message"
 	"github.com/plgd-dev/go-coap/v3/message/codes"
 )
+
+func TestProcessingErrorCode(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want codes.Code
+	}{
+		{name: "unknown context", err: ErrNoSecurityContext, want: codes.Unauthorized},
+		{name: "replay", err: ErrReplay, want: codes.Unauthorized},
+		{name: "malformed option", err: fmt.Errorf("%w: malformed", ErrInvalidOSCOREOption), want: codes.BadOption},
+		{name: "decrypt failure", err: errors.New("authentication failed"), want: codes.BadRequest},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := ProcessingErrorCode(test.err); got != test.want {
+				t.Fatalf("ProcessingErrorCode(%v) = %v, want %v", test.err, got, test.want)
+			}
+			if !IsUnprotectedProcessingErrorCode(test.want) {
+				t.Fatalf("response code %v is not recognized as an unprotected processing error", test.want)
+			}
+		})
+	}
+}
+
+func TestProcessorProcessingErrorClassification(t *testing.T) {
+	client, server := pairedContexts(t, 0, 0)
+	processor, err := NewProcessor(ProcessorConfig{Contexts: []*Context{server}})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	malformed := message.Message{
+		Code:    codes.GET,
+		Options: message.Options{{ID: message.OSCORE, Value: []byte{0x09}}},
+	}
+	if _, _, _, processErr := processor.ProcessIncomingRequest(malformed); !errors.Is(processErr, ErrInvalidOSCOREOption) ||
+		ProcessingErrorCode(processErr) != codes.BadOption {
+		t.Fatalf("malformed OSCORE option classification error = %v, code = %v", processErr, ProcessingErrorCode(processErr))
+	}
+
+	protected, _, err := client.ProtectRequest(message.Message{Code: codes.GET, Token: message.Token{1}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	invalidCiphertext := protected
+	invalidCiphertext.Payload = append([]byte(nil), protected.Payload...)
+	invalidCiphertext.Payload[len(invalidCiphertext.Payload)-1] ^= 0xff
+	if _, _, _, processErr := processor.ProcessIncomingRequest(invalidCiphertext); processErr == nil ||
+		ProcessingErrorCode(processErr) != codes.BadRequest {
+		t.Fatalf("invalid ciphertext classification error = %v, code = %v", processErr, ProcessingErrorCode(processErr))
+	}
+
+	if _, _, _, processErr := processor.ProcessIncomingRequest(protected); processErr != nil {
+		t.Fatalf("process valid request: %v", processErr)
+	}
+	if _, _, _, processErr := processor.ProcessIncomingRequest(protected); !errors.Is(processErr, ErrReplay) ||
+		ProcessingErrorCode(processErr) != codes.Unauthorized {
+		t.Fatalf("replayed request classification error = %v, code = %v", processErr, ProcessingErrorCode(processErr))
+	}
+}
 
 func TestProcessorSupportsProtectedAndPlaintextRequests(t *testing.T) {
 	client, server := pairedContexts(t, 0, 0)
@@ -85,28 +146,31 @@ func TestProcessorNeverFallsBackAfterOSCOREFailure(t *testing.T) {
 func TestProcessorSelectsContextByKIDAndIDContext(t *testing.T) {
 	masterSecret := []byte{1, 2, 3}
 	client, err := NewContext(ContextConfig{
-		MasterSecret: masterSecret,
-		IDContext:    []byte{0xa1},
-		SenderID:     []byte{0x10},
-		RecipientID:  []byte{0x20},
+		AcceptReplayStateLoss: true,
+		MasterSecret:          masterSecret,
+		IDContext:             []byte{0xa1},
+		SenderID:              []byte{0x10},
+		RecipientID:           []byte{0x20},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	server, err := NewContext(ContextConfig{
-		MasterSecret: masterSecret,
-		IDContext:    []byte{0xa1},
-		SenderID:     []byte{0x20},
-		RecipientID:  []byte{0x10},
+		AcceptReplayStateLoss: true,
+		MasterSecret:          masterSecret,
+		IDContext:             []byte{0xa1},
+		SenderID:              []byte{0x20},
+		RecipientID:           []byte{0x10},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	otherServer, err := NewContext(ContextConfig{
-		MasterSecret: masterSecret,
-		IDContext:    []byte{0xa2},
-		SenderID:     []byte{0x20},
-		RecipientID:  []byte{0x10},
+		AcceptReplayStateLoss: true,
+		MasterSecret:          masterSecret,
+		IDContext:             []byte{0xa2},
+		SenderID:              []byte{0x20},
+		RecipientID:           []byte{0x10},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -131,10 +195,11 @@ func TestProcessorSelectsContextByKIDAndIDContext(t *testing.T) {
 	}
 
 	wrongContext, err := NewContext(ContextConfig{
-		MasterSecret: masterSecret,
-		IDContext:    []byte{0xa3},
-		SenderID:     []byte{0x20},
-		RecipientID:  []byte{0x10},
+		AcceptReplayStateLoss: true,
+		MasterSecret:          masterSecret,
+		IDContext:             []byte{0xa3},
+		SenderID:              []byte{0x20},
+		RecipientID:           []byte{0x10},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -276,10 +341,11 @@ func TestProcessorRemoveContextIsScopedToIDContext(t *testing.T) {
 	newContext := func(senderID, recipientID, idContext byte) *Context {
 		t.Helper()
 		context, err := NewContext(ContextConfig{
-			MasterSecret: []byte("context removal scope"),
-			IDContext:    []byte{idContext},
-			SenderID:     []byte{senderID},
-			RecipientID:  []byte{recipientID},
+			AcceptReplayStateLoss: true,
+			MasterSecret:          []byte("context removal scope"),
+			IDContext:             []byte{idContext},
+			SenderID:              []byte{senderID},
+			RecipientID:           []byte{recipientID},
 		})
 		if err != nil {
 			t.Fatal(err)
@@ -389,11 +455,12 @@ func TestProcessorRejectsDuplicateSenderSecurityContext(t *testing.T) {
 	newContext := func(recipientID, masterSalt, idContext []byte) *Context {
 		t.Helper()
 		context, err := NewContext(ContextConfig{
-			MasterSecret: []byte("duplicate sender context test"),
-			MasterSalt:   masterSalt,
-			IDContext:    idContext,
-			SenderID:     []byte{1},
-			RecipientID:  recipientID,
+			AcceptReplayStateLoss: true,
+			MasterSecret:          []byte("duplicate sender context test"),
+			MasterSalt:            masterSalt,
+			IDContext:             idContext,
+			SenderID:              []byte{1},
+			RecipientID:           recipientID,
 		})
 		if err != nil {
 			t.Fatal(err)
@@ -440,10 +507,11 @@ func TestProcessorRejectsDuplicateSenderSecurityContext(t *testing.T) {
 
 func TestContextShallowCopySharesSenderSequenceState(t *testing.T) {
 	original, err := NewContext(ContextConfig{
-		MasterSecret: []byte("shallow copy sender sequence test"),
-		MasterSalt:   []byte{1, 2, 3},
-		SenderID:     []byte{1},
-		RecipientID:  []byte{2},
+		AcceptReplayStateLoss: true,
+		MasterSecret:          []byte("shallow copy sender sequence test"),
+		MasterSalt:            []byte{1, 2, 3},
+		SenderID:              []byte{1},
+		RecipientID:           []byte{2},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -513,9 +581,10 @@ func TestProcessorSelectsOutgoingContext(t *testing.T) {
 func newTestContext(t *testing.T, senderID, recipientID []byte) *Context {
 	t.Helper()
 	context, err := NewContext(ContextConfig{
-		MasterSecret: []byte("shared master secret"),
-		SenderID:     senderID,
-		RecipientID:  recipientID,
+		AcceptReplayStateLoss: true,
+		MasterSecret:          []byte("shared master secret"),
+		SenderID:              senderID,
+		RecipientID:           recipientID,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -581,25 +650,28 @@ func assertOutgoingContextSelection(t *testing.T, processor *Processor, host str
 
 func TestProcessorOutgoingSelectorRejectsInvalidSelection(t *testing.T) {
 	clientA, err := NewContext(ContextConfig{
-		MasterSecret: []byte("shared master secret"),
-		SenderID:     []byte{0x10},
-		RecipientID:  []byte{0x20},
+		AcceptReplayStateLoss: true,
+		MasterSecret:          []byte("shared master secret"),
+		SenderID:              []byte{0x10},
+		RecipientID:           []byte{0x20},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	clientB, err := NewContext(ContextConfig{
-		MasterSecret: []byte("shared master secret"),
-		SenderID:     []byte{0x11},
-		RecipientID:  []byte{0x21},
+		AcceptReplayStateLoss: true,
+		MasterSecret:          []byte("shared master secret"),
+		SenderID:              []byte{0x11},
+		RecipientID:           []byte{0x21},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	foreign, err := NewContext(ContextConfig{
-		MasterSecret: []byte("foreign context"),
-		SenderID:     []byte{0},
-		RecipientID:  []byte{1},
+		AcceptReplayStateLoss: true,
+		MasterSecret:          []byte("foreign context"),
+		SenderID:              []byte{0},
+		RecipientID:           []byte{1},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -713,17 +785,19 @@ func TestProcessorOutgoingSelectorConcurrentContextChanges(t *testing.T) {
 
 func TestProcessorRequiresSelectorForMultipleOutgoingContexts(t *testing.T) {
 	clientA, err := NewContext(ContextConfig{
-		MasterSecret: []byte("shared master secret"),
-		SenderID:     []byte{0x10},
-		RecipientID:  []byte{0x20},
+		AcceptReplayStateLoss: true,
+		MasterSecret:          []byte("shared master secret"),
+		SenderID:              []byte{0x10},
+		RecipientID:           []byte{0x20},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	clientB, err := NewContext(ContextConfig{
-		MasterSecret: []byte("shared master secret"),
-		SenderID:     []byte{0x11},
-		RecipientID:  []byte{0x21},
+		AcceptReplayStateLoss: true,
+		MasterSecret:          []byte("shared master secret"),
+		SenderID:              []byte{0x11},
+		RecipientID:           []byte{0x21},
 	})
 	if err != nil {
 		t.Fatal(err)

@@ -8,7 +8,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
+	"net"
 	"strconv"
 
 	"github.com/plgd-dev/go-coap/v3/message"
@@ -19,6 +19,7 @@ import (
 
 var (
 	ErrInvalidRequest         = errors.New("invalid OSCORE proxy request")
+	ErrBadGateway             = errors.New("invalid OSCORE proxy origin response")
 	ErrTargetNotAllowed       = errors.New("OSCORE proxy target is not allowed")
 	ErrUnsupportedOperation   = errors.New("unsupported OSCORE proxy operation")
 	ErrInvalidForwarderConfig = errors.New("invalid OSCORE proxy forwarder configuration")
@@ -41,7 +42,21 @@ func (f RoundTripperFunc) RoundTrip(ctx context.Context, target oscore.ProxyTarg
 
 // TargetPolicy authorizes a destination before the forwarder contacts it.
 // Applications should implement an allowlist; a nil policy is not permitted.
+// A policy that permits hostnames must ensure they are resolved and the
+// resulting IP is pinned by the RoundTripper. Resolving a hostname once for
+// policy evaluation but again during dialing permits DNS rebinding and SSRF.
 type TargetPolicy func(oscore.ProxyTarget) bool
+
+// AllowPublicIPLiteralTarget accepts only literal public IP destinations.
+// It rejects hostnames as well as loopback, private, link-local, multicast,
+// and unspecified addresses. Applications with DNS targets should instead
+// resolve and pin addresses in their policy and RoundTripper.
+func AllowPublicIPLiteralTarget(target oscore.ProxyTarget) bool {
+	ip := net.ParseIP(target.Host)
+	return ip != nil && !ip.IsPrivate() && !ip.IsLoopback() &&
+		!ip.IsLinkLocalUnicast() && !ip.IsLinkLocalMulticast() &&
+		!ip.IsMulticast() && !ip.IsUnspecified()
+}
 
 // Forwarder implements a one-request/one-response OSCORE forwarding path.
 // The surrounding CoAP transport handles Outer Blockwise when enabled.
@@ -68,8 +83,8 @@ func (f *Forwarder) Forward(ctx context.Context, request message.Message) (messa
 	if err != nil {
 		return message.Message{}, fmt.Errorf("forward OSCORE request to %s: %w", target.AuthorityURI(), err)
 	}
-	if !isResponseCode(response.Code) || !bytes.Equal(response.Token, request.Token) {
-		return message.Message{}, fmt.Errorf("%w: origin returned an invalid response code or token", ErrInvalidRequest)
+	if !oscore.IsResponseCode(response.Code) || !bytes.Equal(response.Token, request.Token) {
+		return message.Message{}, fmt.Errorf("%w: origin returned an invalid response code or token", ErrBadGateway)
 	}
 	return response, nil
 }
@@ -154,7 +169,7 @@ func (f *Forwarder) ServeCOAP(w mux.ResponseWriter, r *mux.Message) {
 			Code:      r.Code(),
 			Type:      r.Type(),
 			MessageID: r.MessageID(),
-			Options:   cloneOptions(r.Options()),
+			Options:   oscore.CloneOptions(r.Options()),
 			Payload:   body,
 		})
 		if err == nil {
@@ -175,13 +190,13 @@ func (f *Forwarder) ServeCOAP(w mux.ResponseWriter, r *mux.Message) {
 func (f *Forwarder) report(err error) {
 	if f != nil && f.OnError != nil {
 		f.OnError(err)
-		return
 	}
-	log.Printf("OSCORE proxy: %v", err)
 }
 
 func errorCode(err error) codes.Code {
 	switch {
+	case errors.Is(err, ErrBadGateway):
+		return codes.BadGateway
 	case errors.Is(err, ErrInvalidRequest):
 		return codes.BadRequest
 	case errors.Is(err, ErrTargetNotAllowed):
@@ -191,10 +206,6 @@ func errorCode(err error) codes.Code {
 	default:
 		return codes.BadGateway
 	}
-}
-
-func isResponseCode(code codes.Code) bool {
-	return code >= 64 && code < 192
 }
 
 func singleOption(options message.Options, id message.OptionID) (message.Option, bool) {
@@ -209,21 +220,13 @@ func singleOption(options message.Options, id message.OptionID) (message.Option,
 	return found, count == 1
 }
 
-func cloneOptions(options message.Options) message.Options {
-	cloned := make(message.Options, len(options))
-	for i, option := range options {
-		cloned[i] = message.Option{ID: option.ID, Value: append([]byte(nil), option.Value...)}
-	}
-	return cloned
-}
-
 func cloneMessage(m message.Message) message.Message {
 	return message.Message{
 		Token:     append(message.Token(nil), m.Token...),
 		Code:      m.Code,
 		Type:      m.Type,
 		MessageID: m.MessageID,
-		Options:   cloneOptions(m.Options),
+		Options:   oscore.CloneOptions(m.Options),
 		Payload:   append([]byte(nil), m.Payload...),
 	}
 }

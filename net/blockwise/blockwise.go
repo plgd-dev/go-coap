@@ -133,6 +133,7 @@ type BlockWise[C Client] struct {
 	rollingExpiration                bool
 	maxReceiveBodySize               int64
 	maxReassembledPayloadSize        int64
+	maxReassembledPayloadSizeOSCORE  bool
 	qblock                           *qblock.Engine[C]
 }
 
@@ -148,9 +149,18 @@ func (b *BlockWise[C]) SetMaxReceiveBodySize(size int64) {
 }
 
 // SetMaxReassembledPayloadSize limits the payload size of any reassembled
-// Block1 or Block2 message. A value of 0 means unlimited.
+// Block1 or Block2 message, including plaintext and OSCORE messages. A value
+// of 0 means unlimited.
 func (b *BlockWise[C]) SetMaxReassembledPayloadSize(size int64) {
 	b.maxReassembledPayloadSize = max(size, 0)
+	b.maxReassembledPayloadSizeOSCORE = false
+}
+
+// SetMaxOSCOREReassembledPayloadSize limits reassembled messages carrying the
+// OSCORE option. Plaintext messages are unaffected. A value of 0 means unlimited.
+func (b *BlockWise[C]) SetMaxOSCOREReassembledPayloadSize(size int64) {
+	b.maxReassembledPayloadSize = max(size, 0)
+	b.maxReassembledPayloadSizeOSCORE = true
 }
 
 type sendingMessage struct {
@@ -1319,7 +1329,8 @@ func (b *BlockWise[C]) processCachedReceivedBlock(w *responsewriter.ResponseWrit
 }
 
 func (b *BlockWise[C]) checkReassembledPayloadSize(r *pool.Message, off int64, sizeOption message.OptionID) error {
-	if b.maxReassembledPayloadSize <= 0 {
+	if b.maxReassembledPayloadSize <= 0 ||
+		b.maxReassembledPayloadSizeOSCORE && !r.HasOption(message.OSCORE) {
 		return nil
 	}
 	size := off

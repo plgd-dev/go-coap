@@ -164,7 +164,7 @@ func DecodeInner(plaintext []byte) (message.Message, error) {
 		Type:      message.Unset,
 	}
 	optionsData := plaintext[1:]
-	decoded.Options = make(message.Options, 0, len(optionsData))
+	decoded.Options = make(message.Options, 0, innerOptionCount(optionsData))
 	processed, err := decoded.Options.Unmarshal(optionsData, message.CoapOptionDefs)
 	if err != nil {
 		return message.Message{}, fmt.Errorf("%w: decode options: %w", ErrInvalidInnerMessage, err)
@@ -175,7 +175,6 @@ func DecodeInner(plaintext []byte) (message.Message, error) {
 	if processed > 0 && optionsData[processed-1] == 0xff {
 		decoded.Payload = append([]byte(nil), optionsData[processed:]...)
 	}
-
 	split, err := SplitOptions(decoded.Options)
 	if err != nil {
 		return message.Message{}, err
@@ -184,6 +183,54 @@ func DecodeInner(plaintext []byte) (message.Message, error) {
 		return message.Message{}, fmt.Errorf("%w: plaintext contains Class U option", ErrInvalidInnerMessage)
 	}
 	return decoded, nil
+}
+
+func innerOptionCount(data []byte) int {
+	count := 0
+	for len(data) > 0 && data[0] != 0xff {
+		count++
+		header := data[0]
+		data = data[1:]
+		delta, ok := innerOptionExtendedValue(data, int(header>>4))
+		if !ok {
+			return count
+		}
+		data = data[delta.consumed:]
+		length, ok := innerOptionExtendedValue(data, int(header&0x0f))
+		if !ok {
+			return count
+		}
+		data = data[length.consumed:]
+		if length.value > len(data) {
+			return count
+		}
+		data = data[length.value:]
+	}
+	return count
+}
+
+type innerOptionLength struct {
+	value    int
+	consumed int
+}
+
+func innerOptionExtendedValue(data []byte, value int) (innerOptionLength, bool) {
+	switch value {
+	case 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12:
+		return innerOptionLength{value: value}, true
+	case 13:
+		if len(data) < 1 {
+			return innerOptionLength{}, false
+		}
+		return innerOptionLength{value: 13 + int(data[0]), consumed: 1}, true
+	case 14:
+		if len(data) < 2 {
+			return innerOptionLength{}, false
+		}
+		return innerOptionLength{value: 269 + (int(data[0]) << 8) + int(data[1]), consumed: 2}, true
+	default:
+		return innerOptionLength{}, false
+	}
 }
 
 // BuildAAD creates the RFC 8613 COSE_Encrypt0 Enc_structure. requestKid and

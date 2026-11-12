@@ -37,6 +37,7 @@ type Common[C responsewriter.Client] struct {
 	ReceivedMessageQueueSize                      int
 	OSCORE                                        *oscore.Processor
 	OSCOREProxy                                   bool
+	OSCOREErrorResponses                          bool
 	OSCOREOuterBlockwise                          bool
 	OSCOREOuterBlockwiseMaxReassembledPayloadSize uint32
 }

@@ -126,10 +126,11 @@ func TestQBlockRequestBudgetIncludesOSCOREIDContext(t *testing.T) {
 	newProcessor := func(idContext []byte) *oscore.Processor {
 		t.Helper()
 		securityContext, err := oscore.NewContext(oscore.ContextConfig{
-			MasterSecret: []byte("Q-Block OSCORE sizing test"),
-			IDContext:    idContext,
-			SenderID:     []byte("client"),
-			RecipientID:  []byte("server"),
+			AcceptReplayStateLoss: true,
+			MasterSecret:          []byte("Q-Block OSCORE sizing test"),
+			IDContext:             idContext,
+			SenderID:              []byte("client"),
+			RecipientID:           []byte("server"),
 		})
 		require.NoError(t, err)
 		processor, err := oscore.NewProcessor(oscore.ProcessorConfig{Contexts: []*oscore.Context{securityContext}})

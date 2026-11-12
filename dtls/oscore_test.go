@@ -24,6 +24,47 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestOSCOREDTLSErrorResponseIsUnprotectedAndDoesNotReachHandler(t *testing.T) {
+	listener, err := coapNet.NewDTLSListener("udp", "127.0.0.1:0", testOSCOREDTLSServerOptions())
+	require.NoError(t, err)
+	var handled atomic.Int32
+	server := dtls.NewServer(
+		options.WithOSCORE(newDTLSOSCOREProcessor(t, "server", "other", false)),
+		options.WithOSCOREErrorResponses(),
+		options.WithHandlerFunc(func(*responsewriter.ResponseWriter[*client.Conn], *pool.Message) {
+			handled.Add(1)
+		}),
+	)
+	serverDone := make(chan error, 1)
+	go func() { serverDone <- server.Serve(listener) }()
+	defer func() {
+		server.Stop()
+		select {
+		case serverErr := <-serverDone:
+			require.NoError(t, serverErr)
+		case <-time.After(5 * time.Second):
+			require.Fail(t, "DTLS OSCORE-error server did not stop")
+		}
+	}()
+
+	cc, err := dtls.Dial(listener.Addr().String(), testOSCOREDTLSClientOptions(),
+		options.WithOSCORE(newDTLSOSCOREProcessor(t, "client", "server", false)))
+	require.NoError(t, err)
+	defer func() { require.NoError(t, cc.Close()) }()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	response, err := cc.Get(ctx, "/")
+	require.NoError(t, err)
+	require.Equal(t, codes.Unauthorized, response.Code())
+	require.False(t, response.HasOption(message.OSCORE))
+	require.Empty(t, response.Options())
+	require.True(t, oscore.IsUnprotectedProcessingError(response.Context()))
+	body, err := response.ReadBody()
+	require.NoError(t, err)
+	require.Empty(t, body)
+	require.Zero(t, handled.Load())
+}
+
 func TestOSCOREDTLSExchange(t *testing.T) {
 	serverDTLSConfig := testOSCOREDTLSServerOptions()
 	listener, listenerErr := coapNet.NewDTLSListener("udp", "127.0.0.1:0", serverDTLSConfig)
@@ -36,6 +77,20 @@ func TestOSCOREDTLSExchange(t *testing.T) {
 					t.Errorf("set bad-request response: %v", err)
 				}
 				return
+			}
+			path, err := req.Path()
+			if err != nil {
+				t.Errorf("get request path: %v", err)
+				return
+			}
+			if path == "/secure-only" {
+				info, ok := oscore.RequestInfoFromContext(req.Context())
+				if !ok || !info.Protected || string(info.RecipientID) != "client" {
+					if err := w.SetResponse(codes.Unauthorized, message.TextPlain, nil); err != nil {
+						t.Errorf("set OSCORE-required response: %v", err)
+					}
+					return
+				}
 			}
 			if err := w.SetResponse(codes.Content, message.TextPlain, bytes.NewReader([]byte("ok"))); err != nil {
 				t.Errorf("set content response: %v", err)
@@ -79,6 +134,27 @@ func TestOSCOREDTLSExchange(t *testing.T) {
 		require.Equal(t, []byte("ok"), body)
 		cc.ReleaseMessage(request)
 		cc.ReleaseMessage(response)
+	}
+
+	for _, test := range []struct {
+		name string
+		conn *client.Conn
+		code codes.Code
+	}{
+		{name: "protected", conn: secureClient, code: codes.Content},
+		{name: "plaintext", conn: plaintextClient, code: codes.Unauthorized},
+	} {
+		t.Run("secure-only/"+test.name, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			defer cancel()
+			request, err := test.conn.NewGetRequest(ctx, "/secure-only")
+			require.NoError(t, err)
+			defer test.conn.ReleaseMessage(request)
+			response, err := test.conn.Do(request)
+			require.NoError(t, err)
+			defer test.conn.ReleaseMessage(response)
+			require.Equal(t, test.code, response.Code())
+		})
 	}
 }
 
@@ -535,9 +611,10 @@ func testOSCOREPSK([]byte) ([]byte, error) {
 func newDTLSOSCOREProcessor(t *testing.T, senderID, recipientID string, allowPlaintext ...bool) *oscore.Processor {
 	t.Helper()
 	securityContext, err := oscore.NewContext(oscore.ContextConfig{
-		MasterSecret: []byte{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16},
-		SenderID:     []byte(senderID),
-		RecipientID:  []byte(recipientID),
+		AcceptReplayStateLoss: true,
+		MasterSecret:          []byte{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16},
+		SenderID:              []byte(senderID),
+		RecipientID:           []byte(recipientID),
 	})
 	require.NoError(t, err)
 	config := oscore.ProcessorConfig{

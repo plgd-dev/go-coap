@@ -32,9 +32,10 @@ func TestUnprotectedErrorResponseOnlyTerminatesOSCOREExchange(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			securityContext, err := oscore.NewContext(oscore.ContextConfig{
-				MasterSecret: []byte("processing error response test"),
-				SenderID:     []byte("client"),
-				RecipientID:  []byte("server"),
+				AcceptReplayStateLoss: true,
+				MasterSecret:          []byte("processing error response test"),
+				SenderID:              []byte("client"),
+				RecipientID:           []byte("server"),
 			})
 			require.NoError(t, err)
 			request, exchange, err := securityContext.ProtectRequest(message.Message{
@@ -42,7 +43,7 @@ func TestUnprotectedErrorResponseOnlyTerminatesOSCOREExchange(t *testing.T) {
 			})
 			require.NoError(t, err)
 			key := string(request.Token)
-			cc := &Conn{oscoreExchanges: map[string]tcpOSCOREExchange{
+			cc := &Conn{oscoreExchanges: oscore.ExchangeTracker[tcpOSCOREExchange]{
 				key: {
 					context:  securityContext,
 					exchange: exchange,
@@ -73,9 +74,10 @@ func TestUnprotectedErrorResponseOnlyTerminatesOSCOREExchange(t *testing.T) {
 func TestStaleOSCOREExchangeDoesNotRemoveReplacement(t *testing.T) {
 	makeExchange := func(secret string) (*oscore.Context, oscore.Exchange) {
 		securityContext, err := oscore.NewContext(oscore.ContextConfig{
-			MasterSecret: []byte(secret),
-			SenderID:     []byte("client"),
-			RecipientID:  []byte("server"),
+			AcceptReplayStateLoss: true,
+			MasterSecret:          []byte(secret),
+			SenderID:              []byte("client"),
+			RecipientID:           []byte("server"),
 		})
 		require.NoError(t, err)
 		_, exchange, err := securityContext.ProtectRequest(message.Message{
@@ -92,7 +94,7 @@ func TestStaleOSCOREExchangeDoesNotRemoveReplacement(t *testing.T) {
 
 	const key = "\x01"
 	cc := &Conn{
-		oscoreExchanges: map[string]tcpOSCOREExchange{
+		oscoreExchanges: oscore.ExchangeTracker[tcpOSCOREExchange]{
 			key: {
 				context:  newContext,
 				exchange: newExchange,
@@ -119,9 +121,10 @@ func TestStaleOSCOREExchangeDoesNotRemoveReplacement(t *testing.T) {
 func TestFailedTCPOSCOREWriteDoesNotRollbackReplacement(t *testing.T) {
 	makeExchange := func(secret string) (*oscore.Context, oscore.Exchange) {
 		securityContext, err := oscore.NewContext(oscore.ContextConfig{
-			MasterSecret: []byte(secret),
-			SenderID:     []byte("client"),
-			RecipientID:  []byte("server"),
+			AcceptReplayStateLoss: true,
+			MasterSecret:          []byte(secret),
+			SenderID:              []byte("client"),
+			RecipientID:           []byte("server"),
 		})
 		require.NoError(t, err)
 		_, exchange, err := securityContext.ProtectRequest(message.Message{
@@ -136,7 +139,7 @@ func TestFailedTCPOSCOREWriteDoesNotRollbackReplacement(t *testing.T) {
 	require.NotEqual(t, failedExchange, replacementExchange)
 	const key = "\x04"
 	cc := &Conn{
-		oscoreExchanges: map[string]tcpOSCOREExchange{
+		oscoreExchanges: oscore.ExchangeTracker[tcpOSCOREExchange]{
 			key: {exchange: replacementExchange},
 		},
 		oscoreRequiredResponses: map[string]map[oscore.Exchange]time.Time{
@@ -159,9 +162,10 @@ func TestFailedTCPOSCOREWriteDoesNotRollbackReplacement(t *testing.T) {
 func TestFailedTCPOSCOREObserveCancellationRestoresOnlyOwnedExchange(t *testing.T) {
 	makeExchange := func(secret string) oscore.Exchange {
 		securityContext, err := oscore.NewContext(oscore.ContextConfig{
-			MasterSecret: []byte(secret),
-			SenderID:     []byte("client"),
-			RecipientID:  []byte("server"),
+			AcceptReplayStateLoss: true,
+			MasterSecret:          []byte(secret),
+			SenderID:              []byte("client"),
+			RecipientID:           []byte("server"),
 		})
 		require.NoError(t, err)
 		_, exchange, err := securityContext.ProtectRequest(message.Message{
@@ -176,7 +180,7 @@ func TestFailedTCPOSCOREObserveCancellationRestoresOnlyOwnedExchange(t *testing.
 	const key = "\x05"
 	previous := tcpOSCOREExchange{exchange: previousExchange, observe: true}
 	cc := &Conn{
-		oscoreExchanges: map[string]tcpOSCOREExchange{
+		oscoreExchanges: oscore.ExchangeTracker[tcpOSCOREExchange]{
 			key: {
 				exchange:       previousExchange,
 				observe:        true,
@@ -205,9 +209,10 @@ func TestFailedTCPOSCOREObserveCancellationPreservesPreviousCancellation(t *test
 	ctx := context.Background()
 	const token = "token"
 	securityContext, err := oscore.NewContext(oscore.ContextConfig{
-		MasterSecret: []byte("failed TCP OSCORE cancellation write"),
-		SenderID:     []byte("client"),
-		RecipientID:  []byte("server"),
+		AcceptReplayStateLoss: true,
+		MasterSecret:          []byte("failed TCP OSCORE cancellation write"),
+		SenderID:              []byte("client"),
+		RecipientID:           []byte("server"),
 	})
 	require.NoError(t, err)
 	processor, err := oscore.NewProcessor(oscore.ProcessorConfig{
@@ -246,7 +251,7 @@ func TestFailedTCPOSCOREObserveCancellationPreservesPreviousCancellation(t *test
 	cc := &Conn{
 		session:         session,
 		oscoreProcessor: processor,
-		oscoreExchanges: map[string]tcpOSCOREExchange{token: previous},
+		oscoreExchanges: oscore.ExchangeTracker[tcpOSCOREExchange]{token: previous},
 		oscoreRequiredResponses: map[string]map[oscore.Exchange]time.Time{
 			token: {
 				observeExchange:        time.Time{},
@@ -268,9 +273,10 @@ func TestFailedTCPOSCOREObserveCancellationPreservesPreviousCancellation(t *test
 
 func TestExpiredTCPOSCOREExchangeStillRequiresProtection(t *testing.T) {
 	securityContext, err := oscore.NewContext(oscore.ContextConfig{
-		MasterSecret: []byte("expired TCP OSCORE exchange"),
-		SenderID:     []byte("client"),
-		RecipientID:  []byte("server"),
+		AcceptReplayStateLoss: true,
+		MasterSecret:          []byte("expired TCP OSCORE exchange"),
+		SenderID:              []byte("client"),
+		RecipientID:           []byte("server"),
 	})
 	require.NoError(t, err)
 	request, exchange, err := securityContext.ProtectRequest(message.Message{
@@ -279,7 +285,7 @@ func TestExpiredTCPOSCOREExchangeStillRequiresProtection(t *testing.T) {
 	require.NoError(t, err)
 	key := string(request.Token)
 	cc := &Conn{
-		oscoreExchanges: map[string]tcpOSCOREExchange{
+		oscoreExchanges: oscore.ExchangeTracker[tcpOSCOREExchange]{
 			key: {
 				context:  securityContext,
 				exchange: exchange,
@@ -300,9 +306,10 @@ func TestExpiredTCPOSCOREExchangeStillRequiresProtection(t *testing.T) {
 
 func TestExpiredTCPOSCOREExchangeAllowsProcessingError(t *testing.T) {
 	securityContext, err := oscore.NewContext(oscore.ContextConfig{
-		MasterSecret: []byte("expired TCP OSCORE processing error"),
-		SenderID:     []byte("client"),
-		RecipientID:  []byte("server"),
+		AcceptReplayStateLoss: true,
+		MasterSecret:          []byte("expired TCP OSCORE processing error"),
+		SenderID:              []byte("client"),
+		RecipientID:           []byte("server"),
 	})
 	require.NoError(t, err)
 	request, exchange, err := securityContext.ProtectRequest(message.Message{
@@ -311,7 +318,7 @@ func TestExpiredTCPOSCOREExchangeAllowsProcessingError(t *testing.T) {
 	require.NoError(t, err)
 	key := string(request.Token)
 	cc := &Conn{
-		oscoreExchanges: map[string]tcpOSCOREExchange{
+		oscoreExchanges: oscore.ExchangeTracker[tcpOSCOREExchange]{
 			key: {
 				context:  securityContext,
 				exchange: exchange,
@@ -330,11 +337,63 @@ func TestExpiredTCPOSCOREExchangeAllowsProcessingError(t *testing.T) {
 	require.NotContains(t, cc.oscoreRequiredResponses, key)
 }
 
+func TestTCPOSCOREExchangeAcceptsResponseAfterRFC247SecondWindow(t *testing.T) {
+	secret := []byte("late TCP OSCORE response")
+	clientContext, err := oscore.NewContext(oscore.ContextConfig{
+		AcceptReplayStateLoss: true,
+		MasterSecret:          secret,
+		SenderID:              []byte("client"),
+		RecipientID:           []byte("server"),
+	})
+	require.NoError(t, err)
+	serverContext, err := oscore.NewContext(oscore.ContextConfig{
+		AcceptReplayStateLoss: true,
+		MasterSecret:          secret,
+		SenderID:              []byte("server"),
+		RecipientID:           []byte("client"),
+	})
+	require.NoError(t, err)
+	request, exchange, err := clientContext.ProtectRequest(message.Message{
+		Code: codes.GET, Token: message.Token{7},
+	})
+	require.NoError(t, err)
+	opened, serverExchange, err := serverContext.UnprotectRequest(request)
+	require.NoError(t, err)
+	protectedResponse, err := serverContext.ProtectResponse(message.Message{
+		Code:  codes.Content,
+		Token: request.Token,
+	}, serverExchange)
+	require.NoError(t, err)
+	require.Equal(t, request.Token, protectedResponse.Token)
+
+	require.Zero(t, DefaultConfig.OSCOREExchangeTimeout)
+	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	cc := &Conn{
+		oscoreExchangeTimeout: DefaultConfig.OSCOREExchangeTimeout,
+		oscoreNow:             func() time.Time { return now },
+	}
+	expires := cc.oscoreExpiry()
+	key := oscore.ExchangeTrackerKey(request.Token)
+	cc.oscoreExchanges = oscore.ExchangeTracker[tcpOSCOREExchange]{
+		key: {context: clientContext, exchange: exchange, expires: expires},
+	}
+	cc.oscoreRequiredResponses = map[string]map[oscore.Exchange]time.Time{
+		key: {exchange: expires},
+	}
+	now = now.Add(248 * time.Second)
+	response := pool.NewMessage(context.Background())
+	response.SetMessage(protectedResponse)
+	require.NoError(t, cc.unprotectResponse(response))
+	require.Equal(t, codes.Content, response.Code())
+	require.Equal(t, codes.GET, opened.Code)
+}
+
 func TestTCPOSCORERequirementTracksLiveRequestConsumer(t *testing.T) {
 	securityContext, err := oscore.NewContext(oscore.ContextConfig{
-		MasterSecret: []byte("TCP OSCORE requirement consumer"),
-		SenderID:     []byte("client"),
-		RecipientID:  []byte("server"),
+		AcceptReplayStateLoss: true,
+		MasterSecret:          []byte("TCP OSCORE requirement consumer"),
+		SenderID:              []byte("client"),
+		RecipientID:           []byte("server"),
 	})
 	require.NoError(t, err)
 	request, exchange, err := securityContext.ProtectRequest(message.Message{
@@ -361,9 +420,10 @@ func TestTCPOSCORERequirementTracksLiveRequestConsumer(t *testing.T) {
 
 func TestCancelObservationClearsTCPOSCORERequirements(t *testing.T) {
 	securityContext, err := oscore.NewContext(oscore.ContextConfig{
-		MasterSecret: []byte("TCP OSCORE cancel observation"),
-		SenderID:     []byte("client"),
-		RecipientID:  []byte("server"),
+		AcceptReplayStateLoss: true,
+		MasterSecret:          []byte("TCP OSCORE cancel observation"),
+		SenderID:              []byte("client"),
+		RecipientID:           []byte("server"),
 	})
 	require.NoError(t, err)
 	options, _, err := (message.Options{}).SetObserve(nil, 0)
@@ -377,7 +437,7 @@ func TestCancelObservationClearsTCPOSCORERequirements(t *testing.T) {
 	})
 	require.NoError(t, err)
 	cc := &Conn{
-		oscoreExchanges: map[string]tcpOSCOREExchange{
+		oscoreExchanges: oscore.ExchangeTracker[tcpOSCOREExchange]{
 			"token": {exchange: observeExchange, observe: true},
 		},
 		oscoreRequiredResponses: map[string]map[oscore.Exchange]time.Time{

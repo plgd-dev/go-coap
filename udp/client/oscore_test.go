@@ -41,9 +41,10 @@ func TestObserveCancellationRequiresMatchingRegistrationOptions(t *testing.T) {
 		{ID: message.URIPath, Value: []byte("resource")},
 	}
 	securityContext, err := oscore.NewContext(oscore.ContextConfig{
-		MasterSecret: []byte("observe cancellation test"),
-		SenderID:     []byte("client"),
-		RecipientID:  []byte("server"),
+		AcceptReplayStateLoss: true,
+		MasterSecret:          []byte("observe cancellation test"),
+		SenderID:              []byte("client"),
+		RecipientID:           []byte("server"),
 	})
 	require.NoError(t, err)
 	_, observeExchange, err := securityContext.ProtectRequest(message.Message{
@@ -95,16 +96,17 @@ func TestUnprotectedErrorResponseOnlyTerminatesOSCOREExchange(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			securityContext, err := oscore.NewContext(oscore.ContextConfig{
-				MasterSecret: []byte("processing error response test"),
-				SenderID:     []byte("client"),
-				RecipientID:  []byte("server"),
+				AcceptReplayStateLoss: true,
+				MasterSecret:          []byte("processing error response test"),
+				SenderID:              []byte("client"),
+				RecipientID:           []byte("server"),
 			})
 			require.NoError(t, err)
 			request, exchange, err := securityContext.ProtectRequest(message.Message{
 				Code: codes.GET, Token: message.Token{1},
 			})
 			require.NoError(t, err)
-			cc := &Conn{oscoreExchanges: make(map[string]udpOSCOREExchange)}
+			cc := &Conn{oscoreExchanges: oscore.NewExchangeTracker[udpOSCOREExchange]()}
 			record := &udpOSCOREExchangeRecord{
 				exchange: udpOSCOREExchange{
 					context:  securityContext,
@@ -133,9 +135,10 @@ func TestUnprotectedErrorResponseOnlyTerminatesOSCOREExchange(t *testing.T) {
 
 func TestProtectOutgoingRequestPreservesControlMessage(t *testing.T) {
 	securityContext, err := oscore.NewContext(oscore.ContextConfig{
-		MasterSecret: []byte("control message test secret"),
-		SenderID:     []byte("client"),
-		RecipientID:  []byte("server"),
+		AcceptReplayStateLoss: true,
+		MasterSecret:          []byte("control message test secret"),
+		SenderID:              []byte("client"),
+		RecipientID:           []byte("server"),
 	})
 	require.NoError(t, err)
 	processor, err := oscore.NewProcessor(oscore.ProcessorConfig{Contexts: []*oscore.Context{securityContext}})
@@ -184,9 +187,10 @@ func TestOSCOREOuterBlockwiseUsesConfiguredMaxReassembledPayloadSize(t *testing.
 			defer session.Close()
 			cfg := DefaultConfig
 			securityContext, err := oscore.NewContext(oscore.ContextConfig{
-				MasterSecret: []byte("outer blockwise limit test"),
-				SenderID:     []byte("client"),
-				RecipientID:  []byte("server"),
+				AcceptReplayStateLoss: true,
+				MasterSecret:          []byte("outer blockwise limit test"),
+				SenderID:              []byte("client"),
+				RecipientID:           []byte("server"),
 			})
 			require.NoError(t, err)
 			cfg.OSCORE, err = oscore.NewProcessor(oscore.ProcessorConfig{Contexts: []*oscore.Context{securityContext}})
@@ -204,6 +208,7 @@ func TestOSCOREOuterBlockwiseUsesConfiguredMaxReassembledPayloadSize(t *testing.
 			request.SetCode(codes.POST)
 			request.SetToken(message.Token{0x42})
 			request.SetType(message.Confirmable)
+			request.SetOptionBytes(message.OSCORE, []byte{0})
 			block, err := blockwise.EncodeBlockOption(blockwise.SZX1024, 0, true)
 			require.NoError(t, err)
 			request.SetOptionUint32(message.Block1, block)
@@ -224,15 +229,17 @@ func TestOSCOREOuterBlockwiseUsesConfiguredMaxReassembledPayloadSize(t *testing.
 func TestOuterBlockwiseOSCOREUnchangedHandlerResponseRemainsUnmodified(t *testing.T) {
 	const masterSecret = "outer blockwise unchanged response"
 	clientContext, err := oscore.NewContext(oscore.ContextConfig{
-		MasterSecret: []byte(masterSecret),
-		SenderID:     []byte("client"),
-		RecipientID:  []byte("server"),
+		AcceptReplayStateLoss: true,
+		MasterSecret:          []byte(masterSecret),
+		SenderID:              []byte("client"),
+		RecipientID:           []byte("server"),
 	})
 	require.NoError(t, err)
 	serverContext, err := oscore.NewContext(oscore.ContextConfig{
-		MasterSecret: []byte(masterSecret),
-		SenderID:     []byte("server"),
-		RecipientID:  []byte("client"),
+		AcceptReplayStateLoss: true,
+		MasterSecret:          []byte(masterSecret),
+		SenderID:              []byte("server"),
+		RecipientID:           []byte("client"),
 	})
 	require.NoError(t, err)
 	processor, err := oscore.NewProcessor(oscore.ProcessorConfig{Contexts: []*oscore.Context{serverContext}})
@@ -307,9 +314,10 @@ func TestOSCOREOuterBlockwiseRejectsOutgoingPayloadOverLimit(t *testing.T) {
 			defer session.Close()
 			cfg := DefaultConfig
 			securityContext, err := oscore.NewContext(oscore.ContextConfig{
-				MasterSecret: []byte("outer blockwise outgoing limit"),
-				SenderID:     []byte("client"),
-				RecipientID:  []byte("server"),
+				AcceptReplayStateLoss: true,
+				MasterSecret:          []byte("outer blockwise outgoing limit"),
+				SenderID:              []byte("client"),
+				RecipientID:           []byte("server"),
 			})
 			require.NoError(t, err)
 			cfg.OSCORE, err = oscore.NewProcessor(oscore.ProcessorConfig{Contexts: []*oscore.Context{securityContext}})
@@ -338,9 +346,10 @@ func TestOSCOREOuterBlockwiseRejectsOutgoingPayloadOverLimit(t *testing.T) {
 func TestStaleOSCOREExchangeDoesNotRemoveReplacementOrProtectionRequirement(t *testing.T) {
 	makeExchange := func(secret string) (*oscore.Context, oscore.Exchange) {
 		securityContext, err := oscore.NewContext(oscore.ContextConfig{
-			MasterSecret: []byte(secret),
-			SenderID:     []byte("client"),
-			RecipientID:  []byte("server"),
+			AcceptReplayStateLoss: true,
+			MasterSecret:          []byte(secret),
+			SenderID:              []byte("client"),
+			RecipientID:           []byte("server"),
 		})
 		require.NoError(t, err)
 		_, exchange, err := securityContext.ProtectRequest(message.Message{
@@ -357,7 +366,7 @@ func TestStaleOSCOREExchangeDoesNotRemoveReplacementOrProtectionRequirement(t *t
 
 	const key = "\x01"
 	cc := &Conn{
-		oscoreExchanges: map[string]udpOSCOREExchange{
+		oscoreExchanges: oscore.ExchangeTracker[udpOSCOREExchange]{
 			key: {
 				context:  newContext,
 				exchange: newExchange,
@@ -402,9 +411,10 @@ func TestOSCOREOuterBlockwiseResponseRequiresProtection(t *testing.T) {
 			defer session.Close()
 			cfg := DefaultConfig
 			securityContext, err := oscore.NewContext(oscore.ContextConfig{
-				MasterSecret: []byte("outer blockwise response policy"),
-				SenderID:     []byte("client"),
-				RecipientID:  []byte("server"),
+				AcceptReplayStateLoss: true,
+				MasterSecret:          []byte("outer blockwise response policy"),
+				SenderID:              []byte("client"),
+				RecipientID:           []byte("server"),
 			})
 			require.NoError(t, err)
 			cfg.OSCORE, err = oscore.NewProcessor(oscore.ProcessorConfig{
@@ -452,9 +462,10 @@ func TestOSCOREOuterBlockwiseRequiresProtectionAfterExchangeExpiry(t *testing.T)
 	defer session.Close()
 	cfg := DefaultConfig
 	securityContext, err := oscore.NewContext(oscore.ContextConfig{
-		MasterSecret: []byte("expired outer blockwise exchange"),
-		SenderID:     []byte("client"),
-		RecipientID:  []byte("server"),
+		AcceptReplayStateLoss: true,
+		MasterSecret:          []byte("expired outer blockwise exchange"),
+		SenderID:              []byte("client"),
+		RecipientID:           []byte("server"),
 	})
 	require.NoError(t, err)
 	cfg.OSCORE, err = oscore.NewProcessor(oscore.ProcessorConfig{
@@ -501,15 +512,17 @@ func TestOSCOREPendingObservationRetainsExchangeAfterExchangeLifetime(t *testing
 	cfg := DefaultConfig
 	const masterSecret = "expired observe exchange"
 	securityContext, err := oscore.NewContext(oscore.ContextConfig{
-		MasterSecret: []byte(masterSecret),
-		SenderID:     []byte("client"),
-		RecipientID:  []byte("server"),
+		AcceptReplayStateLoss: true,
+		MasterSecret:          []byte(masterSecret),
+		SenderID:              []byte("client"),
+		RecipientID:           []byte("server"),
 	})
 	require.NoError(t, err)
 	serverContext, err := oscore.NewContext(oscore.ContextConfig{
-		MasterSecret: []byte(masterSecret),
-		SenderID:     []byte("server"),
-		RecipientID:  []byte("client"),
+		AcceptReplayStateLoss: true,
+		MasterSecret:          []byte(masterSecret),
+		SenderID:              []byte("server"),
+		RecipientID:           []byte("client"),
 	})
 	require.NoError(t, err)
 	cfg.OSCORE, err = oscore.NewProcessor(oscore.ProcessorConfig{
@@ -653,15 +666,17 @@ func TestProcessIncomingOSCOREMessageUsesOSCOREOptionDirection(t *testing.T) {
 
 	t.Run("request outer code changed to response", func(t *testing.T) {
 		clientContext, err := oscore.NewContext(oscore.ContextConfig{
-			MasterSecret: []byte(masterSecret),
-			SenderID:     []byte("client"),
-			RecipientID:  []byte("server"),
+			AcceptReplayStateLoss: true,
+			MasterSecret:          []byte(masterSecret),
+			SenderID:              []byte("client"),
+			RecipientID:           []byte("server"),
 		})
 		require.NoError(t, err)
 		serverContext, err := oscore.NewContext(oscore.ContextConfig{
-			MasterSecret: []byte(masterSecret),
-			SenderID:     []byte("server"),
-			RecipientID:  []byte("client"),
+			AcceptReplayStateLoss: true,
+			MasterSecret:          []byte(masterSecret),
+			SenderID:              []byte("server"),
+			RecipientID:           []byte("client"),
 		})
 		require.NoError(t, err)
 		processor, err := oscore.NewProcessor(oscore.ProcessorConfig{Contexts: []*oscore.Context{serverContext}})
@@ -690,15 +705,17 @@ func TestProcessIncomingOSCOREMessageUsesOSCOREOptionDirection(t *testing.T) {
 
 	t.Run("response outer code changed to request", func(t *testing.T) {
 		clientContext, err := oscore.NewContext(oscore.ContextConfig{
-			MasterSecret: []byte(masterSecret),
-			SenderID:     []byte("client"),
-			RecipientID:  []byte("server"),
+			AcceptReplayStateLoss: true,
+			MasterSecret:          []byte(masterSecret),
+			SenderID:              []byte("client"),
+			RecipientID:           []byte("server"),
 		})
 		require.NoError(t, err)
 		serverContext, err := oscore.NewContext(oscore.ContextConfig{
-			MasterSecret: []byte(masterSecret),
-			SenderID:     []byte("server"),
-			RecipientID:  []byte("client"),
+			AcceptReplayStateLoss: true,
+			MasterSecret:          []byte(masterSecret),
+			SenderID:              []byte("server"),
+			RecipientID:           []byte("client"),
 		})
 		require.NoError(t, err)
 		processor, err := oscore.NewProcessor(oscore.ProcessorConfig{Contexts: []*oscore.Context{clientContext}})
@@ -775,15 +792,17 @@ func TestOSCOREOuterBlockwiseProxyRejectsOversizedResponse(t *testing.T) {
 func TestOSCOREOuterBlockwiseObserveResponseIsUnprotectedOnce(t *testing.T) {
 	const masterSecret = "outer blockwise observe response"
 	clientContext, err := oscore.NewContext(oscore.ContextConfig{
-		MasterSecret: []byte(masterSecret),
-		SenderID:     []byte("client"),
-		RecipientID:  []byte("server"),
+		AcceptReplayStateLoss: true,
+		MasterSecret:          []byte(masterSecret),
+		SenderID:              []byte("client"),
+		RecipientID:           []byte("server"),
 	})
 	require.NoError(t, err)
 	serverContext, err := oscore.NewContext(oscore.ContextConfig{
-		MasterSecret: []byte(masterSecret),
-		SenderID:     []byte("server"),
-		RecipientID:  []byte("client"),
+		AcceptReplayStateLoss: true,
+		MasterSecret:          []byte(masterSecret),
+		SenderID:              []byte("server"),
+		RecipientID:           []byte("client"),
 	})
 	require.NoError(t, err)
 	processor, err := oscore.NewProcessor(oscore.ProcessorConfig{Contexts: []*oscore.Context{clientContext}})
@@ -932,9 +951,10 @@ func TestOSCOREOuterBlockwiseProxyResponseDoesNotUnprotectWithoutProcessor(t *te
 
 func TestFailedOSCOREWriteRemovesExchange(t *testing.T) {
 	securityContext, err := oscore.NewContext(oscore.ContextConfig{
-		MasterSecret: []byte("failed OSCORE write test"),
-		SenderID:     []byte("client"),
-		RecipientID:  []byte("server"),
+		AcceptReplayStateLoss: true,
+		MasterSecret:          []byte("failed OSCORE write test"),
+		SenderID:              []byte("client"),
+		RecipientID:           []byte("server"),
 	})
 	require.NoError(t, err)
 	processor, err := oscore.NewProcessor(oscore.ProcessorConfig{Contexts: []*oscore.Context{securityContext}})
@@ -961,9 +981,10 @@ func TestFailedOSCOREWriteRemovesExchange(t *testing.T) {
 
 func TestOSCOREExchangeSurvivesAcknowledgmentTimeoutAfterWrite(t *testing.T) {
 	securityContext, err := oscore.NewContext(oscore.ContextConfig{
-		MasterSecret: []byte("OSCORE acknowledgment timeout test"),
-		SenderID:     []byte("client"),
-		RecipientID:  []byte("server"),
+		AcceptReplayStateLoss: true,
+		MasterSecret:          []byte("OSCORE acknowledgment timeout test"),
+		SenderID:              []byte("client"),
+		RecipientID:           []byte("server"),
 	})
 	require.NoError(t, err)
 	processor, err := oscore.NewProcessor(oscore.ProcessorConfig{Contexts: []*oscore.Context{securityContext}})
@@ -992,9 +1013,10 @@ func TestOSCOREExchangeSurvivesAcknowledgmentTimeoutAfterWrite(t *testing.T) {
 
 func TestFailedOSCOREWriteDoesNotRemoveReplacementExchange(t *testing.T) {
 	securityContext, err := oscore.NewContext(oscore.ContextConfig{
-		MasterSecret: []byte("replacement OSCORE exchange test"),
-		SenderID:     []byte("client"),
-		RecipientID:  []byte("server"),
+		AcceptReplayStateLoss: true,
+		MasterSecret:          []byte("replacement OSCORE exchange test"),
+		SenderID:              []byte("client"),
+		RecipientID:           []byte("server"),
 	})
 	require.NoError(t, err)
 	processor, err := oscore.NewProcessor(oscore.ProcessorConfig{Contexts: []*oscore.Context{securityContext}})
@@ -1039,9 +1061,10 @@ func TestFailedOSCOREWriteDoesNotRemoveReplacementExchange(t *testing.T) {
 
 func TestFailedConcurrentOSCOREExchangesDoNotRestoreFailedEntry(t *testing.T) {
 	securityContext, err := oscore.NewContext(oscore.ContextConfig{
-		MasterSecret: []byte("failed concurrent OSCORE exchanges test"),
-		SenderID:     []byte("client"),
-		RecipientID:  []byte("server"),
+		AcceptReplayStateLoss: true,
+		MasterSecret:          []byte("failed concurrent OSCORE exchanges test"),
+		SenderID:              []byte("client"),
+		RecipientID:           []byte("server"),
 	})
 	require.NoError(t, err)
 	processor, err := oscore.NewProcessor(oscore.ProcessorConfig{Contexts: []*oscore.Context{securityContext}})
@@ -1109,9 +1132,10 @@ func TestThreeConcurrentOSCOREExchangeRollbacksRestoreLatestSentEntry(t *testing
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			securityContext, err := oscore.NewContext(oscore.ContextConfig{
-				MasterSecret: []byte("three concurrent OSCORE exchanges test"),
-				SenderID:     []byte("client"),
-				RecipientID:  []byte("server"),
+				AcceptReplayStateLoss: true,
+				MasterSecret:          []byte("three concurrent OSCORE exchanges test"),
+				SenderID:              []byte("client"),
+				RecipientID:           []byte("server"),
 			})
 			require.NoError(t, err)
 			processor, err := oscore.NewProcessor(oscore.ProcessorConfig{Contexts: []*oscore.Context{securityContext}})
@@ -1150,9 +1174,10 @@ func TestThreeConcurrentOSCOREExchangeRollbacksRestoreLatestSentEntry(t *testing
 
 func TestOSCOREExchangeChainIsBoundedPerToken(t *testing.T) {
 	securityContext, err := oscore.NewContext(oscore.ContextConfig{
-		MasterSecret: []byte("bounded OSCORE exchange chain test"),
-		SenderID:     []byte("client"),
-		RecipientID:  []byte("server"),
+		AcceptReplayStateLoss: true,
+		MasterSecret:          []byte("bounded OSCORE exchange chain test"),
+		SenderID:              []byte("client"),
+		RecipientID:           []byte("server"),
 	})
 	require.NoError(t, err)
 	processor, err := oscore.NewProcessor(oscore.ProcessorConfig{Contexts: []*oscore.Context{securityContext}})
@@ -1213,15 +1238,17 @@ func TestOSCOREExchangeChainIsBoundedPerToken(t *testing.T) {
 func TestOSCOREMessageTransformsPreserveControlMessage(t *testing.T) {
 	masterSecret := []byte("OSCORE control message preservation test")
 	clientContext, err := oscore.NewContext(oscore.ContextConfig{
-		MasterSecret: masterSecret,
-		SenderID:     []byte("client"),
-		RecipientID:  []byte("server"),
+		AcceptReplayStateLoss: true,
+		MasterSecret:          masterSecret,
+		SenderID:              []byte("client"),
+		RecipientID:           []byte("server"),
 	})
 	require.NoError(t, err)
 	serverContext, err := oscore.NewContext(oscore.ContextConfig{
-		MasterSecret: masterSecret,
-		SenderID:     []byte("server"),
-		RecipientID:  []byte("client"),
+		AcceptReplayStateLoss: true,
+		MasterSecret:          masterSecret,
+		SenderID:              []byte("server"),
+		RecipientID:           []byte("client"),
 	})
 	require.NoError(t, err)
 	processor, err := oscore.NewProcessor(oscore.ProcessorConfig{
@@ -1299,15 +1326,17 @@ func TestRetransmitCachedOSCOREResponse(t *testing.T) {
 	const mid = 1234
 	masterSecret := []byte{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16}
 	clientContext, err := oscore.NewContext(oscore.ContextConfig{
-		MasterSecret: masterSecret,
-		SenderID:     []byte("client"),
-		RecipientID:  []byte("server"),
+		AcceptReplayStateLoss: true,
+		MasterSecret:          masterSecret,
+		SenderID:              []byte("client"),
+		RecipientID:           []byte("server"),
 	})
 	require.NoError(t, err)
 	serverContext, err := oscore.NewContext(oscore.ContextConfig{
-		MasterSecret: masterSecret,
-		SenderID:     []byte("server"),
-		RecipientID:  []byte("client"),
+		AcceptReplayStateLoss: true,
+		MasterSecret:          masterSecret,
+		SenderID:              []byte("server"),
+		RecipientID:           []byte("client"),
 	})
 	require.NoError(t, err)
 	processor, err := oscore.NewProcessor(oscore.ProcessorConfig{
@@ -1374,16 +1403,18 @@ func TestRetransmitCachedOSCOREResponse(t *testing.T) {
 func TestOSCOREObserveNotificationNumberRejectsOutOfOrder(t *testing.T) {
 	const masterSecret = "oscore observe replay test secret"
 	clientContext, err := oscore.NewContext(oscore.ContextConfig{
-		MasterSecret: []byte(masterSecret),
-		SenderID:     []byte("client"),
-		RecipientID:  []byte("server"),
+		AcceptReplayStateLoss: true,
+		MasterSecret:          []byte(masterSecret),
+		SenderID:              []byte("client"),
+		RecipientID:           []byte("server"),
 	})
 	require.NoError(t, err)
 	serverContext, err := oscore.NewContext(oscore.ContextConfig{
-		MasterSecret:         []byte(masterSecret),
-		SenderID:             []byte("server"),
-		RecipientID:          []byte("client"),
-		SenderSequenceNumber: 10,
+		AcceptReplayStateLoss: true,
+		MasterSecret:          []byte(masterSecret),
+		SenderID:              []byte("server"),
+		RecipientID:           []byte("client"),
+		SenderSequenceNumber:  10,
 	})
 	require.NoError(t, err)
 	processor, err := oscore.NewProcessor(oscore.ProcessorConfig{Contexts: []*oscore.Context{clientContext}})
@@ -1414,7 +1445,7 @@ func TestOSCOREObserveNotificationNumberRejectsOutOfOrder(t *testing.T) {
 
 	cc := Conn{
 		oscoreProcessor: processor,
-		oscoreExchanges: map[string]udpOSCOREExchange{
+		oscoreExchanges: oscore.ExchangeTracker[udpOSCOREExchange]{
 			string(request.Token): {
 				context:  clientContext,
 				exchange: exchange,
@@ -1435,16 +1466,18 @@ func TestOSCOREObserveNotificationNumberRejectsOutOfOrder(t *testing.T) {
 func TestOSCOREObserveNotificationPreservesFullPartialIVForOrdering(t *testing.T) {
 	const masterSecret = "OSCORE Observe full Partial IV test"
 	clientContext, err := oscore.NewContext(oscore.ContextConfig{
-		MasterSecret: []byte(masterSecret),
-		SenderID:     []byte("client"),
-		RecipientID:  []byte("server"),
+		AcceptReplayStateLoss: true,
+		MasterSecret:          []byte(masterSecret),
+		SenderID:              []byte("client"),
+		RecipientID:           []byte("server"),
 	})
 	require.NoError(t, err)
 	serverContext, err := oscore.NewContext(oscore.ContextConfig{
-		MasterSecret:         []byte(masterSecret),
-		SenderID:             []byte("server"),
-		RecipientID:          []byte("client"),
-		SenderSequenceNumber: 0x1000000,
+		AcceptReplayStateLoss: true,
+		MasterSecret:          []byte(masterSecret),
+		SenderID:              []byte("server"),
+		RecipientID:           []byte("client"),
+		SenderSequenceNumber:  0x1000000,
 	})
 	require.NoError(t, err)
 	processor, err := oscore.NewProcessor(oscore.ProcessorConfig{Contexts: []*oscore.Context{clientContext}})
@@ -1468,7 +1501,7 @@ func TestOSCOREObserveNotificationPreservesFullPartialIVForOrdering(t *testing.T
 
 	cc := Conn{
 		oscoreProcessor: processor,
-		oscoreExchanges: map[string]udpOSCOREExchange{
+		oscoreExchanges: oscore.ExchangeTracker[udpOSCOREExchange]{
 			string(request.Token): {context: clientContext, exchange: clientExchange, observe: true},
 		},
 	}
@@ -1486,15 +1519,17 @@ func TestOSCOREObserveNotificationPreservesFullPartialIVForOrdering(t *testing.T
 func TestOSCOREQBlockRecoveryExchangeSurvivesFinalBlockFirst(t *testing.T) {
 	const masterSecret = "OSCORE Q-Block recovery exchange test"
 	clientContext, err := oscore.NewContext(oscore.ContextConfig{
-		MasterSecret: []byte(masterSecret),
-		SenderID:     []byte("client"),
-		RecipientID:  []byte("server"),
+		AcceptReplayStateLoss: true,
+		MasterSecret:          []byte(masterSecret),
+		SenderID:              []byte("client"),
+		RecipientID:           []byte("server"),
 	})
 	require.NoError(t, err)
 	serverContext, err := oscore.NewContext(oscore.ContextConfig{
-		MasterSecret: []byte(masterSecret),
-		SenderID:     []byte("server"),
-		RecipientID:  []byte("client"),
+		AcceptReplayStateLoss: true,
+		MasterSecret:          []byte(masterSecret),
+		SenderID:              []byte("server"),
+		RecipientID:           []byte("client"),
 	})
 	require.NoError(t, err)
 	processor, err := oscore.NewProcessor(oscore.ProcessorConfig{Contexts: []*oscore.Context{clientContext}})
@@ -1565,15 +1600,17 @@ func TestDuplicateOSCOREConfirmableResponseIsAcknowledged(t *testing.T) {
 	const mid = 1234
 	masterSecret := []byte("duplicate OSCORE response test secret")
 	clientContext, err := oscore.NewContext(oscore.ContextConfig{
-		MasterSecret: masterSecret,
-		SenderID:     []byte("client"),
-		RecipientID:  []byte("server"),
+		AcceptReplayStateLoss: true,
+		MasterSecret:          masterSecret,
+		SenderID:              []byte("client"),
+		RecipientID:           []byte("server"),
 	})
 	require.NoError(t, err)
 	serverContext, err := oscore.NewContext(oscore.ContextConfig{
-		MasterSecret: masterSecret,
-		SenderID:     []byte("server"),
-		RecipientID:  []byte("client"),
+		AcceptReplayStateLoss: true,
+		MasterSecret:          masterSecret,
+		SenderID:              []byte("server"),
+		RecipientID:           []byte("client"),
 	})
 	require.NoError(t, err)
 	processor, err := oscore.NewProcessor(oscore.ProcessorConfig{Contexts: []*oscore.Context{clientContext}})
@@ -1679,15 +1716,17 @@ func TestProtectedRequestCachesProtectedResponseForRetransmission(t *testing.T) 
 	const mid = 2345
 	masterSecret := []byte("protected response cache test secret")
 	clientContext, err := oscore.NewContext(oscore.ContextConfig{
-		MasterSecret: masterSecret,
-		SenderID:     []byte("client"),
-		RecipientID:  []byte("server"),
+		AcceptReplayStateLoss: true,
+		MasterSecret:          masterSecret,
+		SenderID:              []byte("client"),
+		RecipientID:           []byte("server"),
 	})
 	require.NoError(t, err)
 	serverContext, err := oscore.NewContext(oscore.ContextConfig{
-		MasterSecret: masterSecret,
-		SenderID:     []byte("server"),
-		RecipientID:  []byte("client"),
+		AcceptReplayStateLoss: true,
+		MasterSecret:          masterSecret,
+		SenderID:              []byte("server"),
+		RecipientID:           []byte("client"),
 	})
 	require.NoError(t, err)
 	processor, err := oscore.NewProcessor(oscore.ProcessorConfig{
@@ -1768,15 +1807,17 @@ func TestProtectedRequestCachesEmptyAcknowledgementForRetransmission(t *testing.
 	const mid = 3456
 	masterSecret := []byte("protected empty ACK cache test secret")
 	clientContext, err := oscore.NewContext(oscore.ContextConfig{
-		MasterSecret: masterSecret,
-		SenderID:     []byte("client"),
-		RecipientID:  []byte("server"),
+		AcceptReplayStateLoss: true,
+		MasterSecret:          masterSecret,
+		SenderID:              []byte("client"),
+		RecipientID:           []byte("server"),
 	})
 	require.NoError(t, err)
 	serverContext, err := oscore.NewContext(oscore.ContextConfig{
-		MasterSecret: masterSecret,
-		SenderID:     []byte("server"),
-		RecipientID:  []byte("client"),
+		AcceptReplayStateLoss: true,
+		MasterSecret:          masterSecret,
+		SenderID:              []byte("server"),
+		RecipientID:           []byte("client"),
 	})
 	require.NoError(t, err)
 	processor, err := oscore.NewProcessor(oscore.ProcessorConfig{
@@ -1826,6 +1867,203 @@ func TestProtectedRequestCachesEmptyAcknowledgementForRetransmission(t *testing.
 	require.Equal(t, message.Acknowledgement, retransmittedAck.Type())
 	require.Equal(t, int32(mid), retransmittedAck.MessageID())
 	require.EqualValues(t, 1, handlerCalls.Load(), "duplicate protected request must not invoke the handler again")
+}
+
+func TestOSCOREEmptyControlMessagesWithTokenlessExchange(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		token message.Token
+	}{
+		{name: "zero-length token"},
+		{name: "non-empty token", token: message.Token{0x42}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			serverContext, cc, session := newOSCOREControlMessageTestConn(t)
+			const mid = 0x1234
+			request := cc.AcquireMessage(context.Background())
+			request.SetCode(codes.GET)
+			request.SetType(message.Confirmable)
+			request.SetMessageID(mid)
+			request.SetToken(test.token)
+
+			wireRequest, finish, err := cc.protectRequestMessage(request)
+			require.NoError(t, err)
+			protectedRequest, err := udpPoolMessageToOSCOREMessage(wireRequest)
+			require.NoError(t, err)
+			finish(true)
+
+			_, serverExchange, err := serverContext.UnprotectRequest(protectedRequest)
+			require.NoError(t, err)
+			token := append(message.Token(nil), test.token...)
+			var ackHandlerCalled atomic.Int32
+			cc.midHandlerContainer.Store(mid, &midElement{
+				handler: func(_ *responsewriter.ResponseWriter[*Conn], response *pool.Message) {
+					require.Equal(t, codes.Empty, response.Code())
+					require.Equal(t, message.Acknowledgement, response.Type())
+					require.Equal(t, int32(mid), response.MessageID())
+					ackHandlerCalled.Add(1)
+				},
+			})
+
+			ack := cc.AcquireMessage(context.Background())
+			ack.SetCode(codes.Empty)
+			ack.SetType(message.Acknowledgement)
+			ack.SetMessageID(mid)
+			ack.SetToken(nil)
+			ackDatagram, err := ack.MarshalWithEncoder(coder.DefaultCoder)
+			require.NoError(t, err)
+			require.False(t, cc.processIncomingOSCOREMessage(ack, ackDatagram),
+				"valid Empty ACK must continue through normal CoAP processing")
+			require.False(t, cc.handleSpecialMessages(ack),
+				"Empty ACK must be matched by Message ID in the transport layer")
+			cc.ReleaseMessage(ack)
+			require.EqualValues(t, 1, ackHandlerCalled.Load())
+			require.True(t, cc.requiresOSCOREResponse(token),
+				"Empty ACK must not remove the pending OSCORE response requirement")
+			require.Contains(t, cc.oscoreExchanges, oscore.ExchangeTrackerKey(token))
+
+			protectedResponse, err := serverContext.ProtectResponse(message.Message{
+				Code:      codes.Content,
+				Token:     token,
+				Type:      message.Confirmable,
+				MessageID: mid + 1,
+				Payload:   []byte("separate response"),
+			}, serverExchange)
+			require.NoError(t, err)
+			response := cc.AcquireMessage(context.Background())
+			response.SetMessage(protectedResponse)
+			responseDatagram, err := response.MarshalWithEncoder(coder.DefaultCoder)
+			require.NoError(t, err)
+			require.False(t, cc.processIncomingOSCOREMessage(response, responseDatagram),
+				"protected separate response must continue through normal response delivery")
+			body, err := response.ReadBody()
+			require.NoError(t, err)
+			require.Equal(t, codes.Content, response.Code())
+			require.Equal(t, []byte("separate response"), body)
+			require.True(t, isOSCOREResponseAlreadyProcessed(response))
+
+			var delivered atomic.Int32
+			handler := func(_ *responsewriter.ResponseWriter[*Conn], received *pool.Message) {
+				require.Equal(t, codes.Content, received.Code())
+				delivered.Add(1)
+			}
+			var cleanup func(bool)
+			if len(token) == 0 {
+				cleanup, err = cc.tokenlessHandler.Register(handler)
+				require.NoError(t, err)
+			} else {
+				cc.tokenHandlerContainer.Store(token.Hash(), handler)
+			}
+			responseWriterMessage := cc.AcquireMessage(context.Background())
+			cc.handleResponse(responsewriter.New(responseWriterMessage, cc), response)
+			cc.ReleaseMessage(responseWriterMessage)
+			if cleanup != nil {
+				cleanup(true)
+			}
+			require.EqualValues(t, 1, delivered.Load())
+			require.Equal(t, 0, session.writtenCount(),
+				"separate response ACK behavior is independent of request control ACK handling")
+			cc.ReleaseMessage(response)
+			cc.ReleaseMessage(request)
+		})
+	}
+}
+
+func TestOSCOREEmptyResetUsesNormalControlMessagePath(t *testing.T) {
+	_, cc, _ := newOSCOREControlMessageTestConn(t)
+	const mid = 0x4321
+	request := cc.AcquireMessage(context.Background())
+	request.SetCode(codes.GET)
+	request.SetType(message.Confirmable)
+	request.SetMessageID(mid)
+	_, finish, err := cc.protectRequestMessage(request)
+	require.NoError(t, err)
+	finish(true)
+
+	var rstHandlerCalled atomic.Int32
+	cc.midHandlerContainer.Store(mid, &midElement{
+		handler: func(_ *responsewriter.ResponseWriter[*Conn], response *pool.Message) {
+			require.Equal(t, codes.Empty, response.Code())
+			require.Equal(t, message.Reset, response.Type())
+			rstHandlerCalled.Add(1)
+		},
+	})
+	reset := cc.AcquireMessage(context.Background())
+	reset.SetCode(codes.Empty)
+	reset.SetType(message.Reset)
+	reset.SetMessageID(mid)
+	datagram, err := reset.MarshalWithEncoder(coder.DefaultCoder)
+	require.NoError(t, err)
+	require.False(t, cc.processIncomingOSCOREMessage(reset, datagram))
+	require.False(t, cc.handleSpecialMessages(reset))
+	require.EqualValues(t, 1, rstHandlerCalled.Load())
+	cc.ReleaseMessage(reset)
+	cc.ReleaseMessage(request)
+}
+
+func TestOSCORERejectsMalformedEmptyControlAndUnexpectedPlaintextResponse(t *testing.T) {
+	_, cc, _ := newOSCOREControlMessageTestConn(t)
+	var reported []error
+	cc.errors = func(err error) { reported = append(reported, err) }
+	malformedACK := cc.AcquireMessage(context.Background())
+	malformedACK.SetCode(codes.Empty)
+	malformedACK.SetType(message.Acknowledgement)
+	malformedACK.SetMessageID(1)
+	malformedACK.SetToken(message.Token{1})
+	malformedDatagram, err := malformedACK.MarshalWithEncoder(coder.DefaultCoder)
+	require.NoError(t, err)
+	require.True(t, cc.processIncomingOSCOREMessage(malformedACK, malformedDatagram))
+	require.ErrorIs(t, reported[len(reported)-1], oscore.ErrInvalidOSCOREMessage)
+
+	request := cc.AcquireMessage(context.Background())
+	request.SetCode(codes.GET)
+	request.SetType(message.Confirmable)
+	request.SetMessageID(2)
+	request.SetToken(message.Token{2})
+	wireRequest, finish, err := cc.protectRequestMessage(request)
+	require.NoError(t, err)
+	finish(true)
+	cc.ReleaseMessage(wireRequest)
+	unprotectedResponse := cc.AcquireMessage(context.Background())
+	unprotectedResponse.SetCode(codes.Content)
+	unprotectedResponse.SetType(message.Acknowledgement)
+	unprotectedResponse.SetMessageID(2)
+	unprotectedResponse.SetToken(message.Token{2})
+	responseDatagram, err := unprotectedResponse.MarshalWithEncoder(coder.DefaultCoder)
+	require.NoError(t, err)
+	require.True(t, cc.processIncomingOSCOREMessage(unprotectedResponse, responseDatagram))
+	require.ErrorIs(t, reported[len(reported)-1], oscore.ErrOSCORERequired)
+	cc.ReleaseMessage(request)
+}
+
+func newOSCOREControlMessageTestConn(t *testing.T) (*oscore.Context, *Conn, *recordingSession) {
+	t.Helper()
+	const secret = "OSCORE Empty ACK regression test"
+	clientContext, err := oscore.NewContext(oscore.ContextConfig{
+		AcceptReplayStateLoss: true,
+		MasterSecret:          []byte(secret),
+		SenderID:              []byte("client"),
+		RecipientID:           []byte("server"),
+	})
+	require.NoError(t, err)
+	serverContext, err := oscore.NewContext(oscore.ContextConfig{
+		AcceptReplayStateLoss: true,
+		MasterSecret:          []byte(secret),
+		SenderID:              []byte("server"),
+		RecipientID:           []byte("client"),
+	})
+	require.NoError(t, err)
+	processor, err := oscore.NewProcessor(oscore.ProcessorConfig{Contexts: []*oscore.Context{clientContext}})
+	require.NoError(t, err)
+	session := newRecordingSession()
+	cfg := DefaultConfig
+	cfg.OSCORE = processor
+	cfg.Errors = func(error) {}
+	cc := NewConnWithOpts(session, &cfg)
+	t.Cleanup(func() {
+		_ = cc.Close()
+	})
+	return serverContext, cc, session
 }
 
 func assertNoCallbackErrors(t *testing.T, callbackErrors <-chan error) {

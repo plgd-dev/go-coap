@@ -330,11 +330,12 @@ type Conn struct {
 
 	oscoreProcessor                               *oscore.Processor
 	oscoreProxy                                   bool
+	oscoreErrorResponses                          bool
 	oscoreOuterBlockwise                          bool
 	oscoreOuterBlockwiseMaxReassembledPayloadSize uint32
 	oscoreOuterBlockwiseErr                       error
 	oscoreMu                                      sync.Mutex
-	oscoreExchanges                               map[string]udpOSCOREExchange
+	oscoreExchanges                               oscore.ExchangeTracker[udpOSCOREExchange]
 	oscoreRequiredResponses                       map[string]struct{}
 	oscoreRequests                                map[int32]udpOSCORERequest
 	oscoreResponses                               map[int32]udpOSCOREResponse
@@ -524,9 +525,10 @@ func newConn(session Session, cfg *Config, cfgOpts ConnOptions) *Conn {
 		processReceivedMessage: cfg.ProcessReceivedMessage,
 		oscoreProcessor:        cfg.OSCORE,
 		oscoreProxy:            cfg.OSCOREProxy,
+		oscoreErrorResponses:   cfg.OSCOREErrorResponses,
 		oscoreOuterBlockwise:   cfg.OSCOREOuterBlockwise,
 		oscoreOuterBlockwiseMaxReassembledPayloadSize: cfg.OSCOREOuterBlockwiseMaxReassembledPayloadSize,
-		oscoreExchanges:           make(map[string]udpOSCOREExchange),
+		oscoreExchanges:           oscore.NewExchangeTracker[udpOSCOREExchange](),
 		oscoreRequiredResponses:   make(map[string]struct{}),
 		oscoreRequests:            make(map[int32]udpOSCORERequest),
 		oscoreResponses:           make(map[int32]udpOSCOREResponse),
@@ -556,7 +558,7 @@ func (cc *Conn) initializeBlockwise() {
 			if cc.oscoreOuterBlockwiseMaxReassembledPayloadSize == 0 {
 				cc.oscoreOuterBlockwiseMaxReassembledPayloadSize = oscore.MaxUnfragmentedSize
 			}
-			cc.blockWise.SetMaxReassembledPayloadSize(int64(cc.oscoreOuterBlockwiseMaxReassembledPayloadSize))
+			cc.blockWise.SetMaxOSCOREReassembledPayloadSize(int64(cc.oscoreOuterBlockwiseMaxReassembledPayloadSize))
 		}
 		if cc.oscoreOuterBlockwiseErr != nil {
 			cc.errors(cc.oscoreOuterBlockwiseErr)
@@ -1905,6 +1907,9 @@ func (cc *Conn) processIncomingOSCOREMessage(req *pool.Message, datagram []byte)
 	if cc.oscoreProcessor == nil {
 		return false
 	}
+	if isControl, handled := cc.processIncomingOSCOREEmptyControl(req); isControl {
+		return handled
+	}
 	if cc.oscoreOuterBlockwise && (req.HasOption(message.Block1) || req.HasOption(message.Block2)) {
 		cc.normalizeOuterBlockwiseCode(req)
 		return false
@@ -1912,11 +1917,27 @@ func (cc *Conn) processIncomingOSCOREMessage(req *pool.Message, datagram []byte)
 	if cc.isOSCORERequestMessage(req) {
 		return cc.processIncomingOSCORERequestMessage(req, datagram)
 	}
-	if req.Code() >= codes.Created && req.Code() < 192 ||
-		req.HasOption(message.OSCORE) || cc.requiresOSCOREResponse(req.Token()) {
+	if cc.isOSCOREResponseMessage(req) {
 		return cc.processIncomingOSCOREResponse(req, datagram)
 	}
 	return false
+}
+
+func (cc *Conn) processIncomingOSCOREEmptyControl(req *pool.Message) (bool, bool) {
+	if req.Code() != codes.Empty || req.Type() != message.Acknowledgement && req.Type() != message.Reset {
+		return false, false
+	}
+	if len(req.Token()) == 0 && len(req.Options()) == 0 && req.Body() == nil {
+		return true, false
+	}
+	cc.ReleaseMessage(req)
+	cc.errors(fmt.Errorf("%w: malformed Empty ACK or RST", oscore.ErrInvalidOSCOREMessage))
+	return true, true
+}
+
+func (cc *Conn) isOSCOREResponseMessage(req *pool.Message) bool {
+	return req.Code() >= codes.Created && req.Code() < 192 ||
+		req.HasOption(message.OSCORE) || cc.requiresOSCOREResponse(req.Token())
 }
 
 func (cc *Conn) isOSCORERequestMessage(req *pool.Message) bool {

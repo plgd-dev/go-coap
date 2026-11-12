@@ -69,11 +69,18 @@ func (b *block1Receiver) sendPayload(num int64, more bool, payload []byte, size1
 }
 
 func (b *block1Receiver) sendPayloadWithPath(num int64, more bool, payload []byte, path string, size1 ...uint32) block1Response {
+	return b.sendPayloadWithPathAndOSCORE(num, more, payload, path, false, size1...)
+}
+
+func (b *block1Receiver) sendPayloadWithPathAndOSCORE(num int64, more bool, payload []byte, path string, protected bool, size1 ...uint32) block1Response {
 	req := b.cc.AcquireMessage(b.t.Context())
 	defer b.cc.ReleaseMessage(req)
 	req.SetCode(codes.PUT)
 	req.SetToken(b.token)
 	req.SetType(message.Confirmable)
+	if protected {
+		req.SetOptionBytes(message.OSCORE, []byte{0})
+	}
 	if path != "" {
 		require.NoError(b.t, req.SetPath(path))
 	}
@@ -250,6 +257,35 @@ func TestBlockWiseReceiveMaxReassembledPayloadSize(t *testing.T) {
 	require.Equal(t, codes.RequestEntityTooLarge, resp.code)
 	require.Equal(t, uint32(limit), resp.size1)
 	require.Empty(t, r.delivered)
+}
+
+func TestBlockWiseReceiveOSCOREPayloadLimitDoesNotAffectPlaintext(t *testing.T) {
+	const limit = 64 * 1024
+	r := newBlock1Receiver(t, time.Minute)
+	r.bw.SetMaxOSCOREReassembledPayloadSize(limit)
+
+	for block := int64(0); block < limit/testBlock1Size; block++ {
+		require.Equal(t, codes.Continue, r.send(block, true).code)
+	}
+	require.Equal(t, codes.Changed, r.send(limit/testBlock1Size, false).code)
+	require.Len(t, r.delivered, 1)
+	require.Len(t, r.delivered[0], limit+testBlock1Size)
+
+	protected := newBlock1Receiver(t, time.Minute)
+	protected.bw.SetMaxOSCOREReassembledPayloadSize(limit)
+	for block := int64(0); block < limit/testBlock1Size; block++ {
+		payload := bytes.Repeat([]byte{byte(block)}, testBlock1Size)
+		require.Equal(t, codes.Continue, protected.sendPayloadWithPathAndOSCORE(block, true, payload, "", true).code)
+	}
+	resp := protected.sendPayloadWithPathAndOSCORE(
+		limit/testBlock1Size,
+		false,
+		bytes.Repeat([]byte{0xff}, testBlock1Size),
+		"",
+		true,
+	)
+	require.Equal(t, codes.RequestEntityTooLarge, resp.code)
+	require.Empty(t, protected.delivered)
 }
 
 func TestBlockWiseReceiveMaxReassembledPayloadSizeClearsTransfer(t *testing.T) {

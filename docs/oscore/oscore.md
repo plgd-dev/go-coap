@@ -55,10 +55,11 @@ import (
 
 func newOSCOREProcessor(senderID, recipientID string) (*oscore.Processor, error) {
 	ctx, err := oscore.NewContext(oscore.ContextConfig{
-		MasterSecret: []byte("0123456789abcdef"),
-		MasterSalt:   []byte("salt1234"),
-		SenderID:     []byte(senderID),
-		RecipientID:  []byte(recipientID),
+		MasterSecret:          []byte("0123456789abcdef"),
+		MasterSalt:            []byte("salt1234"),
+		SenderID:              []byte(senderID),
+		RecipientID:           []byte(recipientID),
+		AcceptReplayStateLoss: true, // Use only for examples or deliberate volatile-state deployments.
 	})
 	if err != nil {
 		return nil, err
@@ -86,6 +87,10 @@ The public API separates state by responsibility:
   Keep the returned value with its request; copies share lifecycle state.
   Read request metadata through `RequestIdentifier()`,
   `RequestPartialIVBytes()`, and `IsObserve()`.
+- Transports attach `RequestInfo` to the handler context. Use
+  `oscore.RequestInfoFromContext(req.Context())` to distinguish protected
+  requests and inspect the inbound Recipient ID and ID Context without
+  exposing key material or the Exchange.
 - A transport owns CoAP retransmission, Token/MID tracking, Observe delivery,
   and Blockwise/Q-Block integration. Direct `net/oscore` calls do not provide
   those transport services.
@@ -99,6 +104,12 @@ revocation: already-bound Exchanges and operations holding a pre-removal
 context snapshot may complete, and the original Context remains available to
 them. Removing a context does not make it safe to restart or reuse its sender
 sequence numbers.
+The Processor retains sender key/common-IV fingerprints after removal to
+prevent nonce reuse. Therefore, after `RemoveContext`, calling `AddContext`
+with a newly constructed Context that has the same sender security context
+fails with `ErrInvalidContext` ("duplicate sender key and common IV") by
+design. Re-adding the exact same Context instance is allowed; restarting it
+with reset sender sequence state is not.
 
 `Processor.UnprotectResponse(response, context, exchange)` accepts only the
 same Context instance that created the supplied Exchange. An Exchange remains
@@ -153,17 +164,19 @@ import (
 func directOSCOREExample() error {
 	masterSecret := []byte("public test-only secret")
 	clientContext, err := oscore.NewContext(oscore.ContextConfig{
-		MasterSecret: masterSecret,
-		SenderID:     []byte("client"),
-		RecipientID:  []byte("server"),
+		MasterSecret:          masterSecret,
+		SenderID:              []byte("client"),
+		RecipientID:           []byte("server"),
+		AcceptReplayStateLoss: true,
 	})
 	if err != nil {
 		return err
 	}
 	serverContext, err := oscore.NewContext(oscore.ContextConfig{
-		MasterSecret: masterSecret,
-		SenderID:     []byte("server"),
-		RecipientID:  []byte("client"),
+		MasterSecret:          masterSecret,
+		SenderID:              []byte("server"),
+		RecipientID:           []byte("client"),
+		AcceptReplayStateLoss: true,
 	})
 	if err != nil {
 		return err
@@ -280,6 +293,13 @@ denial of service but must not be treated as authenticated peer statements.
 Check `oscore.IsUnprotectedProcessingError(response.Context())` before acting
 on one.
 
+Server endpoints can opt into sending these responses with
+`options.WithOSCOREErrorResponses()`. It is disabled by default; when enabled,
+UDP/DTLS replies only to Confirmable requests, while TCP responds on the stream.
+Unknown contexts and replays map to 4.01, malformed OSCORE options to 4.02, and
+other OSCORE processing failures to 4.00. Responses contain no diagnostic
+payload and failed requests are never dispatched to the application handler.
+
 ## Sender sequence and receiver replay state
 
 Partial IV values must never be reused with the same sender key. The default
@@ -302,26 +322,37 @@ Alternatively, restore `SenderSequenceNumber` to the next unused value before
 constructing a context. Never restore an old or guessed value. The receiver
 replay window is independent of sender sequence persistence. To preserve it
 across receiver restarts, configure a `ReplayWindowStore` on `ContextConfig`.
-The store must load the state for that recipient context and atomically persist
-each new state before returning success from `Save`; otherwise the protected
-request is not accepted. Use one store per context and coordinate access if
-multiple receiver processes can use that context. Persisting a replay-window
-advance requires durable storage on every accepted protected message and can
-limit throughput. Omitting the replay store avoids that write cost, but a
-receiver restart then loses its replay state. After such a restart, do not
-continue using the same context without restoring replay protection; use the
-RFC 8613 Appendix B.1.2 recovery approach (for example, Echo) or establish a
-fresh security context.
+`NewContext` requires either this store or the explicit
+`AcceptReplayStateLoss: true` opt-in. The opt-in permits an in-memory replay
+window only; after a restart, recorded requests may be accepted again. Use it
+only when that loss is an intentional deployment choice, such as a transient
+example. Production receivers should use a durable replay store or follow the
+RFC recovery procedure rather than silently accepting state loss.
+The store must load the state for that recipient context and persist it before
+returning success; otherwise the protected request is not accepted. Use one
+store per context and coordinate access if multiple receiver processes use
+that context. A custom `ReplayWindowStore` that persists every complete
+window advance can limit throughput. The file-backed `HighWaterFileStore`
+implements the optional `ReplayWindowHighWaterStore` and instead persists one
+exclusive cutoff per 256 accepted sequence advances. After restart, all
+sequences below that cutoff are treated as replay, including requests that may
+not have arrived before shutdown. This trades availability for fewer durable
+writes. Omitting a replay store avoids that write cost but loses replay state
+after restart; do not continue using that context without restoring replay
+protection. Follow RFC 8613 Appendix B.1.2 recovery (for example, Echo) or
+establish a fresh security context.
 
-The `net/oscore/store` package provides a file-backed implementation of both
-interfaces. Its sender sequence store durably reserves windows of 256 values
-and serves them from memory; unused values are skipped when the store is
-recreated. Sender reservations use a separate rollback guard and pending
-transaction, allowing startup to finish an interrupted reservation while
-skipping its entire reserved window. A missing individual sender state or guard
-file, corrupt files, and mismatched files are rejected; an existing sender
-sequence file without its guard is not treated as a fresh store. Its replay
-store still durably records each accepted window advance:
+The `net/oscore/store` package provides `HighWaterFileStore`, which durably
+reserves sender sequence windows of 256 values and atomically persists one
+exclusive receiver replay cutoff per 256 sequence advances. After restart,
+every sequence below the cutoff is treated as replay, including requests that
+may not have arrived before shutdown; this intentionally trades availability
+for fewer durable writes. Use only one active receiver `Context` for this
+store. Rolling back its high-water file cannot be detected without an external
+monotonic trust anchor. Sender reservations use a rollback guard and pending
+transaction so startup can finish an interrupted reservation while consuming
+its entire reserved window. Missing individual sender-state files, corrupt
+files, and mismatched files are rejected.
 
 ```go
 import (
@@ -329,7 +360,7 @@ import (
 	oscorestore "github.com/plgd-dev/go-coap/v3/net/oscore/store"
 )
 
-state, err := oscorestore.NewFileStore("/var/lib/myapp/oscore", "peer-17")
+state, err := oscorestore.NewHighWaterFileStore("/var/lib/myapp/oscore", "peer-17")
 if err != nil {
 	return err
 }
@@ -343,50 +374,17 @@ ctx, err := oscore.NewContext(oscore.ContextConfig{
 ```
 
 Use the same stable store ID when recreating the same local OSCORE context and
-a different ID for each distinct context. The file store creates state with
+a different ID for each distinct context. The store creates files with
 restrictive permissions and atomically syncs updates. On Unix it coordinates
 multiple processes with file locks; on other platforms it only coordinates
 within one process and cannot sync directory metadata. Keep its directory
-writable only by the trusted application account. The file store does not
-persist master secrets or encrypt state at rest. Applications can instead
-implement `SenderSequenceStore` and `ReplayWindowStore` for a database or
-remote transactional store.
-
-Replay updates use a durable pending transaction file so startup can finish an
-update interrupted between writing the rollback guard and replay state. A
-replay-state/guard mismatch without a valid pending transaction is rejected;
-restoring only an old replay-state file is therefore detected. Back up or
-restore the sender sequence, its guard, and any pending transaction together;
-do the same for replay state. Rolling back the complete store directory,
-or restoring a matching old state-and-guard pair, cannot be detected locally.
-Preventing that requires an external monotonic trust anchor or equivalent
-trusted state outside the rollback domain.
-
-Loss of only one sender sequence file is detected by the surviving counterpart.
-An active `FileStore` instance remembers initialization after validating an
-existing sequence/guard pair or completing a pending reservation, even if a
-later operation returns an error while syncing transaction cleanup. If both
-sequence and guard files then disappear, it may consume the rest of its
-already-reserved in-memory window, but rejects a subsequent reservation. A
-newly created instance has no such in-memory history and treats the absence of
-both files as an uninitialized store. Thus, paired deletion followed by process
-restart—and matching state-and-guard rollback—cannot be detected without
-trusted state outside the store directory. A complete directory rollback has
-the same limitation.
-
-On startup, a valid pending sender transaction is completed and its entire
-reserved window is treated as consumed, even if the original `Reserve` call
-did not return a value. A missing individual sender state or guard file,
-malformed files, or mismatched files without a valid pending transaction fails
-closed; do not recreate a missing guard from an existing sequence file or
-replace just one file with an older backup.
-Restore the complete set of sender state, guard, and pending transaction from
-a backup whose currentness is proven by an external monotonic trust anchor, or
-provision a fresh OSCORE context with a new sender key.
-State created by an older FileStore version without a sender guard is rejected
-and must be migrated only from a trusted next-sequence value. Reserved but
-unused values are intentionally skipped after restart. A stable FileStore ID
-must be reused only for the same local OSCORE context.
+writable only by the trusted application account. The store does not persist
+master secrets or encrypt state at rest. It detects sender-state corruption,
+missing individual sender-state files, and sender-state rollback, but cannot
+detect rollback of the complete high-water file without an external monotonic
+trust anchor. Reserved but unused sender values are intentionally skipped
+after restart. Applications can implement `SenderSequenceStore` and
+`ReplayWindowHighWaterStore` for a database or remote transactional store.
 
 ## Minimal forward proxy
 
@@ -426,7 +424,11 @@ defer cc.ReleaseMessage(resp)
 Configure the proxy with a `RoundTripper` for the target transport and an
 explicit allowlist `AllowTarget` policy. A nil policy rejects all forwarding;
 do not expose an unrestricted proxy, since arbitrary targets can create an
-SSRF path. The round tripper receives the context, parsed target, and a copied
+SSRF path. If hostnames are allowed, resolve them in the policy and pin the
+selected IP in the `RoundTripper`; validating one DNS answer and dialing a
+later answer permits DNS rebinding. `AllowPublicIPLiteralTarget` is a helper
+for policies that intentionally accept only literal public IP addresses.
+The round tripper receives the context, parsed target, and a copied
 CoAP message whose OSCORE option and ciphertext are unchanged. It should use a
 fresh connection per request unless it safely handles token collisions.
 Register `Forwarder.ServeCOAP` as a mux handler, for example as the router's
@@ -443,12 +445,17 @@ timeouts, and response-size limits.
   AES-CCM-16-128-128, and AES-CCM-16-128-256. The default remains
   AES-CCM-16-64-128.
 - UDP, DTLS, TCP, and TLS transports.
+- TCP OSCORE exchanges use a 247-second response timeout by default.
+  Configure `options.WithOSCOREExchangeTimeout` to extend it for slow origins;
+  zero disables timeout expiry. This is a local exchange-retention policy, not
+  an RFC-defined TCP lifetime.
 - Classic Block1/Block2 and Observe flows. Inner Blockwise remains the
   default. UDP and DTLS also support opt-in Outer Blockwise fragmentation and
   reassembly with `options.WithOSCOREOuterBlockwise()`; reassembled payloads
   default to a 65,536-byte limit. Configure a different cap with
   `options.WithOSCOREOuterBlockwiseMaxReassembledPayloadSize(size)`; a size
-  of zero selects the default. This is a general reassembly cap; the existing
+  of zero selects the default. The cap applies only to messages carrying the
+  OSCORE option; plaintext Blockwise transfers are unaffected. The existing
   Block1 body-size limit remains independent, and the stricter cap applies to
   Block1 uploads. Protected client requests exceeding the cap are rejected
   locally, and UDP/DTLS endpoints replace oversized protected responses with
@@ -463,8 +470,9 @@ timeouts, and response-size limits.
 - No-Response suppression is preserved for protected requests over UDP, DTLS,
   TCP, and TLS; the application processes each request while the suppressed
   response is not sent.
-- Optional durable receiver replay-state persistence through
-  `ReplayWindowStore`; storage durability and coordination are application
+- Receiver replay-state policy is explicit: use `ReplayWindowStore` for
+  durable persistence or set `AcceptReplayStateLoss` to opt into volatile
+  replay state; storage durability and coordination are application
   responsibilities.
 - Q-Block1 uploads and Q-Block2 downloads over OSCORE-protected UDP and DTLS.
   Q-Block options are encrypted as Class E options. Q-Block is a datagram

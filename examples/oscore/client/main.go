@@ -26,7 +26,7 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	state, err := oscorestore.NewFileStore(*stateDir, "go-coap-example-client")
+	state, err := oscorestore.NewHighWaterFileStore(*stateDir, "go-coap-example-client")
 	if err != nil {
 		log.Fatalf("create OSCORE state store: %v", err)
 	}

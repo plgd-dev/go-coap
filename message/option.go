@@ -68,8 +68,8 @@ const (
 	Observe      OptionID = 6
 	URIPort      OptionID = 7
 	LocationPath OptionID = 8
-	// OSCORE remains an unknown critical option until transport processing is
-	// integrated, so legacy endpoints cannot mistake protected traffic for plain CoAP.
+	// OSCORE is the critical option defined by RFC 8613. An OSCORE-enabled
+	// transport must process it before dispatching the request to an application handler.
 	OSCORE        OptionID = 9
 	URIPath       OptionID = 11
 	ContentFormat OptionID = 12

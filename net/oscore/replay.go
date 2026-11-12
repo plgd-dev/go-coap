@@ -20,34 +20,48 @@ type ReplayWindowState struct {
 	WindowSize      uint8
 }
 
-// ReplayWindowStore loads and durably saves a receiver's replay window state.
-// Save must atomically persist the complete state before returning nil. Use a
-// store dedicated to one Context and coordinate access if receiver processes
-// can concurrently use the same security context.
+// ReplayWindowStore loads and durably saves a receiver's replay state. Save
+// must atomically persist sufficient replay state before returning nil.
+// Stores implementing ReplayWindowHighWaterStore may persist a stricter
+// exclusive sequence cutoff instead of the complete bitmap. Use a store
+// dedicated to one Context and coordinate access if receiver processes can
+// concurrently use the same security context.
 type ReplayWindowStore interface {
 	Load() (ReplayWindowState, error)
 	Save(ReplayWindowState) error
 }
 
+// ReplayWindowHighWaterStore optionally persists an exclusive sequence
+// boundary in batches. After restart, sequences below the boundary are
+// rejected, trading a bounded amount of availability for fewer durable writes.
+type ReplayWindowHighWaterStore interface {
+	LoadHighWater() (uint64, bool, error)
+	SaveHighWater(uint64) error
+}
+
+const replayHighWaterMargin = uint64(256)
+
 // ReplayWindow rejects duplicate or stale Partial IV values. Authentication is
 // performed while holding the window lock so concurrent copies cannot both be
 // accepted. The window advances only after verify returns nil.
 type ReplayWindow struct {
-	mu      sync.Mutex
-	size    uint8
-	highest uint64
-	bitmap  uint64
-	started bool
-	store   ReplayWindowStore
+	mu           sync.Mutex
+	size         uint8
+	highest      uint64
+	bitmap       uint64
+	started      bool
+	store        ReplayWindowStore
+	highWater    uint64
+	highWaterSet bool
 }
 
 // NewReplayWindow creates a sliding replay window of 1 to 64 sequence numbers.
 // A size of zero selects the RFC default of 32; larger values are rejected.
 func NewReplayWindow(size uint8) (*ReplayWindow, error) {
-	return newReplayWindow(size, ReplayWindowState{}, nil)
+	return newReplayWindow(size, ReplayWindowState{}, nil, false)
 }
 
-func newReplayWindow(size uint8, state ReplayWindowState, store ReplayWindowStore) (*ReplayWindow, error) {
+func newReplayWindow(size uint8, state ReplayWindowState, store ReplayWindowStore, highWaterSet bool) (*ReplayWindow, error) {
 	if size == 0 {
 		size = 32
 	}
@@ -60,13 +74,18 @@ func newReplayWindow(size uint8, state ReplayWindowState, store ReplayWindowStor
 	if state.Started && state.WindowSize == 0 {
 		state.WindowSize = size
 	}
-	return &ReplayWindow{
+	window := &ReplayWindow{
 		size:    size,
 		highest: state.HighestSequence,
 		bitmap:  state.Bitmap,
 		started: state.Started,
 		store:   store,
-	}, nil
+	}
+	if highWaterSet && state.Started {
+		window.highWater = state.HighestSequence + 1
+		window.highWaterSet = highWaterSet
+	}
+	return window, nil
 }
 
 func validateReplayState(size uint8, state ReplayWindowState) error {
@@ -97,23 +116,38 @@ func (w *ReplayWindow) Accept(sequence uint64, verify func() error) error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
+	bit, err := w.sequenceBit(sequence)
+	if err != nil {
+		return err
+	}
+	if err := verify(); err != nil {
+		return err
+	}
+	next := w.nextState(sequence, bit)
+	if err := w.persistState(next); err != nil {
+		return err
+	}
+	w.highest, w.bitmap, w.started = next.HighestSequence, next.Bitmap, next.Started
+	return nil
+}
+
+func (w *ReplayWindow) sequenceBit(sequence uint64) (uint64, error) {
 	var bit uint64
 	switch {
 	case !w.started:
 	case sequence > w.highest:
 	case w.highest-sequence >= uint64(w.size):
-		return ErrReplay
+		return 0, ErrReplay
 	default:
 		bit = uint64(1) << (w.highest - sequence)
 		if w.bitmap&bit != 0 {
-			return ErrReplay
+			return 0, ErrReplay
 		}
 	}
+	return bit, nil
+}
 
-	if err := verify(); err != nil {
-		return err
-	}
-
+func (w *ReplayWindow) nextState(sequence, bit uint64) ReplayWindowState {
 	next := ReplayWindowState{
 		HighestSequence: w.highest,
 		Bitmap:          w.bitmap,
@@ -134,21 +168,42 @@ func (w *ReplayWindow) Accept(sequence uint64, verify func() error) error {
 	default:
 		next.Bitmap |= bit
 	}
-	if w.store != nil {
-		if err := w.store.Save(next); err != nil {
-			reconcileErr := w.reconcileStoreState()
-			if reconcileErr != nil {
-				return fmt.Errorf("persist OSCORE replay state: %w (reload persisted state: %w)", err, reconcileErr)
-			}
-			return fmt.Errorf("persist OSCORE replay state: %w", err)
-		}
+	return next
+}
+
+func (w *ReplayWindow) persistState(next ReplayWindowState) error {
+	if w.store == nil {
+		return nil
 	}
-	w.highest, w.bitmap, w.started = next.HighestSequence, next.Bitmap, next.Started
+	persistErr := w.saveState(next)
+	if persistErr == nil {
+		return nil
+	}
+	reconcileErr := w.reconcileStoreState()
+	if reconcileErr != nil {
+		return fmt.Errorf("persist OSCORE replay state: %w (reload persisted state: %w)", persistErr, reconcileErr)
+	}
+	return fmt.Errorf("persist OSCORE replay state: %w", persistErr)
+}
+
+func (w *ReplayWindow) saveState(next ReplayWindowState) error {
+	highWaterStore, ok := w.store.(ReplayWindowHighWaterStore)
+	if !ok {
+		return w.store.Save(next)
+	}
+	if w.highWaterSet && next.HighestSequence < w.highWater {
+		return nil
+	}
+	w.highWater = min(next.HighestSequence+replayHighWaterMargin, maxPartialIV+1)
+	if err := highWaterStore.SaveHighWater(w.highWater); err != nil {
+		return err
+	}
+	w.highWaterSet = true
 	return nil
 }
 
 func (w *ReplayWindow) reconcileStoreState() error {
-	state, err := w.store.Load()
+	state, highWaterSet, err := loadReplayState(w.store, w.size)
 	if err != nil {
 		return err
 	}
@@ -168,7 +223,37 @@ func (w *ReplayWindow) reconcileStoreState() error {
 		return ErrInvalidReplayState
 	}
 	w.highest, w.bitmap, w.started = state.HighestSequence, state.Bitmap, state.Started
+	if _, ok := w.store.(ReplayWindowHighWaterStore); ok && state.Started {
+		w.highWater = state.HighestSequence + 1
+		w.highWaterSet = highWaterSet
+	}
 	return nil
+}
+
+func loadReplayState(store ReplayWindowStore, size uint8) (ReplayWindowState, bool, error) {
+	if highWaterStore, ok := store.(ReplayWindowHighWaterStore); ok {
+		highWater, exists, err := highWaterStore.LoadHighWater()
+		if err != nil {
+			return ReplayWindowState{}, false, err
+		}
+		if exists {
+			if highWater == 0 || highWater > maxPartialIV+1 {
+				return ReplayWindowState{}, false, fmt.Errorf("%w: invalid high-water mark %d", ErrInvalidReplayState, highWater)
+			}
+			return replayWindowStateFromHighWater(highWater, size), true, nil
+		}
+	}
+	state, err := store.Load()
+	return state, false, err
+}
+
+func replayWindowStateFromHighWater(highWater uint64, size uint8) ReplayWindowState {
+	return ReplayWindowState{
+		HighestSequence: highWater - 1,
+		Bitmap:          replayWindowMask(size),
+		Started:         true,
+		WindowSize:      size,
+	}
 }
 
 func replayStateAtLeast(current, candidate ReplayWindowState) bool {

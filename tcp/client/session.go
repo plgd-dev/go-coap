@@ -208,6 +208,9 @@ func (s *Session) shouldDropRequest(req *pool.Message) (bool, error) {
 func (s *Session) handleReceivedRequest(cc *Conn, req *pool.Message) (bool, error) {
 	if req.Code() >= codes.GET && req.Code() <= codes.IPATCH {
 		if err := cc.unprotectIncomingRequest(req); err != nil {
+			if responseErr := cc.respondToOSCOREProcessingError(req, err); responseErr != nil {
+				s.errors(responseErr)
+			}
 			s.errors(fmt.Errorf("cannot process incoming OSCORE request: %w", err))
 			return true, nil
 		}

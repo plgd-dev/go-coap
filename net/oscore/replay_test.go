@@ -84,7 +84,7 @@ func (s *testReplayWindowStore) Save(state ReplayWindowState) error {
 
 func TestReplayWindowStoreRestoresState(t *testing.T) {
 	store := &testReplayWindowStore{}
-	window, err := newReplayWindow(4, store.state, store)
+	window, err := newReplayWindow(4, store.state, store, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -92,7 +92,7 @@ func TestReplayWindowStoreRestoresState(t *testing.T) {
 		t.Fatal(acceptErr)
 	}
 
-	restarted, err := newReplayWindow(4, store.state, store)
+	restarted, err := newReplayWindow(4, store.state, store, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -104,7 +104,7 @@ func TestReplayWindowStoreRestoresState(t *testing.T) {
 func TestReplayWindowStoreFailureDoesNotAdvanceWindow(t *testing.T) {
 	saveErr := errors.New("storage unavailable")
 	store := &testReplayWindowStore{saveErr: saveErr}
-	window, err := newReplayWindow(4, store.state, store)
+	window, err := newReplayWindow(4, store.state, store, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -130,7 +130,7 @@ func TestReplayWindowRecoversLiveStateAfterInterruptedSave(t *testing.T) {
 		saveErr:           saveErr,
 		commitOnSaveError: true,
 	}
-	window, err := newReplayWindow(4, store.state, store)
+	window, err := newReplayWindow(4, store.state, store, false)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -12,17 +12,19 @@ import (
 func ExampleContext_directAPI() {
 	masterSecret := []byte("public test-only secret")
 	clientContext, err := oscore.NewContext(oscore.ContextConfig{
-		MasterSecret: masterSecret,
-		SenderID:     []byte("client"),
-		RecipientID:  []byte("server"),
+		AcceptReplayStateLoss: true,
+		MasterSecret:          masterSecret,
+		SenderID:              []byte("client"),
+		RecipientID:           []byte("server"),
 	})
 	if err != nil {
 		panic(err)
 	}
 	serverContext, err := oscore.NewContext(oscore.ContextConfig{
-		MasterSecret: masterSecret,
-		SenderID:     []byte("server"),
-		RecipientID:  []byte("client"),
+		AcceptReplayStateLoss: true,
+		MasterSecret:          masterSecret,
+		SenderID:              []byte("server"),
+		RecipientID:           []byte("client"),
 	})
 	if err != nil {
 		panic(err)

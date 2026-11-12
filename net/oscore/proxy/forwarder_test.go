@@ -58,17 +58,19 @@ func (o *testOrigin) RoundTrip(_ context.Context, target oscore.ProxyTarget, req
 func TestForwarderRelaysOSCOREWithoutDecrypting(t *testing.T) {
 	secret := []byte("0123456789abcdef")
 	clientContext, err := oscore.NewContext(oscore.ContextConfig{
-		MasterSecret: secret,
-		SenderID:     []byte{0},
-		RecipientID:  []byte{1},
+		AcceptReplayStateLoss: true,
+		MasterSecret:          secret,
+		SenderID:              []byte{0},
+		RecipientID:           []byte{1},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	originContext, err := oscore.NewContext(oscore.ContextConfig{
-		MasterSecret: secret,
-		SenderID:     []byte{1},
-		RecipientID:  []byte{0},
+		AcceptReplayStateLoss: true,
+		MasterSecret:          secret,
+		SenderID:              []byte{1},
+		RecipientID:           []byte{0},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -118,9 +120,10 @@ func TestForwarderRequiresTargetAllowlist(t *testing.T) {
 func TestForwarderRejectsDisallowedTargetBeforeDial(t *testing.T) {
 	secret := []byte("0123456789abcdef")
 	clientContext, err := oscore.NewContext(oscore.ContextConfig{
-		MasterSecret: secret,
-		SenderID:     []byte{0},
-		RecipientID:  []byte{1},
+		AcceptReplayStateLoss: true,
+		MasterSecret:          secret,
+		SenderID:              []byte{0},
+		RecipientID:           []byte{1},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -147,4 +150,77 @@ func TestForwarderRejectsDisallowedTargetBeforeDial(t *testing.T) {
 	if origin.called {
 		t.Fatal("round trip attempted for a denied target")
 	}
+}
+
+func TestForwarderMapsInvalidOriginResponseToBadGateway(t *testing.T) {
+	tests := []struct {
+		name     string
+		response message.Message
+	}{
+		{name: "invalid code", response: message.Message{Code: codes.Empty}},
+		{name: "invalid token", response: message.Message{Code: codes.Content, Token: []byte{2}}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			forwarder := Forwarder{
+				RoundTripper: RoundTripperFunc(func(context.Context, oscore.ProxyTarget, message.Message) (message.Message, error) {
+					return test.response, nil
+				}),
+				AllowTarget: func(oscore.ProxyTarget) bool { return true },
+			}
+			_, err := forwarder.Forward(context.Background(), validProtectedProxyRequest(t))
+			if !errors.Is(err, ErrBadGateway) {
+				t.Fatalf("Forward error = %v, want ErrBadGateway", err)
+			}
+			if got := errorCode(err); got != codes.BadGateway {
+				t.Fatalf("errorCode = %v, want 5.02", got)
+			}
+		})
+	}
+}
+
+func TestAllowPublicIPLiteralTarget(t *testing.T) {
+	for _, test := range []struct {
+		host string
+		want bool
+	}{
+		{host: "8.8.8.8", want: true},
+		{host: "2001:4860:4860::8888", want: true},
+		{host: "127.0.0.1"},
+		{host: "10.0.0.1"},
+		{host: "169.254.1.1"},
+		{host: "::1"},
+		{host: "fe80::1"},
+		{host: "origin.example"},
+	} {
+		t.Run(test.host, func(t *testing.T) {
+			if got := AllowPublicIPLiteralTarget(oscore.ProxyTarget{Host: test.host}); got != test.want {
+				t.Fatalf("AllowPublicIPLiteralTarget(%q) = %t, want %t", test.host, got, test.want)
+			}
+		})
+	}
+}
+
+func validProtectedProxyRequest(t *testing.T) message.Message {
+	t.Helper()
+	clientContext, err := oscore.NewContext(oscore.ContextConfig{
+		AcceptReplayStateLoss: true,
+		MasterSecret:          []byte("0123456789abcdef"),
+		SenderID:              []byte{0},
+		RecipientID:           []byte{1},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request, _, err := clientContext.ProtectRequest(message.Message{
+		Code: codes.GET,
+		Options: message.Options{{
+			ID:    message.ProxyURI,
+			Value: []byte("coap://" + testOriginHost + "/sensors/temp"),
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return request
 }

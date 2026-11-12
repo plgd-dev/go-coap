@@ -524,6 +524,7 @@ func (s *Server) getOrCreateConn(udpConn *coapNet.UDPConn, raddr *net.UDPAddr, l
 	cfg.MessagePool = s.cfg.MessagePool
 	cfg.OSCORE = s.cfg.OSCORE
 	cfg.OSCOREProxy = s.cfg.OSCOREProxy
+	cfg.OSCOREErrorResponses = s.cfg.OSCOREErrorResponses
 	cfg.OSCOREOuterBlockwise = s.cfg.OSCOREOuterBlockwise
 	cfg.OSCOREOuterBlockwiseMaxReassembledPayloadSize = s.cfg.OSCOREOuterBlockwiseMaxReassembledPayloadSize
 	cfg.ProcessReceivedMessage = s.cfg.ProcessReceivedMessage

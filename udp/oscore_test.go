@@ -24,6 +24,47 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestOSCOREUDPErrorResponseIsUnprotectedAndDoesNotReachHandler(t *testing.T) {
+	listener, err := coapNet.NewListenUDP("udp", "127.0.0.1:0")
+	require.NoError(t, err)
+	var handled atomic.Int32
+	server := udp.NewServer(
+		options.WithOSCORE(newUDPOSCOREProcessor(t, "server", "other", false)),
+		options.WithOSCOREErrorResponses(),
+		options.WithHandlerFunc(func(*responsewriter.ResponseWriter[*client.Conn], *pool.Message) {
+			handled.Add(1)
+		}),
+	)
+	serverDone := make(chan error, 1)
+	go func() { serverDone <- server.Serve(listener) }()
+	defer func() {
+		server.Stop()
+		select {
+		case serverErr := <-serverDone:
+			require.NoError(t, serverErr)
+		case <-time.After(5 * time.Second):
+			require.Fail(t, "UDP OSCORE-error server did not stop")
+		}
+	}()
+
+	cc, err := udp.Dial(listener.LocalAddr().String(),
+		options.WithOSCORE(newUDPOSCOREProcessor(t, "client", "server", false)))
+	require.NoError(t, err)
+	defer func() { require.NoError(t, cc.Close()) }()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	response, err := cc.Get(ctx, "/")
+	require.NoError(t, err)
+	require.Equal(t, codes.Unauthorized, response.Code())
+	require.False(t, response.HasOption(message.OSCORE))
+	require.Empty(t, response.Options())
+	require.True(t, oscore.IsUnprotectedProcessingError(response.Context()))
+	body, err := response.ReadBody()
+	require.NoError(t, err)
+	require.Empty(t, body)
+	require.Zero(t, handled.Load())
+}
+
 func TestOSCOREAndPlaintextUDPExchange(t *testing.T) {
 	listener, listenerErr := coapNet.NewListenUDP("udp", "127.0.0.1:0")
 	require.NoError(t, listenerErr)
@@ -41,6 +82,15 @@ func TestOSCOREAndPlaintextUDPExchange(t *testing.T) {
 			if pathErr != nil {
 				t.Errorf("get request path: %v", pathErr)
 				return
+			}
+			if path == "/secure-only" {
+				info, ok := oscore.RequestInfoFromContext(req.Context())
+				if !ok || !info.Protected || string(info.RecipientID) != "client" {
+					if err := w.SetResponse(codes.Unauthorized, message.TextPlain, nil); err != nil {
+						t.Errorf("set OSCORE-required response: %v", err)
+					}
+					return
+				}
 			}
 			if path == "/error" {
 				if err := w.SetResponse(codes.BadRequest, message.TextPlain, nil); err != nil {
@@ -87,6 +137,27 @@ func TestOSCOREAndPlaintextUDPExchange(t *testing.T) {
 
 	assertUDPGetResponse(t, secureClient)
 	assertUDPGetResponse(t, plaintextClient)
+
+	for _, test := range []struct {
+		name string
+		conn *client.Conn
+		code codes.Code
+	}{
+		{name: "protected", conn: secureClient, code: codes.Content},
+		{name: "plaintext", conn: plaintextClient, code: codes.Unauthorized},
+	} {
+		t.Run("secure-only/"+test.name, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			defer cancel()
+			request, err := test.conn.NewGetRequest(ctx, "/secure-only")
+			require.NoError(t, err)
+			defer test.conn.ReleaseMessage(request)
+			response, err := test.conn.Do(request)
+			require.NoError(t, err)
+			defer test.conn.ReleaseMessage(response)
+			require.Equal(t, test.code, response.Code())
+		})
+	}
 
 	for _, test := range []struct {
 		path string
@@ -349,6 +420,71 @@ func TestOSCOREOuterBlockwiseRejectsOversizedProtectedResponse(t *testing.T) {
 	require.Empty(t, body)
 	require.False(t, response.HasOption(message.OSCORE))
 	require.False(t, oscore.IsUnprotectedProcessingError(response.Context()))
+}
+
+func TestOSCOREOuterBlockwisePayloadLimitDoesNotAffectPlaintextRequest(t *testing.T) {
+	listener, err := coapNet.NewListenUDP("udp", "127.0.0.1:0")
+	require.NoError(t, err)
+	const maxPayloadSize = 64 * 1024
+	requestBody := bytes.Repeat([]byte{0x5a}, int(maxPayloadSize)+int(blockwise.SZX1024.Size()))
+	received := make(chan []byte, 1)
+	server := udp.NewServer(
+		options.WithOSCORE(newUDPOSCOREProcessor(t, "server", "client", true)),
+		options.WithOSCOREOuterBlockwise(),
+		options.WithOSCOREOuterBlockwiseMaxReassembledPayloadSize(maxPayloadSize),
+		options.WithBlockwise(true, blockwise.SZX1024, 10*time.Second),
+		options.WithHandlerFunc(func(w *responsewriter.ResponseWriter[*client.Conn], req *pool.Message) {
+			body, readErr := req.ReadBody()
+			if readErr != nil {
+				t.Errorf("read plaintext blockwise request: %v", readErr)
+				return
+			}
+			if req.HasOption(message.OSCORE) {
+				t.Error("plaintext request unexpectedly has OSCORE option")
+				return
+			}
+			received <- body
+			if responseErr := w.SetResponse(codes.Changed, message.TextPlain, bytes.NewReader([]byte("ok"))); responseErr != nil {
+				t.Errorf("set response to plaintext request: %v", responseErr)
+			}
+		}),
+	)
+	serverDone := make(chan error, 1)
+	go func() { serverDone <- server.Serve(listener) }()
+	defer func() {
+		server.Stop()
+		select {
+		case serverErr := <-serverDone:
+			require.NoError(t, serverErr)
+		case <-time.After(5 * time.Second):
+			require.Fail(t, "UDP Outer Blockwise server did not stop")
+		}
+	}()
+
+	cc, err := udp.Dial(listener.LocalAddr().String(),
+		options.WithBlockwise(true, blockwise.SZX1024, 10*time.Second))
+	require.NoError(t, err)
+	defer func() { require.NoError(t, cc.Close()) }()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	request, err := cc.NewPostRequest(ctx, "/plaintext-blockwise", message.TextPlain, bytes.NewReader(requestBody))
+	require.NoError(t, err)
+	defer cc.ReleaseMessage(request)
+	response, err := cc.Do(request)
+	require.NoError(t, err)
+	defer cc.ReleaseMessage(response)
+	require.Equal(t, codes.Changed, response.Code())
+	responseBody, err := response.ReadBody()
+	require.NoError(t, err)
+	require.Equal(t, []byte("ok"), responseBody)
+
+	select {
+	case got := <-received:
+		require.Equal(t, requestBody, got)
+	case <-ctx.Done():
+		require.Fail(t, "server did not receive complete plaintext blockwise request")
+	}
 }
 
 func TestOSCOREOuterBlockwiseClientRejectsPlaintextBlock2Responses(t *testing.T) {
@@ -1055,9 +1191,10 @@ func assertUDPGetResponse(t *testing.T, cc *client.Conn) {
 func newUDPOSCOREProcessor(t *testing.T, senderID, recipientID string, allowPlaintext bool) *oscore.Processor {
 	t.Helper()
 	securityContext, err := oscore.NewContext(oscore.ContextConfig{
-		MasterSecret: []byte{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16},
-		SenderID:     []byte(senderID),
-		RecipientID:  []byte(recipientID),
+		AcceptReplayStateLoss: true,
+		MasterSecret:          []byte{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16},
+		SenderID:              []byte(senderID),
+		RecipientID:           []byte(recipientID),
 	})
 	require.NoError(t, err)
 	policy := oscore.PlaintextDisabled
@@ -1076,15 +1213,17 @@ func newUDPOSCOREContextPair(t *testing.T, clientID, serverID string) (*oscore.C
 	t.Helper()
 	masterSecret := []byte{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16}
 	clientContext, err := oscore.NewContext(oscore.ContextConfig{
-		MasterSecret: masterSecret,
-		SenderID:     []byte(clientID),
-		RecipientID:  []byte(serverID),
+		AcceptReplayStateLoss: true,
+		MasterSecret:          masterSecret,
+		SenderID:              []byte(clientID),
+		RecipientID:           []byte(serverID),
 	})
 	require.NoError(t, err)
 	serverContext, err := oscore.NewContext(oscore.ContextConfig{
-		MasterSecret: masterSecret,
-		SenderID:     []byte(serverID),
-		RecipientID:  []byte(clientID),
+		AcceptReplayStateLoss: true,
+		MasterSecret:          masterSecret,
+		SenderID:              []byte(serverID),
+		RecipientID:           []byte(clientID),
 	})
 	require.NoError(t, err)
 	return clientContext, serverContext

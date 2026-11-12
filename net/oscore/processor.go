@@ -32,6 +32,19 @@ func IsUnprotectedProcessingErrorCode(code codes.Code) bool {
 	}
 }
 
+// ProcessingErrorCode maps an OSCORE request-processing failure to the
+// unprotected response code clients recognize for OSCORE processing errors.
+func ProcessingErrorCode(err error) codes.Code {
+	switch {
+	case errors.Is(err, ErrNoSecurityContext), errors.Is(err, ErrReplay):
+		return codes.Unauthorized
+	case errors.Is(err, ErrInvalidOSCOREOption):
+		return codes.BadOption
+	default:
+		return codes.BadRequest
+	}
+}
+
 // ContextWithUnprotectedProcessingError marks a received response as an
 // unprotected OSCORE processing error. The caller must pass a non-nil context.
 func ContextWithUnprotectedProcessingError(ctx context.Context) context.Context {
@@ -248,7 +261,7 @@ func (p *Processor) ProtectRequestWithContext(request message.Message) (message.
 	default:
 		selectorRequest := request
 		selectorRequest.Token = append(message.Token(nil), request.Token...)
-		selectorRequest.Options = cloneOptions(request.Options)
+		selectorRequest.Options = CloneOptions(request.Options)
 		selectorRequest.Payload = append([]byte(nil), request.Payload...)
 		selected, err := selector(selectorRequest, append([]*Context(nil), contexts...))
 		if err != nil {

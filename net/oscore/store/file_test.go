@@ -11,12 +11,12 @@ import (
 	"github.com/plgd-dev/go-coap/v3/net/oscore"
 )
 
-func TestFileStoreSequenceReservationsAcrossInstances(t *testing.T) {
-	first, err := NewFileStore(t.TempDir(), "peer-a")
+func TestHighWaterFileStoreSequenceReservationsAcrossInstances(t *testing.T) {
+	first, err := NewHighWaterFileStore(t.TempDir(), "peer-a")
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, err := NewFileStore(first.dir, "peer-a")
+	second, err := NewHighWaterFileStore(first.dir, "peer-a")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -57,7 +57,7 @@ func TestFileStoreSequenceReservationsAcrossInstances(t *testing.T) {
 	for value := range seen {
 		maxReserved = max(maxReserved, value)
 	}
-	restarted, err := NewFileStore(first.dir, "peer-a")
+	restarted, err := NewHighWaterFileStore(first.dir, "peer-a")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -70,8 +70,8 @@ func TestFileStoreSequenceReservationsAcrossInstances(t *testing.T) {
 	}
 }
 
-func TestFileStoreSequenceWindowSkipsUnusedValuesAfterRestart(t *testing.T) {
-	first, err := NewFileStore(t.TempDir(), "peer-a")
+func TestHighWaterFileStoreSequenceWindowSkipsUnusedValuesAfterRestart(t *testing.T) {
+	first, err := NewHighWaterFileStore(t.TempDir(), "peer-a")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -90,7 +90,7 @@ func TestFileStoreSequenceWindowSkipsUnusedValuesAfterRestart(t *testing.T) {
 		t.Fatalf("next sequence in window = %d, want 1", nextInWindow)
 	}
 
-	restarted, err := NewFileStore(first.dir, "peer-a")
+	restarted, err := NewHighWaterFileStore(first.dir, "peer-a")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -103,16 +103,16 @@ func TestFileStoreSequenceWindowSkipsUnusedValuesAfterRestart(t *testing.T) {
 	}
 }
 
-func TestFileStoreRejectsMissingSenderSequenceStateOrGuard(t *testing.T) {
+func TestHighWaterFileStoreRejectsMissingSenderSequenceStateOrGuard(t *testing.T) {
 	for _, test := range []struct {
 		name string
-		path func(*FileStore) string
+		path func(*HighWaterFileStore) string
 	}{
-		{name: "sequence file", path: func(s *FileStore) string { return s.sequencePath }},
-		{name: "sequence guard", path: func(s *FileStore) string { return s.sequenceGuardPath }},
+		{name: "sequence file", path: func(s *HighWaterFileStore) string { return s.sequencePath }},
+		{name: "sequence guard", path: func(s *HighWaterFileStore) string { return s.sequenceGuardPath }},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			store, err := NewFileStore(t.TempDir(), "missing-"+test.name)
+			store, err := NewHighWaterFileStore(t.TempDir(), "missing-"+test.name)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -125,7 +125,7 @@ func TestFileStoreRejectsMissingSenderSequenceStateOrGuard(t *testing.T) {
 			if value, reserveErr := store.Reserve(); reserveErr != nil || value != 1 {
 				t.Fatalf("active reservation after deleting %s = %d, %v; want 1", test.name, value, reserveErr)
 			}
-			restarted, err := NewFileStore(store.dir, "missing-"+test.name)
+			restarted, err := NewHighWaterFileStore(store.dir, "missing-"+test.name)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -136,8 +136,8 @@ func TestFileStoreRejectsMissingSenderSequenceStateOrGuard(t *testing.T) {
 	}
 }
 
-func TestFileStoreRejectsMissingSenderStateAndGuardAfterWindow(t *testing.T) {
-	store, err := NewFileStore(t.TempDir(), "missing-sequence-and-guard")
+func TestHighWaterFileStoreRejectsMissingSenderStateAndGuardAfterWindow(t *testing.T) {
+	store, err := NewHighWaterFileStore(t.TempDir(), "missing-sequence-and-guard")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -169,16 +169,16 @@ func TestFileStoreRejectsMissingSenderStateAndGuardAfterWindow(t *testing.T) {
 	}
 }
 
-func TestFileStoreRemembersLoadedStateAfterPendingRemovalSyncFailure(t *testing.T) {
+func TestHighWaterFileStoreRemembersLoadedStateAfterPendingRemovalSyncFailure(t *testing.T) {
 	dir := t.TempDir()
-	first, err := NewFileStore(dir, "pending-removal-sync-failure")
+	first, err := NewHighWaterFileStore(dir, "pending-removal-sync-failure")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if value, reserveErr := first.Reserve(); reserveErr != nil || value != 0 {
 		t.Fatalf("first reservation = %d, %v; want 0", value, reserveErr)
 	}
-	second, err := NewFileStore(dir, "pending-removal-sync-failure")
+	second, err := NewHighWaterFileStore(dir, "pending-removal-sync-failure")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -210,9 +210,9 @@ func TestFileStoreRemembersLoadedStateAfterPendingRemovalSyncFailure(t *testing.
 	}
 }
 
-func TestFileStoreSequencePersistenceFailureDoesNotReturnAValue(t *testing.T) {
+func TestHighWaterFileStoreSequencePersistenceFailureDoesNotReturnAValue(t *testing.T) {
 	dir := t.TempDir()
-	store, err := NewFileStore(dir, "sender-sequence-storage-failure")
+	store, err := NewHighWaterFileStore(dir, "sender-sequence-storage-failure")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -239,7 +239,7 @@ func TestFileStoreSequencePersistenceFailureDoesNotReturnAValue(t *testing.T) {
 	}
 }
 
-func TestFileStoreSequencePersistenceFaultInjection(t *testing.T) {
+func TestHighWaterFileStoreSequencePersistenceFaultInjection(t *testing.T) {
 	tests := []struct {
 		name         string
 		point        sequencePersistenceFaultPoint
@@ -283,7 +283,7 @@ func runSequencePersistenceFaultCase(
 	t.Helper()
 	dir := t.TempDir()
 	id := "sequence-fault-" + name
-	store, err := NewFileStore(dir, id)
+	store, err := NewHighWaterFileStore(dir, id)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -299,7 +299,7 @@ func runSequencePersistenceFaultCase(
 	assertSequenceRetryAfterRecovery(t, dir, id)
 }
 
-func injectSequencePersistenceFault(store *FileStore, point sequencePersistenceFaultPoint, failure error) {
+func injectSequencePersistenceFault(store *HighWaterFileStore, point sequencePersistenceFaultPoint, failure error) {
 	switch point {
 	case sequencePendingWrite:
 		injectSequenceWriteFailure(store, store.sequencePendingPath, failure)
@@ -320,7 +320,7 @@ func injectSequencePersistenceFault(store *FileStore, point sequencePersistenceF
 	}
 }
 
-func injectSequenceWriteFailure(store *FileStore, path string, failure error) {
+func injectSequenceWriteFailure(store *HighWaterFileStore, path string, failure error) {
 	store.sequenceOps.beforeWrite = func(writePath string) error {
 		if writePath == path {
 			return failure
@@ -329,7 +329,7 @@ func injectSequenceWriteFailure(store *FileStore, path string, failure error) {
 	}
 }
 
-func injectSequenceSyncFailure(store *FileStore, path string, failure error) {
+func injectSequenceSyncFailure(store *HighWaterFileStore, path string, failure error) {
 	store.sequenceOps.syncDirectory = func(syncPath, dir string) error {
 		if syncPath == path {
 			return failure
@@ -338,7 +338,7 @@ func injectSequenceSyncFailure(store *FileStore, path string, failure error) {
 	}
 }
 
-func injectPendingRemovalSyncFailure(store *FileStore, failure error) {
+func injectPendingRemovalSyncFailure(store *HighWaterFileStore, failure error) {
 	pendingSyncs := 0
 	store.sequenceOps.syncDirectory = func(path, dir string) error {
 		if path == store.sequencePendingPath {
@@ -351,7 +351,7 @@ func injectPendingRemovalSyncFailure(store *FileStore, failure error) {
 	}
 }
 
-func assertSequenceRetryInPlace(t *testing.T, store *FileStore) {
+func assertSequenceRetryInPlace(t *testing.T, store *HighWaterFileStore) {
 	t.Helper()
 	store.sequenceOps = sequenceFileOps{}
 	if value, err := store.Reserve(); err != nil || value != 0 {
@@ -361,7 +361,7 @@ func assertSequenceRetryInPlace(t *testing.T, store *FileStore) {
 
 func assertSequenceRetryAfterRecovery(t *testing.T, dir, id string) {
 	t.Helper()
-	restarted, err := NewFileStore(dir, id)
+	restarted, err := NewHighWaterFileStore(dir, id)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -370,9 +370,9 @@ func assertSequenceRetryAfterRecovery(t *testing.T, dir, id string) {
 	}
 }
 
-func TestFileStoreRejectsRestoredSenderSequenceSnapshot(t *testing.T) {
+func TestHighWaterFileStoreRejectsRestoredSenderSequenceSnapshot(t *testing.T) {
 	dir := t.TempDir()
-	store, err := NewFileStore(dir, "restored-sender-sequence")
+	store, err := NewHighWaterFileStore(dir, "restored-sender-sequence")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -394,7 +394,7 @@ func TestFileStoreRejectsRestoredSenderSequenceSnapshot(t *testing.T) {
 	if writeErr := os.WriteFile(store.sequencePath, oldSnapshot, 0o600); writeErr != nil {
 		t.Fatal(writeErr)
 	}
-	restarted, err := NewFileStore(dir, "restored-sender-sequence")
+	restarted, err := NewHighWaterFileStore(dir, "restored-sender-sequence")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -403,7 +403,7 @@ func TestFileStoreRejectsRestoredSenderSequenceSnapshot(t *testing.T) {
 	}
 }
 
-func TestFileStoreRecoversInterruptedSequenceReservation(t *testing.T) {
+func TestHighWaterFileStoreRecoversInterruptedSequenceReservation(t *testing.T) {
 	for _, stage := range interruptedSequenceReservationStages() {
 		t.Run(stage.name, func(t *testing.T) {
 			runInterruptedSequenceReservation(t, stage)
@@ -433,7 +433,7 @@ func runInterruptedSequenceReservation(t *testing.T, stage sequenceReservationIn
 	t.Helper()
 	dir := t.TempDir()
 	id := "interrupted-sequence-" + stage.name
-	store, err := NewFileStore(dir, id)
+	store, err := NewHighWaterFileStore(dir, id)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -467,9 +467,9 @@ func writeSequenceFile(t *testing.T, dir, path string, state any) {
 	}
 }
 
-func assertInterruptedSequenceRecovery(t *testing.T, store *FileStore, dir, id string, want uint64) {
+func assertInterruptedSequenceRecovery(t *testing.T, store *HighWaterFileStore, dir, id string, want uint64) {
 	t.Helper()
-	restarted, err := NewFileStore(dir, id)
+	restarted, err := NewHighWaterFileStore(dir, id)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -485,8 +485,8 @@ func assertInterruptedSequenceRecovery(t *testing.T, store *FileStore, dir, id s
 	}
 }
 
-func TestFileStoreSequenceWindowExhaustsAtMaximumPartialIV(t *testing.T) {
-	store, err := NewFileStore(t.TempDir(), "peer-a")
+func TestHighWaterFileStoreSequenceWindowExhaustsAtMaximumPartialIV(t *testing.T) {
+	store, err := NewHighWaterFileStore(t.TempDir(), "peer-a")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -514,10 +514,10 @@ func TestFileStoreSequenceWindowExhaustsAtMaximumPartialIV(t *testing.T) {
 	}
 }
 
-func TestFileStoreRejectsInvalidSenderSequenceValues(t *testing.T) {
+func TestHighWaterFileStoreRejectsInvalidSenderSequenceValues(t *testing.T) {
 	for _, next := range []uint64{1, maxPartialIV + 2} {
 		t.Run(fmt.Sprintf("next-%d", next), func(t *testing.T) {
-			store, err := NewFileStore(t.TempDir(), "invalid-sequence")
+			store, err := NewHighWaterFileStore(t.TempDir(), "invalid-sequence")
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -535,8 +535,8 @@ func TestFileStoreRejectsInvalidSenderSequenceValues(t *testing.T) {
 	}
 }
 
-func TestFileStoreRejectsStaleSenderSequenceTransaction(t *testing.T) {
-	store, err := NewFileStore(t.TempDir(), "stale-sequence-transaction")
+func TestHighWaterFileStoreRejectsStaleSenderSequenceTransaction(t *testing.T) {
+	store, err := NewHighWaterFileStore(t.TempDir(), "stale-sequence-transaction")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -561,8 +561,8 @@ func TestFileStoreRejectsStaleSenderSequenceTransaction(t *testing.T) {
 	}
 }
 
-func TestFileStoreSequenceReservationsWithinSingleInstance(t *testing.T) {
-	store, err := NewFileStore(t.TempDir(), "single-instance-concurrency")
+func TestHighWaterFileStoreSequenceReservationsWithinSingleInstance(t *testing.T) {
+	store, err := NewHighWaterFileStore(t.TempDir(), "single-instance-concurrency")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -595,63 +595,47 @@ func TestFileStoreSequenceReservationsWithinSingleInstance(t *testing.T) {
 	}
 }
 
-func TestFileStoreRejectsCorruptOrTruncatedState(t *testing.T) {
+func TestHighWaterFileStoreRejectsCorruptOrTruncatedState(t *testing.T) {
 	for _, test := range []struct {
 		name string
-		run  func(*testing.T, *FileStore) error
-		path func(*FileStore) string
+		run  func(*testing.T, *HighWaterFileStore) error
+		path func(*HighWaterFileStore) string
 	}{
 		{
 			name: "sender sequence",
-			run: func(_ *testing.T, store *FileStore) error {
+			run: func(_ *testing.T, store *HighWaterFileStore) error {
 				_, err := store.Reserve()
 				return err
 			},
-			path: func(store *FileStore) string { return store.sequencePath },
+			path: func(store *HighWaterFileStore) string { return store.sequencePath },
 		},
 		{
 			name: "sender sequence guard",
-			run: func(_ *testing.T, store *FileStore) error {
+			run: func(_ *testing.T, store *HighWaterFileStore) error {
 				_, err := store.Reserve()
 				return err
 			},
-			path: func(store *FileStore) string { return store.sequenceGuardPath },
+			path: func(store *HighWaterFileStore) string { return store.sequenceGuardPath },
 		},
 		{
 			name: "sender sequence pending transaction",
-			run: func(_ *testing.T, store *FileStore) error {
+			run: func(_ *testing.T, store *HighWaterFileStore) error {
 				_, err := store.Reserve()
 				return err
 			},
-			path: func(store *FileStore) string { return store.sequencePendingPath },
+			path: func(store *HighWaterFileStore) string { return store.sequencePendingPath },
 		},
 		{
-			name: "replay window",
-			run: func(_ *testing.T, store *FileStore) error {
-				_, err := store.Load()
+			name: "replay high-water mark",
+			run: func(_ *testing.T, store *HighWaterFileStore) error {
+				_, _, err := store.LoadHighWater()
 				return err
 			},
-			path: func(store *FileStore) string { return store.replayPath },
-		},
-		{
-			name: "replay rollback guard",
-			run: func(_ *testing.T, store *FileStore) error {
-				_, err := store.Load()
-				return err
-			},
-			path: func(store *FileStore) string { return store.replayGuardPath },
-		},
-		{
-			name: "replay pending transaction",
-			run: func(_ *testing.T, store *FileStore) error {
-				_, err := store.Load()
-				return err
-			},
-			path: func(store *FileStore) string { return store.replayPendingPath },
+			path: func(store *HighWaterFileStore) string { return store.replayHighWaterPath },
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			store, err := NewFileStore(t.TempDir(), "corrupt-"+test.name)
+			store, err := NewHighWaterFileStore(t.TempDir(), "corrupt-"+test.name)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -676,16 +660,17 @@ func TestFileStoreRejectsCorruptOrTruncatedState(t *testing.T) {
 	}
 }
 
-func TestFileStoreReplayPersistenceFailureDoesNotAcceptRequest(t *testing.T) {
+func TestHighWaterFileStoreReplayCutoffSurvivesRestart(t *testing.T) {
 	dir := t.TempDir()
-	store, err := NewFileStore(dir, "replay-failure")
+	store, err := NewHighWaterFileStore(dir, "high-water-replay")
 	if err != nil {
 		t.Fatal(err)
 	}
 	sender, err := oscore.NewContext(oscore.ContextConfig{
-		MasterSecret: []byte("0123456789abcdef"),
-		SenderID:     []byte{0},
-		RecipientID:  []byte{1},
+		AcceptReplayStateLoss: true,
+		MasterSecret:          []byte("0123456789abcdef"),
+		SenderID:              []byte{0},
+		RecipientID:           []byte{1},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -699,224 +684,35 @@ func TestFileStoreReplayPersistenceFailureDoesNotAcceptRequest(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	aad := []byte("persistent replay failure")
-	piv, ciphertext, err := sender.Seal([]byte("request"), func([]byte) ([]byte, error) {
-		return aad, nil
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	offlineDir := filepath.Join(t.TempDir(), "offline")
-	if err := os.Rename(store.dir, offlineDir); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := receiver.Open(piv, ciphertext, aad); err == nil {
-		t.Fatal("request accepted while durable replay-state storage was unavailable")
-	}
-	if err := os.Rename(offlineDir, store.dir); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := receiver.Open(piv, ciphertext, aad); err != nil {
-		t.Fatalf("request was consumed despite persistence failure: %v", err)
-	}
-	if _, err := receiver.Open(piv, ciphertext, aad); !errors.Is(err, oscore.ErrReplay) {
-		t.Fatalf("replayed request error = %v, want ErrReplay", err)
-	}
-}
-
-func TestFileStoreRejectsReplayStateCorruptionDuringRuntime(t *testing.T) {
-	store, err := NewFileStore(t.TempDir(), "runtime-corruption")
-	if err != nil {
-		t.Fatal(err)
-	}
-	sender, err := oscore.NewContext(oscore.ContextConfig{
-		MasterSecret: []byte("0123456789abcdef"),
-		SenderID:     []byte{0},
-		RecipientID:  []byte{1},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	receiver, err := oscore.NewContext(oscore.ContextConfig{
-		MasterSecret:      []byte("0123456789abcdef"),
-		SenderID:          []byte{1},
-		RecipientID:       []byte{0},
-		ReplayWindowStore: store,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	seal := func(payload string) ([]byte, []byte) {
-		t.Helper()
-		piv, ciphertext, sealErr := sender.Seal([]byte(payload), func([]byte) ([]byte, error) {
-			return []byte("runtime corruption AAD"), nil
+	aad := []byte("high-water replay")
+	var firstPIV, boundaryPIV []byte
+	var firstCiphertext, boundaryCiphertext []byte
+	for sequence := range uint64(257) {
+		piv, ciphertext, sealErr := sender.Seal([]byte("request"), func([]byte) ([]byte, error) {
+			return aad, nil
 		})
 		if sealErr != nil {
 			t.Fatal(sealErr)
 		}
-		return piv, ciphertext
-	}
-
-	aad := []byte("runtime corruption AAD")
-	firstPIV, firstCiphertext := seal("first")
-	if _, openErr := receiver.Open(firstPIV, firstCiphertext, aad); openErr != nil {
-		t.Fatal(openErr)
-	}
-	validSnapshot, err := os.ReadFile(store.replayPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	corrupt := []byte(`{"version":1,"`)
-	if err := os.WriteFile(store.replayPath, corrupt, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	secondPIV, secondCiphertext := seal("second")
-	if _, err := receiver.Open(secondPIV, secondCiphertext, aad); err == nil {
-		t.Fatal("request accepted while replay state was corrupt at runtime")
-	}
-	if err := os.WriteFile(store.replayPath, validSnapshot, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := receiver.Open(secondPIV, secondCiphertext, aad); err != nil {
-		t.Fatalf("request was consumed despite runtime corruption: %v", err)
-	}
-	if _, err := receiver.Open(firstPIV, firstCiphertext, aad); !errors.Is(err, oscore.ErrReplay) {
-		t.Fatalf("previously authenticated request error = %v, want ErrReplay", err)
-	}
-}
-
-func TestFileStoreRecoversInterruptedReplayStateSave(t *testing.T) {
-	tests := []replaySaveInterruption{
-		{name: "after transaction journal"},
-		{name: "after guard update", writeGuard: true},
-		{name: "after replay update", writeGuard: true, writeReplay: true},
-	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			runInterruptedReplayStateSave(t, test)
-		})
-	}
-}
-
-type replaySaveInterruption struct {
-	name        string
-	writeGuard  bool
-	writeReplay bool
-}
-
-func runInterruptedReplayStateSave(t *testing.T, test replaySaveInterruption) {
-	t.Helper()
-	dir := t.TempDir()
-	store, sender, receiver := newReplaySaveContexts(t, dir)
-	aad := []byte("interrupted replay save")
-	firstPIV, firstCiphertext := sealReplayTestMessage(t, sender, "first", aad)
-	openReplayTestMessage(t, receiver, firstPIV, firstCiphertext, aad)
-	previous, err := store.Load()
-	if err != nil {
-		t.Fatal(err)
-	}
-	secondPIV, secondCiphertext := sealReplayTestMessage(t, sender, "second", aad)
-	openReplayTestMessage(t, receiver, secondPIV, secondCiphertext, aad)
-	next, err := store.Load()
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	writeInterruptedReplayFiles(t, store, previous, next, test)
-	assertInterruptedReplayRecovery(t, dir, store, replayRecoveryMessages{
-		firstPIV:         firstPIV,
-		firstCiphertext:  firstCiphertext,
-		secondPIV:        secondPIV,
-		secondCiphertext: secondCiphertext,
-		aad:              aad,
-	})
-}
-
-func newReplaySaveContexts(t *testing.T, dir string) (*FileStore, *oscore.Context, *oscore.Context) {
-	t.Helper()
-	store, err := NewFileStore(dir, "interrupted-replay-save")
-	if err != nil {
-		t.Fatal(err)
-	}
-	sender, err := oscore.NewContext(oscore.ContextConfig{
-		MasterSecret: []byte("0123456789abcdef"),
-		SenderID:     []byte{0},
-		RecipientID:  []byte{1},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	receiver, err := oscore.NewContext(oscore.ContextConfig{
-		MasterSecret:      []byte("0123456789abcdef"),
-		SenderID:          []byte{1},
-		RecipientID:       []byte{0},
-		ReplayWindowStore: store,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	return store, sender, receiver
-}
-
-func sealReplayTestMessage(t *testing.T, sender *oscore.Context, payload string, aad []byte) ([]byte, []byte) {
-	t.Helper()
-	piv, ciphertext, err := sender.Seal([]byte(payload), func([]byte) ([]byte, error) {
-		return aad, nil
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	return piv, ciphertext
-}
-
-func openReplayTestMessage(t *testing.T, receiver *oscore.Context, piv, ciphertext, aad []byte) {
-	t.Helper()
-	if _, err := receiver.Open(piv, ciphertext, aad); err != nil {
-		t.Fatal(err)
-	}
-}
-
-func writeInterruptedReplayFiles(
-	t *testing.T,
-	store *FileStore,
-	previous, next oscore.ReplayWindowState,
-	test replaySaveInterruption,
-) {
-	t.Helper()
-	write := func(path string, value any) {
-		t.Helper()
-		if err := writeStateFile(store.dir, path, value); err != nil {
-			t.Fatal(err)
+		if sequence == 0 {
+			firstPIV, firstCiphertext = piv, ciphertext
+		}
+		if sequence == 256 {
+			boundaryPIV, boundaryCiphertext = piv, ciphertext
+		}
+		if _, openErr := receiver.Open(piv, ciphertext, aad); openErr != nil {
+			t.Fatalf("open sequence %d: %v", sequence, openErr)
 		}
 	}
-	write(store.replayPath, replayFile{Version: fileVersion, ReplayWindowState: previous})
-	write(store.replayGuardPath, replayFile{Version: fileVersion, ReplayWindowState: previous})
-	write(store.replayPendingPath, replayPendingFile{Version: fileVersion, Previous: previous, Next: next})
-	if test.writeGuard {
-		write(store.replayGuardPath, replayFile{Version: fileVersion, ReplayWindowState: next})
+	highWater, exists, err := store.LoadHighWater()
+	if err != nil || !exists {
+		t.Fatalf("load high-water mark = %d, %t, %v", highWater, exists, err)
 	}
-	if test.writeReplay {
-		write(store.replayPath, replayFile{Version: fileVersion, ReplayWindowState: next})
+	if highWater != 512 {
+		t.Fatalf("high-water mark = %d, want 512", highWater)
 	}
-}
 
-type replayRecoveryMessages struct {
-	firstPIV         []byte
-	firstCiphertext  []byte
-	secondPIV        []byte
-	secondCiphertext []byte
-	aad              []byte
-}
-
-func assertInterruptedReplayRecovery(
-	t *testing.T,
-	dir string,
-	store *FileStore,
-	messages replayRecoveryMessages,
-) {
-	t.Helper()
-	restartedStore, err := NewFileStore(dir, "interrupted-replay-save")
+	restartedStore, err := NewHighWaterFileStore(dir, "high-water-replay")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -927,114 +723,128 @@ func assertInterruptedReplayRecovery(
 		ReplayWindowStore: restartedStore,
 	})
 	if err != nil {
-		t.Fatalf("recreate context after interrupted save: %v", err)
+		t.Fatal(err)
 	}
-	assertReplayRejected(t, restarted, messages.secondPIV, messages.secondCiphertext, messages.aad, "replayed request after recovery")
-	assertReplayRejected(t, restarted, messages.firstPIV, messages.firstCiphertext, messages.aad, "earlier accepted request after recovery")
-	if _, err := os.Stat(store.replayPendingPath); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("pending replay transaction remains after recovery: %v", err)
-	}
-}
-
-func assertReplayRejected(
-	t *testing.T,
-	context *oscore.Context,
-	piv, ciphertext, aad []byte,
-	description string,
-) {
-	t.Helper()
-	if _, err := context.Open(piv, ciphertext, aad); !errors.Is(err, oscore.ErrReplay) {
-		t.Fatalf("%s error = %v, want ErrReplay", description, err)
+	for _, replay := range []struct {
+		name       string
+		piv        []byte
+		ciphertext []byte
+	}{
+		{name: "oldest accepted", piv: firstPIV, ciphertext: firstCiphertext},
+		{name: "last accepted below cutoff", piv: boundaryPIV, ciphertext: boundaryCiphertext},
+	} {
+		t.Run(replay.name, func(t *testing.T) {
+			if _, err := restarted.Open(replay.piv, replay.ciphertext, aad); !errors.Is(err, oscore.ErrReplay) {
+				t.Fatalf("replayed request error = %v, want ErrReplay", err)
+			}
+		})
 	}
 }
 
-func TestFileStoreRejectsRestoredReplaySnapshot(t *testing.T) {
-	dir := t.TempDir()
-	store, err := NewFileStore(dir, "restored-replay-snapshot")
+func TestHighWaterFileStoreRestartAfterDirectorySyncFailureRejectsAcceptedReplay(t *testing.T) {
+	store, err := NewHighWaterFileStore(t.TempDir(), "high-water-sync-failure")
 	if err != nil {
 		t.Fatal(err)
 	}
 	sender, err := oscore.NewContext(oscore.ContextConfig{
-		MasterSecret: []byte("0123456789abcdef"),
-		SenderID:     []byte{0},
-		RecipientID:  []byte{1},
+		AcceptReplayStateLoss: true,
+		MasterSecret:          []byte("0123456789abcdef"),
+		SenderID:              []byte{0},
+		RecipientID:           []byte{1},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	newReceiver := func() *oscore.Context {
-		t.Helper()
-		replayStore, storeErr := NewFileStore(dir, "restored-replay-snapshot")
-		if storeErr != nil {
-			t.Fatal(storeErr)
-		}
-		receiver, contextErr := oscore.NewContext(oscore.ContextConfig{
-			MasterSecret:      []byte("0123456789abcdef"),
-			SenderID:          []byte{1},
-			RecipientID:       []byte{0},
-			ReplayWindowStore: replayStore,
-		})
-		if contextErr != nil {
-			t.Fatal(contextErr)
-		}
-		return receiver
+	receiver, err := oscore.NewContext(oscore.ContextConfig{
+		MasterSecret:      []byte("0123456789abcdef"),
+		SenderID:          []byte{1},
+		RecipientID:       []byte{0},
+		ReplayWindowStore: store,
+	})
+	if err != nil {
+		t.Fatal(err)
 	}
-	seal := func(payload string) ([]byte, []byte) {
-		t.Helper()
-		piv, ciphertext, sealErr := sender.Seal([]byte(payload), func([]byte) ([]byte, error) {
-			return []byte("rollback AAD"), nil
-		})
-		if sealErr != nil {
-			t.Fatal(sealErr)
-		}
-		return piv, ciphertext
+	aad := []byte("high-water crash")
+	piv, ciphertext, err := sender.Seal([]byte("request"), func([]byte) ([]byte, error) {
+		return aad, nil
+	})
+	if err != nil {
+		t.Fatal(err)
 	}
-	aad := []byte("rollback AAD")
+	syncErr := errors.New("simulated crash after atomic rename")
+	store.replayOps.syncDirectory = func(string, string) error {
+		store.replayOps.syncDirectory = nil
+		return syncErr
+	}
+	if _, openErr := receiver.Open(piv, ciphertext, aad); !errors.Is(openErr, syncErr) {
+		t.Fatalf("Open error = %v, want simulated sync failure", openErr)
+	}
 
-	firstPIV, firstCiphertext := seal("first")
-	if _, openErr := newReceiver().Open(firstPIV, firstCiphertext, aad); openErr != nil {
-		t.Fatal(openErr)
-	}
-	oldSnapshot, err := os.ReadFile(store.replayPath)
+	restartedStore, err := NewHighWaterFileStore(store.dir, "high-water-sync-failure")
 	if err != nil {
 		t.Fatal(err)
 	}
-	secondPIV, secondCiphertext := seal("second")
-	if _, openErr := newReceiver().Open(secondPIV, secondCiphertext, aad); openErr != nil {
-		t.Fatal(openErr)
-	}
-	if writeErr := os.WriteFile(store.replayPath, oldSnapshot, 0o600); writeErr != nil {
-		t.Fatal(writeErr)
-	}
-	restartedStore, err := NewFileStore(dir, "restored-replay-snapshot")
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, err = oscore.NewContext(oscore.ContextConfig{
+	restarted, err := oscore.NewContext(oscore.ContextConfig{
 		MasterSecret:      []byte("0123456789abcdef"),
 		SenderID:          []byte{1},
 		RecipientID:       []byte{0},
 		ReplayWindowStore: restartedStore,
 	})
-	if !errors.Is(err, oscore.ErrInvalidReplayState) {
-		t.Fatalf("context creation after restoring old replay snapshot error = %v, want ErrInvalidReplayState", err)
-	}
-	if removeErr := os.Remove(store.replayGuardPath); removeErr != nil {
-		t.Fatal(removeErr)
-	}
-	restartedStore, err = NewFileStore(dir, "restored-replay-snapshot")
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = oscore.NewContext(oscore.ContextConfig{
+	if _, openErr := restarted.Open(piv, ciphertext, aad); !errors.Is(openErr, oscore.ErrReplay) {
+		t.Fatalf("request after restart error = %v, want ErrReplay", openErr)
+	}
+}
+
+func BenchmarkHighWaterFileStoreReplayPersistence(b *testing.B) {
+	store, err := NewHighWaterFileStore(b.TempDir(), "benchmark")
+	if err != nil {
+		b.Fatal(err)
+	}
+	var syncCount uint64
+	store.replayOps.syncFile = func(_ string, file *os.File) error {
+		syncCount++
+		return file.Sync()
+	}
+	store.replayOps.syncDirectory = func(_ string, dir string) error {
+		syncCount++
+		return syncDirectory(dir)
+	}
+	sender, err := oscore.NewContext(oscore.ContextConfig{
+		AcceptReplayStateLoss: true,
+		MasterSecret:          []byte("0123456789abcdef"),
+		SenderID:              []byte{0},
+		RecipientID:           []byte{1},
+	})
+	if err != nil {
+		b.Fatal(err)
+	}
+	receiver, err := oscore.NewContext(oscore.ContextConfig{
 		MasterSecret:      []byte("0123456789abcdef"),
 		SenderID:          []byte{1},
 		RecipientID:       []byte{0},
-		ReplayWindowStore: restartedStore,
+		ReplayWindowStore: store,
 	})
-	if !errors.Is(err, oscore.ErrInvalidReplayState) {
-		t.Fatalf("context creation with missing replay rollback guard error = %v, want ErrInvalidReplayState", err)
+	if err != nil {
+		b.Fatal(err)
 	}
+	aad := []byte("benchmark")
+	b.ResetTimer()
+	for range b.N {
+		piv, ciphertext, err := sender.Seal([]byte("request"), func([]byte) ([]byte, error) {
+			return aad, nil
+		})
+		if err != nil {
+			b.Fatal(err)
+		}
+		if _, err := receiver.Open(piv, ciphertext, aad); err != nil {
+			b.Fatal(err)
+		}
+	}
+	b.StopTimer()
+	b.ReportMetric(float64(syncCount)/float64(b.N), "fsyncs/op")
 }
 
 func TestWriteStateFileRenameFailurePreservesExistingTarget(t *testing.T) {
@@ -1066,19 +876,20 @@ func TestWriteStateFileRenameFailurePreservesExistingTarget(t *testing.T) {
 	}
 }
 
-func TestFileStoreReplayStatePersistsAcrossContextRestart(t *testing.T) {
+func TestHighWaterFileStoreReplayStatePersistsAcrossContextRestart(t *testing.T) {
 	dir := t.TempDir()
 	sender, err := oscore.NewContext(oscore.ContextConfig{
-		MasterSecret: []byte("0123456789abcdef"),
-		SenderID:     []byte{0},
-		RecipientID:  []byte{1},
+		AcceptReplayStateLoss: true,
+		MasterSecret:          []byte("0123456789abcdef"),
+		SenderID:              []byte{0},
+		RecipientID:           []byte{1},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	newReceiver := func() *oscore.Context {
 		t.Helper()
-		store, storeErr := NewFileStore(dir, "receiver-context")
+		store, storeErr := NewHighWaterFileStore(dir, "receiver-context")
 		if storeErr != nil {
 			t.Fatal(storeErr)
 		}
@@ -1106,71 +917,5 @@ func TestFileStoreReplayStatePersistsAcrossContextRestart(t *testing.T) {
 	}
 	if _, err := newReceiver().Open(piv, ciphertext, aad); !errors.Is(err, oscore.ErrReplay) {
 		t.Fatalf("replayed message after restart error = %v, want ErrReplay", err)
-	}
-}
-
-func TestFileStoreRejectsConflictingReplayState(t *testing.T) {
-	first, err := NewFileStore(t.TempDir(), "shared-receiver")
-	if err != nil {
-		t.Fatal(err)
-	}
-	second, err := NewFileStore(first.dir, "shared-receiver")
-	if err != nil {
-		t.Fatal(err)
-	}
-	client, err := oscore.NewContext(oscore.ContextConfig{
-		MasterSecret: []byte("0123456789abcdef"),
-		SenderID:     []byte{0},
-		RecipientID:  []byte{1},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	newReceiver := func(store *FileStore) *oscore.Context {
-		context, contextErr := oscore.NewContext(oscore.ContextConfig{
-			MasterSecret:      []byte("0123456789abcdef"),
-			SenderID:          []byte{1},
-			RecipientID:       []byte{0},
-			ReplayWindowStore: store,
-		})
-		if contextErr != nil {
-			t.Fatal(contextErr)
-		}
-		return context
-	}
-	receivers := []*oscore.Context{newReceiver(first), newReceiver(second)}
-	aad := []byte("OSCORE test AAD")
-	piv, ciphertext, err := client.Seal([]byte("request"), func([]byte) ([]byte, error) {
-		return aad, nil
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	var wg sync.WaitGroup
-	results := make(chan error, len(receivers))
-	for _, receiver := range receivers {
-		wg.Add(1)
-		go func(receiver *oscore.Context) {
-			defer wg.Done()
-			_, err := receiver.Open(piv, ciphertext, aad)
-			results <- err
-		}(receiver)
-	}
-	wg.Wait()
-	close(results)
-
-	accepted, rejected := 0, 0
-	for err := range results {
-		switch {
-		case err == nil:
-			accepted++
-		case errors.Is(err, oscore.ErrReplay):
-			rejected++
-		default:
-			t.Fatalf("unexpected open error: %v", err)
-		}
-	}
-	if accepted != 1 || rejected != 1 {
-		t.Fatalf("accepted %d copies and rejected %d, want one of each", accepted, rejected)
 	}
 }

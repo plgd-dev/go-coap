@@ -15,18 +15,16 @@ import (
 )
 
 type udpOSCOREExchange struct {
-	context               *oscore.Context
-	exchange              oscore.Exchange
-	record                *udpOSCOREExchangeRecord
-	observe               bool
-	qBlock2               bool
-	expires               time.Time
-	hasObserveResponse    bool
-	hasNotificationNumber bool
-	notificationNumber    uint64
-	cancelContext         *oscore.Context
-	cancelExchange        oscore.Exchange
-	cancelExpires         time.Time
+	context         *oscore.Context
+	exchange        oscore.Exchange
+	record          *udpOSCOREExchangeRecord
+	observe         bool
+	qBlock2         bool
+	expires         time.Time
+	observeResponse oscore.ObserveResponseState
+	cancelContext   *oscore.Context
+	cancelExchange  oscore.Exchange
+	cancelExpires   time.Time
 }
 
 type udpOSCOREExchangeRecord struct {
@@ -61,14 +59,6 @@ type udpOSCORERequest struct {
 type udpOSCOREResponse struct {
 	digest  [sha256.Size]byte
 	expires time.Time
-}
-
-func cloneUDPOSCOREOptions(options message.Options) message.Options {
-	cloned := make(message.Options, len(options))
-	for i, option := range options {
-		cloned[i] = message.Option{ID: option.ID, Value: append([]byte(nil), option.Value...)}
-	}
-	return cloned
 }
 
 func udpPoolMessageToOSCOREMessage(msg *pool.Message) (message.Message, error) {
@@ -179,7 +169,7 @@ func (cc *Conn) requiresOSCOREResponse(token message.Token) bool {
 }
 
 func (cc *Conn) hasPendingOSCOREObservation(token string, exchange udpOSCOREExchange) bool {
-	if !exchange.observe || exchange.hasObserveResponse || cc.observationHandler == nil {
+	if !exchange.observe || exchange.observeResponse.HasResponse || cc.observationHandler == nil {
 		return false
 	}
 	_, exists := cc.observationHandler.GetObservation(message.Token(token).Hash())
@@ -189,7 +179,7 @@ func (cc *Conn) hasPendingOSCOREObservation(token string, exchange udpOSCOREExch
 func (cc *Conn) trackOSCOREExchange(
 	req *pool.Message, context *oscore.Context, exchange oscore.Exchange,
 ) (func(bool), error) {
-	key := string(req.Token())
+	key := oscore.ExchangeTrackerKey(req.Token())
 	observeValue, observeErr := req.Options().Observe()
 	isObserveRequest := observeErr == nil
 	expires := time.Now().Add(ExchangeLifetime)
@@ -303,7 +293,7 @@ func (cc *Conn) finishOSCOREExchange(key string, record *udpOSCOREExchangeRecord
 }
 
 func (cc *Conn) unprotectIncomingResponse(resp *pool.Message) error {
-	key := string(resp.Token())
+	key := oscore.ExchangeTrackerKey(resp.Token())
 	exchange, ok := cc.oscoreExchangeForResponse(key)
 	if !ok {
 		if !resp.HasOption(message.OSCORE) {
@@ -339,7 +329,7 @@ func (cc *Conn) unprotectIncomingResponse(resp *pool.Message) error {
 		return err
 	}
 	if hasObserve && len(responseOption.PartialIV) > 0 {
-		observation.SetAuthenticatedSequenceNumber(resp, partialIVNumber(responseOption.PartialIV))
+		observation.SetAuthenticatedSequenceNumber(resp, oscore.PartialIVNumber(responseOption.PartialIV))
 	}
 	setMessagePreservingControlMessage(resp, plaintext)
 	resp.SetContext(context.WithValue(resp.Context(), oscoreResponseAlreadyProcessedContextKey{}, true))
@@ -391,12 +381,22 @@ func (cc *Conn) updateOSCOREExchangeResponse(
 ) error {
 	cc.oscoreMu.Lock()
 	defer cc.oscoreMu.Unlock()
-	current, exists := cc.oscoreExchanges[key]
-	if !exists || current.exchange != exchange.exchange {
-		return fmt.Errorf("%w: response belongs to a replaced OSCORE exchange", oscore.ErrInvalidOSCOREMessage)
-	}
-	if err := updateOSCOREObserveResponse(&current, responseOption, usedCancelExchange, hasObserve); err != nil {
+	current, err := cc.oscoreExchanges.UpdateResponse(
+		key,
+		exchange.exchange,
+		responseOption,
+		usedCancelExchange,
+		func(current udpOSCOREExchange) oscore.Exchange { return current.exchange },
+		func(current udpOSCOREExchange) bool { return current.observe },
+		func(current *udpOSCOREExchange) *oscore.ObserveResponseState {
+			return &current.observeResponse
+		},
+	)
+	if err != nil {
 		return err
+	}
+	if current.observe && !usedCancelExchange && hasObserve {
+		current.expires = time.Time{}
 	}
 	qBlock2More := !usedCancelExchange && !hasObserve && qBlockResponseHasMore(options)
 	if usedCancelExchange || !hasObserve && !current.qBlock2 && !qBlock2More {
@@ -407,33 +407,6 @@ func (cc *Conn) updateOSCOREExchangeResponse(
 	cc.oscoreExchanges[key] = current
 	if current.record != nil {
 		current.record.exchange = current
-	}
-	return nil
-}
-
-func updateOSCOREObserveResponse(
-	current *udpOSCOREExchange,
-	responseOption oscore.OptionValue,
-	usedCancelExchange bool,
-	hasObserve bool,
-) error {
-	if !current.observe || usedCancelExchange {
-		return nil
-	}
-	if current.hasObserveResponse && len(responseOption.PartialIV) == 0 {
-		return oscore.ErrReplay
-	}
-	if len(responseOption.PartialIV) > 0 {
-		notificationNumber := partialIVNumber(responseOption.PartialIV)
-		if current.hasNotificationNumber && notificationNumber <= current.notificationNumber {
-			return oscore.ErrReplay
-		}
-		current.hasNotificationNumber = true
-		current.notificationNumber = notificationNumber
-	}
-	current.hasObserveResponse = true
-	if hasObserve {
-		current.expires = time.Time{}
 	}
 	return nil
 }
@@ -484,13 +457,23 @@ func (cc *Conn) processIncomingOSCORERequest(req *pool.Message, datagram []byte)
 	}
 	plaintext, securityContext, exchange, err := cc.oscoreProcessor.ProcessIncomingRequest(outer)
 	if err != nil {
+		responded, responseErr := cc.respondToOSCOREProcessingError(req, err)
+		if responded {
+			return true, responseErr
+		}
 		return false, err
 	}
+	requestInfo := oscore.RequestInfo{}
 	if securityContext != nil {
+		requestInfo = oscore.RequestInfo{
+			RecipientID: securityContext.RecipientID(),
+			Protected:   true,
+		}
+		requestInfo.IDContext, requestInfo.IDContextSet = securityContext.IDContext()
 		req.SetContext(context.WithValue(req.Context(), udpOSCORERequestContextKey{}, udpOSCORERequestContext{
 			context:  securityContext,
 			exchange: exchange,
-			options:  cloneUDPOSCOREOptions(plaintext.Options),
+			options:  oscore.CloneOptions(plaintext.Options),
 		}))
 		cc.oscoreMu.Lock()
 		cc.oscoreRequests[req.MessageID()] = udpOSCORERequest{
@@ -499,8 +482,25 @@ func (cc *Conn) processIncomingOSCORERequest(req *pool.Message, datagram []byte)
 		}
 		cc.oscoreMu.Unlock()
 	}
+	req.SetContext(oscore.ContextWithRequestInfo(req.Context(), requestInfo))
 	setMessagePreservingControlMessage(req, plaintext)
 	return false, nil
+}
+
+func (cc *Conn) respondToOSCOREProcessingError(req *pool.Message, processingErr error) (bool, error) {
+	if !cc.oscoreErrorResponses || !req.HasOption(message.OSCORE) || req.Type() != message.Confirmable {
+		return false, nil
+	}
+	resp := cc.AcquireMessage(req.Context())
+	defer cc.ReleaseMessage(resp)
+	resp.SetCode(oscore.ProcessingErrorCode(processingErr))
+	resp.SetType(message.Acknowledgement)
+	resp.SetMessageID(req.MessageID())
+	resp.SetToken(req.Token())
+	if err := cc.session.WriteMessage(resp); err != nil {
+		return true, fmt.Errorf("send OSCORE processing-error response: %w", err)
+	}
+	return true, nil
 }
 
 func (cc *Conn) retransmitOSCOREResponse(req *pool.Message) error {
@@ -574,16 +574,7 @@ func (cc *Conn) oscoreResponseExceedsOuterBlockwiseLimit(req, resp *pool.Message
 	if err != nil {
 		return false, fmt.Errorf("encode response inner message: %w", err)
 	}
-	var tagLength int
-	switch binding.context.Algorithm() {
-	case oscore.AEADAlgorithmAESCCM16_64_128, oscore.AEADAlgorithmAESCCM16_64_256:
-		tagLength = 8
-	case oscore.AEADAlgorithmAESCCM16_128_128, oscore.AEADAlgorithmAESCCM16_128_256:
-		tagLength = 16
-	default:
-		return false, fmt.Errorf("unsupported OSCORE AEAD algorithm %d", binding.context.Algorithm())
-	}
-	return int64(len(plaintext)+tagLength) > limit, nil
+	return int64(len(plaintext)+binding.context.TagSize()) > limit, nil
 }
 
 func protectOSCOREResponse(binding udpOSCORERequestContext, response message.Message) (message.Message, error) {
@@ -599,7 +590,7 @@ func (cc *Conn) updateOSCOREObservationForResponse(
 	binding udpOSCORERequestContext,
 ) error {
 	observeValue, observeErr := req.Observe()
-	key := string(req.Token())
+	key := oscore.ExchangeTrackerKey(req.Token())
 	cc.oscoreMu.Lock()
 	defer cc.oscoreMu.Unlock()
 	switch {
@@ -622,7 +613,7 @@ func (cc *Conn) protectObservationResponse(resp *pool.Message) error {
 		resp.Code() < codes.Created || resp.Code() >= 192 {
 		return nil
 	}
-	key := string(resp.Token())
+	key := oscore.ExchangeTrackerKey(resp.Token())
 	if handled, err := cc.protectContextQBlockResponse(resp); handled {
 		return err
 	}
@@ -675,14 +666,6 @@ func findOSCOREOption(options message.Options) []byte {
 		return nil
 	}
 	return options[start].Value
-}
-
-func partialIVNumber(partialIV []byte) uint64 {
-	var number uint64
-	for _, b := range partialIV {
-		number = number<<8 | uint64(b)
-	}
-	return number
 }
 
 func (cc *Conn) expireOSCORERequests(now time.Time) {

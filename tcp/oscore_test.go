@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -36,6 +37,20 @@ func TestOSCOREAndPlaintextTCPExchange(t *testing.T) {
 				}
 				return
 			}
+			path, err := req.Path()
+			if err != nil {
+				t.Errorf("get request path: %v", err)
+				return
+			}
+			if path == "/secure-only" {
+				info, ok := oscore.RequestInfoFromContext(req.Context())
+				if !ok || !info.Protected || string(info.RecipientID) != "client" {
+					if err := w.SetResponse(codes.Unauthorized, message.TextPlain, nil); err != nil {
+						t.Errorf("set OSCORE-required response: %v", err)
+					}
+					return
+				}
+			}
 			if err := w.SetResponse(codes.Content, message.TextPlain, bytes.NewReader([]byte("ok"))); err != nil {
 				t.Errorf("set content response: %v", err)
 			}
@@ -63,6 +78,67 @@ func TestOSCOREAndPlaintextTCPExchange(t *testing.T) {
 
 	assertTCPGetResponse(t, secureClient)
 	assertTCPGetResponse(t, plaintextClient)
+	for _, test := range []struct {
+		name string
+		conn *client.Conn
+		code codes.Code
+	}{
+		{name: "protected", conn: secureClient, code: codes.Content},
+		{name: "plaintext", conn: plaintextClient, code: codes.Unauthorized},
+	} {
+		t.Run("secure-only/"+test.name, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			defer cancel()
+			request, err := test.conn.NewGetRequest(ctx, "/secure-only")
+			require.NoError(t, err)
+			defer test.conn.ReleaseMessage(request)
+			response, err := test.conn.Do(request)
+			require.NoError(t, err)
+			defer test.conn.ReleaseMessage(response)
+			require.Equal(t, test.code, response.Code())
+		})
+	}
+}
+
+func TestOSCORETCPErrorResponseIsUnprotectedAndDoesNotReachHandler(t *testing.T) {
+	listener, err := coapNet.NewTCPListener("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	var handled atomic.Int32
+	server := tcp.NewServer(
+		options.WithOSCORE(newTCPOSCOREProcessor(t, "server", "other", false)),
+		options.WithOSCOREErrorResponses(),
+		options.WithHandlerFunc(func(*responsewriter.ResponseWriter[*client.Conn], *pool.Message) {
+			handled.Add(1)
+		}),
+	)
+	serverDone := make(chan error, 1)
+	go func() { serverDone <- server.Serve(listener) }()
+	defer func() {
+		server.Stop()
+		select {
+		case serverErr := <-serverDone:
+			require.NoError(t, serverErr)
+		case <-time.After(5 * time.Second):
+			require.Fail(t, "TCP OSCORE-error server did not stop")
+		}
+	}()
+
+	cc, err := tcp.Dial(listener.Addr().String(),
+		options.WithOSCORE(newTCPOSCOREProcessor(t, "client", "server", false)))
+	require.NoError(t, err)
+	defer func() { require.NoError(t, cc.Close()) }()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	response, err := cc.Get(ctx, "/")
+	require.NoError(t, err)
+	require.Equal(t, codes.Unauthorized, response.Code())
+	require.False(t, response.HasOption(message.OSCORE))
+	require.Empty(t, response.Options())
+	require.True(t, oscore.IsUnprotectedProcessingError(response.Context()))
+	body, err := response.ReadBody()
+	require.NoError(t, err)
+	require.Empty(t, body)
+	require.Zero(t, handled.Load())
 }
 
 func TestOSCORETCPRejectsMalformedTransportMessages(t *testing.T) {
@@ -354,16 +430,18 @@ func TestOSCORETCPObserveNotificationsAndCancellation(t *testing.T) {
 	require.NoError(t, err)
 	masterSecret := []byte{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16}
 	clientContext, err := oscore.NewContext(oscore.ContextConfig{
-		MasterSecret: masterSecret,
-		SenderID:     []byte("client"),
-		RecipientID:  []byte("server"),
+		AcceptReplayStateLoss: true,
+		MasterSecret:          masterSecret,
+		SenderID:              []byte("client"),
+		RecipientID:           []byte("server"),
 	})
 	require.NoError(t, err)
 	serverContext, err := oscore.NewContext(oscore.ContextConfig{
-		MasterSecret:         masterSecret,
-		SenderID:             []byte("server"),
-		RecipientID:          []byte("client"),
-		SenderSequenceNumber: 0xffffff,
+		AcceptReplayStateLoss: true,
+		MasterSecret:          masterSecret,
+		SenderID:              []byte("server"),
+		RecipientID:           []byte("client"),
+		SenderSequenceNumber:  0xffffff,
 	})
 	require.NoError(t, err)
 	serverProcessor, err := oscore.NewProcessor(oscore.ProcessorConfig{Contexts: []*oscore.Context{serverContext}})
@@ -682,9 +760,10 @@ func assertTCPGetResponse(t *testing.T, cc *client.Conn) {
 func newTCPOSCOREProcessor(t *testing.T, senderID, recipientID string, allowPlaintext bool) *oscore.Processor {
 	t.Helper()
 	securityContext, err := oscore.NewContext(oscore.ContextConfig{
-		MasterSecret: []byte{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16},
-		SenderID:     []byte(senderID),
-		RecipientID:  []byte(recipientID),
+		AcceptReplayStateLoss: true,
+		MasterSecret:          []byte{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16},
+		SenderID:              []byte(senderID),
+		RecipientID:           []byte(recipientID),
 	})
 	require.NoError(t, err)
 	policy := oscore.PlaintextDisabled
@@ -703,15 +782,17 @@ func newTCPOSCOREContextPair(t *testing.T, clientID, serverID string) (*oscore.C
 	t.Helper()
 	masterSecret := []byte{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16}
 	clientContext, err := oscore.NewContext(oscore.ContextConfig{
-		MasterSecret: masterSecret,
-		SenderID:     []byte(clientID),
-		RecipientID:  []byte(serverID),
+		AcceptReplayStateLoss: true,
+		MasterSecret:          masterSecret,
+		SenderID:              []byte(clientID),
+		RecipientID:           []byte(serverID),
 	})
 	require.NoError(t, err)
 	serverContext, err := oscore.NewContext(oscore.ContextConfig{
-		MasterSecret: masterSecret,
-		SenderID:     []byte(serverID),
-		RecipientID:  []byte(clientID),
+		AcceptReplayStateLoss: true,
+		MasterSecret:          masterSecret,
+		SenderID:              []byte(serverID),
+		RecipientID:           []byte(clientID),
 	})
 	require.NoError(t, err)
 	return clientContext, serverContext

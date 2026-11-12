@@ -14,19 +14,21 @@ func pairedContexts(t *testing.T, clientSequence, serverSequence uint64) (*Conte
 	t.Helper()
 	masterSecret := mustHex(t, "0102030405060708090a0b0c0d0e0f10")
 	client, err := NewContext(ContextConfig{
-		MasterSecret:         masterSecret,
-		SenderID:             []byte{0},
-		RecipientID:          []byte{1},
-		SenderSequenceNumber: clientSequence,
+		AcceptReplayStateLoss: true,
+		MasterSecret:          masterSecret,
+		SenderID:              []byte{0},
+		RecipientID:           []byte{1},
+		SenderSequenceNumber:  clientSequence,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	server, err := NewContext(ContextConfig{
-		MasterSecret:         masterSecret,
-		SenderID:             []byte{1},
-		RecipientID:          []byte{0},
-		SenderSequenceNumber: serverSequence,
+		AcceptReplayStateLoss: true,
+		MasterSecret:          masterSecret,
+		SenderID:              []byte{1},
+		RecipientID:           []byte{0},
+		SenderSequenceNumber:  serverSequence,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -142,19 +144,21 @@ func assertProtectedResponseRoundTrip(
 func TestProtectRequestAndResponseWithAESCCM256(t *testing.T) {
 	masterSecret := mustHex(t, "0102030405060708090a0b0c0d0e0f10")
 	client, err := NewContext(ContextConfig{
-		Algorithm:    AEADAlgorithmAESCCM16_128_256,
-		MasterSecret: masterSecret,
-		SenderID:     []byte{0},
-		RecipientID:  []byte{1},
+		AcceptReplayStateLoss: true,
+		Algorithm:             AEADAlgorithmAESCCM16_128_256,
+		MasterSecret:          masterSecret,
+		SenderID:              []byte{0},
+		RecipientID:           []byte{1},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	server, err := NewContext(ContextConfig{
-		Algorithm:    AEADAlgorithmAESCCM16_128_256,
-		MasterSecret: masterSecret,
-		SenderID:     []byte{1},
-		RecipientID:  []byte{0},
+		AcceptReplayStateLoss: true,
+		Algorithm:             AEADAlgorithmAESCCM16_128_256,
+		MasterSecret:          masterSecret,
+		SenderID:              []byte{1},
+		RecipientID:           []byte{0},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -300,6 +304,34 @@ func TestValidateInnerRequestObserveValue(t *testing.T) {
 		}
 	}
 
+	for _, test := range []struct {
+		name  string
+		value []byte
+		want  uint32
+	}{
+		{name: "zero with leading zero", value: []byte{0}, want: 0},
+		{name: "one with leading zero", value: []byte{0, 1}, want: 1},
+		{name: "one with multiple leading zeros", value: []byte{0, 0, 1}, want: 1},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			outer := message.Option{ID: message.Observe, Value: test.value}
+			inner := message.Message{
+				Code:    codes.GET,
+				Options: message.Options{{ID: message.Observe, Value: []byte{byte(test.want)}}},
+			}
+			if test.want == 0 {
+				inner.Options[0].Value = nil
+			}
+			if _, err := validateInnerRequest(inner, outer, true); err != nil {
+				t.Fatalf("leading-zero Observe request rejected: %v", err)
+			}
+			got, err := observeOptionValue(outer)
+			if err != nil || got != test.want {
+				t.Fatalf("decoded Observe = %d, %v; want %d", got, err, test.want)
+			}
+		})
+	}
+
 	for _, value := range []uint32{2, 3, 0xffffff} {
 		options := observeOptions(t, value)
 		outerOption, hasOuterObserve, err := findObserveOption(options)
@@ -427,10 +459,11 @@ func assertObserveCancellation(t *testing.T, client, server *Context) {
 
 func TestRFC8613AppendixC5ProtectedRequest(t *testing.T) {
 	client, err := NewContext(ContextConfig{
-		MasterSecret:         mustHex(t, "0102030405060708090a0b0c0d0e0f10"),
-		SenderID:             mustHex(t, "00"),
-		RecipientID:          mustHex(t, "01"),
-		SenderSequenceNumber: 20,
+		AcceptReplayStateLoss: true,
+		MasterSecret:          mustHex(t, "0102030405060708090a0b0c0d0e0f10"),
+		SenderID:              mustHex(t, "00"),
+		RecipientID:           mustHex(t, "01"),
+		SenderSequenceNumber:  20,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -456,12 +489,13 @@ func TestRFC8613AppendixC5ProtectedRequest(t *testing.T) {
 
 func TestRFC8613AppendixC6ProtectedRequestWithIDContext(t *testing.T) {
 	client, err := NewContext(ContextConfig{
-		MasterSecret:         mustHex(t, "0102030405060708090a0b0c0d0e0f10"),
-		MasterSalt:           mustHex(t, "9e7ca92223786340"),
-		IDContext:            mustHex(t, "37cbf3210017a2d3"),
-		SenderID:             []byte{},
-		RecipientID:          mustHex(t, "01"),
-		SenderSequenceNumber: 20,
+		AcceptReplayStateLoss: true,
+		MasterSecret:          mustHex(t, "0102030405060708090a0b0c0d0e0f10"),
+		MasterSalt:            mustHex(t, "9e7ca92223786340"),
+		IDContext:             mustHex(t, "37cbf3210017a2d3"),
+		SenderID:              []byte{},
+		RecipientID:           mustHex(t, "01"),
+		SenderSequenceNumber:  20,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -507,19 +541,21 @@ func assertRFC8613ProtectedRequest(t *testing.T, protected message.Message, mess
 
 func TestRFC8613AppendixC7ProtectedResponse(t *testing.T) {
 	server, err := NewContext(ContextConfig{
-		MasterSecret: mustHex(t, "0102030405060708090a0b0c0d0e0f10"),
-		MasterSalt:   mustHex(t, "9e7ca92223786340"),
-		SenderID:     mustHex(t, "01"),
-		RecipientID:  []byte{},
+		AcceptReplayStateLoss: true,
+		MasterSecret:          mustHex(t, "0102030405060708090a0b0c0d0e0f10"),
+		MasterSalt:            mustHex(t, "9e7ca92223786340"),
+		SenderID:              mustHex(t, "01"),
+		RecipientID:           []byte{},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	client, err := NewContext(ContextConfig{
-		MasterSecret: mustHex(t, "0102030405060708090a0b0c0d0e0f10"),
-		MasterSalt:   mustHex(t, "9e7ca92223786340"),
-		SenderID:     []byte{},
-		RecipientID:  mustHex(t, "01"),
+		AcceptReplayStateLoss: true,
+		MasterSecret:          mustHex(t, "0102030405060708090a0b0c0d0e0f10"),
+		MasterSalt:            mustHex(t, "9e7ca92223786340"),
+		SenderID:              []byte{},
+		RecipientID:           mustHex(t, "01"),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -643,9 +679,10 @@ func TestExchangeBindingIsImmutableAndSharedByCopies(t *testing.T) {
 		t.Fatalf("zero-value Exchange error = %v, want ErrInvalidContext", protectErr)
 	}
 	unrelated, err := NewContext(ContextConfig{
-		MasterSecret: []byte("unrelated context"),
-		SenderID:     []byte{2},
-		RecipientID:  []byte{3},
+		AcceptReplayStateLoss: true,
+		MasterSecret:          []byte("unrelated context"),
+		SenderID:              []byte{2},
+		RecipientID:           []byte{3},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -681,9 +718,10 @@ func TestProtectResponseFailureDoesNotConsumeOrdinaryExchange(t *testing.T) {
 func TestProtectResponseSequenceReservationFailureCanRetry(t *testing.T) {
 	const masterSecret = "response sequence reservation retry"
 	client, err := NewContext(ContextConfig{
-		MasterSecret: []byte(masterSecret),
-		SenderID:     []byte("client"),
-		RecipientID:  []byte("server"),
+		AcceptReplayStateLoss: true,
+		MasterSecret:          []byte(masterSecret),
+		SenderID:              []byte("client"),
+		RecipientID:           []byte("server"),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -691,10 +729,11 @@ func TestProtectResponseSequenceReservationFailureCanRetry(t *testing.T) {
 	storeErr := errors.New("temporary sequence storage failure")
 	store := &testSenderSequenceStore{err: storeErr}
 	server, err := NewContext(ContextConfig{
-		MasterSecret:        []byte(masterSecret),
-		SenderID:            []byte("server"),
-		RecipientID:         []byte("client"),
-		SenderSequenceStore: store,
+		AcceptReplayStateLoss: true,
+		MasterSecret:          []byte(masterSecret),
+		SenderID:              []byte("server"),
+		RecipientID:           []byte("client"),
+		SenderSequenceStore:   store,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -935,19 +974,21 @@ func TestObserveNotificationWithoutOuterObserveUsesInnerObserveAndPartialIV(t *t
 
 func TestRFC8613AppendixC8ProtectedResponseWithPartialIV(t *testing.T) {
 	server, err := NewContext(ContextConfig{
-		MasterSecret: mustHex(t, "0102030405060708090a0b0c0d0e0f10"),
-		MasterSalt:   mustHex(t, "9e7ca92223786340"),
-		SenderID:     mustHex(t, "01"),
-		RecipientID:  []byte{},
+		AcceptReplayStateLoss: true,
+		MasterSecret:          mustHex(t, "0102030405060708090a0b0c0d0e0f10"),
+		MasterSalt:            mustHex(t, "9e7ca92223786340"),
+		SenderID:              mustHex(t, "01"),
+		RecipientID:           []byte{},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	client, err := NewContext(ContextConfig{
-		MasterSecret: mustHex(t, "0102030405060708090a0b0c0d0e0f10"),
-		MasterSalt:   mustHex(t, "9e7ca92223786340"),
-		SenderID:     []byte{},
-		RecipientID:  mustHex(t, "01"),
+		AcceptReplayStateLoss: true,
+		MasterSecret:          mustHex(t, "0102030405060708090a0b0c0d0e0f10"),
+		MasterSalt:            mustHex(t, "9e7ca92223786340"),
+		SenderID:              []byte{},
+		RecipientID:           mustHex(t, "01"),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -1003,19 +1044,21 @@ func TestRFC8613AppendixC8ProtectedResponseWithPartialIV(t *testing.T) {
 func TestProtectWithPresentEmptyIDContext(t *testing.T) {
 	masterSecret := []byte{1, 2, 3, 4}
 	client, err := NewContext(ContextConfig{
-		MasterSecret: masterSecret,
-		IDContext:    []byte{},
-		SenderID:     []byte{},
-		RecipientID:  []byte{1},
+		AcceptReplayStateLoss: true,
+		MasterSecret:          masterSecret,
+		IDContext:             []byte{},
+		SenderID:              []byte{},
+		RecipientID:           []byte{1},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	server, err := NewContext(ContextConfig{
-		MasterSecret: masterSecret,
-		IDContext:    []byte{},
-		SenderID:     []byte{1},
-		RecipientID:  []byte{},
+		AcceptReplayStateLoss: true,
+		MasterSecret:          masterSecret,
+		IDContext:             []byte{},
+		SenderID:              []byte{1},
+		RecipientID:           []byte{},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -1103,18 +1146,20 @@ func TestUnprotectRejectsTamperingAndReplay(t *testing.T) {
 
 func TestObserveRejectsOutOfOrderFullWidthPartialIV(t *testing.T) {
 	requestContext, err := NewContext(ContextConfig{
-		MasterSecret: []byte("OSCORE observe sequence test"),
-		SenderID:     []byte("client"),
-		RecipientID:  []byte("server"),
+		AcceptReplayStateLoss: true,
+		MasterSecret:          []byte("OSCORE observe sequence test"),
+		SenderID:              []byte("client"),
+		RecipientID:           []byte("server"),
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	serverContext, err := NewContext(ContextConfig{
-		MasterSecret:         []byte("OSCORE observe sequence test"),
-		SenderID:             []byte("server"),
-		RecipientID:          []byte("client"),
-		SenderSequenceNumber: 0xffffff,
+		AcceptReplayStateLoss: true,
+		MasterSecret:          []byte("OSCORE observe sequence test"),
+		SenderID:              []byte("server"),
+		RecipientID:           []byte("client"),
+		SenderSequenceNumber:  0xffffff,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -1169,7 +1214,7 @@ func TestUnprotectRejectsMalformedOuterMessage(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			msg := protected
-			msg.Options = cloneOptions(protected.Options)
+			msg.Options = CloneOptions(protected.Options)
 			mutate(&msg)
 			if _, _, err := server.UnprotectRequest(msg); err == nil {
 				t.Fatal("expected malformed OSCORE message to fail")
@@ -1297,7 +1342,7 @@ func TestUnprotectRejectsMalformedOrTamperedResponse(t *testing.T) {
 				t.Fatal(err)
 			}
 			mutated := response
-			mutated.Options = cloneOptions(response.Options)
+			mutated.Options = CloneOptions(response.Options)
 			mutate(t, &mutated)
 			if _, err := client.UnprotectResponse(mutated, clientExchange); err == nil {
 				t.Fatal("expected invalid response to fail")

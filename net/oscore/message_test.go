@@ -195,11 +195,19 @@ func TestDecodeInnerRejectsOuterOptionsAndEmptyPayloadMarker(t *testing.T) {
 	tests := [][]byte{
 		{},
 		{byte(codes.GET), 0x31, 'x'}, // Uri-Host is Class U.
-		{byte(codes.GET), 0xff},
 	}
 	for _, input := range tests {
 		if _, err := DecodeInner(input); err == nil {
 			t.Errorf("DecodeInner(%x) succeeded", input)
+		}
+	}
+
+	for _, input := range [][]byte{
+		{byte(codes.GET), 0xff},
+		{byte(codes.GET), 0xb1, 'x', 0xff},
+	} {
+		if _, err := DecodeInner(input); !errors.Is(err, message.ErrPayloadMarkerWithoutPayload) {
+			t.Errorf("DecodeInner(%x) error = %v, want ErrPayloadMarkerWithoutPayload", input, err)
 		}
 	}
 }

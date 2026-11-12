@@ -30,9 +30,10 @@ func TestParseProxyURI(t *testing.T) {
 
 func TestProtectRequestDecomposesProxyURI(t *testing.T) {
 	ctx, err := NewContext(ContextConfig{
-		MasterSecret: []byte("0123456789abcdef"),
-		SenderID:     []byte{0},
-		RecipientID:  []byte{1},
+		AcceptReplayStateLoss: true,
+		MasterSecret:          []byte("0123456789abcdef"),
+		SenderID:              []byte{0},
+		RecipientID:           []byte{1},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -80,9 +81,10 @@ func TestParseProxyURIRejectsInvalidTargets(t *testing.T) {
 
 func TestProtectRequestRejectsProxyURIWithSeparateURIOptions(t *testing.T) {
 	ctx, err := NewContext(ContextConfig{
-		MasterSecret: []byte("0123456789abcdef"),
-		SenderID:     []byte{0},
-		RecipientID:  []byte{1},
+		AcceptReplayStateLoss: true,
+		MasterSecret:          []byte("0123456789abcdef"),
+		SenderID:              []byte{0},
+		RecipientID:           []byte{1},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -101,9 +103,10 @@ func TestProtectRequestRejectsProxyURIWithSeparateURIOptions(t *testing.T) {
 
 func TestProtectProxyRequestKeepsAuthorityOutsideCiphertext(t *testing.T) {
 	ctx, err := NewContext(ContextConfig{
-		MasterSecret: []byte("0123456789abcdef"),
-		SenderID:     []byte{0},
-		RecipientID:  []byte{1},
+		AcceptReplayStateLoss: true,
+		MasterSecret:          []byte("0123456789abcdef"),
+		SenderID:              []byte{0},
+		RecipientID:           []byte{1},
 	})
 	if err != nil {
 		t.Fatal(err)

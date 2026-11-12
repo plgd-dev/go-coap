@@ -13,6 +13,7 @@ import (
 
 var (
 	ErrInvalidOSCOREMessage = errors.New("invalid OSCORE message")
+	ErrInvalidOSCOREOption  = errors.New("invalid OSCORE option")
 	ErrUnsupportedOption    = errors.New("unsupported OSCORE option processing")
 )
 
@@ -39,6 +40,49 @@ type exchangeResponseState struct {
 	hasNotificationNumber  bool
 	notificationNumber     uint64
 	seenResponsePartialIVs map[uint64]struct{}
+}
+
+// ObserveResponseState tracks notification sequencing for an Observe exchange.
+// State transitions are: unseen -> sequenced notifications -> complete when a
+// response no longer carries Observe.
+type ObserveResponseState struct {
+	HasResponse bool
+	HasSequence bool
+	Sequence    uint64
+}
+
+// Update validates and records an Observe response. usedCancelExchange marks
+// a response bound to a separate cancellation exchange.
+func (s *ObserveResponseState) Update(
+	option OptionValue,
+	observeExchange bool,
+	usedCancelExchange bool,
+) error {
+	if !observeExchange || usedCancelExchange {
+		return nil
+	}
+	if s.HasResponse && len(option.PartialIV) == 0 {
+		return ErrReplay
+	}
+	if len(option.PartialIV) > 0 {
+		sequence := PartialIVNumber(option.PartialIV)
+		if s.HasSequence && sequence <= s.Sequence {
+			return ErrReplay
+		}
+		s.HasSequence = true
+		s.Sequence = sequence
+	}
+	s.HasResponse = true
+	return nil
+}
+
+// PartialIVNumber converts a big-endian Partial IV into its sequence number.
+func PartialIVNumber(partialIV []byte) uint64 {
+	var number uint64
+	for _, b := range partialIV {
+		number = number<<8 | uint64(b)
+	}
+	return number
 }
 
 // RequestIdentifier returns a copy of the request identifier bound to the
@@ -76,7 +120,8 @@ func (e Exchange) matchesContext(context *Context) bool {
 	return e.responseState != nil && context != nil && e.responseState.context == context
 }
 
-func cloneOptions(options message.Options) message.Options {
+// CloneOptions returns a deep copy of options.
+func CloneOptions(options message.Options) message.Options {
 	cloned := make(message.Options, len(options))
 	for i, option := range options {
 		cloned[i] = message.Option{
@@ -91,7 +136,8 @@ func isRequestCode(code codes.Code) bool {
 	return code >= codes.GET && code <= codes.IPATCH
 }
 
-func isResponseCode(code codes.Code) bool {
+// IsResponseCode reports whether code is a CoAP response code.
+func IsResponseCode(code codes.Code) bool {
 	return code >= 64 && code < 192
 }
 
@@ -111,7 +157,7 @@ func observeRegistrationFromOptions(options message.Options) (bool, error) {
 }
 
 func mergeOptions(first, second message.Options) message.Options {
-	options := append(cloneOptions(first), cloneOptions(second)...)
+	options := append(CloneOptions(first), CloneOptions(second)...)
 	sort.SliceStable(options, func(i, j int) bool {
 		return options[i].ID < options[j].ID
 	})
@@ -119,7 +165,7 @@ func mergeOptions(first, second message.Options) message.Options {
 }
 
 func appendOSCOREOptions(outer message.Options, encodedOption []byte) message.Options {
-	outer = cloneOptions(outer)
+	outer = CloneOptions(outer)
 	outer = outer.Add(message.Option{
 		ID:    message.OSCORE,
 		Value: append([]byte(nil), encodedOption...),
@@ -137,13 +183,13 @@ func parseOSCOREOuter(options message.Options) (OptionValue, message.Options, er
 		switch option.ID {
 		case message.OSCORE:
 			if optionFound {
-				return OptionValue{}, nil, fmt.Errorf("%w: duplicate OSCORE option", ErrInvalidOSCOREMessage)
+				return OptionValue{}, nil, fmt.Errorf("%w: %w: duplicate OSCORE option", ErrInvalidOSCOREMessage, ErrInvalidOSCOREOption)
 			}
 			optionFound = true
 			var err error
 			optionValue, err = UnmarshalOption(option.Value)
 			if err != nil {
-				return OptionValue{}, nil, fmt.Errorf("%w: decode OSCORE option: %w", ErrInvalidOSCOREMessage, err)
+				return OptionValue{}, nil, fmt.Errorf("%w: %w: decode OSCORE option: %w", ErrInvalidOSCOREMessage, ErrInvalidOSCOREOption, err)
 			}
 		default:
 			outerUserFields = append(outerUserFields, option)
@@ -162,7 +208,7 @@ func parseOSCOREOuter(options message.Options) (OptionValue, message.Options, er
 			filteredOuterFields = append(filteredOuterFields, option)
 		}
 	}
-	return optionValue, cloneOptions(filteredOuterFields), nil
+	return optionValue, CloneOptions(filteredOuterFields), nil
 }
 
 func (c *Context) requestOption(partialIV []byte) ([]byte, error) {
@@ -182,7 +228,7 @@ func (c *Context) responseOption(partialIV []byte) ([]byte, error) {
 
 func (c *Context) validateRequestOption(option OptionValue) error {
 	if len(option.PartialIV) == 0 || !option.SenderIDSet {
-		return fmt.Errorf("%w: request OSCORE option must contain Partial IV and KID", ErrInvalidOSCOREMessage)
+		return fmt.Errorf("%w: %w: request OSCORE option must contain Partial IV and KID", ErrInvalidOSCOREMessage, ErrInvalidOSCOREOption)
 	}
 	if !bytes.Equal(option.SenderID, c.recipientID) {
 		return fmt.Errorf("%w: request KID does not match recipient context", ErrInvalidContext)
@@ -361,7 +407,7 @@ func findObserveOption(options message.Options) (message.Option, bool, error) {
 }
 
 func observeOptionValue(option message.Option) (uint32, error) {
-	if len(option.Value) > 3 || len(option.Value) > 0 && option.Value[0] == 0 {
+	if len(option.Value) > 3 {
 		return 0, fmt.Errorf("%w: invalid Observe option encoding", ErrInvalidOSCOREMessage)
 	}
 	return message.Options{option}.Observe()
@@ -426,7 +472,7 @@ func (c *Context) ProtectResponseWithPartialIV(response message.Message, exchang
 }
 
 func (c *Context) protectResponse(response message.Message, exchange Exchange, usePartialIV bool) (message.Message, error) {
-	if !isResponseCode(response.Code) {
+	if !IsResponseCode(response.Code) {
 		return message.Message{}, fmt.Errorf("%w: code %d is not a response", ErrInvalidOSCOREMessage, response.Code)
 	}
 	if validationErr := validateExchange(exchange); validationErr != nil {
@@ -661,7 +707,7 @@ func (c *Context) openResponse(response message.Message, exchange Exchange) (Opt
 }
 
 func validateInnerResponse(inner message.Message, exchange Exchange, option OptionValue) (message.Options, error) {
-	if !isResponseCode(inner.Code) {
+	if !IsResponseCode(inner.Code) {
 		return nil, fmt.Errorf("%w: decrypted code %d is not a response", ErrInvalidOSCOREMessage, inner.Code)
 	}
 	innerObserve, hasInnerObserve, err := findObserveOption(inner.Options)

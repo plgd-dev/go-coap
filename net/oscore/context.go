@@ -48,7 +48,8 @@ var (
 // Set SenderSequenceNumber to the next sequence number to use, or provide a
 // SenderSequenceStore for durable reservations across process restarts. Never
 // reset the sequence number for an existing sender key; doing so can reuse an
-// AEAD nonce.
+// AEAD nonce. Configure ReplayWindowStore for durable inbound replay state, or
+// explicitly set AcceptReplayStateLoss to allow an in-memory replay window.
 type ContextConfig struct {
 	// Algorithm is a COSE AEAD algorithm. Zero selects AES-CCM-16-64-128.
 	Algorithm AEADAlgorithm
@@ -64,6 +65,9 @@ type ContextConfig struct {
 	SenderSequenceStore  SenderSequenceReserver
 	ReplayWindowSize     uint8
 	ReplayWindowStore    ReplayWindowStore
+	// AcceptReplayStateLoss explicitly accepts that replay protection resets
+	// after a restart when no ReplayWindowStore is configured.
+	AcceptReplayStateLoss bool
 }
 
 // SenderSequenceReserver returns sender sequence numbers from durably reserved
@@ -210,6 +214,9 @@ func validateContextConfig(cfg ContextConfig) (ContextConfig, error) {
 	if cfg.ReplayWindowSize > 64 {
 		return cfg, fmt.Errorf("%w: replay window exceeds 64 entries", ErrInvalidReplayWindow)
 	}
+	if cfg.ReplayWindowStore == nil && !cfg.AcceptReplayStateLoss {
+		return cfg, fmt.Errorf("%w: configure a ReplayWindowStore or explicitly accept replay-state loss with AcceptReplayStateLoss", ErrInvalidContext)
+	}
 	return cfg, nil
 }
 
@@ -247,14 +254,15 @@ func newContextAEAD(key []byte, tagSize int, endpoint string) (ccm.CCM, error) {
 
 func loadReplayWindow(cfg ContextConfig) (*ReplayWindow, error) {
 	replayState := ReplayWindowState{}
+	highWaterSet := false
 	var err error
 	if cfg.ReplayWindowStore != nil {
-		replayState, err = cfg.ReplayWindowStore.Load()
+		replayState, highWaterSet, err = loadReplayState(cfg.ReplayWindowStore, cfg.ReplayWindowSize)
 		if err != nil {
 			return nil, fmt.Errorf("load OSCORE replay state: %w", err)
 		}
 	}
-	replay, err := newReplayWindow(cfg.ReplayWindowSize, replayState, cfg.ReplayWindowStore)
+	replay, err := newReplayWindow(cfg.ReplayWindowSize, replayState, cfg.ReplayWindowStore, highWaterSet)
 	if err != nil {
 		return nil, err
 	}
@@ -304,6 +312,12 @@ func deriveKey(secret, salt, id, idContext []byte, label string, length int, alg
 // Algorithm returns the COSE AEAD algorithm configured for this context.
 func (c *Context) Algorithm() AEADAlgorithm {
 	return c.algorithm
+}
+
+// TagSize returns the authentication tag size, in bytes, for the context's
+// configured AEAD algorithm.
+func (c *Context) TagSize() int {
+	return algorithmParameters(c.algorithm).tagSize
 }
 
 func appendCBORHead(dst []byte, majorType uint8, value uint64) []byte {

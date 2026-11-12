@@ -54,6 +54,42 @@ func WithOSCORE(processor *oscore.Processor) OSCOREOpt {
 	return OSCOREOpt{processor: processor}
 }
 
+type OSCOREExchangeTimeoutOpt struct {
+	timeout time.Duration
+}
+
+func (o OSCOREExchangeTimeoutOpt) TCPClientApply(cfg *tcpClient.Config) {
+	cfg.OSCOREExchangeTimeout = o.timeout
+}
+
+// WithOSCOREExchangeTimeout configures how long TCP keeps a non-Observe
+// OSCORE exchange available for a late response. Zero disables expiry.
+func WithOSCOREExchangeTimeout(timeout time.Duration) OSCOREExchangeTimeoutOpt {
+	return OSCOREExchangeTimeoutOpt{timeout: timeout}
+}
+
+// OSCOREErrorResponsesOpt enables empty, unprotected OSCORE processing-error
+// responses on server endpoints.
+type OSCOREErrorResponsesOpt struct{}
+
+func (OSCOREErrorResponsesOpt) TCPServerApply(cfg *tcpServer.Config) {
+	cfg.OSCOREErrorResponses = true
+}
+
+func (OSCOREErrorResponsesOpt) UDPServerApply(cfg *udpServer.Config) {
+	cfg.OSCOREErrorResponses = true
+}
+
+func (OSCOREErrorResponsesOpt) DTLSServerApply(cfg *dtlsServer.Config) {
+	cfg.OSCOREErrorResponses = true
+}
+
+// WithOSCOREErrorResponses enables unprotected 4.00, 4.01, or 4.02 responses
+// to OSCORE processing failures. Responses are empty and disabled by default.
+func WithOSCOREErrorResponses() OSCOREErrorResponsesOpt {
+	return OSCOREErrorResponsesOpt{}
+}
+
 // OSCOREOuterBlockwiseOpt enables Outer Blockwise fragmentation and
 // reassembly for OSCORE messages over UDP and DTLS.
 type OSCOREOuterBlockwiseOpt struct{}
@@ -78,7 +114,7 @@ func WithOSCOREOuterBlockwise() OSCOREOuterBlockwiseOpt {
 }
 
 // OSCOREOuterBlockwiseMaxReassembledPayloadSizeOpt sets the maximum reassembled
-// payload size for Outer Blockwise OSCORE messages.
+// payload size for Outer Blockwise messages carrying the OSCORE option.
 type OSCOREOuterBlockwiseMaxReassembledPayloadSizeOpt struct {
 	size uint32
 }
@@ -95,8 +131,9 @@ func (o OSCOREOuterBlockwiseMaxReassembledPayloadSizeOpt) DTLSServerApply(cfg *d
 	cfg.OSCOREOuterBlockwiseMaxReassembledPayloadSize = o.size
 }
 
-// WithOSCOREOuterBlockwiseMaxReassembledPayloadSize sets the maximum reassembled payload size
-// for Outer Blockwise OSCORE messages over UDP and DTLS. A size of 0 uses the
+// WithOSCOREOuterBlockwiseMaxReassembledPayloadSize sets the maximum reassembled
+// payload size for Outer Blockwise messages carrying the OSCORE option over UDP
+// and DTLS. Plaintext Blockwise transfers are unaffected. A size of 0 uses the
 // default of 65,536 bytes. Enable Outer Blockwise separately with
 // WithOSCOREOuterBlockwise.
 func WithOSCOREOuterBlockwiseMaxReassembledPayloadSize(size uint32) OSCOREOuterBlockwiseMaxReassembledPayloadSizeOpt {
