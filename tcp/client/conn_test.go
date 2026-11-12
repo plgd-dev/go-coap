@@ -63,6 +63,52 @@ func TestUnprotectedErrorResponseOnlyTerminatesOSCOREExchange(t *testing.T) {
 	}
 }
 
+func TestStaleOSCOREExchangeDoesNotRemoveReplacement(t *testing.T) {
+	makeExchange := func(secret string) (*oscore.Context, oscore.Exchange) {
+		securityContext, err := oscore.NewContext(oscore.ContextConfig{
+			MasterSecret: []byte(secret),
+			SenderID:     []byte("client"),
+			RecipientID:  []byte("server"),
+		})
+		require.NoError(t, err)
+		_, exchange, err := securityContext.ProtectRequest(message.Message{
+			Code: codes.GET, Token: message.Token{1},
+		})
+		require.NoError(t, err)
+		return securityContext, exchange
+	}
+
+	oldContext, oldExchange := makeExchange("old response exchange context")
+	newContext, newExchange := makeExchange("replacement response exchange")
+	require.Equal(t, oldExchange.RequestPartialIVBytes(), newExchange.RequestPartialIVBytes())
+	require.NotEqual(t, oldExchange, newExchange)
+
+	const key = "\x01"
+	cc := &Conn{
+		oscoreExchanges: map[string]tcpOSCOREExchange{
+			key: {
+				context:  newContext,
+				exchange: newExchange,
+				observe:  true,
+			},
+		},
+	}
+	stale := tcpOSCOREExchange{context: oldContext, exchange: oldExchange}
+
+	require.NoError(t, cc.updateTCPOSCOREExchangeResponse(
+		key,
+		stale,
+		oscore.OptionValue{},
+		false,
+		false,
+	))
+	cc.removeTCPOSCOREExchangeForProcessingError(key, oldExchange)
+
+	current, exists := cc.oscoreExchanges[key]
+	require.True(t, exists, "stale response processing must not remove the replacement exchange")
+	require.Equal(t, newExchange, current.exchange)
+}
+
 func TestConnReceiveCleanupPreservesOwnerAcquisition(t *testing.T) {
 	ctx := context.Background()
 	session := &Session{messagePool: pool.New(1, 2048)}

@@ -221,6 +221,67 @@ func TestOSCOREOuterBlockwiseUsesConfiguredMaxReassembledPayloadSize(t *testing.
 	}
 }
 
+func TestOuterBlockwiseOSCOREUnchangedHandlerResponseRemainsUnmodified(t *testing.T) {
+	const masterSecret = "outer blockwise unchanged response"
+	clientContext, err := oscore.NewContext(oscore.ContextConfig{
+		MasterSecret: []byte(masterSecret),
+		SenderID:     []byte("client"),
+		RecipientID:  []byte("server"),
+	})
+	require.NoError(t, err)
+	serverContext, err := oscore.NewContext(oscore.ContextConfig{
+		MasterSecret: []byte(masterSecret),
+		SenderID:     []byte("server"),
+		RecipientID:  []byte("client"),
+	})
+	require.NoError(t, err)
+	processor, err := oscore.NewProcessor(oscore.ProcessorConfig{Contexts: []*oscore.Context{serverContext}})
+	require.NoError(t, err)
+	protected, _, err := clientContext.ProtectRequest(message.Message{
+		Code:  codes.GET,
+		Token: message.Token{0x47},
+		Options: message.Options{
+			{ID: message.Observe},
+			{ID: message.URIPath, Value: []byte("resource")},
+		},
+	})
+	require.NoError(t, err)
+
+	request := pool.NewMessage(context.Background())
+	request.SetMessage(protected)
+	request.SetType(message.Confirmable)
+	request.SetMessageID(0x1234)
+	response := pool.NewMessage(context.Background())
+	response.SetToken(request.Token())
+	writer := responsewriter.New[*Conn](response, nil)
+	cc := &Conn{
+		oscoreProcessor:      processor,
+		oscoreRequests:       make(map[int32]udpOSCORERequest),
+		oscoreOuterBlockwise: true,
+		errors:               func(error) {},
+		responseMsgCache:     newMessageCache(),
+	}
+
+	handlerCalled := false
+	outerHandler := cc.outerBlockwiseRequestHandler(request, func(_ *responsewriter.ResponseWriter[*Conn], reassembled *pool.Message) {
+		handlerCalled = true
+		require.True(t, reassembled.HasOption(message.URIPath))
+		require.True(t, reassembled.HasOption(message.Observe))
+	})
+	outerHandler(writer, request)
+	require.True(t, handlerCalled)
+	require.False(t, response.IsModified(), "request options must not mark an unchanged response modified")
+	require.Empty(t, response.Options())
+
+	require.NoError(t, cc.processResponse(request.Type(), request.MessageID(), false, false, writer))
+	require.Equal(t, codes.Empty, response.Code())
+	require.Equal(t, message.Acknowledgement, response.Type(),
+		"an unchanged response to a confirmable request must produce an empty ACK")
+	require.Empty(t, response.Token())
+	require.Empty(t, response.Options(),
+		"request-only options must not be copied into the empty ACK")
+}
+
 func TestOSCOREOuterBlockwiseRejectsOutgoingPayloadOverLimit(t *testing.T) {
 	for _, test := range []struct {
 		name string
@@ -272,6 +333,56 @@ func TestOSCOREOuterBlockwiseRejectsOutgoingPayloadOverLimit(t *testing.T) {
 			require.Empty(t, session.written, "oversized envelope must be rejected before sending")
 		})
 	}
+}
+
+func TestStaleOSCOREExchangeDoesNotRemoveReplacementOrProtectionRequirement(t *testing.T) {
+	makeExchange := func(secret string) (*oscore.Context, oscore.Exchange) {
+		securityContext, err := oscore.NewContext(oscore.ContextConfig{
+			MasterSecret: []byte(secret),
+			SenderID:     []byte("client"),
+			RecipientID:  []byte("server"),
+		})
+		require.NoError(t, err)
+		_, exchange, err := securityContext.ProtectRequest(message.Message{
+			Code: codes.GET, Token: message.Token{1},
+		})
+		require.NoError(t, err)
+		return securityContext, exchange
+	}
+
+	oldContext, oldExchange := makeExchange("old response exchange context")
+	newContext, newExchange := makeExchange("replacement response exchange")
+	require.Equal(t, oldExchange.RequestPartialIVBytes(), newExchange.RequestPartialIVBytes())
+	require.NotEqual(t, oldExchange, newExchange)
+
+	const key = "\x01"
+	cc := &Conn{
+		oscoreExchanges: map[string]udpOSCOREExchange{
+			key: {
+				context:  newContext,
+				exchange: newExchange,
+				observe:  true,
+			},
+		},
+		oscoreRequiredResponses: map[string]struct{}{key: {}},
+	}
+	stale := udpOSCOREExchange{context: oldContext, exchange: oldExchange}
+
+	require.NoError(t, cc.updateOSCOREExchangeResponse(
+		key,
+		stale,
+		oscore.OptionValue{},
+		false,
+		false,
+		nil,
+	))
+	cc.removeOSCOREExchangeForProcessingError(key, oldExchange)
+
+	current, exists := cc.oscoreExchanges[key]
+	require.True(t, exists, "stale response processing must not remove the replacement exchange")
+	require.Equal(t, newExchange, current.exchange)
+	require.Contains(t, cc.oscoreRequiredResponses, key,
+		"stale response processing must not disable the OSCORE response requirement")
 }
 
 func TestOSCOREOuterBlockwiseResponseRequiresProtection(t *testing.T) {

@@ -77,8 +77,14 @@ type SenderSequenceReserver interface {
 
 type noCopy struct{}
 
-func (*noCopy) Lock()   {}
-func (*noCopy) Unlock() {}
+// Lock and Unlock are no-ops recognized by go vet's copylocks analyzer.
+func (*noCopy) Lock() {
+	// The marker prevents accidental copies; it is not a runtime mutex.
+}
+
+func (*noCopy) Unlock() {
+	// The marker prevents accidental copies; it is not a runtime mutex.
+}
 
 type senderSequenceState struct {
 	mu        sync.Mutex

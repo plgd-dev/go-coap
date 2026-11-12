@@ -157,6 +157,14 @@ func TestFileStoreRejectsCorruptOrTruncatedState(t *testing.T) {
 			},
 			path: func(store *FileStore) string { return store.replayGuardPath },
 		},
+		{
+			name: "replay pending transaction",
+			run: func(_ *testing.T, store *FileStore) error {
+				_, err := store.Load()
+				return err
+			},
+			path: func(store *FileStore) string { return store.replayPendingPath },
+		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			store, err := NewFileStore(t.TempDir(), "corrupt-"+test.name)
@@ -291,6 +299,127 @@ func TestFileStoreRejectsReplayStateCorruptionDuringRuntime(t *testing.T) {
 	}
 	if _, err := receiver.Open(firstPIV, firstCiphertext, aad); !errors.Is(err, oscore.ErrReplay) {
 		t.Fatalf("previously authenticated request error = %v, want ErrReplay", err)
+	}
+}
+
+func TestFileStoreRecoversInterruptedReplayStateSave(t *testing.T) {
+	tests := []struct {
+		name        string
+		writeGuard  bool
+		writeReplay bool
+	}{
+		{name: "after transaction journal"},
+		{name: "after guard update", writeGuard: true},
+		{name: "after replay update", writeGuard: true, writeReplay: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			dir := t.TempDir()
+			store, err := NewFileStore(dir, "interrupted-replay-save")
+			if err != nil {
+				t.Fatal(err)
+			}
+			sender, err := oscore.NewContext(oscore.ContextConfig{
+				MasterSecret: []byte("0123456789abcdef"),
+				SenderID:     []byte{0},
+				RecipientID:  []byte{1},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			receiver, err := oscore.NewContext(oscore.ContextConfig{
+				MasterSecret:      []byte("0123456789abcdef"),
+				SenderID:          []byte{1},
+				RecipientID:       []byte{0},
+				ReplayWindowStore: store,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			aad := []byte("interrupted replay save")
+			seal := func(payload string) ([]byte, []byte) {
+				t.Helper()
+				piv, ciphertext, sealErr := sender.Seal([]byte(payload), func([]byte) ([]byte, error) {
+					return aad, nil
+				})
+				if sealErr != nil {
+					t.Fatal(sealErr)
+				}
+				return piv, ciphertext
+			}
+
+			firstPIV, firstCiphertext := seal("first")
+			if _, openErr := receiver.Open(firstPIV, firstCiphertext, aad); openErr != nil {
+				t.Fatal(openErr)
+			}
+			previous, err := store.Load()
+			if err != nil {
+				t.Fatal(err)
+			}
+			secondPIV, secondCiphertext := seal("second")
+			if _, openErr := receiver.Open(secondPIV, secondCiphertext, aad); openErr != nil {
+				t.Fatal(openErr)
+			}
+			next, err := store.Load()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if writeErr := writeStateFile(dir, store.replayPath, replayFile{
+				Version: fileVersion, ReplayWindowState: previous,
+			}); writeErr != nil {
+				t.Fatal(writeErr)
+			}
+			if writeErr := writeStateFile(dir, store.replayGuardPath, replayFile{
+				Version: fileVersion, ReplayWindowState: previous,
+			}); writeErr != nil {
+				t.Fatal(writeErr)
+			}
+			pending := replayPendingFile{
+				Version:  fileVersion,
+				Previous: previous,
+				Next:     next,
+			}
+			if writeErr := writeStateFile(dir, store.replayPendingPath, pending); writeErr != nil {
+				t.Fatal(writeErr)
+			}
+			if test.writeGuard {
+				if writeErr := writeStateFile(dir, store.replayGuardPath, replayFile{
+					Version: fileVersion, ReplayWindowState: next,
+				}); writeErr != nil {
+					t.Fatal(writeErr)
+				}
+			}
+			if test.writeReplay {
+				if writeErr := writeStateFile(dir, store.replayPath, replayFile{
+					Version: fileVersion, ReplayWindowState: next,
+				}); writeErr != nil {
+					t.Fatal(writeErr)
+				}
+			}
+
+			restartedStore, err := NewFileStore(dir, "interrupted-replay-save")
+			if err != nil {
+				t.Fatal(err)
+			}
+			restarted, err := oscore.NewContext(oscore.ContextConfig{
+				MasterSecret:      []byte("0123456789abcdef"),
+				SenderID:          []byte{1},
+				RecipientID:       []byte{0},
+				ReplayWindowStore: restartedStore,
+			})
+			if err != nil {
+				t.Fatalf("recreate context after interrupted save: %v", err)
+			}
+			if _, err := restarted.Open(secondPIV, secondCiphertext, aad); !errors.Is(err, oscore.ErrReplay) {
+				t.Fatalf("replayed request after recovery error = %v, want ErrReplay", err)
+			}
+			if _, err := restarted.Open(firstPIV, firstCiphertext, aad); !errors.Is(err, oscore.ErrReplay) {
+				t.Fatalf("earlier accepted request after recovery error = %v, want ErrReplay", err)
+			}
+			if _, err := os.Stat(store.replayPendingPath); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("pending replay transaction remains after recovery: %v", err)
+			}
+		})
 	}
 }
 

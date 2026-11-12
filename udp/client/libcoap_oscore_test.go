@@ -16,6 +16,7 @@ import (
 	"time"
 
 	piondtls "github.com/pion/dtls/v3"
+	piondtlsnet "github.com/pion/dtls/v3/pkg/net"
 	coapDTLS "github.com/plgd-dev/go-coap/v3/dtls"
 	"github.com/plgd-dev/go-coap/v3/message"
 	"github.com/plgd-dev/go-coap/v3/message/codes"
@@ -881,16 +882,13 @@ func waitForLibCoAPDTLSOSCORE(
 		}
 
 		requestCtx, cancel := context.WithTimeout(context.Background(), 750*time.Millisecond)
-		cc, err := coapDTLS.Dial(
-			address,
-			coapDTLS.NewDTLSClientOptions(
-				piondtls.WithPSK(func([]byte) ([]byte, error) { return []byte{0xab, 0xc1, 0x23}, nil }),
-				piondtls.WithPSKIdentityHint([]byte("go-coap-client")),
-				piondtls.WithCipherSuites(piondtls.TLS_PSK_WITH_AES_128_GCM_SHA256),
-			),
-			options.WithOSCORE(processor),
-		)
+		dtlsConn, err := dialLibCoAPDTLSWithHandshakeTimeout(requestCtx, address)
 		if err == nil {
+			cc := coapDTLS.Client(
+				dtlsConn,
+				options.WithOSCORE(processor),
+				options.WithCloseSocket(),
+			)
 			var request *pool.Message
 			request, err = cc.NewGetRequest(requestCtx, "/time")
 			if err == nil {
@@ -913,6 +911,44 @@ func waitForLibCoAPDTLSOSCORE(
 		}
 	}
 	return nil, nil, false, fmt.Errorf("libcoap DTLS OSCORE server did not become ready: %w; output: %s", lastErr, serverOutput.String())
+}
+
+func TestLibCoAPDTLSHandshakeTimeout(t *testing.T) {
+	listener, err := net.ListenPacket("udp", "127.0.0.1:0")
+	require.NoError(t, err)
+	defer func() { require.NoError(t, listener.Close()) }()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	started := time.Now()
+	conn, err := dialLibCoAPDTLSWithHandshakeTimeout(ctx, listener.LocalAddr().String())
+	require.Error(t, err)
+	require.Nil(t, conn)
+	require.ErrorIs(t, ctx.Err(), context.DeadlineExceeded)
+	require.Less(t, time.Since(started), time.Second)
+}
+
+func dialLibCoAPDTLSWithHandshakeTimeout(ctx context.Context, address string) (*piondtls.Conn, error) {
+	rawConn, err := (&net.Dialer{}).DialContext(ctx, "udp", address)
+	if err != nil {
+		return nil, fmt.Errorf("dial libcoap DTLS server: %w", err)
+	}
+	dtlsConn, err := piondtls.ClientWithOptions(
+		piondtlsnet.PacketConnFromConn(rawConn),
+		rawConn.RemoteAddr(),
+		piondtls.WithPSK(func([]byte) ([]byte, error) { return []byte{0xab, 0xc1, 0x23}, nil }),
+		piondtls.WithPSKIdentityHint([]byte("go-coap-client")),
+		piondtls.WithCipherSuites(piondtls.TLS_PSK_WITH_AES_128_GCM_SHA256),
+	)
+	if err != nil {
+		_ = rawConn.Close()
+		return nil, fmt.Errorf("create libcoap DTLS client: %w", err)
+	}
+	if err := dtlsConn.HandshakeContext(ctx); err != nil {
+		_ = dtlsConn.Close()
+		return nil, fmt.Errorf("complete libcoap DTLS handshake: %w", err)
+	}
+	return dtlsConn, nil
 }
 
 func libCoAPServerExitError(err error) error {

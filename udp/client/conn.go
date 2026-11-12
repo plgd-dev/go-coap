@@ -1379,7 +1379,7 @@ func (cc *Conn) outerBlockwiseProxyRequestHandler(next HandlerFunc) HandlerFunc 
 func (cc *Conn) outerBlockwiseOSCORERequestHandler(m *pool.Message, next HandlerFunc) HandlerFunc {
 	return func(rw *responsewriter.ResponseWriter[*Conn], rm *pool.Message) {
 		if !hasOSCORERequestContext(rm) {
-			processed, err := cc.processReassembledOuterOSCORERequest(rw, rm, m.MessageID())
+			processed, err := cc.processReassembledOuterOSCORERequest(rm, m.MessageID())
 			if err != nil {
 				cc.errors(err)
 				return
@@ -1387,7 +1387,6 @@ func (cc *Conn) outerBlockwiseOSCORERequestHandler(m *pool.Message, next Handler
 			if !processed {
 				return
 			}
-			rw.Message().ResetOptionsTo(rm.Options())
 			m.SetContext(rm.Context())
 		}
 		next(rw, rm)
@@ -1423,7 +1422,7 @@ func (cc *Conn) protectOuterBlockwiseResponse(rw *responsewriter.ResponseWriter[
 }
 
 func (cc *Conn) processReassembledOuterOSCORERequest(
-	rw *responsewriter.ResponseWriter[*Conn], rm *pool.Message, messageID int32,
+	rm *pool.Message, messageID int32,
 ) (bool, error) {
 	rm.SetMessageID(messageID)
 	datagram, err := rm.MarshalWithEncoder(coder.DefaultCoder)
@@ -1437,7 +1436,6 @@ func (cc *Conn) processReassembledOuterOSCORERequest(
 	if drop {
 		return false, nil
 	}
-	rw.Message().ResetOptionsTo(rm.Options())
 	return true, nil
 }
 

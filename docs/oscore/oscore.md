@@ -251,12 +251,21 @@ defer cc.Close()
 ```
 
 OSCORE is opt-in. Endpoints that do not configure it retain their existing
-behavior. `ProcessorConfig.PlaintextPolicy` controls incoming message
-protection: its zero value, `PlaintextDisabled`, rejects plaintext with
-`oscore.ErrPlaintextDisabled`;
-`PlaintextAllowed` accepts both modes; and `PlaintextOnly` rejects
-OSCORE-protected messages. This is an endpoint-wide policy; use separate
-endpoints or application policy when some resources must not accept plaintext.
+behavior. `ProcessorConfig.PlaintextPolicy` controls incoming requests only:
+its zero value, `PlaintextDisabled`, rejects plaintext requests with
+`oscore.ErrPlaintextDisabled`; `PlaintextAllowed` accepts both plaintext and
+OSCORE-protected requests; and `PlaintextOnly` accepts only plaintext requests,
+rejecting protected requests with `oscore.ErrOSCOREDisabled`. Incoming
+responses are handled according to their originating exchange, not this
+policy; for example, a plaintext response to an outgoing request that requires
+OSCORE is rejected with `oscore.ErrOSCORERequired`. This is an endpoint-wide
+request policy. The UDP and TCP transport handlers receive the decrypted
+request without its outer OSCORE option, so handlers cannot use that option to
+identify protected requests. To enforce a per-resource policy on a mixed-mode
+endpoint, call `Processor.ProcessIncomingRequest` directly and check the
+returned context before dispatching: it is non-nil for a successfully
+authenticated OSCORE request and nil for a plaintext request. Otherwise, use
+separate endpoints when some resources must not accept plaintext.
 
 Once an OSCORE option is present, malformed messages, unknown contexts,
 authentication failures, and replays are rejected; they are never retried as
@@ -337,6 +346,14 @@ writable only by the trusted application account. The file store does not
 persist master secrets or encrypt state at rest. Applications can instead
 implement `SenderSequenceStore` and `ReplayWindowStore` for a database or
 remote transactional store.
+
+Replay updates use a durable pending transaction file so startup can finish an
+update interrupted between writing the rollback guard and replay state. A
+replay-state/guard mismatch without a valid pending transaction is rejected;
+restoring only an old replay-state file is therefore detected. Back up or
+restore the replay state, guard, and any pending transaction together. Rolling
+back the complete store directory cannot be detected without an external
+monotonic trust anchor.
 
 ## Minimal forward proxy
 

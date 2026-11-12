@@ -1,7 +1,6 @@
 package client
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -349,12 +348,7 @@ func (cc *Conn) unprotectResponse(response *pool.Message) error {
 	}
 	if !response.HasOption(message.OSCORE) {
 		if oscore.IsUnprotectedProcessingErrorCode(response.Code()) {
-			cc.oscoreMu.Lock()
-			if current, exists := cc.oscoreExchanges[key]; exists &&
-				bytes.Equal(current.exchange.RequestPartialIVBytes(), exchange.exchange.RequestPartialIVBytes()) {
-				delete(cc.oscoreExchanges, key)
-			}
-			cc.oscoreMu.Unlock()
+			cc.removeTCPOSCOREExchangeForProcessingError(key, exchange.exchange)
 			response.SetContext(oscore.ContextWithUnprotectedProcessingError(response.Context()))
 			return nil
 		}
@@ -411,6 +405,14 @@ func (cc *Conn) unprotectTCPResponseWithExchange(
 	return plaintext, usedCancelExchange, nil
 }
 
+func (cc *Conn) removeTCPOSCOREExchangeForProcessingError(key string, exchange oscore.Exchange) {
+	cc.oscoreMu.Lock()
+	defer cc.oscoreMu.Unlock()
+	if current, exists := cc.oscoreExchanges[key]; exists && current.exchange == exchange {
+		delete(cc.oscoreExchanges, key)
+	}
+}
+
 func (cc *Conn) updateTCPOSCOREExchangeResponse(
 	key string,
 	exchange tcpOSCOREExchange,
@@ -421,7 +423,7 @@ func (cc *Conn) updateTCPOSCOREExchangeResponse(
 	cc.oscoreMu.Lock()
 	defer cc.oscoreMu.Unlock()
 	current, exists := cc.oscoreExchanges[key]
-	if !exists || !bytes.Equal(current.exchange.RequestPartialIVBytes(), exchange.exchange.RequestPartialIVBytes()) {
+	if !exists || current.exchange != exchange.exchange {
 		return nil
 	}
 	if err := updateTCPObserveResponse(&current, responseOption, usedCancelExchange, hasObserve); err != nil {
