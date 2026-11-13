@@ -868,6 +868,7 @@ func TestCanceledTCPOSCOREObservationsExpireAfterBackstop(t *testing.T) {
 			cancelExchange: cancelExchange,
 		}
 		cc.oscoreRequiredResponses.Add(key, exchange, time.Time{})
+		cc.oscoreRequiredResponses.Add(key, cancelExchange, time.Time{})
 		cc.CancelObservation(token)
 		require.Equal(t, now.Add(tcpOSCOREObserveCancelBackstop), cc.oscoreExchanges[key].expires)
 	}

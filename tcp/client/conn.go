@@ -763,18 +763,18 @@ func (cc *Conn) CheckExpirations(now time.Time) {
 
 func (cc *Conn) expireTCPOSCOREExchangesLocked(now time.Time) {
 	for token, exchange := range cc.oscoreExchanges {
-		if !exchange.expires.IsZero() && !now.Before(exchange.expires) &&
-			!cc.hasActiveTCPOSCOREResponseRequirementLocked(token, exchange.exchange) &&
-			!cc.hasUnexpiredTCPOSCOREResponseRequirementLocked(token, exchange.cancelExchange, now) {
-			delete(cc.oscoreExchanges, token)
-			continue
-		}
 		if exchange.cancelContext != nil && !exchange.cancelExpires.IsZero() &&
 			!now.Before(exchange.cancelExpires) {
+			cc.oscoreRequiredResponses.Remove(token, exchange.cancelExchange)
 			exchange.cancelContext = nil
 			exchange.cancelExchange = oscore.Exchange{}
 			exchange.cancelExpires = time.Time{}
 			cc.oscoreExchanges[token] = exchange
+		}
+		if !exchange.expires.IsZero() && !now.Before(exchange.expires) &&
+			!cc.hasUnexpiredTCPOSCOREResponseRequirementLocked(token, exchange.exchange, now) &&
+			!cc.hasUnexpiredTCPOSCOREResponseRequirementLocked(token, exchange.cancelExchange, now) {
+			delete(cc.oscoreExchanges, token)
 		}
 	}
 }
