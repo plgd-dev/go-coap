@@ -1363,23 +1363,35 @@ func (b *BlockWise[C]) validateCachedReceivedBlock(
 	payloadSize, off int64,
 ) error {
 	if block.blockType == message.Block1 {
-		if mg.identity.protected != block.identity.protected {
-			return ErrMixedProtectionBlock1Transfer
-		}
-		if mg.identity != block.identity {
-			return ErrBlock1TransferIdentityMismatch
-		}
-		if block.more {
-			if err := checkFullBlock(r, block.reqSzx); err != nil {
-				return err
-			}
-		}
-		if off > payloadSize || off < payloadSize && !block.more {
-			return fmt.Errorf("%w: block %v at offset %v, have %v bytes",
-				ErrRequestEntityIncomplete, block.num, off, payloadSize)
+		if err := validateCachedBlock1(r, mg, block, payloadSize, off); err != nil {
+			return err
 		}
 	}
 	return b.checkReassembledPayloadSize(r, off, block.sizeType)
+}
+
+func validateCachedBlock1(
+	r *pool.Message,
+	mg *messageGuard,
+	block receivedBlock,
+	payloadSize, off int64,
+) error {
+	if mg.identity.protected != block.identity.protected {
+		return ErrMixedProtectionBlock1Transfer
+	}
+	if mg.identity != block.identity {
+		return ErrBlock1TransferIdentityMismatch
+	}
+	if block.more {
+		if err := checkFullBlock(r, block.reqSzx); err != nil {
+			return err
+		}
+	}
+	if off > payloadSize || off < payloadSize && !block.more {
+		return fmt.Errorf("%w: block %v at offset %v, have %v bytes",
+			ErrRequestEntityIncomplete, block.num, off, payloadSize)
+	}
+	return nil
 }
 
 func (b *BlockWise[C]) checkReassembledPayloadSize(r *pool.Message, off int64, sizeOption message.OptionID) error {

@@ -193,6 +193,7 @@ func TestAllowPublicIPLiteralTarget(t *testing.T) {
 		{host: "::1"},
 		{host: "fe80::1"},
 		{host: "100.64.0.1"},
+		{host: "64:ff9b::a00:1%eth0"},
 		{host: "0.1.2.3"},
 		{host: "192.0.0.1"},
 		{host: "192.0.2.1"},

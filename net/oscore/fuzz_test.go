@@ -255,9 +255,7 @@ func FuzzUnprotectInnerResponse(f *testing.F) {
 			return
 		}
 		option, err := (OptionValue{
-			PartialIV:   partialIV,
-			SenderID:    serverContext.senderID,
-			SenderIDSet: true,
+			PartialIV: partialIV,
 		}).MarshalBinary()
 		if err != nil {
 			t.Fatal(err)

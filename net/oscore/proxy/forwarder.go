@@ -56,6 +56,9 @@ func AllowPublicIPLiteralTarget(target oscore.ProxyTarget) bool {
 	if err != nil {
 		return false
 	}
+	if ip.Zone() != "" {
+		return false
+	}
 	ip = ip.Unmap()
 	if !ip.IsGlobalUnicast() || ip.IsPrivate() || ip.IsLoopback() ||
 		ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() ||
