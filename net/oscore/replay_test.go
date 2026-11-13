@@ -161,8 +161,8 @@ func TestReplayWindowHighWaterSaveAndReconcileFailureRetryPersistence(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := window.Accept(0, func() error { return nil }); err != nil {
-		t.Fatal(err)
+	if acceptErr := window.Accept(0, func() error { return nil }); acceptErr != nil {
+		t.Fatal(acceptErr)
 	}
 	previouslyAccepted := store.highWater
 

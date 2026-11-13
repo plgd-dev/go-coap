@@ -782,8 +782,8 @@ func TestHighWaterFileStoreConfigurableReplayMargin(t *testing.T) {
 				if sequence == 0 {
 					firstPIV, firstCiphertext = piv, ciphertext
 				}
-				if _, err := receiver.Open(piv, ciphertext, aad); err != nil {
-					t.Fatalf("open sequence %d: %v", sequence, err)
+				if _, openErr := receiver.Open(piv, ciphertext, aad); openErr != nil {
+					t.Fatalf("open sequence %d: %v", sequence, openErr)
 				}
 			}
 			highWater, exists, err := store.LoadHighWater()
