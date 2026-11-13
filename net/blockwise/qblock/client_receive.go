@@ -157,19 +157,44 @@ func (s *q2BodyReceiver[C]) addQBlockOptionsWithinBudget(
 	if err != nil {
 		return 0, err
 	}
-	if tailAdjustment < 0 {
-		decrease := uint64(-tailAdjustment)
-		if decrease > baseSize {
-			return 0, errors.New("invalid Q-Block datagram size estimate")
-		}
-		baseSize -= decrease
-	} else {
-		baseSize += uint64(tailAdjustment)
+	baseSize, err = applyQBlockTailAdjustment(baseSize, tailAdjustment)
+	if err != nil {
+		return 0, err
 	}
 	if baseSize > limit {
 		return 0, nil
 	}
+	return s.countFittingQBlockOptions(nums, more, baseSize, perOptionOverhead, limit, previousID)
+}
 
+func applyQBlockTailAdjustment(baseSize uint64, tailAdjustment int64) (uint64, error) {
+	if tailAdjustment < 0 {
+		decrease, err := pkgMath.SafeCastTo[uint64](-(tailAdjustment + 1))
+		if err != nil {
+			return 0, err
+		}
+		decrease++
+		if decrease > baseSize {
+			return 0, errors.New("invalid Q-Block datagram size estimate")
+		}
+		return baseSize - decrease, nil
+	}
+	increase, err := pkgMath.SafeCastTo[uint64](tailAdjustment)
+	if err != nil {
+		return 0, err
+	}
+	if increase > ^uint64(0)-baseSize {
+		return 0, errors.New("Q-Block datagram size estimate overflow")
+	}
+	return baseSize + increase, nil
+}
+
+func (s *q2BodyReceiver[C]) countFittingQBlockOptions(
+	nums []int64,
+	more bool,
+	baseSize, perOptionOverhead, limit uint64,
+	previousID message.OptionID,
+) (int, error) {
 	size := baseSize
 	added := 0
 	for _, num := range nums {
