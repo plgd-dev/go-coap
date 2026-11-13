@@ -1013,6 +1013,41 @@ func TestTCPOSCOREExchangeExpiryRetainsActiveCancellationRequirement(t *testing.
 	require.Equal(t, cancelExchange, exchange.cancelExchange)
 }
 
+func TestTCPOSCOREExchangeLookupRetainsUnexpiredResponseRequirement(t *testing.T) {
+	securityContext, err := oscore.NewContext(oscore.ContextConfig{
+		AcceptVolatileSenderSequence: true,
+		AcceptReplayStateLoss:        true,
+		MasterSecret:                 []byte("TCP OSCORE response requirement expiry"),
+		SenderID:                     []byte("client"),
+		RecipientID:                  []byte("server"),
+	})
+	require.NoError(t, err)
+	request, exchange, err := securityContext.ProtectRequest(message.Message{
+		Code: codes.GET, Token: message.Token("response-requirement"),
+	})
+	require.NoError(t, err)
+
+	now := time.Date(2026, 11, 13, 0, 0, 0, 0, time.UTC)
+	key := oscore.ExchangeTrackerKey(request.Token)
+	cc := &Conn{
+		oscoreNow: func() time.Time { return now },
+		oscoreExchanges: oscore.ExchangeTracker[tcpOSCOREExchange]{
+			key: {
+				context:  securityContext,
+				exchange: exchange,
+				expires:  now.Add(-time.Second),
+			},
+		},
+		oscoreRequiredResponses: oscore.ResponseRequirements{
+			key: {exchange: now.Add(time.Minute)},
+		},
+	}
+
+	got, exists := cc.oscoreExchangeForResponse(key)
+	require.True(t, exists, "lookup must retain an exchange while its response requirement is unexpired")
+	require.Equal(t, exchange, got.exchange)
+}
+
 func TestConnReceiveCleanupPreservesOwnerAcquisition(t *testing.T) {
 	ctx := context.Background()
 	session := &Session{messagePool: pool.New(1, 2048)}

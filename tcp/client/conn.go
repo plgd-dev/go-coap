@@ -467,7 +467,7 @@ func (cc *Conn) oscoreExchangeForResponse(key string) (tcpOSCOREExchange, bool) 
 	if ok {
 		now := cc.now()
 		if !exchange.expires.IsZero() && now.After(exchange.expires) &&
-			!cc.hasActiveTCPOSCOREResponseRequirementLocked(key, exchange.exchange) &&
+			!cc.hasUnexpiredTCPOSCOREResponseRequirementLocked(key, exchange.exchange, now) &&
 			!cc.hasUnexpiredTCPOSCOREResponseRequirementLocked(key, exchange.cancelExchange, now) {
 			delete(cc.oscoreExchanges, key)
 			ok = false
@@ -777,12 +777,6 @@ func (cc *Conn) expireTCPOSCOREExchangesLocked(now time.Time) {
 			delete(cc.oscoreExchanges, token)
 		}
 	}
-}
-
-func (cc *Conn) hasActiveTCPOSCOREResponseRequirementLocked(key string, exchange oscore.Exchange) bool {
-	requirements := cc.oscoreRequiredResponses[key]
-	expires, exists := requirements[exchange]
-	return exists && expires.IsZero()
 }
 
 func (cc *Conn) hasUnexpiredTCPOSCOREResponseRequirementLocked(
