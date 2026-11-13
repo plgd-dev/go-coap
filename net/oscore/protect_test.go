@@ -293,15 +293,7 @@ func observeOptions(t *testing.T, value uint32) message.Options {
 
 func TestValidateInnerRequestObserveValue(t *testing.T) {
 	for _, value := range []uint32{0, 1} {
-		options := observeOptions(t, value)
-		outerOption, hasOuterObserve, err := findObserveOption(options)
-		if err != nil || !hasOuterObserve {
-			t.Fatalf("find Observe option for %d: has=%t err=%v", value, hasOuterObserve, err)
-		}
-		_, err = validateInnerRequest(message.Message{Code: codes.GET, Options: options}, outerOption, true)
-		if err != nil {
-			t.Errorf("valid Observe value %d rejected: %v", value, err)
-		}
+		assertValidObserveRequest(t, value)
 	}
 
 	for _, test := range []struct {
@@ -313,51 +305,80 @@ func TestValidateInnerRequestObserveValue(t *testing.T) {
 		{name: "one with leading zero", value: []byte{0, 1}, want: 1},
 		{name: "one with multiple leading zeros", value: []byte{0, 0, 1}, want: 1},
 	} {
-		t.Run(test.name, func(t *testing.T) {
-			outer := message.Option{ID: message.Observe, Value: test.value}
-			inner := message.Message{
-				Code:    codes.GET,
-				Options: message.Options{{ID: message.Observe, Value: []byte{byte(test.want)}}},
-			}
-			if test.want == 0 {
-				inner.Options[0].Value = nil
-			}
-			if _, err := validateInnerRequest(inner, outer, true); err != nil {
-				t.Fatalf("leading-zero Observe request rejected: %v", err)
-			}
-			got, err := observeOptionValue(outer)
-			if err != nil || got != test.want {
-				t.Fatalf("decoded Observe = %d, %v; want %d", got, err, test.want)
-			}
-		})
+		t.Run(test.name, func(t *testing.T) { assertLeadingZeroObserveRequest(t, test.value, test.want) })
 	}
 
 	for _, value := range []uint32{2, 3, 0xffffff} {
-		options := observeOptions(t, value)
-		outerOption, hasOuterObserve, err := findObserveOption(options)
-		if err != nil || !hasOuterObserve {
-			t.Fatalf("find Observe option for %d: has=%t err=%v", value, hasOuterObserve, err)
-		}
-		if _, err := validateInnerRequest(message.Message{Code: codes.GET, Options: options}, outerOption, true); !errors.Is(err, ErrInvalidOSCOREMessage) {
-			t.Errorf("invalid Observe value %d error = %v, want %v", value, err, ErrInvalidOSCOREMessage)
-		}
+		assertInvalidObserveRequest(t, value)
 	}
 
+	assertObservePostRejected(t)
+	assertMalformedObserveRejected(t)
+}
+
+func assertValidObserveRequest(t *testing.T, value uint32) {
+	t.Helper()
+	options := observeOptions(t, value)
+	outerOption, hasOuterObserve, err := findObserveOption(options)
+	if err != nil || !hasOuterObserve {
+		t.Fatalf("find Observe option for %d: has=%t err=%v", value, hasOuterObserve, err)
+	}
+	if _, err := validateInnerRequest(message.Message{Code: codes.GET, Options: options}, outerOption, true); err != nil {
+		t.Errorf("valid Observe value %d rejected: %v", value, err)
+	}
+}
+
+func assertLeadingZeroObserveRequest(t *testing.T, value []byte, want uint32) {
+	t.Helper()
+	outer := message.Option{ID: message.Observe, Value: value}
+	inner := message.Message{
+		Code:    codes.GET,
+		Options: message.Options{{ID: message.Observe, Value: []byte{byte(want)}}},
+	}
+	if want == 0 {
+		inner.Options[0].Value = nil
+	}
+	if _, err := validateInnerRequest(inner, outer, true); err != nil {
+		t.Fatalf("leading-zero Observe request rejected: %v", err)
+	}
+	got, err := observeOptionValue(outer)
+	if err != nil || got != want {
+		t.Fatalf("decoded Observe = %d, %v; want %d", got, err, want)
+	}
+}
+
+func assertInvalidObserveRequest(t *testing.T, value uint32) {
+	t.Helper()
+	options := observeOptions(t, value)
+	outerOption, hasOuterObserve, err := findObserveOption(options)
+	if err != nil || !hasOuterObserve {
+		t.Fatalf("find Observe option for %d: has=%t err=%v", value, hasOuterObserve, err)
+	}
+	if _, err := validateInnerRequest(message.Message{Code: codes.GET, Options: options}, outerOption, true); !errors.Is(err, ErrInvalidOSCOREMessage) {
+		t.Errorf("invalid Observe value %d error = %v, want %v", value, err, ErrInvalidOSCOREMessage)
+	}
+}
+
+func assertObservePostRejected(t *testing.T) {
+	t.Helper()
 	options := observeOptions(t, 0)
 	outerOption, _, err := findObserveOption(options)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, validationErr := validateInnerRequest(message.Message{Code: codes.POST, Options: options}, outerOption, true); !errors.Is(validationErr, ErrUnsupportedOption) {
-		t.Fatalf("POST with Observe error = %v, want ErrUnsupportedOption", validationErr)
+	if _, err := validateInnerRequest(message.Message{Code: codes.POST, Options: options}, outerOption, true); !errors.Is(err, ErrUnsupportedOption) {
+		t.Fatalf("POST with Observe error = %v, want ErrUnsupportedOption", err)
 	}
+}
 
-	malformedObserve := message.Options{{ID: message.Observe, Value: []byte{0, 0, 0, 0, 0}}}
-	outerOption, _, err = findObserveOption(malformedObserve)
+func assertMalformedObserveRejected(t *testing.T) {
+	t.Helper()
+	options := message.Options{{ID: message.Observe, Value: []byte{0, 0, 0, 0, 0}}}
+	outerOption, _, err := findObserveOption(options)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := validateInnerRequest(message.Message{Code: codes.GET, Options: malformedObserve}, outerOption, true); !errors.Is(err, ErrInvalidOSCOREMessage) {
+	if _, err := validateInnerRequest(message.Message{Code: codes.GET, Options: options}, outerOption, true); !errors.Is(err, ErrInvalidOSCOREMessage) {
 		t.Fatalf("malformed Observe error = %v, want ErrInvalidOSCOREMessage", err)
 	}
 }

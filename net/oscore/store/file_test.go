@@ -808,7 +808,7 @@ func BenchmarkHighWaterFileStoreReplayPersistence(b *testing.B) {
 		syncCount++
 		return file.Sync()
 	}
-	store.replayOps.syncDirectory = func(_ string, dir string) error {
+	store.replayOps.syncDirectory = func(_, dir string) error {
 		syncCount++
 		return syncDirectory(dir)
 	}

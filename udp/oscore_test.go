@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -66,58 +67,25 @@ func TestOSCOREUDPErrorResponseIsUnprotectedAndDoesNotReachHandler(t *testing.T)
 }
 
 func TestOSCOREAndPlaintextUDPExchange(t *testing.T) {
+	secureClient, plaintextClient := startOSCOREAndPlaintextUDPExchange(t)
+	assertUDPGetResponse(t, secureClient)
+	assertUDPGetResponse(t, plaintextClient)
+	assertUDPPathCode(t, secureClient, "/secure-only", codes.Content)
+	assertUDPPathCode(t, plaintextClient, "/secure-only", codes.Unauthorized)
+	assertUDPApplicationErrors(t, secureClient)
+}
+
+func startOSCOREAndPlaintextUDPExchange(t *testing.T) (*client.Conn, *client.Conn) {
+	t.Helper()
 	listener, listenerErr := coapNet.NewListenUDP("udp", "127.0.0.1:0")
 	require.NoError(t, listenerErr)
-	serverProcessor := newUDPOSCOREProcessor(t, "server", "client", true)
 	server := udp.NewServer(
-		options.WithOSCORE(serverProcessor),
-		options.WithHandlerFunc(func(w *responsewriter.ResponseWriter[*client.Conn], req *pool.Message) {
-			if req.Code() != codes.GET || req.HasOption(message.OSCORE) {
-				if err := w.SetResponse(codes.BadRequest, message.TextPlain, nil); err != nil {
-					t.Errorf("set bad-request response: %v", err)
-				}
-				return
-			}
-			path, pathErr := req.Path()
-			if pathErr != nil {
-				t.Errorf("get request path: %v", pathErr)
-				return
-			}
-			if path == "/secure-only" {
-				info, ok := oscore.RequestInfoFromContext(req.Context())
-				if !ok || !info.Protected || string(info.RecipientID) != "client" {
-					if err := w.SetResponse(codes.Unauthorized, message.TextPlain, nil); err != nil {
-						t.Errorf("set OSCORE-required response: %v", err)
-					}
-					return
-				}
-			}
-			if path == "/error" {
-				if err := w.SetResponse(codes.BadRequest, message.TextPlain, nil); err != nil {
-					t.Errorf("set application-error response: %v", err)
-				}
-				return
-			}
-			if path == "/unauthorized" {
-				if err := w.SetResponse(codes.Unauthorized, message.TextPlain, nil); err != nil {
-					t.Errorf("set application-error response: %v", err)
-				}
-				return
-			}
-			if path == "/server-error" {
-				if err := w.SetResponse(codes.InternalServerError, message.TextPlain, nil); err != nil {
-					t.Errorf("set application-error response: %v", err)
-				}
-				return
-			}
-			if err := w.SetResponse(codes.Content, message.TextPlain, bytes.NewReader([]byte("ok"))); err != nil {
-				t.Errorf("set content response: %v", err)
-			}
-		}),
+		options.WithOSCORE(newUDPOSCOREProcessor(t, "server", "client", true)),
+		options.WithHandlerFunc(oscoreAndPlaintextUDPExchangeHandler(t)),
 	)
 	serverDone := make(chan error, 1)
 	go func() { serverDone <- server.Serve(listener) }()
-	defer func() {
+	t.Cleanup(func() {
 		server.Stop()
 		select {
 		case serverErr := <-serverDone:
@@ -125,58 +93,98 @@ func TestOSCOREAndPlaintextUDPExchange(t *testing.T) {
 		case <-time.After(5 * time.Second):
 			require.Fail(t, "UDP server did not stop")
 		}
-	}()
+	})
 
 	secureProcessor := newUDPOSCOREProcessor(t, "client", "server", true)
 	secureClient, err := udp.Dial(listener.LocalAddr().String(), options.WithOSCORE(secureProcessor))
 	require.NoError(t, err)
-	defer func() { require.NoError(t, secureClient.Close()) }()
+	t.Cleanup(func() { require.NoError(t, secureClient.Close()) })
 	plaintextClient, err := udp.Dial(listener.LocalAddr().String())
 	require.NoError(t, err)
-	defer func() { require.NoError(t, plaintextClient.Close()) }()
+	t.Cleanup(func() { require.NoError(t, plaintextClient.Close()) })
+	return secureClient, plaintextClient
+}
 
-	assertUDPGetResponse(t, secureClient)
-	assertUDPGetResponse(t, plaintextClient)
-
-	for _, test := range []struct {
-		name string
-		conn *client.Conn
-		code codes.Code
-	}{
-		{name: "protected", conn: secureClient, code: codes.Content},
-		{name: "plaintext", conn: plaintextClient, code: codes.Unauthorized},
-	} {
-		t.Run("secure-only/"+test.name, func(t *testing.T) {
-			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-			defer cancel()
-			request, err := test.conn.NewGetRequest(ctx, "/secure-only")
-			require.NoError(t, err)
-			defer test.conn.ReleaseMessage(request)
-			response, err := test.conn.Do(request)
-			require.NoError(t, err)
-			defer test.conn.ReleaseMessage(response)
-			require.Equal(t, test.code, response.Code())
-		})
+func oscoreAndPlaintextUDPExchangeHandler(t *testing.T) func(*responsewriter.ResponseWriter[*client.Conn], *pool.Message) {
+	t.Helper()
+	return func(w *responsewriter.ResponseWriter[*client.Conn], req *pool.Message) {
+		if req.Code() != codes.GET || req.HasOption(message.OSCORE) {
+			setOSCOREAndPlaintextUDPResponse(t, w, codes.BadRequest, nil)
+			return
+		}
+		path, err := req.Path()
+		if err != nil {
+			setOSCOREAndPlaintextUDPResponse(t, w, codes.BadRequest, nil)
+			return
+		}
+		if path == "/secure-only" && !isOSCOREProtectedRequestFromClient(req) {
+			setOSCOREAndPlaintextUDPResponse(t, w, codes.Unauthorized, nil)
+			return
+		}
+		code, body := oscoreAndPlaintextUDPResponse(path)
+		setOSCOREAndPlaintextUDPResponse(t, w, code, body)
 	}
+}
 
-	for _, test := range []struct {
-		path string
-		code codes.Code
-	}{
-		{path: "/error", code: codes.BadRequest},
-		{path: "/unauthorized", code: codes.Unauthorized},
-		{path: "/server-error", code: codes.InternalServerError},
+func oscoreAndPlaintextUDPResponse(path string) (codes.Code, []byte) {
+	switch path {
+	case "/error":
+		return codes.BadRequest, nil
+	case "/unauthorized":
+		return codes.Unauthorized, nil
+	case "/server-error":
+		return codes.InternalServerError, nil
+	default:
+		return codes.Content, []byte("ok")
+	}
+}
+
+func isOSCOREProtectedRequestFromClient(req *pool.Message) bool {
+	info, ok := oscore.RequestInfoFromContext(req.Context())
+	return ok && info.Protected && string(info.RecipientID) == "client"
+}
+
+func setOSCOREAndPlaintextUDPResponse(t *testing.T, w *responsewriter.ResponseWriter[*client.Conn], code codes.Code, body []byte) {
+	t.Helper()
+	var reader io.ReadSeeker
+	if body != nil {
+		reader = bytes.NewReader(body)
+	}
+	if err := w.SetResponse(code, message.TextPlain, reader); err != nil {
+		t.Errorf("set OSCORE/plaintext UDP response: %v", err)
+	}
+}
+
+func assertUDPPathCode(t *testing.T, conn *client.Conn, path string, want codes.Code) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	request, err := conn.NewGetRequest(ctx, path)
+	require.NoError(t, err)
+	defer conn.ReleaseMessage(request)
+	response, err := conn.Do(request)
+	require.NoError(t, err)
+	defer conn.ReleaseMessage(response)
+	require.Equal(t, want, response.Code())
+}
+
+func assertUDPApplicationErrors(t *testing.T, secureClient *client.Conn) {
+	t.Helper()
+	for path, want := range map[string]codes.Code{
+		"/error":        codes.BadRequest,
+		"/unauthorized": codes.Unauthorized,
+		"/server-error": codes.InternalServerError,
 	} {
-		t.Run(test.path, func(t *testing.T) {
+		t.Run(path, func(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 			defer cancel()
-			request, err := secureClient.NewGetRequest(ctx, test.path)
+			request, err := secureClient.NewGetRequest(ctx, path)
 			require.NoError(t, err)
 			defer secureClient.ReleaseMessage(request)
 			response, err := secureClient.Do(request)
 			require.NoError(t, err)
 			defer secureClient.ReleaseMessage(response)
-			require.Equal(t, test.code, response.Code())
+			require.Equal(t, want, response.Code())
 			require.False(t, oscore.IsUnprotectedProcessingError(response.Context()),
 				"application errors to protected requests must be protected, not treated as OSCORE processing errors")
 		})
