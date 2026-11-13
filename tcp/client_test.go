@@ -977,6 +977,14 @@ func TestConnRejectUnknownCriticalOptions(t *testing.T) {
 			},
 			optionID: "5",
 		},
+		{
+			name: "repeated non-repeatable accept",
+			options: message.Options{
+				{ID: message.Accept, Value: []byte{0x00}},
+				{ID: message.Accept, Value: []byte{0x00}},
+			},
+			optionID: "17",
+		},
 	}
 
 	for _, tc := range testCases {
