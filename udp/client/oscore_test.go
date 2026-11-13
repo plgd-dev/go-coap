@@ -605,8 +605,22 @@ func TestOSCOREPendingObservationRetainsExchangeAfterExchangeLifetime(t *testing
 	cc.oscoreMu.Unlock()
 	require.True(t, exists, "OSCORE Observe request should create an exchange")
 
+	alreadyAuthenticatedResponse, err := serverContext.ProtectResponseWithPartialIV(message.Message{
+		Code:    codes.Content,
+		Token:   message.Token(token),
+		Options: message.Options{{ID: message.Observe}},
+		Payload: []byte("response being committed"),
+	}, serverExchange)
+	require.NoError(t, err)
+	_, err = securityContext.UnprotectResponse(alreadyAuthenticatedResponse, exchange.exchange)
+	if err != nil {
+		t.Fatalf("authenticate response before commit: %v", err)
+	}
+	require.True(t, exchange.exchange.HasResponse(), "response should be authenticated before expiration")
+
 	cc.expireOSCORERequests(time.Now())
-	require.Contains(t, cc.oscoreExchanges, token, "pending observation should keep its exchange alive")
+	require.Contains(t, cc.oscoreExchanges, token,
+		"pending observation should keep its exchange alive while an authenticated response is being committed")
 	require.True(t, cc.oscoreRequiredResponses.HasToken(token), "pending observation should keep OSCORE required")
 
 	var reported error

@@ -473,8 +473,11 @@ timeouts, and response-size limits.
   (`Do`) returns, is canceled, or times out. Observe exchanges remain available
   for the observation lifetime. The default `OSCOREExchangeTimeout` is zero,
   so there is no timeout-based expiry; configure
-  `options.WithOSCOREExchangeTimeout` as a timeout backstop. This is a local
-  exchange-retention policy, not an RFC-defined TCP lifetime.
+  `options.WithOSCOREExchangeTimeout` as a timeout backstop. A response
+  arriving after the configured timeout is rejected because its exchange is
+  no longer available; this also applies to the first response to an Observe
+  request. This is a local exchange-retention policy, not an RFC-defined TCP
+  lifetime.
 - Classic Block1/Block2 and Observe flows. Inner Blockwise remains the
   default. UDP and DTLS also support opt-in Outer Blockwise fragmentation and
   reassembly with `options.WithOSCOREOuterBlockwise()`; reassembled payloads

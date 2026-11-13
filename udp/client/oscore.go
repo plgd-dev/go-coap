@@ -169,7 +169,7 @@ func (cc *Conn) requiresOSCOREResponse(token message.Token) bool {
 }
 
 func (cc *Conn) hasPendingOSCOREObservation(token string, exchange udpOSCOREExchange) bool {
-	if !exchange.observe || exchange.exchange.HasResponse() || cc.observationHandler == nil {
+	if !exchange.observe || cc.observationHandler == nil {
 		return false
 	}
 	_, exists := cc.observationHandler.GetObservation(message.Token(token).Hash())
