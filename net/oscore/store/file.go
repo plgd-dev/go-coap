@@ -22,32 +22,53 @@ const (
 	sequenceWindowSize = uint64(256)
 )
 
-var ErrInvalidStoreID = errors.New("OSCORE file store ID must not be empty")
+var (
+	ErrInvalidStoreID               = errors.New("OSCORE file store ID must not be empty")
+	ErrInvalidReplayHighWaterMargin = errors.New("OSCORE replay high-water margin must be between 1 and 1024")
+)
+
+// HighWaterFileStoreOption configures a HighWaterFileStore.
+type HighWaterFileStoreOption struct {
+	replayHighWaterMargin uint64
+}
+
+// WithReplayHighWaterMargin configures how many accepted sequence numbers may
+// pass between durable receiver replay cutoff writes. Valid values are 1..1024.
+func WithReplayHighWaterMargin(margin uint64) HighWaterFileStoreOption {
+	return HighWaterFileStoreOption{replayHighWaterMargin: margin}
+}
 
 // HighWaterFileStore persists sender sequence reservations and a receiver
 // replay high-water mark. Construct it with the same stable ID whenever the
 // corresponding OSCORE context is recreated. Sender sequence guards detect
-// individual state-file deletion, corruption, or rollback. The replay cutoff
-// intentionally rejects some previously unobserved requests after restart.
+// individual state-file deletion, corruption, or rollback that causes a
+// mismatch, but cannot detect restoring matching older state and guard files.
+// Replay cutoff and guard files detect individual deletion or mismatch;
+// deleting or rolling back both replay files together is not detectable. These
+// complete-state rollbacks require an external monotonic trust anchor to detect.
+// The replay cutoff intentionally rejects some previously unobserved requests
+// after restart.
 //
 // On Unix systems, file locking serializes operations across goroutines,
 // store instances, and processes. Keep the directory private to the
 // application. On other platforms, operations are serialized within the
 // process only and directory metadata syncing is unavailable.
 type HighWaterFileStore struct {
-	dir                 string
-	sequencePath        string
-	sequenceGuardPath   string
-	sequencePendingPath string
-	replayHighWaterPath string
-	sequenceLock        string
-	replayLock          string
-	mu                  sync.Mutex
-	next                uint64
-	limit               uint64
-	sequenceInitialized bool
-	sequenceOps         sequenceFileOps
-	replayOps           sequenceFileOps
+	dir                   string
+	sequencePath          string
+	sequenceGuardPath     string
+	sequencePendingPath   string
+	replayHighWaterPath   string
+	replayGuardPath       string
+	replayHighWaterMargin uint64
+	sequenceLock          string
+	replayLock            string
+	mu                    sync.Mutex
+	next                  uint64
+	limit                 uint64
+	sequenceInitialized   bool
+	sequenceOps           sequenceFileOps
+	replayOps             sequenceFileOps
 }
 
 type sequenceFileOps struct {
@@ -78,12 +99,19 @@ type replayHighWaterFile struct {
 // chosen stable identifier for one OSCORE context; only its SHA-256 digest
 // is used in filenames. The directory is created with mode 0700 when
 // necessary, and state and lock files are created with mode 0600.
-func NewHighWaterFileStore(dir, id string) (*HighWaterFileStore, error) {
+func NewHighWaterFileStore(dir, id string, options ...HighWaterFileStoreOption) (*HighWaterFileStore, error) {
 	if id == "" {
 		return nil, ErrInvalidStoreID
 	}
 	if dir == "" {
 		return nil, errors.New("OSCORE file store directory is empty")
+	}
+	replayHighWaterMargin := oscore.DefaultReplayHighWaterMargin
+	for _, option := range options {
+		replayHighWaterMargin = option.replayHighWaterMargin
+	}
+	if replayHighWaterMargin == 0 || replayHighWaterMargin > oscore.MaxReplayHighWaterMargin {
+		return nil, ErrInvalidReplayHighWaterMargin
 	}
 	absoluteDir, err := filepath.Abs(dir)
 	if err != nil {
@@ -95,24 +123,27 @@ func NewHighWaterFileStore(dir, id string) (*HighWaterFileStore, error) {
 	digest := sha256.Sum256([]byte(id))
 	prefix := filepath.Join(absoluteDir, hex.EncodeToString(digest[:]))
 	return &HighWaterFileStore{
-		dir:                 absoluteDir,
-		sequencePath:        prefix + ".sequence.json",
-		sequenceGuardPath:   prefix + ".sequence.guard.json",
-		sequencePendingPath: prefix + ".sequence.pending.json",
-		replayHighWaterPath: prefix + ".replay.high-water.json",
-		sequenceLock:        prefix + ".sequence.lock",
-		replayLock:          prefix + ".replay.lock",
+		dir:                   absoluteDir,
+		sequencePath:          prefix + ".sequence.json",
+		sequenceGuardPath:     prefix + ".sequence.guard.json",
+		sequencePendingPath:   prefix + ".sequence.pending.json",
+		replayHighWaterPath:   prefix + ".replay.high-water.json",
+		replayGuardPath:       prefix + ".replay.guard.json",
+		replayHighWaterMargin: replayHighWaterMargin,
+		sequenceLock:          prefix + ".sequence.lock",
+		replayLock:            prefix + ".replay.lock",
 	}, nil
 }
 
 // LoadHighWater loads the exclusive replay cutoff used by the batched replay
-// store. A missing file means no replay boundary has been persisted yet.
+// store. A missing cutoff and guard means no replay boundary has been persisted.
+// If exactly one file is missing or their marks differ, it returns an error.
 func (s *HighWaterFileStore) LoadHighWater() (uint64, bool, error) {
 	var highWater uint64
 	var exists bool
 	err := withFileLock(s.replayLock, func() error {
 		var err error
-		highWater, exists, err = readReplayHighWater(s.replayHighWaterPath)
+		highWater, exists, err = readReplayHighWaterPair(s.replayHighWaterPath, s.replayGuardPath)
 		return err
 	})
 	if err != nil {
@@ -121,15 +152,19 @@ func (s *HighWaterFileStore) LoadHighWater() (uint64, bool, error) {
 	return highWater, exists, nil
 }
 
-// SaveHighWater atomically persists an exclusive replay cutoff. It is called
-// once per replayHighWaterMargin accepted sequence numbers rather than once
-// per request.
+// ReplayWindowHighWaterMargin returns the configured persistence margin.
+func (s *HighWaterFileStore) ReplayWindowHighWaterMargin() uint64 {
+	return s.replayHighWaterMargin
+}
+
+// SaveHighWater atomically persists an exclusive replay cutoff. Replay window
+// persistence calls this after each configured margin rather than every request.
 func (s *HighWaterFileStore) SaveHighWater(highWater uint64) error {
 	if highWater == 0 || highWater > maxPartialIV+1 {
 		return fmt.Errorf("%w: invalid high-water mark %d", oscore.ErrInvalidReplayState, highWater)
 	}
 	err := withFileLock(s.replayLock, func() error {
-		current, exists, err := readReplayHighWater(s.replayHighWaterPath)
+		current, exists, err := readReplayHighWaterPair(s.replayHighWaterPath, s.replayGuardPath)
 		if err != nil {
 			return err
 		}
@@ -138,14 +173,51 @@ func (s *HighWaterFileStore) SaveHighWater(highWater uint64) error {
 				return fmt.Errorf("%w: replay high-water mark moved backward", oscore.ErrInvalidReplayState)
 			}
 			if highWater == current {
-				return nil
+				// A prior rename may have succeeded while its directory sync
+				// failed. Re-sync before treating the visible cutoff as durable.
+				return s.syncReplayDirectory(s.replayHighWaterPath)
 			}
 		}
 		value := replayHighWaterFile{Version: fileVersion, Next: highWater}
+		if err := s.writeReplayStateFile(s.replayGuardPath, value); err != nil {
+			return fmt.Errorf("persist replay high-water guard: %w", err)
+		}
 		return s.writeReplayStateFile(s.replayHighWaterPath, value)
 	})
 	if err != nil {
 		return fmt.Errorf("save OSCORE replay high-water mark: %w", err)
+	}
+	return nil
+}
+
+// ResetReplayState removes the replay cutoff and its guard. Call it only when
+// deliberately replacing the associated OSCORE security context, with no
+// active Context using this store. Resetting while reusing the same keys allows
+// previously accepted requests to be replayed.
+func (s *HighWaterFileStore) ResetReplayState() error {
+	err := withFileLock(s.replayLock, func() error {
+		removed := false
+		for _, path := range []string{s.replayHighWaterPath, s.replayGuardPath} {
+			if s.replayOps.beforeRemove != nil {
+				if err := s.replayOps.beforeRemove(path); err != nil {
+					return err
+				}
+			}
+			if err := os.Remove(path); err != nil {
+				if !errors.Is(err, os.ErrNotExist) {
+					return err
+				}
+				continue
+			}
+			removed = true
+		}
+		if removed {
+			return s.syncReplayDirectory(s.replayHighWaterPath)
+		}
+		return nil
+	})
+	if err != nil {
+		return fmt.Errorf("reset OSCORE replay state: %w", err)
 	}
 	return nil
 }
@@ -161,7 +233,7 @@ func (s *HighWaterFileStore) Save(state oscore.ReplayWindowState) error {
 	if !state.Started || state.HighestSequence > maxPartialIV {
 		return fmt.Errorf("%w: invalid replay state", oscore.ErrInvalidReplayState)
 	}
-	return s.SaveHighWater(min(state.HighestSequence+sequenceWindowSize, maxPartialIV+1))
+	return s.SaveHighWater(min(state.HighestSequence+s.replayHighWaterMargin, maxPartialIV+1))
 }
 
 // Reserve returns a sender sequence number from a durably reserved window.
@@ -478,6 +550,27 @@ func readReplayHighWater(path string) (uint64, bool, error) {
 		return 0, false, fmt.Errorf("%w: invalid replay high-water file", oscore.ErrInvalidReplayState)
 	}
 	return state.Next, true, nil
+}
+
+func readReplayHighWaterPair(markPath, guardPath string) (uint64, bool, error) {
+	mark, markExists, err := readReplayHighWater(markPath)
+	if err != nil {
+		return 0, false, err
+	}
+	guard, guardExists, err := readReplayHighWater(guardPath)
+	if err != nil {
+		return 0, false, err
+	}
+	if !markExists && !guardExists {
+		return 0, false, nil
+	}
+	if !markExists || !guardExists {
+		return 0, false, errors.New("OSCORE replay high-water mark or guard is missing")
+	}
+	if mark != guard {
+		return 0, false, errors.New("OSCORE replay high-water mark differs from its guard")
+	}
+	return mark, true, nil
 }
 
 func readStateFile(path string) ([]byte, error) {

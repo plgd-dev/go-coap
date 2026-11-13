@@ -9,6 +9,7 @@ import (
 	"github.com/plgd-dev/go-coap/v3/message"
 	"github.com/plgd-dev/go-coap/v3/message/codes"
 	"github.com/plgd-dev/go-coap/v3/message/pool"
+	"github.com/plgd-dev/go-coap/v3/net/oscore"
 	"github.com/plgd-dev/go-coap/v3/net/responsewriter"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -23,6 +24,7 @@ type block1Receiver struct {
 	token     message.Token
 	remote    net.Addr
 	delivered [][]byte
+	protected []bool
 }
 
 func newBlock1Receiver(t *testing.T, expiration time.Duration) *block1Receiver {
@@ -141,6 +143,66 @@ func TestBlockWiseReceiveExpiredTransfer(t *testing.T) {
 			require.Len(t, r.delivered[0], 3*testBlock1Size)
 		})
 	}
+}
+
+func TestBlockWiseReceiveBlock1RejectsMixedProtection(t *testing.T) {
+	for _, test := range []struct {
+		name           string
+		firstProtected bool
+	}{
+		{name: "plaintext then protected", firstProtected: false},
+		{name: "protected then plaintext", firstProtected: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			r := newBlock1Receiver(t, time.Minute)
+			errorsCh := make(chan error, 1)
+			r.bw = New(r.cc, time.Minute, func(err error) { errorsCh <- err }, nil)
+
+			require.Equal(t, codes.Continue, r.sendPostUnprotectedBlock(0, true, test.firstProtected).code)
+			resp := r.sendPostUnprotectedBlock(1, false, !test.firstProtected)
+			require.Equal(t, codes.RequestEntityIncomplete, resp.code)
+			require.Empty(t, r.delivered, "mixed-protection transfer reached the handler")
+
+			select {
+			case err := <-errorsCh:
+				require.ErrorIs(t, err, ErrMixedProtectionBlock1Transfer)
+			case <-time.After(time.Second):
+				require.FailNow(t, "mixed-protection transfer was not reported")
+			}
+		})
+	}
+}
+
+func TestBlockWiseReceiveBlock1PreservesProtectionMode(t *testing.T) {
+	r := newBlock1Receiver(t, time.Minute)
+	require.Equal(t, codes.Continue, r.sendPostUnprotectedBlock(0, true, true).code)
+	require.Equal(t, codes.Changed, r.sendPostUnprotectedBlock(1, false, true).code)
+	require.Equal(t, []bool{true}, r.protected)
+}
+
+func (b *block1Receiver) sendPostUnprotectedBlock(num int64, more, protected bool) block1Response {
+	req := b.cc.AcquireMessage(b.t.Context())
+	defer b.cc.ReleaseMessage(req)
+	req.SetCode(codes.PUT)
+	req.SetToken(b.token)
+	req.SetType(message.Confirmable)
+	req.SetContext(oscore.ContextWithRequestInfo(req.Context(), oscore.RequestInfo{Protected: protected}))
+	block, err := EncodeBlockOption(SZX1024, num, more)
+	require.NoError(b.t, err)
+	req.SetOptionUint32(message.Block1, block)
+	req.SetBody(bytes.NewReader(bytes.Repeat([]byte{byte(num)}, testBlock1Size)))
+
+	w := responsewriter.New(b.cc.AcquireMessage(b.t.Context()), b.cc)
+	defer func() { b.cc.ReleaseMessage(w.Message()) }()
+	b.bw.Handle(w, req, SZX1024, 64*1024, b.remote, func(w *responsewriter.ResponseWriter[*testClient], r *pool.Message) {
+		body, readErr := r.ReadBody()
+		require.NoError(b.t, readErr)
+		b.delivered = append(b.delivered, body)
+		info, ok := oscore.RequestInfoFromContext(r.Context())
+		b.protected = append(b.protected, ok && info.Protected)
+		require.NoError(b.t, w.SetResponse(codes.Changed, message.TextPlain, nil))
+	})
+	return block1Response{code: w.Message().Code()}
 }
 
 func TestBlockWiseReceiveMissingBlock(t *testing.T) {

@@ -18,6 +18,7 @@ import (
 	"github.com/plgd-dev/go-coap/v3/message/pool"
 	"github.com/plgd-dev/go-coap/v3/net/blockwise/internal/blocks"
 	"github.com/plgd-dev/go-coap/v3/net/blockwise/qblock"
+	"github.com/plgd-dev/go-coap/v3/net/oscore"
 	"github.com/plgd-dev/go-coap/v3/net/responsewriter"
 	"github.com/plgd-dev/go-coap/v3/pkg/cache"
 	"github.com/plgd-dev/go-coap/v3/pkg/math"
@@ -193,15 +194,17 @@ type messageGuard struct {
 	// matchingKey (RFC 9175 §3.3) and received are read without the semaphore,
 	// so a token-changed continuation never waits for another transfer.
 	matchingKey uint64
+	protected   bool
 }
 
 var errReceivingMessagesCacheFull = errors.New("receiving messages cache is full")
 
-func newRequestGuard(request *pool.Message, matchingKey uint64) *messageGuard {
+func newRequestGuard(request *pool.Message, matchingKey uint64, protected bool) *messageGuard {
 	return &messageGuard{
 		Message:     request,
 		Weighted:    semaphore.NewWeighted(1),
 		matchingKey: matchingKey,
+		protected:   protected,
 	}
 }
 
@@ -1154,7 +1157,7 @@ func (b *BlockWise[C]) getOrCreateReceivedMessageGuard(r *pool.Message, exchange
 	msg.SetSequence(r.Sequence())
 	msg.SetBody(memfile.New(make([]byte, 0, 1024)))
 	msg.SetCode(r.Code())
-	mg := newRequestGuard(msg, matchingKey)
+	mg := newRequestGuard(msg, matchingKey, isProtectedRequest(r))
 	// Lock before publishing so later blocks cannot overtake the first block.
 	if err := acquireMessageGuard(mg); err != nil {
 		b.cc.ReleaseMessage(msg)
@@ -1203,6 +1206,7 @@ type receivedBlock struct {
 	token       message.Token
 	blockType   message.OptionID
 	sizeType    message.OptionID
+	protected   bool
 	szx         SZX
 	reqSzx      SZX
 	maxSzx      SZX
@@ -1244,8 +1248,17 @@ func (b *BlockWise[C]) processReceivedMessage(w *responsewriter.ResponseWriter[C
 	}
 	return b.processReceivedBlock(w, r, next, receivedBlock{
 		exchangeKey: keys.exchange, matchingKey: keys.matching, token: token, blockType: blockType, sizeType: sizeType,
-		szx: szx, reqSzx: szx, maxSzx: maxSzx, num: num, more: more,
+		protected: isProtectedRequest(r),
+		szx:       szx, reqSzx: szx, maxSzx: maxSzx, num: num, more: more,
 	})
+}
+
+func isProtectedRequest(r *pool.Message) bool {
+	if r.HasOption(message.OSCORE) {
+		return true
+	}
+	info, ok := oscore.RequestInfoFromContext(r.Context())
+	return ok && info.Protected
 }
 
 func (b *BlockWise[C]) processReceivedBlock(w *responsewriter.ResponseWriter[C], r *pool.Message, next func(w *responsewriter.ResponseWriter[C], r *pool.Message), block receivedBlock) error {
@@ -1304,6 +1317,9 @@ func (b *BlockWise[C]) processCachedReceivedBlock(w *responsewriter.ResponseWrit
 			b.receivingMessagesCache.Delete(block.exchangeKey)
 		}
 	}()
+	if block.blockType == message.Block1 && mg.protected != block.protected {
+		return ErrMixedProtectionBlock1Transfer
+	}
 	payloadFile, payloadSize, err := b.getPayloadFromCachedReceivedMessage(r, mg.Message)
 	if err != nil {
 		return fmt.Errorf("cannot get payload: %w", err)

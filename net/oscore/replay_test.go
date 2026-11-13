@@ -82,6 +82,124 @@ func (s *testReplayWindowStore) Save(state ReplayWindowState) error {
 	return nil
 }
 
+type testReplayWindowHighWaterStore struct {
+	testReplayWindowStore
+	highWater        uint64
+	highWaterSet     bool
+	loadHighWaterErr error
+	saveHighWaterErr error
+	saveAttempts     int
+	commitOnError    bool
+}
+
+func (s *testReplayWindowHighWaterStore) LoadHighWater() (uint64, bool, error) {
+	if s.loadHighWaterErr != nil {
+		return 0, false, s.loadHighWaterErr
+	}
+	return s.highWater, s.highWaterSet, nil
+}
+
+func (s *testReplayWindowHighWaterStore) SaveHighWater(highWater uint64) error {
+	s.saveAttempts++
+	if s.saveHighWaterErr != nil {
+		if s.commitOnError {
+			s.highWater = highWater
+			s.highWaterSet = true
+			s.commitOnError = false
+		}
+		return s.saveHighWaterErr
+	}
+	s.highWater = highWater
+	s.highWaterSet = true
+	return nil
+}
+
+func (s *testReplayWindowHighWaterStore) restart(t *testing.T, size uint8) *ReplayWindow {
+	t.Helper()
+	state, highWaterSet, err := loadReplayState(s, size)
+	if err != nil {
+		t.Fatalf("load replay state after restart: %v", err)
+	}
+	window, err := newReplayWindow(size, state, s, highWaterSet)
+	if err != nil {
+		t.Fatalf("create replay window after restart: %v", err)
+	}
+	return window
+}
+
+func TestReplayWindowHighWaterSaveFailureReconcilesPersistedMark(t *testing.T) {
+	saveErr := errors.New("high-water write reported failure")
+	store := &testReplayWindowHighWaterStore{}
+	window, err := newReplayWindow(4, ReplayWindowState{}, store, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if acceptErr := window.Accept(0, func() error { return nil }); acceptErr != nil {
+		t.Fatal(acceptErr)
+	}
+	store.saveHighWaterErr = saveErr
+	store.commitOnError = true
+	if err := window.Accept(300, func() error { return nil }); !errors.Is(err, saveErr) {
+		t.Fatalf("persistence error = %v, want %v", err, saveErr)
+	}
+	if !store.highWaterSet {
+		t.Fatal("test store did not commit the high-water mark")
+	}
+
+	restarted := store.restart(t, 4)
+	if err := restarted.Accept(0, func() error { return nil }); !errors.Is(err, ErrReplay) {
+		t.Fatalf("replayed previously accepted sequence after restart error = %v, want ErrReplay", err)
+	}
+	if err := restarted.Accept(300, func() error { return nil }); !errors.Is(err, ErrReplay) {
+		t.Fatalf("replayed sequence covered by persisted mark error = %v, want ErrReplay", err)
+	}
+}
+
+func TestReplayWindowHighWaterSaveAndReconcileFailureRetryPersistence(t *testing.T) {
+	store := &testReplayWindowHighWaterStore{}
+	window, err := newReplayWindow(4, ReplayWindowState{}, store, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := window.Accept(0, func() error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+	previouslyAccepted := store.highWater
+
+	saveErr := errors.New("high-water write failed")
+	loadErr := errors.New("high-water load failed")
+	store.saveHighWaterErr = saveErr
+	store.loadHighWaterErr = loadErr
+	err = window.Accept(300, func() error { return nil })
+	if !errors.Is(err, saveErr) {
+		t.Fatalf("save failure = %v, want %v", err, saveErr)
+	}
+	if !errors.Is(err, loadErr) {
+		t.Fatalf("reconcile failure = %v, want %v", err, loadErr)
+	}
+
+	store.saveHighWaterErr = nil
+	store.loadHighWaterErr = nil
+	attemptsBeforeRetry := store.saveAttempts
+	if err := window.Accept(301, func() error { return nil }); err != nil {
+		t.Fatalf("accept sequence after persistence failure: %v", err)
+	}
+	if store.saveAttempts != attemptsBeforeRetry+1 {
+		t.Fatalf("high-water save attempts = %d, want %d", store.saveAttempts, attemptsBeforeRetry+1)
+	}
+	if store.highWater <= previouslyAccepted {
+		t.Fatalf("persisted high-water mark = %d, want greater than %d", store.highWater, previouslyAccepted)
+	}
+
+	restarted := store.restart(t, 4)
+	if err := restarted.Accept(0, func() error { return nil }); !errors.Is(err, ErrReplay) {
+		t.Fatalf("replayed previously accepted sequence after restart error = %v, want ErrReplay", err)
+	}
+	if err := restarted.Accept(301, func() error { return nil }); !errors.Is(err, ErrReplay) {
+		t.Fatalf("replayed retried sequence after restart error = %v, want ErrReplay", err)
+	}
+}
+
 func TestReplayWindowStoreRestoresState(t *testing.T) {
 	store := &testReplayWindowStore{}
 	window, err := newReplayWindow(4, store.state, store, false)

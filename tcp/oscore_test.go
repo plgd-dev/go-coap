@@ -104,9 +104,11 @@ func TestOSCORETCPErrorResponseIsUnprotectedAndDoesNotReachHandler(t *testing.T)
 	listener, err := coapNet.NewTCPListener("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
 	var handled atomic.Int32
+	serverErrors := make(chan error, 4)
 	server := tcp.NewServer(
 		options.WithOSCORE(newTCPOSCOREProcessor(t, "server", "other", false)),
 		options.WithOSCOREErrorResponses(),
+		options.WithErrors(func(err error) { serverErrors <- err }),
 		options.WithHandlerFunc(func(*responsewriter.ResponseWriter[*client.Conn], *pool.Message) {
 			handled.Add(1)
 		}),
@@ -139,6 +141,12 @@ func TestOSCORETCPErrorResponseIsUnprotectedAndDoesNotReachHandler(t *testing.T)
 	require.NoError(t, err)
 	require.Empty(t, body)
 	require.Zero(t, handled.Load())
+	select {
+	case serverErr := <-serverErrors:
+		require.ErrorIs(t, serverErr, oscore.ErrNoSecurityContext)
+	case <-ctx.Done():
+		require.FailNow(t, "TCP server did not report original OSCORE processing error")
+	}
 }
 
 func TestOSCORETCPRejectsMalformedTransportMessages(t *testing.T) {

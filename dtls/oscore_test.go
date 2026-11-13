@@ -28,9 +28,11 @@ func TestOSCOREDTLSErrorResponseIsUnprotectedAndDoesNotReachHandler(t *testing.T
 	listener, err := coapNet.NewDTLSListener("udp", "127.0.0.1:0", testOSCOREDTLSServerOptions())
 	require.NoError(t, err)
 	var handled atomic.Int32
+	serverErrors := make(chan error, 4)
 	server := dtls.NewServer(
 		options.WithOSCORE(newDTLSOSCOREProcessor(t, "server", "other", false)),
 		options.WithOSCOREErrorResponses(),
+		options.WithErrors(func(err error) { serverErrors <- err }),
 		options.WithHandlerFunc(func(*responsewriter.ResponseWriter[*client.Conn], *pool.Message) {
 			handled.Add(1)
 		}),
@@ -63,6 +65,12 @@ func TestOSCOREDTLSErrorResponseIsUnprotectedAndDoesNotReachHandler(t *testing.T
 	require.NoError(t, err)
 	require.Empty(t, body)
 	require.Zero(t, handled.Load())
+	select {
+	case serverErr := <-serverErrors:
+		require.ErrorIs(t, serverErr, oscore.ErrNoSecurityContext)
+	case <-ctx.Done():
+		require.FailNow(t, "DTLS server did not report original OSCORE processing error")
+	}
 }
 
 func TestOSCOREDTLSExchange(t *testing.T) {

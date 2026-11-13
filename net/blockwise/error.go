@@ -31,6 +31,10 @@ var (
 	// ErrRequestEntityIncomplete request body is missing blocks
 	ErrRequestEntityIncomplete = errors.New("request entity incomplete")
 
+	// ErrMixedProtectionBlock1Transfer indicates that a Block1 transfer mixes
+	// protected and plaintext request blocks.
+	ErrMixedProtectionBlock1Transfer = errors.New("Block1 transfer mixes protected and plaintext messages")
+
 	// ErrRequestEntityTooLarge request body exceeds the size limit
 	ErrRequestEntityTooLarge = blocks.ErrRequestEntityTooLarge
 )

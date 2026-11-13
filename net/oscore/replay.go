@@ -39,7 +39,16 @@ type ReplayWindowHighWaterStore interface {
 	SaveHighWater(uint64) error
 }
 
-const replayHighWaterMargin = uint64(256)
+// ReplayWindowHighWaterMarginProvider optionally configures the number of
+// accepted sequence advances between durable high-water mark writes.
+type ReplayWindowHighWaterMarginProvider interface {
+	ReplayWindowHighWaterMargin() uint64
+}
+
+const (
+	DefaultReplayHighWaterMargin = uint64(256)
+	MaxReplayHighWaterMargin     = uint64(1024)
+)
 
 // ReplayWindow rejects duplicate or stale Partial IV values. Authentication is
 // performed while holding the window lock so concurrent copies cannot both be
@@ -194,10 +203,15 @@ func (w *ReplayWindow) saveState(next ReplayWindowState) error {
 	if w.highWaterSet && next.HighestSequence < w.highWater {
 		return nil
 	}
-	w.highWater = min(next.HighestSequence+replayHighWaterMargin, maxPartialIV+1)
-	if err := highWaterStore.SaveHighWater(w.highWater); err != nil {
+	margin := DefaultReplayHighWaterMargin
+	if provider, ok := highWaterStore.(ReplayWindowHighWaterMarginProvider); ok {
+		margin = provider.ReplayWindowHighWaterMargin()
+	}
+	highWater := min(next.HighestSequence+margin, maxPartialIV+1)
+	if err := highWaterStore.SaveHighWater(highWater); err != nil {
 		return err
 	}
+	w.highWater = highWater
 	w.highWaterSet = true
 	return nil
 }

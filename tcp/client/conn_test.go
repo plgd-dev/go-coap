@@ -51,7 +51,7 @@ func TestUnprotectedErrorResponseOnlyTerminatesOSCOREExchange(t *testing.T) {
 				},
 			}}
 			if test.wantRetained {
-				cc.oscoreRequiredResponses = map[string]map[oscore.Exchange]time.Time{
+				cc.oscoreRequiredResponses = oscore.ResponseRequirements{
 					key: {exchange: time.Time{}},
 				}
 			}
@@ -107,7 +107,6 @@ func TestStaleOSCOREExchangeDoesNotRemoveReplacement(t *testing.T) {
 	require.ErrorIs(t, cc.updateTCPOSCOREExchangeResponse(
 		key,
 		stale,
-		oscore.OptionValue{},
 		false,
 		false,
 	), oscore.ErrInvalidOSCOREMessage)
@@ -142,7 +141,7 @@ func TestFailedTCPOSCOREWriteDoesNotRollbackReplacement(t *testing.T) {
 		oscoreExchanges: oscore.ExchangeTracker[tcpOSCOREExchange]{
 			key: {exchange: replacementExchange},
 		},
-		oscoreRequiredResponses: map[string]map[oscore.Exchange]time.Time{
+		oscoreRequiredResponses: oscore.ResponseRequirements{
 			key: {
 				failedExchange:      time.Time{},
 				replacementExchange: time.Time{},
@@ -187,7 +186,7 @@ func TestFailedTCPOSCOREObserveCancellationRestoresOnlyOwnedExchange(t *testing.
 				cancelExchange: cancelExchange,
 			},
 		},
-		oscoreRequiredResponses: map[string]map[oscore.Exchange]time.Time{
+		oscoreRequiredResponses: oscore.ResponseRequirements{
 			key: {
 				previousExchange: time.Time{},
 				cancelExchange:   time.Time{},
@@ -252,7 +251,7 @@ func TestFailedTCPOSCOREObserveCancellationPreservesPreviousCancellation(t *test
 		session:         session,
 		oscoreProcessor: processor,
 		oscoreExchanges: oscore.ExchangeTracker[tcpOSCOREExchange]{token: previous},
-		oscoreRequiredResponses: map[string]map[oscore.Exchange]time.Time{
+		oscoreRequiredResponses: oscore.ResponseRequirements{
 			token: {
 				observeExchange:        time.Time{},
 				previousCancelExchange: time.Time{},
@@ -292,7 +291,7 @@ func TestExpiredTCPOSCOREExchangeStillRequiresProtection(t *testing.T) {
 				expires:  time.Now().Add(-time.Second),
 			},
 		},
-		oscoreRequiredResponses: map[string]map[oscore.Exchange]time.Time{
+		oscoreRequiredResponses: oscore.ResponseRequirements{
 			key: {exchange: time.Time{}},
 		},
 	}
@@ -325,7 +324,7 @@ func TestExpiredTCPOSCOREExchangeAllowsProcessingError(t *testing.T) {
 				expires:  time.Now().Add(-time.Second),
 			},
 		},
-		oscoreRequiredResponses: map[string]map[oscore.Exchange]time.Time{
+		oscoreRequiredResponses: oscore.ResponseRequirements{
 			key: {exchange: time.Time{}},
 		},
 	}
@@ -337,7 +336,7 @@ func TestExpiredTCPOSCOREExchangeAllowsProcessingError(t *testing.T) {
 	require.NotContains(t, cc.oscoreRequiredResponses, key)
 }
 
-func TestTCPOSCOREExchangeAcceptsResponseAfterRFC247SecondWindow(t *testing.T) {
+func TestTCPOSCOREExchangeAcceptsResponseWithinConfiguredTimeout(t *testing.T) {
 	secret := []byte("late TCP OSCORE response")
 	clientContext, err := oscore.NewContext(oscore.ContextConfig{
 		AcceptReplayStateLoss: true,
@@ -366,10 +365,9 @@ func TestTCPOSCOREExchangeAcceptsResponseAfterRFC247SecondWindow(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, request.Token, protectedResponse.Token)
 
-	require.Zero(t, DefaultConfig.OSCOREExchangeTimeout)
 	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	cc := &Conn{
-		oscoreExchangeTimeout: DefaultConfig.OSCOREExchangeTimeout,
+		oscoreExchangeTimeout: 250 * time.Second,
 		oscoreNow:             func() time.Time { return now },
 	}
 	expires := cc.oscoreExpiry()
@@ -377,7 +375,7 @@ func TestTCPOSCOREExchangeAcceptsResponseAfterRFC247SecondWindow(t *testing.T) {
 	cc.oscoreExchanges = oscore.ExchangeTracker[tcpOSCOREExchange]{
 		key: {context: clientContext, exchange: exchange, expires: expires},
 	}
-	cc.oscoreRequiredResponses = map[string]map[oscore.Exchange]time.Time{
+	cc.oscoreRequiredResponses = oscore.ResponseRequirements{
 		key: {exchange: expires},
 	}
 	now = now.Add(248 * time.Second)
@@ -386,6 +384,55 @@ func TestTCPOSCOREExchangeAcceptsResponseAfterRFC247SecondWindow(t *testing.T) {
 	require.NoError(t, cc.unprotectResponse(response))
 	require.Equal(t, codes.Content, response.Code())
 	require.Equal(t, codes.GET, opened.Code)
+}
+
+func TestTCPOSCORERequestConsumersReleaseExchanges(t *testing.T) {
+	require.Zero(t, DefaultConfig.OSCOREExchangeTimeout)
+	securityContext, err := oscore.NewContext(oscore.ContextConfig{
+		AcceptReplayStateLoss: true,
+		MasterSecret:          []byte("TCP OSCORE consumer lifecycle"),
+		SenderID:              []byte("client"),
+		RecipientID:           []byte("server"),
+	})
+	require.NoError(t, err)
+	cc := &Conn{
+		oscoreExchanges:         make(oscore.ExchangeTracker[tcpOSCOREExchange]),
+		oscoreRequiredResponses: oscore.NewResponseRequirements(),
+	}
+
+	const requestCount = 10_000
+	requests := make([]*pool.Message, 0, requestCount)
+	for i := 0; i < requestCount; i++ {
+		token := message.Token{
+			byte(i >> 24), byte(i >> 16), byte(i >> 8), byte(i),
+		}
+		_, exchange, err := securityContext.ProtectRequest(message.Message{
+			Code: codes.GET, Token: token,
+		})
+		require.NoError(t, err)
+		key := oscore.ExchangeTrackerKey(token)
+		cc.oscoreExchanges[key] = tcpOSCOREExchange{
+			context:  securityContext,
+			exchange: exchange,
+		}
+		cc.oscoreRequiredResponses[key] = map[oscore.Exchange]time.Time{
+			exchange: time.Now().Add(time.Minute),
+		}
+
+		ctx, cancel := context.WithCancel(context.Background())
+		req := pool.NewMessage(ctx)
+		req.SetToken(token)
+		req.SetContext(context.WithValue(ctx, tcpOSCOREResponseRequirementKey{}, exchange))
+		cancel()
+		requests = append(requests, req)
+	}
+
+	for _, req := range requests {
+		cc.releaseTCPOSCOREResponseRequirement(req)
+	}
+
+	require.Empty(t, cc.oscoreExchanges)
+	require.Empty(t, cc.oscoreRequiredResponses)
 }
 
 func TestTCPOSCORERequirementTracksLiveRequestConsumer(t *testing.T) {
@@ -405,7 +452,10 @@ func TestTCPOSCORERequirementTracksLiveRequestConsumer(t *testing.T) {
 	req.SetToken(request.Token)
 	req.SetContext(context.WithValue(context.Background(), tcpOSCOREResponseRequirementKey{}, exchange))
 	cc := &Conn{
-		oscoreRequiredResponses: map[string]map[oscore.Exchange]time.Time{
+		oscoreExchanges: oscore.ExchangeTracker[tcpOSCOREExchange]{
+			key: {context: securityContext, exchange: exchange},
+		},
+		oscoreRequiredResponses: oscore.ResponseRequirements{
 			key: {exchange: time.Now().Add(time.Second)},
 		},
 	}
@@ -416,6 +466,42 @@ func TestTCPOSCORERequirementTracksLiveRequestConsumer(t *testing.T) {
 	cc.releaseTCPOSCOREResponseRequirement(req)
 	require.NotContains(t, cc.oscoreRequiredResponses, key,
 		"consumer completion must release the independent protection requirement")
+	require.NotContains(t, cc.oscoreExchanges, key,
+		"consumer completion must release the non-Observe exchange")
+}
+
+func TestTCPOSCOREObservationExchangeSurvivesRequestConsumerRelease(t *testing.T) {
+	securityContext, err := oscore.NewContext(oscore.ContextConfig{
+		AcceptReplayStateLoss: true,
+		MasterSecret:          []byte("TCP OSCORE Observe lifecycle"),
+		SenderID:              []byte("client"),
+		RecipientID:           []byte("server"),
+	})
+	require.NoError(t, err)
+	options, _, err := (message.Options{}).SetObserve(nil, 0)
+	require.NoError(t, err)
+	request, exchange, err := securityContext.ProtectRequest(message.Message{
+		Code: codes.GET, Token: message.Token("observe"), Options: options,
+	})
+	require.NoError(t, err)
+	key := oscore.ExchangeTrackerKey(request.Token)
+	req := pool.NewMessage(context.Background())
+	req.SetToken(request.Token)
+	req.SetContext(context.WithValue(context.Background(), tcpOSCOREResponseRequirementKey{}, exchange))
+	cc := &Conn{
+		oscoreExchanges: oscore.ExchangeTracker[tcpOSCOREExchange]{
+			key: {context: securityContext, exchange: exchange, observe: true},
+		},
+		oscoreRequiredResponses: oscore.ResponseRequirements{
+			key: {exchange: time.Time{}},
+		},
+	}
+
+	cc.releaseTCPOSCOREResponseRequirement(req)
+
+	require.Contains(t, cc.oscoreExchanges, key,
+		"an active Observe exchange must outlive the initial request consumer")
+	require.NotContains(t, cc.oscoreRequiredResponses, key)
 }
 
 func TestCancelObservationClearsTCPOSCORERequirements(t *testing.T) {
@@ -440,7 +526,7 @@ func TestCancelObservationClearsTCPOSCORERequirements(t *testing.T) {
 		oscoreExchanges: oscore.ExchangeTracker[tcpOSCOREExchange]{
 			"token": {exchange: observeExchange, observe: true},
 		},
-		oscoreRequiredResponses: map[string]map[oscore.Exchange]time.Time{
+		oscoreRequiredResponses: oscore.ResponseRequirements{
 			"token": {
 				observeExchange: time.Time{},
 				otherExchange:   time.Time{},

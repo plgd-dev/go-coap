@@ -8,7 +8,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net"
+	"net/netip"
 	"strconv"
 
 	"github.com/plgd-dev/go-coap/v3/message"
@@ -52,16 +52,44 @@ type TargetPolicy func(oscore.ProxyTarget) bool
 // and unspecified addresses. Applications with DNS targets should instead
 // resolve and pin addresses in their policy and RoundTripper.
 func AllowPublicIPLiteralTarget(target oscore.ProxyTarget) bool {
-	ip := net.ParseIP(target.Host)
-	return ip != nil && !ip.IsPrivate() && !ip.IsLoopback() &&
-		!ip.IsLinkLocalUnicast() && !ip.IsLinkLocalMulticast() &&
-		!ip.IsMulticast() && !ip.IsUnspecified()
+	ip, err := netip.ParseAddr(target.Host)
+	if err != nil {
+		return false
+	}
+	ip = ip.Unmap()
+	if !ip.IsGlobalUnicast() || ip.IsPrivate() || ip.IsLoopback() ||
+		ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() ||
+		ip.IsMulticast() || ip.IsUnspecified() {
+		return false
+	}
+	for _, prefix := range deniedPublicTargetPrefixes {
+		if prefix.Contains(ip) {
+			return false
+		}
+	}
+	return true
+}
+
+var deniedPublicTargetPrefixes = [...]netip.Prefix{
+	netip.MustParsePrefix("100.64.0.0/10"),
+	netip.MustParsePrefix("0.0.0.0/8"),
+	netip.MustParsePrefix("192.0.0.0/24"),
+	netip.MustParsePrefix("192.0.2.0/24"),
+	netip.MustParsePrefix("198.18.0.0/15"),
+	netip.MustParsePrefix("198.51.100.0/24"),
+	netip.MustParsePrefix("203.0.113.0/24"),
+	netip.MustParsePrefix("240.0.0.0/4"),
+	netip.MustParsePrefix("255.255.255.255/32"),
+	netip.MustParsePrefix("64:ff9b::/96"),
+	netip.MustParsePrefix("2001:db8::/32"),
 }
 
 // Forwarder implements a one-request/one-response OSCORE forwarding path.
 // The surrounding CoAP transport handles Outer Blockwise when enabled.
 // RoundTripper implementations should use Blockwise for large envelopes.
 // The forwarder does not provide caching, Observe, or proxy session management.
+// If OnError is nil, forwarding errors are silently ignored after the error
+// response is written.
 type Forwarder struct {
 	RoundTripper RoundTripper
 	AllowTarget  TargetPolicy

@@ -37,43 +37,9 @@ type exchangeResponseState struct {
 	observeComplete        bool
 	multipleResponses      bool
 	responseProtected      bool
-	hasNotificationNumber  bool
-	notificationNumber     uint64
+	hasResponseSequence    bool
+	lastResponseSequence   uint64
 	seenResponsePartialIVs map[uint64]struct{}
-}
-
-// ObserveResponseState tracks notification sequencing for an Observe exchange.
-// State transitions are: unseen -> sequenced notifications -> complete when a
-// response no longer carries Observe.
-type ObserveResponseState struct {
-	HasResponse bool
-	HasSequence bool
-	Sequence    uint64
-}
-
-// Update validates and records an Observe response. usedCancelExchange marks
-// a response bound to a separate cancellation exchange.
-func (s *ObserveResponseState) Update(
-	option OptionValue,
-	observeExchange bool,
-	usedCancelExchange bool,
-) error {
-	if !observeExchange || usedCancelExchange {
-		return nil
-	}
-	if s.HasResponse && len(option.PartialIV) == 0 {
-		return ErrReplay
-	}
-	if len(option.PartialIV) > 0 {
-		sequence := PartialIVNumber(option.PartialIV)
-		if s.HasSequence && sequence <= s.Sequence {
-			return ErrReplay
-		}
-		s.HasSequence = true
-		s.Sequence = sequence
-	}
-	s.HasResponse = true
-	return nil
 }
 
 // PartialIVNumber converts a big-endian Partial IV into its sequence number.
@@ -106,6 +72,18 @@ func (e Exchange) RequestPartialIVBytes() []byte {
 // IsObserve reports whether the Exchange is bound to an Observe registration.
 func (e Exchange) IsObserve() bool {
 	return e.responseState != nil && e.responseState.observe
+}
+
+// HasResponse reports whether a response has been successfully authenticated
+// for this exchange.
+func (e Exchange) HasResponse() bool {
+	if e.responseState == nil {
+		return false
+	}
+	state := e.responseState
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	return state.started
 }
 
 func (e Exchange) requestBinding() ([]byte, []byte, *Context) {
@@ -616,7 +594,7 @@ func (state *exchangeResponseState) checkResponse(exchange Exchange, option Opti
 		return 0, err
 	}
 	if exchange.IsObserve() {
-		if state.hasNotificationNumber && responseSequence <= state.notificationNumber {
+		if state.hasResponseSequence && responseSequence <= state.lastResponseSequence {
 			return 0, ErrReplay
 		}
 	} else if state.multipleResponses && state.seenResponsePartialIVs != nil {
@@ -639,8 +617,8 @@ func (state *exchangeResponseState) recordResponse(
 			state.observeComplete = true
 		}
 		if len(option.PartialIV) > 0 {
-			state.hasNotificationNumber = true
-			state.notificationNumber = responseSequence
+			state.hasResponseSequence = true
+			state.lastResponseSequence = responseSequence
 		}
 	} else if state.multipleResponses && len(option.PartialIV) > 0 {
 		if state.seenResponsePartialIVs == nil {

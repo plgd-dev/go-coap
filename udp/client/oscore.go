@@ -15,22 +15,22 @@ import (
 )
 
 type udpOSCOREExchange struct {
-	context         *oscore.Context
-	exchange        oscore.Exchange
-	record          *udpOSCOREExchangeRecord
-	observe         bool
-	qBlock2         bool
-	expires         time.Time
-	observeResponse oscore.ObserveResponseState
-	cancelContext   *oscore.Context
-	cancelExchange  oscore.Exchange
-	cancelExpires   time.Time
+	context        *oscore.Context
+	exchange       oscore.Exchange
+	record         *udpOSCOREExchangeRecord
+	observe        bool
+	qBlock2        bool
+	expires        time.Time
+	cancelContext  *oscore.Context
+	cancelExchange oscore.Exchange
+	cancelExpires  time.Time
 }
 
 type udpOSCOREExchangeRecord struct {
-	exchange udpOSCOREExchange
-	previous *udpOSCOREExchangeRecord
-	state    udpOSCOREExchangeState
+	exchange        udpOSCOREExchange
+	requestExchange oscore.Exchange
+	previous        *udpOSCOREExchangeRecord
+	state           udpOSCOREExchangeState
 }
 
 type udpOSCOREExchangeState uint8
@@ -159,7 +159,7 @@ func (cc *Conn) hasOSCOREExchange(token message.Token) bool {
 func (cc *Conn) requiresOSCOREResponse(token message.Token) bool {
 	cc.oscoreMu.Lock()
 	defer cc.oscoreMu.Unlock()
-	if _, ok := cc.oscoreRequiredResponses[string(token)]; ok {
+	if cc.oscoreRequiredResponses.Has(string(token), time.Now()) {
 		return true
 	}
 	key := string(token)
@@ -169,7 +169,7 @@ func (cc *Conn) requiresOSCOREResponse(token message.Token) bool {
 }
 
 func (cc *Conn) hasPendingOSCOREObservation(token string, exchange udpOSCOREExchange) bool {
-	if !exchange.observe || exchange.observeResponse.HasResponse || cc.observationHandler == nil {
+	if !exchange.observe || exchange.exchange.HasResponse() || cc.observationHandler == nil {
 		return false
 	}
 	_, exists := cc.observationHandler.GetObservation(message.Token(token).Hash())
@@ -221,17 +221,15 @@ func (cc *Conn) trackOSCOREExchange(
 		next.cancelExpires = expires
 	}
 	record := &udpOSCOREExchangeRecord{
-		exchange: next,
-		previous: previousRecord,
-		state:    udpOSCOREExchangePending,
+		exchange:        next,
+		requestExchange: exchange,
+		previous:        previousRecord,
+		state:           udpOSCOREExchangePending,
 	}
 	next.record = record
 	record.exchange = next
 	cc.oscoreExchanges[key] = next
-	if cc.oscoreRequiredResponses == nil {
-		cc.oscoreRequiredResponses = make(map[string]struct{})
-	}
-	cc.oscoreRequiredResponses[key] = struct{}{}
+	cc.oscoreRequiredResponses.Add(key, exchange, time.Time{})
 	cc.oscoreMu.Unlock()
 	return func(sent bool) {
 		cc.finishOSCOREExchange(key, record, sent)
@@ -277,8 +275,10 @@ func (cc *Conn) finishOSCOREExchange(key string, record *udpOSCOREExchangeRecord
 	record.state = udpOSCOREExchangeFailed
 	current, exists := cc.oscoreExchanges[key]
 	if !exists || current.record != record {
+		cc.oscoreRequiredResponses.Remove(key, record.requestExchange)
 		return
 	}
+	cc.oscoreRequiredResponses.Remove(key, record.requestExchange)
 	previous := record.previous
 	now := time.Now()
 	for previous != nil && (previous.state == udpOSCOREExchangeFailed ||
@@ -325,7 +325,7 @@ func (cc *Conn) unprotectIncomingResponse(resp *pool.Message) error {
 		return fmt.Errorf("decode OSCORE response option: %w", err)
 	}
 	hasObserve := plaintext.Options.HasOption(message.Observe)
-	if err := cc.updateOSCOREExchangeResponse(key, exchange, responseOption, usedCancelExchange, hasObserve, plaintext.Options); err != nil {
+	if err := cc.updateOSCOREExchangeResponse(key, exchange, usedCancelExchange, hasObserve, plaintext.Options); err != nil {
 		return err
 	}
 	if hasObserve && len(responseOption.PartialIV) > 0 {
@@ -367,30 +367,24 @@ func (cc *Conn) removeOSCOREExchangeForProcessingError(key string, exchange osco
 	defer cc.oscoreMu.Unlock()
 	if current, exists := cc.oscoreExchanges[key]; exists && current.exchange == exchange {
 		delete(cc.oscoreExchanges, key)
-		delete(cc.oscoreRequiredResponses, key)
+		cc.oscoreRequiredResponses.Remove(key, current.exchange)
+		cc.oscoreRequiredResponses.Remove(key, current.cancelExchange)
 	}
 }
 
 func (cc *Conn) updateOSCOREExchangeResponse(
 	key string,
 	exchange udpOSCOREExchange,
-	responseOption oscore.OptionValue,
 	usedCancelExchange bool,
 	hasObserve bool,
 	options message.Options,
 ) error {
 	cc.oscoreMu.Lock()
 	defer cc.oscoreMu.Unlock()
-	current, err := cc.oscoreExchanges.UpdateResponse(
+	current, err := cc.oscoreExchanges.Match(
 		key,
 		exchange.exchange,
-		responseOption,
-		usedCancelExchange,
 		func(current udpOSCOREExchange) oscore.Exchange { return current.exchange },
-		func(current udpOSCOREExchange) bool { return current.observe },
-		func(current *udpOSCOREExchange) *oscore.ObserveResponseState {
-			return &current.observeResponse
-		},
 	)
 	if err != nil {
 		return err
@@ -401,7 +395,10 @@ func (cc *Conn) updateOSCOREExchangeResponse(
 	qBlock2More := !usedCancelExchange && !hasObserve && qBlockResponseHasMore(options)
 	if usedCancelExchange || !hasObserve && !current.qBlock2 && !qBlock2More {
 		delete(cc.oscoreExchanges, key)
-		delete(cc.oscoreRequiredResponses, key)
+		cc.oscoreRequiredResponses.Remove(key, current.exchange)
+		if usedCancelExchange {
+			cc.oscoreRequiredResponses.Remove(key, current.cancelExchange)
+		}
 		return nil
 	}
 	cc.oscoreExchanges[key] = current
@@ -459,6 +456,7 @@ func (cc *Conn) processIncomingOSCORERequest(req *pool.Message, datagram []byte)
 	if err != nil {
 		responded, responseErr := cc.respondToOSCOREProcessingError(req, err)
 		if responded {
+			cc.errors(fmt.Errorf("cannot process incoming OSCORE request: %w", err))
 			return true, responseErr
 		}
 		return false, err
@@ -497,6 +495,7 @@ func (cc *Conn) respondToOSCOREProcessingError(req *pool.Message, processingErr 
 	resp.SetType(message.Acknowledgement)
 	resp.SetMessageID(req.MessageID())
 	resp.SetToken(req.Token())
+	resp.SetControlMessage(responseControlMessage(req.ControlMessage()))
 	if err := cc.session.WriteMessage(resp); err != nil {
 		return true, fmt.Errorf("send OSCORE processing-error response: %w", err)
 	}
@@ -700,7 +699,7 @@ func (cc *Conn) expireOSCORERequiredResponses() {
 			continue
 		}
 		if !cc.hasOSCOREResponseConsumer(token) {
-			delete(cc.oscoreRequiredResponses, token)
+			cc.oscoreRequiredResponses.RemoveToken(token)
 		}
 	}
 }

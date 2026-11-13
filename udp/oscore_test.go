@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -22,6 +23,7 @@ import (
 	"github.com/plgd-dev/go-coap/v3/options"
 	"github.com/plgd-dev/go-coap/v3/udp"
 	"github.com/plgd-dev/go-coap/v3/udp/client"
+	"github.com/plgd-dev/go-coap/v3/udp/coder"
 	"github.com/stretchr/testify/require"
 )
 
@@ -29,9 +31,11 @@ func TestOSCOREUDPErrorResponseIsUnprotectedAndDoesNotReachHandler(t *testing.T)
 	listener, err := coapNet.NewListenUDP("udp", "127.0.0.1:0")
 	require.NoError(t, err)
 	var handled atomic.Int32
+	serverErrors := make(chan error, 4)
 	server := udp.NewServer(
 		options.WithOSCORE(newUDPOSCOREProcessor(t, "server", "other", false)),
 		options.WithOSCOREErrorResponses(),
+		options.WithErrors(func(err error) { serverErrors <- err }),
 		options.WithHandlerFunc(func(*responsewriter.ResponseWriter[*client.Conn], *pool.Message) {
 			handled.Add(1)
 		}),
@@ -64,6 +68,12 @@ func TestOSCOREUDPErrorResponseIsUnprotectedAndDoesNotReachHandler(t *testing.T)
 	require.NoError(t, err)
 	require.Empty(t, body)
 	require.Zero(t, handled.Load())
+	select {
+	case serverErr := <-serverErrors:
+		require.ErrorIs(t, serverErr, oscore.ErrNoSecurityContext)
+	case <-ctx.Done():
+		require.FailNow(t, "UDP server did not report original OSCORE processing error")
+	}
 }
 
 func TestOSCOREAndPlaintextUDPExchange(t *testing.T) {
@@ -73,6 +83,92 @@ func TestOSCOREAndPlaintextUDPExchange(t *testing.T) {
 	assertUDPPathCode(t, secureClient, "/secure-only", codes.Content)
 	assertUDPPathCode(t, plaintextClient, "/secure-only", codes.Unauthorized)
 	assertUDPApplicationErrors(t, secureClient)
+}
+
+func TestOSCOREPlaintextAllowedRejectsMixedProtectionBlock1(t *testing.T) {
+	listener, err := coapNet.NewListenUDP("udp", "127.0.0.1:0")
+	require.NoError(t, err)
+	serverErrors := make(chan error, 8)
+	handlerRequests := make(chan oscore.RequestInfo, 1)
+	server := udp.NewServer(
+		options.WithOSCORE(newUDPOSCOREProcessor(t, "server", "client", true)),
+		options.WithBlockwise(true, blockwise.SZX1024, 10*time.Second),
+		options.WithErrors(func(err error) {
+			select {
+			case serverErrors <- err:
+			default:
+			}
+		}),
+		options.WithHandlerFunc(func(_ *responsewriter.ResponseWriter[*client.Conn], req *pool.Message) {
+			info, _ := oscore.RequestInfoFromContext(req.Context())
+			select {
+			case handlerRequests <- info:
+			default:
+			}
+		}),
+	)
+	serverDone := make(chan error, 1)
+	go func() { serverDone <- server.Serve(listener) }()
+	defer func() {
+		server.Stop()
+		select {
+		case serverErr := <-serverDone:
+			require.NoError(t, serverErr)
+		case <-time.After(5 * time.Second):
+			require.Fail(t, "UDP mixed-protection server did not stop")
+		}
+	}()
+
+	rawConn, err := net.DialUDP("udp", nil, listener.LocalAddr().(*net.UDPAddr))
+	require.NoError(t, err)
+	defer func() { require.NoError(t, rawConn.Close()) }()
+	clientContext, _ := newUDPOSCOREContextPair(t, "client", "server")
+	token := message.Token{0x61}
+	makeRequest := func(messageID int32, block uint32, payload []byte) message.Message {
+		blockValue := make([]byte, 4)
+		n, _, marshalErr := (message.Options{}).SetUint32(blockValue, message.Block1, block)
+		require.NoError(t, marshalErr)
+		return message.Message{
+			Code:      codes.PUT,
+			Type:      message.NonConfirmable,
+			MessageID: messageID,
+			Token:     token,
+			Options:   append(message.Options{{ID: message.URIPath, Value: []byte("mixed")}}, n...),
+			Payload:   payload,
+		}
+	}
+	send := func(req message.Message) {
+		size, marshalErr := coder.DefaultCoder.Size(req)
+		require.NoError(t, marshalErr)
+		datagram := make([]byte, size)
+		n, encodeErr := coder.DefaultCoder.Encode(req, datagram)
+		require.NoError(t, encodeErr)
+		_, writeErr := rawConn.Write(datagram[:n])
+		require.NoError(t, writeErr)
+	}
+
+	firstBlock, err := blockwise.EncodeBlockOption(blockwise.SZX1024, 0, true)
+	require.NoError(t, err)
+	send(makeRequest(101, firstBlock, bytes.Repeat([]byte{0x01}, 1024)))
+	lastBlock, err := blockwise.EncodeBlockOption(blockwise.SZX1024, 1, false)
+	require.NoError(t, err)
+	protectedLastBlock, _, err := clientContext.ProtectRequest(makeRequest(102, lastBlock, []byte("last block")))
+	require.NoError(t, err)
+	send(protectedLastBlock)
+
+	select {
+	case serverErr := <-serverErrors:
+		require.ErrorIs(t, serverErr, blockwise.ErrMixedProtectionBlock1Transfer)
+	case info := <-handlerRequests:
+		require.Failf(t, "mixed-protection transfer reached handler", "RequestInfo.Protected=%t", info.Protected)
+	case <-time.After(3 * time.Second):
+		require.FailNow(t, "server neither rejected mixed transfer nor invoked handler")
+	}
+	select {
+	case info := <-handlerRequests:
+		require.Failf(t, "mixed-protection transfer reached handler", "RequestInfo.Protected=%t", info.Protected)
+	default:
+	}
 }
 
 func startOSCOREAndPlaintextUDPExchange(t *testing.T) (*client.Conn, *client.Conn) {

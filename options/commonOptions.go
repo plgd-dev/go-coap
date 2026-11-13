@@ -62,8 +62,10 @@ func (o OSCOREExchangeTimeoutOpt) TCPClientApply(cfg *tcpClient.Config) {
 	cfg.OSCOREExchangeTimeout = o.timeout
 }
 
-// WithOSCOREExchangeTimeout configures how long TCP keeps a non-Observe
-// OSCORE exchange available for a late response. Zero disables expiry.
+// WithOSCOREExchangeTimeout configures the expiry backstop for TCP OSCORE
+// exchanges. Ordinary request exchanges are removed when their Do consumer
+// ends; Observe exchanges remain available for the observation lifetime.
+// Zero disables timeout expiry.
 func WithOSCOREExchangeTimeout(timeout time.Duration) OSCOREExchangeTimeoutOpt {
 	return OSCOREExchangeTimeoutOpt{timeout: timeout}
 }

@@ -334,25 +334,34 @@ store per context and coordinate access if multiple receiver processes use
 that context. A custom `ReplayWindowStore` that persists every complete
 window advance can limit throughput. The file-backed `HighWaterFileStore`
 implements the optional `ReplayWindowHighWaterStore` and instead persists one
-exclusive cutoff per 256 accepted sequence advances. After restart, all
-sequences below that cutoff are treated as replay, including requests that may
-not have arrived before shutdown. This trades availability for fewer durable
-writes. Omitting a replay store avoids that write cost but loses replay state
-after restart; do not continue using that context without restoring replay
-protection. Follow RFC 8613 Appendix B.1.2 recovery (for example, Echo) or
-establish a fresh security context.
+exclusive cutoff per 256 accepted sequence advances by default. Configure a
+different margin with `oscorestore.WithReplayHighWaterMargin` (1..1024). A
+smaller margin increases durable-write/fsync frequency but reduces the number of
+legitimate, previously unseen requests rejected after restart; a larger margin
+reduces writes while increasing that rejection range. Omitting a replay store
+avoids that write cost but loses replay state after restart; do not continue
+using that context without restoring replay protection. Follow RFC 8613
+Appendix B.1.2 recovery (for example, Echo) or establish a fresh security
+context.
 
 The `net/oscore/store` package provides `HighWaterFileStore`, which durably
 reserves sender sequence windows of 256 values and atomically persists one
-exclusive receiver replay cutoff per 256 sequence advances. After restart,
+exclusive receiver replay cutoff per configured margin (256 by default).
+Margins from 1 through 1024 are supported. After restart,
 every sequence below the cutoff is treated as replay, including requests that
 may not have arrived before shutdown; this intentionally trades availability
 for fewer durable writes. Use only one active receiver `Context` for this
-store. Rolling back its high-water file cannot be detected without an external
-monotonic trust anchor. Sender reservations use a rollback guard and pending
-transaction so startup can finish an interrupted reservation while consuming
-its entire reserved window. Missing individual sender-state files, corrupt
-files, and mismatched files are rejected.
+store. The replay cutoff has a matching guard; deletion of either individual
+file or a mismatch fails closed. Deleting or rolling back
+both replay files together, including rolling back the whole directory, cannot
+be detected without an external monotonic trust anchor. To explicitly reset
+replay state while replacing a security context, first stop all users of the
+store and call `HighWaterFileStore.ResetReplayState()`. Do not reset and reuse
+the same OSCORE keys, because previously accepted requests could then be
+replayed. Sender reservations use a rollback guard and pending transaction so
+startup can finish an interrupted reservation while consuming its entire
+reserved window. Missing individual sender-state files, corrupt files, and
+mismatched files are rejected.
 
 ```go
 import (
@@ -360,7 +369,11 @@ import (
 	oscorestore "github.com/plgd-dev/go-coap/v3/net/oscore/store"
 )
 
-state, err := oscorestore.NewHighWaterFileStore("/var/lib/myapp/oscore", "peer-17")
+state, err := oscorestore.NewHighWaterFileStore(
+	"/var/lib/myapp/oscore",
+	"peer-17",
+	oscorestore.WithReplayHighWaterMargin(16),
+)
 if err != nil {
 	return err
 }
@@ -380,10 +393,14 @@ multiple processes with file locks; on other platforms it only coordinates
 within one process and cannot sync directory metadata. Keep its directory
 writable only by the trusted application account. The store does not persist
 master secrets or encrypt state at rest. It detects sender-state corruption,
-missing individual sender-state files, and sender-state rollback, but cannot
-detect rollback of the complete high-water file without an external monotonic
-trust anchor. Reserved but unused sender values are intentionally skipped
-after restart. Applications can implement `SenderSequenceStore` and
+missing individual sender-state files, and mismatches caused by individual
+sender-state file rollback. Restoring matching older sender-state and guard
+files can reuse Partial IVs under the same key; detecting complete sender-state
+rollback requires an external monotonic trust anchor. Similarly, deletion or
+rollback of both replay files together or rollback of the complete directory
+cannot be detected without such a trust anchor. Reserved but unused sender
+values are intentionally skipped after restart. Applications can implement
+`SenderSequenceStore` and
 `ReplayWindowHighWaterStore` for a database or remote transactional store.
 
 ## Minimal forward proxy
@@ -428,6 +445,11 @@ SSRF path. If hostnames are allowed, resolve them in the policy and pin the
 selected IP in the `RoundTripper`; validating one DNS answer and dialing a
 later answer permits DNS rebinding. `AllowPublicIPLiteralTarget` is a helper
 for policies that intentionally accept only literal public IP addresses.
+It uses `netip.Addr.IsGlobalUnicast` and rejects private/special-use ranges,
+including IPv4-mapped forms, the well-known NAT64 prefix, and documentation
+prefixes. This helper is not a substitute for an application-specific
+allowlist. If `Forwarder.OnError` is nil, forwarding errors are silently
+ignored after an error response is written; set the callback to observe them.
 The round tripper receives the context, parsed target, and a copied
 CoAP message whose OSCORE option and ciphertext are unchanged. It should use a
 fresh connection per request unless it safely handles token collisions.
@@ -445,10 +467,12 @@ timeouts, and response-size limits.
   AES-CCM-16-128-128, and AES-CCM-16-128-256. The default remains
   AES-CCM-16-64-128.
 - UDP, DTLS, TCP, and TLS transports.
-- TCP OSCORE exchanges use a 247-second response timeout by default.
-  Configure `options.WithOSCOREExchangeTimeout` to extend it for slow origins;
-  zero disables timeout expiry. This is a local exchange-retention policy, not
-  an RFC-defined TCP lifetime.
+- TCP non-Observe OSCORE exchanges are removed when their request consumer
+  (`Do`) returns, is canceled, or times out. Observe exchanges remain available
+  for the observation lifetime. The default `OSCOREExchangeTimeout` is zero,
+  so there is no timeout-based expiry; configure
+  `options.WithOSCOREExchangeTimeout` as a timeout backstop. This is a local
+  exchange-retention policy, not an RFC-defined TCP lifetime.
 - Classic Block1/Block2 and Observe flows. Inner Blockwise remains the
   default. UDP and DTLS also support opt-in Outer Blockwise fragmentation and
   reassembly with `options.WithOSCOREOuterBlockwise()`; reassembled payloads

@@ -373,14 +373,15 @@ func TestStaleOSCOREExchangeDoesNotRemoveReplacementOrProtectionRequirement(t *t
 				observe:  true,
 			},
 		},
-		oscoreRequiredResponses: map[string]struct{}{key: {}},
+		oscoreRequiredResponses: oscore.ResponseRequirements{
+			key: {oscore.Exchange{}: time.Time{}},
+		},
 	}
 	stale := udpOSCOREExchange{context: oldContext, exchange: oldExchange}
 
 	require.ErrorIs(t, cc.updateOSCOREExchangeResponse(
 		key,
 		stale,
-		oscore.OptionValue{},
 		false,
 		false,
 		nil,
@@ -390,7 +391,7 @@ func TestStaleOSCOREExchangeDoesNotRemoveReplacementOrProtectionRequirement(t *t
 	current, exists := cc.oscoreExchanges[key]
 	require.True(t, exists, "stale response processing must not remove the replacement exchange")
 	require.Equal(t, newExchange, current.exchange)
-	require.Contains(t, cc.oscoreRequiredResponses, key,
+	require.True(t, cc.oscoreRequiredResponses.HasToken(key),
 		"stale response processing must not disable the OSCORE response requirement")
 }
 
@@ -482,7 +483,7 @@ func TestOSCOREOuterBlockwiseRequiresProtectionAfterExchangeExpiry(t *testing.T)
 		context: securityContext,
 		expires: time.Now().Add(-time.Second),
 	}
-	cc.oscoreRequiredResponses[token] = struct{}{}
+	cc.oscoreRequiredResponses.Add(token, oscore.Exchange{}, time.Time{})
 	delivered := false
 	cc.tokenHandlerContainer.Store(message.Token(token).Hash(), func(*responsewriter.ResponseWriter[*Conn], *pool.Message) {
 		delivered = true
@@ -491,7 +492,7 @@ func TestOSCOREOuterBlockwiseRequiresProtectionAfterExchangeExpiry(t *testing.T)
 	cc.errors = func(err error) { reported = err }
 	cc.expireOSCORERequests(time.Now())
 	require.NotContains(t, cc.oscoreExchanges, token, "expired cryptographic exchange should be removed")
-	require.Contains(t, cc.oscoreRequiredResponses, token, "active response handler should keep OSCORE required")
+	require.True(t, cc.oscoreRequiredResponses.HasToken(token), "active response handler should keep OSCORE required")
 
 	response := cc.AcquireMessage(context.Background())
 	defer cc.ReleaseMessage(response)
@@ -606,7 +607,7 @@ func TestOSCOREPendingObservationRetainsExchangeAfterExchangeLifetime(t *testing
 
 	cc.expireOSCORERequests(time.Now())
 	require.Contains(t, cc.oscoreExchanges, token, "pending observation should keep its exchange alive")
-	require.Contains(t, cc.oscoreRequiredResponses, token, "pending observation should keep OSCORE required")
+	require.True(t, cc.oscoreRequiredResponses.HasToken(token), "pending observation should keep OSCORE required")
 
 	var reported error
 	cc.errors = func(err error) { reported = err }
@@ -658,7 +659,7 @@ func TestOSCOREPendingObservationRetainsExchangeAfterExchangeLifetime(t *testing
 	cc.oscoreMu.Unlock()
 	cc.expireOSCORERequests(time.Now())
 	require.NotContains(t, cc.oscoreExchanges, token, "canceled observation should release its expired exchange")
-	require.NotContains(t, cc.oscoreRequiredResponses, token, "canceled observation should release its response guard")
+	require.False(t, cc.oscoreRequiredResponses.HasToken(token), "canceled observation should release its response guard")
 }
 
 func TestProcessIncomingOSCOREMessageUsesOSCOREOptionDirection(t *testing.T) {
@@ -2034,6 +2035,35 @@ func TestOSCORERejectsMalformedEmptyControlAndUnexpectedPlaintextResponse(t *tes
 	require.True(t, cc.processIncomingOSCOREMessage(unprotectedResponse, responseDatagram))
 	require.ErrorIs(t, reported[len(reported)-1], oscore.ErrOSCORERequired)
 	cc.ReleaseMessage(request)
+}
+
+func TestOSCOREProcessingErrorResponseUsesRequestControlMessage(t *testing.T) {
+	cc, session := newTestConnWithSession(t)
+	cc.oscoreErrorResponses = true
+
+	request := cc.AcquireMessage(context.Background())
+	defer cc.ReleaseMessage(request)
+	request.SetCode(codes.GET)
+	request.SetType(message.Confirmable)
+	request.SetMessageID(42)
+	request.ResetOptionsTo(message.Options{{ID: message.OSCORE}})
+	requestControl := &coapNet.ControlMessage{
+		Dst:     net.ParseIP("203.0.113.42").To4(),
+		IfIndex: 7,
+	}
+	request.SetControlMessage(requestControl)
+
+	responded, err := cc.respondToOSCOREProcessingError(request, oscore.ErrNoSecurityContext)
+	require.NoError(t, err)
+	require.True(t, responded)
+
+	response := session.lastWritten()
+	require.NotNil(t, response)
+	require.Equal(t, codes.Unauthorized, response.Code())
+	responseControl := response.ControlMessage()
+	require.NotNil(t, responseControl)
+	require.True(t, responseControl.Src.Equal(requestControl.Dst))
+	require.Equal(t, requestControl.IfIndex, responseControl.IfIndex)
 }
 
 func newOSCOREControlMessageTestConn(t *testing.T) (*oscore.Context, *Conn, *recordingSession) {

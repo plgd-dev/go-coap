@@ -336,7 +336,7 @@ type Conn struct {
 	oscoreOuterBlockwiseErr                       error
 	oscoreMu                                      sync.Mutex
 	oscoreExchanges                               oscore.ExchangeTracker[udpOSCOREExchange]
-	oscoreRequiredResponses                       map[string]struct{}
+	oscoreRequiredResponses                       oscore.ResponseRequirements
 	oscoreRequests                                map[int32]udpOSCORERequest
 	oscoreResponses                               map[int32]udpOSCOREResponse
 	oscoreObservations                            map[string]udpOSCORERequestContext
@@ -529,7 +529,7 @@ func newConn(session Session, cfg *Config, cfgOpts ConnOptions) *Conn {
 		oscoreOuterBlockwise:   cfg.OSCOREOuterBlockwise,
 		oscoreOuterBlockwiseMaxReassembledPayloadSize: cfg.OSCOREOuterBlockwiseMaxReassembledPayloadSize,
 		oscoreExchanges:           oscore.NewExchangeTracker[udpOSCOREExchange](),
-		oscoreRequiredResponses:   make(map[string]struct{}),
+		oscoreRequiredResponses:   oscore.NewResponseRequirements(),
 		oscoreRequests:            make(map[int32]udpOSCORERequest),
 		oscoreResponses:           make(map[int32]udpOSCOREResponse),
 		oscoreObservations:        make(map[string]udpOSCORERequestContext),
