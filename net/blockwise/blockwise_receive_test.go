@@ -220,6 +220,25 @@ func TestBlockWiseReceiveBlock1RejectsDifferentOSCOREIdentity(t *testing.T) {
 	}
 }
 
+func TestBlockWiseReceiveOversizedForeignBlockPreservesTransfer(t *testing.T) {
+	const limit = 2 * testBlock1Size
+	r := newBlock1Receiver(t, time.Minute)
+	r.bw.SetMaxReassembledPayloadSize(limit)
+	firstIdentity := oscore.RequestInfo{Protected: true, RecipientID: []byte("client-a")}
+	otherIdentity := oscore.RequestInfo{Protected: true, RecipientID: []byte("client-b")}
+	token := message.Token{0x51}
+
+	require.Equal(t, codes.Continue, r.sendPostBlockWithIdentity(0, true, token, firstIdentity).code)
+	require.Equal(t, codes.RequestEntityIncomplete,
+		r.sendPostBlockWithIdentity(1, true, token, otherIdentity, limit*2).code)
+	require.Empty(t, r.delivered, "foreign block reached the handler")
+
+	require.Equal(t, codes.Changed, r.sendPostBlockWithIdentity(1, false, token, firstIdentity).code,
+		"oversized foreign block must not discard the original transfer")
+	require.Len(t, r.delivered, 1)
+	require.Equal(t, []byte("client-a"), r.identities[0].RecipientID)
+}
+
 func TestBlockWiseReceiveBlock1ChangedTokenMatchesSameOSCOREIdentity(t *testing.T) {
 	r := newBlock1Receiver(t, time.Minute)
 	info := oscore.RequestInfo{
@@ -255,6 +274,7 @@ func (b *block1Receiver) sendPostBlockWithIdentity(
 	more bool,
 	token message.Token,
 	info oscore.RequestInfo,
+	size1 ...uint32,
 ) block1Response {
 	req := b.cc.AcquireMessage(b.t.Context())
 	defer b.cc.ReleaseMessage(req)
@@ -265,6 +285,9 @@ func (b *block1Receiver) sendPostBlockWithIdentity(
 	block, err := EncodeBlockOption(SZX1024, num, more)
 	require.NoError(b.t, err)
 	req.SetOptionUint32(message.Block1, block)
+	for _, value := range size1 {
+		req.SetOptionUint32(message.Size1, value)
+	}
 	req.SetBody(bytes.NewReader(bytes.Repeat([]byte{byte(num)}, testBlock1Size)))
 
 	w := responsewriter.New(b.cc.AcquireMessage(b.t.Context()), b.cc)

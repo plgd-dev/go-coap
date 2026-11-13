@@ -1287,10 +1287,6 @@ func (b *BlockWise[C]) processReceivedBlock(w *responsewriter.ResponseWriter[C],
 	if sentRequest != nil {
 		defer b.cc.ReleaseMessage(sentRequest)
 	}
-	if err := b.checkReassembledPayloadSize(r, block.num*block.szx.Size(), block.sizeType); err != nil {
-		b.receivingMessagesCache.Delete(block.exchangeKey)
-		return err
-	}
 	validUntil := b.getValidUntil(sentRequest)
 	if block.blockType == message.Block2 && sentRequest == nil {
 		return errors.New("cannot request body without paired request")
@@ -1304,9 +1300,9 @@ func (b *BlockWise[C]) processReceivedBlock(w *responsewriter.ResponseWriter[C],
 		block.exchangeKey = token.Hash()
 	}
 
-	var cachedReceivedMessageGuard *messageGuard
-	if e := b.receivingMessagesCache.Load(block.exchangeKey); e != nil {
-		cachedReceivedMessageGuard = e.Data()
+	cachedReceivedMessageGuard, err := b.validateReceivedBlockBeforeProcessing(r, block)
+	if err != nil {
+		return err
 	}
 	if cachedReceivedMessageGuard == nil {
 		// RFC 7959 §2.9.2: reject non-initial blocks without transfer state.
@@ -1330,6 +1326,26 @@ func (b *BlockWise[C]) processReceivedBlock(w *responsewriter.ResponseWriter[C],
 	defer closeCachedReceivedMessage()
 
 	return b.processCachedReceivedBlock(w, r, cachedReceivedMessageGuard, next, block, sentRequest)
+}
+
+func (b *BlockWise[C]) validateReceivedBlockBeforeProcessing(
+	r *pool.Message,
+	block receivedBlock,
+) (*messageGuard, error) {
+	var cachedReceivedMessageGuard *messageGuard
+	if e := b.receivingMessagesCache.Load(block.exchangeKey); e != nil {
+		cachedReceivedMessageGuard = e.Data()
+	}
+	if cachedReceivedMessageGuard != nil && block.blockType == message.Block1 {
+		if err := validateBlock1ProtectionIdentity(cachedReceivedMessageGuard, block); err != nil {
+			return nil, err
+		}
+	}
+	if err := b.checkReassembledPayloadSize(r, block.num*block.szx.Size(), block.sizeType); err != nil {
+		b.receivingMessagesCache.Delete(block.exchangeKey)
+		return nil, err
+	}
+	return cachedReceivedMessageGuard, nil
 }
 
 func (b *BlockWise[C]) processCachedReceivedBlock(w *responsewriter.ResponseWriter[C], r *pool.Message, mg *messageGuard, next func(w *responsewriter.ResponseWriter[C], r *pool.Message), block receivedBlock, sentRequest *pool.Message) (err error) {
@@ -1370,17 +1386,24 @@ func (b *BlockWise[C]) validateCachedReceivedBlock(
 	return b.checkReassembledPayloadSize(r, off, block.sizeType)
 }
 
+func validateBlock1ProtectionIdentity(mg *messageGuard, block receivedBlock) error {
+	if mg.identity.protected != block.identity.protected {
+		return ErrMixedProtectionBlock1Transfer
+	}
+	if mg.identity != block.identity {
+		return ErrBlock1TransferIdentityMismatch
+	}
+	return nil
+}
+
 func validateCachedBlock1(
 	r *pool.Message,
 	mg *messageGuard,
 	block receivedBlock,
 	payloadSize, off int64,
 ) error {
-	if mg.identity.protected != block.identity.protected {
-		return ErrMixedProtectionBlock1Transfer
-	}
-	if mg.identity != block.identity {
-		return ErrBlock1TransferIdentityMismatch
+	if err := validateBlock1ProtectionIdentity(mg, block); err != nil {
+		return err
 	}
 	if block.more {
 		if err := checkFullBlock(r, block.reqSzx); err != nil {
