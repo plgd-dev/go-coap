@@ -43,9 +43,10 @@ func WithReplayHighWaterMargin(margin uint64) HighWaterFileStoreOption {
 // corresponding OSCORE context is recreated. Sender sequence guards detect
 // individual state-file deletion, corruption, or rollback that causes a
 // mismatch, but cannot detect restoring matching older state and guard files.
-// Replay cutoff and guard files detect individual deletion or mismatch;
-// deleting or rolling back both replay files together is not detectable. These
-// complete-state rollbacks require an external monotonic trust anchor to detect.
+// Replay cutoff and guard files detect individual deletion or mismatch, and
+// interrupted updates are completed from a pending transaction. Deleting or
+// rolling back both replay files together is not detectable. These complete-
+// state rollbacks require an external monotonic trust anchor to detect.
 // The replay cutoff intentionally rejects some previously unobserved requests
 // after restart.
 //
@@ -60,6 +61,7 @@ type HighWaterFileStore struct {
 	sequencePendingPath   string
 	replayHighWaterPath   string
 	replayGuardPath       string
+	replayPendingPath     string
 	replayHighWaterMargin uint64
 	sequenceLock          string
 	replayLock            string
@@ -93,6 +95,13 @@ type sequencePendingFile struct {
 type replayHighWaterFile struct {
 	Version uint8  `json:"version"`
 	Next    uint64 `json:"next"`
+}
+
+type replayHighWaterPendingFile struct {
+	Version        uint8               `json:"version"`
+	Previous       replayHighWaterFile `json:"previous"`
+	PreviousExists bool                `json:"previousExists"`
+	Next           replayHighWaterFile `json:"next"`
 }
 
 // NewHighWaterFileStore creates a file store in dir. id is an application-
@@ -129,6 +138,7 @@ func NewHighWaterFileStore(dir, id string, options ...HighWaterFileStoreOption) 
 		sequencePendingPath:   prefix + ".sequence.pending.json",
 		replayHighWaterPath:   prefix + ".replay.high-water.json",
 		replayGuardPath:       prefix + ".replay.guard.json",
+		replayPendingPath:     prefix + ".replay.pending.json",
 		replayHighWaterMargin: replayHighWaterMargin,
 		sequenceLock:          prefix + ".sequence.lock",
 		replayLock:            prefix + ".replay.lock",
@@ -142,6 +152,9 @@ func (s *HighWaterFileStore) LoadHighWater() (uint64, bool, error) {
 	var highWater uint64
 	var exists bool
 	err := withFileLock(s.replayLock, func() error {
+		if err := s.recoverReplayHighWater(); err != nil {
+			return err
+		}
 		var err error
 		highWater, exists, err = readReplayHighWaterPair(s.replayHighWaterPath, s.replayGuardPath)
 		return err
@@ -164,6 +177,9 @@ func (s *HighWaterFileStore) SaveHighWater(highWater uint64) error {
 		return fmt.Errorf("%w: invalid high-water mark %d", oscore.ErrInvalidReplayState, highWater)
 	}
 	err := withFileLock(s.replayLock, func() error {
+		if err := s.recoverReplayHighWater(); err != nil {
+			return err
+		}
 		current, exists, err := readReplayHighWaterPair(s.replayHighWaterPath, s.replayGuardPath)
 		if err != nil {
 			return err
@@ -179,10 +195,25 @@ func (s *HighWaterFileStore) SaveHighWater(highWater uint64) error {
 			}
 		}
 		value := replayHighWaterFile{Version: fileVersion, Next: highWater}
+		pending := replayHighWaterPendingFile{
+			Version:        fileVersion,
+			Previous:       replayHighWaterFile{Version: fileVersion, Next: current},
+			PreviousExists: exists,
+			Next:           value,
+		}
+		if err := s.writeReplayStateFile(s.replayPendingPath, pending); err != nil {
+			return fmt.Errorf("persist replay high-water transaction: %w", err)
+		}
 		if err := s.writeReplayStateFile(s.replayGuardPath, value); err != nil {
 			return fmt.Errorf("persist replay high-water guard: %w", err)
 		}
-		return s.writeReplayStateFile(s.replayHighWaterPath, value)
+		if err := s.writeReplayStateFile(s.replayHighWaterPath, value); err != nil {
+			return fmt.Errorf("persist replay high-water mark: %w", err)
+		}
+		if err := s.removeReplayPending(); err != nil {
+			return fmt.Errorf("complete replay high-water transaction: %w", err)
+		}
+		return nil
 	})
 	if err != nil {
 		return fmt.Errorf("save OSCORE replay high-water mark: %w", err)
@@ -196,8 +227,7 @@ func (s *HighWaterFileStore) SaveHighWater(highWater uint64) error {
 // previously accepted requests to be replayed.
 func (s *HighWaterFileStore) ResetReplayState() error {
 	err := withFileLock(s.replayLock, func() error {
-		removed := false
-		for _, path := range []string{s.replayHighWaterPath, s.replayGuardPath} {
+		for _, path := range []string{s.replayHighWaterPath, s.replayGuardPath, s.replayPendingPath} {
 			if s.replayOps.beforeRemove != nil {
 				if err := s.replayOps.beforeRemove(path); err != nil {
 					return err
@@ -209,12 +239,10 @@ func (s *HighWaterFileStore) ResetReplayState() error {
 				}
 				continue
 			}
-			removed = true
 		}
-		if removed {
-			return s.syncReplayDirectory(s.replayHighWaterPath)
-		}
-		return nil
+		// Sync even if the files are already absent: a previous reset may
+		// have removed them but failed to persist that directory update.
+		return s.syncReplayDirectory(s.replayHighWaterPath)
 	})
 	if err != nil {
 		return fmt.Errorf("reset OSCORE replay state: %w", err)
@@ -344,6 +372,87 @@ func (s *HighWaterFileStore) recoverSequenceReservation() error {
 		s.sequenceInitialized = true
 	}
 	return s.finishSequenceReservationRecovery(pending, state, stateExists, guard, guardExists)
+}
+
+func (s *HighWaterFileStore) recoverReplayHighWater() error {
+	pending, pendingExists, err := readReplayHighWaterPending(s.replayPendingPath)
+	if err != nil {
+		return err
+	}
+	if !pendingExists {
+		return nil
+	}
+	if err = validateReplayHighWaterPending(pending); err != nil {
+		return err
+	}
+	mark, markExists, err := readReplayHighWater(s.replayHighWaterPath)
+	if err != nil {
+		return err
+	}
+	guard, guardExists, err := readReplayHighWater(s.replayGuardPath)
+	if err != nil {
+		return err
+	}
+	if !replayHighWaterTransactionProgressIsValid(pending, mark, markExists, guard, guardExists) {
+		return errors.New("OSCORE replay high-water files do not match pending transaction")
+	}
+	if !guardExists || guard != pending.Next.Next {
+		if err := s.writeReplayStateFile(s.replayGuardPath, pending.Next); err != nil {
+			return fmt.Errorf("recover replay high-water guard: %w", err)
+		}
+	}
+	if !markExists || mark != pending.Next.Next {
+		if err := s.writeReplayStateFile(s.replayHighWaterPath, pending.Next); err != nil {
+			return fmt.Errorf("recover replay high-water mark: %w", err)
+		}
+	}
+	if err := s.removeReplayPending(); err != nil {
+		return fmt.Errorf("complete replay high-water recovery: %w", err)
+	}
+	return nil
+}
+
+func validateReplayHighWaterPending(pending replayHighWaterPendingFile) error {
+	if pending.Version != fileVersion || pending.Previous.Version != fileVersion ||
+		pending.Next.Version != fileVersion ||
+		pending.Next.Next == 0 || pending.Next.Next > maxPartialIV+1 {
+		return errors.New("invalid OSCORE replay high-water transaction")
+	}
+	if pending.PreviousExists {
+		if pending.Previous.Next == 0 || pending.Previous.Next >= pending.Next.Next {
+			return errors.New("invalid OSCORE replay high-water transaction")
+		}
+	} else if pending.Previous.Next != 0 {
+		return errors.New("invalid OSCORE replay high-water transaction")
+	}
+	return nil
+}
+
+func replayHighWaterTransactionProgressIsValid(
+	pending replayHighWaterPendingFile,
+	mark uint64,
+	markExists bool,
+	guard uint64,
+	guardExists bool,
+) bool {
+	if pending.PreviousExists {
+		return (!markExists || mark == pending.Previous.Next || mark == pending.Next.Next) &&
+			(!guardExists || guard == pending.Previous.Next || guard == pending.Next.Next)
+	}
+	return (!markExists || mark == pending.Next.Next) &&
+		(!guardExists || guard == pending.Next.Next)
+}
+
+func (s *HighWaterFileStore) removeReplayPending() error {
+	if s.replayOps.beforeRemove != nil {
+		if err := s.replayOps.beforeRemove(s.replayPendingPath); err != nil {
+			return err
+		}
+	}
+	if err := os.Remove(s.replayPendingPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	return s.syncReplayDirectory(s.replayPendingPath)
 }
 
 func (s *HighWaterFileStore) finishSequenceReservationRecovery(
@@ -550,6 +659,21 @@ func readReplayHighWater(path string) (uint64, bool, error) {
 		return 0, false, fmt.Errorf("%w: invalid replay high-water file", oscore.ErrInvalidReplayState)
 	}
 	return state.Next, true, nil
+}
+
+func readReplayHighWaterPending(path string) (replayHighWaterPendingFile, bool, error) {
+	data, err := readStateFile(path)
+	if err != nil {
+		return replayHighWaterPendingFile{}, false, err
+	}
+	if data == nil {
+		return replayHighWaterPendingFile{}, false, nil
+	}
+	var pending replayHighWaterPendingFile
+	if err := json.Unmarshal(data, &pending); err != nil {
+		return replayHighWaterPendingFile{}, false, fmt.Errorf("decode replay high-water transaction file: %w", err)
+	}
+	return pending, true, nil
 }
 
 func readReplayHighWaterPair(markPath, guardPath string) (uint64, bool, error) {

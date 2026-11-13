@@ -351,10 +351,12 @@ Margins from 1 through 1024 are supported. After restart,
 every sequence below the cutoff is treated as replay, including requests that
 may not have arrived before shutdown; this intentionally trades availability
 for fewer durable writes. Use only one active receiver `Context` for this
-store. The replay cutoff has a matching guard; deletion of either individual
-file or a mismatch fails closed. Deleting or rolling back
-both replay files together, including rolling back the whole directory, cannot
-be detected without an external monotonic trust anchor. To explicitly reset
+store. The replay cutoff has a matching guard and a pending transaction record;
+startup completes an interrupted pair update before loading or saving the
+cutoff. Deletion of either individual cutoff/guard file or an invalid
+transaction fails closed. Deleting or rolling back both replay files together,
+including rolling back the whole directory, cannot be detected without an
+external monotonic trust anchor. To explicitly reset
 replay state while replacing a security context, first stop all users of the
 store and call `HighWaterFileStore.ResetReplayState()`. Do not reset and reuse
 the same OSCORE keys, because previously accepted requests could then be

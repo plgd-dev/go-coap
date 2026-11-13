@@ -92,6 +92,15 @@ type testReplayWindowHighWaterStore struct {
 	commitOnError    bool
 }
 
+type testReplayWindowHighWaterMarginStore struct {
+	*testReplayWindowHighWaterStore
+	margin uint64
+}
+
+func (s *testReplayWindowHighWaterMarginStore) ReplayWindowHighWaterMargin() uint64 {
+	return s.margin
+}
+
 func (s *testReplayWindowHighWaterStore) LoadHighWater() (uint64, bool, error) {
 	if s.loadHighWaterErr != nil {
 		return 0, false, s.loadHighWaterErr
@@ -197,6 +206,36 @@ func TestReplayWindowHighWaterSaveAndReconcileFailureRetryPersistence(t *testing
 	}
 	if err := restarted.Accept(301, func() error { return nil }); !errors.Is(err, ErrReplay) {
 		t.Fatalf("replayed retried sequence after restart error = %v, want ErrReplay", err)
+	}
+}
+
+func TestReplayWindowRejectsInvalidHighWaterMarginProvider(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		margin uint64
+	}{
+		{name: "zero", margin: 0},
+		{name: "above maximum", margin: MaxReplayHighWaterMargin + 1},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			store := &testReplayWindowHighWaterMarginStore{
+				testReplayWindowHighWaterStore: &testReplayWindowHighWaterStore{},
+				margin:                         test.margin,
+			}
+			window, err := newReplayWindow(4, ReplayWindowState{}, store, false)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := window.Accept(1, func() error { return nil }); !errors.Is(err, ErrInvalidReplayState) {
+				t.Fatalf("Accept with invalid margin error = %v, want ErrInvalidReplayState", err)
+			}
+			if store.saveAttempts != 0 {
+				t.Fatalf("SaveHighWater attempts = %d, want 0", store.saveAttempts)
+			}
+			if window.started {
+				t.Fatal("replay window advanced after invalid margin")
+			}
+		})
 	}
 }
 

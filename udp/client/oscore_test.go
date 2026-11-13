@@ -1057,6 +1057,8 @@ func TestFailedOSCOREWriteDoesNotRemoveReplacementExchange(t *testing.T) {
 	cc.oscoreMu.Unlock()
 	require.Equal(t, firstExchange.RequestPartialIVBytes(), current.RequestPartialIVBytes(),
 		"failed replacement must restore the earlier request that was sent")
+	require.True(t, cc.oscoreRequiredResponses.Has(string(message.Token{0x74}), time.Now()),
+		"rollback must retain the earlier exchange's response requirement")
 	require.NotEqual(t, firstExchange.RequestPartialIVBytes(), secondExchange.RequestPartialIVBytes())
 }
 
@@ -1234,6 +1236,46 @@ func TestOSCOREExchangeChainIsBoundedPerToken(t *testing.T) {
 	_, exists := cc.oscoreExchanges[string(message.Token{0x78})]
 	cc.oscoreMu.Unlock()
 	require.False(t, exists)
+}
+
+func TestSuccessfulOSCOREWritesKeepOnlyReachableResponseRequirements(t *testing.T) {
+	securityContext, err := oscore.NewContext(oscore.ContextConfig{
+		AcceptReplayStateLoss: true,
+		MasterSecret:          []byte("bounded OSCORE response requirements"),
+		SenderID:              []byte("client"),
+		RecipientID:           []byte("server"),
+	})
+	require.NoError(t, err)
+	processor, err := oscore.NewProcessor(oscore.ProcessorConfig{Contexts: []*oscore.Context{securityContext}})
+	require.NoError(t, err)
+	session := newRecordingSession()
+	defer session.Close()
+	cfg := DefaultConfig
+	cfg.OSCORE = processor
+	cc := NewConnWithOpts(session, &cfg)
+	defer cc.Close()
+
+	const token = "\x79"
+	cc.oscoreObservations[token] = udpOSCORERequestContext{}
+	for range 100 {
+		request := cc.AcquireMessage(context.Background())
+		request.SetCode(codes.GET)
+		request.SetToken(message.Token(token))
+		request.SetOptionUint32(message.Observe, 0)
+		_, finish, protectErr := cc.protectOutgoingRequest(request)
+		cc.ReleaseMessage(request)
+		require.NoError(t, protectErr)
+		finish(true)
+
+		cc.oscoreMu.Lock()
+		requirementCount := len(cc.oscoreRequiredResponses[token])
+		current := cc.oscoreExchanges[token]
+		_, currentRequired := cc.oscoreRequiredResponses[token][current.exchange]
+		cc.oscoreMu.Unlock()
+		require.Equal(t, 1, requirementCount,
+			"superseded exchanges must not retain response requirements")
+		require.True(t, currentRequired, "the current exchange must remain protected")
+	}
 }
 
 func TestOSCOREMessageTransformsPreserveControlMessage(t *testing.T) {

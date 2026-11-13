@@ -194,17 +194,25 @@ type messageGuard struct {
 	// matchingKey (RFC 9175 §3.3) and received are read without the semaphore,
 	// so a token-changed continuation never waits for another transfer.
 	matchingKey uint64
-	protected   bool
+	identity    blockProtectionIdentity
 }
 
 var errReceivingMessagesCacheFull = errors.New("receiving messages cache is full")
 
-func newRequestGuard(request *pool.Message, matchingKey uint64, protected bool) *messageGuard {
+type blockProtectionIdentity struct {
+	protected     bool
+	identityKnown bool
+	recipientID   string
+	idContext     string
+	idContextSet  bool
+}
+
+func newRequestGuard(request *pool.Message, matchingKey uint64, identity blockProtectionIdentity) *messageGuard {
 	return &messageGuard{
 		Message:     request,
 		Weighted:    semaphore.NewWeighted(1),
 		matchingKey: matchingKey,
-		protected:   protected,
+		identity:    identity,
 	}
 }
 
@@ -416,7 +424,7 @@ func (b *BlockWise[C]) resolveBlock1ExchangeKey(r *pool.Message, remoteAddr net.
 	}
 	expectedOffset := num * szx.Size()
 	requestKey := getRequestMatchingKey(r, remoteAddr)
-	matchingKey, matches := b.findMatchingBlock1Transfer(requestKey, expectedOffset)
+	matchingKey, matches := b.findMatchingBlock1Transfer(requestKey, expectedOffset, blockProtectionIdentityFor(r))
 	if matches > 1 {
 		return 0, errors.New("cannot identify Block1 continuation: multiple transfers match")
 	}
@@ -428,7 +436,11 @@ func (b *BlockWise[C]) resolveBlock1ExchangeKey(r *pool.Message, remoteAddr net.
 
 // findMatchingBlock1Transfer does not lock the transfers: the received offset is
 // published before the 2.31 response is sent, so it is current for the next block.
-func (b *BlockWise[C]) findMatchingBlock1Transfer(requestKey uint64, expectedOffset int64) (uint64, int) {
+func (b *BlockWise[C]) findMatchingBlock1Transfer(
+	requestKey uint64,
+	expectedOffset int64,
+	identity blockProtectionIdentity,
+) (uint64, int) {
 	now := time.Now()
 	var matchingKey uint64
 	matches := 0
@@ -437,7 +449,7 @@ func (b *BlockWise[C]) findMatchingBlock1Transfer(requestKey uint64, expectedOff
 			return true
 		}
 		guard := element.Data()
-		if guard.matchingKey == requestKey && guard.received.Load() == expectedOffset {
+		if guard.matchingKey == requestKey && guard.identity == identity && guard.received.Load() == expectedOffset {
 			matchingKey = key
 			matches++
 		}
@@ -1157,7 +1169,7 @@ func (b *BlockWise[C]) getOrCreateReceivedMessageGuard(r *pool.Message, exchange
 	msg.SetSequence(r.Sequence())
 	msg.SetBody(memfile.New(make([]byte, 0, 1024)))
 	msg.SetCode(r.Code())
-	mg := newRequestGuard(msg, matchingKey, isProtectedRequest(r))
+	mg := newRequestGuard(msg, matchingKey, blockProtectionIdentityFor(r))
 	// Lock before publishing so later blocks cannot overtake the first block.
 	if err := acquireMessageGuard(mg); err != nil {
 		b.cc.ReleaseMessage(msg)
@@ -1206,7 +1218,7 @@ type receivedBlock struct {
 	token       message.Token
 	blockType   message.OptionID
 	sizeType    message.OptionID
-	protected   bool
+	identity    blockProtectionIdentity
 	szx         SZX
 	reqSzx      SZX
 	maxSzx      SZX
@@ -1248,17 +1260,26 @@ func (b *BlockWise[C]) processReceivedMessage(w *responsewriter.ResponseWriter[C
 	}
 	return b.processReceivedBlock(w, r, next, receivedBlock{
 		exchangeKey: keys.exchange, matchingKey: keys.matching, token: token, blockType: blockType, sizeType: sizeType,
-		protected: isProtectedRequest(r),
-		szx:       szx, reqSzx: szx, maxSzx: maxSzx, num: num, more: more,
+		identity: blockProtectionIdentityFor(r),
+		szx:      szx, reqSzx: szx, maxSzx: maxSzx, num: num, more: more,
 	})
 }
 
-func isProtectedRequest(r *pool.Message) bool {
-	if r.HasOption(message.OSCORE) {
-		return true
-	}
+func blockProtectionIdentityFor(r *pool.Message) blockProtectionIdentity {
 	info, ok := oscore.RequestInfoFromContext(r.Context())
-	return ok && info.Protected
+	if ok && info.Protected {
+		return blockProtectionIdentity{
+			protected:     true,
+			identityKnown: true,
+			recipientID:   string(info.RecipientID),
+			idContext:     string(info.IDContext),
+			idContextSet:  info.IDContextSet,
+		}
+	}
+	if r.HasOption(message.OSCORE) {
+		return blockProtectionIdentity{protected: true}
+	}
+	return blockProtectionIdentity{}
 }
 
 func (b *BlockWise[C]) processReceivedBlock(w *responsewriter.ResponseWriter[C], r *pool.Message, next func(w *responsewriter.ResponseWriter[C], r *pool.Message), block receivedBlock) error {
@@ -1313,28 +1334,19 @@ func (b *BlockWise[C]) processReceivedBlock(w *responsewriter.ResponseWriter[C],
 
 func (b *BlockWise[C]) processCachedReceivedBlock(w *responsewriter.ResponseWriter[C], r *pool.Message, mg *messageGuard, next func(w *responsewriter.ResponseWriter[C], r *pool.Message), block receivedBlock, sentRequest *pool.Message) (err error) {
 	defer func() {
-		if err != nil {
+		if err != nil &&
+			!errors.Is(err, ErrMixedProtectionBlock1Transfer) &&
+			!errors.Is(err, ErrBlock1TransferIdentityMismatch) {
 			b.receivingMessagesCache.Delete(block.exchangeKey)
 		}
 	}()
-	if block.blockType == message.Block1 && mg.protected != block.protected {
-		return ErrMixedProtectionBlock1Transfer
-	}
 	payloadFile, payloadSize, err := b.getPayloadFromCachedReceivedMessage(r, mg.Message)
 	if err != nil {
 		return fmt.Errorf("cannot get payload: %w", err)
 	}
-	if block.blockType == message.Block1 && block.more {
-		if err = checkFullBlock(r, block.reqSzx); err != nil {
-			return err
-		}
-	}
 	off := block.num * block.szx.Size()
-	if err = b.checkReassembledPayloadSize(r, off, block.sizeType); err != nil {
+	if err = b.validateCachedReceivedBlock(r, mg, block, payloadSize, off); err != nil {
 		return err
-	}
-	if block.blockType == message.Block1 && (off > payloadSize || (off < payloadSize && !block.more)) {
-		return fmt.Errorf("%w: block %v at offset %v, have %v bytes", ErrRequestEntityIncomplete, block.num, off, payloadSize)
 	}
 
 	if tooLarge, errS := b.rejectTooLarge(w, r, block.blockType, block.token, off); tooLarge || errS != nil {
@@ -1342,6 +1354,32 @@ func (b *BlockWise[C]) processCachedReceivedBlock(w *responsewriter.ResponseWrit
 		return errS
 	}
 	return b.appendReceivedBlock(w, r, mg, next, block, sentRequest, payloadFile, payloadSize, off)
+}
+
+func (b *BlockWise[C]) validateCachedReceivedBlock(
+	r *pool.Message,
+	mg *messageGuard,
+	block receivedBlock,
+	payloadSize, off int64,
+) error {
+	if block.blockType == message.Block1 {
+		if mg.identity.protected != block.identity.protected {
+			return ErrMixedProtectionBlock1Transfer
+		}
+		if mg.identity != block.identity {
+			return ErrBlock1TransferIdentityMismatch
+		}
+		if block.more {
+			if err := checkFullBlock(r, block.reqSzx); err != nil {
+				return err
+			}
+		}
+		if off > payloadSize || off < payloadSize && !block.more {
+			return fmt.Errorf("%w: block %v at offset %v, have %v bytes",
+				ErrRequestEntityIncomplete, block.num, off, payloadSize)
+		}
+	}
+	return b.checkReassembledPayloadSize(r, off, block.sizeType)
 }
 
 func (b *BlockWise[C]) checkReassembledPayloadSize(r *pool.Message, off int64, sizeOption message.OptionID) error {

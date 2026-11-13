@@ -267,8 +267,14 @@ func (cc *Conn) finishOSCOREExchange(key string, record *udpOSCOREExchangeRecord
 	defer cc.oscoreMu.Unlock()
 	if sent {
 		if record.state == udpOSCOREExchangePending {
+			previous := record.previous
 			record.state = udpOSCOREExchangeSent
 			record.previous = nil
+			for previous != nil {
+				cc.removeUnreachableOSCORERequirement(key, previous)
+				previous = previous.previous
+			}
+			cc.removeUnreachableOSCORERequirement(key, record)
 		}
 		return
 	}
@@ -290,6 +296,25 @@ func (cc *Conn) finishOSCOREExchange(key string, record *udpOSCOREExchangeRecord
 		return
 	}
 	cc.oscoreExchanges[key] = previous.exchange
+}
+
+func (cc *Conn) removeUnreachableOSCORERequirement(key string, record *udpOSCOREExchangeRecord) {
+	current, exists := cc.oscoreExchanges[key]
+	if exists && (current.exchange == record.requestExchange ||
+		current.cancelExchange == record.requestExchange ||
+		oscoreExchangeRecordReachable(current.record, record)) {
+		return
+	}
+	cc.oscoreRequiredResponses.Remove(key, record.requestExchange)
+}
+
+func oscoreExchangeRecordReachable(head, target *udpOSCOREExchangeRecord) bool {
+	for current := head; current != nil; current = current.previous {
+		if current == target {
+			return true
+		}
+	}
+	return false
 }
 
 func (cc *Conn) unprotectIncomingResponse(resp *pool.Message) error {

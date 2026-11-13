@@ -207,6 +207,10 @@ func (w *ReplayWindow) saveState(next ReplayWindowState) error {
 	if provider, ok := highWaterStore.(ReplayWindowHighWaterMarginProvider); ok {
 		margin = provider.ReplayWindowHighWaterMargin()
 	}
+	if margin == 0 || margin > MaxReplayHighWaterMargin {
+		return fmt.Errorf("%w: high-water margin %d is outside 1..%d",
+			ErrInvalidReplayState, margin, MaxReplayHighWaterMargin)
+	}
 	highWater := min(next.HighestSequence+margin, maxPartialIV+1)
 	if err := highWaterStore.SaveHighWater(highWater); err != nil {
 		return err
