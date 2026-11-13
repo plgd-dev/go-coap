@@ -38,6 +38,7 @@ type OptionID uint16
    |   7 | x  | x | - |   | Uri-Port       | uint   | 0-2    | (see    |
    |     |    |   |   |   |                |        |        | below)  |
    |   8 |    |   |   | x | Location-Path  | string | 0-255  | (none)  |
+   |   9 | x  |   |   |   | OSCORE         | opaque | 0-255  | (none)  |
    |  11 | x  | x | - | x | Uri-Path       | string | 0-255  | (none)  |
    |  12 |    |   |   |   | Content-Format | uint   | 0-2    | (none)  |
    |  14 |    | x | - |   | Max-Age        | uint   | 0-4    | 60      |
@@ -60,13 +61,16 @@ type OptionID uint16
 
 // Option IDs.
 const (
-	IfMatch       OptionID = 1
-	URIHost       OptionID = 3
-	ETag          OptionID = 4
-	IfNoneMatch   OptionID = 5
-	Observe       OptionID = 6
-	URIPort       OptionID = 7
-	LocationPath  OptionID = 8
+	IfMatch      OptionID = 1
+	URIHost      OptionID = 3
+	ETag         OptionID = 4
+	IfNoneMatch  OptionID = 5
+	Observe      OptionID = 6
+	URIPort      OptionID = 7
+	LocationPath OptionID = 8
+	// OSCORE is the critical option defined by RFC 8613. An OSCORE-enabled
+	// transport must process it before dispatching the request to an application handler.
+	OSCORE        OptionID = 9
 	URIPath       OptionID = 11
 	ContentFormat OptionID = 12
 	MaxAge        OptionID = 14
@@ -94,6 +98,7 @@ var optionIDToString = map[OptionID]string{
 	Observe:       "Observe",
 	URIPort:       "URIPort",
 	LocationPath:  "LocationPath",
+	OSCORE:        "OSCORE",
 	URIPath:       "URIPath",
 	ContentFormat: "ContentFormat",
 	MaxAge:        "MaxAge",

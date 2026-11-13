@@ -33,11 +33,12 @@ type q1ReceiveTransfer struct {
 	szx                SZX
 	response           *pool.Message
 	token              message.Token
+	initialToken       message.Token
 	mode               message.Type
 	lastValue          uint32
 	retries            int
 	updated            time.Time
-	reportedSet        int64
+	reportedMissing    []uint32
 	reportedAt         time.Time
 	continuedThrough   int64
 	continues          map[int64]uint32
@@ -156,42 +157,54 @@ func parseQBlock1(r *pool.Message) (q1Parameters, error) {
 
 // q1TransferLocked creates or validates a transfer while q1ReceiveMu is held.
 func (b *Engine[C]) q1TransferLocked(r *pool.Message, key string, p q1Parameters) (*q1ReceiveTransfer, error) {
-	maxBodySize := b.maxReceiveBodySize
-	if maxBodySize <= 0 {
-		maxBodySize = q1DefaultMaxBodySize
-	}
-	now := time.Now()
 	if b.q1Closed {
 		return nil, context.Canceled
 	}
 	transfer := b.q1Receivers[key]
-	if transfer != nil && !transfer.expires.After(now) {
-		delete(b.q1Receivers, key)
-		b.q1ReceiveBytes -= transfer.bytes
-		b.qReleaseBytes(transfer.bytes)
-		b.qReleaseTransfer()
-		if transfer.response != nil {
-			b.cc.ReleaseMessage(transfer.response)
-		}
+	if transfer != nil && !transfer.expires.After(time.Now()) {
+		b.removeExpiredQ1TransferLocked(key, transfer)
 		transfer = nil
 	}
-	if transfer == nil {
-		if len(b.q1Receivers) >= 4096 || b.receivingMessagesCacheMaxEntries.Load() > 0 &&
-			int64(len(b.q1Receivers)) >= b.receivingMessagesCacheMaxEntries.Load() {
-			return nil, errReceivingMessagesCacheFull
+	if transfer != nil {
+		if transfer.bodySize != int64(p.bodySize) || transfer.szx != p.szx || transfer.mode != r.Type() {
+			return nil, ErrInvalidOptionBlock1
 		}
-		assembly, createErr := NewAssembly(p.szx, int64(p.bodySize), maxBodySize, q1MaxTrackedBlocks)
-		if createErr != nil {
-			return nil, createErr
-		}
-		if !b.qReserveTransfer() {
-			return nil, errReceivingMessagesCacheFull
-		}
-		transfer = &q1ReceiveTransfer{assembly: assembly, bodySize: int64(p.bodySize), szx: p.szx, mode: r.Type(), reportedSet: -1, continuedThrough: -1}
-		b.q1Receivers[key] = transfer
-	} else if transfer.bodySize != int64(p.bodySize) || transfer.szx != p.szx || transfer.mode != r.Type() {
-		return nil, ErrInvalidOptionBlock1
+		return transfer, nil
 	}
+	return b.newQ1TransferLocked(r, key, p)
+}
+
+func (b *Engine[C]) removeExpiredQ1TransferLocked(key string, transfer *q1ReceiveTransfer) {
+	delete(b.q1Receivers, key)
+	b.q1ReceiveBytes -= transfer.bytes
+	b.qReleaseBytes(transfer.bytes)
+	b.qReleaseTransfer()
+	if transfer.response != nil {
+		b.cc.ReleaseMessage(transfer.response)
+	}
+}
+
+func (b *Engine[C]) newQ1TransferLocked(r *pool.Message, key string, p q1Parameters) (*q1ReceiveTransfer, error) {
+	maxBodySize := b.maxReceiveBodySize
+	if maxBodySize <= 0 {
+		maxBodySize = q1DefaultMaxBodySize
+	}
+	maxEntries := b.receivingMessagesCacheMaxEntries.Load()
+	if len(b.q1Receivers) >= 4096 || maxEntries > 0 && int64(len(b.q1Receivers)) >= maxEntries {
+		return nil, errReceivingMessagesCacheFull
+	}
+	assembly, err := NewAssembly(p.szx, int64(p.bodySize), maxBodySize, q1MaxTrackedBlocks)
+	if err != nil {
+		return nil, err
+	}
+	if !b.qReserveTransfer() {
+		return nil, errReceivingMessagesCacheFull
+	}
+	transfer := &q1ReceiveTransfer{
+		assembly: assembly, bodySize: int64(p.bodySize), szx: p.szx, mode: r.Type(),
+		initialToken: bytes.Clone(r.Token()), continuedThrough: -1,
+	}
+	b.q1Receivers[key] = transfer
 	return transfer, nil
 }
 
@@ -221,6 +234,9 @@ func (b *Engine[C]) handleQBlock1(
 	}
 	transfer.expires = time.Now().Add(b.config.NonPartialTimeout())
 	transfer.token = bytes.Clone(r.Token())
+	if p.num == 0 {
+		transfer.initialToken = bytes.Clone(r.Token())
+	}
 	transfer.lastValue = value
 	b.q1ReceiveMu.Unlock()
 
@@ -289,9 +305,6 @@ func (b *Engine[C]) respondQ1Incomplete(w *responsewriter.ResponseWriter[C], r *
 		return nil
 	}
 	if r.Type() != message.NonConfirmable {
-		if firstMissing > p.num && p.more {
-			return respondQBlock1(w, codes.Continue, p.value, nil)
-		}
 		return nil
 	}
 	if err := b.scheduleQ1Missing(r.Context(), key); err != nil {
@@ -307,7 +320,7 @@ func (b *Engine[C]) respondQ1Incomplete(w *responsewriter.ResponseWriter[C], r *
 		return nil
 	}
 	if p.num/b.config.MaxPayloads > firstMissing/b.config.MaxPayloads {
-		return b.respondQ1Missing(w, transfer, assembly, firstMissing, p.value)
+		return b.respondQ1Missing(w, transfer, assembly, p.value)
 	}
 	if firstMissing <= 0 || firstMissing%b.config.MaxPayloads != 0 {
 		return nil
@@ -330,30 +343,86 @@ func (b *Engine[C]) respondQ1Incomplete(w *responsewriter.ResponseWriter[C], r *
 }
 
 func (b *Engine[C]) respondQ1Missing(w *responsewriter.ResponseWriter[C], transfer *q1ReceiveTransfer,
-	assembly *Assembly, firstMissing int64, value uint32,
+	assembly *Assembly, value uint32,
 ) error {
-	b.q1ReceiveMu.Lock()
-	reported := transfer.reportedSet == firstMissing/b.config.MaxPayloads && time.Since(transfer.reportedAt) < b.config.NonReceiveTimeout
-	if !reported {
-		transfer.reportedSet = firstMissing / b.config.MaxPayloads
-		transfer.reportedAt = time.Now()
-	}
-	b.q1ReceiveMu.Unlock()
-	if reported {
-		return nil
-	}
-	report, err := EncodeMissingBlocks(nil, assembly.missingSet(b.config.MaxPayloads))
+	missing := assembly.missingSet(b.config.MaxPayloads)
+	reported, report, err := b.encodeQ1MissingReport(missing, w.Message().Token(), value)
 	if err != nil {
 		return err
 	}
+	b.q1ReceiveMu.Lock()
+	sameReport := len(transfer.reportedMissing) == len(reported)
+	if sameReport {
+		for i := range reported {
+			if transfer.reportedMissing[i] != reported[i] {
+				sameReport = false
+				break
+			}
+		}
+	}
+	suppress := sameReport && time.Since(transfer.reportedAt) < b.config.NonReceiveTimeout
+	if !suppress {
+		transfer.reportedMissing = append(transfer.reportedMissing[:0], reported...)
+		transfer.reportedAt = time.Now()
+	}
+	b.q1ReceiveMu.Unlock()
+	if suppress {
+		return nil
+	}
 	return respondQBlock1(w, codes.RequestEntityIncomplete, value, report)
+}
+
+func (b *Engine[C]) encodeQ1MissingReport(missing []uint32, token message.Token, value uint32) ([]uint32, []byte, error) {
+	const maxCoAPMessageSize = 1<<16 - 1
+	maxDatagramSize := uint32(maxCoAPMessageSize)
+	if provider, ok := any(b.cc).(interface{ QBlockMaxDatagramSize() uint32 }); ok {
+		if size := provider.QBlockMaxDatagramSize(); size > 0 {
+			maxDatagramSize = size
+		}
+	}
+	// CoAP header, token, Content-Format option, Q-Block1 option, and payload
+	// marker. The connection's datagram limit already reserves DTLS overhead.
+	envelopeSize := uint32(10) + uint32(len(token)) + coapUintSize(value) // #nosec G115 -- CoAP tokens are at most 8 bytes.
+	if envelopeSize >= maxDatagramSize {
+		return nil, nil, ErrQBlockTooLarge
+	}
+	payloadLimit := int(maxDatagramSize - envelopeSize)
+	reported := make([]uint32, 0, len(missing))
+	var report []byte
+	for _, block := range missing {
+		encoded, err := EncodeMissingBlocks(nil, []uint32{block})
+		if err != nil {
+			return nil, nil, err
+		}
+		if len(report)+len(encoded) > payloadLimit {
+			break
+		}
+		report = append(report, encoded...)
+		reported = append(reported, block)
+	}
+	if len(reported) == 0 {
+		return nil, nil, ErrQBlockTooLarge
+	}
+	return reported, report, nil
+}
+
+func coapUintSize(value uint32) uint32 {
+	switch {
+	case value == 0:
+		return 0
+	case value <= 0xff:
+		return 1
+	case value <= 0xffff:
+		return 2
+	default:
+		return 3
+	}
 }
 
 func (b *Engine[C]) completeQ1(w *responsewriter.ResponseWriter[C], r *pool.Message, key string,
 	transfer *q1ReceiveTransfer, maxSZX SZX, remoteAddr net.Addr,
 	next func(*responsewriter.ResponseWriter[C], *pool.Message),
 ) error {
-	szx := transfer.szx
 	b.q1ReceiveMu.Lock()
 	if b.q1Receivers[key] != transfer {
 		b.q1ReceiveMu.Unlock()
@@ -372,32 +441,97 @@ func (b *Engine[C]) completeQ1(w *responsewriter.ResponseWriter[C], r *pool.Mess
 		transport.CancelQBlock("q1:" + key)
 	}
 
-	body, err := assembly.ReadSeeker()
+	q2Request, err := b.prepareQ1ResponseRequest(w, r, transfer, assembly, next)
 	if err != nil {
 		return err
+	}
+	if err := b.completeQ1Response(w, r, transfer, q2Request, maxSZX, remoteAddr, next); err != nil {
+		return err
+	}
+	return b.storeQ1Response(w, r, key, transfer)
+}
+
+func (b *Engine[C]) prepareQ1ResponseRequest(w *responsewriter.ResponseWriter[C], r *pool.Message,
+	transfer *q1ReceiveTransfer, assembly *Assembly,
+	next func(*responsewriter.ResponseWriter[C], *pool.Message),
+) (*pool.Message, error) {
+	body, err := assembly.ReadSeeker()
+	if err != nil {
+		return nil, err
 	}
 	request := b.cloneMessage(r)
 	request.Remove(message.QBlock1)
 	request.Remove(message.Size1)
+	if observe, observeErr := r.Observe(); observeErr == nil && observe == 0 && r.HasOption(message.QBlock2) {
+		request.SetToken(transfer.initialToken)
+	}
 	request.SetBody(body)
 	next(w, request)
+	q2Request := b.cloneMessage(request)
+	q2Request.SetBody(nil)
 	b.cc.ReleaseMessage(request)
+	return q2Request, nil
+}
+
+func (b *Engine[C]) completeQ1Response(w *responsewriter.ResponseWriter[C], r *pool.Message,
+	transfer *q1ReceiveTransfer, q2Request *pool.Message, maxSZX SZX, remoteAddr net.Addr,
+	next func(*responsewriter.ResponseWriter[C], *pool.Message),
+) error {
+	defer b.cc.ReleaseMessage(q2Request)
 	responseSize, sizeErr := w.Message().BodySize()
-	if sizeErr == nil && responseSize > szx.Size() {
-		if err := b.cacheQBlock2Response(r.Context(), q2TransferKey(r, remoteAddr), qTransferKey(r, remoteAddr, nil, true), w.Message(), r.Type()); err != nil {
-			return err
-		}
-		q2Request := b.cloneMessage(r)
-		q2Request.Remove(message.QBlock1)
-		if !q2Request.HasOption(message.QBlock2) {
-			capability, _ := EncodeQBlockOption(szx, 0, true)
-			q2Request.SetOptionUint32(message.QBlock2, capability)
-		}
-		defer b.cc.ReleaseMessage(q2Request)
-		if err := b.handleQBlock2(w, q2Request, maxSZX, remoteAddr, next); err != nil {
+	b.ensureQBlock2Capability(q2Request, transfer.szx)
+	if sizeErr == nil && responseSize > transfer.szx.Size() {
+		if err := b.prepareQBlock2Response(w, r, q2Request, maxSZX, remoteAddr, next); err != nil {
 			return err
 		}
 	}
+	if err := b.registerCompletedQ1Observation(w, q2Request, transfer, remoteAddr); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (b *Engine[C]) ensureQBlock2Capability(request *pool.Message, szx SZX) {
+	if request.HasOption(message.QBlock2) {
+		return
+	}
+	capability, _ := EncodeQBlockOption(szx, 0, true)
+	request.SetOptionUint32(message.QBlock2, capability)
+}
+
+func (b *Engine[C]) prepareQBlock2Response(
+	w *responsewriter.ResponseWriter[C], r, q2Request *pool.Message, maxSZX SZX, remoteAddr net.Addr,
+	next func(*responsewriter.ResponseWriter[C], *pool.Message),
+) error {
+	if observe, observeErr := q2Request.Observe(); observeErr == nil && observe == 0 {
+		b.CancelQBlockObservation(q2Request.Token(), remoteAddr)
+	}
+	if err := b.cacheQBlock2Response(r.Context(), q2TransferKey(q2Request, remoteAddr),
+		qTransferKey(q2Request, remoteAddr, nil, true), w.Message(), r.Type()); err != nil {
+		return err
+	}
+	return b.handleQBlock2(w, q2Request, maxSZX, remoteAddr, next)
+}
+
+func (b *Engine[C]) registerCompletedQ1Observation(
+	w *responsewriter.ResponseWriter[C], q2Request *pool.Message, transfer *q1ReceiveTransfer, remoteAddr net.Addr,
+) error {
+	if !w.Message().HasOption(message.Observe) || !q2Request.HasOption(message.Observe) {
+		return nil
+	}
+	observe, err := q2Request.Observe()
+	if err != nil {
+		return err
+	}
+	if observe != 0 {
+		return nil
+	}
+	return b.registerQObservation(q2Request, remoteAddr, transfer.szx)
+}
+
+func (b *Engine[C]) storeQ1Response(w *responsewriter.ResponseWriter[C], r *pool.Message, key string,
+	transfer *q1ReceiveTransfer,
+) error {
 	stored := b.cc.AcquireMessage(r.Context())
 	if err := w.Message().Clone(stored); err != nil {
 		b.cc.ReleaseMessage(stored)
@@ -460,7 +594,7 @@ func (b *Engine[C]) scheduleQ1Missing(ctx context.Context, key string) error {
 		transfer.retries++
 		transfer.updated = time.Now()
 		b.q1ReceiveMu.Unlock()
-		report, err := EncodeMissingBlocks(nil, nums)
+		_, report, err := b.encodeQ1MissingReport(nums, token, value)
 		if err != nil {
 			return err
 		}

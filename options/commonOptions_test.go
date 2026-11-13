@@ -428,6 +428,7 @@ func TestCommonUDPClientApply(t *testing.T) {
 	handler := func(*responsewriter.ResponseWriter[*udpClient.Conn], *pool.Message) {
 		// no-op
 	}
+
 	ctx := context.Background()
 	errs := func(error) {
 		// no-op
@@ -521,4 +522,27 @@ func TestCommonUDPClientApply(t *testing.T) {
 	require.NotNil(t, cfg.Handler)
 	// WithKeepAlive
 	require.NotNil(t, cfg.CreateInactivityMonitor)
+}
+
+func TestOSCOREOuterBlockwiseMaxReassembledPayloadSizeOption(t *testing.T) {
+	const maxSize = 4096
+	opt := options.WithOSCOREOuterBlockwiseMaxReassembledPayloadSize(maxSize)
+
+	udpClientCfg := udpClient.Config{}
+	opt.UDPClientApply(&udpClientCfg)
+	require.Equal(t, uint32(maxSize), udpClientCfg.OSCOREOuterBlockwiseMaxReassembledPayloadSize)
+
+	udpServerCfg := udpServer.Config{}
+	opt.UDPServerApply(&udpServerCfg)
+	require.Equal(t, uint32(maxSize), udpServerCfg.OSCOREOuterBlockwiseMaxReassembledPayloadSize)
+
+	dtlsServerCfg := dtlsServer.Config{}
+	opt.DTLSServerApply(&dtlsServerCfg)
+	require.Equal(t, uint32(maxSize), dtlsServerCfg.OSCOREOuterBlockwiseMaxReassembledPayloadSize)
+}
+
+func TestOSCOREOuterBlockwiseMaxReassembledPayloadSizeDefault(t *testing.T) {
+	require.Equal(t, uint32(65536), udpClient.DefaultConfig.OSCOREOuterBlockwiseMaxReassembledPayloadSize)
+	require.Equal(t, uint32(65536), udpServer.DefaultConfig.OSCOREOuterBlockwiseMaxReassembledPayloadSize)
+	require.Equal(t, uint32(65536), dtlsServer.DefaultConfig.OSCOREOuterBlockwiseMaxReassembledPayloadSize)
 }

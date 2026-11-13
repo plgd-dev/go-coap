@@ -282,6 +282,7 @@ func (b *Engine[C]) scheduleQ2Continuation(r *pool.Message, key string, szx SZX,
 	// share its reliability mode and pass through the connection worker.
 	token := r.Token()
 	mode := r.Type()
+	ctx := r.Context()
 	remaining := slices.Clone(nums[1:])
 	delay := time.Duration(0)
 	if len(remaining) == 0 && wholeBody {
@@ -298,7 +299,7 @@ func (b *Engine[C]) scheduleQ2Continuation(r *pool.Message, key string, szx SZX,
 		count: count, wholeBody: wholeBody, recovery: !wholeBody,
 	}
 	schedule := func() error {
-		return b.scheduleQ2Set(r.Context(), job, time.Now().Add(delay))
+		return b.scheduleQ2Set(ctx, job, time.Now().Add(delay))
 	}
 	if responsewriter.AfterWrite(r.Context(), func() {
 		if err := schedule(); err != nil {

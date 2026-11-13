@@ -12,6 +12,7 @@ import (
 	"github.com/plgd-dev/go-coap/v3/net/blockwise"
 	"github.com/plgd-dev/go-coap/v3/net/client"
 	"github.com/plgd-dev/go-coap/v3/net/monitor/inactivity"
+	"github.com/plgd-dev/go-coap/v3/net/oscore"
 	"github.com/plgd-dev/go-coap/v3/net/responsewriter"
 	"github.com/plgd-dev/go-coap/v3/options/config"
 	"github.com/plgd-dev/go-coap/v3/pkg/runner/periodic"
@@ -22,6 +23,138 @@ import (
 )
 
 type ErrorFunc = config.ErrorFunc
+
+// OSCOREOpt applies an OSCORE processor to client or server configuration.
+type OSCOREOpt struct {
+	processor *oscore.Processor
+}
+
+func (o OSCOREOpt) TCPServerApply(cfg *tcpServer.Config) {
+	cfg.OSCORE = o.processor
+}
+
+func (o OSCOREOpt) TCPClientApply(cfg *tcpClient.Config) {
+	cfg.OSCORE = o.processor
+}
+
+func (o OSCOREOpt) UDPServerApply(cfg *udpServer.Config) {
+	cfg.OSCORE = o.processor
+}
+
+func (o OSCOREOpt) DTLSServerApply(cfg *dtlsServer.Config) {
+	cfg.OSCORE = o.processor
+}
+
+func (o OSCOREOpt) UDPClientApply(cfg *udpClient.Config) {
+	cfg.OSCORE = o.processor
+}
+
+// WithOSCORE configures a pre-established OSCORE processor.
+func WithOSCORE(processor *oscore.Processor) OSCOREOpt {
+	return OSCOREOpt{processor: processor}
+}
+
+type OSCOREExchangeTimeoutOpt struct {
+	timeout time.Duration
+}
+
+func (o OSCOREExchangeTimeoutOpt) TCPClientApply(cfg *tcpClient.Config) {
+	cfg.OSCOREExchangeTimeout = o.timeout
+}
+
+// WithOSCOREExchangeTimeout configures the expiry backstop for TCP OSCORE
+// exchanges. Ordinary request exchanges are removed when their Do consumer
+// ends; Observe exchanges remain available for the observation lifetime.
+// Zero disables timeout expiry.
+func WithOSCOREExchangeTimeout(timeout time.Duration) OSCOREExchangeTimeoutOpt {
+	return OSCOREExchangeTimeoutOpt{timeout: timeout}
+}
+
+// OSCOREErrorResponsesOpt enables empty, unprotected OSCORE processing-error
+// responses on server endpoints.
+type OSCOREErrorResponsesOpt struct{}
+
+func (OSCOREErrorResponsesOpt) TCPServerApply(cfg *tcpServer.Config) {
+	cfg.OSCOREErrorResponses = true
+}
+
+func (OSCOREErrorResponsesOpt) UDPServerApply(cfg *udpServer.Config) {
+	cfg.OSCOREErrorResponses = true
+}
+
+func (OSCOREErrorResponsesOpt) DTLSServerApply(cfg *dtlsServer.Config) {
+	cfg.OSCOREErrorResponses = true
+}
+
+// WithOSCOREErrorResponses enables unprotected 4.00, 4.01, or 4.02 responses
+// to OSCORE processing failures. Responses are empty and disabled by default.
+func WithOSCOREErrorResponses() OSCOREErrorResponsesOpt {
+	return OSCOREErrorResponsesOpt{}
+}
+
+// OSCOREOuterBlockwiseOpt enables Outer Blockwise fragmentation and
+// reassembly for OSCORE messages over UDP and DTLS.
+type OSCOREOuterBlockwiseOpt struct{}
+
+func (OSCOREOuterBlockwiseOpt) UDPClientApply(cfg *udpClient.Config) {
+	cfg.OSCOREOuterBlockwise = true
+}
+
+func (OSCOREOuterBlockwiseOpt) UDPServerApply(cfg *udpServer.Config) {
+	cfg.OSCOREOuterBlockwise = true
+}
+
+func (OSCOREOuterBlockwiseOpt) DTLSServerApply(cfg *dtlsServer.Config) {
+	cfg.OSCOREOuterBlockwise = true
+}
+
+// WithOSCOREOuterBlockwise enables hop-by-hop fragmentation of complete
+// OSCORE envelopes. Inner Blockwise remains the default when this option is
+// not set. Requires OSCORE processing (or OSCORE proxy mode) and Blockwise.
+func WithOSCOREOuterBlockwise() OSCOREOuterBlockwiseOpt {
+	return OSCOREOuterBlockwiseOpt{}
+}
+
+// OSCOREOuterBlockwiseMaxReassembledPayloadSizeOpt sets the maximum reassembled
+// payload size for Outer Blockwise messages carrying the OSCORE option.
+type OSCOREOuterBlockwiseMaxReassembledPayloadSizeOpt struct {
+	size uint32
+}
+
+func (o OSCOREOuterBlockwiseMaxReassembledPayloadSizeOpt) UDPClientApply(cfg *udpClient.Config) {
+	cfg.OSCOREOuterBlockwiseMaxReassembledPayloadSize = o.size
+}
+
+func (o OSCOREOuterBlockwiseMaxReassembledPayloadSizeOpt) UDPServerApply(cfg *udpServer.Config) {
+	cfg.OSCOREOuterBlockwiseMaxReassembledPayloadSize = o.size
+}
+
+func (o OSCOREOuterBlockwiseMaxReassembledPayloadSizeOpt) DTLSServerApply(cfg *dtlsServer.Config) {
+	cfg.OSCOREOuterBlockwiseMaxReassembledPayloadSize = o.size
+}
+
+// WithOSCOREOuterBlockwiseMaxReassembledPayloadSize sets the maximum reassembled
+// payload size for Outer Blockwise messages carrying the OSCORE option over UDP
+// and DTLS. Plaintext Blockwise transfers are unaffected. A size of 0 uses the
+// default of 65,536 bytes. Enable Outer Blockwise separately with
+// WithOSCOREOuterBlockwise.
+func WithOSCOREOuterBlockwiseMaxReassembledPayloadSize(size uint32) OSCOREOuterBlockwiseMaxReassembledPayloadSizeOpt {
+	return OSCOREOuterBlockwiseMaxReassembledPayloadSizeOpt{size: size}
+}
+
+// OSCOREProxyOpt enables opaque OSCORE option forwarding on UDP and DTLS server endpoints.
+// The configured handler must validate and forward protected messages.
+type OSCOREProxyOpt struct{}
+
+func (OSCOREProxyOpt) UDPServerApply(cfg *udpServer.Config)   { cfg.OSCOREProxy = true }
+func (OSCOREProxyOpt) DTLSServerApply(cfg *dtlsServer.Config) { cfg.OSCOREProxy = true }
+
+// WithOSCOREProxy allows OSCORE to reach the application handler without
+// decryption. Use only with a handler that validates and forwards OSCORE
+// messages; this option does not itself provide proxy behavior.
+func WithOSCOREProxy() OSCOREProxyOpt {
+	return OSCOREProxyOpt{}
+}
 
 type Handler interface {
 	tcpClient.HandlerFunc | udpClient.HandlerFunc

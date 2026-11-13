@@ -29,16 +29,22 @@ func qRawRoundTrip(t *testing.T, conn *net.UDPConn, req message.Message) message
 	require.NoError(t, conn.SetDeadline(time.Now().Add(3*time.Second)))
 	qRawSend(t, conn, req)
 	for {
-		data := make([]byte, 65535)
-		n, err := conn.Read(data)
-		require.NoError(t, err)
-		resp := message.Message{Options: make(message.Options, 0, 32)}
-		_, err = coder.DefaultCoder.Decode(data[:n], &resp)
-		require.NoError(t, err)
+		resp := qRawReceive(t, conn)
 		if resp.Code != codes.Empty {
 			return resp
 		}
 	}
+}
+
+func qRawReceive(t *testing.T, conn *net.UDPConn) message.Message {
+	t.Helper()
+	data := make([]byte, 65535)
+	n, err := conn.Read(data)
+	require.NoError(t, err)
+	resp := message.Message{Options: make(message.Options, 0, 32)}
+	_, err = coder.DefaultCoder.Decode(data[:n], &resp)
+	require.NoError(t, err)
+	return resp
 }
 
 func qRawSend(t *testing.T, conn *net.UDPConn, req message.Message) {
@@ -129,6 +135,62 @@ func TestQBlockDuplicateCompletedRequest(t *testing.T) {
 	require.Equal(t, req.Token, second.Token, "repeat responds to its own request token")
 	require.Equal(t, payload, second.Payload)
 	require.Equal(t, int32(1), calls.Load(), "duplicate completed body must not invoke application again")
+}
+
+func TestQBlockConfirmableUploadUsesEmptyACKUntilComplete(t *testing.T) {
+	payload := []byte("0123456789abcdef0123456789abcdef01234567")
+	calls := new(atomic.Int32)
+	uri := startQGoServer(t, false, blockwise.SZX1024, payload, new(qWireCounts), calls)
+	addr, err := net.ResolveUDPAddr("udp4", strings.TrimPrefix(uri, "coap://"))
+	require.NoError(t, err)
+	conn, err := net.DialUDP("udp4", nil, addr)
+	require.NoError(t, err)
+	defer conn.Close()
+	require.NoError(t, conn.SetDeadline(time.Now().Add(5*time.Second)))
+
+	for num, start := range []int{0, 16} {
+		value, encodeErr := blockwise.EncodeQBlockOption(blockwise.SZX16, int64(num), true)
+		require.NoError(t, encodeErr)
+		qOption, _, encodeErr := (message.Options{
+			{ID: message.URIPath, Value: []byte("q")},
+			{ID: message.RequestTag, Value: []byte("tag")},
+		}).AddUint32(make([]byte, 4), message.QBlock1, value)
+		require.NoError(t, encodeErr)
+		sizeOption, _, encodeErr := qOption.AddUint32(make([]byte, 4), message.Size1, uint32(len(payload)))
+		require.NoError(t, encodeErr)
+		request := message.Message{
+			Code: codes.PUT, Type: message.Confirmable, MessageID: int32(num + 1),
+			Token:   message.Token{1, byte(num + 1)},
+			Options: sizeOption,
+			Payload: payload[start : start+16],
+		}
+		qRawSend(t, conn, request)
+		response := qRawReceive(t, conn)
+		require.Equal(t, codes.Empty, response.Code, "incomplete CON payload must receive an empty ACK")
+		require.Equal(t, message.Acknowledgement, response.Type)
+		require.Equal(t, request.MessageID, response.MessageID)
+		require.Empty(t, response.Token)
+	}
+
+	value, err := blockwise.EncodeQBlockOption(blockwise.SZX16, 2, false)
+	require.NoError(t, err)
+	qOption, _, err := (message.Options{
+		{ID: message.URIPath, Value: []byte("q")},
+		{ID: message.RequestTag, Value: []byte("tag")},
+	}).AddUint32(make([]byte, 4), message.QBlock1, value)
+	require.NoError(t, err)
+	sizeOption, _, err := qOption.AddUint32(make([]byte, 4), message.Size1, uint32(len(payload)))
+	require.NoError(t, err)
+	request := message.Message{
+		Code: codes.PUT, Type: message.Confirmable, MessageID: 3,
+		Token:   message.Token{1, 3},
+		Options: sizeOption,
+		Payload: payload[32:],
+	}
+	response := qRawRoundTrip(t, conn, request)
+	require.Equal(t, codes.Changed, response.Code)
+	require.NotEqual(t, codes.Continue, response.Code)
+	require.Equal(t, int32(1), calls.Load())
 }
 
 func TestQBlockEmptyRequestTag(t *testing.T) {

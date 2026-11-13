@@ -9,6 +9,7 @@ import (
 	"github.com/plgd-dev/go-coap/v3/message/pool"
 	"github.com/plgd-dev/go-coap/v3/net/blockwise"
 	"github.com/plgd-dev/go-coap/v3/net/client"
+	"github.com/plgd-dev/go-coap/v3/net/oscore"
 	"github.com/plgd-dev/go-coap/v3/net/responsewriter"
 	"github.com/plgd-dev/go-coap/v3/pkg/runner/periodic"
 )
@@ -20,26 +21,32 @@ type (
 )
 
 type Common[C responsewriter.Client] struct {
-	LimitClientParallelRequests               int64
-	LimitClientEndpointParallelRequests       int64
-	Ctx                                       context.Context
-	Errors                                    ErrorFunc
-	PeriodicRunner                            periodic.Func
-	MessagePool                               *pool.Pool
-	GetToken                                  client.GetTokenFunc
-	MaxMessageSize                            uint32
-	BlockwiseTransferTimeout                  time.Duration
-	BlockwiseReceivingMessagesCacheMaxEntries int
-	BlockwiseSZX                              blockwise.SZX
-	BlockwiseEnable                           bool
-	ProcessReceivedMessage                    ProcessReceivedMessageFunc[C]
-	ReceivedMessageQueueSize                  int
+	LimitClientParallelRequests                   int64
+	LimitClientEndpointParallelRequests           int64
+	Ctx                                           context.Context
+	Errors                                        ErrorFunc
+	PeriodicRunner                                periodic.Func
+	MessagePool                                   *pool.Pool
+	GetToken                                      client.GetTokenFunc
+	MaxMessageSize                                uint32
+	BlockwiseTransferTimeout                      time.Duration
+	BlockwiseReceivingMessagesCacheMaxEntries     int
+	BlockwiseSZX                                  blockwise.SZX
+	BlockwiseEnable                               bool
+	ProcessReceivedMessage                        ProcessReceivedMessageFunc[C]
+	ReceivedMessageQueueSize                      int
+	OSCORE                                        *oscore.Processor
+	OSCOREProxy                                   bool
+	OSCOREErrorResponses                          bool
+	OSCOREOuterBlockwise                          bool
+	OSCOREOuterBlockwiseMaxReassembledPayloadSize uint32
 }
 
 func NewCommon[C responsewriter.Client]() Common[C] {
 	return Common[C]{
 		Ctx:            context.Background(),
 		MaxMessageSize: 64 * 1024,
+		OSCOREOuterBlockwiseMaxReassembledPayloadSize: oscore.MaxUnfragmentedSize,
 		Errors: func(err error) {
 			fmt.Println(err)
 		},

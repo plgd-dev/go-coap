@@ -81,6 +81,100 @@ func TestQBlockUploadAfterMonitorReadsBody(t *testing.T) {
 	require.Zero(t, offset)
 }
 
+func TestQBlock1ResponseObserveWithoutRequestObserveDoesNotFail(t *testing.T) {
+	cc := &qTestTransport{testClient: newTestClient(), jobs: make(map[string]qBlockTestJob)}
+	engine := New(cc, func(err error) { t.Error(err) })
+	defer engine.CloseQBlockTransfers()
+	payload := []byte("upload")
+	request := pool.NewMessage(context.Background())
+	request.SetCode(codes.FETCH)
+	request.SetType(message.NonConfirmable)
+	request.SetToken([]byte("no-observe"))
+	require.NoError(t, request.SetRequestTag([]byte("tag")))
+	value, err := EncodeQBlockOption(SZX16, 0, false)
+	require.NoError(t, err)
+	request.SetOptionUint32(message.QBlock1, value)
+	request.SetOptionUint32(message.Size1, uint32(len(payload)))
+	request.SetBody(bytes.NewReader(payload))
+
+	writer := responsewriter.New(cc.AcquireMessage(request.Context()), cc)
+	defer cc.ReleaseMessage(writer.Message())
+	var handlerCalls int
+	err = engine.handleQBlock1(writer, request, SZX16, nil,
+		func(w *responsewriter.ResponseWriter[*qTestTransport], _ *pool.Message) {
+			handlerCalls++
+			require.NoError(t, w.SetResponse(codes.Content, message.TextPlain, bytes.NewReader([]byte("ok"))))
+			w.Message().SetObserve(1)
+		})
+	require.NoError(t, err)
+	require.Equal(t, 1, handlerCalls)
+	require.Equal(t, codes.Content, writer.Message().Code())
+	require.True(t, writer.Message().HasOption(message.Observe))
+	require.Empty(t, engine.qObservations, "request without Observe must not create a registration")
+}
+
+func TestQBlockObserveReplacementRetainsNewResponseCache(t *testing.T) {
+	cc := &qTestTransport{testClient: newTestClient(), jobs: make(map[string]qBlockTestJob)}
+	engine := New(cc, func(err error) { t.Error(err) })
+	defer engine.CloseQBlockTransfers()
+	const token = "reused-observe"
+	const tag = "same-tag"
+	observation := pool.NewMessage(context.Background())
+	observation.SetCode(codes.FETCH)
+	observation.SetType(message.NonConfirmable)
+	observation.SetToken([]byte(token))
+	observation.SetObserve(0)
+	require.NoError(t, observation.SetPath("/observe"))
+	require.NoError(t, observation.SetRequestTag([]byte(tag)))
+	require.NoError(t, engine.registerQObservation(observation, nil, SZX16))
+
+	oldNotification := pool.NewMessage(context.Background())
+	oldNotification.SetCode(codes.Content)
+	oldNotification.SetType(message.NonConfirmable)
+	oldNotification.SetToken([]byte(token))
+	oldNotification.SetObserve(1)
+	oldNotification.SetBody(bytes.NewReader(bytes.Repeat([]byte{1}, 48)))
+	handled, err := engine.WriteNotification(oldNotification, nil)
+	require.NoError(t, err)
+	require.True(t, handled)
+
+	request := pool.NewMessage(context.Background())
+	request.SetCode(codes.FETCH)
+	request.SetType(message.NonConfirmable)
+	request.SetToken([]byte(token))
+	request.SetObserve(0)
+	require.NoError(t, request.SetPath("/observe"))
+	require.NoError(t, request.SetRequestTag([]byte(tag)))
+	qBlock1, err := EncodeQBlockOption(SZX16, 0, false)
+	require.NoError(t, err)
+	request.SetOptionUint32(message.QBlock1, qBlock1)
+	qBlock2, err := EncodeQBlockOption(SZX16, 0, true)
+	require.NoError(t, err)
+	request.SetOptionUint32(message.QBlock2, qBlock2)
+	payload := []byte("upload")
+	request.SetOptionUint32(message.Size1, uint32(len(payload)))
+	request.SetBody(bytes.NewReader(payload))
+
+	writer := responsewriter.New(cc.AcquireMessage(request.Context()), cc)
+	defer cc.ReleaseMessage(writer.Message())
+	var handlerCalls int
+	err = engine.handleQBlock1(writer, request, SZX16, nil,
+		func(w *responsewriter.ResponseWriter[*qTestTransport], _ *pool.Message) {
+			handlerCalls++
+			require.NoError(t, w.SetResponse(codes.Content, message.AppOctets,
+				bytes.NewReader(bytes.Repeat([]byte{2}, 48))))
+			w.Message().SetObserve(2)
+		})
+	require.NoError(t, err)
+	require.Equal(t, 1, handlerCalls, "the completed upload should invoke the handler only once")
+	key := q2TransferKey(request, nil)
+	cached, exists := engine.q2Senders[key]
+	require.True(t, exists, "the new response's Q-Block2 cache must survive observation replacement")
+	body, err := cached.message.ReadBody()
+	require.NoError(t, err)
+	require.Equal(t, bytes.Repeat([]byte{2}, 48), body)
+}
+
 func TestQBlockTooLargeAdvertisesEffectiveLimit(t *testing.T) {
 	for _, limit := range []int64{0, 1024} {
 		cc := newTestClient()

@@ -25,6 +25,7 @@ The implementation also provides functionality including:
 - Q-Block transfers (RFC 9177), including Q-Block1 and Q-Block2
 - Multicast
 - NoResponse option (RFC 7967)
+- Object Security for Constrained RESTful Environments (OSCORE, RFC 8613)
 - DTLS-based communication
 
 The library is intended to be embedded into applications,
@@ -134,6 +135,35 @@ Important attack surfaces include:
 - Session lifecycle management.
 - Authentication and encryption configuration.
 
+### OSCORE (RFC 8613)
+
+- Provisioning and matching master secret, master salt, Sender ID, Recipient
+  ID, and ID Context across peers.
+- Derivation and selection of the supported security context, including
+  unknown or ambiguous context identifiers.
+- Sender Partial IV allocation, exhaustion, process restart, and duplicate
+  sequence reservations across contexts or processes sharing a sender key.
+- Sender sequence persistence files, including guard and pending transaction
+  integrity; deletion, corruption, stale backups, partial writes, or rollback
+  that could cause Partial IV reuse. Whole-directory rollback requires an
+  external monotonic trust anchor and is not detectable from local files alone.
+- Recipient replay-window state, duplicate and out-of-order messages, and replay
+  state loss after process restart.
+- OSCORE option parsing, inner/outer message construction, option classes,
+  external AAD, authentication-tag validation, and response-to-request binding.
+- Downgrade risks when endpoints permit both plaintext and protected traffic;
+  authentication and context failures must never fall back to plaintext.
+- Observe notification freshness, cancellation, token/context lifetime, and
+  asynchronous sends.
+- Interaction with blockwise transfers, UDP retransmission/deduplication, and
+  reliable-transport framing.
+- Q-Block options are encrypted with OSCORE on the tested UDP/DTLS endpoint
+  paths; verify this remains true across retransmission and recovery flows.
+- Proxy forwarding is supported only by the minimal opaque forwarder; caching,
+  Observe, and blockwise proxy sessions are not implemented. Multicast OSCORE
+  and group OSCORE remain unsupported. RFC 9177 Q-Block over TCP/TLS is not
+  supported; those transports use reliable-transport Blockwise.
+
 ## 4. Vulnerability classes of interest
 
 Please prioritize findings involving:
@@ -184,10 +214,21 @@ Please investigate and test:
 - Connection and session cleanup.
 - UDP amplification and resource exhaustion scenarios.
 - DTLS configuration and authentication edge cases.
+- OSCORE Appendix C test vectors, malformed options/messages, invalid contexts,
+  modified ciphertext or AAD, replay, out-of-order notifications, concurrent
+  sequence reservation, sender-sequence exhaustion, and restart behavior.
+- OSCORE/plaintext policy on all transports, ensuring an OSCORE failure never
+  reaches an application handler or triggers plaintext fallback.
+- OSCORE interoperability with the pinned OSCORE-enabled libcoap build in both
+  endpoint directions, including Observe, blockwise, invalid credentials,
+  tampering, and replay.
 
 Use existing tests and fuzz tests as a starting point.
 Run the Q-Block interoperability tests against a Q-enabled libcoap build; they
 exercise both client and server behavior, including UDP and DTLS.
+Run OSCORE interoperability tests against an OSCORE-enabled libcoap build as
+well. The `.oss-scanner/Dockerfile` builds libcoap with both Q-Block and OSCORE
+enabled and makes both interoperability suites mandatory.
 
 When possible, create a minimal reproducible proof of concept.
 

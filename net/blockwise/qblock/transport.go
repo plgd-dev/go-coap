@@ -7,6 +7,7 @@ import (
 	"github.com/plgd-dev/go-coap/v3/message"
 	"github.com/plgd-dev/go-coap/v3/message/codes"
 	"github.com/plgd-dev/go-coap/v3/message/pool"
+	"github.com/plgd-dev/go-coap/v3/net/observation"
 )
 
 // Exchange routes every response token for a body until Close, rather
@@ -43,7 +44,11 @@ func receiveQBlockResponse(ctx context.Context, exchange Exchange, deadline time
 	defer cancel()
 	response, err := exchange.Receive(receiveCtx)
 	if response != nil {
+		authenticatedSequence, hasAuthenticatedSequence := observation.AuthenticatedSequenceNumber(response.Context())
 		response.SetContext(ctx)
+		if hasAuthenticatedSequence {
+			observation.SetAuthenticatedSequenceNumber(response, authenticatedSequence)
+		}
 	}
 	return response, err
 }

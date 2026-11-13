@@ -51,4 +51,5 @@ type Config struct {
 	CloseSocket                     bool
 	DisableTCPSignalMessageCSM      bool
 	CSMExchangeTimeout              time.Duration
+	OSCOREExchangeTimeout           time.Duration
 }

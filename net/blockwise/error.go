@@ -31,6 +31,14 @@ var (
 	// ErrRequestEntityIncomplete request body is missing blocks
 	ErrRequestEntityIncomplete = errors.New("request entity incomplete")
 
+	// ErrMixedProtectionBlock1Transfer indicates that a Block1 transfer mixes
+	// protected and plaintext request blocks.
+	ErrMixedProtectionBlock1Transfer = errors.New("Block1 transfer mixes protected and plaintext messages")
+
+	// ErrBlock1TransferIdentityMismatch indicates that a Block1 transfer mixes
+	// requests authenticated under different OSCORE identities.
+	ErrBlock1TransferIdentityMismatch = errors.New("Block1 transfer uses different OSCORE identities")
+
 	// ErrRequestEntityTooLarge request body exceeds the size limit
 	ErrRequestEntityTooLarge = blocks.ErrRequestEntityTooLarge
 )

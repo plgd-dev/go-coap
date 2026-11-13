@@ -16,11 +16,10 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v7
 
-      - name: Set up Go >=1.26
+      - name: Set up Go 1.27.4
         uses: actions/setup-go@v7
         with:
-          go-version: ">=1.26" # The Go version to download (if necessary) and use.
-          check-latest: true
+          go-version: "1.27.4"
 
       - run: go version
 

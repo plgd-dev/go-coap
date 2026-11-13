@@ -9,6 +9,7 @@ import (
 	"github.com/plgd-dev/go-coap/v3/message"
 	"github.com/plgd-dev/go-coap/v3/message/codes"
 	"github.com/plgd-dev/go-coap/v3/message/pool"
+	"github.com/plgd-dev/go-coap/v3/net/oscore"
 	"github.com/plgd-dev/go-coap/v3/net/responsewriter"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -17,12 +18,14 @@ import (
 const testBlock1Size = 1024
 
 type block1Receiver struct {
-	t         *testing.T
-	cc        *testClient
-	bw        *BlockWise[*testClient]
-	token     message.Token
-	remote    net.Addr
-	delivered [][]byte
+	t          *testing.T
+	cc         *testClient
+	bw         *BlockWise[*testClient]
+	token      message.Token
+	remote     net.Addr
+	delivered  [][]byte
+	protected  []bool
+	identities []oscore.RequestInfo
 }
 
 func newBlock1Receiver(t *testing.T, expiration time.Duration) *block1Receiver {
@@ -69,11 +72,18 @@ func (b *block1Receiver) sendPayload(num int64, more bool, payload []byte, size1
 }
 
 func (b *block1Receiver) sendPayloadWithPath(num int64, more bool, payload []byte, path string, size1 ...uint32) block1Response {
+	return b.sendPayloadWithPathAndOSCORE(num, more, payload, path, false, size1...)
+}
+
+func (b *block1Receiver) sendPayloadWithPathAndOSCORE(num int64, more bool, payload []byte, path string, protected bool, size1 ...uint32) block1Response {
 	req := b.cc.AcquireMessage(b.t.Context())
 	defer b.cc.ReleaseMessage(req)
 	req.SetCode(codes.PUT)
 	req.SetToken(b.token)
 	req.SetType(message.Confirmable)
+	if protected {
+		req.SetOptionBytes(message.OSCORE, []byte{0})
+	}
 	if path != "" {
 		require.NoError(b.t, req.SetPath(path))
 	}
@@ -134,6 +144,289 @@ func TestBlockWiseReceiveExpiredTransfer(t *testing.T) {
 			require.Len(t, r.delivered[0], 3*testBlock1Size)
 		})
 	}
+}
+
+func TestBlockWiseReceiveBlock1RejectsMixedProtection(t *testing.T) {
+	for _, test := range []struct {
+		name           string
+		firstProtected bool
+	}{
+		{name: "plaintext then protected", firstProtected: false},
+		{name: "protected then plaintext", firstProtected: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			r := newBlock1Receiver(t, time.Minute)
+			errorsCh := make(chan error, 1)
+			r.bw = New(r.cc, time.Minute, func(err error) { errorsCh <- err }, nil)
+
+			require.Equal(t, codes.Continue, r.sendPostUnprotectedBlock(0, true, test.firstProtected).code)
+			resp := r.sendPostUnprotectedBlock(1, false, !test.firstProtected)
+			require.Equal(t, codes.RequestEntityIncomplete, resp.code)
+			require.Empty(t, r.delivered, "mixed-protection transfer reached the handler")
+
+			select {
+			case err := <-errorsCh:
+				require.ErrorIs(t, err, ErrMixedProtectionBlock1Transfer)
+			case <-time.After(time.Second):
+				require.FailNow(t, "mixed-protection transfer was not reported")
+			}
+			require.Equal(t, codes.Changed, r.sendPostUnprotectedBlock(1, false, test.firstProtected).code,
+				"rejected mixed block must not discard the original transfer")
+			require.Len(t, r.delivered, 1)
+		})
+	}
+}
+
+func TestBlockWiseReceiveBlock1PreservesProtectionMode(t *testing.T) {
+	r := newBlock1Receiver(t, time.Minute)
+	require.Equal(t, codes.Continue, r.sendPostUnprotectedBlock(0, true, true).code)
+	require.Equal(t, codes.Changed, r.sendPostUnprotectedBlock(1, false, true).code)
+	require.Equal(t, []bool{true}, r.protected)
+}
+
+func TestBlockWiseReceiveBlock1RejectsDifferentOSCOREIdentity(t *testing.T) {
+	tests := []struct {
+		name  string
+		first oscore.RequestInfo
+		next  oscore.RequestInfo
+	}{
+		{
+			name:  "recipient ID differs",
+			first: oscore.RequestInfo{Protected: true, RecipientID: []byte("client-a")},
+			next:  oscore.RequestInfo{Protected: true, RecipientID: []byte("client-b")},
+		},
+		{
+			name:  "ID Context differs",
+			first: oscore.RequestInfo{Protected: true, RecipientID: []byte("client"), IDContext: []byte("context-a"), IDContextSet: true},
+			next:  oscore.RequestInfo{Protected: true, RecipientID: []byte("client"), IDContext: []byte("context-b"), IDContextSet: true},
+		},
+		{
+			name:  "absent and present empty ID Context differ",
+			first: oscore.RequestInfo{Protected: true, RecipientID: []byte("client")},
+			next:  oscore.RequestInfo{Protected: true, RecipientID: []byte("client"), IDContextSet: true},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			r := newBlock1Receiver(t, time.Minute)
+			token := message.Token{0x21}
+			require.Equal(t, codes.Continue, r.sendPostBlockWithIdentity(0, true, token, test.first).code)
+			require.Equal(t, codes.RequestEntityIncomplete, r.sendPostBlockWithIdentity(1, false, token, test.next).code)
+			require.Empty(t, r.delivered, "request assembled from different OSCORE identities reached the handler")
+			require.Equal(t, codes.Changed, r.sendPostBlockWithIdentity(1, false, token, test.first).code,
+				"rejected foreign block must not discard the original transfer")
+			require.Len(t, r.delivered, 1)
+		})
+	}
+}
+
+func TestBlockProtectionIdentityUsesOuterOSCOREOption(t *testing.T) {
+	tests := []struct {
+		name   string
+		first  oscore.OptionValue
+		second oscore.OptionValue
+	}{
+		{
+			name: "sender ID differs",
+			first: oscore.OptionValue{
+				PartialIV: []byte{1}, SenderID: []byte("clientA"), SenderIDSet: true,
+			},
+			second: oscore.OptionValue{
+				PartialIV: []byte{1}, SenderID: []byte("clientB"), SenderIDSet: true,
+			},
+		},
+		{
+			name: "ID Context differs",
+			first: oscore.OptionValue{
+				PartialIV: []byte{1}, IDContext: []byte("context-a"), IDContextSet: true,
+				SenderID: []byte("client"), SenderIDSet: true,
+			},
+			second: oscore.OptionValue{
+				PartialIV: []byte{1}, IDContext: []byte("context-b"), IDContextSet: true,
+				SenderID: []byte("client"), SenderIDSet: true,
+			},
+		},
+		{
+			name: "absent and present empty ID Context differ",
+			first: oscore.OptionValue{
+				PartialIV: []byte{1}, SenderID: []byte("client"), SenderIDSet: true,
+			},
+			second: oscore.OptionValue{
+				PartialIV: []byte{1}, IDContextSet: true,
+				SenderID: []byte("client"), SenderIDSet: true,
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			firstValue, err := test.first.MarshalBinary()
+			require.NoError(t, err)
+			secondValue, err := test.second.MarshalBinary()
+			require.NoError(t, err)
+
+			first := pool.NewMessage(t.Context())
+			first.SetOptionBytes(message.OSCORE, firstValue)
+			second := pool.NewMessage(t.Context())
+			second.SetOptionBytes(message.OSCORE, secondValue)
+
+			firstIdentity := blockProtectionIdentityFor(first)
+			secondIdentity := blockProtectionIdentityFor(second)
+			require.True(t, firstIdentity.protected)
+			require.True(t, firstIdentity.identityKnown)
+			require.True(t, secondIdentity.protected)
+			require.True(t, secondIdentity.identityKnown)
+			require.NotEqual(t, firstIdentity, secondIdentity,
+				"distinct outer OSCORE identities must not collapse to protected=true")
+		})
+	}
+}
+
+func TestBlockWiseReceiveOverlappingOuterOSCORETransfers(t *testing.T) {
+	r := newBlock1Receiver(t, time.Minute)
+	token := message.Token{0x61}
+	makeOption := func(senderID string) []byte {
+		value, err := (oscore.OptionValue{
+			PartialIV: []byte{1}, SenderID: []byte(senderID), SenderIDSet: true,
+		}).MarshalBinary()
+		require.NoError(t, err)
+		return value
+	}
+	firstIdentity := makeOption("clientA")
+	secondIdentity := makeOption("clientB")
+
+	require.Equal(t, codes.Continue,
+		r.sendPostBlockWithOSCOREOption(0, true, token, firstIdentity, 0xa0).code)
+	require.Equal(t, codes.Continue,
+		r.sendPostBlockWithOSCOREOption(0, true, token, secondIdentity, 0xb0).code)
+	require.Equal(t, codes.Changed,
+		r.sendPostBlockWithOSCOREOption(1, false, token, firstIdentity, 0xa1).code)
+	require.Equal(t, codes.Changed,
+		r.sendPostBlockWithOSCOREOption(1, false, token, secondIdentity, 0xb1).code)
+
+	require.Len(t, r.delivered, 2)
+	require.Len(t, r.delivered[0], 2*testBlock1Size)
+	require.Len(t, r.delivered[1], 2*testBlock1Size)
+	require.Equal(t, bytes.Repeat([]byte{0xa0}, testBlock1Size),
+		r.delivered[0][:testBlock1Size])
+	require.Equal(t, bytes.Repeat([]byte{0xa1}, testBlock1Size),
+		r.delivered[0][testBlock1Size:])
+	require.Equal(t, bytes.Repeat([]byte{0xb0}, testBlock1Size),
+		r.delivered[1][:testBlock1Size])
+	require.Equal(t, bytes.Repeat([]byte{0xb1}, testBlock1Size),
+		r.delivered[1][testBlock1Size:])
+}
+
+func TestBlockWiseReceiveOversizedForeignBlockPreservesTransfer(t *testing.T) {
+	const limit = 2 * testBlock1Size
+	r := newBlock1Receiver(t, time.Minute)
+	r.bw.SetMaxReassembledPayloadSize(limit)
+	firstIdentity := oscore.RequestInfo{Protected: true, RecipientID: []byte("client-a")}
+	otherIdentity := oscore.RequestInfo{Protected: true, RecipientID: []byte("client-b")}
+	token := message.Token{0x51}
+
+	require.Equal(t, codes.Continue, r.sendPostBlockWithIdentity(0, true, token, firstIdentity).code)
+	require.Equal(t, codes.RequestEntityIncomplete,
+		r.sendPostBlockWithIdentity(1, true, token, otherIdentity, limit*2).code)
+	require.Empty(t, r.delivered, "foreign block reached the handler")
+
+	require.Equal(t, codes.Changed, r.sendPostBlockWithIdentity(1, false, token, firstIdentity).code,
+		"oversized foreign block must not discard the original transfer")
+	require.Len(t, r.delivered, 1)
+	require.Equal(t, []byte("client-a"), r.identities[0].RecipientID)
+}
+
+func TestBlockWiseReceiveBlock1ChangedTokenMatchesSameOSCOREIdentity(t *testing.T) {
+	r := newBlock1Receiver(t, time.Minute)
+	info := oscore.RequestInfo{
+		Protected: true, RecipientID: []byte("client"), IDContext: []byte("context"), IDContextSet: true,
+	}
+	require.Equal(t, codes.Continue, r.sendPostBlockWithIdentity(0, true, message.Token{0x31}, info).code)
+	require.Equal(t, codes.Changed, r.sendPostBlockWithIdentity(1, false, message.Token{0x32}, info).code)
+	require.Len(t, r.delivered, 1)
+	require.Equal(t, []bool{true}, r.protected)
+	require.Equal(t, []byte("client"), r.identities[0].RecipientID)
+	require.Equal(t, []byte("context"), r.identities[0].IDContext)
+}
+
+func TestBlockWiseReceiveBlock1ChangedTokenDoesNotMatchDifferentOSCOREIdentity(t *testing.T) {
+	r := newBlock1Receiver(t, time.Minute)
+	firstIdentity := oscore.RequestInfo{Protected: true, RecipientID: []byte("client-a")}
+	otherIdentity := oscore.RequestInfo{Protected: true, RecipientID: []byte("client-b")}
+	require.Equal(t, codes.Continue, r.sendPostBlockWithIdentity(0, true, message.Token{0x41}, firstIdentity).code)
+	require.Equal(t, codes.RequestEntityIncomplete, r.sendPostBlockWithIdentity(1, false, message.Token{0x42}, otherIdentity).code)
+	require.Empty(t, r.delivered, "block from a different identity reached the handler")
+
+	require.Equal(t, codes.Changed, r.sendPostBlockWithIdentity(1, false, message.Token{0x43}, firstIdentity).code)
+	require.Len(t, r.delivered, 1)
+	require.Equal(t, []byte("client-a"), r.identities[0].RecipientID)
+}
+
+func (b *block1Receiver) sendPostUnprotectedBlock(num int64, more, protected bool) block1Response {
+	return b.sendPostBlockWithIdentity(num, more, b.token, oscore.RequestInfo{Protected: protected})
+}
+
+func (b *block1Receiver) sendPostBlockWithIdentity(
+	num int64,
+	more bool,
+	token message.Token,
+	info oscore.RequestInfo,
+	size1 ...uint32,
+) block1Response {
+	req := b.cc.AcquireMessage(b.t.Context())
+	defer b.cc.ReleaseMessage(req)
+	req.SetCode(codes.PUT)
+	req.SetToken(token)
+	req.SetType(message.Confirmable)
+	req.SetContext(oscore.ContextWithRequestInfo(req.Context(), info))
+	block, err := EncodeBlockOption(SZX1024, num, more)
+	require.NoError(b.t, err)
+	req.SetOptionUint32(message.Block1, block)
+	for _, value := range size1 {
+		req.SetOptionUint32(message.Size1, value)
+	}
+	req.SetBody(bytes.NewReader(bytes.Repeat([]byte{byte(num)}, testBlock1Size)))
+
+	w := responsewriter.New(b.cc.AcquireMessage(b.t.Context()), b.cc)
+	defer func() { b.cc.ReleaseMessage(w.Message()) }()
+	b.bw.Handle(w, req, SZX1024, 64*1024, b.remote, func(w *responsewriter.ResponseWriter[*testClient], r *pool.Message) {
+		body, readErr := r.ReadBody()
+		require.NoError(b.t, readErr)
+		b.delivered = append(b.delivered, body)
+		requestInfo, ok := oscore.RequestInfoFromContext(r.Context())
+		b.protected = append(b.protected, ok && requestInfo.Protected)
+		b.identities = append(b.identities, requestInfo)
+		require.NoError(b.t, w.SetResponse(codes.Changed, message.TextPlain, nil))
+	})
+	return block1Response{code: w.Message().Code()}
+}
+
+func (b *block1Receiver) sendPostBlockWithOSCOREOption(
+	num int64,
+	more bool,
+	token message.Token,
+	oscoreOption []byte,
+	payloadByte byte,
+) block1Response {
+	req := b.cc.AcquireMessage(b.t.Context())
+	defer b.cc.ReleaseMessage(req)
+	req.SetCode(codes.PUT)
+	req.SetToken(token)
+	req.SetType(message.Confirmable)
+	req.SetOptionBytes(message.OSCORE, oscoreOption)
+	block, err := EncodeBlockOption(SZX1024, num, more)
+	require.NoError(b.t, err)
+	req.SetOptionUint32(message.Block1, block)
+	req.SetBody(bytes.NewReader(bytes.Repeat([]byte{payloadByte}, testBlock1Size)))
+
+	w := responsewriter.New(b.cc.AcquireMessage(b.t.Context()), b.cc)
+	defer func() { b.cc.ReleaseMessage(w.Message()) }()
+	b.bw.Handle(w, req, SZX1024, 64*1024, b.remote, func(w *responsewriter.ResponseWriter[*testClient], r *pool.Message) {
+		body, readErr := r.ReadBody()
+		require.NoError(b.t, readErr)
+		b.delivered = append(b.delivered, body)
+		require.NoError(b.t, w.SetResponse(codes.Changed, message.TextPlain, nil))
+	})
+	return block1Response{code: w.Message().Code()}
 }
 
 func TestBlockWiseReceiveMissingBlock(t *testing.T) {
@@ -238,6 +531,88 @@ func TestBlockWiseReceiveInvalidNonFinalBlock(t *testing.T) {
 			require.Empty(t, r.delivered)
 		})
 	}
+}
+
+func TestBlockWiseReceiveMaxReassembledPayloadSize(t *testing.T) {
+	const limit = 2 * testBlock1Size
+	r := newBlock1Receiver(t, time.Minute)
+	r.bw.SetMaxReassembledPayloadSize(limit)
+	r.bw.SetMaxReceiveBodySize(limit * 2)
+
+	resp := r.send(0, true, limit+1)
+	require.Equal(t, codes.RequestEntityTooLarge, resp.code)
+	require.Equal(t, uint32(limit), resp.size1)
+	require.Empty(t, r.delivered)
+}
+
+func TestBlockWiseReceiveOSCOREPayloadLimitDoesNotAffectPlaintext(t *testing.T) {
+	const limit = 64 * 1024
+	r := newBlock1Receiver(t, time.Minute)
+	r.bw.SetMaxOSCOREReassembledPayloadSize(limit)
+
+	for block := int64(0); block < limit/testBlock1Size; block++ {
+		require.Equal(t, codes.Continue, r.send(block, true).code)
+	}
+	require.Equal(t, codes.Changed, r.send(limit/testBlock1Size, false).code)
+	require.Len(t, r.delivered, 1)
+	require.Len(t, r.delivered[0], limit+testBlock1Size)
+
+	protected := newBlock1Receiver(t, time.Minute)
+	protected.bw.SetMaxOSCOREReassembledPayloadSize(limit)
+	for block := int64(0); block < limit/testBlock1Size; block++ {
+		payload := bytes.Repeat([]byte{byte(block)}, testBlock1Size)
+		require.Equal(t, codes.Continue, protected.sendPayloadWithPathAndOSCORE(block, true, payload, "", true).code)
+	}
+	resp := protected.sendPayloadWithPathAndOSCORE(
+		limit/testBlock1Size,
+		false,
+		bytes.Repeat([]byte{0xff}, testBlock1Size),
+		"",
+		true,
+	)
+	require.Equal(t, codes.RequestEntityTooLarge, resp.code)
+	require.Empty(t, protected.delivered)
+}
+
+func TestBlockWiseReceiveMaxReassembledPayloadSizeClearsTransfer(t *testing.T) {
+	const limit = 2 * testBlock1Size
+	r := newBlock1Receiver(t, time.Minute)
+	r.bw.SetMaxReassembledPayloadSize(limit)
+
+	require.Equal(t, codes.Continue, r.send(0, true, limit).code)
+	require.NotNil(t, r.bw.receivingMessagesCache.Load(r.exchangeKey()))
+
+	resp := r.send(1, true, limit+1)
+	require.Equal(t, codes.RequestEntityTooLarge, resp.code)
+	require.Nil(t, r.bw.receivingMessagesCache.Load(r.exchangeKey()))
+	require.Empty(t, r.delivered)
+}
+
+func TestBlockWiseReceiveMaxReassembledPayloadSizeClearsOnlyExceededTransfer(t *testing.T) {
+	const limit = 2 * testBlock1Size
+	r := newBlock1Receiver(t, time.Minute)
+	r.bw.SetMaxReassembledPayloadSize(limit)
+
+	firstToken := r.token
+	firstKey := r.exchangeKey()
+	require.Equal(t, codes.Continue, r.send(0, true).code)
+
+	r.token = message.Token{0x02}
+	secondKey := r.exchangeKey()
+	require.Equal(t, codes.Continue, r.send(0, true).code)
+	require.NotNil(t, r.bw.receivingMessagesCache.Load(firstKey))
+	require.NotNil(t, r.bw.receivingMessagesCache.Load(secondKey))
+
+	r.token = firstToken
+	require.Equal(t, codes.Continue, r.send(1, true).code)
+	require.Equal(t, codes.RequestEntityTooLarge, r.send(2, true).code)
+	require.Nil(t, r.bw.receivingMessagesCache.Load(firstKey), "exceeded transfer must be removed immediately")
+	require.NotNil(t, r.bw.receivingMessagesCache.Load(secondKey), "unrelated transfer must remain intact")
+
+	r.token = message.Token{0x02}
+	require.Equal(t, codes.Continue, r.send(1, true).code)
+	require.NotNil(t, r.bw.receivingMessagesCache.Load(secondKey))
+	require.Empty(t, r.delivered)
 }
 
 func TestBlockWiseReceiveMaxBodySize(t *testing.T) {
