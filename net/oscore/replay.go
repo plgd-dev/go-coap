@@ -9,6 +9,7 @@ import (
 var (
 	ErrInvalidReplayWindow = errors.New("invalid OSCORE replay window size")
 	ErrInvalidReplayState  = errors.New("invalid OSCORE replay window state")
+	ErrInternalProcessing  = errors.New("internal OSCORE processing failure")
 )
 
 // ReplayWindowState is the durable state needed to continue replay protection
@@ -77,6 +78,9 @@ func newReplayWindow(size uint8, state ReplayWindowState, store ReplayWindowStor
 	if size > 64 {
 		return nil, fmt.Errorf("%w: %d exceeds 64", ErrInvalidReplayWindow, size)
 	}
+	if err := validateReplayHighWaterMargin(store); err != nil {
+		return nil, err
+	}
 	if err := validateReplayState(size, state); err != nil {
 		return nil, err
 	}
@@ -120,7 +124,7 @@ func validateReplayState(size uint8, state ReplayWindowState) error {
 // authentication.
 func (w *ReplayWindow) Accept(sequence uint64, verify func() error) error {
 	if verify == nil {
-		return fmt.Errorf("%w: missing authentication function", ErrInvalidContext)
+		return fmt.Errorf("%w: %w: missing authentication function", ErrInternalProcessing, ErrInvalidContext)
 	}
 	w.mu.Lock()
 	defer w.mu.Unlock()
@@ -190,9 +194,10 @@ func (w *ReplayWindow) persistState(next ReplayWindowState) error {
 	}
 	reconcileErr := w.reconcileStoreState()
 	if reconcileErr != nil {
-		return fmt.Errorf("persist OSCORE replay state: %w (reload persisted state: %w)", persistErr, reconcileErr)
+		return fmt.Errorf("%w: persist OSCORE replay state: %w (reload persisted state: %w)",
+			ErrInternalProcessing, persistErr, reconcileErr)
 	}
-	return fmt.Errorf("persist OSCORE replay state: %w", persistErr)
+	return fmt.Errorf("%w: persist OSCORE replay state: %w", ErrInternalProcessing, persistErr)
 }
 
 func (w *ReplayWindow) saveState(next ReplayWindowState) error {
@@ -203,13 +208,9 @@ func (w *ReplayWindow) saveState(next ReplayWindowState) error {
 	if w.highWaterSet && next.HighestSequence < w.highWater {
 		return nil
 	}
-	margin := DefaultReplayHighWaterMargin
-	if provider, ok := highWaterStore.(ReplayWindowHighWaterMarginProvider); ok {
-		margin = provider.ReplayWindowHighWaterMargin()
-	}
-	if margin == 0 || margin > MaxReplayHighWaterMargin {
-		return fmt.Errorf("%w: high-water margin %d is outside 1..%d",
-			ErrInvalidReplayState, margin, MaxReplayHighWaterMargin)
+	margin, err := replayHighWaterMargin(highWaterStore)
+	if err != nil {
+		return err
 	}
 	highWater := min(next.HighestSequence+margin, maxPartialIV+1)
 	if err := highWaterStore.SaveHighWater(highWater); err != nil {
@@ -218,6 +219,27 @@ func (w *ReplayWindow) saveState(next ReplayWindowState) error {
 	w.highWater = highWater
 	w.highWaterSet = true
 	return nil
+}
+
+func validateReplayHighWaterMargin(store ReplayWindowStore) error {
+	highWaterStore, ok := store.(ReplayWindowHighWaterStore)
+	if !ok {
+		return nil
+	}
+	_, err := replayHighWaterMargin(highWaterStore)
+	return err
+}
+
+func replayHighWaterMargin(store ReplayWindowHighWaterStore) (uint64, error) {
+	margin := DefaultReplayHighWaterMargin
+	if provider, ok := store.(ReplayWindowHighWaterMarginProvider); ok {
+		margin = provider.ReplayWindowHighWaterMargin()
+	}
+	if margin == 0 || margin > MaxReplayHighWaterMargin {
+		return 0, fmt.Errorf("%w: high-water margin %d is outside 1..%d",
+			ErrInvalidReplayState, margin, MaxReplayHighWaterMargin)
+	}
+	return margin, nil
 }
 
 func (w *ReplayWindow) reconcileStoreState() error {
@@ -252,17 +274,25 @@ func loadReplayState(store ReplayWindowStore, size uint8) (ReplayWindowState, bo
 	if highWaterStore, ok := store.(ReplayWindowHighWaterStore); ok {
 		highWater, exists, err := highWaterStore.LoadHighWater()
 		if err != nil {
-			return ReplayWindowState{}, false, err
+			return ReplayWindowState{}, false, fmt.Errorf("%w: load replay high-water mark: %w",
+				ErrInternalProcessing, err)
 		}
 		if exists {
 			if highWater == 0 || highWater > maxPartialIV+1 {
-				return ReplayWindowState{}, false, fmt.Errorf("%w: invalid high-water mark %d", ErrInvalidReplayState, highWater)
+				return ReplayWindowState{}, false, fmt.Errorf("%w: %w: invalid high-water mark %d",
+					ErrInternalProcessing, ErrInvalidReplayState, highWater)
 			}
 			return replayWindowStateFromHighWater(highWater, size), true, nil
 		}
 	}
 	state, err := store.Load()
-	return state, false, err
+	if err != nil {
+		return ReplayWindowState{}, false, fmt.Errorf("%w: load replay state: %w", ErrInternalProcessing, err)
+	}
+	if err := validateReplayState(size, state); err != nil {
+		return ReplayWindowState{}, false, fmt.Errorf("%w: %w", ErrInternalProcessing, err)
+	}
+	return state, false, nil
 }
 
 func replayWindowStateFromHighWater(highWater uint64, size uint8) ReplayWindowState {

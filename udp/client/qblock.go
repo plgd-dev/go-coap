@@ -581,6 +581,29 @@ func (cc *Conn) ValidateQBlockDatagram(msg *pool.Message) error {
 	return cc.validateQBlockDatagram(msg)
 }
 
+// QBlockDatagramBudget estimates a request's encoded size and the per-option
+// OSCORE expansion used when appending repeated Q-Block options.
+func (cc *Conn) QBlockDatagramBudget(msg *pool.Message) (uint64, uint64, uint64, error) {
+	wire, err := msg.MarshalWithEncoder(coder.DefaultCoder)
+	if err != nil {
+		return 0, 0, 0, err
+	}
+	size := uint64(len(wire))
+	var perOptionOverhead uint64
+	if cc.oscoreProcessor != nil && isQBlockMethod(msg.Code()) {
+		optionCount := len(msg.Options())
+		observe := msg.HasOption(message.Observe)
+		overhead := cc.oscoreProcessor.MaxRequestOverhead(optionCount, observe)
+		size += uint64(overhead)
+		if nextOverhead := cc.oscoreProcessor.MaxRequestOverhead(optionCount+1, observe); nextOverhead > overhead {
+			perOptionOverhead = uint64(nextOverhead - overhead)
+		}
+	} else if cc.oscoreProcessor != nil {
+		size += 32
+	}
+	return size, perOptionOverhead, uint64(cc.qDatagramLimit), nil
+}
+
 // QBlockMaxDatagramSize returns the encoded datagram limit used for Q-Block
 // request and response sizing, including configured MTU, DTLS, and OSCORE reserves.
 func (cc *Conn) QBlockMaxDatagramSize() uint32 {

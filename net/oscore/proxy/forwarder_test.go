@@ -58,19 +58,21 @@ func (o *testOrigin) RoundTrip(_ context.Context, target oscore.ProxyTarget, req
 func TestForwarderRelaysOSCOREWithoutDecrypting(t *testing.T) {
 	secret := []byte("0123456789abcdef")
 	clientContext, err := oscore.NewContext(oscore.ContextConfig{
-		AcceptReplayStateLoss: true,
-		MasterSecret:          secret,
-		SenderID:              []byte{0},
-		RecipientID:           []byte{1},
+		AcceptVolatileSenderSequence: true,
+		AcceptReplayStateLoss:        true,
+		MasterSecret:                 secret,
+		SenderID:                     []byte{0},
+		RecipientID:                  []byte{1},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	originContext, err := oscore.NewContext(oscore.ContextConfig{
-		AcceptReplayStateLoss: true,
-		MasterSecret:          secret,
-		SenderID:              []byte{1},
-		RecipientID:           []byte{0},
+		AcceptVolatileSenderSequence: true,
+		AcceptReplayStateLoss:        true,
+		MasterSecret:                 secret,
+		SenderID:                     []byte{1},
+		RecipientID:                  []byte{0},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -120,10 +122,11 @@ func TestForwarderRequiresTargetAllowlist(t *testing.T) {
 func TestForwarderRejectsDisallowedTargetBeforeDial(t *testing.T) {
 	secret := []byte("0123456789abcdef")
 	clientContext, err := oscore.NewContext(oscore.ContextConfig{
-		AcceptReplayStateLoss: true,
-		MasterSecret:          secret,
-		SenderID:              []byte{0},
-		RecipientID:           []byte{1},
+		AcceptVolatileSenderSequence: true,
+		AcceptReplayStateLoss:        true,
+		MasterSecret:                 secret,
+		SenderID:                     []byte{0},
+		RecipientID:                  []byte{1},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -197,6 +200,7 @@ func TestAllowPublicIPLiteralTarget(t *testing.T) {
 		{host: "0.1.2.3"},
 		{host: "192.0.0.1"},
 		{host: "192.0.2.1"},
+		{host: "192.88.99.1"},
 		{host: "198.18.0.1"},
 		{host: "198.51.100.1"},
 		{host: "203.0.113.1"},
@@ -204,8 +208,10 @@ func TestAllowPublicIPLiteralTarget(t *testing.T) {
 		{host: "255.255.255.255"},
 		{host: "64:ff9b::808:808"},
 		{host: "64:ff9b:1::a00:1"},
+		{host: "2001::1"},
 		{host: "2001:2::1"},
 		{host: "2001:db8::1"},
+		{host: "2002::1"},
 		{host: "3fff::1"},
 		{host: "::ffff:192.0.2.1"},
 		{host: "::ffff:100.64.0.1"},
@@ -222,10 +228,11 @@ func TestAllowPublicIPLiteralTarget(t *testing.T) {
 func validProtectedProxyRequest(t *testing.T) message.Message {
 	t.Helper()
 	clientContext, err := oscore.NewContext(oscore.ContextConfig{
-		AcceptReplayStateLoss: true,
-		MasterSecret:          []byte("0123456789abcdef"),
-		SenderID:              []byte{0},
-		RecipientID:           []byte{1},
+		AcceptVolatileSenderSequence: true,
+		AcceptReplayStateLoss:        true,
+		MasterSecret:                 []byte("0123456789abcdef"),
+		SenderID:                     []byte{0},
+		RecipientID:                  []byte{1},
 	})
 	if err != nil {
 		t.Fatal(err)

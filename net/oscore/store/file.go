@@ -406,6 +406,9 @@ func (s *HighWaterFileStore) recoverReplayHighWater() error {
 			return fmt.Errorf("recover replay high-water mark: %w", err)
 		}
 	}
+	if err := s.syncReplayDirectory(s.replayHighWaterPath); err != nil {
+		return fmt.Errorf("sync recovered replay high-water state: %w", err)
+	}
 	if err := s.removeReplayPending(); err != nil {
 		return fmt.Errorf("complete replay high-water recovery: %w", err)
 	}

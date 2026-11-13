@@ -11,6 +11,7 @@ import (
 	"github.com/plgd-dev/go-coap/v3/message/codes"
 	"github.com/plgd-dev/go-coap/v3/message/pool"
 	"github.com/plgd-dev/go-coap/v3/net/observation"
+	pkgMath "github.com/plgd-dev/go-coap/v3/pkg/math"
 )
 
 // DoQBlock2 requests a body burst, acknowledges complete payload sets, and
@@ -88,6 +89,29 @@ func (s *q2BodyReceiver[C]) buildRequestPart(nums []int64, more bool) (*pool.Mes
 	if err != nil {
 		return nil, 0, err
 	}
+	if budget, ok := any(s.b.cc).(interface {
+		QBlockDatagramBudget(*pool.Message) (baseSize, perOptionOverhead, limit uint64, err error)
+	}); ok {
+		added, err := s.addQBlockOptionsWithinBudget(part, nums, more, budget)
+		if err != nil {
+			s.b.cc.ReleaseMessage(part)
+			return nil, 0, err
+		}
+		if added == 0 {
+			s.b.cc.ReleaseMessage(part)
+			return nil, 0, ErrQBlockTooLarge
+		}
+		if err := addQBlockOptions(part, s.szx, nums[:added], more); err != nil {
+			s.b.cc.ReleaseMessage(part)
+			return nil, 0, err
+		}
+		if err := validateQBlockDatagram(s.b.cc, part); err != nil {
+			s.b.cc.ReleaseMessage(part)
+			return nil, 0, err
+		}
+		return part, added, nil
+	}
+
 	added := 0
 	for _, num := range nums {
 		value, err := EncodeQBlockOption(s.szx, num, more)
@@ -115,6 +139,105 @@ func (s *q2BodyReceiver[C]) buildRequestPart(nums []int64, more bool) (*pool.Mes
 		return nil, 0, ErrQBlockTooLarge
 	}
 	return part, added, nil
+}
+
+func (s *q2BodyReceiver[C]) addQBlockOptionsWithinBudget(
+	part *pool.Message,
+	nums []int64,
+	more bool,
+	budget interface {
+		QBlockDatagramBudget(*pool.Message) (baseSize, perOptionOverhead, limit uint64, err error)
+	},
+) (int, error) {
+	baseSize, perOptionOverhead, limit, err := budget.QBlockDatagramBudget(part)
+	if err != nil {
+		return 0, err
+	}
+	tailAdjustment, previousID, err := qBlockOptionTailAdjustment(part.Options())
+	if err != nil {
+		return 0, err
+	}
+	if tailAdjustment < 0 {
+		decrease := uint64(-tailAdjustment)
+		if decrease > baseSize {
+			return 0, errors.New("invalid Q-Block datagram size estimate")
+		}
+		baseSize -= decrease
+	} else {
+		baseSize += uint64(tailAdjustment)
+	}
+	if baseSize > limit {
+		return 0, nil
+	}
+
+	size := baseSize
+	added := 0
+	for _, num := range nums {
+		value, err := EncodeQBlockOption(s.szx, num, more)
+		if err != nil {
+			return 0, err
+		}
+		option, err := newQBlockMessageOption(value)
+		if err != nil {
+			return 0, err
+		}
+		increment, err := encodedOptionSize(option, previousID)
+		if err != nil {
+			return 0, err
+		}
+		incrementSize, err := pkgMath.SafeCastTo[uint64](increment)
+		if err != nil {
+			return 0, err
+		}
+		if size > limit || incrementSize > limit-size ||
+			perOptionOverhead > limit-size-incrementSize {
+			break
+		}
+		size += incrementSize + perOptionOverhead
+		added++
+		previousID = message.QBlock2
+	}
+	return added, nil
+}
+
+func qBlockOptionTailAdjustment(options message.Options) (int64, message.OptionID, error) {
+	var previousID message.OptionID
+	for _, option := range options {
+		switch {
+		case option.ID < message.QBlock2:
+			previousID = option.ID
+		case option.ID == message.QBlock2:
+			return 0, 0, errors.New("Q-Block2 option already present in request part")
+		default:
+			originalSize, err := encodedOptionSize(option, previousID)
+			if err != nil {
+				return 0, 0, err
+			}
+			insertedSize, err := encodedOptionSize(option, message.QBlock2)
+			if err != nil {
+				return 0, 0, err
+			}
+			return int64(insertedSize - originalSize), previousID, nil
+		}
+	}
+	return 0, previousID, nil
+}
+
+func newQBlockMessageOption(value uint32) (message.Option, error) {
+	var encoded [4]byte
+	length, err := message.EncodeUint32(encoded[:], value)
+	if err != nil {
+		return message.Option{}, err
+	}
+	return message.Option{ID: message.QBlock2, Value: encoded[:length]}, nil
+}
+
+func encodedOptionSize(option message.Option, previousID message.OptionID) (int, error) {
+	size, err := option.Marshal(nil, previousID)
+	if err != nil && !errors.Is(err, message.ErrTooSmall) {
+		return 0, err
+	}
+	return size, nil
 }
 
 func (s *q2BodyReceiver[C]) newRequest() (*pool.Message, error) {

@@ -9,6 +9,7 @@ import (
 	"hash/fnv"
 	"io"
 	"net"
+	"strconv"
 	"sync"
 	"time"
 
@@ -202,9 +203,11 @@ var errReceivingMessagesCacheFull = errors.New("receiving messages cache is full
 type blockProtectionIdentity struct {
 	protected     bool
 	identityKnown bool
+	senderIDSet   bool
 	recipientID   string
 	idContext     string
 	idContextSet  bool
+	rawOption     string
 }
 
 func newRequestGuard(request *pool.Message, matchingKey uint64, identity blockProtectionIdentity) *messageGuard {
@@ -1271,15 +1274,53 @@ func blockProtectionIdentityFor(r *pool.Message) blockProtectionIdentity {
 		return blockProtectionIdentity{
 			protected:     true,
 			identityKnown: true,
+			senderIDSet:   true,
 			recipientID:   string(info.RecipientID),
 			idContext:     string(info.IDContext),
 			idContextSet:  info.IDContextSet,
 		}
 	}
 	if r.HasOption(message.OSCORE) {
-		return blockProtectionIdentity{protected: true}
+		options := r.Options()
+		start, end, err := options.Find(message.OSCORE)
+		if err != nil {
+			return blockProtectionIdentity{
+				protected: true, identityKnown: true, rawOption: rawOSCOREOptions(options),
+			}
+		}
+		if end-start != 1 {
+			return blockProtectionIdentity{
+				protected: true, identityKnown: true, rawOption: rawOSCOREOptions(options[start:end]),
+			}
+		}
+		value := options[start].Value
+		option, err := oscore.UnmarshalOption(value)
+		if err != nil {
+			return blockProtectionIdentity{protected: true, identityKnown: true, rawOption: string(value)}
+		}
+		return blockProtectionIdentity{
+			protected:     true,
+			identityKnown: true,
+			senderIDSet:   option.SenderIDSet,
+			recipientID:   string(option.SenderID),
+			idContext:     string(option.IDContext),
+			idContextSet:  option.IDContextSet,
+		}
 	}
 	return blockProtectionIdentity{}
+}
+
+func rawOSCOREOptions(options message.Options) string {
+	var raw []byte
+	for _, option := range options {
+		if option.ID != message.OSCORE {
+			continue
+		}
+		raw = strconv.AppendInt(raw, int64(len(option.Value)), 10)
+		raw = append(raw, ':')
+		raw = append(raw, option.Value...)
+	}
+	return string(raw)
 }
 
 func (b *BlockWise[C]) processReceivedBlock(w *responsewriter.ResponseWriter[C], r *pool.Message, next func(w *responsewriter.ResponseWriter[C], r *pool.Message), block receivedBlock) error {

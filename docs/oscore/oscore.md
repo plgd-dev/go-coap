@@ -55,11 +55,12 @@ import (
 
 func newOSCOREProcessor(senderID, recipientID string) (*oscore.Processor, error) {
 	ctx, err := oscore.NewContext(oscore.ContextConfig{
-		MasterSecret:          []byte("0123456789abcdef"),
-		MasterSalt:            []byte("salt1234"),
-		SenderID:              []byte(senderID),
-		RecipientID:           []byte(recipientID),
-		AcceptReplayStateLoss: true, // Use only for examples or deliberate volatile-state deployments.
+		MasterSecret:                 []byte("0123456789abcdef"),
+		MasterSalt:                   []byte("salt1234"),
+		SenderID:                     []byte(senderID),
+		RecipientID:                  []byte(recipientID),
+		AcceptVolatileSenderSequence: true, // Development-only: sender sequence resets on restart.
+		AcceptReplayStateLoss:        true, // Use only for examples or deliberate volatile-state deployments.
 	})
 	if err != nil {
 		return nil, err
@@ -164,19 +165,21 @@ import (
 func directOSCOREExample() error {
 	masterSecret := []byte("public test-only secret")
 	clientContext, err := oscore.NewContext(oscore.ContextConfig{
-		MasterSecret:          masterSecret,
-		SenderID:              []byte("client"),
-		RecipientID:           []byte("server"),
-		AcceptReplayStateLoss: true,
+		MasterSecret:                  masterSecret,
+		SenderID:                      []byte("client"),
+		RecipientID:                   []byte("server"),
+		AcceptVolatileSenderSequence: true,
+		AcceptReplayStateLoss:        true,
 	})
 	if err != nil {
 		return err
 	}
 	serverContext, err := oscore.NewContext(oscore.ContextConfig{
-		MasterSecret:          masterSecret,
-		SenderID:              []byte("server"),
-		RecipientID:           []byte("client"),
-		AcceptReplayStateLoss: true,
+		MasterSecret:                  masterSecret,
+		SenderID:                      []byte("server"),
+		RecipientID:                   []byte("client"),
+		AcceptVolatileSenderSequence: true,
+		AcceptReplayStateLoss:        true,
 	})
 	if err != nil {
 		return err
@@ -302,9 +305,12 @@ payload and failed requests are never dispatched to the application handler.
 
 ## Sender sequence and receiver replay state
 
-Partial IV values must never be reused with the same sender key. The default
-in-memory sequence counter is appropriate only if that sender key will not be
-reused after process restart. For durable deployments, configure a
+Partial IV values must never be reused with the same sender key. When no
+`SenderSequenceStore` is configured, `NewContext` requires the explicit
+`AcceptVolatileSenderSequence: true` opt-in. This mode is for development,
+examples, and deliberate volatile-state deployments only; restarting with the
+same sender key and configuration reuses sequence numbers and can reuse AEAD
+nonces. For durable deployments, configure a
 `SenderSequenceStore` whose `Reserve` operation atomically reserves and durably
 persists a unique value before returning it. Coordinate reservations across all
 processes and `Context` instances that share a sender key. A reserved value
@@ -319,7 +325,10 @@ instance for each sender context, or coordinate transmission so messages arrive
 in sequence order.
 
 Alternatively, restore `SenderSequenceNumber` to the next unused value before
-constructing a context. Never restore an old or guessed value. The receiver
+constructing a context and set `AcceptVolatileSenderSequence: true`. This
+restored value is only an in-memory starting point; after using it, persist and
+restore the next unused value again before any restart. Never restore an old or
+guessed value. The receiver
 replay window is independent of sender sequence persistence. To preserve it
 across receiver restarts, configure a `ReplayWindowStore` on `ContextConfig`.
 `NewContext` requires either this store or the explicit
@@ -343,6 +352,8 @@ avoids that write cost but loses replay state after restart; do not continue
 using that context without restoring replay protection. Follow RFC 8613
 Appendix B.1.2 recovery (for example, Echo) or establish a fresh security
 context.
+With `oscorestore.WithReplayHighWaterMargin(1)`, each accepted request costs
+about seven fsync-class operations to persist the replay cutoff.
 
 The `net/oscore/store` package provides `HighWaterFileStore`, which durably
 reserves sender sequence windows of 256 values and atomically persists one
@@ -474,11 +485,15 @@ timeouts, and response-size limits.
   (`Do`) returns, is canceled, or times out. Observe exchanges remain available
   for the observation lifetime. The default `OSCOREExchangeTimeout` is zero,
   so there is no timeout-based expiry; configure
-  `options.WithOSCOREExchangeTimeout` as a timeout backstop. A response
-  arriving after the configured timeout is rejected because its exchange is
-  no longer available; this also applies to the first response to an Observe
-  request. This is a local exchange-retention policy, not an RFC-defined TCP
-  lifetime.
+  `options.WithOSCOREExchangeTimeout` as a timeout backstop. The timeout
+  rejects an exchange only when no live request is awaiting its response; a
+  live `Do` request retains its exchange until it returns, is canceled, or
+  times out. This also applies to the first response to an Observe request.
+  This is a local exchange-retention policy, not an RFC-defined TCP
+  lifetime. Canceling an Observe registration with no deregistration request
+  in flight removes its exchange immediately. If deregistration is in flight,
+  the exchange is retained until its response arrives or the timeout expires;
+  when the timeout is zero, a 247-second backstop releases it.
 - Classic Block1/Block2 and Observe flows. Inner Blockwise remains the
   default. UDP and DTLS also support opt-in Outer Blockwise fragmentation and
   reassembly with `options.WithOSCOREOuterBlockwise()`; reassembled payloads
@@ -504,6 +519,9 @@ timeouts, and response-size limits.
   durable persistence or set `AcceptReplayStateLoss` to opt into volatile
   replay state; storage durability and coordination are application
   responsibilities.
+- Sender sequence policy is explicit: use `SenderSequenceStore` for durable
+  reservations or set `AcceptVolatileSenderSequence` for development-only,
+  in-memory sender state.
 - Q-Block1 uploads and Q-Block2 downloads over OSCORE-protected UDP and DTLS.
   Q-Block options are encrypted as Class E options. Q-Block is a datagram
   protocol (RFC 9177); TCP/TLS use reliable-transport Blockwise instead.

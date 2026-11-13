@@ -223,17 +223,14 @@ func TestReplayWindowRejectsInvalidHighWaterMarginProvider(t *testing.T) {
 				margin:                         test.margin,
 			}
 			window, err := newReplayWindow(4, ReplayWindowState{}, store, false)
-			if err != nil {
-				t.Fatal(err)
+			if window != nil {
+				t.Fatal("newReplayWindow returned a window for an invalid margin")
 			}
-			if err := window.Accept(1, func() error { return nil }); !errors.Is(err, ErrInvalidReplayState) {
-				t.Fatalf("Accept with invalid margin error = %v, want ErrInvalidReplayState", err)
+			if !errors.Is(err, ErrInvalidReplayState) {
+				t.Fatalf("newReplayWindow error = %v, want ErrInvalidReplayState", err)
 			}
 			if store.saveAttempts != 0 {
 				t.Fatalf("SaveHighWater attempts = %d, want 0", store.saveAttempts)
-			}
-			if window.started {
-				t.Fatal("replay window advanced after invalid margin")
 			}
 		})
 	}
@@ -265,8 +262,9 @@ func TestReplayWindowStoreFailureDoesNotAdvanceWindow(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := window.Accept(9, func() error { return nil }); !errors.Is(err, saveErr) {
-		t.Fatalf("persistence error = %v, want %v", err, saveErr)
+	if err := window.Accept(9, func() error { return nil }); !errors.Is(err, saveErr) ||
+		!errors.Is(err, ErrInternalProcessing) {
+		t.Fatalf("persistence error = %v, want wrapped %v and ErrInternalProcessing", err, saveErr)
 	}
 
 	store.saveErr = nil
@@ -315,10 +313,11 @@ func TestReplayWindowRecoversLiveStateAfterInterruptedSave(t *testing.T) {
 func TestContextLoadsReplayWindowStore(t *testing.T) {
 	loadErr := errors.New("storage unavailable")
 	cfg := ContextConfig{
-		MasterSecret:      []byte("0123456789abcdef"),
-		SenderID:          []byte{1},
-		RecipientID:       []byte{2},
-		ReplayWindowStore: &testReplayWindowStore{loadErr: loadErr},
+		AcceptVolatileSenderSequence: true,
+		MasterSecret:                 []byte("0123456789abcdef"),
+		SenderID:                     []byte{1},
+		RecipientID:                  []byte{2},
+		ReplayWindowStore:            &testReplayWindowStore{loadErr: loadErr},
 	}
 	if _, err := NewContext(cfg); !errors.Is(err, loadErr) {
 		t.Fatalf("context load error = %v, want %v", err, loadErr)

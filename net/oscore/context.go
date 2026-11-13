@@ -46,10 +46,12 @@ var (
 
 // ContextConfig contains pre-established RFC 8613 security-context parameters.
 // Set SenderSequenceNumber to the next sequence number to use, or provide a
-// SenderSequenceStore for durable reservations across process restarts. Never
-// reset the sequence number for an existing sender key; doing so can reuse an
-// AEAD nonce. Configure ReplayWindowStore for durable inbound replay state, or
-// explicitly set AcceptReplayStateLoss to allow an in-memory replay window.
+// SenderSequenceStore for durable reservations across process restarts. Without
+// a store, explicitly set AcceptVolatileSenderSequence to accept in-memory
+// sequence state. Never reset the sequence number for an existing sender key;
+// doing so can reuse an AEAD nonce. Configure ReplayWindowStore for durable
+// inbound replay state, or explicitly set AcceptReplayStateLoss to allow an
+// in-memory replay window.
 type ContextConfig struct {
 	// Algorithm is a COSE AEAD algorithm. Zero selects AES-CCM-16-64-128.
 	Algorithm AEADAlgorithm
@@ -65,6 +67,9 @@ type ContextConfig struct {
 	SenderSequenceStore  SenderSequenceReserver
 	ReplayWindowSize     uint8
 	ReplayWindowStore    ReplayWindowStore
+	// AcceptVolatileSenderSequence explicitly accepts sender sequence state
+	// that is lost on restart when SenderSequenceStore is not configured.
+	AcceptVolatileSenderSequence bool
 	// AcceptReplayStateLoss explicitly accepts that replay protection resets
 	// after a restart when no ReplayWindowStore is configured.
 	AcceptReplayStateLoss bool
@@ -214,10 +219,20 @@ func validateContextConfig(cfg ContextConfig) (ContextConfig, error) {
 	if cfg.ReplayWindowSize > 64 {
 		return cfg, fmt.Errorf("%w: replay window exceeds 64 entries", ErrInvalidReplayWindow)
 	}
-	if cfg.ReplayWindowStore == nil && !cfg.AcceptReplayStateLoss {
-		return cfg, fmt.Errorf("%w: configure a ReplayWindowStore or explicitly accept replay-state loss with AcceptReplayStateLoss", ErrInvalidContext)
+	if err := validateContextPersistencePolicy(cfg); err != nil {
+		return cfg, err
 	}
 	return cfg, nil
+}
+
+func validateContextPersistencePolicy(cfg ContextConfig) error {
+	if cfg.ReplayWindowStore == nil && !cfg.AcceptReplayStateLoss {
+		return fmt.Errorf("%w: configure a ReplayWindowStore or explicitly accept replay-state loss with AcceptReplayStateLoss", ErrInvalidContext)
+	}
+	if cfg.SenderSequenceStore == nil && !cfg.AcceptVolatileSenderSequence {
+		return fmt.Errorf("%w: configure a SenderSequenceStore or explicitly accept volatile sender sequence state with AcceptVolatileSenderSequence", ErrInvalidContext)
+	}
+	return nil
 }
 
 type aeadParameters struct {

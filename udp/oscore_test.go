@@ -1295,10 +1295,11 @@ func assertUDPGetResponse(t *testing.T, cc *client.Conn) {
 func newUDPOSCOREProcessor(t *testing.T, senderID, recipientID string, allowPlaintext bool) *oscore.Processor {
 	t.Helper()
 	securityContext, err := oscore.NewContext(oscore.ContextConfig{
-		AcceptReplayStateLoss: true,
-		MasterSecret:          []byte{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16},
-		SenderID:              []byte(senderID),
-		RecipientID:           []byte(recipientID),
+		AcceptVolatileSenderSequence: true,
+		AcceptReplayStateLoss:        true,
+		MasterSecret:                 []byte{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16},
+		SenderID:                     []byte(senderID),
+		RecipientID:                  []byte(recipientID),
 	})
 	require.NoError(t, err)
 	policy := oscore.PlaintextDisabled
@@ -1317,17 +1318,19 @@ func newUDPOSCOREContextPair(t *testing.T, clientID, serverID string) (*oscore.C
 	t.Helper()
 	masterSecret := []byte{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16}
 	clientContext, err := oscore.NewContext(oscore.ContextConfig{
-		AcceptReplayStateLoss: true,
-		MasterSecret:          masterSecret,
-		SenderID:              []byte(clientID),
-		RecipientID:           []byte(serverID),
+		AcceptVolatileSenderSequence: true,
+		AcceptReplayStateLoss:        true,
+		MasterSecret:                 masterSecret,
+		SenderID:                     []byte(clientID),
+		RecipientID:                  []byte(serverID),
 	})
 	require.NoError(t, err)
 	serverContext, err := oscore.NewContext(oscore.ContextConfig{
-		AcceptReplayStateLoss: true,
-		MasterSecret:          masterSecret,
-		SenderID:              []byte(serverID),
-		RecipientID:           []byte(clientID),
+		AcceptVolatileSenderSequence: true,
+		AcceptReplayStateLoss:        true,
+		MasterSecret:                 masterSecret,
+		SenderID:                     []byte(serverID),
+		RecipientID:                  []byte(clientID),
 	})
 	require.NoError(t, err)
 	return clientContext, serverContext

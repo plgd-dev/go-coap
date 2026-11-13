@@ -388,6 +388,9 @@ func (cc *Conn) unprotectResponseWithExchange(outer message.Message, exchange ud
 }
 
 func (cc *Conn) removeOSCOREExchangeForProcessingError(key string, exchange oscore.Exchange) {
+	if exchange.IsObserve() {
+		return
+	}
 	cc.oscoreMu.Lock()
 	defer cc.oscoreMu.Unlock()
 	if current, exists := cc.oscoreExchanges[key]; exists && current.exchange == exchange {
@@ -514,7 +517,8 @@ func (cc *Conn) processIncomingOSCORERequest(req *pool.Message, datagram []byte)
 }
 
 func (cc *Conn) respondToOSCOREProcessingError(req *pool.Message, processingErr error) (bool, error) {
-	if !cc.oscoreErrorResponses || !req.HasOption(message.OSCORE) || req.Type() != message.Confirmable {
+	if oscore.IsInternalProcessingError(processingErr) ||
+		!cc.oscoreErrorResponses || !req.HasOption(message.OSCORE) || req.Type() != message.Confirmable {
 		return false, nil
 	}
 	resp := cc.AcquireMessage(req.Context())

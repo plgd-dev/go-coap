@@ -77,12 +77,13 @@ func FuzzContextUnprotectRequest(f *testing.F) {
 	f.Add([]byte{0x19, 0x14, 0x02, 0x37, 0xcb, 0x01}, []byte{0x01, 0x02})
 	f.Fuzz(func(t *testing.T, option, payload []byte) {
 		ctx, err := NewContext(ContextConfig{
-			AcceptReplayStateLoss: true,
-			MasterSecret:          mustHexSeed("0102030405060708090a0b0c0d0e0f10"),
-			MasterSalt:            mustHexSeed("9e7ca92223786340"),
-			IDContext:             mustHexSeed("37cbf3210017a2d3"),
-			SenderID:              []byte{1},
-			RecipientID:           []byte{},
+			AcceptVolatileSenderSequence: true,
+			AcceptReplayStateLoss:        true,
+			MasterSecret:                 mustHexSeed("0102030405060708090a0b0c0d0e0f10"),
+			MasterSalt:                   mustHexSeed("9e7ca92223786340"),
+			IDContext:                    mustHexSeed("37cbf3210017a2d3"),
+			SenderID:                     []byte{1},
+			RecipientID:                  []byte{},
 		})
 		if err != nil {
 			t.Fatal(err)
@@ -101,12 +102,13 @@ func FuzzContextUnprotectRequest(f *testing.F) {
 
 func TestFuzzSeedRFC8613AppendixC6AuthenticatesRequest(t *testing.T) {
 	ctx, err := NewContext(ContextConfig{
-		AcceptReplayStateLoss: true,
-		MasterSecret:          mustHexSeed("0102030405060708090a0b0c0d0e0f10"),
-		MasterSalt:            mustHexSeed("9e7ca92223786340"),
-		IDContext:             mustHexSeed("37cbf3210017a2d3"),
-		SenderID:              []byte{1},
-		RecipientID:           []byte{},
+		AcceptVolatileSenderSequence: true,
+		AcceptReplayStateLoss:        true,
+		MasterSecret:                 mustHexSeed("0102030405060708090a0b0c0d0e0f10"),
+		MasterSalt:                   mustHexSeed("9e7ca92223786340"),
+		IDContext:                    mustHexSeed("37cbf3210017a2d3"),
+		SenderID:                     []byte{1},
+		RecipientID:                  []byte{},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -137,11 +139,12 @@ func FuzzContextUnprotectResponse(f *testing.F) {
 	f.Add([]byte{0x19, 0x14, 0x02, 0x37, 0xcb, 0x01}, []byte{0x01, 0x02})
 	f.Fuzz(func(t *testing.T, option, payload []byte) {
 		ctx, err := NewContext(ContextConfig{
-			AcceptReplayStateLoss: true,
-			MasterSecret:          mustHexSeed("0102030405060708090a0b0c0d0e0f10"),
-			MasterSalt:            mustHexSeed("9e7ca92223786340"),
-			SenderID:              []byte{},
-			RecipientID:           []byte{1},
+			AcceptVolatileSenderSequence: true,
+			AcceptReplayStateLoss:        true,
+			MasterSecret:                 mustHexSeed("0102030405060708090a0b0c0d0e0f10"),
+			MasterSalt:                   mustHexSeed("9e7ca92223786340"),
+			SenderID:                     []byte{},
+			RecipientID:                  []byte{1},
 		})
 		if err != nil {
 			t.Fatal(err)
@@ -163,11 +166,12 @@ func FuzzContextUnprotectResponse(f *testing.F) {
 
 func TestFuzzSeedRFC8613AppendixC7AuthenticatesResponse(t *testing.T) {
 	ctx, err := NewContext(ContextConfig{
-		AcceptReplayStateLoss: true,
-		MasterSecret:          mustHexSeed("0102030405060708090a0b0c0d0e0f10"),
-		MasterSalt:            mustHexSeed("9e7ca92223786340"),
-		SenderID:              []byte{},
-		RecipientID:           []byte{1},
+		AcceptVolatileSenderSequence: true,
+		AcceptReplayStateLoss:        true,
+		MasterSecret:                 mustHexSeed("0102030405060708090a0b0c0d0e0f10"),
+		MasterSalt:                   mustHexSeed("9e7ca92223786340"),
+		SenderID:                     []byte{},
+		RecipientID:                  []byte{1},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -292,19 +296,21 @@ func fuzzRequestContexts(t *testing.T) (*Context, *Context) {
 	t.Helper()
 	const secret = "OSCORE fuzz post-authentication"
 	sender, err := NewContext(ContextConfig{
-		AcceptReplayStateLoss: true,
-		MasterSecret:          []byte(secret),
-		SenderID:              []byte{0},
-		RecipientID:           []byte{1},
+		AcceptVolatileSenderSequence: true,
+		AcceptReplayStateLoss:        true,
+		MasterSecret:                 []byte(secret),
+		SenderID:                     []byte{0},
+		RecipientID:                  []byte{1},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	recipient, err := NewContext(ContextConfig{
-		AcceptReplayStateLoss: true,
-		MasterSecret:          []byte(secret),
-		SenderID:              []byte{1},
-		RecipientID:           []byte{0},
+		AcceptVolatileSenderSequence: true,
+		AcceptReplayStateLoss:        true,
+		MasterSecret:                 []byte(secret),
+		SenderID:                     []byte{1},
+		RecipientID:                  []byte{0},
 	})
 	if err != nil {
 		t.Fatal(err)

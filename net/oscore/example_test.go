@@ -10,21 +10,25 @@ import (
 )
 
 func ExampleContext_directAPI() {
+	// This example uses volatile sequence and replay state; never reuse these
+	// settings with a production sender key.
 	masterSecret := []byte("public test-only secret")
 	clientContext, err := oscore.NewContext(oscore.ContextConfig{
-		AcceptReplayStateLoss: true,
-		MasterSecret:          masterSecret,
-		SenderID:              []byte("client"),
-		RecipientID:           []byte("server"),
+		AcceptVolatileSenderSequence: true,
+		AcceptReplayStateLoss:        true,
+		MasterSecret:                 masterSecret,
+		SenderID:                     []byte("client"),
+		RecipientID:                  []byte("server"),
 	})
 	if err != nil {
 		panic(err)
 	}
 	serverContext, err := oscore.NewContext(oscore.ContextConfig{
-		AcceptReplayStateLoss: true,
-		MasterSecret:          masterSecret,
-		SenderID:              []byte("server"),
-		RecipientID:           []byte("client"),
+		AcceptVolatileSenderSequence: true,
+		AcceptReplayStateLoss:        true,
+		MasterSecret:                 masterSecret,
+		SenderID:                     []byte("server"),
+		RecipientID:                  []byte("client"),
 	})
 	if err != nil {
 		panic(err)

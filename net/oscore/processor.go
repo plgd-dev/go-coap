@@ -32,10 +32,13 @@ func IsUnprotectedProcessingErrorCode(code codes.Code) bool {
 	}
 }
 
-// ProcessingErrorCode maps an OSCORE request-processing failure to the
-// unprotected response code clients recognize for OSCORE processing errors.
+// ProcessingErrorCode maps peer-caused OSCORE errors to the unprotected
+// response codes clients recognize. Internal processing errors map to 5.00
+// for classification and must not be sent as OSCORE processing-error responses.
 func ProcessingErrorCode(err error) codes.Code {
 	switch {
+	case IsInternalProcessingError(err):
+		return codes.InternalServerError
 	case errors.Is(err, ErrNoSecurityContext), errors.Is(err, ErrReplay):
 		return codes.Unauthorized
 	case errors.Is(err, ErrInvalidOSCOREOption):
@@ -345,7 +348,8 @@ func (p *Processor) ProcessIncomingRequest(request message.Message) (message.Mes
 		case PlaintextOnly, PlaintextAllowed:
 			return request, nil, Exchange{}, nil
 		default:
-			return message.Message{}, nil, Exchange{}, fmt.Errorf("%w: invalid plaintext policy %d", ErrInvalidContext, p.plaintextPolicy)
+			return message.Message{}, nil, Exchange{}, fmt.Errorf("%w: %w: invalid plaintext policy %d",
+				ErrInternalProcessing, ErrInvalidContext, p.plaintextPolicy)
 		}
 	}
 	if p.plaintextPolicy == PlaintextOnly {
@@ -357,9 +361,19 @@ func (p *Processor) ProcessIncomingRequest(request message.Message) (message.Mes
 	}
 	plaintext, exchange, err := context.UnprotectRequest(request)
 	if err != nil {
+		if !IsInternalProcessingError(err) &&
+			(errors.Is(err, ErrInvalidContext) || errors.Is(err, ErrInvalidReplayState)) {
+			err = fmt.Errorf("%w: %w", ErrInternalProcessing, err)
+		}
 		return message.Message{}, nil, Exchange{}, err
 	}
 	return plaintext, context, exchange, nil
+}
+
+// IsInternalProcessingError reports whether processing failed because of a
+// local OSCORE configuration or persistence fault rather than a peer request.
+func IsInternalProcessingError(err error) bool {
+	return errors.Is(err, ErrInternalProcessing)
 }
 
 // UnprotectResponse decrypts a response using the context bound to exchange.

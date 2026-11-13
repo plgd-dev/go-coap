@@ -10,6 +10,7 @@ import (
 	"github.com/plgd-dev/go-coap/v3/message"
 	"github.com/plgd-dev/go-coap/v3/message/codes"
 	"github.com/plgd-dev/go-coap/v3/message/pool"
+	"github.com/plgd-dev/go-coap/v3/net/oscore"
 	"github.com/plgd-dev/go-coap/v3/net/responsewriter"
 	pkgErrors "github.com/plgd-dev/go-coap/v3/pkg/errors"
 	coapSync "github.com/plgd-dev/go-coap/v3/pkg/sync"
@@ -216,7 +217,7 @@ func (o *Observation[C]) handle(r *pool.Message) {
 	if o.wantBeNotified(r) {
 		o.observeFunc(r)
 	}
-	if !hasObserve {
+	if !hasObserve && !oscore.IsUnprotectedProcessingError(r.Context()) {
 		o.cleanUp()
 	}
 }

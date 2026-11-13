@@ -220,6 +220,102 @@ func TestBlockWiseReceiveBlock1RejectsDifferentOSCOREIdentity(t *testing.T) {
 	}
 }
 
+func TestBlockProtectionIdentityUsesOuterOSCOREOption(t *testing.T) {
+	tests := []struct {
+		name   string
+		first  oscore.OptionValue
+		second oscore.OptionValue
+	}{
+		{
+			name: "sender ID differs",
+			first: oscore.OptionValue{
+				PartialIV: []byte{1}, SenderID: []byte("clientA"), SenderIDSet: true,
+			},
+			second: oscore.OptionValue{
+				PartialIV: []byte{1}, SenderID: []byte("clientB"), SenderIDSet: true,
+			},
+		},
+		{
+			name: "ID Context differs",
+			first: oscore.OptionValue{
+				PartialIV: []byte{1}, IDContext: []byte("context-a"), IDContextSet: true,
+				SenderID: []byte("client"), SenderIDSet: true,
+			},
+			second: oscore.OptionValue{
+				PartialIV: []byte{1}, IDContext: []byte("context-b"), IDContextSet: true,
+				SenderID: []byte("client"), SenderIDSet: true,
+			},
+		},
+		{
+			name: "absent and present empty ID Context differ",
+			first: oscore.OptionValue{
+				PartialIV: []byte{1}, SenderID: []byte("client"), SenderIDSet: true,
+			},
+			second: oscore.OptionValue{
+				PartialIV: []byte{1}, IDContextSet: true,
+				SenderID: []byte("client"), SenderIDSet: true,
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			firstValue, err := test.first.MarshalBinary()
+			require.NoError(t, err)
+			secondValue, err := test.second.MarshalBinary()
+			require.NoError(t, err)
+
+			first := pool.NewMessage(t.Context())
+			first.SetOptionBytes(message.OSCORE, firstValue)
+			second := pool.NewMessage(t.Context())
+			second.SetOptionBytes(message.OSCORE, secondValue)
+
+			firstIdentity := blockProtectionIdentityFor(first)
+			secondIdentity := blockProtectionIdentityFor(second)
+			require.True(t, firstIdentity.protected)
+			require.True(t, firstIdentity.identityKnown)
+			require.True(t, secondIdentity.protected)
+			require.True(t, secondIdentity.identityKnown)
+			require.NotEqual(t, firstIdentity, secondIdentity,
+				"distinct outer OSCORE identities must not collapse to protected=true")
+		})
+	}
+}
+
+func TestBlockWiseReceiveOverlappingOuterOSCORETransfers(t *testing.T) {
+	r := newBlock1Receiver(t, time.Minute)
+	token := message.Token{0x61}
+	makeOption := func(senderID string) []byte {
+		value, err := (oscore.OptionValue{
+			PartialIV: []byte{1}, SenderID: []byte(senderID), SenderIDSet: true,
+		}).MarshalBinary()
+		require.NoError(t, err)
+		return value
+	}
+	firstIdentity := makeOption("clientA")
+	secondIdentity := makeOption("clientB")
+
+	require.Equal(t, codes.Continue,
+		r.sendPostBlockWithOSCOREOption(0, true, token, firstIdentity, 0xa0).code)
+	require.Equal(t, codes.Continue,
+		r.sendPostBlockWithOSCOREOption(0, true, token, secondIdentity, 0xb0).code)
+	require.Equal(t, codes.Changed,
+		r.sendPostBlockWithOSCOREOption(1, false, token, firstIdentity, 0xa1).code)
+	require.Equal(t, codes.Changed,
+		r.sendPostBlockWithOSCOREOption(1, false, token, secondIdentity, 0xb1).code)
+
+	require.Len(t, r.delivered, 2)
+	require.Len(t, r.delivered[0], 2*testBlock1Size)
+	require.Len(t, r.delivered[1], 2*testBlock1Size)
+	require.Equal(t, bytes.Repeat([]byte{0xa0}, testBlock1Size),
+		r.delivered[0][:testBlock1Size])
+	require.Equal(t, bytes.Repeat([]byte{0xa1}, testBlock1Size),
+		r.delivered[0][testBlock1Size:])
+	require.Equal(t, bytes.Repeat([]byte{0xb0}, testBlock1Size),
+		r.delivered[1][:testBlock1Size])
+	require.Equal(t, bytes.Repeat([]byte{0xb1}, testBlock1Size),
+		r.delivered[1][testBlock1Size:])
+}
+
 func TestBlockWiseReceiveOversizedForeignBlockPreservesTransfer(t *testing.T) {
 	const limit = 2 * testBlock1Size
 	r := newBlock1Receiver(t, time.Minute)
@@ -299,6 +395,35 @@ func (b *block1Receiver) sendPostBlockWithIdentity(
 		requestInfo, ok := oscore.RequestInfoFromContext(r.Context())
 		b.protected = append(b.protected, ok && requestInfo.Protected)
 		b.identities = append(b.identities, requestInfo)
+		require.NoError(b.t, w.SetResponse(codes.Changed, message.TextPlain, nil))
+	})
+	return block1Response{code: w.Message().Code()}
+}
+
+func (b *block1Receiver) sendPostBlockWithOSCOREOption(
+	num int64,
+	more bool,
+	token message.Token,
+	oscoreOption []byte,
+	payloadByte byte,
+) block1Response {
+	req := b.cc.AcquireMessage(b.t.Context())
+	defer b.cc.ReleaseMessage(req)
+	req.SetCode(codes.PUT)
+	req.SetToken(token)
+	req.SetType(message.Confirmable)
+	req.SetOptionBytes(message.OSCORE, oscoreOption)
+	block, err := EncodeBlockOption(SZX1024, num, more)
+	require.NoError(b.t, err)
+	req.SetOptionUint32(message.Block1, block)
+	req.SetBody(bytes.NewReader(bytes.Repeat([]byte{payloadByte}, testBlock1Size)))
+
+	w := responsewriter.New(b.cc.AcquireMessage(b.t.Context()), b.cc)
+	defer func() { b.cc.ReleaseMessage(w.Message()) }()
+	b.bw.Handle(w, req, SZX1024, 64*1024, b.remote, func(w *responsewriter.ResponseWriter[*testClient], r *pool.Message) {
+		body, readErr := r.ReadBody()
+		require.NoError(b.t, readErr)
+		b.delivered = append(b.delivered, body)
 		require.NoError(b.t, w.SetResponse(codes.Changed, message.TextPlain, nil))
 	})
 	return block1Response{code: w.Message().Code()}
