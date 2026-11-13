@@ -32,6 +32,29 @@ func TestGetUnknownCriticalOptionsIllegalLength(t *testing.T) {
 	require.Equal(t, []message.OptionID{message.IfNoneMatch, message.URIPath}, unknownCriticalOpts)
 }
 
+func TestGetUnknownCriticalOptionsRepeated(t *testing.T) {
+	options := message.Options{
+		{ID: message.IfMatch, Value: []byte{0x01}},
+		{ID: message.IfMatch, Value: []byte{0x02}},
+		{ID: message.URIHost, Value: []byte("a")},
+		{ID: message.URIHost, Value: []byte("b")},
+		{ID: message.URIPath, Value: []byte("a")},
+		{ID: message.URIPath, Value: []byte("b")},
+		{ID: message.URIQuery, Value: []byte("a")},
+		{ID: message.URIQuery, Value: []byte("b")},
+		{ID: message.Accept, Value: []byte{0x00}},
+		{ID: message.Accept, Value: []byte{0x00}},
+		{ID: message.Accept, Value: []byte{0x00}},
+		{ID: message.Block1, Value: []byte{0x0e}},
+		{ID: message.Block1, Value: []byte{0x16}},
+		{ID: message.QBlock2, Value: []byte{0x06}},
+		{ID: message.QBlock2, Value: []byte{0x16}},
+	}
+
+	unknownCriticalOpts := GetUnknownCriticalOptionsWithQBlock(options, true)
+	require.Equal(t, []message.OptionID{message.URIHost, message.Accept, message.Block1}, unknownCriticalOpts)
+}
+
 func TestFormatUnknownCriticalOptionsDiagnostic(t *testing.T) {
 	diagnostic := FormatUnknownCriticalOptionsDiagnostic([]message.OptionID{13, 99})
 	require.Equal(t, "unknown critical option(s): 13,99", diagnostic)

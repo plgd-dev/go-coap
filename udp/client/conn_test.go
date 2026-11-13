@@ -1151,6 +1151,11 @@ func TestConnRejectUnknownCriticalOptions(t *testing.T) {
 			rawRequestHex: "43036f1166f30251006573746f726510ff61746c61732d637269746963616c2d42",
 			optionID:      "5",
 		},
+		{
+			name:          "repeated non-repeatable accept",
+			rawRequestHex: "43036f1166f302b573746f72651051000100ff61746c61732d637269746963616c2d42",
+			optionID:      "17",
+		},
 	}
 
 	for _, tc := range testCases {
