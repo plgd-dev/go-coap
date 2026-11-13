@@ -470,6 +470,86 @@ func TestTCPOSCORERequirementTracksLiveRequestConsumer(t *testing.T) {
 		"consumer completion must release the non-Observe exchange")
 }
 
+func TestPendingTCPOSCOREWriteKeepsExchangeAndRequirement(t *testing.T) {
+	securityContext, err := oscore.NewContext(oscore.ContextConfig{
+		AcceptReplayStateLoss: true,
+		MasterSecret:          []byte("pending TCP OSCORE write"),
+		SenderID:              []byte("client"),
+		RecipientID:           []byte("server"),
+	})
+	require.NoError(t, err)
+	processor, err := oscore.NewProcessor(oscore.ProcessorConfig{Contexts: []*oscore.Context{securityContext}})
+	require.NoError(t, err)
+
+	clientConn, serverConn := net.Pipe()
+	defer clientConn.Close()
+	defer serverConn.Close()
+	session := &Session{
+		connection:  coapNet.NewConn(clientConn),
+		messagePool: pool.New(1, 2048),
+	}
+	now := time.Date(2026, 11, 13, 0, 0, 0, 0, time.UTC)
+	cc := &Conn{
+		session:                 session,
+		oscoreProcessor:         processor,
+		oscoreExchangeTimeout:   time.Second,
+		oscoreNow:               func() time.Time { return now },
+		oscoreExchanges:         make(oscore.ExchangeTracker[tcpOSCOREExchange]),
+		oscoreRequiredResponses: oscore.NewResponseRequirements(),
+	}
+	request := pool.NewMessage(context.Background())
+	request.SetCode(codes.GET)
+	request.SetToken(message.Token("pw"))
+	request.SetContext(context.WithValue(context.Background(), tcpOSCORERequestConsumerKey{}, true))
+
+	writeResult := make(chan error, 1)
+	go func() {
+		writeResult <- cc.writeProtectedRequest(request)
+	}()
+
+	key := oscore.ExchangeTrackerKey(request.Token())
+	require.Eventually(t, func() bool {
+		cc.oscoreMu.Lock()
+		_, exists := cc.oscoreExchanges[key]
+		cc.oscoreMu.Unlock()
+		if exists {
+			return true
+		}
+		select {
+		case writeErr := <-writeResult:
+			require.NoError(t, writeErr, "protected write returned before exchange publication")
+		default:
+		}
+		return false
+	}, time.Second, time.Millisecond)
+
+	now = now.Add(2 * time.Second)
+	cc.oscoreMu.Lock()
+	cc.expireTCPOSCOREExchangesLocked(now)
+	cc.expireTCPOSCOREResponseRequirementsLocked(now)
+	exchange, exchangeExists := cc.oscoreExchanges[key]
+	requirements := cc.oscoreRequiredResponses[key]
+	requirementExpiry, requirementExists := requirements[exchange.exchange]
+	cc.oscoreMu.Unlock()
+	require.True(t, exchangeExists, "in-flight request consumer must keep its exchange")
+	require.True(t, requirementExists, "in-flight request consumer must keep OSCORE required")
+	require.True(t, requirementExpiry.IsZero())
+
+	response := pool.NewMessage(context.Background())
+	response.SetMessage(message.Message{Code: codes.Content, Token: request.Token()})
+	require.ErrorIs(t, cc.unprotectResponse(response), oscore.ErrOSCORERequired,
+		"an unprotected success must not pass during the pending protected write")
+	cc.oscoreMu.Lock()
+	_, exchangeExists = cc.oscoreExchanges[key]
+	cc.oscoreMu.Unlock()
+	require.True(t, exchangeExists, "response processing must preserve the pending exchange")
+
+	require.NoError(t, serverConn.Close(), "closing peer should unblock the pending write")
+	require.Error(t, <-writeResult)
+	require.NotContains(t, cc.oscoreRequiredResponses, key,
+		"failed write must release its provisional response requirement")
+}
+
 func TestTCPOSCOREObservationExchangeSurvivesRequestConsumerRelease(t *testing.T) {
 	securityContext, err := oscore.NewContext(oscore.ContextConfig{
 		AcceptReplayStateLoss: true,

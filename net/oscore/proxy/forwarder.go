@@ -85,7 +85,9 @@ var deniedPublicTargetPrefixes = [...]netip.Prefix{
 	netip.MustParsePrefix("255.255.255.255/32"),
 	netip.MustParsePrefix("64:ff9b::/96"),
 	netip.MustParsePrefix("64:ff9b:1::/48"),
+	netip.MustParsePrefix("2001:2::/48"),
 	netip.MustParsePrefix("2001:db8::/32"),
+	netip.MustParsePrefix("3fff::/20"),
 }
 
 // Forwarder implements a one-request/one-response OSCORE forwarding path.

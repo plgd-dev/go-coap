@@ -448,10 +448,11 @@ selected IP in the `RoundTripper`; validating one DNS answer and dialing a
 later answer permits DNS rebinding. `AllowPublicIPLiteralTarget` is a helper
 for policies that intentionally accept only literal public IP addresses.
 It uses `netip.Addr.IsGlobalUnicast` and rejects private/special-use ranges,
-including IPv4-mapped forms, the well-known NAT64 prefix, and documentation
-prefixes. This helper is not a substitute for an application-specific
-allowlist. If `Forwarder.OnError` is nil, forwarding errors are silently
-ignored after an error response is written; set the callback to observe them.
+including IPv4-mapped forms, well-known and local-use NAT64 prefixes,
+documentation prefixes, and IPv4/IPv6 benchmarking ranges. This helper is not
+a substitute for an application-specific allowlist. If `Forwarder.OnError` is
+nil, forwarding errors are silently ignored after an error response is written;
+set the callback to observe them.
 The round tripper receives the context, parsed target, and a copied
 CoAP message whose OSCORE option and ciphertext are unchanged. It should use a
 fresh connection per request unless it safely handles token collisions.
