@@ -414,6 +414,9 @@ func (cc *Conn) updateOSCOREExchangeResponse(
 	if err != nil {
 		return err
 	}
+	if usedCancelExchange && current.cancelExchange != exchange.cancelExchange {
+		return oscore.ErrInvalidOSCOREMessage
+	}
 	if current.observe && !usedCancelExchange && hasObserve {
 		current.expires = time.Time{}
 	}

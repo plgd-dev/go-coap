@@ -395,6 +395,70 @@ func TestStaleOSCOREExchangeDoesNotRemoveReplacementOrProtectionRequirement(t *t
 		"stale response processing must not disable the OSCORE response requirement")
 }
 
+func TestStaleOSCORECancellationResponseDoesNotRemoveReplacement(t *testing.T) {
+	makeExchange := func(secret string) (*oscore.Context, oscore.Exchange) {
+		securityContext, err := oscore.NewContext(oscore.ContextConfig{
+			AcceptReplayStateLoss: true,
+			MasterSecret:          []byte(secret),
+			SenderID:              []byte("client"),
+			RecipientID:           []byte("server"),
+		})
+		require.NoError(t, err)
+		_, exchange, err := securityContext.ProtectRequest(message.Message{
+			Code: codes.GET, Token: message.Token{1},
+		})
+		require.NoError(t, err)
+		return securityContext, exchange
+	}
+
+	context, primary := makeExchange("Observe primary exchange")
+	_, oldCancel := makeExchange("old Observe cancellation")
+	_, newCancel := makeExchange("replacement Observe cancellation")
+	require.NotEqual(t, oldCancel, newCancel)
+
+	const key = "\x01"
+	cc := &Conn{
+		oscoreExchanges: oscore.ExchangeTracker[udpOSCOREExchange]{
+			key: {
+				context:        context,
+				exchange:       primary,
+				observe:        true,
+				cancelContext:  context,
+				cancelExchange: newCancel,
+			},
+		},
+		oscoreRequiredResponses: oscore.ResponseRequirements{
+			key: {
+				primary:   time.Time{},
+				oldCancel: time.Time{},
+				newCancel: time.Time{},
+			},
+		},
+	}
+	responseExchange := udpOSCOREExchange{
+		context:        context,
+		exchange:       primary,
+		observe:        true,
+		cancelContext:  context,
+		cancelExchange: oldCancel,
+	}
+
+	require.ErrorIs(t, cc.updateOSCOREExchangeResponse(
+		key,
+		responseExchange,
+		true,
+		false,
+		nil,
+	), oscore.ErrInvalidOSCOREMessage)
+	current := cc.oscoreExchanges[key]
+	require.Equal(t, newCancel, current.cancelExchange,
+		"stale cancellation response must not remove the replacement cancellation")
+	require.True(t, cc.oscoreRequiredResponses.HasToken(key),
+		"stale cancellation response must not remove response requirements")
+	require.Contains(t, cc.oscoreRequiredResponses[key], newCancel,
+		"replacement cancellation must remain required")
+}
+
 func TestOSCOREOuterBlockwiseResponseRequiresProtection(t *testing.T) {
 	for _, test := range []struct {
 		name                string
