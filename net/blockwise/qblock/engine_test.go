@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"io"
 	"testing"
 	"time"
 
@@ -232,6 +233,41 @@ func TestQBlockTransferLifecycleBudget(t *testing.T) {
 	require.ErrorIs(t, b.cacheQBlock2Response(response.Context(), "body", "identity", response, message.NonConfirmable), context.Canceled)
 	require.Equal(t, bytesBefore, qRetainedBytes.Load())
 	require.Equal(t, transfersBefore, qRetainedTransfers.Load())
+}
+
+func TestQBlock2NewRequestWithPayloadIsNotResumed(t *testing.T) {
+	type control = struct {
+		num  int64
+		more bool
+	}
+	for _, code := range []codes.Code{codes.POST, codes.PUT, codes.FETCH, codes.PATCH, codes.IPATCH} {
+		t.Run(code.String(), func(t *testing.T) {
+			cc := &qTestTransport{testClient: newTestClient(), jobs: make(map[string]qBlockTestJob)}
+			b := New(cc, func(error) {})
+			defer b.CloseQBlockTransfers()
+			calls := 0
+			handler := func(w *responsewriter.ResponseWriter[*qTestTransport], r *pool.Message) {
+				calls++
+				payload, err := io.ReadAll(r.Body())
+				require.NoError(t, err)
+				require.NoError(t, w.SetResponse(codes.Changed, message.AppOctets, bytes.NewReader(bytes.Repeat(payload, 64))))
+			}
+			invoke := func(token, payload string) *pool.Message {
+				req := qTestRequest(t, token, control{0, true})
+				req.SetCode(code)
+				req.SetBody(bytes.NewReader([]byte(payload)))
+				w := responsewriter.New(cc.AcquireMessage(req.Context()), cc)
+				require.NoError(t, b.handleQBlock2(w, req, SZX16, nil, handler))
+				return w.Message()
+			}
+			invoke("first", "A")
+			second := invoke("second", "B")
+			require.Equal(t, 2, calls, "a new request must reach the handler")
+			body, err := io.ReadAll(second.Body())
+			require.NoError(t, err)
+			require.Equal(t, bytes.Repeat([]byte("B"), 16), body)
+		})
+	}
 }
 
 func TestQBlockEmptyBodies(t *testing.T) {
