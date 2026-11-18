@@ -451,6 +451,27 @@ func TestUnmarshalRejectsPayloadMarkerWithoutPayload(t *testing.T) {
 	require.Equal(t, 1, n)
 }
 
+func TestMarshalRejectsOverlongOptionValue(t *testing.T) {
+	// 269 + 0xffff bytes is the longest value the 16-bit extended length can encode.
+	options := Options{{ID: ProxyURI, Value: make([]byte, 269+0xffff)}}
+	buf := make([]byte, 70000)
+	n, err := options.Marshal(buf)
+	require.NoError(t, err)
+	require.Equal(t, 4+269+0xffff, n)
+	// delta 35 = 13+22, length 269+0xffff
+	require.Equal(t, []byte{0xde, 22, 0xff, 0xff}, buf[:4])
+
+	// One byte more would wrap the length to 269 and the remaining 0x10000 bytes,
+	// here a Size1 option and a payload, would be decoded as part of the message.
+	value := make([]byte, 269+0x10000)
+	copy(value[269:], []byte{0xd2, 0x0c, 0x12, 0x34, 0xff, 'x'})
+	options = Options{{ID: ProxyURI, Value: value}}
+	_, err = options.Marshal(nil)
+	require.ErrorIs(t, err, ErrInvalidValueLength)
+	_, err = options.Marshal(buf)
+	require.ErrorIs(t, err, ErrInvalidValueLength)
+}
+
 func FuzzUnmarshalData(f *testing.F) {
 	f.Fuzz(func(_ *testing.T, input_data []byte) {
 		uoptions := make(Options, 0, 10)
