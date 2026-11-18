@@ -410,6 +410,11 @@ func (o Option) Marshal(buf []byte, previousID OptionID) (int, error) {
 	default:
 		return -1, err
 	}
+	// The extended length is 16 bits (RFC 7252 section 3.1). A longer value would be
+	// written with a wrapped length and the peer would parse its tail as further options.
+	if lenBuf > ExtendOptionWordAddend+int(max2ByteNumber) {
+		return -1, ErrInvalidValueLength
+	}
 
 	// header marshal
 	lenBuf, err = marshalOptionHeader(buf, delta, lenBuf)
