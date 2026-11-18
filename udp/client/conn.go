@@ -1372,7 +1372,10 @@ func (cc *Conn) handleSpecialMessages(r *pool.Message) bool {
 		return true
 	}
 
-	// if waits for concrete message handler
+	// if waits for concrete message handler; only an ACK or RST matches our CON (RFC 7252 section 4.4)
+	if r.Type() != message.Acknowledgement && r.Type() != message.Reset {
+		return false
+	}
 	if elem, ok := cc.midHandlerContainer.LoadAndDelete(r.MessageID()); ok {
 		elem.ReleaseMessage(cc)
 		resp := cc.AcquireMessage(cc.Context())
