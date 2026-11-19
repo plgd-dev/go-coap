@@ -35,6 +35,7 @@ type Message struct {
 	isModified      bool
 	valueBuffer     []byte
 	origValueBuffer []byte
+	origOptions     message.Options
 	body            io.ReadSeeker
 	sequence        uint64
 
@@ -47,15 +48,17 @@ const valueBufferSize = 256
 
 func NewMessage(ctx context.Context) *Message {
 	valueBuffer := make([]byte, valueBufferSize)
+	options := make(message.Options, 0, 16)
 	return &Message{
 		ctx: ctx,
 		msg: message.Message{
-			Options:   make(message.Options, 0, 16),
+			Options:   options,
 			MessageID: -1,
 			Type:      message.Unset,
 		},
 		valueBuffer:     valueBuffer,
 		origValueBuffer: valueBuffer,
+		origOptions:     options,
 		bufferUnmarshal: make([]byte, 256),
 		bufferMarshal:   make([]byte, 256),
 	}
@@ -75,11 +78,13 @@ func (r *Message) SetContext(ctx context.Context) {
 	r.ctx = ctx
 }
 
-func (r *Message) SetMessage(message message.Message) {
+func (r *Message) SetMessage(msg message.Message) {
+	// copy options to avoid sharing the same underlying array
+	msg.Options = append([]message.Option(nil), msg.Options...)
 	r.Reset()
-	r.msg = message
-	if len(message.Payload) > 0 {
-		r.body = bytes.NewReader(message.Payload)
+	r.msg = msg
+	if len(msg.Payload) > 0 {
+		r.body = bytes.NewReader(msg.Payload)
 	}
 	r.isModified = true
 }
@@ -140,7 +145,10 @@ func (r *Message) Type() message.Type {
 func (r *Message) Reset() {
 	r.msg.Token = nil
 	r.msg.Code = codes.Empty
-	r.msg.Options = r.msg.Options[:0]
+	// Return to the original options and clear all of them: each element, also
+	// those behind len, keeps the buffer alive that its value refers to.
+	clear(r.origOptions[:cap(r.origOptions)])
+	r.msg.Options = r.origOptions
 	r.msg.MessageID = -1
 	r.msg.Type = message.Unset
 	r.msg.Payload = nil
