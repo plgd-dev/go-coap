@@ -1462,3 +1462,81 @@ func TestConnRequestMonitorDropRequest(t *testing.T) {
 	require.Error(t, err)
 	require.ErrorIs(t, err, context.DeadlineExceeded)
 }
+
+// A peer's own Confirmable or Non-confirmable message carries a Message ID from
+// the peer's ID space (RFC 7252 section 4.4). Only an Acknowledgement or Reset
+// with the same Message ID may complete an outstanding Confirmable message.
+func TestConnConfirmableNotAcknowledgedByPeerRequestWithSameMID(t *testing.T) {
+	peer, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	require.NoError(t, err)
+	defer func() {
+		errC := peer.Close()
+		require.NoError(t, errC)
+	}()
+
+	cc, err := udp.Dial(peer.LocalAddr().String())
+	require.NoError(t, err)
+	defer func() {
+		errC := cc.Close()
+		require.NoError(t, errC)
+	}()
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second*5)
+	defer cancel()
+	req := cc.AcquireMessage(ctx)
+	defer cc.ReleaseMessage(req)
+	err = req.SetupPost("/a", []byte{0x01, 0x02}, message.TextPlain, bytes.NewReader([]byte("data")))
+	require.NoError(t, err)
+	req.SetType(message.Confirmable)
+
+	writeErr := make(chan error, 1)
+	go func() {
+		writeErr <- cc.WriteMessage(req)
+	}()
+
+	buf := make([]byte, 1500)
+	err = peer.SetReadDeadline(time.Now().Add(time.Second * 2))
+	require.NoError(t, err)
+	n, clientAddr, err := peer.ReadFromUDP(buf)
+	require.NoError(t, err)
+	sent := pool.NewMessage(ctx)
+	_, err = sent.UnmarshalWithDecoder(coder.DefaultCoder, buf[:n])
+	require.NoError(t, err)
+	require.Equal(t, message.Confirmable, sent.Type())
+
+	encode := func(m message.Message) []byte {
+		data := make([]byte, 64)
+		l, errE := coder.DefaultCoder.Encode(m, data)
+		require.NoError(t, errE)
+		return data[:l]
+	}
+	for _, typ := range []message.Type{message.Confirmable, message.NonConfirmable} {
+		// The peer's request happens to reuse the Message ID of the client's CON.
+		_, err = peer.WriteToUDP(encode(message.Message{
+			Code:      codes.GET,
+			Token:     []byte{0x09},
+			MessageID: sent.MessageID(),
+			Type:      typ,
+		}), clientAddr)
+		require.NoError(t, err)
+	}
+
+	select {
+	case err = <-writeErr:
+		require.Failf(t, "CON completed by a peer request", "WriteMessage returned %v without an ACK", err)
+	case <-time.After(time.Millisecond * 300):
+	}
+
+	_, err = peer.WriteToUDP(encode(message.Message{
+		Code:      codes.Empty,
+		MessageID: sent.MessageID(),
+		Type:      message.Acknowledgement,
+	}), clientAddr)
+	require.NoError(t, err)
+	select {
+	case err = <-writeErr:
+		require.NoError(t, err)
+	case <-ctx.Done():
+		require.FailNow(t, "WriteMessage did not complete after ACK")
+	}
+}
