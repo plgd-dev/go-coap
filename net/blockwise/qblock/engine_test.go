@@ -5,6 +5,8 @@ import (
 	"context"
 	"errors"
 	"io"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -41,6 +43,11 @@ type qBlockTestJob struct {
 	deadline time.Time
 	run      func() error
 }
+
+const (
+	q2TestTokenAlpha = "alpha-token"
+	q2TestTokenBeta  = "beta-token"
+)
 
 func (c *qTestTransport) OpenQBlockExchange(context.Context, message.Token) (Exchange, error) {
 	return nil, errors.New("not used")
@@ -265,28 +272,147 @@ func TestQBlock2NewRequestWithPayloadIsNotResumed(t *testing.T) {
 					cc.ReleaseMessage(req)
 					return w.Message()
 				}
-				first := invoke("first", "A", true)
+				first := invoke(q2TestTokenAlpha, "A", true)
 				cc.ReleaseMessage(first)
-				second := invoke("second", "B", tc.more)
+				second := invoke(q2TestTokenBeta, "B", tc.more)
 				defer cc.ReleaseMessage(second)
 				require.Equal(t, 2, calls, "a new request must reach the handler")
 				body, err := io.ReadAll(second.Body())
 				require.NoError(t, err)
 				require.Equal(t, bytes.Repeat([]byte("B"), 16), body)
 
-				recovery := qTestRequest(t, "recovery", control{1, false})
-				recovery.SetCode(code)
-				w := responsewriter.New(cc.AcquireMessage(recovery.Context()), cc)
-				require.NoError(t, b.handleQBlock2(w, recovery, SZX16, nil, handler))
-				cc.ReleaseMessage(recovery)
-				defer cc.ReleaseMessage(w.Message())
-				require.Equal(t, 2, calls, "recovery must reuse the latest cached response")
-				recoveredBody, err := io.ReadAll(w.Message().Body())
-				require.NoError(t, err)
-				require.Equal(t, bytes.Repeat([]byte("B"), 16), recoveredBody)
+				for _, expected := range []struct {
+					token   string
+					payload byte
+				}{{q2TestTokenAlpha, 'A'}, {q2TestTokenBeta, 'B'}} {
+					recovery := qTestRequest(t, expected.token, control{1, false})
+					recovery.SetCode(code)
+					w := responsewriter.New(cc.AcquireMessage(recovery.Context()), cc)
+					require.NoError(t, b.handleQBlock2(w, recovery, SZX16, nil, handler))
+					cc.ReleaseMessage(recovery)
+					defer cc.ReleaseMessage(w.Message())
+					require.Equal(t, 2, calls, "recovery must reuse its original cached response")
+					recoveredBody, err := io.ReadAll(w.Message().Body())
+					require.NoError(t, err)
+					require.Equal(t, bytes.Repeat([]byte{expected.payload}, 16), recoveredBody)
+				}
 			})
 		}
 	}
+}
+
+func TestQBlock2NewRequestWithSameTokenReplacesCachedResponse(t *testing.T) {
+	cc := &qTestTransport{testClient: newTestClient(), jobs: make(map[string]qBlockTestJob)}
+	b := New(cc, func(error) {})
+	defer b.CloseQBlockTransfers()
+	calls := 0
+	handler := func(w *responsewriter.ResponseWriter[*qTestTransport], r *pool.Message) {
+		calls++
+		payload, err := io.ReadAll(r.Body())
+		require.NoError(t, err)
+		require.NoError(t, w.SetResponse(codes.Changed, message.AppOctets, bytes.NewReader(bytes.Repeat(payload, 32))))
+	}
+	invoke := func(payload string, num int64) *pool.Message {
+		req := qTestRequest(t, "same", struct {
+			num  int64
+			more bool
+		}{num, false})
+		req.SetCode(codes.POST)
+		if num == 0 {
+			req.SetBody(bytes.NewReader([]byte(payload)))
+		}
+		w := responsewriter.New(cc.AcquireMessage(req.Context()), cc)
+		require.NoError(t, b.handleQBlock2(w, req, SZX16, nil, handler))
+		cc.ReleaseMessage(req)
+		return w.Message()
+	}
+
+	first := invoke("A", 0)
+	cc.ReleaseMessage(first)
+	second := invoke("B", 0)
+	defer cc.ReleaseMessage(second)
+	require.Equal(t, 2, calls)
+	body, err := io.ReadAll(second.Body())
+	require.NoError(t, err)
+	require.Equal(t, bytes.Repeat([]byte("B"), 16), body)
+
+	recovery := invoke("", 1)
+	defer cc.ReleaseMessage(recovery)
+	require.Equal(t, 2, calls, "same-token continuation must use the replacement response")
+	recoveredBody, err := io.ReadAll(recovery.Body())
+	require.NoError(t, err)
+	require.Equal(t, bytes.Repeat([]byte("B"), 16), recoveredBody)
+}
+
+func TestQBlock2ConcurrentNewRequestsKeepSeparateSenders(t *testing.T) {
+	cc := &qTestTransport{testClient: newTestClient(), jobs: make(map[string]qBlockTestJob)}
+	b := New(cc, func(error) {})
+	defer b.CloseQBlockTransfers()
+	var calls atomic.Int32
+	handler := func(w *responsewriter.ResponseWriter[*qTestTransport], r *pool.Message) {
+		calls.Add(1)
+		payload, err := io.ReadAll(r.Body())
+		require.NoError(t, err)
+		require.NoError(t, w.SetResponse(codes.Changed, message.AppOctets, bytes.NewReader(bytes.Repeat(payload, 32))))
+	}
+	type result struct {
+		token   string
+		payload string
+		msg     *pool.Message
+		err     error
+	}
+	results := make(chan result, 2)
+	var wg sync.WaitGroup
+	for _, request := range []struct {
+		token   string
+		payload string
+	}{{q2TestTokenAlpha, "A"}, {q2TestTokenBeta, "B"}} {
+		request := request
+		req := qTestRequest(t, request.token, struct {
+			num  int64
+			more bool
+		}{0, false})
+		req.SetCode(codes.POST)
+		req.SetBody(bytes.NewReader([]byte(request.payload)))
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			w := responsewriter.New(cc.AcquireMessage(req.Context()), cc)
+			err := b.handleQBlock2(w, req, SZX16, nil, handler)
+			cc.ReleaseMessage(req)
+			results <- result{request.token, request.payload, w.Message(), err}
+		}()
+	}
+	wg.Wait()
+	close(results)
+	require.Len(t, b.q2Senders, 2)
+	for result := range results {
+		require.NoError(t, result.err)
+		body, err := io.ReadAll(result.msg.Body())
+		require.NoError(t, err)
+		require.Equal(t, bytes.Repeat([]byte(result.payload), 16), body)
+		cc.ReleaseMessage(result.msg)
+	}
+	require.EqualValues(t, 2, calls.Load())
+
+	for _, request := range []struct {
+		token   string
+		payload string
+	}{{q2TestTokenAlpha, "A"}, {q2TestTokenBeta, "B"}} {
+		recovery := qTestRequest(t, request.token, struct {
+			num  int64
+			more bool
+		}{1, false})
+		recovery.SetCode(codes.POST)
+		w := responsewriter.New(cc.AcquireMessage(recovery.Context()), cc)
+		require.NoError(t, b.handleQBlock2(w, recovery, SZX16, nil, handler))
+		cc.ReleaseMessage(recovery)
+		body, err := io.ReadAll(w.Message().Body())
+		require.NoError(t, err)
+		require.Equal(t, bytes.Repeat([]byte(request.payload), 16), body)
+		cc.ReleaseMessage(w.Message())
+	}
+	require.EqualValues(t, 2, calls.Load())
 }
 
 func TestQBlockEmptyBodies(t *testing.T) {

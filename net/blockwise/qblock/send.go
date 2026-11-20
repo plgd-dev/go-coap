@@ -168,7 +168,7 @@ func (b *Engine[C]) q2ResponseKey(r *pool.Message, remoteAddr net.Addr, num int6
 	b.q2SendMu.Lock()
 	defer b.q2SendMu.Unlock()
 	if newRequest {
-		b.removeQ2SendersByIdentityLocked(identity)
+		b.removeQ2SenderLocked(key)
 	}
 	if shouldFindQ2Response(r, num, more, newRequest, b.q2Senders[key] != nil) {
 		found, err := b.findQ2ResponseLocked(identity)
@@ -200,14 +200,6 @@ func shouldFindQ2Response(r *pool.Message, num int64, more, newRequest, hasSende
 		return false
 	}
 	return num != 0 || !more || r.HasOption(message.RequestTag) || r.Code() != codes.GET
-}
-
-func (b *Engine[C]) removeQ2SendersByIdentityLocked(identity string) {
-	for key, transfer := range b.q2Senders {
-		if transfer.identity == identity {
-			b.removeQ2SenderLocked(key)
-		}
-	}
 }
 
 func (b *Engine[C]) findQ2ResponseLocked(identity string) (string, error) {
