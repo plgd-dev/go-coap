@@ -107,6 +107,24 @@ func TestRFC8613InnerMessageEncoding(t *testing.T) {
 	}
 }
 
+func TestEncodeInnerRejectsURIHostAndPort(t *testing.T) {
+	tests := []struct {
+		name   string
+		option message.Option
+	}{
+		{name: "Uri-Host", option: message.Option{ID: message.URIHost, Value: []byte("example.com")}},
+		{name: "Uri-Port", option: message.Option{ID: message.URIPort, Value: []byte{0x16, 0x33}}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := EncodeInner(codes.GET, message.Options{test.option}, nil)
+			if !errors.Is(err, ErrInvalidInnerMessage) {
+				t.Fatalf("EncodeInner error = %v, want %v", err, ErrInvalidInnerMessage)
+			}
+		})
+	}
+}
+
 func TestInnerMessagePayloadAndOptions(t *testing.T) {
 	options := message.Options{
 		{ID: message.URIPath, Value: []byte("blob")},

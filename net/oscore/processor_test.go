@@ -427,12 +427,15 @@ func TestProcessorSelectsContextByKIDAndIDContext(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, selected, _, err = singleContextProcessor.ProcessIncomingRequest(kidOnlyRequest)
+	plaintext, selected, _, err := singleContextProcessor.ProcessIncomingRequest(kidOnlyRequest)
 	if err != nil {
 		t.Fatalf("process request with omitted ID Context: %v", err)
 	}
 	if selected != server {
 		t.Fatalf("selected context for KID-only request %p, want %p", selected, server)
+	}
+	if plaintext.Code != codes.GET {
+		t.Fatalf("decrypted KID-only request code = %v, want %v", plaintext.Code, codes.GET)
 	}
 	if _, _, _, lookupErr := processor.ProcessIncomingRequest(kidOnlyRequest); !errors.Is(lookupErr, ErrAmbiguousContext) {
 		t.Fatalf("ambiguous KID-only lookup error = %v, want ErrAmbiguousContext", lookupErr)
