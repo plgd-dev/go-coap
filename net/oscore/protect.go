@@ -731,13 +731,16 @@ func (c *Context) unprotectResponse(response message.Message, exchange Exchange)
 	if err != nil {
 		return message.Message{}, err
 	}
-	inner.Options, err = validateInnerResponse(inner, exchange, option)
+	inner.Options, err = validateInnerResponse(
+		inner, exchange, option, outerOptions.HasOption(message.Observe),
+	)
 	if err != nil {
 		return message.Message{}, err
 	}
 	inner.Token = append(message.Token(nil), response.Token...)
 	inner.Type = response.Type
 	inner.MessageID = response.MessageID
+	outerOptions = removeObserveOption(outerOptions)
 	if inner.Options.HasOption(message.MaxAge) {
 		outerOptions = removeOption(outerOptions, message.MaxAge)
 	}
@@ -768,7 +771,6 @@ func (c *Context) openResponse(response message.Message, exchange Exchange) (Opt
 			return OptionValue{}, nil, message.Message{}, observeErr
 		}
 	}
-	outerOptions = removeObserveOption(outerOptions)
 	requestID, requestPartialIV, _ := exchange.requestBinding()
 	aad, err := BuildAADWithAlgorithm(c.algorithm, requestID, requestPartialIV, nil)
 	if err != nil {
@@ -785,7 +787,12 @@ func (c *Context) openResponse(response message.Message, exchange Exchange) (Opt
 	return option, outerOptions, inner, nil
 }
 
-func validateInnerResponse(inner message.Message, exchange Exchange, option OptionValue) (message.Options, error) {
+func validateInnerResponse(
+	inner message.Message,
+	exchange Exchange,
+	option OptionValue,
+	hasOuterObserve bool,
+) (message.Options, error) {
 	if !IsResponseCode(inner.Code) {
 		return nil, fmt.Errorf("%w: decrypted code %d is not a response", ErrInvalidOSCOREMessage, inner.Code)
 	}
@@ -796,22 +803,33 @@ func validateInnerResponse(inner message.Message, exchange Exchange, option Opti
 	if hasInnerObserve && !exchange.IsObserve() {
 		return nil, fmt.Errorf("%w: Observe response for a non-Observe request", ErrInvalidOSCOREMessage)
 	}
+	if hasOuterObserve && !hasInnerObserve {
+		return nil, fmt.Errorf("%w: Outer Observe response has no protected Inner Observe option", ErrInvalidOSCOREMessage)
+	}
 	if hasInnerObserve && len(innerObserve.Value) != 0 {
 		return nil, fmt.Errorf("%w: inner Observe notification value must be empty", ErrInvalidOSCOREMessage)
 	}
-	if hasInnerObserve {
-		if len(option.PartialIV) == 0 {
-			return nil, fmt.Errorf("%w: Observe notification must contain a Partial IV", ErrInvalidOSCOREMessage)
-		}
-		sequence := uint32(0)
-		for _, b := range option.PartialIV {
-			sequence = (sequence << 8) | uint32(b)
-		}
-		sequence &= 0x00ffffff
-		inner.Options, err = setObserve(inner.Options, sequence)
-		if err != nil {
-			return nil, err
-		}
+	if !hasInnerObserve {
+		return inner.Options, nil
+	}
+	if len(option.PartialIV) == 0 {
+		return nil, fmt.Errorf("%w: Observe notification must contain a Partial IV", ErrInvalidOSCOREMessage)
+	}
+	partialIV := option.PartialIV
+	if len(partialIV) > 3 {
+		partialIV = partialIV[len(partialIV)-3:]
+	}
+	last := len(partialIV) - 1
+	sequence := uint32(partialIV[last])
+	if len(partialIV) > 1 {
+		sequence |= uint32(partialIV[last-1]) << 8
+	}
+	if len(partialIV) > 2 {
+		sequence |= uint32(partialIV[last-2]) << 16
+	}
+	inner.Options, err = setObserve(inner.Options, sequence)
+	if err != nil {
+		return nil, err
 	}
 	return inner.Options, nil
 }

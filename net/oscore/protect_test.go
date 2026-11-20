@@ -1310,13 +1310,31 @@ func TestObserveRejectsNotificationWithoutPartialIV(t *testing.T) {
 		t.Fatal(err)
 	}
 	firstResponse := message.Message{
-		Code:    codes.Content,
-		Token:   request.Token,
-		Options: message.Options{{ID: message.OSCORE}},
+		Code:  codes.Content,
+		Token: request.Token,
+		Options: message.Options{
+			{ID: message.Observe, Value: []byte{1}},
+			{ID: message.OSCORE},
+		},
 		Payload: ciphertext,
 	}
 	if _, unprotectErr := client.UnprotectResponse(firstResponse, clientExchange); !errors.Is(unprotectErr, ErrInvalidOSCOREMessage) {
 		t.Fatalf("notification without Partial IV error = %v, want ErrInvalidOSCOREMessage", unprotectErr)
+	}
+
+	outerOnlyNotification, err := server.ProtectResponseWithPartialIV(message.Message{
+		Code:  codes.Content,
+		Token: request.Token,
+	}, serverExchange)
+	if err != nil {
+		t.Fatal(err)
+	}
+	outerOnlyNotification.Options, err = setObserve(outerOnlyNotification.Options, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, unprotectErr := client.UnprotectResponse(outerOnlyNotification, clientExchange); !errors.Is(unprotectErr, ErrInvalidOSCOREMessage) {
+		t.Fatalf("Outer-only Observe notification error = %v, want ErrInvalidOSCOREMessage", unprotectErr)
 	}
 
 	notificationOptions, _, err := (message.Options{}).SetObserve(make([]byte, 4), 1)
