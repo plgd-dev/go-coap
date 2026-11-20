@@ -149,6 +149,101 @@ func TestOSCORETCPErrorResponseIsUnprotectedAndDoesNotReachHandler(t *testing.T)
 	}
 }
 
+func TestOSCOREStreamAuthenticationFailureDoesNotPoisonSession(t *testing.T) {
+	t.Run("TCP", func(t *testing.T) {
+		listener, err := coapNet.NewTCPListener("tcp", "127.0.0.1:0")
+		require.NoError(t, err)
+		address := listener.Addr().String()
+		testOSCOREStreamAuthenticationFailureDoesNotPoisonSession(t, listener, func(processor *oscore.Processor) (*client.Conn, error) {
+			return tcp.Dial(address, options.WithOSCORE(processor))
+		})
+	})
+	t.Run("TLS", func(t *testing.T) {
+		serverConfig, clientConfig, _, err := createTLSConfig()
+		require.NoError(t, err)
+		listener, err := coapNet.NewTLSListener("tcp", "127.0.0.1:0", serverConfig)
+		require.NoError(t, err)
+		address := listener.Addr().String()
+		testOSCOREStreamAuthenticationFailureDoesNotPoisonSession(t, listener, func(processor *oscore.Processor) (*client.Conn, error) {
+			return tcp.Dial(address, options.WithTLS(clientConfig),
+				options.WithOSCORE(processor))
+		})
+	})
+}
+
+func testOSCOREStreamAuthenticationFailureDoesNotPoisonSession(
+	t *testing.T,
+	listener tcpserver.Listener,
+	dial func(*oscore.Processor) (*client.Conn, error),
+) {
+	t.Helper()
+	clientContext, serverContext := newTCPOSCOREContextPair(t, "client", "server")
+	serverProcessor, err := oscore.NewProcessor(oscore.ProcessorConfig{
+		Contexts: []*oscore.Context{serverContext},
+	})
+	require.NoError(t, err)
+	clientProcessor, err := oscore.NewProcessor(oscore.ProcessorConfig{
+		Contexts: []*oscore.Context{clientContext},
+	})
+	require.NoError(t, err)
+	var handled atomic.Int32
+	serverErrors := make(chan error, 4)
+	server := tcp.NewServer(
+		options.WithOSCORE(serverProcessor),
+		options.WithOSCOREErrorResponses(),
+		options.WithErrors(func(err error) { serverErrors <- err }),
+		options.WithHandlerFunc(func(w *responsewriter.ResponseWriter[*client.Conn], _ *pool.Message) {
+			handled.Add(1)
+			if responseErr := w.SetResponse(codes.Content, message.TextPlain, bytes.NewReader([]byte("ok"))); responseErr != nil {
+				t.Errorf("set response: %v", responseErr)
+			}
+		}),
+	)
+	serverDone := make(chan error, 1)
+	go func() { serverDone <- server.Serve(listener) }()
+	defer func() {
+		server.Stop()
+		select {
+		case serverErr := <-serverDone:
+			require.NoError(t, serverErr)
+		case <-time.After(5 * time.Second):
+			require.Fail(t, "TCP/TLS OSCORE server did not stop")
+		}
+	}()
+
+	cc, err := dial(clientProcessor)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, cc.Close()) }()
+
+	protected, _, err := clientContext.ProtectRequest(message.Message{
+		Code: codes.GET, Token: message.Token{0x71},
+	})
+	require.NoError(t, err)
+	require.NotEmpty(t, protected.Payload)
+	protected.Payload[len(protected.Payload)-1] ^= 0x01
+	wireRequest := cc.AcquireMessage(context.Background())
+	wireRequest.SetMessage(protected)
+	require.NoError(t, cc.Session().WriteMessage(wireRequest))
+	cc.ReleaseMessage(wireRequest)
+
+	select {
+	case processingErr := <-serverErrors:
+		require.Error(t, processingErr)
+		require.False(t, oscore.IsInternalProcessingError(processingErr))
+	case <-time.After(time.Second):
+		t.Fatal("server did not report the authentication failure")
+	}
+	require.Zero(t, handled.Load(), "authentication failure reached the application")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	response, err := cc.Get(ctx, "/valid")
+	require.NoError(t, err)
+	defer cc.ReleaseMessage(response)
+	require.Equal(t, codes.Content, response.Code())
+	require.EqualValues(t, 1, handled.Load(), "only the valid request should reach the application")
+}
+
 func TestOSCORETCPReplayRecoveryReturnsEchoBeforeHandler(t *testing.T) {
 	listener, err := coapNet.NewTCPListener("tcp", "127.0.0.1:0")
 	require.NoError(t, err)

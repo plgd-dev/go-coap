@@ -315,13 +315,20 @@ func TestProcessorNeverFallsBackAfterOSCOREFailure(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	plaintext, _, _, err := processor.ProcessIncomingRequest(message.Message{
+		Code: codes.GET, Token: message.Token{1},
+	})
+	if err != nil || plaintext.Code != codes.GET {
+		t.Fatalf("mixed-mode plaintext request = %+v, error %v", plaintext, err)
+	}
 	protected, _, err := client.ProtectRequest(message.Message{Code: codes.GET})
 	if err != nil {
 		t.Fatal(err)
 	}
 	protected.Payload = append([]byte(nil), protected.Payload...)
 	protected.Payload[len(protected.Payload)-1] ^= 0x01
-	if _, _, _, err := processor.ProcessIncomingRequest(protected); err == nil {
+	if plaintext, context, exchange, err := processor.ProcessIncomingRequest(protected); err == nil ||
+		plaintext.Code != codes.Empty || context != nil || len(exchange.RequestPartialIVBytes()) != 0 {
 		t.Fatal("expected authentication failure")
 	}
 }

@@ -76,6 +76,76 @@ func TestOSCOREUDPErrorResponseIsUnprotectedAndDoesNotReachHandler(t *testing.T)
 	}
 }
 
+func TestOSCOREUDPAuthenticationFailureDoesNotPoisonSession(t *testing.T) {
+	listener, err := coapNet.NewListenUDP("udp", "127.0.0.1:0")
+	require.NoError(t, err)
+	clientContext, serverContext := newUDPOSCOREContextPair(t, "client", "server")
+	serverProcessor, err := oscore.NewProcessor(oscore.ProcessorConfig{
+		Contexts: []*oscore.Context{serverContext},
+	})
+	require.NoError(t, err)
+	clientProcessor, err := oscore.NewProcessor(oscore.ProcessorConfig{
+		Contexts: []*oscore.Context{clientContext},
+	})
+	require.NoError(t, err)
+	var handled atomic.Int32
+	serverErrors := make(chan error, 4)
+	server := udp.NewServer(
+		options.WithOSCORE(serverProcessor),
+		options.WithOSCOREErrorResponses(),
+		options.WithErrors(func(err error) { serverErrors <- err }),
+		options.WithHandlerFunc(func(w *responsewriter.ResponseWriter[*client.Conn], _ *pool.Message) {
+			handled.Add(1)
+			if responseErr := w.SetResponse(codes.Content, message.TextPlain, bytes.NewReader([]byte("ok"))); responseErr != nil {
+				t.Errorf("set response: %v", responseErr)
+			}
+		}),
+	)
+	serverDone := make(chan error, 1)
+	go func() { serverDone <- server.Serve(listener) }()
+	defer func() {
+		server.Stop()
+		select {
+		case serverErr := <-serverDone:
+			require.NoError(t, serverErr)
+		case <-time.After(5 * time.Second):
+			require.Fail(t, "UDP OSCORE server did not stop")
+		}
+	}()
+
+	cc, err := udp.Dial(listener.LocalAddr().String(), options.WithOSCORE(clientProcessor))
+	require.NoError(t, err)
+	defer func() { require.NoError(t, cc.Close()) }()
+
+	protected, _, err := clientContext.ProtectRequest(message.Message{
+		Code: codes.GET, Type: message.Confirmable, MessageID: 0x7171, Token: message.Token{0x71},
+	})
+	require.NoError(t, err)
+	require.NotEmpty(t, protected.Payload)
+	protected.Payload[len(protected.Payload)-1] ^= 0x01
+	wireRequest := cc.AcquireMessage(context.Background())
+	wireRequest.SetMessage(protected)
+	require.NoError(t, cc.Session().WriteMessage(wireRequest))
+	cc.ReleaseMessage(wireRequest)
+
+	select {
+	case processingErr := <-serverErrors:
+		require.Error(t, processingErr)
+		require.False(t, oscore.IsInternalProcessingError(processingErr))
+	case <-time.After(time.Second):
+		t.Fatal("server did not report the authentication failure")
+	}
+	require.Zero(t, handled.Load(), "authentication failure reached the application")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	response, err := cc.Get(ctx, "/valid")
+	require.NoError(t, err)
+	defer cc.ReleaseMessage(response)
+	require.Equal(t, codes.Content, response.Code())
+	require.EqualValues(t, 1, handled.Load(), "only the valid request should reach the application")
+}
+
 func TestOSCOREAndPlaintextUDPExchange(t *testing.T) {
 	secureClient, plaintextClient := startOSCOREAndPlaintextUDPExchange(t)
 	assertUDPGetResponse(t, secureClient)
