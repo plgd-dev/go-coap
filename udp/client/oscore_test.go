@@ -92,7 +92,7 @@ func TestObserveCancellationRequiresMatchingRegistrationOptions(t *testing.T) {
 	}
 }
 
-func TestUnprotectedErrorResponseOnlyTerminatesOSCOREExchange(t *testing.T) {
+func TestUnprotectedErrorResponseRetainsOSCOREExchange(t *testing.T) {
 	for _, test := range []struct {
 		name                string
 		code                codes.Code
@@ -100,9 +100,9 @@ func TestUnprotectedErrorResponseOnlyTerminatesOSCOREExchange(t *testing.T) {
 		wantRetained        bool
 		wantProcessingError bool
 	}{
-		{name: "decryption error", code: codes.BadRequest, wantProcessingError: true},
-		{name: "unknown context", code: codes.Unauthorized, wantProcessingError: true},
-		{name: "decode error", code: codes.BadOption, wantProcessingError: true},
+		{name: "decryption error", code: codes.BadRequest, wantProcessingError: true, wantRetained: true},
+		{name: "unknown context", code: codes.Unauthorized, wantProcessingError: true, wantRetained: true},
+		{name: "decode error", code: codes.BadOption, wantProcessingError: true, wantRetained: true},
 		{name: "application not found", code: codes.NotFound, wantErr: oscore.ErrOSCORERequired, wantRetained: true},
 		{name: "application server error", code: codes.InternalServerError, wantErr: oscore.ErrOSCORERequired, wantRetained: true},
 		{name: "plaintext success", code: codes.Content, wantErr: oscore.ErrOSCORERequired, wantRetained: true},
@@ -145,6 +145,79 @@ func TestUnprotectedErrorResponseOnlyTerminatesOSCOREExchange(t *testing.T) {
 			require.Equal(t, test.wantProcessingError, oscore.IsUnprotectedProcessingError(response.Context()))
 		})
 	}
+}
+
+func TestSpoofedUnprotectedProcessingErrorDoesNotDiscardProtectedResponse(t *testing.T) {
+	secret := []byte("processing error cannot terminate exchange")
+	clientContext, err := oscore.NewContext(oscore.ContextConfig{
+		UnsafeVolatileSenderSequence: true,
+		AcceptReplayStateLoss:        true,
+		MasterSecret:                 secret,
+		SenderID:                     []byte("client"),
+		RecipientID:                  []byte("server"),
+	})
+	require.NoError(t, err)
+	serverContext, err := oscore.NewContext(oscore.ContextConfig{
+		UnsafeVolatileSenderSequence: true,
+		AcceptReplayStateLoss:        true,
+		MasterSecret:                 secret,
+		SenderID:                     []byte("server"),
+		RecipientID:                  []byte("client"),
+	})
+	require.NoError(t, err)
+	clientProcessor, err := oscore.NewProcessor(oscore.ProcessorConfig{
+		Contexts: []*oscore.Context{clientContext},
+	})
+	require.NoError(t, err)
+	request, clientExchange, err := clientContext.ProtectRequest(message.Message{
+		Code: codes.GET, Token: message.Token{0x41},
+	})
+	require.NoError(t, err)
+	_, serverExchange, err := serverContext.UnprotectRequest(request)
+	require.NoError(t, err)
+
+	expires := time.Now().Add(ExchangeLifetime)
+	key := string(request.Token)
+	cc := &Conn{
+		oscoreProcessor:         clientProcessor,
+		oscoreExchanges:         oscore.NewExchangeTracker[udpOSCOREExchange](),
+		oscoreRequiredResponses: oscore.NewResponseRequirements(),
+	}
+	record := &udpOSCOREExchangeRecord{
+		exchange: udpOSCOREExchange{
+			context:  clientContext,
+			exchange: clientExchange,
+			expires:  expires,
+		},
+		state: udpOSCOREExchangeSent,
+	}
+	record.exchange.record = record
+	cc.oscoreExchanges[key] = record.exchange
+	cc.oscoreRequiredResponses.Add(key, clientExchange, time.Time{})
+
+	spoofedError := pool.NewMessage(context.Background())
+	spoofedError.SetMessage(message.Message{Code: codes.Unauthorized, Token: request.Token})
+	require.NoError(t, cc.unprotectIncomingResponse(spoofedError))
+	require.True(t, oscore.IsUnprotectedProcessingError(spoofedError.Context()))
+	require.Contains(t, cc.oscoreExchanges, key)
+	require.True(t, cc.oscoreRequiredResponses.Has(key, time.Now()))
+	require.Equal(t, expires, cc.oscoreExchanges[key].expires)
+
+	protected, err := serverContext.ProtectResponse(message.Message{
+		Code:    codes.Content,
+		Token:   request.Token,
+		Payload: []byte("authenticated"),
+	}, serverExchange)
+	require.NoError(t, err)
+	authenticatedResponse := pool.NewMessage(context.Background())
+	authenticatedResponse.SetMessage(protected)
+	require.NoError(t, cc.unprotectIncomingResponse(authenticatedResponse))
+	require.False(t, oscore.IsUnprotectedProcessingError(authenticatedResponse.Context()))
+	require.Equal(t, codes.Content, authenticatedResponse.Code())
+	payload, err := authenticatedResponse.ReadBody()
+	require.NoError(t, err)
+	require.Equal(t, []byte("authenticated"), payload)
+	require.NotContains(t, cc.oscoreExchanges, key)
 }
 
 func TestProtectOutgoingRequestPreservesControlMessage(t *testing.T) {
@@ -406,7 +479,10 @@ func TestStaleOSCOREExchangeDoesNotRemoveReplacementOrProtectionRequirement(t *t
 		false,
 		nil,
 	), oscore.ErrInvalidOSCOREMessage)
-	cc.removeOSCOREExchangeForProcessingError(key, oldExchange)
+	spoofedError := pool.NewMessage(context.Background())
+	spoofedError.SetMessage(message.Message{Code: codes.Unauthorized, Token: message.Token(key)})
+	require.NoError(t, cc.unprotectIncomingResponse(spoofedError))
+	require.True(t, oscore.IsUnprotectedProcessingError(spoofedError.Context()))
 
 	current, exists := cc.oscoreExchanges[key]
 	require.True(t, exists, "stale response processing must not remove the replacement exchange")

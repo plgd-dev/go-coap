@@ -331,7 +331,6 @@ func (cc *Conn) unprotectIncomingResponse(resp *pool.Message) error {
 	}
 	if !resp.HasOption(message.OSCORE) {
 		if oscore.IsUnprotectedProcessingErrorCode(resp.Code()) {
-			cc.removeOSCOREExchangeForProcessingError(key, exchange.exchange)
 			resp.SetContext(oscore.ContextWithUnprotectedProcessingError(resp.Context()))
 			return nil
 		}
@@ -385,19 +384,6 @@ func (cc *Conn) unprotectResponseWithExchange(outer message.Message, exchange ud
 		return message.Message{}, false, err
 	}
 	return plaintext, usedCancelExchange, nil
-}
-
-func (cc *Conn) removeOSCOREExchangeForProcessingError(key string, exchange oscore.Exchange) {
-	if exchange.IsObserve() {
-		return
-	}
-	cc.oscoreMu.Lock()
-	defer cc.oscoreMu.Unlock()
-	if current, exists := cc.oscoreExchanges[key]; exists && current.exchange == exchange {
-		delete(cc.oscoreExchanges, key)
-		cc.oscoreRequiredResponses.Remove(key, current.exchange)
-		cc.oscoreRequiredResponses.Remove(key, current.cancelExchange)
-	}
 }
 
 func (cc *Conn) updateOSCOREExchangeResponse(
