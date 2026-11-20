@@ -344,6 +344,76 @@ func TestQBlock2NewRequestWithSameTokenReplacesCachedResponse(t *testing.T) {
 	require.Equal(t, bytes.Repeat([]byte("B"), 16), recoveredBody)
 }
 
+func TestQBlock2ChangedTokenRecoveryRejectsAmbiguousTransfers(t *testing.T) {
+	cc := &qTestTransport{testClient: newTestClient(), jobs: make(map[string]qBlockTestJob)}
+	b := New(cc, func(error) {})
+	defer b.CloseQBlockTransfers()
+	calls := 0
+	handler := func(w *responsewriter.ResponseWriter[*qTestTransport], r *pool.Message) {
+		calls++
+		payload, err := io.ReadAll(r.Body())
+		require.NoError(t, err)
+		require.NoError(t, w.SetResponse(codes.Changed, message.AppOctets, bytes.NewReader(bytes.Repeat(payload, 32))))
+	}
+	send := func(token, payload string, num int64) (*pool.Message, error) {
+		req := qTestRequest(t, token, struct {
+			num  int64
+			more bool
+		}{num, false})
+		req.SetCode(codes.POST)
+		if payload != "" {
+			req.SetBody(bytes.NewReader([]byte(payload)))
+		}
+		w := responsewriter.New(cc.AcquireMessage(req.Context()), cc)
+		err := b.handleQBlock2(w, req, SZX16, nil, handler)
+		cc.ReleaseMessage(req)
+		return w.Message(), err
+	}
+
+	first, err := send(q2TestTokenAlpha, "A", 0)
+	require.NoError(t, err)
+	cc.ReleaseMessage(first)
+	second, err := send(q2TestTokenBeta, "B", 0)
+	require.NoError(t, err)
+	cc.ReleaseMessage(second)
+	require.Equal(t, 2, calls)
+
+	keyFor := func(token string) string {
+		req := qTestRequest(t, token)
+		req.SetCode(codes.POST)
+		key := q2TransferKey(req, nil)
+		cc.ReleaseMessage(req)
+		return key
+	}
+	alphaKey := keyFor(q2TestTokenAlpha)
+	betaKey := keyFor(q2TestTokenBeta)
+	alphaSender, betaSender := b.q2Senders[alphaKey], b.q2Senders[betaKey]
+	require.NotNil(t, alphaSender)
+	require.NotNil(t, betaSender)
+
+	for i := 0; i < 2; i++ {
+		ambiguous, err := send("fresh-token", "", 1)
+		require.ErrorIs(t, err, ErrInvalidOptionBlock2)
+		cc.ReleaseMessage(ambiguous)
+		require.Len(t, b.q2Senders, 2)
+		require.Same(t, alphaSender, b.q2Senders[alphaKey])
+		require.Same(t, betaSender, b.q2Senders[betaKey])
+	}
+
+	for _, expected := range []struct {
+		token   string
+		payload byte
+	}{{q2TestTokenAlpha, 'A'}, {q2TestTokenBeta, 'B'}} {
+		recovery, err := send(expected.token, "", 1)
+		require.NoError(t, err)
+		body, err := io.ReadAll(recovery.Body())
+		require.NoError(t, err)
+		require.Equal(t, bytes.Repeat([]byte{expected.payload}, 16), body)
+		cc.ReleaseMessage(recovery)
+	}
+	require.Equal(t, 2, calls, "recovery must not invoke the handler")
+}
+
 func TestQBlock2ConcurrentNewRequestsKeepSeparateSenders(t *testing.T) {
 	cc := &qTestTransport{testClient: newTestClient(), jobs: make(map[string]qBlockTestJob)}
 	b := New(cc, func(error) {})
