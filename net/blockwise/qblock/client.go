@@ -183,19 +183,27 @@ func (s *q1BodySender[C]) missing(response *pool.Message) error {
 	if formatErr != nil || readErr != nil || format != message.AppMissingBlocksCBORSeq {
 		return errors.New("invalid Q-Block1 missing-block report")
 	}
+	missing, err := parseQBlock1MissingReport(report, s.blockCount)
+	if err != nil {
+		return err
+	}
+	s.pendingRecovery = missing
+	return s.send(s.pendingRecovery)
+}
+
+func parseQBlock1MissingReport(report []byte, blockCount int64) ([]int64, error) {
 	missing, err := DecodeMissingBlocks(nil, report)
 	if err != nil || len(missing) > q1MaxTrackedBlocks {
-		return errors.New("invalid Q-Block1 missing-block sequence")
+		return nil, errors.New("invalid Q-Block1 missing-block sequence")
 	}
-	s.pendingRecovery = make([]int64, len(missing))
+	nums := make([]int64, len(missing))
 	for i, num := range missing {
-		if int64(num) >= s.blockCount {
-			s.pendingRecovery = nil
-			return errors.New("invalid Q-Block1 missing-block sequence")
+		if int64(num) >= blockCount {
+			return nil, errors.New("invalid Q-Block1 missing-block sequence")
 		}
-		s.pendingRecovery[i] = int64(num)
+		nums[i] = int64(num)
 	}
-	return s.send(s.pendingRecovery)
+	return nums, nil
 }
 
 func (s *q1BodySender[C]) final(response *pool.Message) (*pool.Message, error) {
