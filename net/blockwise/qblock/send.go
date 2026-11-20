@@ -453,19 +453,19 @@ func (b *Engine[C]) buildQBlock2ResponseFrom(ctx context.Context, key string, to
 }
 
 func (b *Engine[C]) cacheQBlock2Response(ctx context.Context, key, identity string, response *pool.Message, mode message.Type) error {
-	_, err := b.cacheQBlock2Notification(ctx, key, identity, response, mode, nil, false, 0)
+	_, err := b.cacheQBlock2Notification(ctx, key, identity, response, mode, nil, nil)
 	return err
 }
 
 func (b *Engine[C]) cacheQBlock2ResponseForRequest(ctx context.Context, key, identity string, response *pool.Message,
 	mode message.Type, requestMessageID int32,
 ) error {
-	_, err := b.cacheQBlock2Notification(ctx, key, identity, response, mode, nil, true, requestMessageID)
+	_, err := b.cacheQBlock2Notification(ctx, key, identity, response, mode, nil, &requestMessageID)
 	return err
 }
 
 func (b *Engine[C]) cacheQBlock2Notification(ctx context.Context, key, identity string, response *pool.Message,
-	mode message.Type, generation *qObservation, hasRequestMessageID bool, requestMessageID int32,
+	mode message.Type, generation *qObservation, requestMessageID *int32,
 ) (*q2SendTransfer, error) {
 	stored, size, err := b.snapshotQ2NotificationBody(ctx, response)
 	if err != nil {
@@ -506,10 +506,15 @@ func (b *Engine[C]) cacheQBlock2Notification(ctx context.Context, key, identity 
 		maxAge = 60
 	}
 	lifetime := min(b.config.NonPartialTimeout(), max(b.config.NonReceiveTimeout, time.Duration(maxAge)*time.Second))
+	hasRequestMessageID := requestMessageID != nil
+	var requestMID int32
+	if hasRequestMessageID {
+		requestMID = *requestMessageID
+	}
 	transfer := &q2SendTransfer{
 		message: stored, expires: time.Now().Add(lifetime),
 		size: size, identity: identity, mode: mode, hasRequestMessageID: hasRequestMessageID,
-		requestMessageID: requestMessageID,
+		requestMessageID: requestMID,
 		sentThrough:      -1, delay: b.config.nonDelay(),
 	}
 	b.q2Senders[key] = transfer

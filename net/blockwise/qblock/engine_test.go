@@ -480,6 +480,7 @@ func TestQBlock2NewRequestMessageIDZeroDoesNotMatchRequestlessSender(t *testing.
 	}{0, false})
 	request.SetCode(codes.POST)
 	request.SetType(message.Confirmable)
+	request.SetMessageID(0)
 	key := q2TransferKey(request, nil)
 	identity := qTransferKey(request, nil, nil, true)
 	response := cc.AcquireMessage(request.Context())
@@ -488,7 +489,7 @@ func TestQBlock2NewRequestMessageIDZeroDoesNotMatchRequestlessSender(t *testing.
 	response.SetMessageID(0)
 	response.SetBody(bytes.NewReader(bytes.Repeat([]byte("old"), 16)))
 	_, err := b.cacheQBlock2Notification(request.Context(), key, identity, response,
-		message.Confirmable, nil, false, 0)
+		message.Confirmable, nil, nil)
 	require.NoError(t, err)
 	cc.ReleaseMessage(response)
 
