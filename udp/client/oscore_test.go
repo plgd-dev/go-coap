@@ -1606,6 +1606,82 @@ func TestOSCOREMessageTransformsPreserveControlMessage(t *testing.T) {
 	require.Same(t, notificationControl, notification.ControlMessage(), "notification protection must preserve selected egress metadata")
 }
 
+func TestConcurrentDuplicateOSCORERequestIsProcessedOnce(t *testing.T) {
+	const mid = 0x4321
+	clientContext, err := oscore.NewContext(oscore.ContextConfig{
+		UnsafeVolatileSenderSequence: true,
+		AcceptReplayStateLoss:        true,
+		MasterSecret:                 []byte("concurrent duplicate OSCORE request"),
+		SenderID:                     []byte("client"),
+		RecipientID:                  []byte("server"),
+	})
+	require.NoError(t, err)
+	serverContext, err := oscore.NewContext(oscore.ContextConfig{
+		UnsafeVolatileSenderSequence: true,
+		AcceptReplayStateLoss:        true,
+		MasterSecret:                 []byte("concurrent duplicate OSCORE request"),
+		SenderID:                     []byte("server"),
+		RecipientID:                  []byte("client"),
+	})
+	require.NoError(t, err)
+	processor, err := oscore.NewProcessor(oscore.ProcessorConfig{
+		Contexts:        []*oscore.Context{serverContext},
+		PlaintextPolicy: oscore.PlaintextDisabled,
+	})
+	require.NoError(t, err)
+	protected, _, err := clientContext.ProtectRequest(message.Message{
+		Code:      codes.GET,
+		Token:     message.Token{0x43},
+		Type:      message.Confirmable,
+		MessageID: mid,
+	})
+	require.NoError(t, err)
+	wireMessage := pool.NewMessage(context.Background())
+	wireMessage.SetMessage(protected)
+	datagram, err := wireMessage.MarshalWithEncoder(coder.DefaultCoder)
+	require.NoError(t, err)
+
+	session := newRecordingSession()
+	defer session.Close()
+	cfg := DefaultConfig
+	cfg.OSCORE = processor
+	cfg.OSCOREErrorResponses = true
+	cc := NewConnWithOpts(session, &cfg)
+	defer cc.Close()
+
+	type result struct {
+		drop bool
+		err  error
+	}
+	start := make(chan struct{})
+	results := make(chan result, 2)
+	for range 2 {
+		go func() {
+			req := cc.AcquireMessage(context.Background())
+			req.SetMessage(protected)
+			<-start
+			drop, processErr := cc.processIncomingOSCORERequest(req, datagram)
+			cc.ReleaseMessage(req)
+			results <- result{drop: drop, err: processErr}
+		}()
+	}
+	close(start)
+
+	processed, suppressed := 0, 0
+	for range 2 {
+		got := <-results
+		require.NoError(t, got.err)
+		if got.drop {
+			suppressed++
+		} else {
+			processed++
+		}
+	}
+	require.Equal(t, 1, processed, "exactly one copy should be decrypted")
+	require.Equal(t, 1, suppressed, "the concurrent duplicate should be suppressed")
+	require.Zero(t, session.writtenCount(), "a duplicate must not cause an OSCORE 4.01 response")
+}
+
 func TestRetransmitCachedOSCOREResponse(t *testing.T) {
 	const mid = 1234
 	masterSecret := []byte{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16}

@@ -33,7 +33,10 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-const libCoAPTLSTestServerName = "localhost"
+const (
+	libCoAPTLSTestServerName     = "localhost"
+	libCoAPTLSCertificatePEMType = "CERTIFICATE"
+)
 
 type libCoAPTLSCredentials struct {
 	serverConfig *tls.Config
@@ -190,9 +193,9 @@ func createLibCoAPTLSCredentials(t *testing.T) libCoAPTLSCredentials {
 	require.NoError(t, err)
 	keyDER, err := x509.MarshalPKCS8PrivateKey(serverKey)
 	require.NoError(t, err)
-	serverPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: serverDER})
+	serverPEM := pem.EncodeToMemory(&pem.Block{Type: libCoAPTLSCertificatePEMType, Bytes: serverDER})
 	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER})
-	caPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: caDER})
+	caPEM := pem.EncodeToMemory(&pem.Block{Type: libCoAPTLSCertificatePEMType, Bytes: caDER})
 	certificate, err := tls.X509KeyPair(serverPEM, keyPEM)
 	require.NoError(t, err)
 
@@ -213,7 +216,7 @@ func createLibCoAPTLSCredentials(t *testing.T) libCoAPTLSCredentials {
 	require.NoError(t, err)
 	clientKeyDER, err := x509.MarshalPKCS8PrivateKey(clientKey)
 	require.NoError(t, err)
-	clientPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: clientDER})
+	clientPEM := pem.EncodeToMemory(&pem.Block{Type: libCoAPTLSCertificatePEMType, Bytes: clientDER})
 	clientKeyPEM := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: clientKeyDER})
 	clientCertificate, err := tls.X509KeyPair(clientPEM, clientKeyPEM)
 	require.NoError(t, err)

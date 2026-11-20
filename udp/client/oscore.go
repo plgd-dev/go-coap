@@ -52,8 +52,9 @@ type udpOSCORERequestContext struct {
 }
 
 type udpOSCORERequest struct {
-	digest  [sha256.Size]byte
-	expires time.Time
+	digest   [sha256.Size]byte
+	expires  time.Time
+	inFlight bool
 }
 
 type udpOSCOREResponse struct {
@@ -451,18 +452,16 @@ func (cc *Conn) processIncomingOSCORERequest(req *pool.Message, datagram []byte)
 		return false, nil
 	}
 	digest := sha256.Sum256(datagram)
-	cc.oscoreMu.Lock()
-	cached, exists := cc.oscoreRequests[req.MessageID()]
-	if exists && time.Now().After(cached.expires) {
-		delete(cc.oscoreRequests, req.MessageID())
-		exists = false
-	}
-	cc.oscoreMu.Unlock()
-	if exists {
-		if cached.digest != digest {
-			return false, fmt.Errorf("%w: Message ID reused for different protected request", oscore.ErrInvalidOSCOREMessage)
+	protected := req.HasOption(message.OSCORE)
+	processed := false
+	if protected {
+		handled, err := cc.beginOSCORERequest(req, digest)
+		if handled || err != nil {
+			return handled, err
 		}
-		return true, cc.retransmitOSCOREResponse(req)
+		defer func() {
+			cc.finishOSCORERequest(req.MessageID(), digest, processed)
+		}()
 	}
 
 	outer, err := udpPoolMessageToOSCOREMessage(req)
@@ -480,6 +479,7 @@ func (cc *Conn) processIncomingOSCORERequest(req *pool.Message, datagram []byte)
 	}
 	requestInfo := oscore.RequestInfo{}
 	if securityContext != nil {
+		processed = protected
 		requestInfo = oscore.RequestInfo{
 			RecipientID: securityContext.RecipientID(),
 			Protected:   true,
@@ -490,16 +490,51 @@ func (cc *Conn) processIncomingOSCORERequest(req *pool.Message, datagram []byte)
 			exchange: exchange,
 			options:  oscore.CloneOptions(plaintext.Options),
 		}))
-		cc.oscoreMu.Lock()
-		cc.oscoreRequests[req.MessageID()] = udpOSCORERequest{
-			digest:  digest,
-			expires: time.Now().Add(ExchangeLifetime),
-		}
-		cc.oscoreMu.Unlock()
 	}
 	req.SetContext(oscore.ContextWithRequestInfo(req.Context(), requestInfo))
 	setMessagePreservingControlMessage(req, plaintext)
 	return false, nil
+}
+
+func (cc *Conn) beginOSCORERequest(req *pool.Message, digest [sha256.Size]byte) (bool, error) {
+	cc.oscoreMu.Lock()
+	cached, exists := cc.oscoreRequests[req.MessageID()]
+	if exists && !cached.inFlight && !time.Now().Before(cached.expires) {
+		delete(cc.oscoreRequests, req.MessageID())
+		exists = false
+	}
+	if !exists {
+		cc.oscoreRequests[req.MessageID()] = udpOSCORERequest{
+			digest:   digest,
+			expires:  time.Now().Add(ExchangeLifetime),
+			inFlight: true,
+		}
+		cc.oscoreMu.Unlock()
+		return false, nil
+	}
+	cc.oscoreMu.Unlock()
+	if cached.digest != digest {
+		return false, fmt.Errorf("%w: Message ID reused for different protected request",
+			oscore.ErrInvalidOSCOREMessage)
+	}
+	if cached.inFlight {
+		return true, nil
+	}
+	return true, cc.retransmitOSCOREResponse(req)
+}
+
+func (cc *Conn) finishOSCORERequest(mid int32, digest [sha256.Size]byte, processed bool) {
+	cc.oscoreMu.Lock()
+	defer cc.oscoreMu.Unlock()
+	if request, exists := cc.oscoreRequests[mid]; exists && request.digest == digest {
+		if !processed {
+			delete(cc.oscoreRequests, mid)
+			return
+		}
+		request.inFlight = false
+		request.expires = time.Now().Add(ExchangeLifetime)
+		cc.oscoreRequests[mid] = request
+	}
 }
 
 func (cc *Conn) respondToOSCOREProcessingError(req *pool.Message, processingErr error) (bool, error) {
@@ -739,7 +774,7 @@ func (cc *Conn) hasOSCOREResponseConsumer(token string) bool {
 
 func (cc *Conn) expireOSCORERequestCache(now time.Time) {
 	for mid, request := range cc.oscoreRequests {
-		if !now.Before(request.expires) {
+		if !request.inFlight && !now.Before(request.expires) {
 			delete(cc.oscoreRequests, mid)
 		}
 	}
