@@ -393,6 +393,82 @@ func TestQBlock2RetransmittedNewRequestReusesCachedResponse(t *testing.T) {
 	require.Len(t, b.q2Senders, 1)
 }
 
+func TestQBlock2NegotiatedSZXDifferentMessageIDsAreNewRequests(t *testing.T) {
+	cc := &qTestTransport{testClient: newTestClient(), jobs: make(map[string]qBlockTestJob)}
+	b := New(cc, func(error) {})
+	defer b.CloseQBlockTransfers()
+	handlerCalls := 0
+	handler := func(w *responsewriter.ResponseWriter[*qTestTransport], r *pool.Message) {
+		handlerCalls++
+		payload, err := io.ReadAll(r.Body())
+		require.NoError(t, err)
+		require.NoError(t, w.SetResponse(codes.Changed, message.AppOctets, bytes.NewReader(bytes.Repeat(payload, 32))))
+	}
+	send := func(messageID int32, payload string) *pool.Message {
+		req := qTestRequest(t, "negotiated", struct {
+			num  int64
+			more bool
+		}{0, false})
+		req.SetMessageID(messageID)
+		req.SetCode(codes.POST)
+		req.SetBody(bytes.NewReader([]byte(payload)))
+		value, err := EncodeQBlockOption(SZX32, 0, false)
+		require.NoError(t, err)
+		req.SetOptionUint32(message.QBlock2, value)
+		w := responsewriter.New(cc.AcquireMessage(req.Context()), cc)
+		require.NoError(t, b.handleQBlock2(w, req, SZX16, nil, handler))
+		cc.ReleaseMessage(req)
+		return w.Message()
+	}
+
+	first := send(21, "A")
+	cc.ReleaseMessage(first)
+	second := send(22, "B")
+	defer cc.ReleaseMessage(second)
+	require.Equal(t, 2, handlerCalls, "distinct request MIDs must invoke the handler independently")
+	body, err := io.ReadAll(second.Body())
+	require.NoError(t, err)
+	require.Equal(t, bytes.Repeat([]byte("B"), 16), body)
+}
+
+func TestQBlock2NegotiatedSZXRetransmissionReusesCachedResponse(t *testing.T) {
+	cc := &qTestTransport{testClient: newTestClient(), jobs: make(map[string]qBlockTestJob)}
+	b := New(cc, func(error) {})
+	defer b.CloseQBlockTransfers()
+	handlerCalls := 0
+	handler := func(w *responsewriter.ResponseWriter[*qTestTransport], r *pool.Message) {
+		handlerCalls++
+		payload, err := io.ReadAll(r.Body())
+		require.NoError(t, err)
+		require.NoError(t, w.SetResponse(codes.Changed, message.AppOctets, bytes.NewReader(bytes.Repeat(payload, 32))))
+	}
+	send := func() *pool.Message {
+		req := qTestRequest(t, "negotiated-retry", struct {
+			num  int64
+			more bool
+		}{0, false})
+		req.SetMessageID(23)
+		req.SetCode(codes.POST)
+		req.SetBody(bytes.NewReader([]byte("A")))
+		value, err := EncodeQBlockOption(SZX32, 0, false)
+		require.NoError(t, err)
+		req.SetOptionUint32(message.QBlock2, value)
+		w := responsewriter.New(cc.AcquireMessage(req.Context()), cc)
+		require.NoError(t, b.handleQBlock2(w, req, SZX16, nil, handler))
+		cc.ReleaseMessage(req)
+		return w.Message()
+	}
+
+	first := send()
+	defer cc.ReleaseMessage(first)
+	retransmission := send()
+	defer cc.ReleaseMessage(retransmission)
+	require.Equal(t, 1, handlerCalls, "same-MID retransmission must reuse the cached response")
+	body, err := io.ReadAll(retransmission.Body())
+	require.NoError(t, err)
+	require.Equal(t, bytes.Repeat([]byte("A"), 16), body)
+}
+
 func TestQBlock2NewRequestMessageIDZeroDoesNotMatchRequestlessSender(t *testing.T) {
 	cc := &qTestTransport{testClient: newTestClient(), jobs: make(map[string]qBlockTestJob)}
 	b := New(cc, func(error) {})

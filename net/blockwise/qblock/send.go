@@ -55,6 +55,7 @@ func (b *Engine[C]) handleQBlock2(
 		}
 		request := b.cloneMessage(r)
 		defer b.cc.ReleaseMessage(request)
+		request.SetMessageID(r.MessageID())
 		request.SetBody(r.Body())
 		value, _ := EncodeQBlockOption(maxSZX, 0, more)
 		request.SetOptionUint32(message.QBlock2, value)
