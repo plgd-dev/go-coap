@@ -58,7 +58,7 @@ func (o *testOrigin) RoundTrip(_ context.Context, target oscore.ProxyTarget, req
 func TestForwarderRelaysOSCOREWithoutDecrypting(t *testing.T) {
 	secret := []byte("0123456789abcdef")
 	clientContext, err := oscore.NewContext(oscore.ContextConfig{
-		AcceptVolatileSenderSequence: true,
+		UnsafeVolatileSenderSequence: true,
 		AcceptReplayStateLoss:        true,
 		MasterSecret:                 secret,
 		SenderID:                     []byte{0},
@@ -68,7 +68,7 @@ func TestForwarderRelaysOSCOREWithoutDecrypting(t *testing.T) {
 		t.Fatal(err)
 	}
 	originContext, err := oscore.NewContext(oscore.ContextConfig{
-		AcceptVolatileSenderSequence: true,
+		UnsafeVolatileSenderSequence: true,
 		AcceptReplayStateLoss:        true,
 		MasterSecret:                 secret,
 		SenderID:                     []byte{1},
@@ -122,7 +122,7 @@ func TestForwarderRequiresTargetAllowlist(t *testing.T) {
 func TestForwarderRejectsDisallowedTargetBeforeDial(t *testing.T) {
 	secret := []byte("0123456789abcdef")
 	clientContext, err := oscore.NewContext(oscore.ContextConfig{
-		AcceptVolatileSenderSequence: true,
+		UnsafeVolatileSenderSequence: true,
 		AcceptReplayStateLoss:        true,
 		MasterSecret:                 secret,
 		SenderID:                     []byte{0},
@@ -228,7 +228,7 @@ func TestAllowPublicIPLiteralTarget(t *testing.T) {
 func validProtectedProxyRequest(t *testing.T) message.Message {
 	t.Helper()
 	clientContext, err := oscore.NewContext(oscore.ContextConfig{
-		AcceptVolatileSenderSequence: true,
+		UnsafeVolatileSenderSequence: true,
 		AcceptReplayStateLoss:        true,
 		MasterSecret:                 []byte("0123456789abcdef"),
 		SenderID:                     []byte{0},

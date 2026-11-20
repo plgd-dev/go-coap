@@ -251,7 +251,7 @@ func TestOSCORETCPReplayRecoveryReturnsEchoBeforeHandler(t *testing.T) {
 	newProcessor := func(senderID, recipientID string, requireRecovery bool) *oscore.Processor {
 		t.Helper()
 		securityContext, contextErr := oscore.NewContext(oscore.ContextConfig{
-			AcceptVolatileSenderSequence: true,
+			UnsafeVolatileSenderSequence: true,
 			AcceptReplayStateLoss:        !requireRecovery,
 			RequireEchoRecovery:          requireRecovery,
 			MasterSecret:                 masterSecret,
@@ -627,7 +627,7 @@ func TestOSCORETCPObserveNotificationsAndCancellation(t *testing.T) {
 	require.NoError(t, err)
 	masterSecret := []byte{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16}
 	clientContext, err := oscore.NewContext(oscore.ContextConfig{
-		AcceptVolatileSenderSequence: true,
+		UnsafeVolatileSenderSequence: true,
 		AcceptReplayStateLoss:        true,
 		MasterSecret:                 masterSecret,
 		SenderID:                     []byte("client"),
@@ -635,7 +635,7 @@ func TestOSCORETCPObserveNotificationsAndCancellation(t *testing.T) {
 	})
 	require.NoError(t, err)
 	serverContext, err := oscore.NewContext(oscore.ContextConfig{
-		AcceptVolatileSenderSequence: true,
+		UnsafeVolatileSenderSequence: true,
 		AcceptReplayStateLoss:        true,
 		MasterSecret:                 masterSecret,
 		SenderID:                     []byte("server"),
@@ -959,7 +959,7 @@ func assertTCPGetResponse(t *testing.T, cc *client.Conn) {
 func newTCPOSCOREProcessor(t *testing.T, senderID, recipientID string, allowPlaintext bool) *oscore.Processor {
 	t.Helper()
 	securityContext, err := oscore.NewContext(oscore.ContextConfig{
-		AcceptVolatileSenderSequence: true,
+		UnsafeVolatileSenderSequence: true,
 		AcceptReplayStateLoss:        true,
 		MasterSecret:                 []byte{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16},
 		SenderID:                     []byte(senderID),
@@ -982,7 +982,7 @@ func newTCPOSCOREContextPair(t *testing.T, clientID, serverID string) (*oscore.C
 	t.Helper()
 	masterSecret := []byte{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16}
 	clientContext, err := oscore.NewContext(oscore.ContextConfig{
-		AcceptVolatileSenderSequence: true,
+		UnsafeVolatileSenderSequence: true,
 		AcceptReplayStateLoss:        true,
 		MasterSecret:                 masterSecret,
 		SenderID:                     []byte(clientID),
@@ -990,7 +990,7 @@ func newTCPOSCOREContextPair(t *testing.T, clientID, serverID string) (*oscore.C
 	})
 	require.NoError(t, err)
 	serverContext, err := oscore.NewContext(oscore.ContextConfig{
-		AcceptVolatileSenderSequence: true,
+		UnsafeVolatileSenderSequence: true,
 		AcceptReplayStateLoss:        true,
 		MasterSecret:                 masterSecret,
 		SenderID:                     []byte(serverID),

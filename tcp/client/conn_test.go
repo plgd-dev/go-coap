@@ -60,7 +60,7 @@ func TestUnprotectedErrorResponseOnlyTerminatesOSCOREExchange(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			securityContext, err := oscore.NewContext(oscore.ContextConfig{
-				AcceptVolatileSenderSequence: true,
+				UnsafeVolatileSenderSequence: true,
 				AcceptReplayStateLoss:        true,
 				MasterSecret:                 []byte("processing error response test"),
 				SenderID:                     []byte("client"),
@@ -102,7 +102,7 @@ func TestUnprotectedErrorResponseOnlyTerminatesOSCOREExchange(t *testing.T) {
 
 func TestTCPOSCOREProtectsGeneratedBlockwiseRequestAfterCSM(t *testing.T) {
 	securityContext, err := oscore.NewContext(oscore.ContextConfig{
-		AcceptVolatileSenderSequence: true,
+		UnsafeVolatileSenderSequence: true,
 		AcceptReplayStateLoss:        true,
 		MasterSecret:                 []byte("TCP OSCORE Block1 continuation"),
 		SenderID:                     []byte("client"),
@@ -110,7 +110,7 @@ func TestTCPOSCOREProtectsGeneratedBlockwiseRequestAfterCSM(t *testing.T) {
 	})
 	require.NoError(t, err)
 	serverContext, err := oscore.NewContext(oscore.ContextConfig{
-		AcceptVolatileSenderSequence: true,
+		UnsafeVolatileSenderSequence: true,
 		AcceptReplayStateLoss:        true,
 		MasterSecret:                 []byte("TCP OSCORE Block1 continuation"),
 		SenderID:                     []byte("server"),
@@ -192,7 +192,7 @@ func TestTCPOSCOREProtectsGeneratedBlockwiseRequestAfterCSM(t *testing.T) {
 func TestStaleOSCOREExchangeDoesNotRemoveReplacement(t *testing.T) {
 	makeExchange := func(secret string) (*oscore.Context, oscore.Exchange) {
 		securityContext, err := oscore.NewContext(oscore.ContextConfig{
-			AcceptVolatileSenderSequence: true,
+			UnsafeVolatileSenderSequence: true,
 			AcceptReplayStateLoss:        true,
 			MasterSecret:                 []byte(secret),
 			SenderID:                     []byte("client"),
@@ -251,7 +251,7 @@ func (s failingTCPOSCOREReplayStore) Save(oscore.ReplayWindowState) error {
 func TestInternalTCPOSCOREReplayStoreFailureIsDropped(t *testing.T) {
 	const masterSecret = "TCP internal replay store failure"
 	clientContext, err := oscore.NewContext(oscore.ContextConfig{
-		AcceptVolatileSenderSequence: true,
+		UnsafeVolatileSenderSequence: true,
 		AcceptReplayStateLoss:        true,
 		MasterSecret:                 []byte(masterSecret),
 		SenderID:                     []byte("client"),
@@ -260,7 +260,7 @@ func TestInternalTCPOSCOREReplayStoreFailureIsDropped(t *testing.T) {
 	require.NoError(t, err)
 	storeErr := errors.New("replay storage unavailable")
 	serverContext, err := oscore.NewContext(oscore.ContextConfig{
-		AcceptVolatileSenderSequence: true,
+		UnsafeVolatileSenderSequence: true,
 		MasterSecret:                 []byte(masterSecret),
 		SenderID:                     []byte("server"),
 		RecipientID:                  []byte("client"),
@@ -316,7 +316,7 @@ func TestInternalTCPOSCOREReplayStoreFailureIsDropped(t *testing.T) {
 func TestFailedTCPOSCOREWriteDoesNotRollbackReplacement(t *testing.T) {
 	makeExchange := func(secret string) (*oscore.Context, oscore.Exchange) {
 		securityContext, err := oscore.NewContext(oscore.ContextConfig{
-			AcceptVolatileSenderSequence: true,
+			UnsafeVolatileSenderSequence: true,
 			AcceptReplayStateLoss:        true,
 			MasterSecret:                 []byte(secret),
 			SenderID:                     []byte("client"),
@@ -358,7 +358,7 @@ func TestFailedTCPOSCOREWriteDoesNotRollbackReplacement(t *testing.T) {
 func TestFailedTCPOSCOREObserveCancellationRestoresOnlyOwnedExchange(t *testing.T) {
 	makeExchange := func(secret string) oscore.Exchange {
 		securityContext, err := oscore.NewContext(oscore.ContextConfig{
-			AcceptVolatileSenderSequence: true,
+			UnsafeVolatileSenderSequence: true,
 			AcceptReplayStateLoss:        true,
 			MasterSecret:                 []byte(secret),
 			SenderID:                     []byte("client"),
@@ -406,7 +406,7 @@ func TestFailedTCPOSCOREObserveCancellationPreservesPreviousCancellation(t *test
 	ctx := context.Background()
 	const token = "token"
 	securityContext, err := oscore.NewContext(oscore.ContextConfig{
-		AcceptVolatileSenderSequence: true,
+		UnsafeVolatileSenderSequence: true,
 		AcceptReplayStateLoss:        true,
 		MasterSecret:                 []byte("failed TCP OSCORE cancellation write"),
 		SenderID:                     []byte("client"),
@@ -471,7 +471,7 @@ func TestFailedTCPOSCOREObserveCancellationPreservesPreviousCancellation(t *test
 
 func TestExpiredTCPOSCOREExchangeStillRequiresProtection(t *testing.T) {
 	securityContext, err := oscore.NewContext(oscore.ContextConfig{
-		AcceptVolatileSenderSequence: true,
+		UnsafeVolatileSenderSequence: true,
 		AcceptReplayStateLoss:        true,
 		MasterSecret:                 []byte("expired TCP OSCORE exchange"),
 		SenderID:                     []byte("client"),
@@ -505,7 +505,7 @@ func TestExpiredTCPOSCOREExchangeStillRequiresProtection(t *testing.T) {
 
 func TestExpiredTCPOSCOREExchangeAllowsProcessingError(t *testing.T) {
 	securityContext, err := oscore.NewContext(oscore.ContextConfig{
-		AcceptVolatileSenderSequence: true,
+		UnsafeVolatileSenderSequence: true,
 		AcceptReplayStateLoss:        true,
 		MasterSecret:                 []byte("expired TCP OSCORE processing error"),
 		SenderID:                     []byte("client"),
@@ -540,7 +540,7 @@ func TestExpiredTCPOSCOREExchangeAllowsProcessingError(t *testing.T) {
 func TestTCPOSCOREExchangeAcceptsResponseWithinConfiguredTimeout(t *testing.T) {
 	secret := []byte("late TCP OSCORE response")
 	clientContext, err := oscore.NewContext(oscore.ContextConfig{
-		AcceptVolatileSenderSequence: true,
+		UnsafeVolatileSenderSequence: true,
 		AcceptReplayStateLoss:        true,
 		MasterSecret:                 secret,
 		SenderID:                     []byte("client"),
@@ -548,7 +548,7 @@ func TestTCPOSCOREExchangeAcceptsResponseWithinConfiguredTimeout(t *testing.T) {
 	})
 	require.NoError(t, err)
 	serverContext, err := oscore.NewContext(oscore.ContextConfig{
-		AcceptVolatileSenderSequence: true,
+		UnsafeVolatileSenderSequence: true,
 		AcceptReplayStateLoss:        true,
 		MasterSecret:                 secret,
 		SenderID:                     []byte("server"),
@@ -592,7 +592,7 @@ func TestTCPOSCOREExchangeAcceptsResponseWithinConfiguredTimeout(t *testing.T) {
 func TestTCPOSCORERequestConsumersReleaseExchanges(t *testing.T) {
 	require.Zero(t, DefaultConfig.OSCOREExchangeTimeout)
 	securityContext, err := oscore.NewContext(oscore.ContextConfig{
-		AcceptVolatileSenderSequence: true,
+		UnsafeVolatileSenderSequence: true,
 		AcceptReplayStateLoss:        true,
 		MasterSecret:                 []byte("TCP OSCORE consumer lifecycle"),
 		SenderID:                     []byte("client"),
@@ -641,7 +641,7 @@ func TestTCPOSCORERequestConsumersReleaseExchanges(t *testing.T) {
 
 func TestTCPOSCOREBlockwiseConsumerRetainsExchangesUntilRelease(t *testing.T) {
 	securityContext, err := oscore.NewContext(oscore.ContextConfig{
-		AcceptVolatileSenderSequence: true,
+		UnsafeVolatileSenderSequence: true,
 		AcceptReplayStateLoss:        true,
 		MasterSecret:                 []byte("TCP OSCORE blockwise consumer lifecycle"),
 		SenderID:                     []byte("client"),
@@ -691,7 +691,7 @@ func TestTCPOSCOREBlockwiseConsumerRetainsExchangesUntilRelease(t *testing.T) {
 
 func TestTCPOSCORERequirementTracksLiveRequestConsumer(t *testing.T) {
 	securityContext, err := oscore.NewContext(oscore.ContextConfig{
-		AcceptVolatileSenderSequence: true,
+		UnsafeVolatileSenderSequence: true,
 		AcceptReplayStateLoss:        true,
 		MasterSecret:                 []byte("TCP OSCORE requirement consumer"),
 		SenderID:                     []byte("client"),
@@ -727,7 +727,7 @@ func TestTCPOSCORERequirementTracksLiveRequestConsumer(t *testing.T) {
 
 func TestPendingTCPOSCOREWriteKeepsExchangeAndRequirement(t *testing.T) {
 	securityContext, err := oscore.NewContext(oscore.ContextConfig{
-		AcceptVolatileSenderSequence: true,
+		UnsafeVolatileSenderSequence: true,
 		AcceptReplayStateLoss:        true,
 		MasterSecret:                 []byte("pending TCP OSCORE write"),
 		SenderID:                     []byte("client"),
@@ -808,7 +808,7 @@ func TestPendingTCPOSCOREWriteKeepsExchangeAndRequirement(t *testing.T) {
 
 func TestTCPOSCOREObservationExchangeSurvivesRequestConsumerRelease(t *testing.T) {
 	securityContext, err := oscore.NewContext(oscore.ContextConfig{
-		AcceptVolatileSenderSequence: true,
+		UnsafeVolatileSenderSequence: true,
 		AcceptReplayStateLoss:        true,
 		MasterSecret:                 []byte("TCP OSCORE Observe lifecycle"),
 		SenderID:                     []byte("client"),
@@ -843,7 +843,7 @@ func TestTCPOSCOREObservationExchangeSurvivesRequestConsumerRelease(t *testing.T
 
 func TestCancelObservationClearsTCPOSCORERequirements(t *testing.T) {
 	securityContext, err := oscore.NewContext(oscore.ContextConfig{
-		AcceptVolatileSenderSequence: true,
+		UnsafeVolatileSenderSequence: true,
 		AcceptReplayStateLoss:        true,
 		MasterSecret:                 []byte("TCP OSCORE cancel observation"),
 		SenderID:                     []byte("client"),
@@ -880,7 +880,7 @@ func TestCancelObservationClearsTCPOSCORERequirements(t *testing.T) {
 
 func TestCanceledTCPOSCOREObservationsExpireAfterBackstop(t *testing.T) {
 	securityContext, err := oscore.NewContext(oscore.ContextConfig{
-		AcceptVolatileSenderSequence: true,
+		UnsafeVolatileSenderSequence: true,
 		AcceptReplayStateLoss:        true,
 		MasterSecret:                 []byte("TCP OSCORE cancellation backstop"),
 		SenderID:                     []byte("client"),
@@ -936,7 +936,7 @@ func TestCanceledTCPOSCOREObservationsExpireAfterBackstop(t *testing.T) {
 func TestTCPOSCOREAcceptsDeregistrationResponseBeforeBackstop(t *testing.T) {
 	const masterSecret = "TCP OSCORE cancellation response before backstop"
 	clientContext, err := oscore.NewContext(oscore.ContextConfig{
-		AcceptVolatileSenderSequence: true,
+		UnsafeVolatileSenderSequence: true,
 		AcceptReplayStateLoss:        true,
 		MasterSecret:                 []byte(masterSecret),
 		SenderID:                     []byte("client"),
@@ -944,7 +944,7 @@ func TestTCPOSCOREAcceptsDeregistrationResponseBeforeBackstop(t *testing.T) {
 	})
 	require.NoError(t, err)
 	serverContext, err := oscore.NewContext(oscore.ContextConfig{
-		AcceptVolatileSenderSequence: true,
+		UnsafeVolatileSenderSequence: true,
 		AcceptReplayStateLoss:        true,
 		MasterSecret:                 []byte(masterSecret),
 		SenderID:                     []byte("server"),
@@ -1011,7 +1011,7 @@ func TestTCPOSCOREAcceptsDeregistrationResponseBeforeBackstop(t *testing.T) {
 
 func TestTCPOSCOREExchangeExpiryRetainsActiveCancellationRequirement(t *testing.T) {
 	securityContext, err := oscore.NewContext(oscore.ContextConfig{
-		AcceptVolatileSenderSequence: true,
+		UnsafeVolatileSenderSequence: true,
 		AcceptReplayStateLoss:        true,
 		MasterSecret:                 []byte("TCP OSCORE cancellation requirement expiry"),
 		SenderID:                     []byte("client"),
@@ -1065,7 +1065,7 @@ func TestTCPOSCOREExchangeExpiryRetainsActiveCancellationRequirement(t *testing.
 
 func TestTCPOSCOREExchangeLookupRetainsUnexpiredResponseRequirement(t *testing.T) {
 	securityContext, err := oscore.NewContext(oscore.ContextConfig{
-		AcceptVolatileSenderSequence: true,
+		UnsafeVolatileSenderSequence: true,
 		AcceptReplayStateLoss:        true,
 		MasterSecret:                 []byte("TCP OSCORE response requirement expiry"),
 		SenderID:                     []byte("client"),

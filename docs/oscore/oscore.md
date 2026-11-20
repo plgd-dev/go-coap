@@ -59,7 +59,7 @@ func newOSCOREProcessor(senderID, recipientID string) (*oscore.Processor, error)
 		MasterSalt:                   []byte("salt1234"),
 		SenderID:                     []byte(senderID),
 		RecipientID:                  []byte(recipientID),
-		AcceptVolatileSenderSequence: true, // Development-only: sender sequence resets on restart.
+		UnsafeVolatileSenderSequence: true, // Unsafe: restart can reuse Partial IVs/nonces (RFC 8613 Appendix B.2).
 		AcceptReplayStateLoss:        true, // Use only for examples or deliberate volatile-state deployments.
 	})
 	if err != nil {
@@ -168,7 +168,7 @@ func directOSCOREExample() error {
 		MasterSecret:                  masterSecret,
 		SenderID:                      []byte("client"),
 		RecipientID:                   []byte("server"),
-		AcceptVolatileSenderSequence: true,
+		UnsafeVolatileSenderSequence: true,
 		AcceptReplayStateLoss:        true,
 	})
 	if err != nil {
@@ -178,7 +178,7 @@ func directOSCOREExample() error {
 		MasterSecret:                  masterSecret,
 		SenderID:                      []byte("server"),
 		RecipientID:                   []byte("client"),
-		AcceptVolatileSenderSequence: true,
+		UnsafeVolatileSenderSequence: true,
 		AcceptReplayStateLoss:        true,
 	})
 	if err != nil {
@@ -307,10 +307,12 @@ payload and failed requests are never dispatched to the application handler.
 
 Partial IV values must never be reused with the same sender key. When no
 `SenderSequenceStore` is configured, `NewContext` requires the explicit
-`AcceptVolatileSenderSequence: true` opt-in. This mode is for development,
-examples, and deliberate volatile-state deployments only; restarting with the
-same sender key and configuration reuses sequence numbers and can reuse AEAD
-nonces. For durable deployments, configure a
+`UnsafeVolatileSenderSequence: true` opt-in and logs a warning when the context
+is created. This mode is for development and deliberate volatile-state
+deployments only; restarting with the same sender key and configuration reuses
+sequence numbers and can reuse AEAD nonces. RFC 8613 Appendix B.2 describes the
+sender sequence number requirements that prevent nonce reuse. For durable
+deployments, configure a
 `SenderSequenceStore` whose `Reserve` operation atomically reserves and durably
 persists a unique value before returning it. Coordinate reservations across all
 processes and `Context` instances that share a sender key. A reserved value
@@ -325,10 +327,10 @@ instance for each sender context, or coordinate transmission so messages arrive
 in sequence order.
 
 Alternatively, restore `SenderSequenceNumber` to the next unused value before
-constructing a context and set `AcceptVolatileSenderSequence: true`. This
-restored value is only an in-memory starting point; after using it, persist and
-restore the next unused value again before any restart. Never restore an old or
-guessed value. The receiver
+constructing a context and set `UnsafeVolatileSenderSequence: true`. The context
+logs a warning because this restored value is only an in-memory starting point;
+after using it, persist and restore the next unused value again before any
+restart. Never restore an old or guessed value. The receiver
 replay window is independent of sender sequence persistence. To preserve it
 across receiver restarts, configure a `ReplayWindowStore` on `ContextConfig`.
 `NewContext` requires either this store or the explicit
@@ -537,8 +539,10 @@ timeouts, and response-size limits.
   replay state; storage durability and coordination are application
   responsibilities.
 - Sender sequence policy is explicit: use `SenderSequenceStore` for durable
-  reservations or set `AcceptVolatileSenderSequence` for development-only,
-  in-memory sender state.
+  reservations or set `UnsafeVolatileSenderSequence` for development-only,
+  in-memory sender state. Creating a context in this mode logs a warning;
+  restarting with the same sender key can reuse Partial IVs and AEAD nonces
+  (RFC 8613 Appendix B.2).
 - Q-Block1 uploads and Q-Block2 downloads over OSCORE-protected UDP and DTLS.
   Q-Block options are encrypted as Class E options. Q-Block is a datagram
   protocol (RFC 9177); TCP/TLS use reliable-transport Blockwise instead.

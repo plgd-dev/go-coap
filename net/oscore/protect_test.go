@@ -14,7 +14,7 @@ func pairedContexts(t *testing.T, clientSequence, serverSequence uint64) (*Conte
 	t.Helper()
 	masterSecret := mustHex(t, "0102030405060708090a0b0c0d0e0f10")
 	client, err := NewContext(ContextConfig{
-		AcceptVolatileSenderSequence: true,
+		UnsafeVolatileSenderSequence: true,
 		AcceptReplayStateLoss:        true,
 		MasterSecret:                 masterSecret,
 		SenderID:                     []byte{0},
@@ -25,7 +25,7 @@ func pairedContexts(t *testing.T, clientSequence, serverSequence uint64) (*Conte
 		t.Fatal(err)
 	}
 	server, err := NewContext(ContextConfig{
-		AcceptVolatileSenderSequence: true,
+		UnsafeVolatileSenderSequence: true,
 		AcceptReplayStateLoss:        true,
 		MasterSecret:                 masterSecret,
 		SenderID:                     []byte{1},
@@ -398,7 +398,7 @@ func assertProtectedResponseRoundTrip(
 func TestProtectRequestAndResponseWithAESCCM256(t *testing.T) {
 	masterSecret := mustHex(t, "0102030405060708090a0b0c0d0e0f10")
 	client, err := NewContext(ContextConfig{
-		AcceptVolatileSenderSequence: true,
+		UnsafeVolatileSenderSequence: true,
 		AcceptReplayStateLoss:        true,
 		Algorithm:                    AEADAlgorithmAESCCM16_128_256,
 		MasterSecret:                 masterSecret,
@@ -409,7 +409,7 @@ func TestProtectRequestAndResponseWithAESCCM256(t *testing.T) {
 		t.Fatal(err)
 	}
 	server, err := NewContext(ContextConfig{
-		AcceptVolatileSenderSequence: true,
+		UnsafeVolatileSenderSequence: true,
 		AcceptReplayStateLoss:        true,
 		Algorithm:                    AEADAlgorithmAESCCM16_128_256,
 		MasterSecret:                 masterSecret,
@@ -861,7 +861,7 @@ func assertObserveCancellation(t *testing.T, client, server *Context) {
 
 func TestRFC8613AppendixC5ProtectedRequest(t *testing.T) {
 	client, err := NewContext(ContextConfig{
-		AcceptVolatileSenderSequence: true,
+		UnsafeVolatileSenderSequence: true,
 		AcceptReplayStateLoss:        true,
 		MasterSecret:                 mustHex(t, "0102030405060708090a0b0c0d0e0f10"),
 		SenderID:                     mustHex(t, "00"),
@@ -892,7 +892,7 @@ func TestRFC8613AppendixC5ProtectedRequest(t *testing.T) {
 
 func TestRFC8613AppendixC6ProtectedRequestWithIDContext(t *testing.T) {
 	client, err := NewContext(ContextConfig{
-		AcceptVolatileSenderSequence: true,
+		UnsafeVolatileSenderSequence: true,
 		AcceptReplayStateLoss:        true,
 		MasterSecret:                 mustHex(t, "0102030405060708090a0b0c0d0e0f10"),
 		MasterSalt:                   mustHex(t, "9e7ca92223786340"),
@@ -945,7 +945,7 @@ func assertRFC8613ProtectedRequest(t *testing.T, protected message.Message, mess
 
 func TestRFC8613AppendixC7ProtectedResponse(t *testing.T) {
 	server, err := NewContext(ContextConfig{
-		AcceptVolatileSenderSequence: true,
+		UnsafeVolatileSenderSequence: true,
 		AcceptReplayStateLoss:        true,
 		MasterSecret:                 mustHex(t, "0102030405060708090a0b0c0d0e0f10"),
 		MasterSalt:                   mustHex(t, "9e7ca92223786340"),
@@ -956,7 +956,7 @@ func TestRFC8613AppendixC7ProtectedResponse(t *testing.T) {
 		t.Fatal(err)
 	}
 	client, err := NewContext(ContextConfig{
-		AcceptVolatileSenderSequence: true,
+		UnsafeVolatileSenderSequence: true,
 		AcceptReplayStateLoss:        true,
 		MasterSecret:                 mustHex(t, "0102030405060708090a0b0c0d0e0f10"),
 		MasterSalt:                   mustHex(t, "9e7ca92223786340"),
@@ -1085,7 +1085,7 @@ func TestExchangeBindingIsImmutableAndSharedByCopies(t *testing.T) {
 		t.Fatalf("zero-value Exchange error = %v, want ErrInvalidContext", protectErr)
 	}
 	unrelated, err := NewContext(ContextConfig{
-		AcceptVolatileSenderSequence: true,
+		UnsafeVolatileSenderSequence: true,
 		AcceptReplayStateLoss:        true,
 		MasterSecret:                 []byte("unrelated context"),
 		SenderID:                     []byte{2},
@@ -1125,7 +1125,7 @@ func TestProtectResponseFailureDoesNotConsumeOrdinaryExchange(t *testing.T) {
 func TestProtectResponseSequenceReservationFailureCanRetry(t *testing.T) {
 	const masterSecret = "response sequence reservation retry"
 	client, err := NewContext(ContextConfig{
-		AcceptVolatileSenderSequence: true,
+		UnsafeVolatileSenderSequence: true,
 		AcceptReplayStateLoss:        true,
 		MasterSecret:                 []byte(masterSecret),
 		SenderID:                     []byte("client"),
@@ -1137,7 +1137,7 @@ func TestProtectResponseSequenceReservationFailureCanRetry(t *testing.T) {
 	storeErr := errors.New("temporary sequence storage failure")
 	store := &testSenderSequenceStore{err: storeErr}
 	server, err := NewContext(ContextConfig{
-		AcceptVolatileSenderSequence: true,
+		UnsafeVolatileSenderSequence: true,
 		AcceptReplayStateLoss:        true,
 		MasterSecret:                 []byte(masterSecret),
 		SenderID:                     []byte("server"),
@@ -1421,7 +1421,7 @@ func TestObserveNotificationWithoutOuterObserveUsesInnerObserveAndPartialIV(t *t
 
 func TestRFC8613AppendixC8ProtectedResponseWithPartialIV(t *testing.T) {
 	server, err := NewContext(ContextConfig{
-		AcceptVolatileSenderSequence: true,
+		UnsafeVolatileSenderSequence: true,
 		AcceptReplayStateLoss:        true,
 		MasterSecret:                 mustHex(t, "0102030405060708090a0b0c0d0e0f10"),
 		MasterSalt:                   mustHex(t, "9e7ca92223786340"),
@@ -1432,7 +1432,7 @@ func TestRFC8613AppendixC8ProtectedResponseWithPartialIV(t *testing.T) {
 		t.Fatal(err)
 	}
 	client, err := NewContext(ContextConfig{
-		AcceptVolatileSenderSequence: true,
+		UnsafeVolatileSenderSequence: true,
 		AcceptReplayStateLoss:        true,
 		MasterSecret:                 mustHex(t, "0102030405060708090a0b0c0d0e0f10"),
 		MasterSalt:                   mustHex(t, "9e7ca92223786340"),
@@ -1493,7 +1493,7 @@ func TestRFC8613AppendixC8ProtectedResponseWithPartialIV(t *testing.T) {
 func TestProtectWithPresentEmptyIDContext(t *testing.T) {
 	masterSecret := []byte{1, 2, 3, 4}
 	client, err := NewContext(ContextConfig{
-		AcceptVolatileSenderSequence: true,
+		UnsafeVolatileSenderSequence: true,
 		AcceptReplayStateLoss:        true,
 		MasterSecret:                 masterSecret,
 		IDContext:                    []byte{},
@@ -1504,7 +1504,7 @@ func TestProtectWithPresentEmptyIDContext(t *testing.T) {
 		t.Fatal(err)
 	}
 	server, err := NewContext(ContextConfig{
-		AcceptVolatileSenderSequence: true,
+		UnsafeVolatileSenderSequence: true,
 		AcceptReplayStateLoss:        true,
 		MasterSecret:                 masterSecret,
 		IDContext:                    []byte{},
@@ -1597,7 +1597,7 @@ func TestUnprotectRejectsTamperingAndReplay(t *testing.T) {
 
 func TestObserveRejectsOutOfOrderFullWidthPartialIV(t *testing.T) {
 	requestContext, err := NewContext(ContextConfig{
-		AcceptVolatileSenderSequence: true,
+		UnsafeVolatileSenderSequence: true,
 		AcceptReplayStateLoss:        true,
 		MasterSecret:                 []byte("OSCORE observe sequence test"),
 		SenderID:                     []byte("client"),
@@ -1607,7 +1607,7 @@ func TestObserveRejectsOutOfOrderFullWidthPartialIV(t *testing.T) {
 		t.Fatal(err)
 	}
 	serverContext, err := NewContext(ContextConfig{
-		AcceptVolatileSenderSequence: true,
+		UnsafeVolatileSenderSequence: true,
 		AcceptReplayStateLoss:        true,
 		MasterSecret:                 []byte("OSCORE observe sequence test"),
 		SenderID:                     []byte("server"),

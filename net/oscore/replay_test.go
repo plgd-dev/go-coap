@@ -348,7 +348,7 @@ func TestReplayWindowRecoversLiveStateAfterInterruptedSave(t *testing.T) {
 func TestContextLoadsReplayWindowStore(t *testing.T) {
 	loadErr := errors.New("storage unavailable")
 	cfg := ContextConfig{
-		AcceptVolatileSenderSequence: true,
+		UnsafeVolatileSenderSequence: true,
 		MasterSecret:                 []byte("0123456789abcdef"),
 		SenderID:                     []byte{1},
 		RecipientID:                  []byte{2},

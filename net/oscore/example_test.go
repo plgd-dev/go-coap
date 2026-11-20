@@ -14,7 +14,7 @@ func ExampleContext_directAPI() {
 	// settings with a production sender key.
 	masterSecret := []byte("public test-only secret")
 	clientContext, err := oscore.NewContext(oscore.ContextConfig{
-		AcceptVolatileSenderSequence: true,
+		UnsafeVolatileSenderSequence: true,
 		AcceptReplayStateLoss:        true,
 		MasterSecret:                 masterSecret,
 		SenderID:                     []byte("client"),
@@ -24,7 +24,7 @@ func ExampleContext_directAPI() {
 		panic(err)
 	}
 	serverContext, err := oscore.NewContext(oscore.ContextConfig{
-		AcceptVolatileSenderSequence: true,
+		UnsafeVolatileSenderSequence: true,
 		AcceptReplayStateLoss:        true,
 		MasterSecret:                 masterSecret,
 		SenderID:                     []byte("server"),

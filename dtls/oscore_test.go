@@ -78,7 +78,7 @@ func TestOSCOREDTLSAuthenticationFailureDoesNotPoisonSession(t *testing.T) {
 	require.NoError(t, err)
 	masterSecret := []byte{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16}
 	clientContext, err := oscore.NewContext(oscore.ContextConfig{
-		AcceptVolatileSenderSequence: true,
+		UnsafeVolatileSenderSequence: true,
 		AcceptReplayStateLoss:        true,
 		MasterSecret:                 masterSecret,
 		SenderID:                     []byte("client"),
@@ -86,7 +86,7 @@ func TestOSCOREDTLSAuthenticationFailureDoesNotPoisonSession(t *testing.T) {
 	})
 	require.NoError(t, err)
 	serverContext, err := oscore.NewContext(oscore.ContextConfig{
-		AcceptVolatileSenderSequence: true,
+		UnsafeVolatileSenderSequence: true,
 		AcceptReplayStateLoss:        true,
 		MasterSecret:                 masterSecret,
 		SenderID:                     []byte("server"),
@@ -320,7 +320,7 @@ func TestOSCOREOuterBlockwiseDTLSRejectsAuthenticationFailureDuringTransfer(t *t
 	require.NoError(t, err)
 	masterSecret := []byte("DTLS outer blockwise authentication failure")
 	clientContext, err := oscore.NewContext(oscore.ContextConfig{
-		AcceptVolatileSenderSequence: true,
+		UnsafeVolatileSenderSequence: true,
 		AcceptReplayStateLoss:        true,
 		MasterSecret:                 masterSecret,
 		SenderID:                     []byte("client"),
@@ -328,7 +328,7 @@ func TestOSCOREOuterBlockwiseDTLSRejectsAuthenticationFailureDuringTransfer(t *t
 	})
 	require.NoError(t, err)
 	serverContext, err := oscore.NewContext(oscore.ContextConfig{
-		AcceptVolatileSenderSequence: true,
+		UnsafeVolatileSenderSequence: true,
 		AcceptReplayStateLoss:        true,
 		MasterSecret:                 masterSecret,
 		SenderID:                     []byte("server"),
@@ -837,7 +837,7 @@ func testOSCOREPSK([]byte) ([]byte, error) {
 func newDTLSOSCOREProcessor(t *testing.T, senderID, recipientID string, allowPlaintext ...bool) *oscore.Processor {
 	t.Helper()
 	securityContext, err := oscore.NewContext(oscore.ContextConfig{
-		AcceptVolatileSenderSequence: true,
+		UnsafeVolatileSenderSequence: true,
 		AcceptReplayStateLoss:        true,
 		MasterSecret:                 []byte{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16},
 		SenderID:                     []byte(senderID),

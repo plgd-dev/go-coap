@@ -91,7 +91,7 @@ func TestHighWaterFileStoreBindsSequenceStateToSenderKeys(t *testing.T) {
 	}
 	newContext := func(secret string, store *HighWaterFileStore) (*oscore.Context, error) {
 		return oscore.NewContext(oscore.ContextConfig{
-			AcceptVolatileSenderSequence: true,
+			UnsafeVolatileSenderSequence: true,
 			AcceptReplayStateLoss:        true,
 			MasterSecret:                 []byte(secret),
 			SenderID:                     []byte("same-id"),
@@ -844,7 +844,7 @@ func TestHighWaterFileStoreReplayCutoffSurvivesRestart(t *testing.T) {
 		t.Fatal(err)
 	}
 	sender, err := oscore.NewContext(oscore.ContextConfig{
-		AcceptVolatileSenderSequence: true,
+		UnsafeVolatileSenderSequence: true,
 		AcceptReplayStateLoss:        true,
 		MasterSecret:                 []byte("0123456789abcdef"),
 		SenderID:                     []byte{0},
@@ -854,7 +854,7 @@ func TestHighWaterFileStoreReplayCutoffSurvivesRestart(t *testing.T) {
 		t.Fatal(err)
 	}
 	receiver, err := oscore.NewContext(oscore.ContextConfig{
-		AcceptVolatileSenderSequence: true,
+		UnsafeVolatileSenderSequence: true,
 		MasterSecret:                 []byte("0123456789abcdef"),
 		SenderID:                     []byte{1},
 		RecipientID:                  []byte{0},
@@ -896,7 +896,7 @@ func TestHighWaterFileStoreReplayCutoffSurvivesRestart(t *testing.T) {
 		t.Fatal(err)
 	}
 	restarted, err := oscore.NewContext(oscore.ContextConfig{
-		AcceptVolatileSenderSequence: true,
+		UnsafeVolatileSenderSequence: true,
 		MasterSecret:                 []byte("0123456789abcdef"),
 		SenderID:                     []byte{1},
 		RecipientID:                  []byte{0},
@@ -938,7 +938,7 @@ func testHighWaterFileStoreReplayMargin(t *testing.T, margin uint64) {
 		t.Fatal(err)
 	}
 	sender, err := oscore.NewContext(oscore.ContextConfig{
-		AcceptVolatileSenderSequence: true,
+		UnsafeVolatileSenderSequence: true,
 		AcceptReplayStateLoss:        true,
 		MasterSecret:                 []byte("0123456789abcdef"),
 		SenderID:                     []byte{0},
@@ -948,7 +948,7 @@ func testHighWaterFileStoreReplayMargin(t *testing.T, margin uint64) {
 		t.Fatal(err)
 	}
 	receiver, err := oscore.NewContext(oscore.ContextConfig{
-		AcceptVolatileSenderSequence: true,
+		UnsafeVolatileSenderSequence: true,
 		MasterSecret:                 []byte("0123456789abcdef"),
 		SenderID:                     []byte{1},
 		RecipientID:                  []byte{0},
@@ -1000,7 +1000,7 @@ func assertReplayMarginRestartRejects(
 		t.Fatal(err)
 	}
 	restarted, err := oscore.NewContext(oscore.ContextConfig{
-		AcceptVolatileSenderSequence: true,
+		UnsafeVolatileSenderSequence: true,
 		MasterSecret:                 []byte("0123456789abcdef"),
 		SenderID:                     []byte{1},
 		RecipientID:                  []byte{0},
@@ -1165,7 +1165,7 @@ func TestHighWaterFileStoreRecoversInterruptedReplayPairUpdate(t *testing.T) {
 		t.Fatal(err)
 	}
 	sender, err := oscore.NewContext(oscore.ContextConfig{
-		AcceptVolatileSenderSequence: true,
+		UnsafeVolatileSenderSequence: true,
 		AcceptReplayStateLoss:        true,
 		MasterSecret:                 []byte("0123456789abcdef"),
 		SenderID:                     []byte{0},
@@ -1213,7 +1213,7 @@ func TestHighWaterFileStoreRecoversInterruptedReplayPairUpdate(t *testing.T) {
 		t.Fatal(err)
 	}
 	restarted, err := oscore.NewContext(oscore.ContextConfig{
-		AcceptVolatileSenderSequence: true,
+		UnsafeVolatileSenderSequence: true,
 		MasterSecret:                 []byte("0123456789abcdef"),
 		SenderID:                     []byte{1},
 		RecipientID:                  []byte{0},
@@ -1236,7 +1236,7 @@ func TestHighWaterFileStoreRestartAfterDirectorySyncFailureRejectsAcceptedReplay
 		t.Fatal(err)
 	}
 	sender, err := oscore.NewContext(oscore.ContextConfig{
-		AcceptVolatileSenderSequence: true,
+		UnsafeVolatileSenderSequence: true,
 		AcceptReplayStateLoss:        true,
 		MasterSecret:                 []byte("0123456789abcdef"),
 		SenderID:                     []byte{0},
@@ -1246,7 +1246,7 @@ func TestHighWaterFileStoreRestartAfterDirectorySyncFailureRejectsAcceptedReplay
 		t.Fatal(err)
 	}
 	receiver, err := oscore.NewContext(oscore.ContextConfig{
-		AcceptVolatileSenderSequence: true,
+		UnsafeVolatileSenderSequence: true,
 		MasterSecret:                 []byte("0123456789abcdef"),
 		SenderID:                     []byte{1},
 		RecipientID:                  []byte{0},
@@ -1279,7 +1279,7 @@ func TestHighWaterFileStoreRestartAfterDirectorySyncFailureRejectsAcceptedReplay
 		t.Fatal(err)
 	}
 	restarted, err := oscore.NewContext(oscore.ContextConfig{
-		AcceptVolatileSenderSequence: true,
+		UnsafeVolatileSenderSequence: true,
 		MasterSecret:                 []byte("0123456789abcdef"),
 		SenderID:                     []byte{1},
 		RecipientID:                  []byte{0},
@@ -1393,7 +1393,7 @@ func BenchmarkHighWaterFileStoreReplayPersistence(b *testing.B) {
 				return syncDirectory(dir)
 			}
 			sender, err := oscore.NewContext(oscore.ContextConfig{
-				AcceptVolatileSenderSequence: true,
+				UnsafeVolatileSenderSequence: true,
 				AcceptReplayStateLoss:        true,
 				MasterSecret:                 []byte("0123456789abcdef"),
 				SenderID:                     []byte{0},
@@ -1403,7 +1403,7 @@ func BenchmarkHighWaterFileStoreReplayPersistence(b *testing.B) {
 				b.Fatal(err)
 			}
 			receiver, err := oscore.NewContext(oscore.ContextConfig{
-				AcceptVolatileSenderSequence: true,
+				UnsafeVolatileSenderSequence: true,
 				MasterSecret:                 []byte("0123456789abcdef"),
 				SenderID:                     []byte{1},
 				RecipientID:                  []byte{0},
@@ -1463,7 +1463,7 @@ func TestWriteStateFileRenameFailurePreservesExistingTarget(t *testing.T) {
 func TestHighWaterFileStoreReplayStatePersistsAcrossContextRestart(t *testing.T) {
 	dir := t.TempDir()
 	sender, err := oscore.NewContext(oscore.ContextConfig{
-		AcceptVolatileSenderSequence: true,
+		UnsafeVolatileSenderSequence: true,
 		AcceptReplayStateLoss:        true,
 		MasterSecret:                 []byte("0123456789abcdef"),
 		SenderID:                     []byte{0},
@@ -1479,7 +1479,7 @@ func TestHighWaterFileStoreReplayStatePersistsAcrossContextRestart(t *testing.T)
 			t.Fatal(storeErr)
 		}
 		context, contextErr := oscore.NewContext(oscore.ContextConfig{
-			AcceptVolatileSenderSequence: true,
+			UnsafeVolatileSenderSequence: true,
 			MasterSecret:                 []byte("0123456789abcdef"),
 			SenderID:                     []byte{1},
 			RecipientID:                  []byte{0},

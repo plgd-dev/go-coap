@@ -44,7 +44,7 @@ func TestProcessorRequiresEchoRecoveryAfterVolatileReplayStateLoss(t *testing.T)
 	newContext := func(senderID, recipientID []byte, requireEcho bool) *Context {
 		t.Helper()
 		cfg := ContextConfig{
-			AcceptVolatileSenderSequence: true,
+			UnsafeVolatileSenderSequence: true,
 			MasterSecret:                 []byte("Echo replay recovery"),
 			SenderID:                     senderID,
 			RecipientID:                  recipientID,
@@ -138,7 +138,7 @@ func TestProcessorReplayRecoveryEchoIsContextSpecific(t *testing.T) {
 	newPair := func(idContext []byte, requireEcho bool) (*Context, *Context) {
 		t.Helper()
 		client, err := NewContext(ContextConfig{
-			AcceptVolatileSenderSequence: true,
+			UnsafeVolatileSenderSequence: true,
 			AcceptReplayStateLoss:        !requireEcho,
 			RequireEchoRecovery:          requireEcho,
 			MasterSecret:                 []byte("context-specific Echo recovery"),
@@ -150,7 +150,7 @@ func TestProcessorReplayRecoveryEchoIsContextSpecific(t *testing.T) {
 			t.Fatal(err)
 		}
 		server, err := NewContext(ContextConfig{
-			AcceptVolatileSenderSequence: true,
+			UnsafeVolatileSenderSequence: true,
 			AcceptReplayStateLoss:        !requireEcho,
 			RequireEchoRecovery:          requireEcho,
 			MasterSecret:                 []byte("context-specific Echo recovery"),
@@ -336,7 +336,7 @@ func TestProcessorNeverFallsBackAfterOSCOREFailure(t *testing.T) {
 func TestProcessorSelectsContextByKIDAndIDContext(t *testing.T) {
 	masterSecret := []byte{1, 2, 3}
 	client, err := NewContext(ContextConfig{
-		AcceptVolatileSenderSequence: true,
+		UnsafeVolatileSenderSequence: true,
 		AcceptReplayStateLoss:        true,
 		MasterSecret:                 masterSecret,
 		IDContext:                    []byte{0xa1},
@@ -347,7 +347,7 @@ func TestProcessorSelectsContextByKIDAndIDContext(t *testing.T) {
 		t.Fatal(err)
 	}
 	server, err := NewContext(ContextConfig{
-		AcceptVolatileSenderSequence: true,
+		UnsafeVolatileSenderSequence: true,
 		AcceptReplayStateLoss:        true,
 		MasterSecret:                 masterSecret,
 		IDContext:                    []byte{0xa1},
@@ -358,7 +358,7 @@ func TestProcessorSelectsContextByKIDAndIDContext(t *testing.T) {
 		t.Fatal(err)
 	}
 	otherServer, err := NewContext(ContextConfig{
-		AcceptVolatileSenderSequence: true,
+		UnsafeVolatileSenderSequence: true,
 		AcceptReplayStateLoss:        true,
 		MasterSecret:                 masterSecret,
 		IDContext:                    []byte{0xa2},
@@ -427,7 +427,7 @@ func TestProcessorSelectsContextByKIDAndIDContext(t *testing.T) {
 	}
 
 	wrongContext, err := NewContext(ContextConfig{
-		AcceptVolatileSenderSequence: true,
+		UnsafeVolatileSenderSequence: true,
 		AcceptReplayStateLoss:        true,
 		MasterSecret:                 masterSecret,
 		IDContext:                    []byte{0xa3},
@@ -574,7 +574,7 @@ func TestProcessorRemoveContextIsScopedToIDContext(t *testing.T) {
 	newContext := func(senderID, recipientID, idContext byte) *Context {
 		t.Helper()
 		context, err := NewContext(ContextConfig{
-			AcceptVolatileSenderSequence: true,
+			UnsafeVolatileSenderSequence: true,
 			AcceptReplayStateLoss:        true,
 			MasterSecret:                 []byte("context removal scope"),
 			IDContext:                    []byte{idContext},
@@ -689,7 +689,7 @@ func TestProcessorRejectsDuplicateSenderSecurityContext(t *testing.T) {
 	newContext := func(recipientID, masterSalt, idContext []byte) *Context {
 		t.Helper()
 		context, err := NewContext(ContextConfig{
-			AcceptVolatileSenderSequence: true,
+			UnsafeVolatileSenderSequence: true,
 			AcceptReplayStateLoss:        true,
 			MasterSecret:                 []byte("duplicate sender context test"),
 			MasterSalt:                   masterSalt,
@@ -742,7 +742,7 @@ func TestProcessorRejectsDuplicateSenderSecurityContext(t *testing.T) {
 
 func TestContextShallowCopySharesSenderSequenceState(t *testing.T) {
 	original, err := NewContext(ContextConfig{
-		AcceptVolatileSenderSequence: true,
+		UnsafeVolatileSenderSequence: true,
 		AcceptReplayStateLoss:        true,
 		MasterSecret:                 []byte("shallow copy sender sequence test"),
 		MasterSalt:                   []byte{1, 2, 3},
@@ -817,7 +817,7 @@ func TestProcessorSelectsOutgoingContext(t *testing.T) {
 func newTestContext(t *testing.T, senderID, recipientID []byte) *Context {
 	t.Helper()
 	context, err := NewContext(ContextConfig{
-		AcceptVolatileSenderSequence: true,
+		UnsafeVolatileSenderSequence: true,
 		AcceptReplayStateLoss:        true,
 		MasterSecret:                 []byte("shared master secret"),
 		SenderID:                     senderID,
@@ -887,7 +887,7 @@ func assertOutgoingContextSelection(t *testing.T, processor *Processor, host str
 
 func TestProcessorOutgoingSelectorRejectsInvalidSelection(t *testing.T) {
 	clientA, err := NewContext(ContextConfig{
-		AcceptVolatileSenderSequence: true,
+		UnsafeVolatileSenderSequence: true,
 		AcceptReplayStateLoss:        true,
 		MasterSecret:                 []byte("shared master secret"),
 		SenderID:                     []byte{0x10},
@@ -897,7 +897,7 @@ func TestProcessorOutgoingSelectorRejectsInvalidSelection(t *testing.T) {
 		t.Fatal(err)
 	}
 	clientB, err := NewContext(ContextConfig{
-		AcceptVolatileSenderSequence: true,
+		UnsafeVolatileSenderSequence: true,
 		AcceptReplayStateLoss:        true,
 		MasterSecret:                 []byte("shared master secret"),
 		SenderID:                     []byte{0x11},
@@ -907,7 +907,7 @@ func TestProcessorOutgoingSelectorRejectsInvalidSelection(t *testing.T) {
 		t.Fatal(err)
 	}
 	foreign, err := NewContext(ContextConfig{
-		AcceptVolatileSenderSequence: true,
+		UnsafeVolatileSenderSequence: true,
 		AcceptReplayStateLoss:        true,
 		MasterSecret:                 []byte("foreign context"),
 		SenderID:                     []byte{0},
@@ -1025,7 +1025,7 @@ func TestProcessorOutgoingSelectorConcurrentContextChanges(t *testing.T) {
 
 func TestProcessorRequiresSelectorForMultipleOutgoingContexts(t *testing.T) {
 	clientA, err := NewContext(ContextConfig{
-		AcceptVolatileSenderSequence: true,
+		UnsafeVolatileSenderSequence: true,
 		AcceptReplayStateLoss:        true,
 		MasterSecret:                 []byte("shared master secret"),
 		SenderID:                     []byte{0x10},
@@ -1035,7 +1035,7 @@ func TestProcessorRequiresSelectorForMultipleOutgoingContexts(t *testing.T) {
 		t.Fatal(err)
 	}
 	clientB, err := NewContext(ContextConfig{
-		AcceptVolatileSenderSequence: true,
+		UnsafeVolatileSenderSequence: true,
 		AcceptReplayStateLoss:        true,
 		MasterSecret:                 []byte("shared master secret"),
 		SenderID:                     []byte{0x11},

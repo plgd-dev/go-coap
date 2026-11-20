@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"sync"
 
 	"github.com/pion/dtls/v3/pkg/crypto/ccm"
@@ -49,9 +50,10 @@ var (
 // ContextConfig contains pre-established RFC 8613 security-context parameters.
 // Set SenderSequenceNumber to the next sequence number to use, or provide a
 // SenderSequenceStore for durable reservations across process restarts. Without
-// a store, explicitly set AcceptVolatileSenderSequence to accept in-memory
-// sequence state. Never reset the sequence number for an existing sender key;
-// doing so can reuse an AEAD nonce. Configure ReplayWindowStore for durable
+// a store, explicitly set UnsafeVolatileSenderSequence to accept in-memory
+// sequence state. Restarting with the same sender key can then reuse Partial
+// IVs and AEAD nonces; see RFC 8613 Appendix B.2. Never reset the sequence
+// number for an existing sender key. Configure ReplayWindowStore for durable
 // inbound replay state, set RequireEchoRecovery after a receiver restart, or
 // explicitly set AcceptReplayStateLoss to allow an unprotected volatile replay
 // window.
@@ -70,9 +72,11 @@ type ContextConfig struct {
 	SenderSequenceStore  SenderSequenceReserver
 	ReplayWindowSize     uint8
 	ReplayWindowStore    ReplayWindowStore
-	// AcceptVolatileSenderSequence explicitly accepts sender sequence state
-	// that is lost on restart when SenderSequenceStore is not configured.
-	AcceptVolatileSenderSequence bool
+	// UnsafeVolatileSenderSequence explicitly accepts in-memory sender sequence
+	// state when SenderSequenceStore is not configured. Restarting with the
+	// same sender key can reuse Partial IVs and AEAD nonces; see RFC 8613
+	// Appendix B.2. Use only when this risk is acceptable.
+	UnsafeVolatileSenderSequence bool
 	// AcceptReplayStateLoss explicitly accepts that replay protection resets
 	// after a restart when no ReplayWindowStore is configured.
 	AcceptReplayStateLoss bool
@@ -194,7 +198,7 @@ func NewContext(cfg ContextConfig) (*Context, error) {
 			return nil, fmt.Errorf("generate OSCORE replay recovery Echo: %w", err)
 		}
 	}
-	return &Context{
+	context := &Context{
 		commonIV:                 commonIV,
 		senderContextFingerprint: senderContextFingerprint,
 		senderSequence: &senderSequenceState{
@@ -211,7 +215,11 @@ func NewContext(cfg ContextConfig) (*Context, error) {
 		replay:                replay,
 		replayRecoveryEcho:    replayRecoveryEcho,
 		replayRecoveryPending: cfg.RequireEchoRecovery,
-	}, nil
+	}
+	if cfg.SenderSequenceStore == nil {
+		log.Printf("WARNING: OSCORE is using volatile sender sequence state; restarting with the same sender key can reuse Partial IVs and AEAD nonces (RFC 8613 Appendix B.2)")
+	}
+	return context, nil
 }
 
 func senderSequenceFingerprint(senderKey, commonIV []byte) [sha256.Size]byte {
@@ -272,8 +280,8 @@ func validateContextPersistencePolicy(cfg ContextConfig) error {
 	if cfg.ReplayWindowStore == nil && !cfg.AcceptReplayStateLoss && !cfg.RequireEchoRecovery {
 		return fmt.Errorf("%w: configure a ReplayWindowStore, explicitly accept replay-state loss with AcceptReplayStateLoss, or require Echo recovery with RequireEchoRecovery", ErrInvalidContext)
 	}
-	if cfg.SenderSequenceStore == nil && !cfg.AcceptVolatileSenderSequence {
-		return fmt.Errorf("%w: configure a SenderSequenceStore or explicitly accept volatile sender sequence state with AcceptVolatileSenderSequence", ErrInvalidContext)
+	if cfg.SenderSequenceStore == nil && !cfg.UnsafeVolatileSenderSequence {
+		return fmt.Errorf("%w: configure a SenderSequenceStore or explicitly accept volatile sender sequence state with UnsafeVolatileSenderSequence", ErrInvalidContext)
 	}
 	return nil
 }

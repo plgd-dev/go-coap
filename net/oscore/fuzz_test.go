@@ -94,7 +94,7 @@ func FuzzContextUnprotectRequest(f *testing.F) {
 			return
 		}
 		ctx, err := NewContext(ContextConfig{
-			AcceptVolatileSenderSequence: true,
+			UnsafeVolatileSenderSequence: true,
 			AcceptReplayStateLoss:        true,
 			MasterSecret:                 mustHexSeed("0102030405060708090a0b0c0d0e0f10"),
 			MasterSalt:                   mustHexSeed("9e7ca92223786340"),
@@ -119,7 +119,7 @@ func FuzzContextUnprotectRequest(f *testing.F) {
 
 func TestFuzzSeedRFC8613AppendixC6AuthenticatesRequest(t *testing.T) {
 	ctx, err := NewContext(ContextConfig{
-		AcceptVolatileSenderSequence: true,
+		UnsafeVolatileSenderSequence: true,
 		AcceptReplayStateLoss:        true,
 		MasterSecret:                 mustHexSeed("0102030405060708090a0b0c0d0e0f10"),
 		MasterSalt:                   mustHexSeed("9e7ca92223786340"),
@@ -159,7 +159,7 @@ func FuzzContextUnprotectResponse(f *testing.F) {
 			return
 		}
 		ctx, err := NewContext(ContextConfig{
-			AcceptVolatileSenderSequence: true,
+			UnsafeVolatileSenderSequence: true,
 			AcceptReplayStateLoss:        true,
 			MasterSecret:                 mustHexSeed("0102030405060708090a0b0c0d0e0f10"),
 			MasterSalt:                   mustHexSeed("9e7ca92223786340"),
@@ -186,7 +186,7 @@ func FuzzContextUnprotectResponse(f *testing.F) {
 
 func TestFuzzSeedRFC8613AppendixC7AuthenticatesResponse(t *testing.T) {
 	ctx, err := NewContext(ContextConfig{
-		AcceptVolatileSenderSequence: true,
+		UnsafeVolatileSenderSequence: true,
 		AcceptReplayStateLoss:        true,
 		MasterSecret:                 mustHexSeed("0102030405060708090a0b0c0d0e0f10"),
 		MasterSalt:                   mustHexSeed("9e7ca92223786340"),
@@ -323,7 +323,7 @@ func fuzzRequestContexts(t *testing.T) (*Context, *Context) {
 	t.Helper()
 	const secret = "OSCORE fuzz post-authentication"
 	sender, err := NewContext(ContextConfig{
-		AcceptVolatileSenderSequence: true,
+		UnsafeVolatileSenderSequence: true,
 		AcceptReplayStateLoss:        true,
 		MasterSecret:                 []byte(secret),
 		SenderID:                     []byte{0},
@@ -333,7 +333,7 @@ func fuzzRequestContexts(t *testing.T) (*Context, *Context) {
 		t.Fatal(err)
 	}
 	recipient, err := NewContext(ContextConfig{
-		AcceptVolatileSenderSequence: true,
+		UnsafeVolatileSenderSequence: true,
 		AcceptReplayStateLoss:        true,
 		MasterSecret:                 []byte(secret),
 		SenderID:                     []byte{1},

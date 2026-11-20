@@ -62,7 +62,8 @@ OSCORE protects CoAP messages using application-provisioned security contexts.
 See the [OSCORE guide](docs/oscore/oscore.md) for configuration, sequence persistence,
 supported transports, and limitations. A runnable UDP
 [client/server example](examples/oscore/README.md) demonstrates protected
-requests and durable sender/replay state.
+requests and durable sender/replay state. Avoid volatile sender sequence state
+in production: restarting with the same sender key can reuse AEAD nonces.
 
 ## Samples
 

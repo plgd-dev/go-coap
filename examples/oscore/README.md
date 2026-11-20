@@ -28,3 +28,8 @@ directory is `./oscore-state`; the client and server use distinct stable store
 IDs, so they can share a directory on one host. Preserve each peer's state
 directory when restarting it with the same OSCORE identity. Never reset sender
 sequence state or use the example secret and IDs in production.
+
+The example uses a durable sender sequence store. Do not replace it with
+`UnsafeVolatileSenderSequence` in production: the library logs a warning, and a
+restart with the same sender key can reuse Partial IVs and AEAD nonces (see
+RFC 8613 Appendix B.2).

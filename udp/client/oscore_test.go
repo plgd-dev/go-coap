@@ -53,7 +53,7 @@ func TestObserveCancellationRequiresMatchingRegistrationOptions(t *testing.T) {
 		{ID: message.URIPath, Value: []byte("resource")},
 	}
 	securityContext, err := oscore.NewContext(oscore.ContextConfig{
-		AcceptVolatileSenderSequence: true,
+		UnsafeVolatileSenderSequence: true,
 		AcceptReplayStateLoss:        true,
 		MasterSecret:                 []byte("observe cancellation test"),
 		SenderID:                     []byte("client"),
@@ -109,7 +109,7 @@ func TestUnprotectedErrorResponseOnlyTerminatesOSCOREExchange(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			securityContext, err := oscore.NewContext(oscore.ContextConfig{
-				AcceptVolatileSenderSequence: true,
+				UnsafeVolatileSenderSequence: true,
 				AcceptReplayStateLoss:        true,
 				MasterSecret:                 []byte("processing error response test"),
 				SenderID:                     []byte("client"),
@@ -149,7 +149,7 @@ func TestUnprotectedErrorResponseOnlyTerminatesOSCOREExchange(t *testing.T) {
 
 func TestProtectOutgoingRequestPreservesControlMessage(t *testing.T) {
 	securityContext, err := oscore.NewContext(oscore.ContextConfig{
-		AcceptVolatileSenderSequence: true,
+		UnsafeVolatileSenderSequence: true,
 		AcceptReplayStateLoss:        true,
 		MasterSecret:                 []byte("control message test secret"),
 		SenderID:                     []byte("client"),
@@ -202,7 +202,7 @@ func TestOSCOREOuterBlockwiseUsesConfiguredMaxReassembledPayloadSize(t *testing.
 			defer session.Close()
 			cfg := DefaultConfig
 			securityContext, err := oscore.NewContext(oscore.ContextConfig{
-				AcceptVolatileSenderSequence: true,
+				UnsafeVolatileSenderSequence: true,
 				AcceptReplayStateLoss:        true,
 				MasterSecret:                 []byte("outer blockwise limit test"),
 				SenderID:                     []byte("client"),
@@ -245,7 +245,7 @@ func TestOSCOREOuterBlockwiseUsesConfiguredMaxReassembledPayloadSize(t *testing.
 func TestOuterBlockwiseOSCOREUnchangedHandlerResponseRemainsUnmodified(t *testing.T) {
 	const masterSecret = "outer blockwise unchanged response"
 	clientContext, err := oscore.NewContext(oscore.ContextConfig{
-		AcceptVolatileSenderSequence: true,
+		UnsafeVolatileSenderSequence: true,
 		AcceptReplayStateLoss:        true,
 		MasterSecret:                 []byte(masterSecret),
 		SenderID:                     []byte("client"),
@@ -253,7 +253,7 @@ func TestOuterBlockwiseOSCOREUnchangedHandlerResponseRemainsUnmodified(t *testin
 	})
 	require.NoError(t, err)
 	serverContext, err := oscore.NewContext(oscore.ContextConfig{
-		AcceptVolatileSenderSequence: true,
+		UnsafeVolatileSenderSequence: true,
 		AcceptReplayStateLoss:        true,
 		MasterSecret:                 []byte(masterSecret),
 		SenderID:                     []byte("server"),
@@ -332,7 +332,7 @@ func TestOSCOREOuterBlockwiseRejectsOutgoingPayloadOverLimit(t *testing.T) {
 			defer session.Close()
 			cfg := DefaultConfig
 			securityContext, err := oscore.NewContext(oscore.ContextConfig{
-				AcceptVolatileSenderSequence: true,
+				UnsafeVolatileSenderSequence: true,
 				AcceptReplayStateLoss:        true,
 				MasterSecret:                 []byte("outer blockwise outgoing limit"),
 				SenderID:                     []byte("client"),
@@ -365,7 +365,7 @@ func TestOSCOREOuterBlockwiseRejectsOutgoingPayloadOverLimit(t *testing.T) {
 func TestStaleOSCOREExchangeDoesNotRemoveReplacementOrProtectionRequirement(t *testing.T) {
 	makeExchange := func(secret string) (*oscore.Context, oscore.Exchange) {
 		securityContext, err := oscore.NewContext(oscore.ContextConfig{
-			AcceptVolatileSenderSequence: true,
+			UnsafeVolatileSenderSequence: true,
 			AcceptReplayStateLoss:        true,
 			MasterSecret:                 []byte(secret),
 			SenderID:                     []byte("client"),
@@ -420,7 +420,7 @@ func TestStaleOSCOREExchangeDoesNotRemoveReplacementOrProtectionRequirement(t *t
 func TestStaleOSCORECancellationResponseDoesNotRemoveReplacement(t *testing.T) {
 	makeExchange := func(secret string) (*oscore.Context, oscore.Exchange) {
 		securityContext, err := oscore.NewContext(oscore.ContextConfig{
-			AcceptVolatileSenderSequence: true,
+			UnsafeVolatileSenderSequence: true,
 			AcceptReplayStateLoss:        true,
 			MasterSecret:                 []byte(secret),
 			SenderID:                     []byte("client"),
@@ -499,7 +499,7 @@ func TestOSCOREOuterBlockwiseResponseRequiresProtection(t *testing.T) {
 			defer session.Close()
 			cfg := DefaultConfig
 			securityContext, err := oscore.NewContext(oscore.ContextConfig{
-				AcceptVolatileSenderSequence: true,
+				UnsafeVolatileSenderSequence: true,
 				AcceptReplayStateLoss:        true,
 				MasterSecret:                 []byte("outer blockwise response policy"),
 				SenderID:                     []byte("client"),
@@ -551,7 +551,7 @@ func TestOSCOREOuterBlockwiseRequiresProtectionAfterExchangeExpiry(t *testing.T)
 	defer session.Close()
 	cfg := DefaultConfig
 	securityContext, err := oscore.NewContext(oscore.ContextConfig{
-		AcceptVolatileSenderSequence: true,
+		UnsafeVolatileSenderSequence: true,
 		AcceptReplayStateLoss:        true,
 		MasterSecret:                 []byte("expired outer blockwise exchange"),
 		SenderID:                     []byte("client"),
@@ -602,7 +602,7 @@ func TestOSCOREPendingObservationRetainsExchangeAfterExchangeLifetime(t *testing
 	cfg := DefaultConfig
 	const masterSecret = "expired observe exchange"
 	securityContext, err := oscore.NewContext(oscore.ContextConfig{
-		AcceptVolatileSenderSequence: true,
+		UnsafeVolatileSenderSequence: true,
 		AcceptReplayStateLoss:        true,
 		MasterSecret:                 []byte(masterSecret),
 		SenderID:                     []byte("client"),
@@ -610,7 +610,7 @@ func TestOSCOREPendingObservationRetainsExchangeAfterExchangeLifetime(t *testing
 	})
 	require.NoError(t, err)
 	serverContext, err := oscore.NewContext(oscore.ContextConfig{
-		AcceptVolatileSenderSequence: true,
+		UnsafeVolatileSenderSequence: true,
 		AcceptReplayStateLoss:        true,
 		MasterSecret:                 []byte(masterSecret),
 		SenderID:                     []byte("server"),
@@ -817,7 +817,7 @@ func TestProcessIncomingOSCOREMessageUsesOSCOREOptionDirection(t *testing.T) {
 
 	t.Run("request outer code changed to response", func(t *testing.T) {
 		clientContext, err := oscore.NewContext(oscore.ContextConfig{
-			AcceptVolatileSenderSequence: true,
+			UnsafeVolatileSenderSequence: true,
 			AcceptReplayStateLoss:        true,
 			MasterSecret:                 []byte(masterSecret),
 			SenderID:                     []byte("client"),
@@ -825,7 +825,7 @@ func TestProcessIncomingOSCOREMessageUsesOSCOREOptionDirection(t *testing.T) {
 		})
 		require.NoError(t, err)
 		serverContext, err := oscore.NewContext(oscore.ContextConfig{
-			AcceptVolatileSenderSequence: true,
+			UnsafeVolatileSenderSequence: true,
 			AcceptReplayStateLoss:        true,
 			MasterSecret:                 []byte(masterSecret),
 			SenderID:                     []byte("server"),
@@ -858,7 +858,7 @@ func TestProcessIncomingOSCOREMessageUsesOSCOREOptionDirection(t *testing.T) {
 
 	t.Run("response outer code changed to request", func(t *testing.T) {
 		clientContext, err := oscore.NewContext(oscore.ContextConfig{
-			AcceptVolatileSenderSequence: true,
+			UnsafeVolatileSenderSequence: true,
 			AcceptReplayStateLoss:        true,
 			MasterSecret:                 []byte(masterSecret),
 			SenderID:                     []byte("client"),
@@ -866,7 +866,7 @@ func TestProcessIncomingOSCOREMessageUsesOSCOREOptionDirection(t *testing.T) {
 		})
 		require.NoError(t, err)
 		serverContext, err := oscore.NewContext(oscore.ContextConfig{
-			AcceptVolatileSenderSequence: true,
+			UnsafeVolatileSenderSequence: true,
 			AcceptReplayStateLoss:        true,
 			MasterSecret:                 []byte(masterSecret),
 			SenderID:                     []byte("server"),
@@ -947,7 +947,7 @@ func TestOSCOREOuterBlockwiseProxyRejectsOversizedResponse(t *testing.T) {
 func TestOSCOREOuterBlockwiseObserveResponseIsUnprotectedOnce(t *testing.T) {
 	const masterSecret = "outer blockwise observe response"
 	clientContext, err := oscore.NewContext(oscore.ContextConfig{
-		AcceptVolatileSenderSequence: true,
+		UnsafeVolatileSenderSequence: true,
 		AcceptReplayStateLoss:        true,
 		MasterSecret:                 []byte(masterSecret),
 		SenderID:                     []byte("client"),
@@ -955,7 +955,7 @@ func TestOSCOREOuterBlockwiseObserveResponseIsUnprotectedOnce(t *testing.T) {
 	})
 	require.NoError(t, err)
 	serverContext, err := oscore.NewContext(oscore.ContextConfig{
-		AcceptVolatileSenderSequence: true,
+		UnsafeVolatileSenderSequence: true,
 		AcceptReplayStateLoss:        true,
 		MasterSecret:                 []byte(masterSecret),
 		SenderID:                     []byte("server"),
@@ -1108,7 +1108,7 @@ func TestOSCOREOuterBlockwiseProxyResponseDoesNotUnprotectWithoutProcessor(t *te
 
 func TestFailedOSCOREWriteRemovesExchange(t *testing.T) {
 	securityContext, err := oscore.NewContext(oscore.ContextConfig{
-		AcceptVolatileSenderSequence: true,
+		UnsafeVolatileSenderSequence: true,
 		AcceptReplayStateLoss:        true,
 		MasterSecret:                 []byte("failed OSCORE write test"),
 		SenderID:                     []byte("client"),
@@ -1139,7 +1139,7 @@ func TestFailedOSCOREWriteRemovesExchange(t *testing.T) {
 
 func TestOSCOREExchangeSurvivesAcknowledgmentTimeoutAfterWrite(t *testing.T) {
 	securityContext, err := oscore.NewContext(oscore.ContextConfig{
-		AcceptVolatileSenderSequence: true,
+		UnsafeVolatileSenderSequence: true,
 		AcceptReplayStateLoss:        true,
 		MasterSecret:                 []byte("OSCORE acknowledgment timeout test"),
 		SenderID:                     []byte("client"),
@@ -1172,7 +1172,7 @@ func TestOSCOREExchangeSurvivesAcknowledgmentTimeoutAfterWrite(t *testing.T) {
 
 func TestFailedOSCOREWriteDoesNotRemoveReplacementExchange(t *testing.T) {
 	securityContext, err := oscore.NewContext(oscore.ContextConfig{
-		AcceptVolatileSenderSequence: true,
+		UnsafeVolatileSenderSequence: true,
 		AcceptReplayStateLoss:        true,
 		MasterSecret:                 []byte("replacement OSCORE exchange test"),
 		SenderID:                     []byte("client"),
@@ -1223,7 +1223,7 @@ func TestFailedOSCOREWriteDoesNotRemoveReplacementExchange(t *testing.T) {
 
 func TestFailedConcurrentOSCOREExchangesDoNotRestoreFailedEntry(t *testing.T) {
 	securityContext, err := oscore.NewContext(oscore.ContextConfig{
-		AcceptVolatileSenderSequence: true,
+		UnsafeVolatileSenderSequence: true,
 		AcceptReplayStateLoss:        true,
 		MasterSecret:                 []byte("failed concurrent OSCORE exchanges test"),
 		SenderID:                     []byte("client"),
@@ -1295,7 +1295,7 @@ func TestThreeConcurrentOSCOREExchangeRollbacksRestoreLatestSentEntry(t *testing
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			securityContext, err := oscore.NewContext(oscore.ContextConfig{
-				AcceptVolatileSenderSequence: true,
+				UnsafeVolatileSenderSequence: true,
 				AcceptReplayStateLoss:        true,
 				MasterSecret:                 []byte("three concurrent OSCORE exchanges test"),
 				SenderID:                     []byte("client"),
@@ -1338,7 +1338,7 @@ func TestThreeConcurrentOSCOREExchangeRollbacksRestoreLatestSentEntry(t *testing
 
 func TestOSCOREExchangeChainIsBoundedPerToken(t *testing.T) {
 	securityContext, err := oscore.NewContext(oscore.ContextConfig{
-		AcceptVolatileSenderSequence: true,
+		UnsafeVolatileSenderSequence: true,
 		AcceptReplayStateLoss:        true,
 		MasterSecret:                 []byte("bounded OSCORE exchange chain test"),
 		SenderID:                     []byte("client"),
@@ -1402,7 +1402,7 @@ func TestOSCOREExchangeChainIsBoundedPerToken(t *testing.T) {
 
 func TestSuccessfulOSCOREWritesKeepOnlyReachableResponseRequirements(t *testing.T) {
 	securityContext, err := oscore.NewContext(oscore.ContextConfig{
-		AcceptVolatileSenderSequence: true,
+		UnsafeVolatileSenderSequence: true,
 		AcceptReplayStateLoss:        true,
 		MasterSecret:                 []byte("bounded OSCORE response requirements"),
 		SenderID:                     []byte("client"),
@@ -1444,7 +1444,7 @@ func TestSuccessfulOSCOREWritesKeepOnlyReachableResponseRequirements(t *testing.
 func TestOSCOREMessageTransformsPreserveControlMessage(t *testing.T) {
 	masterSecret := []byte("OSCORE control message preservation test")
 	clientContext, err := oscore.NewContext(oscore.ContextConfig{
-		AcceptVolatileSenderSequence: true,
+		UnsafeVolatileSenderSequence: true,
 		AcceptReplayStateLoss:        true,
 		MasterSecret:                 masterSecret,
 		SenderID:                     []byte("client"),
@@ -1452,7 +1452,7 @@ func TestOSCOREMessageTransformsPreserveControlMessage(t *testing.T) {
 	})
 	require.NoError(t, err)
 	serverContext, err := oscore.NewContext(oscore.ContextConfig{
-		AcceptVolatileSenderSequence: true,
+		UnsafeVolatileSenderSequence: true,
 		AcceptReplayStateLoss:        true,
 		MasterSecret:                 masterSecret,
 		SenderID:                     []byte("server"),
@@ -1534,7 +1534,7 @@ func TestRetransmitCachedOSCOREResponse(t *testing.T) {
 	const mid = 1234
 	masterSecret := []byte{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16}
 	clientContext, err := oscore.NewContext(oscore.ContextConfig{
-		AcceptVolatileSenderSequence: true,
+		UnsafeVolatileSenderSequence: true,
 		AcceptReplayStateLoss:        true,
 		MasterSecret:                 masterSecret,
 		SenderID:                     []byte("client"),
@@ -1542,7 +1542,7 @@ func TestRetransmitCachedOSCOREResponse(t *testing.T) {
 	})
 	require.NoError(t, err)
 	serverContext, err := oscore.NewContext(oscore.ContextConfig{
-		AcceptVolatileSenderSequence: true,
+		UnsafeVolatileSenderSequence: true,
 		AcceptReplayStateLoss:        true,
 		MasterSecret:                 masterSecret,
 		SenderID:                     []byte("server"),
@@ -1613,7 +1613,7 @@ func TestRetransmitCachedOSCOREResponse(t *testing.T) {
 func TestOSCOREObserveNotificationNumberRejectsOutOfOrder(t *testing.T) {
 	const masterSecret = "oscore observe replay test secret"
 	clientContext, err := oscore.NewContext(oscore.ContextConfig{
-		AcceptVolatileSenderSequence: true,
+		UnsafeVolatileSenderSequence: true,
 		AcceptReplayStateLoss:        true,
 		MasterSecret:                 []byte(masterSecret),
 		SenderID:                     []byte("client"),
@@ -1621,7 +1621,7 @@ func TestOSCOREObserveNotificationNumberRejectsOutOfOrder(t *testing.T) {
 	})
 	require.NoError(t, err)
 	serverContext, err := oscore.NewContext(oscore.ContextConfig{
-		AcceptVolatileSenderSequence: true,
+		UnsafeVolatileSenderSequence: true,
 		AcceptReplayStateLoss:        true,
 		MasterSecret:                 []byte(masterSecret),
 		SenderID:                     []byte("server"),
@@ -1678,7 +1678,7 @@ func TestOSCOREObserveNotificationNumberRejectsOutOfOrder(t *testing.T) {
 func TestOSCOREObserveNotificationPreservesFullPartialIVForOrdering(t *testing.T) {
 	const masterSecret = "OSCORE Observe full Partial IV test"
 	clientContext, err := oscore.NewContext(oscore.ContextConfig{
-		AcceptVolatileSenderSequence: true,
+		UnsafeVolatileSenderSequence: true,
 		AcceptReplayStateLoss:        true,
 		MasterSecret:                 []byte(masterSecret),
 		SenderID:                     []byte("client"),
@@ -1686,7 +1686,7 @@ func TestOSCOREObserveNotificationPreservesFullPartialIVForOrdering(t *testing.T
 	})
 	require.NoError(t, err)
 	serverContext, err := oscore.NewContext(oscore.ContextConfig{
-		AcceptVolatileSenderSequence: true,
+		UnsafeVolatileSenderSequence: true,
 		AcceptReplayStateLoss:        true,
 		MasterSecret:                 []byte(masterSecret),
 		SenderID:                     []byte("server"),
@@ -1733,7 +1733,7 @@ func TestOSCOREObserveNotificationPreservesFullPartialIVForOrdering(t *testing.T
 func TestOSCOREQBlockRecoveryExchangeSurvivesFinalBlockFirst(t *testing.T) {
 	const masterSecret = "OSCORE Q-Block recovery exchange test"
 	clientContext, err := oscore.NewContext(oscore.ContextConfig{
-		AcceptVolatileSenderSequence: true,
+		UnsafeVolatileSenderSequence: true,
 		AcceptReplayStateLoss:        true,
 		MasterSecret:                 []byte(masterSecret),
 		SenderID:                     []byte("client"),
@@ -1741,7 +1741,7 @@ func TestOSCOREQBlockRecoveryExchangeSurvivesFinalBlockFirst(t *testing.T) {
 	})
 	require.NoError(t, err)
 	serverContext, err := oscore.NewContext(oscore.ContextConfig{
-		AcceptVolatileSenderSequence: true,
+		UnsafeVolatileSenderSequence: true,
 		AcceptReplayStateLoss:        true,
 		MasterSecret:                 []byte(masterSecret),
 		SenderID:                     []byte("server"),
@@ -1816,7 +1816,7 @@ func TestDuplicateOSCOREConfirmableResponseIsAcknowledged(t *testing.T) {
 	const mid = 1234
 	masterSecret := []byte("duplicate OSCORE response test secret")
 	clientContext, err := oscore.NewContext(oscore.ContextConfig{
-		AcceptVolatileSenderSequence: true,
+		UnsafeVolatileSenderSequence: true,
 		AcceptReplayStateLoss:        true,
 		MasterSecret:                 masterSecret,
 		SenderID:                     []byte("client"),
@@ -1824,7 +1824,7 @@ func TestDuplicateOSCOREConfirmableResponseIsAcknowledged(t *testing.T) {
 	})
 	require.NoError(t, err)
 	serverContext, err := oscore.NewContext(oscore.ContextConfig{
-		AcceptVolatileSenderSequence: true,
+		UnsafeVolatileSenderSequence: true,
 		AcceptReplayStateLoss:        true,
 		MasterSecret:                 masterSecret,
 		SenderID:                     []byte("server"),
@@ -1934,7 +1934,7 @@ func TestProtectedRequestCachesProtectedResponseForRetransmission(t *testing.T) 
 	const mid = 2345
 	masterSecret := []byte("protected response cache test secret")
 	clientContext, err := oscore.NewContext(oscore.ContextConfig{
-		AcceptVolatileSenderSequence: true,
+		UnsafeVolatileSenderSequence: true,
 		AcceptReplayStateLoss:        true,
 		MasterSecret:                 masterSecret,
 		SenderID:                     []byte("client"),
@@ -1942,7 +1942,7 @@ func TestProtectedRequestCachesProtectedResponseForRetransmission(t *testing.T) 
 	})
 	require.NoError(t, err)
 	serverContext, err := oscore.NewContext(oscore.ContextConfig{
-		AcceptVolatileSenderSequence: true,
+		UnsafeVolatileSenderSequence: true,
 		AcceptReplayStateLoss:        true,
 		MasterSecret:                 masterSecret,
 		SenderID:                     []byte("server"),
@@ -2027,7 +2027,7 @@ func TestProtectedRequestCachesEmptyAcknowledgementForRetransmission(t *testing.
 	const mid = 3456
 	masterSecret := []byte("protected empty ACK cache test secret")
 	clientContext, err := oscore.NewContext(oscore.ContextConfig{
-		AcceptVolatileSenderSequence: true,
+		UnsafeVolatileSenderSequence: true,
 		AcceptReplayStateLoss:        true,
 		MasterSecret:                 masterSecret,
 		SenderID:                     []byte("client"),
@@ -2035,7 +2035,7 @@ func TestProtectedRequestCachesEmptyAcknowledgementForRetransmission(t *testing.
 	})
 	require.NoError(t, err)
 	serverContext, err := oscore.NewContext(oscore.ContextConfig{
-		AcceptVolatileSenderSequence: true,
+		UnsafeVolatileSenderSequence: true,
 		AcceptReplayStateLoss:        true,
 		MasterSecret:                 masterSecret,
 		SenderID:                     []byte("server"),
@@ -2290,7 +2290,7 @@ func TestOSCOREProcessingErrorResponseUsesRequestControlMessage(t *testing.T) {
 func TestInternalOSCOREReplayStoreFailureIsDropped(t *testing.T) {
 	const masterSecret = "UDP internal replay store failure"
 	clientContext, err := oscore.NewContext(oscore.ContextConfig{
-		AcceptVolatileSenderSequence: true,
+		UnsafeVolatileSenderSequence: true,
 		AcceptReplayStateLoss:        true,
 		MasterSecret:                 []byte(masterSecret),
 		SenderID:                     []byte("client"),
@@ -2299,7 +2299,7 @@ func TestInternalOSCOREReplayStoreFailureIsDropped(t *testing.T) {
 	require.NoError(t, err)
 	storeErr := errors.New("replay storage unavailable")
 	serverContext, err := oscore.NewContext(oscore.ContextConfig{
-		AcceptVolatileSenderSequence: true,
+		UnsafeVolatileSenderSequence: true,
 		MasterSecret:                 []byte(masterSecret),
 		SenderID:                     []byte("server"),
 		RecipientID:                  []byte("client"),
@@ -2344,7 +2344,7 @@ func newOSCOREControlMessageTestConn(t *testing.T) (*oscore.Context, *Conn, *rec
 	t.Helper()
 	const secret = "OSCORE Empty ACK regression test"
 	clientContext, err := oscore.NewContext(oscore.ContextConfig{
-		AcceptVolatileSenderSequence: true,
+		UnsafeVolatileSenderSequence: true,
 		AcceptReplayStateLoss:        true,
 		MasterSecret:                 []byte(secret),
 		SenderID:                     []byte("client"),
@@ -2352,7 +2352,7 @@ func newOSCOREControlMessageTestConn(t *testing.T) (*oscore.Context, *Conn, *rec
 	})
 	require.NoError(t, err)
 	serverContext, err := oscore.NewContext(oscore.ContextConfig{
-		AcceptVolatileSenderSequence: true,
+		UnsafeVolatileSenderSequence: true,
 		AcceptReplayStateLoss:        true,
 		MasterSecret:                 []byte(secret),
 		SenderID:                     []byte("server"),

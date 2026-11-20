@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/hex"
 	"errors"
+	"log"
 	"strings"
 	"sync"
 	"testing"
@@ -23,7 +24,7 @@ func mustHex(t *testing.T, value string) []byte {
 
 func TestRFC8613AppendixC2DerivationAndNonce(t *testing.T) {
 	ctx, err := NewContext(ContextConfig{
-		AcceptVolatileSenderSequence: true,
+		UnsafeVolatileSenderSequence: true,
 		AcceptReplayStateLoss:        true,
 		MasterSecret:                 mustHex(t, "0102030405060708090a0b0c0d0e0f10"),
 		SenderID:                     mustHex(t, "00"),
@@ -75,7 +76,7 @@ func TestRFC8613AppendixC2DerivationAndNonce(t *testing.T) {
 
 func TestRFC8613AppendixC1DerivationWithMasterSalt(t *testing.T) {
 	ctx, err := NewContext(ContextConfig{
-		AcceptVolatileSenderSequence: true,
+		UnsafeVolatileSenderSequence: true,
 		AcceptReplayStateLoss:        true,
 		MasterSecret:                 mustHex(t, "0102030405060708090a0b0c0d0e0f10"),
 		MasterSalt:                   mustHex(t, "9e7ca92223786340"),
@@ -112,7 +113,7 @@ func TestRFC8613AppendixC1DerivationWithMasterSalt(t *testing.T) {
 
 func TestRFC8613AppendixC3DerivationWithIDContext(t *testing.T) {
 	ctx, err := NewContext(ContextConfig{
-		AcceptVolatileSenderSequence: true,
+		UnsafeVolatileSenderSequence: true,
 		AcceptReplayStateLoss:        true,
 		MasterSecret:                 mustHex(t, "0102030405060708090a0b0c0d0e0f10"),
 		MasterSalt:                   mustHex(t, "9e7ca92223786340"),
@@ -167,7 +168,7 @@ func TestSupportedAEADAlgorithms(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			secret := mustHex(t, "0102030405060708090a0b0c0d0e0f10")
 			client, err := NewContext(ContextConfig{
-				AcceptVolatileSenderSequence: true,
+				UnsafeVolatileSenderSequence: true,
 				AcceptReplayStateLoss:        true,
 				Algorithm:                    tt.id,
 				MasterSecret:                 secret,
@@ -178,7 +179,7 @@ func TestSupportedAEADAlgorithms(t *testing.T) {
 				t.Fatal(err)
 			}
 			server, err := NewContext(ContextConfig{
-				AcceptVolatileSenderSequence: true,
+				UnsafeVolatileSenderSequence: true,
 				AcceptReplayStateLoss:        true,
 				Algorithm:                    tt.id,
 				MasterSecret:                 secret,
@@ -223,7 +224,7 @@ func TestSupportedAEADAlgorithms(t *testing.T) {
 
 func TestNewContextRejectsUnsupportedAEADAlgorithm(t *testing.T) {
 	_, err := NewContext(ContextConfig{
-		AcceptVolatileSenderSequence: true,
+		UnsafeVolatileSenderSequence: true,
 		AcceptReplayStateLoss:        true,
 		Algorithm:                    AEADAlgorithm(999),
 		MasterSecret:                 []byte{1},
@@ -235,7 +236,7 @@ func TestNewContextRejectsUnsupportedAEADAlgorithm(t *testing.T) {
 
 func TestNewContextRejectsIdenticalIDs(t *testing.T) {
 	_, err := NewContext(ContextConfig{
-		AcceptVolatileSenderSequence: true,
+		UnsafeVolatileSenderSequence: true,
 		AcceptReplayStateLoss:        true,
 		MasterSecret:                 []byte("0123456789abcdef"),
 		SenderID:                     []byte{1},
@@ -259,7 +260,7 @@ func TestNewContextRequiresReplayStatePersistenceOrExplicitOptIn(t *testing.T) {
 	}
 
 	cfg.AcceptReplayStateLoss = true
-	cfg.AcceptVolatileSenderSequence = true
+	cfg.UnsafeVolatileSenderSequence = true
 	if _, err := NewContext(cfg); err != nil {
 		t.Fatalf("context with explicit replay-state-loss opt-in: %v", err)
 	}
@@ -285,11 +286,11 @@ func TestNewContextRequiresSenderSequencePersistenceOrExplicitOptIn(t *testing.T
 	if _, err := NewContext(cfg); !errors.Is(err, ErrInvalidContext) {
 		t.Fatalf("context without sender-sequence policy error = %v, want %v", err, ErrInvalidContext)
 	} else if !strings.Contains(err.Error(), "SenderSequenceStore") ||
-		!strings.Contains(err.Error(), "AcceptVolatileSenderSequence") {
+		!strings.Contains(err.Error(), "UnsafeVolatileSenderSequence") {
 		t.Fatalf("sender-sequence policy error is not actionable: %v", err)
 	}
 
-	cfg.AcceptVolatileSenderSequence = true
+	cfg.UnsafeVolatileSenderSequence = true
 	first, err := NewContext(cfg)
 	if err != nil {
 		t.Fatalf("context with volatile sender-sequence opt-in: %v", err)
@@ -299,13 +300,13 @@ func TestNewContextRequiresSenderSequencePersistenceOrExplicitOptIn(t *testing.T
 		t.Fatal(err)
 	}
 
-	cfg.AcceptVolatileSenderSequence = false
+	cfg.UnsafeVolatileSenderSequence = false
 	_, recreateErr := NewContext(cfg)
 	if !errors.Is(recreateErr, ErrInvalidContext) {
 		t.Fatalf("recreated context without sender-sequence policy error = %v, want %v", recreateErr, ErrInvalidContext)
 	}
 
-	cfg.AcceptVolatileSenderSequence = true
+	cfg.UnsafeVolatileSenderSequence = true
 	recreated, err := NewContext(cfg)
 	if err != nil {
 		t.Fatalf("recreated context with explicit volatile sender-sequence opt-in: %v", err)
@@ -318,10 +319,32 @@ func TestNewContextRequiresSenderSequencePersistenceOrExplicitOptIn(t *testing.T
 		t.Fatalf("recreated context Partial IV = %x, want repeated volatile value %x", recreatedPartialIV, firstPartialIV)
 	}
 
-	cfg.AcceptVolatileSenderSequence = false
+	cfg.UnsafeVolatileSenderSequence = false
 	cfg.SenderSequenceStore = &testSenderSequenceStore{}
 	if _, err := NewContext(cfg); err != nil {
 		t.Fatalf("context with durable sender sequence store: %v", err)
+	}
+}
+
+func TestNewContextWarnsForVolatileSenderSequence(t *testing.T) {
+	var output bytes.Buffer
+	originalOutput := log.Writer()
+	log.SetOutput(&output)
+	defer log.SetOutput(originalOutput)
+
+	_, err := NewContext(ContextConfig{
+		UnsafeVolatileSenderSequence: true,
+		AcceptReplayStateLoss:        true,
+		MasterSecret:                 []byte("0123456789abcdef"),
+		SenderID:                     []byte{1},
+		RecipientID:                  []byte{2},
+	})
+	if err != nil {
+		t.Fatalf("create context with volatile sender sequence: %v", err)
+	}
+	if warning := output.String(); !strings.Contains(warning, "WARNING") ||
+		!strings.Contains(warning, "RFC 8613 Appendix B.2") {
+		t.Fatalf("volatile sender sequence warning = %q", warning)
 	}
 }
 
@@ -330,7 +353,7 @@ func TestNewContextIDContextFitsMaximumRequestOption(t *testing.T) {
 	recipientID := bytes.Repeat([]byte{2}, maxIdentifierSize)
 	maxIDContextSize := maxOSCOREOptionLength - 1 - 5 - 1 - len(senderID)
 	context, err := NewContext(ContextConfig{
-		AcceptVolatileSenderSequence: true,
+		UnsafeVolatileSenderSequence: true,
 		AcceptReplayStateLoss:        true,
 		MasterSecret:                 []byte("0123456789abcdef"),
 		IDContext:                    bytes.Repeat([]byte{3}, maxIDContextSize),
@@ -357,7 +380,7 @@ func TestNewContextIDContextFitsMaximumRequestOption(t *testing.T) {
 	}
 
 	_, err = NewContext(ContextConfig{
-		AcceptVolatileSenderSequence: true,
+		UnsafeVolatileSenderSequence: true,
 		AcceptReplayStateLoss:        true,
 		MasterSecret:                 []byte("0123456789abcdef"),
 		IDContext:                    bytes.Repeat([]byte{3}, maxIDContextSize+1),
@@ -371,7 +394,7 @@ func TestNewContextIDContextFitsMaximumRequestOption(t *testing.T) {
 
 func TestNewContextIDContextUsesBothIDs(t *testing.T) {
 	_, err := NewContext(ContextConfig{
-		AcceptVolatileSenderSequence: true,
+		UnsafeVolatileSenderSequence: true,
 		AcceptReplayStateLoss:        true,
 		MasterSecret:                 []byte("0123456789abcdef"),
 		SenderID:                     []byte{1},
@@ -390,7 +413,7 @@ func TestNewContextOwnsConfigurationSlices(t *testing.T) {
 	senderID := []byte{0x10}
 	recipientID := []byte{0x20}
 	server, err := NewContext(ContextConfig{
-		AcceptVolatileSenderSequence: true,
+		UnsafeVolatileSenderSequence: true,
 		AcceptReplayStateLoss:        true,
 		MasterSecret:                 append([]byte(nil), masterSecret...),
 		MasterSalt:                   append([]byte(nil), masterSalt...),
@@ -402,7 +425,7 @@ func TestNewContextOwnsConfigurationSlices(t *testing.T) {
 		t.Fatal(err)
 	}
 	client, err := NewContext(ContextConfig{
-		AcceptVolatileSenderSequence: true,
+		UnsafeVolatileSenderSequence: true,
 		AcceptReplayStateLoss:        true,
 		MasterSecret:                 masterSecret,
 		MasterSalt:                   masterSalt,
@@ -436,7 +459,7 @@ func TestNewContextOwnsConfigurationSlices(t *testing.T) {
 
 func TestContextSealOpenAndReplayProtection(t *testing.T) {
 	client, err := NewContext(ContextConfig{
-		AcceptVolatileSenderSequence: true,
+		UnsafeVolatileSenderSequence: true,
 		AcceptReplayStateLoss:        true,
 		MasterSecret:                 mustHex(t, "0102030405060708090a0b0c0d0e0f10"),
 		SenderID:                     mustHex(t, "00"),
@@ -446,7 +469,7 @@ func TestContextSealOpenAndReplayProtection(t *testing.T) {
 		t.Fatal(err)
 	}
 	server, err := NewContext(ContextConfig{
-		AcceptVolatileSenderSequence: true,
+		UnsafeVolatileSenderSequence: true,
 		AcceptReplayStateLoss:        true,
 		MasterSecret:                 mustHex(t, "0102030405060708090a0b0c0d0e0f10"),
 		SenderID:                     mustHex(t, "01"),
@@ -492,7 +515,7 @@ func TestContextSealOpenAndReplayProtection(t *testing.T) {
 func TestContextReplayWindowRestoredAfterRestart(t *testing.T) {
 	masterSecret := mustHex(t, "0102030405060708090a0b0c0d0e0f10")
 	client, err := NewContext(ContextConfig{
-		AcceptVolatileSenderSequence: true,
+		UnsafeVolatileSenderSequence: true,
 		AcceptReplayStateLoss:        true,
 		MasterSecret:                 masterSecret,
 		SenderID:                     mustHex(t, "00"),
@@ -503,7 +526,7 @@ func TestContextReplayWindowRestoredAfterRestart(t *testing.T) {
 	}
 	store := &testReplayWindowStore{}
 	serverConfig := ContextConfig{
-		AcceptVolatileSenderSequence: true,
+		UnsafeVolatileSenderSequence: true,
 		MasterSecret:                 masterSecret,
 		SenderID:                     mustHex(t, "01"),
 		RecipientID:                  mustHex(t, "00"),
@@ -535,7 +558,7 @@ func TestContextReplayWindowRestoredAfterRestart(t *testing.T) {
 
 func TestRFC8613AppendixC4Encryption(t *testing.T) {
 	client, err := NewContext(ContextConfig{
-		AcceptVolatileSenderSequence: true,
+		UnsafeVolatileSenderSequence: true,
 		AcceptReplayStateLoss:        true,
 		MasterSecret:                 mustHex(t, "0102030405060708090a0b0c0d0e0f10"),
 		MasterSalt:                   mustHex(t, "9e7ca92223786340"),
@@ -566,7 +589,7 @@ func TestRFC8613AppendixC4Encryption(t *testing.T) {
 	}
 
 	server, err := NewContext(ContextConfig{
-		AcceptVolatileSenderSequence: true,
+		UnsafeVolatileSenderSequence: true,
 		AcceptReplayStateLoss:        true,
 		MasterSecret:                 mustHex(t, "0102030405060708090a0b0c0d0e0f10"),
 		MasterSalt:                   mustHex(t, "9e7ca92223786340"),
@@ -587,7 +610,7 @@ func TestRFC8613AppendixC4Encryption(t *testing.T) {
 
 func TestContextSequenceExhaustion(t *testing.T) {
 	ctx, err := NewContext(ContextConfig{
-		AcceptVolatileSenderSequence: true,
+		UnsafeVolatileSenderSequence: true,
 		AcceptReplayStateLoss:        true,
 		MasterSecret:                 []byte{1},
 		SenderID:                     []byte{0},
@@ -611,7 +634,7 @@ func TestContextSequenceExhaustion(t *testing.T) {
 
 func TestContextRejectsOversizedPlaintextWithoutConsumingSequence(t *testing.T) {
 	ctx, err := NewContext(ContextConfig{
-		AcceptVolatileSenderSequence: true,
+		UnsafeVolatileSenderSequence: true,
 		AcceptReplayStateLoss:        true,
 		MasterSecret:                 []byte{1},
 		SenderID:                     []byte{0},
@@ -642,7 +665,7 @@ func TestContextRejectsOversizedPlaintextWithoutConsumingSequence(t *testing.T) 
 
 func TestContextConcurrentSequenceAllocation(t *testing.T) {
 	ctx, err := NewContext(ContextConfig{
-		AcceptVolatileSenderSequence: true,
+		UnsafeVolatileSenderSequence: true,
 		AcceptReplayStateLoss:        true,
 		MasterSecret:                 []byte{1},
 		SenderID:                     []byte{0},
@@ -689,7 +712,7 @@ func TestContextPersistentSequenceStoreSurvivesRecreation(t *testing.T) {
 	store := &testSenderSequenceStore{}
 	newContext := func() *Context {
 		ctx, err := NewContext(ContextConfig{
-			AcceptVolatileSenderSequence: true,
+			UnsafeVolatileSenderSequence: true,
 			AcceptReplayStateLoss:        true,
 			MasterSecret:                 []byte{1},
 			SenderID:                     []byte{0},
@@ -719,7 +742,7 @@ func TestContextPersistentSequenceStoreConcurrentAcrossContexts(t *testing.T) {
 	store := &testSenderSequenceStore{}
 	newContext := func() *Context {
 		ctx, err := NewContext(ContextConfig{
-			AcceptVolatileSenderSequence: true,
+			UnsafeVolatileSenderSequence: true,
 			AcceptReplayStateLoss:        true,
 			MasterSecret:                 []byte{1},
 			SenderID:                     []byte{0},
@@ -769,7 +792,7 @@ func TestContextPersistentSequenceStoreConcurrentAcrossContexts(t *testing.T) {
 func TestContextPersistentSequenceStoreErrorsAndExhaustion(t *testing.T) {
 	storeErr := errors.New("storage unavailable")
 	ctx, err := NewContext(ContextConfig{
-		AcceptVolatileSenderSequence: true,
+		UnsafeVolatileSenderSequence: true,
 		AcceptReplayStateLoss:        true,
 		MasterSecret:                 []byte{1},
 		SenderID:                     []byte{0},
