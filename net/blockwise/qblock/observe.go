@@ -120,7 +120,8 @@ func (b *Engine[C]) WriteNotification(response *pool.Message, remote net.Addr) (
 		mode = message.Confirmable
 	}
 	request.SetType(mode)
-	transfer, err := b.cacheQBlock2Notification(response.Context(), key, qTransferKey(request, remote, nil, true), response, mode, generation)
+	transfer, err := b.cacheQBlock2Notification(response.Context(), key, qTransferKey(request, remote, nil, true),
+		response, mode, generation, nil)
 	if err != nil {
 		return true, err
 	}

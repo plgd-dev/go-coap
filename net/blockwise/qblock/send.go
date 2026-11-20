@@ -26,6 +26,8 @@ type q2SendTransfer struct {
 	delay                  time.Duration
 	identity               string
 	mode                   message.Type
+	hasRequestMessageID    bool
+	requestMessageID       int32
 	terminalObservationKey string
 	recoveryUntil          time.Time
 }
@@ -53,6 +55,7 @@ func (b *Engine[C]) handleQBlock2(
 		}
 		request := b.cloneMessage(r)
 		defer b.cc.ReleaseMessage(request)
+		request.SetMessageID(r.MessageID())
 		request.SetBody(r.Body())
 		value, _ := EncodeQBlockOption(maxSZX, 0, more)
 		request.SetOptionUint32(message.QBlock2, value)
@@ -165,10 +168,21 @@ func (b *Engine[C]) q2ResponseKey(r *pool.Message, remoteAddr net.Addr, num int6
 	key := q2TransferKey(r, remoteAddr)
 	identity := qTransferKey(r, remoteAddr, nil, true)
 	b.q2SendMu.Lock()
-	if b.q2Senders[key] == nil && (num != 0 || !more || r.HasOption(message.RequestTag) || r.Code() != codes.GET) {
+	defer b.q2SendMu.Unlock()
+	newRequest := isQ2NewRequest(r, num)
+	if newRequest {
+		if transfer := b.q2Senders[key]; transfer != nil &&
+			transfer.hasRequestMessageID && transfer.mode == r.Type() &&
+			transfer.requestMessageID == r.MessageID() {
+			newRequest = false
+		}
+	}
+	if newRequest {
+		b.removeQ2SenderLocked(key)
+	}
+	if shouldFindQ2Response(r, num, more, newRequest, b.q2Senders[key] != nil) {
 		found, err := b.findQ2ResponseLocked(identity)
 		if err != nil {
-			b.q2SendMu.Unlock()
 			return "", err
 		}
 		if found != "" {
@@ -176,11 +190,26 @@ func (b *Engine[C]) q2ResponseKey(r *pool.Message, remoteAddr net.Addr, num int6
 		}
 	}
 	if transfer := b.q2Senders[key]; transfer != nil && transfer.mode != r.Type() {
-		b.q2SendMu.Unlock()
 		return "", errQBlockBadOption
 	}
-	b.q2SendMu.Unlock()
 	return key, nil
+}
+
+// isQ2NewRequest identifies a NUM=0 request whose own payload may change the
+// response, rather than a bodyless request to resume a cached transfer.
+func isQ2NewRequest(r *pool.Message, num int64) bool {
+	if !qBodyMethod(r.Code()) || num != 0 {
+		return false
+	}
+	size, err := r.BodySize()
+	return err != nil || size > 0
+}
+
+func shouldFindQ2Response(r *pool.Message, num int64, more, newRequest, hasSender bool) bool {
+	if hasSender || newRequest {
+		return false
+	}
+	return num != 0 || !more || r.HasOption(message.RequestTag) || r.Code() != codes.GET
 }
 
 func (b *Engine[C]) findQ2ResponseLocked(identity string) (string, error) {
@@ -195,6 +224,21 @@ func (b *Engine[C]) findQ2ResponseLocked(identity string) (string, error) {
 		found = key
 	}
 	return found, nil
+}
+
+func (b *Engine[C]) removeQ2SenderLocked(key string) {
+	transfer := b.q2Senders[key]
+	if transfer == nil {
+		return
+	}
+	if transport, ok := any(b.cc).(Transport); ok {
+		transport.CancelQBlock("q2:" + key)
+	}
+	delete(b.q2Senders, key)
+	b.q2SendBytes -= transfer.size
+	b.qReleaseBytes(transfer.size)
+	b.qReleaseTransfer()
+	b.cc.ReleaseMessage(transfer.message)
 }
 
 func (b *Engine[C]) loadQ2Response(w *responsewriter.ResponseWriter[C], r *pool.Message, remote net.Addr,
@@ -214,7 +258,8 @@ func (b *Engine[C]) loadQ2Response(w *responsewriter.ResponseWriter[C], r *pool.
 	if w.Message().Body() == nil {
 		w.Message().SetBody(bytes.NewReader(nil))
 	}
-	if cacheErr := b.cacheQBlock2Response(r.Context(), key, qTransferKey(r, remote, nil, true), w.Message(), r.Type()); cacheErr != nil {
+	if cacheErr := b.cacheQBlock2ResponseForRequest(r.Context(), key, qTransferKey(r, remote, nil, true),
+		w.Message(), r.Type(), r.MessageID()); cacheErr != nil {
 		return nil, cacheErr
 	}
 	if observe, observeErr := r.Observe(); observeErr == nil && observe == 0 && w.Message().HasOption(message.Observe) {
@@ -373,11 +418,7 @@ func (b *Engine[C]) buildQBlock2ResponseFrom(ctx context.Context, key string, to
 		return nil, errQBlock2ResponseNotFound
 	}
 	if !transfer.expires.After(time.Now()) {
-		delete(b.q2Senders, key)
-		b.q2SendBytes -= transfer.size
-		b.qReleaseBytes(transfer.size)
-		b.qReleaseTransfer()
-		b.cc.ReleaseMessage(transfer.message)
+		b.removeQ2SenderLocked(key)
 		return nil, errQBlock2ResponseNotFound
 	}
 	response := b.cc.AcquireMessage(ctx)
@@ -413,11 +454,20 @@ func (b *Engine[C]) buildQBlock2ResponseFrom(ctx context.Context, key string, to
 }
 
 func (b *Engine[C]) cacheQBlock2Response(ctx context.Context, key, identity string, response *pool.Message, mode message.Type) error {
-	_, err := b.cacheQBlock2Notification(ctx, key, identity, response, mode, nil)
+	_, err := b.cacheQBlock2Notification(ctx, key, identity, response, mode, nil, nil)
 	return err
 }
 
-func (b *Engine[C]) cacheQBlock2Notification(ctx context.Context, key, identity string, response *pool.Message, mode message.Type, generation *qObservation) (*q2SendTransfer, error) {
+func (b *Engine[C]) cacheQBlock2ResponseForRequest(ctx context.Context, key, identity string, response *pool.Message,
+	mode message.Type, requestMessageID int32,
+) error {
+	_, err := b.cacheQBlock2Notification(ctx, key, identity, response, mode, nil, &requestMessageID)
+	return err
+}
+
+func (b *Engine[C]) cacheQBlock2Notification(ctx context.Context, key, identity string, response *pool.Message,
+	mode message.Type, generation *qObservation, requestMessageID *int32,
+) (*q2SendTransfer, error) {
 	stored, size, err := b.snapshotQ2NotificationBody(ctx, response)
 	if err != nil {
 		return nil, err
@@ -443,15 +493,8 @@ func (b *Engine[C]) cacheQBlock2Notification(ctx context.Context, key, identity 
 		b.cc.ReleaseMessage(stored)
 		return nil, err
 	}
-	if old := b.q2Senders[key]; old != nil {
-		if transport, ok := any(b.cc).(Transport); ok {
-			transport.CancelQBlock("q2:" + key)
-		}
-		b.q2SendBytes -= old.size
-		b.qReleaseBytes(old.size)
-		b.qReleaseTransfer()
-		delete(b.q2Senders, key)
-		b.cc.ReleaseMessage(old.message)
+	if b.q2Senders[key] != nil {
+		b.removeQ2SenderLocked(key)
 	} else if len(b.q2Senders) >= 4096 {
 		b.q2SendMu.Unlock()
 		b.cc.ReleaseMessage(stored)
@@ -464,9 +507,16 @@ func (b *Engine[C]) cacheQBlock2Notification(ctx context.Context, key, identity 
 		maxAge = 60
 	}
 	lifetime := min(b.config.NonPartialTimeout(), max(b.config.NonReceiveTimeout, time.Duration(maxAge)*time.Second))
+	hasRequestMessageID := requestMessageID != nil
+	var requestMID int32
+	if hasRequestMessageID {
+		requestMID = *requestMessageID
+	}
 	transfer := &q2SendTransfer{
 		message: stored, expires: time.Now().Add(lifetime),
-		size: size, identity: identity, mode: mode, sentThrough: -1, delay: b.config.nonDelay(),
+		size: size, identity: identity, mode: mode, hasRequestMessageID: hasRequestMessageID,
+		requestMessageID: requestMID,
+		sentThrough:      -1, delay: b.config.nonDelay(),
 	}
 	b.q2Senders[key] = transfer
 	observePresent := response.HasOption(message.Observe)
@@ -512,6 +562,7 @@ func (b *Engine[C]) snapshotQ2Body(ctx context.Context, response *pool.Message, 
 	}
 	stored := b.cloneMessage(response)
 	stored.SetContext(ctx)
+	stored.SetMessageID(response.MessageID())
 	stored.SetBody(bytes.NewReader(payload))
 	if err := ensureQ2ETag(stored); err != nil {
 		b.cc.ReleaseMessage(stored)

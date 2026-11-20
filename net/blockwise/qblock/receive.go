@@ -157,31 +157,24 @@ func parseQBlock1(r *pool.Message) (q1Parameters, error) {
 
 // q1TransferLocked creates or validates a transfer while q1ReceiveMu is held.
 func (b *Engine[C]) q1TransferLocked(r *pool.Message, key string, p q1Parameters) (*q1ReceiveTransfer, error) {
+	now := time.Now()
 	if b.q1Closed {
 		return nil, context.Canceled
 	}
 	transfer := b.q1Receivers[key]
-	if transfer != nil && !transfer.expires.After(time.Now()) {
-		b.removeExpiredQ1TransferLocked(key, transfer)
+	if b.removeExpiredQ1TransferLocked(key, transfer, now) {
 		transfer = nil
 	}
-	if transfer != nil {
-		if transfer.bodySize != int64(p.bodySize) || transfer.szx != p.szx || transfer.mode != r.Type() {
-			return nil, ErrInvalidOptionBlock1
+	if transfer == nil {
+		if !b.canCreateQ1TransferLocked() {
+			return nil, errReceivingMessagesCacheFull
 		}
-		return transfer, nil
+		return b.newQ1TransferLocked(r, key, p)
 	}
-	return b.newQ1TransferLocked(r, key, p)
-}
-
-func (b *Engine[C]) removeExpiredQ1TransferLocked(key string, transfer *q1ReceiveTransfer) {
-	delete(b.q1Receivers, key)
-	b.q1ReceiveBytes -= transfer.bytes
-	b.qReleaseBytes(transfer.bytes)
-	b.qReleaseTransfer()
-	if transfer.response != nil {
-		b.cc.ReleaseMessage(transfer.response)
+	if transfer.bodySize != int64(p.bodySize) || transfer.szx != p.szx || transfer.mode != r.Type() {
+		return nil, ErrInvalidOptionBlock1
 	}
+	return transfer, nil
 }
 
 func (b *Engine[C]) newQ1TransferLocked(r *pool.Message, key string, p q1Parameters) (*q1ReceiveTransfer, error) {
@@ -206,6 +199,26 @@ func (b *Engine[C]) newQ1TransferLocked(r *pool.Message, key string, p q1Paramet
 	}
 	b.q1Receivers[key] = transfer
 	return transfer, nil
+}
+
+func (b *Engine[C]) removeExpiredQ1TransferLocked(key string, transfer *q1ReceiveTransfer, now time.Time) bool {
+	if transfer == nil || transfer.expires.After(now) {
+		return false
+	}
+	delete(b.q1Receivers, key)
+	b.q1ReceiveBytes -= transfer.bytes
+	b.qReleaseBytes(transfer.bytes)
+	b.qReleaseTransfer()
+	if transfer.response != nil {
+		b.cc.ReleaseMessage(transfer.response)
+	}
+	return true
+}
+
+func (b *Engine[C]) canCreateQ1TransferLocked() bool {
+	count := int64(len(b.q1Receivers))
+	maxEntries := b.receivingMessagesCacheMaxEntries.Load()
+	return count < 4096 && (maxEntries <= 0 || count < maxEntries)
 }
 
 func (b *Engine[C]) handleQBlock1(

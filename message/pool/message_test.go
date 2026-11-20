@@ -611,3 +611,43 @@ func TestUnmarshalMessageWithZeroOptionCapacity(t *testing.T) {
 	require.Len(t, data, n)
 	require.Equal(t, req.Options(), msg.Options())
 }
+
+func TestMessageResetReleasesOptions(t *testing.T) {
+	msg := pool.NewMessage(context.Background())
+	for _, numOptions := range []int{40, 20, 1000, 1} {
+		req := pool.NewMessage(context.Background())
+		for i := 0; i < numOptions; i++ {
+			req.AddOptionUint32(message.URIQuery, uint32(i))
+		}
+		data, err := req.MarshalWithEncoder(coder.DefaultCoder)
+		require.NoError(t, err)
+		_, err = msg.UnmarshalWithDecoder(coder.DefaultCoder, data)
+		require.NoError(t, err)
+		require.Len(t, msg.Options(), numOptions)
+
+		msg.Reset()
+		// A message waiting in the pool must keep neither a large options array
+		// nor, through the elements of the array, the buffers of earlier messages.
+		opts := msg.Options()
+		require.Empty(t, opts)
+		require.Equal(t, 16, cap(opts))
+		for _, opt := range opts[:cap(opts)] {
+			require.Nil(t, opt.Value)
+		}
+	}
+}
+
+func TestSetMessagePreservesAliasedOptions(t *testing.T) {
+	msg := pool.NewMessage(context.Background())
+	msg.AddOptionString(message.URIPath, "resource")
+	msg.AddOptionString(message.URIQuery, "key=value")
+	options := msg.Options()
+	want := append(message.Options(nil), options...)
+
+	msg.SetMessage(message.Message{
+		Code:    codes.PUT,
+		Options: options,
+	})
+	require.Equal(t, want, msg.Options())
+	require.Equal(t, want, msg.Options())
+}
