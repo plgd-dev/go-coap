@@ -395,8 +395,9 @@ func (b *Engine[C]) completeQ1(w *responsewriter.ResponseWriter[C], r *pool.Mess
 	request.Remove(message.QBlock1)
 	request.Remove(message.Size1)
 	request.SetBody(body)
+	generation := request.Generation()
 	next(w, request)
-	b.cc.ReleaseMessage(request)
+	b.releaseUnlessHijacked(request, generation)
 	responseSize, sizeErr := w.Message().BodySize()
 	if sizeErr == nil && responseSize > szx.Size() {
 		if err := b.cacheQBlock2ResponseForRequest(r.Context(), q2TransferKey(r, remoteAddr),
@@ -409,7 +410,7 @@ func (b *Engine[C]) completeQ1(w *responsewriter.ResponseWriter[C], r *pool.Mess
 			capability, _ := EncodeQBlockOption(szx, 0, true)
 			q2Request.SetOptionUint32(message.QBlock2, capability)
 		}
-		defer b.cc.ReleaseMessage(q2Request)
+		defer b.releaseUnlessHijacked(q2Request, q2Request.Generation())
 		if err := b.handleQBlock2(w, q2Request, maxSZX, remoteAddr, next); err != nil {
 			return err
 		}
