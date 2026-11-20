@@ -164,26 +164,15 @@ func (b *Engine[C]) validQ2Family(r *pool.Message) bool {
 func (b *Engine[C]) q2ResponseKey(r *pool.Message, remoteAddr net.Addr, num int64, more bool) (string, error) {
 	key := q2TransferKey(r, remoteAddr)
 	identity := qTransferKey(r, remoteAddr, nil, true)
-	// A request for the whole body that carries its own payload is a new
-	// exchange, so it must reach the handler instead of resuming the cached
-	// response of an earlier request whose payload may differ.
-	newRequest := false
-	if qBodyMethod(r.Code()) && num == 0 && more {
-		size, sizeErr := r.BodySize()
-		newRequest = sizeErr != nil || size > 0
-	}
+	newRequest := isQ2NewRequest(r, num, more)
 	b.q2SendMu.Lock()
+	defer b.q2SendMu.Unlock()
 	if newRequest {
-		for existingKey, transfer := range b.q2Senders {
-			if transfer.identity == identity {
-				b.removeQ2SenderLocked(existingKey)
-			}
-		}
+		b.removeQ2SendersByIdentityLocked(identity)
 	}
-	if b.q2Senders[key] == nil && !newRequest && (num != 0 || !more || r.HasOption(message.RequestTag) || r.Code() != codes.GET) {
+	if shouldFindQ2Response(r, num, more, newRequest, b.q2Senders[key] != nil) {
 		found, err := b.findQ2ResponseLocked(identity)
 		if err != nil {
-			b.q2SendMu.Unlock()
 			return "", err
 		}
 		if found != "" {
@@ -191,11 +180,34 @@ func (b *Engine[C]) q2ResponseKey(r *pool.Message, remoteAddr net.Addr, num int6
 		}
 	}
 	if transfer := b.q2Senders[key]; transfer != nil && transfer.mode != r.Type() {
-		b.q2SendMu.Unlock()
 		return "", errQBlockBadOption
 	}
-	b.q2SendMu.Unlock()
 	return key, nil
+}
+
+// isQ2NewRequest identifies a whole-body request whose own payload may change
+// the response, rather than a bodyless request to resume a cached transfer.
+func isQ2NewRequest(r *pool.Message, num int64, more bool) bool {
+	if !qBodyMethod(r.Code()) || num != 0 || !more {
+		return false
+	}
+	size, err := r.BodySize()
+	return err != nil || size > 0
+}
+
+func shouldFindQ2Response(r *pool.Message, num int64, more, newRequest, hasSender bool) bool {
+	if hasSender || newRequest {
+		return false
+	}
+	return num != 0 || !more || r.HasOption(message.RequestTag) || r.Code() != codes.GET
+}
+
+func (b *Engine[C]) removeQ2SendersByIdentityLocked(identity string) {
+	for key, transfer := range b.q2Senders {
+		if transfer.identity == identity {
+			b.removeQ2SenderLocked(key)
+		}
+	}
 }
 
 func (b *Engine[C]) findQ2ResponseLocked(identity string) (string, error) {
@@ -468,7 +480,7 @@ func (b *Engine[C]) cacheQBlock2Notification(ctx context.Context, key, identity 
 		b.cc.ReleaseMessage(stored)
 		return nil, err
 	}
-	if old := b.q2Senders[key]; old != nil {
+	if b.q2Senders[key] != nil {
 		b.removeQ2SenderLocked(key)
 	} else if len(b.q2Senders) >= 4096 {
 		b.q2SendMu.Unlock()
