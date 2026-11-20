@@ -1359,6 +1359,102 @@ func TestOSCOREUDPClassicBlockwise(t *testing.T) {
 	require.Equal(t, responseBody, got)
 }
 
+func TestOSCOREOuterBlockwiseRejectsAuthenticationFailureDuringTransfer(t *testing.T) {
+	listener, err := coapNet.NewListenUDP("udp", "127.0.0.1:0")
+	require.NoError(t, err)
+	masterSecret := []byte("outer blockwise authentication failure")
+	clientContext, err := oscore.NewContext(oscore.ContextConfig{
+		AcceptVolatileSenderSequence: true,
+		AcceptReplayStateLoss:        true,
+		MasterSecret:                 masterSecret,
+		SenderID:                     []byte("client"),
+		RecipientID:                  []byte("server"),
+	})
+	require.NoError(t, err)
+	serverContext, err := oscore.NewContext(oscore.ContextConfig{
+		AcceptVolatileSenderSequence: true,
+		AcceptReplayStateLoss:        true,
+		MasterSecret:                 masterSecret,
+		SenderID:                     []byte("server"),
+		RecipientID:                  []byte("client"),
+	})
+	require.NoError(t, err)
+	serverProcessor, err := oscore.NewProcessor(oscore.ProcessorConfig{Contexts: []*oscore.Context{serverContext}})
+	require.NoError(t, err)
+	var handled atomic.Int32
+	serverErrors := make(chan error, 8)
+	server := udp.NewServer(
+		options.WithOSCORE(serverProcessor),
+		options.WithOSCOREOuterBlockwise(),
+		options.WithErrors(func(err error) {
+			select {
+			case serverErrors <- err:
+			default:
+			}
+		}),
+		options.WithHandlerFunc(func(*responsewriter.ResponseWriter[*client.Conn], *pool.Message) {
+			handled.Add(1)
+		}),
+	)
+	serverDone := make(chan error, 1)
+	go func() { serverDone <- server.Serve(listener) }()
+	defer func() {
+		server.Stop()
+		select {
+		case serverErr := <-serverDone:
+			require.NoError(t, serverErr)
+		case <-time.After(5 * time.Second):
+			require.Fail(t, "UDP Outer Blockwise OSCORE server did not stop")
+		}
+	}()
+
+	cc, err := udp.Dial(listener.LocalAddr().String())
+	require.NoError(t, err)
+	defer func() { require.NoError(t, cc.Close()) }()
+
+	protected, _, err := clientContext.ProtectRequest(message.Message{
+		Code: codes.POST, Type: message.Confirmable, MessageID: 0x7171, Token: message.Token{0x71},
+		Options: message.Options{{ID: message.URIPath, Value: []byte("upload")}},
+		Payload: bytes.Repeat([]byte("authenticated-block-"), 200),
+	})
+	require.NoError(t, err)
+	require.NotEmpty(t, protected.Payload)
+	protected.Payload[len(protected.Payload)-1] ^= 0x01
+	oscoreOptionStart, oscoreOptionEnd, err := protected.Options.Find(message.OSCORE)
+	require.NoError(t, err)
+	require.Equal(t, oscoreOptionStart+1, oscoreOptionEnd)
+	oscoreOption := protected.Options[oscoreOptionStart]
+	const blockSize = 1024
+	for offset, num := 0, int64(0); offset < len(protected.Payload); num++ {
+		end := min(offset+blockSize, len(protected.Payload))
+		more := end < len(protected.Payload)
+		block, encodeErr := blockwise.EncodeBlockOption(blockwise.SZX1024, num, more)
+		require.NoError(t, encodeErr)
+		request := cc.AcquireMessage(context.Background())
+		request.SetCode(protected.Code)
+		request.SetType(message.NonConfirmable)
+		request.SetMessageID(int32(0x7200 + num))
+		request.SetToken(protected.Token)
+		request.SetOptionBytes(message.OSCORE, oscoreOption.Value)
+		request.SetOptionUint32(message.Block1, block)
+		request.SetOptionUint32(message.Size1, uint32(len(protected.Payload)))
+		request.SetBody(bytes.NewReader(protected.Payload[offset:end]))
+		err = cc.Session().WriteMessage(request)
+		cc.ReleaseMessage(request)
+		require.NoError(t, err)
+		offset = end
+	}
+
+	select {
+	case processingErr := <-serverErrors:
+		require.Error(t, processingErr)
+		require.False(t, oscore.IsInternalProcessingError(processingErr))
+	case <-time.After(time.Second):
+		t.Fatal("server did not report the fragmented request authentication failure")
+	}
+	require.Zero(t, handled.Load(), "unauthenticated reassembled request reached the application")
+}
+
 func TestOSCOREUDPQBlock(t *testing.T) {
 	listener, err := coapNet.NewListenUDP("udp", "127.0.0.1:0")
 	require.NoError(t, err)
