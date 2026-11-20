@@ -384,7 +384,8 @@ func (b *Engine[C]) completeQ1(w *responsewriter.ResponseWriter[C], r *pool.Mess
 	b.cc.ReleaseMessage(request)
 	responseSize, sizeErr := w.Message().BodySize()
 	if sizeErr == nil && responseSize > szx.Size() {
-		if err := b.cacheQBlock2Response(r.Context(), q2TransferKey(r, remoteAddr), qTransferKey(r, remoteAddr, nil, true), w.Message(), r.Type()); err != nil {
+		if err := b.cacheQBlock2ResponseForRequest(r.Context(), q2TransferKey(r, remoteAddr),
+			qTransferKey(r, remoteAddr, nil, true), w.Message(), r.Type(), r.MessageID()); err != nil {
 			return err
 		}
 		q2Request := b.cloneMessage(r)

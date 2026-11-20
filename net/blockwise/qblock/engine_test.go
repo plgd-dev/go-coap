@@ -312,11 +312,12 @@ func TestQBlock2NewRequestWithSameTokenReplacesCachedResponse(t *testing.T) {
 		require.NoError(t, err)
 		require.NoError(t, w.SetResponse(codes.Changed, message.AppOctets, bytes.NewReader(bytes.Repeat(payload, 32))))
 	}
-	invoke := func(payload string, num int64) *pool.Message {
+	invoke := func(payload string, num int64, messageID int32) *pool.Message {
 		req := qTestRequest(t, "same", struct {
 			num  int64
 			more bool
 		}{num, false})
+		req.SetMessageID(messageID)
 		req.SetCode(codes.POST)
 		if num == 0 {
 			req.SetBody(bytes.NewReader([]byte(payload)))
@@ -327,21 +328,57 @@ func TestQBlock2NewRequestWithSameTokenReplacesCachedResponse(t *testing.T) {
 		return w.Message()
 	}
 
-	first := invoke("A", 0)
+	first := invoke("A", 0, 1)
 	cc.ReleaseMessage(first)
-	second := invoke("B", 0)
+	second := invoke("B", 0, 2)
 	defer cc.ReleaseMessage(second)
 	require.Equal(t, 2, calls)
 	body, err := io.ReadAll(second.Body())
 	require.NoError(t, err)
 	require.Equal(t, bytes.Repeat([]byte("B"), 16), body)
 
-	recovery := invoke("", 1)
+	recovery := invoke("", 1, 3)
 	defer cc.ReleaseMessage(recovery)
 	require.Equal(t, 2, calls, "same-token continuation must use the replacement response")
 	recoveredBody, err := io.ReadAll(recovery.Body())
 	require.NoError(t, err)
 	require.Equal(t, bytes.Repeat([]byte("B"), 16), recoveredBody)
+}
+
+func TestQBlock2RetransmittedNewRequestReusesCachedResponse(t *testing.T) {
+	cc := &qTestTransport{testClient: newTestClient(), jobs: make(map[string]qBlockTestJob)}
+	b := New(cc, func(error) {})
+	defer b.CloseQBlockTransfers()
+	calls := 0
+	handler := func(w *responsewriter.ResponseWriter[*qTestTransport], r *pool.Message) {
+		calls++
+		payload, err := io.ReadAll(r.Body())
+		require.NoError(t, err)
+		require.NoError(t, w.SetResponse(codes.Changed, message.AppOctets, bytes.NewReader(bytes.Repeat(payload, 32))))
+	}
+	send := func() *pool.Message {
+		req := qTestRequest(t, "retry", struct {
+			num  int64
+			more bool
+		}{0, false})
+		req.SetMessageID(42)
+		req.SetCode(codes.POST)
+		req.SetBody(bytes.NewReader([]byte("A")))
+		w := responsewriter.New(cc.AcquireMessage(req.Context()), cc)
+		require.NoError(t, b.handleQBlock2(w, req, SZX16, nil, handler))
+		cc.ReleaseMessage(req)
+		return w.Message()
+	}
+
+	first := send()
+	defer cc.ReleaseMessage(first)
+	retransmission := send()
+	defer cc.ReleaseMessage(retransmission)
+	require.Equal(t, 1, calls, "a retransmission must not repeat application effects")
+	body, err := io.ReadAll(retransmission.Body())
+	require.NoError(t, err)
+	require.Equal(t, bytes.Repeat([]byte("A"), 16), body)
+	require.Len(t, b.q2Senders, 1)
 }
 
 func TestQBlock2ChangedTokenRecoveryRejectsAmbiguousTransfers(t *testing.T) {
