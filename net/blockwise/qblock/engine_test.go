@@ -391,14 +391,19 @@ func TestQBlock2ChangedTokenRecoveryRejectsAmbiguousTransfers(t *testing.T) {
 	require.NotNil(t, alphaSender)
 	require.NotNil(t, betaSender)
 
-	for i := 0; i < 2; i++ {
-		ambiguous, err := send("fresh-token", "", 1)
-		require.ErrorIs(t, err, ErrInvalidOptionBlock2)
-		cc.ReleaseMessage(ambiguous)
-		require.Len(t, b.q2Senders, 2)
-		require.Same(t, alphaSender, b.q2Senders[alphaKey])
-		require.Same(t, betaSender, b.q2Senders[betaKey])
-	}
+	ambiguous := qTestRequest(t, "fresh-token", struct {
+		num  int64
+		more bool
+	}{1, false})
+	ambiguous.SetCode(codes.POST)
+	ambiguousResponse := responsewriter.New(cc.AcquireMessage(ambiguous.Context()), cc)
+	b.Handle(ambiguousResponse, ambiguous, SZX16, nil, handler)
+	cc.ReleaseMessage(ambiguous)
+	defer cc.ReleaseMessage(ambiguousResponse.Message())
+	require.Equal(t, codes.BadRequest, ambiguousResponse.Message().Code())
+	require.Len(t, b.q2Senders, 2)
+	require.Same(t, alphaSender, b.q2Senders[alphaKey])
+	require.Same(t, betaSender, b.q2Senders[betaKey])
 
 	for _, expected := range []struct {
 		token   string
