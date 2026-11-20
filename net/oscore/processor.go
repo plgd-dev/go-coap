@@ -12,12 +12,36 @@ import (
 )
 
 var (
-	ErrNoSecurityContext = errors.New("no matching OSCORE security context")
-	ErrAmbiguousContext  = errors.New("multiple OSCORE security contexts are configured")
-	ErrPlaintextDisabled = errors.New("unprotected CoAP is not permitted")
-	ErrOSCORERequired    = errors.New("OSCORE protection is required")
-	ErrOSCOREDisabled    = errors.New("OSCORE-protected CoAP is not permitted")
+	ErrNoSecurityContext      = errors.New("no matching OSCORE security context")
+	ErrAmbiguousContext       = errors.New("multiple OSCORE security contexts are configured")
+	ErrPlaintextDisabled      = errors.New("unprotected CoAP is not permitted")
+	ErrOSCORERequired         = errors.New("OSCORE protection is required")
+	ErrOSCOREDisabled         = errors.New("OSCORE-protected CoAP is not permitted")
+	ErrReplayRecoveryRequired = errors.New("OSCORE replay recovery Echo is required")
 )
+
+type replayRecoveryRequiredError struct {
+	echo []byte
+}
+
+func (e *replayRecoveryRequiredError) Error() string {
+	return ErrReplayRecoveryRequired.Error()
+}
+
+func (e *replayRecoveryRequiredError) Unwrap() error {
+	return ErrReplayRecoveryRequired
+}
+
+// ReplayRecoveryEcho returns the Echo challenge from a replay recovery error.
+// The returned bytes are a copy and are suitable for adding to an unprotected
+// 4.01 response.
+func ReplayRecoveryEcho(err error) ([]byte, bool) {
+	var recoveryErr *replayRecoveryRequiredError
+	if !errors.As(err, &recoveryErr) {
+		return nil, false
+	}
+	return append([]byte(nil), recoveryErr.echo...), true
+}
 
 type unprotectedProcessingErrorKey struct{}
 
@@ -40,6 +64,8 @@ func ProcessingErrorCode(err error) codes.Code {
 	case IsInternalProcessingError(err):
 		return codes.InternalServerError
 	case errors.Is(err, ErrNoSecurityContext), errors.Is(err, ErrReplay):
+		return codes.Unauthorized
+	case errors.Is(err, ErrReplayRecoveryRequired):
 		return codes.Unauthorized
 	case errors.Is(err, ErrInvalidOSCOREOption):
 		return codes.BadOption

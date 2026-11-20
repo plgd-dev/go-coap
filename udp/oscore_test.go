@@ -287,6 +287,64 @@ func assertUDPApplicationErrors(t *testing.T, secureClient *client.Conn) {
 	}
 }
 
+func TestOSCOREUDPReplayRecoveryReturnsEchoBeforeHandler(t *testing.T) {
+	listener, err := coapNet.NewListenUDP("udp", "127.0.0.1:0")
+	require.NoError(t, err)
+	masterSecret := []byte("UDP replay recovery Echo")
+	newProcessor := func(senderID, recipientID string, requireRecovery bool) *oscore.Processor {
+		t.Helper()
+		securityContext, contextErr := oscore.NewContext(oscore.ContextConfig{
+			AcceptVolatileSenderSequence: true,
+			AcceptReplayStateLoss:        !requireRecovery,
+			RequireEchoRecovery:          requireRecovery,
+			MasterSecret:                 masterSecret,
+			SenderID:                     []byte(senderID),
+			RecipientID:                  []byte(recipientID),
+		})
+		require.NoError(t, contextErr)
+		processor, processorErr := oscore.NewProcessor(oscore.ProcessorConfig{
+			Contexts: []*oscore.Context{securityContext},
+		})
+		require.NoError(t, processorErr)
+		return processor
+	}
+
+	var handled atomic.Int32
+	server := udp.NewServer(
+		options.WithOSCORE(newProcessor("server", "client", true)),
+		options.WithOSCOREErrorResponses(),
+		options.WithHandlerFunc(func(*responsewriter.ResponseWriter[*client.Conn], *pool.Message) {
+			handled.Add(1)
+		}),
+	)
+	serverDone := make(chan error, 1)
+	go func() { serverDone <- server.Serve(listener) }()
+	defer func() {
+		server.Stop()
+		select {
+		case serverErr := <-serverDone:
+			require.NoError(t, serverErr)
+		case <-time.After(5 * time.Second):
+			require.Fail(t, "UDP replay-recovery server did not stop")
+		}
+	}()
+
+	cc, err := udp.Dial(listener.LocalAddr().String(), options.WithOSCORE(newProcessor("client", "server", false)))
+	require.NoError(t, err)
+	defer func() { require.NoError(t, cc.Close()) }()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	response, err := cc.Get(ctx, "/")
+	require.NoError(t, err)
+	require.Equal(t, codes.Unauthorized, response.Code())
+	require.False(t, response.HasOption(message.OSCORE))
+	echo, err := response.Echo()
+	require.NoError(t, err)
+	require.Len(t, echo, 16)
+	require.True(t, oscore.IsUnprotectedProcessingError(response.Context()))
+	require.Zero(t, handled.Load())
+}
+
 func TestOSCOREOuterBlockwiseStrictRejectsPlaintextRequests(t *testing.T) {
 	listener, err := coapNet.NewListenUDP("udp", "127.0.0.1:0")
 	require.NoError(t, err)

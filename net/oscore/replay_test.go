@@ -33,6 +33,41 @@ func TestReplayWindowSlidingAndAuthentication(t *testing.T) {
 	}
 }
 
+func TestReplayWindowRecoveryRejectsAllOlderSequences(t *testing.T) {
+	window, err := NewReplayWindow(4)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := window.acceptRecovery(10, func() error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+	for _, sequence := range []uint64{7, 8, 9, 10} {
+		if err := window.Accept(sequence, func() error { return nil }); !errors.Is(err, ErrReplay) {
+			t.Errorf("Accept(%d) after recovery error = %v, want ErrReplay", sequence, err)
+		}
+	}
+	if err := window.Accept(11, func() error { return nil }); err != nil {
+		t.Fatalf("Accept fresh sequence after recovery: %v", err)
+	}
+}
+
+func TestReplayWindowRecoveryFailureDoesNotSeedState(t *testing.T) {
+	window, err := NewReplayWindow(4)
+	if err != nil {
+		t.Fatal(err)
+	}
+	verifyErr := errors.New("invalid recovery authentication")
+	if err := window.acceptRecovery(10, func() error { return verifyErr }); !errors.Is(err, verifyErr) {
+		t.Fatalf("recovery error = %v, want %v", err, verifyErr)
+	}
+	if err := window.Accept(1, func() error { return nil }); err != nil {
+		t.Fatalf("normal acceptance after failed recovery: %v", err)
+	}
+	if err := window.Accept(10, func() error { return nil }); err != nil {
+		t.Fatalf("failed recovery changed replay window: %v", err)
+	}
+}
+
 func TestReplayWindowConcurrentDuplicates(t *testing.T) {
 	window, err := NewReplayWindow(32)
 	if err != nil {

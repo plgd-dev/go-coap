@@ -19,6 +19,7 @@ func TestProcessingErrorCode(t *testing.T) {
 	}{
 		{name: "unknown context", err: ErrNoSecurityContext, want: codes.Unauthorized},
 		{name: "replay", err: ErrReplay, want: codes.Unauthorized},
+		{name: "replay recovery", err: ErrReplayRecoveryRequired, want: codes.Unauthorized},
 		{name: "malformed option", err: fmt.Errorf("%w: malformed", ErrInvalidOSCOREOption), want: codes.BadOption},
 		{name: "decrypt failure", err: errors.New("authentication failed"), want: codes.BadRequest},
 		{name: "internal persistence failure", err: fmt.Errorf("%w: storage unavailable", ErrInternalProcessing), want: codes.InternalServerError},
@@ -36,6 +37,183 @@ func TestProcessingErrorCode(t *testing.T) {
 				t.Fatalf("response code %v is not recognized as an unprotected processing error", test.want)
 			}
 		})
+	}
+}
+
+func TestProcessorRequiresEchoRecoveryAfterVolatileReplayStateLoss(t *testing.T) {
+	newContext := func(senderID, recipientID []byte, requireEcho bool) *Context {
+		t.Helper()
+		cfg := ContextConfig{
+			AcceptVolatileSenderSequence: true,
+			MasterSecret:                 []byte("Echo replay recovery"),
+			SenderID:                     senderID,
+			RecipientID:                  recipientID,
+			RequireEchoRecovery:          requireEcho,
+			AcceptReplayStateLoss:        !requireEcho,
+		}
+		context, err := NewContext(cfg)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return context
+	}
+
+	client := newContext([]byte("client"), []byte("server"), false)
+	oldServer := newContext([]byte("server"), []byte("client"), false)
+	oldProcessor, err := NewProcessor(ProcessorConfig{Contexts: []*Context{oldServer}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldRequest, _, err := client.ProtectRequest(message.Message{
+		Code: codes.GET, Token: message.Token{1},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldPlaintext, oldContext, oldExchange, processErr := oldProcessor.ProcessIncomingRequest(oldRequest)
+	if processErr != nil {
+		t.Fatalf("accept request before simulated restart: %v", processErr)
+	}
+	if oldPlaintext.Code != codes.GET || oldContext != oldServer || len(oldExchange.RequestPartialIVBytes()) == 0 {
+		t.Fatalf("pre-restart request result = %+v, context %p, exchange %+v", oldPlaintext, oldContext, oldExchange)
+	}
+
+	restartedServer := newContext([]byte("server"), []byte("client"), true)
+	processor, err := NewProcessor(ProcessorConfig{Contexts: []*Context{restartedServer}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	plaintext, _, _, processErr := processor.ProcessIncomingRequest(oldRequest)
+	if !errors.Is(processErr, ErrReplayRecoveryRequired) ||
+		plaintext.Code != codes.Empty {
+		t.Fatalf("post-restart request = %+v, error %v; want challenge and no dispatch", plaintext, processErr)
+	}
+	challenge, ok := ReplayRecoveryEcho(processErr)
+	if !ok || len(challenge) == 0 {
+		t.Fatalf("replay recovery challenge = %x, present=%t", challenge, ok)
+	}
+	if got := ProcessingErrorCode(processErr); got != codes.Unauthorized {
+		t.Fatalf("replay recovery response code = %v, want Unauthorized", got)
+	}
+
+	wrongEchoRequest, _, err := client.ProtectRequest(message.Message{
+		Code: codes.GET, Token: message.Token{1},
+		Options: message.Options{{ID: message.Echo, Value: []byte("wrong challenge")}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	wrongPlaintext, wrongContext, wrongExchange, processErr := processor.ProcessIncomingRequest(wrongEchoRequest)
+	if !errors.Is(processErr, ErrReplayRecoveryRequired) {
+		t.Fatalf("invalid recovery attempt error = %v, want ErrReplayRecoveryRequired", processErr)
+	}
+	if wrongPlaintext.Code != codes.Empty || wrongContext != nil || len(wrongExchange.RequestPartialIVBytes()) != 0 {
+		t.Fatalf("invalid recovery attempt was dispatched: %+v, context %p, exchange %+v",
+			wrongPlaintext, wrongContext, wrongExchange)
+	}
+
+	recoveryRequest, _, err := client.ProtectRequest(message.Message{
+		Code: codes.GET, Token: message.Token{1},
+		Options: message.Options{{ID: message.Echo, Value: challenge}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plaintext, _, _, err := processor.ProcessIncomingRequest(recoveryRequest); err != nil ||
+		plaintext.Code != codes.GET || plaintext.Options.HasOption(message.Echo) == false {
+		t.Fatalf("authenticated recovery request = %+v, error %v", plaintext, err)
+	}
+	if _, _, _, err := processor.ProcessIncomingRequest(oldRequest); !errors.Is(err, ErrReplay) {
+		t.Fatalf("previously accepted request after recovery error = %v, want ErrReplay", err)
+	}
+	if _, _, _, err := processor.ProcessIncomingRequest(recoveryRequest); !errors.Is(err, ErrReplay) {
+		t.Fatalf("repeated recovery request error = %v, want ErrReplay", err)
+	}
+	if _, _, _, err := processor.ProcessIncomingRequest(message.Message{Code: codes.GET}); !errors.Is(err, ErrPlaintextDisabled) {
+		t.Fatalf("plaintext after failed recovery error = %v, want ErrPlaintextDisabled", err)
+	}
+}
+
+func TestProcessorReplayRecoveryEchoIsContextSpecific(t *testing.T) {
+	newPair := func(idContext []byte, requireEcho bool) (*Context, *Context) {
+		t.Helper()
+		client, err := NewContext(ContextConfig{
+			AcceptVolatileSenderSequence: true,
+			AcceptReplayStateLoss:        !requireEcho,
+			RequireEchoRecovery:          requireEcho,
+			MasterSecret:                 []byte("context-specific Echo recovery"),
+			IDContext:                    idContext,
+			SenderID:                     []byte("client"),
+			RecipientID:                  []byte("server"),
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		server, err := NewContext(ContextConfig{
+			AcceptVolatileSenderSequence: true,
+			AcceptReplayStateLoss:        !requireEcho,
+			RequireEchoRecovery:          requireEcho,
+			MasterSecret:                 []byte("context-specific Echo recovery"),
+			IDContext:                    idContext,
+			SenderID:                     []byte("server"),
+			RecipientID:                  []byte("client"),
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return client, server
+	}
+	clientA, serverA := newPair([]byte("A"), true)
+	clientB, serverB := newPair([]byte("B"), true)
+	processor, err := NewProcessor(ProcessorConfig{Contexts: []*Context{serverA, serverB}})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	challengeRequest, _, err := clientA.ProtectRequest(message.Message{Code: codes.GET, Token: message.Token{2}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	challengePlaintext, challengeContext, challengeExchange, processErr := processor.ProcessIncomingRequest(challengeRequest)
+	challengeA, ok := ReplayRecoveryEcho(processErr)
+	if !ok {
+		t.Fatalf("context A challenge error = %v", processErr)
+	}
+	if challengePlaintext.Code != codes.Empty || challengeContext != nil || len(challengeExchange.RequestPartialIVBytes()) != 0 {
+		t.Fatalf("context A challenge dispatched request: %+v, context %p, exchange %+v",
+			challengePlaintext, challengeContext, challengeExchange)
+	}
+
+	wrongContextRequest, _, err := clientB.ProtectRequest(message.Message{
+		Code: codes.GET, Token: message.Token{2},
+		Options: message.Options{{ID: message.Echo, Value: challengeA}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	wrongContextPlaintext, wrongContext, wrongContextExchange, processErr := processor.ProcessIncomingRequest(wrongContextRequest)
+	challengeB, ok := ReplayRecoveryEcho(processErr)
+	if !ok {
+		t.Fatalf("context B accepted or did not challenge context A's Echo: %v", processErr)
+	}
+	if wrongContextPlaintext.Code != codes.Empty || wrongContext != nil ||
+		len(wrongContextExchange.RequestPartialIVBytes()) != 0 {
+		t.Fatalf("context B dispatched request with context A's Echo: %+v, context %p, exchange %+v",
+			wrongContextPlaintext, wrongContext, wrongContextExchange)
+	}
+	if string(challengeA) == string(challengeB) {
+		t.Fatal("independent contexts generated the same replay recovery Echo")
+	}
+
+	validContextRequest, _, err := clientB.ProtectRequest(message.Message{
+		Code: codes.GET, Token: message.Token{2},
+		Options: message.Options{{ID: message.Echo, Value: challengeB}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, _, err := processor.ProcessIncomingRequest(validContextRequest); err != nil {
+		t.Fatalf("recover context B with its own Echo: %v", err)
 	}
 }
 

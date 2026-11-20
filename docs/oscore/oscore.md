@@ -337,6 +337,23 @@ window only; after a restart, recorded requests may be accepted again. Use it
 only when that loss is an intentional deployment choice, such as a transient
 example. Production receivers should use a durable replay store or follow the
 RFC recovery procedure rather than silently accepting state loss.
+For deployments recovering a receiver with volatile replay state, configure
+`RequireEchoRecovery: true` on the replacement `Context`. Before accepting any
+request, it returns an unprotected 4.01 response with a fresh Echo challenge.
+The peer must create a new OSCORE request containing that Echo option inside
+the protected request; retransmitting the old request or adding Echo outside
+the OSCORE protection does not recover the context. The first valid response
+to the challenge seeds the replay window conservatively, rejecting every
+sequence up to and including the recovery request. Challenges are random and
+specific to each `Context`. This mode is mutually exclusive with
+`ReplayWindowStore`; after another restart, it must be enabled again if the
+replay state remains volatile. Echo recovery does not make volatile replay
+state durable, so use persistent replay storage where practical. The peer must
+preserve its sender sequence across restarts; if sender sequence state was also
+lost, establish a fresh security context instead of recovering with Echo.
+Enable `options.WithOSCOREErrorResponses()` on the receiver so the 4.01 Echo
+challenge is sent to the peer; these OSCORE processing-error responses are
+disabled by default.
 The store must load the state for that recipient context and persist it before
 returning success; otherwise the protected request is not accepted. Use one
 store per context and coordinate access if multiple receiver processes use

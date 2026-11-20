@@ -87,7 +87,8 @@ func (OSCOREErrorResponsesOpt) DTLSServerApply(cfg *dtlsServer.Config) {
 }
 
 // WithOSCOREErrorResponses enables unprotected 4.00, 4.01, or 4.02 responses
-// to OSCORE processing failures. Responses are empty and disabled by default.
+// to OSCORE processing failures. Responses are empty except for an optional
+// Echo challenge and are disabled by default.
 func WithOSCOREErrorResponses() OSCOREErrorResponsesOpt {
 	return OSCOREErrorResponsesOpt{}
 }

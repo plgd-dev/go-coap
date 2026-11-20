@@ -269,6 +269,10 @@ func TestNewContextRequiresReplayStatePersistenceOrExplicitOptIn(t *testing.T) {
 	if _, err := NewContext(cfg); err != nil {
 		t.Fatalf("context with replay window store: %v", err)
 	}
+	cfg.RequireEchoRecovery = true
+	if _, err := NewContext(cfg); !errors.Is(err, ErrInvalidContext) {
+		t.Fatalf("context combining replay store and Echo recovery error = %v, want %v", err, ErrInvalidContext)
+	}
 }
 
 func TestNewContextRequiresSenderSequencePersistenceOrExplicitOptIn(t *testing.T) {

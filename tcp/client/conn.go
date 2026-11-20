@@ -704,6 +704,11 @@ func (cc *Conn) respondToOSCOREProcessingError(req *pool.Message, processingErr 
 	defer cc.ReleaseMessage(resp)
 	resp.SetCode(oscore.ProcessingErrorCode(processingErr))
 	resp.SetToken(req.Token())
+	if echo, ok := oscore.ReplayRecoveryEcho(processingErr); ok {
+		if err := resp.SetEcho(echo); err != nil {
+			return fmt.Errorf("set replay recovery Echo: %w", err)
+		}
+	}
 	if err := cc.session.WriteMessage(resp); err != nil {
 		return fmt.Errorf("send OSCORE processing-error response: %w", err)
 	}

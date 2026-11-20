@@ -144,6 +144,29 @@ func (w *ReplayWindow) Accept(sequence uint64, verify func() error) error {
 	return nil
 }
 
+func (w *ReplayWindow) acceptRecovery(sequence uint64, verify func() error) error {
+	if verify == nil {
+		return fmt.Errorf("%w: %w: missing authentication function", ErrInternalProcessing, ErrInvalidContext)
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	if err := verify(); err != nil {
+		return err
+	}
+	next := ReplayWindowState{
+		HighestSequence: sequence,
+		Bitmap:          replayWindowMask(w.size),
+		Started:         true,
+		WindowSize:      w.size,
+	}
+	if err := w.persistState(next); err != nil {
+		return err
+	}
+	w.highest, w.bitmap, w.started = next.HighestSequence, next.Bitmap, next.Started
+	return nil
+}
+
 func (w *ReplayWindow) sequenceBit(sequence uint64) (uint64, error) {
 	var bit uint64
 	switch {

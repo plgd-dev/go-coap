@@ -5,6 +5,7 @@ package oscore
 import (
 	"bytes"
 	"crypto/aes"
+	"crypto/rand"
 	"crypto/sha256"
 	"errors"
 	"fmt"
@@ -50,8 +51,9 @@ var (
 // a store, explicitly set AcceptVolatileSenderSequence to accept in-memory
 // sequence state. Never reset the sequence number for an existing sender key;
 // doing so can reuse an AEAD nonce. Configure ReplayWindowStore for durable
-// inbound replay state, or explicitly set AcceptReplayStateLoss to allow an
-// in-memory replay window.
+// inbound replay state, set RequireEchoRecovery after a receiver restart, or
+// explicitly set AcceptReplayStateLoss to allow an unprotected volatile replay
+// window.
 type ContextConfig struct {
 	// Algorithm is a COSE AEAD algorithm. Zero selects AES-CCM-16-64-128.
 	Algorithm AEADAlgorithm
@@ -73,6 +75,11 @@ type ContextConfig struct {
 	// AcceptReplayStateLoss explicitly accepts that replay protection resets
 	// after a restart when no ReplayWindowStore is configured.
 	AcceptReplayStateLoss bool
+	// RequireEchoRecovery requires an authenticated request with a fresh,
+	// context-specific Echo option before application dispatch. Use it after a
+	// receiver restart when replay state was not persisted. It cannot be
+	// combined with ReplayWindowStore.
+	RequireEchoRecovery bool
 }
 
 // SenderSequenceReserver returns sender sequence numbers from durably reserved
@@ -117,6 +124,9 @@ type Context struct {
 	senderAEAD               ccm.CCM
 	recipientAEAD            ccm.CCM
 	replay                   *ReplayWindow
+	replayRecoveryMu         sync.Mutex
+	replayRecoveryEcho       []byte
+	replayRecoveryPending    bool
 }
 
 // NewContext derives keys for the configured AEAD algorithm. The zero-value
@@ -168,6 +178,13 @@ func NewContext(cfg ContextConfig) (*Context, error) {
 	if err != nil {
 		return nil, err
 	}
+	var replayRecoveryEcho []byte
+	if cfg.RequireEchoRecovery {
+		replayRecoveryEcho = make([]byte, 16)
+		if _, err := rand.Read(replayRecoveryEcho); err != nil {
+			return nil, fmt.Errorf("generate OSCORE replay recovery Echo: %w", err)
+		}
+	}
 	return &Context{
 		commonIV:                 commonIV,
 		senderContextFingerprint: senderContextFingerprint,
@@ -175,14 +192,16 @@ func NewContext(cfg ContextConfig) (*Context, error) {
 			next:  cfg.SenderSequenceNumber,
 			store: cfg.SenderSequenceStore,
 		},
-		senderID:      senderID,
-		recipientID:   recipientID,
-		idContext:     idContext,
-		idContextSet:  cfg.IDContext != nil,
-		algorithm:     cfg.Algorithm,
-		senderAEAD:    senderAEAD,
-		recipientAEAD: recipientAEAD,
-		replay:        replay,
+		senderID:              senderID,
+		recipientID:           recipientID,
+		idContext:             idContext,
+		idContextSet:          cfg.IDContext != nil,
+		algorithm:             cfg.Algorithm,
+		senderAEAD:            senderAEAD,
+		recipientAEAD:         recipientAEAD,
+		replay:                replay,
+		replayRecoveryEcho:    replayRecoveryEcho,
+		replayRecoveryPending: cfg.RequireEchoRecovery,
 	}, nil
 }
 
@@ -226,8 +245,11 @@ func validateContextConfig(cfg ContextConfig) (ContextConfig, error) {
 }
 
 func validateContextPersistencePolicy(cfg ContextConfig) error {
-	if cfg.ReplayWindowStore == nil && !cfg.AcceptReplayStateLoss {
-		return fmt.Errorf("%w: configure a ReplayWindowStore or explicitly accept replay-state loss with AcceptReplayStateLoss", ErrInvalidContext)
+	if cfg.RequireEchoRecovery && cfg.ReplayWindowStore != nil {
+		return fmt.Errorf("%w: RequireEchoRecovery cannot be combined with ReplayWindowStore", ErrInvalidContext)
+	}
+	if cfg.ReplayWindowStore == nil && !cfg.AcceptReplayStateLoss && !cfg.RequireEchoRecovery {
+		return fmt.Errorf("%w: configure a ReplayWindowStore, explicitly accept replay-state loss with AcceptReplayStateLoss, or require Echo recovery with RequireEchoRecovery", ErrInvalidContext)
 	}
 	if cfg.SenderSequenceStore == nil && !cfg.AcceptVolatileSenderSequence {
 		return fmt.Errorf("%w: configure a SenderSequenceStore or explicitly accept volatile sender sequence state with AcceptVolatileSenderSequence", ErrInvalidContext)

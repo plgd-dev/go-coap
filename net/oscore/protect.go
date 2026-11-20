@@ -2,6 +2,7 @@ package oscore
 
 import (
 	"bytes"
+	"crypto/subtle"
 	"errors"
 	"fmt"
 	"sort"
@@ -313,19 +314,7 @@ func (c *Context) UnprotectRequest(request message.Message) (message.Message, Ex
 			context:          c,
 		},
 	}
-	aad, err := BuildAADWithAlgorithm(c.algorithm, exchange.responseState.requestID, exchange.responseState.requestPartialIV, nil)
-	if err != nil {
-		return message.Message{}, Exchange{}, err
-	}
-	plaintext, err := c.Open(option.PartialIV, request.Payload, aad)
-	if err != nil {
-		return message.Message{}, Exchange{}, err
-	}
-	inner, err := DecodeInner(plaintext)
-	if err != nil {
-		return message.Message{}, Exchange{}, err
-	}
-	hasInnerObserve, err := validateInnerRequest(inner, outerObserveOption, hasOuterObserve)
+	inner, hasInnerObserve, err := c.unprotectRequestInner(request, option, outerObserveOption, hasOuterObserve)
 	if err != nil {
 		return message.Message{}, Exchange{}, err
 	}
@@ -341,6 +330,102 @@ func (c *Context) UnprotectRequest(request message.Message) (message.Message, Ex
 	inner.MessageID = request.MessageID
 	inner.Options = mergeOptions(outerOptions, inner.Options)
 	return inner, exchange, nil
+}
+
+func (c *Context) unprotectRequestInner(
+	request message.Message,
+	option OptionValue,
+	outerObserveOption message.Option,
+	hasOuterObserve bool,
+) (message.Message, bool, error) {
+	sequence, err := decodePartialIV(option.PartialIV)
+	if err != nil {
+		return message.Message{}, false, err
+	}
+	nonce, err := c.nonce(option.PartialIV, c.recipientID)
+	if err != nil {
+		return message.Message{}, false, err
+	}
+	aad, err := BuildAADWithAlgorithm(c.algorithm, option.SenderID, option.PartialIV, nil)
+	if err != nil {
+		return message.Message{}, false, err
+	}
+	var (
+		inner           message.Message
+		hasInnerObserve bool
+	)
+	verify := func() error {
+		plaintext, openErr := c.recipientAEAD.Open(nil, nonce, request.Payload, aad)
+		if openErr != nil {
+			return openErr
+		}
+		inner, openErr = DecodeInner(plaintext)
+		if openErr != nil {
+			return openErr
+		}
+		hasInnerObserve, openErr = validateInnerRequest(inner, outerObserveOption, hasOuterObserve)
+		return openErr
+	}
+	err = c.acceptRequestSequence(sequence, verify, func() error {
+		return c.validateReplayRecoveryEcho(inner.Options)
+	})
+	if err != nil {
+		return message.Message{}, false, err
+	}
+	return inner, hasInnerObserve, nil
+}
+
+func (c *Context) acceptRequestSequence(sequence uint64, verify func() error, checkEcho func() error) error {
+	c.replayRecoveryMu.Lock()
+	if !c.replayRecoveryPending {
+		c.replayRecoveryMu.Unlock()
+		return c.replay.Accept(sequence, func() error {
+			if err := verify(); err != nil {
+				return err
+			}
+			return checkEcho()
+		})
+	}
+	err := c.replay.acceptRecovery(sequence, func() error {
+		if err := verify(); err != nil {
+			return err
+		}
+		return checkEcho()
+	})
+	if err == nil {
+		c.replayRecoveryPending = false
+	}
+	c.replayRecoveryMu.Unlock()
+	return err
+}
+
+func (c *Context) validateReplayRecoveryEcho(options message.Options) error {
+	echo, found, err := findEchoOption(options)
+	if err != nil {
+		return err
+	}
+	if c.replayRecoveryPending {
+		if !found || subtle.ConstantTimeCompare(echo.Value, c.replayRecoveryEcho) != 1 {
+			return &replayRecoveryRequiredError{echo: append([]byte(nil), c.replayRecoveryEcho...)}
+		}
+		return nil
+	}
+	if found && subtle.ConstantTimeCompare(echo.Value, c.replayRecoveryEcho) == 1 {
+		return ErrReplay
+	}
+	return nil
+}
+
+func findEchoOption(options message.Options) (message.Option, bool, error) {
+	start, end, err := options.Find(message.Echo)
+	if err != nil {
+		return message.Option{}, false, nil //nolint:nilerr
+	}
+	if end-start != 1 {
+		return message.Option{}, false, fmt.Errorf("%w: duplicate Echo option", ErrInvalidOSCOREMessage)
+	}
+	option := options[start]
+	return message.Option{ID: option.ID, Value: append([]byte(nil), option.Value...)}, true, nil
 }
 
 func validateInnerRequest(inner message.Message, outerObserveOption message.Option, hasOuterObserve bool) (bool, error) {
