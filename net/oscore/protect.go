@@ -699,14 +699,14 @@ func validateInnerResponse(inner message.Message, exchange Exchange, option Opti
 		return nil, fmt.Errorf("%w: inner Observe notification value must be empty", ErrInvalidOSCOREMessage)
 	}
 	if hasInnerObserve {
-		sequence := uint32(0x00ffffff)
-		if len(option.PartialIV) > 0 {
-			sequence = 0
-			for _, b := range option.PartialIV {
-				sequence = (sequence << 8) | uint32(b)
-			}
-			sequence &= 0x00ffffff
+		if len(option.PartialIV) == 0 {
+			return nil, fmt.Errorf("%w: Observe notification must contain a Partial IV", ErrInvalidOSCOREMessage)
 		}
+		sequence := uint32(0)
+		for _, b := range option.PartialIV {
+			sequence = (sequence << 8) | uint32(b)
+		}
+		sequence &= 0x00ffffff
 		inner.Options, err = setObserve(inner.Options, sequence)
 		if err != nil {
 			return nil, err

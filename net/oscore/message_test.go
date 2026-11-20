@@ -48,18 +48,23 @@ func TestMatchesObserveRegistrationIgnoresOnlyObserveAndETag(t *testing.T) {
 		{ID: message.Observe, Value: []byte{0}},
 		{ID: message.ETag, Value: []byte("first")},
 		{ID: message.URIPath, Value: []byte("resource")},
+		{ID: message.URIQuery, Value: []byte("limit=10")},
 	}
 	cancellation := message.Options{
 		{ID: message.Observe, Value: []byte{1}},
 		{ID: message.ETag, Value: []byte("second")},
 		{ID: message.URIPath, Value: []byte("resource")},
+		{ID: message.URIQuery, Value: []byte("limit=10")},
 	}
 	if !MatchesObserveRegistration(registration, cancellation) {
 		t.Fatal("cancellation with matching options did not match registration")
 	}
-	cancellation[2].Value = []byte("different")
-	if MatchesObserveRegistration(registration, cancellation) {
-		t.Fatal("cancellation with a different Uri-Path matched registration")
+	for _, mismatchIndex := range []int{2, 3} {
+		mismatchedCancellation := CloneOptions(cancellation)
+		mismatchedCancellation[mismatchIndex].Value = []byte("different")
+		if MatchesObserveRegistration(registration, mismatchedCancellation) {
+			t.Fatalf("cancellation with mismatched option %d matched registration", mismatchedCancellation[mismatchIndex].ID)
+		}
 	}
 }
 

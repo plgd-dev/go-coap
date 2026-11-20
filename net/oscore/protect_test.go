@@ -320,6 +320,82 @@ func TestValidateInnerRequestObserveValue(t *testing.T) {
 	assertMalformedObserveRejected(t)
 }
 
+func TestValidateInnerRequestObserveCombinations(t *testing.T) {
+	tests := []struct {
+		name        string
+		inner       message.Options
+		outer       message.Option
+		hasOuter    bool
+		wantObserve bool
+		wantErr     bool
+	}{
+		{
+			name:        "registration",
+			inner:       observeOptions(t, 0),
+			outer:       message.Option{ID: message.Observe, Value: []byte{0}},
+			hasOuter:    true,
+			wantObserve: true,
+		},
+		{
+			name:        "cancellation",
+			inner:       observeOptions(t, 1),
+			outer:       message.Option{ID: message.Observe, Value: []byte{1}},
+			hasOuter:    true,
+			wantObserve: true,
+		},
+		{
+			name:     "mismatched values",
+			inner:    observeOptions(t, 0),
+			outer:    message.Option{ID: message.Observe, Value: []byte{1}},
+			hasOuter: true,
+			wantErr:  true,
+		},
+		{
+			name:     "missing inner",
+			outer:    message.Option{ID: message.Observe, Value: []byte{0}},
+			hasOuter: true,
+			wantErr:  true,
+		},
+		{
+			name:    "missing outer",
+			inner:   observeOptions(t, 0),
+			wantErr: true,
+		},
+		{
+			name:     "invalid inner value",
+			inner:    message.Options{{ID: message.Observe, Value: []byte{2}}},
+			outer:    message.Option{ID: message.Observe, Value: []byte{2}},
+			hasOuter: true,
+			wantErr:  true,
+		},
+		{
+			name:     "invalid outer value",
+			inner:    observeOptions(t, 0),
+			outer:    message.Option{ID: message.Observe, Value: []byte{2}},
+			hasOuter: true,
+			wantErr:  true,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			hasObserve, err := validateInnerRequest(
+				message.Message{Code: codes.GET, Options: test.inner},
+				test.outer,
+				test.hasOuter,
+			)
+			if test.wantErr {
+				if !errors.Is(err, ErrInvalidOSCOREMessage) {
+					t.Fatalf("validation error = %v, want ErrInvalidOSCOREMessage", err)
+				}
+				return
+			}
+			if err != nil || hasObserve != test.wantObserve {
+				t.Fatalf("validation = (%t, %v), want (%t, nil)", hasObserve, err, test.wantObserve)
+			}
+		})
+	}
+}
+
 func assertValidObserveRequest(t *testing.T, value uint32) {
 	t.Helper()
 	options := observeOptions(t, value)
@@ -898,7 +974,7 @@ func TestConcurrentUnprotectOrdinaryResponseAcceptsOnce(t *testing.T) {
 	}
 }
 
-func TestObserveAllowsInitialResponseWithoutPartialIV(t *testing.T) {
+func TestObserveRejectsNotificationWithoutPartialIV(t *testing.T) {
 	client, server := pairedContexts(t, 0, 0)
 	observeOptions, _, err := (message.Options{}).SetObserve(nil, 0)
 	if err != nil {
@@ -938,15 +1014,8 @@ func TestObserveAllowsInitialResponseWithoutPartialIV(t *testing.T) {
 		Options: message.Options{{ID: message.OSCORE}},
 		Payload: ciphertext,
 	}
-	opened, err := client.UnprotectResponse(firstResponse, clientExchange)
-	if err != nil {
-		t.Fatalf("first Observe response without Partial IV failed: %v", err)
-	}
-	if got, observeErr := opened.Options.Observe(); observeErr != nil || got != 0x00ffffff {
-		t.Fatalf("Observe sequence = %d, error = %v, want 0xffffff", got, observeErr)
-	}
-	if _, replayErr := client.UnprotectResponse(firstResponse, clientExchange); !errors.Is(replayErr, ErrReplay) {
-		t.Fatalf("replayed initial Observe response error = %v, want ErrReplay", replayErr)
+	if _, unprotectErr := client.UnprotectResponse(firstResponse, clientExchange); !errors.Is(unprotectErr, ErrInvalidOSCOREMessage) {
+		t.Fatalf("notification without Partial IV error = %v, want ErrInvalidOSCOREMessage", unprotectErr)
 	}
 
 	notificationOptions, _, err := (message.Options{}).SetObserve(make([]byte, 4), 1)
@@ -963,7 +1032,52 @@ func TestObserveAllowsInitialResponseWithoutPartialIV(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := client.UnprotectResponse(notification, clientExchange); err != nil {
-		t.Fatalf("notification with Partial IV after initial response failed: %v", err)
+		t.Fatalf("notification with Partial IV after rejected notification failed: %v", err)
+	}
+}
+
+func TestObserveFreshnessUsesPartialIVNotOuterObserve(t *testing.T) {
+	client, server := pairedContexts(t, 0, 5)
+	request, clientExchange, err := client.ProtectRequest(message.Message{
+		Code:    codes.GET,
+		Token:   message.Token{0x42},
+		Options: observeOptions(t, 0),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, serverExchange, err := server.UnprotectRequest(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, tc := range []struct {
+		outerObserve uint32
+		wantSequence uint32
+	}{
+		{outerObserve: 100, wantSequence: 5},
+		{outerObserve: 0, wantSequence: 6},
+	} {
+		response, protectErr := server.ProtectResponseWithPartialIV(message.Message{
+			Code:    codes.Content,
+			Token:   request.Token,
+			Options: message.Options{{ID: message.Observe}},
+		}, serverExchange)
+		if protectErr != nil {
+			t.Fatal(protectErr)
+		}
+		response.Options, err = setObserve(removeObserveOption(response.Options), tc.outerObserve)
+		if err != nil {
+			t.Fatal(err)
+		}
+		opened, unprotectErr := client.UnprotectResponse(response, clientExchange)
+		if unprotectErr != nil {
+			t.Fatalf("notification with outer Observe %d failed: %v", tc.outerObserve, unprotectErr)
+		}
+		if got, observeErr := opened.Options.Observe(); observeErr != nil || got != tc.wantSequence {
+			t.Fatalf("reconstructed Observe = %d, error = %v; want Partial-IV sequence %d",
+				got, observeErr, tc.wantSequence)
+		}
 	}
 }
 
