@@ -173,6 +173,13 @@ func (b *Engine[C]) q2ResponseKey(r *pool.Message, remoteAddr net.Addr, num int6
 		newRequest = sizeErr != nil || size > 0
 	}
 	b.q2SendMu.Lock()
+	if newRequest {
+		for existingKey, transfer := range b.q2Senders {
+			if transfer.identity == identity {
+				b.removeQ2SenderLocked(existingKey)
+			}
+		}
+	}
 	if b.q2Senders[key] == nil && !newRequest && (num != 0 || !more || r.HasOption(message.RequestTag) || r.Code() != codes.GET) {
 		found, err := b.findQ2ResponseLocked(identity)
 		if err != nil {
@@ -203,6 +210,21 @@ func (b *Engine[C]) findQ2ResponseLocked(identity string) (string, error) {
 		found = key
 	}
 	return found, nil
+}
+
+func (b *Engine[C]) removeQ2SenderLocked(key string) {
+	transfer := b.q2Senders[key]
+	if transfer == nil {
+		return
+	}
+	if transport, ok := any(b.cc).(Transport); ok {
+		transport.CancelQBlock("q2:" + key)
+	}
+	delete(b.q2Senders, key)
+	b.q2SendBytes -= transfer.size
+	b.qReleaseBytes(transfer.size)
+	b.qReleaseTransfer()
+	b.cc.ReleaseMessage(transfer.message)
 }
 
 func (b *Engine[C]) loadQ2Response(w *responsewriter.ResponseWriter[C], r *pool.Message, remote net.Addr,
@@ -380,11 +402,7 @@ func (b *Engine[C]) buildQBlock2ResponseFrom(ctx context.Context, key string, to
 		return nil, errQBlock2ResponseNotFound
 	}
 	if !transfer.expires.After(time.Now()) {
-		delete(b.q2Senders, key)
-		b.q2SendBytes -= transfer.size
-		b.qReleaseBytes(transfer.size)
-		b.qReleaseTransfer()
-		b.cc.ReleaseMessage(transfer.message)
+		b.removeQ2SenderLocked(key)
 		return nil, errQBlock2ResponseNotFound
 	}
 	response := b.cc.AcquireMessage(ctx)
@@ -451,14 +469,7 @@ func (b *Engine[C]) cacheQBlock2Notification(ctx context.Context, key, identity 
 		return nil, err
 	}
 	if old := b.q2Senders[key]; old != nil {
-		if transport, ok := any(b.cc).(Transport); ok {
-			transport.CancelQBlock("q2:" + key)
-		}
-		b.q2SendBytes -= old.size
-		b.qReleaseBytes(old.size)
-		b.qReleaseTransfer()
-		delete(b.q2Senders, key)
-		b.cc.ReleaseMessage(old.message)
+		b.removeQ2SenderLocked(key)
 	} else if len(b.q2Senders) >= 4096 {
 		b.q2SendMu.Unlock()
 		b.cc.ReleaseMessage(stored)
