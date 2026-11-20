@@ -6,6 +6,8 @@ import (
 	"sync"
 )
 
+const supportsProcessFileLock = false
+
 var fileLocks sync.Map
 
 func withFileLock(path string, action func() error) error {

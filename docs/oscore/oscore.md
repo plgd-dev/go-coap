@@ -425,11 +425,11 @@ writable only by the trusted application account. The store does not persist
 master secrets or encrypt state at rest. It detects sender-state corruption,
 missing individual sender-state files, and mismatches caused by individual
 sender-state file rollback. Restoring matching older sender-state and guard
-files can reuse Partial IVs under the same key; detecting complete sender-state
-rollback requires an external monotonic trust anchor. Similarly, deletion or
-rollback of both replay files together or rollback of the complete directory
-cannot be detected without such a trust anchor. Reserved but unused sender
-values are intentionally skipped after restart. Applications can implement
+files can reuse Partial IVs under the same key. Rolling back the complete
+directory, including both sender files or both replay files, is also
+undetectable. Detecting either rollback requires an external monotonic trust
+anchor outside the store directory. Reserved but unused sender values are
+intentionally skipped after restart. Applications can implement
 `SenderSequenceStore` and
 `ReplayWindowHighWaterStore` for a database or remote transactional store.
 

@@ -8,6 +8,8 @@ import (
 	"syscall"
 )
 
+const supportsProcessFileLock = true
+
 func withFileLock(path string, action func() error) (err error) {
 	file, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600)
 	if err != nil {
@@ -33,6 +35,7 @@ func withFileLock(path string, action func() error) (err error) {
 }
 
 func syncDirectory(path string) error {
+	// #nosec G703 -- path is the configured store directory used for durability sync.
 	directory, err := os.Open(path)
 	if err != nil {
 		return fmt.Errorf("open OSCORE store directory for sync: %w", err)

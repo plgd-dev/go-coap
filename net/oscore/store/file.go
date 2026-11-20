@@ -42,7 +42,8 @@ func WithReplayHighWaterMargin(margin uint64) HighWaterFileStoreOption {
 // replay high-water mark. Construct it with the same stable ID whenever the
 // corresponding OSCORE context is recreated. Sender sequence guards detect
 // individual state-file deletion, corruption, or rollback that causes a
-// mismatch, but cannot detect restoring matching older state and guard files.
+// mismatch, but cannot detect restoring matching older state and guard files
+// or rolling back the complete store directory.
 // Replay cutoff and guard files detect individual deletion or mismatch, and
 // interrupted updates are completed from a pending transaction. Deleting or
 // rolling back both replay files together is not detectable. These complete-
@@ -122,11 +123,12 @@ func NewHighWaterFileStore(dir, id string, options ...HighWaterFileStoreOption) 
 	if replayHighWaterMargin == 0 || replayHighWaterMargin > oscore.MaxReplayHighWaterMargin {
 		return nil, ErrInvalidReplayHighWaterMargin
 	}
-	absoluteDir, err := filepath.Abs(dir)
+	absoluteDir, err := filepath.Abs(filepath.Clean(dir))
 	if err != nil {
 		return nil, fmt.Errorf("resolve OSCORE file store directory: %w", err)
 	}
-	if err := os.MkdirAll(absoluteDir, 0o700); err != nil {
+	// #nosec G703 -- dir is the caller-selected persistent-store root.
+	if err := os.MkdirAll(filepath.Clean(absoluteDir), 0o700); err != nil {
 		return nil, fmt.Errorf("create OSCORE file store directory: %w", err)
 	}
 	digest := sha256.Sum256([]byte(id))
@@ -559,7 +561,8 @@ func (s *HighWaterFileStore) removeSequencePending() error {
 			return err
 		}
 	}
-	if err := os.Remove(s.sequencePendingPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+	// #nosec G703 -- this path is derived from the configured store root and a fixed suffix.
+	if err := os.Remove(filepath.Clean(s.sequencePendingPath)); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
 	if s.sequenceOps.syncDirectory != nil {
@@ -701,7 +704,8 @@ func readReplayHighWaterPair(markPath, guardPath string) (uint64, bool, error) {
 }
 
 func readStateFile(path string) ([]byte, error) {
-	file, err := os.Open(path)
+	// #nosec G703 -- callers pass only state paths derived from a configured store root.
+	file, err := os.Open(filepath.Clean(path))
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, nil
 	}
@@ -758,6 +762,7 @@ func writeStateFileWithHooks(dir, path string, value any, syncFile func(*os.File
 	if err := temporary.Close(); err != nil {
 		return err
 	}
+	// #nosec G703 -- temporary and target paths are inside the configured store root.
 	if err := os.Rename(temporaryPath, path); err != nil {
 		return err
 	}

@@ -1,13 +1,18 @@
 package store
 
 import (
+	"bytes"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/plgd-dev/go-coap/v3/net/oscore"
 )
@@ -68,6 +73,108 @@ func TestHighWaterFileStoreSequenceReservationsAcrossInstances(t *testing.T) {
 	}
 	if next <= maxReserved {
 		t.Fatalf("restarted sequence = %d, want greater than %d", next, maxReserved)
+	}
+}
+
+func TestHighWaterFileStoreSequenceReservationsAcrossProcesses(t *testing.T) {
+	if !supportsProcessFileLock {
+		t.Skip("file store process locking is unavailable on this platform")
+	}
+	dir := t.TempDir()
+	const (
+		processCount = 4
+		reservations = 64
+	)
+	startPath := filepath.Join(dir, "start")
+	commands := make([]*exec.Cmd, processCount)
+	outputs := make([][]byte, processCount)
+	stdouts := make([]bytes.Buffer, processCount)
+	stderrs := make([]bytes.Buffer, processCount)
+	for i := range commands {
+		command := exec.Command(
+			os.Args[0],
+			"-test.run=^TestHighWaterFileStoreSequenceReservationProcessHelper$",
+		)
+		command.Stdout = &stdouts[i]
+		command.Stderr = &stderrs[i]
+		command.Env = append(os.Environ(),
+			"GO_COAP_OSCORE_SEQUENCE_PROCESS_DIR="+dir,
+			"GO_COAP_OSCORE_SEQUENCE_PROCESS_START="+startPath,
+			"GO_COAP_OSCORE_SEQUENCE_PROCESS_COUNT="+strconv.Itoa(reservations),
+		)
+		commands[i] = command
+		if err := command.Start(); err != nil {
+			t.Fatalf("start reservation process %d: %v", i, err)
+		}
+	}
+	if err := os.WriteFile(startPath, []byte("go"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for i, command := range commands {
+		err := command.Wait()
+		if err != nil {
+			t.Fatalf("reservation process %d failed: %v\n%s", i, err, stderrs[i].String())
+		}
+		outputs[i] = append([]byte(nil), stdouts[i].Bytes()...)
+	}
+
+	seen := make(map[uint64]bool, processCount*reservations)
+	for i, output := range outputs {
+		var values []uint64
+		if err := json.NewDecoder(bytes.NewReader(output)).Decode(&values); err != nil {
+			t.Fatalf("decode reservations from process %d: %v\n%s", i, err, output)
+		}
+		if len(values) != reservations {
+			t.Fatalf("process %d reserved %d values, want %d", i, len(values), reservations)
+		}
+		for _, value := range values {
+			if seen[value] {
+				t.Fatalf("sequence %d was reserved by more than one process", value)
+			}
+			seen[value] = true
+		}
+	}
+	if len(seen) != processCount*reservations {
+		t.Fatalf("reserved %d unique values, want %d", len(seen), processCount*reservations)
+	}
+}
+
+func TestHighWaterFileStoreSequenceReservationProcessHelper(t *testing.T) {
+	dir := os.Getenv("GO_COAP_OSCORE_SEQUENCE_PROCESS_DIR")
+	if dir == "" {
+		return
+	}
+	startPath := os.Getenv("GO_COAP_OSCORE_SEQUENCE_PROCESS_START")
+	count, err := strconv.Atoi(os.Getenv("GO_COAP_OSCORE_SEQUENCE_PROCESS_COUNT"))
+	if err != nil || count < 1 {
+		t.Fatalf("invalid reservation count: %v", err)
+	}
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		if _, startErr := os.Stat(startPath); startErr == nil {
+			break
+		} else if !errors.Is(startErr, os.ErrNotExist) {
+			t.Fatalf("wait for process start: %v", startErr)
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("timed out waiting for process start")
+		}
+		time.Sleep(time.Millisecond)
+	}
+
+	store, err := NewHighWaterFileStore(dir, "cross-process-sequence")
+	if err != nil {
+		t.Fatal(err)
+	}
+	values := make([]uint64, count)
+	for i := range values {
+		values[i], err = store.Reserve()
+		if err != nil {
+			t.Fatalf("reserve sequence %d: %v", i, err)
+		}
+	}
+	if err := json.NewEncoder(os.Stdout).Encode(values); err != nil {
+		t.Fatalf("encode reservations: %v", err)
 	}
 }
 
