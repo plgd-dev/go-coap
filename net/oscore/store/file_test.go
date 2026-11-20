@@ -85,16 +85,6 @@ func TestHighWaterFileStoreSequenceReservationsAcrossInstances(t *testing.T) {
 	}
 }
 
-func TestNewHighWaterFileStoreRejectsWritableDirectory(t *testing.T) {
-	dir := privateTempDir(t)
-	if err := os.Chmod(dir, 0o777); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := NewHighWaterFileStore(dir, "writable-directory"); err == nil {
-		t.Fatal("NewHighWaterFileStore accepted a group/world-writable directory")
-	}
-}
-
 func TestHighWaterFileStoreBindsSequenceStateToSenderKeys(t *testing.T) {
 	dir := privateTempDir(t)
 	const (

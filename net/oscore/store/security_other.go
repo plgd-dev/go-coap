@@ -15,9 +15,6 @@ func validateStoreDirectory(path string) error {
 	if !info.IsDir() {
 		return fmt.Errorf("%q is not a directory", path)
 	}
-	if info.Mode().Perm()&0o022 != 0 {
-		return fmt.Errorf("directory %q is group- or world-writable", path)
-	}
 	return nil
 }
 

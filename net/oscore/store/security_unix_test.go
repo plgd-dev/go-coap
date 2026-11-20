@@ -8,6 +8,16 @@ import (
 	"testing"
 )
 
+func TestNewHighWaterFileStoreRejectsWritableDirectory(t *testing.T) {
+	dir := privateTempDir(t)
+	if err := os.Chmod(dir, 0o777); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := NewHighWaterFileStore(dir, "writable-directory"); err == nil {
+		t.Fatal("NewHighWaterFileStore accepted a group/world-writable directory")
+	}
+}
+
 func TestHighWaterFileStoreRejectsSymlinkLock(t *testing.T) {
 	dir := privateTempDir(t)
 	store, storeErr := NewHighWaterFileStore(dir, "symlink-lock")
