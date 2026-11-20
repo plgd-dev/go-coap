@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"encoding/hex"
 	"errors"
-	"log"
 	"strings"
 	"sync"
 	"testing"
@@ -323,28 +322,6 @@ func TestNewContextRequiresSenderSequencePersistenceOrExplicitOptIn(t *testing.T
 	cfg.SenderSequenceStore = &testSenderSequenceStore{}
 	if _, err := NewContext(cfg); err != nil {
 		t.Fatalf("context with durable sender sequence store: %v", err)
-	}
-}
-
-func TestNewContextWarnsForVolatileSenderSequence(t *testing.T) {
-	var output bytes.Buffer
-	originalOutput := log.Writer()
-	log.SetOutput(&output)
-	defer log.SetOutput(originalOutput)
-
-	_, err := NewContext(ContextConfig{
-		UnsafeVolatileSenderSequence: true,
-		AcceptReplayStateLoss:        true,
-		MasterSecret:                 []byte("0123456789abcdef"),
-		SenderID:                     []byte{1},
-		RecipientID:                  []byte{2},
-	})
-	if err != nil {
-		t.Fatalf("create context with volatile sender sequence: %v", err)
-	}
-	if warning := output.String(); !strings.Contains(warning, "WARNING") ||
-		!strings.Contains(warning, "RFC 8613 Appendix B.2") {
-		t.Fatalf("volatile sender sequence warning = %q", warning)
 	}
 }
 

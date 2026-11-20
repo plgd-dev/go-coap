@@ -21,6 +21,7 @@ var (
 	ErrInvalidRequest         = errors.New("invalid OSCORE proxy request")
 	ErrBadGateway             = errors.New("invalid OSCORE proxy origin response")
 	ErrTargetNotAllowed       = errors.New("OSCORE proxy target is not allowed")
+	ErrRateLimited            = errors.New("OSCORE proxy request rate limited")
 	ErrUnsupportedOperation   = errors.New("unsupported OSCORE proxy operation")
 	ErrInvalidForwarderConfig = errors.New("invalid OSCORE proxy forwarder configuration")
 )
@@ -45,32 +46,65 @@ func (f RoundTripperFunc) RoundTrip(ctx context.Context, target oscore.ProxyTarg
 // A policy that permits hostnames must ensure they are resolved and the
 // resulting IP is pinned by the RoundTripper. Resolving a hostname once for
 // policy evaluation but again during dialing permits DNS rebinding and SSRF.
-type TargetPolicy func(oscore.ProxyTarget) bool
+type TargetPolicy func(context.Context, oscore.ProxyTarget) bool
 
 // AllowPublicIPLiteralTarget accepts only literal public IP destinations.
 // It rejects hostnames as well as loopback, private, link-local, multicast,
-// and unspecified addresses. Applications with DNS targets should instead
-// resolve and pin addresses in their policy and RoundTripper.
-func AllowPublicIPLiteralTarget(target oscore.ProxyTarget) bool {
-	ip, err := netip.ParseAddr(target.Host)
-	if err != nil {
+// and unspecified addresses. Only ports 5683 and 5684 are permitted.
+// Applications with DNS targets should instead resolve and pin addresses in
+// their policy and RoundTripper.
+func AllowPublicIPLiteralTarget(ctx context.Context, target oscore.ProxyTarget) bool {
+	return AllowPublicIPLiteralTargetWithPorts(ctx, target, 5683, 5684)
+}
+
+// AllowPublicIPLiteralTargetWithPorts is AllowPublicIPLiteralTarget with an
+// application-configured allowlist of destination ports.
+func AllowPublicIPLiteralTargetWithPorts(
+	_ context.Context, target oscore.ProxyTarget, allowedPorts ...uint16,
+) bool {
+	if !targetPortAllowed(target.Port, allowedPorts) {
 		return false
 	}
-	if ip.Zone() != "" {
+	ip, err := netip.ParseAddr(target.Host)
+	if err != nil || ip.Zone() != "" {
+		return false
+	}
+	if isDeniedTargetPrefix(ip) {
 		return false
 	}
 	ip = ip.Unmap()
+	return isPublicTargetIP(ip)
+}
+
+func targetPortAllowed(targetPort string, allowedPorts []uint16) bool {
+	port, err := strconv.ParseUint(targetPort, 10, 16)
+	if err != nil {
+		return false
+	}
+	for _, allowedPort := range allowedPorts {
+		if allowedPort != 0 && port == uint64(allowedPort) {
+			return true
+		}
+	}
+	return false
+}
+
+func isPublicTargetIP(ip netip.Addr) bool {
 	if !ip.IsGlobalUnicast() || ip.IsPrivate() || ip.IsLoopback() ||
 		ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() ||
 		ip.IsMulticast() || ip.IsUnspecified() {
 		return false
 	}
+	return !isDeniedTargetPrefix(ip)
+}
+
+func isDeniedTargetPrefix(ip netip.Addr) bool {
 	for _, prefix := range deniedPublicTargetPrefixes {
 		if prefix.Contains(ip) {
-			return false
+			return true
 		}
 	}
-	return true
+	return false
 }
 
 var deniedPublicTargetPrefixes = [...]netip.Prefix{
@@ -86,6 +120,9 @@ var deniedPublicTargetPrefixes = [...]netip.Prefix{
 	netip.MustParsePrefix("255.255.255.255/32"),
 	netip.MustParsePrefix("64:ff9b::/96"),
 	netip.MustParsePrefix("64:ff9b:1::/48"),
+	netip.MustParsePrefix("::/96"),
+	netip.MustParsePrefix("100::/64"),
+	netip.MustParsePrefix("fec0::/10"),
 	netip.MustParsePrefix("2001::/32"),
 	netip.MustParsePrefix("2001:2::/48"),
 	netip.MustParsePrefix("2001:db8::/32"),
@@ -97,20 +134,26 @@ var deniedPublicTargetPrefixes = [...]netip.Prefix{
 // The surrounding CoAP transport handles Outer Blockwise when enabled.
 // RoundTripper implementations should use Blockwise for large envelopes.
 // The forwarder does not provide caching, Observe, or proxy session management.
-// If OnError is nil, forwarding errors are silently ignored after the error
-// response is written.
+// OnError is called for forwarding errors. When it is nil, errors are not
+// logged by the package.
 type Forwarder struct {
 	RoundTripper RoundTripper
 	AllowTarget  TargetPolicy
-	OnError      func(error)
+	// RateLimit rejects a request when it returns false. It is optional; when
+	// configured, it runs after target authorization and before forwarding.
+	RateLimit func(context.Context, oscore.ProxyTarget) bool
+	OnError   func(error)
 }
 
 // Forward validates and routes an opaque OSCORE request. The Proxy-Uri must
 // contain only its authority, as produced by Context.ProtectRequest.
 func (f *Forwarder) Forward(ctx context.Context, request message.Message) (message.Message, error) {
-	target, err := f.validate(request)
+	target, err := f.validate(ctx, request)
 	if err != nil {
 		return message.Message{}, err
+	}
+	if f.RateLimit != nil && !f.RateLimit(ctx, target) {
+		return message.Message{}, fmt.Errorf("%w: %s", ErrRateLimited, target.AuthorityURI())
 	}
 	forwarded, err := prepareForwardedRequest(request, target)
 	if err != nil {
@@ -126,7 +169,7 @@ func (f *Forwarder) Forward(ctx context.Context, request message.Message) (messa
 	return response, nil
 }
 
-func (f *Forwarder) validate(request message.Message) (oscore.ProxyTarget, error) {
+func (f *Forwarder) validate(ctx context.Context, request message.Message) (oscore.ProxyTarget, error) {
 	if f == nil || f.RoundTripper == nil || f.AllowTarget == nil {
 		return oscore.ProxyTarget{}, ErrInvalidForwarderConfig
 	}
@@ -156,7 +199,7 @@ func (f *Forwarder) validate(request message.Message) (oscore.ProxyTarget, error
 	if len(target.Path) != 0 || len(target.Query) != 0 {
 		return oscore.ProxyTarget{}, fmt.Errorf("%w: Proxy-Uri must contain only an authority", ErrInvalidRequest)
 	}
-	if !f.AllowTarget(target) {
+	if !f.AllowTarget(ctx, target) {
 		return oscore.ProxyTarget{}, fmt.Errorf("%w: %s", ErrTargetNotAllowed, target.AuthorityURI())
 	}
 	return target, nil
@@ -238,6 +281,8 @@ func errorCode(err error) codes.Code {
 		return codes.BadRequest
 	case errors.Is(err, ErrTargetNotAllowed):
 		return codes.Forbidden
+	case errors.Is(err, ErrRateLimited):
+		return codes.TooManyRequests
 	case errors.Is(err, ErrUnsupportedOperation):
 		return codes.ProxyingNotSupported
 	default:

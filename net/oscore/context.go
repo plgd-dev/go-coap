@@ -11,7 +11,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
 	"sync"
 
 	"github.com/pion/dtls/v3/pkg/crypto/ccm"
@@ -223,9 +222,6 @@ func NewContext(cfg ContextConfig) (*Context, error) {
 		replay:                replay,
 		replayRecoveryEcho:    replayRecoveryEcho,
 		replayRecoveryPending: cfg.RequireEchoRecovery,
-	}
-	if cfg.SenderSequenceStore == nil {
-		log.Printf("WARNING: OSCORE is using volatile sender sequence state; restarting with the same sender key can reuse Partial IVs and AEAD nonces (RFC 8613 Appendix B.2)")
 	}
 	return context, nil
 }

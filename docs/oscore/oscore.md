@@ -307,12 +307,12 @@ payload and failed requests are never dispatched to the application handler.
 
 Partial IV values must never be reused with the same sender key. When no
 `SenderSequenceStore` is configured, `NewContext` requires the explicit
-`UnsafeVolatileSenderSequence: true` opt-in and logs a warning when the context
-is created. This mode is for development and deliberate volatile-state
-deployments only; restarting with the same sender key and configuration reuses
-sequence numbers and can reuse AEAD nonces. RFC 8613 Appendix B.2 describes the
-sender sequence number requirements that prevent nonce reuse. For durable
-deployments, configure a
+`UnsafeVolatileSenderSequence: true` opt-in. The package does not log; make this
+risk visible in application configuration and observability. This mode is for
+development and deliberate volatile-state deployments only; restarting with
+the same sender key and configuration reuses sequence numbers and can reuse
+AEAD nonces. RFC 8613 Appendix B.2 describes the sender sequence number
+requirements that prevent nonce reuse. For durable deployments, configure a
 `SenderSequenceStore` whose `Reserve` operation atomically reserves and durably
 persists a unique value before returning it. Coordinate reservations across all
 processes and `Context` instances that share a sender key. A reserved value
@@ -327,10 +327,10 @@ instance for each sender context, or coordinate transmission so messages arrive
 in sequence order.
 
 Alternatively, restore `SenderSequenceNumber` to the next unused value before
-constructing a context and set `UnsafeVolatileSenderSequence: true`. The context
-logs a warning because this restored value is only an in-memory starting point;
-after using it, persist and restore the next unused value again before any
-restart. Never restore an old or guessed value. The receiver
+constructing a context and set `UnsafeVolatileSenderSequence: true`. This
+restored value is only an in-memory starting point; after using it, persist and
+restore the next unused value again before any restart. Never restore an old or
+guessed value. The receiver
 replay window is independent of sender sequence persistence. To preserve it
 across receiver restarts, configure a `ReplayWindowStore` on `ContextConfig`.
 `NewContext` requires either this store or the explicit
@@ -477,18 +477,22 @@ defer cc.ReleaseMessage(resp)
 ```
 
 Configure the proxy with a `RoundTripper` for the target transport and an
-explicit allowlist `AllowTarget` policy. A nil policy rejects all forwarding;
-do not expose an unrestricted proxy, since arbitrary targets can create an
-SSRF path. If hostnames are allowed, resolve them in the policy and pin the
-selected IP in the `RoundTripper`; validating one DNS answer and dialing a
-later answer permits DNS rebinding. `AllowPublicIPLiteralTarget` is a helper
-for policies that intentionally accept only literal public IP addresses.
-It uses `netip.Addr.IsGlobalUnicast` and rejects private/special-use ranges,
-including IPv4-mapped forms, well-known and local-use NAT64 prefixes,
-documentation prefixes, and IPv4/IPv6 benchmarking ranges. This helper is not
-a substitute for an application-specific allowlist. If `Forwarder.OnError` is
-nil, forwarding errors are silently ignored after an error response is written;
-set the callback to observe them.
+explicit allowlist `AllowTarget` policy. The policy receives the request
+context and parsed destination; a nil policy rejects all forwarding. Do not
+expose an unrestricted proxy, since arbitrary targets can create an SSRF path.
+If hostnames are allowed, resolve them in the policy and pin the selected IP in
+the `RoundTripper`; validating one DNS answer and dialing a later answer permits
+DNS rebinding. `AllowPublicIPLiteralTarget` accepts only literal public IP
+addresses on ports 5683 and 5684. Use
+`AllowPublicIPLiteralTargetWithPorts` to configure the port allowlist. Both
+helpers reject private/special-use ranges, including IPv4-mapped forms,
+well-known and local-use NAT64 prefixes, documentation prefixes, and
+IPv4/IPv6 benchmarking ranges. This helper is not a substitute for an
+application-specific allowlist. An optional `RateLimit` hook can reject
+authorized requests before the round trip; rejection maps to 4.29 Too Many
+Requests. The forwarder invokes `Forwarder.OnError` for errors; when it is nil,
+the package does not log. Applications can use the callback with their own
+logging framework.
 The round tripper receives the context, parsed target, and a copied
 CoAP message whose OSCORE option and ciphertext are unchanged. It should use a
 fresh connection per request unless it safely handles token collisions.
@@ -546,9 +550,9 @@ timeouts, and response-size limits.
   responsibilities.
 - Sender sequence policy is explicit: use `SenderSequenceStore` for durable
   reservations or set `UnsafeVolatileSenderSequence` for development-only,
-  in-memory sender state. Creating a context in this mode logs a warning;
-  restarting with the same sender key can reuse Partial IVs and AEAD nonces
-  (RFC 8613 Appendix B.2).
+  in-memory sender state. The package does not log when volatile sequence state
+  is enabled; restarting with the same sender key can reuse Partial IVs and
+  AEAD nonces (RFC 8613 Appendix B.2).
 - Q-Block1 uploads and Q-Block2 downloads over OSCORE-protected UDP and DTLS.
   Q-Block options are encrypted as Class E options. Q-Block is a datagram
   protocol (RFC 9177); TCP/TLS use reliable-transport Blockwise instead.

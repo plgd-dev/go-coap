@@ -12,7 +12,10 @@ import (
 	"github.com/plgd-dev/go-coap/v3/net/oscore"
 )
 
-const testOriginHost = "origin.example"
+const (
+	testOriginHost = "origin.example"
+	testPublicIPv4 = "8.8.8.8"
+)
 
 type testOrigin struct {
 	context         *oscore.Context
@@ -90,7 +93,7 @@ func TestForwarderRelaysOSCOREWithoutDecrypting(t *testing.T) {
 	origin := &testOrigin{context: originContext, expectedPayload: append([]byte(nil), request.Payload...)}
 	forwarder := Forwarder{
 		RoundTripper: origin,
-		AllowTarget: func(target oscore.ProxyTarget) bool {
+		AllowTarget: func(_ context.Context, target oscore.ProxyTarget) bool {
 			return target.Host == testOriginHost
 		},
 	}
@@ -112,8 +115,12 @@ func TestForwarderRelaysOSCOREWithoutDecrypting(t *testing.T) {
 }
 
 func TestForwarderRequiresTargetAllowlist(t *testing.T) {
-	forwarder := Forwarder{}
-	_, err := forwarder.Forward(context.Background(), message.Message{})
+	forwarder := Forwarder{RoundTripper: RoundTripperFunc(func(
+		context.Context, oscore.ProxyTarget, message.Message,
+	) (message.Message, error) {
+		return message.Message{}, nil
+	})}
+	_, err := forwarder.Forward(context.Background(), validProtectedProxyRequest(t))
 	if !errors.Is(err, ErrInvalidForwarderConfig) {
 		t.Fatalf("Forward error = %v", err)
 	}
@@ -144,7 +151,7 @@ func TestForwarderRejectsDisallowedTargetBeforeDial(t *testing.T) {
 	origin := &testOrigin{}
 	forwarder := Forwarder{
 		RoundTripper: origin,
-		AllowTarget:  func(oscore.ProxyTarget) bool { return false },
+		AllowTarget:  func(context.Context, oscore.ProxyTarget) bool { return false },
 	}
 	_, err = forwarder.Forward(context.Background(), request)
 	if !errors.Is(err, ErrTargetNotAllowed) {
@@ -169,7 +176,7 @@ func TestForwarderMapsInvalidOriginResponseToBadGateway(t *testing.T) {
 				RoundTripper: RoundTripperFunc(func(context.Context, oscore.ProxyTarget, message.Message) (message.Message, error) {
 					return test.response, nil
 				}),
-				AllowTarget: func(oscore.ProxyTarget) bool { return true },
+				AllowTarget: func(context.Context, oscore.ProxyTarget) bool { return true },
 			}
 			_, err := forwarder.Forward(context.Background(), validProtectedProxyRequest(t))
 			if !errors.Is(err, ErrBadGateway) {
@@ -185,11 +192,14 @@ func TestForwarderMapsInvalidOriginResponseToBadGateway(t *testing.T) {
 func TestAllowPublicIPLiteralTarget(t *testing.T) {
 	for _, test := range []struct {
 		host string
+		port string
 		want bool
 	}{
-		{host: "8.8.8.8", want: true},
-		{host: "2001:4860:4860::8888", want: true},
-		{host: "::ffff:8.8.8.8", want: true},
+		{host: testPublicIPv4, port: "5683", want: true},
+		{host: testPublicIPv4, port: "5684", want: true},
+		{host: "2001:4860:4860::8888", port: "5683", want: true},
+		{host: "::ffff:" + testPublicIPv4, port: "5683", want: true},
+		{host: testPublicIPv4, port: "8080"},
 		{host: "127.0.0.1"},
 		{host: "10.0.0.1"},
 		{host: "169.254.1.1"},
@@ -197,6 +207,9 @@ func TestAllowPublicIPLiteralTarget(t *testing.T) {
 		{host: "fe80::1"},
 		{host: "100.64.0.1"},
 		{host: "64:ff9b::a00:1%eth0"},
+		{host: "fec0::1"},
+		{host: "100::1"},
+		{host: "::1.2.3.4"},
 		{host: "0.1.2.3"},
 		{host: "192.0.0.1"},
 		{host: "192.0.2.1"},
@@ -218,11 +231,68 @@ func TestAllowPublicIPLiteralTarget(t *testing.T) {
 		{host: "origin.example"},
 	} {
 		t.Run(test.host, func(t *testing.T) {
-			if got := AllowPublicIPLiteralTarget(oscore.ProxyTarget{Host: test.host}); got != test.want {
-				t.Fatalf("AllowPublicIPLiteralTarget(%q) = %t, want %t", test.host, got, test.want)
+			port := test.port
+			if port == "" {
+				port = "5683"
+			}
+			if got := AllowPublicIPLiteralTarget(context.Background(), oscore.ProxyTarget{
+				Host: test.host, Port: port,
+			}); got != test.want {
+				t.Fatalf("AllowPublicIPLiteralTarget(%q:%q) = %t, want %t",
+					test.host, port, got, test.want)
 			}
 		})
 	}
+}
+
+func TestAllowPublicIPLiteralTargetConfigurablePorts(t *testing.T) {
+	target := oscore.ProxyTarget{Host: testPublicIPv4, Port: "8443"}
+	if !AllowPublicIPLiteralTargetWithPorts(context.Background(), target, 8443) {
+		t.Fatal("configured public target port was rejected")
+	}
+	if AllowPublicIPLiteralTargetWithPorts(context.Background(), target, 5683, 5684) {
+		t.Fatal("unconfigured public target port was allowed")
+	}
+}
+
+func TestForwarderRateLimitRejectsBeforeRoundTrip(t *testing.T) {
+	originCalled := false
+	forwarder := Forwarder{
+		RoundTripper: RoundTripperFunc(func(context.Context, oscore.ProxyTarget, message.Message) (message.Message, error) {
+			originCalled = true
+			return message.Message{}, nil
+		}),
+		AllowTarget: func(_ context.Context, target oscore.ProxyTarget) bool {
+			return target.Host == testOriginHost
+		},
+		RateLimit: func(_ context.Context, target oscore.ProxyTarget) bool {
+			return target.Host != testOriginHost
+		},
+	}
+	_, err := forwarder.Forward(context.Background(), validProtectedProxyRequest(t))
+	if !errors.Is(err, ErrRateLimited) {
+		t.Fatalf("Forward error = %v, want ErrRateLimited", err)
+	}
+	if got := errorCode(err); got != codes.TooManyRequests {
+		t.Fatalf("errorCode = %v, want TooManyRequests", got)
+	}
+	if originCalled {
+		t.Fatal("round trip attempted for a rate-limited request")
+	}
+}
+
+func TestForwarderReportUsesOnErrorCallback(t *testing.T) {
+	want := errors.New("forwarding failed")
+	var got error
+	(&Forwarder{OnError: func(err error) {
+		got = err
+	}}).report(want)
+	if !errors.Is(got, want) {
+		t.Fatalf("OnError received %v, want %v", got, want)
+	}
+
+	// Without a callback, reporting is intentionally a no-op.
+	(&Forwarder{}).report(want)
 }
 
 func validProtectedProxyRequest(t *testing.T) message.Message {

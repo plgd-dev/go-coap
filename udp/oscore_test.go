@@ -832,7 +832,7 @@ func TestOSCOREOuterBlockwiseUDPProxy(t *testing.T) {
 	origin := &outerBlockwiseProxyRoundTripper{context: originContext, expectedPayload: payload}
 	forwarder := &proxy.Forwarder{
 		RoundTripper: origin,
-		AllowTarget: func(target oscore.ProxyTarget) bool {
+		AllowTarget: func(_ context.Context, target oscore.ProxyTarget) bool {
 			return target.Host == "origin.example"
 		},
 	}

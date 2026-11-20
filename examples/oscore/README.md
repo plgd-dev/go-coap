@@ -30,6 +30,5 @@ directory when restarting it with the same OSCORE identity. Never reset sender
 sequence state or use the example secret and IDs in production.
 
 The example uses a durable sender sequence store. Do not replace it with
-`UnsafeVolatileSenderSequence` in production: the library logs a warning, and a
-restart with the same sender key can reuse Partial IVs and AEAD nonces (see
-RFC 8613 Appendix B.2).
+`UnsafeVolatileSenderSequence` in production: a restart with the same sender
+key can reuse Partial IVs and AEAD nonces (see RFC 8613 Appendix B.2).
