@@ -45,8 +45,9 @@ func FuzzUnmarshalOption(f *testing.F) {
 func FuzzDecodeInner(f *testing.F) {
 	f.Add([]byte{0x01, 0xb2, 0x76, 0x31}) // RFC 8613 Appendix C.5 inner request.
 	f.Add([]byte{0x01, 0xff, 0x01})
-	f.Add([]byte{0x01, 0xff})
-	f.Add([]byte{byte(codes.GET), 0xf0}) // Truncated extended option.
+	f.Add([]byte{byte(codes.GET), 0xff})            // Payload marker without payload.
+	f.Add([]byte{byte(codes.GET), 0xb1, 'x', 0xff}) // Marker after an option, without payload.
+	f.Add([]byte{byte(codes.GET), 0xf0})            // Truncated extended option.
 	f.Fuzz(func(t *testing.T, data []byte) {
 		if len(data) > maxFuzzInputSize {
 			return

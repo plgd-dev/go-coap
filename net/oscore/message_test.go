@@ -214,8 +214,10 @@ func TestDecodeInnerRejectsOuterOptionsAndEmptyPayloadMarker(t *testing.T) {
 		{byte(codes.GET), 0xff},
 		{byte(codes.GET), 0xb1, 'x', 0xff},
 	} {
-		if _, err := DecodeInner(input); !errors.Is(err, message.ErrPayloadMarkerWithoutPayload) {
-			t.Errorf("DecodeInner(%x) error = %v, want ErrPayloadMarkerWithoutPayload", input, err)
+		if _, err := DecodeInner(input); !errors.Is(err, ErrInvalidInnerMessage) {
+			t.Errorf("DecodeInner(%x) error = %v, want ErrInvalidInnerMessage", input, err)
+		} else if !errors.Is(err, message.ErrPayloadMarkerWithoutPayload) {
+			t.Errorf("DecodeInner(%x) error = %v, want wrapped ErrPayloadMarkerWithoutPayload", input, err)
 		}
 	}
 }
