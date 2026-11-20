@@ -9,6 +9,7 @@ import (
 	"hash/fnv"
 	"io"
 	"net"
+	"strconv"
 	"sync"
 	"time"
 
@@ -18,6 +19,7 @@ import (
 	"github.com/plgd-dev/go-coap/v3/message/pool"
 	"github.com/plgd-dev/go-coap/v3/net/blockwise/internal/blocks"
 	"github.com/plgd-dev/go-coap/v3/net/blockwise/qblock"
+	"github.com/plgd-dev/go-coap/v3/net/oscore"
 	"github.com/plgd-dev/go-coap/v3/net/responsewriter"
 	"github.com/plgd-dev/go-coap/v3/pkg/cache"
 	"github.com/plgd-dev/go-coap/v3/pkg/math"
@@ -132,6 +134,8 @@ type BlockWise[C Client] struct {
 	expiration                       time.Duration
 	rollingExpiration                bool
 	maxReceiveBodySize               int64
+	maxReassembledPayloadSize        int64
+	maxReassembledPayloadSizeOSCORE  bool
 	qblock                           *qblock.Engine[C]
 }
 
@@ -144,6 +148,21 @@ func (b *BlockWise[C]) SetRollingExpiration(enabled bool) {
 func (b *BlockWise[C]) SetMaxReceiveBodySize(size int64) {
 	b.maxReceiveBodySize = max(size, 0)
 	b.qblock.SetMaxReceiveBodySize(size)
+}
+
+// SetMaxReassembledPayloadSize limits the payload size of any reassembled
+// Block1 or Block2 message, including plaintext and OSCORE messages. A value
+// of 0 means unlimited.
+func (b *BlockWise[C]) SetMaxReassembledPayloadSize(size int64) {
+	b.maxReassembledPayloadSize = max(size, 0)
+	b.maxReassembledPayloadSizeOSCORE = false
+}
+
+// SetMaxOSCOREReassembledPayloadSize limits reassembled messages carrying the
+// OSCORE option. Plaintext messages are unaffected. A value of 0 means unlimited.
+func (b *BlockWise[C]) SetMaxOSCOREReassembledPayloadSize(size int64) {
+	b.maxReassembledPayloadSize = max(size, 0)
+	b.maxReassembledPayloadSizeOSCORE = true
 }
 
 type sendingMessage struct {
@@ -176,15 +195,27 @@ type messageGuard struct {
 	// matchingKey (RFC 9175 §3.3) and received are read without the semaphore,
 	// so a token-changed continuation never waits for another transfer.
 	matchingKey uint64
+	identity    blockProtectionIdentity
 }
 
 var errReceivingMessagesCacheFull = errors.New("receiving messages cache is full")
 
-func newRequestGuard(request *pool.Message, matchingKey uint64) *messageGuard {
+type blockProtectionIdentity struct {
+	protected     bool
+	identityKnown bool
+	senderIDSet   bool
+	recipientID   string
+	idContext     string
+	idContextSet  bool
+	rawOption     string
+}
+
+func newRequestGuard(request *pool.Message, matchingKey uint64, identity blockProtectionIdentity) *messageGuard {
 	return &messageGuard{
 		Message:     request,
 		Weighted:    semaphore.NewWeighted(1),
 		matchingKey: matchingKey,
+		identity:    identity,
 	}
 }
 
@@ -396,7 +427,7 @@ func (b *BlockWise[C]) resolveBlock1ExchangeKey(r *pool.Message, remoteAddr net.
 	}
 	expectedOffset := num * szx.Size()
 	requestKey := getRequestMatchingKey(r, remoteAddr)
-	matchingKey, matches := b.findMatchingBlock1Transfer(requestKey, expectedOffset)
+	matchingKey, matches := b.findMatchingBlock1Transfer(requestKey, expectedOffset, blockProtectionIdentityFor(r))
 	if matches > 1 {
 		return 0, errors.New("cannot identify Block1 continuation: multiple transfers match")
 	}
@@ -408,7 +439,11 @@ func (b *BlockWise[C]) resolveBlock1ExchangeKey(r *pool.Message, remoteAddr net.
 
 // findMatchingBlock1Transfer does not lock the transfers: the received offset is
 // published before the 2.31 response is sent, so it is current for the next block.
-func (b *BlockWise[C]) findMatchingBlock1Transfer(requestKey uint64, expectedOffset int64) (uint64, int) {
+func (b *BlockWise[C]) findMatchingBlock1Transfer(
+	requestKey uint64,
+	expectedOffset int64,
+	identity blockProtectionIdentity,
+) (uint64, int) {
 	now := time.Now()
 	var matchingKey uint64
 	matches := 0
@@ -417,7 +452,7 @@ func (b *BlockWise[C]) findMatchingBlock1Transfer(requestKey uint64, expectedOff
 			return true
 		}
 		guard := element.Data()
-		if guard.matchingKey == requestKey && guard.received.Load() == expectedOffset {
+		if guard.matchingKey == requestKey && guard.identity == identity && guard.received.Load() == expectedOffset {
 			matchingKey = key
 			matches++
 		}
@@ -634,7 +669,11 @@ func (b *BlockWise[C]) sendServiceUnavailable(w *responsewriter.ResponseWriter[C
 
 // sendEntityTooLarge responds with 4.13 and the size limit in Size1 (RFC 7959 §4).
 func (b *BlockWise[C]) sendEntityTooLarge(w *responsewriter.ResponseWriter[C], token message.Token) {
-	blocks.SendEntityTooLarge(b.cc, w, token, b.maxReceiveBodySize)
+	limit := b.maxReceiveBodySize
+	if limit <= 0 || (b.maxReassembledPayloadSize > 0 && b.maxReassembledPayloadSize < limit) {
+		limit = b.maxReassembledPayloadSize
+	}
+	blocks.SendEntityTooLarge(b.cc, w, token, limit)
 }
 
 func wantsToBeReceived(r *pool.Message) bool {
@@ -700,9 +739,12 @@ func (b *BlockWise[C]) Handle(w *responsewriter.ResponseWriter[C], r *pool.Messa
 	if !sendingMessageExist || wantsToBeReceived(r) {
 		err = b.handleReceivedMessage(w, r, maxSZX, maxMessageSize, remoteAddr, exchangeKey, next)
 		if err != nil {
-			if errors.Is(err, errReceivingMessagesCacheFull) {
+			switch {
+			case errors.Is(err, errReceivingMessagesCacheFull):
 				b.sendServiceUnavailable(w, token)
-			} else {
+			case errors.Is(err, ErrRequestEntityTooLarge) && r.HasOption(message.Block1):
+				b.sendEntityTooLarge(w, token)
+			default:
 				b.sendEntityIncomplete(w, token)
 			}
 			b.errors(fmt.Errorf("handleReceivedMessage(%v): %w", r, err))
@@ -1130,7 +1172,7 @@ func (b *BlockWise[C]) getOrCreateReceivedMessageGuard(r *pool.Message, exchange
 	msg.SetSequence(r.Sequence())
 	msg.SetBody(memfile.New(make([]byte, 0, 1024)))
 	msg.SetCode(r.Code())
-	mg := newRequestGuard(msg, matchingKey)
+	mg := newRequestGuard(msg, matchingKey, blockProtectionIdentityFor(r))
 	// Lock before publishing so later blocks cannot overtake the first block.
 	if err := acquireMessageGuard(mg); err != nil {
 		b.cc.ReleaseMessage(msg)
@@ -1179,6 +1221,7 @@ type receivedBlock struct {
 	token       message.Token
 	blockType   message.OptionID
 	sizeType    message.OptionID
+	identity    blockProtectionIdentity
 	szx         SZX
 	reqSzx      SZX
 	maxSzx      SZX
@@ -1220,8 +1263,64 @@ func (b *BlockWise[C]) processReceivedMessage(w *responsewriter.ResponseWriter[C
 	}
 	return b.processReceivedBlock(w, r, next, receivedBlock{
 		exchangeKey: keys.exchange, matchingKey: keys.matching, token: token, blockType: blockType, sizeType: sizeType,
-		szx: szx, reqSzx: szx, maxSzx: maxSzx, num: num, more: more,
+		identity: blockProtectionIdentityFor(r),
+		szx:      szx, reqSzx: szx, maxSzx: maxSzx, num: num, more: more,
 	})
+}
+
+func blockProtectionIdentityFor(r *pool.Message) blockProtectionIdentity {
+	info, ok := oscore.RequestInfoFromContext(r.Context())
+	if ok && info.Protected {
+		return blockProtectionIdentity{
+			protected:     true,
+			identityKnown: true,
+			senderIDSet:   true,
+			recipientID:   string(info.RecipientID),
+			idContext:     string(info.IDContext),
+			idContextSet:  info.IDContextSet,
+		}
+	}
+	if r.HasOption(message.OSCORE) {
+		options := r.Options()
+		start, end, err := options.Find(message.OSCORE)
+		if err != nil {
+			return blockProtectionIdentity{
+				protected: true, identityKnown: true, rawOption: rawOSCOREOptions(options),
+			}
+		}
+		if end-start != 1 {
+			return blockProtectionIdentity{
+				protected: true, identityKnown: true, rawOption: rawOSCOREOptions(options[start:end]),
+			}
+		}
+		value := options[start].Value
+		option, err := oscore.UnmarshalOption(value)
+		if err != nil {
+			return blockProtectionIdentity{protected: true, identityKnown: true, rawOption: string(value)}
+		}
+		return blockProtectionIdentity{
+			protected:     true,
+			identityKnown: true,
+			senderIDSet:   option.SenderIDSet,
+			recipientID:   string(option.SenderID),
+			idContext:     string(option.IDContext),
+			idContextSet:  option.IDContextSet,
+		}
+	}
+	return blockProtectionIdentity{}
+}
+
+func rawOSCOREOptions(options message.Options) string {
+	var raw []byte
+	for _, option := range options {
+		if option.ID != message.OSCORE {
+			continue
+		}
+		raw = strconv.AppendInt(raw, int64(len(option.Value)), 10)
+		raw = append(raw, ':')
+		raw = append(raw, option.Value...)
+	}
+	return string(raw)
 }
 
 func (b *BlockWise[C]) processReceivedBlock(w *responsewriter.ResponseWriter[C], r *pool.Message, next func(w *responsewriter.ResponseWriter[C], r *pool.Message), block receivedBlock) error {
@@ -1242,9 +1341,9 @@ func (b *BlockWise[C]) processReceivedBlock(w *responsewriter.ResponseWriter[C],
 		block.exchangeKey = token.Hash()
 	}
 
-	var cachedReceivedMessageGuard *messageGuard
-	if e := b.receivingMessagesCache.Load(block.exchangeKey); e != nil {
-		cachedReceivedMessageGuard = e.Data()
+	cachedReceivedMessageGuard, err := b.validateReceivedBlockBeforeProcessing(r, block)
+	if err != nil {
+		return err
 	}
 	if cachedReceivedMessageGuard == nil {
 		// RFC 7959 §2.9.2: reject non-initial blocks without transfer state.
@@ -1270,9 +1369,31 @@ func (b *BlockWise[C]) processReceivedBlock(w *responsewriter.ResponseWriter[C],
 	return b.processCachedReceivedBlock(w, r, cachedReceivedMessageGuard, next, block, sentRequest)
 }
 
+func (b *BlockWise[C]) validateReceivedBlockBeforeProcessing(
+	r *pool.Message,
+	block receivedBlock,
+) (*messageGuard, error) {
+	var cachedReceivedMessageGuard *messageGuard
+	if e := b.receivingMessagesCache.Load(block.exchangeKey); e != nil {
+		cachedReceivedMessageGuard = e.Data()
+	}
+	if cachedReceivedMessageGuard != nil && block.blockType == message.Block1 {
+		if err := validateBlock1ProtectionIdentity(cachedReceivedMessageGuard, block); err != nil {
+			return nil, err
+		}
+	}
+	if err := b.checkReassembledPayloadSize(r, block.num*block.szx.Size(), block.sizeType); err != nil {
+		b.receivingMessagesCache.Delete(block.exchangeKey)
+		return nil, err
+	}
+	return cachedReceivedMessageGuard, nil
+}
+
 func (b *BlockWise[C]) processCachedReceivedBlock(w *responsewriter.ResponseWriter[C], r *pool.Message, mg *messageGuard, next func(w *responsewriter.ResponseWriter[C], r *pool.Message), block receivedBlock, sentRequest *pool.Message) (err error) {
 	defer func() {
-		if err != nil {
+		if err != nil &&
+			!errors.Is(err, ErrMixedProtectionBlock1Transfer) &&
+			!errors.Is(err, ErrBlock1TransferIdentityMismatch) {
 			b.receivingMessagesCache.Delete(block.exchangeKey)
 		}
 	}()
@@ -1280,20 +1401,84 @@ func (b *BlockWise[C]) processCachedReceivedBlock(w *responsewriter.ResponseWrit
 	if err != nil {
 		return fmt.Errorf("cannot get payload: %w", err)
 	}
-	if block.blockType == message.Block1 && block.more {
-		if err = checkFullBlock(r, block.reqSzx); err != nil {
-			return err
-		}
-	}
 	off := block.num * block.szx.Size()
-	if block.blockType == message.Block1 && (off > payloadSize || (off < payloadSize && !block.more)) {
-		return fmt.Errorf("%w: block %v at offset %v, have %v bytes", ErrRequestEntityIncomplete, block.num, off, payloadSize)
+	if err = b.validateCachedReceivedBlock(r, mg, block, payloadSize, off); err != nil {
+		return err
 	}
+
 	if tooLarge, errS := b.rejectTooLarge(w, r, block.blockType, block.token, off); tooLarge || errS != nil {
 		b.receivingMessagesCache.Delete(block.exchangeKey)
 		return errS
 	}
 	return b.appendReceivedBlock(w, r, mg, next, block, sentRequest, payloadFile, payloadSize, off)
+}
+
+func (b *BlockWise[C]) validateCachedReceivedBlock(
+	r *pool.Message,
+	mg *messageGuard,
+	block receivedBlock,
+	payloadSize, off int64,
+) error {
+	if block.blockType == message.Block1 {
+		if err := validateCachedBlock1(r, mg, block, payloadSize, off); err != nil {
+			return err
+		}
+	}
+	return b.checkReassembledPayloadSize(r, off, block.sizeType)
+}
+
+func validateBlock1ProtectionIdentity(mg *messageGuard, block receivedBlock) error {
+	if mg.identity.protected != block.identity.protected {
+		return ErrMixedProtectionBlock1Transfer
+	}
+	if mg.identity != block.identity {
+		return ErrBlock1TransferIdentityMismatch
+	}
+	return nil
+}
+
+func validateCachedBlock1(
+	r *pool.Message,
+	mg *messageGuard,
+	block receivedBlock,
+	payloadSize, off int64,
+) error {
+	if err := validateBlock1ProtectionIdentity(mg, block); err != nil {
+		return err
+	}
+	if block.more {
+		if err := checkFullBlock(r, block.reqSzx); err != nil {
+			return err
+		}
+	}
+	if off > payloadSize || off < payloadSize && !block.more {
+		return fmt.Errorf("%w: block %v at offset %v, have %v bytes",
+			ErrRequestEntityIncomplete, block.num, off, payloadSize)
+	}
+	return nil
+}
+
+func (b *BlockWise[C]) checkReassembledPayloadSize(r *pool.Message, off int64, sizeOption message.OptionID) error {
+	if b.maxReassembledPayloadSize <= 0 ||
+		b.maxReassembledPayloadSizeOSCORE && !r.HasOption(message.OSCORE) {
+		return nil
+	}
+	size := off
+	if r.Body() != nil {
+		bodySize, err := r.BodySize()
+		if err != nil {
+			return payloadSizeError(err)
+		}
+		size += bodySize
+	}
+	if expectedSize, err := r.GetOptionUint32(sizeOption); err == nil {
+		size = max(size, int64(expectedSize))
+	}
+	if size > b.maxReassembledPayloadSize {
+		return fmt.Errorf("%w: reassembled payload size %d exceeds limit %d",
+			ErrRequestEntityTooLarge, size, b.maxReassembledPayloadSize)
+	}
+	return nil
 }
 
 func (b *BlockWise[C]) appendReceivedBlock(w *responsewriter.ResponseWriter[C], r *pool.Message, mg *messageGuard, next func(w *responsewriter.ResponseWriter[C], r *pool.Message), block receivedBlock, sentRequest *pool.Message, payloadFile *memfile.File, payloadSize, off int64) error {

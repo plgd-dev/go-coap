@@ -426,15 +426,19 @@ func startQGoServer(t *testing.T, secure bool, szx blockwise.SZX, payload []byte
 type qGoServerOptions struct {
 	mtu       uint16
 	blockwise options.QBlockwiseConfig
+	path      string
 }
 
 func startQGoServerWithMTU(t *testing.T, secure bool, szx blockwise.SZX, payload []byte, counts *qWireCounts, calls *atomic.Int32, config qGoServerOptions) string {
 	t.Helper()
+	if config.path == "" {
+		config.path = "/q"
+	}
 	router := mux.NewRouter()
-	require.NoError(t, router.Handle("/q", mux.HandlerFunc(func(w mux.ResponseWriter, r *mux.Message) {
+	require.NoError(t, router.Handle(config.path, mux.HandlerFunc(func(w mux.ResponseWriter, r *mux.Message) {
 		calls.Add(1)
 		switch r.Code() {
-		case codes.PUT, codes.FETCH, codes.PATCH, codes.IPATCH:
+		case codes.POST, codes.PUT, codes.FETCH, codes.PATCH, codes.IPATCH:
 			got, err := r.ReadBody()
 			if err != nil {
 				t.Errorf("read Q request body: %v", err)
@@ -578,6 +582,7 @@ func TestQBlockLibcoapRFC8132Methods(t *testing.T) {
 		name string
 		code codes.Code
 	}{
+		{name: "post", code: codes.POST},
 		{name: "fetch", code: codes.FETCH},
 		{name: "patch", code: codes.PATCH},
 		{name: "ipatch", code: codes.IPATCH},

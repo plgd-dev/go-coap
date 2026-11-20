@@ -27,12 +27,23 @@ func (cc *Conn) qBlockEligible(req *pool.Message) bool {
 	if remote, ok := cc.RemoteAddr().(*net.UDPAddr); ok && remote.IP.IsMulticast() {
 		return false
 	}
-	if req.HasOption(message.Observe) && req.Code() != codes.GET {
+	if req.HasOption(message.Observe) && req.Code() != codes.GET && req.Code() != codes.FETCH {
 		return false
 	}
-	bodyMethod := req.Code() == codes.POST || req.Code() == codes.PUT ||
-		req.Code() == codes.FETCH || req.Code() == codes.PATCH || req.Code() == codes.IPATCH
-	return (req.Code() == codes.GET || bodyMethod) && (req.Body() == nil || bodyMethod)
+	return isQBlockMethod(req.Code()) && (req.Body() == nil || isQBlockBodyMethod(req.Code()))
+}
+
+func isQBlockMethod(code codes.Code) bool {
+	return code == codes.GET || isQBlockBodyMethod(code)
+}
+
+func isQBlockBodyMethod(code codes.Code) bool {
+	switch code {
+	case codes.POST, codes.PUT, codes.FETCH, codes.PATCH, codes.IPATCH:
+		return true
+	default:
+		return false
+	}
 }
 
 func (cc *Conn) selectQBlock(req *pool.Message) (bool, error) {
@@ -86,7 +97,10 @@ func qBlockOrigin(options message.Options) (string, message.Options) {
 }
 
 func (cc *Conn) prepareQObservation(req *pool.Message) error {
-	if req.Code() != codes.GET || req.Body() != nil {
+	if req.Code() == codes.GET && req.Body() != nil || req.Code() != codes.GET && req.Code() != codes.FETCH {
+		return blockwise.ErrQBlockUnsupported
+	}
+	if req.Code() == codes.FETCH && req.Body() == nil {
 		return blockwise.ErrQBlockUnsupported
 	}
 	szx, err := cc.qBlockResponseSZX()
@@ -329,6 +343,13 @@ func (cc *Conn) CancelObservation(token message.Token) {
 	if route != nil {
 		route.Close()
 	}
+	cc.oscoreMu.Lock()
+	delete(cc.oscoreObservations, string(token))
+	if exchange, ok := cc.oscoreExchanges[string(token)]; ok && exchange.observe {
+		exchange.expires = time.Now().Add(ExchangeLifetime)
+		cc.oscoreExchanges[string(token)] = exchange
+	}
+	cc.oscoreMu.Unlock()
 }
 
 func (cc *Conn) startQBlockNotification(msg *pool.Message) bool {
@@ -542,10 +563,55 @@ func (cc *Conn) validateQBlockDatagram(msg *pool.Message) error {
 	if err != nil {
 		return err
 	}
-	if uint64(len(wire)) > uint64(cc.qDatagramLimit) {
-		return fmt.Errorf("%w: Q-Block datagram size %d exceeds %d", blockwise.ErrQBlockTooLarge, len(wire), cc.qDatagramLimit)
+	size := uint64(len(wire))
+	if cc.oscoreProcessor != nil && isQBlockMethod(msg.Code()) {
+		size += uint64(cc.oscoreProcessor.MaxRequestOverhead(len(msg.Options()), msg.HasOption(message.Observe)))
+	} else if cc.oscoreProcessor != nil {
+		size += 32
+	}
+	if size > uint64(cc.qDatagramLimit) {
+		return fmt.Errorf("%w: Q-Block datagram size %d exceeds %d", blockwise.ErrQBlockTooLarge, size, cc.qDatagramLimit)
 	}
 	return nil
+}
+
+// ValidateQBlockDatagram checks whether a Q-Block message fits the configured
+// datagram budget, including conservative OSCORE expansion.
+func (cc *Conn) ValidateQBlockDatagram(msg *pool.Message) error {
+	return cc.validateQBlockDatagram(msg)
+}
+
+// QBlockDatagramBudget estimates a request's encoded size and the per-option
+// OSCORE expansion used when appending repeated Q-Block options.
+func (cc *Conn) QBlockDatagramBudget(msg *pool.Message) (uint64, uint64, uint64, error) {
+	wire, err := msg.MarshalWithEncoder(coder.DefaultCoder)
+	if err != nil {
+		return 0, 0, 0, err
+	}
+	size := uint64(len(wire))
+	var perOptionOverhead uint64
+	if cc.oscoreProcessor != nil && isQBlockMethod(msg.Code()) {
+		optionCount := len(msg.Options())
+		observe := msg.HasOption(message.Observe)
+		overhead := cc.oscoreProcessor.MaxRequestOverhead(optionCount, observe)
+		size += uint64(overhead)
+		if nextOverhead := cc.oscoreProcessor.MaxRequestOverhead(optionCount+1, observe); nextOverhead > overhead {
+			perOptionOverhead = uint64(nextOverhead - overhead)
+		}
+	} else if cc.oscoreProcessor != nil {
+		size += 32
+	}
+	return size, perOptionOverhead, uint64(cc.qDatagramLimit), nil
+}
+
+// QBlockMaxDatagramSize returns the encoded datagram limit used for Q-Block
+// request and response sizing, including configured MTU, DTLS, and OSCORE reserves.
+func (cc *Conn) QBlockMaxDatagramSize() uint32 {
+	size := cc.qDatagramLimit
+	if cc.oscoreProcessor != nil {
+		size -= min(size, 32)
+	}
+	return size
 }
 
 func (cc *Conn) qBlockPeerProgress() {
@@ -580,8 +646,12 @@ func (cc *Conn) qBlockRequestSZX(req *pool.Message) (blockwise.SZX, error) {
 	if err != nil {
 		return 0, err
 	}
+	wireSize := int64(len(wire))
+	if cc.oscoreProcessor != nil {
+		wireSize += int64(cc.oscoreProcessor.MaxRequestOverhead(len(header.Options()), header.HasOption(message.Observe)))
+	}
 	for szx := min(cc.blockwiseSZX, blockwise.SZX1024); ; szx-- {
-		if int64(len(wire))+1+szx.Size() <= int64(cc.qDatagramLimit) {
+		if wireSize+1+szx.Size() <= int64(cc.qDatagramLimit) {
 			return szx, nil
 		}
 		if szx == blockwise.SZX16 {

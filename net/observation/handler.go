@@ -10,6 +10,7 @@ import (
 	"github.com/plgd-dev/go-coap/v3/message"
 	"github.com/plgd-dev/go-coap/v3/message/codes"
 	"github.com/plgd-dev/go-coap/v3/message/pool"
+	"github.com/plgd-dev/go-coap/v3/net/oscore"
 	"github.com/plgd-dev/go-coap/v3/net/responsewriter"
 	pkgErrors "github.com/plgd-dev/go-coap/v3/pkg/errors"
 	coapSync "github.com/plgd-dev/go-coap/v3/pkg/sync"
@@ -34,6 +35,27 @@ type Handler[C Client] struct {
 	observations *coapSync.Map[uint64, *Observation[C]]
 	next         HandlerFunc[C]
 	do           DoFunc
+}
+
+type authenticatedSequenceNumberKey struct{}
+
+// SetAuthenticatedSequenceNumber marks a notification with its authenticated,
+// non-wrapping sequence number for ordering by the observation handler.
+func SetAuthenticatedSequenceNumber(r *pool.Message, sequence uint64) {
+	ctx := r.Context()
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	r.SetContext(context.WithValue(ctx, authenticatedSequenceNumberKey{}, sequence))
+}
+
+// AuthenticatedSequenceNumber returns the authenticated sequence number attached to a message.
+func AuthenticatedSequenceNumber(ctx context.Context) (uint64, bool) {
+	if ctx == nil {
+		return 0, false
+	}
+	sequence, ok := ctx.Value(authenticatedSequenceNumberKey{}).(uint64)
+	return sequence, ok
 }
 
 func (h *Handler[C]) Handle(w *responsewriter.ResponseWriter[C], r *pool.Message) {
@@ -156,10 +178,12 @@ type Observation[C Client] struct {
 	observationHandler  *Handler[C]
 
 	private struct { // members guarded by mutex
-		mutex       sync.Mutex
-		obsSequence uint32
-		lastEvent   time.Time
-		etag        []byte
+		mutex                    sync.Mutex
+		obsSequence              uint32
+		lastEvent                time.Time
+		authenticatedSequence    uint64
+		hasAuthenticatedSequence bool
+		etag                     []byte
 	}
 }
 
@@ -193,7 +217,7 @@ func (o *Observation[C]) handle(r *pool.Message) {
 	if o.wantBeNotified(r) {
 		o.observeFunc(r)
 	}
-	if !hasObserve {
+	if !hasObserve && !oscore.IsUnprotectedProcessingError(r.Context()) {
 		o.cleanUp()
 	}
 }
@@ -266,7 +290,14 @@ func (o *Observation[C]) wantBeNotified(r *pool.Message) bool {
 
 	o.private.mutex.Lock()
 	defer o.private.mutex.Unlock()
-	if !ValidSequenceNumber(o.private.obsSequence, obsSequence, o.private.lastEvent, now) {
+	authenticatedSequence, authenticated := AuthenticatedSequenceNumber(r.Context())
+	if authenticated {
+		if o.private.hasAuthenticatedSequence && authenticatedSequence <= o.private.authenticatedSequence {
+			return false
+		}
+		o.private.authenticatedSequence = authenticatedSequence
+		o.private.hasAuthenticatedSequence = true
+	} else if !ValidSequenceNumber(o.private.obsSequence, obsSequence, o.private.lastEvent, now) {
 		return false
 	}
 

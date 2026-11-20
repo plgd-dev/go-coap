@@ -138,8 +138,8 @@ func TestQBlockCompatibilityLimitsAndExpiration(t *testing.T) {
 	require.Equal(t, codes.RequestEntityTooLarge, send(1))
 	b.SetMaxReceiveBodySize(32)
 	b.SetReceivingMessagesCacheMaxEntries(1)
-	require.Equal(t, codes.Continue, send(2))
+	require.Equal(t, codes.Empty, send(2), "incomplete CON payload must not receive Continue")
 	require.Equal(t, codes.ServiceUnavailable, send(3))
 	b.CheckExpirations(time.Now().Add(248 * time.Second))
-	require.Equal(t, codes.Continue, send(4), "expiration must reach the extracted engine")
+	require.Equal(t, codes.Empty, send(4), "expiration must reach the extracted engine")
 }
