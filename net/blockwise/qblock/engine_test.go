@@ -393,6 +393,45 @@ func TestQBlock2RetransmittedNewRequestReusesCachedResponse(t *testing.T) {
 	require.Len(t, b.q2Senders, 1)
 }
 
+func TestQBlock2NewRequestMessageIDZeroDoesNotMatchRequestlessSender(t *testing.T) {
+	cc := &qTestTransport{testClient: newTestClient(), jobs: make(map[string]qBlockTestJob)}
+	b := New(cc, func(error) {})
+	defer b.CloseQBlockTransfers()
+
+	request := qTestRequest(t, "shared-token", struct {
+		num  int64
+		more bool
+	}{0, false})
+	request.SetCode(codes.POST)
+	request.SetType(message.Confirmable)
+	key := q2TransferKey(request, nil)
+	identity := qTransferKey(request, nil, nil, true)
+	response := cc.AcquireMessage(request.Context())
+	response.SetCode(codes.Content)
+	response.SetType(message.Confirmable)
+	response.SetMessageID(0)
+	response.SetBody(bytes.NewReader(bytes.Repeat([]byte("old"), 16)))
+	_, err := b.cacheQBlock2Notification(request.Context(), key, identity, response,
+		message.Confirmable, nil, false, 0)
+	require.NoError(t, err)
+	cc.ReleaseMessage(response)
+
+	handlerCalls := 0
+	handler := func(w *responsewriter.ResponseWriter[*qTestTransport], _ *pool.Message) {
+		handlerCalls++
+		require.NoError(t, w.SetResponse(codes.Changed, message.AppOctets, bytes.NewReader(bytes.Repeat([]byte("N"), 32))))
+	}
+	request.SetBody(bytes.NewReader([]byte("payload")))
+	w := responsewriter.New(cc.AcquireMessage(request.Context()), cc)
+	require.NoError(t, b.handleQBlock2(w, request, SZX16, nil, handler))
+	defer cc.ReleaseMessage(w.Message())
+
+	require.Equal(t, 1, handlerCalls, "MID zero on a requestless sender must not look like a retransmission")
+	body, err := io.ReadAll(w.Message().Body())
+	require.NoError(t, err)
+	require.Equal(t, bytes.Repeat([]byte("N"), 16), body)
+}
+
 func TestQBlock2ChangedTokenRecoveryRejectsAmbiguousTransfers(t *testing.T) {
 	cc := &qTestTransport{testClient: newTestClient(), jobs: make(map[string]qBlockTestJob)}
 	b := New(cc, func(error) {})
