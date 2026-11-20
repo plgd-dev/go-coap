@@ -156,31 +156,19 @@ func parseQBlock1(r *pool.Message) (q1Parameters, error) {
 
 // q1TransferLocked creates or validates a transfer while q1ReceiveMu is held.
 func (b *Engine[C]) q1TransferLocked(r *pool.Message, key string, p q1Parameters) (*q1ReceiveTransfer, error) {
-	maxBodySize := b.maxReceiveBodySize
-	if maxBodySize <= 0 {
-		maxBodySize = q1DefaultMaxBodySize
-	}
 	now := time.Now()
 	if b.q1Closed {
 		return nil, context.Canceled
 	}
 	transfer := b.q1Receivers[key]
-	if transfer != nil && !transfer.expires.After(now) {
-		delete(b.q1Receivers, key)
-		b.q1ReceiveBytes -= transfer.bytes
-		b.qReleaseBytes(transfer.bytes)
-		b.qReleaseTransfer()
-		if transfer.response != nil {
-			b.cc.ReleaseMessage(transfer.response)
-		}
+	if b.removeExpiredQ1TransferLocked(key, transfer, now) {
 		transfer = nil
 	}
 	if transfer == nil {
-		if len(b.q1Receivers) >= 4096 || b.receivingMessagesCacheMaxEntries.Load() > 0 &&
-			int64(len(b.q1Receivers)) >= b.receivingMessagesCacheMaxEntries.Load() {
+		if !b.canCreateQ1TransferLocked() {
 			return nil, errReceivingMessagesCacheFull
 		}
-		assembly, createErr := NewAssembly(p.szx, int64(p.bodySize), maxBodySize, q1MaxTrackedBlocks)
+		assembly, createErr := NewAssembly(p.szx, int64(p.bodySize), b.q1MaxReceiveBodySize(), q1MaxTrackedBlocks)
 		if createErr != nil {
 			return nil, createErr
 		}
@@ -193,6 +181,33 @@ func (b *Engine[C]) q1TransferLocked(r *pool.Message, key string, p q1Parameters
 		return nil, ErrInvalidOptionBlock1
 	}
 	return transfer, nil
+}
+
+func (b *Engine[C]) removeExpiredQ1TransferLocked(key string, transfer *q1ReceiveTransfer, now time.Time) bool {
+	if transfer == nil || transfer.expires.After(now) {
+		return false
+	}
+	delete(b.q1Receivers, key)
+	b.q1ReceiveBytes -= transfer.bytes
+	b.qReleaseBytes(transfer.bytes)
+	b.qReleaseTransfer()
+	if transfer.response != nil {
+		b.cc.ReleaseMessage(transfer.response)
+	}
+	return true
+}
+
+func (b *Engine[C]) canCreateQ1TransferLocked() bool {
+	count := int64(len(b.q1Receivers))
+	maxEntries := b.receivingMessagesCacheMaxEntries.Load()
+	return count < 4096 && (maxEntries <= 0 || count < maxEntries)
+}
+
+func (b *Engine[C]) q1MaxReceiveBodySize() int64 {
+	if b.maxReceiveBodySize > 0 {
+		return b.maxReceiveBodySize
+	}
+	return q1DefaultMaxBodySize
 }
 
 func (b *Engine[C]) handleQBlock1(
