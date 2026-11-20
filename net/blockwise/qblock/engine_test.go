@@ -19,8 +19,9 @@ import (
 
 type qTestTransport struct {
 	*testClient
-	jobs map[string]qBlockTestJob
-	sent []*pool.Message
+	jobs            map[string]qBlockTestJob
+	sent            []*pool.Message
+	delayQBlockHook func(string)
 }
 
 type testClient struct {
@@ -65,6 +66,9 @@ func (c *qTestTransport) DelayQBlock(key string, deadline time.Time) {
 	if job, ok := c.jobs[key]; ok && job.deadline.Before(deadline) {
 		job.deadline = deadline
 		c.jobs[key] = job
+	}
+	if c.delayQBlockHook != nil {
+		c.delayQBlockHook(key)
 	}
 }
 
@@ -481,32 +485,65 @@ func TestQBlock2ConcurrentNewRequestsKeepSeparateSenders(t *testing.T) {
 		msg     *pool.Message
 		err     error
 	}
-	results := make(chan result, 2)
-	var wg sync.WaitGroup
-	for _, request := range []struct {
+	makeRequest := func(request struct {
 		token   string
 		payload string
-	}{{q2TestTokenAlpha, "A"}, {q2TestTokenBeta, "B"}} {
-		request := request
+	},
+	) *pool.Message {
 		req := qTestRequest(t, request.token, struct {
 			num  int64
 			more bool
 		}{0, false})
 		req.SetCode(codes.POST)
 		req.SetBody(bytes.NewReader([]byte(request.payload)))
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			w := responsewriter.New(cc.AcquireMessage(req.Context()), cc)
-			err := b.handleQBlock2(w, req, SZX16, nil, handler)
-			cc.ReleaseMessage(req)
-			results <- result{request.token, request.payload, w.Message(), err}
-		}()
+		return req
 	}
-	wg.Wait()
-	close(results)
+	alphaRequest := makeRequest(struct {
+		token   string
+		payload string
+	}{q2TestTokenAlpha, "A"})
+	defer cc.ReleaseMessage(alphaRequest)
+	alphaKey := "q2:" + q2TransferKey(alphaRequest, nil)
+	alphaPaused, releaseAlpha := make(chan struct{}), make(chan struct{})
+	var pauseAlphaOnce sync.Once
+	var releaseAlphaOnce sync.Once
+	defer releaseAlphaOnce.Do(func() { close(releaseAlpha) })
+	cc.delayQBlockHook = func(key string) {
+		if key == alphaKey {
+			pauseAlphaOnce.Do(func() {
+				close(alphaPaused)
+				<-releaseAlpha
+			})
+		}
+	}
+	alphaResult := make(chan result, 1)
+	go func() {
+		w := responsewriter.New(cc.AcquireMessage(alphaRequest.Context()), cc)
+		err := b.handleQBlock2(w, alphaRequest, SZX16, nil, handler)
+		alphaResult <- result{q2TestTokenAlpha, "A", w.Message(), err}
+	}()
+	select {
+	case <-alphaPaused:
+	case <-time.After(time.Second):
+		releaseAlphaOnce.Do(func() { close(releaseAlpha) })
+		<-alphaResult
+		t.Fatal("alpha did not pause after its sender was cached")
+	}
+
+	betaRequest := makeRequest(struct {
+		token   string
+		payload string
+	}{q2TestTokenBeta, "B"})
+	betaWriter := responsewriter.New(cc.AcquireMessage(betaRequest.Context()), cc)
+	betaErr := b.handleQBlock2(betaWriter, betaRequest, SZX16, nil, handler)
+	cc.ReleaseMessage(betaRequest)
+	require.NoError(t, betaErr)
+	require.Len(t, b.q2Senders, 2, "beta must not remove alpha's already-cached sender")
+	releaseAlphaOnce.Do(func() { close(releaseAlpha) })
+
+	results := []result{{q2TestTokenBeta, "B", betaWriter.Message(), nil}, <-alphaResult}
 	require.Len(t, b.q2Senders, 2)
-	for result := range results {
+	for _, result := range results {
 		require.NoError(t, result.err)
 		body, err := io.ReadAll(result.msg.Body())
 		require.NoError(t, err)
