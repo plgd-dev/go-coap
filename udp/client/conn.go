@@ -1540,8 +1540,21 @@ func sendJustAcknowledgeMessage(reqType message.Type, w *responsewriter.Response
 	return reqType == message.Confirmable && !w.Message().IsModified()
 }
 
+// isRequestClassCode reports whether code belongs to the CoAP request class
+// (RFC 7252 section 12.1.1), including method codes that are not assigned yet.
+func isRequestClassCode(code codes.Code) bool {
+	return code >= codes.GET && code < 32
+}
+
+// isResponseToNonRequest reports whether the handler answered a message that is not a
+// request (a response, or an Empty ACK/RST/NON) with a response.
+func isResponseToNonRequest(reqCode codes.Code, w *responsewriter.ResponseWriter[*Conn]) bool {
+	return w.Message().IsModified() && !isRequestClassCode(reqCode) && !isRequestClassCode(w.Message().Code())
+}
+
 func (cc *Conn) processResponse(
 	reqType message.Type,
+	reqCode codes.Code,
 	reqMessageID int32,
 	qResponse, cacheResponse bool,
 	w *responsewriter.ResponseWriter[*Conn],
@@ -1567,6 +1580,21 @@ func (cc *Conn) processResponse(
 		// Empty ACKs are unprotected and must be cached so duplicate protected
 		// CON requests can be acknowledged while a separate response is pending.
 		return cc.cacheResponseIfRequested(true, reqMessageID, "cannot cache response", w.Message())
+	case isResponseToNonRequest(reqCode, w):
+		// RFC 7252 section 5.3.2: a response that matches no request is rejected with
+		// Reset when confirmable and silently ignored otherwise. Answering it with another
+		// response lets one spoofed datagram start an endless loop between two endpoints.
+		if reqType != message.Confirmable {
+			w.Message().SetModified(false)
+			return nil
+		}
+		w.Message().ResetOptionsTo(nil)
+		w.Message().SetBody(nil)
+		w.Message().SetToken(nil)
+		w.Message().SetCode(codes.Empty)
+		w.Message().SetType(message.Reset)
+		w.Message().SetMessageID(reqMessageID)
+		return nil
 	case isQNonResponse(reqType, qResponse, w.Message()):
 		w.Message().SetType(message.NonConfirmable)
 		w.Message().SetMessageID(cc.GetMessageID())
@@ -1642,12 +1670,13 @@ func (cc *Conn) handleReq(w *responsewriter.ResponseWriter[*Conn], req *pool.Mes
 
 	w.Message().SetModified(false)
 	reqType := req.Type()
+	reqCode := req.Code()
 	reqMessageID := req.MessageID()
 	qResponse := req.HasOption(message.QBlock1) || req.HasOption(message.QBlock2)
 	cacheResponse := !hasOSCORERequestContext(req)
 	cc.handle(w, req)
 
-	err := cc.processResponse(reqType, reqMessageID, qResponse, cacheResponse, w)
+	err := cc.processResponse(reqType, reqCode, reqMessageID, qResponse, cacheResponse, w)
 	if err != nil {
 		cc.closeConnection()
 		cc.errors(fmt.Errorf(errFmtWriteResponse, err))
