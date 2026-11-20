@@ -211,7 +211,7 @@ func (c *Context) validateRequestOption(option OptionValue) error {
 	if !bytes.Equal(option.SenderID, c.recipientID) {
 		return fmt.Errorf("%w: request KID does not match recipient context", ErrInvalidContext)
 	}
-	if option.IDContextSet != c.idContextSet || (option.IDContextSet && !bytes.Equal(option.IDContext, c.idContext)) {
+	if option.IDContextSet && (!c.idContextSet || !bytes.Equal(option.IDContext, c.idContext)) {
 		return fmt.Errorf("%w: request ID Context does not match recipient context", ErrInvalidContext)
 	}
 	return nil

@@ -202,6 +202,45 @@ func TestProcessorSelectsContextByKIDAndIDContext(t *testing.T) {
 		t.Fatalf("selected context %p, want %p", selected, server)
 	}
 
+	kidOnlyRequest, _, err := client.ProtectRequest(message.Message{Code: codes.GET})
+	if err != nil {
+		t.Fatal(err)
+	}
+	kidOnlyRequest.Options = CloneOptions(kidOnlyRequest.Options)
+	optionIndex, _, err := kidOnlyRequest.Options.Find(message.OSCORE)
+	if err != nil {
+		t.Fatal(err)
+	}
+	option, err := UnmarshalOption(kidOnlyRequest.Options[optionIndex].Value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	option.IDContext = nil
+	option.IDContextSet = false
+	kidOnlyValue, err := option.MarshalBinary()
+	if err != nil {
+		t.Fatal(err)
+	}
+	kidOnlyRequest.Options[optionIndex].Value = kidOnlyValue
+
+	singleContextProcessor, err := NewProcessor(ProcessorConfig{
+		Contexts:        []*Context{server},
+		PlaintextPolicy: PlaintextAllowed,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, selected, _, err = singleContextProcessor.ProcessIncomingRequest(kidOnlyRequest)
+	if err != nil {
+		t.Fatalf("process request with omitted ID Context: %v", err)
+	}
+	if selected != server {
+		t.Fatalf("selected context for KID-only request %p, want %p", selected, server)
+	}
+	if _, _, _, lookupErr := processor.ProcessIncomingRequest(kidOnlyRequest); !errors.Is(lookupErr, ErrAmbiguousContext) {
+		t.Fatalf("ambiguous KID-only lookup error = %v, want ErrAmbiguousContext", lookupErr)
+	}
+
 	wrongContext, err := NewContext(ContextConfig{
 		AcceptVolatileSenderSequence: true,
 		AcceptReplayStateLoss:        true,

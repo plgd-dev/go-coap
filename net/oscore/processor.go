@@ -227,7 +227,25 @@ func (p *Processor) contextForRequest(options message.Options) (*Context, error)
 		return nil, fmt.Errorf("%w: request has no KID", ErrInvalidOSCOREMessage)
 	}
 	p.mu.RLock()
-	context := p.contexts[keyForOption(option)]
+	if option.IDContextSet {
+		context := p.contexts[keyForOption(option)]
+		p.mu.RUnlock()
+		if context == nil {
+			return nil, ErrNoSecurityContext
+		}
+		return context, nil
+	}
+	var context *Context
+	for key, candidate := range p.contexts {
+		if key.recipientID != string(option.SenderID) {
+			continue
+		}
+		if context != nil {
+			p.mu.RUnlock()
+			return nil, ErrAmbiguousContext
+		}
+		context = candidate
+	}
 	p.mu.RUnlock()
 	if context == nil {
 		return nil, ErrNoSecurityContext
