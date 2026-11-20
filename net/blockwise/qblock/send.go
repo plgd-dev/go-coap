@@ -167,8 +167,11 @@ func (b *Engine[C]) q2ResponseKey(r *pool.Message, remoteAddr net.Addr, num int6
 	// A request for the whole body that carries its own payload is a new
 	// exchange, so it must reach the handler instead of resuming the cached
 	// response of an earlier request whose payload may differ.
-	size, sizeErr := r.BodySize()
-	newRequest := num == 0 && more && (sizeErr != nil || size > 0)
+	newRequest := false
+	if qBodyMethod(r.Code()) && num == 0 && more {
+		size, sizeErr := r.BodySize()
+		newRequest = sizeErr != nil || size > 0
+	}
 	b.q2SendMu.Lock()
 	if b.q2Senders[key] == nil && !newRequest && (num != 0 || !more || r.HasOption(message.RequestTag) || r.Code() != codes.GET) {
 		found, err := b.findQ2ResponseLocked(identity)
