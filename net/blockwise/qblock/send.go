@@ -551,6 +551,7 @@ func (b *Engine[C]) snapshotQ2Body(ctx context.Context, response *pool.Message, 
 	}
 	stored := b.cloneMessage(response)
 	stored.SetContext(ctx)
+	stored.SetMessageID(response.MessageID())
 	stored.SetBody(bytes.NewReader(payload))
 	if err := ensureQ2ETag(stored); err != nil {
 		b.cc.ReleaseMessage(stored)
