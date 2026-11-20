@@ -366,10 +366,16 @@ exclusive cutoff per 256 accepted sequence advances by default. Configure a
 different margin with `oscorestore.WithReplayHighWaterMargin` (1..1024). A
 smaller margin increases durable-write/fsync frequency but reduces the number of
 legitimate, previously unseen requests rejected after restart; a larger margin
-reduces writes while increasing that rejection range. Omitting a replay store
-avoids that write cost but loses replay state after restart; do not continue
-using that context without restoring replay protection. Follow RFC 8613
-Appendix B.1.2 recovery (for example, Echo) or establish a fresh security
+reduces writes while increasing that rejection range. The margin is a sequence-
+number range, not a count of lost requests: after a high-water write, up to
+`margin-1` subsequent sequence values can be below the persisted cutoff and
+rejected after a crash, even if those values had not reached the receiver.
+`Context.ReplayMessagesRejectedBelowCutoff()` exposes a counter for messages
+rejected below the cutoff loaded at context creation; server applications can
+sample it as a metric to observe this availability tradeoff. Omitting a replay
+store avoids that write cost but loses replay state after restart; do not
+continue using that context without restoring replay protection. Follow RFC
+8613 Appendix B.1.2 recovery (for example, Echo) or establish a fresh security
 context.
 With `oscorestore.WithReplayHighWaterMargin(1)`, each accepted request costs
 about seven fsync-class operations to persist the replay cutoff.

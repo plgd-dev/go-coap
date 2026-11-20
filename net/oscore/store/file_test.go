@@ -1012,6 +1012,9 @@ func assertReplayMarginRestartRejects(
 	if _, replayErr := restarted.Open(piv, ciphertext, aad); !errors.Is(replayErr, oscore.ErrReplay) {
 		t.Fatalf("replayed sequence after restart = %v, want ErrReplay", replayErr)
 	}
+	if got := restarted.ReplayMessagesRejectedBelowCutoff(); got != 1 {
+		t.Fatalf("messages rejected below the loaded high-water cutoff = %d, want 1", got)
+	}
 }
 
 func TestHighWaterFileStoreRejectsInvalidReplayMargins(t *testing.T) {

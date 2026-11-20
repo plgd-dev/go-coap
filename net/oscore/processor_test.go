@@ -77,6 +77,18 @@ func TestProcessorRequiresEchoRecoveryAfterVolatileReplayStateLoss(t *testing.T)
 	if oldPlaintext.Code != codes.GET || oldContext != oldServer || len(oldExchange.RequestPartialIVBytes()) == 0 {
 		t.Fatalf("pre-restart request result = %+v, context %p, exchange %+v", oldPlaintext, oldContext, oldExchange)
 	}
+	for sequence := range 5 {
+		request, _, protectErr := client.ProtectRequest(message.Message{
+			Code: codes.GET, Token: message.Token{byte(sequence + 2)},
+		})
+		if protectErr != nil {
+			t.Fatalf("protect request %d before simulated restart: %v", sequence, protectErr)
+		}
+		if requestPlaintext, _, _, requestErr := oldProcessor.ProcessIncomingRequest(request); requestErr != nil ||
+			requestPlaintext.Code != codes.GET {
+			t.Fatalf("accept request %d before simulated restart = %+v, %v", sequence, requestPlaintext, requestErr)
+		}
+	}
 
 	restartedServer := newContext([]byte("server"), []byte("client"), true)
 	processor, err := NewProcessor(ProcessorConfig{Contexts: []*Context{restartedServer}})

@@ -80,10 +80,11 @@ type ContextConfig struct {
 	// AcceptReplayStateLoss explicitly accepts that replay protection resets
 	// after a restart when no ReplayWindowStore is configured.
 	AcceptReplayStateLoss bool
-	// RequireEchoRecovery requires an authenticated request with a fresh,
-	// context-specific Echo option before application dispatch. Use it after a
-	// receiver restart when replay state was not persisted. It cannot be
-	// combined with ReplayWindowStore.
+	// RequireEchoRecovery challenges requests with a fresh, context-specific
+	// Echo option after a receiver restart. The authenticated request carrying
+	// the challenge seeds the replay window before application dispatch. Use
+	// it when replay state was not persisted; it cannot be combined with
+	// ReplayWindowStore.
 	RequireEchoRecovery bool
 }
 
@@ -138,6 +139,13 @@ type Context struct {
 	replayRecoveryMu         sync.Mutex
 	replayRecoveryEcho       []byte
 	replayRecoveryPending    bool
+}
+
+// ReplayMessagesRejectedBelowCutoff reports the number of inbound sequences
+// rejected below the durable high-water cutoff loaded when this context was
+// created. It can be sampled by application metrics after receiver restarts.
+func (c *Context) ReplayMessagesRejectedBelowCutoff() uint64 {
+	return c.replay.RejectedBelowCutoff()
 }
 
 // NewContext derives keys for the configured AEAD algorithm. The zero-value

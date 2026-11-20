@@ -55,14 +55,17 @@ const (
 // performed while holding the window lock so concurrent copies cannot both be
 // accepted. The window advances only after verify returns nil.
 type ReplayWindow struct {
-	mu           sync.Mutex
-	size         uint8
-	highest      uint64
-	bitmap       uint64
-	started      bool
-	store        ReplayWindowStore
-	highWater    uint64
-	highWaterSet bool
+	mu                  sync.Mutex
+	size                uint8
+	highest             uint64
+	bitmap              uint64
+	started             bool
+	store               ReplayWindowStore
+	highWater           uint64
+	highWaterSet        bool
+	recoveryCutoff      uint64
+	recoveryCutoffSet   bool
+	rejectedBelowCutoff uint64
 }
 
 // NewReplayWindow creates a sliding replay window of 1 to 64 sequence numbers.
@@ -97,6 +100,8 @@ func newReplayWindow(size uint8, state ReplayWindowState, store ReplayWindowStor
 	if highWaterSet && state.Started {
 		window.highWater = state.HighestSequence + 1
 		window.highWaterSet = highWaterSet
+		window.recoveryCutoff = state.HighestSequence + 1
+		window.recoveryCutoffSet = true
 	}
 	return window, nil
 }
@@ -131,6 +136,9 @@ func (w *ReplayWindow) Accept(sequence uint64, verify func() error) error {
 
 	bit, err := w.sequenceBit(sequence)
 	if err != nil {
+		if errors.Is(err, ErrReplay) && w.recoveryCutoffSet && sequence < w.recoveryCutoff {
+			w.rejectedBelowCutoff++
+		}
 		return err
 	}
 	if err := verify(); err != nil {
@@ -142,6 +150,14 @@ func (w *ReplayWindow) Accept(sequence uint64, verify func() error) error {
 	}
 	w.highest, w.bitmap, w.started = next.HighestSequence, next.Bitmap, next.Started
 	return nil
+}
+
+// RejectedBelowCutoff returns the number of inbound sequences rejected below
+// the high-water cutoff loaded when this replay window was created.
+func (w *ReplayWindow) RejectedBelowCutoff() uint64 {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.rejectedBelowCutoff
 }
 
 func (w *ReplayWindow) acceptRecovery(sequence uint64, verify func() error) error {
