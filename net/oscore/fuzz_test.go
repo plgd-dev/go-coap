@@ -10,13 +10,20 @@ import (
 	"github.com/plgd-dev/go-coap/v3/message/codes"
 )
 
+const maxFuzzInputSize = MaxUnfragmentedSize
+
 func FuzzUnmarshalOption(f *testing.F) {
 	f.Add([]byte{0x09, 0x14})
 	f.Add([]byte{0x09, 0x14, 0x00})                                                 // RFC 8613 Appendix C.5.
 	f.Add([]byte{0x19, 0x14, 0x08, 0x37, 0xcb, 0xf3, 0x21, 0x00, 0x17, 0xa2, 0xd3}) // Appendix C.6.
 	f.Add([]byte{0x19, 0x14, 0x02, 0x37, 0xcb, 0x01})
+	f.Add([]byte{0x0a, 0x00, 0x01}) // Non-canonical Partial IV.
+	f.Add(bytes.Repeat([]byte{0xff}, maxOSCOREOptionLength+1))
 	f.Add([]byte{0xff})
 	f.Fuzz(func(t *testing.T, data []byte) {
+		if len(data) > maxFuzzInputSize {
+			return
+		}
 		decoded, err := UnmarshalOption(data)
 		if err != nil {
 			return
@@ -39,7 +46,11 @@ func FuzzDecodeInner(f *testing.F) {
 	f.Add([]byte{0x01, 0xb2, 0x76, 0x31}) // RFC 8613 Appendix C.5 inner request.
 	f.Add([]byte{0x01, 0xff, 0x01})
 	f.Add([]byte{0x01, 0xff})
+	f.Add([]byte{byte(codes.GET), 0xf0}) // Truncated extended option.
 	f.Fuzz(func(t *testing.T, data []byte) {
+		if len(data) > maxFuzzInputSize {
+			return
+		}
 		decoded, err := DecodeInner(data)
 		if err != nil {
 			return
@@ -64,6 +75,9 @@ func FuzzParseProxyURI(f *testing.F) {
 	f.Add("coap://origin.example/")
 	f.Add("coap://user@host/")
 	f.Fuzz(func(_ *testing.T, uri string) {
+		if len(uri) > maxFuzzInputSize {
+			return
+		}
 		_, _ = ParseProxyURI(uri)
 	})
 }
@@ -76,6 +90,9 @@ func FuzzContextUnprotectRequest(f *testing.F) {
 	f.Add([]byte{0x09, 0x14}, []byte{0x00})
 	f.Add([]byte{0x19, 0x14, 0x02, 0x37, 0xcb, 0x01}, []byte{0x01, 0x02})
 	f.Fuzz(func(t *testing.T, option, payload []byte) {
+		if len(option) > maxFuzzInputSize || len(payload) > maxFuzzInputSize {
+			return
+		}
 		ctx, err := NewContext(ContextConfig{
 			AcceptVolatileSenderSequence: true,
 			AcceptReplayStateLoss:        true,
@@ -138,6 +155,9 @@ func FuzzContextUnprotectResponse(f *testing.F) {
 	f.Add([]byte{0x09, 0x14}, []byte{0x00})
 	f.Add([]byte{0x19, 0x14, 0x02, 0x37, 0xcb, 0x01}, []byte{0x01, 0x02})
 	f.Fuzz(func(t *testing.T, option, payload []byte) {
+		if len(option) > maxFuzzInputSize || len(payload) > maxFuzzInputSize {
+			return
+		}
 		ctx, err := NewContext(ContextConfig{
 			AcceptVolatileSenderSequence: true,
 			AcceptReplayStateLoss:        true,
@@ -199,7 +219,11 @@ func TestFuzzSeedRFC8613AppendixC7AuthenticatesResponse(t *testing.T) {
 func FuzzUnprotectInnerRequest(f *testing.F) {
 	f.Add([]byte{byte(codes.GET)})
 	f.Add([]byte{byte(codes.POST), 0xff, 'x'})
+	f.Add([]byte{byte(codes.GET), 0xff}) // Payload marker without payload.
 	f.Fuzz(func(t *testing.T, inner []byte) {
+		if len(inner) > maxFuzzInputSize {
+			return
+		}
 		sender, recipient := fuzzRequestContexts(t)
 		partialIV, ciphertext, err := sender.Seal(inner, func(piv []byte) ([]byte, error) {
 			return BuildAADWithAlgorithm(AEADAlgorithmAESCCM16_64_128, sender.senderID, piv, nil)
@@ -246,6 +270,9 @@ func FuzzUnprotectInnerResponse(f *testing.F) {
 	f.Add([]byte{byte(codes.Content)})
 	f.Add([]byte{byte(codes.Changed), 0xff, 'x'})
 	f.Fuzz(func(t *testing.T, inner []byte) {
+		if len(inner) > maxFuzzInputSize {
+			return
+		}
 		clientContext, serverContext, clientExchange, serverExchange := fuzzResponseContexts(t)
 		partialIV, ciphertext, err := serverContext.SealResponse(inner, func([]byte) ([]byte, error) {
 			return BuildAADWithAlgorithm(

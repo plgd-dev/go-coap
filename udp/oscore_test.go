@@ -999,16 +999,27 @@ func TestOSCOREUDPRejectsMalformedTransportMessages(t *testing.T) {
 		PartialIV: []byte{1}, SenderID: []byte("client"), SenderIDSet: true,
 	}).MarshalBinary()
 	require.NoError(t, err)
+	wrongKID, err := (oscore.OptionValue{
+		PartialIV: []byte{1}, SenderID: []byte("unknown"), SenderIDSet: true,
+	}).MarshalBinary()
+	require.NoError(t, err)
+	wrongIDContext, err := (oscore.OptionValue{
+		PartialIV: []byte{1}, IDContext: []byte("wrong"), SenderID: []byte("client"),
+		IDContextSet: true, SenderIDSet: true,
+	}).MarshalBinary()
+	require.NoError(t, err)
 
 	malformedMessages := []struct {
 		name    string
 		code    codes.Code
 		options message.Options
+		wantErr error
 	}{
 		{
 			name:    "truncated OSCORE option",
 			code:    codes.POST,
 			options: message.Options{{ID: message.OSCORE, Value: []byte{0x09}}},
+			wantErr: oscore.ErrInvalidOSCOREMessage,
 		},
 		{
 			name: "duplicate OSCORE options",
@@ -1017,6 +1028,31 @@ func TestOSCOREUDPRejectsMalformedTransportMessages(t *testing.T) {
 				{ID: message.OSCORE, Value: validOSCOREOption},
 				{ID: message.OSCORE, Value: validOSCOREOption},
 			},
+			wantErr: oscore.ErrInvalidOSCOREMessage,
+		},
+		{
+			name:    "invalid Partial IV",
+			code:    codes.POST,
+			options: message.Options{{ID: message.OSCORE, Value: []byte{0x0a, 0x00, 0x01, 0x00}}},
+			wantErr: oscore.ErrInvalidOSCOREMessage,
+		},
+		{
+			name:    "invalid KID",
+			code:    codes.POST,
+			options: message.Options{{ID: message.OSCORE, Value: wrongKID}},
+			wantErr: oscore.ErrNoSecurityContext,
+		},
+		{
+			name:    "invalid KID Context",
+			code:    codes.POST,
+			options: message.Options{{ID: message.OSCORE, Value: wrongIDContext}},
+			wantErr: oscore.ErrNoSecurityContext,
+		},
+		{
+			name:    "oversized OSCORE option",
+			code:    codes.POST,
+			options: message.Options{{ID: message.OSCORE, Value: bytes.Repeat([]byte{0xff}, 256)}},
+			wantErr: oscore.ErrInvalidOSCOREMessage,
 		},
 	}
 	for i, test := range malformedMessages {
@@ -1034,7 +1070,7 @@ func TestOSCOREUDPRejectsMalformedTransportMessages(t *testing.T) {
 
 			select {
 			case serverErr := <-serverErrors:
-				require.ErrorIs(t, serverErr, oscore.ErrInvalidOSCOREMessage)
+				require.ErrorIs(t, serverErr, test.wantErr)
 			case <-time.After(time.Second):
 				t.Fatal("server did not report malformed OSCORE request")
 			}

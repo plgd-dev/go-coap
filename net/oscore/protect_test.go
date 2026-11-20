@@ -66,6 +66,258 @@ func TestProtectRequestAndResponse(t *testing.T) {
 	assertProtectedResponseRoundTrip(t, client, server, clientExchange, serverExchange, response)
 }
 
+func TestUnprotectRequestRejectsMalformedOSCOREInputs(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(*testing.T, *Context, message.Message) message.Message
+	}{
+		{
+			name: "truncated option",
+			mutate: func(_ *testing.T, _ *Context, request message.Message) message.Message {
+				request.Options = message.Options{{ID: message.OSCORE, Value: []byte{0x09}}}
+				return request
+			},
+		},
+		{
+			name: "duplicate option",
+			mutate: func(_ *testing.T, _ *Context, request message.Message) message.Message {
+				request.Options = append(CloneOptions(request.Options), CloneOptions(request.Options)[0])
+				return request
+			},
+		},
+		{
+			name: "invalid Partial IV",
+			mutate: func(_ *testing.T, _ *Context, request message.Message) message.Message {
+				request.Options = message.Options{{ID: message.OSCORE, Value: []byte{0x0a, 0x00, 0x01, 0x00}}}
+				return request
+			},
+		},
+		{
+			name: "invalid KID",
+			mutate: func(t *testing.T, _ *Context, request message.Message) message.Message {
+				option := OptionValue{PartialIV: []byte{0}, SenderID: []byte{2}, SenderIDSet: true}
+				request.Options = message.Options{{ID: message.OSCORE, Value: mustMarshalOption(t, option)}}
+				return request
+			},
+		},
+		{
+			name: "invalid KID Context",
+			mutate: func(t *testing.T, _ *Context, request message.Message) message.Message {
+				option := OptionValue{
+					PartialIV: []byte{0}, IDContext: []byte("wrong"), SenderID: []byte{0},
+					IDContextSet: true, SenderIDSet: true,
+				}
+				request.Options = message.Options{{ID: message.OSCORE, Value: mustMarshalOption(t, option)}}
+				return request
+			},
+		},
+		{
+			name: "invalid ciphertext",
+			mutate: func(_ *testing.T, _ *Context, request message.Message) message.Message {
+				request.Payload = append([]byte(nil), request.Payload...)
+				request.Payload[len(request.Payload)-1] ^= 0x80
+				return request
+			},
+		},
+		{
+			name: "modified AAD",
+			mutate: func(t *testing.T, sender *Context, request message.Message) message.Message {
+				partialIV, ciphertext, err := sender.Seal([]byte{byte(codes.GET)}, func(partialIV []byte) ([]byte, error) {
+					wrongPartialIV := append([]byte(nil), partialIV...)
+					wrongPartialIV[len(wrongPartialIV)-1]++
+					return BuildAADWithAlgorithm(sender.algorithm, sender.senderID, wrongPartialIV, nil)
+				})
+				if err != nil {
+					t.Fatal(err)
+				}
+				option := mustMarshalOption(t, OptionValue{
+					PartialIV: partialIV, SenderID: sender.senderID, SenderIDSet: true,
+				})
+				request.Options = message.Options{{ID: message.OSCORE, Value: option}}
+				request.Payload = ciphertext
+				return request
+			},
+		},
+		{
+			name: "modified AAD Partial IV",
+			mutate: func(t *testing.T, _ *Context, request message.Message) message.Message {
+				request.Options = message.Options{{ID: message.OSCORE, Value: mustMarshalOption(t, OptionValue{
+					PartialIV: []byte{1}, SenderID: []byte{0}, SenderIDSet: true,
+				})}}
+				return request
+			},
+		},
+		{
+			name: "invalid inner code",
+			mutate: func(t *testing.T, sender *Context, request message.Message) message.Message {
+				return authenticatedRequestWithInner(t, sender, []byte{byte(codes.Empty)}, request.Token)
+			},
+		},
+		{
+			name: "invalid inner option encoding",
+			mutate: func(t *testing.T, sender *Context, request message.Message) message.Message {
+				return authenticatedRequestWithInner(t, sender, []byte{byte(codes.GET), 0xf0}, request.Token)
+			},
+		},
+		{
+			name: "invalid payload marker",
+			mutate: func(t *testing.T, sender *Context, request message.Message) message.Message {
+				return authenticatedRequestWithInner(t, sender, []byte{byte(codes.GET), 0xff}, request.Token)
+			},
+		},
+		{
+			name: "oversized option",
+			mutate: func(_ *testing.T, _ *Context, request message.Message) message.Message {
+				request.Options = message.Options{{ID: message.OSCORE, Value: bytes.Repeat([]byte{0xff}, maxOSCOREOptionLength+1)}}
+				return request
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			sender, recipient := pairedContexts(t, 0, 0)
+			protected, _, err := sender.ProtectRequest(message.Message{
+				Code: codes.GET, Token: message.Token{0x51},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			malformed := test.mutate(t, sender, protected)
+			plaintext, exchange, err := recipient.UnprotectRequest(malformed)
+			if err == nil {
+				t.Fatalf("malformed request was accepted: %+v", plaintext)
+			}
+			if plaintext.Code != codes.Empty || exchange.responseState != nil {
+				t.Fatalf("malformed request returned dispatchable result: %+v, exchange %+v", plaintext, exchange)
+			}
+
+			plaintext, _, err = recipient.UnprotectRequest(protected)
+			if err != nil || plaintext.Code != codes.GET {
+				t.Fatalf("original protected request after failure = %+v, %v", plaintext, err)
+			}
+		})
+	}
+}
+
+func TestUnprotectResponseRejectsMalformedInputsWithoutConsumingExchange(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(*testing.T, *Context, Exchange, message.Message) message.Message
+	}{
+		{
+			name: "truncated option",
+			mutate: func(_ *testing.T, _ *Context, _ Exchange, response message.Message) message.Message {
+				response.Options = message.Options{{ID: message.OSCORE, Value: []byte{0x09}}}
+				return response
+			},
+		},
+		{
+			name: "duplicate option",
+			mutate: func(_ *testing.T, _ *Context, _ Exchange, response message.Message) message.Message {
+				option := CloneOptions(response.Options)[0]
+				response.Options = append(CloneOptions(response.Options), option)
+				return response
+			},
+		},
+		{
+			name: "invalid ciphertext",
+			mutate: func(_ *testing.T, _ *Context, _ Exchange, response message.Message) message.Message {
+				response.Payload = append([]byte(nil), response.Payload...)
+				response.Payload[len(response.Payload)-1] ^= 0x80
+				return response
+			},
+		},
+		{
+			name: "unexpected Token",
+			mutate: func(_ *testing.T, _ *Context, _ Exchange, response message.Message) message.Message {
+				response.Token = message.Token{0x62}
+				return response
+			},
+		},
+		{
+			name: "invalid inner code",
+			mutate: func(t *testing.T, server *Context, exchange Exchange, response message.Message) message.Message {
+				ciphertext, err := server.SealResponseWithRequestNonce(
+					[]byte{byte(codes.Empty)},
+					exchange.RequestPartialIVBytes(),
+					func(partialIV []byte) ([]byte, error) {
+						return BuildAADWithAlgorithm(
+							server.algorithm, exchange.RequestIdentifier(), partialIV, nil,
+						)
+					},
+				)
+				if err != nil {
+					t.Fatal(err)
+				}
+				response.Payload = ciphertext
+				return response
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			client, server := pairedContexts(t, 0, 0)
+			request, clientExchange, err := client.ProtectRequest(message.Message{
+				Code: codes.GET, Token: message.Token{0x61},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, serverExchange, err := server.UnprotectRequest(request)
+			if err != nil {
+				t.Fatal(err)
+			}
+			response, err := server.ProtectResponse(message.Message{
+				Code: codes.Content, Token: append(message.Token(nil), request.Token...),
+			}, serverExchange)
+			if err != nil {
+				t.Fatal(err)
+			}
+			malformed := test.mutate(t, server, serverExchange, response)
+			if _, err := client.UnprotectResponse(malformed, clientExchange); err == nil {
+				t.Fatal("malformed response was accepted")
+			}
+			if _, err := client.UnprotectResponse(response, clientExchange); err != nil {
+				t.Fatalf("valid response after malformed response: %v", err)
+			}
+		})
+	}
+}
+
+func mustMarshalOption(t *testing.T, option OptionValue) []byte {
+	t.Helper()
+	encoded, err := option.MarshalBinary()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return encoded
+}
+
+func authenticatedRequestWithInner(
+	t *testing.T,
+	sender *Context,
+	inner []byte,
+	token message.Token,
+) message.Message {
+	t.Helper()
+	partialIV, ciphertext, err := sender.Seal(inner, func(partialIV []byte) ([]byte, error) {
+		return BuildAADWithAlgorithm(sender.algorithm, sender.senderID, partialIV, nil)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	option := mustMarshalOption(t, OptionValue{
+		PartialIV: partialIV, SenderID: sender.senderID, SenderIDSet: true,
+	})
+	return message.Message{
+		Code: codes.POST, Token: append(message.Token(nil), token...),
+		Options: message.Options{{ID: message.OSCORE, Value: option}},
+		Payload: ciphertext,
+	}
+}
+
 func assertProtectedRequestRoundTrip(
 	t *testing.T, client, server *Context, request message.Message,
 ) (message.Message, Exchange, message.Message, Exchange) {

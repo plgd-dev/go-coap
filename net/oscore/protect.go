@@ -30,6 +30,8 @@ type Exchange struct {
 
 type exchangeResponseState struct {
 	mu                     sync.Mutex
+	requestToken           message.Token
+	hasRequestToken        bool
 	requestID              []byte
 	requestPartialIV       []byte
 	observe                bool
@@ -261,6 +263,8 @@ func (c *Context) ProtectRequest(request message.Message) (message.Message, Exch
 	partialIV, ciphertext, err := c.Seal(plaintext, func(partialIV []byte) ([]byte, error) {
 		exchange = Exchange{
 			responseState: &exchangeResponseState{
+				requestToken:     append(message.Token(nil), request.Token...),
+				hasRequestToken:  true,
 				requestID:        c.SenderID(),
 				requestPartialIV: append([]byte(nil), partialIV...),
 				observe:          observeRegistration,
@@ -309,6 +313,8 @@ func (c *Context) UnprotectRequest(request message.Message) (message.Message, Ex
 	outerOptions = removeObserveOption(outerOptions)
 	exchange := Exchange{
 		responseState: &exchangeResponseState{
+			requestToken:     append(message.Token(nil), request.Token...),
+			hasRequestToken:  true,
 			requestID:        append([]byte(nil), option.SenderID...),
 			requestPartialIV: append([]byte(nil), option.PartialIV...),
 			context:          c,
@@ -650,6 +656,9 @@ func (c *Context) UnprotectResponse(response message.Message, exchange Exchange)
 		return message.Message{}, fmt.Errorf("%w: exchange belongs to another security context", ErrInvalidContext)
 	}
 	state := exchange.responseState
+	if state.hasRequestToken && !bytes.Equal(response.Token, state.requestToken) {
+		return message.Message{}, fmt.Errorf("%w: response Token does not match request", ErrInvalidOSCOREMessage)
+	}
 	state.mu.Lock()
 	defer state.mu.Unlock()
 	responseSequence, err := state.checkResponse(exchange, option)
