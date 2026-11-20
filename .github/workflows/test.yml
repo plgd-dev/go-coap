@@ -75,8 +75,8 @@ jobs:
           cmake --build "$build_dir" --parallel 2
           cmake --install "$build_dir"
           mkdir -p "$tools"
-          client="$prefix/bin/coap-client-openssl"
-          server="$prefix/bin/coap-server-openssl"
+          client="$prefix/bin/coap-client"
+          server="$prefix/bin/coap-server"
           test -x "$client"
           test -x "$server"
           ln -s "$client" "$tools/coap-client"

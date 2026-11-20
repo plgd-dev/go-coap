@@ -947,7 +947,7 @@ func (cc *Conn) ProcessReceivedMessageWithHandler(req *pool.Message, handler Han
 		return
 	}
 	if cc.oscoreProcessor != nil && hasRequestBinding {
-		if err := cc.protectTCPResponseForRequest(
+		if err := cc.protectTCPResponseWithFallback(
 			w.Message(), requestBinding, requestToken, requestObserve, requestObserveErr,
 		); err != nil {
 			cc.session.errors(err)
@@ -967,6 +967,35 @@ func (cc *Conn) ProcessReceivedMessageWithHandler(req *pool.Message, handler Han
 		}
 		cc.Session().errors(fmt.Errorf("cannot write response to %v: %w", cc.RemoteAddr(), err))
 	}
+}
+
+func (cc *Conn) protectTCPResponseWithFallback(
+	response *pool.Message,
+	binding tcpOSCORERequestContext,
+	token string,
+	observeValue uint32,
+	observeErr error,
+) error {
+	err := cc.protectTCPResponseForRequest(response, binding, token, observeValue, observeErr)
+	if err == nil {
+		return nil
+	}
+	cc.session.errors(err)
+	errorCode := codes.InternalServerError
+	if errors.Is(err, oscore.ErrPlaintextTooLarge) {
+		errorCode = codes.RequestEntityTooLarge
+	}
+	response.SetMessage(message.Message{
+		Code:  errorCode,
+		Token: message.Token(token),
+	})
+	if fallbackErr := cc.protectTCPResponseForRequest(
+		response, binding, token, observeValue, observeErr,
+	); fallbackErr != nil {
+		return fmt.Errorf("cannot protect OSCORE error response: %w (initial response protection failed: %w)",
+			fallbackErr, err)
+	}
+	return nil
 }
 
 func (cc *Conn) protectTCPResponseForRequest(

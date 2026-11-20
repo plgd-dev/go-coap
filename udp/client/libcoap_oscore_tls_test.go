@@ -104,7 +104,7 @@ func TestLibCoAPServerOSCOREFromTLS(t *testing.T) {
 	serverConfig := writeLibCoAPOSCOREConfig(t, "server", "client")
 	ctx, cancel := context.WithCancel(context.Background())
 	server := exec.CommandContext(ctx, serverPath, "-A", "127.0.0.1", "-p", strconv.Itoa(basePort),
-		"-v", "8", "-E", serverConfig, "-c", credentials.certPath, "-j", credentials.keyPath)
+		"-v", "8", "-E", serverConfig, "-c", credentials.certPath, "-j", credentials.keyPath, "-C", credentials.caPath)
 	var serverOutput lockedBuffer
 	server.Stdout = &serverOutput
 	server.Stderr = &serverOutput
@@ -195,6 +195,29 @@ func createLibCoAPTLSCredentials(t *testing.T) libCoAPTLSCredentials {
 	caPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: caDER})
 	certificate, err := tls.X509KeyPair(serverPEM, keyPEM)
 	require.NoError(t, err)
+
+	clientKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	require.NoError(t, err)
+	clientSerial, err := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 128))
+	require.NoError(t, err)
+	clientTemplate := x509.Certificate{
+		SerialNumber:          clientSerial,
+		Subject:               pkix.Name{CommonName: "go-coap libcoap test client"},
+		NotBefore:             now.Add(-time.Minute),
+		NotAfter:              now.Add(time.Hour),
+		KeyUsage:              x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
+		BasicConstraintsValid: true,
+	}
+	clientDER, err := x509.CreateCertificate(rand.Reader, &clientTemplate, caCertificate, &clientKey.PublicKey, caKey)
+	require.NoError(t, err)
+	clientKeyDER, err := x509.MarshalPKCS8PrivateKey(clientKey)
+	require.NoError(t, err)
+	clientPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: clientDER})
+	clientKeyPEM := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: clientKeyDER})
+	clientCertificate, err := tls.X509KeyPair(clientPEM, clientKeyPEM)
+	require.NoError(t, err)
+
 	roots := x509.NewCertPool()
 	roots.AddCert(caCertificate)
 	caPath, certPath, keyPath := t.TempDir()+"/test-ca.pem", t.TempDir()+"/server-cert.pem", t.TempDir()+"/server-key.pem"
@@ -207,9 +230,10 @@ func createLibCoAPTLSCredentials(t *testing.T) libCoAPTLSCredentials {
 			MinVersion:   tls.VersionTLS12,
 		},
 		clientConfig: &tls.Config{
-			RootCAs:    roots,
-			ServerName: libCoAPTLSTestServerName,
-			MinVersion: tls.VersionTLS12,
+			Certificates: []tls.Certificate{clientCertificate},
+			RootCAs:      roots,
+			ServerName:   libCoAPTLSTestServerName,
+			MinVersion:   tls.VersionTLS12,
 		},
 		caPath:   caPath,
 		certPath: certPath,

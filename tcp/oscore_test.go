@@ -100,6 +100,62 @@ func TestOSCOREAndPlaintextTCPExchange(t *testing.T) {
 	}
 }
 
+func TestOSCORELargeResponseReturnsProtectedErrorAndKeepsConnection(t *testing.T) {
+	listener, err := coapNet.NewTCPListener("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	server := tcp.NewServer(
+		options.WithOSCORE(newTCPOSCOREProcessor(t, "server", "client", false)),
+		options.WithHandlerFunc(func(w *responsewriter.ResponseWriter[*client.Conn], req *pool.Message) {
+			path, pathErr := req.Path()
+			if pathErr != nil {
+				t.Errorf("get request path: %v", pathErr)
+				return
+			}
+			body := []byte("ok")
+			if path == "/large" {
+				body = make([]byte, 70*1024)
+			}
+			if responseErr := w.SetResponse(codes.Content, message.AppOctets, bytes.NewReader(body)); responseErr != nil {
+				t.Errorf("set response: %v", responseErr)
+			}
+		}),
+	)
+	serverDone := make(chan error, 1)
+	go func() { serverDone <- server.Serve(listener) }()
+	defer func() {
+		server.Stop()
+		select {
+		case serverErr := <-serverDone:
+			require.NoError(t, serverErr)
+		case <-time.After(5 * time.Second):
+			require.Fail(t, "TCP OSCORE large-response server did not stop")
+		}
+	}()
+
+	cc, err := tcp.Dial(listener.Addr().String(),
+		options.WithOSCORE(newTCPOSCOREProcessor(t, "client", "server", false)))
+	require.NoError(t, err)
+	defer func() { require.NoError(t, cc.Close()) }()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	largeResponse, err := cc.Get(ctx, "/large")
+	require.NoError(t, err)
+	require.Equal(t, codes.RequestEntityTooLarge, largeResponse.Code())
+	require.False(t, largeResponse.HasOption(message.OSCORE), "client should receive the unprotected inner response")
+	require.False(t, oscore.IsUnprotectedProcessingError(largeResponse.Context()),
+		"fallback must be authenticated, not an unprotected processing error")
+	cc.ReleaseMessage(largeResponse)
+
+	response, err := cc.Get(ctx, "/valid")
+	require.NoError(t, err, "connection should remain usable after the oversized response")
+	defer cc.ReleaseMessage(response)
+	require.Equal(t, codes.Content, response.Code())
+	body, err := response.ReadBody()
+	require.NoError(t, err)
+	require.Equal(t, []byte("ok"), body)
+}
+
 func TestOSCORETCPErrorResponseIsUnprotectedAndDoesNotReachHandler(t *testing.T) {
 	listener, err := coapNet.NewTCPListener("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
