@@ -25,6 +25,7 @@ const (
 var (
 	ErrInvalidStoreID               = errors.New("OSCORE file store ID must not be empty")
 	ErrInvalidReplayHighWaterMargin = errors.New("OSCORE replay high-water margin must be between 1 and 1024")
+	ErrSequenceBindingMismatch      = errors.New("OSCORE sender sequence store is bound to a different context")
 )
 
 // HighWaterFileStoreOption configures a HighWaterFileStore.
@@ -70,6 +71,7 @@ type HighWaterFileStore struct {
 	next                  uint64
 	limit                 uint64
 	sequenceInitialized   bool
+	sequenceFingerprint   string
 	sequenceOps           sequenceFileOps
 	replayOps             sequenceFileOps
 }
@@ -82,8 +84,9 @@ type sequenceFileOps struct {
 }
 
 type sequenceFile struct {
-	Version uint8  `json:"version"`
-	Next    uint64 `json:"next"`
+	Version     uint8  `json:"version"`
+	Next        uint64 `json:"next"`
+	Fingerprint string `json:"fingerprint,omitempty"`
 }
 
 type sequencePendingFile struct {
@@ -266,6 +269,81 @@ func (s *HighWaterFileStore) Save(state oscore.ReplayWindowState) error {
 	return s.SaveHighWater(min(state.HighestSequence+s.replayHighWaterMargin, maxPartialIV+1))
 }
 
+// Bind associates sender sequence reservations with one OSCORE sender
+// context. The domain-separated fingerprint, not key material, is stored in
+// the sequence state and rollback guard.
+func (s *HighWaterFileStore) Bind(fingerprint [sha256.Size]byte) error {
+	binding := hex.EncodeToString(fingerprint[:])
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.sequenceFingerprint != "" && s.sequenceFingerprint != binding {
+		return ErrSequenceBindingMismatch
+	}
+
+	err := withFileLock(s.sequenceLock, func() error { return s.bindSequenceState(binding) })
+	if err != nil {
+		return fmt.Errorf("bind sender sequence state: %w", err)
+	}
+	return nil
+}
+
+func (s *HighWaterFileStore) bindSequenceState(binding string) error {
+	if err := s.recoverSequenceReservation(); err != nil {
+		return err
+	}
+	state, stateExists, err := readSequenceWithExistence(s.sequencePath)
+	if err != nil {
+		return err
+	}
+	guard, guardExists, err := readSequenceWithExistence(s.sequenceGuardPath)
+	if err != nil {
+		return err
+	}
+	switch {
+	case !stateExists && !guardExists:
+		if s.sequenceInitialized {
+			return errors.New("OSCORE sender sequence state and rollback guard are missing after initialization")
+		}
+		if err := s.persistInitialSequenceBinding(binding); err != nil {
+			return err
+		}
+		s.sequenceInitialized = true
+	case !stateExists || !guardExists:
+		return errors.New("OSCORE sender sequence state or rollback guard is missing")
+	case state != guard:
+		return errors.New("OSCORE sender sequence state differs from its rollback guard")
+	case state.Fingerprint != binding:
+		return ErrSequenceBindingMismatch
+	default:
+		s.sequenceInitialized = true
+	}
+	s.sequenceFingerprint = binding
+	return nil
+}
+
+func (s *HighWaterFileStore) persistInitialSequenceBinding(binding string) error {
+	initial := sequenceFile{Version: fileVersion, Fingerprint: binding}
+	pending := sequencePendingFile{
+		Version:        fileVersion,
+		Previous:       sequenceFile{Version: fileVersion},
+		PreviousExists: false,
+		Next:           initial,
+	}
+	if err := s.writeSequenceState(s.sequencePendingPath, pending); err != nil {
+		return fmt.Errorf("persist sender sequence binding transaction: %w", err)
+	}
+	if err := s.writeSequenceState(s.sequenceGuardPath, initial); err != nil {
+		return fmt.Errorf("persist sender sequence binding guard: %w", err)
+	}
+	if err := s.writeSequenceState(s.sequencePath, initial); err != nil {
+		return fmt.Errorf("persist sender sequence binding: %w", err)
+	}
+	if err := s.removeSequencePending(); err != nil {
+		return fmt.Errorf("complete sender sequence binding transaction: %w", err)
+	}
+	return nil
+}
+
 // Reserve returns a sender sequence number from a durably reserved window.
 // Unused values in a window are skipped when the store is recreated.
 func (s *HighWaterFileStore) Reserve() (uint64, error) {
@@ -290,10 +368,10 @@ func (s *HighWaterFileStore) Reserve() (uint64, error) {
 		remaining := maxPartialIV + 1 - reserved
 		windowSize := min(sequenceWindowSize, remaining)
 		limit = reserved + windowSize
-		next := sequenceFile{Version: fileVersion, Next: limit}
+		next := sequenceFile{Version: fileVersion, Next: limit, Fingerprint: s.sequenceFingerprint}
 		pending := sequencePendingFile{
 			Version:        fileVersion,
-			Previous:       sequenceFile{Version: fileVersion, Next: reserved},
+			Previous:       sequenceFile{Version: fileVersion, Next: reserved, Fingerprint: s.sequenceFingerprint},
 			PreviousExists: reserved != 0,
 			Next:           next,
 		}
@@ -343,6 +421,9 @@ func (s *HighWaterFileStore) loadSequenceState() (sequenceFile, error) {
 	}
 	if state != guard {
 		return sequenceFile{}, errors.New("OSCORE sender sequence state differs from its rollback guard")
+	}
+	if s.sequenceFingerprint != "" && state.Fingerprint != s.sequenceFingerprint {
+		return sequenceFile{}, ErrSequenceBindingMismatch
 	}
 	s.sequenceInitialized = true
 	return state, nil
@@ -494,10 +575,17 @@ func validateSequencePending(pending sequencePendingFile) error {
 	if err := validateSequence(pending.Next); err != nil {
 		return err
 	}
+	if !pending.PreviousExists && pending.Previous.Next == 0 &&
+		pending.Next.Next == 0 && pending.Next.Fingerprint != "" {
+		return nil
+	}
 	if !pending.PreviousExists && pending.Previous.Next != 0 ||
 		pending.Next.Next <= pending.Previous.Next ||
 		pending.Next.Next-pending.Previous.Next > sequenceWindowSize {
 		return errors.New("invalid OSCORE sender sequence transaction")
+	}
+	if pending.Previous.Fingerprint != pending.Next.Fingerprint {
+		return errors.New("OSCORE sender sequence transaction changes context binding")
 	}
 	expectedWindow := min(sequenceWindowSize, maxPartialIV+1-pending.Previous.Next)
 	if pending.Next.Next-pending.Previous.Next != expectedWindow {
@@ -613,6 +701,12 @@ func validateSequence(state sequenceFile) error {
 		state.Next%sequenceWindowSize != 0 {
 		return errors.New("invalid OSCORE sender sequence file")
 	}
+	if state.Fingerprint != "" {
+		fingerprint, err := hex.DecodeString(state.Fingerprint)
+		if err != nil || len(fingerprint) != sha256.Size {
+			return errors.New("invalid OSCORE sender sequence fingerprint")
+		}
+	}
 	return nil
 }
 
@@ -628,7 +722,7 @@ func readSequenceWithExistence(path string) (sequenceFile, bool, error) {
 	if err := json.Unmarshal(data, &state); err != nil {
 		return sequenceFile{}, false, fmt.Errorf("decode sender sequence file: %w", err)
 	}
-	if err := validateSequence(state); err != nil || state.Next == 0 {
+	if err := validateSequence(state); err != nil || state.Next == 0 && state.Fingerprint == "" {
 		return sequenceFile{}, false, errors.New("invalid OSCORE sender sequence file")
 	}
 	return state, true, nil

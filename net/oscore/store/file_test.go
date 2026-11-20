@@ -76,6 +76,75 @@ func TestHighWaterFileStoreSequenceReservationsAcrossInstances(t *testing.T) {
 	}
 }
 
+func TestHighWaterFileStoreBindsSequenceStateToSenderKeys(t *testing.T) {
+	dir := t.TempDir()
+	const (
+		storeID      = "same-sender-id"
+		masterSecret = "top-secret-master-key"
+	)
+	newStore := func() *HighWaterFileStore {
+		store, err := NewHighWaterFileStore(dir, storeID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return store
+	}
+	newContext := func(secret string, store *HighWaterFileStore) (*oscore.Context, error) {
+		return oscore.NewContext(oscore.ContextConfig{
+			AcceptVolatileSenderSequence: true,
+			AcceptReplayStateLoss:        true,
+			MasterSecret:                 []byte(secret),
+			SenderID:                     []byte("same-id"),
+			RecipientID:                  []byte("peer-id"),
+			SenderSequenceStore:          store,
+		})
+	}
+
+	firstStore := newStore()
+	first, contextErr := newContext(masterSecret, firstStore)
+	if contextErr != nil {
+		t.Fatal(contextErr)
+	}
+	if _, sequenceErr := first.NextPartialIV(); sequenceErr != nil {
+		t.Fatal(sequenceErr)
+	}
+
+	mismatched, err := newContext("different-master-secret", newStore())
+	if !errors.Is(err, ErrSequenceBindingMismatch) {
+		t.Fatalf("context with different sender keys error = %v, want ErrSequenceBindingMismatch", err)
+	}
+	if mismatched != nil {
+		t.Fatal("context with different sender keys was constructed")
+	}
+
+	if _, matchingErr := newContext(masterSecret, newStore()); matchingErr != nil {
+		t.Fatalf("context with matching sender keys: %v", matchingErr)
+	}
+
+	sequenceData, err := os.ReadFile(firstStore.sequencePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	guardData, err := os.ReadFile(firstStore.sequenceGuardPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(sequenceData, []byte(masterSecret)) || bytes.Contains(guardData, []byte(masterSecret)) {
+		t.Fatal("sender sequence files contain the master secret in readable form")
+	}
+	var sequence, guard sequenceFile
+	if err := json.Unmarshal(sequenceData, &sequence); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(guardData, &guard); err != nil {
+		t.Fatal(err)
+	}
+	if sequence.Fingerprint == "" || sequence.Fingerprint != guard.Fingerprint {
+		t.Fatalf("sequence and guard fingerprints differ or are empty: %q, %q",
+			sequence.Fingerprint, guard.Fingerprint)
+	}
+}
+
 func TestHighWaterFileStoreSequenceReservationsAcrossProcesses(t *testing.T) {
 	if !supportsProcessFileLock {
 		t.Skip("file store process locking is unavailable on this platform")

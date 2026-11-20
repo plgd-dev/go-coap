@@ -5,6 +5,7 @@ package oscore
 import (
 	"bytes"
 	"crypto/aes"
+	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
 	"errors"
@@ -91,6 +92,12 @@ type SenderSequenceReserver interface {
 	Reserve() (uint64, error)
 }
 
+// SequenceBinder associates a sender sequence store with the OSCORE sender
+// context whose Partial IVs it reserves.
+type SequenceBinder interface {
+	Bind(fingerprint [sha256.Size]byte) error
+}
+
 type noCopy struct{}
 
 // Lock and Unlock are no-ops recognized by go vet's copylocks analyzer.
@@ -160,10 +167,12 @@ func NewContext(cfg ContextConfig) (*Context, error) {
 	if err != nil {
 		return nil, err
 	}
-	fingerprintInput := make([]byte, 0, len(senderKey)+len(commonIV))
-	fingerprintInput = append(fingerprintInput, senderKey...)
-	fingerprintInput = append(fingerprintInput, commonIV...)
-	senderContextFingerprint := sha256.Sum256(fingerprintInput)
+	senderContextFingerprint := senderSequenceFingerprint(senderKey, commonIV)
+	if binder, ok := cfg.SenderSequenceStore.(SequenceBinder); ok {
+		if bindErr := binder.Bind(senderContextFingerprint); bindErr != nil {
+			return nil, fmt.Errorf("bind OSCORE sender sequence store: %w", bindErr)
+		}
+	}
 
 	senderAEAD, err := newContextAEAD(senderKey, algorithm.tagSize, "sender")
 	if err != nil {
@@ -203,6 +212,18 @@ func NewContext(cfg ContextConfig) (*Context, error) {
 		replayRecoveryEcho:    replayRecoveryEcho,
 		replayRecoveryPending: cfg.RequireEchoRecovery,
 	}, nil
+}
+
+func senderSequenceFingerprint(senderKey, commonIV []byte) [sha256.Size]byte {
+	const label = "go-coap/oscore/sender-sequence-store/v1\x00"
+	input := make([]byte, 0, len(label)+len(commonIV))
+	input = append(input, label...)
+	input = append(input, commonIV...)
+	mac := hmac.New(sha256.New, senderKey)
+	_, _ = mac.Write(input)
+	var fingerprint [sha256.Size]byte
+	copy(fingerprint[:], mac.Sum(nil))
+	return fingerprint
 }
 
 func validateContextConfig(cfg ContextConfig) (ContextConfig, error) {
