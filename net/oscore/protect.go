@@ -483,9 +483,13 @@ func observeOptionValue(option message.Option) (uint32, error) {
 }
 
 func removeObserveOption(options message.Options) message.Options {
+	return removeOption(options, message.Observe)
+}
+
+func removeOption(options message.Options, id message.OptionID) message.Options {
 	result := make(message.Options, 0, len(options))
 	for _, option := range options {
-		if option.ID != message.Observe {
+		if option.ID != id {
 			result = append(result, option)
 		}
 	}
@@ -734,6 +738,9 @@ func (c *Context) unprotectResponse(response message.Message, exchange Exchange)
 	inner.Token = append(message.Token(nil), response.Token...)
 	inner.Type = response.Type
 	inner.MessageID = response.MessageID
+	if inner.Options.HasOption(message.MaxAge) {
+		outerOptions = removeOption(outerOptions, message.MaxAge)
+	}
 	inner.Options = mergeOptions(outerOptions, inner.Options)
 	return inner, nil
 }

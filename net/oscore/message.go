@@ -20,6 +20,8 @@ const (
 	ClassI
 	// ClassU options are carried outside the ciphertext without OSCORE protection.
 	ClassU
+	// ClassBoth options may be carried in either the Inner or Outer message.
+	ClassBoth
 )
 
 var (
@@ -28,16 +30,20 @@ var (
 	ErrInvalidInnerMessage = errors.New("invalid OSCORE inner message")
 )
 
-// ClassifyOption returns the RFC 8613 default class for an option. Options with
-// only Class U processing in RFC 8613 remain outer. Options that support both
-// inner and outer use are classified as Class E here; specialized proxy or
-// block-wise processing may explicitly choose the outer form.
+// ClassifyOption returns the OSCORE classes supported by an option. Options
+// that support both Inner and Outer processing are classified as ClassBoth;
+// callers should prefer Inner processing unless they need the Outer behavior.
 //
 // Unknown options default to Class E, as required by RFC 8613.
 func ClassifyOption(id message.OptionID) OptionClass {
 	switch id {
-	case message.URIHost, message.URIPort, message.OSCORE, message.ProxyURI, message.ProxyScheme:
+	// Hop-Limit needs to be available to proxies to decrement it (RFC 8768).
+	case message.URIHost, message.URIPort, message.OSCORE, message.ProxyURI, message.ProxyScheme, message.HopLimit:
 		return ClassU
+	// Echo may be Inner or Outer, with independent values (RFC 9175).
+	case message.Echo, message.Observe, message.MaxAge, message.Block1, message.Block2, message.Size1, message.Size2,
+		message.NoResponse:
+		return ClassBoth
 	default:
 		return ClassE
 	}
@@ -85,6 +91,8 @@ func SplitOptions(options message.Options) (OptionSplit, error) {
 			split.Inner = append(split.Inner, option)
 		case ClassU:
 			split.Outer = append(split.Outer, option)
+		case ClassBoth:
+			split.Inner = append(split.Inner, option)
 		case ClassI:
 			return OptionSplit{}, fmt.Errorf("%w: Class I option %d has no AAD encoder", ErrInvalidOptionClass, option.ID)
 		default:

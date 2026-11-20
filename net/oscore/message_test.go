@@ -155,15 +155,65 @@ func TestSplitOptionsUsesRFC8613Classes(t *testing.T) {
 		split.Inner[1].ID != message.ContentFormat || split.Inner[2].ID != 99 {
 		t.Fatalf("inner options = %#v", split.Inner)
 	}
-	for _, id := range []message.OptionID{message.Observe, message.Block1, message.Block2, message.Size1, message.Size2, message.NoResponse, 99} {
-		if got := ClassifyOption(id); got != ClassE {
-			t.Errorf("ClassifyOption(%d) = %v, want ClassE default", id, got)
-		}
+}
+
+func TestClassifyOption(t *testing.T) {
+	tests := []struct {
+		name string
+		id   message.OptionID
+		want OptionClass
+	}{
+		{name: "Hop-Limit (RFC 8768)", id: message.HopLimit, want: ClassU},
+		{name: "Echo (RFC 9175)", id: message.Echo, want: ClassBoth},
+		{name: "Request-Tag (RFC 9175)", id: message.RequestTag, want: ClassE},
+		{name: "unknown option", id: 65000, want: ClassE},
+		{name: "URI-Host", id: message.URIHost, want: ClassU},
+		{name: "URI-Port", id: message.URIPort, want: ClassU},
+		{name: "OSCORE", id: message.OSCORE, want: ClassU},
+		{name: "Proxy-URI", id: message.ProxyURI, want: ClassU},
+		{name: "Proxy-Scheme", id: message.ProxyScheme, want: ClassU},
+		{name: "Observe", id: message.Observe, want: ClassBoth},
+		{name: "Max-Age", id: message.MaxAge, want: ClassBoth},
+		{name: "Block1", id: message.Block1, want: ClassBoth},
+		{name: "Block2", id: message.Block2, want: ClassBoth},
+		{name: "Size1", id: message.Size1, want: ClassBoth},
+		{name: "Size2", id: message.Size2, want: ClassBoth},
+		{name: "No-Response", id: message.NoResponse, want: ClassBoth},
+		{name: "If-Match", id: message.IfMatch, want: ClassE},
+		{name: "ETag", id: message.ETag, want: ClassE},
+		{name: "If-None-Match", id: message.IfNoneMatch, want: ClassE},
+		{name: "Location-Path", id: message.LocationPath, want: ClassE},
+		{name: "Uri-Path", id: message.URIPath, want: ClassE},
+		{name: "Content-Format", id: message.ContentFormat, want: ClassE},
+		{name: "Uri-Query", id: message.URIQuery, want: ClassE},
+		{name: "Accept", id: message.Accept, want: ClassE},
+		{name: "Q-Block1", id: message.QBlock1, want: ClassE},
+		{name: "Location-Query", id: message.LocationQuery, want: ClassE},
+		{name: "Q-Block2", id: message.QBlock2, want: ClassE},
 	}
-	for _, id := range []message.OptionID{message.URIHost, message.URIPort, message.OSCORE, message.ProxyURI, message.ProxyScheme} {
-		if got := ClassifyOption(id); got != ClassU {
-			t.Errorf("ClassifyOption(%d) = %v, want ClassU", id, got)
-		}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := ClassifyOption(tt.id); got != tt.want {
+				t.Errorf("ClassifyOption(%d) = %v, want %v", tt.id, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestSplitOptionsUsesExtensionClasses(t *testing.T) {
+	split, err := SplitOptions(message.Options{
+		{ID: message.HopLimit, Value: []byte{16}},
+		{ID: message.Echo, Value: []byte("challenge")},
+		{ID: message.RequestTag, Value: []byte("tag")},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(split.Outer) != 1 || split.Outer[0].ID != message.HopLimit {
+		t.Fatalf("outer options = %#v, want Hop-Limit", split.Outer)
+	}
+	if len(split.Inner) != 2 || split.Inner[0].ID != message.Echo || split.Inner[1].ID != message.RequestTag {
+		t.Fatalf("inner options = %#v, want Echo and Request-Tag", split.Inner)
 	}
 }
 

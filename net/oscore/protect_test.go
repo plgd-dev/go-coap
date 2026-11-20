@@ -1717,7 +1717,6 @@ func TestUnprotectDiscardsClassEOptionsFromOuterMessages(t *testing.T) {
 	protectedRequest.Options = append(protectedRequest.Options,
 		message.Option{ID: message.URIPath, Value: []byte("unexpected")},
 		message.Option{ID: message.ContentFormat, Value: []byte{0}},
-		message.Option{ID: message.MaxAge, Value: []byte{0}},
 	)
 	request, serverExchange, err := server.UnprotectRequest(protectedRequest)
 	if err != nil {
@@ -1725,9 +1724,6 @@ func TestUnprotectDiscardsClassEOptionsFromOuterMessages(t *testing.T) {
 	}
 	if request.Options.HasOption(message.URIPath) || request.Options.HasOption(message.ContentFormat) {
 		t.Fatalf("outer Class E options were not discarded: %v", request.Options)
-	}
-	if request.Options.HasOption(message.MaxAge) {
-		t.Fatal("outer Max-Age was not discarded from the request")
 	}
 
 	protectedResponse, err := server.ProtectResponse(message.Message{
