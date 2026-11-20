@@ -17,8 +17,17 @@ import (
 	"github.com/plgd-dev/go-coap/v3/net/oscore"
 )
 
+func privateTempDir(t testing.TB) string {
+	t.Helper()
+	dir := t.TempDir()
+	if err := os.Chmod(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	return dir
+}
+
 func TestHighWaterFileStoreSequenceReservationsAcrossInstances(t *testing.T) {
-	first, err := NewHighWaterFileStore(t.TempDir(), "peer-a")
+	first, err := NewHighWaterFileStore(privateTempDir(t), "peer-a")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -76,8 +85,18 @@ func TestHighWaterFileStoreSequenceReservationsAcrossInstances(t *testing.T) {
 	}
 }
 
+func TestNewHighWaterFileStoreRejectsWritableDirectory(t *testing.T) {
+	dir := privateTempDir(t)
+	if err := os.Chmod(dir, 0o777); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := NewHighWaterFileStore(dir, "writable-directory"); err == nil {
+		t.Fatal("NewHighWaterFileStore accepted a group/world-writable directory")
+	}
+}
+
 func TestHighWaterFileStoreBindsSequenceStateToSenderKeys(t *testing.T) {
-	dir := t.TempDir()
+	dir := privateTempDir(t)
 	const (
 		storeID      = "same-sender-id"
 		masterSecret = "top-secret-master-key"
@@ -149,7 +168,7 @@ func TestHighWaterFileStoreSequenceReservationsAcrossProcesses(t *testing.T) {
 	if !supportsProcessFileLock {
 		t.Skip("file store process locking is unavailable on this platform")
 	}
-	dir := t.TempDir()
+	dir := privateTempDir(t)
 	const (
 		processCount = 4
 		reservations = 64
@@ -248,7 +267,7 @@ func TestHighWaterFileStoreSequenceReservationProcessHelper(t *testing.T) {
 }
 
 func TestHighWaterFileStoreSequenceWindowSkipsUnusedValuesAfterRestart(t *testing.T) {
-	first, err := NewHighWaterFileStore(t.TempDir(), "peer-a")
+	first, err := NewHighWaterFileStore(privateTempDir(t), "peer-a")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -289,7 +308,7 @@ func TestHighWaterFileStoreRejectsMissingSenderSequenceStateOrGuard(t *testing.T
 		{name: "sequence guard", path: func(s *HighWaterFileStore) string { return s.sequenceGuardPath }},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			store, err := NewHighWaterFileStore(t.TempDir(), "missing-"+test.name)
+			store, err := NewHighWaterFileStore(privateTempDir(t), "missing-"+test.name)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -314,7 +333,7 @@ func TestHighWaterFileStoreRejectsMissingSenderSequenceStateOrGuard(t *testing.T
 }
 
 func TestHighWaterFileStoreRejectsMissingSenderStateAndGuardAfterWindow(t *testing.T) {
-	store, err := NewHighWaterFileStore(t.TempDir(), "missing-sequence-and-guard")
+	store, err := NewHighWaterFileStore(privateTempDir(t), "missing-sequence-and-guard")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -347,7 +366,7 @@ func TestHighWaterFileStoreRejectsMissingSenderStateAndGuardAfterWindow(t *testi
 }
 
 func TestHighWaterFileStoreRemembersLoadedStateAfterPendingRemovalSyncFailure(t *testing.T) {
-	dir := t.TempDir()
+	dir := privateTempDir(t)
 	first, err := NewHighWaterFileStore(dir, "pending-removal-sync-failure")
 	if err != nil {
 		t.Fatal(err)
@@ -388,7 +407,7 @@ func TestHighWaterFileStoreRemembersLoadedStateAfterPendingRemovalSyncFailure(t 
 }
 
 func TestHighWaterFileStoreSequencePersistenceFailureDoesNotReturnAValue(t *testing.T) {
-	dir := t.TempDir()
+	dir := privateTempDir(t)
 	store, err := NewHighWaterFileStore(dir, "sender-sequence-storage-failure")
 	if err != nil {
 		t.Fatal(err)
@@ -401,7 +420,7 @@ func TestHighWaterFileStoreSequencePersistenceFailureDoesNotReturnAValue(t *test
 			t.Fatal(err)
 		}
 	}
-	offlineDir := filepath.Join(t.TempDir(), "offline")
+	offlineDir := filepath.Join(privateTempDir(t), "offline")
 	if err := os.Rename(store.dir, offlineDir); err != nil {
 		t.Fatal(err)
 	}
@@ -458,7 +477,7 @@ func runSequencePersistenceFaultCase(
 	retryInPlace bool,
 ) {
 	t.Helper()
-	dir := t.TempDir()
+	dir := privateTempDir(t)
 	id := "sequence-fault-" + name
 	store, err := NewHighWaterFileStore(dir, id)
 	if err != nil {
@@ -548,7 +567,7 @@ func assertSequenceRetryAfterRecovery(t *testing.T, dir, id string) {
 }
 
 func TestHighWaterFileStoreRejectsRestoredSenderSequenceSnapshot(t *testing.T) {
-	dir := t.TempDir()
+	dir := privateTempDir(t)
 	store, err := NewHighWaterFileStore(dir, "restored-sender-sequence")
 	if err != nil {
 		t.Fatal(err)
@@ -608,7 +627,7 @@ func interruptedSequenceReservationStages() []sequenceReservationInterruption {
 
 func runInterruptedSequenceReservation(t *testing.T, stage sequenceReservationInterruption) {
 	t.Helper()
-	dir := t.TempDir()
+	dir := privateTempDir(t)
 	id := "interrupted-sequence-" + stage.name
 	store, err := NewHighWaterFileStore(dir, id)
 	if err != nil {
@@ -663,7 +682,7 @@ func assertInterruptedSequenceRecovery(t *testing.T, store *HighWaterFileStore, 
 }
 
 func TestHighWaterFileStoreSequenceWindowExhaustsAtMaximumPartialIV(t *testing.T) {
-	store, err := NewHighWaterFileStore(t.TempDir(), "peer-a")
+	store, err := NewHighWaterFileStore(privateTempDir(t), "peer-a")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -694,7 +713,7 @@ func TestHighWaterFileStoreSequenceWindowExhaustsAtMaximumPartialIV(t *testing.T
 func TestHighWaterFileStoreRejectsInvalidSenderSequenceValues(t *testing.T) {
 	for _, next := range []uint64{1, maxPartialIV + 2} {
 		t.Run(fmt.Sprintf("next-%d", next), func(t *testing.T) {
-			store, err := NewHighWaterFileStore(t.TempDir(), "invalid-sequence")
+			store, err := NewHighWaterFileStore(privateTempDir(t), "invalid-sequence")
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -713,7 +732,7 @@ func TestHighWaterFileStoreRejectsInvalidSenderSequenceValues(t *testing.T) {
 }
 
 func TestHighWaterFileStoreRejectsStaleSenderSequenceTransaction(t *testing.T) {
-	store, err := NewHighWaterFileStore(t.TempDir(), "stale-sequence-transaction")
+	store, err := NewHighWaterFileStore(privateTempDir(t), "stale-sequence-transaction")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -739,7 +758,7 @@ func TestHighWaterFileStoreRejectsStaleSenderSequenceTransaction(t *testing.T) {
 }
 
 func TestHighWaterFileStoreSequenceReservationsWithinSingleInstance(t *testing.T) {
-	store, err := NewHighWaterFileStore(t.TempDir(), "single-instance-concurrency")
+	store, err := NewHighWaterFileStore(privateTempDir(t), "single-instance-concurrency")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -812,7 +831,7 @@ func TestHighWaterFileStoreRejectsCorruptOrTruncatedState(t *testing.T) {
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			store, err := NewHighWaterFileStore(t.TempDir(), "corrupt-"+test.name)
+			store, err := NewHighWaterFileStore(privateTempDir(t), "corrupt-"+test.name)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -838,7 +857,7 @@ func TestHighWaterFileStoreRejectsCorruptOrTruncatedState(t *testing.T) {
 }
 
 func TestHighWaterFileStoreReplayCutoffSurvivesRestart(t *testing.T) {
-	dir := t.TempDir()
+	dir := privateTempDir(t)
 	store, err := NewHighWaterFileStore(dir, "high-water-replay")
 	if err != nil {
 		t.Fatal(err)
@@ -932,7 +951,7 @@ func TestHighWaterFileStoreConfigurableReplayMargin(t *testing.T) {
 func testHighWaterFileStoreReplayMargin(t *testing.T, margin uint64) {
 	t.Helper()
 	const storeID = "high-water-margin"
-	dir := t.TempDir()
+	dir := privateTempDir(t)
 	store, err := NewHighWaterFileStore(dir, storeID, WithReplayHighWaterMargin(margin))
 	if err != nil {
 		t.Fatal(err)
@@ -1020,7 +1039,7 @@ func assertReplayMarginRestartRejects(
 func TestHighWaterFileStoreRejectsInvalidReplayMargins(t *testing.T) {
 	for _, margin := range []uint64{0, 1025} {
 		if _, err := NewHighWaterFileStore(
-			t.TempDir(), fmt.Sprintf("invalid-margin-%d", margin), WithReplayHighWaterMargin(margin),
+			privateTempDir(t), fmt.Sprintf("invalid-margin-%d", margin), WithReplayHighWaterMargin(margin),
 		); !errors.Is(err, ErrInvalidReplayHighWaterMargin) {
 			t.Fatalf("margin %d error = %v, want ErrInvalidReplayHighWaterMargin", margin, err)
 		}
@@ -1072,7 +1091,7 @@ func testHighWaterFileStoreReplayDeletion(
 	},
 ) {
 	t.Helper()
-	store, err := NewHighWaterFileStore(t.TempDir(), "replay-deletion-"+test.name)
+	store, err := NewHighWaterFileStore(privateTempDir(t), "replay-deletion-"+test.name)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1113,7 +1132,7 @@ func assertReplayDeletionResult(t *testing.T, highWater uint64, exists bool, err
 }
 
 func TestHighWaterFileStoreResetReplayState(t *testing.T) {
-	store, err := NewHighWaterFileStore(t.TempDir(), "reset-replay-state")
+	store, err := NewHighWaterFileStore(privateTempDir(t), "reset-replay-state")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1129,7 +1148,7 @@ func TestHighWaterFileStoreResetReplayState(t *testing.T) {
 }
 
 func TestHighWaterFileStoreResetRetrySyncsDirectory(t *testing.T) {
-	store, err := NewHighWaterFileStore(t.TempDir(), "reset-replay-sync-retry")
+	store, err := NewHighWaterFileStore(privateTempDir(t), "reset-replay-sync-retry")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1163,7 +1182,7 @@ func TestHighWaterFileStoreResetRetrySyncsDirectory(t *testing.T) {
 }
 
 func TestHighWaterFileStoreRecoversInterruptedReplayPairUpdate(t *testing.T) {
-	store, err := NewHighWaterFileStore(t.TempDir(), "replay-pair-recovery")
+	store, err := NewHighWaterFileStore(privateTempDir(t), "replay-pair-recovery")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1234,7 +1253,7 @@ func TestHighWaterFileStoreRecoversInterruptedReplayPairUpdate(t *testing.T) {
 }
 
 func TestHighWaterFileStoreRestartAfterDirectorySyncFailureRejectsAcceptedReplay(t *testing.T) {
-	store, err := NewHighWaterFileStore(t.TempDir(), "high-water-sync-failure")
+	store, err := NewHighWaterFileStore(privateTempDir(t), "high-water-sync-failure")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1297,7 +1316,7 @@ func TestHighWaterFileStoreRestartAfterDirectorySyncFailureRejectsAcceptedReplay
 }
 
 func TestHighWaterFileStoreRecoverySyncsBeforeRemovingPendingJournal(t *testing.T) {
-	store, err := NewHighWaterFileStore(t.TempDir(), "replay-recovery-sync-before-remove")
+	store, err := NewHighWaterFileStore(privateTempDir(t), "replay-recovery-sync-before-remove")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1341,7 +1360,7 @@ func TestHighWaterFileStoreRecoverySyncsBeforeRemovingPendingJournal(t *testing.
 }
 
 func TestHighWaterFileStoreEqualMarkRetrySyncsDirectory(t *testing.T) {
-	store, err := NewHighWaterFileStore(t.TempDir(), "high-water-equal-mark-sync")
+	store, err := NewHighWaterFileStore(privateTempDir(t), "high-water-equal-mark-sync")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1381,7 +1400,7 @@ func BenchmarkHighWaterFileStoreReplayPersistence(b *testing.B) {
 	for _, margin := range []uint64{1, 16, 256} {
 		b.Run(fmt.Sprintf("margin-%d", margin), func(b *testing.B) {
 			store, err := NewHighWaterFileStore(
-				b.TempDir(), "benchmark", WithReplayHighWaterMargin(margin),
+				privateTempDir(b), "benchmark", WithReplayHighWaterMargin(margin),
 			)
 			if err != nil {
 				b.Fatal(err)
@@ -1435,7 +1454,7 @@ func BenchmarkHighWaterFileStoreReplayPersistence(b *testing.B) {
 }
 
 func TestWriteStateFileRenameFailurePreservesExistingTarget(t *testing.T) {
-	dir := t.TempDir()
+	dir := privateTempDir(t)
 	target := filepath.Join(dir, "state.json")
 	if err := os.Mkdir(target, 0o700); err != nil {
 		t.Fatal(err)
@@ -1464,7 +1483,7 @@ func TestWriteStateFileRenameFailurePreservesExistingTarget(t *testing.T) {
 }
 
 func TestHighWaterFileStoreReplayStatePersistsAcrossContextRestart(t *testing.T) {
-	dir := t.TempDir()
+	dir := privateTempDir(t)
 	sender, err := oscore.NewContext(oscore.ContextConfig{
 		UnsafeVolatileSenderSequence: true,
 		AcceptReplayStateLoss:        true,

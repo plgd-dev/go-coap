@@ -134,6 +134,9 @@ func NewHighWaterFileStore(dir, id string, options ...HighWaterFileStoreOption) 
 	if err := os.MkdirAll(filepath.Clean(absoluteDir), 0o700); err != nil {
 		return nil, fmt.Errorf("create OSCORE file store directory: %w", err)
 	}
+	if err := validateStoreDirectory(absoluteDir); err != nil {
+		return nil, fmt.Errorf("validate OSCORE file store directory: %w", err)
+	}
 	digest := sha256.Sum256([]byte(id))
 	prefix := filepath.Join(absoluteDir, hex.EncodeToString(digest[:]))
 	return &HighWaterFileStore{
@@ -799,7 +802,7 @@ func readReplayHighWaterPair(markPath, guardPath string) (uint64, bool, error) {
 
 func readStateFile(path string) ([]byte, error) {
 	// #nosec G703 -- callers pass only state paths derived from a configured store root.
-	file, err := os.Open(filepath.Clean(path))
+	file, err := openFileNoFollow(filepath.Clean(path), os.O_RDONLY, 0)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, nil
 	}
