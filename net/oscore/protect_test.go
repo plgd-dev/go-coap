@@ -648,6 +648,55 @@ func TestValidateInnerRequestObserveCombinations(t *testing.T) {
 	}
 }
 
+func TestUnprotectRequestRejectsObserveMismatchAndMissingOption(t *testing.T) {
+	client, server := pairedContexts(t, 3, 5)
+	for _, test := range []struct {
+		name   string
+		mutate func(message.Message) message.Message
+	}{
+		{
+			name: "mismatched inner and outer",
+			mutate: func(request message.Message) message.Message {
+				start, end, err := request.Options.Find(message.Observe)
+				if err != nil || end-start != 1 {
+					t.Fatalf("find outer Observe option: range=(%d,%d), err=%v", start, end, err)
+				}
+				request.Options[start].Value = []byte{1}
+				return request
+			},
+		},
+		{
+			name: "missing outer Observe",
+			mutate: func(request message.Message) message.Message {
+				request.Options = request.Options.Remove(message.Observe)
+				return request
+			},
+		},
+		{
+			name: "missing inner Observe",
+			mutate: func(request message.Message) message.Message {
+				request.Options = request.Options.Add(message.Option{ID: message.Observe})
+				return request
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			request := message.Message{Code: codes.GET, Options: observeOptions(t, 0)}
+			if test.name == "missing inner Observe" {
+				request.Options = nil
+			}
+			protected, _, err := client.ProtectRequest(request)
+			if err != nil {
+				t.Fatal(err)
+			}
+			protected = test.mutate(protected)
+			if _, _, err := server.UnprotectRequest(protected); !errors.Is(err, ErrInvalidOSCOREMessage) {
+				t.Fatalf("UnprotectRequest error = %v, want %v", err, ErrInvalidOSCOREMessage)
+			}
+		})
+	}
+}
+
 func assertValidObserveRequest(t *testing.T, value uint32) {
 	t.Helper()
 	options := observeOptions(t, value)

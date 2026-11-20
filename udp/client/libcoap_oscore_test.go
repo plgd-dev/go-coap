@@ -75,9 +75,6 @@ func TestLibCoAPServerOSCORE(t *testing.T) {
 		options.WithOSCORE(processor),
 		options.WithBlockwise(true, blockwise.SZX1024, 5*time.Second),
 	}
-	if libCoAPQBlockRequired() {
-		dialOptions = append(dialOptions, options.WithQBlockwise(options.QBlockwiseOnly))
-	}
 	cc, err := udp.Dial(net.JoinHostPort("127.0.0.1", strconv.Itoa(port)), dialOptions...)
 	require.NoError(t, err)
 	defer func() { require.NoError(t, cc.Close()) }()
@@ -97,12 +94,23 @@ func TestLibCoAPServerOSCORE(t *testing.T) {
 	require.NotEmpty(t, body)
 
 	payload := bytes.Repeat([]byte("libcoap-oscore-blockwise-"), 200)
-	putRequest, err := cc.NewPutRequest(requestCtx, "/example_data", message.AppOctets, bytes.NewReader(payload))
+	putConn := cc
+	if libCoAPQBlockRequired() {
+		putConn, err = udp.Dial(
+			net.JoinHostPort("127.0.0.1", strconv.Itoa(port)),
+			options.WithOSCORE(processor),
+			options.WithBlockwise(true, blockwise.SZX1024, 5*time.Second),
+			options.WithQBlockwise(options.QBlockwiseOnly),
+		)
+		require.NoError(t, err)
+		defer func() { require.NoError(t, putConn.Close()) }()
+	}
+	putRequest, err := putConn.NewPutRequest(requestCtx, "/example_data", message.AppOctets, bytes.NewReader(payload))
 	require.NoError(t, err)
-	defer cc.ReleaseMessage(putRequest)
-	putResponse, err := cc.Do(putRequest)
+	defer putConn.ReleaseMessage(putRequest)
+	putResponse, err := putConn.Do(putRequest)
 	require.NoError(t, err)
-	defer cc.ReleaseMessage(putResponse)
+	defer putConn.ReleaseMessage(putResponse)
 	require.Equal(t, codes.Created, putResponse.Code(), "libcoap output: %s", serverOutput.String())
 	putBody, err := putResponse.ReadBody()
 	require.NoError(t, err)

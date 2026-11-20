@@ -137,6 +137,7 @@ func TestInnerMessagePayloadAndOptions(t *testing.T) {
 func TestSplitOptionsUsesRFC8613Classes(t *testing.T) {
 	options := message.Options{
 		{ID: message.URIHost, Value: []byte("example.com")},
+		{ID: message.URIPort, Value: []byte{0x16, 0x33}},
 		{ID: message.URIPath, Value: []byte("sensors")},
 		{ID: message.ContentFormat, Value: []byte{byte(message.AppJSON)}},
 		{ID: message.ProxyScheme, Value: []byte("coap")},
@@ -146,7 +147,8 @@ func TestSplitOptionsUsesRFC8613Classes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(split.Outer) != 2 || split.Outer[0].ID != message.URIHost || split.Outer[1].ID != message.ProxyScheme {
+	if len(split.Outer) != 3 || split.Outer[0].ID != message.URIHost ||
+		split.Outer[1].ID != message.URIPort || split.Outer[2].ID != message.ProxyScheme {
 		t.Fatalf("outer options = %#v", split.Outer)
 	}
 	if len(split.Inner) != 3 || split.Inner[0].ID != message.URIPath ||
@@ -200,6 +202,7 @@ func TestDecodeInnerRejectsOuterOptionsAndEmptyPayloadMarker(t *testing.T) {
 	tests := [][]byte{
 		{},
 		{byte(codes.GET), 0x31, 'x'}, // Uri-Host is Class U.
+		{byte(codes.GET), 0x71, '1'}, // Uri-Port is Class U.
 	}
 	for _, input := range tests {
 		if _, err := DecodeInner(input); err == nil {

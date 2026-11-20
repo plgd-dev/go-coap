@@ -75,25 +75,42 @@ jobs:
           cmake --build "$build_dir" --parallel 2
           cmake --install "$build_dir"
           mkdir -p "$tools"
-          clients=("$prefix"/bin/coap-client*)
-          servers=("$prefix"/bin/coap-server*)
-          test -x "${clients[0]}"
-          test -x "${servers[0]}"
-          ln -s "${clients[0]}" "$tools/coap-client"
-          ln -s "${clients[0]}" "$tools/coap-client-notls"
-          ln -s "${servers[0]}" "$tools/coap-server"
-          ln -s "${servers[0]}" "$tools/coap-server-notls"
+          client="$prefix/bin/coap-client-openssl"
+          server="$prefix/bin/coap-server-openssl"
+          test -x "$client"
+          test -x "$server"
+          ln -s "$client" "$tools/coap-client"
+          ln -s "$client" "$tools/coap-client-notls"
+          ln -s "$server" "$tools/coap-server"
+          ln -s "$server" "$tools/coap-server-notls"
           echo "$tools" >> "$GITHUB_PATH"
           git -C "$source_dir" rev-parse HEAD
         shell: bash
 
       - name: Run bidirectional OSCORE interoperability tests
-        run: go test ./udp/client -run 'TestLibCoAP(Server|Client).*OSCORE' -count=1 -v
         env:
           GOCOAP_REQUIRE_LIBCOAP_OSCORE: "1"
           LIBCOAP_QBLOCK_REQUIRED: "1"
           LIBCOAP_QBLOCK_MODE: enabled
+        run: |
+          set -o pipefail
+          go test ./udp/client -run 'TestLibCoAP(Server|Client).*OSCORE' -count=1 -timeout=15m -json > oscore-interop-report.json
+          if grep -q '"Action":"skip"' oscore-interop-report.json; then
+            echo "Required libcoap OSCORE interoperability tests must not skip"
+            cat oscore-interop-report.json
+            exit 1
+          fi
+          cat oscore-interop-report.json
         shell: bash
+
+      - name: Upload OSCORE interoperability report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: oscore-interop-report
+          path: oscore-interop-report.json
+          if-no-files-found: warn
+          retention-days: 7
 
   test:
     # don't run for forks
