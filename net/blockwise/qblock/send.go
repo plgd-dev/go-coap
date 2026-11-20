@@ -164,7 +164,7 @@ func (b *Engine[C]) validQ2Family(r *pool.Message) bool {
 func (b *Engine[C]) q2ResponseKey(r *pool.Message, remoteAddr net.Addr, num int64, more bool) (string, error) {
 	key := q2TransferKey(r, remoteAddr)
 	identity := qTransferKey(r, remoteAddr, nil, true)
-	newRequest := isQ2NewRequest(r, num, more)
+	newRequest := isQ2NewRequest(r, num)
 	b.q2SendMu.Lock()
 	defer b.q2SendMu.Unlock()
 	if newRequest {
@@ -185,10 +185,10 @@ func (b *Engine[C]) q2ResponseKey(r *pool.Message, remoteAddr net.Addr, num int6
 	return key, nil
 }
 
-// isQ2NewRequest identifies a whole-body request whose own payload may change
-// the response, rather than a bodyless request to resume a cached transfer.
-func isQ2NewRequest(r *pool.Message, num int64, more bool) bool {
-	if !qBodyMethod(r.Code()) || num != 0 || !more {
+// isQ2NewRequest identifies a NUM=0 request whose own payload may change the
+// response, rather than a bodyless request to resume a cached transfer.
+func isQ2NewRequest(r *pool.Message, num int64) bool {
+	if !qBodyMethod(r.Code()) || num != 0 {
 		return false
 	}
 	size, err := r.BodySize()

@@ -241,46 +241,51 @@ func TestQBlock2NewRequestWithPayloadIsNotResumed(t *testing.T) {
 		more bool
 	}
 	for _, code := range []codes.Code{codes.POST, codes.PUT, codes.FETCH, codes.PATCH, codes.IPATCH} {
-		t.Run(code.String(), func(t *testing.T) {
-			cc := &qTestTransport{testClient: newTestClient(), jobs: make(map[string]qBlockTestJob)}
-			b := New(cc, func(error) {})
-			defer b.CloseQBlockTransfers()
-			calls := 0
-			handler := func(w *responsewriter.ResponseWriter[*qTestTransport], r *pool.Message) {
-				calls++
-				payload, err := io.ReadAll(r.Body())
+		for _, tc := range []struct {
+			name string
+			more bool
+		}{{"whole-body", true}, {"first-block", false}} {
+			t.Run(code.String()+"/"+tc.name, func(t *testing.T) {
+				cc := &qTestTransport{testClient: newTestClient(), jobs: make(map[string]qBlockTestJob)}
+				b := New(cc, func(error) {})
+				defer b.CloseQBlockTransfers()
+				calls := 0
+				handler := func(w *responsewriter.ResponseWriter[*qTestTransport], r *pool.Message) {
+					calls++
+					payload, err := io.ReadAll(r.Body())
+					require.NoError(t, err)
+					require.NoError(t, w.SetResponse(codes.Changed, message.AppOctets, bytes.NewReader(bytes.Repeat(payload, 64))))
+				}
+				invoke := func(token, payload string, more bool) *pool.Message {
+					req := qTestRequest(t, token, control{0, more})
+					req.SetCode(code)
+					req.SetBody(bytes.NewReader([]byte(payload)))
+					w := responsewriter.New(cc.AcquireMessage(req.Context()), cc)
+					require.NoError(t, b.handleQBlock2(w, req, SZX16, nil, handler))
+					cc.ReleaseMessage(req)
+					return w.Message()
+				}
+				first := invoke("first", "A", true)
+				cc.ReleaseMessage(first)
+				second := invoke("second", "B", tc.more)
+				defer cc.ReleaseMessage(second)
+				require.Equal(t, 2, calls, "a new request must reach the handler")
+				body, err := io.ReadAll(second.Body())
 				require.NoError(t, err)
-				require.NoError(t, w.SetResponse(codes.Changed, message.AppOctets, bytes.NewReader(bytes.Repeat(payload, 64))))
-			}
-			invoke := func(token, payload string) *pool.Message {
-				req := qTestRequest(t, token, control{0, true})
-				req.SetCode(code)
-				req.SetBody(bytes.NewReader([]byte(payload)))
-				w := responsewriter.New(cc.AcquireMessage(req.Context()), cc)
-				require.NoError(t, b.handleQBlock2(w, req, SZX16, nil, handler))
-				cc.ReleaseMessage(req)
-				return w.Message()
-			}
-			first := invoke("first", "A")
-			cc.ReleaseMessage(first)
-			second := invoke("second", "B")
-			defer cc.ReleaseMessage(second)
-			require.Equal(t, 2, calls, "a new request must reach the handler")
-			body, err := io.ReadAll(second.Body())
-			require.NoError(t, err)
-			require.Equal(t, bytes.Repeat([]byte("B"), 16), body)
+				require.Equal(t, bytes.Repeat([]byte("B"), 16), body)
 
-			recovery := qTestRequest(t, "recovery", control{1, false})
-			recovery.SetCode(code)
-			w := responsewriter.New(cc.AcquireMessage(recovery.Context()), cc)
-			require.NoError(t, b.handleQBlock2(w, recovery, SZX16, nil, handler))
-			cc.ReleaseMessage(recovery)
-			defer cc.ReleaseMessage(w.Message())
-			require.Equal(t, 2, calls, "recovery must reuse the latest cached response")
-			recoveredBody, err := io.ReadAll(w.Message().Body())
-			require.NoError(t, err)
-			require.Equal(t, bytes.Repeat([]byte("B"), 16), recoveredBody)
-		})
+				recovery := qTestRequest(t, "recovery", control{1, false})
+				recovery.SetCode(code)
+				w := responsewriter.New(cc.AcquireMessage(recovery.Context()), cc)
+				require.NoError(t, b.handleQBlock2(w, recovery, SZX16, nil, handler))
+				cc.ReleaseMessage(recovery)
+				defer cc.ReleaseMessage(w.Message())
+				require.Equal(t, 2, calls, "recovery must reuse the latest cached response")
+				recoveredBody, err := io.ReadAll(w.Message().Body())
+				require.NoError(t, err)
+				require.Equal(t, bytes.Repeat([]byte("B"), 16), recoveredBody)
+			})
+		}
 	}
 }
 
