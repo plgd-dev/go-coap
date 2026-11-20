@@ -300,7 +300,7 @@ func TestOSCORETLSRejectsMalformedTransportMessages(t *testing.T) {
 func testOSCOREStreamNoResponse(
 	t *testing.T,
 	listener tcpserver.Listener,
-	dialPlain func() (*client.Conn, error),
+	dialPlain,
 	dialProtected func() (*client.Conn, error),
 ) {
 	t.Helper()

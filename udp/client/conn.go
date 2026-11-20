@@ -1530,7 +1530,7 @@ func sendJustAcknowledgeMessage(reqType message.Type, w *responsewriter.Response
 	return reqType == message.Confirmable && !w.Message().IsModified()
 }
 
-func (cc *Conn) processResponse(reqType message.Type, reqMessageID int32, qResponse bool,
+func (cc *Conn) processResponse(reqType message.Type, reqMessageID int32, qResponse,
 	cacheResponse bool, w *responsewriter.ResponseWriter[*Conn],
 ) error {
 	switch {

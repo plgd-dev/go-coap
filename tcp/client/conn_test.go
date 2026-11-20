@@ -639,6 +639,56 @@ func TestTCPOSCORERequestConsumersReleaseExchanges(t *testing.T) {
 	require.Empty(t, cc.oscoreRequiredResponses)
 }
 
+func TestTCPOSCOREBlockwiseConsumerRetainsExchangesUntilRelease(t *testing.T) {
+	securityContext, err := oscore.NewContext(oscore.ContextConfig{
+		AcceptVolatileSenderSequence: true,
+		AcceptReplayStateLoss:        true,
+		MasterSecret:                 []byte("TCP OSCORE blockwise consumer lifecycle"),
+		SenderID:                     []byte("client"),
+		RecipientID:                  []byte("server"),
+	})
+	require.NoError(t, err)
+	now := time.Date(2026, 11, 13, 0, 0, 0, 0, time.UTC)
+	cc := &Conn{
+		oscoreNow:               func() time.Time { return now },
+		oscoreExchanges:         make(oscore.ExchangeTracker[tcpOSCOREExchange]),
+		oscoreRequiredResponses: oscore.NewResponseRequirements(),
+	}
+	token := message.Token("blockwise")
+	key := oscore.ExchangeTrackerKey(token)
+	state := &tcpOSCOREBlockwiseConsumer{}
+	req := pool.NewMessage(context.WithValue(context.Background(), tcpOSCOREBlockwiseConsumerKey{}, state))
+	req.SetToken(token)
+
+	var current oscore.Exchange
+	for range 2 {
+		_, exchange, protectErr := securityContext.ProtectRequest(message.Message{
+			Code: codes.GET, Token: token,
+		})
+		require.NoError(t, protectErr)
+		state.retain(key, exchange)
+		cc.oscoreRequiredResponses.Add(key, exchange, time.Time{})
+		current = exchange
+	}
+	cc.oscoreExchanges[key] = tcpOSCOREExchange{
+		context:  securityContext,
+		exchange: current,
+		expires:  now.Add(time.Second),
+	}
+
+	now = now.Add(2 * time.Second)
+	require.True(t, cc.requiresTCPOSCOREResponse(key),
+		"an active blockwise consumer must keep responses protected after exchange timeout")
+	require.True(t, hasTCPOSCOREBlockwiseConsumer(req),
+		"generated requests must retain the logical consumer context")
+
+	cc.releaseTCPOSCOREBlockwiseConsumer(state)
+	require.False(t, cc.requiresTCPOSCOREResponse(key),
+		"consumer completion must release each block exchange requirement")
+	require.NotContains(t, cc.oscoreExchanges, key,
+		"consumer completion must remove its current non-Observe exchange")
+}
+
 func TestTCPOSCORERequirementTracksLiveRequestConsumer(t *testing.T) {
 	securityContext, err := oscore.NewContext(oscore.ContextConfig{
 		AcceptVolatileSenderSequence: true,

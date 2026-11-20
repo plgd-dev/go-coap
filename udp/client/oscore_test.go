@@ -394,7 +394,7 @@ func TestStaleOSCOREExchangeDoesNotRemoveReplacementOrProtectionRequirement(t *t
 			},
 		},
 		oscoreRequiredResponses: oscore.ResponseRequirements{
-			key: {oscore.Exchange{}: time.Time{}},
+			key: {newExchange: time.Time{}},
 		},
 	}
 	stale := udpOSCOREExchange{context: oldContext, exchange: oldExchange}
@@ -413,6 +413,8 @@ func TestStaleOSCOREExchangeDoesNotRemoveReplacementOrProtectionRequirement(t *t
 	require.Equal(t, newExchange, current.exchange)
 	require.True(t, cc.oscoreRequiredResponses.HasToken(key),
 		"stale response processing must not disable the OSCORE response requirement")
+	require.Contains(t, cc.oscoreRequiredResponses[key], newExchange,
+		"stale response processing must preserve the replacement exchange requirement")
 }
 
 func TestStaleOSCORECancellationResponseDoesNotRemoveReplacement(t *testing.T) {

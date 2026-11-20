@@ -403,7 +403,7 @@ func (cc *Conn) removeOSCOREExchangeForProcessingError(key string, exchange osco
 func (cc *Conn) updateOSCOREExchangeResponse(
 	key string,
 	exchange udpOSCOREExchange,
-	usedCancelExchange bool,
+	usedCancelExchange,
 	hasObserve bool,
 	options message.Options,
 ) error {

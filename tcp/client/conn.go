@@ -86,6 +86,7 @@ type tcpOSCOREExchange struct {
 type (
 	tcpOSCORERequestContextKey      struct{}
 	tcpOSCORERequestConsumerKey     struct{}
+	tcpOSCOREBlockwiseConsumerKey   struct{}
 	tcpOSCOREResponseRequirementKey struct{}
 )
 
@@ -95,6 +96,36 @@ type tcpOSCORERequestContext struct {
 	context  *oscore.Context
 	exchange oscore.Exchange
 	options  message.Options
+}
+
+type tcpOSCOREBlockwiseConsumer struct {
+	mu        sync.Mutex
+	exchanges map[string]map[oscore.Exchange]struct{}
+}
+
+func (c *tcpOSCOREBlockwiseConsumer) retain(token string, exchange oscore.Exchange) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.exchanges == nil {
+		c.exchanges = make(map[string]map[oscore.Exchange]struct{})
+	}
+	if c.exchanges[token] == nil {
+		c.exchanges[token] = make(map[oscore.Exchange]struct{})
+	}
+	c.exchanges[token][exchange] = struct{}{}
+}
+
+func (c *tcpOSCOREBlockwiseConsumer) snapshot() map[string]map[oscore.Exchange]struct{} {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	exchanges := make(map[string]map[oscore.Exchange]struct{}, len(c.exchanges))
+	for token, tracked := range c.exchanges {
+		exchanges[token] = make(map[oscore.Exchange]struct{}, len(tracked))
+		for exchange := range tracked {
+			exchanges[token][exchange] = struct{}{}
+		}
+	}
+	return exchanges
 }
 
 func tcpOSCOREResponseNeedsPartialIV(binding tcpOSCORERequestContext, options message.Options) bool {
@@ -234,7 +265,9 @@ func (cc *Conn) doInternal(req *pool.Message) (_ *pool.Message, err error) {
 	req.SetContext(context.WithValue(requestContext, tcpOSCORERequestConsumerKey{}, true))
 	defer func() {
 		err = removeHandler(err)
-		cc.releaseTCPOSCOREResponseRequirement(req)
+		if !hasTCPOSCOREBlockwiseConsumer(req) {
+			cc.releaseTCPOSCOREResponseRequirement(req)
+		}
 	}()
 
 	if err = cc.writeMessage(req); err != nil {
@@ -264,6 +297,16 @@ func (cc *Conn) do(req *pool.Message) (*pool.Message, error) {
 	if !cc.peerBlockWiseTranferEnabled.Load() || cc.blockWise == nil {
 		return cc.doInternal(req)
 	}
+	requestContext := req.Context()
+	if requestContext == nil {
+		requestContext = context.Background()
+	}
+	consumer := &tcpOSCOREBlockwiseConsumer{}
+	req.SetContext(context.WithValue(requestContext, tcpOSCOREBlockwiseConsumerKey{}, consumer))
+	defer func() {
+		cc.releaseTCPOSCOREBlockwiseConsumer(consumer)
+		req.SetContext(requestContext)
+	}()
 	resp, err := cc.blockWise.Do(req, cc.blockwiseSZX, cc.session.maxMessageSize, cc.RemoteAddr(), cc.doInternal)
 	if err != nil {
 		return nil, err
@@ -351,6 +394,7 @@ func (cc *Conn) writeProtectedRequest(req *pool.Message) error {
 		requirementExpiry = time.Time{}
 	}
 	cc.completeTCPOSCOREWrite(key, exchange, requirementExpiry)
+	cc.retainTCPOSCOREBlockwiseExchange(req, key, exchange)
 	return nil
 }
 
@@ -397,7 +441,7 @@ func (cc *Conn) rollbackTCPOSCOREWrite(
 	key string,
 	exchange oscore.Exchange,
 	previous tcpOSCOREExchange,
-	hadPrevious bool,
+	hadPrevious,
 	observeCancellation bool,
 ) {
 	cc.oscoreMu.Lock()
@@ -507,7 +551,7 @@ func (cc *Conn) removeTCPOSCOREExchangeForProcessingError(key string, exchange o
 func (cc *Conn) updateTCPOSCOREExchangeResponse(
 	key string,
 	exchange tcpOSCOREExchange,
-	usedCancelExchange bool,
+	usedCancelExchange,
 	hasObserve bool,
 ) error {
 	cc.oscoreMu.Lock()
@@ -549,6 +593,43 @@ func (cc *Conn) clearAllTCPOSCOREResponseRequirements(key string) {
 	cc.oscoreMu.Lock()
 	cc.oscoreRequiredResponses.RemoveToken(key)
 	cc.oscoreMu.Unlock()
+}
+
+func hasTCPOSCOREBlockwiseConsumer(req *pool.Message) bool {
+	if req.Context() == nil {
+		return false
+	}
+	_, ok := req.Context().Value(tcpOSCOREBlockwiseConsumerKey{}).(*tcpOSCOREBlockwiseConsumer)
+	return ok
+}
+
+func (cc *Conn) retainTCPOSCOREBlockwiseExchange(req *pool.Message, key string, exchange oscore.Exchange) {
+	if req.Context() == nil {
+		return
+	}
+	consumer, _ := req.Context().Value(tcpOSCOREBlockwiseConsumerKey{}).(*tcpOSCOREBlockwiseConsumer)
+	if consumer != nil {
+		consumer.retain(key, exchange)
+	}
+}
+
+func (cc *Conn) releaseTCPOSCOREBlockwiseConsumer(consumer *tcpOSCOREBlockwiseConsumer) {
+	if consumer == nil {
+		return
+	}
+	cc.oscoreMu.Lock()
+	defer cc.oscoreMu.Unlock()
+	for token, exchanges := range consumer.snapshot() {
+		for exchange := range exchanges {
+			cc.clearTCPOSCOREResponseRequirementLocked(token, exchange)
+		}
+		if current, exists := cc.oscoreExchanges[token]; exists {
+			if _, isConsumerExchange := exchanges[current.exchange]; isConsumerExchange && !current.observe {
+				delete(cc.oscoreExchanges, token)
+				cc.clearTCPOSCOREResponseRequirementLocked(token, current.cancelExchange)
+			}
+		}
+	}
 }
 
 func (cc *Conn) tcpOSCORERequirement(req *pool.Message) (oscore.Exchange, bool) {

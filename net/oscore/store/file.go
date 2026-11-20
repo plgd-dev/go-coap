@@ -535,8 +535,8 @@ func sequenceTransactionProgressIsValid(
 
 func validPreviousSequenceTransaction(
 	pending sequencePendingFile,
-	stateIsPrevious bool,
-	guardIsPrevious bool,
+	stateIsPrevious,
+	guardIsPrevious,
 	guardIsNext bool,
 ) bool {
 	return pending.PreviousExists && stateIsPrevious && (guardIsPrevious || guardIsNext)
@@ -544,9 +544,9 @@ func validPreviousSequenceTransaction(
 
 func validFreshSequenceTransaction(
 	pending sequencePendingFile,
-	stateExists bool,
-	stateIsNext bool,
-	guardExists bool,
+	stateExists,
+	stateIsNext,
+	guardExists,
 	guardIsNext bool,
 ) bool {
 	return !pending.PreviousExists && pending.Previous.Next == 0 &&
