@@ -528,6 +528,9 @@ func (s *q2BodyReceiver[C]) finish(response *pool.Message) (*pool.Message, error
 	if s.observePresent {
 		response.SetObserve(s.observeSequence)
 	}
+	if s.hasAuthenticatedSequence {
+		observation.SetAuthenticatedSequenceNumber(response, s.authenticatedSequence)
+	}
 	return response, nil
 }
 

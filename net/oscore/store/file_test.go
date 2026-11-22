@@ -2,6 +2,7 @@ package store
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -24,6 +25,57 @@ func privateTempDir(t testing.TB) string {
 		t.Fatal(err)
 	}
 	return dir
+}
+
+func TestCreateStoreDirectorySyncsEachNewEntryParent(t *testing.T) {
+	if !supportsDirectorySync {
+		t.Skip("directory metadata sync is unavailable")
+	}
+	root := privateTempDir(t)
+	storeDir := filepath.Join(root, "oscore", "state")
+	var synced []string
+	err := createStoreDirectory(storeDir, func(path string) error {
+		synced = append(synced, path)
+		return syncDirectory(path)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{filepath.Dir(root), root, filepath.Join(root, "oscore")}
+	if len(synced) != len(want) {
+		t.Fatalf("synced parent directories = %q, want %q", synced, want)
+	}
+	for i := range want {
+		if synced[i] != want[i] {
+			t.Fatalf("synced parent directories = %q, want %q", synced, want)
+		}
+	}
+	if err := validateStoreDirectory(storeDir); err != nil {
+		t.Fatalf("created store directory is invalid: %v", err)
+	}
+}
+
+func TestCreateStoreDirectoryReturnsParentSyncFailure(t *testing.T) {
+	if !supportsDirectorySync {
+		t.Skip("directory metadata sync is unavailable")
+	}
+	root := privateTempDir(t)
+	storeDir := filepath.Join(root, "oscore")
+	wantErr := errors.New("parent sync failed")
+	syncs := 0
+	err := createStoreDirectory(storeDir, func(path string) error {
+		syncs++
+		if syncs == 2 {
+			return wantErr
+		}
+		return syncDirectory(path)
+	})
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("createStoreDirectory error = %v, want %v", err, wantErr)
+	}
+	if err := createStoreDirectory(storeDir, syncDirectory); err != nil {
+		t.Fatalf("retry after parent sync failure: %v", err)
+	}
 }
 
 func TestHighWaterFileStoreSequenceReservationsAcrossInstances(t *testing.T) {
@@ -151,6 +203,87 @@ func TestHighWaterFileStoreBindsSequenceStateToSenderKeys(t *testing.T) {
 	if sequence.Fingerprint == "" || sequence.Fingerprint != guard.Fingerprint {
 		t.Fatalf("sequence and guard fingerprints differ or are empty: %q, %q",
 			sequence.Fingerprint, guard.Fingerprint)
+	}
+}
+
+func TestHighWaterFileStoreRecoversFirstReservationAfterGuardWriteFailure(t *testing.T) {
+	dir := privateTempDir(t)
+	store, err := NewHighWaterFileStore(dir, "first-bound-reservation")
+	if err != nil {
+		t.Fatal(err)
+	}
+	fingerprint := sha256.Sum256([]byte("bound sender context"))
+	if bindErr := store.Bind(fingerprint); bindErr != nil {
+		t.Fatal(bindErr)
+	}
+	store.sequenceOps.beforeWrite = func(path string) error {
+		if path == store.sequenceGuardPath {
+			return errors.New("simulated guard write failure")
+		}
+		return nil
+	}
+	if _, reserveErr := store.Reserve(); reserveErr == nil {
+		t.Fatal("first reservation succeeded despite guard write failure")
+	}
+	store.sequenceOps.beforeWrite = nil
+
+	restarted, err := NewHighWaterFileStore(dir, "first-bound-reservation")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := restarted.Bind(fingerprint); err != nil {
+		t.Fatalf("rebind after interrupted first reservation: %v", err)
+	}
+	if value, err := restarted.Reserve(); err != nil || value < sequenceWindowSize {
+		t.Fatalf("reservation after recovery = %d, %v; want a value at least %d",
+			value, err, sequenceWindowSize)
+	}
+}
+
+func TestHighWaterFileStoreSenderRecoverySyncsBeforeRemovingPendingJournal(t *testing.T) {
+	dir := privateTempDir(t)
+	store, err := NewHighWaterFileStore(dir, "sender-recovery-sync-before-remove")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Reserve(); err != nil {
+		t.Fatal(err)
+	}
+	next := sequenceFile{
+		Version:     fileVersion,
+		Next:        sequenceWindowSize * 2,
+		Fingerprint: store.sequenceFingerprint,
+	}
+	pending := sequencePendingFile{
+		Version:        fileVersion,
+		Previous:       sequenceFile{Version: fileVersion, Next: sequenceWindowSize},
+		PreviousExists: true,
+		Next:           next,
+	}
+	if err := writeStateFile(store.dir, store.sequencePendingPath, pending); err != nil {
+		t.Fatal(err)
+	}
+
+	syncErr := errors.New("simulated recovered-state directory sync failure")
+	store.sequenceOps.syncDirectory = func(path, dir string) error {
+		if path == store.sequencePendingPath {
+			store.sequenceOps.syncDirectory = nil
+			return syncErr
+		}
+		return syncDirectory(dir)
+	}
+	if err := store.recoverSequenceReservation(); !errors.Is(err, syncErr) {
+		t.Fatalf("recovery error = %v, want %v", err, syncErr)
+	}
+	if _, err := os.Stat(store.sequencePendingPath); err != nil {
+		t.Fatalf("pending journal was removed before syncing recovered state: %v", err)
+	}
+
+	if err := store.recoverSequenceReservation(); err != nil {
+		t.Fatalf("retry recovery after sync failure: %v", err)
+	}
+	if _, err := os.Stat(store.sequencePendingPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("pending journal remains after successful recovery: %v", err)
 	}
 }
 

@@ -1275,7 +1275,7 @@ func TestConcurrentUnprotectOrdinaryResponseAcceptsOnce(t *testing.T) {
 	}
 }
 
-func TestObserveRejectsNotificationWithoutPartialIV(t *testing.T) {
+func TestObserveAcceptsFirstNotificationWithoutPartialIV(t *testing.T) {
 	client, server := pairedContexts(t, 0, 0)
 	observeOptions, _, err := (message.Options{}).SetObserve(nil, 0)
 	if err != nil {
@@ -1318,8 +1318,15 @@ func TestObserveRejectsNotificationWithoutPartialIV(t *testing.T) {
 		},
 		Payload: ciphertext,
 	}
-	if _, unprotectErr := client.UnprotectResponse(firstResponse, clientExchange); !errors.Is(unprotectErr, ErrInvalidOSCOREMessage) {
-		t.Fatalf("notification without Partial IV error = %v, want ErrInvalidOSCOREMessage", unprotectErr)
+	openedFirst, unprotectErr := client.UnprotectResponse(firstResponse, clientExchange)
+	if unprotectErr != nil {
+		t.Fatalf("first notification without Partial IV: %v", unprotectErr)
+	}
+	if got, observeErr := openedFirst.Options.Observe(); observeErr != nil || got != 1 {
+		t.Fatalf("first notification Observe = %d, %v; want outer Observe value 1", got, observeErr)
+	}
+	if _, unprotectErr := client.UnprotectResponse(firstResponse, clientExchange); !errors.Is(unprotectErr, ErrReplay) {
+		t.Fatalf("replayed first notification error = %v, want ErrReplay", unprotectErr)
 	}
 
 	outerOnlyNotification, err := server.ProtectResponseWithPartialIV(message.Message{
@@ -1351,7 +1358,48 @@ func TestObserveRejectsNotificationWithoutPartialIV(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := client.UnprotectResponse(notification, clientExchange); err != nil {
-		t.Fatalf("notification with Partial IV after rejected notification failed: %v", err)
+		t.Fatalf("notification with Partial IV after initial request-nonce notification failed: %v", err)
+	}
+}
+
+func TestUnprotectResponsePrefersInnerEcho(t *testing.T) {
+	client, server := pairedContexts(t, 0, 0)
+	protectedRequest, clientExchange, err := client.ProtectRequest(message.Message{
+		Code: codes.GET, Token: message.Token{1},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, serverExchange, err := server.UnprotectRequest(protectedRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	protectedResponse, err := server.ProtectResponse(message.Message{
+		Code:  codes.Content,
+		Token: protectedRequest.Token,
+		Options: message.Options{{
+			ID: message.Echo, Value: []byte("inner-authenticated"),
+		}},
+	}, serverExchange)
+	if err != nil {
+		t.Fatal(err)
+	}
+	protectedResponse.Options = append(protectedResponse.Options, message.Option{
+		ID: message.Echo, Value: []byte("outer-hop-by-hop"),
+	})
+	sortOptions(protectedResponse.Options)
+
+	opened, err := client.UnprotectResponse(protectedResponse, clientExchange)
+	if err != nil {
+		t.Fatal(err)
+	}
+	echo, err := opened.Options.GetBytes(message.Echo)
+	if err != nil || string(echo) != "inner-authenticated" {
+		t.Fatalf("decrypted Echo = %q, error %v; want authenticated Inner Echo", echo, err)
+	}
+	start, end, err := opened.Options.Find(message.Echo)
+	if err != nil || end-start != 1 {
+		t.Fatalf("decrypted Echo options = %#v, error %v; want only Inner Echo", opened.Options, err)
 	}
 }
 

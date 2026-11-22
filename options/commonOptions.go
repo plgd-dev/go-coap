@@ -63,9 +63,9 @@ func (o OSCOREExchangeTimeoutOpt) TCPClientApply(cfg *tcpClient.Config) {
 }
 
 // WithOSCOREExchangeTimeout configures the expiry backstop for TCP OSCORE
-// exchanges. Ordinary request exchanges are removed when their Do consumer
-// ends; Observe exchanges remain available for the observation lifetime.
-// Zero disables timeout expiry.
+// exchanges. Standalone writes use a 247-second backstop when timeout is zero;
+// live Do and Observe consumers retain their exchanges for the consumer
+// lifetime. A positive timeout overrides the backstop.
 func WithOSCOREExchangeTimeout(timeout time.Duration) OSCOREExchangeTimeoutOpt {
 	return OSCOREExchangeTimeoutOpt{timeout: timeout}
 }
@@ -87,8 +87,8 @@ func (OSCOREErrorResponsesOpt) DTLSServerApply(cfg *dtlsServer.Config) {
 }
 
 // WithOSCOREErrorResponses enables unprotected 4.00, 4.01, or 4.02 responses
-// to OSCORE processing failures. Responses are empty except for an optional
-// Echo challenge and are disabled by default.
+// to ordinary OSCORE processing failures. These responses are disabled by
+// default. Required protected Echo recovery challenges are sent independently.
 func WithOSCOREErrorResponses() OSCOREErrorResponsesOpt {
 	return OSCOREErrorResponsesOpt{}
 }

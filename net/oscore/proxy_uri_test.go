@@ -1,13 +1,14 @@
 package oscore
 
 import (
-	"bytes"
 	"errors"
 	"testing"
 
 	"github.com/plgd-dev/go-coap/v3/message"
 	"github.com/plgd-dev/go-coap/v3/message/codes"
 )
+
+const testOriginAuthority = "coap://origin.example"
 
 func TestParseProxyURI(t *testing.T) {
 	target, err := ParseProxyURI("coap://[2001:db8::1]:5683/a%2Fb/c/?q=a+b&x=%2F")
@@ -53,7 +54,7 @@ func TestProtectRequestDecomposesProxyURI(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if authority != "coap://origin.example" {
+	if authority != testOriginAuthority {
 		t.Fatalf("outer Proxy-Uri = %q", authority)
 	}
 	if protected.Options.HasOption(message.URIPath) || protected.Options.HasOption(message.URIQuery) {
@@ -104,17 +105,8 @@ func TestProtectRequestRejectsProxyURIWithSeparateURIOptions(t *testing.T) {
 }
 
 func TestProtectProxyRequestKeepsAuthorityOutsideCiphertext(t *testing.T) {
-	ctx, err := NewContext(ContextConfig{
-		UnsafeVolatileSenderSequence: true,
-		AcceptReplayStateLoss:        true,
-		MasterSecret:                 []byte("0123456789abcdef"),
-		SenderID:                     []byte{0},
-		RecipientID:                  []byte{1},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	protected, _, err := ctx.ProtectRequest(message.Message{
+	client, server := pairedContexts(t, 0, 0)
+	protected, _, err := client.ProtectRequest(message.Message{
 		Code: codes.GET,
 		Options: message.Options{{
 			ID:    message.ProxyURI,
@@ -124,11 +116,42 @@ func TestProtectProxyRequestKeepsAuthorityOutsideCiphertext(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	first, last, err := protected.Options.Find(message.ProxyURI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if last-first != 1 || string(protected.Options[first].Value) != testOriginAuthority {
+		t.Fatalf("outer Proxy-Uri = %#v", protected.Options[first:last])
+	}
 	if !protected.Options.HasOption(message.OSCORE) || len(protected.Payload) == 0 {
 		t.Fatalf("protected message missing OSCORE data: %+v", protected)
 	}
-	if bytes.Contains(protected.Payload, []byte("origin.example")) ||
-		bytes.Contains(protected.Payload, []byte("a/b")) {
-		t.Fatalf("protected payload unexpectedly contains URI text: %x", protected.Payload)
+
+	opened, _, err := server.UnprotectRequest(protected)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, last, err = opened.Options.Find(message.ProxyURI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if last-first != 1 || string(opened.Options[first].Value) != testOriginAuthority {
+		t.Fatalf("decrypted Proxy-Uri options = %#v", opened.Options[first:last])
+	}
+	paths := make([]string, len(opened.Options))
+	pathCount, err := opened.Options.GetStrings(message.URIPath, paths)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := paths[:pathCount]; len(got) != 1 || got[0] != "a/b" {
+		t.Fatalf("decrypted Uri-Path segments = %#v", got)
+	}
+	queries := make([]string, len(opened.Options))
+	queryCount, err := opened.Options.GetStrings(message.URIQuery, queries)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := queries[:queryCount]; len(got) != 1 || got[0] != "q=one+two" {
+		t.Fatalf("decrypted Uri-Query values = %#v", got)
 	}
 }

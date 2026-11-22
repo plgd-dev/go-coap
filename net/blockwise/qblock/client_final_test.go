@@ -113,6 +113,35 @@ func TestReceiveQBlockResponsePreservesAuthenticatedSequence(t *testing.T) {
 	require.Equal(t, uint64(0x1000000), sequence)
 }
 
+func TestQBlockAssemblyPreservesAuthenticatedSequence(t *testing.T) {
+	ctx := context.Background()
+	client := newTestClient()
+	engine := New(client, nil)
+	defer engine.CloseQBlockTransfers()
+
+	req := pool.NewMessage(ctx)
+	req.SetToken([]byte("authenticated"))
+	assembly, err := NewAssembly(SZX16, 1, 1, 1)
+	require.NoError(t, err)
+	complete, _, err := assembly.Add(0, false, []byte{1})
+	require.NoError(t, err)
+	require.True(t, complete)
+
+	response := pool.NewMessage(ctx)
+	response.SetCode(codes.Content)
+	receiver := q2BodyReceiver[*testClient]{
+		b: engine, req: req, assembly: assembly, observePresent: true,
+		authenticatedSequence: 0x1000000, hasAuthenticatedSequence: true,
+	}
+	assembled, err := receiver.finish(response)
+	require.NoError(t, err)
+	defer client.ReleaseMessage(assembled)
+
+	sequence, ok := observation.AuthenticatedSequenceNumber(assembled.Context())
+	require.True(t, ok)
+	require.Equal(t, uint64(0x1000000), sequence)
+}
+
 type q1IncompleteTestTransport struct {
 	*qTestTransport
 	exchange *q1IncompleteTestExchange

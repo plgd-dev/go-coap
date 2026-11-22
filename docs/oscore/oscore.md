@@ -296,12 +296,21 @@ denial of service but must not be treated as authenticated peer statements.
 Check `oscore.IsUnprotectedProcessingError(response.Context())` before acting
 on one.
 
-Server endpoints can opt into sending these responses with
-`options.WithOSCOREErrorResponses()`. It is disabled by default; when enabled,
-UDP/DTLS replies only to Confirmable requests, while TCP responds on the stream.
-Unknown contexts and replays map to 4.01, malformed OSCORE options to 4.02, and
-other OSCORE processing failures to 4.00. Responses contain no diagnostic
-payload and failed requests are never dispatched to the application handler.
+An OSCORE request routed with `Proxy-Uri` can also receive an unprotected
+proxy-generated error response. Such responses are accepted only for proxied
+exchanges and are marked by `oscore.IsUnprotectedProxyError(response.Context())`.
+They are not authenticated origin responses and may be spoofed by an on-path
+attacker. Direct OSCORE exchanges continue to reject unprotected application
+errors.
+
+Server endpoints can opt into sending ordinary OSCORE processing-error
+responses with `options.WithOSCOREErrorResponses()`. It is disabled by default;
+when enabled, UDP/DTLS replies only to Confirmable requests, while TCP responds
+on the stream. Unknown contexts and replays map to 4.01, malformed OSCORE
+options to 4.02, and other OSCORE processing failures to 4.00. Responses contain
+no diagnostic payload and failed requests are never dispatched to the
+application handler. A context configured with `RequireEchoRecovery` always
+sends its authenticated Echo challenge, independently of this option.
 
 ## Sender sequence and receiver replay state
 
@@ -353,9 +362,9 @@ replay state remains volatile. Echo recovery does not make volatile replay
 state durable, so use persistent replay storage where practical. The peer must
 preserve its sender sequence across restarts; if sender sequence state was also
 lost, establish a fresh security context instead of recovering with Echo.
-Enable `options.WithOSCOREErrorResponses()` on the receiver so the 4.01 Echo
-challenge is sent to the peer; these OSCORE processing-error responses are
-disabled by default.
+The required Echo challenge is sent independently of
+`options.WithOSCOREErrorResponses()`, which only controls ordinary OSCORE
+processing-error responses.
 The store must load the state for that recipient context and persist it before
 returning success; otherwise the protected request is not accepted. Use one
 store per context and coordinate access if multiple receiver processes use
@@ -428,12 +437,13 @@ Use the same stable store ID when recreating the same local OSCORE context and
 a different ID for each distinct context. The store creates files with
 restrictive permissions and atomically syncs updates. On Unix it coordinates
 multiple processes with file locks; on other platforms it only coordinates
-within one process and cannot sync directory metadata. Keep its directory
-writable only by the trusted application account. The store does not persist
-master secrets or encrypt state at rest. It detects sender-state corruption,
-missing individual sender-state files, and mismatches caused by individual
-sender-state file rollback. Restoring matching older sender-state and guard
-files can reuse Partial IVs under the same key. Rolling back the complete
+within one process and cannot sync directory metadata. On Windows, the store
+checks the directory ACL for write access granted to broad principals. Keep its
+directory writable only by the trusted application account. The store does not
+persist master secrets or encrypt state at rest. It detects sender-state
+corruption, missing individual sender-state files, and mismatches caused by
+individual sender-state file rollback. Restoring matching older sender-state and
+guard files can reuse Partial IVs under the same key. Rolling back the complete
 directory, including both sender files or both replay files, is also
 undetectable. Detecting either rollback requires an external monotonic trust
 anchor outside the store directory. Reserved but unused sender values are
@@ -511,18 +521,16 @@ timeouts, and response-size limits.
   AES-CCM-16-64-128.
 - UDP, DTLS, TCP, and TLS transports.
 - TCP non-Observe OSCORE exchanges are removed when their request consumer
-  (`Do`) returns, is canceled, or times out. Observe exchanges remain available
-  for the observation lifetime. The default `OSCOREExchangeTimeout` is zero,
-  so there is no timeout-based expiry; configure
-  `options.WithOSCOREExchangeTimeout` as a timeout backstop. The timeout
-  rejects an exchange only when no live request is awaiting its response; a
-  live `Do` request retains its exchange until it returns, is canceled, or
+  (`Do`) returns, is canceled, or times out. Standalone protected writes expire
+  after 247 seconds by default; configure `options.WithOSCOREExchangeTimeout`
+  to change that backstop. Observe exchanges remain available for the
+  observation lifetime while a live Observe consumer owns them. A live `Do`
+  request likewise retains its exchange until it returns, is canceled, or
   times out. This also applies to the first response to an Observe request.
   This is a local exchange-retention policy, not an RFC-defined TCP
   lifetime. Canceling an Observe registration with no deregistration request
   in flight removes its exchange immediately. If deregistration is in flight,
-  the exchange is retained until its response arrives or the timeout expires;
-  when the timeout is zero, a 247-second backstop releases it.
+  the exchange is retained until its response arrives or the timeout expires.
 - Classic Block1/Block2 and Observe flows. Inner Blockwise remains the
   default. UDP and DTLS also support opt-in Outer Blockwise fragmentation and
   reassembly with `options.WithOSCOREOuterBlockwise()`; reassembled payloads

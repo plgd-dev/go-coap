@@ -21,7 +21,8 @@ var (
 )
 
 type replayRecoveryRequiredError struct {
-	echo []byte
+	echo     []byte
+	exchange Exchange
 }
 
 func (e *replayRecoveryRequiredError) Error() string {
@@ -32,9 +33,7 @@ func (e *replayRecoveryRequiredError) Unwrap() error {
 	return ErrReplayRecoveryRequired
 }
 
-// ReplayRecoveryEcho returns the Echo challenge from a replay recovery error.
-// The returned bytes are a copy and are suitable for adding to an unprotected
-// 4.01 response.
+// ReplayRecoveryEcho returns a copy of the Echo challenge from a replay recovery error.
 func ReplayRecoveryEcho(err error) ([]byte, bool) {
 	var recoveryErr *replayRecoveryRequiredError
 	if !errors.As(err, &recoveryErr) {
@@ -43,7 +42,38 @@ func ReplayRecoveryEcho(err error) ([]byte, bool) {
 	return append([]byte(nil), recoveryErr.echo...), true
 }
 
-type unprotectedProcessingErrorKey struct{}
+// ProtectReplayRecoveryResponse builds a protected 4.01 response carrying the
+// authenticated replay-recovery Echo challenge. The supplied response provides
+// transport fields such as type and message ID; its code, token, options, and
+// payload are replaced with the challenge response bound to the authenticated
+// request.
+func ProtectReplayRecoveryResponse(err error, response message.Message) (message.Message, bool, error) {
+	var recoveryErr *replayRecoveryRequiredError
+	if !errors.As(err, &recoveryErr) {
+		return message.Message{}, false, nil
+	}
+	if recoveryErr.exchange.responseState == nil {
+		return message.Message{}, true, ErrInvalidContext
+	}
+	state := recoveryErr.exchange.responseState
+	response.Code = codes.Unauthorized
+	response.Token = append(message.Token(nil), state.requestToken...)
+	response.Options = message.Options{{
+		ID:    message.Echo,
+		Value: append([]byte(nil), recoveryErr.echo...),
+	}}
+	response.Payload = nil
+	protected, protectErr := state.context.ProtectResponseWithPartialIV(response, recoveryErr.exchange)
+	if protectErr != nil {
+		return message.Message{}, true, fmt.Errorf("protect replay recovery response: %w", protectErr)
+	}
+	return protected, true, nil
+}
+
+type (
+	unprotectedProcessingErrorKey struct{}
+	unprotectedProxyErrorKey      struct{}
+)
 
 // IsUnprotectedProcessingErrorCode reports whether RFC 8613 permits this
 // response code for an OSCORE processing error without OSCORE protection.
@@ -88,6 +118,28 @@ func IsUnprotectedProcessingError(ctx context.Context) bool {
 	}
 	marked, _ := ctx.Value(unprotectedProcessingErrorKey{}).(bool)
 	return marked
+}
+
+// IsUnprotectedProxyError reports whether the response is an unprotected
+// proxy-generated error for a proxied OSCORE request. Such responses are
+// unauthenticated and may be spoofed by an on-path attacker.
+func IsUnprotectedProxyError(ctx context.Context) bool {
+	if ctx == nil {
+		return false
+	}
+	marked, _ := ctx.Value(unprotectedProxyErrorKey{}).(bool)
+	return marked
+}
+
+// ContextWithUnprotectedProxyError marks an unprotected proxy-generated error.
+func ContextWithUnprotectedProxyError(ctx context.Context) context.Context {
+	return context.WithValue(ctx, unprotectedProxyErrorKey{}, true)
+}
+
+// IsUnprotectedProxyErrorCode reports whether code is an error response code
+// other than one reserved for OSCORE processing errors.
+func IsUnprotectedProxyErrorCode(code codes.Code) bool {
+	return code >= codes.BadRequest && code < 192 && !IsUnprotectedProcessingErrorCode(code)
 }
 
 // OutgoingContextSelector chooses a security context for an outgoing request.

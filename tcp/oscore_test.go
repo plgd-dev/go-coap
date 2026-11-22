@@ -325,9 +325,11 @@ func TestOSCORETCPReplayRecoveryReturnsEchoBeforeHandler(t *testing.T) {
 	var handled atomic.Int32
 	server := tcp.NewServer(
 		options.WithOSCORE(newProcessor("server", "client", true)),
-		options.WithOSCOREErrorResponses(),
-		options.WithHandlerFunc(func(*responsewriter.ResponseWriter[*client.Conn], *pool.Message) {
+		options.WithHandlerFunc(func(w *responsewriter.ResponseWriter[*client.Conn], _ *pool.Message) {
 			handled.Add(1)
+			if responseErr := w.SetResponse(codes.Content, message.TextPlain, bytes.NewReader([]byte("recovered"))); responseErr != nil {
+				t.Errorf("set recovered response: %v", responseErr)
+			}
 		}),
 	)
 	serverDone := make(chan error, 1)
@@ -349,13 +351,28 @@ func TestOSCORETCPReplayRecoveryReturnsEchoBeforeHandler(t *testing.T) {
 	defer cancel()
 	response, err := cc.Get(ctx, "/")
 	require.NoError(t, err)
+	defer cc.ReleaseMessage(response)
 	require.Equal(t, codes.Unauthorized, response.Code())
 	require.False(t, response.HasOption(message.OSCORE))
 	echo, err := response.Echo()
 	require.NoError(t, err)
 	require.Len(t, echo, 16)
-	require.True(t, oscore.IsUnprotectedProcessingError(response.Context()))
+	require.False(t, oscore.IsUnprotectedProcessingError(response.Context()),
+		"replay-recovery challenge must be protected")
 	require.Zero(t, handled.Load())
+
+	retry, err := cc.NewGetRequest(ctx, "/")
+	require.NoError(t, err)
+	defer cc.ReleaseMessage(retry)
+	require.NoError(t, retry.SetEcho(echo))
+	recovered, err := cc.Do(retry)
+	require.NoError(t, err)
+	defer cc.ReleaseMessage(recovered)
+	require.Equal(t, codes.Content, recovered.Code())
+	body, err := recovered.ReadBody()
+	require.NoError(t, err)
+	require.Equal(t, "recovered", string(body))
+	require.EqualValues(t, 1, handled.Load(), "only the Echo-authenticated retry should be dispatched")
 }
 
 func TestOSCORETCPRejectsMalformedTransportMessages(t *testing.T) {
@@ -702,6 +719,7 @@ func TestOSCORETCPObserveNotificationsAndCancellation(t *testing.T) {
 	serverProcessor, err := oscore.NewProcessor(oscore.ProcessorConfig{Contexts: []*oscore.Context{serverContext}})
 	require.NoError(t, err)
 	sendNotifications := make(chan struct{})
+	notificationsSent := make(chan error, 1)
 	server := tcp.NewServer(
 		options.WithOSCORE(serverProcessor),
 		options.WithHandlerFunc(func(w *responsewriter.ResponseWriter[*client.Conn], req *pool.Message) {
@@ -729,10 +747,11 @@ func TestOSCORETCPObserveNotificationsAndCancellation(t *testing.T) {
 						writeErr := cc.WriteMessage(notification)
 						cc.ReleaseMessage(notification)
 						if writeErr != nil {
-							t.Errorf("write Observe notification: %v", writeErr)
+							notificationsSent <- fmt.Errorf("write Observe notification: %w", writeErr)
 							return
 						}
 					}
+					notificationsSent <- nil
 				}()
 			case 1:
 				if responseErr := w.SetResponse(codes.Content, message.TextPlain, nil); responseErr != nil {
@@ -782,19 +801,44 @@ func TestOSCORETCPObserveNotificationsAndCancellation(t *testing.T) {
 		received <- observedResponse{body: string(body), sequence: sequence, ok: ok}
 	})
 	require.NoError(t, err)
-	initial := <-received
-	require.Equal(t, "initial", initial.body)
-	require.True(t, initial.ok)
-	require.Equal(t, uint64(0xffffff), initial.sequence)
+	waitForResponse := func(expected string, sequence uint64) {
+		t.Helper()
+		for {
+			select {
+			case response := <-received:
+				require.Equal(t, expected, response.body)
+				require.True(t, response.ok)
+				require.Equal(t, sequence, response.sequence)
+				return
+			case sendErr := <-notificationsSent:
+				if sendErr != nil {
+					require.NoError(t, sendErr)
+				}
+				notificationsSent = nil
+			case <-ctx.Done():
+				select {
+				case sendErr := <-notificationsSent:
+					if sendErr != nil {
+						require.NoError(t, sendErr)
+					}
+				default:
+				}
+				t.Fatalf("timed out waiting for Observe body %q: %v", expected, ctx.Err())
+			}
+		}
+	}
+	waitForResponse("initial", 0xffffff)
 	close(sendNotifications)
-	first := <-received
-	require.Equal(t, "notification-1", first.body)
-	require.True(t, first.ok)
-	require.Equal(t, uint64(0x1000000), first.sequence)
-	second := <-received
-	require.Equal(t, "notification-2", second.body)
-	require.True(t, second.ok)
-	require.Equal(t, uint64(0x1000001), second.sequence)
+	waitForResponse("notification-1", 0x1000000)
+	waitForResponse("notification-2", 0x1000001)
+	if notificationsSent != nil {
+		select {
+		case sendErr := <-notificationsSent:
+			require.NoError(t, sendErr)
+		case <-ctx.Done():
+			t.Fatalf("TCP Observe notifications were not written before deadline: %v", ctx.Err())
+		}
+	}
 	require.NoError(t, observation.Cancel(ctx))
 }
 

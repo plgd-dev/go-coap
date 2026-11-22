@@ -111,7 +111,8 @@ type replayHighWaterPendingFile struct {
 // NewHighWaterFileStore creates a file store in dir. id is an application-
 // chosen stable identifier for one OSCORE context; only its SHA-256 digest
 // is used in filenames. The directory is created with mode 0700 when
-// necessary, and state and lock files are created with mode 0600.
+// necessary, and state and lock files are created with mode 0600. On
+// platforms that cannot sync directory metadata, dir must already exist.
 func NewHighWaterFileStore(dir, id string, options ...HighWaterFileStoreOption) (*HighWaterFileStore, error) {
 	if id == "" {
 		return nil, ErrInvalidStoreID
@@ -130,8 +131,7 @@ func NewHighWaterFileStore(dir, id string, options ...HighWaterFileStoreOption) 
 	if err != nil {
 		return nil, fmt.Errorf("resolve OSCORE file store directory: %w", err)
 	}
-	// #nosec G703 -- dir is the caller-selected persistent-store root.
-	if err := os.MkdirAll(filepath.Clean(absoluteDir), 0o700); err != nil {
+	if err := createStoreDirectory(filepath.Clean(absoluteDir), syncDirectory); err != nil {
 		return nil, fmt.Errorf("create OSCORE file store directory: %w", err)
 	}
 	if err := validateStoreDirectory(absoluteDir); err != nil {
@@ -151,6 +151,78 @@ func NewHighWaterFileStore(dir, id string, options ...HighWaterFileStoreOption) 
 		sequenceLock:          prefix + ".sequence.lock",
 		replayLock:            prefix + ".replay.lock",
 	}, nil
+}
+
+func createStoreDirectory(path string, syncDir func(string) error) error {
+	missing, existing, err := findMissingStoreDirectories(path)
+	if err != nil {
+		return err
+	}
+	if len(missing) > 0 && !supportsDirectorySync {
+		return errors.New("directory metadata sync is unavailable; pre-create the store directory")
+	}
+	if err := syncExistingStoreParent(existing, syncDir); err != nil {
+		return err
+	}
+	return createMissingStoreDirectories(missing, syncDir)
+}
+
+func findMissingStoreDirectories(path string) ([]string, string, error) {
+	var missing []string
+	var existing string
+	for current := path; ; current = filepath.Dir(current) {
+		// #nosec G703 -- current is the caller-selected store directory or one of its missing ancestors.
+		_, err := os.Stat(current)
+		if err == nil {
+			existing = current
+			break
+		}
+		if !errors.Is(err, os.ErrNotExist) {
+			return nil, "", err
+		}
+		parent := filepath.Dir(current)
+		if parent == current {
+			return nil, "", err
+		}
+		missing = append(missing, current)
+	}
+	return missing, existing, nil
+}
+
+func syncExistingStoreParent(existing string, syncDir func(string) error) error {
+	if !supportsDirectorySync {
+		return nil
+	}
+	parent := filepath.Dir(existing)
+	if parent != existing {
+		if err := syncDir(parent); err != nil {
+			return fmt.Errorf("sync parent directory %q: %w", parent, err)
+		}
+	}
+	return nil
+}
+
+func createMissingStoreDirectories(missing []string, syncDir func(string) error) error {
+	for i := len(missing) - 1; i >= 0; i-- {
+		current := missing[i]
+		parent := filepath.Dir(current)
+		// #nosec G703 -- current is the caller-selected store directory or one of its missing ancestors.
+		if err := os.Mkdir(current, 0o700); err != nil && !errors.Is(err, os.ErrExist) {
+			return fmt.Errorf("create directory %q: %w", current, err)
+		}
+		// #nosec G703 -- current is a newly created directory derived from the caller-selected store root.
+		info, err := os.Stat(current)
+		if err != nil {
+			return fmt.Errorf("stat directory %q: %w", current, err)
+		}
+		if !info.IsDir() {
+			return fmt.Errorf("%q is not a directory", current)
+		}
+		if err := syncDir(parent); err != nil {
+			return fmt.Errorf("sync parent directory %q: %w", parent, err)
+		}
+	}
+	return nil
 }
 
 // LoadHighWater loads the exclusive replay cutoff used by the batched replay
@@ -364,6 +436,17 @@ func (s *HighWaterFileStore) Reserve() (uint64, error) {
 		if err != nil {
 			return err
 		}
+		_, stateExists, err := readSequenceWithExistence(s.sequencePath)
+		if err != nil {
+			return err
+		}
+		_, guardExists, err := readSequenceWithExistence(s.sequenceGuardPath)
+		if err != nil {
+			return err
+		}
+		if stateExists != guardExists {
+			return errors.New("OSCORE sender sequence state or rollback guard is missing")
+		}
 		if state.Next > maxPartialIV {
 			return oscore.ErrSenderSequenceExhausted
 		}
@@ -375,7 +458,7 @@ func (s *HighWaterFileStore) Reserve() (uint64, error) {
 		pending := sequencePendingFile{
 			Version:        fileVersion,
 			Previous:       sequenceFile{Version: fileVersion, Next: reserved, Fingerprint: s.sequenceFingerprint},
-			PreviousExists: reserved != 0,
+			PreviousExists: stateExists && guardExists,
 			Next:           next,
 		}
 		if err := s.writeSequenceState(s.sequencePendingPath, pending); err != nil {
@@ -562,6 +645,9 @@ func (s *HighWaterFileStore) finishSequenceReservationRecovery(
 		}
 	}
 	s.sequenceInitialized = true
+	if err := s.syncSequenceDirectory(s.sequencePendingPath); err != nil {
+		return fmt.Errorf("sync recovered sender sequence state: %w", err)
+	}
 	if err := s.removeSequencePending(); err != nil {
 		return fmt.Errorf("complete sender sequence recovery: %w", err)
 	}
@@ -658,6 +744,13 @@ func (s *HighWaterFileStore) removeSequencePending() error {
 	}
 	if s.sequenceOps.syncDirectory != nil {
 		return s.sequenceOps.syncDirectory(s.sequencePendingPath, s.dir)
+	}
+	return syncDirectory(s.dir)
+}
+
+func (s *HighWaterFileStore) syncSequenceDirectory(path string) error {
+	if s.sequenceOps.syncDirectory != nil {
+		return s.sequenceOps.syncDirectory(path, s.dir)
 	}
 	return syncDirectory(s.dir)
 }

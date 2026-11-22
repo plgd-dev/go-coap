@@ -719,15 +719,41 @@ func TestOSCOREDTLSObserveNotificationsAndCancellation(t *testing.T) {
 		received <- string(body)
 	})
 	require.NoError(t, err)
-	require.Equal(t, "initial", <-received)
+	waitForBody := func(expected string) {
+		t.Helper()
+		for {
+			select {
+			case body := <-received:
+				require.Equal(t, expected, body)
+				return
+			case sendErr := <-notificationsSent:
+				if sendErr != nil {
+					require.NoError(t, sendErr)
+				}
+				notificationsSent = nil
+			case <-ctx.Done():
+				select {
+				case sendErr := <-notificationsSent:
+					if sendErr != nil {
+						require.NoError(t, sendErr)
+					}
+				default:
+				}
+				t.Fatalf("timed out waiting for Observe body %q: %v", expected, ctx.Err())
+			}
+		}
+	}
+	waitForBody("initial")
 	close(sendNotifications)
-	require.Equal(t, "notification-1", <-received)
-	require.Equal(t, "notification-2", <-received)
-	select {
-	case err := <-notificationsSent:
-		require.NoError(t, err)
-	case <-ctx.Done():
-		require.FailNow(t, "DTLS Observe notifications were not acknowledged before cancellation")
+	waitForBody("notification-1")
+	waitForBody("notification-2")
+	if notificationsSent != nil {
+		select {
+		case err := <-notificationsSent:
+			require.NoError(t, err)
+		case <-ctx.Done():
+			t.Fatalf("DTLS Observe notifications were not acknowledged before cancellation: %v", ctx.Err())
+		}
 	}
 	require.NoError(t, observation.Cancel(ctx))
 }

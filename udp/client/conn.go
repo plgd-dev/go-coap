@@ -1530,7 +1530,7 @@ func sendJustAcknowledgeMessage(reqType message.Type, w *responsewriter.Response
 	return reqType == message.Confirmable && !w.Message().IsModified()
 }
 
-func (cc *Conn) processResponse(reqType message.Type, reqMessageID int32, qResponse,
+func (cc *Conn) processResponse(reqType message.Type, reqMessageID int32, qResponse bool,
 	cacheResponse bool, w *responsewriter.ResponseWriter[*Conn],
 ) error {
 	switch {
@@ -1751,10 +1751,7 @@ func (cc *Conn) handleSpecialMessages(r *pool.Message) bool {
 		return true
 	}
 
-	// if waits for concrete message handler; only an ACK or RST matches our CON (RFC 7252 section 4.4)
-	if r.Type() != message.Acknowledgement && r.Type() != message.Reset {
-		return false
-	}
+	// if waits for concrete message handler
 	if elem, ok := cc.midHandlerContainer.LoadAndDelete(r.MessageID()); ok {
 		elem.ReleaseMessage(cc)
 		resp := cc.AcquireMessage(cc.Context())
@@ -2116,8 +2113,15 @@ func (cc *Conn) Done() <-chan struct{} {
 
 func (cc *Conn) checkMidHandlerContainer(now time.Time, maxRetransmit uint32, key int32, value *midElement) {
 	if value.IsExpired(now, maxRetransmit) {
-		current, loaded := cc.midHandlerContainer.LoadAndDelete(key)
-		if !loaded || current != value {
+		removed := false
+		cc.midHandlerContainer.ReplaceWithFunc(key, func(current *midElement, loaded bool) (*midElement, bool) {
+			if loaded && current == value {
+				removed = true
+				return current, true
+			}
+			return current, !loaded
+		})
+		if !removed {
 			return
 		}
 		value.ReleaseMessage(cc)

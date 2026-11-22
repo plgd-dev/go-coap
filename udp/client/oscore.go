@@ -20,6 +20,7 @@ type udpOSCOREExchange struct {
 	record         *udpOSCOREExchangeRecord
 	observe        bool
 	qBlock2        bool
+	proxied        bool
 	expires        time.Time
 	cancelContext  *oscore.Context
 	cancelExchange oscore.Exchange
@@ -213,6 +214,7 @@ func (cc *Conn) trackOSCOREExchange(
 		exchange: exchange,
 		observe:  isObserveRequest,
 		qBlock2:  req.HasOption(message.QBlock2),
+		proxied:  req.HasOption(message.ProxyURI),
 		expires:  expires,
 	}
 	if isObserveRequest && observeValue == 1 && hadPrevious && previous.observe {
@@ -331,6 +333,10 @@ func (cc *Conn) unprotectIncomingResponse(resp *pool.Message) error {
 		return oscore.ErrNoSecurityContext
 	}
 	if !resp.HasOption(message.OSCORE) {
+		if exchange.proxied && oscore.IsUnprotectedProxyErrorCode(resp.Code()) {
+			resp.SetContext(oscore.ContextWithUnprotectedProxyError(resp.Context()))
+			return nil
+		}
 		if oscore.IsUnprotectedProcessingErrorCode(resp.Code()) {
 			resp.SetContext(oscore.ContextWithUnprotectedProcessingError(resp.Context()))
 			return nil
@@ -538,15 +544,39 @@ func (cc *Conn) finishOSCORERequest(mid int32, digest [sha256.Size]byte, process
 }
 
 func (cc *Conn) respondToOSCOREProcessingError(req *pool.Message, processingErr error) (bool, error) {
+	_, requiresEchoRecovery := oscore.ReplayRecoveryEcho(processingErr)
 	if oscore.IsInternalProcessingError(processingErr) ||
-		!cc.oscoreErrorResponses || !req.HasOption(message.OSCORE) || req.Type() != message.Confirmable {
+		!req.HasOption(message.OSCORE) ||
+		!cc.oscoreErrorResponses && !requiresEchoRecovery ||
+		req.Type() != message.Confirmable && (!requiresEchoRecovery || req.Type() != message.NonConfirmable) {
 		return false, nil
+	}
+	responseType := message.Acknowledgement
+	responseMID := req.MessageID()
+	if req.Type() == message.NonConfirmable {
+		responseType = message.NonConfirmable
+		responseMID = cc.GetMessageID()
 	}
 	resp := cc.AcquireMessage(req.Context())
 	defer cc.ReleaseMessage(resp)
+	if protected, ok, err := oscore.ProtectReplayRecoveryResponse(processingErr, message.Message{
+		Type:      responseType,
+		MessageID: responseMID,
+		Token:     req.Token(),
+	}); ok {
+		if err != nil {
+			return true, fmt.Errorf("protect replay recovery response: %w", err)
+		}
+		resp.SetMessage(protected)
+		resp.SetControlMessage(responseControlMessage(req.ControlMessage()))
+		if err := cc.session.WriteMessage(resp); err != nil {
+			return true, fmt.Errorf("send protected replay recovery response: %w", err)
+		}
+		return true, nil
+	}
 	resp.SetCode(oscore.ProcessingErrorCode(processingErr))
-	resp.SetType(message.Acknowledgement)
-	resp.SetMessageID(req.MessageID())
+	resp.SetType(responseType)
+	resp.SetMessageID(responseMID)
 	resp.SetToken(req.Token())
 	if echo, ok := oscore.ReplayRecoveryEcho(processingErr); ok {
 		if err := resp.SetEcho(echo); err != nil {
@@ -576,6 +606,7 @@ func (cc *Conn) retransmitOSCOREResponse(req *pool.Message) error {
 	} else {
 		resp.SetType(message.NonConfirmable)
 	}
+	resp.SetControlMessage(responseControlMessage(req.ControlMessage()))
 	return cc.session.WriteMessage(resp)
 }
 
@@ -763,13 +794,18 @@ func (cc *Conn) expireOSCORERequiredResponses() {
 }
 
 func (cc *Conn) hasOSCOREResponseConsumer(token string) bool {
-	_, hasHandler := cc.tokenHandlerContainer.Load(message.Token(token).Hash())
+	tokenValue := message.Token(token)
+	_, hasHandler := cc.tokenHandlerContainer.Load(tokenValue.Hash())
 	_, hasObservation := cc.oscoreObservations[token]
 	hasObservationConsumer := false
 	if cc.observationHandler != nil {
-		_, hasObservationConsumer = cc.observationHandler.GetObservation(message.Token(token).Hash())
+		_, hasObservationConsumer = cc.observationHandler.GetObservation(tokenValue.Hash())
 	}
-	return hasHandler || hasObservation || hasObservationConsumer
+	hasTokenlessHandler := false
+	if token == "" {
+		_, hasTokenlessHandler = cc.tokenlessHandler.Load(false)
+	}
+	return hasHandler || hasObservation || hasObservationConsumer || hasTokenlessHandler
 }
 
 func (cc *Conn) expireOSCORERequestCache(now time.Time) {

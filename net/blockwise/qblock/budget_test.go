@@ -177,20 +177,33 @@ func TestQBlockOSCOREReceiveLimitsAndRetransmission(t *testing.T) {
 	defer b.CloseQBlockTransfers()
 
 	request := pool.NewMessage(context.Background())
-	request.SetContext(oscore.ContextWithRequestInfo(request.Context(), oscore.RequestInfo{Protected: true}))
+	firstInfo := oscore.RequestInfo{Protected: true, RecipientID: []byte("first")}
+	request.SetContext(oscore.ContextWithRequestInfo(request.Context(), firstInfo))
 	requestInfo, hasRequestInfo := oscore.RequestInfoFromContext(request.Context())
 	require.True(t, hasRequestInfo)
 	require.True(t, requestInfo.Protected)
 	p := q1Parameters{szx: SZX16, bodySize: 32, num: 0, more: true}
-	transfer, err := b.q1TransferLocked(request, "oscore-retry", p)
+	firstKey := q1TransferKey(request, nil, []byte("tag"))
+	transfer, err := b.q1TransferLocked(request, firstKey, p)
 	require.NoError(t, err)
 	transfer.expires = time.Now().Add(time.Hour)
 
+	secondRequest := pool.NewMessage(context.Background())
+	secondRequest.SetContext(oscore.ContextWithRequestInfo(secondRequest.Context(), oscore.RequestInfo{
+		Protected:   true,
+		RecipientID: []byte("second"),
+	}))
+	secondKey := q1TransferKey(secondRequest, nil, []byte("tag"))
+	require.NotEqual(t, firstKey, secondKey, "distinct OSCORE identities must not share a Q-Block1 transfer")
+	originalTransfer, err := b.q1TransferLocked(request, firstKey, p)
+	require.NoError(t, err)
+	require.Same(t, transfer, originalTransfer, "the original identity's transfer must remain usable")
+
 	payload := bytes.Repeat([]byte{1}, 16)
-	_, duplicate, err := b.addQ1PayloadLocked("oscore-retry", transfer, transfer.assembly, p, payload)
+	_, duplicate, err := b.addQ1PayloadLocked(firstKey, transfer, transfer.assembly, p, payload)
 	require.NoError(t, err)
 	require.False(t, duplicate)
-	_, duplicate, err = b.addQ1PayloadLocked("oscore-retry", transfer, transfer.assembly, p, payload)
+	_, duplicate, err = b.addQ1PayloadLocked(firstKey, transfer, transfer.assembly, p, payload)
 	require.NoError(t, err)
 	require.True(t, duplicate)
 	require.Len(t, b.q1Receivers, 1)

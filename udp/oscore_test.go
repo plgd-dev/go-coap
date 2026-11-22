@@ -15,6 +15,7 @@ import (
 	"github.com/plgd-dev/go-coap/v3/message/codes"
 	"github.com/plgd-dev/go-coap/v3/message/noresponse"
 	"github.com/plgd-dev/go-coap/v3/message/pool"
+	"github.com/plgd-dev/go-coap/v3/mux"
 	coapNet "github.com/plgd-dev/go-coap/v3/net"
 	"github.com/plgd-dev/go-coap/v3/net/blockwise"
 	"github.com/plgd-dev/go-coap/v3/net/oscore"
@@ -382,9 +383,11 @@ func TestOSCOREUDPReplayRecoveryReturnsEchoBeforeHandler(t *testing.T) {
 	var handled atomic.Int32
 	server := udp.NewServer(
 		options.WithOSCORE(newProcessor("server", "client", true)),
-		options.WithOSCOREErrorResponses(),
-		options.WithHandlerFunc(func(*responsewriter.ResponseWriter[*client.Conn], *pool.Message) {
+		options.WithHandlerFunc(func(w *responsewriter.ResponseWriter[*client.Conn], _ *pool.Message) {
 			handled.Add(1)
+			if responseErr := w.SetResponse(codes.Content, message.TextPlain, bytes.NewReader([]byte("recovered"))); responseErr != nil {
+				t.Errorf("set recovered response: %v", responseErr)
+			}
 		}),
 	)
 	serverDone := make(chan error, 1)
@@ -406,13 +409,28 @@ func TestOSCOREUDPReplayRecoveryReturnsEchoBeforeHandler(t *testing.T) {
 	defer cancel()
 	response, err := cc.Get(ctx, "/")
 	require.NoError(t, err)
+	defer cc.ReleaseMessage(response)
 	require.Equal(t, codes.Unauthorized, response.Code())
 	require.False(t, response.HasOption(message.OSCORE))
 	echo, err := response.Echo()
 	require.NoError(t, err)
 	require.Len(t, echo, 16)
-	require.True(t, oscore.IsUnprotectedProcessingError(response.Context()))
+	require.False(t, oscore.IsUnprotectedProcessingError(response.Context()),
+		"replay-recovery challenge must be protected")
 	require.Zero(t, handled.Load())
+
+	retry, err := cc.NewGetRequest(ctx, "/")
+	require.NoError(t, err)
+	defer cc.ReleaseMessage(retry)
+	require.NoError(t, retry.SetEcho(echo))
+	recovered, err := cc.Do(retry)
+	require.NoError(t, err)
+	defer cc.ReleaseMessage(recovered)
+	require.Equal(t, codes.Content, recovered.Code())
+	body, err := recovered.ReadBody()
+	require.NoError(t, err)
+	require.Equal(t, "recovered", string(body))
+	require.EqualValues(t, 1, handled.Load(), "only the Echo-authenticated retry should be dispatched")
 }
 
 func TestOSCOREOuterBlockwiseStrictRejectsPlaintextRequests(t *testing.T) {
@@ -899,6 +917,58 @@ func TestOSCOREOuterBlockwiseUDPProxy(t *testing.T) {
 	require.False(t, response.HasOption(message.Block2))
 }
 
+func TestOSCOREUDPProxyRejectionIsDeliveredAsUnprotectedProxyError(t *testing.T) {
+	listener, err := coapNet.NewListenUDP("udp", "127.0.0.1:0")
+	require.NoError(t, err)
+	clientContext, _ := newUDPOSCOREContextPair(t, "client", "origin")
+	processor, err := oscore.NewProcessor(oscore.ProcessorConfig{Contexts: []*oscore.Context{clientContext}})
+	require.NoError(t, err)
+	var originCalled atomic.Bool
+	forwarder := &proxy.Forwarder{
+		RoundTripper: proxy.RoundTripperFunc(func(
+			context.Context, oscore.ProxyTarget, message.Message,
+		) (message.Message, error) {
+			originCalled.Store(true)
+			return message.Message{}, nil
+		}),
+		AllowTarget: func(context.Context, oscore.ProxyTarget) bool { return false },
+	}
+	server := udp.NewServer(
+		options.WithOSCOREProxy(),
+		options.WithMux(mux.HandlerFunc(forwarder.ServeCOAP)),
+	)
+	serverDone := make(chan error, 1)
+	go func() { serverDone <- server.Serve(listener) }()
+	defer func() {
+		server.Stop()
+		select {
+		case serverErr := <-serverDone:
+			require.NoError(t, serverErr)
+		case <-time.After(5 * time.Second):
+			require.Fail(t, "UDP OSCORE proxy did not stop")
+		}
+	}()
+
+	cc, err := udp.Dial(listener.LocalAddr().String(), options.WithOSCORE(processor))
+	require.NoError(t, err)
+	defer func() { require.NoError(t, cc.Close()) }()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	request := cc.AcquireMessage(ctx)
+	defer cc.ReleaseMessage(request)
+	request.SetCode(codes.POST)
+	request.SetOptionBytes(message.ProxyURI, []byte("coap://blocked.example/resource"))
+	response, err := cc.Do(request)
+	require.NoError(t, err)
+	defer cc.ReleaseMessage(response)
+	require.Equal(t, codes.Forbidden, response.Code())
+	require.True(t, oscore.IsUnprotectedProxyError(response.Context()))
+	require.False(t, oscore.IsUnprotectedProcessingError(response.Context()))
+	require.False(t, response.HasOption(message.OSCORE))
+	require.False(t, originCalled.Load(), "disallowed target must not reach the origin")
+}
+
 func TestOSCOREUDPObserveWithPOSTIsRejectedBeforeDispatch(t *testing.T) {
 	listener, err := coapNet.NewListenUDP("udp", "127.0.0.1:0")
 	require.NoError(t, err)
@@ -1223,6 +1293,7 @@ func TestOSCOREUDPObserveNotificationsAndCancellation(t *testing.T) {
 	serverProcessor, err := oscore.NewProcessor(oscore.ProcessorConfig{Contexts: []*oscore.Context{serverContext}})
 	require.NoError(t, err)
 	sendNotifications := make(chan struct{})
+	notificationsSent := make(chan error, 1)
 	server := udp.NewServer(
 		options.WithOSCORE(serverProcessor),
 		options.WithHandlerFunc(func(w *responsewriter.ResponseWriter[*client.Conn], req *pool.Message) {
@@ -1250,10 +1321,11 @@ func TestOSCOREUDPObserveNotificationsAndCancellation(t *testing.T) {
 						writeErr := cc.WriteMessage(notification)
 						cc.ReleaseMessage(notification)
 						if writeErr != nil {
-							t.Errorf("write Observe notification: %v", writeErr)
+							notificationsSent <- fmt.Errorf("write Observe notification: %w", writeErr)
 							return
 						}
 					}
+					notificationsSent <- nil
 				}()
 			case 1:
 				if responseErr := w.SetResponse(codes.Content, message.TextPlain, nil); responseErr != nil {
@@ -1297,10 +1369,42 @@ func TestOSCOREUDPObserveNotificationsAndCancellation(t *testing.T) {
 		received <- string(body)
 	})
 	require.NoError(t, err)
-	require.Equal(t, "initial", <-received)
+	waitForBody := func(expected string) {
+		t.Helper()
+		for {
+			select {
+			case body := <-received:
+				require.Equal(t, expected, body)
+				return
+			case sendErr := <-notificationsSent:
+				if sendErr != nil {
+					require.NoError(t, sendErr)
+				}
+				notificationsSent = nil
+			case <-ctx.Done():
+				select {
+				case sendErr := <-notificationsSent:
+					if sendErr != nil {
+						require.NoError(t, sendErr)
+					}
+				default:
+				}
+				t.Fatalf("timed out waiting for Observe body %q: %v", expected, ctx.Err())
+			}
+		}
+	}
+	waitForBody("initial")
 	close(sendNotifications)
-	require.Equal(t, "notification-1", <-received)
-	require.Equal(t, "notification-2", <-received)
+	waitForBody("notification-1")
+	waitForBody("notification-2")
+	if notificationsSent != nil {
+		select {
+		case sendErr := <-notificationsSent:
+			require.NoError(t, sendErr)
+		case <-ctx.Done():
+			t.Fatalf("UDP Observe notifications were not written before deadline: %v", ctx.Err())
+		}
+	}
 	require.NoError(t, observation.Cancel(ctx))
 }
 

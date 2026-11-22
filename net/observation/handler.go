@@ -49,6 +49,14 @@ func SetAuthenticatedSequenceNumber(r *pool.Message, sequence uint64) {
 	r.SetContext(context.WithValue(ctx, authenticatedSequenceNumberKey{}, sequence))
 }
 
+// CopyAuthenticatedSequenceNumber copies authenticated ordering metadata onto a message
+// without replacing the message's context.
+func CopyAuthenticatedSequenceNumber(ctx context.Context, r *pool.Message) {
+	if sequence, ok := AuthenticatedSequenceNumber(ctx); ok {
+		SetAuthenticatedSequenceNumber(r, sequence)
+	}
+}
+
 // AuthenticatedSequenceNumber returns the authenticated sequence number attached to a message.
 func AuthenticatedSequenceNumber(ctx context.Context) (uint64, bool) {
 	if ctx == nil {

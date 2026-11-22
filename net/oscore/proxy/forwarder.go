@@ -122,6 +122,7 @@ var deniedPublicTargetPrefixes = [...]netip.Prefix{
 	netip.MustParsePrefix("64:ff9b:1::/48"),
 	netip.MustParsePrefix("::/96"),
 	netip.MustParsePrefix("100::/64"),
+	netip.MustParsePrefix("5f00::/16"),
 	netip.MustParsePrefix("fec0::/10"),
 	netip.MustParsePrefix("2001::/32"),
 	netip.MustParsePrefix("2001:2::/48"),
@@ -206,8 +207,14 @@ func (f *Forwarder) validate(ctx context.Context, request message.Message) (osco
 }
 
 func prepareForwardedRequest(request message.Message, target oscore.ProxyTarget) (message.Message, error) {
-	forwarded := cloneMessage(request)
-	forwarded.Options = forwarded.Options[:0]
+	forwarded := message.Message{
+		Token:     append(message.Token(nil), request.Token...),
+		Code:      request.Code,
+		Type:      request.Type,
+		MessageID: request.MessageID,
+		Options:   make(message.Options, 0, len(request.Options)+2),
+		Payload:   append([]byte(nil), request.Payload...),
+	}
 	for _, option := range request.Options {
 		switch option.ID {
 		case message.ProxyURI, message.ProxyScheme, message.URIHost, message.URIPort:
@@ -300,17 +307,6 @@ func singleOption(options message.Options, id message.OptionID) (message.Option,
 		}
 	}
 	return found, count == 1
-}
-
-func cloneMessage(m message.Message) message.Message {
-	return message.Message{
-		Token:     append(message.Token(nil), m.Token...),
-		Code:      m.Code,
-		Type:      m.Type,
-		MessageID: m.MessageID,
-		Options:   oscore.CloneOptions(m.Options),
-		Payload:   append([]byte(nil), m.Payload...),
-	}
 }
 
 func sortOptions(options message.Options) {

@@ -15,6 +15,7 @@ import (
 	"github.com/plgd-dev/go-coap/v3/net/blockwise"
 	"github.com/plgd-dev/go-coap/v3/net/blockwise/qblock"
 	netclient "github.com/plgd-dev/go-coap/v3/net/client"
+	"github.com/plgd-dev/go-coap/v3/net/observation"
 	"github.com/plgd-dev/go-coap/v3/net/oscore"
 	"github.com/plgd-dev/go-coap/v3/udp/coder"
 	"github.com/stretchr/testify/require"
@@ -84,6 +85,26 @@ func TestQBlockConfiguredProbingCapAndRouteCapacity(t *testing.T) {
 	route, ok := exchange.(*qBlockRoute)
 	require.True(t, ok)
 	require.Equal(t, 128, cap(route.messages))
+}
+
+func TestQBlockAuthenticatedNotificationOrdering(t *testing.T) {
+	now := time.Now()
+	sequence := qBlockNotificationSequence{
+		observe:          0x800000,
+		authenticated:    0x800000,
+		hasAuthenticated: true,
+		lastEvent:        now,
+	}
+	response := pool.NewMessage(context.Background())
+	response.SetObserve(0)
+	observation.SetAuthenticatedSequenceNumber(response, 0x1000000)
+
+	require.True(t, sequence.validNotification(response, now),
+		"authenticated ordering accepts the next full-width sequence across the Observe wrap")
+
+	response.SetContext(context.Background())
+	require.False(t, sequence.validNotification(response, now),
+		"plaintext notifications retain 24-bit Observe ordering")
 }
 
 func TestQBlockDatagramBudgetIncludesOptionsAndToken(t *testing.T) {

@@ -8,7 +8,10 @@ import (
 	"syscall"
 )
 
-const supportsProcessFileLock = true
+const (
+	supportsProcessFileLock = true
+	supportsDirectorySync   = true
+)
 
 func withFileLock(path string, action func() error) (err error) {
 	file, err := openFileNoFollow(path, os.O_CREATE|os.O_RDWR, 0o600)

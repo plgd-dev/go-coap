@@ -99,6 +99,8 @@ func TestUnprotectedErrorResponseRetainsOSCOREExchange(t *testing.T) {
 		wantErr             error
 		wantRetained        bool
 		wantProcessingError bool
+		proxied             bool
+		wantProxyError      bool
 	}{
 		{name: "decryption error", code: codes.BadRequest, wantProcessingError: true, wantRetained: true},
 		{name: "unknown context", code: codes.Unauthorized, wantProcessingError: true, wantRetained: true},
@@ -106,6 +108,8 @@ func TestUnprotectedErrorResponseRetainsOSCOREExchange(t *testing.T) {
 		{name: "application not found", code: codes.NotFound, wantErr: oscore.ErrOSCORERequired, wantRetained: true},
 		{name: "application server error", code: codes.InternalServerError, wantErr: oscore.ErrOSCORERequired, wantRetained: true},
 		{name: "plaintext success", code: codes.Content, wantErr: oscore.ErrOSCORERequired, wantRetained: true},
+		{name: "proxy rejection", code: codes.Forbidden, wantRetained: true, proxied: true, wantProxyError: true},
+		{name: "direct rejection", code: codes.Forbidden, wantErr: oscore.ErrOSCORERequired, wantRetained: true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			securityContext, err := oscore.NewContext(oscore.ContextConfig{
@@ -125,6 +129,7 @@ func TestUnprotectedErrorResponseRetainsOSCOREExchange(t *testing.T) {
 				exchange: udpOSCOREExchange{
 					context:  securityContext,
 					exchange: exchange,
+					proxied:  test.proxied,
 					expires:  time.Now().Add(time.Minute),
 				},
 				state: udpOSCOREExchangeSent,
@@ -143,6 +148,7 @@ func TestUnprotectedErrorResponseRetainsOSCOREExchange(t *testing.T) {
 			_, retained := cc.oscoreExchanges[string(request.Token)]
 			require.Equal(t, test.wantRetained, retained)
 			require.Equal(t, test.wantProcessingError, oscore.IsUnprotectedProcessingError(response.Context()))
+			require.Equal(t, test.wantProxyError, oscore.IsUnprotectedProxyError(response.Context()))
 		})
 	}
 }
@@ -669,6 +675,24 @@ func TestOSCOREOuterBlockwiseRequiresProtectionAfterExchangeExpiry(t *testing.T)
 	cc.handleResponse(writer, response)
 	require.False(t, delivered, "plaintext response was delivered after OSCORE exchange expiry")
 	require.ErrorIs(t, reported, oscore.ErrOSCORERequired)
+}
+
+func TestOSCORETokenlessHandlerRetainsEmptyTokenRequirement(t *testing.T) {
+	session := newRecordingSession()
+	defer session.Close()
+	cc := NewConnWithOpts(session, &DefaultConfig)
+	defer cc.Close()
+
+	cc.oscoreRequiredResponses.Add("", oscore.Exchange{}, time.Time{})
+	cleanup, err := cc.tokenlessHandler.Register(func(*responsewriter.ResponseWriter[*Conn], *pool.Message) {})
+	require.NoError(t, err)
+	defer cleanup(true)
+
+	cc.expireOSCORERequiredResponses()
+	require.True(t, cc.oscoreRequiredResponses.HasToken(""),
+		"a pending tokenless request must keep the empty-token OSCORE requirement")
+	_, ok := cc.tokenlessHandler.Load(false)
+	require.True(t, ok, "checking the response consumer must not consume the pending handler")
 }
 
 func TestOSCOREPendingObservationRetainsExchangeAfterExchangeLifetime(t *testing.T) {
@@ -1737,6 +1761,8 @@ func TestRetransmitCachedOSCOREResponse(t *testing.T) {
 
 	retransmittedRequest := cc.AcquireMessage(context.Background())
 	retransmittedRequest.SetMessage(outerRequest)
+	localAddress := net.ParseIP("203.0.113.42").To4()
+	retransmittedRequest.SetControlMessage(&coapNet.ControlMessage{Dst: localAddress, IfIndex: 9})
 	require.NoError(t, cc.retransmitOSCOREResponse(retransmittedRequest))
 	cc.ReleaseMessage(retransmittedRequest)
 
@@ -1745,6 +1771,8 @@ func TestRetransmitCachedOSCOREResponse(t *testing.T) {
 	require.Equal(t, codes.Changed, got.Code())
 	require.Equal(t, message.Acknowledgement, got.Type())
 	require.Equal(t, int32(mid), got.MessageID())
+	require.True(t, got.ControlMessage().Src.Equal(localAddress))
+	require.Equal(t, 9, got.ControlMessage().IfIndex)
 	require.True(t, got.HasOption(message.OSCORE))
 	body, err := got.ReadBody()
 	require.NoError(t, err)

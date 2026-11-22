@@ -320,7 +320,9 @@ func (c *Context) UnprotectRequest(request message.Message) (message.Message, Ex
 			context:          c,
 		},
 	}
-	inner, hasInnerObserve, err := c.unprotectRequestInner(request, option, outerObserveOption, hasOuterObserve)
+	inner, hasInnerObserve, err := c.unprotectRequestInner(
+		request, option, outerObserveOption, hasOuterObserve, exchange,
+	)
 	if err != nil {
 		return message.Message{}, Exchange{}, err
 	}
@@ -343,6 +345,7 @@ func (c *Context) unprotectRequestInner(
 	option OptionValue,
 	outerObserveOption message.Option,
 	hasOuterObserve bool,
+	exchange Exchange,
 ) (message.Message, bool, error) {
 	sequence, err := decodePartialIV(option.PartialIV)
 	if err != nil {
@@ -373,7 +376,7 @@ func (c *Context) unprotectRequestInner(
 		return openErr
 	}
 	err = c.acceptRequestSequence(sequence, verify, func() error {
-		return c.validateReplayRecoveryEcho(inner.Options)
+		return c.validateReplayRecoveryEcho(inner.Options, exchange)
 	})
 	if err != nil {
 		return message.Message{}, false, err
@@ -381,7 +384,7 @@ func (c *Context) unprotectRequestInner(
 	return inner, hasInnerObserve, nil
 }
 
-func (c *Context) acceptRequestSequence(sequence uint64, verify func() error, checkEcho func() error) error {
+func (c *Context) acceptRequestSequence(sequence uint64, verify, checkEcho func() error) error {
 	c.replayRecoveryMu.Lock()
 	if !c.replayRecoveryPending {
 		c.replayRecoveryMu.Unlock()
@@ -405,14 +408,17 @@ func (c *Context) acceptRequestSequence(sequence uint64, verify func() error, ch
 	return err
 }
 
-func (c *Context) validateReplayRecoveryEcho(options message.Options) error {
+func (c *Context) validateReplayRecoveryEcho(options message.Options, exchange Exchange) error {
 	echo, found, err := findEchoOption(options)
 	if err != nil {
 		return err
 	}
 	if c.replayRecoveryPending {
 		if !found || subtle.ConstantTimeCompare(echo.Value, c.replayRecoveryEcho) != 1 {
-			return &replayRecoveryRequiredError{echo: append([]byte(nil), c.replayRecoveryEcho...)}
+			return &replayRecoveryRequiredError{
+				echo:     append([]byte(nil), c.replayRecoveryEcho...),
+				exchange: exchange,
+			}
 		}
 		return nil
 	}
@@ -731,9 +737,11 @@ func (c *Context) unprotectResponse(response message.Message, exchange Exchange)
 	if err != nil {
 		return message.Message{}, err
 	}
-	inner.Options, err = validateInnerResponse(
-		inner, exchange, option, outerOptions.HasOption(message.Observe),
-	)
+	outerObserveOption, hasOuterObserve, err := findObserveOption(outerOptions)
+	if err != nil {
+		return message.Message{}, err
+	}
+	inner.Options, err = validateInnerResponse(inner, exchange, option, outerObserveOption, hasOuterObserve)
 	if err != nil {
 		return message.Message{}, err
 	}
@@ -741,6 +749,7 @@ func (c *Context) unprotectResponse(response message.Message, exchange Exchange)
 	inner.Type = response.Type
 	inner.MessageID = response.MessageID
 	outerOptions = removeObserveOption(outerOptions)
+	outerOptions = removeOption(outerOptions, message.Echo)
 	if inner.Options.HasOption(message.MaxAge) {
 		outerOptions = removeOption(outerOptions, message.MaxAge)
 	}
@@ -791,6 +800,7 @@ func validateInnerResponse(
 	inner message.Message,
 	exchange Exchange,
 	option OptionValue,
+	outerObserveOption message.Option,
 	hasOuterObserve bool,
 ) (message.Options, error) {
 	if !IsResponseCode(inner.Code) {
@@ -800,33 +810,65 @@ func validateInnerResponse(
 	if err != nil {
 		return nil, err
 	}
-	if hasInnerObserve && !exchange.IsObserve() {
-		return nil, fmt.Errorf("%w: Observe response for a non-Observe request", ErrInvalidOSCOREMessage)
-	}
-	if hasOuterObserve && !hasInnerObserve {
-		return nil, fmt.Errorf("%w: Outer Observe response has no protected Inner Observe option", ErrInvalidOSCOREMessage)
-	}
-	if hasInnerObserve && len(innerObserve.Value) != 0 {
-		return nil, fmt.Errorf("%w: inner Observe notification value must be empty", ErrInvalidOSCOREMessage)
+	if err := validateInnerObserveForExchange(innerObserve, hasInnerObserve, exchange, hasOuterObserve); err != nil {
+		return nil, err
 	}
 	if !hasInnerObserve {
 		return inner.Options, nil
 	}
 	if len(option.PartialIV) == 0 {
-		return nil, fmt.Errorf("%w: Observe notification must contain a Partial IV", ErrInvalidOSCOREMessage)
+		return setInnerObserveForNoPartialIV(inner, outerObserveOption, hasOuterObserve)
 	}
-	partialIV := option.PartialIV
+	return setInnerObserveFromPartialIV(inner, option.PartialIV)
+}
+
+func validateInnerObserveForExchange(
+	innerObserve message.Option,
+	hasInnerObserve bool,
+	exchange Exchange,
+	hasOuterObserve bool,
+) error {
+	if hasInnerObserve && !exchange.IsObserve() {
+		return fmt.Errorf("%w: Observe response for a non-Observe request", ErrInvalidOSCOREMessage)
+	}
+	if hasOuterObserve && !hasInnerObserve {
+		return fmt.Errorf("%w: Outer Observe response has no protected Inner Observe option", ErrInvalidOSCOREMessage)
+	}
+	if hasInnerObserve && len(innerObserve.Value) != 0 {
+		return fmt.Errorf("%w: inner Observe notification value must be empty", ErrInvalidOSCOREMessage)
+	}
+	return nil
+}
+
+func setInnerObserveForNoPartialIV(
+	inner message.Message,
+	outerObserveOption message.Option,
+	hasOuterObserve bool,
+) (message.Options, error) {
+	sequence := uint32(0)
+	var err error
+	if hasOuterObserve {
+		sequence, err = observeOptionValue(outerObserveOption)
+		if err != nil {
+			return nil, fmt.Errorf("%w: invalid outer Observe notification value: %w", ErrInvalidOSCOREMessage, err)
+		}
+	}
+	inner.Options, err = setObserve(inner.Options, sequence)
+	if err != nil {
+		return nil, err
+	}
+	return inner.Options, nil
+}
+
+func setInnerObserveFromPartialIV(inner message.Message, partialIV []byte) (message.Options, error) {
 	if len(partialIV) > 3 {
 		partialIV = partialIV[len(partialIV)-3:]
 	}
-	last := len(partialIV) - 1
-	sequence := uint32(partialIV[last])
-	if len(partialIV) > 1 {
-		sequence |= uint32(partialIV[last-1]) << 8
+	sequence := uint32(0)
+	for i := range partialIV {
+		sequence = sequence<<8 | uint32(partialIV[i])
 	}
-	if len(partialIV) > 2 {
-		sequence |= uint32(partialIV[last-2]) << 16
-	}
+	var err error
 	inner.Options, err = setObserve(inner.Options, sequence)
 	if err != nil {
 		return nil, err

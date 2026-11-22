@@ -202,9 +202,14 @@ func (r *qBlockRoute) Send(msg *pool.Message) error {
 
 func (r *qBlockRoute) Receive(ctx context.Context) (*pool.Message, error) {
 	r.cc.receivedMessageReader.TryToReplaceLoop()
+	setReceiveContext := func(msg *pool.Message) {
+		responseContext := msg.Context()
+		msg.SetContext(ctx)
+		observation.CopyAuthenticatedSequenceNumber(responseContext, msg)
+	}
 	select {
 	case msg := <-r.messages:
-		msg.SetContext(ctx)
+		setReceiveContext(msg)
 		return msg, nil
 	default:
 	}
@@ -219,7 +224,7 @@ func (r *qBlockRoute) Receive(ctx context.Context) (*pool.Message, error) {
 		r.mu.Unlock()
 		return nil, err
 	case msg := <-r.messages:
-		msg.SetContext(ctx)
+		setReceiveContext(msg)
 		return msg, nil
 	}
 }
@@ -326,6 +331,7 @@ func (cc *Conn) routeQBlockResponse(msg *pool.Message) bool {
 		cc.errors(fmt.Errorf("clone Q-Block response: %w", err))
 		return true
 	}
+	observation.CopyAuthenticatedSequenceNumber(msg.Context(), copyMsg)
 	select {
 	case route.messages <- copyMsg:
 	default:
@@ -418,22 +424,41 @@ func (cc *Conn) prepareQBlockNotification(req, msg *pool.Message) (blockwise.QBl
 		cc.errors(err)
 		return nil, nil
 	}
+	observation.CopyAuthenticatedSequenceNumber(msg.Context(), initial)
 	return exchange, initial
 }
 
 func (cc *Conn) runQBlockObservation(req *pool.Message, szx blockwise.SZX, exchange blockwise.QBlockExchange, initial *pool.Message) {
 	defer cc.ReleaseMessage(req)
 	defer exchange.Close()
-	var sequence uint32
-	var lastEvent time.Time
+	var sequence qBlockNotificationSequence
 	for {
 		setQObservationRequestType(req, initial.Type())
 		var keepRunning bool
-		initial, sequence, lastEvent, keepRunning = cc.advanceQBlockObservation(req, szx, exchange, initial, sequence, lastEvent)
+		initial, sequence, keepRunning = cc.advanceQBlockObservation(req, szx, exchange, initial, sequence)
 		if !keepRunning {
 			return
 		}
 	}
+}
+
+type qBlockNotificationSequence struct {
+	observe          uint32
+	authenticated    uint64
+	hasAuthenticated bool
+	lastEvent        time.Time
+}
+
+func (s qBlockNotificationSequence) validNotification(response *pool.Message, now time.Time) bool {
+	next, err := response.Observe()
+	if err != nil {
+		return false
+	}
+	nextAuthenticated, hasNextAuthenticated := observation.AuthenticatedSequenceNumber(response.Context())
+	if s.hasAuthenticated && hasNextAuthenticated {
+		return nextAuthenticated > s.authenticated
+	}
+	return observation.ValidSequenceNumber(s.observe, next, s.lastEvent, now)
 }
 
 func setQObservationRequestType(req *pool.Message, notificationType message.Type) {
@@ -444,31 +469,33 @@ func setQObservationRequestType(req *pool.Message, notificationType message.Type
 	req.SetType(requestType)
 }
 
-func (cc *Conn) advanceQBlockObservation(req *pool.Message, szx blockwise.SZX, exchange blockwise.QBlockExchange, initial *pool.Message, sequence uint32, lastEvent time.Time) (*pool.Message, uint32, time.Time, bool) {
+func (cc *Conn) advanceQBlockObservation(req *pool.Message, szx blockwise.SZX, exchange blockwise.QBlockExchange, initial *pool.Message, sequence qBlockNotificationSequence) (*pool.Message, qBlockNotificationSequence, bool) {
 	response, err := cc.receiveQNotification(req, szx, exchange, initial)
 	if route, ok := exchange.(*qBlockRoute); ok {
 		route.retireAliases(req.Token())
 	}
 	if errors.Is(err, context.Canceled) || cc.Context().Err() != nil {
-		return nil, sequence, lastEvent, false
+		return nil, sequence, false
 	}
 	if err != nil {
 		cc.errors(fmt.Errorf("receive Q Observe notification: %w", err))
 	} else {
 		if nextSequence, observeErr := response.Observe(); observeErr == nil {
-			sequence, lastEvent = nextSequence, time.Now()
+			sequence.observe = nextSequence
+			sequence.lastEvent = time.Now()
+			sequence.authenticated, sequence.hasAuthenticated = observation.AuthenticatedSequenceNumber(response.Context())
 		}
 		active := cc.observationHandler.HandleNotification(response)
 		cc.ReleaseMessage(response)
 		if !active {
-			return nil, sequence, lastEvent, false
+			return nil, sequence, false
 		}
 	}
-	next, err := cc.nextQBlockNotification(req.Token(), exchange, sequence, lastEvent)
+	next, err := cc.nextQBlockNotification(req.Token(), exchange, sequence)
 	if err != nil {
-		return nil, sequence, lastEvent, false
+		return nil, sequence, false
 	}
-	return next, sequence, lastEvent, true
+	return next, sequence, true
 }
 
 func (cc *Conn) receiveQNotification(req *pool.Message, szx blockwise.SZX, exchange blockwise.QBlockExchange, initial *pool.Message) (*pool.Message, error) {
@@ -478,7 +505,7 @@ func (cc *Conn) receiveQNotification(req *pool.Message, szx blockwise.SZX, excha
 	return cc.blockWise.ReceiveQBlock2(req, szx, exchange, initial)
 }
 
-func (cc *Conn) nextQBlockNotification(token message.Token, exchange blockwise.QBlockExchange, sequence uint32, lastEvent time.Time) (*pool.Message, error) {
+func (cc *Conn) nextQBlockNotification(token message.Token, exchange blockwise.QBlockExchange, sequence qBlockNotificationSequence) (*pool.Message, error) {
 	for {
 		response, err := exchange.Receive(cc.Context())
 		if err != nil {
@@ -491,8 +518,7 @@ func (cc *Conn) nextQBlockNotification(token message.Token, exchange blockwise.Q
 		if !response.HasOption(message.Observe) {
 			return response, nil
 		}
-		next, observeErr := response.Observe()
-		if observeErr == nil && observation.ValidSequenceNumber(sequence, next, lastEvent, time.Now()) {
+		if sequence.validNotification(response, time.Now()) {
 			return response, nil
 		}
 		cc.ReleaseMessage(response)

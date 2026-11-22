@@ -44,11 +44,9 @@ func receiveQBlockResponse(ctx context.Context, exchange Exchange, deadline time
 	defer cancel()
 	response, err := exchange.Receive(receiveCtx)
 	if response != nil {
-		authenticatedSequence, hasAuthenticatedSequence := observation.AuthenticatedSequenceNumber(response.Context())
+		responseContext := response.Context()
 		response.SetContext(ctx)
-		if hasAuthenticatedSequence {
-			observation.SetAuthenticatedSequenceNumber(response, authenticatedSequence)
-		}
+		observation.CopyAuthenticatedSequenceNumber(responseContext, response)
 	}
 	return response, err
 }

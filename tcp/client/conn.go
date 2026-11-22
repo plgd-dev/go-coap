@@ -390,7 +390,7 @@ func (cc *Conn) writeProtectedRequest(req *pool.Message) error {
 		return err
 	}
 	requirementExpiry := expires
-	if hasTCPOSCORERequestConsumer(req) || observeErr == nil && observeValue == 0 {
+	if hasTCPOSCORERequestConsumer(req) {
 		requirementExpiry = time.Time{}
 	}
 	cc.completeTCPOSCOREWrite(key, exchange, requirementExpiry)
@@ -425,7 +425,7 @@ func (cc *Conn) now() time.Time {
 
 func (cc *Conn) oscoreExpiry() time.Time {
 	if cc.oscoreExchangeTimeout <= 0 {
-		return time.Time{}
+		return cc.now().Add(tcpOSCOREObserveCancelBackstop)
 	}
 	return cc.now().Add(cc.oscoreExchangeTimeout)
 }
@@ -696,12 +696,25 @@ func (cc *Conn) unprotectIncomingRequest(req *pool.Message) error {
 }
 
 func (cc *Conn) respondToOSCOREProcessingError(req *pool.Message, processingErr error) error {
-	if oscore.IsInternalProcessingError(processingErr) ||
-		!cc.oscoreErrorResponses || !req.HasOption(message.OSCORE) {
+	_, requiresEchoRecovery := oscore.ReplayRecoveryEcho(processingErr)
+	if oscore.IsInternalProcessingError(processingErr) || !req.HasOption(message.OSCORE) ||
+		!cc.oscoreErrorResponses && !requiresEchoRecovery {
 		return nil
 	}
 	resp := cc.AcquireMessage(req.Context())
 	defer cc.ReleaseMessage(resp)
+	if protected, ok, err := oscore.ProtectReplayRecoveryResponse(processingErr, message.Message{
+		Token: req.Token(),
+	}); ok {
+		if err != nil {
+			return fmt.Errorf("protect replay recovery response: %w", err)
+		}
+		resp.SetMessage(protected)
+		if err := cc.session.WriteMessage(resp); err != nil {
+			return fmt.Errorf("send protected replay recovery response: %w", err)
+		}
+		return nil
+	}
 	resp.SetCode(oscore.ProcessingErrorCode(processingErr))
 	resp.SetToken(req.Token())
 	if echo, ok := oscore.ReplayRecoveryEcho(processingErr); ok {
@@ -897,6 +910,11 @@ func (cc *Conn) NetConn() net.Conn {
 
 // DoObserve subscribes for every change with request.
 func (cc *Conn) doObserve(req *pool.Message, observeFunc func(req *pool.Message)) (client.Observation, error) {
+	requestContext := req.Context()
+	if requestContext == nil {
+		requestContext = context.Background()
+	}
+	req.SetContext(context.WithValue(requestContext, tcpOSCORERequestConsumerKey{}, true))
 	observation, err := cc.observationHandler.NewObservation(req, observeFunc)
 	if err != nil {
 		cc.releaseTCPOSCOREResponseRequirement(req)

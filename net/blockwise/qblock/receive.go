@@ -14,6 +14,7 @@ import (
 	"github.com/plgd-dev/go-coap/v3/message/codes"
 	"github.com/plgd-dev/go-coap/v3/message/pool"
 	"github.com/plgd-dev/go-coap/v3/net/blockwise/internal/blocks"
+	"github.com/plgd-dev/go-coap/v3/net/oscore"
 	"github.com/plgd-dev/go-coap/v3/net/responsewriter"
 )
 
@@ -47,7 +48,22 @@ type q1ReceiveTransfer struct {
 }
 
 func q1TransferKey(r *pool.Message, remoteAddr net.Addr, tag []byte) string {
-	return qTransferKey(r, remoteAddr, tag, false)
+	key := qTransferKey(r, remoteAddr, tag, false)
+	info, ok := oscore.RequestInfoFromContext(r.Context())
+	if !ok || !info.Protected {
+		return key
+	}
+	h := &bytes.Buffer{}
+	blocks.WriteExchangeKeyPart(h, []byte(key))
+	_, _ = h.Write([]byte{1})
+	blocks.WriteExchangeKeyPart(h, info.RecipientID)
+	if info.IDContextSet {
+		_, _ = h.Write([]byte{1})
+	} else {
+		_, _ = h.Write([]byte{0})
+	}
+	blocks.WriteExchangeKeyPart(h, info.IDContext)
+	return h.String()
 }
 
 func qTransferKey(r *pool.Message, remoteAddr net.Addr, tag []byte, response bool) string {

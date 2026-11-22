@@ -209,6 +209,8 @@ func TestAllowPublicIPLiteralTarget(t *testing.T) {
 		{host: "64:ff9b::a00:1%eth0"},
 		{host: "fec0::1"},
 		{host: "100::1"},
+		{host: "5f00::1"},
+		{host: "5f00:1234::1"},
 		{host: "::1.2.3.4"},
 		{host: "0.1.2.3"},
 		{host: "192.0.0.1"},

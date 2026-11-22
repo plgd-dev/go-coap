@@ -2,12 +2,42 @@ package qblock
 
 import (
 	"context"
+	"encoding/binary"
 	"testing"
 
 	"github.com/plgd-dev/go-coap/v3/message"
 	"github.com/plgd-dev/go-coap/v3/message/codes"
 	"github.com/plgd-dev/go-coap/v3/message/pool"
 )
+
+func packQBlock2FuzzOptions(options ...[]byte) []byte {
+	packed := make([]byte, 0)
+	for _, option := range options {
+		var length [4]byte
+		binary.BigEndian.PutUint32(length[:], uint32(len(option)))
+		packed = append(packed, length[:]...)
+		packed = append(packed, option...)
+	}
+	return packed
+}
+
+func unpackQBlock2FuzzOptions(packed []byte) ([6][]byte, bool) {
+	var options [6][]byte
+	offset := 0
+	for i := range options {
+		if len(packed)-offset < 4 {
+			return options, false
+		}
+		length := int(binary.BigEndian.Uint32(packed[offset : offset+4]))
+		offset += 4
+		if length > len(packed)-offset {
+			return options, false
+		}
+		options[i] = packed[offset : offset+length]
+		offset += length
+	}
+	return options, offset == len(packed)
+}
 
 func FuzzParseQBlock1(f *testing.F) {
 	f.Add([]byte{0x18}, []byte{1}, []byte{0x10}, []byte{8}, uint8(codes.PUT))
@@ -31,17 +61,21 @@ func FuzzParseQBlock1(f *testing.F) {
 }
 
 func FuzzParseQBlock2(f *testing.F) {
-	f.Add([]byte{0x18}, []byte{}, []byte{}, []byte{}, []byte{}, []byte{}, uint8(codes.GET))
-	f.Add([]byte{0xff, 0xff, 0xff, 0xff}, []byte{0}, []byte{}, []byte{}, []byte{}, []byte{}, uint8(codes.PUT))
-	f.Fuzz(func(t *testing.T, qblock, qblock2, qblock1, block1, block2, observe []byte, code uint8) {
+	f.Add(packQBlock2FuzzOptions([]byte{0x18}, nil, nil, nil, nil, nil), uint8(codes.GET))
+	f.Add(packQBlock2FuzzOptions([]byte{0xff, 0xff, 0xff, 0xff}, []byte{0}, nil, nil, nil, nil), uint8(codes.PUT))
+	f.Fuzz(func(t *testing.T, packed []byte, code uint8) {
+		options, ok := unpackQBlock2FuzzOptions(packed)
+		if !ok {
+			return
+		}
 		request := pool.NewMessage(context.Background())
 		request.SetCode(codes.Code(code))
-		request.AddOptionBytes(message.QBlock2, qblock)
-		request.AddOptionBytes(message.QBlock2, qblock2)
-		request.AddOptionBytes(message.QBlock1, qblock1)
-		request.AddOptionBytes(message.Block1, block1)
-		request.AddOptionBytes(message.Block2, block2)
-		request.AddOptionBytes(message.Observe, observe)
+		request.AddOptionBytes(message.QBlock2, options[0])
+		request.AddOptionBytes(message.QBlock2, options[1])
+		request.AddOptionBytes(message.QBlock1, options[2])
+		request.AddOptionBytes(message.Block1, options[3])
+		request.AddOptionBytes(message.Block2, options[4])
+		request.AddOptionBytes(message.Observe, options[5])
 		engine := New(newTestClient(), nil)
 
 		szx, num, _, err := engine.parseQBlock2(request)

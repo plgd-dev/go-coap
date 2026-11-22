@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"errors"
-	"fmt"
 	"net"
 	"os/exec"
 	"strconv"
@@ -16,7 +15,6 @@ import (
 	"github.com/plgd-dev/go-coap/v3/net/blockwise"
 	"github.com/plgd-dev/go-coap/v3/options"
 	"github.com/plgd-dev/go-coap/v3/udp"
-	"github.com/plgd-dev/go-coap/v3/udp/coder"
 	"github.com/stretchr/testify/require"
 )
 
@@ -58,7 +56,7 @@ func TestConnPutBlockwiseWithoutTokenLibCoAP(t *testing.T) {
 		}
 	}()
 
-	waitForLibCoAPServer(t, net.JoinHostPort("127.0.0.1", strconv.Itoa(port)))
+	time.Sleep(100 * time.Millisecond)
 	select {
 	case waitErr := <-serverDone:
 		serverWaited = true
@@ -89,54 +87,6 @@ func TestConnPutBlockwiseWithoutTokenLibCoAP(t *testing.T) {
 	require.Equal(t, codes.Created, resp.Code())
 	require.Empty(t, resp.Token())
 	require.Equal(t, payload, bodyToBytes(t, resp.Body()))
-}
-
-func waitForLibCoAPServer(t *testing.T, address string) {
-	t.Helper()
-	deadline := time.Now().Add(5 * time.Second)
-	ping := message.Message{Code: codes.Empty, Type: message.Confirmable, MessageID: 1}
-	size, err := coder.DefaultCoder.Size(ping)
-	require.NoError(t, err)
-	request := make([]byte, size)
-	_, err = coder.DefaultCoder.Encode(ping, request)
-	require.NoError(t, err)
-
-	var lastErr error
-	for time.Now().Before(deadline) {
-		lastErr = pingLibCoAPServer(address, request, ping.MessageID)
-		if lastErr == nil {
-			return
-		}
-		time.Sleep(25 * time.Millisecond)
-	}
-	require.FailNow(t, "libcoap server did not respond to CoAP ping", "address: %s, error: %v", address, lastErr)
-}
-
-func pingLibCoAPServer(address string, request []byte, messageID int32) error {
-	conn, err := net.Dial("udp", address)
-	if err != nil {
-		return err
-	}
-	defer conn.Close()
-	if deadlineErr := conn.SetDeadline(time.Now().Add(100 * time.Millisecond)); deadlineErr != nil {
-		return deadlineErr
-	}
-	if _, writeErr := conn.Write(request); writeErr != nil {
-		return writeErr
-	}
-	response := make([]byte, 64)
-	n, readErr := conn.Read(response)
-	if readErr != nil {
-		return readErr
-	}
-	var decoded message.Message
-	if _, decodeErr := coder.DefaultCoder.Decode(response[:n], &decoded); decodeErr != nil {
-		return decodeErr
-	}
-	if decoded.Type != message.Reset || decoded.MessageID != messageID {
-		return fmt.Errorf("unexpected response to CoAP ping: type %v, MID %d", decoded.Type, decoded.MessageID)
-	}
-	return nil
 }
 
 func findLibCoAPServer() (string, error) {

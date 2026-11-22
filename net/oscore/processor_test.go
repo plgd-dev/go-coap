@@ -40,31 +40,125 @@ func TestProcessingErrorCode(t *testing.T) {
 	}
 }
 
-func TestProcessorRequiresEchoRecoveryAfterVolatileReplayStateLoss(t *testing.T) {
-	newContext := func(senderID, recipientID []byte, requireEcho bool) *Context {
-		t.Helper()
-		cfg := ContextConfig{
-			UnsafeVolatileSenderSequence: true,
-			MasterSecret:                 []byte("Echo replay recovery"),
-			SenderID:                     senderID,
-			RecipientID:                  recipientID,
-			RequireEchoRecovery:          requireEcho,
-			AcceptReplayStateLoss:        !requireEcho,
+func TestIsUnprotectedProxyErrorCode(t *testing.T) {
+	for _, test := range []struct {
+		code codes.Code
+		want bool
+	}{
+		{code: codes.BadRequest},
+		{code: codes.Unauthorized},
+		{code: codes.BadOption},
+		{code: codes.Forbidden, want: true},
+		{code: codes.TooManyRequests, want: true},
+		{code: codes.BadGateway, want: true},
+		{code: codes.InternalServerError, want: true},
+		{code: codes.Content},
+	} {
+		if got := IsUnprotectedProxyErrorCode(test.code); got != test.want {
+			t.Errorf("IsUnprotectedProxyErrorCode(%v) = %t, want %t", test.code, got, test.want)
 		}
-		context, err := NewContext(cfg)
-		if err != nil {
-			t.Fatal(err)
-		}
-		return context
 	}
+}
 
-	client := newContext([]byte("client"), []byte("server"), false)
-	oldServer := newContext([]byte("server"), []byte("client"), false)
+func newEchoRecoveryContext(t *testing.T, senderID, recipientID []byte, requireEcho bool) *Context {
+	t.Helper()
+	cfg := ContextConfig{
+		UnsafeVolatileSenderSequence: true,
+		MasterSecret:                 []byte("Echo replay recovery"),
+		SenderID:                     senderID,
+		RecipientID:                  recipientID,
+		RequireEchoRecovery:          requireEcho,
+		AcceptReplayStateLoss:        !requireEcho,
+	}
+	context, err := NewContext(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return context
+}
+
+func requireReplayRecoveryChallenge(
+	t *testing.T,
+	processor *Processor,
+	client *Context,
+	oldRequest message.Message,
+	clientExchange Exchange,
+) []byte {
+	t.Helper()
+	plaintext, _, _, processErr := processor.ProcessIncomingRequest(oldRequest)
+	if !errors.Is(processErr, ErrReplayRecoveryRequired) ||
+		plaintext.Code != codes.Empty {
+		t.Fatalf("post-restart request = %+v, error %v; want challenge and no dispatch", plaintext, processErr)
+	}
+	challenge, ok := ReplayRecoveryEcho(processErr)
+	if !ok || len(challenge) == 0 {
+		t.Fatalf("replay recovery challenge = %x, present=%t", challenge, ok)
+	}
+	if got := ProcessingErrorCode(processErr); got != codes.Unauthorized {
+		t.Fatalf("replay recovery response code = %v, want Unauthorized", got)
+	}
+	protectedChallenge, ok, err := ProtectReplayRecoveryResponse(processErr, message.Message{
+		Type: message.Acknowledgement, MessageID: oldRequest.MessageID, Token: oldRequest.Token,
+	})
+	if err != nil || !ok {
+		t.Fatalf("protect replay recovery challenge: response=%+v, handled=%t, error=%v", protectedChallenge, ok, err)
+	}
+	if !protectedChallenge.Options.HasOption(message.OSCORE) ||
+		protectedChallenge.Options.HasOption(message.Echo) {
+		t.Fatalf("replay recovery response is not protected with Inner Echo: %+v", protectedChallenge)
+	}
+	oscoreOption, err := protectedChallenge.Options.GetBytes(message.OSCORE)
+	if err != nil {
+		t.Fatalf("get protected replay recovery OSCORE option: %v", err)
+	}
+	option, err := UnmarshalOption(oscoreOption)
+	if err != nil || len(option.PartialIV) == 0 {
+		t.Fatalf("replay recovery response Partial IV = %x, error %v", option.PartialIV, err)
+	}
+	openedChallenge, err := client.UnprotectResponse(protectedChallenge, clientExchange)
+	if err != nil {
+		t.Fatalf("unprotect replay recovery challenge: %v", err)
+	}
+	if !openedChallenge.Options.HasOption(message.Echo) {
+		t.Fatalf("replay recovery challenge Echo is not in the decrypted options: %+v", openedChallenge.Options)
+	}
+	openedEcho, err := openedChallenge.Options.GetBytes(message.Echo)
+	if err != nil || string(openedEcho) != string(challenge) {
+		t.Fatalf("protected challenge Echo = %x, error %v; want %x", openedEcho, err, challenge)
+	}
+	if openedChallenge.Code != codes.Unauthorized {
+		t.Fatalf("opened replay recovery code = %v, want Unauthorized", openedChallenge.Code)
+	}
+	return challenge
+}
+
+func requireRejectedEchoRecovery(t *testing.T, processor *Processor, client *Context) {
+	t.Helper()
+	wrongEchoRequest, _, err := client.ProtectRequest(message.Message{
+		Code: codes.GET, Token: message.Token{1},
+		Options: message.Options{{ID: message.Echo, Value: []byte("wrong challenge")}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	wrongPlaintext, wrongContext, wrongExchange, processErr := processor.ProcessIncomingRequest(wrongEchoRequest)
+	if !errors.Is(processErr, ErrReplayRecoveryRequired) {
+		t.Fatalf("invalid recovery attempt error = %v, want ErrReplayRecoveryRequired", processErr)
+	}
+	if wrongPlaintext.Code != codes.Empty || wrongContext != nil || len(wrongExchange.RequestPartialIVBytes()) != 0 {
+		t.Fatalf("invalid recovery attempt was dispatched: %+v, context %p, exchange %+v",
+			wrongPlaintext, wrongContext, wrongExchange)
+	}
+}
+
+func TestProcessorRequiresEchoRecoveryAfterVolatileReplayStateLoss(t *testing.T) {
+	client := newEchoRecoveryContext(t, []byte("client"), []byte("server"), false)
+	oldServer := newEchoRecoveryContext(t, []byte("server"), []byte("client"), false)
 	oldProcessor, err := NewProcessor(ProcessorConfig{Contexts: []*Context{oldServer}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	oldRequest, _, err := client.ProtectRequest(message.Message{
+	oldRequest, clientExchange, err := client.ProtectRequest(message.Message{
 		Code: codes.GET, Token: message.Token{1},
 	})
 	if err != nil {
@@ -90,39 +184,13 @@ func TestProcessorRequiresEchoRecoveryAfterVolatileReplayStateLoss(t *testing.T)
 		}
 	}
 
-	restartedServer := newContext([]byte("server"), []byte("client"), true)
+	restartedServer := newEchoRecoveryContext(t, []byte("server"), []byte("client"), true)
 	processor, err := NewProcessor(ProcessorConfig{Contexts: []*Context{restartedServer}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	plaintext, _, _, processErr := processor.ProcessIncomingRequest(oldRequest)
-	if !errors.Is(processErr, ErrReplayRecoveryRequired) ||
-		plaintext.Code != codes.Empty {
-		t.Fatalf("post-restart request = %+v, error %v; want challenge and no dispatch", plaintext, processErr)
-	}
-	challenge, ok := ReplayRecoveryEcho(processErr)
-	if !ok || len(challenge) == 0 {
-		t.Fatalf("replay recovery challenge = %x, present=%t", challenge, ok)
-	}
-	if got := ProcessingErrorCode(processErr); got != codes.Unauthorized {
-		t.Fatalf("replay recovery response code = %v, want Unauthorized", got)
-	}
-
-	wrongEchoRequest, _, err := client.ProtectRequest(message.Message{
-		Code: codes.GET, Token: message.Token{1},
-		Options: message.Options{{ID: message.Echo, Value: []byte("wrong challenge")}},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	wrongPlaintext, wrongContext, wrongExchange, processErr := processor.ProcessIncomingRequest(wrongEchoRequest)
-	if !errors.Is(processErr, ErrReplayRecoveryRequired) {
-		t.Fatalf("invalid recovery attempt error = %v, want ErrReplayRecoveryRequired", processErr)
-	}
-	if wrongPlaintext.Code != codes.Empty || wrongContext != nil || len(wrongExchange.RequestPartialIVBytes()) != 0 {
-		t.Fatalf("invalid recovery attempt was dispatched: %+v, context %p, exchange %+v",
-			wrongPlaintext, wrongContext, wrongExchange)
-	}
+	challenge := requireReplayRecoveryChallenge(t, processor, client, oldRequest, clientExchange)
+	requireRejectedEchoRecovery(t, processor, client)
 
 	recoveryRequest, _, err := client.ProtectRequest(message.Message{
 		Code: codes.GET, Token: message.Token{1},
@@ -858,7 +926,7 @@ func outgoingContextSelector(t *testing.T, clientA, clientB *Context) OutgoingCo
 		case "peer-a.example":
 			request.Code = codes.PUT
 			request.Options[0].Value[0] = 'x'
-			request.Payload = append(request.Payload, 0xff)
+			request.Payload[0] = 'x'
 			return clientA, nil
 		case "peer-b.example":
 			return clientB, nil

@@ -806,6 +806,53 @@ func TestPendingTCPOSCOREWriteKeepsExchangeAndRequirement(t *testing.T) {
 		"failed write must release its provisional response requirement")
 }
 
+func TestTCPOSCOREStandaloneWriteExpiresByDefault(t *testing.T) {
+	securityContext, err := oscore.NewContext(oscore.ContextConfig{
+		UnsafeVolatileSenderSequence: true,
+		AcceptReplayStateLoss:        true,
+		MasterSecret:                 []byte("TCP OSCORE standalone write lifetime"),
+		SenderID:                     []byte("client"),
+		RecipientID:                  []byte("server"),
+	})
+	require.NoError(t, err)
+	processor, err := oscore.NewProcessor(oscore.ProcessorConfig{Contexts: []*oscore.Context{securityContext}})
+	require.NoError(t, err)
+
+	now := time.Date(2026, 11, 13, 0, 0, 0, 0, time.UTC)
+	transport := &tcpClientWriteRecorder{}
+	session := &Session{
+		connection:  coapNet.NewConn(transport),
+		messagePool: pool.New(0, 0),
+	}
+	sessionContext := context.Background()
+	session.ctx.Store(&sessionContext)
+	cc := &Conn{
+		session:                 session,
+		oscoreProcessor:         processor,
+		oscoreNow:               func() time.Time { return now },
+		oscoreExchanges:         make(oscore.ExchangeTracker[tcpOSCOREExchange]),
+		oscoreRequiredResponses: oscore.NewResponseRequirements(),
+	}
+	request := pool.NewMessage(context.Background())
+	request.SetCode(codes.GET)
+	request.SetToken(message.Token("solo"))
+
+	require.NoError(t, cc.writeProtectedRequest(request))
+	key := oscore.ExchangeTrackerKey(request.Token())
+	exchange := cc.oscoreExchanges[key]
+	expectedExpiry := now.Add(tcpOSCOREObserveCancelBackstop)
+	require.Equal(t, expectedExpiry, exchange.expires)
+	require.Equal(t, expectedExpiry, cc.oscoreRequiredResponses[key][exchange.exchange])
+
+	now = expectedExpiry
+	cc.oscoreMu.Lock()
+	cc.expireTCPOSCOREExchangesLocked(now)
+	cc.expireTCPOSCOREResponseRequirementsLocked(now)
+	cc.oscoreMu.Unlock()
+	require.NotContains(t, cc.oscoreExchanges, key)
+	require.NotContains(t, cc.oscoreRequiredResponses, key)
+}
+
 func TestTCPOSCOREObservationExchangeSurvivesRequestConsumerRelease(t *testing.T) {
 	securityContext, err := oscore.NewContext(oscore.ContextConfig{
 		UnsafeVolatileSenderSequence: true,
