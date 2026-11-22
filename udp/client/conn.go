@@ -1752,6 +1752,9 @@ func (cc *Conn) handleSpecialMessages(r *pool.Message) bool {
 	}
 
 	// if waits for concrete message handler
+	if r.Type() != message.Acknowledgement && r.Type() != message.Reset {
+		return false
+	}
 	if elem, ok := cc.midHandlerContainer.LoadAndDelete(r.MessageID()); ok {
 		elem.ReleaseMessage(cc)
 		resp := cc.AcquireMessage(cc.Context())
