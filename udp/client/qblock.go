@@ -229,6 +229,10 @@ func (r *qBlockRoute) Receive(ctx context.Context) (*pool.Message, error) {
 	}
 }
 
+func (r *qBlockRoute) CompleteQBlock2Representation(token message.Token, highestPartialIV uint64) error {
+	return r.cc.completeOSCOREQBlock2Representation(token, highestPartialIV)
+}
+
 func (r *qBlockRoute) Close() {
 	r.closeWithError(context.Canceled)
 }

@@ -33,6 +33,7 @@ type HighWaterFileStoreOption struct {
 	replayHighWaterMargin    uint64
 	hasReplayHighWaterMargin bool
 	allowSingleProcess       bool
+	allowedSymlinks          []string
 }
 
 // WithReplayHighWaterMargin configures how many accepted sequence numbers may
@@ -46,6 +47,39 @@ func WithReplayHighWaterMargin(margin uint64) HighWaterFileStoreOption {
 // accesses the same directory.
 func WithSingleProcessOnly() HighWaterFileStoreOption {
 	return HighWaterFileStoreOption{allowSingleProcess: true}
+}
+
+// WithAllowedSymlinks permits the listed directory components to be symlinks
+// on Unix-like systems. The resolved targets are still checked for trusted
+// ownership and permissions; Windows continues to reject all reparse points.
+func WithAllowedSymlinks(paths ...string) HighWaterFileStoreOption {
+	return HighWaterFileStoreOption{allowedSymlinks: append([]string(nil), paths...)}
+}
+
+func parseHighWaterFileStoreOptions(
+	options []HighWaterFileStoreOption,
+) (uint64, bool, []string, error) {
+	replayHighWaterMargin := oscore.DefaultReplayHighWaterMargin
+	allowSingleProcess := false
+	var allowedSymlinks []string
+	for _, option := range options {
+		if option.hasReplayHighWaterMargin {
+			replayHighWaterMargin = option.replayHighWaterMargin
+		}
+		allowSingleProcess = allowSingleProcess || option.allowSingleProcess
+		allowedSymlinks = append(allowedSymlinks, option.allowedSymlinks...)
+	}
+	for i, path := range allowedSymlinks {
+		if path == "" {
+			return 0, false, nil, errors.New("allowed OSCORE store symlink path is empty")
+		}
+		absolutePath, err := filepath.Abs(filepath.Clean(path))
+		if err != nil {
+			return 0, false, nil, fmt.Errorf("resolve allowed OSCORE store symlink %q: %w", path, err)
+		}
+		allowedSymlinks[i] = absolutePath
+	}
+	return replayHighWaterMargin, allowSingleProcess, allowedSymlinks, nil
 }
 
 // HighWaterFileStore persists sender sequence reservations and a receiver
@@ -67,6 +101,7 @@ func WithSingleProcessOnly() HighWaterFileStoreOption {
 // process owner. Keep the directory private to the application.
 type HighWaterFileStore struct {
 	dir                   string
+	directoryGuard        storeDirectoryGuard
 	sequencePath          string
 	sequenceGuardPath     string
 	sequencePendingPath   string
@@ -83,6 +118,10 @@ type HighWaterFileStore struct {
 	sequenceFingerprint   string
 	sequenceOps           sequenceFileOps
 	replayOps             sequenceFileOps
+}
+
+type storeDirectoryGuard interface {
+	withOperation(func() error) error
 }
 
 type sequenceFileOps struct {
@@ -129,13 +168,9 @@ func NewHighWaterFileStore(dir, id string, options ...HighWaterFileStoreOption) 
 	if dir == "" {
 		return nil, errors.New("OSCORE file store directory is empty")
 	}
-	replayHighWaterMargin := oscore.DefaultReplayHighWaterMargin
-	allowSingleProcess := false
-	for _, option := range options {
-		if option.hasReplayHighWaterMargin {
-			replayHighWaterMargin = option.replayHighWaterMargin
-		}
-		allowSingleProcess = allowSingleProcess || option.allowSingleProcess
+	replayHighWaterMargin, allowSingleProcess, allowedSymlinks, err := parseHighWaterFileStoreOptions(options)
+	if err != nil {
+		return nil, err
 	}
 	if !supportsProcessFileLock && !allowSingleProcess {
 		return nil, errors.New("process file locking is unavailable; explicitly allow single-process store use")
@@ -143,26 +178,15 @@ func NewHighWaterFileStore(dir, id string, options ...HighWaterFileStoreOption) 
 	if replayHighWaterMargin == 0 || replayHighWaterMargin > oscore.MaxReplayHighWaterMargin {
 		return nil, ErrInvalidReplayHighWaterMargin
 	}
-	absoluteDir, err := filepath.Abs(filepath.Clean(dir))
+	absoluteDir, directoryGuard, err := prepareStoreDirectory(dir, allowedSymlinks)
 	if err != nil {
-		return nil, fmt.Errorf("resolve OSCORE file store directory: %w", err)
-	}
-	if err := validateStoreDirectoryPath(absoluteDir); err != nil {
-		return nil, fmt.Errorf("validate OSCORE file store directory path: %w", err)
-	}
-	if err := createStoreDirectory(filepath.Clean(absoluteDir), syncDirectory); err != nil {
-		return nil, fmt.Errorf("create OSCORE file store directory: %w", err)
-	}
-	if err := validateStoreDirectoryPath(absoluteDir); err != nil {
-		return nil, fmt.Errorf("validate OSCORE file store directory path: %w", err)
-	}
-	if err := validateStoreDirectory(absoluteDir); err != nil {
-		return nil, fmt.Errorf("validate OSCORE file store directory: %w", err)
+		return nil, err
 	}
 	digest := sha256.Sum256([]byte(id))
 	prefix := filepath.Join(absoluteDir, hex.EncodeToString(digest[:]))
 	return &HighWaterFileStore{
 		dir:                   absoluteDir,
+		directoryGuard:        directoryGuard,
 		sequencePath:          prefix + ".sequence.json",
 		sequenceGuardPath:     prefix + ".sequence.guard.json",
 		sequencePendingPath:   prefix + ".sequence.pending.json",
@@ -173,6 +197,47 @@ func NewHighWaterFileStore(dir, id string, options ...HighWaterFileStoreOption) 
 		sequenceLock:          prefix + ".sequence.lock",
 		replayLock:            prefix + ".replay.lock",
 	}, nil
+}
+
+func prepareStoreDirectory(dir string, allowedSymlinks []string) (string, storeDirectoryGuard, error) {
+	absoluteDir, err := filepath.Abs(filepath.Clean(dir))
+	if err != nil {
+		return "", nil, fmt.Errorf("resolve OSCORE file store directory: %w", err)
+	}
+	if err = validateStoreDirectoryPath(absoluteDir, allowedSymlinks); err != nil {
+		return "", nil, fmt.Errorf("validate OSCORE file store directory path: %w", err)
+	}
+	_, existingParent, err := findMissingStoreDirectories(absoluteDir)
+	if err != nil {
+		return "", nil, fmt.Errorf("locate OSCORE store directory parent: %w", err)
+	}
+	creationGuard, err := newStoreDirectoryGuard(existingParent)
+	if err != nil {
+		return "", nil, fmt.Errorf("secure OSCORE store directory parent: %w", err)
+	}
+	if err = creationGuard.withOperation(func() error {
+		return createStoreDirectory(absoluteDir, syncDirectory)
+	}); err != nil {
+		return "", nil, fmt.Errorf("create OSCORE file store directory: %w", err)
+	}
+	if err = validateStoreDirectoryPath(absoluteDir, allowedSymlinks); err != nil {
+		return "", nil, fmt.Errorf("validate OSCORE file store directory path: %w", err)
+	}
+	if err = validateStoreDirectory(absoluteDir); err != nil {
+		return "", nil, fmt.Errorf("validate OSCORE file store directory: %w", err)
+	}
+	directoryGuard, err := newStoreDirectoryGuard(absoluteDir)
+	if err != nil {
+		return "", nil, fmt.Errorf("secure OSCORE store directory: %w", err)
+	}
+	return absoluteDir, directoryGuard, nil
+}
+
+func (s *HighWaterFileStore) withDirectoryGuard(action func() error) error {
+	if s.directoryGuard == nil {
+		return errors.New("OSCORE store directory guard is unavailable")
+	}
+	return s.directoryGuard.withOperation(action)
 }
 
 func createStoreDirectory(path string, syncDir func(string) error) error {
@@ -253,13 +318,15 @@ func createMissingStoreDirectories(missing []string, syncDir func(string) error)
 func (s *HighWaterFileStore) LoadHighWater() (uint64, bool, error) {
 	var highWater uint64
 	var exists bool
-	err := withFileLock(s.replayLock, func() error {
-		if err := s.recoverReplayHighWater(); err != nil {
+	err := s.withDirectoryGuard(func() error {
+		return withFileLock(s.replayLock, func() error {
+			if err := s.recoverReplayHighWater(); err != nil {
+				return err
+			}
+			var err error
+			highWater, exists, err = readReplayHighWaterPair(s.replayHighWaterPath, s.replayGuardPath)
 			return err
-		}
-		var err error
-		highWater, exists, err = readReplayHighWaterPair(s.replayHighWaterPath, s.replayGuardPath)
-		return err
+		})
 	})
 	if err != nil {
 		return 0, false, fmt.Errorf("load OSCORE replay high-water mark: %w", err)
@@ -278,7 +345,15 @@ func (s *HighWaterFileStore) SaveHighWater(highWater uint64) error {
 	if highWater == 0 || highWater > maxPartialIV+1 {
 		return fmt.Errorf("%w: invalid high-water mark %d", oscore.ErrInvalidReplayState, highWater)
 	}
-	err := withFileLock(s.replayLock, func() error {
+	err := s.withDirectoryGuard(func() error { return s.saveReplayHighWater(highWater) })
+	if err != nil {
+		return fmt.Errorf("save OSCORE replay high-water mark: %w", err)
+	}
+	return nil
+}
+
+func (s *HighWaterFileStore) saveReplayHighWater(highWater uint64) error {
+	return withFileLock(s.replayLock, func() error {
 		if err := s.recoverReplayHighWater(); err != nil {
 			return err
 		}
@@ -291,34 +366,32 @@ func (s *HighWaterFileStore) SaveHighWater(highWater uint64) error {
 				return fmt.Errorf("%w: replay high-water mark moved backward", oscore.ErrInvalidReplayState)
 			}
 			if highWater == current {
-				// A prior rename may have succeeded while its directory sync
-				// failed. Re-sync before treating the visible cutoff as durable.
 				return s.syncReplayDirectory(s.replayHighWaterPath)
 			}
 		}
-		value := replayHighWaterFile{Version: fileVersion, Next: highWater}
-		pending := replayHighWaterPendingFile{
-			Version:        fileVersion,
-			Previous:       replayHighWaterFile{Version: fileVersion, Next: current},
-			PreviousExists: exists,
-			Next:           value,
-		}
-		if err := s.writeReplayStateFile(s.replayPendingPath, pending); err != nil {
-			return fmt.Errorf("persist replay high-water transaction: %w", err)
-		}
-		if err := s.writeReplayStateFile(s.replayGuardPath, value); err != nil {
-			return fmt.Errorf("persist replay high-water guard: %w", err)
-		}
-		if err := s.writeReplayStateFile(s.replayHighWaterPath, value); err != nil {
-			return fmt.Errorf("persist replay high-water mark: %w", err)
-		}
-		if err := s.removeReplayPending(); err != nil {
-			return fmt.Errorf("complete replay high-water transaction: %w", err)
-		}
-		return nil
+		return s.persistReplayHighWater(current, exists, highWater)
 	})
-	if err != nil {
-		return fmt.Errorf("save OSCORE replay high-water mark: %w", err)
+}
+
+func (s *HighWaterFileStore) persistReplayHighWater(current uint64, exists bool, highWater uint64) error {
+	value := replayHighWaterFile{Version: fileVersion, Next: highWater}
+	pending := replayHighWaterPendingFile{
+		Version:        fileVersion,
+		Previous:       replayHighWaterFile{Version: fileVersion, Next: current},
+		PreviousExists: exists,
+		Next:           value,
+	}
+	if err := s.writeReplayStateFile(s.replayPendingPath, pending); err != nil {
+		return fmt.Errorf("persist replay high-water transaction: %w", err)
+	}
+	if err := s.writeReplayStateFile(s.replayGuardPath, value); err != nil {
+		return fmt.Errorf("persist replay high-water guard: %w", err)
+	}
+	if err := s.writeReplayStateFile(s.replayHighWaterPath, value); err != nil {
+		return fmt.Errorf("persist replay high-water mark: %w", err)
+	}
+	if err := s.removeReplayPending(); err != nil {
+		return fmt.Errorf("complete replay high-water transaction: %w", err)
 	}
 	return nil
 }
@@ -328,23 +401,22 @@ func (s *HighWaterFileStore) SaveHighWater(highWater uint64) error {
 // active Context using this store. Resetting while reusing the same keys allows
 // previously accepted requests to be replayed.
 func (s *HighWaterFileStore) ResetReplayState() error {
-	err := withFileLock(s.replayLock, func() error {
-		for _, path := range []string{s.replayHighWaterPath, s.replayGuardPath, s.replayPendingPath} {
-			if s.replayOps.beforeRemove != nil {
-				if err := s.replayOps.beforeRemove(path); err != nil {
-					return err
+	err := s.withDirectoryGuard(func() error {
+		return withFileLock(s.replayLock, func() error {
+			for _, path := range []string{s.replayHighWaterPath, s.replayGuardPath, s.replayPendingPath} {
+				if s.replayOps.beforeRemove != nil {
+					if err := s.replayOps.beforeRemove(path); err != nil {
+						return err
+					}
+				}
+				if err := os.Remove(path); err != nil {
+					if !errors.Is(err, os.ErrNotExist) {
+						return err
+					}
 				}
 			}
-			if err := os.Remove(path); err != nil {
-				if !errors.Is(err, os.ErrNotExist) {
-					return err
-				}
-				continue
-			}
-		}
-		// Sync even if the files are already absent: a previous reset may
-		// have removed them but failed to persist that directory update.
-		return s.syncReplayDirectory(s.replayHighWaterPath)
+			return s.syncReplayDirectory(s.replayHighWaterPath)
+		})
 	})
 	if err != nil {
 		return fmt.Errorf("reset OSCORE replay state: %w", err)
@@ -377,7 +449,9 @@ func (s *HighWaterFileStore) Bind(fingerprint [sha256.Size]byte) error {
 		return ErrSequenceBindingMismatch
 	}
 
-	err := withFileLock(s.sequenceLock, func() error { return s.bindSequenceState(binding) })
+	err := s.withDirectoryGuard(func() error {
+		return withFileLock(s.sequenceLock, func() error { return s.bindSequenceState(binding) })
+	})
 	if err != nil {
 		return fmt.Errorf("bind sender sequence state: %w", err)
 	}
@@ -453,49 +527,51 @@ func (s *HighWaterFileStore) Reserve() (uint64, error) {
 	}
 
 	var reserved, limit uint64
-	err := withFileLock(s.sequenceLock, func() error {
-		state, err := s.loadSequenceState()
-		if err != nil {
-			return err
-		}
-		_, stateExists, err := readSequenceWithExistence(s.sequencePath)
-		if err != nil {
-			return err
-		}
-		_, guardExists, err := readSequenceWithExistence(s.sequenceGuardPath)
-		if err != nil {
-			return err
-		}
-		if stateExists != guardExists {
-			return errors.New("OSCORE sender sequence state or rollback guard is missing")
-		}
-		if state.Next > maxPartialIV {
-			return oscore.ErrSenderSequenceExhausted
-		}
-		reserved = state.Next
-		remaining := maxPartialIV + 1 - reserved
-		windowSize := min(sequenceWindowSize, remaining)
-		limit = reserved + windowSize
-		next := sequenceFile{Version: fileVersion, Next: limit, Fingerprint: s.sequenceFingerprint}
-		pending := sequencePendingFile{
-			Version:        fileVersion,
-			Previous:       sequenceFile{Version: fileVersion, Next: reserved, Fingerprint: s.sequenceFingerprint},
-			PreviousExists: stateExists && guardExists,
-			Next:           next,
-		}
-		if err := s.writeSequenceState(s.sequencePendingPath, pending); err != nil {
-			return fmt.Errorf("persist sender sequence transaction: %w", err)
-		}
-		if err := s.writeSequenceState(s.sequenceGuardPath, next); err != nil {
-			return fmt.Errorf("persist sender sequence guard: %w", err)
-		}
-		if err := s.writeSequenceState(s.sequencePath, next); err != nil {
-			return fmt.Errorf("persist sender sequence state: %w", err)
-		}
-		if err := s.removeSequencePending(); err != nil {
-			return fmt.Errorf("complete sender sequence transaction: %w", err)
-		}
-		return nil
+	err := s.withDirectoryGuard(func() error {
+		return withFileLock(s.sequenceLock, func() error {
+			state, err := s.loadSequenceState()
+			if err != nil {
+				return err
+			}
+			_, stateExists, err := readSequenceWithExistence(s.sequencePath)
+			if err != nil {
+				return err
+			}
+			_, guardExists, err := readSequenceWithExistence(s.sequenceGuardPath)
+			if err != nil {
+				return err
+			}
+			if stateExists != guardExists {
+				return errors.New("OSCORE sender sequence state or rollback guard is missing")
+			}
+			if state.Next > maxPartialIV {
+				return oscore.ErrSenderSequenceExhausted
+			}
+			reserved = state.Next
+			remaining := maxPartialIV + 1 - reserved
+			windowSize := min(sequenceWindowSize, remaining)
+			limit = reserved + windowSize
+			next := sequenceFile{Version: fileVersion, Next: limit, Fingerprint: s.sequenceFingerprint}
+			pending := sequencePendingFile{
+				Version:        fileVersion,
+				Previous:       sequenceFile{Version: fileVersion, Next: reserved, Fingerprint: s.sequenceFingerprint},
+				PreviousExists: stateExists && guardExists,
+				Next:           next,
+			}
+			if err := s.writeSequenceState(s.sequencePendingPath, pending); err != nil {
+				return fmt.Errorf("persist sender sequence transaction: %w", err)
+			}
+			if err := s.writeSequenceState(s.sequenceGuardPath, next); err != nil {
+				return fmt.Errorf("persist sender sequence guard: %w", err)
+			}
+			if err := s.writeSequenceState(s.sequencePath, next); err != nil {
+				return fmt.Errorf("persist sender sequence state: %w", err)
+			}
+			if err := s.removeSequencePending(); err != nil {
+				return fmt.Errorf("complete sender sequence transaction: %w", err)
+			}
+			return nil
+		})
 	})
 	if err != nil {
 		return 0, fmt.Errorf("reserve OSCORE sender sequence: %w", err)
@@ -975,7 +1051,7 @@ func writeStateFileWithHooks(dir, path string, value any, syncFile func(*os.File
 		return err
 	}
 	// #nosec G703 -- temporary and target paths are inside the configured store root.
-	if err := os.Rename(temporaryPath, path); err != nil {
+	if err := replaceFileAtomically(temporaryPath, path); err != nil {
 		return err
 	}
 	if err := syncDir(); err != nil {

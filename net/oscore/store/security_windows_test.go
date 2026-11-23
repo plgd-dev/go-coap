@@ -58,6 +58,22 @@ func TestValidateStoreDirectoryACLRejectsUnrelatedLocalAccountWriteAccess(t *tes
 	}
 }
 
+func TestValidateStoreDirectoryACLAllowsCreatorOwnerInheritance(t *testing.T) {
+	descriptor, err := windows.SecurityDescriptorFromString(
+		"D:(A;OICIIO;FA;;;CO)(A;;FA;;;SY)",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dacl, _, err := descriptor.DACL()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := validateStoreDirectoryACL(dacl); err != nil {
+		t.Fatalf("creator-owner inheritance ACE rejected: %v", err)
+	}
+}
+
 func TestValidateStoreDirectoryOwnerAcceptsSystem(t *testing.T) {
 	descriptor, err := windows.SecurityDescriptorFromString("O:SYG:SYD:P(A;;FA;;;SY)")
 	if err != nil {
@@ -156,5 +172,47 @@ func TestLockFileExSerializesTwoStoreInstances(t *testing.T) {
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("second store instance remained blocked after LockFileEx was released")
+	}
+}
+
+func TestWindowsStoreDirectoryGuardBlocksDirectoryReplacement(t *testing.T) {
+	root := t.TempDir()
+	parent := filepath.Join(root, "store-parent")
+	if err := os.Mkdir(parent, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	dir := filepath.Join(parent, "store")
+	if err := os.Mkdir(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	guard, err := newStoreDirectoryGuard(dir)
+	if err != nil {
+		t.Fatalf("create directory guard: %v", err)
+	}
+
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	guardDone := make(chan error, 1)
+	go func() {
+		guardDone <- guard.withOperation(func() error {
+			close(entered)
+			<-release
+			return nil
+		})
+	}()
+	<-entered
+	if err := os.Rename(parent, parent+".replaced"); err == nil {
+		close(release)
+		<-guardDone
+		t.Fatal("renamed an ancestor while the guarded store operation was active")
+	}
+	if err := os.Rename(dir, dir+".replaced"); err == nil {
+		close(release)
+		<-guardDone
+		t.Fatal("renamed the store directory while the guarded operation was active")
+	}
+	close(release)
+	if err := <-guardDone; err != nil {
+		t.Fatalf("guarded operation: %v", err)
 	}
 }

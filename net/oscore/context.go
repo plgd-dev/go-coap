@@ -24,6 +24,7 @@ const (
 	maxIdentifierSize             = 7
 	replayRecoveryChallengeLimit  = 8
 	replayRecoveryChallengeWindow = time.Second
+	replayRecoveryPeerLimit       = 1024
 )
 
 // AEADAlgorithm identifies a COSE AEAD algorithm supported by OSCORE.
@@ -74,6 +75,9 @@ type ContextConfig struct {
 	SenderSequenceStore  SenderSequenceReserver
 	ReplayWindowSize     uint8
 	ReplayWindowStore    ReplayWindowStore
+	// QBlock2ObserveWindowSize bounds the authenticated PIVs retained for
+	// out-of-order Q-Block2 Observe fragments.
+	QBlock2ObserveWindowSize uint64
 	// UnsafeVolatileSenderSequence explicitly accepts in-memory sender sequence
 	// state when SenderSequenceStore is not configured. Restarting with the
 	// same sender key can reuse Partial IVs and AEAD nonces; see RFC 8613
@@ -143,6 +147,14 @@ type Context struct {
 	replayRecoveryPending    bool
 	replayRecoveryWindow     time.Time
 	replayRecoveryCount      int
+	replayRecoveryPeers      map[string]*replayRecoveryPeerState
+	qBlock2ObserveWindowSize uint64
+	replayRecoveryNow        func() time.Time
+}
+
+type replayRecoveryPeerState struct {
+	window time.Time
+	count  int
 }
 
 // ReplayMessagesRejectedBelowCutoff reports the number of inbound sequences
@@ -152,10 +164,16 @@ func (c *Context) ReplayMessagesRejectedBelowCutoff() uint64 {
 	return c.replay.RejectedBelowCutoff()
 }
 
-func (c *Context) allowReplayRecoveryChallenge() error {
+func (c *Context) allowReplayRecoveryChallengeForPeer(peer string) error {
 	c.replayRecoveryMu.Lock()
 	defer c.replayRecoveryMu.Unlock()
 	now := time.Now()
+	if c.replayRecoveryNow != nil {
+		now = c.replayRecoveryNow()
+	}
+	if peer != "" {
+		return c.allowPeerReplayRecoveryChallenge(peer, now)
+	}
 	if c.replayRecoveryWindow.IsZero() ||
 		now.Sub(c.replayRecoveryWindow) >= replayRecoveryChallengeWindow {
 		c.replayRecoveryWindow = now
@@ -165,6 +183,34 @@ func (c *Context) allowReplayRecoveryChallenge() error {
 		return ErrReplayRecoveryRateLimited
 	}
 	c.replayRecoveryCount++
+	return nil
+}
+
+func (c *Context) allowPeerReplayRecoveryChallenge(peer string, now time.Time) error {
+	if c.replayRecoveryPeers == nil {
+		c.replayRecoveryPeers = make(map[string]*replayRecoveryPeerState)
+	}
+	state := c.replayRecoveryPeers[peer]
+	if state == nil {
+		for key, existing := range c.replayRecoveryPeers {
+			if now.Sub(existing.window) >= replayRecoveryChallengeWindow {
+				delete(c.replayRecoveryPeers, key)
+			}
+		}
+		if len(c.replayRecoveryPeers) >= replayRecoveryPeerLimit {
+			return ErrReplayRecoveryRateLimited
+		}
+		state = &replayRecoveryPeerState{}
+		c.replayRecoveryPeers[peer] = state
+	}
+	if state.window.IsZero() || now.Sub(state.window) >= replayRecoveryChallengeWindow {
+		state.window = now
+		state.count = 0
+	}
+	if state.count >= replayRecoveryChallengeLimit {
+		return ErrReplayRecoveryRateLimited
+	}
+	state.count++
 	return nil
 }
 
@@ -233,16 +279,17 @@ func NewContext(cfg ContextConfig) (*Context, error) {
 			next:  cfg.SenderSequenceNumber,
 			store: cfg.SenderSequenceStore,
 		},
-		senderID:              senderID,
-		recipientID:           recipientID,
-		idContext:             idContext,
-		idContextSet:          cfg.IDContext != nil,
-		algorithm:             cfg.Algorithm,
-		senderAEAD:            senderAEAD,
-		recipientAEAD:         recipientAEAD,
-		replay:                replay,
-		replayRecoveryEcho:    replayRecoveryEcho,
-		replayRecoveryPending: cfg.RequireEchoRecovery,
+		senderID:                 senderID,
+		recipientID:              recipientID,
+		idContext:                idContext,
+		idContextSet:             cfg.IDContext != nil,
+		algorithm:                cfg.Algorithm,
+		senderAEAD:               senderAEAD,
+		recipientAEAD:            recipientAEAD,
+		replay:                   replay,
+		replayRecoveryEcho:       replayRecoveryEcho,
+		replayRecoveryPending:    cfg.RequireEchoRecovery,
+		qBlock2ObserveWindowSize: cfg.QBlock2ObserveWindowSize,
 	}
 	return context, nil
 }
@@ -295,7 +342,21 @@ func validateContextConfig(cfg ContextConfig) (ContextConfig, error) {
 	if err := validateContextPersistencePolicy(cfg); err != nil {
 		return cfg, err
 	}
+	if err := validateQBlock2ObserveWindowSize(&cfg); err != nil {
+		return cfg, err
+	}
 	return cfg, nil
+}
+
+func validateQBlock2ObserveWindowSize(cfg *ContextConfig) error {
+	if cfg.QBlock2ObserveWindowSize == 0 {
+		cfg.QBlock2ObserveWindowSize = 1024
+	}
+	if cfg.QBlock2ObserveWindowSize > maxQBlock2ObserveWindowSize {
+		return fmt.Errorf("%w: Q-Block2 Observe replay window exceeds %d entries",
+			ErrInvalidContext, maxQBlock2ObserveWindowSize)
+	}
+	return nil
 }
 
 func validateContextPersistencePolicy(cfg ContextConfig) error {

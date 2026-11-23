@@ -703,9 +703,13 @@ func (cc *Conn) respondToOSCOREProcessingError(req *pool.Message, processingErr 
 	}
 	resp := cc.AcquireMessage(req.Context())
 	defer cc.ReleaseMessage(resp)
-	if protected, ok, err := oscore.ProtectReplayRecoveryResponse(processingErr, message.Message{
+	peer := ""
+	if addr := cc.RemoteAddr(); addr != nil {
+		peer = addr.String()
+	}
+	if protected, ok, err := oscore.ProtectReplayRecoveryResponseForPeer(processingErr, message.Message{
 		Token: req.Token(),
-	}); ok {
+	}, peer); ok {
 		if err != nil {
 			return fmt.Errorf("protect replay recovery response: %w", err)
 		}

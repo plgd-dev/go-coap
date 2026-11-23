@@ -12,7 +12,7 @@ import (
 	"syscall"
 )
 
-func validateStoreDirectoryPath(path string) error {
+func validateStoreDirectoryPath(path string, allowedSymlinks []string) error {
 	absolute, err := filepath.Abs(filepath.Clean(path))
 	if err != nil {
 		return fmt.Errorf("make OSCORE store directory absolute: %w", err)
@@ -33,7 +33,10 @@ func validateStoreDirectoryPath(path string) error {
 			return fmt.Errorf("lstat OSCORE store directory component %q: %w", current, err)
 		}
 		if info.Mode()&os.ModeSymlink != 0 {
-			if isAllowedUnixSystemSymlink(current) {
+			if isAllowedStoreSymlink(current, allowedSymlinks) {
+				if err := validateStoreSymlinkTarget(current); err != nil {
+					return err
+				}
 				continue
 			}
 			return fmt.Errorf("OSCORE store directory component %q is a symlink", current)
@@ -43,6 +46,16 @@ func validateStoreDirectoryPath(path string) error {
 		}
 	}
 	return nil
+}
+
+func isAllowedStoreSymlink(path string, allowedSymlinks []string) bool {
+	cleaned := filepath.Clean(path)
+	for _, allowed := range allowedSymlinks {
+		if cleaned == allowed {
+			return true
+		}
+	}
+	return isAllowedUnixSystemSymlink(cleaned)
 }
 
 func isAllowedUnixSystemSymlink(path string) bool {
@@ -55,6 +68,36 @@ func isAllowedUnixSystemSymlink(path string) bool {
 	default:
 		return false
 	}
+}
+
+func validateStoreSymlinkTarget(path string) error {
+	resolved, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		return fmt.Errorf("resolve allowed OSCORE store symlink %q: %w", path, err)
+	}
+	// #nosec G703 -- EvalSymlinks resolves the caller-approved symlink before stat.
+	info, err := os.Stat(resolved)
+	if err != nil {
+		return fmt.Errorf("stat allowed OSCORE store symlink target %q: %w", resolved, err)
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("allowed OSCORE store symlink target %q is not a directory", resolved)
+	}
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	if !ok {
+		return fmt.Errorf("cannot determine owner of allowed OSCORE store symlink target %q", resolved)
+	}
+	// #nosec G115 -- Unix file owners and effective user IDs are both uint32.
+	if stat.Uid != uint32(os.Geteuid()) && stat.Uid != 0 {
+		return fmt.Errorf("allowed OSCORE store symlink target %q is not owned by the current user or root", resolved)
+	}
+	if info.Mode().Perm()&0o022 != 0 {
+		if runtime.GOOS != "darwin" || filepath.Clean(path) != "/tmp" ||
+			info.Mode()&os.ModeSticky == 0 {
+			return fmt.Errorf("allowed OSCORE store symlink target %q is group- or world-writable", resolved)
+		}
+	}
+	return nil
 }
 
 func validateStoreDirectory(path string) error {
@@ -80,10 +123,25 @@ func validateStoreDirectory(path string) error {
 	return nil
 }
 
+type unixStoreDirectoryGuard struct{}
+
+func newStoreDirectoryGuard(string) (storeDirectoryGuard, error) {
+	return unixStoreDirectoryGuard{}, nil
+}
+
+func (unixStoreDirectoryGuard) withOperation(action func() error) error {
+	return action()
+}
+
 func openFileNoFollow(path string, flags int, perm os.FileMode) (*os.File, error) {
 	fd, err := syscall.Open(path, flags|syscall.O_NOFOLLOW, uint32(perm.Perm()))
 	if err != nil {
 		return nil, err
 	}
 	return os.NewFile(uintptr(fd), path), nil
+}
+
+func replaceFileAtomically(source, destination string) error {
+	// #nosec G703 -- both paths are generated inside the validated store directory.
+	return os.Rename(source, destination)
 }

@@ -2615,6 +2615,68 @@ func TestOSCORERejectsMalformedEmptyControlAndUnexpectedPlaintextResponse(t *tes
 	cc.ReleaseMessage(request)
 }
 
+func TestUnauthenticatedOSCOREProcessingErrorDoesNotReserveMID(t *testing.T) {
+	const mid = 0x4325
+	masterSecret := []byte("unauthenticated OSCORE error MID reuse")
+	clientContext, err := oscore.NewContext(oscore.ContextConfig{
+		UnsafeVolatileSenderSequence: true,
+		AcceptReplayStateLoss:        true,
+		MasterSecret:                 masterSecret,
+		SenderID:                     []byte("client"),
+		RecipientID:                  []byte("server"),
+	})
+	require.NoError(t, err)
+	serverContext, err := oscore.NewContext(oscore.ContextConfig{
+		UnsafeVolatileSenderSequence: true,
+		AcceptReplayStateLoss:        true,
+		MasterSecret:                 masterSecret,
+		SenderID:                     []byte("server"),
+		RecipientID:                  []byte("client"),
+	})
+	require.NoError(t, err)
+	processor, err := oscore.NewProcessor(oscore.ProcessorConfig{Contexts: []*oscore.Context{serverContext}})
+	require.NoError(t, err)
+	protected, _, err := clientContext.ProtectRequest(message.Message{
+		Code: codes.GET, Token: message.Token{0x47},
+		Type: message.Confirmable, MessageID: mid,
+	})
+	require.NoError(t, err)
+	corrupted := protected
+	corrupted.Payload = append([]byte(nil), protected.Payload...)
+	corrupted.Payload[len(corrupted.Payload)-1] ^= 0xff
+	marshalRequest := func(request message.Message) []byte {
+		t.Helper()
+		wire := pool.NewMessage(context.Background())
+		wire.SetMessage(request)
+		datagram, marshalErr := wire.MarshalWithEncoder(coder.DefaultCoder)
+		require.NoError(t, marshalErr)
+		return datagram
+	}
+
+	session := newRecordingSession()
+	defer session.Close()
+	cfg := DefaultConfig
+	cfg.OSCORE = processor
+	cfg.OSCOREErrorResponses = true
+	cc := NewConnWithOpts(session, &cfg)
+	defer cc.Close()
+
+	badReq := cc.AcquireMessage(context.Background())
+	badReq.SetMessage(corrupted)
+	handled, err := cc.processIncomingOSCORERequest(badReq, marshalRequest(corrupted))
+	cc.ReleaseMessage(badReq)
+	require.NoError(t, err)
+	require.True(t, handled, "malformed protected request should receive an error response")
+	require.Equal(t, 1, session.writtenCount())
+
+	validReq := cc.AcquireMessage(context.Background())
+	validReq.SetMessage(protected)
+	handled, err = cc.processIncomingOSCORERequest(validReq, marshalRequest(protected))
+	cc.ReleaseMessage(validReq)
+	require.NoError(t, err)
+	require.False(t, handled, "valid request reusing an unauthenticated MID must be processed")
+}
+
 func TestOSCOREProcessingErrorResponseUsesRequestControlMessage(t *testing.T) {
 	cc, session := newTestConnWithSession(t)
 	cc.oscoreErrorResponses = true

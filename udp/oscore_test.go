@@ -1774,10 +1774,10 @@ func TestOSCOREQBlock2ObserveReordersRecoversAndRejectsDuplicate(t *testing.T) {
 	require.Positive(t, sequence, "assembled notification retains an authenticated Partial IV")
 
 	relay.mu.Lock()
+	defer relay.mu.Unlock()
 	require.True(t, relay.reordered, "the relay must reorder protected notification fragments")
 	require.True(t, relay.duplicatedOSCOREObserve, "the relay must duplicate a protected notification fragment")
 	require.Zero(t, relay.dropOSCOREObserve, "the relay must drop one protected notification fragment")
-	relay.mu.Unlock()
 }
 
 func newUDPOSCOREProcessor(t *testing.T, senderID, recipientID string, allowPlaintext bool) *oscore.Processor {

@@ -67,6 +67,10 @@ type q2BodyReceiver[C Client] struct {
 	representationCode       codes.Code
 }
 
+type qBlock2RepresentationCompleter interface {
+	CompleteQBlock2Representation(message.Token, uint64) error
+}
+
 func (s *q2BodyReceiver[C]) send(nums []int64, more bool) error {
 	for offset := 0; offset < len(nums); {
 		part, added, err := s.buildRequestPart(nums[offset:], more)
@@ -520,6 +524,14 @@ func (s *q2BodyReceiver[C]) finish(response *pool.Message) (*pool.Message, error
 	if err != nil {
 		s.b.cc.ReleaseMessage(response)
 		return nil, err
+	}
+	if s.hasAuthenticatedSequence {
+		if completer, ok := s.exchange.(qBlock2RepresentationCompleter); ok {
+			if err := completer.CompleteQBlock2Representation(s.req.Token(), s.authenticatedSequence); err != nil {
+				s.b.cc.ReleaseMessage(response)
+				return nil, fmt.Errorf("complete authenticated Q-Block2 representation: %w", err)
+			}
+		}
 	}
 	response.Remove(message.QBlock2)
 	response.Remove(message.Size2)

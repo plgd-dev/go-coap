@@ -1731,6 +1731,7 @@ func TestQBlock2ObserveAllowsOutOfOrderUniquePartialIVs(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	serverContext, err := NewContext(ContextConfig{
 		UnsafeVolatileSenderSequence: true,
 		AcceptReplayStateLoss:        true,
@@ -1793,14 +1794,91 @@ func TestQBlock2ObserveAllowsOutOfOrderUniquePartialIVs(t *testing.T) {
 	if err != nil || outOfOrderSequence != 0 {
 		t.Fatalf("out-of-order fragment Observe sequence = %d, error %v", outOfOrderSequence, err)
 	}
-	if _, err := requestContext.UnprotectResponse(responses[0], clientExchange); !errors.Is(err, ErrReplay) {
-		t.Fatalf("duplicate Q-Block2 Partial IV error = %v, want ErrReplay", err)
+	if _, responseErr := requestContext.UnprotectResponse(responses[0], clientExchange); !errors.Is(responseErr, ErrReplay) {
+		t.Fatalf("duplicate Q-Block2 Partial IV error = %v, want ErrReplay", responseErr)
 	}
-	if _, err := requestContext.UnprotectResponse(responses[2], clientExchange); err != nil {
-		t.Fatalf("response without Observe terminated Q-Block2 registration: %v", err)
+	if _, responseErr := requestContext.UnprotectResponse(responses[2], clientExchange); responseErr != nil {
+		t.Fatalf("response without Observe terminated Q-Block2 registration: %v", responseErr)
 	}
-	if _, err := requestContext.UnprotectResponse(responses[3], clientExchange); err != nil {
-		t.Fatalf("Q-Block2 Observe registration did not survive recovery response: %v", err)
+	if _, responseErr := requestContext.UnprotectResponse(responses[3], clientExchange); responseErr != nil {
+		t.Fatalf("Q-Block2 Observe registration did not survive recovery response: %v", responseErr)
+	}
+
+	terminalResponse, err := serverContext.ProtectResponseWithPartialIV(message.Message{
+		Code: codes.NotFound, Token: protectedRequest.Token,
+	}, serverExchange)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := requestContext.UnprotectResponse(terminalResponse, clientExchange); err != nil {
+		t.Fatalf("terminal response failed: %v", err)
+	}
+	laterNotification := makeResponse(5, true)
+	if _, err := requestContext.UnprotectResponse(laterNotification, clientExchange); !errors.Is(err, ErrReplay) {
+		t.Fatalf("notification after terminal response error = %v, want ErrReplay", err)
+	}
+}
+
+func TestQBlock2ObserveReplayWindowIsBounded(t *testing.T) {
+	const windowSize = uint64(64)
+	state := &exchangeResponseState{
+		qBlock2Observe: true,
+		context:        &Context{qBlock2ObserveWindowSize: windowSize},
+	}
+	option := OptionValue{PartialIV: []byte{1}}
+	exchange := Exchange{responseState: state}
+	for sequence := uint64(1); sequence <= 10000; sequence++ {
+		if err := state.checkObserveResponseSequence(sequence); err != nil {
+			t.Fatalf("sequence %d rejected: %v", sequence, err)
+		}
+		state.recordObserveResponse(option, sequence, message.Message{
+			Options: message.Options{{ID: message.Observe}},
+		})
+		if err := exchange.CompleteQBlock2Representation(sequence); err != nil {
+			t.Fatalf("complete notification %d: %v", sequence, err)
+		}
+		if got := len(state.seenResponsePartialIVs); got != 0 {
+			t.Fatalf("retained %d fragment Partial IVs after completion, want 0", got)
+		}
+	}
+	if err := state.checkObserveResponseSequence(9999); !errors.Is(err, ErrReplay) {
+		t.Fatalf("fragment from completed representation error = %v, want ErrReplay", err)
+	}
+	if err := state.checkObserveResponseSequence(10001); err != nil {
+		t.Fatalf("next notification rejected: %v", err)
+	}
+}
+
+func TestQBlock2ObserveBoundsActiveRepresentationAndAllowsReordering(t *testing.T) {
+	const windowSize = uint64(3)
+	state := &exchangeResponseState{
+		qBlock2Observe: true,
+		context:        &Context{qBlock2ObserveWindowSize: windowSize},
+	}
+	option := OptionValue{PartialIV: []byte{1}}
+	for _, sequence := range []uint64{100, 102} {
+		if err := state.checkObserveResponseSequence(sequence); err != nil {
+			t.Fatalf("sequence %d rejected: %v", sequence, err)
+		}
+		state.recordObserveResponse(option, sequence, message.Message{
+			Options: message.Options{{ID: message.Observe}},
+		})
+	}
+	if err := state.checkObserveResponseSequence(101); err != nil {
+		t.Fatalf("out-of-order fragment within active representation rejected: %v", err)
+	}
+	state.recordObserveResponse(option, 101, message.Message{
+		Options: message.Options{{ID: message.Observe}},
+	})
+	if err := state.checkObserveResponseSequence(103); !errors.Is(err, ErrReplayTrackingLimit) {
+		t.Fatalf("fragment beyond the active tracking limit error = %v, want ErrReplayTrackingLimit", err)
+	}
+	exchange := Exchange{responseState: state}
+	if err := exchange.CompleteQBlock2Representation(102); err != nil {
+		t.Fatalf("complete reordered representation: %v", err)
+	}
+	if err := state.checkObserveResponseSequence(101); !errors.Is(err, ErrReplay) {
+		t.Fatalf("completed representation fragment error = %v, want ErrReplay", err)
 	}
 }
 
@@ -1868,6 +1946,8 @@ func TestUnprotectDiscardsClassEOptionsFromOuterMessages(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, option := range []message.Option{
+		{ID: message.HopLimit, Value: []byte{16}},
+		{ID: message.HopLimit, Value: []byte{0}},
 		{ID: message.URIPath, Value: []byte("unexpected")},
 		{ID: message.ContentFormat, Value: []byte{0}},
 		{ID: message.Echo, Value: []byte("outer-echo")},
@@ -1891,6 +1971,9 @@ func TestUnprotectDiscardsClassEOptionsFromOuterMessages(t *testing.T) {
 	}
 	if host, hostErr := request.Options.GetString(message.URIHost); hostErr != nil || host != "origin.example" {
 		t.Fatalf("Class U URI-Host = %q, error = %v; want origin.example", host, hostErr)
+	}
+	if hopLimit, hopLimitErr := request.Options.GetUint32(message.HopLimit); hopLimitErr != nil || hopLimit != 16 {
+		t.Fatalf("first outer Hop-Limit = %d, error = %v; want 16", hopLimit, hopLimitErr)
 	}
 
 	protectedResponse, err := server.ProtectResponse(message.Message{

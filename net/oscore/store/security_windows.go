@@ -3,6 +3,7 @@
 package store
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -35,11 +36,143 @@ func validateStoreDirectory(path string) error {
 	return validateStoreDirectoryACL(dacl)
 }
 
+type windowsStoreDirectoryGuard struct {
+	path string
+}
+
+func newStoreDirectoryGuard(path string) (storeDirectoryGuard, error) {
+	guard := &windowsStoreDirectoryGuard{path: path}
+	if err := guard.withOperation(func() error { return nil }); err != nil {
+		return nil, err
+	}
+	return guard, nil
+}
+
+func (g *windowsStoreDirectoryGuard) withOperation(action func() error) error {
+	handles, err := openWindowsStoreDirectoryChain(g.path)
+	if err != nil {
+		return err
+	}
+	defer closeWindowsHandles(handles)
+	return action()
+}
+
+func openWindowsStoreDirectoryChain(path string) ([]windows.Handle, error) {
+	absolute, err := filepath.Abs(filepath.Clean(path))
+	if err != nil {
+		return nil, fmt.Errorf("resolve OSCORE store directory: %w", err)
+	}
+	volume := filepath.VolumeName(absolute)
+	rest := strings.TrimPrefix(absolute, volume)
+	current := volume
+	if strings.HasPrefix(rest, `\`) {
+		current = volume + `\`
+		rest = strings.TrimPrefix(rest, `\`)
+	}
+	handles := make([]windows.Handle, 0, strings.Count(rest, `\`)+2)
+	closeOnError := func(err error) ([]windows.Handle, error) {
+		closeWindowsHandles(handles)
+		return nil, err
+	}
+	if current != "" {
+		handle, err := openWindowsDirectoryGuardHandle(current)
+		if err != nil {
+			return nil, err
+		}
+		handles = append(handles, handle)
+		if err := validateWindowsDirectoryHandleACL(handle, current, filepath.Clean(current) == absolute); err != nil {
+			return closeOnError(err)
+		}
+	}
+	for _, component := range strings.Split(rest, `\`) {
+		if component == "" {
+			continue
+		}
+		current = filepath.Join(current, component)
+		handle, err := openWindowsDirectoryGuardHandle(current)
+		if err != nil {
+			return closeOnError(err)
+		}
+		handles = append(handles, handle)
+		if err := validateWindowsDirectoryHandleACL(handle, current, filepath.Clean(current) == absolute); err != nil {
+			return closeOnError(err)
+		}
+	}
+	return handles, nil
+}
+
+func openWindowsDirectoryGuardHandle(path string) (windows.Handle, error) {
+	name, err := windows.UTF16PtrFromString(path)
+	if err != nil {
+		return 0, err
+	}
+	handle, err := windows.CreateFile(
+		name,
+		windows.READ_CONTROL|windows.FILE_READ_ATTRIBUTES,
+		windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE,
+		nil,
+		windows.OPEN_EXISTING,
+		windows.FILE_FLAG_BACKUP_SEMANTICS|windows.FILE_FLAG_OPEN_REPARSE_POINT,
+		0,
+	)
+	if err != nil {
+		return 0, fmt.Errorf("open OSCORE store ancestor %q without delete sharing: %w", path, err)
+	}
+	var info windows.ByHandleFileInformation
+	if err := windows.GetFileInformationByHandle(handle, &info); err != nil {
+		windows.CloseHandle(handle)
+		return 0, fmt.Errorf("inspect OSCORE store ancestor %q: %w", path, err)
+	}
+	if info.FileAttributes&windows.FILE_ATTRIBUTE_REPARSE_POINT != 0 ||
+		info.FileAttributes&windows.FILE_ATTRIBUTE_DIRECTORY == 0 {
+		windows.CloseHandle(handle)
+		return 0, fmt.Errorf("OSCORE store ancestor %q is not a regular directory", path)
+	}
+	return handle, nil
+}
+
+func validateWindowsDirectoryHandleACL(handle windows.Handle, path string, validateOwner bool) error {
+	information := windows.SECURITY_INFORMATION(windows.DACL_SECURITY_INFORMATION)
+	if validateOwner {
+		information |= windows.OWNER_SECURITY_INFORMATION
+	}
+	descriptor, err := windows.GetSecurityInfo(
+		handle,
+		windows.SE_FILE_OBJECT,
+		information,
+	)
+	if err != nil {
+		return fmt.Errorf("read OSCORE store ancestor ACL %q: %w", path, err)
+	}
+	if validateOwner {
+		if err := validateStoreDirectoryOwner(descriptor); err != nil {
+			return fmt.Errorf("validate OSCORE store directory owner %q: %w", path, err)
+		}
+	}
+	dacl, _, err := descriptor.DACL()
+	if err != nil {
+		return fmt.Errorf("read OSCORE store ancestor DACL %q: %w", path, err)
+	}
+	if err := validateStoreDirectoryACL(dacl); err != nil {
+		return fmt.Errorf("validate OSCORE store ancestor ACL %q: %w", path, err)
+	}
+	return nil
+}
+
+func closeWindowsHandles(handles []windows.Handle) {
+	for i := len(handles) - 1; i >= 0; i-- {
+		_ = windows.CloseHandle(handles[i])
+	}
+}
+
 // validateStoreDirectoryPath rejects directory symlinks and reparse points in
 // every component. os.Lstat alone is useful for the final component; opening
 // the directory by handle below also verifies that no reparse point was raced
 // in while the path was being resolved.
-func validateStoreDirectoryPath(path string) error {
+func validateStoreDirectoryPath(path string, allowedSymlinks []string) error {
+	if len(allowedSymlinks) > 0 {
+		return errors.New("allowed OSCORE store symlinks are unsupported on Windows")
+	}
 	absolute, err := filepath.Abs(filepath.Clean(path))
 	if err != nil {
 		return fmt.Errorf("make OSCORE store directory absolute: %w", err)
@@ -180,7 +313,7 @@ func validateStoreFileOwner(descriptor *windows.SECURITY_DESCRIPTOR) error {
 }
 
 func storeDirectoryTrustedSIDs() ([]*windows.SID, error) {
-	sids := make([]*windows.SID, 0, 3)
+	sids := make([]*windows.SID, 0, 5)
 	token := windows.GetCurrentProcessToken()
 	user, err := token.GetTokenUser()
 	if err == nil && user != nil && user.User.Sid != nil {
@@ -189,6 +322,7 @@ func storeDirectoryTrustedSIDs() ([]*windows.SID, error) {
 	for _, sidType := range []windows.WELL_KNOWN_SID_TYPE{
 		windows.WinBuiltinAdministratorsSid,
 		windows.WinLocalSystemSid,
+		windows.WinCreatorOwnerSid,
 	} {
 		sid, err := windows.CreateWellKnownSid(sidType)
 		if err != nil {
@@ -196,6 +330,11 @@ func storeDirectoryTrustedSIDs() ([]*windows.SID, error) {
 		}
 		sids = append(sids, sid)
 	}
+	trustedInstaller, err := windows.StringToSid("S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464")
+	if err != nil {
+		return nil, fmt.Errorf("create trusted Windows Installer SID: %w", err)
+	}
+	sids = append(sids, trustedInstaller)
 	return sids, nil
 }
 
@@ -299,4 +438,23 @@ func openFileNoFollow(path string, flags int, perm os.FileMode) (*os.File, error
 		return nil, fmt.Errorf("validate OSCORE store file ACL %q: %w", path, err)
 	}
 	return os.NewFile(uintptr(handle), path), nil
+}
+
+func replaceFileAtomically(source, destination string) error {
+	sourceName, err := windows.UTF16PtrFromString(source)
+	if err != nil {
+		return err
+	}
+	destinationName, err := windows.UTF16PtrFromString(destination)
+	if err != nil {
+		return err
+	}
+	if err := windows.MoveFileEx(
+		sourceName,
+		destinationName,
+		windows.MOVEFILE_REPLACE_EXISTING|windows.MOVEFILE_WRITE_THROUGH,
+	); err != nil {
+		return fmt.Errorf("durably replace OSCORE state file: %w", err)
+	}
+	return nil
 }

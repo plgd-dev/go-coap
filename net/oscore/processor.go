@@ -49,6 +49,16 @@ func ReplayRecoveryEcho(err error) ([]byte, bool) {
 // payload are replaced with the challenge response bound to the authenticated
 // request.
 func ProtectReplayRecoveryResponse(err error, response message.Message) (message.Message, bool, error) {
+	return ProtectReplayRecoveryResponseForPeer(err, response, "")
+}
+
+// ProtectReplayRecoveryResponseForPeer applies the replay-recovery challenge
+// budget independently to the supplied peer identity.
+func ProtectReplayRecoveryResponseForPeer(
+	err error,
+	response message.Message,
+	peer string,
+) (message.Message, bool, error) {
 	var recoveryErr *replayRecoveryRequiredError
 	if !errors.As(err, &recoveryErr) {
 		return message.Message{}, false, nil
@@ -57,7 +67,7 @@ func ProtectReplayRecoveryResponse(err error, response message.Message) (message
 		return message.Message{}, true, ErrInvalidContext
 	}
 	state := recoveryErr.exchange.responseState
-	if err := state.context.allowReplayRecoveryChallenge(); err != nil {
+	if err := state.context.allowReplayRecoveryChallengeForPeer(peer); err != nil {
 		return message.Message{}, true, err
 	}
 	response.Code = codes.Unauthorized

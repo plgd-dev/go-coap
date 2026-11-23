@@ -352,14 +352,14 @@ example. Production receivers should use a durable replay store or follow the
 RFC recovery procedure rather than silently accepting state loss.
 For deployments recovering a receiver with volatile replay state, configure
 `RequireEchoRecovery: true` on the replacement `Context`. Before accepting any
-request, it returns a protected 4.01 response with a fresh server Partial IV
+request, it returns an OSCORE-protected 4.01 response with a fresh server Partial IV
 and an authenticated Inner Echo option. The peer must create a new OSCORE
 request containing that Echo option inside the protected request; retransmitting
 the old request or adding Echo outside the OSCORE protection does not recover
 the context. The first valid response to the challenge seeds the replay window
 conservatively, rejecting every sequence up to and including the recovery
 request. Challenges are random and specific to each `Context`, and a context
-limits challenge responses to eight per one-second window. After successful
+limits challenge responses to eight per peer in a one-second window. After successful
 recovery the Echo value may be reused on a fresh, authenticated request; normal
 Partial IV replay checks still reject a repeated request. This mode is mutually exclusive with
 `ReplayWindowStore`; after another restart, it must be enabled again if the
@@ -413,7 +413,17 @@ the same OSCORE keys, because previously accepted requests could then be
 replayed. Sender reservations use a rollback guard and pending transaction so
 startup can finish an interrupted reservation while consuming its entire
 reserved window. Missing individual sender-state files, corrupt files, and
-mismatched files are rejected.
+mismatched files are rejected. User-specified directory symlinks are rejected
+by default. On macOS, the system `/var` alias and sticky `/tmp` alias are
+accepted. On Unix-like systems, `WithAllowedSymlinks` can permit specific
+directory components when their resolved targets are owned by the current user
+or root and are not group- or world-writable. Windows rejects all reparse
+points. For Windows filesystem operations, each path ancestor is opened without
+delete sharing and its ACL is checked while state files, lock files, temporary
+files, and renames are accessed. This blocks path-component replacement by
+untrusted principals during an operation. Trusted administrators and the
+store-owning account remain trusted and can alter the directory between
+operations; deployments must protect those accounts and the directory ACL.
 
 ```go
 import (
@@ -562,7 +572,12 @@ timeouts, and response-size limits.
   Observe notifications use fresh Partial IVs; stale or duplicate
   notifications are rejected. A protected Q-Block2 Observe transfer accepts
   unique fragment Partial IVs out of arrival order while rejecting duplicates;
-  representation freshness remains ordered by authenticated sequence.
+  representation freshness remains ordered by authenticated sequence. Once a
+  representation is assembled, its fragment replay entries are released and
+  its highest authenticated Partial IV remains as a high-water mark. The
+  number of fragments tracked before completion defaults to 1024 and can be
+  configured with `ContextConfig.QBlock2ObserveWindowSize` (maximum 1<<20);
+  exceeding the limit fails closed.
 - No-Response suppression is preserved for protected requests over UDP, DTLS,
   TCP, and TLS; the application processes each request while the suppressed
   response is not sent.

@@ -63,7 +63,7 @@ func FuzzParseQBlock1(f *testing.F) {
 func FuzzParseQBlock2(f *testing.F) {
 	f.Add(packQBlock2FuzzOptions([]byte{0x18}, nil, nil, nil, nil, nil), uint8(codes.GET), uint8(0))
 	f.Add(packQBlock2FuzzOptions([]byte{0xff, 0xff, 0xff, 0xff}, []byte{0}, nil, nil, nil, nil), uint8(codes.PUT), uint8(0b0111))
-	f.Fuzz(func(t *testing.T, packed []byte, code uint8, conflictingOptions uint8) {
+	f.Fuzz(func(t *testing.T, packed []byte, code, conflictingOptions uint8) {
 		options, ok := unpackQBlock2FuzzOptions(packed)
 		if !ok {
 			return

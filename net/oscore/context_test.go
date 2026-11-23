@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/plgd-dev/go-coap/v3/message"
 	"github.com/plgd-dev/go-coap/v3/message/codes"
@@ -19,6 +20,77 @@ func mustHex(t *testing.T, value string) []byte {
 		t.Fatal(err)
 	}
 	return decoded
+}
+
+func TestReplayRecoveryChallengeRateLimitIsPerPeer(t *testing.T) {
+	ctx := &Context{}
+	now := time.Unix(100, 0)
+	ctx.replayRecoveryNow = func() time.Time { return now }
+	for range replayRecoveryChallengeLimit {
+		if err := ctx.allowReplayRecoveryChallengeForPeer("peer-a"); err != nil {
+			t.Fatalf("peer-a challenge rejected: %v", err)
+		}
+	}
+	if err := ctx.allowReplayRecoveryChallengeForPeer("peer-a"); !errors.Is(err, ErrReplayRecoveryRateLimited) {
+		t.Fatalf("peer-a over-limit error = %v, want ErrReplayRecoveryRateLimited", err)
+	}
+	if err := ctx.allowReplayRecoveryChallengeForPeer("peer-b"); err != nil {
+		t.Fatalf("peer-b budget was consumed by peer-a: %v", err)
+	}
+	now = now.Add(replayRecoveryChallengeWindow)
+	for range replayRecoveryChallengeLimit {
+		if err := ctx.allowReplayRecoveryChallengeForPeer("peer-a"); err != nil {
+			t.Fatalf("peer-a challenge after the rate-limit window was rejected: %v", err)
+		}
+	}
+}
+
+func TestReplayRecoveryPeerLimiterPrunesExpiredPeers(t *testing.T) {
+	now := time.Unix(100, 0)
+	ctx := &Context{
+		replayRecoveryPeers: make(map[string]*replayRecoveryPeerState, replayRecoveryPeerLimit),
+		replayRecoveryNow:   func() time.Time { return now },
+	}
+	for i := 0; i < replayRecoveryPeerLimit; i++ {
+		ctx.replayRecoveryPeers[string(rune(i+1))] = &replayRecoveryPeerState{
+			window: now.Add(-2 * replayRecoveryChallengeWindow),
+			count:  replayRecoveryChallengeLimit,
+		}
+	}
+	if err := ctx.allowReplayRecoveryChallengeForPeer("new-peer"); err != nil {
+		t.Fatalf("expired peer entries blocked a new peer: %v", err)
+	}
+	if got := len(ctx.replayRecoveryPeers); got != 1 {
+		t.Fatalf("peer limiter retained %d entries, want 1", got)
+	}
+}
+
+func TestQBlock2ObserveWindowConfiguration(t *testing.T) {
+	ctx, err := NewContext(ContextConfig{
+		UnsafeVolatileSenderSequence: true,
+		AcceptReplayStateLoss:        true,
+		MasterSecret:                 []byte("Q-Block2 window configuration"),
+		SenderID:                     []byte("client"),
+		RecipientID:                  []byte("server"),
+		QBlock2ObserveWindowSize:     64,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ctx.qBlock2ObserveWindowSize != 64 {
+		t.Fatalf("configured Q-Block2 Observe window = %d, want 64", ctx.qBlock2ObserveWindowSize)
+	}
+	_, err = NewContext(ContextConfig{
+		UnsafeVolatileSenderSequence: true,
+		AcceptReplayStateLoss:        true,
+		MasterSecret:                 []byte("invalid Q-Block2 window configuration"),
+		SenderID:                     []byte("client"),
+		RecipientID:                  []byte("server"),
+		QBlock2ObserveWindowSize:     maxQBlock2ObserveWindowSize + 1,
+	})
+	if !errors.Is(err, ErrInvalidContext) {
+		t.Fatalf("oversized Q-Block2 Observe window error = %v, want ErrInvalidContext", err)
+	}
 }
 
 func TestRFC8613AppendixC2DerivationAndNonce(t *testing.T) {

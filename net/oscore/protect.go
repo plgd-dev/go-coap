@@ -16,9 +16,12 @@ var (
 	ErrInvalidOSCOREMessage = errors.New("invalid OSCORE message")
 	ErrInvalidOSCOREOption  = errors.New("invalid OSCORE option")
 	ErrUnsupportedOption    = errors.New("unsupported OSCORE option processing")
+	ErrReplayTrackingLimit  = errors.New("OSCORE response replay tracking limit exceeded")
 )
 
 const outerResponseCode = codes.Changed
+
+const maxQBlock2ObserveWindowSize = uint64(1 << 20)
 
 // Exchange binds a response to the request that established its OSCORE AAD
 // and nonce context. Keep the exact value returned by ProtectRequest or
@@ -29,21 +32,23 @@ type Exchange struct {
 }
 
 type exchangeResponseState struct {
-	mu                     sync.Mutex
-	requestToken           message.Token
-	hasRequestToken        bool
-	requestID              []byte
-	requestPartialIV       []byte
-	observe                bool
-	qBlock2Observe         bool
-	context                *Context
-	started                bool
-	observeComplete        bool
-	multipleResponses      bool
-	responseProtected      bool
-	hasResponseSequence    bool
-	lastResponseSequence   uint64
-	seenResponsePartialIVs map[uint64]struct{}
+	mu                        sync.Mutex
+	requestToken              message.Token
+	hasRequestToken           bool
+	requestID                 []byte
+	requestPartialIV          []byte
+	observe                   bool
+	qBlock2Observe            bool
+	context                   *Context
+	started                   bool
+	observeComplete           bool
+	multipleResponses         bool
+	responseProtected         bool
+	hasResponseSequence       bool
+	lastResponseSequence      uint64
+	hasCompletedQBlock2       bool
+	completedQBlock2HighWater uint64
+	seenResponsePartialIVs    map[uint64]struct{}
 }
 
 // PartialIVNumber converts a big-endian Partial IV into its sequence number.
@@ -76,6 +81,34 @@ func (e Exchange) RequestPartialIVBytes() []byte {
 // IsObserve reports whether the Exchange is bound to an Observe registration.
 func (e Exchange) IsObserve() bool {
 	return e.responseState != nil && e.responseState.observe
+}
+
+// CompleteQBlock2Representation retires per-fragment replay entries after the
+// caller has successfully assembled a protected Q-Block2 Observe representation.
+func (e Exchange) CompleteQBlock2Representation(highestPartialIV uint64) error {
+	state := e.responseState
+	if state == nil {
+		return ErrInvalidContext
+	}
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	if !state.qBlock2Observe {
+		return fmt.Errorf("%w: exchange is not a Q-Block2 Observe exchange", ErrInvalidContext)
+	}
+	if !state.hasResponseSequence || highestPartialIV != state.lastResponseSequence {
+		return fmt.Errorf("%w: Q-Block2 representation high-water does not match authenticated fragments",
+			ErrInvalidOSCOREMessage)
+	}
+	if _, exists := state.seenResponsePartialIVs[highestPartialIV]; !exists {
+		return fmt.Errorf("%w: Q-Block2 representation high-water is not tracked", ErrInvalidOSCOREMessage)
+	}
+	if !state.hasCompletedQBlock2 || highestPartialIV > state.completedQBlock2HighWater {
+		state.completedQBlock2HighWater = highestPartialIV
+	}
+	state.hasCompletedQBlock2 = true
+	clear(state.seenResponsePartialIVs)
+	state.seenResponsePartialIVs = nil
+	return nil
 }
 
 // HasResponse reports whether a response has been successfully authenticated
@@ -190,6 +223,7 @@ func parseOSCOREOuter(options message.Options) (OptionValue, message.Options, er
 	if !optionFound {
 		return OptionValue{}, nil, fmt.Errorf("%w: missing OSCORE option", ErrInvalidOSCOREMessage)
 	}
+	outerUserFields = discardSurplusHopLimitOptions(outerUserFields)
 	_, err := SplitOptions(outerUserFields)
 	if err != nil {
 		return OptionValue{}, nil, err
@@ -201,6 +235,21 @@ func parseOSCOREOuter(options message.Options) (OptionValue, message.Options, er
 		}
 	}
 	return optionValue, CloneOptions(filteredOuterFields), nil
+}
+
+func discardSurplusHopLimitOptions(options message.Options) message.Options {
+	result := make(message.Options, 0, len(options))
+	hopLimitSeen := false
+	for _, option := range options {
+		if option.ID == message.HopLimit {
+			if hopLimitSeen {
+				continue
+			}
+			hopLimitSeen = true
+		}
+		result = append(result, option)
+	}
+	return result
 }
 
 func (c *Context) requestOption(partialIV []byte) ([]byte, error) {
@@ -703,7 +752,7 @@ func (c *Context) UnprotectResponse(response message.Message, exchange Exchange)
 	if err != nil {
 		return message.Message{}, err
 	}
-	state.recordResponse(exchange, option, responseSequence, plaintext.Options.HasOption(message.Observe))
+	state.recordResponse(exchange, option, responseSequence, plaintext)
 	return plaintext, nil
 }
 
@@ -735,10 +784,7 @@ func (state *exchangeResponseState) checkResponse(exchange Exchange, option Opti
 
 func (state *exchangeResponseState) checkObserveResponseSequence(sequence uint64) error {
 	if state.qBlock2Observe {
-		if _, exists := state.seenResponsePartialIVs[sequence]; exists {
-			return ErrReplay
-		}
-		return nil
+		return state.checkQBlock2ObserveSequence(sequence)
 	}
 	if state.hasResponseSequence && sequence <= state.lastResponseSequence {
 		return ErrReplay
@@ -746,15 +792,40 @@ func (state *exchangeResponseState) checkObserveResponseSequence(sequence uint64
 	return nil
 }
 
+func (state *exchangeResponseState) checkQBlock2ObserveSequence(sequence uint64) error {
+	if _, exists := state.seenResponsePartialIVs[sequence]; exists {
+		return ErrReplay
+	}
+	if state.hasCompletedQBlock2 && sequence <= state.completedQBlock2HighWater {
+		return ErrReplay
+	}
+	if uint64(len(state.seenResponsePartialIVs)) >= state.qBlock2ObserveWindowSize() {
+		return ErrReplayTrackingLimit
+	}
+	if state.isOutsideActiveQBlock2Window(sequence) {
+		return ErrReplay
+	}
+	return nil
+}
+
+func (state *exchangeResponseState) isOutsideActiveQBlock2Window(sequence uint64) bool {
+	if !state.hasResponseSequence {
+		return false
+	}
+	windowSize := state.qBlock2ObserveWindowSize()
+	return state.lastResponseSequence >= windowSize &&
+		sequence <= state.lastResponseSequence-windowSize
+}
+
 func (state *exchangeResponseState) recordResponse(
 	exchange Exchange,
 	option OptionValue,
 	responseSequence uint64,
-	hasObserve bool,
+	response message.Message,
 ) {
 	state.started = true
 	if exchange.IsObserve() {
-		state.recordObserveResponse(option, responseSequence, hasObserve)
+		state.recordObserveResponse(option, responseSequence, response)
 	} else if state.multipleResponses && len(option.PartialIV) > 0 {
 		state.recordSeenResponseSequence(responseSequence)
 	}
@@ -763,9 +834,10 @@ func (state *exchangeResponseState) recordResponse(
 func (state *exchangeResponseState) recordObserveResponse(
 	option OptionValue,
 	responseSequence uint64,
-	hasObserve bool,
+	response message.Message,
 ) {
-	if !hasObserve && !state.qBlock2Observe {
+	hasObserve := response.Options.HasOption(message.Observe)
+	if !hasObserve && (!state.qBlock2Observe || !response.Options.HasOption(message.QBlock2)) {
 		state.observeComplete = true
 	}
 	if len(option.PartialIV) == 0 {
@@ -788,6 +860,13 @@ func (state *exchangeResponseState) recordSeenResponseSequence(responseSequence 
 		state.seenResponsePartialIVs = make(map[uint64]struct{})
 	}
 	state.seenResponsePartialIVs[responseSequence] = struct{}{}
+}
+
+func (state *exchangeResponseState) qBlock2ObserveWindowSize() uint64 {
+	if state.context != nil && state.context.qBlock2ObserveWindowSize > 0 {
+		return state.context.qBlock2ObserveWindowSize
+	}
+	return 1024
 }
 
 func (c *Context) unprotectResponse(response message.Message, exchange Exchange) (message.Message, error) {

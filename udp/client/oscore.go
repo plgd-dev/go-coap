@@ -379,6 +379,16 @@ func (cc *Conn) oscoreExchangeForResponse(key string) (udpOSCOREExchange, bool) 
 	return exchange, ok
 }
 
+func (cc *Conn) completeOSCOREQBlock2Representation(token message.Token, highestPartialIV uint64) error {
+	cc.oscoreMu.Lock()
+	exchange, ok := cc.oscoreExchanges[string(token)]
+	cc.oscoreMu.Unlock()
+	if !ok || !exchange.observe || !exchange.qBlock2 {
+		return nil
+	}
+	return exchange.exchange.CompleteQBlock2Representation(highestPartialIV)
+}
+
 func (cc *Conn) unprotectResponseWithExchange(outer message.Message, exchange udpOSCOREExchange) (message.Message, bool, error) {
 	plaintext, err := cc.oscoreProcessor.UnprotectResponse(outer, exchange.context, exchange.exchange)
 	usedCancelExchange := false
@@ -478,7 +488,9 @@ func (cc *Conn) processIncomingOSCORERequest(req *pool.Message, datagram []byte)
 	if err != nil {
 		responded, responseErr := cc.respondToOSCOREProcessingError(req, err)
 		if responded {
-			processed = responseErr == nil && req.Type() == message.Confirmable
+			_, isEchoChallenge := oscore.ReplayRecoveryEcho(err)
+			processed = responseErr == nil && isEchoChallenge &&
+				req.Type() == message.Confirmable
 			cc.errors(fmt.Errorf("cannot process incoming OSCORE request: %w", err))
 			return true, responseErr
 		}
@@ -575,7 +587,7 @@ func (cc *Conn) respondToOSCOREProcessingError(req *pool.Message, processingErr 
 func shouldRespondToOSCOREProcessingError(
 	req *pool.Message,
 	processingErr error,
-	sendProcessingErrors bool,
+	sendProcessingErrors,
 	requiresEchoRecovery bool,
 ) bool {
 	if oscore.IsInternalProcessingError(processingErr) ||
@@ -601,9 +613,13 @@ func (cc *Conn) setProtectedReplayRecoveryResponse(
 	responseType message.Type,
 	responseMID int32,
 ) (bool, error) {
-	protected, handled, err := oscore.ProtectReplayRecoveryResponse(processingErr, message.Message{
+	peer := ""
+	if addr := cc.RemoteAddr(); addr != nil {
+		peer = addr.String()
+	}
+	protected, handled, err := oscore.ProtectReplayRecoveryResponseForPeer(processingErr, message.Message{
 		Type: responseType, MessageID: responseMID, Token: req.Token(),
-	})
+	}, peer)
 	if err != nil {
 		return handled, fmt.Errorf("protect replay recovery response: %w", err)
 	}
@@ -626,7 +642,7 @@ func setReplayRecoveryEcho(processingErr error, resp *pool.Message) error {
 
 func (cc *Conn) sendOSCOREProcessingErrorResponse(req, resp *pool.Message, protected bool) error {
 	resp.SetControlMessage(responseControlMessage(req.ControlMessage()))
-	if req.Type() == message.Confirmable {
+	if protected && req.Type() == message.Confirmable {
 		if err := cc.addResponseToCache(req.MessageID(), resp); err != nil {
 			return fmt.Errorf("cache OSCORE processing-error response: %w", err)
 		}

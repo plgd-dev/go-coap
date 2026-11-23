@@ -37,6 +37,7 @@ type qDropRelay struct {
 	dropForever             map[int64]bool
 	reorderNUM              int64
 	reorderPending          []byte
+	reorderPendingDuplicate bool
 	reordered               bool
 	reorderEnabled          bool
 	reorderOSCOREObserve    bool
@@ -184,11 +185,13 @@ func (r *qDropRelay) applyFinalResponseFaultLocked(msg message.Message) (bool, b
 	return r.fault == qRelayDropFinalResponse, r.fault == qRelayDuplicateFinalResponse
 }
 
-func (r *qDropRelay) reorderResponse(data []byte) (forward, delayed []byte) {
+func (r *qDropRelay) reorderResponse(data []byte, duplicate bool) (
+	forward, delayed []byte, duplicateForward, duplicateDelayed bool,
+) {
 	msg := message.Message{Options: make(message.Options, 0, 32)}
 	if _, err := coder.DefaultCoder.Decode(data, &msg); err != nil ||
 		msg.Code < codes.Created || len(msg.Payload) == 0 {
-		return data, nil
+		return data, nil, duplicate, false
 	}
 	if msg.Options.HasOption(message.OSCORE) && msg.Options.HasOption(message.Observe) {
 		r.mu.Lock()
@@ -196,40 +199,46 @@ func (r *qDropRelay) reorderResponse(data []byte) (forward, delayed []byte) {
 		if r.reorderOSCOREObserve && !r.reordered {
 			if r.reorderPending != nil {
 				delayed = r.reorderPending
+				duplicateDelayed = r.reorderPendingDuplicate
 				r.reorderPending = nil
+				r.reorderPendingDuplicate = false
 				r.reordered = true
-				return data, delayed
+				return data, delayed, duplicate, duplicateDelayed
 			}
 			r.reorderPending = bytes.Clone(data)
-			return nil, nil
+			r.reorderPendingDuplicate = duplicate
+			return nil, nil, false, false
 		}
-		return data, nil
+		return data, nil, duplicate, false
 	}
 	if !msg.Options.HasOption(message.QBlock2) {
-		return data, nil
+		return data, nil, duplicate, false
 	}
 	value, err := msg.Options.GetUint32(message.QBlock2)
 	if err != nil {
-		return data, nil
+		return data, nil, duplicate, false
 	}
 
 	_, num, _, err := blockwise.DecodeQBlockOption(value)
 	if err != nil {
-		return data, nil
+		return data, nil, duplicate, false
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.reorderPending != nil {
 		delayed = r.reorderPending
+		duplicateDelayed = r.reorderPendingDuplicate
 		r.reorderPending = nil
+		r.reorderPendingDuplicate = false
 		r.reordered = true
-		return data, delayed
+		return data, delayed, duplicate, duplicateDelayed
 	}
 	if r.reorderEnabled && num == r.reorderNUM && !r.reordered {
 		r.reorderPending = bytes.Clone(data)
-		return nil, nil
+		r.reorderPendingDuplicate = duplicate
+		return nil, nil, false, false
 	}
-	return data, nil
+	return data, nil, duplicate, false
 }
 
 func (r *qDropRelay) applyOSCOREObserveFault(data []byte) (drop, duplicate bool) {
@@ -327,7 +336,7 @@ func (r *qDropRelay) forwardResponses(t *testing.T, local, upstream *net.UDPConn
 			continue
 		}
 		duplicate = duplicate || oscoreDuplicate
-		forward, delayed := r.reorderResponse(buf[:n])
+		forward, delayed, duplicateForward, duplicateDelayed := r.reorderResponse(buf[:n], duplicate)
 		if forward == nil {
 			continue
 		}
@@ -341,9 +350,15 @@ func (r *qDropRelay) forwardResponses(t *testing.T, local, upstream *net.UDPConn
 				return
 			}
 		}
-		if duplicate {
+		if duplicateForward {
 			if _, err := local.WriteToUDP(forward, peer); err != nil {
 				qRelayError(t, "forward relay response", err)
+				return
+			}
+		}
+		if duplicateDelayed {
+			if _, err := local.WriteToUDP(delayed, peer); err != nil {
+				qRelayError(t, "forward duplicated reordered relay response", err)
 				return
 			}
 		}
