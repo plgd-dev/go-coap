@@ -1540,3 +1540,186 @@ func TestConnConfirmableNotAcknowledgedByPeerRequestWithSameMID(t *testing.T) {
 		require.FailNow(t, "WriteMessage did not complete after ACK")
 	}
 }
+
+func TestConnConfirmableRejectedByReset(t *testing.T) {
+	peer, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	require.NoError(t, err)
+	defer func() {
+		errC := peer.Close()
+		require.NoError(t, errC)
+	}()
+
+	cc, err := udp.Dial(peer.LocalAddr().String())
+	require.NoError(t, err)
+	defer func() {
+		errC := cc.Close()
+		require.NoError(t, errC)
+	}()
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second*5)
+	defer cancel()
+	req := cc.AcquireMessage(ctx)
+	defer cc.ReleaseMessage(req)
+	err = req.SetupPost("/a", []byte{0x01, 0x02}, message.TextPlain, bytes.NewReader([]byte("data")))
+	require.NoError(t, err)
+	req.SetType(message.Confirmable)
+
+	writeErr := make(chan error, 1)
+	go func() {
+		writeErr <- cc.WriteMessage(req)
+	}()
+
+	buf := make([]byte, 1500)
+	err = peer.SetReadDeadline(time.Now().Add(time.Second * 2))
+	require.NoError(t, err)
+	n, clientAddr, err := peer.ReadFromUDP(buf)
+	require.NoError(t, err)
+	sent := pool.NewMessage(ctx)
+	_, err = sent.UnmarshalWithDecoder(coder.DefaultCoder, buf[:n])
+	require.NoError(t, err)
+	require.Equal(t, message.Confirmable, sent.Type())
+
+	// The peer rejects the CON with a matching Reset (RFC 7252 section 4.2).
+	rst := make([]byte, 64)
+	l, err := coder.DefaultCoder.Encode(message.Message{
+		Code:      codes.Empty,
+		MessageID: sent.MessageID(),
+		Type:      message.Reset,
+	}, rst)
+	require.NoError(t, err)
+	_, err = peer.WriteToUDP(rst[:l], clientAddr)
+	require.NoError(t, err)
+
+	select {
+	case err = <-writeErr:
+		require.ErrorIs(t, err, client.ErrMessageReset)
+	case <-ctx.Done():
+		require.FailNow(t, "WriteMessage did not complete after RST")
+	}
+}
+
+func TestConnObserveNotificationRejectedByReset(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second*5)
+	defer cancel()
+
+	// The server keeps sending CON notifications until WriteMessage fails,
+	// like examples/observe/server.
+	notifyErr := make(chan error, 1)
+	router := mux.NewRouter()
+	router.HandleFunc("/obs", func(w mux.ResponseWriter, r *mux.Message) {
+		if obs, errO := r.Options().Observe(); errO != nil || obs != 0 {
+			return
+		}
+		errS := w.SetResponse(codes.Content, message.TextPlain, bytes.NewReader([]byte("0")))
+		require.NoError(t, errS)
+		w.Message().SetObserve(2)
+		cc, token := w.Conn(), bytes.Clone(r.Token())
+		go func() {
+			for seq := uint32(3); ; seq++ {
+				m := cc.AcquireMessage(ctx)
+				m.SetCode(codes.Content)
+				m.SetType(message.Confirmable)
+				m.SetToken(token)
+				m.SetObserve(seq)
+				m.SetContentFormat(message.TextPlain)
+				m.SetBody(bytes.NewReader([]byte("notification")))
+				errW := cc.WriteMessage(m)
+				cc.ReleaseMessage(m)
+				if errW != nil {
+					notifyErr <- errW
+					return
+				}
+				time.Sleep(time.Millisecond * 50)
+			}
+		}()
+	})
+
+	listener, err := coapNet.NewListenUDP("udp", "127.0.0.1:0")
+	require.NoError(t, err)
+	defer func() {
+		errC := listener.Close()
+		require.NoError(t, errC)
+	}()
+	server := udp.NewServer(options.WithMux(router))
+	defer server.Stop()
+	serverDone := make(chan error, 1)
+	go func() {
+		serverDone <- server.Serve(listener)
+	}()
+	defer func() {
+		server.Stop()
+		require.NoError(t, <-serverDone)
+	}()
+
+	serverAddr, ok := listener.LocalAddr().(*net.UDPAddr)
+	require.True(t, ok)
+	peer, err := net.DialUDP("udp", nil, serverAddr)
+	require.NoError(t, err)
+	defer func() {
+		errC := peer.Close()
+		require.NoError(t, errC)
+	}()
+
+	send := func(m message.Message) {
+		t.Helper()
+		data := make([]byte, 64)
+		l, errE := coder.DefaultCoder.Encode(m, data)
+		require.NoError(t, errE)
+		_, errW := peer.Write(data[:l])
+		require.NoError(t, errW)
+	}
+	receive := func(deadline time.Duration) (*pool.Message, bool) {
+		t.Helper()
+		require.NoError(t, peer.SetReadDeadline(time.Now().Add(deadline)))
+		buf := make([]byte, 1500)
+		n, errR := peer.Read(buf)
+		if errR != nil {
+			return nil, false
+		}
+		m := pool.NewMessage(ctx)
+		_, errD := m.UnmarshalWithDecoder(coder.DefaultCoder, buf[:n])
+		require.NoError(t, errD)
+		return m, true
+	}
+	token := []byte{0x0b, 0x5e}
+	isNotification := func(m *pool.Message) bool {
+		return m.Code() == codes.Content && bytes.Equal(m.Token(), token) && m.HasOption(message.Observe)
+	}
+
+	send(message.Message{
+		Code:      codes.GET,
+		Token:     token,
+		MessageID: 1234,
+		Type:      message.NonConfirmable,
+		Options:   message.Options{{ID: message.Observe, Value: nil}, {ID: message.URIPath, Value: []byte("obs")}},
+	})
+	resp, ok := receive(time.Second * 2)
+	require.True(t, ok)
+	require.True(t, isNotification(resp))
+
+	notification, ok := receive(time.Second * 2)
+	require.True(t, ok)
+	require.True(t, isNotification(notification))
+	require.Equal(t, message.Confirmable, notification.Type())
+
+	// The client rejects the notification with Reset: the server MUST remove it
+	// from the observers (RFC 7641 section 4.5), so WriteMessage must fail.
+	send(message.Message{
+		Code:      codes.Empty,
+		MessageID: notification.MessageID(),
+		Type:      message.Reset,
+	})
+	select {
+	case err = <-notifyErr:
+		require.ErrorIs(t, err, client.ErrMessageReset)
+	case <-time.After(time.Second * 2):
+		require.FailNow(t, "notifications continued after RST")
+	}
+	for {
+		m, ok := receive(time.Millisecond * 500)
+		if !ok {
+			break
+		}
+		require.False(t, isNotification(m), "notification %v sent after RST", m)
+	}
+}
