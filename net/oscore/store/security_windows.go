@@ -80,7 +80,8 @@ func openWindowsStoreDirectoryChain(path string) ([]windows.Handle, error) {
 			return nil, err
 		}
 		handles = append(handles, handle)
-		if err := validateWindowsDirectoryHandleACL(handle, current, true); err != nil {
+		allowCreate := filepath.Clean(current) != filepath.Clean(absolute)
+		if err := validateWindowsDirectoryHandleACL(handle, current, true, allowCreate); err != nil {
 			return closeOnError(err)
 		}
 	}
@@ -94,7 +95,8 @@ func openWindowsStoreDirectoryChain(path string) ([]windows.Handle, error) {
 			return closeOnError(err)
 		}
 		handles = append(handles, handle)
-		if err := validateWindowsDirectoryHandleACL(handle, current, true); err != nil {
+		allowCreate := filepath.Clean(current) != filepath.Clean(absolute)
+		if err := validateWindowsDirectoryHandleACL(handle, current, true, allowCreate); err != nil {
 			return closeOnError(err)
 		}
 	}
@@ -131,7 +133,7 @@ func openWindowsDirectoryGuardHandle(path string) (windows.Handle, error) {
 	return handle, nil
 }
 
-func validateWindowsDirectoryHandleACL(handle windows.Handle, path string, validateOwner bool) error {
+func validateWindowsDirectoryHandleACL(handle windows.Handle, path string, validateOwner, allowCreate bool) error {
 	information := windows.SECURITY_INFORMATION(windows.DACL_SECURITY_INFORMATION)
 	if validateOwner {
 		information |= windows.OWNER_SECURITY_INFORMATION
@@ -153,7 +155,7 @@ func validateWindowsDirectoryHandleACL(handle windows.Handle, path string, valid
 	if err != nil {
 		return fmt.Errorf("read OSCORE store ancestor DACL %q: %w", path, err)
 	}
-	if err := validateStoreDirectoryACL(dacl); err != nil {
+	if err := validateStoreDirectoryACLPolicy(dacl, allowCreate); err != nil {
 		return fmt.Errorf("validate OSCORE store ancestor ACL %q: %w", path, err)
 	}
 	return nil
@@ -257,6 +259,10 @@ func openWindowsPathNoFollow(path string, directory bool, access uint32) (window
 }
 
 func validateStoreDirectoryACL(dacl *windows.ACL) error {
+	return validateStoreDirectoryACLPolicy(dacl, false)
+}
+
+func validateStoreDirectoryACLPolicy(dacl *windows.ACL, allowCreate bool) error {
 	if dacl == nil {
 		return fmt.Errorf("directory has a null DACL")
 	}
@@ -265,7 +271,7 @@ func validateStoreDirectoryACL(dacl *windows.ACL) error {
 		return err
 	}
 	for i := uint32(0); i < uint32(dacl.AceCount); i++ {
-		if err := validateStoreDirectoryACE(dacl, i, trustedSIDs); err != nil {
+		if err := validateStoreDirectoryACE(dacl, i, trustedSIDs, allowCreate); err != nil {
 			return err
 		}
 	}
@@ -338,7 +344,7 @@ func storeDirectoryTrustedSIDs() ([]*windows.SID, error) {
 	return sids, nil
 }
 
-func validateStoreDirectoryACE(dacl *windows.ACL, index uint32, trustedSIDs []*windows.SID) error {
+func validateStoreDirectoryACE(dacl *windows.ACL, index uint32, trustedSIDs []*windows.SID, allowCreate bool) error {
 	const directoryWriteRights = windows.FILE_WRITE_DATA |
 		windows.FILE_APPEND_DATA |
 		windows.FILE_WRITE_EA |
@@ -351,6 +357,14 @@ func validateStoreDirectoryACE(dacl *windows.ACL, index uint32, trustedSIDs []*w
 		windows.GENERIC_WRITE |
 		windows.GENERIC_ALL
 
+	writeRights := directoryWriteRights
+	if allowCreate {
+		writeRights = windows.ACCESS_MASK(0x40) |
+			windows.DELETE |
+			windows.WRITE_DAC |
+			windows.WRITE_OWNER |
+			windows.GENERIC_ALL
+	}
 	var ace *windows.ACCESS_ALLOWED_ACE
 	if err := windows.GetAce(dacl, index, &ace); err != nil {
 		return fmt.Errorf("read OSCORE store directory ACL entry %d: %w", index, err)
@@ -361,7 +375,7 @@ func validateStoreDirectoryACE(dacl *windows.ACL, index uint32, trustedSIDs []*w
 	if ace.Header.AceType != windows.ACCESS_ALLOWED_ACE_TYPE {
 		return fmt.Errorf("unsupported ACE type %d in OSCORE store directory ACL", ace.Header.AceType)
 	}
-	if windows.ACCESS_MASK(ace.Mask)&directoryWriteRights == 0 {
+	if ace.Mask&writeRights == 0 {
 		return nil
 	}
 	sid := (*windows.SID)(unsafe.Pointer(&ace.SidStart))

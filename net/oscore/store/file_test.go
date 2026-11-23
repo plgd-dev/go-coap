@@ -137,6 +137,40 @@ func TestHighWaterFileStoreSequenceReservationsAcrossInstances(t *testing.T) {
 	}
 }
 
+func TestHighWaterFileStoreReserveBeforeBindPreservesBinding(t *testing.T) {
+	dir := privateTempDir(t)
+	store, err := NewHighWaterFileStore(dir, "reserve-before-bind")
+	if err != nil {
+		t.Fatal(err)
+	}
+	reserved, err := store.Reserve()
+	if err != nil {
+		t.Fatal(err)
+	}
+	fingerprint := sha256.Sum256([]byte("bound after reserve"))
+	if bindErr := store.Bind(fingerprint); bindErr != nil {
+		t.Fatalf("bind after unbound reservation: %v", bindErr)
+	}
+	next, err := store.Reserve()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if next <= reserved {
+		t.Fatalf("sequence after binding = %d, want greater than %d", next, reserved)
+	}
+
+	restarted, err := NewHighWaterFileStore(dir, "reserve-before-bind")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := restarted.Bind(fingerprint); err != nil {
+		t.Fatalf("rebind persisted sequence state: %v", err)
+	}
+	if err := restarted.Bind(sha256.Sum256([]byte("different context"))); !errors.Is(err, ErrSequenceBindingMismatch) {
+		t.Fatalf("binding a different context = %v, want %v", err, ErrSequenceBindingMismatch)
+	}
+}
+
 func TestHighWaterFileStoreBindsSequenceStateToSenderKeys(t *testing.T) {
 	dir := privateTempDir(t)
 	const (

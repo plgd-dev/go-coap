@@ -643,12 +643,41 @@ func (s *HighWaterFileStore) bindSequenceState(binding string) error {
 		return errors.New("OSCORE sender sequence state or rollback guard is missing")
 	case state != guard:
 		return errors.New("OSCORE sender sequence state differs from its rollback guard")
+	case state.Fingerprint == "":
+		if err := s.bindUnboundSequenceState(state, binding); err != nil {
+			return err
+		}
+		s.sequenceInitialized = true
 	case state.Fingerprint != binding:
 		return ErrSequenceBindingMismatch
 	default:
 		s.sequenceInitialized = true
 	}
 	s.sequenceFingerprint = binding
+	return nil
+}
+
+func (s *HighWaterFileStore) bindUnboundSequenceState(state sequenceFile, binding string) error {
+	bound := state
+	bound.Fingerprint = binding
+	pending := sequencePendingFile{
+		Version:        fileVersion,
+		Previous:       state,
+		PreviousExists: true,
+		Next:           bound,
+	}
+	if err := s.writeSequenceState(s.sequencePendingPath, pending); err != nil {
+		return fmt.Errorf("persist sender sequence binding transaction: %w", err)
+	}
+	if err := s.writeSequenceState(s.sequenceGuardPath, bound); err != nil {
+		return fmt.Errorf("persist sender sequence binding guard: %w", err)
+	}
+	if err := s.writeSequenceState(s.sequencePath, bound); err != nil {
+		return fmt.Errorf("persist sender sequence binding: %w", err)
+	}
+	if err := s.removeSequencePending(); err != nil {
+		return fmt.Errorf("complete sender sequence binding transaction: %w", err)
+	}
 	return nil
 }
 
@@ -721,20 +750,26 @@ func (s *HighWaterFileStore) reserveSequenceWindow() (uint64, uint64, error) {
 			if state.Next > maxPartialIV {
 				return oscore.ErrSenderSequenceExhausted
 			}
+			binding := s.sequenceFingerprint
+			if binding == "" {
+				binding = state.Fingerprint
+			}
 			reserved = state.Next
 			remaining := maxPartialIV + 1 - reserved
 			limit = reserved + min(sequenceWindowSize, remaining)
-			return s.persistSequenceReservation(reserved, limit, stateExists && guardExists)
+			return s.persistSequenceReservation(reserved, limit, stateExists && guardExists, binding)
 		})
 	})
 	return reserved, limit, err
 }
 
-func (s *HighWaterFileStore) persistSequenceReservation(reserved, limit uint64, previousExists bool) error {
-	next := sequenceFile{Version: fileVersion, Next: limit, Fingerprint: s.sequenceFingerprint}
+func (s *HighWaterFileStore) persistSequenceReservation(
+	reserved, limit uint64, previousExists bool, fingerprint string,
+) error {
+	next := sequenceFile{Version: fileVersion, Next: limit, Fingerprint: fingerprint}
 	pending := sequencePendingFile{
 		Version:        fileVersion,
-		Previous:       sequenceFile{Version: fileVersion, Next: reserved, Fingerprint: s.sequenceFingerprint},
+		Previous:       sequenceFile{Version: fileVersion, Next: reserved, Fingerprint: fingerprint},
 		PreviousExists: previousExists,
 		Next:           next,
 	}
@@ -933,6 +968,9 @@ func validateSequencePending(pending sequencePendingFile) error {
 	if err := validateSequence(pending.Next); err != nil {
 		return err
 	}
+	if isSequenceBindingTransaction(pending) {
+		return nil
+	}
 	if !pending.PreviousExists && pending.Previous.Next == 0 &&
 		pending.Next.Next == 0 && pending.Next.Fingerprint != "" {
 		return nil
@@ -950,6 +988,13 @@ func validateSequencePending(pending sequencePendingFile) error {
 		return errors.New("invalid OSCORE sender sequence reservation window")
 	}
 	return nil
+}
+
+func isSequenceBindingTransaction(pending sequencePendingFile) bool {
+	return pending.PreviousExists &&
+		pending.Previous.Next == pending.Next.Next &&
+		pending.Previous.Fingerprint == "" &&
+		pending.Next.Fingerprint != ""
 }
 
 func validateSequenceTransactionProgress(

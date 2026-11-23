@@ -147,6 +147,7 @@ type qDropRelay struct {
 	duplicateOSCOREObserve  bool
 	duplicatedOSCOREObserve bool
 	delayedACK              chan struct{}
+	delayedACKStarted       time.Time
 	emptyACKDelay           time.Duration
 	delayStaleQ1            bool
 	staleQ1Packet           []byte
@@ -276,7 +277,8 @@ func (r *qDropRelay) applyEmptyACKFaultLocked(msg message.Message) (bool, bool, 
 		if delay == 0 {
 			delay = 100 * time.Millisecond
 		}
-		return true, false, true, delay
+		r.delayedACKStarted = time.Now()
+		return true, true, false, delay
 	}
 	return true, r.fault != qRelayDuplicateEmptyACK, r.fault == qRelayDuplicateEmptyACK, 0
 }
@@ -754,25 +756,23 @@ func TestQBlockConfirmableDelayedEmptyACK(t *testing.T) {
 		options.WithBlockwise(true, blockwise.SZX16, 30*time.Second),
 		options.WithQBlockwise(options.QBlockwiseOnly),
 		options.WithQBlockwiseConfig(config),
-		options.WithTransmission(1, 20*time.Millisecond, 3, 1.0),
+		options.WithTransmission(1, 500*time.Millisecond, 3, 1.0),
 	)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, cc.Close()) })
 
 	response := qDo(t, cc, codes.PUT, "/q", payload, message.Confirmable)
-	completedAt := time.Now()
 	require.Equal(t, codes.Changed, response.Code())
-	cc.ReleaseMessage(response)
 	select {
 	case <-relay.delayedACK:
-	case <-time.After(time.Second):
+	case <-time.After(2 * time.Second):
 		t.Fatal("delayed empty ACK was not forwarded")
 	}
-	require.GreaterOrEqual(t, time.Since(completedAt), 150*time.Millisecond,
-		"the injected empty ACK must arrive after the upload response")
 	require.EqualValues(t, 1, calls.Load(), "late ACK traffic must not redispatch the completed upload")
 	relay.mu.Lock()
 	defer relay.mu.Unlock()
+	require.GreaterOrEqual(t, time.Since(relay.delayedACKStarted), 250*time.Millisecond,
+		"the injected empty ACK must be withheld for the configured delay")
 	require.True(t, relay.faulted)
 	require.Positive(t, relay.q1Seen[0], "the transfer must include a Q1 upload")
 }

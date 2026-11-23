@@ -239,3 +239,29 @@ func TestHighWaterFileStoreRejectsSymlinkStateFile(t *testing.T) {
 		t.Fatal("Reserve followed a symlink state file")
 	}
 }
+
+func TestOpenFileAtRootRejectsSymlink(t *testing.T) {
+	dir := privateTempDir(t)
+	target := filepath.Join(dir, "target")
+	if err := os.WriteFile(target, []byte("unchanged"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, filepath.Join(dir, "state")); err != nil {
+		t.Skipf("file symlinks are unavailable: %v", err)
+	}
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer root.Close()
+	if _, openErr := openFileAtRoot(root, "state", os.O_RDONLY, 0); openErr == nil {
+		t.Fatal("openFileAtRoot followed a symlink")
+	}
+	got, err := os.ReadFile(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "unchanged" {
+		t.Fatalf("symlink target contents = %q, want unchanged", got)
+	}
+}

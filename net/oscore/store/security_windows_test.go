@@ -30,12 +30,44 @@ func TestWindowsStoreDirectoryChainAcceptsStandardDataPaths(t *testing.T) {
 			continue
 		}
 		t.Run(filepath.Base(path), func(t *testing.T) {
-			handles, err := openWindowsStoreDirectoryChain(path)
+			handle, err := openWindowsDirectoryGuardHandle(path)
 			if err != nil {
-				t.Fatalf("standard Windows data path %q was rejected: %v", path, err)
+				t.Fatalf("open standard Windows data path %q: %v", path, err)
 			}
-			closeWindowsHandles(handles)
+			defer windows.CloseHandle(handle)
+			if err := validateWindowsDirectoryHandleACL(handle, path, true, true); err != nil {
+				t.Fatalf("standard Windows data path %q was rejected as a store ancestor: %v", path, err)
+			}
 		})
+	}
+}
+
+func TestWindowsStoreAncestorAllowsCreateButRejectsDelete(t *testing.T) {
+	createOnly, descriptorErr := windows.SecurityDescriptorFromString("D:(A;;0x6;;;BU)")
+	if descriptorErr != nil {
+		t.Fatal(descriptorErr)
+	}
+	dacl, _, daclErr := createOnly.DACL()
+	if daclErr != nil {
+		t.Fatal(daclErr)
+	}
+	if policyErr := validateStoreDirectoryACLPolicy(dacl, true); policyErr != nil {
+		t.Fatalf("ancestor create permissions should be allowed: %v", policyErr)
+	}
+	if policyErr := validateStoreDirectoryACL(dacl); policyErr == nil {
+		t.Fatal("store directory with untrusted create permissions was accepted")
+	}
+
+	createAndDelete, descriptorErr := windows.SecurityDescriptorFromString("D:(A;;0x10006;;;BU)")
+	if descriptorErr != nil {
+		t.Fatal(descriptorErr)
+	}
+	dacl, _, daclErr = createAndDelete.DACL()
+	if daclErr != nil {
+		t.Fatal(daclErr)
+	}
+	if policyErr := validateStoreDirectoryACLPolicy(dacl, true); policyErr == nil {
+		t.Fatal("ancestor ACL granting delete access was accepted")
 	}
 }
 

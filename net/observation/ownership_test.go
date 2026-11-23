@@ -48,3 +48,17 @@ func TestNotificationCleanupUsesMetadataBeforeCallback(t *testing.T) {
 		})
 	}
 }
+
+func TestForgetObservationRemovesLocalRegistration(t *testing.T) {
+	cc := new(ownershipClient)
+	handler := NewHandler(cc, nil, nil)
+	token := message.Token("observe")
+	observation := newObservation(message.Message{Code: codes.GET, Token: token}, handler,
+		func(*pool.Message) {}, make(chan respObservationMessage, 1))
+	_, loaded := handler.observations.LoadOrStore(token.Hash(), observation)
+	require.False(t, loaded)
+
+	require.True(t, handler.ForgetObservation(token))
+	require.True(t, observation.Canceled())
+	require.False(t, handler.ForgetObservation(token))
+}

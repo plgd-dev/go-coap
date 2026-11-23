@@ -10,6 +10,8 @@ import (
 	"runtime"
 	"strings"
 	"syscall"
+
+	"golang.org/x/sys/unix"
 )
 
 func validateStoreDirectoryPath(path string, allowedSymlinks []string) error {
@@ -189,7 +191,24 @@ func openFileNoFollow(path string, flags int, perm os.FileMode) (*os.File, error
 }
 
 func openFileAtRoot(root *os.Root, path string, flags int, perm os.FileMode) (*os.File, error) {
-	return root.OpenFile(path, flags|syscall.O_NOFOLLOW, perm)
+	if path == "" || filepath.IsAbs(path) || filepath.Base(path) != path || path == "." || path == ".." {
+		return nil, fmt.Errorf("invalid rooted OSCORE store file path %q", path)
+	}
+	directory, err := root.Open(".")
+	if err != nil {
+		return nil, fmt.Errorf("open rooted OSCORE store directory: %w", err)
+	}
+	defer directory.Close()
+	fd, err := unix.Openat(
+		int(directory.Fd()),
+		path,
+		flags|unix.O_NOFOLLOW|unix.O_CLOEXEC,
+		uint32(perm.Perm()),
+	)
+	if err != nil {
+		return nil, err
+	}
+	return os.NewFile(uintptr(fd), path), nil
 }
 
 func replaceFileAtomically(source, destination string) error {

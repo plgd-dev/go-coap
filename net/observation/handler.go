@@ -145,6 +145,12 @@ func (h *Handler[C]) GetObservation(key uint64) (*Observation[C], bool) {
 	return h.observations.Load(key)
 }
 
+// ForgetObservation removes a local observation without sending a cancellation request.
+func (h *Handler[C]) ForgetObservation(token message.Token) bool {
+	o, ok := h.GetObservation(token.Hash())
+	return ok && o.cleanUp()
+}
+
 // GetObservationRequest returns observation request for token
 func (h *Handler[C]) GetObservationRequest(token message.Token) (*pool.Message, bool) {
 	obs, ok := h.GetObservation(token.Hash())

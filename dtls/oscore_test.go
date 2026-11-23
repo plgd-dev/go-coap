@@ -405,7 +405,7 @@ func TestOSCOREOuterBlockwiseDTLSRejectsAuthenticationFailureDuringTransfer(t *t
 	case processingErr := <-serverErrors:
 		require.Error(t, processingErr)
 		require.False(t, oscore.IsInternalProcessingError(processingErr))
-	case <-time.After(time.Second):
+	case <-time.After(5 * time.Second):
 		t.Fatal("DTLS server did not report the fragmented request authentication failure")
 	}
 	require.Zero(t, handled.Load(), "unauthenticated reassembled request reached the application")

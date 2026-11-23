@@ -535,7 +535,7 @@ func (cc *Conn) advanceQBlockObservation(req *pool.Message, szx blockwise.SZX, e
 	}
 	if err != nil {
 		cc.errors(fmt.Errorf("receive Q Observe notification: %w", err))
-		if errors.Is(err, oscore.ErrReplayTrackingLimit) {
+		if cc.stopQBlockObservationOnError(req.Token(), err) {
 			return nil, sequence, false
 		}
 	} else {
@@ -555,6 +555,16 @@ func (cc *Conn) advanceQBlockObservation(req *pool.Message, szx blockwise.SZX, e
 		return nil, sequence, false
 	}
 	return next, sequence, true
+}
+
+func (cc *Conn) stopQBlockObservationOnError(token message.Token, err error) bool {
+	if !errors.Is(err, oscore.ErrReplayTrackingLimit) {
+		return false
+	}
+	if cc.observationHandler != nil {
+		cc.observationHandler.ForgetObservation(token)
+	}
+	return true
 }
 
 func (cc *Conn) receiveQNotification(req *pool.Message, szx blockwise.SZX, exchange blockwise.QBlockExchange, initial *pool.Message) (*pool.Message, error) {
