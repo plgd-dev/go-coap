@@ -359,11 +359,8 @@ func validateStoreDirectoryACE(dacl *windows.ACL, index uint32, trustedSIDs []*w
 
 	writeRights := directoryWriteRights
 	if allowCreate {
-		writeRights = windows.ACCESS_MASK(0x40) |
-			windows.DELETE |
-			windows.WRITE_DAC |
-			windows.WRITE_OWNER |
-			windows.GENERIC_ALL
+		const directoryCreateRights = windows.FILE_WRITE_DATA | windows.FILE_APPEND_DATA
+		writeRights &^= directoryCreateRights
 	}
 	var ace *windows.ACCESS_ALLOWED_ACE
 	if err := windows.GetAce(dacl, index, &ace); err != nil {

@@ -58,16 +58,23 @@ func TestWindowsStoreAncestorAllowsCreateButRejectsDelete(t *testing.T) {
 		t.Fatal("store directory with untrusted create permissions was accepted")
 	}
 
-	createAndDelete, descriptorErr := windows.SecurityDescriptorFromString("D:(A;;0x10006;;;BU)")
-	if descriptorErr != nil {
-		t.Fatal(descriptorErr)
-	}
-	dacl, _, daclErr = createAndDelete.DACL()
-	if daclErr != nil {
-		t.Fatal(daclErr)
-	}
-	if policyErr := validateStoreDirectoryACLPolicy(dacl, true); policyErr == nil {
-		t.Fatal("ancestor ACL granting delete access was accepted")
+	for _, sddl := range []string{
+		"D:(A;;0x40;;;BU)",
+		"D:(A;;0x10006;;;BU)",
+	} {
+		t.Run(sddl, func(t *testing.T) {
+			createAndDelete, descriptorErr := windows.SecurityDescriptorFromString(sddl)
+			if descriptorErr != nil {
+				t.Fatal(descriptorErr)
+			}
+			dacl, _, daclErr := createAndDelete.DACL()
+			if daclErr != nil {
+				t.Fatal(daclErr)
+			}
+			if policyErr := validateStoreDirectoryACLPolicy(dacl, true); policyErr == nil {
+				t.Fatal("ancestor ACL granting delete access was accepted")
+			}
+		})
 	}
 }
 
