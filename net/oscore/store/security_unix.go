@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"syscall"
 )
@@ -32,6 +33,9 @@ func validateStoreDirectoryPath(path string) error {
 			return fmt.Errorf("lstat OSCORE store directory component %q: %w", current, err)
 		}
 		if info.Mode()&os.ModeSymlink != 0 {
+			if isAllowedUnixSystemSymlink(current) {
+				continue
+			}
 			return fmt.Errorf("OSCORE store directory component %q is a symlink", current)
 		}
 		if !info.IsDir() {
@@ -39,6 +43,18 @@ func validateStoreDirectoryPath(path string) error {
 		}
 	}
 	return nil
+}
+
+func isAllowedUnixSystemSymlink(path string) bool {
+	if runtime.GOOS != "darwin" {
+		return false
+	}
+	switch filepath.Clean(path) {
+	case "/var", "/tmp":
+		return true
+	default:
+		return false
+	}
 }
 
 func validateStoreDirectory(path string) error {
