@@ -8,6 +8,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"net/netip"
 	"strconv"
 
@@ -142,18 +143,26 @@ type Forwarder struct {
 	AllowTarget  TargetPolicy
 	// RateLimit rejects a request when it returns false. It is optional; when
 	// configured, it runs after target authorization and before forwarding.
-	RateLimit func(context.Context, oscore.ProxyTarget) bool
+	// The peer is nil for direct Forward calls that do not provide transport
+	// metadata.
+	RateLimit func(context.Context, net.Addr, oscore.ProxyTarget) bool
 	OnError   func(error)
 }
 
 // Forward validates and routes an opaque OSCORE request. The Proxy-Uri must
 // contain only its authority, as produced by Context.ProtectRequest.
 func (f *Forwarder) Forward(ctx context.Context, request message.Message) (message.Message, error) {
+	return f.ForwardFrom(ctx, nil, request)
+}
+
+// ForwardFrom validates and routes an opaque OSCORE request while exposing the
+// transport peer to the optional rate limiter.
+func (f *Forwarder) ForwardFrom(ctx context.Context, peer net.Addr, request message.Message) (message.Message, error) {
 	target, err := f.validate(ctx, request)
 	if err != nil {
 		return message.Message{}, err
 	}
-	if f.RateLimit != nil && !f.RateLimit(ctx, target) {
+	if f.RateLimit != nil && !f.RateLimit(ctx, peer, target) {
 		return message.Message{}, fmt.Errorf("%w: %s", ErrRateLimited, target.AuthorityURI())
 	}
 	forwarded, err := prepareForwardedRequest(request, target)
@@ -251,7 +260,7 @@ func (f *Forwarder) ServeCOAP(w mux.ResponseWriter, r *mux.Message) {
 	body, err := r.ReadBody()
 	if err == nil {
 		var response message.Message
-		response, err = f.Forward(r.Context(), message.Message{
+		response, err = f.ForwardFrom(r.Context(), w.Conn().RemoteAddr(), message.Message{
 			Token:     r.Token(),
 			Code:      r.Code(),
 			Type:      r.Type(),

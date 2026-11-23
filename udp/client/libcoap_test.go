@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"net"
 	"os/exec"
 	"strconv"
@@ -56,12 +57,9 @@ func TestConnPutBlockwiseWithoutTokenLibCoAP(t *testing.T) {
 		}
 	}()
 
-	time.Sleep(100 * time.Millisecond)
-	select {
-	case waitErr := <-serverDone:
-		serverWaited = true
-		require.FailNow(t, "libcoap server exited before the test", "error: %v, output: %s", waitErr, serverOutput.String())
-	default:
+	if readinessErr := waitForLibCoAPServer(serverDone, &serverWaited,
+		net.JoinHostPort("127.0.0.1", strconv.Itoa(port))); readinessErr != nil {
+		require.FailNow(t, "libcoap server did not become ready", "%v; output: %s", readinessErr, serverOutput.String())
 	}
 
 	cc, err := udp.Dial(net.JoinHostPort("127.0.0.1", strconv.Itoa(port)),
@@ -97,4 +95,58 @@ func findLibCoAPServer() (string, error) {
 		}
 	}
 	return "", errors.New("coap-server not found in PATH")
+}
+
+func waitForLibCoAPServer(serverDone <-chan error, serverWaited *bool, address string) error {
+	deadline := time.Now().Add(5 * time.Second)
+	var lastErr error
+	for time.Now().Before(deadline) {
+		select {
+		case serverErr := <-serverDone:
+			*serverWaited = true
+			return fmt.Errorf("libcoap server exited before becoming ready: %w", serverErr)
+		default:
+		}
+
+		lastErr = probeLibCoAPServer(address)
+		if lastErr == nil {
+			return nil
+		}
+
+		select {
+		case serverErr := <-serverDone:
+			*serverWaited = true
+			if serverErr != nil {
+				return fmt.Errorf("libcoap server exited before becoming ready: %w", serverErr)
+			}
+			return errors.New("libcoap server exited before becoming ready")
+		case <-time.After(50 * time.Millisecond):
+		}
+	}
+	if lastErr == nil {
+		return errors.New("timed out waiting for libcoap server response")
+	}
+	return fmt.Errorf("timed out waiting for libcoap server response: %w", lastErr)
+}
+
+func probeLibCoAPServer(address string) error {
+	cc, err := udp.Dial(address, options.WithErrors(func(error) {}))
+	if err != nil {
+		return err
+	}
+	defer cc.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 250*time.Millisecond)
+	defer cancel()
+	req, err := cc.NewGetRequest(ctx, "/")
+	if err != nil {
+		return err
+	}
+	defer cc.ReleaseMessage(req)
+	resp, err := cc.Do(req)
+	if err != nil {
+		return err
+	}
+	cc.ReleaseMessage(resp)
+	return nil
 }

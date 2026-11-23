@@ -18,6 +18,10 @@ func validateStoreDirectory(path string) error {
 	return nil
 }
 
+func validateStoreDirectoryPath(string) error {
+	return nil
+}
+
 func openFileNoFollow(path string, flags int, perm os.FileMode) (*os.File, error) {
 	return os.OpenFile(path, flags, perm)
 }

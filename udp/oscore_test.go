@@ -18,6 +18,7 @@ import (
 	"github.com/plgd-dev/go-coap/v3/mux"
 	coapNet "github.com/plgd-dev/go-coap/v3/net"
 	"github.com/plgd-dev/go-coap/v3/net/blockwise"
+	"github.com/plgd-dev/go-coap/v3/net/observation"
 	"github.com/plgd-dev/go-coap/v3/net/oscore"
 	"github.com/plgd-dev/go-coap/v3/net/oscore/proxy"
 	"github.com/plgd-dev/go-coap/v3/net/responsewriter"
@@ -1567,7 +1568,7 @@ func TestOSCOREUDPQBlock(t *testing.T) {
 	var handledUpload atomic.Bool
 	server := udp.NewServer(
 		options.WithOSCORE(newUDPOSCOREProcessor(t, "server", "client", false)),
-		options.WithQBlockwise(options.QBlockwiseOnly),
+		options.WithQBlockwise(options.QBlockwiseAuto),
 		options.WithBlockwise(true, blockwise.SZX1024, 5*time.Second),
 		options.WithHandlerFunc(func(w *responsewriter.ResponseWriter[*client.Conn], req *pool.Message) {
 			switch req.Code() {
@@ -1654,6 +1655,129 @@ func assertUDPGetResponse(t *testing.T, cc *client.Conn) {
 	body, err := response.ReadBody()
 	require.NoError(t, err)
 	require.Equal(t, []byte("ok"), body)
+}
+
+func TestOSCOREQBlock2ObserveReordersRecoversAndRejectsDuplicate(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	listener, err := coapNet.NewListenUDP("udp", "127.0.0.1:0")
+	require.NoError(t, err)
+	clientContext, serverContext := newUDPOSCOREContextPair(t, "client", "server")
+	serverProcessor, err := oscore.NewProcessor(oscore.ProcessorConfig{Contexts: []*oscore.Context{serverContext}})
+	require.NoError(t, err)
+	notify := make(chan func([]byte) error, 1)
+	server := udp.NewServer(
+		options.WithOSCORE(serverProcessor),
+		options.WithQBlockwise(options.QBlockwiseAuto),
+		options.WithBlockwise(true, blockwise.SZX128, time.Second),
+		options.WithHandlerFunc(func(w *responsewriter.ResponseWriter[*client.Conn], req *pool.Message) {
+			observe, observeErr := req.Observe()
+			if observeErr != nil {
+				return
+			}
+			if observe == 1 {
+				if responseErr := w.SetResponse(codes.Content, message.AppOctets, nil); responseErr != nil {
+					t.Errorf("set Observe cancellation response: %v", responseErr)
+				}
+				return
+			}
+			if responseErr := w.SetResponse(codes.Content, message.AppOctets, bytes.NewReader([]byte("initial"))); responseErr != nil {
+				t.Errorf("set initial response: %v", responseErr)
+				return
+			}
+			w.Message().SetObserve(0)
+			conn, token := w.Conn(), bytes.Clone(req.Token())
+			notify <- func(body []byte) error {
+				response := conn.AcquireMessage(conn.Context())
+				defer conn.ReleaseMessage(response)
+				response.SetCode(codes.Content)
+				response.SetToken(token)
+				response.SetType(message.NonConfirmable)
+				response.SetObserve(1)
+				response.SetContentFormat(message.AppOctets)
+				response.SetBody(bytes.NewReader(body))
+				return conn.WriteMessage(response)
+			}
+		}),
+	)
+	serverDone := make(chan error, 1)
+	go func() { serverDone <- server.Serve(listener) }()
+	defer func() {
+		server.Stop()
+		require.NoError(t, listener.Close())
+		select {
+		case serverErr := <-serverDone:
+			require.NoError(t, serverErr)
+		case <-time.After(5 * time.Second):
+			require.Fail(t, "OSCORE Q-Block2 Observe server did not stop")
+		}
+	}()
+
+	relayAddr, relay := newQDropRelay(t, listener.LocalAddr().String(), message.QBlock2, -1)
+	processor, err := oscore.NewProcessor(oscore.ProcessorConfig{Contexts: []*oscore.Context{clientContext}})
+	require.NoError(t, err)
+	cc, err := udp.Dial(relayAddr,
+		options.WithOSCORE(processor),
+		options.WithQBlockwise(options.QBlockwiseOnly),
+		options.WithBlockwise(true, blockwise.SZX128, time.Second))
+	require.NoError(t, err)
+	defer func() { require.NoError(t, cc.Close()) }()
+
+	received := make(chan struct {
+		body []byte
+		seq  uint64
+		ok   bool
+	}, 2)
+	observation, err := cc.Observe(ctx, "/oscore-qblock-observe", func(response *pool.Message) {
+		body, readErr := response.ReadBody()
+		if readErr != nil {
+			t.Errorf("read Observe body: %v", readErr)
+			return
+		}
+		sequence, ok := observation.AuthenticatedSequenceNumber(response.Context())
+		received <- struct {
+			body []byte
+			seq  uint64
+			ok   bool
+		}{body: body, seq: sequence, ok: ok}
+	})
+	require.NoError(t, err)
+	defer func() {
+		cancelCtx, cancelObservation := context.WithTimeout(context.Background(), time.Second)
+		defer cancelObservation()
+		require.NoError(t, observation.Cancel(cancelCtx))
+	}()
+	waitForBody := func(want []byte) uint64 {
+		t.Helper()
+		select {
+		case got := <-received:
+			require.Equal(t, want, got.body)
+			require.True(t, got.ok, "assembled response must retain an authenticated Partial IV")
+			return got.seq
+		case <-ctx.Done():
+			t.Fatalf("timed out waiting for Q-Block2 Observe body: %v", ctx.Err())
+			return 0
+		}
+	}
+	waitForBody([]byte("initial"))
+
+	relay.mu.Lock()
+	relay.reorderOSCOREObserve = true
+	relay.dropOSCOREObserve = 1
+	relay.duplicateOSCOREObserve = true
+	relay.mu.Unlock()
+	body := bytes.Repeat([]byte("qblock-oscore-observe-"), 51)
+	write := <-notify
+	require.NoError(t, write(body))
+	sequence := waitForBody(body)
+	require.Positive(t, sequence, "assembled notification retains an authenticated Partial IV")
+
+	relay.mu.Lock()
+	require.True(t, relay.reordered, "the relay must reorder protected notification fragments")
+	require.True(t, relay.duplicatedOSCOREObserve, "the relay must duplicate a protected notification fragment")
+	require.Zero(t, relay.dropOSCOREObserve, "the relay must drop one protected notification fragment")
+	relay.mu.Unlock()
 }
 
 func newUDPOSCOREProcessor(t *testing.T, senderID, recipientID string, allowPlaintext bool) *oscore.Processor {

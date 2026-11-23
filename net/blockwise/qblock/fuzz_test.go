@@ -61,9 +61,9 @@ func FuzzParseQBlock1(f *testing.F) {
 }
 
 func FuzzParseQBlock2(f *testing.F) {
-	f.Add(packQBlock2FuzzOptions([]byte{0x18}, nil, nil, nil, nil, nil), uint8(codes.GET))
-	f.Add(packQBlock2FuzzOptions([]byte{0xff, 0xff, 0xff, 0xff}, []byte{0}, nil, nil, nil, nil), uint8(codes.PUT))
-	f.Fuzz(func(t *testing.T, packed []byte, code uint8) {
+	f.Add(packQBlock2FuzzOptions([]byte{0x18}, nil, nil, nil, nil, nil), uint8(codes.GET), uint8(0))
+	f.Add(packQBlock2FuzzOptions([]byte{0xff, 0xff, 0xff, 0xff}, []byte{0}, nil, nil, nil, nil), uint8(codes.PUT), uint8(0b0111))
+	f.Fuzz(func(t *testing.T, packed []byte, code uint8, conflictingOptions uint8) {
 		options, ok := unpackQBlock2FuzzOptions(packed)
 		if !ok {
 			return
@@ -72,10 +72,18 @@ func FuzzParseQBlock2(f *testing.F) {
 		request.SetCode(codes.Code(code))
 		request.AddOptionBytes(message.QBlock2, options[0])
 		request.AddOptionBytes(message.QBlock2, options[1])
-		request.AddOptionBytes(message.QBlock1, options[2])
-		request.AddOptionBytes(message.Block1, options[3])
-		request.AddOptionBytes(message.Block2, options[4])
-		request.AddOptionBytes(message.Observe, options[5])
+		if conflictingOptions&0b0001 != 0 {
+			request.AddOptionBytes(message.QBlock1, options[2])
+		}
+		if conflictingOptions&0b0010 != 0 {
+			request.AddOptionBytes(message.Block1, options[3])
+		}
+		if conflictingOptions&0b0100 != 0 {
+			request.AddOptionBytes(message.Block2, options[4])
+		}
+		if conflictingOptions&0b1000 != 0 {
+			request.AddOptionBytes(message.Observe, options[5])
+		}
 		engine := New(newTestClient(), nil)
 
 		szx, num, _, err := engine.parseQBlock2(request)

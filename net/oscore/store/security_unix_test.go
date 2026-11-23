@@ -18,6 +18,25 @@ func TestNewHighWaterFileStoreRejectsWritableDirectory(t *testing.T) {
 	}
 }
 
+func TestNewHighWaterFileStoreRejectsSymlinkDirectoryComponent(t *testing.T) {
+	root := t.TempDir()
+	target := filepath.Join(root, "target")
+	if err := os.Mkdir(target, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(root, "alias")
+	if err := os.Symlink(target, link); err != nil {
+		t.Skipf("directory symlinks are unavailable: %v", err)
+	}
+	storePath := filepath.Join(link, "nested")
+	if _, err := NewHighWaterFileStore(storePath, "symlink-component"); err == nil {
+		t.Fatal("NewHighWaterFileStore accepted a directory path containing a symlink")
+	}
+	if _, err := os.Lstat(filepath.Join(target, "nested")); !os.IsNotExist(err) {
+		t.Fatalf("symlink target child status = %v, want not exist", err)
+	}
+}
+
 func TestHighWaterFileStoreRejectsSymlinkLock(t *testing.T) {
 	dir := privateTempDir(t)
 	store, storeErr := NewHighWaterFileStore(dir, "symlink-lock")

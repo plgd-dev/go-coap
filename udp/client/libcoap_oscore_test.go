@@ -233,6 +233,98 @@ func TestLibCoAPClientOSCOREObserveNotifications(t *testing.T) {
 	require.Equal(t, int32(2), handled.Load())
 }
 
+func TestLibCoAPClientOSCOREDTLSObserveNotifications(t *testing.T) {
+	clientPath, err := exec.LookPath("coap-client-notls")
+	if err != nil {
+		clientPath, err = exec.LookPath("coap-client")
+	}
+	if err != nil {
+		requireLibCoAPOSCORE(t, "coap-client not found in PATH")
+	}
+
+	listener, err := coapNet.NewDTLSListener(
+		"udp", "127.0.0.1:0",
+		coapNet.NewDTLSServerOptions(
+			piondtls.WithPSK(func([]byte) ([]byte, error) { return []byte{0xab, 0xc1, 0x23}, nil }),
+			piondtls.WithPSKIdentityHint([]byte("go-coap-server")),
+			piondtls.WithCipherSuites(piondtls.TLS_PSK_WITH_AES_128_GCM_SHA256),
+		),
+	)
+	require.NoError(t, err)
+	var handled atomic.Int32
+	server := coapDTLS.NewServer(
+		options.WithOSCORE(newLibCoAPOSCOREProcessor(t, "server", "client")),
+		options.WithHandlerFunc(func(w *responsewriter.ResponseWriter[*client.Conn], req *pool.Message) {
+			observe, observeErr := req.Observe()
+			if observeErr != nil {
+				t.Errorf("get DTLS Observe request: %v", observeErr)
+				return
+			}
+			switch observe {
+			case 0:
+				if responseErr := w.SetResponse(codes.Content, message.TextPlain, bytes.NewReader([]byte("initial"))); responseErr != nil {
+					t.Errorf("set initial DTLS Observe response: %v", responseErr)
+					return
+				}
+				w.Message().SetObserve(0)
+				conn, token := w.Conn(), bytes.Clone(req.Token())
+				go func() {
+					time.Sleep(100 * time.Millisecond)
+					for sequence := uint32(1); sequence <= 2; sequence++ {
+						notification := conn.AcquireMessage(conn.Context())
+						notification.SetCode(codes.Content)
+						notification.SetToken(token)
+						notification.SetObserve(sequence)
+						notification.SetBody(bytes.NewReader([]byte("notify")))
+						writeErr := conn.WriteMessage(notification)
+						conn.ReleaseMessage(notification)
+						if writeErr != nil {
+							t.Errorf("send DTLS OSCORE notification: %v", writeErr)
+							return
+						}
+						handled.Add(1)
+					}
+				}()
+			case 1:
+				if responseErr := w.SetResponse(codes.Content, message.TextPlain, nil); responseErr != nil {
+					t.Errorf("set DTLS Observe cancellation response: %v", responseErr)
+				}
+			default:
+				t.Errorf("unexpected DTLS Observe value %d", observe)
+			}
+		}),
+	)
+	serverDone := make(chan error, 1)
+	go func() { serverDone <- server.Serve(listener) }()
+	defer func() {
+		server.Stop()
+		require.NoError(t, listener.Close())
+		select {
+		case serverErr := <-serverDone:
+			require.NoError(t, serverErr)
+		case <-time.After(5 * time.Second):
+			require.Fail(t, "go-coap DTLS OSCORE Observe server did not stop")
+		}
+	}()
+
+	clientConfig := writeLibCoAPOSCOREConfig(t, "client", "server")
+	outputPath := t.TempDir() + "/dtls-observe.txt"
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, clientPath, "-E", clientConfig, "-k", "0xabc123", "-u", "libcoap-client",
+		"-s", "3", "-o", outputPath, "-B", "5", "coaps://"+listener.Addr().String()+"/observe")
+	output, err := cmd.CombinedOutput()
+	if err != nil && (strings.Contains(string(output), "OSCORE support not enabled") ||
+		strings.Contains(string(output), "DTLS support not enabled")) {
+		requireLibCoAPOSCORE(t, "libcoap client lacks OSCORE or DTLS support")
+	}
+	require.NoError(t, err, "libcoap DTLS OSCORE Observe output: %s", output)
+	body, err := os.ReadFile(outputPath)
+	require.NoError(t, err)
+	require.GreaterOrEqual(t, strings.Count(string(body), "notify"), 2, "libcoap output: %s", output)
+	require.Equal(t, int32(2), handled.Load())
+}
+
 func TestLibCoAPServerRejectsWrongOSCOREContext(t *testing.T) {
 	serverPath, err := findLibCoAPServer()
 	if err != nil {
@@ -427,6 +519,24 @@ func TestLibCoAPServerOSCOREDTLS(t *testing.T) {
 	body, err := response.ReadBody()
 	require.NoError(t, err)
 	require.NotEmpty(t, body)
+
+	observeCtx, cancelObserve := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancelObserve()
+	observed := make(chan struct{}, 4)
+	observation, err := cc.Observe(observeCtx, "/time", func(*pool.Message) {
+		observed <- struct{}{}
+	})
+	require.NoError(t, err, "libcoap DTLS output: %s", serverOutput.String())
+	for range 2 {
+		select {
+		case <-observed:
+		case <-observeCtx.Done():
+			require.Fail(t, "libcoap DTLS OSCORE Observe did not produce the initial response and notification")
+		}
+	}
+	if !observation.Canceled() {
+		require.NoError(t, observation.Cancel(observeCtx))
+	}
 }
 
 func TestLibCoAPClientOSCOREDTLSRejectsInvalidContextAndReplay(t *testing.T) {

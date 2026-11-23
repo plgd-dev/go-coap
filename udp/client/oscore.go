@@ -478,6 +478,7 @@ func (cc *Conn) processIncomingOSCORERequest(req *pool.Message, datagram []byte)
 	if err != nil {
 		responded, responseErr := cc.respondToOSCOREProcessingError(req, err)
 		if responded {
+			processed = responseErr == nil && req.Type() == message.Confirmable
 			cc.errors(fmt.Errorf("cannot process incoming OSCORE request: %w", err))
 			return true, responseErr
 		}
@@ -545,49 +546,98 @@ func (cc *Conn) finishOSCORERequest(mid int32, digest [sha256.Size]byte, process
 
 func (cc *Conn) respondToOSCOREProcessingError(req *pool.Message, processingErr error) (bool, error) {
 	_, requiresEchoRecovery := oscore.ReplayRecoveryEcho(processingErr)
-	if oscore.IsInternalProcessingError(processingErr) ||
-		!req.HasOption(message.OSCORE) ||
-		!cc.oscoreErrorResponses && !requiresEchoRecovery ||
-		req.Type() != message.Confirmable && (!requiresEchoRecovery || req.Type() != message.NonConfirmable) {
+	if !shouldRespondToOSCOREProcessingError(req, processingErr, cc.oscoreErrorResponses, requiresEchoRecovery) {
 		return false, nil
 	}
-	responseType := message.Acknowledgement
-	responseMID := req.MessageID()
-	if req.Type() == message.NonConfirmable {
-		responseType = message.NonConfirmable
-		responseMID = cc.GetMessageID()
-	}
+	responseType, responseMID := cc.oscoreProcessingErrorResponseType(req)
 	resp := cc.AcquireMessage(req.Context())
 	defer cc.ReleaseMessage(resp)
-	if protected, ok, err := oscore.ProtectReplayRecoveryResponse(processingErr, message.Message{
-		Type:      responseType,
-		MessageID: responseMID,
-		Token:     req.Token(),
-	}); ok {
-		if err != nil {
-			return true, fmt.Errorf("protect replay recovery response: %w", err)
-		}
-		resp.SetMessage(protected)
-		resp.SetControlMessage(responseControlMessage(req.ControlMessage()))
-		if err := cc.session.WriteMessage(resp); err != nil {
-			return true, fmt.Errorf("send protected replay recovery response: %w", err)
-		}
-		return true, nil
+	handled, err := cc.setProtectedReplayRecoveryResponse(req, processingErr, resp, responseType, responseMID)
+	if err != nil {
+		return true, err
+	}
+	if handled {
+		return true, cc.sendOSCOREProcessingErrorResponse(req, resp, true)
 	}
 	resp.SetCode(oscore.ProcessingErrorCode(processingErr))
 	resp.SetType(responseType)
 	resp.SetMessageID(responseMID)
 	resp.SetToken(req.Token())
-	if echo, ok := oscore.ReplayRecoveryEcho(processingErr); ok {
-		if err := resp.SetEcho(echo); err != nil {
-			return true, fmt.Errorf("set replay recovery Echo: %w", err)
-		}
+	if err := setReplayRecoveryEcho(processingErr, resp); err != nil {
+		return true, err
 	}
-	resp.SetControlMessage(responseControlMessage(req.ControlMessage()))
-	if err := cc.session.WriteMessage(resp); err != nil {
-		return true, fmt.Errorf("send OSCORE processing-error response: %w", err)
+	if err := cc.sendOSCOREProcessingErrorResponse(req, resp, false); err != nil {
+		return true, err
 	}
 	return true, nil
+}
+
+func shouldRespondToOSCOREProcessingError(
+	req *pool.Message,
+	processingErr error,
+	sendProcessingErrors bool,
+	requiresEchoRecovery bool,
+) bool {
+	if oscore.IsInternalProcessingError(processingErr) ||
+		!req.HasOption(message.OSCORE) ||
+		!sendProcessingErrors && !requiresEchoRecovery {
+		return false
+	}
+	return req.Type() == message.Confirmable ||
+		requiresEchoRecovery && req.Type() == message.NonConfirmable
+}
+
+func (cc *Conn) oscoreProcessingErrorResponseType(req *pool.Message) (message.Type, int32) {
+	if req.Type() == message.NonConfirmable {
+		return message.NonConfirmable, cc.GetMessageID()
+	}
+	return message.Acknowledgement, req.MessageID()
+}
+
+func (cc *Conn) setProtectedReplayRecoveryResponse(
+	req *pool.Message,
+	processingErr error,
+	resp *pool.Message,
+	responseType message.Type,
+	responseMID int32,
+) (bool, error) {
+	protected, handled, err := oscore.ProtectReplayRecoveryResponse(processingErr, message.Message{
+		Type: responseType, MessageID: responseMID, Token: req.Token(),
+	})
+	if err != nil {
+		return handled, fmt.Errorf("protect replay recovery response: %w", err)
+	}
+	if handled {
+		resp.SetMessage(protected)
+	}
+	return handled, nil
+}
+
+func setReplayRecoveryEcho(processingErr error, resp *pool.Message) error {
+	echo, ok := oscore.ReplayRecoveryEcho(processingErr)
+	if !ok {
+		return nil
+	}
+	if err := resp.SetEcho(echo); err != nil {
+		return fmt.Errorf("set replay recovery Echo: %w", err)
+	}
+	return nil
+}
+
+func (cc *Conn) sendOSCOREProcessingErrorResponse(req, resp *pool.Message, protected bool) error {
+	resp.SetControlMessage(responseControlMessage(req.ControlMessage()))
+	if req.Type() == message.Confirmable {
+		if err := cc.addResponseToCache(req.MessageID(), resp); err != nil {
+			return fmt.Errorf("cache OSCORE processing-error response: %w", err)
+		}
+	}
+	if err := cc.session.WriteMessage(resp); err != nil {
+		if protected {
+			return fmt.Errorf("send protected replay recovery response: %w", err)
+		}
+		return fmt.Errorf("send OSCORE processing-error response: %w", err)
+	}
+	return nil
 }
 
 func (cc *Conn) retransmitOSCOREResponse(req *pool.Message) error {

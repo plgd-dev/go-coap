@@ -3,7 +3,10 @@
 package store
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
+	"time"
 
 	"golang.org/x/sys/windows"
 )
@@ -36,5 +39,122 @@ func TestValidateStoreDirectoryACLRejectsBroadWriteAccess(t *testing.T) {
 				t.Fatal("directory ACL granting write access to Everyone was accepted")
 			}
 		})
+	}
+}
+
+func TestValidateStoreDirectoryACLRejectsUnrelatedLocalAccountWriteAccess(t *testing.T) {
+	descriptor, err := windows.SecurityDescriptorFromString(
+		"D:(A;;FA;;;S-1-5-21-1000-2000-3000-4000)",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dacl, _, err := descriptor.DACL()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := validateStoreDirectoryACL(dacl); err == nil {
+		t.Fatal("directory ACL granting write access to an unrelated local account was accepted")
+	}
+}
+
+func TestValidateStoreDirectoryOwnerAcceptsSystem(t *testing.T) {
+	descriptor, err := windows.SecurityDescriptorFromString("O:SYG:SYD:P(A;;FA;;;SY)")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := validateStoreDirectoryOwner(descriptor); err != nil {
+		t.Fatalf("trusted SYSTEM owner was rejected: %v", err)
+	}
+}
+
+func TestValidateStoreDirectoryOwnerRejectsUntrustedOwner(t *testing.T) {
+	descriptor, err := windows.SecurityDescriptorFromString("O:WDG:SYD:P(A;;FA;;;SY)")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := validateStoreDirectoryOwner(descriptor); err == nil {
+		t.Fatal("untrusted Everyone owner was accepted")
+	}
+}
+
+func TestNewHighWaterFileStoreRejectsDirectorySymlink(t *testing.T) {
+	root := t.TempDir()
+	target := filepath.Join(root, "target")
+	if err := os.Mkdir(target, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(root, "store")
+	if err := os.Symlink(target, link); err != nil {
+		t.Skipf("directory symlink unavailable: %v", err)
+	}
+	if _, err := NewHighWaterFileStore(link, "no-reparse"); err == nil {
+		t.Fatal("NewHighWaterFileStore accepted a directory symlink")
+	}
+}
+
+func TestOpenFileNoFollowRejectsSymlink(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "target")
+	if err := os.WriteFile(target, []byte("unchanged"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(dir, "state")
+	if err := os.Symlink(target, link); err != nil {
+		t.Skipf("file symlink unavailable: %v", err)
+	}
+	if _, err := openFileNoFollow(link, os.O_RDONLY, 0); err == nil {
+		t.Fatal("openFileNoFollow accepted a file symlink")
+	}
+}
+
+func TestLockFileExSerializesTwoStoreInstances(t *testing.T) {
+	dir := t.TempDir()
+	first, err := NewHighWaterFileStore(dir, "windows-lock")
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := NewHighWaterFileStore(dir, "windows-lock")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	held := make(chan struct{})
+	release := make(chan struct{})
+	firstDone := make(chan error, 1)
+	go func() {
+		firstDone <- withFileLock(first.sequenceLock, func() error {
+			close(held)
+			<-release
+			return nil
+		})
+	}()
+	<-held
+
+	secondDone := make(chan error, 1)
+	go func() {
+		_, err := second.Reserve()
+		secondDone <- err
+	}()
+
+	select {
+	case err := <-secondDone:
+		close(release)
+		<-firstDone
+		t.Fatalf("second store instance acquired LockFileEx before the first released it: %v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	close(release)
+	if err := <-firstDone; err != nil {
+		t.Fatalf("first LockFileEx holder failed: %v", err)
+	}
+	select {
+	case err := <-secondDone:
+		if err != nil {
+			t.Fatalf("second store instance failed after LockFileEx was released: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("second store instance remained blocked after LockFileEx was released")
 	}
 }

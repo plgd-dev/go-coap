@@ -18,6 +18,7 @@ func TestProcessingErrorCode(t *testing.T) {
 		want codes.Code
 	}{
 		{name: "unknown context", err: ErrNoSecurityContext, want: codes.Unauthorized},
+		{name: "ambiguous context", err: ErrAmbiguousContext, want: codes.Unauthorized},
 		{name: "replay", err: ErrReplay, want: codes.Unauthorized},
 		{name: "replay recovery", err: ErrReplayRecoveryRequired, want: codes.Unauthorized},
 		{name: "malformed option", err: fmt.Errorf("%w: malformed", ErrInvalidOSCOREOption), want: codes.BadOption},
@@ -199,18 +200,64 @@ func TestProcessorRequiresEchoRecoveryAfterVolatileReplayStateLoss(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if plaintext, _, _, err := processor.ProcessIncomingRequest(recoveryRequest); err != nil ||
-		plaintext.Code != codes.GET || plaintext.Options.HasOption(message.Echo) == false {
-		t.Fatalf("authenticated recovery request = %+v, error %v", plaintext, err)
+	if recoveryPlaintext, _, _, recoveryErr := processor.ProcessIncomingRequest(recoveryRequest); recoveryErr != nil ||
+		recoveryPlaintext.Code != codes.GET || !recoveryPlaintext.Options.HasOption(message.Echo) {
+		t.Fatalf("authenticated recovery request = %+v, error %v", recoveryPlaintext, recoveryErr)
 	}
-	if _, _, _, err := processor.ProcessIncomingRequest(oldRequest); !errors.Is(err, ErrReplay) {
-		t.Fatalf("previously accepted request after recovery error = %v, want ErrReplay", err)
+	if _, _, _, oldRequestErr := processor.ProcessIncomingRequest(oldRequest); !errors.Is(oldRequestErr, ErrReplay) {
+		t.Fatalf("previously accepted request after recovery error = %v, want ErrReplay", oldRequestErr)
 	}
-	if _, _, _, err := processor.ProcessIncomingRequest(recoveryRequest); !errors.Is(err, ErrReplay) {
-		t.Fatalf("repeated recovery request error = %v, want ErrReplay", err)
+	if _, _, _, repeatedRecoveryErr := processor.ProcessIncomingRequest(recoveryRequest); !errors.Is(repeatedRecoveryErr, ErrReplay) {
+		t.Fatalf("repeated recovery request error = %v, want ErrReplay", repeatedRecoveryErr)
+	}
+	reusedEchoRequest, _, err := client.ProtectRequest(message.Message{
+		Code: codes.GET, Token: message.Token{2},
+		Options: message.Options{{ID: message.Echo, Value: challenge}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plaintext, _, _, err := processor.ProcessIncomingRequest(reusedEchoRequest); err != nil ||
+		plaintext.Code != codes.GET {
+		t.Fatalf("fresh request reusing recovery Echo = %+v, error %v; want authenticated fresh request accepted",
+			plaintext, err)
 	}
 	if _, _, _, err := processor.ProcessIncomingRequest(message.Message{Code: codes.GET}); !errors.Is(err, ErrPlaintextDisabled) {
 		t.Fatalf("plaintext after failed recovery error = %v, want ErrPlaintextDisabled", err)
+	}
+}
+
+func TestProcessorLimitsReplayRecoveryChallengesPerContext(t *testing.T) {
+	client := newEchoRecoveryContext(t, []byte("client"), []byte("server"), false)
+	server := newEchoRecoveryContext(t, []byte("server"), []byte("client"), true)
+	processor, err := NewProcessor(ProcessorConfig{Contexts: []*Context{server}})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for sequence := range replayRecoveryChallengeLimit + 1 {
+		request, _, protectErr := client.ProtectRequest(message.Message{
+			Code: codes.GET, Token: message.Token{byte(sequence + 1)},
+		})
+		if protectErr != nil {
+			t.Fatal(protectErr)
+		}
+		_, _, _, processErr := processor.ProcessIncomingRequest(request)
+		if !errors.Is(processErr, ErrReplayRecoveryRequired) {
+			t.Fatalf("request %d error = %v, want ErrReplayRecoveryRequired", sequence, processErr)
+		}
+		_, handled, challengeErr := ProtectReplayRecoveryResponse(processErr, message.Message{
+			Type: message.Acknowledgement, MessageID: request.MessageID, Token: request.Token,
+		})
+		if sequence < replayRecoveryChallengeLimit {
+			if challengeErr != nil || !handled {
+				t.Fatalf("challenge %d: handled=%t, error=%v", sequence, handled, challengeErr)
+			}
+			continue
+		}
+		if !handled || !errors.Is(challengeErr, ErrReplayRecoveryRateLimited) {
+			t.Fatalf("challenge over limit: handled=%t, error=%v", handled, challengeErr)
+		}
 	}
 }
 

@@ -1,4 +1,4 @@
-//go:build !darwin && !dragonfly && !freebsd && !linux && !netbsd && !openbsd
+//go:build !darwin && !dragonfly && !freebsd && !linux && !netbsd && !openbsd && !windows
 
 package store
 
@@ -28,6 +28,16 @@ func TestFallbackFileLockUsesDirectoryIdentity(t *testing.T) {
 	}
 	if first != second {
 		t.Fatal("path aliases to the same lock file received different mutexes")
+	}
+}
+
+func TestHighWaterFileStoreRequiresExplicitSingleProcessMode(t *testing.T) {
+	dir := t.TempDir()
+	if _, err := NewHighWaterFileStore(dir, "requires-process-lock"); err == nil {
+		t.Fatal("NewHighWaterFileStore accepted a platform without process locking")
+	}
+	if _, err := NewHighWaterFileStore(dir, "single-process", WithSingleProcessOnly()); err != nil {
+		t.Fatalf("NewHighWaterFileStore rejected explicit single-process mode: %v", err)
 	}
 }
 

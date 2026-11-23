@@ -21,24 +21,28 @@ import (
 )
 
 type qDropRelay struct {
-	mu                sync.Mutex
-	peer              *net.UDPAddr
-	dropped           bool
-	drops             map[int64]bool
-	option            message.OptionID
-	observed          map[int64]int
-	fault             qRelayFault
-	faultNum          int64
-	faulted           bool
-	q1Seen            map[int64]int
-	q2ControlRequests int
-	maxQ2ControlSize  int
-	maxQ2ControlItems int
-	dropForever       map[int64]bool
-	reorderNUM        int64
-	reorderPending    []byte
-	reordered         bool
-	reorderEnabled    bool
+	mu                      sync.Mutex
+	peer                    *net.UDPAddr
+	dropped                 bool
+	drops                   map[int64]bool
+	option                  message.OptionID
+	observed                map[int64]int
+	fault                   qRelayFault
+	faultNum                int64
+	faulted                 bool
+	q1Seen                  map[int64]int
+	q2ControlRequests       int
+	maxQ2ControlSize        int
+	maxQ2ControlItems       int
+	dropForever             map[int64]bool
+	reorderNUM              int64
+	reorderPending          []byte
+	reordered               bool
+	reorderEnabled          bool
+	reorderOSCOREObserve    bool
+	dropOSCOREObserve       int
+	duplicateOSCOREObserve  bool
+	duplicatedOSCOREObserve bool
 }
 
 type qRelayFault uint8
@@ -183,13 +187,32 @@ func (r *qDropRelay) applyFinalResponseFaultLocked(msg message.Message) (bool, b
 func (r *qDropRelay) reorderResponse(data []byte) (forward, delayed []byte) {
 	msg := message.Message{Options: make(message.Options, 0, 32)}
 	if _, err := coder.DefaultCoder.Decode(data, &msg); err != nil ||
-		msg.Code < codes.Created || len(msg.Payload) == 0 || !msg.Options.HasOption(message.QBlock2) {
+		msg.Code < codes.Created || len(msg.Payload) == 0 {
+		return data, nil
+	}
+	if msg.Options.HasOption(message.OSCORE) && msg.Options.HasOption(message.Observe) {
+		r.mu.Lock()
+		defer r.mu.Unlock()
+		if r.reorderOSCOREObserve && !r.reordered {
+			if r.reorderPending != nil {
+				delayed = r.reorderPending
+				r.reorderPending = nil
+				r.reordered = true
+				return data, delayed
+			}
+			r.reorderPending = bytes.Clone(data)
+			return nil, nil
+		}
+		return data, nil
+	}
+	if !msg.Options.HasOption(message.QBlock2) {
 		return data, nil
 	}
 	value, err := msg.Options.GetUint32(message.QBlock2)
 	if err != nil {
 		return data, nil
 	}
+
 	_, num, _, err := blockwise.DecodeQBlockOption(value)
 	if err != nil {
 		return data, nil
@@ -207,6 +230,25 @@ func (r *qDropRelay) reorderResponse(data []byte) (forward, delayed []byte) {
 		return nil, nil
 	}
 	return data, nil
+}
+
+func (r *qDropRelay) applyOSCOREObserveFault(data []byte) (drop, duplicate bool) {
+	msg := message.Message{Options: make(message.Options, 0, 32)}
+	if _, err := coder.DefaultCoder.Decode(data, &msg); err != nil ||
+		!msg.Options.HasOption(message.OSCORE) || !msg.Options.HasOption(message.Observe) {
+		return false, false
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.dropOSCOREObserve > 0 {
+		r.dropOSCOREObserve--
+		return true, false
+	}
+	if r.duplicateOSCOREObserve && !r.duplicatedOSCOREObserve {
+		r.duplicatedOSCOREObserve = true
+		return false, true
+	}
+	return false, false
 }
 
 func newQDropRelay(t *testing.T, target string, option message.OptionID, block int64, extra ...int64) (string, *qDropRelay) {
@@ -280,6 +322,11 @@ func (r *qDropRelay) forwardResponses(t *testing.T, local, upstream *net.UDPConn
 		if drop {
 			continue
 		}
+		oscoreDrop, oscoreDuplicate := r.applyOSCOREObserveFault(buf[:n])
+		if oscoreDrop {
+			continue
+		}
+		duplicate = duplicate || oscoreDuplicate
 		forward, delayed := r.reorderResponse(buf[:n])
 		if forward == nil {
 			continue

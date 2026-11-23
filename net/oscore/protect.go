@@ -35,6 +35,7 @@ type exchangeResponseState struct {
 	requestID              []byte
 	requestPartialIV       []byte
 	observe                bool
+	qBlock2Observe         bool
 	context                *Context
 	started                bool
 	observeComplete        bool
@@ -145,6 +146,16 @@ func mergeOptions(first, second message.Options) message.Options {
 	return options
 }
 
+func mergeClassUOptions(outer, inner message.Options) message.Options {
+	classUOptions := make(message.Options, 0, len(outer))
+	for _, option := range outer {
+		if ClassifyOption(option.ID) == ClassU {
+			classUOptions = append(classUOptions, option)
+		}
+	}
+	return mergeOptions(classUOptions, inner)
+}
+
 func appendOSCOREOptions(outer message.Options, encodedOption []byte) message.Options {
 	outer = CloneOptions(outer)
 	outer = outer.Add(message.Option{
@@ -235,45 +246,14 @@ func (c *Context) ProtectRequest(request message.Message) (message.Message, Exch
 	if !isRequestCode(request.Code) {
 		return message.Message{}, Exchange{}, fmt.Errorf("%w: code %d is not a request", ErrInvalidOSCOREMessage, request.Code)
 	}
-	observeOption, observes, err := findObserveOption(request.Options)
-	if err != nil {
-		return message.Message{}, Exchange{}, err
-	}
-	if observes && request.Code != codes.GET && request.Code != codes.FETCH {
-		return message.Message{}, Exchange{}, ErrUnsupportedOption
-	}
-	observeRegistration, err := observeRegistrationFromOptions(request.Options)
-	if err != nil {
-		return message.Message{}, Exchange{}, err
-	}
-	options, err := normalizeProxyURI(request.Options)
-	if err != nil {
-		return message.Message{}, Exchange{}, err
-	}
-	split, err := SplitOptions(options)
-	if err != nil {
-		return message.Message{}, Exchange{}, err
-	}
-	plaintext, err := EncodeInner(request.Code, split.Inner, request.Payload)
+	observeOption, observes, observeRegistration, split, plaintext, err := prepareInnerRequest(request)
 	if err != nil {
 		return message.Message{}, Exchange{}, err
 	}
 
 	var exchange Exchange
 	partialIV, ciphertext, err := c.Seal(plaintext, func(partialIV []byte) ([]byte, error) {
-		exchange = Exchange{
-			responseState: &exchangeResponseState{
-				requestToken:     append(message.Token(nil), request.Token...),
-				hasRequestToken:  true,
-				requestID:        c.SenderID(),
-				requestPartialIV: append([]byte(nil), partialIV...),
-				observe:          observeRegistration,
-				context:          c,
-				multipleResponses: observeRegistration ||
-					request.Options.HasOption(message.QBlock1) ||
-					request.Options.HasOption(message.QBlock2),
-			},
-		}
+		exchange = newRequestExchange(c, request, partialIV, observeRegistration)
 		return BuildAADWithAlgorithm(c.algorithm, exchange.responseState.requestID, exchange.responseState.requestPartialIV, nil)
 	})
 	if err != nil {
@@ -294,6 +274,52 @@ func (c *Context) ProtectRequest(request message.Message) (message.Message, Exch
 	protected.Options = appendOSCOREOptions(outerOptions, encodedOption)
 	protected.Payload = ciphertext
 	return protected, exchange, nil
+}
+
+func prepareInnerRequest(
+	request message.Message,
+) (message.Option, bool, bool, OptionSplit, []byte, error) {
+	observeOption, observes, err := findObserveOption(request.Options)
+	if err != nil {
+		return message.Option{}, false, false, OptionSplit{}, nil, err
+	}
+	if observes && request.Code != codes.GET && request.Code != codes.FETCH {
+		return message.Option{}, false, false, OptionSplit{}, nil, ErrUnsupportedOption
+	}
+	observeRegistration, err := observeRegistrationFromOptions(request.Options)
+	if err != nil {
+		return message.Option{}, false, false, OptionSplit{}, nil, err
+	}
+	options, err := normalizeProxyURI(request.Options)
+	if err != nil {
+		return message.Option{}, false, false, OptionSplit{}, nil, err
+	}
+	split, err := SplitOptions(options)
+	if err != nil {
+		return message.Option{}, false, false, OptionSplit{}, nil, err
+	}
+	plaintext, err := EncodeInner(request.Code, split.Inner, request.Payload)
+	if err != nil {
+		return message.Option{}, false, false, OptionSplit{}, nil, err
+	}
+	return observeOption, observes, observeRegistration, split, plaintext, nil
+}
+
+func newRequestExchange(c *Context, request message.Message, partialIV []byte, observeRegistration bool) Exchange {
+	return Exchange{
+		responseState: &exchangeResponseState{
+			requestToken:     append(message.Token(nil), request.Token...),
+			hasRequestToken:  true,
+			requestID:        c.SenderID(),
+			requestPartialIV: append([]byte(nil), partialIV...),
+			observe:          observeRegistration,
+			qBlock2Observe:   observeRegistration && request.Options.HasOption(message.QBlock2),
+			context:          c,
+			multipleResponses: observeRegistration ||
+				request.Options.HasOption(message.QBlock1) ||
+				request.Options.HasOption(message.QBlock2),
+		},
+	}
 }
 
 // UnprotectRequest authenticates and decrypts an incoming OSCORE request and
@@ -333,10 +359,11 @@ func (c *Context) UnprotectRequest(request message.Message) (message.Message, Ex
 	exchange.responseState.multipleResponses = exchange.IsObserve() ||
 		inner.Options.HasOption(message.QBlock1) ||
 		inner.Options.HasOption(message.QBlock2)
+	exchange.responseState.qBlock2Observe = exchange.IsObserve() && inner.Options.HasOption(message.QBlock2)
 	inner.Token = append(message.Token(nil), request.Token...)
 	inner.Type = request.Type
 	inner.MessageID = request.MessageID
-	inner.Options = mergeOptions(outerOptions, inner.Options)
+	inner.Options = mergeClassUOptions(outerOptions, inner.Options)
 	return inner, exchange, nil
 }
 
@@ -421,9 +448,6 @@ func (c *Context) validateReplayRecoveryEcho(options message.Options, exchange E
 			}
 		}
 		return nil
-	}
-	if found && subtle.ConstantTimeCompare(echo.Value, c.replayRecoveryEcho) == 1 {
-		return ErrReplay
 	}
 	return nil
 }
@@ -698,8 +722,8 @@ func (state *exchangeResponseState) checkResponse(exchange Exchange, option Opti
 		return 0, err
 	}
 	if exchange.IsObserve() {
-		if state.hasResponseSequence && responseSequence <= state.lastResponseSequence {
-			return 0, ErrReplay
+		if err := state.checkObserveResponseSequence(responseSequence); err != nil {
+			return 0, err
 		}
 	} else if state.multipleResponses && state.seenResponsePartialIVs != nil {
 		if _, exists := state.seenResponsePartialIVs[responseSequence]; exists {
@@ -707,6 +731,19 @@ func (state *exchangeResponseState) checkResponse(exchange Exchange, option Opti
 		}
 	}
 	return responseSequence, nil
+}
+
+func (state *exchangeResponseState) checkObserveResponseSequence(sequence uint64) error {
+	if state.qBlock2Observe {
+		if _, exists := state.seenResponsePartialIVs[sequence]; exists {
+			return ErrReplay
+		}
+		return nil
+	}
+	if state.hasResponseSequence && sequence <= state.lastResponseSequence {
+		return ErrReplay
+	}
+	return nil
 }
 
 func (state *exchangeResponseState) recordResponse(
@@ -717,19 +754,40 @@ func (state *exchangeResponseState) recordResponse(
 ) {
 	state.started = true
 	if exchange.IsObserve() {
-		if !hasObserve {
-			state.observeComplete = true
-		}
-		if len(option.PartialIV) > 0 {
-			state.hasResponseSequence = true
+		state.recordObserveResponse(option, responseSequence, hasObserve)
+	} else if state.multipleResponses && len(option.PartialIV) > 0 {
+		state.recordSeenResponseSequence(responseSequence)
+	}
+}
+
+func (state *exchangeResponseState) recordObserveResponse(
+	option OptionValue,
+	responseSequence uint64,
+	hasObserve bool,
+) {
+	if !hasObserve && !state.qBlock2Observe {
+		state.observeComplete = true
+	}
+	if len(option.PartialIV) == 0 {
+		return
+	}
+	if state.qBlock2Observe {
+		state.recordSeenResponseSequence(responseSequence)
+		if !state.hasResponseSequence || responseSequence > state.lastResponseSequence {
 			state.lastResponseSequence = responseSequence
 		}
-	} else if state.multipleResponses && len(option.PartialIV) > 0 {
-		if state.seenResponsePartialIVs == nil {
-			state.seenResponsePartialIVs = make(map[uint64]struct{})
-		}
-		state.seenResponsePartialIVs[responseSequence] = struct{}{}
 	}
+	state.hasResponseSequence = true
+	if !state.qBlock2Observe {
+		state.lastResponseSequence = responseSequence
+	}
+}
+
+func (state *exchangeResponseState) recordSeenResponseSequence(responseSequence uint64) {
+	if state.seenResponsePartialIVs == nil {
+		state.seenResponsePartialIVs = make(map[uint64]struct{})
+	}
+	state.seenResponsePartialIVs[responseSequence] = struct{}{}
 }
 
 func (c *Context) unprotectResponse(response message.Message, exchange Exchange) (message.Message, error) {
@@ -737,11 +795,11 @@ func (c *Context) unprotectResponse(response message.Message, exchange Exchange)
 	if err != nil {
 		return message.Message{}, err
 	}
-	outerObserveOption, hasOuterObserve, err := findObserveOption(outerOptions)
+	_, hasOuterObserve, err := findObserveOption(outerOptions)
 	if err != nil {
 		return message.Message{}, err
 	}
-	inner.Options, err = validateInnerResponse(inner, exchange, option, outerObserveOption, hasOuterObserve)
+	inner.Options, err = validateInnerResponse(inner, exchange, option, hasOuterObserve)
 	if err != nil {
 		return message.Message{}, err
 	}
@@ -753,7 +811,7 @@ func (c *Context) unprotectResponse(response message.Message, exchange Exchange)
 	if inner.Options.HasOption(message.MaxAge) {
 		outerOptions = removeOption(outerOptions, message.MaxAge)
 	}
-	inner.Options = mergeOptions(outerOptions, inner.Options)
+	inner.Options = mergeClassUOptions(outerOptions, inner.Options)
 	return inner, nil
 }
 
@@ -800,7 +858,6 @@ func validateInnerResponse(
 	inner message.Message,
 	exchange Exchange,
 	option OptionValue,
-	outerObserveOption message.Option,
 	hasOuterObserve bool,
 ) (message.Options, error) {
 	if !IsResponseCode(inner.Code) {
@@ -817,7 +874,7 @@ func validateInnerResponse(
 		return inner.Options, nil
 	}
 	if len(option.PartialIV) == 0 {
-		return setInnerObserveForNoPartialIV(inner, outerObserveOption, hasOuterObserve)
+		return setInnerObserveWithoutPartialIV(inner)
 	}
 	return setInnerObserveFromPartialIV(inner, option.PartialIV)
 }
@@ -840,20 +897,9 @@ func validateInnerObserveForExchange(
 	return nil
 }
 
-func setInnerObserveForNoPartialIV(
-	inner message.Message,
-	outerObserveOption message.Option,
-	hasOuterObserve bool,
-) (message.Options, error) {
-	sequence := uint32(0)
+func setInnerObserveWithoutPartialIV(inner message.Message) (message.Options, error) {
 	var err error
-	if hasOuterObserve {
-		sequence, err = observeOptionValue(outerObserveOption)
-		if err != nil {
-			return nil, fmt.Errorf("%w: invalid outer Observe notification value: %w", ErrInvalidOSCOREMessage, err)
-		}
-	}
-	inner.Options, err = setObserve(inner.Options, sequence)
+	inner.Options, err = setObserve(inner.Options, 0)
 	if err != nil {
 		return nil, err
 	}

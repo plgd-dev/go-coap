@@ -235,6 +235,12 @@ func TestSplitOptionsUsesExtensionClasses(t *testing.T) {
 	}
 }
 
+func TestSplitOptionsRejectsZeroHopLimit(t *testing.T) {
+	if _, err := SplitOptions(message.Options{{ID: message.HopLimit, Value: []byte{0}}}); err == nil {
+		t.Fatal("SplitOptions accepted Hop-Limit value zero")
+	}
+}
+
 func TestSplitOptionsRejectsNestedOSCOREAndUnsortedOptions(t *testing.T) {
 	tests := []struct {
 		name    string

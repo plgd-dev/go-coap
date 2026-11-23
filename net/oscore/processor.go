@@ -12,12 +12,13 @@ import (
 )
 
 var (
-	ErrNoSecurityContext      = errors.New("no matching OSCORE security context")
-	ErrAmbiguousContext       = errors.New("multiple OSCORE security contexts are configured")
-	ErrPlaintextDisabled      = errors.New("unprotected CoAP is not permitted")
-	ErrOSCORERequired         = errors.New("OSCORE protection is required")
-	ErrOSCOREDisabled         = errors.New("OSCORE-protected CoAP is not permitted")
-	ErrReplayRecoveryRequired = errors.New("OSCORE replay recovery Echo is required")
+	ErrNoSecurityContext         = errors.New("no matching OSCORE security context")
+	ErrAmbiguousContext          = errors.New("multiple OSCORE security contexts are configured")
+	ErrPlaintextDisabled         = errors.New("unprotected CoAP is not permitted")
+	ErrOSCORERequired            = errors.New("OSCORE protection is required")
+	ErrOSCOREDisabled            = errors.New("OSCORE-protected CoAP is not permitted")
+	ErrReplayRecoveryRequired    = errors.New("OSCORE replay recovery Echo is required")
+	ErrReplayRecoveryRateLimited = errors.New("OSCORE replay recovery challenge rate limited")
 )
 
 type replayRecoveryRequiredError struct {
@@ -56,6 +57,9 @@ func ProtectReplayRecoveryResponse(err error, response message.Message) (message
 		return message.Message{}, true, ErrInvalidContext
 	}
 	state := recoveryErr.exchange.responseState
+	if err := state.context.allowReplayRecoveryChallenge(); err != nil {
+		return message.Message{}, true, err
+	}
 	response.Code = codes.Unauthorized
 	response.Token = append(message.Token(nil), state.requestToken...)
 	response.Options = message.Options{{
@@ -93,7 +97,7 @@ func ProcessingErrorCode(err error) codes.Code {
 	switch {
 	case IsInternalProcessingError(err):
 		return codes.InternalServerError
-	case errors.Is(err, ErrNoSecurityContext), errors.Is(err, ErrReplay):
+	case errors.Is(err, ErrNoSecurityContext), errors.Is(err, ErrAmbiguousContext), errors.Is(err, ErrReplay):
 		return codes.Unauthorized
 	case errors.Is(err, ErrReplayRecoveryRequired):
 		return codes.Unauthorized
@@ -183,8 +187,9 @@ type contextKey struct {
 // endpoint's plaintext policy. Responses remain explicitly bound to the
 // context and Exchange returned by ProcessIncomingRequest.
 type Processor struct {
-	mu       sync.RWMutex
-	contexts map[contextKey]*Context
+	mu                  sync.RWMutex
+	contexts            map[contextKey]*Context
+	contextsByRecipient map[string][]*Context
 	// senderContexts preserves nonce-space ownership without retaining removed keys.
 	senderContexts   map[[32]byte]*senderSequenceState
 	outgoingContexts []*Context
@@ -201,10 +206,11 @@ func NewProcessor(cfg ProcessorConfig) (*Processor, error) {
 		return nil, fmt.Errorf("%w: invalid plaintext policy %d", ErrInvalidContext, policy)
 	}
 	processor := &Processor{
-		contexts:         make(map[contextKey]*Context, len(cfg.Contexts)),
-		senderContexts:   make(map[[32]byte]*senderSequenceState, len(cfg.Contexts)),
-		outgoingSelector: cfg.OutgoingContextSelector,
-		plaintextPolicy:  policy,
+		contexts:            make(map[contextKey]*Context, len(cfg.Contexts)),
+		contextsByRecipient: make(map[string][]*Context, len(cfg.Contexts)),
+		senderContexts:      make(map[[32]byte]*senderSequenceState, len(cfg.Contexts)),
+		outgoingSelector:    cfg.OutgoingContextSelector,
+		plaintextPolicy:     policy,
 	}
 	for _, context := range cfg.Contexts {
 		if context == nil {
@@ -218,6 +224,8 @@ func NewProcessor(cfg ProcessorConfig) (*Processor, error) {
 			return nil, fmt.Errorf("%w: duplicate sender key and common IV", ErrInvalidContext)
 		}
 		processor.contexts[key] = context
+		processor.contextsByRecipient[key.recipientID] = append(
+			processor.contextsByRecipient[key.recipientID], context)
 		processor.senderContexts[context.senderContextFingerprint] = context.senderSequence
 		processor.outgoingContexts = append(processor.outgoingContexts, context)
 	}
@@ -260,6 +268,7 @@ func (p *Processor) AddContext(context *Context) error {
 		return fmt.Errorf("%w: duplicate sender key and common IV", ErrInvalidContext)
 	}
 	p.contexts[key] = context
+	p.contextsByRecipient[key.recipientID] = append(p.contextsByRecipient[key.recipientID], context)
 	p.senderContexts[context.senderContextFingerprint] = context.senderSequence
 	p.outgoingContexts = append(p.outgoingContexts, context)
 	return nil
@@ -284,6 +293,20 @@ func (p *Processor) RemoveContext(recipientID, idContext []byte) error {
 		return ErrNoSecurityContext
 	}
 	delete(p.contexts, key)
+	contexts := p.contextsByRecipient[key.recipientID]
+	for i, candidate := range contexts {
+		if candidate == context {
+			copy(contexts[i:], contexts[i+1:])
+			contexts[len(contexts)-1] = nil
+			contexts = contexts[:len(contexts)-1]
+			break
+		}
+	}
+	if len(contexts) == 0 {
+		delete(p.contextsByRecipient, key.recipientID)
+	} else {
+		p.contextsByRecipient[key.recipientID] = contexts
+	}
 	for i, configured := range p.outgoingContexts {
 		if configured == context {
 			copy(p.outgoingContexts[i:], p.outgoingContexts[i+1:])
@@ -313,22 +336,15 @@ func (p *Processor) contextForRequest(options message.Options) (*Context, error)
 		}
 		return context, nil
 	}
-	var context *Context
-	for key, candidate := range p.contexts {
-		if key.recipientID != string(option.SenderID) {
-			continue
-		}
-		if context != nil {
-			p.mu.RUnlock()
-			return nil, ErrAmbiguousContext
-		}
-		context = candidate
-	}
+	contexts := append([]*Context(nil), p.contextsByRecipient[string(option.SenderID)]...)
 	p.mu.RUnlock()
-	if context == nil {
+	if len(contexts) == 0 {
 		return nil, ErrNoSecurityContext
 	}
-	return context, nil
+	if len(contexts) > 1 {
+		return nil, ErrAmbiguousContext
+	}
+	return contexts[0], nil
 }
 
 // ProtectRequest protects an outgoing request using the sole configured

@@ -1313,7 +1313,7 @@ func TestObserveAcceptsFirstNotificationWithoutPartialIV(t *testing.T) {
 		Code:  codes.Content,
 		Token: request.Token,
 		Options: message.Options{
-			{ID: message.Observe, Value: []byte{1}},
+			{ID: message.Observe, Value: []byte{0xff, 0xff, 0xff}},
 			{ID: message.OSCORE},
 		},
 		Payload: ciphertext,
@@ -1322,8 +1322,8 @@ func TestObserveAcceptsFirstNotificationWithoutPartialIV(t *testing.T) {
 	if unprotectErr != nil {
 		t.Fatalf("first notification without Partial IV: %v", unprotectErr)
 	}
-	if got, observeErr := openedFirst.Options.Observe(); observeErr != nil || got != 1 {
-		t.Fatalf("first notification Observe = %d, %v; want outer Observe value 1", got, observeErr)
+	if got, observeErr := openedFirst.Options.Observe(); observeErr != nil || got != 0 {
+		t.Fatalf("first notification Observe = %d, %v; want oldest value 0 regardless of outer Observe", got, observeErr)
 	}
 	if _, unprotectErr := client.UnprotectResponse(firstResponse, clientExchange); !errors.Is(unprotectErr, ErrReplay) {
 		t.Fatalf("replayed first notification error = %v, want ErrReplay", unprotectErr)
@@ -1720,6 +1720,90 @@ func TestObserveRejectsOutOfOrderFullWidthPartialIV(t *testing.T) {
 	}
 }
 
+func TestQBlock2ObserveAllowsOutOfOrderUniquePartialIVs(t *testing.T) {
+	requestContext, err := NewContext(ContextConfig{
+		UnsafeVolatileSenderSequence: true,
+		AcceptReplayStateLoss:        true,
+		MasterSecret:                 []byte("OSCORE Q-Block Observe ordering"),
+		SenderID:                     []byte("client"),
+		RecipientID:                  []byte("server"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	serverContext, err := NewContext(ContextConfig{
+		UnsafeVolatileSenderSequence: true,
+		AcceptReplayStateLoss:        true,
+		MasterSecret:                 []byte("OSCORE Q-Block Observe ordering"),
+		SenderID:                     []byte("server"),
+		RecipientID:                  []byte("client"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	requestOptions := observeOptions(t, 0)
+	requestOptions = append(requestOptions, message.Option{ID: message.QBlock2, Value: []byte{0}})
+	protectedRequest, clientExchange, err := requestContext.ProtectRequest(message.Message{
+		Code: codes.GET, Token: message.Token{1}, Options: requestOptions,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, serverExchange, err := serverContext.UnprotectRequest(protectedRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	makeResponse := func(sequence uint32, withObserve bool) message.Message {
+		t.Helper()
+		options := message.Options{}
+		if withObserve {
+			options = append(options, message.Option{ID: message.Observe})
+		}
+		options = append(options, message.Option{ID: message.QBlock2, Value: []byte{0}})
+		response, protectErr := serverContext.ProtectResponseWithPartialIV(message.Message{
+			Code: codes.Content, Token: protectedRequest.Token, Options: options,
+			Payload: []byte{byte(sequence)},
+		}, serverExchange)
+		if protectErr != nil {
+			t.Fatal(protectErr)
+		}
+		return response
+	}
+
+	responses := []message.Message{
+		makeResponse(0, true),
+		makeResponse(0, true),
+		makeResponse(0, false),
+		makeResponse(0, true),
+	}
+	first, err := requestContext.UnprotectResponse(responses[1], clientExchange)
+	if err != nil {
+		t.Fatalf("newer Q-Block2 fragment failed: %v", err)
+	}
+	firstSequence, err := first.Options.Observe()
+	if err != nil || firstSequence != 1 {
+		t.Fatalf("newer fragment Observe sequence = %d, error %v", firstSequence, err)
+	}
+	outOfOrder, err := requestContext.UnprotectResponse(responses[0], clientExchange)
+	if err != nil {
+		t.Fatalf("out-of-order Q-Block2 fragment failed: %v", err)
+	}
+	outOfOrderSequence, err := outOfOrder.Options.Observe()
+	if err != nil || outOfOrderSequence != 0 {
+		t.Fatalf("out-of-order fragment Observe sequence = %d, error %v", outOfOrderSequence, err)
+	}
+	if _, err := requestContext.UnprotectResponse(responses[0], clientExchange); !errors.Is(err, ErrReplay) {
+		t.Fatalf("duplicate Q-Block2 Partial IV error = %v, want ErrReplay", err)
+	}
+	if _, err := requestContext.UnprotectResponse(responses[2], clientExchange); err != nil {
+		t.Fatalf("response without Observe terminated Q-Block2 registration: %v", err)
+	}
+	if _, err := requestContext.UnprotectResponse(responses[3], clientExchange); err != nil {
+		t.Fatalf("Q-Block2 Observe registration did not survive recovery response: %v", err)
+	}
+}
+
 func TestUnprotectRejectsMalformedOuterMessage(t *testing.T) {
 	client, server := pairedContexts(t, 0, 0)
 	protected, _, err := client.ProtectRequest(message.Message{Code: codes.GET})
@@ -1776,20 +1860,37 @@ func TestUnprotectDiscardsOuterCode(t *testing.T) {
 
 func TestUnprotectDiscardsClassEOptionsFromOuterMessages(t *testing.T) {
 	client, server := pairedContexts(t, 0, 0)
-	protectedRequest, exchange, err := client.ProtectRequest(message.Message{Code: codes.GET})
+	protectedRequest, exchange, err := client.ProtectRequest(message.Message{
+		Code:    codes.GET,
+		Options: message.Options{{ID: message.URIHost, Value: []byte("origin.example")}},
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	protectedRequest.Options = append(protectedRequest.Options,
-		message.Option{ID: message.URIPath, Value: []byte("unexpected")},
-		message.Option{ID: message.ContentFormat, Value: []byte{0}},
-	)
+	for _, option := range []message.Option{
+		{ID: message.URIPath, Value: []byte("unexpected")},
+		{ID: message.ContentFormat, Value: []byte{0}},
+		{ID: message.Echo, Value: []byte("outer-echo")},
+		{ID: message.MaxAge, Value: []byte{9}},
+		{ID: message.Block1, Value: []byte{0}},
+		{ID: message.Block2, Value: []byte{0}},
+		{ID: message.Size1, Value: []byte{1}},
+		{ID: message.NoResponse, Value: []byte{2}},
+	} {
+		protectedRequest.Options = protectedRequest.Options.Add(option)
+	}
 	request, serverExchange, err := server.UnprotectRequest(protectedRequest)
 	if err != nil {
-		t.Fatalf("UnprotectRequest with outer Class E options: %v", err)
+		t.Fatalf("UnprotectRequest with outer options: %v", err)
 	}
-	if request.Options.HasOption(message.URIPath) || request.Options.HasOption(message.ContentFormat) {
-		t.Fatalf("outer Class E options were not discarded: %v", request.Options)
+	if request.Options.HasOption(message.URIPath) || request.Options.HasOption(message.ContentFormat) ||
+		request.Options.HasOption(message.Echo) || request.Options.HasOption(message.MaxAge) ||
+		request.Options.HasOption(message.Block1) || request.Options.HasOption(message.Block2) ||
+		request.Options.HasOption(message.Size1) || request.Options.HasOption(message.NoResponse) {
+		t.Fatalf("untrusted outer options were not discarded: %v", request.Options)
+	}
+	if host, hostErr := request.Options.GetString(message.URIHost); hostErr != nil || host != "origin.example" {
+		t.Fatalf("Class U URI-Host = %q, error = %v; want origin.example", host, hostErr)
 	}
 
 	protectedResponse, err := server.ProtectResponse(message.Message{
@@ -1801,19 +1902,34 @@ func TestUnprotectDiscardsClassEOptionsFromOuterMessages(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	protectedResponse.Options = append(protectedResponse.Options,
-		message.Option{ID: message.URIPath, Value: []byte("unexpected")},
-		message.Option{ID: message.MaxAge, Value: []byte{0}},
-	)
+	for _, option := range []message.Option{
+		{ID: message.URIPath, Value: []byte("unexpected")},
+		{ID: message.Echo, Value: []byte("outer-echo")},
+		{ID: message.MaxAge, Value: []byte{0}},
+		{ID: message.Block2, Value: []byte{0}},
+		{ID: message.Size2, Value: []byte{1}},
+		{ID: message.NoResponse, Value: []byte{2}},
+		{ID: message.URIHost, Value: []byte("origin.example")},
+	} {
+		protectedResponse.Options = protectedResponse.Options.Add(option)
+	}
 	plaintext, err := client.UnprotectResponse(protectedResponse, exchange)
 	if err != nil {
-		t.Fatalf("UnprotectResponse with outer Class E option: %v", err)
+		t.Fatalf("UnprotectResponse with outer options: %v", err)
 	}
-	if plaintext.Options.HasOption(message.URIPath) {
-		t.Fatalf("outer Class E option was not discarded: %v", plaintext.Options)
+	for _, id := range []message.OptionID{
+		message.URIPath, message.Echo, message.Block2, message.Size2,
+		message.NoResponse,
+	} {
+		if plaintext.Options.HasOption(id) {
+			t.Fatalf("untrusted outer option %d was not discarded: %v", id, plaintext.Options)
+		}
 	}
-	if maxAge, err := plaintext.Options.GetUint32(message.MaxAge); err != nil || maxAge != 42 {
-		t.Fatalf("authenticated response Max-Age = %d, error = %v; want 42", maxAge, err)
+	if host, hostErr := plaintext.Options.GetString(message.URIHost); hostErr != nil || host != "origin.example" {
+		t.Fatalf("Class U URI-Host = %q, error = %v; want origin.example", host, hostErr)
+	}
+	if maxAge, maxAgeErr := plaintext.Options.GetUint32(message.MaxAge); maxAgeErr != nil || maxAge != 42 {
+		t.Fatalf("authenticated response Max-Age = %d, error = %v; want 42", maxAge, maxAgeErr)
 	}
 }
 

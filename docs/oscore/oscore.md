@@ -241,6 +241,8 @@ For Observe and Q-Block exchanges, use a fresh Partial IV for each subsequent
 notification or response with `ProtectResponseWithPartialIV`. The Context
 allocates unique Partial IVs; applications producing notifications
 concurrently should serialize them in intended notification order.
+The first Observe response may omit a Partial IV and is treated as the oldest
+notification; any Outer Observe value on that response is ignored for ordering.
 
 ## Configure endpoints
 
@@ -350,13 +352,16 @@ example. Production receivers should use a durable replay store or follow the
 RFC recovery procedure rather than silently accepting state loss.
 For deployments recovering a receiver with volatile replay state, configure
 `RequireEchoRecovery: true` on the replacement `Context`. Before accepting any
-request, it returns an unprotected 4.01 response with a fresh Echo challenge.
-The peer must create a new OSCORE request containing that Echo option inside
-the protected request; retransmitting the old request or adding Echo outside
-the OSCORE protection does not recover the context. The first valid response
-to the challenge seeds the replay window conservatively, rejecting every
-sequence up to and including the recovery request. Challenges are random and
-specific to each `Context`. This mode is mutually exclusive with
+request, it returns a protected 4.01 response with a fresh server Partial IV
+and an authenticated Inner Echo option. The peer must create a new OSCORE
+request containing that Echo option inside the protected request; retransmitting
+the old request or adding Echo outside the OSCORE protection does not recover
+the context. The first valid response to the challenge seeds the replay window
+conservatively, rejecting every sequence up to and including the recovery
+request. Challenges are random and specific to each `Context`, and a context
+limits challenge responses to eight per one-second window. After successful
+recovery the Echo value may be reused on a fresh, authenticated request; normal
+Partial IV replay checks still reject a repeated request. This mode is mutually exclusive with
 `ReplayWindowStore`; after another restart, it must be enabled again if the
 replay state remains volatile. Echo recovery does not make volatile replay
 state durable, so use persistent replay storage where practical. The peer must
@@ -436,11 +441,18 @@ ctx, err := oscore.NewContext(oscore.ContextConfig{
 Use the same stable store ID when recreating the same local OSCORE context and
 a different ID for each distinct context. The store creates files with
 restrictive permissions and atomically syncs updates. On Unix it coordinates
-multiple processes with file locks; on other platforms it only coordinates
-within one process and cannot sync directory metadata. On Windows, the store
-checks the directory ACL for write access granted to broad principals. Keep its
-directory writable only by the trusted application account. The store does not
-persist master secrets or encrypt state at rest. It detects sender-state
+multiple processes with file locks. Windows also uses an OS file lock.
+On platforms without process locks, construction fails unless the caller
+explicitly passes `oscorestore.WithSingleProcessOnly()` and guarantees that no
+other process accesses the directory; those platforms cannot sync directory
+metadata. On Windows, the store
+rejects reparse points and checks directory and state-file ownership and ACLs.
+The trusted-principal policy allows write-capable allow ACEs only for the
+current process account, SYSTEM, and Administrators; the directory owner must
+also be one of those principals. Arbitrary local or foreign account grants are
+rejected. Keep the directory
+writable only by the trusted application account. The store does not persist
+master secrets or encrypt state at rest. It detects sender-state
 corruption, missing individual sender-state files, and mismatches caused by
 individual sender-state file rollback. Restoring matching older sender-state and
 guard files can reuse Partial IVs under the same key. Rolling back the complete
@@ -548,7 +560,9 @@ timeouts, and response-size limits.
   from RFC 8613's SHOULD to use Inner Blockwise for such messages. The option
   requires Blockwise to be enabled and OSCORE processing or proxy mode.
   Observe notifications use fresh Partial IVs; stale or duplicate
-  notifications are rejected.
+  notifications are rejected. A protected Q-Block2 Observe transfer accepts
+  unique fragment Partial IVs out of arrival order while rejecting duplicates;
+  representation freshness remains ordered by authenticated sequence.
 - No-Response suppression is preserved for protected requests over UDP, DTLS,
   TCP, and TLS; the application processes each request while the suppressed
   response is not sent.
@@ -564,6 +578,8 @@ timeouts, and response-size limits.
 - Q-Block1 uploads and Q-Block2 downloads over OSCORE-protected UDP and DTLS.
   Q-Block options are encrypted as Class E options. Q-Block is a datagram
   protocol (RFC 9177); TCP/TLS use reliable-transport Blockwise instead.
+  UDP integration tests cover protected Q-Block2 Observe fragment loss,
+  recovery, reordering, and duplication.
 - Pre-established unicast contexts only. Group OSCORE, automatic context
   establishment (including EDHOC), and multicast OSCORE are unsupported. The
   `net/oscore/proxy` package provides only the minimal forwarding scope above;

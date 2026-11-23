@@ -403,7 +403,7 @@ func hasTCPOSCORERequestConsumer(req *pool.Message) bool {
 		return false
 	}
 	consumer, _ := req.Context().Value(tcpOSCORERequestConsumerKey{}).(bool)
-	return consumer
+	return consumer || hasTCPOSCOREBlockwiseConsumer(req)
 }
 
 func (cc *Conn) completeTCPOSCOREWrite(key string, exchange oscore.Exchange, expires time.Time) {

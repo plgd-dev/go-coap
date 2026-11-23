@@ -97,6 +97,88 @@ func TestLibCoAPClientOSCOREFromTLS(t *testing.T) {
 	require.EqualValues(t, 1, handled.Load())
 }
 
+func TestLibCoAPClientOSCOREObserveNotificationsFromTLS(t *testing.T) {
+	clientPath, err := findLibCoAPTLSBinary("coap-client", "coap-client-openssl", "coap-client-gnutls")
+	if err != nil {
+		requireLibCoAPOSCORE(t, "TLS-capable "+err.Error())
+	}
+	credentials := createLibCoAPTLSCredentials(t)
+	listener, err := coapNet.NewTLSListener("tcp", "127.0.0.1:0", credentials.serverConfig)
+	require.NoError(t, err)
+	var handled atomic.Int32
+	server := coapTCP.NewServer(
+		options.WithOSCORE(newLibCoAPOSCOREProcessor(t, "server", "client")),
+		options.WithHandlerFunc(func(w *responsewriter.ResponseWriter[*client.Conn], req *pool.Message) {
+			observe, observeErr := req.Observe()
+			if observeErr != nil {
+				t.Errorf("get TLS Observe request: %v", observeErr)
+				return
+			}
+			switch observe {
+			case 0:
+				if responseErr := w.SetResponse(codes.Content, message.TextPlain, bytes.NewReader([]byte("initial"))); responseErr != nil {
+					t.Errorf("set initial TLS Observe response: %v", responseErr)
+					return
+				}
+				w.Message().SetObserve(0)
+				conn, token := w.Conn(), bytes.Clone(req.Token())
+				go func() {
+					time.Sleep(100 * time.Millisecond)
+					for sequence := uint32(1); sequence <= 2; sequence++ {
+						notification := conn.AcquireMessage(conn.Context())
+						notification.SetCode(codes.Content)
+						notification.SetToken(token)
+						notification.SetObserve(sequence)
+						notification.SetBody(bytes.NewReader([]byte("notify")))
+						writeErr := conn.WriteMessage(notification)
+						conn.ReleaseMessage(notification)
+						if writeErr != nil {
+							t.Errorf("send TLS OSCORE notification: %v", writeErr)
+							return
+						}
+						handled.Add(1)
+					}
+				}()
+			case 1:
+				if responseErr := w.SetResponse(codes.Content, message.TextPlain, nil); responseErr != nil {
+					t.Errorf("set TLS Observe cancellation response: %v", responseErr)
+				}
+			default:
+				t.Errorf("unexpected TLS Observe value %d", observe)
+			}
+		}),
+	)
+	serverDone := make(chan error, 1)
+	go func() { serverDone <- server.Serve(listener) }()
+	defer func() {
+		server.Stop()
+		require.NoError(t, listener.Close())
+		select {
+		case serverErr := <-serverDone:
+			require.NoError(t, serverErr)
+		case <-time.After(5 * time.Second):
+			require.Fail(t, "go-coap TLS OSCORE Observe server did not stop")
+		}
+	}()
+
+	clientConfig := writeLibCoAPOSCOREConfig(t, "client", "server")
+	outputPath := t.TempDir() + "/tls-observe.txt"
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, clientPath, "-C", credentials.caPath, "-E", clientConfig, "-s", "3",
+		"-o", outputPath, "-B", "5", "coaps+tcp://"+listener.Addr().String()+"/observe")
+	output, err := cmd.CombinedOutput()
+	if err != nil && (strings.Contains(string(output), "OSCORE support not enabled") ||
+		strings.Contains(string(output), "TLS support not enabled")) {
+		requireLibCoAPOSCORE(t, "libcoap client lacks OSCORE or TLS support")
+	}
+	require.NoError(t, err, "libcoap TLS OSCORE Observe output: %s", output)
+	body, err := os.ReadFile(outputPath)
+	require.NoError(t, err)
+	require.GreaterOrEqual(t, strings.Count(string(body), "notify"), 2, "libcoap output: %s", output)
+	require.Equal(t, int32(2), handled.Load())
+}
+
 func TestLibCoAPServerOSCOREFromTLS(t *testing.T) {
 	serverPath, err := findLibCoAPTLSBinary("coap-server", "coap-server-openssl", "coap-server-gnutls")
 	if err != nil {
@@ -142,6 +224,32 @@ func TestLibCoAPServerOSCOREFromTLS(t *testing.T) {
 	body, err := response.ReadBody()
 	require.NoError(t, err)
 	require.NotEmpty(t, body)
+
+	observeCtx, cancelObserve := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancelObserve()
+	observeConn, err := coapTCP.Dial(
+		net.JoinHostPort("127.0.0.1", strconv.Itoa(basePort+1)),
+		options.WithContext(observeCtx),
+		options.WithTLS(credentials.clientConfig),
+		options.WithOSCORE(processor),
+	)
+	require.NoError(t, err, "dial libcoap TLS server for Observe: %s", serverOutput.String())
+	defer func() { require.NoError(t, observeConn.Close()) }()
+	observed := make(chan struct{}, 4)
+	observation, err := observeConn.Observe(observeCtx, "/time", func(*pool.Message) {
+		observed <- struct{}{}
+	})
+	require.NoError(t, err, "libcoap TLS output: %s", serverOutput.String())
+	for range 2 {
+		select {
+		case <-observed:
+		case <-observeCtx.Done():
+			require.Fail(t, "libcoap TLS OSCORE Observe did not produce the initial response and notification")
+		}
+	}
+	if !observation.Canceled() {
+		require.NoError(t, observation.Cancel(observeCtx))
+	}
 }
 
 func findLibCoAPTLSBinary(names ...string) (string, error) {

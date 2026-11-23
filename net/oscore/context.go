@@ -12,15 +12,18 @@ import (
 	"fmt"
 	"io"
 	"sync"
+	"time"
 
 	"github.com/pion/dtls/v3/pkg/crypto/ccm"
 	"golang.org/x/crypto/hkdf"
 )
 
 const (
-	aeadNonceSize     = 13
-	maxPartialIV      = uint64(1<<40 - 1)
-	maxIdentifierSize = 7
+	aeadNonceSize                 = 13
+	maxPartialIV                  = uint64(1<<40 - 1)
+	maxIdentifierSize             = 7
+	replayRecoveryChallengeLimit  = 8
+	replayRecoveryChallengeWindow = time.Second
 )
 
 // AEADAlgorithm identifies a COSE AEAD algorithm supported by OSCORE.
@@ -138,6 +141,8 @@ type Context struct {
 	replayRecoveryMu         sync.Mutex
 	replayRecoveryEcho       []byte
 	replayRecoveryPending    bool
+	replayRecoveryWindow     time.Time
+	replayRecoveryCount      int
 }
 
 // ReplayMessagesRejectedBelowCutoff reports the number of inbound sequences
@@ -145,6 +150,22 @@ type Context struct {
 // created. It can be sampled by application metrics after receiver restarts.
 func (c *Context) ReplayMessagesRejectedBelowCutoff() uint64 {
 	return c.replay.RejectedBelowCutoff()
+}
+
+func (c *Context) allowReplayRecoveryChallenge() error {
+	c.replayRecoveryMu.Lock()
+	defer c.replayRecoveryMu.Unlock()
+	now := time.Now()
+	if c.replayRecoveryWindow.IsZero() ||
+		now.Sub(c.replayRecoveryWindow) >= replayRecoveryChallengeWindow {
+		c.replayRecoveryWindow = now
+		c.replayRecoveryCount = 0
+	}
+	if c.replayRecoveryCount >= replayRecoveryChallengeLimit {
+		return ErrReplayRecoveryRateLimited
+	}
+	c.replayRecoveryCount++
+	return nil
 }
 
 // NewContext derives keys for the configured AEAD algorithm. The zero-value

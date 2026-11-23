@@ -3,10 +3,43 @@
 package store
 
 import (
+	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
+	"strings"
 	"syscall"
 )
+
+func validateStoreDirectoryPath(path string) error {
+	absolute, err := filepath.Abs(filepath.Clean(path))
+	if err != nil {
+		return fmt.Errorf("make OSCORE store directory absolute: %w", err)
+	}
+	current := string(filepath.Separator)
+	rest := strings.TrimPrefix(absolute, current)
+	for _, component := range strings.Split(rest, current) {
+		if component == "" {
+			continue
+		}
+		current = filepath.Join(current, component)
+		// #nosec G703 -- current is a cleaned prefix of the caller-selected store root.
+		info, err := os.Lstat(current)
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		if err != nil {
+			return fmt.Errorf("lstat OSCORE store directory component %q: %w", current, err)
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("OSCORE store directory component %q is a symlink", current)
+		}
+		if !info.IsDir() {
+			return fmt.Errorf("OSCORE store path component %q is not a directory", current)
+		}
+	}
+	return nil
+}
 
 func validateStoreDirectory(path string) error {
 	// #nosec G703 -- path is the caller-selected persistent-store root.

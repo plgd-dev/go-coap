@@ -1530,8 +1530,11 @@ func sendJustAcknowledgeMessage(reqType message.Type, w *responsewriter.Response
 	return reqType == message.Confirmable && !w.Message().IsModified()
 }
 
-func (cc *Conn) processResponse(reqType message.Type, reqMessageID int32, qResponse bool,
-	cacheResponse bool, w *responsewriter.ResponseWriter[*Conn],
+func (cc *Conn) processResponse(
+	reqType message.Type,
+	reqMessageID int32,
+	qResponse, cacheResponse bool,
+	w *responsewriter.ResponseWriter[*Conn],
 ) error {
 	switch {
 	case isPongOrResetResponse(w):
@@ -1647,6 +1650,31 @@ func (cc *Conn) closeConnection() {
 	}
 }
 
+func isRequestCode(code codes.Code) bool {
+	return code >= codes.GET && code <= codes.IPATCH
+}
+
+func (cc *Conn) protectRequestResponseOrFallback(req, response *pool.Message) bool {
+	err := cc.protectResponseForRequest(req, response)
+	if err == nil {
+		return true
+	}
+	cc.errors(fmt.Errorf(errFmtWriteResponse, err))
+	errorCode := codes.InternalServerError
+	if errors.Is(err, oscore.ErrPlaintextTooLarge) {
+		errorCode = codes.RequestEntityTooLarge
+	}
+	response.SetCode(errorCode)
+	response.ResetOptionsTo(nil)
+	response.SetBody(nil)
+	if fallbackErr := cc.protectResponseForRequest(req, response); fallbackErr != nil {
+		cc.errors(fmt.Errorf("cannot protect OSCORE error response: %w (initial response protection failed: %w)",
+			fallbackErr, err))
+		return false
+	}
+	return true
+}
+
 func (cc *Conn) ProcessReceivedMessageWithHandler(req *pool.Message, handler config.HandlerFunc[*Conn]) {
 	generation := req.Generation()
 	reqType, reqMessageID := req.Type(), req.MessageID()
@@ -1682,14 +1710,14 @@ func (cc *Conn) ProcessReceivedMessageWithHandler(req *pool.Message, handler con
 			w.Message().SetBody(nil)
 		}
 	}
-	if req.Code() >= codes.GET && req.Code() <= codes.IPATCH {
-		if err := cc.protectResponseForRequest(req, w.Message()); err != nil {
-			cc.closeConnection()
-			cc.errors(fmt.Errorf(errFmtWriteResponse, err))
+	if isRequestCode(req.Code()) {
+		if !cc.protectRequestResponseOrFallback(req, w.Message()) {
 			return
 		}
 	}
 	if hasOSCORERequestContext(req) && shouldCacheResponse(reqType, w.Message()) {
+		w.Message().UpsertType(message.Confirmable)
+		w.Message().UpsertMessageID(cc.GetMessageID())
 		if err := cc.addResponseToCache(reqMessageID, w.Message()); err != nil {
 			cc.closeConnection()
 			cc.errors(fmt.Errorf("cannot cache protected response: %w", err))
@@ -2116,31 +2144,19 @@ func (cc *Conn) Done() <-chan struct{} {
 
 func (cc *Conn) checkMidHandlerContainer(now time.Time, maxRetransmit uint32, key int32, value *midElement) {
 	if value.IsExpired(now, maxRetransmit) {
-		removed := false
-		cc.midHandlerContainer.ReplaceWithFunc(key, func(current *midElement, loaded bool) (*midElement, bool) {
-			if loaded && current == value {
-				removed = true
-				return current, true
-			}
-			return current, !loaded
-		})
-		if !removed {
-			return
-		}
-		value.ReleaseMessage(cc)
-		expired := fmt.Errorf(errFmtWriteRequest, context.DeadlineExceeded)
-		notifyWaitForAcknowledge(value.waitForAcknowledge, expired)
-		cc.errors(expired)
+		cc.expireMidHandler(key, value)
 		return
 	}
 	if !value.Retransmit(now) {
 		return
 	}
+	cc.retransmitMidHandler(key, maxRetransmit, value)
+}
+
+func (cc *Conn) retransmitMidHandler(key int32, maxRetransmit uint32, value *midElement) {
 	msg, ok, err := value.GetMessage(cc)
 	if err != nil {
-		cc.midHandlerContainer.Delete(key)
-		value.ReleaseMessage(cc)
-		cc.errors(fmt.Errorf(errFmtWriteRequest, err))
+		cc.reportMidHandlerMessageError(key, value, err)
 		return
 	}
 	if !ok {
@@ -2154,20 +2170,44 @@ func (cc *Conn) checkMidHandlerContainer(now time.Time, maxRetransmit uint32, ke
 		return
 	}
 	if value.MarkRetransmissionFailed(maxRetransmit) {
-		removed := false
-		cc.midHandlerContainer.ReplaceWithFunc(key, func(current *midElement, loaded bool) (*midElement, bool) {
-			if loaded && current == value {
-				removed = true
-				return current, true
-			}
-			return current, !loaded
-		})
-		if removed {
-			notifyWaitForAcknowledge(value.waitForAcknowledge, err)
-			value.ReleaseMessage(cc)
-		}
+		cc.removeFailedMidHandler(key, value, err)
 	}
 	cc.errors(fmt.Errorf(errFmtWriteRequest, err))
+}
+
+func (cc *Conn) expireMidHandler(key int32, value *midElement) {
+	if !cc.removeMidHandlerIfCurrent(key, value) {
+		return
+	}
+	value.ReleaseMessage(cc)
+	expired := fmt.Errorf(errFmtWriteRequest, context.DeadlineExceeded)
+	notifyWaitForAcknowledge(value.waitForAcknowledge, expired)
+	cc.errors(expired)
+}
+
+func (cc *Conn) reportMidHandlerMessageError(key int32, value *midElement, err error) {
+	cc.midHandlerContainer.Delete(key)
+	value.ReleaseMessage(cc)
+	cc.errors(fmt.Errorf(errFmtWriteRequest, err))
+}
+
+func (cc *Conn) removeFailedMidHandler(key int32, value *midElement, err error) {
+	if cc.removeMidHandlerIfCurrent(key, value) {
+		notifyWaitForAcknowledge(value.waitForAcknowledge, err)
+		value.ReleaseMessage(cc)
+	}
+}
+
+func (cc *Conn) removeMidHandlerIfCurrent(key int32, value *midElement) bool {
+	removed := false
+	cc.midHandlerContainer.ReplaceWithFunc(key, func(current *midElement, loaded bool) (*midElement, bool) {
+		if loaded && current == value {
+			removed = true
+			return current, true
+		}
+		return current, !loaded
+	})
+	return removed
 }
 
 // CheckExpirations checks and remove expired items from caches.

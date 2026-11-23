@@ -1706,6 +1706,183 @@ func TestConcurrentDuplicateOSCORERequestIsProcessedOnce(t *testing.T) {
 	require.Zero(t, session.writtenCount(), "a duplicate must not cause an OSCORE 4.01 response")
 }
 
+func TestDuplicateOSCOREReplayRecoveryChallengeRetransmitsCachedResponse(t *testing.T) {
+	const mid = 0x4322
+	masterSecret := []byte("duplicate OSCORE replay-recovery challenge")
+	clientContext, err := oscore.NewContext(oscore.ContextConfig{
+		UnsafeVolatileSenderSequence: true,
+		AcceptReplayStateLoss:        true,
+		MasterSecret:                 masterSecret,
+		SenderID:                     []byte("client"),
+		RecipientID:                  []byte("server"),
+	})
+	require.NoError(t, err)
+	serverContext, err := oscore.NewContext(oscore.ContextConfig{
+		UnsafeVolatileSenderSequence: true,
+		RequireEchoRecovery:          true,
+		MasterSecret:                 masterSecret,
+		SenderID:                     []byte("server"),
+		RecipientID:                  []byte("client"),
+	})
+	require.NoError(t, err)
+	processor, err := oscore.NewProcessor(oscore.ProcessorConfig{Contexts: []*oscore.Context{serverContext}})
+	require.NoError(t, err)
+	protected, _, err := clientContext.ProtectRequest(message.Message{
+		Code: codes.GET, Token: message.Token{0x44},
+		Type: message.Confirmable, MessageID: mid,
+	})
+	require.NoError(t, err)
+	wireRequest := pool.NewMessage(context.Background())
+	wireRequest.SetMessage(protected)
+	datagram, err := wireRequest.MarshalWithEncoder(coder.DefaultCoder)
+	require.NoError(t, err)
+
+	session := newRecordingSession()
+	defer session.Close()
+	cfg := DefaultConfig
+	cfg.OSCORE = processor
+	cc := NewConnWithOpts(session, &cfg)
+	defer cc.Close()
+
+	for range 2 {
+		request := cc.AcquireMessage(context.Background())
+		request.SetMessage(protected)
+		handled, processErr := cc.processIncomingOSCORERequest(request, datagram)
+		cc.ReleaseMessage(request)
+		require.NoError(t, processErr)
+		require.True(t, handled)
+	}
+	require.Equal(t, 2, session.writtenCount())
+
+	session.mu.Lock()
+	first, second := session.written[0], session.written[1]
+	firstWire, firstErr := first.MarshalWithEncoder(coder.DefaultCoder)
+	secondWire, secondErr := second.MarshalWithEncoder(coder.DefaultCoder)
+	session.mu.Unlock()
+	require.NoError(t, firstErr)
+	require.NoError(t, secondErr)
+	require.Equal(t, firstWire, secondWire, "duplicate request must retransmit the identical protected Echo challenge")
+	require.True(t, second.HasOption(message.OSCORE))
+	require.Equal(t, message.Acknowledgement, second.Type(),
+		"a duplicate Confirmable request must receive an ACK response")
+}
+
+func TestDuplicateOSCOREProcessingErrorRetransmitsCachedResponse(t *testing.T) {
+	const mid = 0x4324
+	clientContext, err := oscore.NewContext(oscore.ContextConfig{
+		UnsafeVolatileSenderSequence: true,
+		AcceptReplayStateLoss:        true,
+		MasterSecret:                 []byte("duplicate OSCORE processing error"),
+		SenderID:                     []byte("client"),
+		RecipientID:                  []byte("server"),
+	})
+	require.NoError(t, err)
+	processor, err := oscore.NewProcessor(oscore.ProcessorConfig{
+		PlaintextPolicy: oscore.PlaintextAllowed,
+	})
+	require.NoError(t, err)
+	protected, _, err := clientContext.ProtectRequest(message.Message{
+		Code: codes.GET, Token: message.Token{0x46},
+		Type: message.Confirmable, MessageID: mid,
+	})
+	require.NoError(t, err)
+	wireRequest := pool.NewMessage(context.Background())
+	wireRequest.SetMessage(protected)
+	datagram, err := wireRequest.MarshalWithEncoder(coder.DefaultCoder)
+	require.NoError(t, err)
+
+	session := newRecordingSession()
+	defer session.Close()
+	cfg := DefaultConfig
+	cfg.OSCORE = processor
+	cfg.OSCOREErrorResponses = true
+	cc := NewConnWithOpts(session, &cfg)
+	defer cc.Close()
+
+	for range 2 {
+		request := cc.AcquireMessage(context.Background())
+		request.SetMessage(protected)
+		handled, processErr := cc.processIncomingOSCORERequest(request, datagram)
+		cc.ReleaseMessage(request)
+		require.NoError(t, processErr)
+		require.True(t, handled)
+	}
+	require.Equal(t, 2, session.writtenCount())
+
+	session.mu.Lock()
+	first, second := session.written[0], session.written[1]
+	firstWire, firstErr := first.MarshalWithEncoder(coder.DefaultCoder)
+	secondWire, secondErr := second.MarshalWithEncoder(coder.DefaultCoder)
+	session.mu.Unlock()
+	require.NoError(t, firstErr)
+	require.NoError(t, secondErr)
+	require.Equal(t, firstWire, secondWire, "ordinary duplicate error must replay the cached response")
+	require.Equal(t, codes.Unauthorized, second.Code())
+	require.False(t, second.HasOption(message.OSCORE), "ordinary processing error remains unprotected")
+	require.Equal(t, message.Acknowledgement, second.Type(),
+		"a duplicate Confirmable request must receive an ACK response")
+}
+
+func TestUDPOSCOREResponseProtectionFailureSendsProtectedErrorWithoutClosing(t *testing.T) {
+	const masterSecret = "UDP OSCORE response protection fallback"
+	clientContext, err := oscore.NewContext(oscore.ContextConfig{
+		UnsafeVolatileSenderSequence: true,
+		AcceptReplayStateLoss:        true,
+		MasterSecret:                 []byte(masterSecret),
+		SenderID:                     []byte("client"),
+		RecipientID:                  []byte("server"),
+	})
+	require.NoError(t, err)
+	serverContext, err := oscore.NewContext(oscore.ContextConfig{
+		UnsafeVolatileSenderSequence: true,
+		AcceptReplayStateLoss:        true,
+		MasterSecret:                 []byte(masterSecret),
+		SenderID:                     []byte("server"),
+		RecipientID:                  []byte("client"),
+	})
+	require.NoError(t, err)
+	processor, err := oscore.NewProcessor(oscore.ProcessorConfig{Contexts: []*oscore.Context{serverContext}})
+	require.NoError(t, err)
+	protectedRequest, clientExchange, err := clientContext.ProtectRequest(message.Message{
+		Code: codes.GET, Token: message.Token{0x45},
+		Type: message.Confirmable, MessageID: 0x4323,
+	})
+	require.NoError(t, err)
+	wireRequest := pool.NewMessage(context.Background())
+	wireRequest.SetMessage(protectedRequest)
+	datagram, err := wireRequest.MarshalWithEncoder(coder.DefaultCoder)
+	require.NoError(t, err)
+
+	session := newRecordingSession()
+	defer session.Close()
+	cfg := DefaultConfig
+	cfg.OSCORE = processor
+	cc := NewConnWithOpts(session, &cfg)
+	defer cc.Close()
+	request := cc.AcquireMessage(context.Background())
+	request.SetMessage(protectedRequest)
+	handled, err := cc.processIncomingOSCORERequest(request, datagram)
+	require.NoError(t, err)
+	require.False(t, handled)
+
+	cc.ProcessReceivedMessageWithHandler(request, func(w *responsewriter.ResponseWriter[*Conn], _ *pool.Message) {
+		setErr := w.SetResponse(codes.Content, message.AppOctets, bytes.NewReader(make([]byte, 1<<20)))
+		require.NoError(t, setErr)
+	})
+	require.Equal(t, 1, session.writtenCount())
+	require.NoError(t, session.ctx.Err())
+
+	wireResponse := session.lastWritten()
+	require.NotNil(t, wireResponse)
+	require.True(t, wireResponse.HasOption(message.OSCORE), "fallback error must remain protected")
+	responseMessage, err := udpPoolMessageToOSCOREMessage(wireResponse)
+	require.NoError(t, err)
+	plaintext, err := clientContext.UnprotectResponse(responseMessage, clientExchange)
+	require.NoError(t, err)
+	require.Equal(t, codes.RequestEntityTooLarge, plaintext.Code)
+	require.Empty(t, plaintext.Payload)
+}
+
 func TestRetransmitCachedOSCOREResponse(t *testing.T) {
 	const mid = 1234
 	masterSecret := []byte{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16}

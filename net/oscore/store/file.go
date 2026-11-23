@@ -30,13 +30,22 @@ var (
 
 // HighWaterFileStoreOption configures a HighWaterFileStore.
 type HighWaterFileStoreOption struct {
-	replayHighWaterMargin uint64
+	replayHighWaterMargin    uint64
+	hasReplayHighWaterMargin bool
+	allowSingleProcess       bool
 }
 
 // WithReplayHighWaterMargin configures how many accepted sequence numbers may
 // pass between durable receiver replay cutoff writes. Valid values are 1..1024.
 func WithReplayHighWaterMargin(margin uint64) HighWaterFileStoreOption {
-	return HighWaterFileStoreOption{replayHighWaterMargin: margin}
+	return HighWaterFileStoreOption{replayHighWaterMargin: margin, hasReplayHighWaterMargin: true}
+}
+
+// WithSingleProcessOnly allows a file store to run on platforms without
+// inter-process file locking. The caller must ensure that no other process
+// accesses the same directory.
+func WithSingleProcessOnly() HighWaterFileStoreOption {
+	return HighWaterFileStoreOption{allowSingleProcess: true}
 }
 
 // HighWaterFileStore persists sender sequence reservations and a receiver
@@ -52,10 +61,10 @@ func WithReplayHighWaterMargin(margin uint64) HighWaterFileStoreOption {
 // The replay cutoff intentionally rejects some previously unobserved requests
 // after restart.
 //
-// On Unix systems, file locking serializes operations across goroutines,
-// store instances, and processes. Keep the directory private to the
-// application. On other platforms, operations are serialized within the
-// process only and directory metadata syncing is unavailable.
+// File locking serializes operations across goroutines, store instances, and
+// processes on supported platforms. On platforms without process locks, pass
+// WithSingleProcessOnly only when the directory is guaranteed to have one
+// process owner. Keep the directory private to the application.
 type HighWaterFileStore struct {
 	dir                   string
 	sequencePath          string
@@ -121,8 +130,15 @@ func NewHighWaterFileStore(dir, id string, options ...HighWaterFileStoreOption) 
 		return nil, errors.New("OSCORE file store directory is empty")
 	}
 	replayHighWaterMargin := oscore.DefaultReplayHighWaterMargin
+	allowSingleProcess := false
 	for _, option := range options {
-		replayHighWaterMargin = option.replayHighWaterMargin
+		if option.hasReplayHighWaterMargin {
+			replayHighWaterMargin = option.replayHighWaterMargin
+		}
+		allowSingleProcess = allowSingleProcess || option.allowSingleProcess
+	}
+	if !supportsProcessFileLock && !allowSingleProcess {
+		return nil, errors.New("process file locking is unavailable; explicitly allow single-process store use")
 	}
 	if replayHighWaterMargin == 0 || replayHighWaterMargin > oscore.MaxReplayHighWaterMargin {
 		return nil, ErrInvalidReplayHighWaterMargin
@@ -131,8 +147,14 @@ func NewHighWaterFileStore(dir, id string, options ...HighWaterFileStoreOption) 
 	if err != nil {
 		return nil, fmt.Errorf("resolve OSCORE file store directory: %w", err)
 	}
+	if err := validateStoreDirectoryPath(absoluteDir); err != nil {
+		return nil, fmt.Errorf("validate OSCORE file store directory path: %w", err)
+	}
 	if err := createStoreDirectory(filepath.Clean(absoluteDir), syncDirectory); err != nil {
 		return nil, fmt.Errorf("create OSCORE file store directory: %w", err)
+	}
+	if err := validateStoreDirectoryPath(absoluteDir); err != nil {
+		return nil, fmt.Errorf("validate OSCORE file store directory path: %w", err)
 	}
 	if err := validateStoreDirectory(absoluteDir); err != nil {
 		return nil, fmt.Errorf("validate OSCORE file store directory: %w", err)

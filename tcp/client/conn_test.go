@@ -659,6 +659,8 @@ func TestTCPOSCOREBlockwiseConsumerRetainsExchangesUntilRelease(t *testing.T) {
 	state := &tcpOSCOREBlockwiseConsumer{}
 	req := pool.NewMessage(context.WithValue(context.Background(), tcpOSCOREBlockwiseConsumerKey{}, state))
 	req.SetToken(token)
+	require.True(t, hasTCPOSCORERequestConsumer(req),
+		"generated blockwise requests must retain an unexpired OSCORE response requirement")
 
 	var current oscore.Exchange
 	for range 2 {

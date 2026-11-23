@@ -90,6 +90,9 @@ func SplitOptions(options message.Options) (OptionSplit, error) {
 		case ClassE:
 			split.Inner = append(split.Inner, option)
 		case ClassU:
+			if option.ID == message.HopLimit && (len(option.Value) != 1 || option.Value[0] == 0) {
+				return OptionSplit{}, fmt.Errorf("%w: Hop-Limit must be between 1 and 255", ErrInvalidInnerMessage)
+			}
 			split.Outer = append(split.Outer, option)
 		case ClassBoth:
 			split.Inner = append(split.Inner, option)

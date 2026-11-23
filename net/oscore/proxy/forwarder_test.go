@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"testing"
 
 	"github.com/plgd-dev/go-coap/v3/message"
@@ -259,6 +260,8 @@ func TestAllowPublicIPLiteralTargetConfigurablePorts(t *testing.T) {
 
 func TestForwarderRateLimitRejectsBeforeRoundTrip(t *testing.T) {
 	originCalled := false
+	peer := &net.UDPAddr{IP: net.IPv4(192, 0, 2, 1), Port: 5683}
+	var rateLimitedPeer net.Addr
 	forwarder := Forwarder{
 		RoundTripper: RoundTripperFunc(func(context.Context, oscore.ProxyTarget, message.Message) (message.Message, error) {
 			originCalled = true
@@ -267,11 +270,12 @@ func TestForwarderRateLimitRejectsBeforeRoundTrip(t *testing.T) {
 		AllowTarget: func(_ context.Context, target oscore.ProxyTarget) bool {
 			return target.Host == testOriginHost
 		},
-		RateLimit: func(_ context.Context, target oscore.ProxyTarget) bool {
+		RateLimit: func(_ context.Context, gotPeer net.Addr, target oscore.ProxyTarget) bool {
+			rateLimitedPeer = gotPeer
 			return target.Host != testOriginHost
 		},
 	}
-	_, err := forwarder.Forward(context.Background(), validProtectedProxyRequest(t))
+	_, err := forwarder.ForwardFrom(context.Background(), peer, validProtectedProxyRequest(t))
 	if !errors.Is(err, ErrRateLimited) {
 		t.Fatalf("Forward error = %v, want ErrRateLimited", err)
 	}
@@ -280,6 +284,9 @@ func TestForwarderRateLimitRejectsBeforeRoundTrip(t *testing.T) {
 	}
 	if originCalled {
 		t.Fatal("round trip attempted for a rate-limited request")
+	}
+	if rateLimitedPeer == nil || rateLimitedPeer.String() != peer.String() {
+		t.Fatalf("rate limiter peer = %v, want %v", rateLimitedPeer, peer)
 	}
 }
 
