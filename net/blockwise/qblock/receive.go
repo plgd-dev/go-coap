@@ -19,8 +19,12 @@ import (
 )
 
 const (
+	// MaxTrackedBlocks bounds the number of Q-Block payloads retained per body.
+	MaxTrackedBlocks = 1 << 16
+	// DefaultMaxBodySize is the default maximum assembled Q-Block body size.
+	DefaultMaxBodySize   = 16 << 20
 	q1DefaultMaxBodySize = 16 << 20
-	q1MaxTrackedBlocks   = 1 << 16
+	q1MaxTrackedBlocks   = MaxTrackedBlocks
 )
 
 var errQBlockBadOption = errors.New("invalid Q-Block option semantics")

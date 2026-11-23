@@ -18,6 +18,21 @@ func withFileLock(path string, action func() error) (err error) {
 	if err != nil {
 		return fmt.Errorf("open OSCORE store lock: %w", err)
 	}
+	return withLockedFile(file, action)
+}
+
+func withFileLockAt(root *os.Root, path string, action func() error) (err error) {
+	if root == nil {
+		return withFileLock(path, action)
+	}
+	file, err := openFileAtRoot(root, path, os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		return fmt.Errorf("open rooted OSCORE store lock: %w", err)
+	}
+	return withLockedFile(file, action)
+}
+
+func withLockedFile(file *os.File, action func() error) (err error) {
 	defer func() {
 		if closeErr := file.Close(); err == nil && closeErr != nil {
 			err = fmt.Errorf("close OSCORE store lock: %w", closeErr)

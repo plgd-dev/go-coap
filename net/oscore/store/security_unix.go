@@ -83,19 +83,40 @@ func validateStoreSymlinkTarget(path string) error {
 	if !info.IsDir() {
 		return fmt.Errorf("allowed OSCORE store symlink target %q is not a directory", resolved)
 	}
+	current := string(filepath.Separator)
+	for _, component := range strings.Split(strings.TrimPrefix(resolved, current), current) {
+		if component == "" {
+			continue
+		}
+		current = filepath.Join(current, component)
+		// #nosec G703 -- current is a cleaned ancestor of the resolved target.
+		if err := validateTrustedStoreDirectory(current); err != nil {
+			return fmt.Errorf("validate allowed OSCORE store symlink ancestor %q: %w", current, err)
+		}
+	}
+	return nil
+}
+
+func validateTrustedStoreDirectory(path string) error {
+	// #nosec G703 -- path is a canonical ancestor resolved from an approved symlink.
+	info, err := os.Stat(path)
+	if err != nil {
+		return err
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("%q is not a directory", path)
+	}
 	stat, ok := info.Sys().(*syscall.Stat_t)
 	if !ok {
-		return fmt.Errorf("cannot determine owner of allowed OSCORE store symlink target %q", resolved)
+		return fmt.Errorf("cannot determine owner of %q", path)
 	}
 	// #nosec G115 -- Unix file owners and effective user IDs are both uint32.
 	if stat.Uid != uint32(os.Geteuid()) && stat.Uid != 0 {
-		return fmt.Errorf("allowed OSCORE store symlink target %q is not owned by the current user or root", resolved)
+		return fmt.Errorf("directory %q is not owned by the current user or root", path)
 	}
-	if info.Mode().Perm()&0o022 != 0 {
-		if runtime.GOOS != "darwin" || filepath.Clean(path) != "/tmp" ||
-			info.Mode()&os.ModeSticky == 0 {
-			return fmt.Errorf("allowed OSCORE store symlink target %q is group- or world-writable", resolved)
-		}
+	if info.Mode().Perm()&0o022 != 0 &&
+		(info.Mode()&os.ModeSticky == 0 || filepath.Clean(path) != "/tmp") {
+		return fmt.Errorf("directory %q is group- or world-writable", path)
 	}
 	return nil
 }
@@ -123,14 +144,40 @@ func validateStoreDirectory(path string) error {
 	return nil
 }
 
-type unixStoreDirectoryGuard struct{}
-
-func newStoreDirectoryGuard(string) (storeDirectoryGuard, error) {
-	return unixStoreDirectoryGuard{}, nil
+type unixStoreDirectoryGuard struct {
+	path string
+	root *os.Root
 }
 
-func (unixStoreDirectoryGuard) withOperation(action func() error) error {
+func newStoreDirectoryGuard(path string) (storeDirectoryGuard, error) {
+	root, err := os.OpenRoot(path)
+	if err != nil {
+		return nil, fmt.Errorf("open rooted OSCORE store directory %q: %w", path, err)
+	}
+	return &unixStoreDirectoryGuard{path: path, root: root}, nil
+}
+
+func (g *unixStoreDirectoryGuard) withOperation(action func() error) error {
+	rootInfo, err := g.root.Stat(".")
+	if err != nil {
+		return fmt.Errorf("stat rooted OSCORE store directory: %w", err)
+	}
+	pathInfo, err := os.Stat(g.path)
+	if err != nil {
+		return fmt.Errorf("stat configured OSCORE store directory: %w", err)
+	}
+	if !os.SameFile(rootInfo, pathInfo) {
+		return errors.New("configured OSCORE store directory no longer matches its rooted directory")
+	}
 	return action()
+}
+
+func (g *unixStoreDirectoryGuard) fileRoot() *os.Root {
+	return g.root
+}
+
+func (g *unixStoreDirectoryGuard) Close() error {
+	return g.root.Close()
 }
 
 func openFileNoFollow(path string, flags int, perm os.FileMode) (*os.File, error) {
@@ -139,6 +186,10 @@ func openFileNoFollow(path string, flags int, perm os.FileMode) (*os.File, error
 		return nil, err
 	}
 	return os.NewFile(uintptr(fd), path), nil
+}
+
+func openFileAtRoot(root *os.Root, path string, flags int, perm os.FileMode) (*os.File, error) {
+	return root.OpenFile(path, flags|syscall.O_NOFOLLOW, perm)
 }
 
 func replaceFileAtomically(source, destination string) error {

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os/exec"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -36,7 +37,10 @@ func TestGoQBlockObserveLifecycle(t *testing.T) {
 	}
 }
 
+//nolint:tparallel // Cases share the same libcoap resource and must remain sequential.
 func TestQBlockLibcoapObserveGoClient(t *testing.T) {
+	t.Parallel()
+	acquireQInterop(t)
 	if qLibcoapMode(t) != qLibcoapEnabled {
 		// The Q-disabled job exercises fallback, not Q notification payloads.
 		return
@@ -90,6 +94,7 @@ func TestQBlockLibcoapObserveGoClient(t *testing.T) {
 }
 
 func TestQBlockLibcoapObserveGoServer(t *testing.T) {
+	t.Parallel()
 	if qLibcoapMode(t) != qLibcoapEnabled {
 		return
 	}
@@ -97,6 +102,8 @@ func TestQBlockLibcoapObserveGoServer(t *testing.T) {
 	for _, secure := range []bool{false, true} {
 		for _, typ := range []message.Type{message.Confirmable, message.NonConfirmable} {
 			t.Run(fmt.Sprintf("secure=%v/type=%v", secure, typ), func(t *testing.T) {
+				t.Parallel()
+				acquireQInterop(t)
 				testQLibcoapObserveGoServer(t, binary, secure, typ)
 			})
 		}
@@ -205,7 +212,7 @@ func testQObserveLifecycle(t *testing.T, secure bool, mode options.QBlockwiseMod
 	require.NoError(t, router.Handle("/observe", mux.HandlerFunc(func(w mux.ResponseWriter, r *mux.Message) {
 		observe, err := r.Observe()
 		if err != nil {
-			t.Error("recovery reexecuted application")
+			t.Errorf("recovery reexecuted application: code=%v token=%x options=%v", r.Code(), r.Token(), r.Options())
 			return
 		}
 		require.NoError(t, w.SetResponse(codes.Content, message.AppOctets, bytes.NewReader(payload)))
@@ -272,6 +279,9 @@ func testQObserveLifecycle(t *testing.T, secure bool, mode options.QBlockwiseMod
 	require.True(t, state.dropped.Load())
 	if typ == message.NonConfirmable {
 		require.Positive(t, state.recoveries.Load())
+		require.Positive(t, state.recoveryResponses.Load())
+		require.Zero(t, state.recoveryTokenCollision.Load(),
+			"missing-block recovery must not reuse the Observe registration token")
 		require.NoError(t, write(12, bytes.Repeat([]byte{9}, 1<<20)))
 		select {
 		case <-state.partial:
@@ -410,23 +420,50 @@ func testQBlockFETCHObserveLifecycle(t *testing.T, initialSize int) {
 
 type qObserveLifecycleMonitor struct {
 	recoveries, qPayloads, invalidObserve atomic.Int32
+	recoveryResponses                     atomic.Int32
+	recoveryTokenCollision                atomic.Int32
 	dropped, canceling                    atomic.Bool
 	observationToken                      atomic.Value
+	recoveryTokens                        sync.Map
 	partial                               chan struct{}
 }
 
 func (s *qObserveLifecycleMonitor) request(_ *client.Conn, req *pool.Message) (bool, error) {
-	if req.HasOption(message.QBlock2) {
-		value, _ := req.GetOptionUint32(message.QBlock2)
-		_, num, more, _ := blockwise.DecodeQBlockOption(value)
-		if num != 0 && !more {
-			s.recoveries.Add(1)
-			if req.HasOption(message.Observe) {
-				s.invalidObserve.Add(1)
-			}
+	if req.HasOption(message.QBlock2) && isQBlock2MissingRequest(req.Options()) {
+		s.recoveries.Add(1)
+		if req.HasOption(message.Observe) {
+			s.invalidObserve.Add(1)
 		}
+		originalToken, _ := s.observationToken.Load().(string)
+		if string(req.Token()) == originalToken {
+			s.recoveryTokenCollision.Add(1)
+		}
+		s.recoveryTokens.Store(string(req.Token()), struct{}{})
 	}
 	return false, nil
+}
+
+func isQBlock2MissingRequest(options message.Options) bool {
+	values := make([][]byte, 0)
+	for _, option := range options {
+		if option.ID == message.QBlock2 {
+			values = append(values, option.Value)
+		}
+	}
+	if len(values) == 0 {
+		return false
+	}
+	for _, encoded := range values {
+		value, _, err := message.DecodeUint32(encoded)
+		if err != nil {
+			return false
+		}
+		_, _, more, err := blockwise.DecodeQBlockOption(value)
+		if err != nil || more {
+			return false
+		}
+	}
+	return true
 }
 
 func (s *qObserveLifecycleMonitor) response(_ *client.Conn, response *pool.Message) (bool, error) {
@@ -438,6 +475,12 @@ func (s *qObserveLifecycleMonitor) response(_ *client.Conn, response *pool.Messa
 		return false, optionErr
 	}
 	s.qPayloads.Add(1)
+	if _, recovery := s.recoveryTokens.Load(string(response.Token())); recovery {
+		s.recoveryResponses.Add(1)
+		if response.HasOption(message.Observe) {
+			s.invalidObserve.Add(1)
+		}
+	}
 	originalToken, _ := s.observationToken.Load().(string)
 	if !s.canceling.Load() && string(response.Token()) == originalToken && !response.HasOption(message.Observe) {
 		s.invalidObserve.Add(1)

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -65,6 +66,33 @@ func TestReplayRecoveryPeerLimiterPrunesExpiredPeers(t *testing.T) {
 	}
 }
 
+func TestReplayRecoveryPeerLimiterEvictsOldestPeerAtCapacity(t *testing.T) {
+	now := time.Unix(100, 0)
+	ctx := &Context{
+		replayRecoveryPeers: make(map[string]*replayRecoveryPeerState, replayRecoveryPeerLimit),
+		replayRecoveryNow:   func() time.Time { return now },
+	}
+	for i := 0; i < replayRecoveryPeerLimit; i++ {
+		window := now.Add(time.Duration(i) * time.Millisecond)
+		ctx.replayRecoveryPeers[fmt.Sprintf("peer-%d", i)] = &replayRecoveryPeerState{
+			window: window,
+			count:  replayRecoveryChallengeLimit,
+		}
+	}
+	if err := ctx.allowReplayRecoveryChallengeForPeer("new-peer"); err != nil {
+		t.Fatalf("new peer challenge rejected at limiter capacity: %v", err)
+	}
+	if len(ctx.replayRecoveryPeers) != replayRecoveryPeerLimit {
+		t.Fatalf("peer limiter size = %d, want %d", len(ctx.replayRecoveryPeers), replayRecoveryPeerLimit)
+	}
+	if _, exists := ctx.replayRecoveryPeers["peer-0"]; exists {
+		t.Fatal("oldest peer entry was not evicted")
+	}
+	if _, exists := ctx.replayRecoveryPeers["new-peer"]; !exists {
+		t.Fatal("new peer entry was not retained")
+	}
+}
+
 func TestQBlock2ObserveWindowConfiguration(t *testing.T) {
 	ctx, err := NewContext(ContextConfig{
 		UnsafeVolatileSenderSequence: true,
@@ -90,6 +118,16 @@ func TestQBlock2ObserveWindowConfiguration(t *testing.T) {
 	})
 	if !errors.Is(err, ErrInvalidContext) {
 		t.Fatalf("oversized Q-Block2 Observe window error = %v, want ErrInvalidContext", err)
+	}
+	processor, err := NewProcessor(ProcessorConfig{Contexts: []*Context{ctx}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := processor.ValidateQBlock2ObserveWindow(64); err != nil {
+		t.Fatalf("window validation rejected exact configured capacity: %v", err)
+	}
+	if err := processor.ValidateQBlock2ObserveWindow(65); !errors.Is(err, ErrInvalidContext) {
+		t.Fatalf("undersized Q-Block2 Observe window error = %v, want ErrInvalidContext", err)
 	}
 }
 

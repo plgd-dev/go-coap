@@ -80,7 +80,7 @@ func openWindowsStoreDirectoryChain(path string) ([]windows.Handle, error) {
 			return nil, err
 		}
 		handles = append(handles, handle)
-		if err := validateWindowsDirectoryHandleACL(handle, current, filepath.Clean(current) == absolute); err != nil {
+		if err := validateWindowsDirectoryHandleACL(handle, current, true); err != nil {
 			return closeOnError(err)
 		}
 	}
@@ -94,7 +94,7 @@ func openWindowsStoreDirectoryChain(path string) ([]windows.Handle, error) {
 			return closeOnError(err)
 		}
 		handles = append(handles, handle)
-		if err := validateWindowsDirectoryHandleACL(handle, current, filepath.Clean(current) == absolute); err != nil {
+		if err := validateWindowsDirectoryHandleACL(handle, current, true); err != nil {
 			return closeOnError(err)
 		}
 	}
@@ -438,6 +438,10 @@ func openFileNoFollow(path string, flags int, perm os.FileMode) (*os.File, error
 		return nil, fmt.Errorf("validate OSCORE store file ACL %q: %w", path, err)
 	}
 	return os.NewFile(uintptr(handle), path), nil
+}
+
+func openFileAtRoot(root *os.Root, path string, flags int, perm os.FileMode) (*os.File, error) {
+	return root.OpenFile(path, flags, perm)
 }
 
 func replaceFileAtomically(source, destination string) error {

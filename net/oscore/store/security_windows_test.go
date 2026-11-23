@@ -21,6 +21,24 @@ func TestNewHighWaterFileStoreAcceptsPrivateWindowsDirectory(t *testing.T) {
 	}
 }
 
+func TestWindowsStoreDirectoryChainAcceptsStandardDataPaths(t *testing.T) {
+	for _, path := range []string{
+		os.Getenv("ProgramData"),
+		os.Getenv("LOCALAPPDATA"),
+	} {
+		if path == "" {
+			continue
+		}
+		t.Run(filepath.Base(path), func(t *testing.T) {
+			handles, err := openWindowsStoreDirectoryChain(path)
+			if err != nil {
+				t.Fatalf("standard Windows data path %q was rejected: %v", path, err)
+			}
+			closeWindowsHandles(handles)
+		})
+	}
+}
+
 func TestValidateStoreDirectoryACLRejectsBroadWriteAccess(t *testing.T) {
 	for _, sddl := range []string{
 		"D:(A;OICI;FA;;;WD)",

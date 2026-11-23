@@ -21,7 +21,10 @@ var (
 
 const outerResponseCode = codes.Changed
 
-const maxQBlock2ObserveWindowSize = uint64(1 << 20)
+const (
+	maxQBlock2ObserveWindowSize     uint64 = 1 << 20
+	defaultQBlock2ObserveWindowSize        = uint64((1 << 16) * 5)
+)
 
 // Exchange binds a response to the request that established its OSCORE AAD
 // and nonce context. Keep the exact value returned by ProtectRequest or

@@ -2,6 +2,7 @@
 package store
 
 import (
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -10,6 +11,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 
 	"github.com/plgd-dev/go-coap/v3/net/oscore"
@@ -34,6 +36,69 @@ type HighWaterFileStoreOption struct {
 	hasReplayHighWaterMargin bool
 	allowSingleProcess       bool
 	allowedSymlinks          []string
+}
+
+func createStoreTemp(root *os.Root, dir string) (*os.File, string, error) {
+	if root == nil {
+		file, err := os.CreateTemp(dir, ".oscore-state-*")
+		if err != nil {
+			return nil, "", err
+		}
+		return file, file.Name(), nil
+	}
+	for range 10 {
+		var random [16]byte
+		if _, err := rand.Read(random[:]); err != nil {
+			return nil, "", fmt.Errorf("generate OSCORE state temporary name: %w", err)
+		}
+		path := ".oscore-state-" + hex.EncodeToString(random[:])
+		file, err := openStoreFile(root, path, os.O_CREATE|os.O_EXCL|os.O_RDWR, 0o600)
+		if errors.Is(err, os.ErrExist) {
+			continue
+		}
+		if err != nil {
+			return nil, "", err
+		}
+		return file, path, nil
+	}
+	return nil, "", errors.New("cannot allocate unique OSCORE state temporary file")
+}
+
+func openStoreFile(root *os.Root, path string, flags int, perm os.FileMode) (*os.File, error) {
+	if root != nil {
+		return openFileAtRoot(root, path, flags, perm)
+	}
+	return openFileNoFollow(path, flags, perm)
+}
+
+func removeStoreFile(root *os.Root, path string) error {
+	if root != nil {
+		return root.Remove(path)
+	}
+	// #nosec G703 -- fallback paths are derived from the configured store directory.
+	return os.Remove(path)
+}
+
+func replaceStoreFile(root *os.Root, source, destination string) error {
+	if root != nil {
+		return root.Rename(source, destination)
+	}
+	return replaceFileAtomically(source, destination)
+}
+
+func syncStoreDirectory(root *os.Root, dir string) error {
+	if root == nil {
+		return syncDirectory(dir)
+	}
+	directory, err := root.Open(".")
+	if err != nil {
+		return fmt.Errorf("open rooted OSCORE store directory for sync: %w", err)
+	}
+	defer directory.Close()
+	if err := directory.Sync(); err != nil {
+		return fmt.Errorf("sync rooted OSCORE store directory: %w", err)
+	}
+	return nil
 }
 
 // WithReplayHighWaterMargin configures how many accepted sequence numbers may
@@ -102,6 +167,7 @@ func parseHighWaterFileStoreOptions(
 type HighWaterFileStore struct {
 	dir                   string
 	directoryGuard        storeDirectoryGuard
+	root                  *os.Root
 	sequencePath          string
 	sequenceGuardPath     string
 	sequencePendingPath   string
@@ -112,6 +178,7 @@ type HighWaterFileStore struct {
 	sequenceLock          string
 	replayLock            string
 	mu                    sync.Mutex
+	rootMu                sync.RWMutex
 	next                  uint64
 	limit                 uint64
 	sequenceInitialized   bool
@@ -161,6 +228,8 @@ type replayHighWaterPendingFile struct {
 // is used in filenames. The directory is created with mode 0700 when
 // necessary, and state and lock files are created with mode 0600. On
 // platforms that cannot sync directory metadata, dir must already exist.
+// Call Close when the store is no longer needed to release its rooted
+// directory handle.
 func NewHighWaterFileStore(dir, id string, options ...HighWaterFileStoreOption) (*HighWaterFileStore, error) {
 	if id == "" {
 		return nil, ErrInvalidStoreID
@@ -184,7 +253,7 @@ func NewHighWaterFileStore(dir, id string, options ...HighWaterFileStoreOption) 
 	}
 	digest := sha256.Sum256([]byte(id))
 	prefix := filepath.Join(absoluteDir, hex.EncodeToString(digest[:]))
-	return &HighWaterFileStore{
+	store := &HighWaterFileStore{
 		dir:                   absoluteDir,
 		directoryGuard:        directoryGuard,
 		sequencePath:          prefix + ".sequence.json",
@@ -196,7 +265,11 @@ func NewHighWaterFileStore(dir, id string, options ...HighWaterFileStoreOption) 
 		replayHighWaterMargin: replayHighWaterMargin,
 		sequenceLock:          prefix + ".sequence.lock",
 		replayLock:            prefix + ".replay.lock",
-	}, nil
+	}
+	if rooted, ok := directoryGuard.(interface{ fileRoot() *os.Root }); ok {
+		store.root = rooted.fileRoot()
+	}
+	return store, nil
 }
 
 func prepareStoreDirectory(dir string, allowedSymlinks []string) (string, storeDirectoryGuard, error) {
@@ -207,7 +280,7 @@ func prepareStoreDirectory(dir string, allowedSymlinks []string) (string, storeD
 	if err = validateStoreDirectoryPath(absoluteDir, allowedSymlinks); err != nil {
 		return "", nil, fmt.Errorf("validate OSCORE file store directory path: %w", err)
 	}
-	_, existingParent, err := findMissingStoreDirectories(absoluteDir)
+	missing, existingParent, err := findMissingStoreDirectories(absoluteDir)
 	if err != nil {
 		return "", nil, fmt.Errorf("locate OSCORE store directory parent: %w", err)
 	}
@@ -215,9 +288,16 @@ func prepareStoreDirectory(dir string, allowedSymlinks []string) (string, storeD
 	if err != nil {
 		return "", nil, fmt.Errorf("secure OSCORE store directory parent: %w", err)
 	}
-	if err = creationGuard.withOperation(func() error {
+	err = creationGuard.withOperation(func() error {
+		if rooted, ok := creationGuard.(interface{ fileRoot() *os.Root }); ok {
+			return createStoreDirectoryAt(rooted.fileRoot(), existingParent, missing)
+		}
 		return createStoreDirectory(absoluteDir, syncDirectory)
-	}); err != nil {
+	})
+	if closeErr := closeStoreDirectoryGuard(creationGuard); err == nil && closeErr != nil {
+		err = closeErr
+	}
+	if err != nil {
 		return "", nil, fmt.Errorf("create OSCORE file store directory: %w", err)
 	}
 	if err = validateStoreDirectoryPath(absoluteDir, allowedSymlinks); err != nil {
@@ -233,11 +313,91 @@ func prepareStoreDirectory(dir string, allowedSymlinks []string) (string, storeD
 	return absoluteDir, directoryGuard, nil
 }
 
+func createStoreDirectoryAt(root *os.Root, existing string, missing []string) error {
+	if len(missing) > 0 && !supportsDirectorySync {
+		return errors.New("directory metadata sync is unavailable; pre-create the store directory")
+	}
+	for i := len(missing) - 1; i >= 0; i-- {
+		relative, err := filepath.Rel(existing, missing[i])
+		if err != nil || !isStorePathRelative(relative) {
+			return fmt.Errorf("resolve rooted OSCORE store directory %q", missing[i])
+		}
+		if err := createStoreDirectoryEntryAt(root, relative); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func isStorePathRelative(relative string) bool {
+	return relative != "." && !filepath.IsAbs(relative) && relative != ".." &&
+		!strings.HasPrefix(relative, ".."+string(filepath.Separator))
+}
+
+func createStoreDirectoryEntryAt(root *os.Root, relative string) error {
+	if err := root.Mkdir(relative, 0o700); err != nil && !errors.Is(err, os.ErrExist) {
+		return fmt.Errorf("create rooted OSCORE store directory %q: %w", relative, err)
+	}
+	info, err := root.Lstat(relative)
+	if err != nil {
+		return fmt.Errorf("stat rooted OSCORE store directory %q: %w", relative, err)
+	}
+	if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("rooted OSCORE store path %q is not a directory", relative)
+	}
+	parent := filepath.Dir(relative)
+	directory, err := root.Open(parent)
+	if err != nil {
+		return fmt.Errorf("open rooted OSCORE store parent %q for sync: %w", parent, err)
+	}
+	syncErr := directory.Sync()
+	closeErr := directory.Close()
+	if syncErr != nil {
+		return fmt.Errorf("sync rooted OSCORE store parent %q: %w", parent, syncErr)
+	}
+	if closeErr != nil {
+		return fmt.Errorf("close rooted OSCORE store parent %q: %w", parent, closeErr)
+	}
+	return nil
+}
+
+func closeStoreDirectoryGuard(guard storeDirectoryGuard) error {
+	if closer, ok := guard.(interface{ Close() error }); ok {
+		return closer.Close()
+	}
+	return nil
+}
+
 func (s *HighWaterFileStore) withDirectoryGuard(action func() error) error {
+	s.rootMu.RLock()
+	defer s.rootMu.RUnlock()
 	if s.directoryGuard == nil {
 		return errors.New("OSCORE store directory guard is unavailable")
 	}
 	return s.directoryGuard.withOperation(action)
+}
+
+// Close releases the rooted directory handle used to confine Unix store
+// operations. The store must not be used after Close.
+func (s *HighWaterFileStore) Close() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.rootMu.Lock()
+	defer s.rootMu.Unlock()
+	if s.directoryGuard == nil {
+		return nil
+	}
+	err := closeStoreDirectoryGuard(s.directoryGuard)
+	s.root = nil
+	s.directoryGuard = nil
+	return err
+}
+
+func (s *HighWaterFileStore) rootPath(path string) string {
+	if s.root == nil {
+		return path
+	}
+	return filepath.Base(path)
 }
 
 func createStoreDirectory(path string, syncDir func(string) error) error {
@@ -319,12 +479,12 @@ func (s *HighWaterFileStore) LoadHighWater() (uint64, bool, error) {
 	var highWater uint64
 	var exists bool
 	err := s.withDirectoryGuard(func() error {
-		return withFileLock(s.replayLock, func() error {
+		return withFileLockAt(s.root, s.rootPath(s.replayLock), func() error {
 			if err := s.recoverReplayHighWater(); err != nil {
 				return err
 			}
 			var err error
-			highWater, exists, err = readReplayHighWaterPair(s.replayHighWaterPath, s.replayGuardPath)
+			highWater, exists, err = s.readReplayHighWaterPair(s.replayHighWaterPath, s.replayGuardPath)
 			return err
 		})
 	})
@@ -353,11 +513,11 @@ func (s *HighWaterFileStore) SaveHighWater(highWater uint64) error {
 }
 
 func (s *HighWaterFileStore) saveReplayHighWater(highWater uint64) error {
-	return withFileLock(s.replayLock, func() error {
+	return withFileLockAt(s.root, s.rootPath(s.replayLock), func() error {
 		if err := s.recoverReplayHighWater(); err != nil {
 			return err
 		}
-		current, exists, err := readReplayHighWaterPair(s.replayHighWaterPath, s.replayGuardPath)
+		current, exists, err := s.readReplayHighWaterPair(s.replayHighWaterPath, s.replayGuardPath)
 		if err != nil {
 			return err
 		}
@@ -402,14 +562,14 @@ func (s *HighWaterFileStore) persistReplayHighWater(current uint64, exists bool,
 // previously accepted requests to be replayed.
 func (s *HighWaterFileStore) ResetReplayState() error {
 	err := s.withDirectoryGuard(func() error {
-		return withFileLock(s.replayLock, func() error {
+		return withFileLockAt(s.root, s.rootPath(s.replayLock), func() error {
 			for _, path := range []string{s.replayHighWaterPath, s.replayGuardPath, s.replayPendingPath} {
 				if s.replayOps.beforeRemove != nil {
 					if err := s.replayOps.beforeRemove(path); err != nil {
 						return err
 					}
 				}
-				if err := os.Remove(path); err != nil {
+				if err := removeStoreFile(s.root, s.rootPath(path)); err != nil {
 					if !errors.Is(err, os.ErrNotExist) {
 						return err
 					}
@@ -450,7 +610,7 @@ func (s *HighWaterFileStore) Bind(fingerprint [sha256.Size]byte) error {
 	}
 
 	err := s.withDirectoryGuard(func() error {
-		return withFileLock(s.sequenceLock, func() error { return s.bindSequenceState(binding) })
+		return withFileLockAt(s.root, s.rootPath(s.sequenceLock), func() error { return s.bindSequenceState(binding) })
 	})
 	if err != nil {
 		return fmt.Errorf("bind sender sequence state: %w", err)
@@ -462,11 +622,11 @@ func (s *HighWaterFileStore) bindSequenceState(binding string) error {
 	if err := s.recoverSequenceReservation(); err != nil {
 		return err
 	}
-	state, stateExists, err := readSequenceWithExistence(s.sequencePath)
+	state, stateExists, err := s.readSequenceWithExistence(s.sequencePath)
 	if err != nil {
 		return err
 	}
-	guard, guardExists, err := readSequenceWithExistence(s.sequenceGuardPath)
+	guard, guardExists, err := s.readSequenceWithExistence(s.sequenceGuardPath)
 	if err != nil {
 		return err
 	}
@@ -520,24 +680,38 @@ func (s *HighWaterFileStore) persistInitialSequenceBinding(binding string) error
 func (s *HighWaterFileStore) Reserve() (uint64, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.directoryGuard == nil {
+		return 0, errors.New("OSCORE store directory guard is unavailable")
+	}
 	if s.next < s.limit {
 		reserved := s.next
 		s.next++
 		return reserved, nil
 	}
 
+	reserved, limit, err := s.reserveSequenceWindow()
+	if err != nil {
+		return 0, fmt.Errorf("reserve OSCORE sender sequence: %w", err)
+	}
+	s.next = reserved + 1
+	s.limit = limit
+	s.sequenceInitialized = true
+	return reserved, nil
+}
+
+func (s *HighWaterFileStore) reserveSequenceWindow() (uint64, uint64, error) {
 	var reserved, limit uint64
 	err := s.withDirectoryGuard(func() error {
-		return withFileLock(s.sequenceLock, func() error {
+		return withFileLockAt(s.root, s.rootPath(s.sequenceLock), func() error {
 			state, err := s.loadSequenceState()
 			if err != nil {
 				return err
 			}
-			_, stateExists, err := readSequenceWithExistence(s.sequencePath)
+			_, stateExists, err := s.readSequenceWithExistence(s.sequencePath)
 			if err != nil {
 				return err
 			}
-			_, guardExists, err := readSequenceWithExistence(s.sequenceGuardPath)
+			_, guardExists, err := s.readSequenceWithExistence(s.sequenceGuardPath)
 			if err != nil {
 				return err
 			}
@@ -549,48 +723,45 @@ func (s *HighWaterFileStore) Reserve() (uint64, error) {
 			}
 			reserved = state.Next
 			remaining := maxPartialIV + 1 - reserved
-			windowSize := min(sequenceWindowSize, remaining)
-			limit = reserved + windowSize
-			next := sequenceFile{Version: fileVersion, Next: limit, Fingerprint: s.sequenceFingerprint}
-			pending := sequencePendingFile{
-				Version:        fileVersion,
-				Previous:       sequenceFile{Version: fileVersion, Next: reserved, Fingerprint: s.sequenceFingerprint},
-				PreviousExists: stateExists && guardExists,
-				Next:           next,
-			}
-			if err := s.writeSequenceState(s.sequencePendingPath, pending); err != nil {
-				return fmt.Errorf("persist sender sequence transaction: %w", err)
-			}
-			if err := s.writeSequenceState(s.sequenceGuardPath, next); err != nil {
-				return fmt.Errorf("persist sender sequence guard: %w", err)
-			}
-			if err := s.writeSequenceState(s.sequencePath, next); err != nil {
-				return fmt.Errorf("persist sender sequence state: %w", err)
-			}
-			if err := s.removeSequencePending(); err != nil {
-				return fmt.Errorf("complete sender sequence transaction: %w", err)
-			}
-			return nil
+			limit = reserved + min(sequenceWindowSize, remaining)
+			return s.persistSequenceReservation(reserved, limit, stateExists && guardExists)
 		})
 	})
-	if err != nil {
-		return 0, fmt.Errorf("reserve OSCORE sender sequence: %w", err)
+	return reserved, limit, err
+}
+
+func (s *HighWaterFileStore) persistSequenceReservation(reserved, limit uint64, previousExists bool) error {
+	next := sequenceFile{Version: fileVersion, Next: limit, Fingerprint: s.sequenceFingerprint}
+	pending := sequencePendingFile{
+		Version:        fileVersion,
+		Previous:       sequenceFile{Version: fileVersion, Next: reserved, Fingerprint: s.sequenceFingerprint},
+		PreviousExists: previousExists,
+		Next:           next,
 	}
-	s.next = reserved + 1
-	s.limit = limit
-	s.sequenceInitialized = true
-	return reserved, nil
+	if err := s.writeSequenceState(s.sequencePendingPath, pending); err != nil {
+		return fmt.Errorf("persist sender sequence transaction: %w", err)
+	}
+	if err := s.writeSequenceState(s.sequenceGuardPath, next); err != nil {
+		return fmt.Errorf("persist sender sequence guard: %w", err)
+	}
+	if err := s.writeSequenceState(s.sequencePath, next); err != nil {
+		return fmt.Errorf("persist sender sequence state: %w", err)
+	}
+	if err := s.removeSequencePending(); err != nil {
+		return fmt.Errorf("complete sender sequence transaction: %w", err)
+	}
+	return nil
 }
 
 func (s *HighWaterFileStore) loadSequenceState() (sequenceFile, error) {
 	if err := s.recoverSequenceReservation(); err != nil {
 		return sequenceFile{}, err
 	}
-	state, stateExists, err := readSequenceWithExistence(s.sequencePath)
+	state, stateExists, err := s.readSequenceWithExistence(s.sequencePath)
 	if err != nil {
 		return sequenceFile{}, err
 	}
-	guard, guardExists, err := readSequenceWithExistence(s.sequenceGuardPath)
+	guard, guardExists, err := s.readSequenceWithExistence(s.sequenceGuardPath)
 	if err != nil {
 		return sequenceFile{}, err
 	}
@@ -614,7 +785,7 @@ func (s *HighWaterFileStore) loadSequenceState() (sequenceFile, error) {
 }
 
 func (s *HighWaterFileStore) recoverSequenceReservation() error {
-	pending, pendingExists, err := readSequencePending(s.sequencePendingPath)
+	pending, pendingExists, err := s.readSequencePending(s.sequencePendingPath)
 	if err != nil {
 		return err
 	}
@@ -624,11 +795,11 @@ func (s *HighWaterFileStore) recoverSequenceReservation() error {
 	if err = validateSequencePending(pending); err != nil {
 		return err
 	}
-	state, stateExists, err := readSequenceWithExistence(s.sequencePath)
+	state, stateExists, err := s.readSequenceWithExistence(s.sequencePath)
 	if err != nil {
 		return err
 	}
-	guard, guardExists, err := readSequenceWithExistence(s.sequenceGuardPath)
+	guard, guardExists, err := s.readSequenceWithExistence(s.sequenceGuardPath)
 	if err != nil {
 		return err
 	}
@@ -642,7 +813,7 @@ func (s *HighWaterFileStore) recoverSequenceReservation() error {
 }
 
 func (s *HighWaterFileStore) recoverReplayHighWater() error {
-	pending, pendingExists, err := readReplayHighWaterPending(s.replayPendingPath)
+	pending, pendingExists, err := s.readReplayHighWaterPending(s.replayPendingPath)
 	if err != nil {
 		return err
 	}
@@ -652,11 +823,11 @@ func (s *HighWaterFileStore) recoverReplayHighWater() error {
 	if err = validateReplayHighWaterPending(pending); err != nil {
 		return err
 	}
-	mark, markExists, err := readReplayHighWater(s.replayHighWaterPath)
+	mark, markExists, err := s.readReplayHighWater(s.replayHighWaterPath)
 	if err != nil {
 		return err
 	}
-	guard, guardExists, err := readReplayHighWater(s.replayGuardPath)
+	guard, guardExists, err := s.readReplayHighWater(s.replayGuardPath)
 	if err != nil {
 		return err
 	}
@@ -719,7 +890,7 @@ func (s *HighWaterFileStore) removeReplayPending() error {
 			return err
 		}
 	}
-	if err := os.Remove(s.replayPendingPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+	if err := removeStoreFile(s.root, s.rootPath(s.replayPendingPath)); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
 	return s.syncReplayDirectory(s.replayPendingPath)
@@ -837,20 +1008,20 @@ func (s *HighWaterFileStore) removeSequencePending() error {
 		}
 	}
 	// #nosec G703 -- this path is derived from the configured store root and a fixed suffix.
-	if err := os.Remove(filepath.Clean(s.sequencePendingPath)); err != nil && !errors.Is(err, os.ErrNotExist) {
+	if err := removeStoreFile(s.root, s.rootPath(filepath.Clean(s.sequencePendingPath))); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
 	if s.sequenceOps.syncDirectory != nil {
 		return s.sequenceOps.syncDirectory(s.sequencePendingPath, s.dir)
 	}
-	return syncDirectory(s.dir)
+	return syncStoreDirectory(s.root, s.dir)
 }
 
 func (s *HighWaterFileStore) syncSequenceDirectory(path string) error {
 	if s.sequenceOps.syncDirectory != nil {
 		return s.sequenceOps.syncDirectory(path, s.dir)
 	}
-	return syncDirectory(s.dir)
+	return syncStoreDirectory(s.root, s.dir)
 }
 
 func (s *HighWaterFileStore) writeSequenceState(path string, value any) error {
@@ -859,11 +1030,11 @@ func (s *HighWaterFileStore) writeSequenceState(path string, value any) error {
 			return err
 		}
 	}
-	return writeStateFileWithSync(s.dir, path, value, func() error {
+	return writeStateFileWithHooksAt(s.root, s.dir, s.rootPath(path), value, nil, func() error {
 		if s.sequenceOps.syncDirectory != nil {
 			return s.sequenceOps.syncDirectory(path, s.dir)
 		}
-		return syncDirectory(s.dir)
+		return syncStoreDirectory(s.root, s.dir)
 	})
 }
 
@@ -873,7 +1044,7 @@ func (s *HighWaterFileStore) writeReplayStateFile(path string, value any) error 
 			return err
 		}
 	}
-	return writeStateFileWithHooks(s.dir, path, value, func(file *os.File) error {
+	return writeStateFileWithHooksAt(s.root, s.dir, s.rootPath(path), value, func(file *os.File) error {
 		if s.replayOps.syncFile != nil {
 			return s.replayOps.syncFile(path, file)
 		}
@@ -887,7 +1058,7 @@ func (s *HighWaterFileStore) syncReplayDirectory(path string) error {
 	if s.replayOps.syncDirectory != nil {
 		return s.replayOps.syncDirectory(path, s.dir)
 	}
-	return syncDirectory(s.dir)
+	return syncStoreDirectory(s.root, s.dir)
 }
 
 func validateSequence(state sequenceFile) error {
@@ -905,7 +1076,15 @@ func validateSequence(state sequenceFile) error {
 }
 
 func readSequenceWithExistence(path string) (sequenceFile, bool, error) {
-	data, err := readStateFile(path)
+	return readSequenceWithExistenceAt(nil, path)
+}
+
+func (s *HighWaterFileStore) readSequenceWithExistence(path string) (sequenceFile, bool, error) {
+	return readSequenceWithExistenceAt(s.root, s.rootPath(path))
+}
+
+func readSequenceWithExistenceAt(root *os.Root, path string) (sequenceFile, bool, error) {
+	data, err := readStateFileAt(root, path)
 	if err != nil {
 		return sequenceFile{}, false, err
 	}
@@ -923,7 +1102,15 @@ func readSequenceWithExistence(path string) (sequenceFile, bool, error) {
 }
 
 func readSequencePending(path string) (sequencePendingFile, bool, error) {
-	data, err := readStateFile(path)
+	return readSequencePendingAt(nil, path)
+}
+
+func (s *HighWaterFileStore) readSequencePending(path string) (sequencePendingFile, bool, error) {
+	return readSequencePendingAt(s.root, s.rootPath(path))
+}
+
+func readSequencePendingAt(root *os.Root, path string) (sequencePendingFile, bool, error) {
+	data, err := readStateFileAt(root, path)
 	if err != nil {
 		return sequencePendingFile{}, false, err
 	}
@@ -938,7 +1125,15 @@ func readSequencePending(path string) (sequencePendingFile, bool, error) {
 }
 
 func readReplayHighWater(path string) (uint64, bool, error) {
-	data, err := readStateFile(path)
+	return readReplayHighWaterAt(nil, path)
+}
+
+func (s *HighWaterFileStore) readReplayHighWater(path string) (uint64, bool, error) {
+	return readReplayHighWaterAt(s.root, s.rootPath(path))
+}
+
+func readReplayHighWaterAt(root *os.Root, path string) (uint64, bool, error) {
+	data, err := readStateFileAt(root, path)
 	if err != nil {
 		return 0, false, err
 	}
@@ -956,7 +1151,15 @@ func readReplayHighWater(path string) (uint64, bool, error) {
 }
 
 func readReplayHighWaterPending(path string) (replayHighWaterPendingFile, bool, error) {
-	data, err := readStateFile(path)
+	return readReplayHighWaterPendingAt(nil, path)
+}
+
+func (s *HighWaterFileStore) readReplayHighWaterPending(path string) (replayHighWaterPendingFile, bool, error) {
+	return readReplayHighWaterPendingAt(s.root, s.rootPath(path))
+}
+
+func readReplayHighWaterPendingAt(root *os.Root, path string) (replayHighWaterPendingFile, bool, error) {
+	data, err := readStateFileAt(root, path)
 	if err != nil {
 		return replayHighWaterPendingFile{}, false, err
 	}
@@ -970,12 +1173,16 @@ func readReplayHighWaterPending(path string) (replayHighWaterPendingFile, bool, 
 	return pending, true, nil
 }
 
-func readReplayHighWaterPair(markPath, guardPath string) (uint64, bool, error) {
-	mark, markExists, err := readReplayHighWater(markPath)
+func (s *HighWaterFileStore) readReplayHighWaterPair(markPath, guardPath string) (uint64, bool, error) {
+	return readReplayHighWaterPairAt(s.root, s.rootPath(markPath), s.rootPath(guardPath))
+}
+
+func readReplayHighWaterPairAt(root *os.Root, markPath, guardPath string) (uint64, bool, error) {
+	mark, markExists, err := readReplayHighWaterAt(root, markPath)
 	if err != nil {
 		return 0, false, err
 	}
-	guard, guardExists, err := readReplayHighWater(guardPath)
+	guard, guardExists, err := readReplayHighWaterAt(root, guardPath)
 	if err != nil {
 		return 0, false, err
 	}
@@ -991,9 +1198,9 @@ func readReplayHighWaterPair(markPath, guardPath string) (uint64, bool, error) {
 	return mark, true, nil
 }
 
-func readStateFile(path string) ([]byte, error) {
+func readStateFileAt(root *os.Root, path string) ([]byte, error) {
 	// #nosec G703 -- callers pass only state paths derived from a configured store root.
-	file, err := openFileNoFollow(filepath.Clean(path), os.O_RDONLY, 0)
+	file, err := openStoreFile(root, filepath.Clean(path), os.O_RDONLY, 0)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, nil
 	}
@@ -1012,26 +1219,27 @@ func readStateFile(path string) ([]byte, error) {
 }
 
 func writeStateFile(dir, path string, value any) error {
-	return writeStateFileWithSync(dir, path, value, func() error {
+	return writeStateFileWithHooksAt(nil, dir, path, value, nil, func() error {
 		return syncDirectory(dir)
 	})
 }
 
-func writeStateFileWithSync(dir, path string, value any, syncDir func() error) error {
-	return writeStateFileWithHooks(dir, path, value, nil, syncDir)
-}
-
-func writeStateFileWithHooks(dir, path string, value any, syncFile func(*os.File) error, syncDir func() error) error {
+func writeStateFileWithHooksAt(
+	root *os.Root,
+	dir, path string,
+	value any,
+	syncFile func(*os.File) error,
+	syncDir func() error,
+) error {
 	data, err := json.Marshal(value)
 	if err != nil {
 		return fmt.Errorf("encode OSCORE state: %w", err)
 	}
-	temporary, err := os.CreateTemp(dir, ".oscore-state-*")
+	temporary, temporaryPath, err := createStoreTemp(root, dir)
 	if err != nil {
 		return err
 	}
-	temporaryPath := temporary.Name()
-	defer os.Remove(temporaryPath)
+	defer func() { _ = removeStoreFile(root, temporaryPath) }()
 	if err := temporary.Chmod(0o600); err != nil {
 		_ = temporary.Close()
 		return err
@@ -1051,7 +1259,7 @@ func writeStateFileWithHooks(dir, path string, value any, syncFile func(*os.File
 		return err
 	}
 	// #nosec G703 -- temporary and target paths are inside the configured store root.
-	if err := replaceFileAtomically(temporaryPath, path); err != nil {
+	if err := replaceStoreFile(root, temporaryPath, path); err != nil {
 		return err
 	}
 	if err := syncDir(); err != nil {

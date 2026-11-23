@@ -2,6 +2,7 @@ package client
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -68,6 +69,23 @@ func TestQBlockExchangeCancellationReleasesRoutes(t *testing.T) {
 			require.Equal(t, before, qBlockRetainedTokens.Load())
 		})
 	}
+}
+
+func TestQBlockRouteFailureReleasesTokensAndReturnsError(t *testing.T) {
+	before := qBlockRetainedTokens.Load()
+	cc := newQRouteContextConn(t)
+	token := message.Token("tracking-limit")
+	exchange, err := cc.OpenQBlockExchange(context.Background(), token)
+	require.NoError(t, err)
+	wantErr := errors.New("replay tracking limit")
+
+	cc.failQBlockRoute(token, wantErr)
+	_, err = exchange.Receive(context.Background())
+	require.ErrorIs(t, err, wantErr)
+	require.Empty(t, cc.qRoutes)
+	require.Zero(t, cc.qActiveRoutes)
+	require.Equal(t, before, qBlockRetainedTokens.Load())
+	exchange.Close()
 }
 
 func TestQBlockExchangeResponseUsesReceiveContext(t *testing.T) {

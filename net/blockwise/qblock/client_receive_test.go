@@ -43,7 +43,7 @@ func TestBuildRequestPartUsesLargestFittingOptionPrefix(t *testing.T) {
 	receiver := q2BodyReceiver[*budgetedQBlockClient]{
 		b: engine, req: request, szx: SZX16,
 	}
-	part, added, err := receiver.buildRequestPart([]int64{0, 1, 2}, false)
+	part, added, err := receiver.buildRequestPart([]int64{0, 1, 2}, false, false)
 	require.NoError(t, err)
 	defer client.ReleaseMessage(part)
 
@@ -56,6 +56,47 @@ func TestBuildRequestPartUsesLargestFittingOptionPrefix(t *testing.T) {
 	}
 	require.Equal(t, 2, count)
 	require.Equal(t, 1, client.validations, "validate only the selected final request")
+}
+
+func TestQBlock2RecoveryRequestUsesAliasAndOmitsObserve(t *testing.T) {
+	client := newTestClient()
+	engine := New(client, nil)
+	request := client.AcquireMessage(context.Background())
+	defer client.ReleaseMessage(request)
+	request.SetCode(codes.GET)
+	request.SetToken(message.Token("observe"))
+	request.SetObserve(0)
+	require.NoError(t, request.SetRequestTag([]byte("tag")))
+	exchange := &qObserveExchange{}
+	receiver := q2BodyReceiver[*testClient]{
+		b: engine, req: request, exchange: exchange, szx: SZX16, maxSZX: SZX16,
+	}
+
+	part, _, err := receiver.buildRequestPart([]int64{0}, false, true)
+	require.NoError(t, err)
+	defer client.ReleaseMessage(part)
+	require.False(t, part.HasOption(message.Observe))
+	require.Equal(t, message.Token("recovery"), part.Token())
+}
+
+func TestQBlock2RegistrationRequestPreservesObserveAndToken(t *testing.T) {
+	client := newTestClient()
+	engine := New(client, nil)
+	request := client.AcquireMessage(context.Background())
+	defer client.ReleaseMessage(request)
+	request.SetCode(codes.GET)
+	request.SetToken(message.Token("observe"))
+	request.SetObserve(0)
+	require.NoError(t, request.SetRequestTag([]byte("tag")))
+	receiver := q2BodyReceiver[*testClient]{
+		b: engine, req: request, exchange: &qObserveExchange{}, szx: SZX16, maxSZX: SZX16,
+	}
+
+	part, _, err := receiver.buildRequestPart([]int64{0}, true, false)
+	require.NoError(t, err)
+	defer client.ReleaseMessage(part)
+	require.True(t, part.HasOption(message.Observe))
+	require.Equal(t, message.Token("observe"), part.Token())
 }
 
 func TestQBlockOptionSizeIncrementIncludesFollowingOptions(t *testing.T) {

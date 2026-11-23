@@ -71,9 +71,9 @@ type qBlock2RepresentationCompleter interface {
 	CompleteQBlock2Representation(message.Token, uint64) error
 }
 
-func (s *q2BodyReceiver[C]) send(nums []int64, more bool) error {
+func (s *q2BodyReceiver[C]) send(nums []int64, more, recovery bool) error {
 	for offset := 0; offset < len(nums); {
-		part, added, err := s.buildRequestPart(nums[offset:], more)
+		part, added, err := s.buildRequestPart(nums[offset:], more, recovery)
 		if err != nil {
 			return err
 		}
@@ -88,8 +88,8 @@ func (s *q2BodyReceiver[C]) send(nums []int64, more bool) error {
 	return nil
 }
 
-func (s *q2BodyReceiver[C]) buildRequestPart(nums []int64, more bool) (*pool.Message, int, error) {
-	part, err := s.newRequest()
+func (s *q2BodyReceiver[C]) buildRequestPart(nums []int64, more, recovery bool) (*pool.Message, int, error) {
+	part, err := s.newRequest(recovery)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -269,14 +269,14 @@ func encodedOptionSize(option message.Option, previousID message.OptionID) (int,
 	return size, nil
 }
 
-func (s *q2BodyReceiver[C]) newRequest() (*pool.Message, error) {
+func (s *q2BodyReceiver[C]) newRequest(recovery bool) (*pool.Message, error) {
 	part := s.b.cloneMessage(s.req)
 	part.SetMessageID(0)
 	part.Remove(message.ETag)
 	part.Remove(message.QBlock1)
 	part.Remove(message.QBlock2)
 	part.SetBody(nil)
-	if s.sentRequests > 0 {
+	if recovery || s.sentRequests > 0 {
 		token, err := s.exchange.NewToken()
 		if err != nil {
 			s.b.cc.ReleaseMessage(part)
@@ -324,6 +324,9 @@ func (s *q2BodyReceiver[C]) recover(receiveErr error) error {
 	if errors.Is(receiveErr, context.Canceled) {
 		return receiveErr
 	}
+	if !errors.Is(receiveErr, context.DeadlineExceeded) {
+		return receiveErr
+	}
 	if !s.partialExpires.IsZero() && !s.partialExpires.After(time.Now()) {
 		return ErrQBlockIncomplete
 	}
@@ -332,14 +335,14 @@ func (s *q2BodyReceiver[C]) recover(receiveErr error) error {
 	}
 	s.retries++
 	if s.assembly == nil {
-		return s.send([]int64{0}, true)
+		return s.send([]int64{0}, true, true)
 	}
 	nums := qMissingSet(s.assembly.missingSet(s.b.config.MaxPayloads), s.b.config.MaxPayloads)
 	if len(nums) == 0 {
 		return ErrQBlockIncomplete
 	}
 	s.requestedSet = nums[0] / s.b.config.MaxPayloads
-	return s.send(nums, false)
+	return s.send(nums, false, true)
 }
 
 func (s *q2BodyReceiver[C]) newRepresentation(response *pool.Message, szx SZX, size uint32, etag []byte) error {
@@ -464,11 +467,11 @@ func (s *q2BodyReceiver[C]) advance(num int64) error {
 	// Otherwise CON senders advance on ACKs, while NON can accelerate its set.
 	if (s.req.Type() == message.NonConfirmable || resume) && next%s.b.config.MaxPayloads == 0 && next > s.continued {
 		s.continued = next
-		return s.send([]int64{next}, true)
+		return s.send([]int64{next}, true, true)
 	}
 	if num/s.b.config.MaxPayloads > next/s.b.config.MaxPayloads && s.requestedSet != next/s.b.config.MaxPayloads {
 		s.requestedSet = next / s.b.config.MaxPayloads
-		return s.send(qMissingSet(s.assembly.missingSet(s.b.config.MaxPayloads), s.b.config.MaxPayloads), false)
+		return s.send(qMissingSet(s.assembly.missingSet(s.b.config.MaxPayloads), s.b.config.MaxPayloads), false, true)
 	}
 	return nil
 }
@@ -562,7 +565,7 @@ func (b *Engine[C]) ReceiveQBlock2(req *pool.Message, szx SZX, exchange Exchange
 	}()
 	if initial != nil {
 		s.sentRequests = 1
-	} else if err := s.send([]int64{0}, true); err != nil {
+	} else if err := s.send([]int64{0}, true, false); err != nil {
 		return nil, err
 	}
 	for {

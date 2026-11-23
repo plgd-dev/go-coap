@@ -107,6 +107,27 @@ func TestQBlockAuthenticatedNotificationOrdering(t *testing.T) {
 		"plaintext notifications retain 24-bit Observe ordering")
 }
 
+func TestQBlockObserveRejectsUndersizedOSCOREReplayWindow(t *testing.T) {
+	securityContext, err := oscore.NewContext(oscore.ContextConfig{
+		UnsafeVolatileSenderSequence: true,
+		AcceptReplayStateLoss:        true,
+		MasterSecret:                 []byte("undersized Q-Block Observe replay window"),
+		SenderID:                     []byte("client"),
+		RecipientID:                  []byte("server"),
+		QBlock2ObserveWindowSize:     64,
+	})
+	require.NoError(t, err)
+	processor, err := oscore.NewProcessor(oscore.ProcessorConfig{Contexts: []*oscore.Context{securityContext}})
+	require.NoError(t, err)
+	cc := newQRouteContextConn(t)
+	cc.oscoreProcessor = processor
+	cc.blockwiseSZX = blockwise.SZX1024
+	cc.qDatagramLimit = 65535
+	cc.qParameters = qblock.DefaultConfig()
+	request := qControlMessage()
+	require.ErrorIs(t, cc.prepareQObservation(request), oscore.ErrInvalidContext)
+}
+
 func TestQBlockDatagramBudgetIncludesOptionsAndToken(t *testing.T) {
 	msg := qControlMessage()
 	require.NoError(t, msg.SetPath("/long/option/path"))

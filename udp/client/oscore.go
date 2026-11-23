@@ -3,6 +3,7 @@ package client
 import (
 	"context"
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"time"
 
@@ -133,6 +134,9 @@ func (cc *Conn) protectRequestMessage(req *pool.Message) (*pool.Message, func(bo
 	}
 	protected, context, exchange, err := cc.oscoreProcessor.ProtectRequestWithContext(original)
 	if err != nil {
+		return nil, nil, err
+	}
+	if err = cc.validateQBlockObserveContext(req, context); err != nil {
 		return nil, nil, err
 	}
 	cleanupExchange, err := cc.trackOSCOREExchange(req, context, exchange)
@@ -349,6 +353,9 @@ func (cc *Conn) unprotectIncomingResponse(resp *pool.Message) error {
 	}
 	plaintext, usedCancelExchange, err := cc.unprotectResponseWithExchange(outer, exchange)
 	if err != nil {
+		if errors.Is(err, oscore.ErrReplayTrackingLimit) {
+			cc.failQBlockRoute(resp.Token(), err)
+		}
 		return err
 	}
 	responseOption, err := oscore.UnmarshalOption(findOSCOREOption(resp.Options()))

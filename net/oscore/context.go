@@ -75,8 +75,9 @@ type ContextConfig struct {
 	SenderSequenceStore  SenderSequenceReserver
 	ReplayWindowSize     uint8
 	ReplayWindowStore    ReplayWindowStore
-	// QBlock2ObserveWindowSize bounds the authenticated PIVs retained for
-	// out-of-order Q-Block2 Observe fragments.
+	// QBlock2ObserveWindowSize bounds authenticated PIVs retained for
+	// out-of-order Q-Block2 Observe fragments. Zero selects a window sized for
+	// the default Q-Block retry configuration and maximum tracked body.
 	QBlock2ObserveWindowSize uint64
 	// UnsafeVolatileSenderSequence explicitly accepts in-memory sender sequence
 	// state when SenderSequenceStore is not configured. Restarting with the
@@ -152,6 +153,20 @@ type Context struct {
 	replayRecoveryNow        func() time.Time
 }
 
+// ValidateQBlock2ObserveWindow verifies that this context can track every
+// fragment in the configured Q-Block2 body and retry budget.
+func (c *Context) ValidateQBlock2ObserveWindow(required uint64) error {
+	if c == nil || c.qBlock2ObserveWindowSize < required {
+		var configured uint64
+		if c != nil {
+			configured = c.qBlock2ObserveWindowSize
+		}
+		return fmt.Errorf("%w: Q-Block2 Observe replay window %d is smaller than required %d",
+			ErrInvalidContext, configured, required)
+	}
+	return nil
+}
+
 type replayRecoveryPeerState struct {
 	window time.Time
 	count  int
@@ -192,13 +207,19 @@ func (c *Context) allowPeerReplayRecoveryChallenge(peer string, now time.Time) e
 	}
 	state := c.replayRecoveryPeers[peer]
 	if state == nil {
+		var oldestKey string
+		var oldestWindow time.Time
 		for key, existing := range c.replayRecoveryPeers {
 			if now.Sub(existing.window) >= replayRecoveryChallengeWindow {
 				delete(c.replayRecoveryPeers, key)
+				continue
+			}
+			if oldestKey == "" || existing.window.Before(oldestWindow) {
+				oldestKey, oldestWindow = key, existing.window
 			}
 		}
 		if len(c.replayRecoveryPeers) >= replayRecoveryPeerLimit {
-			return ErrReplayRecoveryRateLimited
+			delete(c.replayRecoveryPeers, oldestKey)
 		}
 		state = &replayRecoveryPeerState{}
 		c.replayRecoveryPeers[peer] = state
@@ -350,7 +371,7 @@ func validateContextConfig(cfg ContextConfig) (ContextConfig, error) {
 
 func validateQBlock2ObserveWindowSize(cfg *ContextConfig) error {
 	if cfg.QBlock2ObserveWindowSize == 0 {
-		cfg.QBlock2ObserveWindowSize = 1024
+		cfg.QBlock2ObserveWindowSize = defaultQBlock2ObserveWindowSize
 	}
 	if cfg.QBlock2ObserveWindowSize > maxQBlock2ObserveWindowSize {
 		return fmt.Errorf("%w: Q-Block2 Observe replay window exceeds %d entries",

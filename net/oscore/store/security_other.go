@@ -40,6 +40,10 @@ func openFileNoFollow(path string, flags int, perm os.FileMode) (*os.File, error
 	return os.OpenFile(path, flags, perm)
 }
 
+func openFileAtRoot(root *os.Root, path string, flags int, perm os.FileMode) (*os.File, error) {
+	return root.OpenFile(path, flags, perm)
+}
+
 func replaceFileAtomically(source, destination string) error {
 	return os.Rename(source, destination)
 }

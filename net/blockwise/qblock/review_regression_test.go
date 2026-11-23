@@ -241,7 +241,7 @@ func TestQBlockReplacementRecoveryUsesNewBodyType(t *testing.T) {
 		replacement.SetType(modes[1])
 		_, err = receiver.accept(replacement)
 		require.NoError(t, err)
-		require.NoError(t, receiver.send([]int64{1}, false))
+		require.NoError(t, receiver.send([]int64{1}, false, true))
 		want := modes[1]
 		if want == message.Acknowledgement {
 			want = message.Confirmable

@@ -3,6 +3,7 @@ package udp_test
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"net"
 	"strings"
 	"sync"
@@ -12,6 +13,8 @@ import (
 
 	"github.com/plgd-dev/go-coap/v3/message"
 	"github.com/plgd-dev/go-coap/v3/message/codes"
+	"github.com/plgd-dev/go-coap/v3/mux"
+	coapNet "github.com/plgd-dev/go-coap/v3/net"
 	"github.com/plgd-dev/go-coap/v3/net/blockwise"
 	"github.com/plgd-dev/go-coap/v3/net/blockwise/qblock"
 	"github.com/plgd-dev/go-coap/v3/options"
@@ -19,6 +22,105 @@ import (
 	"github.com/plgd-dev/go-coap/v3/udp/coder"
 	"github.com/stretchr/testify/require"
 )
+
+func TestQBlockConfirmableConcurrentUploadsRespectNSTART(t *testing.T) {
+	for _, nstart := range []int{1, 3} {
+		t.Run(fmt.Sprintf("nstart-%d", nstart), func(t *testing.T) {
+			expected := make(map[byte][]byte)
+			for i := byte(1); i <= 3; i++ {
+				expected[i] = bytes.Repeat([]byte{i}, 513+int(i))
+			}
+			var mu sync.Mutex
+			calls := make(map[byte]int)
+			router := mux.NewRouter()
+			require.NoError(t, router.Handle("/upload", mux.HandlerFunc(func(w mux.ResponseWriter, r *mux.Message) {
+				body, err := r.ReadBody()
+				if err != nil {
+					t.Errorf("read concurrent Q-Block upload: %v", err)
+					return
+				}
+				if len(body) == 0 || !bytes.Equal(expected[body[0]], body) {
+					t.Errorf("concurrent Q-Block upload body was mixed or unknown: %d bytes", len(body))
+					return
+				}
+				mu.Lock()
+				calls[body[0]]++
+				mu.Unlock()
+				if err := w.SetResponse(codes.Changed, message.TextPlain, bytes.NewReader(nil)); err != nil {
+					t.Errorf("set concurrent Q-Block response: %v", err)
+				}
+			})))
+			listener, err := coapNet.NewListenUDP("udp4", "127.0.0.1:0")
+			require.NoError(t, err)
+			server := udp.NewServer(
+				options.WithMux(router),
+				options.WithBlockwise(true, blockwise.SZX128, 30*time.Second),
+				options.WithQBlockwise(options.QBlockwiseOnly),
+			)
+			served := make(chan error, 1)
+			go func() { served <- server.Serve(listener) }()
+			t.Cleanup(func() {
+				server.Stop()
+				require.NoError(t, listener.Close())
+				require.NoError(t, <-served)
+			})
+
+			cc, err := udp.Dial(listener.LocalAddr().String(),
+				options.WithBlockwise(true, blockwise.SZX128, 30*time.Second),
+				options.WithQBlockwise(options.QBlockwiseOnly),
+				options.WithTransmission(uint32(nstart), 20*time.Millisecond, 3, 1.0),
+			)
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, cc.Close()) })
+
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			type result struct {
+				err error
+			}
+			results := make(chan result, len(expected))
+			var wg sync.WaitGroup
+			for key, payload := range expected {
+				key, payload := key, payload
+				wg.Add(1)
+				go func() {
+					defer wg.Done()
+					request, requestErr := cc.NewPutRequest(ctx, "/upload", message.AppOctets, bytes.NewReader(payload))
+					if requestErr != nil {
+						results <- result{err: requestErr}
+						return
+					}
+					request.SetType(message.Confirmable)
+					if requestErr = request.SetRequestTag([]byte{key}); requestErr != nil {
+						cc.ReleaseMessage(request)
+						results <- result{err: requestErr}
+						return
+					}
+					response, doErr := cc.Do(request)
+					cc.ReleaseMessage(request)
+					if doErr == nil {
+						if response.Code() != codes.Changed {
+							doErr = fmt.Errorf("upload %d response code = %v", key, response.Code())
+						}
+						cc.ReleaseMessage(response)
+					}
+					results <- result{err: doErr}
+				}()
+			}
+			wg.Wait()
+			close(results)
+			for result := range results {
+				require.NoError(t, result.err)
+			}
+			mu.Lock()
+			defer mu.Unlock()
+			require.Len(t, calls, len(expected))
+			for key := range expected {
+				require.Equal(t, 1, calls[key], "each independent upload must be dispatched exactly once")
+			}
+		})
+	}
+}
 
 type qDropRelay struct {
 	mu                      sync.Mutex
@@ -44,6 +146,11 @@ type qDropRelay struct {
 	dropOSCOREObserve       int
 	duplicateOSCOREObserve  bool
 	duplicatedOSCOREObserve bool
+	delayedACK              chan struct{}
+	emptyACKDelay           time.Duration
+	delayStaleQ1            bool
+	staleQ1Packet           []byte
+	staleQ1Replayed         bool
 }
 
 type qRelayFault uint8
@@ -53,6 +160,7 @@ const (
 	qRelayDropEmptyACK
 	qRelayDropEmptyACKForever
 	qRelayDuplicateEmptyACK
+	qRelayDelayEmptyACK
 	qRelayDropFinalResponse
 	qRelayDuplicateFinalResponse
 )
@@ -129,40 +237,48 @@ func (r *qDropRelay) observeQ2Control(data []byte) {
 	r.mu.Unlock()
 }
 
-func (r *qDropRelay) applyResponseFault(data []byte) (drop, duplicate bool) {
+func (r *qDropRelay) applyResponseFault(data []byte) (drop, duplicate bool, delay time.Duration) {
 	msg := message.Message{Options: make(message.Options, 0, 32)}
 	if _, err := coder.DefaultCoder.Decode(data, &msg); err != nil {
-		return false, false
+		return false, false, 0
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.faulted {
-		return r.applyRepeatedResponseFaultLocked(msg)
+		return r.applyRepeatedResponseFaultLocked(msg), false, 0
 	}
-	if handled, drop, duplicate := r.applyEmptyACKFaultLocked(msg); handled {
-		return drop, duplicate
+	if handled, responseDrop, responseDuplicate, responseDelay := r.applyEmptyACKFaultLocked(msg); handled {
+		return responseDrop, responseDuplicate, responseDelay
 	}
-	return r.applyFinalResponseFaultLocked(msg)
+	drop, duplicate = r.applyFinalResponseFaultLocked(msg)
+	return drop, duplicate, 0
 }
 
-func (r *qDropRelay) applyRepeatedResponseFaultLocked(msg message.Message) (bool, bool) {
+func (r *qDropRelay) applyRepeatedResponseFaultLocked(msg message.Message) bool {
 	if r.fault == qRelayDropEmptyACKForever &&
 		msg.Code == codes.Empty && msg.Type == message.Acknowledgement {
-		return true, false
+		return true
 	}
-	return false, false
+	return false
 }
 
-func (r *qDropRelay) applyEmptyACKFaultLocked(msg message.Message) (bool, bool, bool) {
+func (r *qDropRelay) applyEmptyACKFaultLocked(msg message.Message) (bool, bool, bool, time.Duration) {
 	if r.fault != qRelayDropEmptyACK && r.fault != qRelayDuplicateEmptyACK &&
-		r.fault != qRelayDropEmptyACKForever {
-		return false, false, false
+		r.fault != qRelayDropEmptyACKForever && r.fault != qRelayDelayEmptyACK {
+		return false, false, false, 0
 	}
 	if msg.Code != codes.Empty || msg.Type != message.Acknowledgement {
-		return false, false, false
+		return false, false, false, 0
 	}
 	r.faulted = true
-	return true, r.fault != qRelayDuplicateEmptyACK, r.fault == qRelayDuplicateEmptyACK
+	if r.fault == qRelayDelayEmptyACK {
+		delay := r.emptyACKDelay
+		if delay == 0 {
+			delay = 100 * time.Millisecond
+		}
+		return true, false, true, delay
+	}
+	return true, r.fault != qRelayDuplicateEmptyACK, r.fault == qRelayDuplicateEmptyACK, 0
 }
 
 func (r *qDropRelay) applyFinalResponseFaultLocked(msg message.Message) (bool, bool) {
@@ -275,6 +391,7 @@ func newQDropRelay(t *testing.T, target string, option message.OptionID, block i
 	relay := &qDropRelay{
 		drops: drops, option: option, observed: make(map[int64]int),
 		q1Seen: make(map[int64]int), dropForever: make(map[int64]bool),
+		delayedACK: make(chan struct{}),
 	}
 	var wg sync.WaitGroup
 	wg.Go(func() {
@@ -304,11 +421,13 @@ func (r *qDropRelay) forwardRequests(t *testing.T, local, upstream *net.UDPConn)
 		r.mu.Unlock()
 		r.observeQ1Request(buf[:n])
 		r.observeQ2Control(buf[:n])
-		if !r.drop(buf[:n]) {
-			if _, err := upstream.Write(buf[:n]); err != nil {
-				qRelayError(t, "forward relay request", err)
-				return
-			}
+		r.retainStaleQ1Packet(buf[:n])
+		if r.drop(buf[:n]) {
+			continue
+		}
+		if _, err := upstream.Write(buf[:n]); err != nil {
+			qRelayError(t, "forward relay request", err)
+			return
 		}
 	}
 }
@@ -327,7 +446,21 @@ func (r *qDropRelay) forwardResponses(t *testing.T, local, upstream *net.UDPConn
 		if peer == nil || r.drop(buf[:n]) {
 			continue
 		}
-		drop, duplicate := r.applyResponseFault(buf[:n])
+		drop, duplicate, delay := r.applyResponseFault(buf[:n])
+		if delay > 0 {
+			response, delayedPeer := bytes.Clone(buf[:n]), peer
+			go func() {
+				time.Sleep(delay)
+				if _, err := local.WriteToUDP(response, delayedPeer); err != nil {
+					qRelayError(t, "forward delayed relay response", err)
+				}
+				close(r.delayedACK)
+			}()
+			if drop {
+				continue
+			}
+			duplicate = false
+		}
 		if drop {
 			continue
 		}
@@ -343,6 +476,12 @@ func (r *qDropRelay) forwardResponses(t *testing.T, local, upstream *net.UDPConn
 		if _, err := local.WriteToUDP(forward, peer); err != nil {
 			qRelayError(t, "forward relay response", err)
 			return
+		}
+		if stale := r.replayStaleQ1AfterCompletion(buf[:n]); stale != nil {
+			if _, err := upstream.Write(stale); err != nil {
+				qRelayError(t, "replay stale Q1 block", err)
+				return
+			}
 		}
 		if delayed != nil {
 			if _, err := local.WriteToUDP(delayed, peer); err != nil {
@@ -363,6 +502,42 @@ func (r *qDropRelay) forwardResponses(t *testing.T, local, upstream *net.UDPConn
 			}
 		}
 	}
+}
+
+func (r *qDropRelay) retainStaleQ1Packet(data []byte) {
+	msg := message.Message{Options: make(message.Options, 0, 32)}
+	if _, err := coder.DefaultCoder.Decode(data, &msg); err != nil ||
+		msg.Code >= codes.Created || len(msg.Payload) == 0 || !msg.Options.HasOption(message.QBlock1) {
+		return
+	}
+	r.mu.Lock()
+	if r.delayStaleQ1 && r.staleQ1Packet == nil {
+		r.staleQ1Packet = bytes.Clone(data)
+	}
+	r.mu.Unlock()
+}
+
+func (r *qDropRelay) replayStaleQ1AfterCompletion(data []byte) []byte {
+	msg := message.Message{Options: make(message.Options, 0, 32)}
+	if _, err := coder.DefaultCoder.Decode(data, &msg); err != nil ||
+		msg.Code < codes.Created || !msg.Options.HasOption(message.QBlock2) {
+		return nil
+	}
+	value, err := msg.Options.GetUint32(message.QBlock2)
+	if err != nil {
+		return nil
+	}
+	_, _, more, err := blockwise.DecodeQBlockOption(value)
+	if err != nil || more {
+		return nil
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if !r.delayStaleQ1 || r.staleQ1Replayed || r.staleQ1Packet == nil {
+		return nil
+	}
+	r.staleQ1Replayed = true
+	return bytes.Clone(r.staleQ1Packet)
 }
 
 func TestQBlockSelectiveRecovery(t *testing.T) {
@@ -561,6 +736,76 @@ func TestQBlockConfirmableACKAndFinalResponseFaults(t *testing.T) {
 			runQBlockConfirmableFaultCase(t, tt)
 		})
 	}
+}
+
+func TestQBlockConfirmableDelayedEmptyACK(t *testing.T) {
+	payload := bytes.Repeat([]byte{0x5a}, 47)
+	config := qblock.DefaultConfig()
+	config.MaxPayloads = 3
+	calls := new(atomic.Int32)
+	server := strings.TrimPrefix(startQGoServer(t, false, blockwise.SZX16, payload,
+		new(qWireCounts), calls, config), "coap://")
+	addr, relay := newQDropRelay(t, server, message.QBlock2, -1)
+	relay.mu.Lock()
+	relay.fault = qRelayDelayEmptyACK
+	relay.emptyACKDelay = 300 * time.Millisecond
+	relay.mu.Unlock()
+	cc, err := udp.Dial(addr,
+		options.WithBlockwise(true, blockwise.SZX16, 30*time.Second),
+		options.WithQBlockwise(options.QBlockwiseOnly),
+		options.WithQBlockwiseConfig(config),
+		options.WithTransmission(1, 20*time.Millisecond, 3, 1.0),
+	)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, cc.Close()) })
+
+	response := qDo(t, cc, codes.PUT, "/q", payload, message.Confirmable)
+	completedAt := time.Now()
+	require.Equal(t, codes.Changed, response.Code())
+	cc.ReleaseMessage(response)
+	select {
+	case <-relay.delayedACK:
+	case <-time.After(time.Second):
+		t.Fatal("delayed empty ACK was not forwarded")
+	}
+	require.GreaterOrEqual(t, time.Since(completedAt), 150*time.Millisecond,
+		"the injected empty ACK must arrive after the upload response")
+	require.EqualValues(t, 1, calls.Load(), "late ACK traffic must not redispatch the completed upload")
+	relay.mu.Lock()
+	defer relay.mu.Unlock()
+	require.True(t, relay.faulted)
+	require.Positive(t, relay.q1Seen[0], "the transfer must include a Q1 upload")
+}
+
+func TestQBlockConfirmableDelayedStaleBlockAfterCompletion(t *testing.T) {
+	payload := bytes.Repeat([]byte{0x5a}, 47)
+	config := qblock.DefaultConfig()
+	config.MaxPayloads = 3
+	calls := new(atomic.Int32)
+	server := strings.TrimPrefix(startQGoServer(t, false, blockwise.SZX16, payload,
+		new(qWireCounts), calls, config), "coap://")
+	addr, relay := newQDropRelay(t, server, message.QBlock2, -1)
+	relay.mu.Lock()
+	relay.delayStaleQ1 = true
+	relay.mu.Unlock()
+	cc, err := udp.Dial(addr,
+		options.WithBlockwise(true, blockwise.SZX16, 30*time.Second),
+		options.WithQBlockwise(options.QBlockwiseOnly),
+		options.WithQBlockwiseConfig(config),
+		options.WithTransmission(1, 50*time.Millisecond, 3, 1.0),
+	)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, cc.Close()) })
+
+	response := qDo(t, cc, codes.PUT, "/q", payload, message.Confirmable)
+	require.Equal(t, codes.Changed, response.Code())
+	require.Eventually(t, func() bool {
+		relay.mu.Lock()
+		defer relay.mu.Unlock()
+		return relay.staleQ1Replayed
+	}, time.Second, time.Millisecond)
+	time.Sleep(50 * time.Millisecond)
+	require.EqualValues(t, 1, calls.Load(), "a delayed stale Q1 packet must not redispatch a completed upload")
 }
 
 func runQBlockConfirmableFaultCase(t *testing.T, tt qBlockConfirmableFaultCase) {

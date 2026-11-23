@@ -290,6 +290,19 @@ func (p *Processor) AddContext(context *Context) error {
 // exchanges, may complete; subsequent selection does not include it. Operations
 // holding a pre-removal context snapshot may also complete. Key material is not
 // modified or zeroed while existing Exchanges may still reference the Context.
+// ValidateQBlock2ObserveWindow rejects a processor whose outgoing contexts
+// cannot retain the requested number of authenticated Q-Block2 fragment IDs.
+func (p *Processor) ValidateQBlock2ObserveWindow(required uint64) error {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	for _, context := range p.outgoingContexts {
+		if err := context.ValidateQBlock2ObserveWindow(required); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (p *Processor) RemoveContext(recipientID, idContext []byte) error {
 	key := contextKey{
 		recipientID:  string(recipientID),

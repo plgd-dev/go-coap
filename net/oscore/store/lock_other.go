@@ -36,6 +36,19 @@ func withFileLock(path string, action func() error) error {
 	return action()
 }
 
+func withFileLockAt(root *os.Root, path string, action func() error) error {
+	if root == nil {
+		return withFileLock(path, action)
+	}
+	lock, err := fallbackLockFor(path)
+	if err != nil {
+		return err
+	}
+	lock.Lock()
+	defer lock.Unlock()
+	return action()
+}
+
 func fallbackLockFor(path string) (*sync.Mutex, error) {
 	directory := filepath.Dir(path)
 	info, err := os.Stat(directory)

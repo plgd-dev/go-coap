@@ -17,6 +17,7 @@ import (
 	"github.com/plgd-dev/go-coap/v3/net/blockwise"
 	"github.com/plgd-dev/go-coap/v3/net/blockwise/qblock"
 	"github.com/plgd-dev/go-coap/v3/net/observation"
+	"github.com/plgd-dev/go-coap/v3/net/oscore"
 	"github.com/plgd-dev/go-coap/v3/udp/coder"
 )
 
@@ -107,6 +108,12 @@ func (cc *Conn) prepareQObservation(req *pool.Message) error {
 	if err != nil {
 		return err
 	}
+	if cc.oscoreProcessor != nil {
+		err = cc.oscoreProcessor.ValidateQBlock2ObserveWindow(cc.qBlockObserveWindowRequired(szx))
+		if err != nil {
+			return err
+		}
+	}
 	value, err := blockwise.EncodeQBlockOption(szx, 0, true)
 	if err != nil {
 		return err
@@ -120,6 +127,42 @@ func (cc *Conn) prepareQObservation(req *pool.Message) error {
 		return err
 	}
 	return req.SetRequestTag(tag)
+}
+
+func (cc *Conn) qBlockObserveWindowRequired(szx blockwise.SZX) uint64 {
+	parameters := cc.qParameters
+	if parameters == (qblock.Config{}) {
+		parameters = qblock.DefaultConfig()
+	}
+	blockSize := szx.Size()
+	if blockSize <= 0 {
+		return 0
+	}
+	blocks := (uint64(qblock.DefaultMaxBodySize) + uint64(blockSize) - 1) / uint64(blockSize)
+	blocks = min(blocks, uint64(qblock.MaxTrackedBlocks))
+	if parameters.NonMaxRetransmit < 0 {
+		return ^uint64(0)
+	}
+	retries := uint64(parameters.NonMaxRetransmit) + 1
+	if blocks != 0 && retries > ^uint64(0)/blocks {
+		return ^uint64(0)
+	}
+	return blocks * retries
+}
+
+func (cc *Conn) validateQBlockObserveContext(req *pool.Message, securityContext *oscore.Context) error {
+	if !req.HasOption(message.Observe) || !req.HasOption(message.QBlock2) {
+		return nil
+	}
+	value, err := req.GetOptionUint32(message.QBlock2)
+	if err != nil {
+		return fmt.Errorf("read Q-Block2 Observe size: %w", err)
+	}
+	szx, _, _, err := blockwise.DecodeQBlockOption(value)
+	if err != nil {
+		return fmt.Errorf("decode Q-Block2 Observe size: %w", err)
+	}
+	return securityContext.ValidateQBlock2ObserveWindow(cc.qBlockObserveWindowRequired(szx))
 }
 
 type qBlockRoute struct {
@@ -263,6 +306,15 @@ func (r *qBlockRoute) closeWithError(err error) {
 		default:
 			return
 		}
+	}
+}
+
+func (cc *Conn) failQBlockRoute(token message.Token, err error) {
+	cc.qRoutesMu.Lock()
+	route := cc.qRoutes[string(token)]
+	cc.qRoutesMu.Unlock()
+	if route != nil {
+		route.closeWithError(err)
 	}
 }
 
@@ -483,6 +535,9 @@ func (cc *Conn) advanceQBlockObservation(req *pool.Message, szx blockwise.SZX, e
 	}
 	if err != nil {
 		cc.errors(fmt.Errorf("receive Q Observe notification: %w", err))
+		if errors.Is(err, oscore.ErrReplayTrackingLimit) {
+			return nil, sequence, false
+		}
 	} else {
 		if nextSequence, observeErr := response.Observe(); observeErr == nil {
 			sequence.observe = nextSequence
