@@ -1603,8 +1603,10 @@ func TestConnObserveNotificationRejectedByReset(t *testing.T) {
 	defer cancel()
 
 	// The server keeps sending CON notifications until WriteMessage fails,
-	// like examples/observe/server.
+	// like examples/observe/server. The first notification is held back until
+	// the peer has read the initial response, so the two can't be reordered.
 	notifyErr := make(chan error, 1)
+	startNotifying := make(chan struct{})
 	router := mux.NewRouter()
 	router.HandleFunc("/obs", func(w mux.ResponseWriter, r *mux.Message) {
 		if obs, errO := r.Options().Observe(); errO != nil || obs != 0 {
@@ -1615,6 +1617,11 @@ func TestConnObserveNotificationRejectedByReset(t *testing.T) {
 		w.Message().SetObserve(2)
 		cc, token := w.Conn(), bytes.Clone(r.Token())
 		go func() {
+			select {
+			case <-startNotifying:
+			case <-ctx.Done():
+				return
+			}
 			for seq := uint32(3); ; seq++ {
 				m := cc.AcquireMessage(ctx)
 				m.SetCode(codes.Content)
@@ -1696,6 +1703,7 @@ func TestConnObserveNotificationRejectedByReset(t *testing.T) {
 	resp, ok := receive(time.Second * 2)
 	require.True(t, ok)
 	require.True(t, isNotification(resp))
+	close(startNotifying)
 
 	notification, ok := receive(time.Second * 2)
 	require.True(t, ok)
