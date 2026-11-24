@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"unicode/utf8"
 
@@ -392,30 +393,16 @@ func (options Options) findPosition(id OptionID) (minIdx int, maxIdx int) {
 	if len(options) == 0 {
 		return -1, 0
 	}
-	pivot := 0
-	maxIdx = len(options)
-	minIdx = 0
-	for {
-		switch {
-		case id == options[pivot].ID || (maxIdx-minIdx)/2 == 0:
-			for maxIdx = pivot; maxIdx < len(options) && options[maxIdx].ID <= id; {
-				maxIdx++
-			}
-			if maxIdx == len(options) {
-				maxIdx = -1
-			}
-			for minIdx = pivot; minIdx >= 0 && options[minIdx].ID >= id; {
-				minIdx--
-			}
-			return minIdx, maxIdx
-		case id < options[pivot].ID:
-			maxIdx = pivot
-			pivot = maxIdx - (maxIdx-minIdx)/2
-		case id > options[pivot].ID:
-			minIdx = pivot
-			pivot = minIdx + (maxIdx-minIdx)/2
-		}
+	minIdx = sort.Search(len(options), func(i int) bool {
+		return options[i].ID >= id
+	}) - 1
+	maxIdx = sort.Search(len(options), func(i int) bool {
+		return options[i].ID > id
+	})
+	if maxIdx == len(options) {
+		maxIdx = -1
 	}
+	return minIdx, maxIdx
 }
 
 // Set replaces/stores option at options.
