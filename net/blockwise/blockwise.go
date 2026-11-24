@@ -849,10 +849,10 @@ func (b *BlockWise[C]) createSendingMessage(sendingMessage *pool.Message, maxSZX
 	sendMessage.ResetOptionsTo(sendingMessage.Options())
 	sendMessage.SetToken(token)
 	sendMessage.SetType(sendingMessage.Type())
-	payloadSize, err := sendingMessage.BodySize()
+	payloadSize, body, err := getSendingMessageBody(sendingMessage)
 	if err != nil {
 		b.cc.ReleaseMessage(sendMessage)
-		return nil, false, payloadSizeError(err)
+		return nil, false, err
 	}
 	szx = getSzx(szx, maxSZX)
 	newBufLen := bufferSize(szx, maxMessageSize)
@@ -861,7 +861,7 @@ func (b *BlockWise[C]) createSendingMessage(sendingMessage *pool.Message, maxSZX
 		// For block1, we need to skip the already sent bytes.
 		off += newBufLen
 	}
-	offSeek, err := sendingMessage.Body().Seek(off, io.SeekStart)
+	offSeek, err := body.Seek(off, io.SeekStart)
 	if err != nil {
 		b.cc.ReleaseMessage(sendMessage)
 		return nil, false, fmt.Errorf("cannot seek in response: %w", err)
@@ -876,7 +876,7 @@ func (b *BlockWise[C]) createSendingMessage(sendingMessage *pool.Message, maxSZX
 	}
 	buf = buf[:newBufLen]
 
-	readed, err := io.ReadFull(sendingMessage.Body(), buf)
+	readed, err := io.ReadFull(body, buf)
 	if errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, io.EOF) {
 		if offSeek+int64(readed) == payloadSize {
 			err = nil
@@ -908,6 +908,18 @@ func (b *BlockWise[C]) createSendingMessage(sendingMessage *pool.Message, maxSZX
 	}
 	sendMessage.SetOptionUint32(blockType, block)
 	return sendMessage, more, nil
+}
+
+func getSendingMessageBody(sendingMessage *pool.Message) (int64, io.ReadSeeker, error) {
+	payloadSize, err := sendingMessage.BodySize()
+	if err != nil {
+		return 0, nil, payloadSizeError(err)
+	}
+	body := sendingMessage.Body()
+	if body == nil {
+		return 0, nil, errors.New("cannot create sending message: body is nil")
+	}
+	return payloadSize, body, nil
 }
 
 func (b *BlockWise[C]) continueSendingMessage(w *responsewriter.ResponseWriter[C], r *pool.Message, maxSZX SZX, maxMessageSize uint32, sendingMessageCode codes.Code, exchangeKey uint64) (bool, error) {
