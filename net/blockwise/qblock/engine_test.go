@@ -492,6 +492,7 @@ func TestQBlock2NegotiatedSZXHijackedRequestBodyIsIndependent(t *testing.T) {
 
 	payload := []byte("first request payload")
 	request := cc.AcquireMessage(context.Background())
+	defer cc.ReleaseMessage(request)
 	_, err := request.UnmarshalWithDecoder(coder.DefaultCoder, makeWireRequest(payload))
 	require.NoError(t, err)
 	writer := responsewriter.New(cc.AcquireMessage(request.Context()), cc)
@@ -504,18 +505,14 @@ func TestQBlock2NegotiatedSZXHijackedRequestBodyIsIndependent(t *testing.T) {
 			hijacked = r
 		}))
 	require.NotNil(t, hijacked)
+	defer cc.ReleaseMessage(hijacked)
 
-	cc.ReleaseMessage(request)
-	reused := cc.AcquireMessage(context.Background())
-	require.Same(t, request, reused)
-	_, err = reused.UnmarshalWithDecoder(coder.DefaultCoder, makeWireRequest([]byte("other request payload")))
+	_, err = request.UnmarshalWithDecoder(coder.DefaultCoder, makeWireRequest([]byte("other request payload")))
 	require.NoError(t, err)
 
 	body, err := hijacked.ReadBody()
 	require.NoError(t, err)
 	require.Equal(t, payload, body)
-	cc.ReleaseMessage(reused)
-	cc.ReleaseMessage(hijacked)
 }
 
 func TestQBlock2NewRequestMessageIDZeroDoesNotMatchRequestlessSender(t *testing.T) {

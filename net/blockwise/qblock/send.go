@@ -55,8 +55,8 @@ func (b *Engine[C]) handleQBlock2(
 		}
 		request := b.cloneMessage(r)
 		defer b.releaseUnlessHijacked(request, request.Generation())
-		if err := copyRequestBody(r, request); err != nil {
-			return err
+		if copyErr := copyRequestBody(r, request); copyErr != nil {
+			return copyErr
 		}
 		request.SetMessageID(r.MessageID())
 		value, _ := EncodeQBlockOption(maxSZX, 0, more)
