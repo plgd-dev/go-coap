@@ -55,8 +55,10 @@ func (b *Engine[C]) handleQBlock2(
 		}
 		request := b.cloneMessage(r)
 		defer b.releaseUnlessHijacked(request, request.Generation())
+		if err := copyRequestBody(r, request); err != nil {
+			return err
+		}
 		request.SetMessageID(r.MessageID())
-		request.SetBody(r.Body())
 		value, _ := EncodeQBlockOption(maxSZX, 0, more)
 		request.SetOptionUint32(message.QBlock2, value)
 		return b.handleQBlock2(w, request, maxSZX, remoteAddr, next)
