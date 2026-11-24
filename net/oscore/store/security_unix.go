@@ -202,7 +202,7 @@ func replaceFileAtomically(source, destination string) error {
 	return os.Rename(source, destination)
 }
 
-func replaceFileAtomicallyAt(root *os.Root, _ string, source, destination string) error {
+func replaceFileAtomicallyAt(root *os.Root, _, source, destination string) error {
 	if root != nil {
 		return root.Rename(source, destination)
 	}

@@ -202,27 +202,9 @@ func (c *Context) allowReplayRecoveryChallengeForPeer(peer string) error {
 }
 
 func (c *Context) allowPeerReplayRecoveryChallenge(peer string, now time.Time) error {
-	if c.replayRecoveryPeers == nil {
-		c.replayRecoveryPeers = make(map[string]*replayRecoveryPeerState)
-	}
 	state := c.replayRecoveryPeers[peer]
 	if state == nil {
-		var oldestKey string
-		var oldestWindow time.Time
-		for key, existing := range c.replayRecoveryPeers {
-			if now.Sub(existing.window) >= replayRecoveryChallengeWindow {
-				delete(c.replayRecoveryPeers, key)
-				continue
-			}
-			if oldestKey == "" || existing.window.Before(oldestWindow) {
-				oldestKey, oldestWindow = key, existing.window
-			}
-		}
-		if len(c.replayRecoveryPeers) >= replayRecoveryPeerLimit {
-			delete(c.replayRecoveryPeers, oldestKey)
-		}
-		state = &replayRecoveryPeerState{}
-		c.replayRecoveryPeers[peer] = state
+		state = c.newReplayRecoveryPeerState(peer, now)
 	}
 	if state.window.IsZero() || now.Sub(state.window) >= replayRecoveryChallengeWindow {
 		state.window = now
@@ -233,6 +215,28 @@ func (c *Context) allowPeerReplayRecoveryChallenge(peer string, now time.Time) e
 	}
 	state.count++
 	return nil
+}
+
+func (c *Context) newReplayRecoveryPeerState(peer string, now time.Time) *replayRecoveryPeerState {
+	if c.replayRecoveryPeers == nil {
+		c.replayRecoveryPeers = make(map[string]*replayRecoveryPeerState)
+	}
+	oldestKey, oldestWindow := "", time.Time{}
+	for key, existing := range c.replayRecoveryPeers {
+		if now.Sub(existing.window) >= replayRecoveryChallengeWindow {
+			delete(c.replayRecoveryPeers, key)
+			continue
+		}
+		if oldestKey == "" || existing.window.Before(oldestWindow) {
+			oldestKey, oldestWindow = key, existing.window
+		}
+	}
+	if len(c.replayRecoveryPeers) >= replayRecoveryPeerLimit {
+		delete(c.replayRecoveryPeers, oldestKey)
+	}
+	state := &replayRecoveryPeerState{}
+	c.replayRecoveryPeers[peer] = state
+	return state
 }
 
 // NewContext derives keys for the configured AEAD algorithm. The zero-value
