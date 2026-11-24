@@ -515,6 +515,35 @@ func TestQBlock2NegotiatedSZXHijackedRequestBodyIsIndependent(t *testing.T) {
 	require.Equal(t, payload, body)
 }
 
+func TestQBlock2NegotiatedSZXBodyCopyError(t *testing.T) {
+	cc := &qTestTransport{testClient: newTestClient(), jobs: make(map[string]qBlockTestJob)}
+	b := New(cc, func(error) {})
+	defer b.CloseQBlockTransfers()
+
+	request := cc.AcquireMessage(context.Background())
+	defer cc.ReleaseMessage(request)
+	request.SetCode(codes.POST)
+	request.SetType(message.Confirmable)
+	request.SetBody(&copyRequestBodySeeker{
+		reader:       bytes.NewReader([]byte("payload")),
+		failSeekCall: 1,
+		seekErr:      errors.New("request body position failed"),
+	})
+	value, err := EncodeQBlockOption(SZX32, 0, false)
+	require.NoError(t, err)
+	request.SetOptionUint32(message.QBlock2, value)
+	writer := responsewriter.New(cc.AcquireMessage(request.Context()), cc)
+	defer cc.ReleaseMessage(writer.Message())
+
+	handlerCalled := false
+	err = b.handleQBlock2(writer, request, SZX16, nil,
+		func(*responsewriter.ResponseWriter[*qTestTransport], *pool.Message) {
+			handlerCalled = true
+		})
+	require.ErrorIs(t, err, request.Body().(*copyRequestBodySeeker).seekErr)
+	require.False(t, handlerCalled)
+}
+
 func TestQBlock2NewRequestMessageIDZeroDoesNotMatchRequestlessSender(t *testing.T) {
 	cc := &qTestTransport{testClient: newTestClient(), jobs: make(map[string]qBlockTestJob)}
 	b := New(cc, func(error) {})

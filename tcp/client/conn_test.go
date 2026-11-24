@@ -1169,3 +1169,21 @@ func TestConnReceiveCleanupPreservesOwnerAcquisition(t *testing.T) {
 		cc.ReleaseMessage(owned)
 	}
 }
+
+func TestReleaseMessageIfNotHijackedForwarding(t *testing.T) {
+	session := &Session{messagePool: pool.New(1, 2048)}
+	cc := &Conn{session: session}
+
+	connMessage := cc.AcquireMessage(context.Background())
+	connMessage.SetCode(codes.GET)
+	cc.ReleaseMessageIfNotHijacked(connMessage, connMessage.Generation())
+	require.Equal(t, codes.Empty, connMessage.Code(), "Conn should forward the release to its pool")
+
+	sessionMessage := session.AcquireMessage(context.Background())
+	sessionMessage.SetCode(codes.POST)
+	sessionMessage.Hijack()
+	session.ReleaseMessageIfNotHijacked(sessionMessage, sessionMessage.Generation())
+	require.Equal(t, codes.POST, sessionMessage.Code(), "Session should preserve hijacked messages")
+	require.True(t, sessionMessage.IsHijacked())
+	session.ReleaseMessage(sessionMessage)
+}
