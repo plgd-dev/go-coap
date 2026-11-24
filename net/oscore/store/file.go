@@ -79,11 +79,8 @@ func removeStoreFile(root *os.Root, path string) error {
 	return os.Remove(path)
 }
 
-func replaceStoreFile(root *os.Root, source, destination string) error {
-	if root != nil {
-		return root.Rename(source, destination)
-	}
-	return replaceFileAtomically(source, destination)
+func replaceStoreFile(root *os.Root, dir, source, destination string) error {
+	return replaceFileAtomicallyAt(root, dir, source, destination)
 }
 
 func syncStoreDirectory(root *os.Root, dir string) error {
@@ -1304,7 +1301,7 @@ func writeStateFileWithHooksAt(
 		return err
 	}
 	// #nosec G703 -- temporary and target paths are inside the configured store root.
-	if err := replaceStoreFile(root, temporaryPath, path); err != nil {
+	if err := replaceStoreFile(root, dir, temporaryPath, path); err != nil {
 		return err
 	}
 	if err := syncDir(); err != nil {

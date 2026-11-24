@@ -479,3 +479,10 @@ func replaceFileAtomically(source, destination string) error {
 	}
 	return nil
 }
+
+func replaceFileAtomicallyAt(root *os.Root, dir, source, destination string) error {
+	if root == nil {
+		return replaceFileAtomically(source, destination)
+	}
+	return replaceFileAtomically(filepath.Join(dir, source), filepath.Join(dir, destination))
+}

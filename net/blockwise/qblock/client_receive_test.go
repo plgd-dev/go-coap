@@ -1,6 +1,7 @@
 package qblock
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"testing"
@@ -97,6 +98,26 @@ func TestQBlock2RegistrationRequestPreservesObserveAndToken(t *testing.T) {
 	defer client.ReleaseMessage(part)
 	require.True(t, part.HasOption(message.Observe))
 	require.Equal(t, message.Token("observe"), part.Token())
+}
+
+func TestQBlock2FetchRecoveryPreservesSelectorBody(t *testing.T) {
+	client := newTestClient()
+	engine := New(client, nil)
+	request := client.AcquireMessage(context.Background())
+	defer client.ReleaseMessage(request)
+	request.SetCode(codes.FETCH)
+	request.SetToken(message.Token("observe"))
+	request.SetBody(bytes.NewReader([]byte("selector")))
+	receiver := q2BodyReceiver[*testClient]{
+		b: engine, req: request, exchange: &qObserveExchange{}, szx: SZX16, maxSZX: SZX16,
+	}
+
+	part, _, err := receiver.buildRequestPart([]int64{0}, true, true)
+	require.NoError(t, err)
+	defer client.ReleaseMessage(part)
+	body, err := part.ReadBody()
+	require.NoError(t, err)
+	require.Equal(t, []byte("selector"), body)
 }
 
 func TestQBlockOptionSizeIncrementIncludesFollowingOptions(t *testing.T) {

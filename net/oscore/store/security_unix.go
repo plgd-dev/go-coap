@@ -215,3 +215,10 @@ func replaceFileAtomically(source, destination string) error {
 	// #nosec G703 -- both paths are generated inside the validated store directory.
 	return os.Rename(source, destination)
 }
+
+func replaceFileAtomicallyAt(root *os.Root, _ string, source, destination string) error {
+	if root != nil {
+		return root.Rename(source, destination)
+	}
+	return replaceFileAtomically(source, destination)
+}

@@ -351,10 +351,13 @@ only when that loss is an intentional deployment choice, such as a transient
 example. Production receivers should use a durable replay store or follow the
 RFC recovery procedure rather than silently accepting state loss.
 For deployments recovering a receiver with volatile replay state, configure
-`RequireEchoRecovery: true` on the replacement `Context`. Before accepting any
-request, it returns an OSCORE-protected 4.01 response with a fresh server Partial IV
-and an authenticated Inner Echo option. The peer must create a new OSCORE
-request containing that Echo option inside the protected request; retransmitting
+`RequireEchoRecovery: true` on the replacement `Context`. When a request
+authenticates but has no valid Inner Echo while recovery is pending, the
+context returns an OSCORE-protected 4.01 response with a fresh server Partial
+IV and an authenticated Inner Echo option, subject to the challenge budget.
+Requests that fail authentication do not receive this challenge. The peer must
+create a new OSCORE request containing that Echo option inside the protected
+request; retransmitting
 the old request or adding Echo outside the OSCORE protection does not recover
 the context. The first valid response to the challenge seeds the replay window
 conservatively, rejecting every sequence up to and including the recovery
@@ -414,7 +417,10 @@ replayed. Sender reservations use a rollback guard and pending transaction so
 startup can finish an interrupted reservation while consuming its entire
 reserved window. Missing individual sender-state files, corrupt files, and
 mismatched files are rejected. User-specified directory symlinks are rejected
-by default. On macOS, the system `/var` alias and sticky `/tmp` alias are
+by default on Unix-like and Windows platforms. On platforms using the fallback
+filesystem validation, symlink components are not inspected; provision and
+protect the entire store path and its ancestors against untrusted modification.
+On macOS, the system `/var` alias and sticky `/tmp` alias are
 accepted. On Unix-like systems, `WithAllowedSymlinks` can permit specific
 directory components when their resolved targets are owned by the current user
 or root and are not group- or world-writable. Windows rejects all reparse

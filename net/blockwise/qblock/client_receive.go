@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"time"
 
 	"github.com/plgd-dev/go-coap/v3/message"
@@ -28,19 +29,24 @@ func (b *Engine[C]) DoQBlock2(req *pool.Message, szx SZX,
 		return nil, err
 	}
 	defer exchange.Close()
-	if !req.HasOption(message.RequestTag) {
-		request := b.cloneMessage(req)
-		defer b.cc.ReleaseMessage(request)
-		tag, tagErr := message.GetToken()
-		if tagErr != nil {
-			return nil, tagErr
-		}
-		if tagErr := request.SetRequestTag(tag); tagErr != nil {
-			return nil, tagErr
-		}
-		req = request
+	if req.HasOption(message.RequestTag) {
+		return b.ReceiveQBlock2(req, szx, exchange, nil)
 	}
-	return b.ReceiveQBlock2(req, szx, exchange, nil)
+	request := b.cloneMessage(req)
+	defer b.cc.ReleaseMessage(request)
+	if req.Code() == codes.FETCH {
+		if copyErr := copyFetchSelectorBody(req, request); copyErr != nil {
+			return nil, copyErr
+		}
+	}
+	tag, err := message.GetToken()
+	if err != nil {
+		return nil, err
+	}
+	if err := request.SetRequestTag(tag); err != nil {
+		return nil, err
+	}
+	return b.ReceiveQBlock2(request, szx, exchange, nil)
 }
 
 type q2BodyReceiver[C Client] struct {
@@ -275,7 +281,14 @@ func (s *q2BodyReceiver[C]) newRequest(recovery bool) (*pool.Message, error) {
 	part.Remove(message.ETag)
 	part.Remove(message.QBlock1)
 	part.Remove(message.QBlock2)
-	part.SetBody(nil)
+	if s.req.Code() == codes.FETCH {
+		if err := copyFetchSelectorBody(s.req, part); err != nil {
+			s.b.cc.ReleaseMessage(part)
+			return nil, err
+		}
+	} else {
+		part.SetBody(nil)
+	}
 	if recovery || s.sentRequests > 0 {
 		token, err := s.exchange.NewToken()
 		if err != nil {
@@ -286,6 +299,31 @@ func (s *q2BodyReceiver[C]) newRequest(recovery bool) (*pool.Message, error) {
 		part.Remove(message.Observe)
 	}
 	return part, nil
+}
+
+func copyFetchSelectorBody(source, destination *pool.Message) error {
+	body := source.Body()
+	if body == nil {
+		destination.SetBody(nil)
+		return nil
+	}
+	position, err := body.Seek(0, io.SeekCurrent)
+	if err != nil {
+		return fmt.Errorf("read FETCH selector position: %w", err)
+	}
+	if _, err := body.Seek(0, io.SeekStart); err != nil {
+		return fmt.Errorf("rewind FETCH selector: %w", err)
+	}
+	selector, readErr := io.ReadAll(body)
+	_, restoreErr := body.Seek(position, io.SeekStart)
+	if readErr != nil {
+		return fmt.Errorf("read FETCH selector: %w", readErr)
+	}
+	if restoreErr != nil {
+		return fmt.Errorf("restore FETCH selector position: %w", restoreErr)
+	}
+	destination.SetBody(bytes.NewReader(selector))
+	return nil
 }
 
 func validateQBlockDatagram(client any, part *pool.Message) error {

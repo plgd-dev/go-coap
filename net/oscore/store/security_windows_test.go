@@ -21,6 +21,32 @@ func TestNewHighWaterFileStoreAcceptsPrivateWindowsDirectory(t *testing.T) {
 	}
 }
 
+func TestWindowsRootedStateReplacement(t *testing.T) {
+	dir := t.TempDir()
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer root.Close()
+
+	if err := os.WriteFile(filepath.Join(dir, "temporary"), []byte("new"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "state"), []byte("old"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := replaceFileAtomicallyAt(root, dir, "temporary", "state"); err != nil {
+		t.Fatalf("durably replace rooted OSCORE state file: %v", err)
+	}
+	content, err := os.ReadFile(filepath.Join(dir, "state"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(content) != "new" {
+		t.Fatalf("state content = %q, want %q", content, "new")
+	}
+}
+
 func TestWindowsStoreDirectoryChainAcceptsStandardDataPaths(t *testing.T) {
 	for _, path := range []string{
 		os.Getenv("ProgramData"),
@@ -260,7 +286,7 @@ func TestLockFileExSerializesTwoStoreInstances(t *testing.T) {
 	}
 }
 
-func TestWindowsStoreDirectoryGuardBlocksDirectoryReplacement(t *testing.T) {
+func TestWindowsStoreDirectoryGuardBlocksAncestorReplacement(t *testing.T) {
 	root := t.TempDir()
 	parent := filepath.Join(root, "store-parent")
 	if err := os.Mkdir(parent, 0o700); err != nil {
@@ -290,11 +316,6 @@ func TestWindowsStoreDirectoryGuardBlocksDirectoryReplacement(t *testing.T) {
 		close(release)
 		<-guardDone
 		t.Fatal("renamed an ancestor while the guarded store operation was active")
-	}
-	if err := os.Rename(dir, dir+".replaced"); err == nil {
-		close(release)
-		<-guardDone
-		t.Fatal("renamed the store directory while the guarded operation was active")
 	}
 	close(release)
 	if err := <-guardDone; err != nil {

@@ -1850,13 +1850,13 @@ func TestQBlock2ObserveReplayWindowIsBounded(t *testing.T) {
 }
 
 func TestQBlock2ObserveBoundsActiveRepresentationAndAllowsReordering(t *testing.T) {
-	const windowSize = uint64(3)
+	const windowSize = uint64(4)
 	state := &exchangeResponseState{
 		qBlock2Observe: true,
 		context:        &Context{qBlock2ObserveWindowSize: windowSize},
 	}
 	option := OptionValue{PartialIV: []byte{1}}
-	for _, sequence := range []uint64{100, 102} {
+	for _, sequence := range []uint64{100, 10_000} {
 		if err := state.checkObserveResponseSequence(sequence); err != nil {
 			t.Fatalf("sequence %d rejected: %v", sequence, err)
 		}
@@ -1865,20 +1865,36 @@ func TestQBlock2ObserveBoundsActiveRepresentationAndAllowsReordering(t *testing.
 		})
 	}
 	if err := state.checkObserveResponseSequence(101); err != nil {
-		t.Fatalf("out-of-order fragment within active representation rejected: %v", err)
+		t.Fatalf("delayed fragment across unrelated response sequences rejected: %v", err)
 	}
 	state.recordObserveResponse(option, 101, message.Message{
 		Options: message.Options{{ID: message.Observe}},
 	})
-	if err := state.checkObserveResponseSequence(103); !errors.Is(err, ErrReplayTrackingLimit) {
+	if err := state.checkObserveResponseSequence(10_001); err != nil {
+		t.Fatalf("queued next representation fragment rejected: %v", err)
+	}
+	state.recordObserveResponse(option, 10_001, message.Message{
+		Options: message.Options{{ID: message.Observe}},
+	})
+	if err := state.checkObserveResponseSequence(10_002); !errors.Is(err, ErrReplayTrackingLimit) {
 		t.Fatalf("fragment beyond the active tracking limit error = %v, want ErrReplayTrackingLimit", err)
 	}
+
 	exchange := Exchange{responseState: state}
-	if err := exchange.CompleteQBlock2Representation(102); err != nil {
+	if err := exchange.CompleteQBlock2Representation(10_000); err != nil {
 		t.Fatalf("complete reordered representation: %v", err)
 	}
-	if err := state.checkObserveResponseSequence(101); !errors.Is(err, ErrReplay) {
-		t.Fatalf("completed representation fragment error = %v, want ErrReplay", err)
+	if got := len(state.seenResponsePartialIVs); got != 1 {
+		t.Fatalf("tracked Partial IV count after retiring representation = %d, want 1", got)
+	}
+	if err := state.checkObserveResponseSequence(10_001); !errors.Is(err, ErrReplay) {
+		t.Fatalf("duplicate queued fragment error = %v, want ErrReplay", err)
+	}
+	if err := exchange.CompleteQBlock2Representation(10_001); err != nil {
+		t.Fatalf("complete queued representation: %v", err)
+	}
+	if got := len(state.seenResponsePartialIVs); got != 0 {
+		t.Fatalf("tracked Partial IV count after all completions = %d, want 0", got)
 	}
 }
 

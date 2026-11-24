@@ -98,19 +98,23 @@ func (e Exchange) CompleteQBlock2Representation(highestPartialIV uint64) error {
 	if !state.qBlock2Observe {
 		return fmt.Errorf("%w: exchange is not a Q-Block2 Observe exchange", ErrInvalidContext)
 	}
-	if !state.hasResponseSequence || highestPartialIV != state.lastResponseSequence {
+	if !state.hasResponseSequence || highestPartialIV > state.lastResponseSequence {
 		return fmt.Errorf("%w: Q-Block2 representation high-water does not match authenticated fragments",
 			ErrInvalidOSCOREMessage)
 	}
 	if _, exists := state.seenResponsePartialIVs[highestPartialIV]; !exists {
 		return fmt.Errorf("%w: Q-Block2 representation high-water is not tracked", ErrInvalidOSCOREMessage)
 	}
-	if !state.hasCompletedQBlock2 || highestPartialIV > state.completedQBlock2HighWater {
-		state.completedQBlock2HighWater = highestPartialIV
+	if state.hasCompletedQBlock2 && highestPartialIV <= state.completedQBlock2HighWater {
+		return fmt.Errorf("%w: Q-Block2 representation is already retired", ErrReplay)
 	}
+	state.completedQBlock2HighWater = highestPartialIV
 	state.hasCompletedQBlock2 = true
-	clear(state.seenResponsePartialIVs)
-	state.seenResponsePartialIVs = nil
+	for sequence := range state.seenResponsePartialIVs {
+		if sequence <= highestPartialIV {
+			delete(state.seenResponsePartialIVs, sequence)
+		}
+	}
 	return nil
 }
 
@@ -805,19 +809,7 @@ func (state *exchangeResponseState) checkQBlock2ObserveSequence(sequence uint64)
 	if uint64(len(state.seenResponsePartialIVs)) >= state.qBlock2ObserveWindowSize() {
 		return ErrReplayTrackingLimit
 	}
-	if state.isOutsideActiveQBlock2Window(sequence) {
-		return ErrReplay
-	}
 	return nil
-}
-
-func (state *exchangeResponseState) isOutsideActiveQBlock2Window(sequence uint64) bool {
-	if !state.hasResponseSequence {
-		return false
-	}
-	windowSize := state.qBlock2ObserveWindowSize()
-	return state.lastResponseSequence >= windowSize &&
-		sequence <= state.lastResponseSequence-windowSize
 }
 
 func (state *exchangeResponseState) recordResponse(

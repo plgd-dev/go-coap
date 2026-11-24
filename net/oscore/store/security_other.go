@@ -47,3 +47,10 @@ func openFileAtRoot(root *os.Root, path string, flags int, perm os.FileMode) (*o
 func replaceFileAtomically(source, destination string) error {
 	return os.Rename(source, destination)
 }
+
+func replaceFileAtomicallyAt(root *os.Root, _ string, source, destination string) error {
+	if root != nil {
+		return root.Rename(source, destination)
+	}
+	return replaceFileAtomically(source, destination)
+}

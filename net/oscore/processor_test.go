@@ -6,6 +6,7 @@ import (
 	"reflect"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/plgd-dev/go-coap/v3/message"
 	"github.com/plgd-dev/go-coap/v3/message/codes"
@@ -230,6 +231,8 @@ func TestProcessorRequiresEchoRecoveryAfterVolatileReplayStateLoss(t *testing.T)
 func TestProcessorLimitsReplayRecoveryChallengesPerContext(t *testing.T) {
 	client := newEchoRecoveryContext(t, []byte("client"), []byte("server"), false)
 	server := newEchoRecoveryContext(t, []byte("server"), []byte("client"), true)
+	now := time.Unix(1_800_000_000, 0)
+	server.replayRecoveryNow = func() time.Time { return now }
 	processor, err := NewProcessor(ProcessorConfig{Contexts: []*Context{server}})
 	if err != nil {
 		t.Fatal(err)
@@ -242,7 +245,10 @@ func TestProcessorLimitsReplayRecoveryChallengesPerContext(t *testing.T) {
 		if protectErr != nil {
 			t.Fatal(protectErr)
 		}
-		_, _, _, processErr := processor.ProcessIncomingRequest(request)
+		_, securityContext, exchange, processErr := processor.ProcessIncomingRequest(request)
+		if securityContext != nil || exchange.responseState != nil {
+			t.Fatal("rate-limited challenge request unexpectedly produced an exchange")
+		}
 		if !errors.Is(processErr, ErrReplayRecoveryRequired) {
 			t.Fatalf("request %d error = %v, want ErrReplayRecoveryRequired", sequence, processErr)
 		}
@@ -258,6 +264,26 @@ func TestProcessorLimitsReplayRecoveryChallengesPerContext(t *testing.T) {
 		if !handled || !errors.Is(challengeErr, ErrReplayRecoveryRateLimited) {
 			t.Fatalf("challenge over limit: handled=%t, error=%v", handled, challengeErr)
 		}
+	}
+	now = now.Add(replayRecoveryChallengeWindow)
+	request, _, err := client.ProtectRequest(message.Message{
+		Code: codes.GET, Token: message.Token{byte(replayRecoveryChallengeLimit + 2)},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, securityContext, exchange, processErr := processor.ProcessIncomingRequest(request)
+	if securityContext != nil || exchange.responseState != nil {
+		t.Fatal("request after challenge window unexpectedly produced an exchange")
+	}
+	if !errors.Is(processErr, ErrReplayRecoveryRequired) {
+		t.Fatalf("request after challenge window error = %v, want ErrReplayRecoveryRequired", processErr)
+	}
+	_, handled, challengeErr := ProtectReplayRecoveryResponse(processErr, message.Message{
+		Type: message.Acknowledgement, MessageID: request.MessageID, Token: request.Token,
+	})
+	if !handled || challengeErr != nil {
+		t.Fatalf("challenge after window: handled=%t, error=%v; want allowed", handled, challengeErr)
 	}
 }
 
