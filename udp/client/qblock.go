@@ -17,6 +17,7 @@ import (
 	"github.com/plgd-dev/go-coap/v3/net/blockwise"
 	"github.com/plgd-dev/go-coap/v3/net/blockwise/qblock"
 	"github.com/plgd-dev/go-coap/v3/net/observation"
+	"github.com/plgd-dev/go-coap/v3/net/oscore"
 	"github.com/plgd-dev/go-coap/v3/udp/coder"
 )
 
@@ -27,12 +28,23 @@ func (cc *Conn) qBlockEligible(req *pool.Message) bool {
 	if remote, ok := cc.RemoteAddr().(*net.UDPAddr); ok && remote.IP.IsMulticast() {
 		return false
 	}
-	if req.HasOption(message.Observe) && req.Code() != codes.GET {
+	if req.HasOption(message.Observe) && req.Code() != codes.GET && req.Code() != codes.FETCH {
 		return false
 	}
-	bodyMethod := req.Code() == codes.POST || req.Code() == codes.PUT ||
-		req.Code() == codes.FETCH || req.Code() == codes.PATCH || req.Code() == codes.IPATCH
-	return (req.Code() == codes.GET || bodyMethod) && (req.Body() == nil || bodyMethod)
+	return isQBlockMethod(req.Code()) && (req.Body() == nil || isQBlockBodyMethod(req.Code()))
+}
+
+func isQBlockMethod(code codes.Code) bool {
+	return code == codes.GET || isQBlockBodyMethod(code)
+}
+
+func isQBlockBodyMethod(code codes.Code) bool {
+	switch code {
+	case codes.POST, codes.PUT, codes.FETCH, codes.PATCH, codes.IPATCH:
+		return true
+	default:
+		return false
+	}
 }
 
 func (cc *Conn) selectQBlock(req *pool.Message) (bool, error) {
@@ -86,12 +98,21 @@ func qBlockOrigin(options message.Options) (string, message.Options) {
 }
 
 func (cc *Conn) prepareQObservation(req *pool.Message) error {
-	if req.Code() != codes.GET || req.Body() != nil {
+	if req.Code() == codes.GET && req.Body() != nil || req.Code() != codes.GET && req.Code() != codes.FETCH {
+		return blockwise.ErrQBlockUnsupported
+	}
+	if req.Code() == codes.FETCH && req.Body() == nil {
 		return blockwise.ErrQBlockUnsupported
 	}
 	szx, err := cc.qBlockResponseSZX()
 	if err != nil {
 		return err
+	}
+	if cc.oscoreProcessor != nil {
+		err = cc.oscoreProcessor.ValidateQBlock2ObserveWindow(cc.qBlockObserveWindowRequired(szx))
+		if err != nil {
+			return err
+		}
 	}
 	value, err := blockwise.EncodeQBlockOption(szx, 0, true)
 	if err != nil {
@@ -106,6 +127,42 @@ func (cc *Conn) prepareQObservation(req *pool.Message) error {
 		return err
 	}
 	return req.SetRequestTag(tag)
+}
+
+func (cc *Conn) qBlockObserveWindowRequired(szx blockwise.SZX) uint64 {
+	parameters := cc.qParameters
+	if parameters == (qblock.Config{}) {
+		parameters = qblock.DefaultConfig()
+	}
+	blockSize := szx.Size()
+	if blockSize <= 0 {
+		return 0
+	}
+	blocks := (uint64(qblock.DefaultMaxBodySize) + uint64(blockSize) - 1) / uint64(blockSize)
+	blocks = min(blocks, uint64(qblock.MaxTrackedBlocks))
+	if parameters.NonMaxRetransmit < 0 {
+		return ^uint64(0)
+	}
+	retries := uint64(parameters.NonMaxRetransmit) + 1
+	if blocks != 0 && retries > ^uint64(0)/blocks {
+		return ^uint64(0)
+	}
+	return blocks * retries
+}
+
+func (cc *Conn) validateQBlockObserveContext(req *pool.Message, securityContext *oscore.Context) error {
+	if !req.HasOption(message.Observe) || !req.HasOption(message.QBlock2) {
+		return nil
+	}
+	value, err := req.GetOptionUint32(message.QBlock2)
+	if err != nil {
+		return fmt.Errorf("read Q-Block2 Observe size: %w", err)
+	}
+	szx, _, _, err := blockwise.DecodeQBlockOption(value)
+	if err != nil {
+		return fmt.Errorf("decode Q-Block2 Observe size: %w", err)
+	}
+	return securityContext.ValidateQBlock2ObserveWindow(cc.qBlockObserveWindowRequired(szx))
 }
 
 type qBlockRoute struct {
@@ -188,9 +245,14 @@ func (r *qBlockRoute) Send(msg *pool.Message) error {
 
 func (r *qBlockRoute) Receive(ctx context.Context) (*pool.Message, error) {
 	r.cc.receivedMessageReader.TryToReplaceLoop()
+	setReceiveContext := func(msg *pool.Message) {
+		responseContext := msg.Context()
+		msg.SetContext(ctx)
+		observation.CopyAuthenticatedSequenceNumber(responseContext, msg)
+	}
 	select {
 	case msg := <-r.messages:
-		msg.SetContext(ctx)
+		setReceiveContext(msg)
 		return msg, nil
 	default:
 	}
@@ -205,9 +267,13 @@ func (r *qBlockRoute) Receive(ctx context.Context) (*pool.Message, error) {
 		r.mu.Unlock()
 		return nil, err
 	case msg := <-r.messages:
-		msg.SetContext(ctx)
+		setReceiveContext(msg)
 		return msg, nil
 	}
+}
+
+func (r *qBlockRoute) CompleteQBlock2Representation(token message.Token, highestPartialIV uint64) error {
+	return r.cc.completeOSCOREQBlock2Representation(token, highestPartialIV)
 }
 
 func (r *qBlockRoute) Close() {
@@ -240,6 +306,15 @@ func (r *qBlockRoute) closeWithError(err error) {
 		default:
 			return
 		}
+	}
+}
+
+func (cc *Conn) failQBlockRoute(token message.Token, err error) {
+	cc.qRoutesMu.Lock()
+	route := cc.qRoutes[string(token)]
+	cc.qRoutesMu.Unlock()
+	if route != nil {
+		route.closeWithError(err)
 	}
 }
 
@@ -312,6 +387,7 @@ func (cc *Conn) routeQBlockResponse(msg *pool.Message) bool {
 		cc.errors(fmt.Errorf("clone Q-Block response: %w", err))
 		return true
 	}
+	observation.CopyAuthenticatedSequenceNumber(msg.Context(), copyMsg)
 	select {
 	case route.messages <- copyMsg:
 	default:
@@ -329,6 +405,13 @@ func (cc *Conn) CancelObservation(token message.Token) {
 	if route != nil {
 		route.Close()
 	}
+	cc.oscoreMu.Lock()
+	delete(cc.oscoreObservations, string(token))
+	if exchange, ok := cc.oscoreExchanges[string(token)]; ok && exchange.observe {
+		exchange.expires = time.Now().Add(ExchangeLifetime)
+		cc.oscoreExchanges[string(token)] = exchange
+	}
+	cc.oscoreMu.Unlock()
 }
 
 func (cc *Conn) startQBlockNotification(msg *pool.Message) bool {
@@ -397,22 +480,41 @@ func (cc *Conn) prepareQBlockNotification(req, msg *pool.Message) (blockwise.QBl
 		cc.errors(err)
 		return nil, nil
 	}
+	observation.CopyAuthenticatedSequenceNumber(msg.Context(), initial)
 	return exchange, initial
 }
 
 func (cc *Conn) runQBlockObservation(req *pool.Message, szx blockwise.SZX, exchange blockwise.QBlockExchange, initial *pool.Message) {
 	defer cc.ReleaseMessage(req)
 	defer exchange.Close()
-	var sequence uint32
-	var lastEvent time.Time
+	var sequence qBlockNotificationSequence
 	for {
 		setQObservationRequestType(req, initial.Type())
 		var keepRunning bool
-		initial, sequence, lastEvent, keepRunning = cc.advanceQBlockObservation(req, szx, exchange, initial, sequence, lastEvent)
+		initial, sequence, keepRunning = cc.advanceQBlockObservation(req, szx, exchange, initial, sequence)
 		if !keepRunning {
 			return
 		}
 	}
+}
+
+type qBlockNotificationSequence struct {
+	observe          uint32
+	authenticated    uint64
+	hasAuthenticated bool
+	lastEvent        time.Time
+}
+
+func (s qBlockNotificationSequence) validNotification(response *pool.Message, now time.Time) bool {
+	next, err := response.Observe()
+	if err != nil {
+		return false
+	}
+	nextAuthenticated, hasNextAuthenticated := observation.AuthenticatedSequenceNumber(response.Context())
+	if s.hasAuthenticated && hasNextAuthenticated {
+		return nextAuthenticated > s.authenticated
+	}
+	return observation.ValidSequenceNumber(s.observe, next, s.lastEvent, now)
 }
 
 func setQObservationRequestType(req *pool.Message, notificationType message.Type) {
@@ -423,31 +525,46 @@ func setQObservationRequestType(req *pool.Message, notificationType message.Type
 	req.SetType(requestType)
 }
 
-func (cc *Conn) advanceQBlockObservation(req *pool.Message, szx blockwise.SZX, exchange blockwise.QBlockExchange, initial *pool.Message, sequence uint32, lastEvent time.Time) (*pool.Message, uint32, time.Time, bool) {
+func (cc *Conn) advanceQBlockObservation(req *pool.Message, szx blockwise.SZX, exchange blockwise.QBlockExchange, initial *pool.Message, sequence qBlockNotificationSequence) (*pool.Message, qBlockNotificationSequence, bool) {
 	response, err := cc.receiveQNotification(req, szx, exchange, initial)
 	if route, ok := exchange.(*qBlockRoute); ok {
 		route.retireAliases(req.Token())
 	}
 	if errors.Is(err, context.Canceled) || cc.Context().Err() != nil {
-		return nil, sequence, lastEvent, false
+		return nil, sequence, false
 	}
 	if err != nil {
 		cc.errors(fmt.Errorf("receive Q Observe notification: %w", err))
+		if cc.stopQBlockObservationOnError(req.Token(), err) {
+			return nil, sequence, false
+		}
 	} else {
 		if nextSequence, observeErr := response.Observe(); observeErr == nil {
-			sequence, lastEvent = nextSequence, time.Now()
+			sequence.observe = nextSequence
+			sequence.lastEvent = time.Now()
+			sequence.authenticated, sequence.hasAuthenticated = observation.AuthenticatedSequenceNumber(response.Context())
 		}
 		active := cc.observationHandler.HandleNotification(response)
 		cc.ReleaseMessage(response)
 		if !active {
-			return nil, sequence, lastEvent, false
+			return nil, sequence, false
 		}
 	}
-	next, err := cc.nextQBlockNotification(req.Token(), exchange, sequence, lastEvent)
+	next, err := cc.nextQBlockNotification(req.Token(), exchange, sequence)
 	if err != nil {
-		return nil, sequence, lastEvent, false
+		return nil, sequence, false
 	}
-	return next, sequence, lastEvent, true
+	return next, sequence, true
+}
+
+func (cc *Conn) stopQBlockObservationOnError(token message.Token, err error) bool {
+	if !errors.Is(err, oscore.ErrReplayTrackingLimit) {
+		return false
+	}
+	if cc.observationHandler != nil {
+		cc.observationHandler.ForgetObservation(token)
+	}
+	return true
 }
 
 func (cc *Conn) receiveQNotification(req *pool.Message, szx blockwise.SZX, exchange blockwise.QBlockExchange, initial *pool.Message) (*pool.Message, error) {
@@ -457,7 +574,7 @@ func (cc *Conn) receiveQNotification(req *pool.Message, szx blockwise.SZX, excha
 	return cc.blockWise.ReceiveQBlock2(req, szx, exchange, initial)
 }
 
-func (cc *Conn) nextQBlockNotification(token message.Token, exchange blockwise.QBlockExchange, sequence uint32, lastEvent time.Time) (*pool.Message, error) {
+func (cc *Conn) nextQBlockNotification(token message.Token, exchange blockwise.QBlockExchange, sequence qBlockNotificationSequence) (*pool.Message, error) {
 	for {
 		response, err := exchange.Receive(cc.Context())
 		if err != nil {
@@ -470,8 +587,7 @@ func (cc *Conn) nextQBlockNotification(token message.Token, exchange blockwise.Q
 		if !response.HasOption(message.Observe) {
 			return response, nil
 		}
-		next, observeErr := response.Observe()
-		if observeErr == nil && observation.ValidSequenceNumber(sequence, next, lastEvent, time.Now()) {
+		if sequence.validNotification(response, time.Now()) {
 			return response, nil
 		}
 		cc.ReleaseMessage(response)
@@ -542,10 +658,55 @@ func (cc *Conn) validateQBlockDatagram(msg *pool.Message) error {
 	if err != nil {
 		return err
 	}
-	if uint64(len(wire)) > uint64(cc.qDatagramLimit) {
-		return fmt.Errorf("%w: Q-Block datagram size %d exceeds %d", blockwise.ErrQBlockTooLarge, len(wire), cc.qDatagramLimit)
+	size := uint64(len(wire))
+	if cc.oscoreProcessor != nil && isQBlockMethod(msg.Code()) {
+		size += uint64(cc.oscoreProcessor.MaxRequestOverhead(len(msg.Options()), msg.HasOption(message.Observe)))
+	} else if cc.oscoreProcessor != nil {
+		size += 32
+	}
+	if size > uint64(cc.qDatagramLimit) {
+		return fmt.Errorf("%w: Q-Block datagram size %d exceeds %d", blockwise.ErrQBlockTooLarge, size, cc.qDatagramLimit)
 	}
 	return nil
+}
+
+// ValidateQBlockDatagram checks whether a Q-Block message fits the configured
+// datagram budget, including conservative OSCORE expansion.
+func (cc *Conn) ValidateQBlockDatagram(msg *pool.Message) error {
+	return cc.validateQBlockDatagram(msg)
+}
+
+// QBlockDatagramBudget estimates a request's encoded size and the per-option
+// OSCORE expansion used when appending repeated Q-Block options.
+func (cc *Conn) QBlockDatagramBudget(msg *pool.Message) (uint64, uint64, uint64, error) {
+	wire, err := msg.MarshalWithEncoder(coder.DefaultCoder)
+	if err != nil {
+		return 0, 0, 0, err
+	}
+	size := uint64(len(wire))
+	var perOptionOverhead uint64
+	if cc.oscoreProcessor != nil && isQBlockMethod(msg.Code()) {
+		optionCount := len(msg.Options())
+		observe := msg.HasOption(message.Observe)
+		overhead := cc.oscoreProcessor.MaxRequestOverhead(optionCount, observe)
+		size += uint64(overhead)
+		if nextOverhead := cc.oscoreProcessor.MaxRequestOverhead(optionCount+1, observe); nextOverhead > overhead {
+			perOptionOverhead = uint64(nextOverhead - overhead)
+		}
+	} else if cc.oscoreProcessor != nil {
+		size += 32
+	}
+	return size, perOptionOverhead, uint64(cc.qDatagramLimit), nil
+}
+
+// QBlockMaxDatagramSize returns the encoded datagram limit used for Q-Block
+// request and response sizing, including configured MTU, DTLS, and OSCORE reserves.
+func (cc *Conn) QBlockMaxDatagramSize() uint32 {
+	size := cc.qDatagramLimit
+	if cc.oscoreProcessor != nil {
+		size -= min(size, 32)
+	}
+	return size
 }
 
 func (cc *Conn) qBlockPeerProgress() {
@@ -580,8 +741,12 @@ func (cc *Conn) qBlockRequestSZX(req *pool.Message) (blockwise.SZX, error) {
 	if err != nil {
 		return 0, err
 	}
+	wireSize := int64(len(wire))
+	if cc.oscoreProcessor != nil {
+		wireSize += int64(cc.oscoreProcessor.MaxRequestOverhead(len(header.Options()), header.HasOption(message.Observe)))
+	}
 	for szx := min(cc.blockwiseSZX, blockwise.SZX1024); ; szx-- {
-		if int64(len(wire))+1+szx.Size() <= int64(cc.qDatagramLimit) {
+		if wireSize+1+szx.Size() <= int64(cc.qDatagramLimit) {
 			return szx, nil
 		}
 		if szx == blockwise.SZX16 {

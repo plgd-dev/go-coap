@@ -423,6 +423,10 @@ func TestRFC9175Options(t *testing.T) {
 
 	require.Equal(t, Echo, OptionID(252))
 	require.Equal(t, RequestTag, OptionID(292))
+	require.Equal(t, HopLimit, OptionID(16))
+	require.True(t, VerifyOptLen(HopLimit, 1))
+	require.False(t, VerifyOptLen(HopLimit, 0))
+	require.False(t, VerifyOptLen(HopLimit, 2))
 	require.True(t, VerifyOptLen(Echo, 1))
 	require.True(t, VerifyOptLen(Echo, 40))
 	require.False(t, VerifyOptLen(Echo, 0))

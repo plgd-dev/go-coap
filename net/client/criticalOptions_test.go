@@ -32,6 +32,13 @@ func TestGetUnknownCriticalOptionsIllegalLength(t *testing.T) {
 	require.Equal(t, []message.OptionID{message.IfNoneMatch, message.URIPath}, unknownCriticalOpts)
 }
 
+func TestOSCOREIsRejectedUntilProtectionProcessingIsEnabled(t *testing.T) {
+	require.Equal(t,
+		[]message.OptionID{message.OSCORE},
+		GetUnknownCriticalOptions(message.Options{{ID: message.OSCORE, Value: []byte{0x01}}}),
+	)
+}
+
 func TestGetUnknownCriticalOptionsRepeated(t *testing.T) {
 	options := message.Options{
 		{ID: message.IfMatch, Value: []byte{0x01}},

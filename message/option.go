@@ -38,10 +38,12 @@ type OptionID uint16
    |   7 | x  | x | - |   | Uri-Port       | uint   | 0-2    | (see    |
    |     |    |   |   |   |                |        |        | below)  |
    |   8 |    |   |   | x | Location-Path  | string | 0-255  | (none)  |
+   |   9 | x  |   |   |   | OSCORE         | opaque | 0-255  | (none)  |
    |  11 | x  | x | - | x | Uri-Path       | string | 0-255  | (none)  |
    |  12 |    |   |   |   | Content-Format | uint   | 0-2    | (none)  |
    |  14 |    | x | - |   | Max-Age        | uint   | 0-4    | 60      |
    |  15 | x  | x | - | x | Uri-Query      | string | 0-255  | (none)  |
+   |  16 |    |   |   |   | Hop-Limit      | uint   | 1      | 16      |
    |  17 | x  |   |   |   | Accept         | uint   | 0-2    | (none)  |
    |  19 | x  | x | - |   | Q-Block1       | uint   | 0-3    | (none)  |
    |  20 |    |   |   | x | Location-Query | string | 0-255  | (none)  |
@@ -60,17 +62,21 @@ type OptionID uint16
 
 // Option IDs.
 const (
-	IfMatch       OptionID = 1
-	URIHost       OptionID = 3
-	ETag          OptionID = 4
-	IfNoneMatch   OptionID = 5
-	Observe       OptionID = 6
-	URIPort       OptionID = 7
-	LocationPath  OptionID = 8
+	IfMatch      OptionID = 1
+	URIHost      OptionID = 3
+	ETag         OptionID = 4
+	IfNoneMatch  OptionID = 5
+	Observe      OptionID = 6
+	URIPort      OptionID = 7
+	LocationPath OptionID = 8
+	// OSCORE is the critical option defined by RFC 8613. An OSCORE-enabled
+	// transport must process it before dispatching the request to an application handler.
+	OSCORE        OptionID = 9
 	URIPath       OptionID = 11
 	ContentFormat OptionID = 12
 	MaxAge        OptionID = 14
 	URIQuery      OptionID = 15
+	HopLimit      OptionID = 16
 	Accept        OptionID = 17
 	QBlock1       OptionID = 19
 	LocationQuery OptionID = 20
@@ -94,10 +100,12 @@ var optionIDToString = map[OptionID]string{
 	Observe:       "Observe",
 	URIPort:       "URIPort",
 	LocationPath:  "LocationPath",
+	OSCORE:        "OSCORE",
 	URIPath:       "URIPath",
 	ContentFormat: "ContentFormat",
 	MaxAge:        "MaxAge",
 	URIQuery:      "URIQuery",
+	HopLimit:      "HopLimit",
 	Accept:        "Accept",
 	QBlock1:       "QBlock1",
 	LocationQuery: "LocationQuery",
@@ -159,6 +167,7 @@ var CoapOptionDefs = map[OptionID]OptionDef{
 	ContentFormat: {ValueFormat: ValueUint, MinLen: 0, MaxLen: 2},
 	MaxAge:        {ValueFormat: ValueUint, MinLen: 0, MaxLen: 4},
 	URIQuery:      {ValueFormat: ValueString, MinLen: 0, MaxLen: 255},
+	HopLimit:      {ValueFormat: ValueUint, MinLen: 1, MaxLen: 1},
 	Accept:        {ValueFormat: ValueUint, MinLen: 0, MaxLen: 2},
 	QBlock1:       {ValueFormat: ValueUint, MinLen: 0, MaxLen: 3},
 	LocationQuery: {ValueFormat: ValueString, MinLen: 0, MaxLen: 255},

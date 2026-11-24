@@ -107,6 +107,14 @@ type qWireCounts struct {
 	legacy atomic.Int32
 }
 
+var qInteropParallel = make(chan struct{}, 4)
+
+func acquireQInterop(t *testing.T) {
+	t.Helper()
+	qInteropParallel <- struct{}{}
+	t.Cleanup(func() { <-qInteropParallel })
+}
+
 func (c *qWireCounts) monitor(_ *client.Conn, msg *pool.Message) (bool, error) {
 	// Bad Option may echo the rejected Q option; it is not Q transfer traffic.
 	if msg.Code() >= codes.BadRequest {
@@ -338,6 +346,7 @@ func qDo(t *testing.T, cc *client.Conn, method codes.Code, path string, payload 
 }
 
 func TestQBlockLibcoapGoClient(t *testing.T) {
+	t.Parallel()
 	binary := qLibcoapBinary(t, "coap-server")
 	enabled := qLibcoapMode(t) == qLibcoapEnabled
 	addr := startQLibcoapServer(t, binary, enabled)
@@ -346,6 +355,7 @@ func TestQBlockLibcoapGoClient(t *testing.T) {
 		for _, typ := range []message.Type{message.NonConfirmable, message.Confirmable} {
 			for szx := blockwise.SZX16; szx <= blockwise.SZX1024; szx++ {
 				t.Run(fmt.Sprintf("secure=%v/type=%v/block=%d", secure, typ, szx.Size()), func(t *testing.T) {
+					t.Parallel()
 					testQLibcoapGoClient(t, binary, addr, payload, qLibcoapClientCase{enabled, secure, typ, szx})
 				})
 			}
@@ -373,6 +383,7 @@ type qLibcoapClientCase struct {
 }
 
 func testQLibcoapGoClient(t *testing.T, binary, addr string, payload []byte, test qLibcoapClientCase) {
+	acquireQInterop(t)
 	enabled, secure, typ, szx := test.enabled, test.secure, test.typ, test.szx
 	counts := new(qWireCounts)
 	mode := options.QBlockwiseAuto
@@ -426,15 +437,19 @@ func startQGoServer(t *testing.T, secure bool, szx blockwise.SZX, payload []byte
 type qGoServerOptions struct {
 	mtu       uint16
 	blockwise options.QBlockwiseConfig
+	path      string
 }
 
 func startQGoServerWithMTU(t *testing.T, secure bool, szx blockwise.SZX, payload []byte, counts *qWireCounts, calls *atomic.Int32, config qGoServerOptions) string {
 	t.Helper()
+	if config.path == "" {
+		config.path = "/q"
+	}
 	router := mux.NewRouter()
-	require.NoError(t, router.Handle("/q", mux.HandlerFunc(func(w mux.ResponseWriter, r *mux.Message) {
+	require.NoError(t, router.Handle(config.path, mux.HandlerFunc(func(w mux.ResponseWriter, r *mux.Message) {
 		calls.Add(1)
 		switch r.Code() {
-		case codes.PUT, codes.FETCH, codes.PATCH, codes.IPATCH:
+		case codes.POST, codes.PUT, codes.FETCH, codes.PATCH, codes.IPATCH:
 			got, err := r.ReadBody()
 			if err != nil {
 				t.Errorf("read Q request body: %v", err)
@@ -559,6 +574,7 @@ func runQLibcoapRequest(t *testing.T, request qLibcoapRequest) []byte {
 }
 
 func TestQBlockLibcoapRFC8132Methods(t *testing.T) {
+	t.Parallel()
 	binary := qLibcoapBinary(t, "coap-client")
 	modes := []struct {
 		name string
@@ -578,6 +594,7 @@ func TestQBlockLibcoapRFC8132Methods(t *testing.T) {
 		name string
 		code codes.Code
 	}{
+		{name: "post", code: codes.POST},
 		{name: "fetch", code: codes.FETCH},
 		{name: "patch", code: codes.PATCH},
 		{name: "ipatch", code: codes.IPATCH},
@@ -585,6 +602,8 @@ func TestQBlockLibcoapRFC8132Methods(t *testing.T) {
 	for _, mode := range modes {
 		for _, method := range methods {
 			t.Run(mode.name+"/"+method.name, func(t *testing.T) {
+				t.Parallel()
+				acquireQInterop(t)
 				counts := new(qWireCounts)
 				calls := new(atomic.Int32)
 				uri := startQGoServer(t, false, blockwise.SZX128, payload, counts, calls)
@@ -615,6 +634,7 @@ func TestQBlockLibcoapRFC8132Methods(t *testing.T) {
 }
 
 func TestQBlockLibcoapGoServer(t *testing.T) {
+	t.Parallel()
 	binary := qLibcoapBinary(t, "coap-client")
 	if qLibcoapMode(t) == qLibcoapDisabled {
 		// Still exercise the legacy-only reference against a Q-capable Go server.
@@ -645,6 +665,8 @@ func TestQBlockLibcoapGoServer(t *testing.T) {
 		for _, typ := range []message.Type{message.NonConfirmable, message.Confirmable} {
 			for szx := blockwise.SZX16; szx <= blockwise.SZX1024; szx++ {
 				t.Run(fmt.Sprintf("secure=%v/type=%v/block=%d", secure, typ, szx.Size()), func(t *testing.T) {
+					t.Parallel()
+					acquireQInterop(t)
 					counts := new(qWireCounts)
 					calls := new(atomic.Int32)
 					uri := startQGoServer(t, secure, szx, payload, counts, calls)
@@ -697,6 +719,7 @@ func TestBoundedLibcoapLog(t *testing.T) {
 }
 
 func TestQBlockLibcoapSelectiveRecovery(t *testing.T) {
+	t.Parallel()
 	serverBinary := qLibcoapBinary(t, "coap-server")
 	clientBinary := qLibcoapBinary(t, "coap-client")
 	if qLibcoapMode(t) == qLibcoapDisabled {
@@ -708,6 +731,8 @@ func TestQBlockLibcoapSelectiveRecovery(t *testing.T) {
 	for _, goClient := range []bool{true, false} {
 		for _, upload := range []bool{true, false} {
 			t.Run(fmt.Sprintf("go-client=%v/upload=%v", goClient, upload), func(t *testing.T) {
+				t.Parallel()
+				acquireQInterop(t)
 				testQLibcoapSelectiveRecovery(t, serverBinary, clientBinary, payload, goClient, upload)
 			})
 		}

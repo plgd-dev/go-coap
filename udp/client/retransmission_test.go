@@ -123,6 +123,22 @@ func TestRetransmissionFailureDoesNotOverrideAcknowledgment(t *testing.T) {
 	element.private.Unlock()
 }
 
+func TestExpiredMIDHandlerDoesNotRemoveReplacement(t *testing.T) {
+	cc, _ := newTestConnWithSession(t)
+	const mid = 1
+	now := time.Now()
+	expired := &midElement{start: now.Add(-time.Hour), acknowledgeTimeout: time.Millisecond}
+	expired.retransmit.Store(4)
+	replacement := &midElement{start: now, acknowledgeTimeout: time.Hour}
+	cc.midHandlerContainer.Store(mid, replacement)
+
+	cc.checkMidHandlerContainer(now, 4, mid, expired)
+
+	current, ok := cc.midHandlerContainer.Load(mid)
+	require.True(t, ok)
+	require.Same(t, replacement, current)
+}
+
 func TestMidElementRepeatedRetransmissionFailuresAreBounded(t *testing.T) {
 	cc, session := newTestConnWithSession(t)
 	session.setWriteError(context.DeadlineExceeded)

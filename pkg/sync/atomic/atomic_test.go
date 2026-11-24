@@ -351,7 +351,7 @@ func TestUnsafePointer(t *testing.T) {
 
 var benchmarkTimeSink time.Time
 
-// The AtomicValueReference benchmarks mirror the storage used by go.uber.org/atomic.Time.
+// Compare pointer-backed storage with the standard library's atomic.Value.
 func BenchmarkTimeStore(b *testing.B) {
 	want := time.Date(2026, time.November, 11, 0, 0, 0, 0, time.UTC)
 	b.Run("PointerAtomic", func(b *testing.B) {

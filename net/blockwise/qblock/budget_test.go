@@ -10,6 +10,7 @@ import (
 
 	"github.com/plgd-dev/go-coap/v3/message"
 	"github.com/plgd-dev/go-coap/v3/message/pool"
+	"github.com/plgd-dev/go-coap/v3/net/oscore"
 	"github.com/stretchr/testify/require"
 )
 
@@ -166,6 +167,106 @@ func TestQBlockBudgetPreservesMaximumBody(t *testing.T) {
 	b.CloseQBlockTransfers()
 	require.Zero(t, b.qRetainedBytes.Load())
 	require.Zero(t, b.qRetainedTransfers.Load())
+	require.Equal(t, bytesBefore, qRetainedBytes.Load())
+	require.Equal(t, transfersBefore, qRetainedTransfers.Load())
+}
+
+func TestQBlockOSCOREReceiveLimitsAndRetransmission(t *testing.T) {
+	bytesBefore, transfersBefore := qRetainedBytes.Load(), qRetainedTransfers.Load()
+	b := New(newTestClient(), nil)
+	defer b.CloseQBlockTransfers()
+
+	request := pool.NewMessage(context.Background())
+	firstInfo := oscore.RequestInfo{Protected: true, RecipientID: []byte("first")}
+	request.SetContext(oscore.ContextWithRequestInfo(request.Context(), firstInfo))
+	requestInfo, hasRequestInfo := oscore.RequestInfoFromContext(request.Context())
+	require.True(t, hasRequestInfo)
+	require.True(t, requestInfo.Protected)
+	p := q1Parameters{szx: SZX16, bodySize: 32, num: 0, more: true}
+	firstKey := q1TransferKey(request, nil, []byte("tag"))
+	transfer, err := b.q1TransferLocked(request, firstKey, p)
+	require.NoError(t, err)
+	transfer.expires = time.Now().Add(time.Hour)
+
+	secondRequest := pool.NewMessage(context.Background())
+	secondRequest.SetContext(oscore.ContextWithRequestInfo(secondRequest.Context(), oscore.RequestInfo{
+		Protected:   true,
+		RecipientID: []byte("second"),
+	}))
+	secondKey := q1TransferKey(secondRequest, nil, []byte("tag"))
+	require.NotEqual(t, firstKey, secondKey, "distinct OSCORE identities must not share a Q-Block1 transfer")
+	originalTransfer, err := b.q1TransferLocked(request, firstKey, p)
+	require.NoError(t, err)
+	require.Same(t, transfer, originalTransfer, "the original identity's transfer must remain usable")
+
+	payload := bytes.Repeat([]byte{1}, 16)
+	_, duplicate, err := b.addQ1PayloadLocked(firstKey, transfer, transfer.assembly, p, payload)
+	require.NoError(t, err)
+	require.False(t, duplicate)
+	_, duplicate, err = b.addQ1PayloadLocked(firstKey, transfer, transfer.assembly, p, payload)
+	require.NoError(t, err)
+	require.True(t, duplicate)
+	require.Len(t, b.q1Receivers, 1)
+	require.Len(t, transfer.assembly.blocks, 1)
+	require.Equal(t, int64(len(payload)), transfer.bytes)
+	require.Equal(t, bytesBefore+int64(len(payload)), qRetainedBytes.Load())
+	require.Equal(t, transfersBefore+1, qRetainedTransfers.Load())
+
+	maxBody := New(newTestClient(), nil)
+	defer maxBody.CloseQBlockTransfers()
+	maxBodyRequest := pool.NewMessage(context.Background())
+	maxBodyRequest.SetContext(oscore.ContextWithRequestInfo(maxBodyRequest.Context(), oscore.RequestInfo{Protected: true}))
+	maxBodyParams := q1Parameters{szx: SZX1024, bodySize: q1DefaultMaxBodySize}
+	maxBodyTransfer, err := maxBody.q1TransferLocked(maxBodyRequest, "maximum-body", maxBodyParams)
+	require.NoError(t, err)
+	require.Equal(t, int64(q1DefaultMaxBodySize), maxBodyTransfer.assembly.bodySize)
+	overBodyParams := maxBodyParams
+	overBodyParams.bodySize++
+	_, err = maxBody.q1TransferLocked(maxBodyRequest, "over-body", overBodyParams)
+	require.ErrorIs(t, err, ErrQBlockTooLarge)
+
+	trackedBlocks := New(newTestClient(), nil)
+	defer trackedBlocks.CloseQBlockTransfers()
+	trackedRequest := pool.NewMessage(context.Background())
+	trackedRequest.SetContext(oscore.ContextWithRequestInfo(trackedRequest.Context(), oscore.RequestInfo{Protected: true}))
+	overTrackedParams := q1Parameters{
+		szx: SZX16, bodySize: uint32((q1MaxTrackedBlocks + 1) * int(SZX16.Size())),
+	}
+	_, err = trackedBlocks.q1TransferLocked(trackedRequest, "over-tracked", overTrackedParams)
+	require.ErrorIs(t, err, ErrQBlockTooLarge)
+	_, err = NewAssembly(SZX16, int64(q1MaxTrackedBlocks)*SZX16.Size(),
+		q1DefaultMaxBodySize, q1MaxTrackedBlocks)
+	require.NoError(t, err, "exact tracked-block limit remains supported")
+
+	transferLimit := New(newTestClient(), nil)
+	transferLimitRequest := pool.NewMessage(context.Background())
+	transferLimitRequest.SetContext(oscore.ContextWithRequestInfo(
+		transferLimitRequest.Context(), oscore.RequestInfo{Protected: true}))
+	for i := range 4096 {
+		transferLimit.q1Receivers[fmt.Sprint(i)] = &q1ReceiveTransfer{}
+	}
+	_, err = transferLimit.q1TransferLocked(transferLimitRequest, "over-transfers",
+		q1Parameters{szx: SZX16, bodySize: 16})
+	require.ErrorIs(t, err, errReceivingMessagesCacheFull)
+	clear(transferLimit.q1Receivers)
+	transferLimit.CloseQBlockTransfers()
+
+	q2TransferLimit := New(newTestClient(), nil)
+	for i := range 4096 {
+		q2TransferLimit.q2Senders[fmt.Sprint(i)] = &q2SendTransfer{}
+	}
+	response := pool.NewMessage(context.Background())
+	response.SetBody(bytes.NewReader([]byte{1}))
+	protectedContext := oscore.ContextWithRequestInfo(context.Background(), oscore.RequestInfo{Protected: true})
+	err = q2TransferLimit.cacheQBlock2Response(protectedContext, "over-transfers", "", response, message.NonConfirmable)
+	require.ErrorIs(t, err, ErrQBlockTooLarge)
+	clear(q2TransferLimit.q2Senders)
+	q2TransferLimit.CloseQBlockTransfers()
+	q2TransferLimit.cc.ReleaseMessage(response)
+
+	maxBody.CloseQBlockTransfers()
+	trackedBlocks.CloseQBlockTransfers()
+	b.CloseQBlockTransfers()
 	require.Equal(t, bytesBefore, qRetainedBytes.Load())
 	require.Equal(t, transfersBefore, qRetainedTransfers.Load())
 }

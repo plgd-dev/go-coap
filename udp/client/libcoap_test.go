@@ -16,7 +16,6 @@ import (
 	"github.com/plgd-dev/go-coap/v3/net/blockwise"
 	"github.com/plgd-dev/go-coap/v3/options"
 	"github.com/plgd-dev/go-coap/v3/udp"
-	"github.com/plgd-dev/go-coap/v3/udp/coder"
 	"github.com/stretchr/testify/require"
 )
 
@@ -58,12 +57,9 @@ func TestConnPutBlockwiseWithoutTokenLibCoAP(t *testing.T) {
 		}
 	}()
 
-	waitForLibCoAPServer(t, net.JoinHostPort("127.0.0.1", strconv.Itoa(port)))
-	select {
-	case waitErr := <-serverDone:
-		serverWaited = true
-		require.FailNow(t, "libcoap server exited before the test", "error: %v, output: %s", waitErr, serverOutput.String())
-	default:
+	if readinessErr := waitForLibCoAPServer(serverDone, &serverWaited,
+		net.JoinHostPort("127.0.0.1", strconv.Itoa(port))); readinessErr != nil {
+		require.FailNow(t, "libcoap server did not become ready", "%v; output: %s", readinessErr, serverOutput.String())
 	}
 
 	cc, err := udp.Dial(net.JoinHostPort("127.0.0.1", strconv.Itoa(port)),
@@ -91,54 +87,6 @@ func TestConnPutBlockwiseWithoutTokenLibCoAP(t *testing.T) {
 	require.Equal(t, payload, bodyToBytes(t, resp.Body()))
 }
 
-func waitForLibCoAPServer(t *testing.T, address string) {
-	t.Helper()
-	deadline := time.Now().Add(5 * time.Second)
-	ping := message.Message{Code: codes.Empty, Type: message.Confirmable, MessageID: 1}
-	size, err := coder.DefaultCoder.Size(ping)
-	require.NoError(t, err)
-	request := make([]byte, size)
-	_, err = coder.DefaultCoder.Encode(ping, request)
-	require.NoError(t, err)
-
-	var lastErr error
-	for time.Now().Before(deadline) {
-		lastErr = pingLibCoAPServer(address, request, ping.MessageID)
-		if lastErr == nil {
-			return
-		}
-		time.Sleep(25 * time.Millisecond)
-	}
-	require.FailNow(t, "libcoap server did not respond to CoAP ping", "address: %s, error: %v", address, lastErr)
-}
-
-func pingLibCoAPServer(address string, request []byte, messageID int32) error {
-	conn, err := net.Dial("udp", address)
-	if err != nil {
-		return err
-	}
-	defer conn.Close()
-	if deadlineErr := conn.SetDeadline(time.Now().Add(100 * time.Millisecond)); deadlineErr != nil {
-		return deadlineErr
-	}
-	if _, writeErr := conn.Write(request); writeErr != nil {
-		return writeErr
-	}
-	response := make([]byte, 64)
-	n, readErr := conn.Read(response)
-	if readErr != nil {
-		return readErr
-	}
-	var decoded message.Message
-	if _, decodeErr := coder.DefaultCoder.Decode(response[:n], &decoded); decodeErr != nil {
-		return decodeErr
-	}
-	if decoded.Type != message.Reset || decoded.MessageID != messageID {
-		return fmt.Errorf("unexpected response to CoAP ping: type %v, MID %d", decoded.Type, decoded.MessageID)
-	}
-	return nil
-}
-
 func findLibCoAPServer() (string, error) {
 	for _, name := range []string{"coap-server-notls", "coap-server"} {
 		path, err := exec.LookPath(name)
@@ -147,4 +95,58 @@ func findLibCoAPServer() (string, error) {
 		}
 	}
 	return "", errors.New("coap-server not found in PATH")
+}
+
+func waitForLibCoAPServer(serverDone <-chan error, serverWaited *bool, address string) error {
+	deadline := time.Now().Add(5 * time.Second)
+	var lastErr error
+	for time.Now().Before(deadline) {
+		select {
+		case serverErr := <-serverDone:
+			*serverWaited = true
+			return fmt.Errorf("libcoap server exited before becoming ready: %w", serverErr)
+		default:
+		}
+
+		lastErr = probeLibCoAPServer(address)
+		if lastErr == nil {
+			return nil
+		}
+
+		select {
+		case serverErr := <-serverDone:
+			*serverWaited = true
+			if serverErr != nil {
+				return fmt.Errorf("libcoap server exited before becoming ready: %w", serverErr)
+			}
+			return errors.New("libcoap server exited before becoming ready")
+		case <-time.After(50 * time.Millisecond):
+		}
+	}
+	if lastErr == nil {
+		return errors.New("timed out waiting for libcoap server response")
+	}
+	return fmt.Errorf("timed out waiting for libcoap server response: %w", lastErr)
+}
+
+func probeLibCoAPServer(address string) error {
+	cc, err := udp.Dial(address, options.WithErrors(func(error) {}))
+	if err != nil {
+		return err
+	}
+	defer cc.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 250*time.Millisecond)
+	defer cancel()
+	req, err := cc.NewGetRequest(ctx, "/")
+	if err != nil {
+		return err
+	}
+	defer cc.ReleaseMessage(req)
+	resp, err := cc.Do(req)
+	if err != nil {
+		return err
+	}
+	cc.ReleaseMessage(resp)
+	return nil
 }

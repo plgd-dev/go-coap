@@ -14,6 +14,7 @@ import (
 	"github.com/plgd-dev/go-coap/v3/mux"
 	coapNet "github.com/plgd-dev/go-coap/v3/net"
 	"github.com/plgd-dev/go-coap/v3/net/blockwise"
+	"github.com/plgd-dev/go-coap/v3/net/blockwise/qblock"
 	"github.com/plgd-dev/go-coap/v3/options"
 	"github.com/plgd-dev/go-coap/v3/udp"
 	"github.com/plgd-dev/go-coap/v3/udp/client"
@@ -135,6 +136,11 @@ func TestGoQBlockProbeWaitersCancelIndependently(t *testing.T) {
 
 func TestGoQBlockRepeatedSelectiveRecovery(t *testing.T) {
 	payload := qPayload()
+	config := qblock.DefaultConfig()
+	config.NonTimeout = 10 * time.Millisecond
+	config.NonReceiveTimeout = 1020 * time.Millisecond
+	config.NonMaxRetransmit = 2
+	config.MaxLatency = 10 * time.Second
 	for _, upload := range []bool{false, true} {
 		t.Run(map[bool]string{false: "download", true: "upload"}[upload], func(t *testing.T) {
 			option, method := message.QBlock2, codes.GET
@@ -143,10 +149,10 @@ func TestGoQBlockRepeatedSelectiveRecovery(t *testing.T) {
 				option, method, body = message.QBlock1, codes.PUT, payload
 			}
 			calls := new(atomic.Int32)
-			server := strings.TrimPrefix(startQGoServer(t, false, blockwise.SZX128, payload, new(qWireCounts), calls), "coap://")
+			server := strings.TrimPrefix(startQGoServer(t, false, blockwise.SZX128, payload, new(qWireCounts), calls, config), "coap://")
 			innerAddr, inner := newQDropRelay(t, server, option, 3)
 			outerAddr, outer := newQDropRelay(t, innerAddr, option, 3)
-			cc := qDial(t, outerAddr, false, blockwise.SZX128, options.QBlockwiseOnly, new(qWireCounts))
+			cc := qDial(t, outerAddr, false, blockwise.SZX128, options.QBlockwiseOnly, new(qWireCounts), config)
 			response := qDo(t, cc, method, "/q", body, message.NonConfirmable)
 			got, err := response.ReadBody()
 			require.NoError(t, err)

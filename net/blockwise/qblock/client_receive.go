@@ -5,12 +5,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"time"
 
 	"github.com/plgd-dev/go-coap/v3/message"
 	"github.com/plgd-dev/go-coap/v3/message/codes"
 	"github.com/plgd-dev/go-coap/v3/message/pool"
 	"github.com/plgd-dev/go-coap/v3/net/observation"
+	pkgMath "github.com/plgd-dev/go-coap/v3/pkg/math"
 )
 
 // DoQBlock2 requests a body burst, acknowledges complete payload sets, and
@@ -27,67 +29,322 @@ func (b *Engine[C]) DoQBlock2(req *pool.Message, szx SZX,
 		return nil, err
 	}
 	defer exchange.Close()
-	if !req.HasOption(message.RequestTag) {
-		request := b.cloneMessage(req)
-		defer b.cc.ReleaseMessage(request)
-		tag, tagErr := message.GetToken()
-		if tagErr != nil {
-			return nil, tagErr
-		}
-		if tagErr := request.SetRequestTag(tag); tagErr != nil {
-			return nil, tagErr
-		}
-		req = request
+	if req.HasOption(message.RequestTag) {
+		return b.ReceiveQBlock2(req, szx, exchange, nil)
 	}
-	return b.ReceiveQBlock2(req, szx, exchange, nil)
+	request := b.cloneMessage(req)
+	defer b.cc.ReleaseMessage(request)
+	if req.Code() == codes.FETCH {
+		if copyErr := copyFetchSelectorBody(req, request); copyErr != nil {
+			return nil, copyErr
+		}
+	}
+	tag, err := message.GetToken()
+	if err != nil {
+		return nil, err
+	}
+	if err := request.SetRequestTag(tag); err != nil {
+		return nil, err
+	}
+	return b.ReceiveQBlock2(request, szx, exchange, nil)
 }
 
 type q2BodyReceiver[C Client] struct {
-	b                  *Engine[C]
-	req                *pool.Message
-	exchange           Exchange
-	szx, maxSZX        SZX
-	assembly           *Assembly
-	etag               []byte
-	continued          int64
-	partialExpires     time.Time
-	retries            int
-	requestedSet       int64
-	retainedBytes      int64
-	sentRequests       int
-	observeSequence    uint32
-	observePresent     bool
-	observeTime        time.Time
-	bodyType           message.Type
-	bodyTypeSet        bool
-	terminal           bool
-	representationCode codes.Code
+	b                        *Engine[C]
+	req                      *pool.Message
+	exchange                 Exchange
+	szx, maxSZX              SZX
+	assembly                 *Assembly
+	etag                     []byte
+	continued                int64
+	partialExpires           time.Time
+	retries                  int
+	requestedSet             int64
+	retainedBytes            int64
+	sentRequests             int
+	observeSequence          uint32
+	observePresent           bool
+	observeTime              time.Time
+	authenticatedSequence    uint64
+	hasAuthenticatedSequence bool
+	bodyType                 message.Type
+	bodyTypeSet              bool
+	terminal                 bool
+	representationCode       codes.Code
 }
 
-func (s *q2BodyReceiver[C]) send(nums []int64, more bool) error {
-	part := s.b.cloneMessage(s.req)
-	defer s.b.cc.ReleaseMessage(part)
-	if s.sentRequests > 0 {
-		token, err := s.exchange.NewToken()
+type qBlock2RepresentationCompleter interface {
+	CompleteQBlock2Representation(message.Token, uint64) error
+}
+
+func (s *q2BodyReceiver[C]) send(nums []int64, more, recovery bool) error {
+	for offset := 0; offset < len(nums); {
+		part, added, err := s.buildRequestPart(nums[offset:], more, recovery)
 		if err != nil {
 			return err
+		}
+		offset += added
+		s.sentRequests++
+		err = s.exchange.Send(part)
+		s.b.cc.ReleaseMessage(part)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *q2BodyReceiver[C]) buildRequestPart(nums []int64, more, recovery bool) (*pool.Message, int, error) {
+	part, err := s.newRequest(recovery)
+	if err != nil {
+		return nil, 0, err
+	}
+	if budget, ok := any(s.b.cc).(interface {
+		QBlockDatagramBudget(*pool.Message) (baseSize, perOptionOverhead, limit uint64, err error)
+	}); ok {
+		added, err := s.addQBlockOptionsWithinBudget(part, nums, more, budget)
+		if err != nil {
+			s.b.cc.ReleaseMessage(part)
+			return nil, 0, err
+		}
+		if added == 0 {
+			s.b.cc.ReleaseMessage(part)
+			return nil, 0, ErrQBlockTooLarge
+		}
+		if err := addQBlockOptions(part, s.szx, nums[:added], more); err != nil {
+			s.b.cc.ReleaseMessage(part)
+			return nil, 0, err
+		}
+		if err := validateQBlockDatagram(s.b.cc, part); err != nil {
+			s.b.cc.ReleaseMessage(part)
+			return nil, 0, err
+		}
+		return part, added, nil
+	}
+
+	added := 0
+	for _, num := range nums {
+		value, err := EncodeQBlockOption(s.szx, num, more)
+		if err != nil {
+			s.b.cc.ReleaseMessage(part)
+			return nil, 0, err
+		}
+		part.AddOptionUint32(message.QBlock2, value)
+		if err = validateQBlockDatagram(s.b.cc, part); err != nil {
+			part.Remove(message.QBlock2)
+			if added == 0 {
+				s.b.cc.ReleaseMessage(part)
+				return nil, 0, err
+			}
+			if err := addQBlockOptions(part, s.szx, nums[:added], more); err != nil {
+				s.b.cc.ReleaseMessage(part)
+				return nil, 0, err
+			}
+			break
+		}
+		added++
+	}
+	if added == 0 {
+		s.b.cc.ReleaseMessage(part)
+		return nil, 0, ErrQBlockTooLarge
+	}
+	return part, added, nil
+}
+
+func (s *q2BodyReceiver[C]) addQBlockOptionsWithinBudget(
+	part *pool.Message,
+	nums []int64,
+	more bool,
+	budget interface {
+		QBlockDatagramBudget(*pool.Message) (baseSize, perOptionOverhead, limit uint64, err error)
+	},
+) (int, error) {
+	baseSize, perOptionOverhead, limit, err := budget.QBlockDatagramBudget(part)
+	if err != nil {
+		return 0, err
+	}
+	tailAdjustment, previousID, err := qBlockOptionTailAdjustment(part.Options())
+	if err != nil {
+		return 0, err
+	}
+	baseSize, err = applyQBlockTailAdjustment(baseSize, tailAdjustment)
+	if err != nil {
+		return 0, err
+	}
+	if baseSize > limit {
+		return 0, nil
+	}
+	return s.countFittingQBlockOptions(nums, more, baseSize, perOptionOverhead, limit, previousID)
+}
+
+func applyQBlockTailAdjustment(baseSize uint64, tailAdjustment int64) (uint64, error) {
+	if tailAdjustment < 0 {
+		decrease, err := pkgMath.SafeCastTo[uint64](-(tailAdjustment + 1))
+		if err != nil {
+			return 0, err
+		}
+		decrease++
+		if decrease > baseSize {
+			return 0, errors.New("invalid Q-Block datagram size estimate")
+		}
+		return baseSize - decrease, nil
+	}
+	increase, err := pkgMath.SafeCastTo[uint64](tailAdjustment)
+	if err != nil {
+		return 0, err
+	}
+	if increase > ^uint64(0)-baseSize {
+		return 0, errors.New("Q-Block datagram size estimate overflow")
+	}
+	return baseSize + increase, nil
+}
+
+func (s *q2BodyReceiver[C]) countFittingQBlockOptions(
+	nums []int64,
+	more bool,
+	baseSize, perOptionOverhead, limit uint64,
+	previousID message.OptionID,
+) (int, error) {
+	size := baseSize
+	added := 0
+	for _, num := range nums {
+		value, err := EncodeQBlockOption(s.szx, num, more)
+		if err != nil {
+			return 0, err
+		}
+		option, err := newQBlockMessageOption(value)
+		if err != nil {
+			return 0, err
+		}
+		increment, err := encodedOptionSize(option, previousID)
+		if err != nil {
+			return 0, err
+		}
+		incrementSize, err := pkgMath.SafeCastTo[uint64](increment)
+		if err != nil {
+			return 0, err
+		}
+		if size > limit || incrementSize > limit-size ||
+			perOptionOverhead > limit-size-incrementSize {
+			break
+		}
+		size += incrementSize + perOptionOverhead
+		added++
+		previousID = message.QBlock2
+	}
+	return added, nil
+}
+
+func qBlockOptionTailAdjustment(options message.Options) (int64, message.OptionID, error) {
+	var previousID message.OptionID
+	for _, option := range options {
+		switch {
+		case option.ID < message.QBlock2:
+			previousID = option.ID
+		case option.ID == message.QBlock2:
+			return 0, 0, errors.New("Q-Block2 option already present in request part")
+		default:
+			originalSize, err := encodedOptionSize(option, previousID)
+			if err != nil {
+				return 0, 0, err
+			}
+			insertedSize, err := encodedOptionSize(option, message.QBlock2)
+			if err != nil {
+				return 0, 0, err
+			}
+			return int64(insertedSize - originalSize), previousID, nil
+		}
+	}
+	return 0, previousID, nil
+}
+
+func newQBlockMessageOption(value uint32) (message.Option, error) {
+	var encoded [4]byte
+	length, err := message.EncodeUint32(encoded[:], value)
+	if err != nil {
+		return message.Option{}, err
+	}
+	return message.Option{ID: message.QBlock2, Value: encoded[:length]}, nil
+}
+
+func encodedOptionSize(option message.Option, previousID message.OptionID) (int, error) {
+	size, err := option.Marshal(nil, previousID)
+	if err != nil && !errors.Is(err, message.ErrTooSmall) {
+		return 0, err
+	}
+	return size, nil
+}
+
+func (s *q2BodyReceiver[C]) newRequest(recovery bool) (*pool.Message, error) {
+	part := s.b.cloneMessage(s.req)
+	part.SetMessageID(0)
+	part.Remove(message.ETag)
+	part.Remove(message.QBlock1)
+	part.Remove(message.QBlock2)
+	if s.req.Code() == codes.FETCH {
+		if err := copyFetchSelectorBody(s.req, part); err != nil {
+			s.b.cc.ReleaseMessage(part)
+			return nil, err
+		}
+	} else {
+		part.SetBody(nil)
+	}
+	if recovery || s.sentRequests > 0 {
+		token, err := s.exchange.NewToken()
+		if err != nil {
+			s.b.cc.ReleaseMessage(part)
+			return nil, err
 		}
 		part.SetToken(token)
 		part.Remove(message.Observe)
 	}
-	s.sentRequests++
-	part.Remove(message.QBlock2)
-	part.Remove(message.ETag)
-	part.Remove(message.QBlock1)
-	part.SetBody(nil)
+	return part, nil
+}
+
+func copyFetchSelectorBody(source, destination *pool.Message) error {
+	body := source.Body()
+	if body == nil {
+		destination.SetBody(nil)
+		return nil
+	}
+	position, err := body.Seek(0, io.SeekCurrent)
+	if err != nil {
+		return fmt.Errorf("read FETCH selector position: %w", err)
+	}
+	if _, err := body.Seek(0, io.SeekStart); err != nil {
+		return fmt.Errorf("rewind FETCH selector: %w", err)
+	}
+	selector, readErr := io.ReadAll(body)
+	_, restoreErr := body.Seek(position, io.SeekStart)
+	if readErr != nil {
+		return fmt.Errorf("read FETCH selector: %w", readErr)
+	}
+	if restoreErr != nil {
+		return fmt.Errorf("restore FETCH selector position: %w", restoreErr)
+	}
+	destination.SetBody(bytes.NewReader(selector))
+	return nil
+}
+
+func validateQBlockDatagram(client any, part *pool.Message) error {
+	validator, ok := client.(interface {
+		ValidateQBlockDatagram(*pool.Message) error
+	})
+	if !ok {
+		return nil
+	}
+	return validator.ValidateQBlockDatagram(part)
+}
+
+func addQBlockOptions(part *pool.Message, szx SZX, nums []int64, more bool) error {
 	for _, num := range nums {
-		value, err := EncodeQBlockOption(s.szx, num, more)
+		value, err := EncodeQBlockOption(szx, num, more)
 		if err != nil {
 			return err
 		}
 		part.AddOptionUint32(message.QBlock2, value)
 	}
-	return s.exchange.Send(part)
+	return nil
 }
 
 func (s *q2BodyReceiver[C]) receive() (*pool.Message, error) {
@@ -105,6 +362,9 @@ func (s *q2BodyReceiver[C]) recover(receiveErr error) error {
 	if errors.Is(receiveErr, context.Canceled) {
 		return receiveErr
 	}
+	if !errors.Is(receiveErr, context.DeadlineExceeded) {
+		return receiveErr
+	}
 	if !s.partialExpires.IsZero() && !s.partialExpires.After(time.Now()) {
 		return ErrQBlockIncomplete
 	}
@@ -113,14 +373,14 @@ func (s *q2BodyReceiver[C]) recover(receiveErr error) error {
 	}
 	s.retries++
 	if s.assembly == nil {
-		return s.send([]int64{0}, true)
+		return s.send([]int64{0}, true, true)
 	}
 	nums := qMissingSet(s.assembly.missingSet(s.b.config.MaxPayloads), s.b.config.MaxPayloads)
 	if len(nums) == 0 {
 		return ErrQBlockIncomplete
 	}
 	s.requestedSet = nums[0] / s.b.config.MaxPayloads
-	return s.send(nums, false)
+	return s.send(nums, false, true)
 }
 
 func (s *q2BodyReceiver[C]) newRepresentation(response *pool.Message, szx SZX, size uint32, etag []byte) error {
@@ -134,6 +394,9 @@ func (s *q2BodyReceiver[C]) newRepresentation(response *pool.Message, szx SZX, s
 	s.representationCode = response.Code()
 	if sequence, sequenceErr := response.Observe(); sequenceErr == nil {
 		s.observeSequence, s.observePresent, s.observeTime = sequence, true, time.Now()
+	}
+	if sequence, ok := observation.AuthenticatedSequenceNumber(response.Context()); ok {
+		s.authenticatedSequence, s.hasAuthenticatedSequence = sequence, true
 	}
 	maxAge, maxAgeErr := response.GetOptionUint32(message.MaxAge)
 	if maxAgeErr != nil {
@@ -161,7 +424,7 @@ func (s *q2BodyReceiver[C]) representation(response *pool.Message, szx SZX) (boo
 	}
 	terminal := s.registrationTerminal(response)
 	if changed && s.observePresent {
-		newer := sequenceErr == nil && observation.ValidSequenceNumber(s.observeSequence, sequence, s.observeTime, time.Now())
+		newer := s.isNewerSequence(response, sequence, sequenceErr)
 		if !newer && !terminal {
 			return true, nil
 		}
@@ -179,8 +442,11 @@ func (s *q2BodyReceiver[C]) representation(response *pool.Message, szx SZX) (boo
 	if terminal {
 		s.terminal, s.observePresent = true, false
 	}
-	if s.isNewerSequence(sequence, sequenceErr) {
+	if s.isNewerSequence(response, sequence, sequenceErr) {
 		s.observeSequence, s.observeTime = sequence, time.Now()
+		if authenticatedSequence, ok := observation.AuthenticatedSequenceNumber(response.Context()); ok {
+			s.authenticatedSequence, s.hasAuthenticatedSequence = authenticatedSequence, true
+		}
 	}
 	return false, nil
 }
@@ -203,7 +469,10 @@ func (s *q2BodyReceiver[C]) skipAfterTerminal(response *pool.Message, changed bo
 	return s.terminal && (response.HasOption(message.Observe) || changed && !s.registrationTerminal(response))
 }
 
-func (s *q2BodyReceiver[C]) isNewerSequence(sequence uint32, err error) bool {
+func (s *q2BodyReceiver[C]) isNewerSequence(response *pool.Message, sequence uint32, err error) bool {
+	if authenticatedSequence, ok := observation.AuthenticatedSequenceNumber(response.Context()); ok {
+		return !s.hasAuthenticatedSequence || authenticatedSequence > s.authenticatedSequence
+	}
 	return s.observePresent && err == nil && sequence != s.observeSequence &&
 		observation.ValidSequenceNumber(s.observeSequence, sequence, s.observeTime, time.Now())
 }
@@ -236,11 +505,11 @@ func (s *q2BodyReceiver[C]) advance(num int64) error {
 	// Otherwise CON senders advance on ACKs, while NON can accelerate its set.
 	if (s.req.Type() == message.NonConfirmable || resume) && next%s.b.config.MaxPayloads == 0 && next > s.continued {
 		s.continued = next
-		return s.send([]int64{next}, true)
+		return s.send([]int64{next}, true, true)
 	}
 	if num/s.b.config.MaxPayloads > next/s.b.config.MaxPayloads && s.requestedSet != next/s.b.config.MaxPayloads {
 		s.requestedSet = next / s.b.config.MaxPayloads
-		return s.send(qMissingSet(s.assembly.missingSet(s.b.config.MaxPayloads), s.b.config.MaxPayloads), false)
+		return s.send(qMissingSet(s.assembly.missingSet(s.b.config.MaxPayloads), s.b.config.MaxPayloads), false, true)
 	}
 	return nil
 }
@@ -297,12 +566,23 @@ func (s *q2BodyReceiver[C]) finish(response *pool.Message) (*pool.Message, error
 		s.b.cc.ReleaseMessage(response)
 		return nil, err
 	}
+	if s.hasAuthenticatedSequence {
+		if completer, ok := s.exchange.(qBlock2RepresentationCompleter); ok {
+			if err := completer.CompleteQBlock2Representation(s.req.Token(), s.authenticatedSequence); err != nil {
+				s.b.cc.ReleaseMessage(response)
+				return nil, fmt.Errorf("complete authenticated Q-Block2 representation: %w", err)
+			}
+		}
+	}
 	response.Remove(message.QBlock2)
 	response.Remove(message.Size2)
 	response.SetBody(body)
 	response.SetToken(s.req.Token())
 	if s.observePresent {
 		response.SetObserve(s.observeSequence)
+	}
+	if s.hasAuthenticatedSequence {
+		observation.SetAuthenticatedSequenceNumber(response, s.authenticatedSequence)
 	}
 	return response, nil
 }
@@ -323,7 +603,7 @@ func (b *Engine[C]) ReceiveQBlock2(req *pool.Message, szx SZX, exchange Exchange
 	}()
 	if initial != nil {
 		s.sentRequests = 1
-	} else if err := s.send([]int64{0}, true); err != nil {
+	} else if err := s.send([]int64{0}, true, false); err != nil {
 		return nil, err
 	}
 	for {

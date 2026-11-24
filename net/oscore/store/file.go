@@ -1,0 +1,1311 @@
+// Package store provides file-backed OSCORE state stores.
+package store
+
+import (
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"os"
+	"path/filepath"
+	"strings"
+	"sync"
+
+	"github.com/plgd-dev/go-coap/v3/net/oscore"
+)
+
+const (
+	fileVersion        = 1
+	maxPartialIV       = uint64(1<<40 - 1)
+	maxStateBytes      = 4096
+	sequenceWindowSize = uint64(256)
+)
+
+var (
+	ErrInvalidStoreID               = errors.New("OSCORE file store ID must not be empty")
+	ErrInvalidReplayHighWaterMargin = errors.New("OSCORE replay high-water margin must be between 1 and 1024")
+	ErrSequenceBindingMismatch      = errors.New("OSCORE sender sequence store is bound to a different context")
+)
+
+// HighWaterFileStoreOption configures a HighWaterFileStore.
+type HighWaterFileStoreOption struct {
+	replayHighWaterMargin    uint64
+	hasReplayHighWaterMargin bool
+	allowSingleProcess       bool
+	allowedSymlinks          []string
+}
+
+func createStoreTemp(root *os.Root, dir string) (*os.File, string, error) {
+	if root == nil {
+		file, err := os.CreateTemp(dir, ".oscore-state-*")
+		if err != nil {
+			return nil, "", err
+		}
+		return file, file.Name(), nil
+	}
+	for range 10 {
+		var random [16]byte
+		if _, err := rand.Read(random[:]); err != nil {
+			return nil, "", fmt.Errorf("generate OSCORE state temporary name: %w", err)
+		}
+		path := ".oscore-state-" + hex.EncodeToString(random[:])
+		file, err := openStoreFile(root, path, os.O_CREATE|os.O_EXCL|os.O_RDWR, 0o600)
+		if errors.Is(err, os.ErrExist) {
+			continue
+		}
+		if err != nil {
+			return nil, "", err
+		}
+		return file, path, nil
+	}
+	return nil, "", errors.New("cannot allocate unique OSCORE state temporary file")
+}
+
+func openStoreFile(root *os.Root, path string, flags int, perm os.FileMode) (*os.File, error) {
+	if root != nil {
+		return openFileAtRoot(root, path, flags, perm)
+	}
+	return openFileNoFollow(path, flags, perm)
+}
+
+func removeStoreFile(root *os.Root, path string) error {
+	if root != nil {
+		return root.Remove(path)
+	}
+	// #nosec G703 -- fallback paths are derived from the configured store directory.
+	return os.Remove(path)
+}
+
+func replaceStoreFile(root *os.Root, dir, source, destination string) error {
+	return replaceFileAtomicallyAt(root, dir, source, destination)
+}
+
+func syncStoreDirectory(root *os.Root, dir string) error {
+	if root == nil {
+		return syncDirectory(dir)
+	}
+	directory, err := root.Open(".")
+	if err != nil {
+		return fmt.Errorf("open rooted OSCORE store directory for sync: %w", err)
+	}
+	defer directory.Close()
+	if err := directory.Sync(); err != nil {
+		return fmt.Errorf("sync rooted OSCORE store directory: %w", err)
+	}
+	return nil
+}
+
+// WithReplayHighWaterMargin configures how many accepted sequence numbers may
+// pass between durable receiver replay cutoff writes. Valid values are 1..1024.
+func WithReplayHighWaterMargin(margin uint64) HighWaterFileStoreOption {
+	return HighWaterFileStoreOption{replayHighWaterMargin: margin, hasReplayHighWaterMargin: true}
+}
+
+// WithSingleProcessOnly allows a file store to run on platforms without
+// inter-process file locking. The caller must ensure that no other process
+// accesses the same directory.
+func WithSingleProcessOnly() HighWaterFileStoreOption {
+	return HighWaterFileStoreOption{allowSingleProcess: true}
+}
+
+// WithAllowedSymlinks permits the listed directory components to be symlinks
+// on Unix-like systems. The resolved targets are still checked for trusted
+// ownership and permissions; Windows continues to reject all reparse points.
+func WithAllowedSymlinks(paths ...string) HighWaterFileStoreOption {
+	return HighWaterFileStoreOption{allowedSymlinks: append([]string(nil), paths...)}
+}
+
+func parseHighWaterFileStoreOptions(
+	options []HighWaterFileStoreOption,
+) (uint64, bool, []string, error) {
+	replayHighWaterMargin := oscore.DefaultReplayHighWaterMargin
+	allowSingleProcess := false
+	var allowedSymlinks []string
+	for _, option := range options {
+		if option.hasReplayHighWaterMargin {
+			replayHighWaterMargin = option.replayHighWaterMargin
+		}
+		allowSingleProcess = allowSingleProcess || option.allowSingleProcess
+		allowedSymlinks = append(allowedSymlinks, option.allowedSymlinks...)
+	}
+	for i, path := range allowedSymlinks {
+		if path == "" {
+			return 0, false, nil, errors.New("allowed OSCORE store symlink path is empty")
+		}
+		absolutePath, err := filepath.Abs(filepath.Clean(path))
+		if err != nil {
+			return 0, false, nil, fmt.Errorf("resolve allowed OSCORE store symlink %q: %w", path, err)
+		}
+		allowedSymlinks[i] = absolutePath
+	}
+	return replayHighWaterMargin, allowSingleProcess, allowedSymlinks, nil
+}
+
+// HighWaterFileStore persists sender sequence reservations and a receiver
+// replay high-water mark. Construct it with the same stable ID whenever the
+// corresponding OSCORE context is recreated. Sender sequence guards detect
+// individual state-file deletion, corruption, or rollback that causes a
+// mismatch, but cannot detect restoring matching older state and guard files
+// or rolling back the complete store directory.
+// Replay cutoff and guard files detect individual deletion or mismatch, and
+// interrupted updates are completed from a pending transaction. Deleting or
+// rolling back both replay files together is not detectable. These complete-
+// state rollbacks require an external monotonic trust anchor to detect.
+// The replay cutoff intentionally rejects some previously unobserved requests
+// after restart.
+//
+// File locking serializes operations across goroutines, store instances, and
+// processes on supported platforms. On platforms without process locks, pass
+// WithSingleProcessOnly only when the directory is guaranteed to have one
+// process owner. Keep the directory private to the application.
+type HighWaterFileStore struct {
+	dir                   string
+	directoryGuard        storeDirectoryGuard
+	root                  *os.Root
+	sequencePath          string
+	sequenceGuardPath     string
+	sequencePendingPath   string
+	replayHighWaterPath   string
+	replayGuardPath       string
+	replayPendingPath     string
+	replayHighWaterMargin uint64
+	sequenceLock          string
+	replayLock            string
+	mu                    sync.Mutex
+	rootMu                sync.RWMutex
+	next                  uint64
+	limit                 uint64
+	sequenceInitialized   bool
+	sequenceFingerprint   string
+	sequenceOps           sequenceFileOps
+	replayOps             sequenceFileOps
+}
+
+type storeDirectoryGuard interface {
+	withOperation(func() error) error
+}
+
+type sequenceFileOps struct {
+	beforeWrite   func(path string) error
+	syncFile      func(path string, file *os.File) error
+	syncDirectory func(path, dir string) error
+	beforeRemove  func(path string) error
+}
+
+type sequenceFile struct {
+	Version     uint8  `json:"version"`
+	Next        uint64 `json:"next"`
+	Fingerprint string `json:"fingerprint,omitempty"`
+}
+
+type sequencePendingFile struct {
+	Version        uint8        `json:"version"`
+	Previous       sequenceFile `json:"previous"`
+	PreviousExists bool         `json:"previousExists"`
+	Next           sequenceFile `json:"next"`
+}
+
+type replayHighWaterFile struct {
+	Version uint8  `json:"version"`
+	Next    uint64 `json:"next"`
+}
+
+type replayHighWaterPendingFile struct {
+	Version        uint8               `json:"version"`
+	Previous       replayHighWaterFile `json:"previous"`
+	PreviousExists bool                `json:"previousExists"`
+	Next           replayHighWaterFile `json:"next"`
+}
+
+// NewHighWaterFileStore creates a file store in dir. id is an application-
+// chosen stable identifier for one OSCORE context; only its SHA-256 digest
+// is used in filenames. The directory is created with mode 0700 when
+// necessary, and state and lock files are created with mode 0600. On
+// platforms that cannot sync directory metadata, dir must already exist.
+// Call Close when the store is no longer needed to release its rooted
+// directory handle.
+func NewHighWaterFileStore(dir, id string, options ...HighWaterFileStoreOption) (*HighWaterFileStore, error) {
+	if id == "" {
+		return nil, ErrInvalidStoreID
+	}
+	if dir == "" {
+		return nil, errors.New("OSCORE file store directory is empty")
+	}
+	replayHighWaterMargin, allowSingleProcess, allowedSymlinks, err := parseHighWaterFileStoreOptions(options)
+	if err != nil {
+		return nil, err
+	}
+	if !supportsProcessFileLock && !allowSingleProcess {
+		return nil, errors.New("process file locking is unavailable; explicitly allow single-process store use")
+	}
+	if replayHighWaterMargin == 0 || replayHighWaterMargin > oscore.MaxReplayHighWaterMargin {
+		return nil, ErrInvalidReplayHighWaterMargin
+	}
+	absoluteDir, directoryGuard, err := prepareStoreDirectory(dir, allowedSymlinks)
+	if err != nil {
+		return nil, err
+	}
+	digest := sha256.Sum256([]byte(id))
+	prefix := filepath.Join(absoluteDir, hex.EncodeToString(digest[:]))
+	store := &HighWaterFileStore{
+		dir:                   absoluteDir,
+		directoryGuard:        directoryGuard,
+		sequencePath:          prefix + ".sequence.json",
+		sequenceGuardPath:     prefix + ".sequence.guard.json",
+		sequencePendingPath:   prefix + ".sequence.pending.json",
+		replayHighWaterPath:   prefix + ".replay.high-water.json",
+		replayGuardPath:       prefix + ".replay.guard.json",
+		replayPendingPath:     prefix + ".replay.pending.json",
+		replayHighWaterMargin: replayHighWaterMargin,
+		sequenceLock:          prefix + ".sequence.lock",
+		replayLock:            prefix + ".replay.lock",
+	}
+	if rooted, ok := directoryGuard.(interface{ fileRoot() *os.Root }); ok {
+		store.root = rooted.fileRoot()
+	}
+	return store, nil
+}
+
+func prepareStoreDirectory(dir string, allowedSymlinks []string) (string, storeDirectoryGuard, error) {
+	absoluteDir, err := filepath.Abs(filepath.Clean(dir))
+	if err != nil {
+		return "", nil, fmt.Errorf("resolve OSCORE file store directory: %w", err)
+	}
+	if err = validateStoreDirectoryPath(absoluteDir, allowedSymlinks); err != nil {
+		return "", nil, fmt.Errorf("validate OSCORE file store directory path: %w", err)
+	}
+	missing, existingParent, err := findMissingStoreDirectories(absoluteDir)
+	if err != nil {
+		return "", nil, fmt.Errorf("locate OSCORE store directory parent: %w", err)
+	}
+	creationGuard, err := newStoreDirectoryGuard(existingParent)
+	if err != nil {
+		return "", nil, fmt.Errorf("secure OSCORE store directory parent: %w", err)
+	}
+	err = creationGuard.withOperation(func() error {
+		if rooted, ok := creationGuard.(interface{ fileRoot() *os.Root }); ok {
+			return createStoreDirectoryAt(rooted.fileRoot(), existingParent, missing)
+		}
+		return createStoreDirectory(absoluteDir, syncDirectory)
+	})
+	if closeErr := closeStoreDirectoryGuard(creationGuard); err == nil && closeErr != nil {
+		err = closeErr
+	}
+	if err != nil {
+		return "", nil, fmt.Errorf("create OSCORE file store directory: %w", err)
+	}
+	if err = validateStoreDirectoryPath(absoluteDir, allowedSymlinks); err != nil {
+		return "", nil, fmt.Errorf("validate OSCORE file store directory path: %w", err)
+	}
+	if err = validateStoreDirectory(absoluteDir); err != nil {
+		return "", nil, fmt.Errorf("validate OSCORE file store directory: %w", err)
+	}
+	directoryGuard, err := newStoreDirectoryGuard(absoluteDir)
+	if err != nil {
+		return "", nil, fmt.Errorf("secure OSCORE store directory: %w", err)
+	}
+	return absoluteDir, directoryGuard, nil
+}
+
+func createStoreDirectoryAt(root *os.Root, existing string, missing []string) error {
+	if len(missing) > 0 && !supportsDirectorySync {
+		return errors.New("directory metadata sync is unavailable; pre-create the store directory")
+	}
+	for i := len(missing) - 1; i >= 0; i-- {
+		relative, err := filepath.Rel(existing, missing[i])
+		if err != nil || !isStorePathRelative(relative) {
+			return fmt.Errorf("resolve rooted OSCORE store directory %q", missing[i])
+		}
+		if err := createStoreDirectoryEntryAt(root, relative); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func isStorePathRelative(relative string) bool {
+	return relative != "." && !filepath.IsAbs(relative) && relative != ".." &&
+		!strings.HasPrefix(relative, ".."+string(filepath.Separator))
+}
+
+func createStoreDirectoryEntryAt(root *os.Root, relative string) error {
+	if err := root.Mkdir(relative, 0o700); err != nil && !errors.Is(err, os.ErrExist) {
+		return fmt.Errorf("create rooted OSCORE store directory %q: %w", relative, err)
+	}
+	info, err := root.Lstat(relative)
+	if err != nil {
+		return fmt.Errorf("stat rooted OSCORE store directory %q: %w", relative, err)
+	}
+	if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("rooted OSCORE store path %q is not a directory", relative)
+	}
+	parent := filepath.Dir(relative)
+	directory, err := root.Open(parent)
+	if err != nil {
+		return fmt.Errorf("open rooted OSCORE store parent %q for sync: %w", parent, err)
+	}
+	syncErr := directory.Sync()
+	closeErr := directory.Close()
+	if syncErr != nil {
+		return fmt.Errorf("sync rooted OSCORE store parent %q: %w", parent, syncErr)
+	}
+	if closeErr != nil {
+		return fmt.Errorf("close rooted OSCORE store parent %q: %w", parent, closeErr)
+	}
+	return nil
+}
+
+func closeStoreDirectoryGuard(guard storeDirectoryGuard) error {
+	if closer, ok := guard.(interface{ Close() error }); ok {
+		return closer.Close()
+	}
+	return nil
+}
+
+func (s *HighWaterFileStore) withDirectoryGuard(action func() error) error {
+	s.rootMu.RLock()
+	defer s.rootMu.RUnlock()
+	if s.directoryGuard == nil {
+		return errors.New("OSCORE store directory guard is unavailable")
+	}
+	return s.directoryGuard.withOperation(action)
+}
+
+// Close releases the rooted directory handle used to confine Unix store
+// operations. The store must not be used after Close.
+func (s *HighWaterFileStore) Close() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.rootMu.Lock()
+	defer s.rootMu.Unlock()
+	if s.directoryGuard == nil {
+		return nil
+	}
+	err := closeStoreDirectoryGuard(s.directoryGuard)
+	s.root = nil
+	s.directoryGuard = nil
+	return err
+}
+
+func (s *HighWaterFileStore) rootPath(path string) string {
+	if s.root == nil {
+		return path
+	}
+	return filepath.Base(path)
+}
+
+func createStoreDirectory(path string, syncDir func(string) error) error {
+	missing, existing, err := findMissingStoreDirectories(path)
+	if err != nil {
+		return err
+	}
+	if len(missing) > 0 && !supportsDirectorySync {
+		return errors.New("directory metadata sync is unavailable; pre-create the store directory")
+	}
+	if err := syncExistingStoreParent(existing, syncDir); err != nil {
+		return err
+	}
+	return createMissingStoreDirectories(missing, syncDir)
+}
+
+func findMissingStoreDirectories(path string) ([]string, string, error) {
+	var missing []string
+	var existing string
+	for current := path; ; current = filepath.Dir(current) {
+		// #nosec G703 -- current is the caller-selected store directory or one of its missing ancestors.
+		_, err := os.Stat(current)
+		if err == nil {
+			existing = current
+			break
+		}
+		if !errors.Is(err, os.ErrNotExist) {
+			return nil, "", err
+		}
+		parent := filepath.Dir(current)
+		if parent == current {
+			return nil, "", err
+		}
+		missing = append(missing, current)
+	}
+	return missing, existing, nil
+}
+
+func syncExistingStoreParent(existing string, syncDir func(string) error) error {
+	if !supportsDirectorySync {
+		return nil
+	}
+	parent := filepath.Dir(existing)
+	if parent != existing {
+		if err := syncDir(parent); err != nil {
+			return fmt.Errorf("sync parent directory %q: %w", parent, err)
+		}
+	}
+	return nil
+}
+
+func createMissingStoreDirectories(missing []string, syncDir func(string) error) error {
+	for i := len(missing) - 1; i >= 0; i-- {
+		current := missing[i]
+		parent := filepath.Dir(current)
+		// #nosec G703 -- current is the caller-selected store directory or one of its missing ancestors.
+		if err := os.Mkdir(current, 0o700); err != nil && !errors.Is(err, os.ErrExist) {
+			return fmt.Errorf("create directory %q: %w", current, err)
+		}
+		// #nosec G703 -- current is a newly created directory derived from the caller-selected store root.
+		info, err := os.Stat(current)
+		if err != nil {
+			return fmt.Errorf("stat directory %q: %w", current, err)
+		}
+		if !info.IsDir() {
+			return fmt.Errorf("%q is not a directory", current)
+		}
+		if err := syncDir(parent); err != nil {
+			return fmt.Errorf("sync parent directory %q: %w", parent, err)
+		}
+	}
+	return nil
+}
+
+// LoadHighWater loads the exclusive replay cutoff used by the batched replay
+// store. A missing cutoff and guard means no replay boundary has been persisted.
+// If exactly one file is missing or their marks differ, it returns an error.
+func (s *HighWaterFileStore) LoadHighWater() (uint64, bool, error) {
+	var highWater uint64
+	var exists bool
+	err := s.withDirectoryGuard(func() error {
+		return withFileLockAt(s.root, s.rootPath(s.replayLock), func() error {
+			if err := s.recoverReplayHighWater(); err != nil {
+				return err
+			}
+			var err error
+			highWater, exists, err = s.readReplayHighWaterPair(s.replayHighWaterPath, s.replayGuardPath)
+			return err
+		})
+	})
+	if err != nil {
+		return 0, false, fmt.Errorf("load OSCORE replay high-water mark: %w", err)
+	}
+	return highWater, exists, nil
+}
+
+// ReplayWindowHighWaterMargin returns the configured persistence margin.
+func (s *HighWaterFileStore) ReplayWindowHighWaterMargin() uint64 {
+	return s.replayHighWaterMargin
+}
+
+// SaveHighWater atomically persists an exclusive replay cutoff. Replay window
+// persistence calls this after each configured margin rather than every request.
+func (s *HighWaterFileStore) SaveHighWater(highWater uint64) error {
+	if highWater == 0 || highWater > maxPartialIV+1 {
+		return fmt.Errorf("%w: invalid high-water mark %d", oscore.ErrInvalidReplayState, highWater)
+	}
+	err := s.withDirectoryGuard(func() error { return s.saveReplayHighWater(highWater) })
+	if err != nil {
+		return fmt.Errorf("save OSCORE replay high-water mark: %w", err)
+	}
+	return nil
+}
+
+func (s *HighWaterFileStore) saveReplayHighWater(highWater uint64) error {
+	return withFileLockAt(s.root, s.rootPath(s.replayLock), func() error {
+		if err := s.recoverReplayHighWater(); err != nil {
+			return err
+		}
+		current, exists, err := s.readReplayHighWaterPair(s.replayHighWaterPath, s.replayGuardPath)
+		if err != nil {
+			return err
+		}
+		if exists {
+			if highWater < current {
+				return fmt.Errorf("%w: replay high-water mark moved backward", oscore.ErrInvalidReplayState)
+			}
+			if highWater == current {
+				return s.syncReplayDirectory(s.replayHighWaterPath)
+			}
+		}
+		return s.persistReplayHighWater(current, exists, highWater)
+	})
+}
+
+func (s *HighWaterFileStore) persistReplayHighWater(current uint64, exists bool, highWater uint64) error {
+	value := replayHighWaterFile{Version: fileVersion, Next: highWater}
+	pending := replayHighWaterPendingFile{
+		Version:        fileVersion,
+		Previous:       replayHighWaterFile{Version: fileVersion, Next: current},
+		PreviousExists: exists,
+		Next:           value,
+	}
+	if err := s.writeReplayStateFile(s.replayPendingPath, pending); err != nil {
+		return fmt.Errorf("persist replay high-water transaction: %w", err)
+	}
+	if err := s.writeReplayStateFile(s.replayGuardPath, value); err != nil {
+		return fmt.Errorf("persist replay high-water guard: %w", err)
+	}
+	if err := s.writeReplayStateFile(s.replayHighWaterPath, value); err != nil {
+		return fmt.Errorf("persist replay high-water mark: %w", err)
+	}
+	if err := s.removeReplayPending(); err != nil {
+		return fmt.Errorf("complete replay high-water transaction: %w", err)
+	}
+	return nil
+}
+
+// ResetReplayState removes the replay cutoff and its guard. Call it only when
+// deliberately replacing the associated OSCORE security context, with no
+// active Context using this store. Resetting while reusing the same keys allows
+// previously accepted requests to be replayed.
+func (s *HighWaterFileStore) ResetReplayState() error {
+	err := s.withDirectoryGuard(func() error {
+		return withFileLockAt(s.root, s.rootPath(s.replayLock), func() error {
+			for _, path := range []string{s.replayHighWaterPath, s.replayGuardPath, s.replayPendingPath} {
+				if s.replayOps.beforeRemove != nil {
+					if err := s.replayOps.beforeRemove(path); err != nil {
+						return err
+					}
+				}
+				if err := removeStoreFile(s.root, s.rootPath(path)); err != nil {
+					if !errors.Is(err, os.ErrNotExist) {
+						return err
+					}
+				}
+			}
+			return s.syncReplayDirectory(s.replayHighWaterPath)
+		})
+	})
+	if err != nil {
+		return fmt.Errorf("reset OSCORE replay state: %w", err)
+	}
+	return nil
+}
+
+// Load supplies the empty ReplayWindowStore fallback when no high-water mark
+// has been persisted. Use LoadHighWater to read the persisted cutoff.
+func (s *HighWaterFileStore) Load() (oscore.ReplayWindowState, error) {
+	return oscore.ReplayWindowState{}, nil
+}
+
+// Save persists a conservative exclusive cutoff instead of the replay bitmap.
+func (s *HighWaterFileStore) Save(state oscore.ReplayWindowState) error {
+	if !state.Started || state.HighestSequence > maxPartialIV {
+		return fmt.Errorf("%w: invalid replay state", oscore.ErrInvalidReplayState)
+	}
+	return s.SaveHighWater(min(state.HighestSequence+s.replayHighWaterMargin, maxPartialIV+1))
+}
+
+// Bind associates sender sequence reservations with one OSCORE sender
+// context. The domain-separated fingerprint, not key material, is stored in
+// the sequence state and rollback guard.
+func (s *HighWaterFileStore) Bind(fingerprint [sha256.Size]byte) error {
+	binding := hex.EncodeToString(fingerprint[:])
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.sequenceFingerprint != "" && s.sequenceFingerprint != binding {
+		return ErrSequenceBindingMismatch
+	}
+
+	err := s.withDirectoryGuard(func() error {
+		return withFileLockAt(s.root, s.rootPath(s.sequenceLock), func() error { return s.bindSequenceState(binding) })
+	})
+	if err != nil {
+		return fmt.Errorf("bind sender sequence state: %w", err)
+	}
+	return nil
+}
+
+func (s *HighWaterFileStore) bindSequenceState(binding string) error {
+	if err := s.recoverSequenceReservation(); err != nil {
+		return err
+	}
+	state, stateExists, err := s.readSequenceWithExistence(s.sequencePath)
+	if err != nil {
+		return err
+	}
+	guard, guardExists, err := s.readSequenceWithExistence(s.sequenceGuardPath)
+	if err != nil {
+		return err
+	}
+	switch {
+	case !stateExists && !guardExists:
+		if s.sequenceInitialized {
+			return errors.New("OSCORE sender sequence state and rollback guard are missing after initialization")
+		}
+		if err := s.persistInitialSequenceBinding(binding); err != nil {
+			return err
+		}
+		s.sequenceInitialized = true
+	case !stateExists || !guardExists:
+		return errors.New("OSCORE sender sequence state or rollback guard is missing")
+	case state != guard:
+		return errors.New("OSCORE sender sequence state differs from its rollback guard")
+	case state.Fingerprint == "":
+		if err := s.bindUnboundSequenceState(state, binding); err != nil {
+			return err
+		}
+		s.sequenceInitialized = true
+	case state.Fingerprint != binding:
+		return ErrSequenceBindingMismatch
+	default:
+		s.sequenceInitialized = true
+	}
+	s.sequenceFingerprint = binding
+	return nil
+}
+
+func (s *HighWaterFileStore) bindUnboundSequenceState(state sequenceFile, binding string) error {
+	bound := state
+	bound.Fingerprint = binding
+	pending := sequencePendingFile{
+		Version:        fileVersion,
+		Previous:       state,
+		PreviousExists: true,
+		Next:           bound,
+	}
+	if err := s.writeSequenceState(s.sequencePendingPath, pending); err != nil {
+		return fmt.Errorf("persist sender sequence binding transaction: %w", err)
+	}
+	if err := s.writeSequenceState(s.sequenceGuardPath, bound); err != nil {
+		return fmt.Errorf("persist sender sequence binding guard: %w", err)
+	}
+	if err := s.writeSequenceState(s.sequencePath, bound); err != nil {
+		return fmt.Errorf("persist sender sequence binding: %w", err)
+	}
+	if err := s.removeSequencePending(); err != nil {
+		return fmt.Errorf("complete sender sequence binding transaction: %w", err)
+	}
+	return nil
+}
+
+func (s *HighWaterFileStore) persistInitialSequenceBinding(binding string) error {
+	initial := sequenceFile{Version: fileVersion, Fingerprint: binding}
+	pending := sequencePendingFile{
+		Version:        fileVersion,
+		Previous:       sequenceFile{Version: fileVersion},
+		PreviousExists: false,
+		Next:           initial,
+	}
+	if err := s.writeSequenceState(s.sequencePendingPath, pending); err != nil {
+		return fmt.Errorf("persist sender sequence binding transaction: %w", err)
+	}
+	if err := s.writeSequenceState(s.sequenceGuardPath, initial); err != nil {
+		return fmt.Errorf("persist sender sequence binding guard: %w", err)
+	}
+	if err := s.writeSequenceState(s.sequencePath, initial); err != nil {
+		return fmt.Errorf("persist sender sequence binding: %w", err)
+	}
+	if err := s.removeSequencePending(); err != nil {
+		return fmt.Errorf("complete sender sequence binding transaction: %w", err)
+	}
+	return nil
+}
+
+// Reserve returns a sender sequence number from a durably reserved window.
+// Unused values in a window are skipped when the store is recreated.
+func (s *HighWaterFileStore) Reserve() (uint64, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.directoryGuard == nil {
+		return 0, errors.New("OSCORE store directory guard is unavailable")
+	}
+	if s.next < s.limit {
+		reserved := s.next
+		s.next++
+		return reserved, nil
+	}
+
+	reserved, limit, err := s.reserveSequenceWindow()
+	if err != nil {
+		return 0, fmt.Errorf("reserve OSCORE sender sequence: %w", err)
+	}
+	s.next = reserved + 1
+	s.limit = limit
+	s.sequenceInitialized = true
+	return reserved, nil
+}
+
+func (s *HighWaterFileStore) reserveSequenceWindow() (uint64, uint64, error) {
+	var reserved, limit uint64
+	err := s.withDirectoryGuard(func() error {
+		return withFileLockAt(s.root, s.rootPath(s.sequenceLock), func() error {
+			state, err := s.loadSequenceState()
+			if err != nil {
+				return err
+			}
+			_, stateExists, err := s.readSequenceWithExistence(s.sequencePath)
+			if err != nil {
+				return err
+			}
+			_, guardExists, err := s.readSequenceWithExistence(s.sequenceGuardPath)
+			if err != nil {
+				return err
+			}
+			if stateExists != guardExists {
+				return errors.New("OSCORE sender sequence state or rollback guard is missing")
+			}
+			if state.Next > maxPartialIV {
+				return oscore.ErrSenderSequenceExhausted
+			}
+			binding := s.sequenceFingerprint
+			if binding == "" {
+				binding = state.Fingerprint
+			}
+			reserved = state.Next
+			remaining := maxPartialIV + 1 - reserved
+			limit = reserved + min(sequenceWindowSize, remaining)
+			return s.persistSequenceReservation(reserved, limit, stateExists && guardExists, binding)
+		})
+	})
+	return reserved, limit, err
+}
+
+func (s *HighWaterFileStore) persistSequenceReservation(
+	reserved, limit uint64, previousExists bool, fingerprint string,
+) error {
+	next := sequenceFile{Version: fileVersion, Next: limit, Fingerprint: fingerprint}
+	pending := sequencePendingFile{
+		Version:        fileVersion,
+		Previous:       sequenceFile{Version: fileVersion, Next: reserved, Fingerprint: fingerprint},
+		PreviousExists: previousExists,
+		Next:           next,
+	}
+	if err := s.writeSequenceState(s.sequencePendingPath, pending); err != nil {
+		return fmt.Errorf("persist sender sequence transaction: %w", err)
+	}
+	if err := s.writeSequenceState(s.sequenceGuardPath, next); err != nil {
+		return fmt.Errorf("persist sender sequence guard: %w", err)
+	}
+	if err := s.writeSequenceState(s.sequencePath, next); err != nil {
+		return fmt.Errorf("persist sender sequence state: %w", err)
+	}
+	if err := s.removeSequencePending(); err != nil {
+		return fmt.Errorf("complete sender sequence transaction: %w", err)
+	}
+	return nil
+}
+
+func (s *HighWaterFileStore) loadSequenceState() (sequenceFile, error) {
+	if err := s.recoverSequenceReservation(); err != nil {
+		return sequenceFile{}, err
+	}
+	state, stateExists, err := s.readSequenceWithExistence(s.sequencePath)
+	if err != nil {
+		return sequenceFile{}, err
+	}
+	guard, guardExists, err := s.readSequenceWithExistence(s.sequenceGuardPath)
+	if err != nil {
+		return sequenceFile{}, err
+	}
+	if !stateExists && !guardExists {
+		if s.sequenceInitialized {
+			return sequenceFile{}, errors.New("OSCORE sender sequence state and rollback guard are missing after initialization")
+		}
+		return sequenceFile{Version: fileVersion}, nil
+	}
+	if !stateExists || !guardExists {
+		return sequenceFile{}, errors.New("OSCORE sender sequence state or rollback guard is missing")
+	}
+	if state != guard {
+		return sequenceFile{}, errors.New("OSCORE sender sequence state differs from its rollback guard")
+	}
+	if s.sequenceFingerprint != "" && state.Fingerprint != s.sequenceFingerprint {
+		return sequenceFile{}, ErrSequenceBindingMismatch
+	}
+	s.sequenceInitialized = true
+	return state, nil
+}
+
+func (s *HighWaterFileStore) recoverSequenceReservation() error {
+	pending, pendingExists, err := s.readSequencePending(s.sequencePendingPath)
+	if err != nil {
+		return err
+	}
+	if !pendingExists {
+		return nil
+	}
+	if err = validateSequencePending(pending); err != nil {
+		return err
+	}
+	state, stateExists, err := s.readSequenceWithExistence(s.sequencePath)
+	if err != nil {
+		return err
+	}
+	guard, guardExists, err := s.readSequenceWithExistence(s.sequenceGuardPath)
+	if err != nil {
+		return err
+	}
+	if err := validateSequenceTransactionProgress(pending, state, stateExists, guard, guardExists); err != nil {
+		return err
+	}
+	if stateExists && guardExists {
+		s.sequenceInitialized = true
+	}
+	return s.finishSequenceReservationRecovery(pending, state, stateExists, guard, guardExists)
+}
+
+func (s *HighWaterFileStore) recoverReplayHighWater() error {
+	pending, pendingExists, err := s.readReplayHighWaterPending(s.replayPendingPath)
+	if err != nil {
+		return err
+	}
+	if !pendingExists {
+		return nil
+	}
+	if err = validateReplayHighWaterPending(pending); err != nil {
+		return err
+	}
+	mark, markExists, err := s.readReplayHighWater(s.replayHighWaterPath)
+	if err != nil {
+		return err
+	}
+	guard, guardExists, err := s.readReplayHighWater(s.replayGuardPath)
+	if err != nil {
+		return err
+	}
+	if !replayHighWaterTransactionProgressIsValid(pending, mark, markExists, guard, guardExists) {
+		return errors.New("OSCORE replay high-water files do not match pending transaction")
+	}
+	if !guardExists || guard != pending.Next.Next {
+		if err := s.writeReplayStateFile(s.replayGuardPath, pending.Next); err != nil {
+			return fmt.Errorf("recover replay high-water guard: %w", err)
+		}
+	}
+	if !markExists || mark != pending.Next.Next {
+		if err := s.writeReplayStateFile(s.replayHighWaterPath, pending.Next); err != nil {
+			return fmt.Errorf("recover replay high-water mark: %w", err)
+		}
+	}
+	if err := s.syncReplayDirectory(s.replayHighWaterPath); err != nil {
+		return fmt.Errorf("sync recovered replay high-water state: %w", err)
+	}
+	if err := s.removeReplayPending(); err != nil {
+		return fmt.Errorf("complete replay high-water recovery: %w", err)
+	}
+	return nil
+}
+
+func validateReplayHighWaterPending(pending replayHighWaterPendingFile) error {
+	if pending.Version != fileVersion || pending.Previous.Version != fileVersion ||
+		pending.Next.Version != fileVersion ||
+		pending.Next.Next == 0 || pending.Next.Next > maxPartialIV+1 {
+		return errors.New("invalid OSCORE replay high-water transaction")
+	}
+	if pending.PreviousExists {
+		if pending.Previous.Next == 0 || pending.Previous.Next >= pending.Next.Next {
+			return errors.New("invalid OSCORE replay high-water transaction")
+		}
+	} else if pending.Previous.Next != 0 {
+		return errors.New("invalid OSCORE replay high-water transaction")
+	}
+	return nil
+}
+
+func replayHighWaterTransactionProgressIsValid(
+	pending replayHighWaterPendingFile,
+	mark uint64,
+	markExists bool,
+	guard uint64,
+	guardExists bool,
+) bool {
+	if pending.PreviousExists {
+		return (!markExists || mark == pending.Previous.Next || mark == pending.Next.Next) &&
+			(!guardExists || guard == pending.Previous.Next || guard == pending.Next.Next)
+	}
+	return (!markExists || mark == pending.Next.Next) &&
+		(!guardExists || guard == pending.Next.Next)
+}
+
+func (s *HighWaterFileStore) removeReplayPending() error {
+	if s.replayOps.beforeRemove != nil {
+		if err := s.replayOps.beforeRemove(s.replayPendingPath); err != nil {
+			return err
+		}
+	}
+	if err := removeStoreFile(s.root, s.rootPath(s.replayPendingPath)); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	return s.syncReplayDirectory(s.replayPendingPath)
+}
+
+func (s *HighWaterFileStore) finishSequenceReservationRecovery(
+	pending sequencePendingFile,
+	state sequenceFile,
+	stateExists bool,
+	guard sequenceFile,
+	guardExists bool,
+) error {
+	if !guardExists || guard != pending.Next {
+		if err := s.writeSequenceState(s.sequenceGuardPath, pending.Next); err != nil {
+			return fmt.Errorf("recover sender sequence guard: %w", err)
+		}
+	}
+	if !stateExists || state != pending.Next {
+		if err := s.writeSequenceState(s.sequencePath, pending.Next); err != nil {
+			return fmt.Errorf("recover sender sequence state: %w", err)
+		}
+	}
+	s.sequenceInitialized = true
+	if err := s.syncSequenceDirectory(s.sequencePendingPath); err != nil {
+		return fmt.Errorf("sync recovered sender sequence state: %w", err)
+	}
+	if err := s.removeSequencePending(); err != nil {
+		return fmt.Errorf("complete sender sequence recovery: %w", err)
+	}
+	return nil
+}
+
+func validateSequencePending(pending sequencePendingFile) error {
+	if pending.Version != fileVersion {
+		return errors.New("invalid OSCORE sender sequence transaction version")
+	}
+	if err := validateSequence(pending.Previous); err != nil {
+		return err
+	}
+	if err := validateSequence(pending.Next); err != nil {
+		return err
+	}
+	if isSequenceBindingTransaction(pending) {
+		return nil
+	}
+	if !pending.PreviousExists && pending.Previous.Next == 0 &&
+		pending.Next.Next == 0 && pending.Next.Fingerprint != "" {
+		return nil
+	}
+	if !pending.PreviousExists && pending.Previous.Next != 0 ||
+		pending.Next.Next <= pending.Previous.Next ||
+		pending.Next.Next-pending.Previous.Next > sequenceWindowSize {
+		return errors.New("invalid OSCORE sender sequence transaction")
+	}
+	if pending.Previous.Fingerprint != pending.Next.Fingerprint {
+		return errors.New("OSCORE sender sequence transaction changes context binding")
+	}
+	expectedWindow := min(sequenceWindowSize, maxPartialIV+1-pending.Previous.Next)
+	if pending.Next.Next-pending.Previous.Next != expectedWindow {
+		return errors.New("invalid OSCORE sender sequence reservation window")
+	}
+	return nil
+}
+
+func isSequenceBindingTransaction(pending sequencePendingFile) bool {
+	return pending.PreviousExists &&
+		pending.Previous.Next == pending.Next.Next &&
+		pending.Previous.Fingerprint == "" &&
+		pending.Next.Fingerprint != ""
+}
+
+func validateSequenceTransactionProgress(
+	pending sequencePendingFile,
+	state sequenceFile,
+	stateExists bool,
+	guard sequenceFile,
+	guardExists bool,
+) error {
+	if sequenceTransactionProgressIsValid(pending, state, stateExists, guard, guardExists) {
+		return nil
+	}
+	return errors.New("OSCORE sender sequence files do not match pending transaction")
+}
+
+func sequenceTransactionProgressIsValid(
+	pending sequencePendingFile,
+	state sequenceFile,
+	stateExists bool,
+	guard sequenceFile,
+	guardExists bool,
+) bool {
+	stateIsPrevious := pending.PreviousExists && stateExists && state == pending.Previous
+	stateIsNext := stateExists && state == pending.Next
+	guardIsPrevious := pending.PreviousExists && guardExists && guard == pending.Previous
+	guardIsNext := guardExists && guard == pending.Next
+	return validPreviousSequenceTransaction(pending, stateIsPrevious, guardIsPrevious, guardIsNext) ||
+		stateIsNext && guardIsNext ||
+		validFreshSequenceTransaction(pending, stateExists, stateIsNext, guardExists, guardIsNext)
+}
+
+func validPreviousSequenceTransaction(
+	pending sequencePendingFile,
+	stateIsPrevious,
+	guardIsPrevious,
+	guardIsNext bool,
+) bool {
+	return pending.PreviousExists && stateIsPrevious && (guardIsPrevious || guardIsNext)
+}
+
+func validFreshSequenceTransaction(
+	pending sequencePendingFile,
+	stateExists,
+	stateIsNext,
+	guardExists,
+	guardIsNext bool,
+) bool {
+	return !pending.PreviousExists && pending.Previous.Next == 0 &&
+		(!stateExists || stateIsNext) && (!guardExists || guardIsNext)
+}
+
+func (s *HighWaterFileStore) removeSequencePending() error {
+	if s.sequenceOps.beforeRemove != nil {
+		if err := s.sequenceOps.beforeRemove(s.sequencePendingPath); err != nil {
+			return err
+		}
+	}
+	// #nosec G703 -- this path is derived from the configured store root and a fixed suffix.
+	if err := removeStoreFile(s.root, s.rootPath(filepath.Clean(s.sequencePendingPath))); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	if s.sequenceOps.syncDirectory != nil {
+		return s.sequenceOps.syncDirectory(s.sequencePendingPath, s.dir)
+	}
+	return syncStoreDirectory(s.root, s.dir)
+}
+
+func (s *HighWaterFileStore) syncSequenceDirectory(path string) error {
+	if s.sequenceOps.syncDirectory != nil {
+		return s.sequenceOps.syncDirectory(path, s.dir)
+	}
+	return syncStoreDirectory(s.root, s.dir)
+}
+
+func (s *HighWaterFileStore) writeSequenceState(path string, value any) error {
+	if s.sequenceOps.beforeWrite != nil {
+		if err := s.sequenceOps.beforeWrite(path); err != nil {
+			return err
+		}
+	}
+	return writeStateFileWithHooksAt(s.root, s.dir, s.rootPath(path), value, nil, func() error {
+		if s.sequenceOps.syncDirectory != nil {
+			return s.sequenceOps.syncDirectory(path, s.dir)
+		}
+		return syncStoreDirectory(s.root, s.dir)
+	})
+}
+
+func (s *HighWaterFileStore) writeReplayStateFile(path string, value any) error {
+	if s.replayOps.beforeWrite != nil {
+		if err := s.replayOps.beforeWrite(path); err != nil {
+			return err
+		}
+	}
+	return writeStateFileWithHooksAt(s.root, s.dir, s.rootPath(path), value, func(file *os.File) error {
+		if s.replayOps.syncFile != nil {
+			return s.replayOps.syncFile(path, file)
+		}
+		return file.Sync()
+	}, func() error {
+		return s.syncReplayDirectory(path)
+	})
+}
+
+func (s *HighWaterFileStore) syncReplayDirectory(path string) error {
+	if s.replayOps.syncDirectory != nil {
+		return s.replayOps.syncDirectory(path, s.dir)
+	}
+	return syncStoreDirectory(s.root, s.dir)
+}
+
+func validateSequence(state sequenceFile) error {
+	if state.Version != fileVersion || state.Next > maxPartialIV+1 ||
+		state.Next%sequenceWindowSize != 0 {
+		return errors.New("invalid OSCORE sender sequence file")
+	}
+	if state.Fingerprint != "" {
+		fingerprint, err := hex.DecodeString(state.Fingerprint)
+		if err != nil || len(fingerprint) != sha256.Size {
+			return errors.New("invalid OSCORE sender sequence fingerprint")
+		}
+	}
+	return nil
+}
+
+func readSequenceWithExistence(path string) (sequenceFile, bool, error) {
+	return readSequenceWithExistenceAt(nil, path)
+}
+
+func (s *HighWaterFileStore) readSequenceWithExistence(path string) (sequenceFile, bool, error) {
+	return readSequenceWithExistenceAt(s.root, s.rootPath(path))
+}
+
+func readSequenceWithExistenceAt(root *os.Root, path string) (sequenceFile, bool, error) {
+	data, err := readStateFileAt(root, path)
+	if err != nil {
+		return sequenceFile{}, false, err
+	}
+	if data == nil {
+		return sequenceFile{}, false, nil
+	}
+	var state sequenceFile
+	if err := json.Unmarshal(data, &state); err != nil {
+		return sequenceFile{}, false, fmt.Errorf("decode sender sequence file: %w", err)
+	}
+	if err := validateSequence(state); err != nil || state.Next == 0 && state.Fingerprint == "" {
+		return sequenceFile{}, false, errors.New("invalid OSCORE sender sequence file")
+	}
+	return state, true, nil
+}
+
+func readSequencePending(path string) (sequencePendingFile, bool, error) {
+	return readSequencePendingAt(nil, path)
+}
+
+func (s *HighWaterFileStore) readSequencePending(path string) (sequencePendingFile, bool, error) {
+	return readSequencePendingAt(s.root, s.rootPath(path))
+}
+
+func readSequencePendingAt(root *os.Root, path string) (sequencePendingFile, bool, error) {
+	data, err := readStateFileAt(root, path)
+	if err != nil {
+		return sequencePendingFile{}, false, err
+	}
+	if data == nil {
+		return sequencePendingFile{}, false, nil
+	}
+	var pending sequencePendingFile
+	if err := json.Unmarshal(data, &pending); err != nil {
+		return sequencePendingFile{}, false, fmt.Errorf("decode sender sequence transaction file: %w", err)
+	}
+	return pending, true, nil
+}
+
+func readReplayHighWater(path string) (uint64, bool, error) {
+	return readReplayHighWaterAt(nil, path)
+}
+
+func (s *HighWaterFileStore) readReplayHighWater(path string) (uint64, bool, error) {
+	return readReplayHighWaterAt(s.root, s.rootPath(path))
+}
+
+func readReplayHighWaterAt(root *os.Root, path string) (uint64, bool, error) {
+	data, err := readStateFileAt(root, path)
+	if err != nil {
+		return 0, false, err
+	}
+	if data == nil {
+		return 0, false, nil
+	}
+	var state replayHighWaterFile
+	if err := json.Unmarshal(data, &state); err != nil {
+		return 0, false, fmt.Errorf("decode replay high-water file: %w", err)
+	}
+	if state.Version != fileVersion || state.Next == 0 || state.Next > maxPartialIV+1 {
+		return 0, false, fmt.Errorf("%w: invalid replay high-water file", oscore.ErrInvalidReplayState)
+	}
+	return state.Next, true, nil
+}
+
+func readReplayHighWaterPending(path string) (replayHighWaterPendingFile, bool, error) {
+	return readReplayHighWaterPendingAt(nil, path)
+}
+
+func (s *HighWaterFileStore) readReplayHighWaterPending(path string) (replayHighWaterPendingFile, bool, error) {
+	return readReplayHighWaterPendingAt(s.root, s.rootPath(path))
+}
+
+func readReplayHighWaterPendingAt(root *os.Root, path string) (replayHighWaterPendingFile, bool, error) {
+	data, err := readStateFileAt(root, path)
+	if err != nil {
+		return replayHighWaterPendingFile{}, false, err
+	}
+	if data == nil {
+		return replayHighWaterPendingFile{}, false, nil
+	}
+	var pending replayHighWaterPendingFile
+	if err := json.Unmarshal(data, &pending); err != nil {
+		return replayHighWaterPendingFile{}, false, fmt.Errorf("decode replay high-water transaction file: %w", err)
+	}
+	return pending, true, nil
+}
+
+func (s *HighWaterFileStore) readReplayHighWaterPair(markPath, guardPath string) (uint64, bool, error) {
+	return readReplayHighWaterPairAt(s.root, s.rootPath(markPath), s.rootPath(guardPath))
+}
+
+func readReplayHighWaterPairAt(root *os.Root, markPath, guardPath string) (uint64, bool, error) {
+	mark, markExists, err := readReplayHighWaterAt(root, markPath)
+	if err != nil {
+		return 0, false, err
+	}
+	guard, guardExists, err := readReplayHighWaterAt(root, guardPath)
+	if err != nil {
+		return 0, false, err
+	}
+	if !markExists && !guardExists {
+		return 0, false, nil
+	}
+	if !markExists || !guardExists {
+		return 0, false, errors.New("OSCORE replay high-water mark or guard is missing")
+	}
+	if mark != guard {
+		return 0, false, errors.New("OSCORE replay high-water mark differs from its guard")
+	}
+	return mark, true, nil
+}
+
+func readStateFileAt(root *os.Root, path string) ([]byte, error) {
+	// #nosec G703 -- callers pass only state paths derived from a configured store root.
+	file, err := openStoreFile(root, filepath.Clean(path), os.O_RDONLY, 0)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+	data, err := io.ReadAll(io.LimitReader(file, maxStateBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(data) > maxStateBytes {
+		return nil, fmt.Errorf("OSCORE state file exceeds %d bytes", maxStateBytes)
+	}
+	return data, nil
+}
+
+func writeStateFile(dir, path string, value any) error {
+	return writeStateFileWithHooksAt(nil, dir, path, value, nil, func() error {
+		return syncDirectory(dir)
+	})
+}
+
+func writeStateFileWithHooksAt(
+	root *os.Root,
+	dir, path string,
+	value any,
+	syncFile func(*os.File) error,
+	syncDir func() error,
+) error {
+	data, err := json.Marshal(value)
+	if err != nil {
+		return fmt.Errorf("encode OSCORE state: %w", err)
+	}
+	temporary, temporaryPath, err := createStoreTemp(root, dir)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = removeStoreFile(root, temporaryPath) }()
+	if err := temporary.Chmod(0o600); err != nil {
+		_ = temporary.Close()
+		return err
+	}
+	if _, err := temporary.Write(data); err != nil {
+		_ = temporary.Close()
+		return err
+	}
+	if syncFile == nil {
+		syncFile = func(file *os.File) error { return file.Sync() }
+	}
+	if err := syncFile(temporary); err != nil {
+		_ = temporary.Close()
+		return err
+	}
+	if err := temporary.Close(); err != nil {
+		return err
+	}
+	// #nosec G703 -- temporary and target paths are inside the configured store root.
+	if err := replaceStoreFile(root, dir, temporaryPath, path); err != nil {
+		return err
+	}
+	if err := syncDir(); err != nil {
+		return err
+	}
+	return nil
+}

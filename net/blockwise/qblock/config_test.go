@@ -2,6 +2,7 @@ package qblock
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -140,6 +141,7 @@ func TestConfiguredRecoveryBackoffAndExhaustion(t *testing.T) {
 	receiver := q2BodyReceiver[*testClient]{
 		b: engine, req: request, exchange: exchange, requestedSet: -1,
 	}
+
 	for retry := 0; retry <= config.NonMaxRetransmit; retry++ {
 		start := time.Now()
 		_, err := receiver.receive()
@@ -153,4 +155,18 @@ func TestConfiguredRecoveryBackoffAndExhaustion(t *testing.T) {
 			require.NoError(t, err)
 		}
 	}
+}
+
+func TestQBlock2RecoveryReturnsNonTimeoutExchangeErrors(t *testing.T) {
+	engine := New(newTestClient(), nil)
+	request := pool.NewMessage(context.Background())
+	request.SetCode(codes.GET)
+	request.SetToken([]byte("body"))
+	wantErr := errors.New("authenticated replay tracking exhausted")
+	receiver := q2BodyReceiver[*testClient]{
+		b: engine, req: request, exchange: new(deadlineExchange), requestedSet: -1,
+	}
+	require.ErrorIs(t, receiver.recover(wantErr), wantErr)
+	require.Zero(t, receiver.retries)
+	require.Zero(t, receiver.sentRequests)
 }

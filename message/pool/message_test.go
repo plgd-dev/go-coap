@@ -598,6 +598,20 @@ func TestUnmarshalMessageWithMultipleOptions(t *testing.T) {
 	}
 }
 
+func TestUnmarshalMessageWithZeroOptionCapacity(t *testing.T) {
+	req := pool.NewMessage(context.Background())
+	req.AddOptionString(message.URIPath, "resource")
+	data, err := req.MarshalWithEncoder(coder.DefaultCoder)
+	require.NoError(t, err)
+
+	msg := pool.NewMessage(context.Background())
+	msg.SetMessage(message.Message{})
+	n, err := msg.UnmarshalWithDecoder(coder.DefaultCoder, data)
+	require.NoError(t, err)
+	require.Len(t, data, n)
+	require.Equal(t, req.Options(), msg.Options())
+}
+
 func TestMessageResetReleasesOptions(t *testing.T) {
 	msg := pool.NewMessage(context.Background())
 	for _, numOptions := range []int{40, 20, 1000, 1} {
@@ -634,6 +648,6 @@ func TestSetMessagePreservesAliasedOptions(t *testing.T) {
 		Code:    codes.PUT,
 		Options: options,
 	})
-
+	require.Equal(t, want, msg.Options())
 	require.Equal(t, want, msg.Options())
 }
