@@ -359,8 +359,11 @@ func validateStoreDirectoryACE(dacl *windows.ACL, index uint32, trustedSIDs []*w
 
 	writeRights := directoryWriteRights
 	if allowCreate {
-		const directoryCreateRights = windows.FILE_WRITE_DATA | windows.FILE_APPEND_DATA
-		writeRights &^= directoryCreateRights
+		writeRights = windows.ACCESS_MASK(0x40) |
+			windows.DELETE |
+			windows.WRITE_DAC |
+			windows.WRITE_OWNER |
+			windows.GENERIC_ALL
 	}
 	var ace *windows.ACCESS_ALLOWED_ACE
 	if err := windows.GetAce(dacl, index, &ace); err != nil {
@@ -371,6 +374,9 @@ func validateStoreDirectoryACE(dacl *windows.ACL, index uint32, trustedSIDs []*w
 	}
 	if ace.Header.AceType != windows.ACCESS_ALLOWED_ACE_TYPE {
 		return fmt.Errorf("unsupported ACE type %d in OSCORE store directory ACL", ace.Header.AceType)
+	}
+	if allowCreate && ace.Header.AceFlags&windows.INHERIT_ONLY_ACE != 0 {
+		return nil
 	}
 	if ace.Mask&writeRights == 0 {
 		return nil

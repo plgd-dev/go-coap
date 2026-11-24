@@ -58,9 +58,22 @@ func TestWindowsStoreAncestorAllowsCreateButRejectsDelete(t *testing.T) {
 		t.Fatal("store directory with untrusted create permissions was accepted")
 	}
 
+	metadataWrite, descriptorErr := windows.SecurityDescriptorFromString("D:(A;;0x40000010;;;BU)")
+	if descriptorErr != nil {
+		t.Fatal(descriptorErr)
+	}
+	dacl, _, daclErr = metadataWrite.DACL()
+	if daclErr != nil {
+		t.Fatal(daclErr)
+	}
+	if policyErr := validateStoreDirectoryACLPolicy(dacl, true); policyErr != nil {
+		t.Fatalf("ancestor metadata write permissions should be allowed: %v", policyErr)
+	}
+
 	for _, sddl := range []string{
 		"D:(A;;0x40;;;BU)",
 		"D:(A;;0x10006;;;BU)",
+		"D:(A;;0x40000;;;BU)",
 	} {
 		t.Run(sddl, func(t *testing.T) {
 			createAndDelete, descriptorErr := windows.SecurityDescriptorFromString(sddl)
@@ -75,6 +88,21 @@ func TestWindowsStoreAncestorAllowsCreateButRejectsDelete(t *testing.T) {
 				t.Fatal("ancestor ACL granting delete access was accepted")
 			}
 		})
+	}
+
+	inheritOnly, descriptorErr := windows.SecurityDescriptorFromString("D:(A;OICIIO;FA;;;BU)")
+	if descriptorErr != nil {
+		t.Fatal(descriptorErr)
+	}
+	dacl, _, daclErr = inheritOnly.DACL()
+	if daclErr != nil {
+		t.Fatal(daclErr)
+	}
+	if policyErr := validateStoreDirectoryACLPolicy(dacl, true); policyErr != nil {
+		t.Fatalf("ancestor inherit-only permissions should be evaluated on the child: %v", policyErr)
+	}
+	if policyErr := validateStoreDirectoryACL(dacl); policyErr == nil {
+		t.Fatal("store directory with untrusted inherit-only permissions was accepted")
 	}
 }
 
