@@ -327,6 +327,28 @@ func TestBlockWiseDo(t *testing.T) {
 	}
 }
 
+// Regression test for the nil-body continuation panic reported by Copperfault LLC.
+func TestCreateSendingMessageWithoutBody(t *testing.T) {
+	cc := newTestClient()
+	bw := New(cc, time.Minute, func(err error) { t.Error(err) }, nil)
+	sendingMessage := cc.AcquireMessage(context.Background())
+	defer cc.ReleaseMessage(sendingMessage)
+	sendingMessage.SetCode(codes.GET)
+	sendingMessage.SetToken(message.Token{0x01, 0x02, 0x03})
+
+	if size, err := sendingMessage.BodySize(); err != nil || size != 0 {
+		t.Fatalf("expected BodySize()==(0, nil), got (%d, %v)", size, err)
+	}
+	require.Nil(t, sendingMessage.Body())
+	block, err := EncodeBlockOption(SZX16, 0, false)
+	require.NoError(t, err)
+
+	sendMessage, more, err := bw.createSendingMessage(sendingMessage, SZX128, 1024, block)
+	require.ErrorContains(t, err, "body is nil")
+	require.Nil(t, sendMessage)
+	require.False(t, more)
+}
+
 func TestBlockWiseRFC8132BodyMethods(t *testing.T) {
 	for _, code := range []codes.Code{codes.FETCH, codes.PATCH, codes.IPATCH} {
 		t.Run(code.String(), func(t *testing.T) {
