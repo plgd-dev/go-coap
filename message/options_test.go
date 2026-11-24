@@ -1,8 +1,10 @@
 package message
 
 import (
+	"sort"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/plgd-dev/go-coap/v3/test/net"
 	"github.com/stretchr/testify/assert"
@@ -10,6 +12,37 @@ import (
 )
 
 const testPathABC = "/a/b/c"
+
+func TestResetOptionsToManyOptionsWithSameID(t *testing.T) {
+	resetTime := func(count int) time.Duration {
+		in := make(Options, count, count+1)
+		for i := range in {
+			in[i] = Option{ID: URIPath, Value: []byte{}}
+		}
+		in = append(in, Option{ID: Block1, Value: []byte{0x0e}})
+
+		out := make(Options, 0, count+1)
+		buf := make([]byte, 16)
+		start := time.Now()
+		out, used, err := out.ResetOptionsTo(buf, in)
+		elapsed := time.Since(start)
+		require.NoError(t, err)
+		require.Equal(t, 1, used)
+		require.Equal(t, in, out)
+		return elapsed
+	}
+
+	const samples = 5
+	smallTimes := make([]time.Duration, samples)
+	largeTimes := make([]time.Duration, samples)
+	for i := range samples {
+		smallTimes[i] = resetTime(16000)
+		largeTimes[i] = resetTime(64000)
+	}
+	sort.Slice(smallTimes, func(i, j int) bool { return smallTimes[i] < smallTimes[j] })
+	sort.Slice(largeTimes, func(i, j int) bool { return largeTimes[i] < largeTimes[j] })
+	require.Less(t, largeTimes[samples/2], 12*smallTimes[samples/2])
+}
 
 func testFindPositionBytesOption(t *testing.T, options Options, id OptionID, prepend bool, expectedIdx int) int {
 	prepIdx, idx := options.findPosition(id)
