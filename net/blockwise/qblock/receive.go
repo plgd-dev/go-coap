@@ -499,10 +499,11 @@ func (b *Engine[C]) prepareQ1ResponseRequest(w *responsewriter.ResponseWriter[C]
 		request.SetToken(transfer.initialToken)
 	}
 	request.SetBody(body)
+	generation := request.Generation()
 	next(w, request)
 	q2Request := b.cloneMessage(request)
 	q2Request.SetBody(nil)
-	b.cc.ReleaseMessage(request)
+	b.releaseUnlessHijacked(request, generation)
 	return q2Request, nil
 }
 
@@ -510,7 +511,7 @@ func (b *Engine[C]) completeQ1Response(w *responsewriter.ResponseWriter[C], r *p
 	transfer *q1ReceiveTransfer, q2Request *pool.Message, maxSZX SZX, remoteAddr net.Addr,
 	next func(*responsewriter.ResponseWriter[C], *pool.Message),
 ) error {
-	defer b.cc.ReleaseMessage(q2Request)
+	defer b.releaseUnlessHijacked(q2Request, q2Request.Generation())
 	responseSize, sizeErr := w.Message().BodySize()
 	b.ensureQBlock2Capability(q2Request, transfer.szx)
 	if sizeErr == nil && responseSize > transfer.szx.Size() {

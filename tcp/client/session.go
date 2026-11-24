@@ -350,6 +350,12 @@ func (s *Session) ReleaseMessage(m *pool.Message) {
 	s.messagePool.ReleaseMessage(m)
 }
 
+// ReleaseMessageIfNotHijacked releases only the captured message acquisition
+// when the handler did not take ownership of it.
+func (s *Session) ReleaseMessageIfNotHijacked(m *pool.Message, generation uint64) {
+	s.messagePool.ReleaseMessageIfNotHijacked(m, generation)
+}
+
 // RemoteAddr gets remote address.
 func (s *Session) RemoteAddr() net.Addr {
 	return s.connection.RemoteAddr()

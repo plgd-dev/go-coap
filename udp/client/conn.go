@@ -2247,6 +2247,12 @@ func (cc *Conn) ReleaseMessage(m *pool.Message) {
 	cc.messagePool.ReleaseMessage(m)
 }
 
+// ReleaseMessageIfNotHijacked releases only the captured message acquisition
+// when the handler did not take ownership of it.
+func (cc *Conn) ReleaseMessageIfNotHijacked(m *pool.Message, generation uint64) {
+	cc.messagePool.ReleaseMessageIfNotHijacked(m, generation)
+}
+
 func (cc *Conn) addPendingMessage(mid int32, sequence uint64, now time.Time) (bool, error) {
 	if cc.maxPendingMessages == 0 {
 		return false, nil
