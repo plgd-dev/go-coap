@@ -6,6 +6,8 @@ import (
 	"net"
 	"sync"
 	"time"
+
+	"github.com/plgd-dev/go-coap/v3/pkg/sync/atomic"
 )
 
 type Connections struct {
@@ -25,8 +27,13 @@ type Connection interface {
 	RemoteAddr() net.Addr
 }
 
+type monitored struct {
+	Connection
+	checking atomic.Bool
+}
+
 func (c *Connections) Store(conn Connection) {
-	c.data.Store(conn.RemoteAddr().String(), conn)
+	c.data.Store(conn.RemoteAddr().String(), &monitored{Connection: conn})
 }
 
 func (c *Connections) length() int {
@@ -38,10 +45,10 @@ func (c *Connections) length() int {
 	return l
 }
 
-func (c *Connections) copyConnections() []Connection {
-	m := make([]Connection, 0, c.length())
+func (c *Connections) copyConnections() []*monitored {
+	m := make([]*monitored, 0, c.length())
 	c.data.Range(func(_, value interface{}) bool {
-		con, ok := value.(Connection)
+		con, ok := value.(*monitored)
 		if !ok {
 			panic(fmt.Errorf("invalid type %T in connections map", con))
 		}
@@ -51,14 +58,22 @@ func (c *Connections) copyConnections() []Connection {
 	return m
 }
 
+// CheckExpirations schedules each connection's check independently, so a check
+// blocked on its peer cannot prevent checks for other connections.
 func (c *Connections) CheckExpirations(now time.Time) {
 	for _, cc := range c.copyConnections() {
 		select {
 		case <-cc.Context().Done():
 			continue
 		default:
-			cc.CheckExpirations(now)
 		}
+		if !cc.checking.CompareAndSwap(false, true) {
+			continue
+		}
+		go func(cc *monitored) {
+			defer cc.checking.Store(false)
+			cc.CheckExpirations(now)
+		}(cc)
 	}
 }
 
