@@ -72,6 +72,10 @@ func (m pendingConfirmableInactivityMonitor) CheckInactivity(now time.Time, cc *
 	m.InactivityMonitor.CheckInactivity(now, cc)
 }
 
+// ErrMessageReset is returned by WriteMessage when the peer rejects a confirmable
+// message with a Reset message (RFC 7252 section 4.2).
+var ErrMessageReset = errors.New("message rejected by peer with Reset")
+
 // MalformedMessageError contains best-effort CoAP header metadata extracted
 // during decode failure. HasHeader indicates whether Type and MessageID are
 // valid and can be used by callers for protocol-level decisions.
@@ -1048,8 +1052,11 @@ func (cc *Conn) writeMessage(req *pool.Message) error {
 	}
 	closeFn, err := cc.prepareWriteMessage(wireReq, func(_ *responsewriter.ResponseWriter[*Conn], response *pool.Message) {
 		var responseErr error
-		if response.Type() == message.Reset && req.HasOption(message.Observe) && req.HasOption(message.QBlock2) {
-			responseErr = errors.New("q-block Observe notification reset by peer")
+		if response.Type() == message.Reset {
+			// RFC 7252 section 4.2: a Reset cancels the transmission and the application
+			// is informed of failure. For a notification it also tells the server that the
+			// peer is no longer an observer (RFC 7641 section 4.5).
+			responseErr = ErrMessageReset
 		}
 		notifyWaitForAcknowledge(respChan, responseErr)
 	}, respChan)
