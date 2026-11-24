@@ -3,6 +3,7 @@ package udp_test
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"strings"
@@ -19,6 +20,7 @@ import (
 	"github.com/plgd-dev/go-coap/v3/net/blockwise/qblock"
 	"github.com/plgd-dev/go-coap/v3/options"
 	"github.com/plgd-dev/go-coap/v3/udp"
+	"github.com/plgd-dev/go-coap/v3/udp/client"
 	"github.com/plgd-dev/go-coap/v3/udp/coder"
 	"github.com/stretchr/testify/require"
 )
@@ -122,9 +124,144 @@ func TestQBlockConfirmableConcurrentUploadsRespectNSTART(t *testing.T) {
 	}
 }
 
+func TestQBlockConfirmableIndependentUploadsReorderRequestTags(t *testing.T) {
+	for _, nstart := range []int{1, 3} {
+		t.Run(fmt.Sprintf("nstart-%d", nstart), func(t *testing.T) {
+			expected := map[byte][]byte{
+				1: bytes.Repeat([]byte{1}, 513),
+				2: bytes.Repeat([]byte{2}, 641),
+			}
+			var mu sync.Mutex
+			calls := make(map[byte]int)
+			router := mux.NewRouter()
+			require.NoError(t, router.Handle("/upload", mux.HandlerFunc(func(w mux.ResponseWriter, r *mux.Message) {
+				body, err := r.ReadBody()
+				if err != nil {
+					t.Errorf("read reordered Q-Block upload: %v", err)
+					return
+				}
+				if len(body) == 0 || !bytes.Equal(expected[body[0]], body) {
+					t.Errorf("reordered Q-Block upload body was mixed or unknown: %d bytes", len(body))
+					return
+				}
+				mu.Lock()
+				calls[body[0]]++
+				mu.Unlock()
+				if err := w.SetResponse(codes.Changed, message.TextPlain, bytes.NewReader(nil)); err != nil {
+					t.Errorf("set reordered Q-Block response: %v", err)
+				}
+			})))
+			listener, err := coapNet.NewListenUDP("udp", "127.0.0.1:0")
+			require.NoError(t, err)
+			server := udp.NewServer(
+				options.WithMux(router),
+				options.WithBlockwise(true, blockwise.SZX128, 30*time.Second),
+				options.WithQBlockwise(options.QBlockwiseOnly),
+			)
+			served := make(chan error, 1)
+			go func() { served <- server.Serve(listener) }()
+			t.Cleanup(func() {
+				server.Stop()
+				require.NoError(t, listener.Close())
+				require.NoError(t, <-served)
+			})
+
+			addr, relay := newQDropRelay(t, listener.LocalAddr().String(), message.QBlock1, -1)
+			relay.mu.Lock()
+			relay.reorderQ1BetweenTags = true
+			relay.mu.Unlock()
+			dial := func() *client.Conn {
+				cc, dialErr := udp.Dial(addr,
+					options.WithBlockwise(true, blockwise.SZX128, 30*time.Second),
+					options.WithQBlockwise(options.QBlockwiseOnly),
+					options.WithTransmission(uint32(nstart), 50*time.Millisecond, 3, 1.0),
+				)
+				require.NoError(t, dialErr)
+				t.Cleanup(func() { require.NoError(t, cc.Close()) })
+				return cc
+			}
+			clients := []*client.Conn{dial()}
+			if nstart == 1 {
+				clients = append(clients, dial())
+			}
+
+			type result struct {
+				key byte
+				err error
+			}
+			results := make(chan result, len(expected))
+			start := make(chan struct{})
+			var wg sync.WaitGroup
+			index := 0
+			for key, payload := range expected {
+				key, payload := key, payload
+				cc := clients[index%len(clients)]
+				index++
+				wg.Add(1)
+				go func() {
+					defer wg.Done()
+					<-start
+					ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+					defer cancel()
+					request, requestErr := cc.NewPutRequest(ctx, "/upload", message.AppOctets, bytes.NewReader(payload))
+					if requestErr != nil {
+						results <- result{key: key, err: requestErr}
+						return
+					}
+					request.SetType(message.Confirmable)
+					requestErr = request.SetRequestTag([]byte{key})
+					if requestErr != nil {
+						cc.ReleaseMessage(request)
+						results <- result{key: key, err: requestErr}
+						return
+					}
+					response, doErr := cc.Do(request)
+					cc.ReleaseMessage(request)
+					if doErr == nil {
+						if response.Code() != codes.Changed {
+							doErr = fmt.Errorf("upload %d response code = %v", key, response.Code())
+						}
+						cc.ReleaseMessage(response)
+					}
+					results <- result{key: key, err: doErr}
+				}()
+			}
+			close(start)
+			wg.Wait()
+			close(results)
+			for result := range results {
+				require.NoError(t, result.err)
+			}
+
+			mu.Lock()
+			require.Len(t, calls, len(expected))
+			for key := range expected {
+				require.Equal(t, 1, calls[key], "each independent upload must be dispatched exactly once")
+			}
+			mu.Unlock()
+
+			relay.mu.Lock()
+			defer relay.mu.Unlock()
+			require.True(t, relay.reorderQ1Done, "relay must reorder first Q1 packets across Request-Tags")
+			require.Len(t, relay.reorderQ1Order, 2)
+			require.NotEqual(t, relay.reorderQ1Order[0], relay.reorderQ1Order[1])
+			require.Len(t, relay.q1MaxInflight, len(clients), "track NSTART independently for each client")
+			for peer, maximum := range relay.q1MaxInflight {
+				require.LessOrEqual(t, maximum, nstart, "NSTART exceeded for client %s", peer)
+				require.Positive(t, maximum, "client %s sent no Q1 CON request", peer)
+			}
+		})
+	}
+}
+
 type qDropRelay struct {
 	mu                      sync.Mutex
 	peer                    *net.UDPAddr
+	local                   *net.UDPConn
+	peersByToken            map[string]*net.UDPAddr
+	peersByMID              map[int32]*net.UDPAddr
+	q1Inflight              map[string]map[int32]bool
+	q1MaxInflight           map[string]int
 	dropped                 bool
 	drops                   map[int64]bool
 	option                  message.OptionID
@@ -152,6 +289,16 @@ type qDropRelay struct {
 	delayStaleQ1            bool
 	staleQ1Packet           []byte
 	staleQ1Replayed         bool
+	reorderQ1BetweenTags    bool
+	reorderQ1HasFirstTag    bool
+	reorderQ1FirstTag       string
+	reorderQ1Pending        []byte
+	reorderQ1PendingTag     string
+	reorderQ1Order          []string
+	reorderQ1Done           bool
+	retainLateResponse      bool
+	lateQ1Response          []byte
+	lateQ1Peer              *net.UDPAddr
 }
 
 type qRelayFault uint8
@@ -394,6 +541,8 @@ func newQDropRelay(t *testing.T, target string, option message.OptionID, block i
 		drops: drops, option: option, observed: make(map[int64]int),
 		q1Seen: make(map[int64]int), dropForever: make(map[int64]bool),
 		delayedACK: make(chan struct{}),
+		local:      local, peersByToken: make(map[string]*net.UDPAddr), peersByMID: make(map[int32]*net.UDPAddr),
+		q1Inflight: make(map[string]map[int32]bool), q1MaxInflight: make(map[string]int),
 	}
 	var wg sync.WaitGroup
 	wg.Go(func() {
@@ -418,8 +567,20 @@ func (r *qDropRelay) forwardRequests(t *testing.T, local, upstream *net.UDPConn)
 			qRelayError(t, "read relay request", err)
 			return
 		}
+		data := bytes.Clone(buf[:n])
+		msg := message.Message{Options: make(message.Options, 0, 32)}
+		_, decodeErr := coder.DefaultCoder.Decode(data, &msg)
 		r.mu.Lock()
 		r.peer = peer
+		if decodeErr == nil {
+			r.peersByMID[msg.MessageID] = peer
+			if len(msg.Token) > 0 {
+				r.peersByToken[string(msg.Token)] = peer
+			}
+			if msg.Type == message.Confirmable && msg.Options.HasOption(message.QBlock1) {
+				r.trackQ1InflightLocked(peer, msg.MessageID)
+			}
+		}
 		r.mu.Unlock()
 		r.observeQ1Request(buf[:n])
 		r.observeQ2Control(buf[:n])
@@ -427,11 +588,71 @@ func (r *qDropRelay) forwardRequests(t *testing.T, local, upstream *net.UDPConn)
 		if r.drop(buf[:n]) {
 			continue
 		}
-		if _, err := upstream.Write(buf[:n]); err != nil {
-			qRelayError(t, "forward relay request", err)
-			return
+		packets := r.reorderQ1Request(data, msg, decodeErr == nil)
+		for _, packet := range packets {
+			if _, err := upstream.Write(packet); err != nil {
+				qRelayError(t, "forward relay request", err)
+				return
+			}
 		}
 	}
+}
+
+func (r *qDropRelay) trackQ1InflightLocked(peer *net.UDPAddr, messageID int32) {
+	peerKey := peer.String()
+	inflight := r.q1Inflight[peerKey]
+	if inflight == nil {
+		inflight = make(map[int32]bool)
+		r.q1Inflight[peerKey] = inflight
+	}
+	if inflight[messageID] {
+		return
+	}
+	inflight[messageID] = true
+	r.q1MaxInflight[peerKey] = max(r.q1MaxInflight[peerKey], len(inflight))
+}
+
+func (r *qDropRelay) acknowledgeQ1Locked(peer *net.UDPAddr, messageID int32) {
+	if peer == nil {
+		return
+	}
+	peerKey := peer.String()
+	inflight := r.q1Inflight[peerKey]
+	delete(inflight, messageID)
+}
+
+func (r *qDropRelay) reorderQ1Request(data []byte, msg message.Message, decoded bool) [][]byte {
+	if !decoded || msg.Type != message.Confirmable || !msg.Options.HasOption(message.QBlock1) {
+		return [][]byte{data}
+	}
+	start, end, err := msg.Options.Find(message.RequestTag)
+	if err != nil || end-start != 1 {
+		return [][]byte{data}
+	}
+	tag := string(msg.Options[start].Value)
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if !r.reorderQ1BetweenTags || r.reorderQ1Done {
+		return [][]byte{data}
+	}
+	if r.reorderQ1Pending == nil {
+		if !r.reorderQ1HasFirstTag {
+			r.reorderQ1FirstTag = tag
+			r.reorderQ1HasFirstTag = true
+		}
+		if tag == r.reorderQ1FirstTag {
+			r.reorderQ1Pending = bytes.Clone(data)
+			r.reorderQ1PendingTag = tag
+			return nil
+		}
+		return [][]byte{data}
+	}
+	if tag == r.reorderQ1PendingTag {
+		return [][]byte{data}
+	}
+	r.reorderQ1Done = true
+	r.reorderQ1Order = []string{tag, r.reorderQ1PendingTag}
+	return [][]byte{data, r.reorderQ1Pending}
 }
 
 func (r *qDropRelay) forwardResponses(t *testing.T, local, upstream *net.UDPConn) {
@@ -442,11 +663,62 @@ func (r *qDropRelay) forwardResponses(t *testing.T, local, upstream *net.UDPConn
 			qRelayError(t, "read relay response", err)
 			return
 		}
+		msg := message.Message{Options: make(message.Options, 0, 32)}
+		_, decodeErr := coder.DefaultCoder.Decode(buf[:n], &msg)
 		r.mu.Lock()
 		peer := r.peer
+		if decodeErr == nil {
+			if len(msg.Token) > 0 {
+				if tokenPeer := r.peersByToken[string(msg.Token)]; tokenPeer != nil {
+					peer = tokenPeer
+				}
+			} else if midPeer := r.peersByMID[msg.MessageID]; midPeer != nil {
+				peer = midPeer
+			}
+		}
 		r.mu.Unlock()
-		if peer == nil || r.drop(buf[:n]) {
+		if peer == nil {
 			continue
+		}
+		r.retainLateQ1Response(buf[:n], peer, decodeErr == nil)
+		if decodeErr == nil && r.dropRetainedLateResponse(msg) {
+			switch msg.Type {
+			case message.Acknowledgement:
+				ack := make([]byte, 4)
+				ackSize, err := coder.DefaultCoder.Encode(message.Message{
+					Type: message.Acknowledgement, MessageID: msg.MessageID,
+				}, ack)
+				if err != nil {
+					qRelayError(t, "encode dropped-response ACK", err)
+					return
+				}
+				if _, err := local.WriteToUDP(ack[:ackSize], peer); err != nil {
+					qRelayError(t, "forward dropped-response ACK", err)
+					return
+				}
+			case message.Confirmable:
+				ack := make([]byte, 4)
+				ackSize, err := coder.DefaultCoder.Encode(message.Message{
+					Type: message.Acknowledgement, MessageID: msg.MessageID,
+				}, ack)
+				if err != nil {
+					qRelayError(t, "encode dropped-response ACK", err)
+					return
+				}
+				if _, err := upstream.Write(ack[:ackSize]); err != nil {
+					qRelayError(t, "acknowledge dropped late response", err)
+					return
+				}
+			}
+			continue
+		}
+		if r.drop(buf[:n]) {
+			continue
+		}
+		if decodeErr == nil && msg.Type == message.Acknowledgement {
+			r.mu.Lock()
+			r.acknowledgeQ1Locked(peer, msg.MessageID)
+			r.mu.Unlock()
 		}
 		drop, duplicate, delay := r.applyResponseFault(buf[:n])
 		if delay > 0 {
@@ -504,6 +776,62 @@ func (r *qDropRelay) forwardResponses(t *testing.T, local, upstream *net.UDPConn
 			}
 		}
 	}
+}
+
+func (r *qDropRelay) dropRetainedLateResponse(msg message.Message) bool {
+	if msg.Code < codes.Created {
+		return false
+	}
+	if msg.Options.HasOption(message.QBlock2) {
+		value, err := msg.Options.GetUint32(message.QBlock2)
+		if err != nil {
+			return false
+		}
+		_, _, more, err := blockwise.DecodeQBlockOption(value)
+		if err != nil || more {
+			return false
+		}
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.retainLateResponse
+}
+
+func (r *qDropRelay) retainLateQ1Response(data []byte, peer *net.UDPAddr, decoded bool) {
+	if !decoded {
+		return
+	}
+	msg := message.Message{Options: make(message.Options, 0, 32)}
+	if _, err := coder.DefaultCoder.Decode(data, &msg); err != nil || msg.Code < codes.Created {
+		return
+	}
+	if msg.Options.HasOption(message.QBlock2) {
+		value, err := msg.Options.GetUint32(message.QBlock2)
+		if err != nil {
+			return
+		}
+		_, _, more, err := blockwise.DecodeQBlockOption(value)
+		if err != nil || more {
+			return
+		}
+	}
+	r.mu.Lock()
+	if r.retainLateResponse && r.lateQ1Response == nil {
+		r.lateQ1Response = bytes.Clone(data)
+		r.lateQ1Peer = peer
+	}
+	r.mu.Unlock()
+}
+
+func (r *qDropRelay) deliverLateQ1Response() error {
+	r.mu.Lock()
+	response, peer, local := bytes.Clone(r.lateQ1Response), r.lateQ1Peer, r.local
+	r.mu.Unlock()
+	if len(response) == 0 || peer == nil || local == nil {
+		return errors.New("no retained late Q-Block1 response")
+	}
+	_, err := local.WriteToUDP(response, peer)
+	return err
 }
 
 func (r *qDropRelay) retainStaleQ1Packet(data []byte) {
@@ -717,6 +1045,90 @@ func TestQBlock1ConfirmableACKExhaustionReturnsError(t *testing.T) {
 	defer relay.mu.Unlock()
 	require.True(t, relay.faulted)
 	require.Equal(t, 2, relay.q1Seen[0], "one initial transmission and one configured retry")
+}
+
+func TestQBlock1LateFinalResponseDoesNotReviveRetiredTransfer(t *testing.T) {
+	firstPayload := bytes.Repeat([]byte{0x31}, 97)
+	config := qblock.DefaultConfig()
+	config.NonTimeout = 20 * time.Millisecond
+	config.NonReceiveTimeout = 1100 * time.Millisecond
+	config.NonMaxRetransmit = 1
+	config.MaxLatency = 10 * time.Second
+	var calls atomic.Int32
+	router := mux.NewRouter()
+	require.NoError(t, router.Handle("/q", mux.HandlerFunc(func(w mux.ResponseWriter, r *mux.Message) {
+		body, err := r.ReadBody()
+		if err != nil {
+			t.Errorf("read Q-Block upload body: %v", err)
+			return
+		}
+		if !bytes.Equal(firstPayload, body) {
+			t.Errorf("Q-Block upload body differs: got %d bytes, want %d", len(body), len(firstPayload))
+			return
+		}
+		calls.Add(1)
+		if err := w.SetResponse(codes.Changed, message.TextPlain, nil); err != nil {
+			t.Errorf("set final Q-Block response: %v", err)
+		}
+	})))
+	listener, err := coapNet.NewListenUDP("udp4", "127.0.0.1:0")
+	require.NoError(t, err)
+	server := udp.NewServer(
+		options.WithMux(router),
+		options.WithBlockwise(true, blockwise.SZX16, 30*time.Second),
+		options.WithQBlockwise(options.QBlockwiseOnly),
+		options.WithQBlockwiseConfig(config),
+	)
+	served := make(chan error, 1)
+	go func() { served <- server.Serve(listener) }()
+	t.Cleanup(func() {
+		server.Stop()
+		require.NoError(t, listener.Close())
+		require.NoError(t, <-served)
+	})
+	finalNUM := int64((len(firstPayload) - 1) / int(blockwise.SZX16.Size()))
+	addr, relay := newQDropRelay(t, listener.LocalAddr().String(), message.QBlock1, -1)
+	relay.mu.Lock()
+	relay.retainLateResponse = true
+	relay.mu.Unlock()
+	cc, err := udp.Dial(addr,
+		options.WithBlockwise(true, blockwise.SZX16, 30*time.Second),
+		options.WithQBlockwise(options.QBlockwiseOnly),
+		options.WithQBlockwiseConfig(config),
+		options.WithTransmission(1, 50*time.Millisecond, 1, 1),
+	)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, cc.Close()) })
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	request, err := cc.NewPutRequest(ctx, "/q", message.AppOctets, bytes.NewReader(firstPayload))
+	require.NoError(t, err)
+	request.SetType(message.Confirmable)
+	_, err = cc.Do(request)
+	cc.ReleaseMessage(request)
+	require.ErrorContains(t, err, "Q-Block1 final response recovery exhausted")
+	require.EqualValues(t, 1, calls.Load(), "server must dispatch the accepted upload exactly once")
+
+	relay.mu.Lock()
+	require.NotEmpty(t, relay.lateQ1Response, "relay must retain the final response")
+	require.GreaterOrEqual(t, relay.q1Seen[finalNUM], 2, "client must retry the final Q-Block1 block")
+	relay.retainLateResponse = false
+	relay.mu.Unlock()
+	require.NoError(t, relay.deliverLateQ1Response())
+
+	nextRequest, err := cc.NewPutRequest(ctx, "/q", message.AppOctets, bytes.NewReader(firstPayload))
+	require.NoError(t, err)
+	nextRequest.SetType(message.Confirmable)
+	response, err := cc.Do(nextRequest)
+	cc.ReleaseMessage(nextRequest)
+	require.NoError(t, err, "a stale response must not complete or corrupt a subsequent transfer")
+	body, err := response.ReadBody()
+	cc.ReleaseMessage(response)
+	require.NoError(t, err)
+	require.Empty(t, body)
+	require.EqualValues(t, 2, calls.Load(),
+		"late traffic must not revive the retired transfer or duplicate application dispatch")
 }
 
 type qBlockConfirmableFaultCase struct {

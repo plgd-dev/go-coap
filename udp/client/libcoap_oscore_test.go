@@ -539,7 +539,7 @@ func TestLibCoAPServerOSCOREDTLS(t *testing.T) {
 	}
 }
 
-func TestLibCoAPClientOSCOREDTLSRejectsInvalidContextAndReplay(t *testing.T) {
+func TestLibCoAPClientOSCOREDTLSRejectsInvalidContext(t *testing.T) {
 	clientPath, err := exec.LookPath("coap-client-notls")
 	if err != nil {
 		clientPath, err = exec.LookPath("coap-client")
@@ -630,8 +630,89 @@ func TestLibCoAPClientOSCOREDTLSRejectsInvalidContextAndReplay(t *testing.T) {
 	require.NoError(t, commandErr)
 	require.Equal(t, []byte("dtls oscore"), response)
 	require.EqualValues(t, 1, handled.Load())
+}
 
-	_, _ = runClient(validConfig, "replay-response.txt")
+func TestOSCOREDTLSRejectsReplayedRequest(t *testing.T) {
+	listener, err := coapNet.NewDTLSListener(
+		"udp",
+		"127.0.0.1:0",
+		coapNet.NewDTLSServerOptions(
+			piondtls.WithPSK(func([]byte) ([]byte, error) { return []byte{0xab, 0xc1, 0x23}, nil }),
+			piondtls.WithPSKIdentityHint([]byte("go-coap-server")),
+			piondtls.WithCipherSuites(piondtls.TLS_PSK_WITH_AES_128_GCM_SHA256),
+		),
+	)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, listener.Close()) }()
+
+	var handled atomic.Int32
+	replayRequestHandled := make(chan struct{}, 1)
+	serverErrors := make(chan error, 8)
+	server := coapDTLS.NewServer(
+		options.WithOSCORE(newLibCoAPOSCOREProcessor(t, "server", "client")),
+		options.WithErrors(func(serverErr error) {
+			select {
+			case serverErrors <- serverErr:
+			default:
+			}
+		}),
+		options.WithHandlerFunc(func(w *responsewriter.ResponseWriter[*client.Conn], _ *pool.Message) {
+			if handled.Add(1) == 1 {
+				replayRequestHandled <- struct{}{}
+			}
+			if responseErr := w.SetResponse(codes.Content, message.TextPlain, bytes.NewReader([]byte("dtls oscore"))); responseErr != nil {
+				t.Errorf("set DTLS OSCORE response: %v", responseErr)
+			}
+		}),
+	)
+	serverDone := make(chan error, 1)
+	go func() { serverDone <- server.Serve(listener) }()
+	defer func() {
+		server.Stop()
+		select {
+		case serverErr := <-serverDone:
+			require.NoError(t, serverErr)
+		case <-time.After(5 * time.Second):
+			require.Fail(t, "go-coap DTLS replay server did not stop")
+		}
+	}()
+
+	replayContext, err := oscore.NewContext(oscore.ContextConfig{
+		UnsafeVolatileSenderSequence: true,
+		AcceptReplayStateLoss:        true,
+		MasterSecret:                 []byte{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16},
+		MasterSalt:                   []byte{0x9e, 0x7c, 0xa9, 0x22, 0x23, 0x78, 0x63, 0x40},
+		SenderID:                     []byte("client"),
+		RecipientID:                  []byte("server"),
+		SenderSequenceNumber:         1000,
+	})
+	require.NoError(t, err)
+	protected, _, err := replayContext.ProtectRequest(message.Message{
+		Code: codes.GET, Type: message.Confirmable, MessageID: 0x7171, Token: message.Token{0x71},
+		Options: message.Options{{ID: message.URIPath, Value: []byte("test")}},
+	})
+	require.NoError(t, err)
+	replayConn, err := coapDTLS.Dial(
+		listener.Addr().String(),
+		coapDTLS.NewDTLSClientOptions(
+			piondtls.WithPSK(func([]byte) ([]byte, error) { return []byte{0xab, 0xc1, 0x23}, nil }),
+			piondtls.WithPSKIdentityHint([]byte("go-coap-server")),
+			piondtls.WithCipherSuites(piondtls.TLS_PSK_WITH_AES_128_GCM_SHA256),
+		),
+	)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, replayConn.Close()) }()
+	wireRequest := replayConn.AcquireMessage(context.Background())
+	defer replayConn.ReleaseMessage(wireRequest)
+	wireRequest.SetMessage(protected)
+	require.NoError(t, replayConn.Session().WriteMessage(wireRequest))
+	select {
+	case <-replayRequestHandled:
+	case <-time.After(2 * time.Second):
+		require.Fail(t, "go-coap DTLS server did not handle the authenticated replay-test request")
+	}
+	wireRequest.SetMessageID(protected.MessageID + 1)
+	require.NoError(t, replayConn.Session().WriteMessage(wireRequest))
 	select {
 	case serverErr := <-serverErrors:
 		require.ErrorIs(t, serverErr, oscore.ErrReplay, "replayed OSCORE request error = %v", serverErr)
