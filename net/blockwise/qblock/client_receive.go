@@ -35,7 +35,7 @@ func (b *Engine[C]) DoQBlock2(req *pool.Message, szx SZX,
 	request := b.cloneMessage(req)
 	defer b.cc.ReleaseMessage(request)
 	if req.Code() == codes.FETCH {
-		if copyErr := copyFetchSelectorBody(req, request); copyErr != nil {
+		if copyErr := copyRequestBody(req, request); copyErr != nil {
 			return nil, copyErr
 		}
 	}
@@ -282,7 +282,7 @@ func (s *q2BodyReceiver[C]) newRequest(recovery bool) (*pool.Message, error) {
 	part.Remove(message.QBlock1)
 	part.Remove(message.QBlock2)
 	if s.req.Code() == codes.FETCH {
-		if err := copyFetchSelectorBody(s.req, part); err != nil {
+		if err := copyRequestBody(s.req, part); err != nil {
 			s.b.cc.ReleaseMessage(part)
 			return nil, err
 		}
@@ -301,7 +301,7 @@ func (s *q2BodyReceiver[C]) newRequest(recovery bool) (*pool.Message, error) {
 	return part, nil
 }
 
-func copyFetchSelectorBody(source, destination *pool.Message) error {
+func copyRequestBody(source, destination *pool.Message) error {
 	body := source.Body()
 	if body == nil {
 		destination.SetBody(nil)
@@ -309,20 +309,21 @@ func copyFetchSelectorBody(source, destination *pool.Message) error {
 	}
 	position, err := body.Seek(0, io.SeekCurrent)
 	if err != nil {
-		return fmt.Errorf("read FETCH selector position: %w", err)
+		return fmt.Errorf("get request body position: %w", err)
 	}
 	if _, err := body.Seek(0, io.SeekStart); err != nil {
-		return fmt.Errorf("rewind FETCH selector: %w", err)
+		_, restoreErr := body.Seek(position, io.SeekStart)
+		return errors.Join(fmt.Errorf("rewind request body: %w", err), restoreErr)
 	}
-	selector, readErr := io.ReadAll(body)
+	data, readErr := io.ReadAll(body)
 	_, restoreErr := body.Seek(position, io.SeekStart)
 	if readErr != nil {
-		return fmt.Errorf("read FETCH selector: %w", readErr)
+		return errors.Join(fmt.Errorf("read request body: %w", readErr), restoreErr)
 	}
 	if restoreErr != nil {
-		return fmt.Errorf("restore FETCH selector position: %w", restoreErr)
+		return fmt.Errorf("restore request body position: %w", restoreErr)
 	}
-	destination.SetBody(bytes.NewReader(selector))
+	destination.SetBody(bytes.NewReader(data))
 	return nil
 }
 

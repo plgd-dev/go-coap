@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"io"
 	"testing"
 
 	"github.com/plgd-dev/go-coap/v3/message"
@@ -11,6 +12,29 @@ import (
 	"github.com/plgd-dev/go-coap/v3/message/pool"
 	"github.com/stretchr/testify/require"
 )
+
+type copyRequestBodySeeker struct {
+	reader        *bytes.Reader
+	failSeekCall  int
+	seekErr       error
+	readErr       error
+	seekCallCount int
+}
+
+func (s *copyRequestBodySeeker) Read(p []byte) (int, error) {
+	if s.readErr != nil {
+		return 0, s.readErr
+	}
+	return s.reader.Read(p)
+}
+
+func (s *copyRequestBodySeeker) Seek(offset int64, whence int) (int64, error) {
+	s.seekCallCount++
+	if s.seekCallCount == s.failSeekCall {
+		return 0, s.seekErr
+	}
+	return s.reader.Seek(offset, whence)
+}
 
 type budgetedQBlockClient struct {
 	*testClient
@@ -118,6 +142,59 @@ func TestQBlock2FetchRecoveryPreservesSelectorBody(t *testing.T) {
 	body, err := part.ReadBody()
 	require.NoError(t, err)
 	require.Equal(t, []byte("selector"), body)
+}
+
+func TestCopyRequestBodyErrorsAndEmptyBody(t *testing.T) {
+	seekErr := errors.New("seek failed")
+	readErr := errors.New("read failed")
+	for _, test := range []struct {
+		name          string
+		body          io.ReadSeeker
+		wantErr       error
+		wantNilCopied bool
+	}{
+		{name: "nil body", wantNilCopied: true},
+		{
+			name:    "position seek fails",
+			body:    &copyRequestBodySeeker{reader: bytes.NewReader([]byte("body")), failSeekCall: 1, seekErr: seekErr},
+			wantErr: seekErr,
+		},
+		{
+			name:    "rewind seek fails",
+			body:    &copyRequestBodySeeker{reader: bytes.NewReader([]byte("body")), failSeekCall: 2, seekErr: seekErr},
+			wantErr: seekErr,
+		},
+		{
+			name:    "read fails",
+			body:    &copyRequestBodySeeker{reader: bytes.NewReader([]byte("body")), readErr: readErr},
+			wantErr: readErr,
+		},
+		{
+			name:    "restore seek fails",
+			body:    &copyRequestBodySeeker{reader: bytes.NewReader([]byte("body")), failSeekCall: 3, seekErr: seekErr},
+			wantErr: seekErr,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			source := pool.NewMessage(context.Background())
+			destination := pool.NewMessage(context.Background())
+			if test.body != nil {
+				source.SetBody(test.body)
+			}
+
+			err := copyRequestBody(source, destination)
+			if test.wantErr != nil {
+				require.ErrorIs(t, err, test.wantErr)
+				return
+			}
+
+			require.NoError(t, err)
+			if test.wantNilCopied {
+				require.Nil(t, destination.Body())
+				return
+			}
+		})
+	}
 }
 
 func TestQBlockOptionSizeIncrementIncludesFollowingOptions(t *testing.T) {

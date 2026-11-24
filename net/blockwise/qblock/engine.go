@@ -141,6 +141,24 @@ func (b *Engine[C]) cloneMessage(r *pool.Message) *pool.Message {
 	return blocks.CloneMessage(b.cc, r)
 }
 
+// releaseUnlessHijacked releases a request passed to the handler, unless the
+// handler took ownership of it with Hijack.
+func (b *Engine[C]) releaseUnlessHijacked(r *pool.Message, generation uint64) {
+	if r.IsHijacked() {
+		return
+	}
+	if releaser, ok := any(b.cc).(interface {
+		ReleaseMessageIfNotHijacked(*pool.Message, uint64)
+	}); ok {
+		releaser.ReleaseMessageIfNotHijacked(r, generation)
+		return
+	}
+	if r.Generation() != generation {
+		return
+	}
+	b.cc.ReleaseMessage(r)
+}
+
 func isRequestCode(code codes.Code) bool {
 	return blocks.IsRequestCode(code)
 }

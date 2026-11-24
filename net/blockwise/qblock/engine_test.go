@@ -14,6 +14,7 @@ import (
 	"github.com/plgd-dev/go-coap/v3/message/codes"
 	"github.com/plgd-dev/go-coap/v3/message/pool"
 	"github.com/plgd-dev/go-coap/v3/net/responsewriter"
+	"github.com/plgd-dev/go-coap/v3/tcp/coder"
 	"github.com/stretchr/testify/require"
 )
 
@@ -467,6 +468,80 @@ func TestQBlock2NegotiatedSZXRetransmissionReusesCachedResponse(t *testing.T) {
 	body, err := io.ReadAll(retransmission.Body())
 	require.NoError(t, err)
 	require.Equal(t, bytes.Repeat([]byte("A"), 16), body)
+}
+
+func TestQBlock2NegotiatedSZXHijackedRequestBodyIsIndependent(t *testing.T) {
+	cc := &qTestTransport{testClient: newTestClient(), jobs: make(map[string]qBlockTestJob)}
+	b := New(cc, func(error) {})
+	defer b.CloseQBlockTransfers()
+
+	makeWireRequest := func(payload []byte) []byte {
+		t.Helper()
+		wireRequest := pool.NewMessage(context.Background())
+		wireRequest.SetCode(codes.POST)
+		wireRequest.SetType(message.Confirmable)
+		wireRequest.SetToken([]byte("bodycopy"))
+		value, err := EncodeQBlockOption(SZX32, 0, false)
+		require.NoError(t, err)
+		wireRequest.SetOptionUint32(message.QBlock2, value)
+		wireRequest.SetBody(bytes.NewReader(payload))
+		wire, err := wireRequest.MarshalWithEncoder(coder.DefaultCoder)
+		require.NoError(t, err)
+		return wire
+	}
+
+	payload := []byte("first request payload")
+	request := cc.AcquireMessage(context.Background())
+	defer cc.ReleaseMessage(request)
+	_, err := request.UnmarshalWithDecoder(coder.DefaultCoder, makeWireRequest(payload))
+	require.NoError(t, err)
+	writer := responsewriter.New(cc.AcquireMessage(request.Context()), cc)
+	defer cc.ReleaseMessage(writer.Message())
+
+	var hijacked *pool.Message
+	require.NoError(t, b.handleQBlock2(writer, request, SZX16, nil,
+		func(_ *responsewriter.ResponseWriter[*qTestTransport], r *pool.Message) {
+			r.Hijack()
+			hijacked = r
+		}))
+	require.NotNil(t, hijacked)
+	defer cc.ReleaseMessage(hijacked)
+
+	_, err = request.UnmarshalWithDecoder(coder.DefaultCoder, makeWireRequest([]byte("other request payload")))
+	require.NoError(t, err)
+
+	body, err := hijacked.ReadBody()
+	require.NoError(t, err)
+	require.Equal(t, payload, body)
+}
+
+func TestQBlock2NegotiatedSZXBodyCopyError(t *testing.T) {
+	cc := &qTestTransport{testClient: newTestClient(), jobs: make(map[string]qBlockTestJob)}
+	b := New(cc, func(error) {})
+	defer b.CloseQBlockTransfers()
+
+	request := cc.AcquireMessage(context.Background())
+	defer cc.ReleaseMessage(request)
+	request.SetCode(codes.POST)
+	request.SetType(message.Confirmable)
+	request.SetBody(&copyRequestBodySeeker{
+		reader:       bytes.NewReader([]byte("payload")),
+		failSeekCall: 1,
+		seekErr:      errors.New("request body position failed"),
+	})
+	value, err := EncodeQBlockOption(SZX32, 0, false)
+	require.NoError(t, err)
+	request.SetOptionUint32(message.QBlock2, value)
+	writer := responsewriter.New(cc.AcquireMessage(request.Context()), cc)
+	defer cc.ReleaseMessage(writer.Message())
+
+	handlerCalled := false
+	err = b.handleQBlock2(writer, request, SZX16, nil,
+		func(*responsewriter.ResponseWriter[*qTestTransport], *pool.Message) {
+			handlerCalled = true
+		})
+	require.ErrorIs(t, err, request.Body().(*copyRequestBodySeeker).seekErr)
+	require.False(t, handlerCalled)
 }
 
 func TestQBlock2NewRequestMessageIDZeroDoesNotMatchRequestlessSender(t *testing.T) {

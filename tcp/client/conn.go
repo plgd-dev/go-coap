@@ -907,6 +907,12 @@ func (cc *Conn) ReleaseMessage(m *pool.Message) {
 	cc.session.ReleaseMessage(m)
 }
 
+// ReleaseMessageIfNotHijacked releases only the captured message acquisition
+// when the handler did not take ownership of it.
+func (cc *Conn) ReleaseMessageIfNotHijacked(m *pool.Message, generation uint64) {
+	cc.session.ReleaseMessageIfNotHijacked(m, generation)
+}
+
 // NetConn returns the underlying connection that is wrapped by cc. The Conn returned is shared by all invocations of NetConn, so do not modify it.
 func (cc *Conn) NetConn() net.Conn {
 	return cc.session.NetConn()
