@@ -388,7 +388,7 @@ func TestOSCOREOuterBlockwiseDTLSRejectsAuthenticationFailureDuringTransfer(t *t
 		require.NoError(t, encodeErr)
 		request := cc.AcquireMessage(context.Background())
 		request.SetCode(protected.Code)
-		request.SetType(message.NonConfirmable)
+		request.SetType(message.Confirmable)
 		request.SetMessageID(int32(0x7200 + num))
 		request.SetToken(protected.Token)
 		request.SetOptionBytes(message.OSCORE, oscoreOption.Value)
