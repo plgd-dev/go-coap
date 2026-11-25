@@ -1894,6 +1894,10 @@ func (cc *Conn) Process(cm *coapNet.ControlMessage, datagram []byte) error {
 		cc.ReleaseMessage(req)
 		return nil
 	}
+	if isQRequestInAckOrReset(req) {
+		cc.ReleaseMessage(req)
+		return nil
+	}
 	if cc.processIncomingOSCOREMessage(req, datagram) {
 		return nil
 	}
@@ -2120,6 +2124,15 @@ func (cc *Conn) recordIncomingOSCOREResponse(mid int32, datagram []byte) {
 
 func isQMulticastRequest(req *pool.Message, cm *coapNet.ControlMessage) bool {
 	return req.Code() >= codes.GET && req.Code() < 32 && req.HasOption(message.QBlock2) && cm != nil && cm.Dst.IsMulticast()
+}
+
+// isQRequestInAckOrReset reports a Q-Block request that is neither CON nor NON.
+// The request type selects how the response body is paced, by ACKs or by
+// NON_TIMEOUT, so a request carried by an ACK or RST must not start a transfer;
+// it is silently ignored (RFC 7252 section 4.2).
+func isQRequestInAckOrReset(req *pool.Message) bool {
+	return req.Code() >= codes.GET && req.Code() < 32 && hasQBlock(req) &&
+		req.Type() != message.Confirmable && req.Type() != message.NonConfirmable
 }
 
 func (cc *Conn) respondUnknownCriticalOptions(req *pool.Message, unknownCriticalOpts []message.OptionID) error {
