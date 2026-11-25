@@ -17,6 +17,7 @@ import (
 	netclient "github.com/plgd-dev/go-coap/v3/net/client"
 	"github.com/plgd-dev/go-coap/v3/net/observation"
 	"github.com/plgd-dev/go-coap/v3/net/oscore"
+	"github.com/plgd-dev/go-coap/v3/net/responsewriter"
 	"github.com/plgd-dev/go-coap/v3/udp/coder"
 	"github.com/stretchr/testify/require"
 )
@@ -321,4 +322,71 @@ func TestQBlockMulticastRequestsAreIgnored(t *testing.T) {
 	wire, err := msg.MarshalWithEncoder(coder.DefaultCoder)
 	require.NoError(t, err)
 	require.NoError(t, cc.Process(&coapNet.ControlMessage{Dst: net.IPv4(224, 0, 1, 187)}, wire))
+}
+
+func TestQBlockObservationHijackedNotificationIsNotReleased(t *testing.T) {
+	cc, session := newTestConnWithSession(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	req, err := cc.NewObserveRequest(ctx, "/q")
+	require.NoError(t, err)
+	defer cc.ReleaseMessage(req)
+	req.SetType(message.NonConfirmable)
+	var owned *pool.Message
+	registered := make(chan error, 1)
+	go func() {
+		_, observeErr := cc.DoObserve(req, func(notification *pool.Message) {
+			notification.Hijack()
+			owned = notification
+		})
+		registered <- observeErr
+	}()
+	require.Eventually(t, func() bool { return session.writtenCount() == 1 }, 5*time.Second, time.Millisecond)
+
+	exchange, err := cc.OpenQBlockExchange(ctx, req.Token())
+	require.NoError(t, err)
+	exchange.Close()
+	notification := cc.AcquireMessage(ctx)
+	notification.SetCode(codes.Content)
+	notification.SetToken(req.Token())
+	notification.SetObserve(2)
+	notification.SetBody(bytes.NewReader([]byte("notification")))
+	_, _, keepRunning := cc.advanceQBlockObservation(req, blockwise.SZX1024, exchange, notification, qBlockNotificationSequence{})
+	require.False(t, keepRunning)
+	require.NoError(t, <-registered)
+
+	require.Same(t, notification, owned)
+	require.Equal(t, codes.Content, owned.Code())
+	body, err := owned.ReadBody()
+	require.NoError(t, err)
+	require.Equal(t, "notification", string(body))
+	cc.ReleaseMessage(owned)
+}
+
+func TestHandleResponseDoesNotMatchRequestCodeToPendingToken(t *testing.T) {
+	cc, _ := newTestConnWithSession(t)
+	ctx := context.Background()
+	token := message.Token("pending")
+	called := false
+	cc.tokenHandlerContainer.Store(token.Hash(), func(*responsewriter.ResponseWriter[*Conn], *pool.Message) {
+		called = true
+	})
+
+	writer := responsewriter.New(cc.AcquireMessage(ctx), cc)
+	defer cc.ReleaseMessage(writer.Message())
+	request := cc.AcquireMessage(ctx)
+	defer cc.ReleaseMessage(request)
+	request.SetCode(codes.POST)
+	request.SetToken(token)
+	cc.handleResponse(writer, request)
+	require.False(t, called)
+	_, exists := cc.tokenHandlerContainer.Load(token.Hash())
+	require.True(t, exists, "a request code must not consume the pending response handler")
+
+	response := cc.AcquireMessage(ctx)
+	defer cc.ReleaseMessage(response)
+	response.SetCode(codes.Content)
+	response.SetToken(token)
+	cc.handleResponse(writer, response)
+	require.True(t, called, "a response with the matching token must consume the handler")
 }
