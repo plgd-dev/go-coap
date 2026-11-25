@@ -20,9 +20,12 @@ func NewDTLSClientOptions(opts ...piondtls.ClientOption) DTLSClientOptions {
 	return DTLSClientOptions{opts: opts}
 }
 
-// WithoutHostnameVerification disables only the server certificate hostname
-// check when used with Dial. Certificate chain verification remains enabled
-// unless the supplied pion/dtls options disable it.
+// WithoutHostnameVerification disables server certificate hostname
+// verification in Dial. Certificate chain verification remains enabled unless
+// disabled separately in the Pion options. This also disables SNI, even if a
+// server name was supplied with piondtls.WithServerName. Without hostname
+// verification, any certificate trusted by the configured roots can identify
+// the server.
 func (o DTLSClientOptions) WithoutHostnameVerification() DTLSClientOptions {
 	o.skipHostnameVerification = true
 	return o

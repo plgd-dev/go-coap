@@ -78,12 +78,40 @@ func TestDialVerifiesDialledHost(t *testing.T) {
 		udp4,
 		quiet,
 	)))
+	require.Error(t, ping(dtls.Dial(
+		net.JoinHostPort("localhost", port),
+		dtls.NewDTLSClientOptions(piondtls.WithRootCAs(x509.NewCertPool())).WithoutHostnameVerification(),
+		udp4,
+		quiet,
+	)))
+	require.Error(t, withOptions(""))
+	require.NoError(t, withOptions("", piondtls.WithServerName("127.0.0.1")))
+	require.NoError(t, ping(dtls.Dial(
+		net.JoinHostPort("", port),
+		dtls.NewDTLSClientOptions(piondtls.WithRootCAs(rootCAs)).WithoutHostnameVerification(),
+		udp4,
+		quiet,
+	)))
+	require.NoError(t, ping(dtls.Dial(
+		net.JoinHostPort("localhost", port),
+		dtls.NewDTLSClientOptions(piondtls.WithRootCAs(rootCAs), piondtls.WithServerName("tenant.example")).WithoutHostnameVerification(),
+		udp4,
+		quiet,
+	)))
+	require.Error(t, ping(dtls.Dial(
+		net.JoinHostPort("127.0.0.1", port),
+		dtls.NewDTLSClientOptions(piondtls.WithRootCAs(x509.NewCertPool())),
+		udp4,
+		quiet,
+	)))
 
 	//nolint:staticcheck // Exercise the backward-compatible Dial config path.
 	cfg := &piondtls.Config{RootCAs: rootCAs}
 	require.Error(t, ping(dtls.Dial(net.JoinHostPort("localhost", port), cfg, udp4, quiet)))
 	require.Empty(t, cfg.ServerName)
+	require.Error(t, ping(dtls.Dial(net.JoinHostPort("", port), cfg, udp4, quiet)))
 	cfg.ServerName = "127.0.0.1"
 	require.NoError(t, ping(dtls.Dial(net.JoinHostPort("localhost", port), cfg, udp4, quiet)))
+	require.NoError(t, ping(dtls.Dial(net.JoinHostPort("", port), cfg, udp4, quiet)))
 	require.Equal(t, "127.0.0.1", cfg.ServerName)
 }

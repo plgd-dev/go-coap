@@ -37,8 +37,9 @@ var DefaultConfig = func() udpClient.Config {
 // Dial creates a client connection to the given target.
 // Unless cfg sets a ServerName, the host part of target is used as the
 // ServerName, so the server certificate is verified against it.
-// DTLSClientOptions.WithoutHostnameVerification can be used to disable only
-// the hostname check while retaining certificate chain verification.
+// For a target with an empty host, the server name defaults to "localhost".
+// DTLSClientOptions.WithoutHostnameVerification disables the hostname check
+// and SNI, while retaining certificate chain verification by default.
 // cfg accepts either a *dtls.Config (backward-compatible legacy path) or a
 // DTLSClientOptions value built with NewDTLSClientOptions (recommended).
 func Dial[T DTLSClientConfig](target string, cfg T, opts ...udp.Option) (*udpClient.Conn, error) {
@@ -57,7 +58,6 @@ func Dial[T DTLSClientConfig](target string, cfg T, opts ...udp.Option) (*udpCli
 	if err != nil {
 		return nil, err
 	}
-
 	c, err := defaultCfg.Dialer.DialContext(defaultCfg.Ctx, defaultCfg.Net, target)
 	if err != nil {
 		return nil, err
@@ -76,6 +76,9 @@ func serverNameFromTarget(target string) (string, error) {
 	serverName, _, err := net.SplitHostPort(target)
 	if err != nil {
 		return "", err
+	}
+	if serverName == "" {
+		return "localhost", nil
 	}
 	addr, parseErr := netip.ParseAddr(serverName)
 	if parseErr == nil && addr.Zone() != "" {
