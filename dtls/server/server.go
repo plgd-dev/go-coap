@@ -1,7 +1,6 @@
 package server
 
 import (
-	"container/list"
 	"context"
 	"errors"
 	"fmt"
@@ -9,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/plgd-dev/go-coap/v3/internal/handshake"
 	"github.com/plgd-dev/go-coap/v3/message"
 	"github.com/plgd-dev/go-coap/v3/message/pool"
 	coapNet "github.com/plgd-dev/go-coap/v3/net"
@@ -17,69 +17,6 @@ import (
 	"github.com/plgd-dev/go-coap/v3/pkg/connections"
 	udpClient "github.com/plgd-dev/go-coap/v3/udp/client"
 )
-
-type handshakeWithContext interface {
-	HandshakeContext(ctx context.Context) error
-}
-
-var errTooManyPendingHandshakes = errors.New("too many pending handshakes")
-
-type pendingHandshake struct {
-	ctx    context.Context
-	cancel context.CancelCauseFunc
-	done   chan struct{}
-}
-
-type pendingHandshakes struct {
-	mu    sync.Mutex
-	list  list.List
-	limit uint32
-}
-
-func (p *pendingHandshakes) add(ctx context.Context) (*pendingHandshake, *list.Element) {
-	for {
-		p.mu.Lock()
-		if p.limit == 0 || int64(p.list.Len()) < int64(p.limit) {
-			handshakeCtx, cancel := context.WithCancelCause(ctx)
-			h := &pendingHandshake{ctx: handshakeCtx, cancel: cancel, done: make(chan struct{})}
-			e := p.list.PushBack(h)
-			p.mu.Unlock()
-			return h, e
-		}
-		oldest, ok := p.list.Front().Value.(*pendingHandshake)
-		if !ok {
-			panic("invalid pending handshake")
-		}
-		oldest.cancel(errTooManyPendingHandshakes)
-		p.mu.Unlock()
-		select {
-		case <-oldest.done:
-		case <-ctx.Done():
-			return nil, nil
-		}
-	}
-}
-
-func (p *pendingHandshakes) remove(h *pendingHandshake, e *list.Element) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	p.list.Remove(e)
-	close(h.done)
-	h.cancel(nil)
-}
-
-func (p *pendingHandshakes) complete(h *pendingHandshake, e *list.Element) error {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	cause := context.Cause(h.ctx)
-	if errors.Is(cause, errTooManyPendingHandshakes) {
-		return cause
-	}
-	p.list.Remove(e)
-	close(h.done)
-	h.cancel(nil)
-	return nil
-}
 
 // Listener defined used by coap
 type Listener interface {
@@ -188,32 +125,10 @@ func (s *Server) checkAcceptError(err error) bool {
 	}
 }
 
-func (s *Server) handshake(rw net.Conn, h handshakeWithContext, pending *pendingHandshakes, ph *pendingHandshake, e *list.Element) error {
-	handshakeCtx := ph.ctx
-	cancel := func() {}
-	if s.cfg.HandshakeTimeout > 0 {
-		handshakeCtx, cancel = context.WithTimeout(handshakeCtx, s.cfg.HandshakeTimeout)
-	}
-	err := h.HandshakeContext(handshakeCtx)
-	if err != nil {
-		if cause := context.Cause(handshakeCtx); errors.Is(cause, errTooManyPendingHandshakes) {
-			err = cause
-		}
-	} else {
-		err = pending.complete(ph, e)
-	}
-	cancel()
-	if err != nil {
-		s.cfg.Errors(fmt.Errorf("%v: handshake failed: %w", rw.RemoteAddr(), err))
-		_ = rw.Close()
-		pending.remove(ph, e)
-	}
-	return err
-}
-
-func (s *Server) serveConnection(connections *connections.Connections, rw net.Conn, pending *pendingHandshakes, ph *pendingHandshake, e *list.Element) {
-	if h, ok := rw.(handshakeWithContext); ok {
-		if err := s.handshake(rw, h, pending, ph, e); err != nil {
+func (s *Server) serveConnection(connections *connections.Connections, rw net.Conn, pending *handshake.Pending, attempt *handshake.Attempt) {
+	if h, ok := rw.(handshake.Conn); ok {
+		if err := pending.Run(attempt, h, s.cfg.HandshakeTimeout); err != nil {
+			s.cfg.Errors(fmt.Errorf("%v: handshake failed: %w", rw.RemoteAddr(), err))
 			return
 		}
 	}
@@ -255,7 +170,7 @@ func (s *Server) Serve(l Listener) error {
 	defer wg.Wait()
 
 	connections := connections.New()
-	pending := &pendingHandshakes{limit: s.cfg.MaxPendingHandshakes}
+	pending := handshake.NewPending(s.cfg.MaxPendingHandshakes)
 	s.cfg.PeriodicRunner(func(now time.Time) bool {
 		connections.CheckExpirations(now)
 		return s.ctx.Err() == nil
@@ -270,11 +185,10 @@ func (s *Server) Serve(l Listener) error {
 		if err != nil || rw == nil {
 			continue
 		}
-		var h *pendingHandshake
-		var e *list.Element
-		if _, ok := rw.(handshakeWithContext); ok {
-			h, e = pending.add(s.ctx)
-			if h == nil {
+		var attempt *handshake.Attempt
+		if _, ok := rw.(handshake.Conn); ok {
+			attempt = pending.Admit(s.ctx)
+			if attempt == nil {
 				_ = rw.Close()
 				return nil
 			}
@@ -282,7 +196,7 @@ func (s *Server) Serve(l Listener) error {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			s.serveConnection(connections, rw, pending, h, e)
+			s.serveConnection(connections, rw, pending, attempt)
 		}()
 	}
 }

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/plgd-dev/go-coap/v3/internal/handshake"
 	"github.com/plgd-dev/go-coap/v3/message"
 	"github.com/plgd-dev/go-coap/v3/message/codes"
 	"github.com/plgd-dev/go-coap/v3/message/pool"
@@ -45,8 +46,8 @@ var DefaultConfig = func() Config {
 		TransmissionAcknowledgeTimeout:      time.Second * 2,
 		TransmissionAcknowledgeRandomFactor: 1.5,
 		TransmissionMaxRetransmit:           4,
-		HandshakeTimeout:                    30 * time.Second,
-		MaxPendingHandshakes:                1024,
+		HandshakeTimeout:                    handshake.DefaultTimeout,
+		MaxPendingHandshakes:                handshake.DefaultLimit,
 		GetMID:                              message.GetMID,
 		MTU:                                 udpClient.DefaultMTU,
 		MaxPendingMessages:                  udpClient.DefaultMaxPendingMessages,
