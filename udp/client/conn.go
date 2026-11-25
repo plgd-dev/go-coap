@@ -1317,7 +1317,7 @@ func (cc *Conn) handleResponse(rw *responsewriter.ResponseWriter[*Conn], rm *poo
 			return
 		}
 	}
-	isResponse := rm.Code() >= codes.Created && rm.Code() < 192
+	isResponse := rm.Code() >= 64 && rm.Code() < 192
 	if isResponse && len(rm.Token()) == 0 {
 		if h, ok := cc.tokenlessHandler.Load(true); ok {
 			h(rw, rm)

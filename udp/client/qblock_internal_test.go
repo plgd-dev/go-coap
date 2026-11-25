@@ -390,3 +390,42 @@ func TestHandleResponseDoesNotMatchRequestCodeToPendingToken(t *testing.T) {
 	cc.handleResponse(writer, response)
 	require.True(t, called, "a response with the matching token must consume the handler")
 }
+
+func TestHandleResponseAcceptsSuccessCodeBoundary(t *testing.T) {
+	cc, _ := newTestConnWithSession(t)
+	ctx := context.Background()
+	writer := responsewriter.New(cc.AcquireMessage(ctx), cc)
+	defer cc.ReleaseMessage(writer.Message())
+
+	t.Run("token", func(t *testing.T) {
+		token := message.Token("pending")
+		called := false
+		cc.tokenHandlerContainer.Store(token.Hash(), func(*responsewriter.ResponseWriter[*Conn], *pool.Message) {
+			called = true
+		})
+
+		response := cc.AcquireMessage(ctx)
+		defer cc.ReleaseMessage(response)
+		response.SetCode(codes.Code(64))
+		response.SetToken(token)
+		cc.handleResponse(writer, response)
+
+		require.True(t, called, "2.00 must dispatch to the matching pending token")
+	})
+
+	t.Run("tokenless", func(t *testing.T) {
+		called := false
+		remove, err := cc.tokenlessHandler.Register(func(*responsewriter.ResponseWriter[*Conn], *pool.Message) {
+			called = true
+		})
+		require.NoError(t, err)
+		defer remove(true)
+
+		response := cc.AcquireMessage(ctx)
+		defer cc.ReleaseMessage(response)
+		response.SetCode(codes.Code(64))
+		cc.handleResponse(writer, response)
+
+		require.True(t, called, "2.00 must dispatch to the tokenless handler")
+	})
+}
