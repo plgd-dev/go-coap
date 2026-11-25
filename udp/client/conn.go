@@ -1317,15 +1317,18 @@ func (cc *Conn) handleResponse(rw *responsewriter.ResponseWriter[*Conn], rm *poo
 			return
 		}
 	}
-	if len(rm.Token()) == 0 && rm.Code() >= codes.Created {
+	isResponse := rm.Code() >= 64 && rm.Code() < 192
+	if isResponse && len(rm.Token()) == 0 {
 		if h, ok := cc.tokenlessHandler.Load(true); ok {
 			h(rw, rm)
 			return
 		}
 	}
-	if h, ok := cc.tokenHandlerContainer.LoadAndDelete(rm.Token().Hash()); ok {
-		h(rw, rm)
-		return
+	if isResponse {
+		if h, ok := cc.tokenHandlerContainer.LoadAndDelete(rm.Token().Hash()); ok {
+			h(rw, rm)
+			return
+		}
 	}
 	cc.observationHandler.Handle(rw, rm)
 }

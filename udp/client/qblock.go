@@ -544,8 +544,9 @@ func (cc *Conn) advanceQBlockObservation(req *pool.Message, szx blockwise.SZX, e
 			sequence.lastEvent = time.Now()
 			sequence.authenticated, sequence.hasAuthenticated = observation.AuthenticatedSequenceNumber(response.Context())
 		}
+		generation := response.Generation()
 		active := cc.observationHandler.HandleNotification(response)
-		cc.ReleaseMessage(response)
+		cc.messagePool.ReleaseMessageIfNotHijacked(response, generation)
 		if !active {
 			return nil, sequence, false
 		}
