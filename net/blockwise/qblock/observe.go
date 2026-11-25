@@ -13,7 +13,7 @@ import (
 )
 
 type qObservation struct {
-	request         *pool.Message
+	identity        string
 	key             string
 	szx             SZX
 	registrationKey string
@@ -37,7 +37,6 @@ func (b *Engine[C]) CancelQBlockObservation(token message.Token, remote net.Addr
 	if observation != nil {
 		delete(b.qObservations, key)
 		b.rememberQCancellationLocked(key)
-		b.cc.ReleaseMessage(observation.request)
 		b.qReleaseTransfer()
 		if transfer := b.q2Senders[observation.key]; transfer != nil {
 			delete(b.q2Senders, observation.key)
@@ -84,7 +83,6 @@ func (b *Engine[C]) registerQObservation(r *pool.Message, remote net.Addr, szx S
 		if transport, ok := any(b.cc).(Transport); ok {
 			transport.CancelQBlock("q2:" + previous.key)
 		}
-		b.cc.ReleaseMessage(previous.request)
 		if transfer := b.q2Senders[previous.key]; transfer != nil {
 			delete(b.q2Senders, previous.key)
 			b.q2SendBytes -= transfer.size
@@ -95,21 +93,23 @@ func (b *Engine[C]) registerQObservation(r *pool.Message, remote net.Addr, szx S
 	} else if len(b.qObservations) >= 128 || !b.qReserveTransfer() {
 		return ErrQBlockTooLarge
 	}
-	b.qObservations[key] = &qObservation{request: b.cloneMessage(r), key: q2TransferKey(r, remote), szx: szx, registrationKey: key}
+	b.qObservations[key] = &qObservation{
+		identity: qTransferKey(r, remote, nil, true), key: q2TransferKey(r, remote),
+		szx: szx, registrationKey: key,
+	}
 	return nil
 }
 
 // WriteNotification sends a registered Q notification and reports whether it
 // handled the message. A false result leaves non-Q notifications to the caller.
 func (b *Engine[C]) WriteNotification(response *pool.Message, remote net.Addr) (bool, error) {
-	request, generation, handled, err := b.registeredQNotification(response, remote)
+	generation, handled, err := b.registeredQNotification(response, remote)
 	if !handled {
 		return false, err
 	}
 	if err != nil {
 		return true, err
 	}
-	defer b.cc.ReleaseMessage(request)
 	key, szx := generation.key, generation.szx
 	transport, ok := any(b.cc).(Transport)
 	if !ok {
@@ -119,8 +119,7 @@ func (b *Engine[C]) WriteNotification(response *pool.Message, remote net.Addr) (
 	if mode != message.NonConfirmable {
 		mode = message.Confirmable
 	}
-	request.SetType(mode)
-	transfer, err := b.cacheQBlock2Notification(response.Context(), key, qTransferKey(request, remote, nil, true),
+	transfer, err := b.cacheQBlock2Notification(response.Context(), key, generation.identity,
 		response, mode, generation, nil)
 	if err != nil {
 		return true, err
@@ -146,9 +145,9 @@ func (b *Engine[C]) WriteNotification(response *pool.Message, remote net.Addr) (
 	}, deadline)
 }
 
-func (b *Engine[C]) registeredQNotification(response *pool.Message, remote net.Addr) (*pool.Message, *qObservation, bool, error) {
+func (b *Engine[C]) registeredQNotification(response *pool.Message, remote net.Addr) (*qObservation, bool, error) {
 	if isRequestCode(response.Code()) {
-		return nil, nil, false, nil
+		return nil, false, nil
 	}
 	b.q2SendMu.Lock()
 	observationKey := qObservationKey(response.Token(), remote)
@@ -157,13 +156,12 @@ func (b *Engine[C]) registeredQNotification(response *pool.Message, remote net.A
 		canceled := b.qCanceledObservations[observationKey].After(time.Now())
 		b.q2SendMu.Unlock()
 		if canceled {
-			return nil, nil, true, context.Canceled
+			return nil, true, context.Canceled
 		}
-		return nil, nil, false, nil
+		return nil, false, nil
 	}
-	request := b.cloneMessage(observation.request)
 	b.q2SendMu.Unlock()
-	return request, observation, true, nil
+	return observation, true, nil
 }
 
 func (b *Engine[C]) firstNotificationSet(key string, mode message.Type, count int64) ([]int64, time.Time) {
@@ -199,6 +197,5 @@ func (b *Engine[C]) finishQNotificationLocked(generation *qObservation, observeP
 	// Retire the registration, but leave the terminal body available to recovery.
 	delete(b.qObservations, generation.registrationKey)
 	b.rememberQCancellationLocked(generation.registrationKey)
-	b.cc.ReleaseMessage(generation.request)
 	b.qReleaseTransfer()
 }

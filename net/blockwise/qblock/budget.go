@@ -87,8 +87,7 @@ func (b *Engine[C]) CloseQBlockTransfers() {
 	b.q2SendMu.Lock()
 	b.q2Closed = true
 	clear(b.qCanceledObservations)
-	for key, observation := range b.qObservations {
-		b.cc.ReleaseMessage(observation.request)
+	for key := range b.qObservations {
 		b.qReleaseTransfer()
 		delete(b.qObservations, key)
 	}
