@@ -2,6 +2,8 @@ package dtls
 
 import (
 	"fmt"
+	"net"
+	"net/netip"
 	"time"
 
 	"github.com/pion/dtls/v3"
@@ -33,6 +35,11 @@ var DefaultConfig = func() udpClient.Config {
 }()
 
 // Dial creates a client connection to the given target.
+// Unless cfg sets a ServerName, the host part of target is used as the
+// ServerName, so the server certificate is verified against it.
+// For a target with an empty host, the server name defaults to "localhost".
+// DTLSClientOptions.WithoutHostnameVerification disables the hostname check
+// and SNI, while retaining certificate chain verification by default.
 // cfg accepts either a *dtls.Config (backward-compatible legacy path) or a
 // DTLSClientOptions value built with NewDTLSClientOptions (recommended).
 func Dial[T DTLSClientConfig](target string, cfg T, opts ...udp.Option) (*udpClient.Conn, error) {
@@ -47,26 +54,61 @@ func Dial[T DTLSClientConfig](target string, cfg T, opts ...udp.Option) (*udpCli
 		return nil, err
 	}
 
+	serverName, err := serverNameFromTarget(target)
+	if err != nil {
+		return nil, err
+	}
 	c, err := defaultCfg.Dialer.DialContext(defaultCfg.Ctx, defaultCfg.Net, target)
 	if err != nil {
 		return nil, err
 	}
 
-	var conn *dtls.Conn
-	switch v := any(cfg).(type) {
-	case *dtls.Config:
-		conn, err = dtls.Client(dtlsnet.PacketConnFromConn(c), c.RemoteAddr(), v) //nolint:staticcheck
-	case DTLSClientOptions:
-		conn, err = dtls.ClientWithOptions(dtlsnet.PacketConnFromConn(c), c.RemoteAddr(), v.opts...)
-	default:
-		panic("unreachable: unexpected type in DTLSClientConfig constraint")
-	}
+	conn, err := newClientConn(c, cfg, serverName)
 	if err != nil {
 		_ = c.Close()
 		return nil, err
 	}
 	opts = append(opts, options.WithCloseSocket())
 	return Client(conn, opts...), nil
+}
+
+func serverNameFromTarget(target string) (string, error) {
+	serverName, _, err := net.SplitHostPort(target)
+	if err != nil {
+		return "", err
+	}
+	if serverName == "" {
+		return "localhost", nil
+	}
+	addr, parseErr := netip.ParseAddr(serverName)
+	if parseErr == nil && addr.Zone() != "" {
+		serverName = addr.WithZone("").String()
+	}
+	return serverName, nil
+}
+
+func newClientConn[T DTLSClientConfig](c net.Conn, cfg T, serverName string) (*dtls.Conn, error) {
+	switch v := any(cfg).(type) {
+	case *dtls.Config:
+		if v != nil && v.ServerName == "" && !v.InsecureSkipVerify {
+			withServerName := *v
+			withServerName.ServerName = serverName
+			v = &withServerName
+		}
+		return dtls.Client(dtlsnet.PacketConnFromConn(c), c.RemoteAddr(), v) //nolint:staticcheck
+	case DTLSClientOptions:
+		clientOpts := make([]dtls.ClientOption, 0, len(v.opts)+1)
+		if !v.skipHostnameVerification {
+			clientOpts = append(clientOpts, dtls.WithServerName(serverName))
+		}
+		clientOpts = append(clientOpts, v.opts...)
+		if v.skipHostnameVerification {
+			clientOpts = append(clientOpts, dtls.WithServerName(""))
+		}
+		return dtls.ClientWithOptions(dtlsnet.PacketConnFromConn(c), c.RemoteAddr(), clientOpts...)
+	default:
+		panic("unreachable: unexpected type in DTLSClientConfig constraint")
+	}
 }
 
 // Client creates client over dtls connection.
