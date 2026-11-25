@@ -59,15 +59,15 @@ var DefaultConfig = func() Config {
 
 type Config struct {
 	config.Common[*client.Conn]
-	CreateInactivityMonitor client.CreateInactivityMonitorFunc
-	Handler                 HandlerFunc
-	OnNewConn               OnNewConnFunc
-	RequestMonitor          client.RequestMonitorFunc
-	ConnectionCacheSize     uint16
+	CreateInactivityMonitor         client.CreateInactivityMonitorFunc
+	Handler                         HandlerFunc
+	OnNewConn                       OnNewConnFunc
+	RequestMonitor                  client.RequestMonitorFunc
+	ConnectionCacheSize             uint16
+	DisablePeerTCPSignalMessageCSMs bool
+	DisableTCPSignalMessageCSM      bool
 	// HandshakeTimeout bounds TLS handshake duration; nonpositive values disable it.
 	HandshakeTimeout time.Duration
 	// MaxPendingHandshakes limits concurrent TLS handshakes; zero disables the limit.
-	MaxPendingHandshakes            uint32
-	DisablePeerTCPSignalMessageCSMs bool
-	DisableTCPSignalMessageCSM      bool
+	MaxPendingHandshakes uint32
 }

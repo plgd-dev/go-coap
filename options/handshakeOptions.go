@@ -21,7 +21,9 @@ func (o HandshakeTimeoutOpt) TCPServerApply(cfg *tcpServer.Config) {
 }
 
 // WithHandshakeTimeout sets the TLS/DTLS server handshake timeout before OnNewConn.
-// The default is 30 seconds; nonpositive values disable the timeout.
+// The default is 30 seconds; nonpositive values disable the timeout. Handshake
+// failures other than cancellation or closed-connection errors are reported to
+// the error callback with "handshake failed".
 func WithHandshakeTimeout(timeout time.Duration) HandshakeTimeoutOpt {
 	return HandshakeTimeoutOpt{timeout: timeout}
 }
@@ -49,10 +51,11 @@ func (o MaxPendingHandshakesOpt) TCPServerApply(cfg *tcpServer.Config) {
 
 // WithMaxPendingHandshakes limits concurrent server-side TLS/DTLS handshakes
 // (default 1024). At the limit, the oldest handshake is cancelled to admit a
-// new one and reported through the error callback. A sustained flood can still
-// prevent slow handshakes from completing. Large fleets may need a higher
-// limit for simultaneous reconnects. Zero disables the limit and allows
-// unbounded resource consumption. Plain TCP connections are unaffected.
+// new one and reported as "handshake failed" through the error callback. A
+// sustained flood can still prevent slow handshakes from completing. Large
+// fleets may need a higher limit for simultaneous reconnects. Zero disables
+// the limit and allows unbounded resource consumption. Plain TCP connections
+// are unaffected.
 func WithMaxPendingHandshakes(limit uint32) MaxPendingHandshakesOpt {
 	return MaxPendingHandshakesOpt{limit: limit}
 }

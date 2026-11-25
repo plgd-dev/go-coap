@@ -22,11 +22,9 @@ func TestTCPClientApply(t *testing.T) {
 		options.WithTLS(tlsCfg),
 		options.WithConnectionCacheSize(100),
 	}
-
 	for _, o := range opt {
 		o.TCPClientApply(&cfg)
 	}
-
 	require.True(t, cfg.DisablePeerTCPSignalMessageCSMs)
 	require.True(t, cfg.DisableTCPSignalMessageCSM)
 	require.Equal(t, tlsCfg, cfg.TLSCfg)

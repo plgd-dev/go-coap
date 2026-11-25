@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"net"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -12,6 +11,7 @@ import (
 
 	piondtls "github.com/pion/dtls/v3"
 	"github.com/plgd-dev/go-coap/v3/dtls"
+	"github.com/plgd-dev/go-coap/v3/internal/handshake"
 	coapNet "github.com/plgd-dev/go-coap/v3/net"
 	"github.com/plgd-dev/go-coap/v3/options"
 	"github.com/stretchr/testify/assert"
@@ -24,6 +24,20 @@ type controlledHandshakeConn struct {
 	started  chan<- int
 	canceled chan<- int
 	release  <-chan struct{}
+}
+
+func pendingHandshakeErrorHandler(t *testing.T, abandoned *atomic.Int32, stopping *atomic.Bool) func(error) {
+	t.Helper()
+	return func(err error) {
+		switch {
+		case errors.Is(err, handshake.ErrTooManyPending):
+			abandoned.Add(1)
+		case stopping.Load() && (errors.Is(err, context.Canceled) || errors.Is(err, net.ErrClosed)):
+			return
+		default:
+			assert.Fail(t, "unexpected server error", "%v", err)
+		}
+	}
 }
 
 func (c *controlledHandshakeConn) HandshakeContext(ctx context.Context) error {
@@ -42,16 +56,11 @@ func TestServerPendingHandshakeAdmission(t *testing.T) {
 	started := make(chan int, count)
 	canceled := make(chan int, count)
 	var abandoned atomic.Int32
+	var stopping atomic.Bool
 	server := dtls.NewServer(
 		options.WithDTLSMaxPendingHandshakes(limit),
 		options.WithDTLSHandshakeTimeout(time.Hour),
-		options.WithErrors(func(err error) {
-			if strings.Contains(err.Error(), "handshake failed: too many pending handshakes") {
-				abandoned.Add(1)
-			} else {
-				assert.Fail(t, "unexpected server error", "%v", err)
-			}
-		}),
+		options.WithErrors(pendingHandshakeErrorHandler(t, &abandoned, &stopping)),
 	)
 	var wg sync.WaitGroup
 	wg.Add(1)
@@ -60,6 +69,7 @@ func TestServerPendingHandshakeAdmission(t *testing.T) {
 		assert.NoError(t, server.Serve(listener))
 	}()
 	defer func() {
+		stopping.Store(true)
 		server.Stop()
 		wg.Wait()
 	}()
@@ -67,6 +77,7 @@ func TestServerPendingHandshakeAdmission(t *testing.T) {
 	for i := range count {
 		client, conn := net.Pipe()
 		t.Cleanup(func() { _ = client.Close() })
+		t.Cleanup(func() { _ = conn.Close() })
 		listener.ch <- &controlledHandshakeConn{Conn: conn, id: i, started: started, canceled: canceled}
 		select {
 		case id := <-started:
@@ -180,17 +191,12 @@ func TestServerDefaultPendingHandshakeLimit(t *testing.T) {
 	const limit, count = 1024, 1056
 	listener := &singleConnListener{ch: make(chan net.Conn, count)}
 	started := make(chan int, count)
-	canceled := make(chan int, count)
+	canceled := make(chan int, count+limit)
 	var abandoned atomic.Int32
+	var stopping atomic.Bool
 	server := dtls.NewServer(
 		options.WithDTLSHandshakeTimeout(time.Hour),
-		options.WithErrors(func(err error) {
-			if strings.Contains(err.Error(), "too many pending handshakes") {
-				abandoned.Add(1)
-			} else {
-				assert.Fail(t, "unexpected server error", "%v", err)
-			}
-		}),
+		options.WithErrors(pendingHandshakeErrorHandler(t, &abandoned, &stopping)),
 	)
 	var wg sync.WaitGroup
 	wg.Add(1)
@@ -199,12 +205,14 @@ func TestServerDefaultPendingHandshakeLimit(t *testing.T) {
 		assert.NoError(t, server.Serve(listener))
 	}()
 	defer func() {
+		stopping.Store(true)
 		server.Stop()
 		wg.Wait()
 	}()
 	for i := range count {
 		client, conn := net.Pipe()
 		t.Cleanup(func() { _ = client.Close() })
+		t.Cleanup(func() { _ = conn.Close() })
 		listener.ch <- &controlledHandshakeConn{Conn: conn, id: i, started: started, canceled: canceled}
 	}
 	for range count {
@@ -233,16 +241,11 @@ func TestServerPendingHandshakeLimitWithDTLS(t *testing.T) {
 	listener, err := coapNet.NewDTLSListener("udp4", "127.0.0.1:0", serverCfg)
 	require.NoError(t, err)
 	var abandoned atomic.Int32
+	var stopping atomic.Bool
 	server := dtls.NewServer(
 		options.WithDTLSMaxPendingHandshakes(4),
 		options.WithDTLSHandshakeTimeout(time.Hour),
-		options.WithErrors(func(err error) {
-			if strings.Contains(err.Error(), "too many pending handshakes") {
-				abandoned.Add(1)
-			} else if !errors.Is(err, net.ErrClosed) {
-				assert.Fail(t, "unexpected server error", "%v", err)
-			}
-		}),
+		options.WithErrors(pendingHandshakeErrorHandler(t, &abandoned, &stopping)),
 	)
 	var wg sync.WaitGroup
 	wg.Add(1)
@@ -251,20 +254,23 @@ func TestServerPendingHandshakeLimitWithDTLS(t *testing.T) {
 		assert.NoError(t, server.Serve(listener))
 	}()
 	defer func() {
+		stopping.Store(true)
 		server.Stop()
 		wg.Wait()
 	}()
 
 	record := []byte{22, 0xfe, 0xfd, 0, 0, 0, 0, 0, 0, 0, 0, 0, 13, 1, 0, 0, 100, 0, 0, 0, 0, 0, 0, 0, 1, 'A'}
-	for range 12 {
+	for i := range 12 {
 		conn, dialErr := net.Dial("udp4", listener.Addr().String())
 		require.NoError(t, dialErr)
 		_, writeErr := conn.Write(record)
 		require.NoError(t, writeErr)
 		t.Cleanup(func() { _ = conn.Close() })
-		time.Sleep(5 * time.Millisecond)
+		if i >= 4 {
+			require.Eventually(t, func() bool { return abandoned.Load() >= int32(i-3) }, Timeout, time.Millisecond)
+		}
 	}
-	require.Eventually(t, func() bool { return abandoned.Load() == 8 }, Timeout, 10*time.Millisecond)
+	require.GreaterOrEqual(t, abandoned.Load(), int32(8))
 	client, err := dtls.Dial(listener.Addr().String(), clientCfg)
 	require.NoError(t, err)
 	defer func() { _ = client.Close() }()

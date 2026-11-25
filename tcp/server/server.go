@@ -118,9 +118,9 @@ func (s *Server) checkAcceptError(err error) bool {
 	}
 }
 
-func (s *Server) serveConnection(connections *connections.Connections, rw net.Conn, pending *handshake.Pending, attempt *handshake.Attempt) {
-	if h, ok := rw.(handshake.Conn); ok {
-		if err := pending.Run(attempt, h, s.cfg.HandshakeTimeout); err != nil {
+func (s *Server) serveConnection(connections *connections.Connections, rw net.Conn, attempt *handshake.Attempt) {
+	if attempt != nil {
+		if err := attempt.Run(s.cfg.HandshakeTimeout); err != nil {
 			s.cfg.Errors(fmt.Errorf("%v: handshake failed: %w", rw.RemoteAddr(), err))
 			return
 		}
@@ -171,8 +171,8 @@ func (s *Server) Serve(l Listener) error {
 			continue
 		}
 		var attempt *handshake.Attempt
-		if _, ok := rw.(handshake.Conn); ok {
-			attempt = pending.Admit(s.ctx)
+		if h, ok := rw.(handshake.Conn); ok {
+			attempt = pending.Admit(s.ctx, h)
 			if attempt == nil {
 				_ = rw.Close()
 				return nil
@@ -181,7 +181,7 @@ func (s *Server) Serve(l Listener) error {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			s.serveConnection(connections, rw, pending, attempt)
+			s.serveConnection(connections, rw, attempt)
 		}()
 	}
 }

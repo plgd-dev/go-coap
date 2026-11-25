@@ -1,111 +1,166 @@
+// Package handshake bounds concurrent server-side TLS and DTLS handshakes.
 package handshake
 
 import (
-	"container/list"
 	"context"
 	"errors"
+	"fmt"
 	"net"
 	"sync"
 	"time"
 )
 
 const (
-	DefaultLimit   = 1024
+	// DefaultLimit is the default maximum number of pending handshakes.
+	DefaultLimit = 1024
+	// DefaultTimeout is the default server-side handshake timeout.
 	DefaultTimeout = 30 * time.Second
 )
 
+// ErrTooManyPending indicates that a handshake was evicted to admit another.
 var ErrTooManyPending = errors.New("too many pending handshakes")
 
+// Conn is a connection that performs a context-aware handshake.
 type Conn interface {
 	net.Conn
 	HandshakeContext(context.Context) error
 }
 
+// Pending tracks handshakes in admission order.
 type Pending struct {
-	mu    sync.Mutex
-	list  list.List
-	limit uint32
+	mu          sync.Mutex
+	first, last *Attempt
+	count       uint64
+	limit       uint64
+	released    chan struct{}
 }
 
+// Attempt represents one admitted handshake and must be run exactly once.
 type Attempt struct {
-	ctx    context.Context
-	cancel context.CancelCauseFunc
-	done   chan struct{}
-	entry  *list.Element
+	pending    *Pending
+	conn       Conn
+	ctx        context.Context
+	cancel     context.CancelCauseFunc
+	closeOnce  sync.Once
+	closed     chan struct{}
+	prev, next *Attempt
+	evicting   bool
 }
 
+// NewPending creates a tracker; a zero limit allows unlimited handshakes.
 func NewPending(limit uint32) *Pending {
-	return &Pending{limit: limit}
+	return &Pending{limit: uint64(limit), released: make(chan struct{})}
 }
 
-// Admit waits for an evicted handshake to finish cleanup before admitting another.
-func (p *Pending) Admit(ctx context.Context) *Attempt {
+// Admit registers conn or cancels and closes the oldest attempt. It waits for
+// any slot to be released, and returns nil if ctx is canceled.
+func (p *Pending) Admit(ctx context.Context, conn Conn) *Attempt {
 	for {
 		p.mu.Lock()
 		if ctx.Err() != nil {
 			p.mu.Unlock()
 			return nil
 		}
-		if p.limit == 0 || int64(p.list.Len()) < int64(p.limit) {
+		if p.limit == 0 || p.count < p.limit {
 			handshakeCtx, cancel := context.WithCancelCause(ctx)
-			a := &Attempt{ctx: handshakeCtx, cancel: cancel, done: make(chan struct{})}
-			a.entry = p.list.PushBack(a)
+			a := &Attempt{pending: p, conn: conn, ctx: handshakeCtx, cancel: cancel, closed: make(chan struct{}), prev: p.last}
+			if p.last == nil {
+				p.first = a
+			} else {
+				p.last.next = a
+			}
+			p.last = a
+			p.count++
 			p.mu.Unlock()
 			return a
 		}
-		oldest, ok := p.list.Front().Value.(*Attempt)
-		if !ok {
-			panic("invalid pending handshake")
+		oldest := p.first
+		if !oldest.evicting {
+			oldest.evicting = true
+			oldest.cancel(ErrTooManyPending)
+			oldest.startClose()
 		}
-		oldest.cancel(ErrTooManyPending)
+		released := p.released
 		p.mu.Unlock()
 		select {
-		case <-oldest.done:
+		case <-released:
 		case <-ctx.Done():
 			return nil
 		}
 	}
 }
 
+func (p *Pending) unlink(a *Attempt) {
+	if a.prev == nil {
+		p.first = a.next
+	} else {
+		a.prev.next = a.next
+	}
+	if a.next == nil {
+		p.last = a.prev
+	} else {
+		a.next.prev = a.prev
+	}
+	p.count--
+	close(p.released)
+	p.released = make(chan struct{})
+	a.cancel(nil)
+}
+
+func (a *Attempt) startClose() {
+	a.closeOnce.Do(func() {
+		go func() {
+			_ = a.conn.Close()
+			close(a.closed)
+		}()
+	})
+}
+
 func (p *Pending) remove(a *Attempt) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	cause := context.Cause(a.ctx)
-	p.list.Remove(a.entry)
-	close(a.done)
-	a.cancel(nil)
+	p.unlink(a)
 	return cause
 }
 
-func (p *Pending) complete(a *Attempt) error {
+func (p *Pending) complete(ctx context.Context, a *Attempt) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	cause := context.Cause(a.ctx)
+	cause := context.Cause(ctx)
 	if cause != nil {
 		return cause
 	}
-	p.list.Remove(a.entry)
-	close(a.done)
-	a.cancel(nil)
+	p.unlink(a)
 	return nil
 }
 
 // Run performs the handshake and releases its slot after failure cleanup.
-func (p *Pending) Run(a *Attempt, conn Conn, timeout time.Duration) error {
+// It returns an error when called on a nil attempt.
+func (a *Attempt) Run(timeout time.Duration) error {
+	if a == nil {
+		return errors.New("nil handshake attempt")
+	}
 	ctx := a.ctx
 	cancel := func() {}
 	if timeout > 0 {
 		ctx, cancel = context.WithTimeout(ctx, timeout)
 	}
-	err := conn.HandshakeContext(ctx)
+	err := a.conn.HandshakeContext(ctx)
 	if err == nil {
-		err = p.complete(a)
+		err = a.pending.complete(ctx, a)
 	}
 	cancel()
 	if err != nil {
-		_ = conn.Close()
-		if cause := p.remove(a); errors.Is(cause, ErrTooManyPending) {
-			err = cause
+		a.startClose()
+		<-a.closed
+		if cause := a.pending.remove(a); errors.Is(cause, ErrTooManyPending) {
+			if !errors.Is(err, ErrTooManyPending) {
+				// Do not wrap cancellation or close errors: server callbacks filter them.
+				err = fmt.Errorf("%w: %s", cause, err.Error())
+			} else {
+				err = cause
+			}
 		}
 	}
 	return err
