@@ -46,6 +46,7 @@ var DefaultConfig = func() Config {
 		TransmissionAcknowledgeRandomFactor: 1.5,
 		TransmissionMaxRetransmit:           4,
 		HandshakeTimeout:                    30 * time.Second,
+		MaxPendingHandshakes:                1024,
 		GetMID:                              message.GetMID,
 		MTU:                                 udpClient.DefaultMTU,
 		MaxPendingMessages:                  udpClient.DefaultMaxPendingMessages,
@@ -71,6 +72,9 @@ type Config struct {
 	TransmissionMaxRetransmit           uint32
 	HandshakeTimeout                    time.Duration
 	MTU                                 uint16
+	// MaxPendingHandshakes limits concurrent server-side handshakes.
+	// Zero disables the limit.
+	MaxPendingHandshakes uint32
 	// MaxPendingMessages limits in-flight duplicate suppression per connection.
 	// Zero disables in-flight tracking.
 	MaxPendingMessages uint32

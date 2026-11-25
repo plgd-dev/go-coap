@@ -191,3 +191,22 @@ func (o DTLSHandshakeTimeoutOpt) DTLSServerApply(cfg *dtlsServer.Config) {
 func WithDTLSHandshakeTimeout(timeout time.Duration) DTLSHandshakeTimeoutOpt {
 	return DTLSHandshakeTimeoutOpt{timeout: timeout}
 }
+
+// DTLSMaxPendingHandshakesOpt configures the number of pending DTLS handshakes.
+type DTLSMaxPendingHandshakesOpt struct {
+	limit uint32
+}
+
+func (o DTLSMaxPendingHandshakesOpt) DTLSServerApply(cfg *dtlsServer.Config) {
+	cfg.MaxPendingHandshakes = o.limit
+}
+
+// WithDTLSMaxPendingHandshakes limits concurrent server-side handshakes
+// (default 1024). At the limit, the oldest handshake is cancelled to admit a
+// new one and reported through the error callback. A sustained flood can still
+// prevent slow handshakes from completing. Large fleets may need a higher
+// limit for simultaneous reconnects. Zero disables the limit and allows
+// unbounded resource consumption.
+func WithDTLSMaxPendingHandshakes(limit uint32) DTLSMaxPendingHandshakesOpt {
+	return DTLSMaxPendingHandshakesOpt{limit: limit}
+}
