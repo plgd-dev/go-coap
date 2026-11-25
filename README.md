@@ -50,8 +50,10 @@ The go-coap provides servers and clients for DTLS, TCP-TLS, UDP, TCP in golang l
 ## Server handshake limits
 
 DTLS and TCP-TLS servers allow at most 1,024 concurrent handshakes by default,
-with a 30-second handshake timeout. At the limit the oldest pending handshake
-is canceled and its connection is closed before a new handshake is admitted.
+with a 30-second handshake timeout. At the limit, the oldest pending handshake
+is canceled and its connection starts closing. A new handshake is admitted
+when any pending handshake releases a slot; the evicted handshake remains
+counted until its cleanup finishes.
 `options.WithMaxPendingHandshakes` and `options.WithHandshakeTimeout` configure
 these settings; a zero limit removes the bound and a nonpositive timeout
 disables the timeout. Unlimited handshakes can exhaust server resources.

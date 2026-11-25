@@ -142,7 +142,9 @@ func (a *Attempt) Run(timeout time.Duration) error {
 		return errors.New("nil handshake attempt")
 	}
 	ctx := a.ctx
-	cancel := func() {}
+	cancel := func() {
+		// No timeout context exists when timeout is disabled.
+	}
 	if timeout > 0 {
 		ctx, cancel = context.WithTimeout(ctx, timeout)
 	}
