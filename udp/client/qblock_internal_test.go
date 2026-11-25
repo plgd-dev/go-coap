@@ -322,3 +322,59 @@ func TestQBlockMulticastRequestsAreIgnored(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, cc.Process(&coapNet.ControlMessage{Dst: net.IPv4(224, 0, 1, 187)}, wire))
 }
+
+func TestQBlockRequestsInAckOrResetAreIgnored(t *testing.T) {
+	tests := []struct {
+		name string
+		typ  message.Type
+		code codes.Code
+		opt  message.OptionID
+	}{
+		{name: "ACK Q-Block2 request", typ: message.Acknowledgement, code: codes.GET, opt: message.QBlock2},
+		{name: "RST Q-Block2 request", typ: message.Reset, code: codes.GET, opt: message.QBlock2},
+		{name: "ACK Q-Block1 request", typ: message.Acknowledgement, code: codes.PUT, opt: message.QBlock1},
+		{name: "RST Q-Block1 request", typ: message.Reset, code: codes.PUT, opt: message.QBlock1},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cc, session := newTestConnWithSession(t)
+			processed := false
+			cc.requestMonitor = func(*Conn, *pool.Message) (bool, error) {
+				processed = true
+				return true, nil
+			}
+			req := qControlSessionMessage(tt.typ, tt.code, tt.opt)
+			wire, err := req.MarshalWithEncoder(coder.DefaultCoder)
+			require.NoError(t, err)
+
+			require.NoError(t, cc.Process(nil, wire))
+			require.False(t, processed, "request must not reach request processing")
+			require.Zero(t, session.writtenCount(), "request must not receive a response")
+		})
+	}
+
+	t.Run("ACK Block2 continuation", func(t *testing.T) {
+		cc, _ := newTestConnWithSession(t)
+		processed := false
+		cc.requestMonitor = func(*Conn, *pool.Message) (bool, error) {
+			processed = true
+			return true, nil
+		}
+		req := qControlSessionMessage(message.Acknowledgement, codes.GET, message.Block2)
+		wire, err := req.MarshalWithEncoder(coder.DefaultCoder)
+		require.NoError(t, err)
+
+		require.NoError(t, cc.Process(nil, wire))
+		require.True(t, processed, "legacy Block2 continuation must remain processable")
+	})
+}
+
+func qControlSessionMessage(typ message.Type, code codes.Code, option message.OptionID) *pool.Message {
+	msg := pool.NewMessage(context.Background())
+	msg.SetType(typ)
+	msg.SetCode(code)
+	msg.SetMessageID(1)
+	msg.SetToken([]byte("transfer"))
+	msg.SetOptionUint32(option, 0)
+	return msg
+}
