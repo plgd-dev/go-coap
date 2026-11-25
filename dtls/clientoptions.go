@@ -6,7 +6,8 @@ import piondtls "github.com/pion/dtls/v3"
 // Dial. It wraps the options-based API of pion/dtls, keeping
 // pion/dtls option types out of go-coap function signatures.
 type DTLSClientOptions struct {
-	opts []piondtls.ClientOption
+	opts                     []piondtls.ClientOption
+	skipHostnameVerification bool
 }
 
 // NewDTLSClientOptions creates a DTLSClientOptions from the provided pion/dtls
@@ -17,6 +18,14 @@ type DTLSClientOptions struct {
 // directly.
 func NewDTLSClientOptions(opts ...piondtls.ClientOption) DTLSClientOptions {
 	return DTLSClientOptions{opts: opts}
+}
+
+// WithoutHostnameVerification disables only the server certificate hostname
+// check when used with Dial. Certificate chain verification remains enabled
+// unless the supplied pion/dtls options disable it.
+func (o DTLSClientOptions) WithoutHostnameVerification() DTLSClientOptions {
+	o.skipHostnameVerification = true
+	return o
 }
 
 // DTLSClientConfig is a type constraint accepted by Dial.

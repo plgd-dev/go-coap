@@ -99,6 +99,7 @@ func GenerateCertificate(ca *x509.Certificate, caPriv *ecdsa.PrivateKey, email s
 		Subject:        subject,
 		EmailAddresses: []string{email},
 		IPAddresses:    []net.IP{net.IPv4(127, 0, 0, 1), net.IPv6loopback},
+		DNSNames:       []string{"localhost"},
 
 		SubjectKeyId: []byte{1, 2, 3, 4, 6},
 		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth, x509.ExtKeyUsageServerAuth},
