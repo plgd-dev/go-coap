@@ -20,6 +20,7 @@ import (
 	"github.com/plgd-dev/go-coap/v3/net/oscore"
 	"github.com/plgd-dev/go-coap/v3/net/responsewriter"
 	"github.com/plgd-dev/go-coap/v3/options"
+	"github.com/plgd-dev/go-coap/v3/options/config"
 	"github.com/plgd-dev/go-coap/v3/udp/client"
 	"github.com/stretchr/testify/require"
 )
@@ -339,9 +340,18 @@ func TestOSCOREOuterBlockwiseDTLSRejectsAuthenticationFailureDuringTransfer(t *t
 	require.NoError(t, err)
 	var handled atomic.Int32
 	serverErrors := make(chan error, 8)
+	processedBlocks := make(chan int32, 1)
 	server := dtls.NewServer(
 		options.WithOSCORE(serverProcessor),
 		options.WithOSCOREOuterBlockwise(),
+		options.WithProcessReceivedMessageFunc(func(req *pool.Message, cc *client.Conn, handler config.HandlerFunc[*client.Conn]) {
+			mid := req.MessageID()
+			cc.ProcessReceivedMessageWithHandler(req, handler)
+			select {
+			case processedBlocks <- mid:
+			case <-cc.Context().Done():
+			}
+		}),
 		options.WithErrors(func(err error) {
 			select {
 			case serverErrors <- err:
@@ -398,6 +408,19 @@ func TestOSCOREOuterBlockwiseDTLSRejectsAuthenticationFailureDuringTransfer(t *t
 		err = cc.Session().WriteMessage(request)
 		cc.ReleaseMessage(request)
 		require.NoError(t, err)
+		select {
+		case mid := <-processedBlocks:
+			require.Equal(t, int32(0x7200+num), mid)
+		case <-time.After(5 * time.Second):
+			t.Fatalf("DTLS server did not process Block1 fragment %d", num)
+		}
+		if more {
+			select {
+			case serverErr := <-serverErrors:
+				t.Fatalf("processing Block1 fragment %d: %v", num, serverErr)
+			default:
+			}
+		}
 		offset = end
 	}
 
@@ -405,6 +428,7 @@ func TestOSCOREOuterBlockwiseDTLSRejectsAuthenticationFailureDuringTransfer(t *t
 	case processingErr := <-serverErrors:
 		require.Error(t, processingErr)
 		require.False(t, oscore.IsInternalProcessingError(processingErr))
+		require.ErrorContains(t, processingErr, "message authentication failed")
 	case <-time.After(5 * time.Second):
 		t.Fatal("DTLS server did not report the fragmented request authentication failure")
 	}

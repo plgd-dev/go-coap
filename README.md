@@ -47,6 +47,24 @@ The go-coap provides servers and clients for DTLS, TCP-TLS, UDP, TCP in golang l
 
 * Go 1.26 or higher
 
+## Server handshake limits
+
+DTLS and TCP-TLS servers allow at most 1,024 concurrent handshakes by default,
+with a 30-second handshake timeout. At the limit, the oldest pending handshake
+is canceled and its connection starts closing. A new handshake is admitted
+when any pending handshake releases a slot; the evicted handshake remains
+counted until its cleanup finishes.
+`options.WithMaxPendingHandshakes` and `options.WithHandshakeTimeout` configure
+these settings; a zero limit removes the bound and a nonpositive timeout
+disables the timeout. Unlimited handshakes can exhaust server resources.
+
+Evicted handshakes and failures other than cancellation or closed-connection
+errors are reported through the configured error callback with
+`handshake failed`. TCP-TLS completes the handshake before creating the CoAP
+session and calling `OnNewConn`. Plain TCP is unaffected. A sustained flood can
+still prevent slow handshakes from completing; large fleets may need a higher
+limit for simultaneous reconnects.
+
 ## Experimental Q-Block transfers
 
 Q-Block is opt-in for UDP/DTLS; existing blockwise defaults are unchanged.

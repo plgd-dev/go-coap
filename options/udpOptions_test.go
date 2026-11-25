@@ -50,10 +50,12 @@ func TestUDPServerApply(t *testing.T) {
 
 func TestDTLSServerApply(t *testing.T) {
 	cfg := dtlsServer.Config{}
+	require.Equal(t, uint32(1024), dtlsServer.DefaultConfig.MaxPendingHandshakes)
 	opt := []dtlsServer.Option{
 		options.WithTransmission(10, time.Second, 5, 2.0),
 		options.WithMTU(1500),
 		options.WithDTLSHandshakeTimeout(12 * time.Second),
+		options.WithDTLSMaxPendingHandshakes(42),
 		options.WithMaxPendingMessages(7),
 	}
 	for _, o := range opt {
@@ -68,7 +70,10 @@ func TestDTLSServerApply(t *testing.T) {
 	require.Equal(t, uint16(1500), cfg.MTU)
 	// WithDTLSHandshakeTimeout
 	require.Equal(t, 12*time.Second, cfg.HandshakeTimeout)
+	require.Equal(t, uint32(42), cfg.MaxPendingHandshakes)
 	require.Equal(t, uint32(7), cfg.MaxPendingMessages)
+	options.WithDTLSMaxPendingHandshakes(0).DTLSServerApply(&cfg)
+	require.Zero(t, cfg.MaxPendingHandshakes)
 }
 
 func TestUDPClientApply(t *testing.T) {

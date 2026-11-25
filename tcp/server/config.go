@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/plgd-dev/go-coap/v3/internal/handshake"
 	"github.com/plgd-dev/go-coap/v3/message"
 	"github.com/plgd-dev/go-coap/v3/message/codes"
 	"github.com/plgd-dev/go-coap/v3/message/pool"
@@ -44,7 +45,9 @@ var DefaultConfig = func() Config {
 		RequestMonitor: func(*client.Conn, *pool.Message) (bool, error) {
 			return false, nil
 		},
-		ConnectionCacheSize: 2 * 1024,
+		ConnectionCacheSize:  2 * 1024,
+		HandshakeTimeout:     handshake.DefaultTimeout,
+		MaxPendingHandshakes: handshake.DefaultLimit,
 	}
 	opts.Handler = func(w *responsewriter.ResponseWriter[*client.Conn], _ *pool.Message) {
 		if err := w.SetResponse(codes.NotFound, message.TextPlain, nil); err != nil {
@@ -63,4 +66,8 @@ type Config struct {
 	ConnectionCacheSize             uint16
 	DisablePeerTCPSignalMessageCSMs bool
 	DisableTCPSignalMessageCSM      bool
+	// HandshakeTimeout bounds TLS handshake duration; nonpositive values disable it.
+	HandshakeTimeout time.Duration
+	// MaxPendingHandshakes limits concurrent TLS handshakes; zero disables the limit.
+	MaxPendingHandshakes uint32
 }

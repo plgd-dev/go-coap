@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/plgd-dev/go-coap/v3/internal/handshake"
 	"github.com/plgd-dev/go-coap/v3/message"
 	"github.com/plgd-dev/go-coap/v3/message/pool"
 	coapNet "github.com/plgd-dev/go-coap/v3/net"
@@ -16,10 +17,6 @@ import (
 	"github.com/plgd-dev/go-coap/v3/pkg/connections"
 	udpClient "github.com/plgd-dev/go-coap/v3/udp/client"
 )
-
-type handshakeWithContext interface {
-	HandshakeContext(ctx context.Context) error
-}
 
 // Listener defined used by coap
 type Listener interface {
@@ -128,20 +125,10 @@ func (s *Server) checkAcceptError(err error) bool {
 	}
 }
 
-func (s *Server) serveConnection(connections *connections.Connections, rw net.Conn) {
-	if h, ok := rw.(handshakeWithContext); ok {
-		handshakeCtx := s.ctx
-		cancel := func() {
-			// do nothing by default
-		}
-		if s.cfg.HandshakeTimeout > 0 {
-			handshakeCtx, cancel = context.WithTimeout(s.ctx, s.cfg.HandshakeTimeout)
-		}
-		err := h.HandshakeContext(handshakeCtx)
-		cancel()
-		if err != nil {
+func (s *Server) serveConnection(connections *connections.Connections, rw net.Conn, attempt *handshake.Attempt) {
+	if attempt != nil {
+		if err := attempt.Run(s.cfg.HandshakeTimeout); err != nil {
 			s.cfg.Errors(fmt.Errorf("%v: handshake failed: %w", rw.RemoteAddr(), err))
-			_ = rw.Close()
 			return
 		}
 	}
@@ -183,6 +170,7 @@ func (s *Server) Serve(l Listener) error {
 	defer wg.Wait()
 
 	connections := connections.New()
+	pending := handshake.NewPending(s.cfg.MaxPendingHandshakes)
 	s.cfg.PeriodicRunner(func(now time.Time) bool {
 		connections.CheckExpirations(now)
 		return s.ctx.Err() == nil
@@ -197,10 +185,18 @@ func (s *Server) Serve(l Listener) error {
 		if err != nil || rw == nil {
 			continue
 		}
+		var attempt *handshake.Attempt
+		if h, ok := rw.(handshake.Conn); ok {
+			attempt = pending.Admit(s.ctx, h)
+			if attempt == nil {
+				_ = rw.Close()
+				return nil
+			}
+		}
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			s.serveConnection(connections, rw)
+			s.serveConnection(connections, rw, attempt)
 		}()
 	}
 }
