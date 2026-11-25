@@ -20,6 +20,20 @@ import (
 
 const testPathABC = "/a/b/c"
 
+func TestMessageResetDropsLargeOptionsTable(t *testing.T) {
+	msg := pool.NewMessage(context.Background())
+	options := make(message.Options, 5000)
+	for i := range options {
+		options[i] = message.Option{ID: 300, Value: []byte{byte(i)}}
+	}
+	msg.SetMessage(message.Message{Options: options})
+	require.Greater(t, cap(msg.Options()), 64)
+
+	msg.Reset()
+
+	require.LessOrEqual(t, cap(msg.Options()), 64)
+}
+
 func TestSetupRFC8132Requests(t *testing.T) {
 	tests := []struct {
 		name  string

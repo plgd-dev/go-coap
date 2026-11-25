@@ -3,6 +3,7 @@ package qblock
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -71,7 +72,7 @@ func q1TransferKey(r *pool.Message, remoteAddr net.Addr, tag []byte) string {
 }
 
 func qTransferKey(r *pool.Message, remoteAddr net.Addr, tag []byte, response bool) string {
-	h := &bytes.Buffer{}
+	h := sha256.New()
 	endpoint := ""
 	if remoteAddr != nil {
 		endpoint = remoteAddr.String()
@@ -98,7 +99,7 @@ func qTransferKey(r *pool.Message, remoteAddr net.Addr, tag []byte, response boo
 		_, _ = h.Write(option.Value)
 	}
 	blocks.WriteExchangeKeyPart(h, tag)
-	return h.String()
+	return string(h.Sum(nil))
 }
 
 func optionCount(r *pool.Message, id message.OptionID) int {
