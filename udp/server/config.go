@@ -49,7 +49,11 @@ var DefaultConfig = func() Config {
 		MTU:                                 udpClient.DefaultMTU,
 		MaxPendingMessages:                  udpClient.DefaultMaxPendingMessages,
 	}
-	opts.Handler = func(w *responsewriter.ResponseWriter[*udpClient.Conn], _ *pool.Message) {
+	opts.Handler = func(w *responsewriter.ResponseWriter[*udpClient.Conn], r *pool.Message) {
+		if r.Type() == message.Confirmable && r.Code() >= 64 && r.Code() < 192 {
+			w.Message().SetType(message.Reset)
+			return
+		}
 		if err := w.SetResponse(codes.NotFound, message.TextPlain, nil); err != nil {
 			opts.Errors(fmt.Errorf("udp server: cannot set response: %w", err))
 		}
