@@ -1537,6 +1537,10 @@ func (b *BlockWise[C]) appendReceivedBlock(w *responsewriter.ResponseWriter[C], 
 	if !bytes.Equal(cachedReceivedMessage.Token(), block.token) {
 		b.sendingMessagesCache.Delete(block.exchangeKey)
 	}
+	if block.blockType == message.Block1 {
+		// The completed request belongs to the final block's exchange.
+		cachedReceivedMessage.SetToken(block.token)
+	}
 	_, err = cachedReceivedMessage.Body().Seek(0, io.SeekStart)
 	if err != nil {
 		return fmt.Errorf("cannot seek to start of cachedReceivedMessage request: %w", err)

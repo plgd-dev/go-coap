@@ -903,6 +903,7 @@ func TestBlockWiseReceivePostBlock1ThenBlock2(t *testing.T) {
 			h := func(w *responsewriter.ResponseWriter[*testClient], req *pool.Message) {
 				handlerCalls++
 				require.Equal(t, codes.POST, req.Code())
+				require.Equal(t, tt.tokens[requestBlocks-1], req.Token())
 				body, err := req.ReadBody()
 				require.NoError(t, err)
 				require.Equal(t, request, body)
