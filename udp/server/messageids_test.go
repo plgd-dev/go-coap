@@ -38,6 +38,47 @@ func TestEndpointMessageIDsEviction(t *testing.T) {
 	require.Len(t, ids.entries, 2)
 }
 
+type endpointMessageIDLimitOption uint32
+
+func (o endpointMessageIDLimitOption) UDPServerApply(cfg *Config) {
+	cfg.MaxEndpointMessageIDs = uint32(o)
+}
+
+func TestServerEndpointMessageIDLimit(t *testing.T) {
+	for _, limit := range []uint32{0, 1, 2} {
+		t.Run(strconv.FormatUint(uint64(limit), 10), func(t *testing.T) {
+			s := New(endpointMessageIDLimitOption(limit))
+			defer s.Stop()
+			initial := func() uint32 { return 100 }
+			first := s.messageIDs.get("first", initial)
+			first.Add(1)
+			second := s.messageIDs.get("second", initial)
+			require.NotSame(t, first, second)
+			got := s.messageIDs.get("first", initial)
+			if limit == 1 {
+				require.NotSame(t, first, got)
+				require.Equal(t, uint32(100), got.Load())
+				require.Len(t, s.messageIDs.entries, 1)
+			} else {
+				require.Same(t, first, got)
+				require.Equal(t, uint32(101), got.Load())
+				require.Len(t, s.messageIDs.entries, 2)
+			}
+		})
+	}
+}
+
+func TestEndpointMessageIDsUnlimited(t *testing.T) {
+	ids := newEndpointMessageIDs(0)
+	initial := func() uint32 { return 100 }
+	first := ids.get("first", initial)
+	for i := 0; i < int(DefaultMaxEndpointMessageIDs)+1; i++ {
+		ids.get(strconv.Itoa(i), initial)
+	}
+	require.Len(t, ids.entries, int(DefaultMaxEndpointMessageIDs)+2)
+	require.Same(t, first, ids.get("first", initial))
+}
+
 func TestServerMessageIDsSurviveReconnectAndOtherPeers(t *testing.T) {
 	s := New()
 	defer s.Stop()

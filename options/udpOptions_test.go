@@ -28,12 +28,23 @@ func TestMaxPendingMessagesDefaultsAndDisable(t *testing.T) {
 	require.Zero(t, dtlsCfg.MaxPendingMessages)
 }
 
+func TestMaxEndpointMessageIDsOption(t *testing.T) {
+	cfg := udpServer.DefaultConfig
+	require.Equal(t, uint32(4096), cfg.MaxEndpointMessageIDs)
+	require.Equal(t, udpServer.DefaultMaxEndpointMessageIDs, cfg.MaxEndpointMessageIDs)
+	options.WithMaxEndpointMessageIDs(2).UDPServerApply(&cfg)
+	require.Equal(t, uint32(2), cfg.MaxEndpointMessageIDs)
+	options.WithMaxEndpointMessageIDs(0).UDPServerApply(&cfg)
+	require.Zero(t, cfg.MaxEndpointMessageIDs)
+}
+
 func TestUDPServerApply(t *testing.T) {
 	cfg := udpServer.Config{}
 	opt := []udpServer.Option{
 		options.WithTransmission(10, time.Second, 5, 2.0),
 		options.WithMTU(1500),
 		options.WithMaxPendingMessages(7),
+		options.WithMaxEndpointMessageIDs(8),
 	}
 	for _, o := range opt {
 		o.UDPServerApply(&cfg)
@@ -46,6 +57,7 @@ func TestUDPServerApply(t *testing.T) {
 	// WithMTU
 	require.Equal(t, uint16(1500), cfg.MTU)
 	require.Equal(t, uint32(7), cfg.MaxPendingMessages)
+	require.Equal(t, uint32(8), cfg.MaxEndpointMessageIDs)
 }
 
 func TestDTLSServerApply(t *testing.T) {

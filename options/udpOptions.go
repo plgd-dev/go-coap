@@ -98,6 +98,23 @@ func WithMaxPendingMessages(maxPendingMessages uint32) MaxPendingMessagesOpt {
 	return MaxPendingMessagesOpt{maxPendingMessages: maxPendingMessages}
 }
 
+// MaxEndpointMessageIDsOpt configures the UDP server's per-peer MID cache.
+type MaxEndpointMessageIDsOpt struct {
+	maxEntries uint32
+}
+
+func (o MaxEndpointMessageIDsOpt) UDPServerApply(cfg *udpServer.Config) {
+	cfg.MaxEndpointMessageIDs = o.maxEntries
+}
+
+// WithMaxEndpointMessageIDs limits the number of remote peers whose outgoing
+// Message ID sequences a UDP server retains (default: 4096). Zero means
+// unlimited, which may cause unbounded memory growth. Evicted peers restart at
+// a random Message ID, so a collision within the exchange lifetime is possible.
+func WithMaxEndpointMessageIDs(maxEntries uint32) MaxEndpointMessageIDsOpt {
+	return MaxEndpointMessageIDsOpt{maxEntries: maxEntries}
+}
+
 // TransmissionOpt transmission options.
 type TransmissionOpt struct {
 	transmissionNStart                  uint32

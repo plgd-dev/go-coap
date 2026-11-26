@@ -6,8 +6,6 @@ import (
 	"github.com/plgd-dev/go-coap/v3/pkg/sync/atomic"
 )
 
-const maxEndpointMessageIDs = 4096
-
 type endpointMessageID struct {
 	endpoint string
 	counter  *atomic.Uint32
@@ -16,13 +14,13 @@ type endpointMessageID struct {
 
 // Access is serialized by Server.connsMutex.
 type endpointMessageIDs struct {
-	limit   int
+	limit   uint32
 	entries map[string]*endpointMessageID
 	byOrder map[*list.Element]*endpointMessageID
 	order   list.List
 }
 
-func newEndpointMessageIDs(limit int) *endpointMessageIDs {
+func newEndpointMessageIDs(limit uint32) *endpointMessageIDs {
 	return &endpointMessageIDs{
 		limit: limit, entries: make(map[string]*endpointMessageID),
 		byOrder: make(map[*list.Element]*endpointMessageID),
@@ -34,7 +32,7 @@ func (m *endpointMessageIDs) get(endpoint string, initial func() uint32) *atomic
 		m.order.MoveToFront(entry.element)
 		return entry.counter
 	}
-	if m.order.Len() == m.limit {
+	if m.limit > 0 && int64(m.order.Len()) >= int64(m.limit) {
 		oldest := m.order.Back()
 		delete(m.entries, m.byOrder[oldest].endpoint)
 		delete(m.byOrder, oldest)

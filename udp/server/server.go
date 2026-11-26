@@ -95,7 +95,7 @@ func New(opt ...Option) *Server {
 		doneCtx:           doneCtx,
 		doneCancel:        doneCancel,
 		conns:             make(map[string]*client.Conn),
-		messageIDs:        newEndpointMessageIDs(maxEndpointMessageIDs),
+		messageIDs:        newEndpointMessageIDs(cfg.MaxEndpointMessageIDs),
 
 		cfg: &cfg,
 	}

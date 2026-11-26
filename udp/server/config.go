@@ -25,6 +25,9 @@ type OnNewConnFunc = func(cc *udpClient.Conn)
 
 type GetMIDFunc = func() int32
 
+// DefaultMaxEndpointMessageIDs is the default number of retained peer sequences.
+const DefaultMaxEndpointMessageIDs uint32 = 4096
+
 var DefaultConfig = func() Config {
 	opts := Config{
 		Common: config.NewCommon[*udpClient.Conn](),
@@ -48,6 +51,7 @@ var DefaultConfig = func() Config {
 		GetMID:                              message.GetMID,
 		MTU:                                 udpClient.DefaultMTU,
 		MaxPendingMessages:                  udpClient.DefaultMaxPendingMessages,
+		MaxEndpointMessageIDs:               DefaultMaxEndpointMessageIDs,
 	}
 	opts.Handler = func(w *responsewriter.ResponseWriter[*udpClient.Conn], r *pool.Message) {
 		if r.Type() == message.Confirmable && r.Code() >= 64 && r.Code() < 192 {
@@ -66,7 +70,7 @@ type Config struct {
 	CreateInactivityMonitor udpClient.CreateInactivityMonitorFunc
 	// GetMID contributes to the initial message ID for a newly tracked peer.
 	// A random offset is added; subsequent connections reuse the peer's counter
-	// while it remains in the server's 4096-entry cache. Evicted peers restart
+	// while it remains in the server's endpoint cache. Evicted peers restart
 	// at a random ID, so a collision within the exchange lifetime is possible.
 	GetMID                              GetMIDFunc
 	Handler                             HandlerFunc
@@ -80,6 +84,9 @@ type Config struct {
 	// MaxPendingMessages limits in-flight duplicate suppression per connection.
 	// Zero disables in-flight tracking.
 	MaxPendingMessages uint32
+	// MaxEndpointMessageIDs limits retained per-peer outgoing MID sequences.
+	// Zero means unlimited and may allow unbounded memory growth.
+	MaxEndpointMessageIDs uint32
 	// QBlockwiseMode is Disabled by default and supports plain UDP.
 	QBlockwiseMode   blockwise.QBlockwiseMode
 	QBlockwiseConfig blockwise.QBlockwiseConfig
