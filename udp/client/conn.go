@@ -302,7 +302,8 @@ type Conn struct {
 	pendingMessages       map[int32]pendingMessage
 	maxPendingMessages    uint32
 	tokenlessHandler      client.TokenlessHandler[HandlerFunc]
-	msgID                 atomic.Uint32
+	msgID                 *atomic.Uint32
+	sharedMessageID       bool
 	blockwiseSZX          blockwise.SZX
 	qBlockwiseMode        blockwise.QBlockwiseMode
 	qParameters           blockwise.QBlockwiseConfig
@@ -409,6 +410,7 @@ type ConnOptions struct {
 	inactivityMonitor InactivityMonitor
 	requestMonitor    RequestMonitorFunc
 	responseMsgCache  MessageCache
+	messageIDCounter  *atomic.Uint32
 }
 
 type Option = func(opts *ConnOptions)
@@ -451,6 +453,15 @@ func WithRequestMonitor(requestMonitor RequestMonitorFunc) Option {
 func WithResponseMessageCache(cache MessageCache) Option {
 	return func(opts *ConnOptions) {
 		opts.responseMsgCache = cache
+	}
+}
+
+// WithMessageIDCounter shares the message ID sequence with other connections.
+// The caller must initialize the counter before passing it to this option.
+// When supplied, Config.GetMID is not used to initialize the connection.
+func WithMessageIDCounter(counter *atomic.Uint32) Option {
+	return func(opts *ConnOptions) {
+		opts.messageIDCounter = counter
 	}
 }
 
@@ -546,7 +557,12 @@ func newConn(session Session, cfg *Config, cfgOpts ConnOptions) *Conn {
 		maxPendingMessages:        cfg.MaxPendingMessages,
 		numOutstandingInteraction: semaphore.NewWeighted(math.MaxInt64),
 	}
-	cc.msgID.Store(pkgMath.CastTo[uint32](cfg.GetMID() - 0xffff/2))
+	cc.msgID = cfgOpts.messageIDCounter
+	if cc.msgID == nil {
+		cc.msgID = atomic.NewUint32(pkgMath.CastTo[uint32](cfg.GetMID() - 0xffff/2))
+	} else {
+		cc.sharedMessageID = true
+	}
 	cc.blockWise = cfgOpts.createBlockWise(&cc)
 	return &cc
 }
@@ -618,12 +634,10 @@ func (cc *Conn) Session() Session {
 }
 
 func (cc *Conn) GetMessageID() int32 {
-	// To prevent collisions during reconnections, it is important to always increment the global counter.
-	// For example, if a connection (cc) is established and later closed due to inactivity, a new cc may
-	// be created shortly after. However, if the new cc is initialized with the same message ID as the
-	// previous one, the receiver may mistakenly treat the incoming message as a duplicate and discard it.
-	// Hence, by incrementing the global counter, we can ensure unique message IDs and avoid such issues.
-	message.GetMID()
+	if !cc.sharedMessageID {
+		// Advance the seed used by independently created connections.
+		message.GetMID()
+	}
 	return int32(pkgMath.CastTo[uint16](cc.msgID.Add(1)))
 }
 

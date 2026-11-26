@@ -63,7 +63,11 @@ var DefaultConfig = func() Config {
 
 type Config struct {
 	config.Common[*udpClient.Conn]
-	CreateInactivityMonitor             udpClient.CreateInactivityMonitorFunc
+	CreateInactivityMonitor udpClient.CreateInactivityMonitorFunc
+	// GetMID contributes to the initial message ID for a newly tracked peer.
+	// A random offset is added; subsequent connections reuse the peer's counter
+	// while it remains in the server's 4096-entry cache. Evicted peers restart
+	// at a random ID, so a collision within the exchange lifetime is possible.
 	GetMID                              GetMIDFunc
 	Handler                             HandlerFunc
 	OnNewConn                           OnNewConnFunc

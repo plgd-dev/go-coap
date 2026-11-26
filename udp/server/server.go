@@ -32,6 +32,7 @@ type Server struct {
 
 	connsMutex sync.Mutex
 	conns      map[string]*client.Conn
+	messageIDs *endpointMessageIDs
 
 	listenMutex sync.Mutex
 	listen      *coapNet.UDPConn
@@ -94,6 +95,7 @@ func New(opt ...Option) *Server {
 		doneCtx:           doneCtx,
 		doneCancel:        doneCancel,
 		conns:             make(map[string]*client.Conn),
+		messageIDs:        newEndpointMessageIDs(maxEndpointMessageIDs),
 
 		cfg: &cfg,
 	}
@@ -531,12 +533,16 @@ func (s *Server) getOrCreateConn(udpConn *coapNet.UDPConn, raddr *net.UDPAddr, l
 	cfg.ReceivedMessageQueueSize = s.cfg.ReceivedMessageQueueSize
 
 	requestMonitor := s.cfg.RequestMonitor
+	counter := s.messageIDs.get(raddr.String(), func() uint32 {
+		return pkgMath.CastTo[uint32](s.cfg.GetMID() + message.RandMID() - 0xffff/2)
+	})
 	cc = client.NewConnWithOpts(
 		session,
 		&cfg,
 		client.WithInactivityMonitor(monitor),
 		client.WithRequestMonitor(requestMonitor),
 		client.WithBlockWise(createBlockWise),
+		client.WithMessageIDCounter(counter),
 	)
 	cc.SetContextValue(closeKey, func() {
 		if err := session.Close(); err != nil {
