@@ -1200,6 +1200,7 @@ func (cc *Conn) Context() context.Context {
 // AsyncPing sends ping and receivedPong will be called when pong arrives. It returns cancellation of ping operation.
 func (cc *Conn) AsyncPing(receivedPong func()) (func(), error) {
 	req := cc.AcquireMessage(cc.Context())
+	defer cc.ReleaseMessage(req)
 	req.SetType(message.Confirmable)
 	req.SetCode(codes.Empty)
 	mid := cc.GetMessageID()
@@ -1207,7 +1208,12 @@ func (cc *Conn) AsyncPing(receivedPong func()) (func(), error) {
 	// Keepalive pings must reuse the original destination IP as the packet source
 	// (e.g. Fly.io public IP), same as regular request/response writes.
 	cc.upsertControlInformation(req)
-	if _, loaded := cc.midHandlerContainer.LoadOrStore(mid, &midElement{
+	retained := cc.AcquireMessage(req.Context())
+	if err := req.Clone(retained); err != nil {
+		cc.ReleaseMessage(retained)
+		return nil, fmt.Errorf("cannot clone ping: %w", err)
+	}
+	element := &midElement{
 		handler: func(_ *responsewriter.ResponseWriter[*Conn], r *pool.Message) {
 			if r.Type() == message.Reset || r.Type() == message.Acknowledgement {
 				receivedPong()
@@ -1219,13 +1225,15 @@ func (cc *Conn) AsyncPing(receivedPong func()) (func(), error) {
 		private: struct {
 			sync.Mutex
 			msg *pool.Message
-		}{msg: req},
-	}); loaded {
+		}{msg: retained},
+	}
+	if _, loaded := cc.midHandlerContainer.LoadOrStore(mid, element); loaded {
+		element.ReleaseMessage(cc)
 		return nil, fmt.Errorf("cannot insert mid(%v) handler: %w", mid, coapErrors.ErrKeyAlreadyExists)
 	}
 	removeMidHandler := func() {
-		if elem, ok := cc.midHandlerContainer.LoadAndDelete(mid); ok {
-			elem.ReleaseMessage(cc)
+		if cc.removeMidHandlerIfCurrent(mid, element) {
+			element.ReleaseMessage(cc)
 		}
 	}
 	if err := cc.session.WriteMessage(req); err != nil {
