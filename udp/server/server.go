@@ -449,7 +449,7 @@ func toWildcardLocalAddr(laddr *net.UDPAddr) *net.UDPAddr {
 	return &wildcard
 }
 
-func (s *Server) getOrCreateConn(udpConn *coapNet.UDPConn, raddr *net.UDPAddr, laddr *net.UDPAddr) (cc *client.Conn, created bool, err error) {
+func (s *Server) getOrCreateConn(udpConn *coapNet.UDPConn, raddr, laddr *net.UDPAddr) (cc *client.Conn, created bool, err error) {
 	s.connsMutex.Lock()
 	defer s.connsMutex.Unlock()
 	key := getConnKey(raddr, laddr)
