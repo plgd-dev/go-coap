@@ -2,6 +2,7 @@ package blockwise
 
 import (
 	"bytes"
+	"fmt"
 	"net"
 	"testing"
 	"time"
@@ -1083,6 +1084,10 @@ func TestGetRequestMatchingKey(t *testing.T) {
 }
 
 func (b *block1Receiver) get(token message.Token, block2 *uint32, h func(*responsewriter.ResponseWriter[*testClient], *pool.Message)) block1Block2Exchange {
+	return b.getWithObserve(token, block2, false, h)
+}
+
+func (b *block1Receiver) getWithObserve(token message.Token, block2 *uint32, observe bool, h func(*responsewriter.ResponseWriter[*testClient], *pool.Message)) block1Block2Exchange {
 	req := b.cc.AcquireMessage(b.t.Context())
 	defer b.cc.ReleaseMessage(req)
 	req.SetCode(codes.GET)
@@ -1091,6 +1096,9 @@ func (b *block1Receiver) get(token message.Token, block2 *uint32, h func(*respon
 	require.NoError(b.t, req.SetPath("/big"))
 	if block2 != nil {
 		req.SetOptionUint32(message.Block2, *block2)
+	}
+	if observe {
+		req.SetObserve(0)
 	}
 	respMsg := b.cc.AcquireMessage(b.t.Context())
 	respMsg.SetToken(token)
@@ -1224,6 +1232,32 @@ func TestBlockWiseReceiveGetBlock2ChangingToken(t *testing.T) {
 		require.Equal(t, newRepresentation(2)[testBlock1Size:2*testBlock1Size], resp.payload)
 		require.Equal(t, 2, s.calls)
 	})
+
+	for _, tokenless := range []bool{false, true} {
+		t.Run(fmt.Sprintf("registration invalidates continuation/tokenless=%t", tokenless), func(t *testing.T) {
+			s := newServer(t)
+			oldToken := message.Token{0x01}
+			continuationToken := message.Token{0x02}
+			if tokenless {
+				oldToken = nil
+				continuationToken = nil
+			}
+			s.r.get(oldToken, nil, s.h)
+			s.version = 2
+			registration := s.r.getWithObserve(message.Token{0x10}, nil, true, func(w *responsewriter.ResponseWriter[*testClient], req *pool.Message) {
+				s.h(w, req)
+				w.Message().SetObserve(0)
+			})
+			require.Equal(t, newRepresentation(2)[:testBlock1Size], registration.payload)
+			resp := s.r.get(continuationToken, encode(1), s.h)
+			require.Equal(t, newRepresentation(2)[testBlock1Size:2*testBlock1Size], resp.payload)
+			require.Equal(t, 3, s.calls)
+			if !tokenless {
+				resp = s.r.get(oldToken, encode(1), s.h)
+				require.Equal(t, newRepresentation(1)[testBlock1Size:2*testBlock1Size], resp.payload)
+			}
+		})
+	}
 }
 
 // TestBlockWiseReceivePostBlock2ZeroIsNewRequest checks that a POST with a new token and

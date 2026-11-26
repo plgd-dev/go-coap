@@ -816,6 +816,9 @@ func (b *BlockWise[C]) handleReceivedMessage(w *responsewriter.ResponseWriter[C]
 		}
 	}
 	match := getSendingMatch(r, w.Message(), receivedCode, remoteAddr)
+	if isObserveResponse(w.Message()) && match.endpoint != "" {
+		b.invalidateObservationTransfers(match.endpoint)
+	}
 	if err = b.startSendingMessage(w, maxSZX, maxMessageSize, startSendingMessageBlock, exchangeKey, match); err != nil {
 		return err
 	}
