@@ -1200,6 +1200,7 @@ func (cc *Conn) Context() context.Context {
 // AsyncPing sends ping and receivedPong will be called when pong arrives. It returns cancellation of ping operation.
 func (cc *Conn) AsyncPing(receivedPong func()) (func(), error) {
 	req := cc.AcquireMessage(cc.Context())
+	defer cc.ReleaseMessage(req)
 	req.SetType(message.Confirmable)
 	req.SetCode(codes.Empty)
 	mid := cc.GetMessageID()
@@ -1207,7 +1208,12 @@ func (cc *Conn) AsyncPing(receivedPong func()) (func(), error) {
 	// Keepalive pings must reuse the original destination IP as the packet source
 	// (e.g. Fly.io public IP), same as regular request/response writes.
 	cc.upsertControlInformation(req)
-	if _, loaded := cc.midHandlerContainer.LoadOrStore(mid, &midElement{
+	retained := cc.AcquireMessage(req.Context())
+	if err := req.Clone(retained); err != nil {
+		cc.ReleaseMessage(retained)
+		return nil, fmt.Errorf("cannot clone ping: %w", err)
+	}
+	element := &midElement{
 		handler: func(_ *responsewriter.ResponseWriter[*Conn], r *pool.Message) {
 			if r.Type() == message.Reset || r.Type() == message.Acknowledgement {
 				receivedPong()
@@ -1219,13 +1225,15 @@ func (cc *Conn) AsyncPing(receivedPong func()) (func(), error) {
 		private: struct {
 			sync.Mutex
 			msg *pool.Message
-		}{msg: req},
-	}); loaded {
+		}{msg: retained},
+	}
+	if _, loaded := cc.midHandlerContainer.LoadOrStore(mid, element); loaded {
+		element.ReleaseMessage(cc)
 		return nil, fmt.Errorf("cannot insert mid(%v) handler: %w", mid, coapErrors.ErrKeyAlreadyExists)
 	}
 	removeMidHandler := func() {
-		if elem, ok := cc.midHandlerContainer.LoadAndDelete(mid); ok {
-			elem.ReleaseMessage(cc)
+		if cc.removeMidHandlerIfCurrent(mid, element) {
+			element.ReleaseMessage(cc)
 		}
 	}
 	if err := cc.session.WriteMessage(req); err != nil {
@@ -1240,7 +1248,8 @@ func (cc *Conn) Run() error {
 	return cc.session.Run(cc)
 }
 
-// AddOnClose calls function on close connection event.
+// AddOnClose calls f when connection processing ends. If shutdown has already
+// started, f is called immediately.
 func (cc *Conn) AddOnClose(f EventFunc) {
 	cc.session.AddOnClose(f)
 }
@@ -1561,13 +1570,23 @@ func (cc *Conn) processResponse(
 ) error {
 	switch {
 	case isPongOrResetResponse(w):
+		if w.Message().Type() == message.Reset {
+			if reqType != message.Confirmable && reqType != message.NonConfirmable {
+				w.Message().SetModified(false)
+				return nil
+			}
+			w.Message().SetCode(codes.Empty)
+			w.Message().SetToken(nil)
+			w.Message().ResetOptionsTo(nil)
+			w.Message().SetBody(nil)
+			w.Message().SetMessageID(reqMessageID)
+			return nil
+		}
 		if reqType == message.Confirmable {
 			w.Message().SetType(message.Acknowledgement)
 			w.Message().SetMessageID(reqMessageID)
 		} else {
-			if w.Message().Type() != message.Reset {
-				w.Message().SetType(message.NonConfirmable)
-			}
+			w.Message().SetType(message.NonConfirmable)
 			w.Message().SetMessageID(cc.GetMessageID())
 		}
 		return nil
@@ -1834,6 +1853,10 @@ func (cc *Conn) handleSpecialMessages(r *pool.Message) bool {
 		// we just confirmed that message was processed for cc.writeMessage
 		// the body of the message is need to be processed by the loopOverReceivedMessageQueue goroutine
 		return false
+	}
+	if r.Type() == message.Reset && r.Code() == codes.Empty {
+		cc.ReleaseMessage(r)
+		return true
 	}
 	// separate message
 	if r.IsSeparateMessage() {

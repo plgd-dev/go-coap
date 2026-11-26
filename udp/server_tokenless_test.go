@@ -52,6 +52,10 @@ func (c *rawUDPClient) get(path string, opts ...message.Option) message.Message 
 }
 
 func (c *rawUDPClient) do(code codes.Code, path string, payload []byte, opts ...message.Option) message.Message {
+	return c.doWithToken(code, path, nil, payload, opts...)
+}
+
+func (c *rawUDPClient) doWithToken(code codes.Code, path string, token message.Token, payload []byte, opts ...message.Option) message.Message {
 	c.mid++
 	options := append(message.Options{{ID: message.URIPath, Value: []byte(path)}}, opts...)
 	// options must be encoded in ascending order
@@ -60,6 +64,7 @@ func (c *rawUDPClient) do(code codes.Code, path string, payload []byte, opts ...
 		Code:      code,
 		Type:      message.Confirmable,
 		MessageID: c.mid,
+		Token:     token,
 		Options:   options,
 		Payload:   payload,
 	}
@@ -232,6 +237,31 @@ func TestServerTokenlessPutBlockwise(t *testing.T) {
 	require.Equal(t, codes.Changed, resp.Code)
 	require.NotNil(t, received.Load())
 	require.Equal(t, request, *received.Load())
+}
+
+func TestServerBlock1HandlerUsesFinalToken(t *testing.T) {
+	firstToken := message.Token{1}
+	finalToken := message.Token{2}
+	tokens := make(chan message.Token, 1)
+	errors := make(chan error, 1)
+	m := mux.NewRouter()
+	require.NoError(t, m.Handle("/put", mux.HandlerFunc(func(w mux.ResponseWriter, r *mux.Message) {
+		tokens <- r.Token()
+		w.Message().SetToken(r.Token())
+		errors <- w.SetResponse(codes.Changed, message.TextPlain, nil)
+	})))
+	c := newTokenlessTestServer(t, m)
+
+	first := c.doWithToken(codes.PUT, "put", firstToken, bytes.Repeat([]byte{1}, 1024),
+		blockOption(t, message.Block1, 0, true))
+	require.Equal(t, codes.Continue, first.Code)
+	require.Equal(t, firstToken, first.Token)
+	last := c.doWithToken(codes.PUT, "put", finalToken, []byte("last"),
+		blockOption(t, message.Block1, 1, false))
+	require.Equal(t, codes.Changed, last.Code)
+	require.Equal(t, finalToken, last.Token)
+	require.Equal(t, finalToken, <-tokens)
+	require.NoError(t, <-errors)
 }
 
 // TestServerTokenlessPostBlockwise uploads a big request with Block1 and fetches a big response with Block2 (RFC 7959 §3.3).

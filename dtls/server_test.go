@@ -6,6 +6,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"fmt"
+	"io"
 	"math/big"
 	"net"
 	"sync"
@@ -724,4 +725,91 @@ func TestServerSetContextValueWithPKIAndOptions(t *testing.T) {
 
 	_, err = cc.Get(ctx, "/")
 	require.NoError(t, err)
+}
+
+func TestServerContinuesAfterConnectionAttemptEOF(t *testing.T) {
+	for _, useOptions := range []bool{false, true} {
+		for _, wrapped := range []bool{false, true} {
+			t.Run(fmt.Sprintf("options=%t/wrapped=%t", useOptions, wrapped), func(t *testing.T) {
+				var attempts atomic.Int32
+				attempt := func(net.Addr) error {
+					if attempts.Add(1) == 2 {
+						if wrapped {
+							return fmt.Errorf("connection policy: %w", io.EOF)
+						}
+						return io.EOF
+					}
+					return nil
+				}
+				psk := func([]byte) ([]byte, error) { return []byte{0xAB, 0xC1, 0x23}, nil }
+				config := &piondtls.Config{
+					PSK:                 psk,
+					PSKIdentityHint:     []byte("identity"),
+					CipherSuites:        []piondtls.CipherSuiteID{piondtls.TLS_PSK_WITH_AES_128_CCM_8},
+					OnConnectionAttempt: attempt,
+				}
+				var listener *coapNet.DTLSListener
+				var err error
+				if useOptions {
+					listener, err = coapNet.NewDTLSListener("udp4", "127.0.0.1:0", coapNet.NewDTLSServerOptions(
+						piondtls.WithPSK(psk),
+						piondtls.WithPSKIdentityHint([]byte("identity")),
+						piondtls.WithCipherSuites(piondtls.TLS_PSK_WITH_AES_128_CCM_8),
+						piondtls.WithOnConnectionAttempt(attempt),
+					))
+				} else {
+					listener, err = coapNet.NewDTLSListener("udp4", "127.0.0.1:0", config)
+				}
+				require.NoError(t, err)
+				errorsCh := make(chan error, 1)
+				server := dtls.NewServer(options.WithErrors(func(err error) { errorsCh <- err }))
+				done := make(chan error, 1)
+				go func() { done <- server.Serve(listener) }()
+				t.Cleanup(func() {
+					server.Stop()
+					require.NoError(t, <-done)
+				})
+
+				ctx, cancel := context.WithTimeout(context.Background(), Timeout)
+				defer cancel()
+				first, err := dtls.Dial(listener.Addr().String(), config)
+				require.NoError(t, err)
+				defer first.Close()
+				require.NoError(t, first.Ping(ctx))
+
+				second, err := dtls.Dial(listener.Addr().String(), config)
+				require.NoError(t, err)
+				defer second.Close()
+				require.NoError(t, second.Ping(ctx))
+				require.NoError(t, first.Ping(ctx))
+				require.GreaterOrEqual(t, attempts.Load(), int32(3))
+				select {
+				case err := <-errorsCh:
+					require.ErrorIs(t, err, io.EOF)
+				case <-ctx.Done():
+					t.Fatal("connection attempt error was not reported")
+				}
+			})
+		}
+	}
+}
+
+func TestServerStopsWhenListenerCloses(t *testing.T) {
+	listener, err := coapNet.NewDTLSListener("udp4", "127.0.0.1:0", coapNet.NewDTLSServerOptions(
+		piondtls.WithPSK(func([]byte) ([]byte, error) { return []byte{0xAB, 0xC1, 0x23}, nil }),
+		piondtls.WithPSKIdentityHint([]byte("identity")),
+		piondtls.WithCipherSuites(piondtls.TLS_PSK_WITH_AES_128_CCM_8),
+	))
+	require.NoError(t, err)
+	server := dtls.NewServer()
+	done := make(chan error, 1)
+	go func() { done <- server.Serve(listener) }()
+	defer server.Stop()
+	require.NoError(t, listener.Close())
+	select {
+	case err = <-done:
+		require.NoError(t, err)
+	case <-time.After(Timeout):
+		t.Fatal("server did not stop after the listener closed")
+	}
 }

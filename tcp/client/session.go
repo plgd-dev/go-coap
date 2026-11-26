@@ -6,9 +6,9 @@ import (
 	"errors"
 	"fmt"
 	"net"
-	"sync"
 	"time"
 
+	"github.com/plgd-dev/go-coap/v3/internal/onclose"
 	"github.com/plgd-dev/go-coap/v3/message"
 	"github.com/plgd-dev/go-coap/v3/message/codes"
 	"github.com/plgd-dev/go-coap/v3/message/pool"
@@ -23,21 +23,18 @@ import (
 type Session struct {
 	// This field needs to be the first in the struct to ensure proper word alignment on 32-bit platforms.
 	// See: https://golang.org/pkg/sync/atomic/#pkg-note-BUG
-	sequence          atomic.Uint64
-	inactivityMonitor InactivityMonitor
-	requestMonitor    RequestMonitorFunc
-	errSendCSM        error
-	cancel            context.CancelFunc
-	done              chan struct{}
-	errors            ErrorFunc
-	connection        *coapNet.Conn
-	messagePool       *pool.Pool
-	ctx               atomic.Pointer[context.Context]
-	maxMessageSize    uint32
-	private           struct {
-		mutex   sync.Mutex
-		onClose []EventFunc
-	}
+	sequence                   atomic.Uint64
+	inactivityMonitor          InactivityMonitor
+	requestMonitor             RequestMonitorFunc
+	errSendCSM                 error
+	cancel                     context.CancelFunc
+	done                       chan struct{}
+	errors                     ErrorFunc
+	connection                 *coapNet.Conn
+	messagePool                *pool.Pool
+	ctx                        atomic.Pointer[context.Context]
+	maxMessageSize             uint32
+	onClose                    onclose.Callbacks
 	connectionCacheSize        uint16
 	disableTCPSignalMessageCSM bool
 	closeSocket                bool
@@ -107,24 +104,12 @@ func (s *Session) Done() <-chan struct{} {
 }
 
 func (s *Session) AddOnClose(f EventFunc) {
-	s.private.mutex.Lock()
-	defer s.private.mutex.Unlock()
-	s.private.onClose = append(s.private.onClose, f)
-}
-
-func (s *Session) popOnClose() []EventFunc {
-	s.private.mutex.Lock()
-	defer s.private.mutex.Unlock()
-	tmp := s.private.onClose
-	s.private.onClose = nil
-	return tmp
+	s.onClose.Add(f)
 }
 
 func (s *Session) shutdown() {
 	defer close(s.done)
-	for _, f := range s.popOnClose() {
-		f()
-	}
+	s.onClose.Close()
 }
 
 func (s *Session) Close() error {

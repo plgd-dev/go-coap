@@ -74,7 +74,11 @@ func NewRouter() *Router {
 		m: new(sync.RWMutex),
 		z: make(map[string]Route),
 	}
-	router.defaultHandler = HandlerFunc(func(w ResponseWriter, _ *Message) {
+	router.defaultHandler = HandlerFunc(func(w ResponseWriter, req *Message) {
+		if req.Type() == message.Confirmable && req.Code() >= 64 && req.Code() < 192 {
+			w.Message().SetType(message.Reset)
+			return
+		}
 		if err := w.SetResponse(codes.NotFound, message.TextPlain, nil); err != nil {
 			router.errors(fmt.Errorf("router handler: cannot set response: %w", err))
 		}
@@ -209,22 +213,18 @@ func (r *Router) GetRoutes() map[string]Route {
 // pattern most closely matches the request message. If DefaultServeMux
 // is used the correct thing for DS queries is done: a possible parent
 // is sought.
-// If no handler is found a standard NotFound message is returned
+// If no handler is found or the request path is invalid, the default handler
+// is used. Middleware is applied to the selected handler.
 func (r *Router) ServeCOAP(w ResponseWriter, req *Message) {
 	path, err := req.Options().Path()
 	r.m.RLock()
 	defaultHandler := r.defaultHandler
 	r.m.RUnlock()
-	if err != nil && !errors.Is(err, message.ErrOptionNotFound) {
-		defaultHandler.ServeCOAP(w, req)
-		return
-	}
-	var h Handler
-	matchedMuxEntry, _ := r.Match(path, req.RouteParams)
-	if matchedMuxEntry == nil {
-		h = defaultHandler
-	} else {
-		h = matchedMuxEntry.h
+	h := defaultHandler
+	if err == nil || errors.Is(err, message.ErrOptionNotFound) {
+		if matchedMuxEntry, _ := r.Match(path, req.RouteParams); matchedMuxEntry != nil {
+			h = matchedMuxEntry.h
+		}
 	}
 	if h == nil {
 		return

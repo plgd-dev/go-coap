@@ -731,6 +731,83 @@ func TestBlockWiseReceiveBlock1DifferentPath(t *testing.T) {
 	require.Empty(t, r.delivered)
 }
 
+func TestBlockWiseReceiveBlock1UsesFinalRequestOptions(t *testing.T) {
+	const customNoCacheKey message.OptionID = 2044
+	tests := []struct {
+		name        string
+		first, last message.Options
+		want        codes.Code
+	}{
+		{
+			name:  "changed query is rejected",
+			first: message.Options{{ID: message.URIQuery, Value: []byte("auth=allowed")}},
+			last:  message.Options{{ID: message.URIQuery, Value: []byte("auth=denied")}},
+			want:  codes.RequestEntityIncomplete,
+		},
+		{
+			name:  "changed non-cache-key option is delivered",
+			first: message.Options{{ID: customNoCacheKey, Value: []byte("allowed")}},
+			last:  message.Options{{ID: customNoCacheKey, Value: []byte("denied")}},
+			want:  codes.Changed,
+		},
+		{
+			name:  "omitted non-cache-key option is not retained",
+			first: message.Options{{ID: customNoCacheKey, Value: []byte("allowed")}},
+			last:  message.Options{},
+			want:  codes.Changed,
+		},
+		{
+			name: "final echo and matching query are delivered",
+			first: message.Options{
+				{ID: message.URIQuery, Value: []byte("auth=allowed")},
+				{ID: message.Echo, Value: []byte("old")},
+			},
+			last: message.Options{
+				{ID: message.URIQuery, Value: []byte("auth=allowed")},
+				{ID: message.Echo, Value: []byte("new")},
+			},
+			want: codes.Changed,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			r := newBlock1Receiver(t, time.Minute)
+			var delivered message.Options
+			send := func(num int64, more bool, opts message.Options) codes.Code {
+				req := r.cc.AcquireMessage(t.Context())
+				defer r.cc.ReleaseMessage(req)
+				req.SetCode(codes.PUT)
+				req.SetToken(r.token)
+				req.SetType(message.Confirmable)
+				req.ResetOptionsTo(opts)
+				block, err := EncodeBlockOption(SZX1024, num, more)
+				require.NoError(t, err)
+				req.SetOptionUint32(message.Block1, block)
+				req.SetBody(bytes.NewReader(bytes.Repeat([]byte{byte(num)}, testBlock1Size)))
+
+				w := responsewriter.New(r.cc.AcquireMessage(t.Context()), r.cc)
+				defer r.cc.ReleaseMessage(w.Message())
+				r.bw.Handle(w, req, SZX1024, 64*1024, r.remote, func(w *responsewriter.ResponseWriter[*testClient], request *pool.Message) {
+					delivered, err = request.Options().Clone()
+					require.NoError(t, err)
+					body, err := request.ReadBody()
+					require.NoError(t, err)
+					require.Len(t, body, 2*testBlock1Size)
+					require.NoError(t, w.SetResponse(codes.Changed, message.TextPlain, nil))
+				})
+				return w.Message().Code()
+			}
+			require.Equal(t, codes.Continue, send(0, true, tt.first))
+			require.Equal(t, tt.want, send(1, false, tt.last))
+			if tt.want == codes.Changed {
+				require.Equal(t, tt.last, delivered)
+			} else {
+				require.Nil(t, delivered)
+			}
+		})
+	}
+}
+
 type block1Block2Exchange struct {
 	code    codes.Code
 	token   message.Token
@@ -826,6 +903,7 @@ func TestBlockWiseReceivePostBlock1ThenBlock2(t *testing.T) {
 			h := func(w *responsewriter.ResponseWriter[*testClient], req *pool.Message) {
 				handlerCalls++
 				require.Equal(t, codes.POST, req.Code())
+				require.Equal(t, tt.tokens[requestBlocks-1], req.Token())
 				body, err := req.ReadBody()
 				require.NoError(t, err)
 				require.Equal(t, request, body)

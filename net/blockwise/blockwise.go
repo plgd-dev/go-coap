@@ -198,7 +198,10 @@ type messageGuard struct {
 	identity    blockProtectionIdentity
 }
 
-var errReceivingMessagesCacheFull = errors.New("receiving messages cache is full")
+var (
+	errReceivingMessagesCacheFull = errors.New("receiving messages cache is full")
+	errNoPairedRequest            = errors.New("cannot request body without paired request")
+)
 
 type blockProtectionIdentity struct {
 	protected     bool
@@ -707,7 +710,14 @@ func (b *BlockWise[C]) getSendingMessageCode(token uint64) (codes.Code, bool) {
 	return sending.Code(), true
 }
 
+func isUnpairedConfirmableResponse(r *pool.Message, err error) bool {
+	return errors.Is(err, errNoPairedRequest) && r.Type() == message.Confirmable &&
+		r.Code() >= 64 && r.Code() < 192
+}
+
 // Handle middleware which constructs COAP request from blockwise transfer and send COAP response via blockwise.
+// For a reassembled Block1 request, the handler receives the completing block's
+// options. Applications must authorize the reassembled request in the handler.
 func (b *BlockWise[C]) Handle(w *responsewriter.ResponseWriter[C], r *pool.Message, maxSZX SZX, maxMessageSize uint32, remoteAddr net.Addr, next func(w *responsewriter.ResponseWriter[C], r *pool.Message)) {
 	if maxSZX > SZXBERT {
 		panic("invalid maxSZX")
@@ -739,15 +749,11 @@ func (b *BlockWise[C]) Handle(w *responsewriter.ResponseWriter[C], r *pool.Messa
 	if !sendingMessageExist || wantsToBeReceived(r) {
 		err = b.handleReceivedMessage(w, r, maxSZX, maxMessageSize, remoteAddr, exchangeKey, next)
 		if err != nil {
-			switch {
-			case errors.Is(err, errReceivingMessagesCacheFull):
-				b.sendServiceUnavailable(w, token)
-			case errors.Is(err, ErrRequestEntityTooLarge) && r.HasOption(message.Block1):
-				b.sendEntityTooLarge(w, token)
-			default:
-				b.sendEntityIncomplete(w, token)
+			if isUnpairedConfirmableResponse(r, err) {
+				next(w, r)
+				return
 			}
-			b.errors(fmt.Errorf("handleReceivedMessage(%v): %w", r, err))
+			b.handleReceiveError(w, r, token, err)
 		}
 		return
 	}
@@ -761,6 +767,18 @@ func (b *BlockWise[C]) Handle(w *responsewriter.ResponseWriter[C], r *pool.Messa
 	if !more && !isRequestCode(sendingMessageCode) {
 		b.sendingMessagesCache.Delete(exchangeKey)
 	}
+}
+
+func (b *BlockWise[C]) handleReceiveError(w *responsewriter.ResponseWriter[C], r *pool.Message, token message.Token, err error) {
+	switch {
+	case errors.Is(err, errReceivingMessagesCacheFull):
+		b.sendServiceUnavailable(w, token)
+	case errors.Is(err, ErrRequestEntityTooLarge) && r.HasOption(message.Block1):
+		b.sendEntityTooLarge(w, token)
+	default:
+		b.sendEntityIncomplete(w, token)
+	}
+	b.errors(fmt.Errorf("handleReceivedMessage(%v): %w", r, err))
 }
 
 func (b *BlockWise[C]) handleReceivedMessage(w *responsewriter.ResponseWriter[C], r *pool.Message, maxSZX SZX, maxMessageSize uint32, remoteAddr net.Addr, exchangeKey uint64, next func(w *responsewriter.ResponseWriter[C], r *pool.Message)) error {
@@ -1342,7 +1360,7 @@ func (b *BlockWise[C]) processReceivedBlock(w *responsewriter.ResponseWriter[C],
 	}
 	validUntil := b.getValidUntil(sentRequest)
 	if block.blockType == message.Block2 && sentRequest == nil {
-		return errors.New("cannot request body without paired request")
+		return errNoPairedRequest
 	}
 	if isObserveResponse(r) {
 		token, deadline, err := b.handleObserveResponse(sentRequest)
@@ -1508,11 +1526,20 @@ func (b *BlockWise[C]) appendReceivedBlock(w *responsewriter.ResponseWriter[C], 
 		return b.sendReceivedBlockContinue(w, r, block, sentRequest, payloadSize)
 	}
 	b.receivingMessagesCache.Delete(block.exchangeKey)
+	if block.blockType == message.Block1 {
+		// Options excluded from the matching key can change between blocks.
+		// The handler must see those of the request that completes the transfer.
+		cachedReceivedMessage.ResetOptionsTo(r.Options())
+	}
 	cachedReceivedMessage.Remove(block.blockType)
 	cachedReceivedMessage.Remove(block.sizeType)
 	cachedReceivedMessage.SetType(r.Type())
 	if !bytes.Equal(cachedReceivedMessage.Token(), block.token) {
 		b.sendingMessagesCache.Delete(block.exchangeKey)
+	}
+	if block.blockType == message.Block1 {
+		// The completed request belongs to the final block's exchange.
+		cachedReceivedMessage.SetToken(block.token)
 	}
 	_, err = cachedReceivedMessage.Body().Seek(0, io.SeekStart)
 	if err != nil {
