@@ -1003,6 +1003,7 @@ func TestBlockWiseFetchObserveResponseBlock2(t *testing.T) {
 			return req
 		}
 		req.SetContentFormat(message.AppJSON)
+		req.SetOptionUint32(message.Observe, 0)
 		block, err := EncodeBlockOption(SZX128, blockNum, false)
 		require.NoError(t, err)
 		req.SetOptionUint32(message.Block2, block)
@@ -1176,7 +1177,9 @@ func TestBlockWiseReceiveGetBlock2ChangingToken(t *testing.T) {
 		}
 		require.Equal(t, newRepresentation(1), got)
 		require.Equal(t, 1, s.calls)
-		// the completed transfer is removed
+		// The original token remains usable until the transfer expires.
+		require.Equal(t, 1, s.r.bw.sendingMessagesCache.Length())
+		s.r.bw.CheckExpirations(time.Now().Add(2 * time.Minute))
 		require.Equal(t, 0, s.r.bw.sendingMessagesCache.Length())
 	})
 
