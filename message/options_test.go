@@ -13,6 +13,51 @@ import (
 
 const testPathABC = "/a/b/c"
 
+func TestSetPathFailurePreservesOptions(t *testing.T) {
+	for _, tt := range []struct {
+		name string
+		id   OptionID
+		set  func(Options, []byte, string) (Options, int, error)
+	}{
+		{name: "URI", id: URIPath, set: Options.SetPath},
+		{name: "location", id: LocationPath, set: Options.SetLocationPath},
+	} {
+		for _, failure := range []struct {
+			name string
+			path string
+			err  error
+		}{
+			{name: "buffer too small", path: "/new/path", err: ErrTooSmall},
+			{name: "invalid segment", path: "/" + strings.Repeat("x", 256), err: ErrInvalidValueLength},
+		} {
+			t.Run(tt.name+"/"+failure.name, func(t *testing.T) {
+				opts := make(Options, 0, 8)
+				opts = append(opts, Option{ID: tt.id, Value: []byte("old")}, Option{ID: URIQuery, Value: []byte("key=value")})
+				want, err := opts.Clone()
+				require.NoError(t, err)
+				got, used, err := tt.set(opts, nil, failure.path)
+				require.ErrorIs(t, err, failure.err)
+				require.Equal(t, -1, used)
+				require.Equal(t, want, opts)
+				require.Equal(t, want, got)
+			})
+		}
+	}
+}
+
+func TestResetOptionsToFailurePreservesOptions(t *testing.T) {
+	options := make(Options, 0, 4)
+	options = append(options, Option{ID: URIPath, Value: []byte("old")}, Option{ID: URIQuery, Value: []byte("existing")})
+	before, err := options.Clone()
+	require.NoError(t, err)
+	input := Options{{ID: URIPath, Value: []byte("new")}, {ID: URIQuery, Value: []byte("long-value")}}
+	got, used, err := options.ResetOptionsTo(make([]byte, 3), input)
+	require.ErrorIs(t, err, ErrTooSmall)
+	require.Equal(t, 13, used)
+	require.Equal(t, before, options)
+	require.Equal(t, before, got)
+}
+
 func TestResetOptionsToManyOptionsWithSameID(t *testing.T) {
 	resetTime := func(count int) time.Duration {
 		in := make(Options, count, count+1)

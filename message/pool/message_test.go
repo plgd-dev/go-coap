@@ -15,10 +15,51 @@ import (
 	"github.com/plgd-dev/go-coap/v3/message/pool"
 	"github.com/plgd-dev/go-coap/v3/tcp/coder"
 	"github.com/plgd-dev/go-coap/v3/test/net"
+	udpCoder "github.com/plgd-dev/go-coap/v3/udp/coder"
 	"github.com/stretchr/testify/require"
 )
 
 const testPathABC = "/a/b/c"
+
+func TestMessageSetPathAfterBufferGrowth(t *testing.T) {
+	longSegment := strings.Repeat("a", 130)
+	path := "/public/" + longSegment + "/original"
+	options := message.Options{
+		{ID: message.URIPath, Value: []byte(longSegment)},
+		{ID: message.URIPath, Value: []byte("original")},
+		{ID: message.URIQuery, Value: []byte("mode=safe")},
+		{ID: 64974, Value: []byte{}},
+	}
+	want := message.Options{
+		{ID: message.URIPath, Value: []byte("public")},
+		{ID: message.URIPath, Value: []byte(longSegment)},
+		{ID: message.URIPath, Value: []byte("original")},
+		{ID: message.URIQuery, Value: []byte("mode=safe")},
+		{ID: 64974, Value: []byte{}},
+	}
+	msg := pool.NewMessage(context.Background())
+	require.NoError(t, msg.SetupGet(path, message.Token{1}, options...))
+	require.Equal(t, want, msg.Options())
+	msg.SetType(message.Confirmable)
+	msg.SetMessageID(42)
+	for _, codec := range []struct {
+		name    string
+		encoder pool.Encoder
+		decoder pool.Decoder
+	}{
+		{name: "UDP", encoder: udpCoder.DefaultCoder, decoder: udpCoder.DefaultCoder},
+		{name: "TCP", encoder: coder.DefaultCoder, decoder: coder.DefaultCoder},
+	} {
+		t.Run(codec.name, func(t *testing.T) {
+			wire, err := msg.MarshalWithEncoder(codec.encoder)
+			require.NoError(t, err)
+			decoded := pool.NewMessage(context.Background())
+			_, err = decoded.UnmarshalWithDecoder(codec.decoder, wire)
+			require.NoError(t, err)
+			require.Equal(t, want, decoded.Options())
+		})
+	}
+}
 
 func TestMessageResetDropsLargeOptionsTable(t *testing.T) {
 	msg := pool.NewMessage(context.Background())

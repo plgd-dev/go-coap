@@ -44,7 +44,6 @@ func setPath(options Options, optionID OptionID, buf []byte, path string) (Optio
 	if len(path) == 0 {
 		return options, 0, nil
 	}
-	o := options.Remove(optionID)
 	if path[0] == '/' {
 		path = path[1:]
 	}
@@ -55,6 +54,7 @@ func setPath(options Options, optionID OptionID, buf []byte, path string) (Optio
 	if requiredSize > len(buf) {
 		return options, -1, ErrTooSmall
 	}
+	o := options.Remove(optionID)
 	encoded := 0
 	for start := 0; start < len(path); {
 		subPath := path[start:]
@@ -82,6 +82,7 @@ func setPath(options Options, optionID OptionID, buf []byte, path string) (Optio
 // SetPath splits path by '/' to URIPath options and copies it to buffer.
 //
 // Returns modified options, number of used buf bytes and error if occurs.
+// On error, the original options remain unchanged.
 //
 // @note the url encoded into URIHost, URIPort, URIPath is expected to be
 // absolute (https://www.rfc-editor.org/rfc/rfc7252.txt)
@@ -92,6 +93,7 @@ func (options Options) SetPath(buf []byte, path string) (Options, int, error) {
 // SetLocationPath splits path by '/' to LocationPath options and copies it to buffer.
 //
 // Returns modified options, number of used buf bytes and error if occurs.
+// On error, the original options remain unchanged.
 //
 // @note the url encoded into LocationPath is expected to be
 // absolute (https://www.rfc-editor.org/rfc/rfc7252.txt)
@@ -607,16 +609,19 @@ func (options *Options) Unmarshal(data []byte, optionDefs map[OptionID]OptionDef
 // ResetOptionsTo resets options to in options.
 //
 // Returns modified options, number of used buf bytes and error if occurs.
+// If the buffer is too small, the original options remain unchanged and the
+// returned byte count is the size required for the input values.
 func (options Options) ResetOptionsTo(buf []byte, in Options) (Options, int, error) {
+	required := 0
+	for _, o := range in {
+		required += len(o.Value)
+	}
+	if required > len(buf) {
+		return options, required, ErrTooSmall
+	}
 	opts := options[:0]
 	used := 0
-	for idx, o := range in {
-		if len(buf) < len(o.Value) {
-			for i := idx; i < len(in); i++ {
-				used += len(in[i].Value)
-			}
-			return options, used, ErrTooSmall
-		}
+	for _, o := range in {
 		copy(buf, o.Value)
 		used += len(o.Value)
 		opts = opts.Add(Option{
