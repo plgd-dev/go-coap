@@ -626,7 +626,9 @@ func (o PeriodicRunnerOpt) DTLSServerApply(cfg *dtlsServer.Config) {
 	cfg.PeriodicRunner = o.periodicRunner
 }
 
-// WithPeriodicRunner set function which is executed in every ticks.
+// WithPeriodicRunner sets the runner used for periodic connection maintenance.
+// UDP server cache expiry and retransmissions depend on this runner, even
+// while the peer is sending traffic.
 func WithPeriodicRunner(periodicRunner periodic.Func) PeriodicRunnerOpt {
 	return PeriodicRunnerOpt{periodicRunner: periodicRunner}
 }

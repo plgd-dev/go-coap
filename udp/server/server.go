@@ -573,9 +573,9 @@ func (s *Server) getConn(l *coapNet.UDPConn, raddr *net.UDPAddr, laddr *net.UDPA
 			s.cfg.OnNewConn(cc)
 		}
 	} else {
-		// check if client is not expired now + 10ms  - if so, close it
-		// 10ms - The expected maximum time taken by cc.CheckExpirations and cc.InactivityMonitor().Notify()
-		cc.CheckExpirations(time.Now().Add(10 * time.Millisecond))
+		// Check inactivity before refreshing it; cache and retransmission expiry
+		// are handled by the periodic runner instead of the packet read loop.
+		cc.InactivityMonitor().CheckInactivity(time.Now().Add(10*time.Millisecond), cc)
 		if cc.Context().Err() == nil {
 			// if client is not closed, extend expiration time
 			cc.InactivityMonitor().Notify()
