@@ -459,6 +459,7 @@ func WithResponseMessageCache(cache MessageCache) Option {
 // WithMessageIDCounter shares the outgoing message ID sequence with other
 // connections. Incoming peer message IDs do not change this sequence.
 // The caller must initialize the counter before passing it to this option.
+// The counter type is sync/atomic.Uint32 from the Go standard library.
 // When supplied, Config.GetMID is not used to initialize the connection.
 func WithMessageIDCounter(counter *atomic.Uint32) Option {
 	return func(opts *ConnOptions) {

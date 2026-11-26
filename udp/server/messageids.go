@@ -2,14 +2,22 @@ package server
 
 import (
 	"container/list"
+	"errors"
+	"time"
 
 	"github.com/plgd-dev/go-coap/v3/pkg/sync/atomic"
+	"github.com/plgd-dev/go-coap/v3/udp/client"
 )
+
+// ErrEndpointMessageIDsFull means that no endpoint sequence can be safely evicted.
+var ErrEndpointMessageIDsFull = errors.New("endpoint message ID cache is full")
 
 type endpointMessageID struct {
 	endpoint string
 	counter  *atomic.Uint32
 	element  *list.Element
+	users    int
+	expires  time.Time
 }
 
 // Access is serialized by Server.connsMutex.
@@ -27,21 +35,38 @@ func newEndpointMessageIDs(limit uint32) *endpointMessageIDs {
 	}
 }
 
-func (m *endpointMessageIDs) get(endpoint string, initial func() uint32) *atomic.Uint32 {
+func (m *endpointMessageIDs) acquire(endpoint string, initial func() uint32, now time.Time) (*atomic.Uint32, error) {
 	if entry := m.entries[endpoint]; entry != nil {
-		m.order.MoveToFront(entry.element)
-		return entry.counter
+		if entry.element != nil {
+			delete(m.byOrder, entry.element)
+			m.order.Remove(entry.element)
+			entry.element = nil
+		}
+		entry.users++
+		return entry.counter, nil
 	}
-	if m.limit > 0 && int64(m.order.Len()) >= int64(m.limit) {
-		oldest := m.order.Back()
-		delete(m.entries, m.byOrder[oldest].endpoint)
+	if m.limit > 0 && int64(len(m.entries)) >= int64(m.limit) {
+		oldest := m.order.Front()
+		if oldest == nil || now.Before(m.byOrder[oldest].expires) {
+			return nil, ErrEndpointMessageIDsFull
+		}
+		entry := m.byOrder[oldest]
+		delete(m.entries, entry.endpoint)
 		delete(m.byOrder, oldest)
 		m.order.Remove(oldest)
 	}
 	counter := atomic.NewUint32(initial())
-	entry := &endpointMessageID{endpoint: endpoint, counter: counter}
-	entry.element = m.order.PushFront(nil)
+	entry := &endpointMessageID{endpoint: endpoint, counter: counter, users: 1}
 	m.entries[endpoint] = entry
-	m.byOrder[entry.element] = entry
-	return counter
+	return counter, nil
+}
+
+func (m *endpointMessageIDs) release(endpoint string, now time.Time) {
+	entry := m.entries[endpoint]
+	entry.users--
+	if entry.users == 0 {
+		entry.expires = now.Add(client.ExchangeLifetime)
+		entry.element = m.order.PushBack(nil)
+		m.byOrder[entry.element] = entry
+	}
 }

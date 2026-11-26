@@ -109,8 +109,13 @@ func (o MaxEndpointMessageIDsOpt) UDPServerApply(cfg *udpServer.Config) {
 
 // WithMaxEndpointMessageIDs limits the number of remote peers whose outgoing
 // Message ID sequences a UDP server retains (default: 4096). Zero means
-// unlimited, which may cause unbounded memory growth. Evicted peers restart at
-// a random Message ID, so a collision within the exchange lifetime is possible.
+// unlimited, which may cause unbounded memory growth. Active peers and peers
+// whose last connection closed less than client.ExchangeLifetime ago are
+// retained. New peers are rejected if the limit is reached and no entry can be
+// evicted. This does not prevent reuse after MID wraparound, when IDs are
+// assigned by callers, or across process restarts.
+// Plain UDP peers are unauthenticated: spoofed addresses can exhaust the cache
+// and prevent new peers from connecting; an unlimited cache can exhaust memory.
 func WithMaxEndpointMessageIDs(maxEntries uint32) MaxEndpointMessageIDsOpt {
 	return MaxEndpointMessageIDsOpt{maxEntries: maxEntries}
 }

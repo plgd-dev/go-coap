@@ -70,8 +70,7 @@ type Config struct {
 	CreateInactivityMonitor udpClient.CreateInactivityMonitorFunc
 	// GetMID contributes to the initial message ID for a newly tracked peer.
 	// A random offset is added; subsequent connections reuse the peer's counter
-	// while it remains in the server's endpoint cache. Evicted peers restart
-	// at a random ID, so a collision within the exchange lifetime is possible.
+	// while it remains in the server's endpoint cache.
 	GetMID                              GetMIDFunc
 	Handler                             HandlerFunc
 	OnNewConn                           OnNewConnFunc
@@ -85,7 +84,11 @@ type Config struct {
 	// Zero disables in-flight tracking.
 	MaxPendingMessages uint32
 	// MaxEndpointMessageIDs limits retained per-peer outgoing MID sequences.
-	// Zero means unlimited and may allow unbounded memory growth.
+	// Active peers and peers whose last connection closed less than
+	// client.ExchangeLifetime ago cannot be evicted. New peers are rejected
+	// when the cache is full and no entry can be evicted. Zero means unlimited
+	// and may allow unbounded memory growth.
+	// MID wraparound, caller-assigned IDs and process restarts are not tracked.
 	MaxEndpointMessageIDs uint32
 	// QBlockwiseMode is Disabled by default and supports plain UDP.
 	QBlockwiseMode   blockwise.QBlockwiseMode

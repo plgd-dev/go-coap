@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"sync"
 	"sync/atomic"
 
 	"github.com/plgd-dev/go-coap/v3/internal/onclose"
@@ -35,6 +36,7 @@ type Session struct {
 
 	closeSocket bool
 	errors      client.ErrorFunc
+	writeMu     sync.RWMutex
 }
 
 // NewSession creates a UDP session. Optional error handlers receive recoverable
@@ -98,10 +100,13 @@ func (s *Session) shutdown() {
 
 func (s *Session) Close() error {
 	s.cancel()
+	var err error
 	if s.closeSocket {
-		return s.connection.Close()
+		err = s.connection.Close()
 	}
-	return nil
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	return err
 }
 
 func (s *Session) Context() context.Context {
@@ -109,6 +114,11 @@ func (s *Session) Context() context.Context {
 }
 
 func (s *Session) WriteMessage(req *pool.Message) error {
+	s.writeMu.RLock()
+	defer s.writeMu.RUnlock()
+	if s.Context().Err() != nil {
+		return &netClient.RequestNotSentError{Err: net.ErrClosed}
+	}
 	data, err := req.MarshalWithEncoder(coder.DefaultCoder)
 	if err != nil {
 		return &netClient.RequestNotSentError{Err: fmt.Errorf("cannot marshal: %w", err)}
@@ -120,6 +130,11 @@ func (s *Session) WriteMessage(req *pool.Message) error {
 // By default it is sent over all network interfaces and all compatible source IP addresses with hop limit 1.
 // Via opts you can specify the network interface, source IP address, and hop limit.
 func (s *Session) WriteMulticastMessage(req *pool.Message, address *net.UDPAddr, opts ...coapNet.MulticastOption) error {
+	s.writeMu.RLock()
+	defer s.writeMu.RUnlock()
+	if s.Context().Err() != nil {
+		return net.ErrClosed
+	}
 	data, err := req.MarshalWithEncoder(coder.DefaultCoder)
 	if err != nil {
 		return fmt.Errorf("cannot marshal: %w", err)

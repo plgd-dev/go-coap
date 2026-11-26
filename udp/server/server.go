@@ -421,7 +421,15 @@ func getConnKey(raddr, laddr *net.UDPAddr) string {
 		normalizedLocalAddr.IP = nil
 		normalizedLocalAddr.Zone = ""
 	}
-	return raddr.String() + "-" + normalizedLocalAddr.String()
+	return getEndpointKey(raddr) + "-" + normalizedLocalAddr.String()
+}
+
+func getEndpointKey(addr *net.UDPAddr) string {
+	normalized := *addr
+	if normalized.IP.To4() != nil {
+		normalized.Zone = ""
+	}
+	return normalized.String()
 }
 
 func localAddrCanFallbackToWildcard(laddr *net.UDPAddr) bool {
@@ -441,14 +449,14 @@ func toWildcardLocalAddr(laddr *net.UDPAddr) *net.UDPAddr {
 	return &wildcard
 }
 
-func (s *Server) getOrCreateConn(udpConn *coapNet.UDPConn, raddr *net.UDPAddr, laddr *net.UDPAddr) (cc *client.Conn, created bool) {
+func (s *Server) getOrCreateConn(udpConn *coapNet.UDPConn, raddr *net.UDPAddr, laddr *net.UDPAddr) (cc *client.Conn, created bool, err error) {
 	s.connsMutex.Lock()
 	defer s.connsMutex.Unlock()
 	key := getConnKey(raddr, laddr)
 	cc = s.conns[key]
 
 	if cc != nil {
-		return cc, false
+		return cc, false, nil
 	}
 
 	// When a client connection is created via NewConn() on a wildcard-bound listener,
@@ -457,8 +465,16 @@ func (s *Server) getOrCreateConn(udpConn *coapNet.UDPConn, raddr *net.UDPAddr, l
 	// same conn instead of creating a second server-side conn.
 	if localAddrCanFallbackToWildcard(laddr) {
 		if cc = s.conns[getConnKey(raddr, toWildcardLocalAddr(laddr))]; cc != nil {
-			return cc, false
+			return cc, false, nil
 		}
+	}
+
+	endpoint := getEndpointKey(raddr)
+	counter, err := s.messageIDs.acquire(endpoint, func() uint32 {
+		return pkgMath.CastTo[uint32](s.cfg.GetMID() + message.RandMID() - 0xffff/2)
+	}, time.Now())
+	if err != nil {
+		return nil, false, fmt.Errorf("cannot track endpoint %s: %w", endpoint, err)
 	}
 
 	createBlockWise := func(*client.Conn) *blockwise.BlockWise[*client.Conn] {
@@ -533,9 +549,6 @@ func (s *Server) getOrCreateConn(udpConn *coapNet.UDPConn, raddr *net.UDPAddr, l
 	cfg.ReceivedMessageQueueSize = s.cfg.ReceivedMessageQueueSize
 
 	requestMonitor := s.cfg.RequestMonitor
-	counter := s.messageIDs.get(raddr.String(), func() uint32 {
-		return pkgMath.CastTo[uint32](s.cfg.GetMID() + message.RandMID() - 0xffff/2)
-	})
 	cc = client.NewConnWithOpts(
 		session,
 		&cfg,
@@ -553,12 +566,13 @@ func (s *Server) getOrCreateConn(udpConn *coapNet.UDPConn, raddr *net.UDPAddr, l
 	cc.AddOnClose(func() {
 		s.connsMutex.Lock()
 		defer s.connsMutex.Unlock()
+		s.messageIDs.release(endpoint, time.Now())
 		if cc == s.conns[key] {
 			delete(s.conns, key)
 		}
 	})
 	s.conns[key] = cc
-	return cc, true
+	return cc, true, nil
 }
 
 func (s *Server) getConn(l *coapNet.UDPConn, raddr *net.UDPAddr, laddr *net.UDPAddr, firstTime bool) (*client.Conn, bool, error) {
@@ -573,7 +587,10 @@ func (s *Server) getConn(l *coapNet.UDPConn, raddr *net.UDPAddr, laddr *net.UDPA
 		}
 	}
 
-	cc, created := s.getOrCreateConn(l, raddr, laddr)
+	cc, created, err := s.getOrCreateConn(l, raddr, laddr)
+	if err != nil {
+		return nil, false, err
+	}
 	if created {
 		if s.cfg.OnNewConn != nil {
 			s.cfg.OnNewConn(cc)

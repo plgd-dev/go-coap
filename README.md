@@ -65,6 +65,22 @@ session and calling `OnNewConn`. Plain TCP is unaffected. A sustained flood can
 still prevent slow handshakes from completing; large fleets may need a higher
 limit for simultaneous reconnects.
 
+## UDP server message IDs
+
+UDP servers retain outgoing message ID sequences per remote endpoint across
+connections. `options.WithMaxEndpointMessageIDs` sets the cache limit (4096 by
+default); zero removes the limit. Active endpoints and endpoints whose last
+connection closed less than `client.ExchangeLifetime` ago cannot be evicted.
+When the cache is full and no entry can be evicted, new endpoints are rejected;
+the error is returned by `NewConn` or reported through the server error handler
+for incoming datagrams.
+
+Plain UDP does not authenticate source addresses: spoofed endpoints can fill
+the cache and prevent new peers from connecting. An unlimited cache instead
+allows unbounded memory growth. Retention does not prevent reuse after 16-bit
+MID wraparound, when applications assign their own MIDs, or across server
+restarts. The endpoint cache applies to UDP servers, not DTLS servers.
+
 ## Experimental Q-Block transfers
 
 Q-Block is opt-in for UDP/DTLS; existing blockwise defaults are unchanged.

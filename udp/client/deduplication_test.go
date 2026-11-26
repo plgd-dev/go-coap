@@ -2,6 +2,7 @@ package client
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -15,6 +16,36 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+type failingResponseCache struct {
+	MessageCache
+	err error
+}
+
+func (c failingResponseCache) Load(_ string, _ *pool.Message) (bool, error) {
+	return false, c.err
+}
+
+func TestResponseCacheOnlyLooksUpPeerInitiatedMessages(t *testing.T) {
+	cacheErr := errors.New("cache read failed")
+	cc := &Conn{responseMsgCache: failingResponseCache{MessageCache: newMessageCache(), err: cacheErr}}
+	req := pool.NewMessage(context.Background())
+	resp := pool.NewMessage(context.Background())
+	w := responsewriter.New(resp, cc)
+	for _, typ := range []message.Type{message.Confirmable, message.NonConfirmable, message.Acknowledgement, message.Reset} {
+		t.Run(typ.String(), func(t *testing.T) {
+			req.SetType(typ)
+			req.SetMessageID(42)
+			hit, err := cc.checkResponseCache(req, w)
+			require.False(t, hit)
+			if typ == message.Confirmable || typ == message.NonConfirmable {
+				require.ErrorIs(t, err, cacheErr)
+			} else {
+				require.NoError(t, err)
+			}
+		})
+	}
+}
 
 func pendingMessageCount(cc *Conn) int {
 	cc.pendingMessagesMutex.Lock()
