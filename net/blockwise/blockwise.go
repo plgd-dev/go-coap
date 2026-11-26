@@ -708,6 +708,8 @@ func (b *BlockWise[C]) getSendingMessageCode(token uint64) (codes.Code, bool) {
 }
 
 // Handle middleware which constructs COAP request from blockwise transfer and send COAP response via blockwise.
+// For a reassembled Block1 request, the handler receives the completing block's
+// options. Applications must authorize the reassembled request in the handler.
 func (b *BlockWise[C]) Handle(w *responsewriter.ResponseWriter[C], r *pool.Message, maxSZX SZX, maxMessageSize uint32, remoteAddr net.Addr, next func(w *responsewriter.ResponseWriter[C], r *pool.Message)) {
 	if maxSZX > SZXBERT {
 		panic("invalid maxSZX")
@@ -1508,6 +1510,11 @@ func (b *BlockWise[C]) appendReceivedBlock(w *responsewriter.ResponseWriter[C], 
 		return b.sendReceivedBlockContinue(w, r, block, sentRequest, payloadSize)
 	}
 	b.receivingMessagesCache.Delete(block.exchangeKey)
+	if block.blockType == message.Block1 {
+		// Options excluded from the matching key can change between blocks.
+		// The handler must see those of the request that completes the transfer.
+		cachedReceivedMessage.ResetOptionsTo(r.Options())
+	}
 	cachedReceivedMessage.Remove(block.blockType)
 	cachedReceivedMessage.Remove(block.sizeType)
 	cachedReceivedMessage.SetType(r.Type())
