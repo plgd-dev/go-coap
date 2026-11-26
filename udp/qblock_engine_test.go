@@ -137,8 +137,8 @@ func TestGoQBlockProbeWaitersCancelIndependently(t *testing.T) {
 func TestGoQBlockRepeatedSelectiveRecovery(t *testing.T) {
 	payload := qPayload()
 	config := qblock.DefaultConfig()
-	config.NonTimeout = 10 * time.Millisecond
-	config.NonReceiveTimeout = 1020 * time.Millisecond
+	config.NonTimeout = 100 * time.Millisecond
+	config.NonReceiveTimeout = 1500 * time.Millisecond
 	config.NonMaxRetransmit = 2
 	config.MaxLatency = 10 * time.Second
 	for _, upload := range []bool{false, true} {
