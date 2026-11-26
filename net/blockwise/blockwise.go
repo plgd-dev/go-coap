@@ -659,7 +659,7 @@ func (b *BlockWise[C]) WriteMessage(request *pool.Message, maxSZX SZX, maxMessag
 	}
 
 	if isObserveResponse(request) && remoteAddr != nil {
-		b.invalidateObservationTransfers(remoteAddr.String())
+		b.invalidateObservationTransfers(remoteAddr.String(), nil, true)
 	}
 	w := newWriteRequestResponse(b.cc, request)
 	err = b.startSendingMessage(w, maxSZX, maxMessageSize, startSendingMessageBlock, exchangeKey, sendingMatch{})
@@ -669,17 +669,16 @@ func (b *BlockWise[C]) WriteMessage(request *pool.Message, maxSZX SZX, maxMessag
 	return writeMessage(w.Message())
 }
 
-// invalidateObservationTransfers is called when a notification announces a new representation
-// (RFC 7641 §4.2). Continuations of notifications (RFC 7959 §2.6, §3.4) must not be
-// resumed from an older GET or FETCH response: transfers keyed by the request itself
-// (tokenless) are dropped, others are only kept for continuations with their own token.
-func (b *BlockWise[C]) invalidateObservationTransfers(endpoint string) {
+// invalidateObservationTransfers invalidates cached transfers for an endpoint. When
+// matchingKey is non-nil, only transfers for that request identity are invalidated.
+func (b *BlockWise[C]) invalidateObservationTransfers(endpoint string, matchingKey *uint64, includeFETCH bool) {
 	var drop []uint64
 	b.sendingMessagesCache.Range(func(key uint64, element *cache.Element[*sendingMessage]) bool {
 		sending := element.Data()
 		sending.mutex.Lock()
-		if (sending.requestCode == codes.GET || sending.requestCode == codes.FETCH) &&
-			sending.endpoint == endpoint && sending.matchingKey != 0 {
+		if (sending.requestCode == codes.GET || (includeFETCH && sending.requestCode == codes.FETCH)) &&
+			sending.endpoint == endpoint && sending.matchingKey != 0 &&
+			(matchingKey == nil || sending.matchingKey == *matchingKey) {
 			if key == sending.matchingKey {
 				drop = append(drop, key)
 			}
@@ -884,6 +883,10 @@ func (b *BlockWise[C]) handleReceivedMessage(w *responsewriter.ResponseWriter[C]
 		}
 	}
 	match := getSendingMatch(r, w.Message(), receivedCode, remoteAddr)
+	if receivedCode == codes.GET && isObserveResponse(w.Message()) && match.endpoint != "" {
+		matchingKey := getRequestMatchingKeyWithObserve(r, remoteAddr, false)
+		b.invalidateObservationTransfers(match.endpoint, &matchingKey, false)
+	}
 	if err = b.startSendingMessage(w, maxSZX, maxMessageSize, startSendingMessageBlock, exchangeKey, match); err != nil {
 		return err
 	}

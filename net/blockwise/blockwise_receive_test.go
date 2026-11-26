@@ -2,6 +2,7 @@ package blockwise
 
 import (
 	"bytes"
+	"fmt"
 	"net"
 	"testing"
 	"time"
@@ -1019,6 +1020,20 @@ func TestBlockWiseFetchObserveResponseBlock2(t *testing.T) {
 	require.True(t, more)
 	require.Equal(t, responseBody[:SZX128.Size()], got.body)
 
+	registration := cc.AcquireMessage(t.Context())
+	registration.SetCode(codes.GET)
+	registration.SetToken(message.Token{0x80})
+	registration.SetObserve(0)
+	require.NoError(t, registration.SetPath("/other"))
+	w := responsewriter.New(cc.AcquireMessage(t.Context()), cc)
+	bw.Handle(w, registration, SZX128, 1024, remote, func(w *responsewriter.ResponseWriter[*testClient], _ *pool.Message) {
+		require.NoError(t, w.SetResponse(codes.Content, message.TextPlain, bytes.NewReader([]byte("observed"))))
+		w.Message().SetObserve(0)
+	})
+	require.Equal(t, codes.Content, w.Message().Code())
+	cc.ReleaseMessage(w.Message())
+	cc.ReleaseMessage(registration)
+
 	var assembled []byte
 	assembled = append(assembled, got.body...)
 	for blockNum := int64(1); ; blockNum++ {
@@ -1036,6 +1051,59 @@ func TestBlockWiseFetchObserveResponseBlock2(t *testing.T) {
 	}
 	require.Equal(t, responseBody, assembled)
 	require.Equal(t, 1, handlerCalls, "Block2 continuations must use the cached FETCH Observe representation")
+}
+
+func TestObserveRegistrationDoesNotInvalidateDifferentResourceBlock2Transfer(t *testing.T) {
+	r := newBlock1Receiver(t, time.Minute)
+	const responseSize = 3 * testBlock1Size
+	version := byte('A')
+	handlerCalls := 0
+	handler := func(w *responsewriter.ResponseWriter[*testClient], req *pool.Message) {
+		if req.HasOption(message.Observe) {
+			require.NoError(t, w.SetResponse(codes.Content, message.TextPlain, bytes.NewReader([]byte("observed"))))
+			w.Message().SetObserve(0)
+			return
+		}
+		handlerCalls++
+		body := bytes.Repeat([]byte{version}, responseSize)
+		require.NoError(t, w.SetResponse(codes.Content, message.TextPlain, bytes.NewReader(body)))
+	}
+	send := func(path string, token message.Token, blockNum *int64, observe bool) []byte {
+		t.Helper()
+		req := r.cc.AcquireMessage(t.Context())
+		defer r.cc.ReleaseMessage(req)
+		req.SetCode(codes.GET)
+		req.SetToken(token)
+		require.NoError(t, req.SetPath(path))
+		if blockNum != nil {
+			block, err := EncodeBlockOption(SZX1024, *blockNum, false)
+			require.NoError(t, err)
+			req.SetOptionUint32(message.Block2, block)
+		}
+		if observe {
+			req.SetObserve(0)
+		}
+
+		w := responsewriter.New(r.cc.AcquireMessage(t.Context()), r.cc)
+		defer func() { r.cc.ReleaseMessage(w.Message()) }()
+		r.bw.Handle(w, req, SZX1024, 64*1024, r.remote, handler)
+		require.Equal(t, codes.Content, w.Message().Code())
+		body, err := w.Message().ReadBody()
+		require.NoError(t, err)
+		return body
+	}
+
+	require.Equal(t, bytes.Repeat([]byte{'A'}, testBlock1Size),
+		send("/a", message.Token{0x01}, nil, false))
+
+	version = 'B'
+	require.Equal(t, []byte("observed"),
+		send("/b", message.Token{0x10}, nil, true))
+
+	blockNum := int64(1)
+	require.Equal(t, bytes.Repeat([]byte{'A'}, testBlock1Size),
+		send("/a", message.Token{0x02}, &blockNum, false))
+	require.Equal(t, 1, handlerCalls, "the /a continuation must use its cached representation")
 }
 
 func TestGetRequestMatchingKey(t *testing.T) {
@@ -1084,6 +1152,10 @@ func TestGetRequestMatchingKey(t *testing.T) {
 }
 
 func (b *block1Receiver) get(token message.Token, block2 *uint32, h func(*responsewriter.ResponseWriter[*testClient], *pool.Message)) block1Block2Exchange {
+	return b.getWithObserve(token, block2, false, h)
+}
+
+func (b *block1Receiver) getWithObserve(token message.Token, block2 *uint32, observe bool, h func(*responsewriter.ResponseWriter[*testClient], *pool.Message)) block1Block2Exchange {
 	req := b.cc.AcquireMessage(b.t.Context())
 	defer b.cc.ReleaseMessage(req)
 	req.SetCode(codes.GET)
@@ -1092,6 +1164,9 @@ func (b *block1Receiver) get(token message.Token, block2 *uint32, h func(*respon
 	require.NoError(b.t, req.SetPath("/big"))
 	if block2 != nil {
 		req.SetOptionUint32(message.Block2, *block2)
+	}
+	if observe {
+		req.SetObserve(0)
 	}
 	respMsg := b.cc.AcquireMessage(b.t.Context())
 	respMsg.SetToken(token)
@@ -1227,6 +1302,32 @@ func TestBlockWiseReceiveGetBlock2ChangingToken(t *testing.T) {
 		require.Equal(t, newRepresentation(2)[testBlock1Size:2*testBlock1Size], resp.payload)
 		require.Equal(t, 2, s.calls)
 	})
+
+	for _, tokenless := range []bool{false, true} {
+		t.Run(fmt.Sprintf("registration invalidates continuation/tokenless=%t", tokenless), func(t *testing.T) {
+			s := newServer(t)
+			oldToken := message.Token{0x01}
+			continuationToken := message.Token{0x02}
+			if tokenless {
+				oldToken = nil
+				continuationToken = nil
+			}
+			s.r.get(oldToken, nil, s.h)
+			s.version = 2
+			registration := s.r.getWithObserve(message.Token{0x10}, nil, true, func(w *responsewriter.ResponseWriter[*testClient], req *pool.Message) {
+				s.h(w, req)
+				w.Message().SetObserve(0)
+			})
+			require.Equal(t, newRepresentation(2)[:testBlock1Size], registration.payload)
+			resp := s.r.get(continuationToken, encode(1), s.h)
+			require.Equal(t, newRepresentation(2)[testBlock1Size:2*testBlock1Size], resp.payload)
+			require.Equal(t, 3, s.calls)
+			if !tokenless {
+				resp = s.r.get(oldToken, encode(1), s.h)
+				require.Equal(t, newRepresentation(1)[testBlock1Size:2*testBlock1Size], resp.payload)
+			}
+		})
+	}
 }
 
 // TestBlockWiseReceivePostBlock2ZeroIsNewRequest checks that a POST with a new token and
