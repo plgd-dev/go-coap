@@ -823,7 +823,8 @@ func (cc *Conn) SetTCPSignalReceivedHandler(handler TCPSignalReceivedHandler) {
 	cc.tcpSignalReceivedHandler = handler
 }
 
-// AddOnClose calls function on close connection event.
+// AddOnClose calls f when connection processing ends. If shutdown has already
+// started, f is called immediately.
 func (cc *Conn) AddOnClose(f EventFunc) {
 	cc.session.AddOnClose(f)
 }
