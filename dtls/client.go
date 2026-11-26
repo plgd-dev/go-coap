@@ -24,6 +24,10 @@ import (
 var DefaultConfig = func() udpClient.Config {
 	cfg := udpClient.DefaultConfig
 	cfg.Handler = func(w *responsewriter.ResponseWriter[*udpClient.Conn], r *pool.Message) {
+		if r.Type() == message.Confirmable && r.Code() >= 64 && r.Code() < 192 {
+			w.Message().SetType(message.Reset)
+			return
+		}
 		switch r.Code() {
 		case codes.GET, codes.POST, codes.PUT, codes.DELETE, codes.FETCH, codes.PATCH, codes.IPATCH:
 			if err := w.SetResponse(codes.NotFound, message.TextPlain, nil); err != nil {

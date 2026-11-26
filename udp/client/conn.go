@@ -1548,13 +1548,23 @@ func (cc *Conn) processResponse(
 ) error {
 	switch {
 	case isPongOrResetResponse(w):
+		if w.Message().Type() == message.Reset {
+			if reqType != message.Confirmable && reqType != message.NonConfirmable {
+				w.Message().SetModified(false)
+				return nil
+			}
+			w.Message().SetCode(codes.Empty)
+			w.Message().SetToken(nil)
+			w.Message().ResetOptionsTo(nil)
+			w.Message().SetBody(nil)
+			w.Message().SetMessageID(reqMessageID)
+			return nil
+		}
 		if reqType == message.Confirmable {
 			w.Message().SetType(message.Acknowledgement)
 			w.Message().SetMessageID(reqMessageID)
 		} else {
-			if w.Message().Type() != message.Reset {
-				w.Message().SetType(message.NonConfirmable)
-			}
+			w.Message().SetType(message.NonConfirmable)
 			w.Message().SetMessageID(cc.GetMessageID())
 		}
 		return nil
@@ -1805,6 +1815,10 @@ func (cc *Conn) handleSpecialMessages(r *pool.Message) bool {
 		// we just confirmed that message was processed for cc.writeMessage
 		// the body of the message is need to be processed by the loopOverReceivedMessageQueue goroutine
 		return false
+	}
+	if r.Type() == message.Reset && r.Code() == codes.Empty {
+		cc.ReleaseMessage(r)
+		return true
 	}
 	// separate message
 	if r.IsSeparateMessage() {

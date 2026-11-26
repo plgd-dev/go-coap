@@ -233,6 +233,10 @@ See [examples/options/server/](examples/options/server/) and [examples/options/c
 
 [Client](examples/observe/client/main.go) example.
 
+On UDP and DTLS, the default handlers reject unclaimed Confirmable responses,
+including notifications for unknown tokens, with an empty Reset. Custom handlers
+can handle unsolicited responses themselves.
+
 ### Multicast
 
 [Server](examples/mcast/server/main.go) example.
