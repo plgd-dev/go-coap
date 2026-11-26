@@ -172,6 +172,7 @@ type sendingMessage struct {
 	// matchingKey allows a Block2 continuation with a changed token to resume the
 	// transfer (RFC 9175 §3.3), 0 disables it.
 	matchingKey uint64
+	completed   bool
 	requestCode codes.Code
 	endpoint    string
 }
@@ -475,6 +476,45 @@ func isBlock2Continuation(r *pool.Message) bool {
 	return err == nil && num > 0
 }
 
+func isInitialBlockRequest(r *pool.Message) bool {
+	if !isRequestCode(r.Code()) {
+		return false
+	}
+	for _, option := range []message.OptionID{message.Block1, message.Block2} {
+		block, err := r.GetOptionUint32(option)
+		if errors.Is(err, message.ErrOptionNotFound) {
+			continue
+		}
+		if err != nil {
+			return false
+		}
+		_, num, _, err := DecodeBlockOption(block)
+		if err != nil || num != 0 {
+			return false
+		}
+	}
+	return true
+}
+
+func (b *BlockWise[C]) removeCompletedResponseForInitialRequest(r *pool.Message, exchangeKey uint64) {
+	if !isInitialBlockRequest(r) {
+		return
+	}
+	element := b.sendingMessagesCache.Load(exchangeKey)
+	if element == nil {
+		return
+	}
+	sending := element.Data()
+	sending.mutex.Lock()
+	defer sending.mutex.Unlock()
+	if !sending.completed {
+		return
+	}
+	b.sendingMessagesCache.ReplaceWithFunc(exchangeKey, func(current *cache.Element[*sendingMessage], loaded bool) (*cache.Element[*sendingMessage], bool) {
+		return current, !loaded || current == element
+	})
+}
+
 // mayResumeBlock2 reports whether r can continue a stored Block2 response.
 // An Observe request with Block2 num 0 starts a new transfer.
 func mayResumeBlock2(r *pool.Message) bool {
@@ -753,6 +793,7 @@ func (b *BlockWise[C]) Handle(w *responsewriter.ResponseWriter[C], r *pool.Messa
 		return
 	}
 	requestExchangeKey := exchangeKey
+	b.removeCompletedResponseForInitialRequest(r, exchangeKey)
 	exchangeKey, err = b.resolveBlock2ExchangeKey(r, remoteAddr, exchangeKey)
 	if err != nil {
 		b.sendEntityIncomplete(w, token)
@@ -783,6 +824,7 @@ func (b *BlockWise[C]) Handle(w *responsewriter.ResponseWriter[C], r *pool.Messa
 			sending := element.Data()
 			sending.mutex.Lock()
 			sending.matchingKey = 0
+			sending.completed = true
 			sending.mutex.Unlock()
 		} else {
 			b.sendingMessagesCache.ReplaceWithFunc(exchangeKey, func(current *cache.Element[*sendingMessage], loaded bool) (*cache.Element[*sendingMessage], bool) {

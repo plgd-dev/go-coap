@@ -2,6 +2,7 @@ package blockwise
 
 import (
 	"bytes"
+	"fmt"
 	"testing"
 	"time"
 
@@ -92,6 +93,100 @@ func TestBlock2ContinuationCannotEndAnotherTransfer(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestBlock2CompletedTransferAllowsNewRequestWithOriginalToken(t *testing.T) {
+	for _, method := range []codes.Code{codes.GET, codes.POST, codes.PUT, codes.FETCH, codes.PATCH, codes.IPATCH} {
+		for _, useBlock2 := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/block2=%t", method, useBlock2), func(t *testing.T) {
+				r := newBlock1Receiver(t, time.Minute)
+				var reported []error
+				r.bw.errors = func(err error) { reported = append(reported, err) }
+				calls := 0
+				payload := func(version byte) []byte {
+					return bytes.Repeat([]byte{version}, 2*testBlock1Size+100)
+				}
+				handler := func(w *responsewriter.ResponseWriter[*testClient], _ *pool.Message) {
+					calls++
+					require.NoError(t, w.SetResponse(codes.Content, message.TextPlain, bytes.NewReader(payload(byte(calls)))))
+				}
+				send := func(token message.Token, block *uint32) block1Block2Exchange {
+					req := r.cc.AcquireMessage(t.Context())
+					defer r.cc.ReleaseMessage(req)
+					req.SetCode(method)
+					req.SetToken(token)
+					require.NoError(t, req.SetPath("/big"))
+					if block != nil {
+						req.SetOptionUint32(message.Block2, *block)
+					}
+					if method != codes.GET && !isBlock2Continuation(req) {
+						req.SetBody(bytes.NewReader([]byte("query")))
+					}
+					respMsg := r.cc.AcquireMessage(t.Context())
+					respMsg.SetToken(token)
+					w := responsewriter.New(respMsg, r.cc)
+					defer func() { r.cc.ReleaseMessage(w.Message()) }()
+					r.bw.Handle(w, req, SZX1024, 64*1024, r.remote, handler)
+					body, err := w.Message().ReadBody()
+					require.NoError(t, err)
+					return block1Block2Exchange{code: w.Message().Code(), token: w.Message().Token(), payload: body}
+				}
+				block := func(num int64) *uint32 {
+					v, err := EncodeBlockOption(SZX1024, num, false)
+					require.NoError(t, err)
+					return &v
+				}
+				original := message.Token{1}
+				require.Equal(t, payload(1)[:testBlock1Size], send(original, nil).payload)
+				require.Equal(t, payload(1)[2*testBlock1Size:], send(message.Token{2}, block(2)).payload)
+				require.Equal(t, payload(1)[testBlock1Size:2*testBlock1Size], send(original, block(1)).payload)
+				require.Equal(t, 1, calls)
+
+				var initialBlock *uint32
+				if useBlock2 {
+					initialBlock = block(0)
+				}
+				fresh := send(original, initialBlock)
+				require.Equal(t, codes.Content, fresh.code)
+				require.Equal(t, payload(2)[:testBlock1Size], fresh.payload)
+				require.Equal(t, 2, calls)
+				next := send(original, block(1))
+				require.Equal(t, payload(2)[testBlock1Size:2*testBlock1Size], next.payload)
+				require.Empty(t, reported)
+			})
+		}
+	}
+}
+
+func TestBlock2CompletedTransferAllowsNewBlock1Request(t *testing.T) {
+	r := newBlock1Receiver(t, time.Minute)
+	var reported []error
+	r.bw.errors = func(err error) { reported = append(reported, err) }
+	calls := 0
+	handler := func(w *responsewriter.ResponseWriter[*testClient], _ *pool.Message) {
+		calls++
+		body := bytes.Repeat([]byte{byte(calls)}, 2*testBlock1Size+100)
+		require.NoError(t, w.SetResponse(codes.Content, message.TextPlain, bytes.NewReader(body)))
+	}
+	block := func(num int64, more bool) *uint32 {
+		v, err := EncodeBlockOption(SZX1024, num, more)
+		require.NoError(t, err)
+		return &v
+	}
+	token := message.Token{1}
+	first := r.post(token, nil, nil, []byte("first"), handler)
+	require.Equal(t, codes.Content, first.code)
+	complete := r.post(message.Token{2}, nil, block(2, false), nil, handler)
+	require.Equal(t, codes.Content, complete.code)
+	require.Equal(t, 1, calls)
+
+	part := r.post(token, block(0, true), nil, bytes.Repeat([]byte{1}, testBlock1Size), handler)
+	require.Equal(t, codes.Continue, part.code)
+	last := r.post(token, block(1, false), nil, []byte("last"), handler)
+	require.Equal(t, codes.Content, last.code)
+	require.Equal(t, bytes.Repeat([]byte{2}, testBlock1Size), last.payload)
+	require.Equal(t, 2, calls)
+	require.Empty(t, reported)
 }
 
 func TestBlockWisePostBlock1Block2RequestTagSeparatesTransfers(t *testing.T) {
