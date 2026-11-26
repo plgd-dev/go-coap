@@ -456,7 +456,8 @@ func WithResponseMessageCache(cache MessageCache) Option {
 	}
 }
 
-// WithMessageIDCounter shares the message ID sequence with other connections.
+// WithMessageIDCounter shares the outgoing message ID sequence with other
+// connections. Incoming peer message IDs do not change this sequence.
 // The caller must initialize the counter before passing it to this option.
 // When supplied, Config.GetMID is not used to initialize the connection.
 func WithMessageIDCounter(counter *atomic.Uint32) Option {
@@ -639,6 +640,12 @@ func (cc *Conn) GetMessageID() int32 {
 		message.GetMID()
 	}
 	return int32(pkgMath.CastTo[uint16](cc.msgID.Add(1)))
+}
+
+func (cc *Conn) upsertMessageID(msg *pool.Message) {
+	if !message.ValidateMID(msg.MessageID()) {
+		msg.SetMessageID(cc.GetMessageID())
+	}
 }
 
 // Close closes connection without waiting for the end of the Run function.
@@ -1018,7 +1025,7 @@ func (cc *Conn) prepareWriteMessage(req *pool.Message, handler HandlerFunc, wait
 
 func (cc *Conn) writeMessageAsync(req *pool.Message) error {
 	req.UpsertType(message.Confirmable)
-	req.UpsertMessageID(cc.GetMessageID())
+	cc.upsertMessageID(req)
 	if err := cc.rememberQNotification(req); err != nil {
 		return err
 	}
@@ -1046,7 +1053,7 @@ func (cc *Conn) writeMessageAsync(req *pool.Message) error {
 
 func (cc *Conn) writeMessage(req *pool.Message) error {
 	req.UpsertType(message.Confirmable)
-	req.UpsertMessageID(cc.GetMessageID())
+	cc.upsertMessageID(req)
 	cc.upsertControlInformation(req)
 
 	if req.Type() != message.Confirmable {
@@ -1511,7 +1518,8 @@ func (cc *Conn) Sequence() uint64 {
 	return cc.sequence.Add(1)
 }
 
-// getResponseFromCache gets a message from the response message cache.
+// getResponseFromCache uses the peer's message ID, independent of the outgoing
+// sequence. ACK and Reset messages are matched separately by outgoing ID.
 func (cc *Conn) getResponseFromCache(mid int32, resp *pool.Message) (bool, error) {
 	return cc.responseMsgCache.Load(strconv.Itoa(int(mid)), resp)
 }
@@ -1519,23 +1527,6 @@ func (cc *Conn) getResponseFromCache(mid int32, resp *pool.Message) (bool, error
 // addResponseToCache adds a message to the response message cache under the request's message ID.
 func (cc *Conn) addResponseToCache(reqMessageID int32, resp *pool.Message) error {
 	return cc.responseMsgCache.Store(strconv.Itoa(int(reqMessageID)), resp)
-}
-
-// checkMyMessageID compare client msgID against peer messageID and if it is near < 0xffff/4 then increase msgID.
-// When msgIDs met it can cause issue because cache can send message to which doesn't bellows to request.
-func (cc *Conn) checkMyMessageID(req *pool.Message) {
-	if req.Type() == message.Confirmable {
-		for {
-			oldID := cc.msgID.Load()
-			if pkgMath.CastTo[uint16](req.MessageID())-pkgMath.CastTo[uint16](cc.msgID.Load()) >= 0xffff/4 {
-				return
-			}
-			newID := oldID + 0xffff/2
-			if cc.msgID.CompareAndSwap(oldID, newID) {
-				break
-			}
-		}
-	}
 }
 
 func (cc *Conn) checkResponseCache(req *pool.Message, w *responsewriter.ResponseWriter[*Conn]) (bool, error) {
@@ -1610,11 +1601,12 @@ func (cc *Conn) processResponse(
 	}
 
 	// send piggybacked response
-	w.Message().SetType(message.Confirmable)
-	w.Message().SetMessageID(cc.GetMessageID())
 	if reqType == message.Confirmable {
 		w.Message().SetType(message.Acknowledgement)
 		w.Message().SetMessageID(reqMessageID)
+	} else {
+		w.Message().SetType(message.Confirmable)
+		w.Message().SetMessageID(cc.GetMessageID())
 	}
 	if reqType == message.Confirmable || reqType == message.NonConfirmable {
 		return cc.cacheResponseIfRequested(cacheResponse, reqMessageID, "cannot cache response", w.Message())
@@ -1760,7 +1752,7 @@ func (cc *Conn) ProcessReceivedMessageWithHandler(req *pool.Message, handler con
 	}
 	if hasOSCORERequestContext(req) && shouldCacheResponse(reqType, w.Message()) {
 		w.Message().UpsertType(message.Confirmable)
-		w.Message().UpsertMessageID(cc.GetMessageID())
+		cc.upsertMessageID(w.Message())
 		if err := cc.addResponseToCache(reqMessageID, w.Message()); err != nil {
 			cc.closeConnection()
 			cc.errors(fmt.Errorf("cannot cache protected response: %w", err))
@@ -1941,7 +1933,6 @@ func (cc *Conn) Process(cm *coapNet.ControlMessage, datagram []byte) error {
 	if handled, processErr := cc.processUnknownCriticalOptions(req); handled {
 		return processErr
 	}
-	cc.checkMyMessageID(req)
 	drop, monitorErr := cc.requestMonitor(cc, req)
 	if monitorErr != nil {
 		cc.ReleaseMessage(req)
@@ -2366,7 +2357,7 @@ func (cc *Conn) WriteMulticastMessage(req *pool.Message, address *net.UDPAddr, o
 	if req.Type() == message.Confirmable {
 		return errors.New("multicast messages cannot be confirmable")
 	}
-	req.UpsertMessageID(cc.GetMessageID())
+	cc.upsertMessageID(req)
 
 	err := cc.session.WriteMulticastMessage(req, address, options...)
 	if err != nil {

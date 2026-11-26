@@ -27,6 +27,63 @@ func waitForNoPendingMessages(t *testing.T, cc *Conn) {
 	require.Eventually(t, func() bool { return pendingMessageCount(cc) == 0 }, time.Second, time.Millisecond)
 }
 
+func TestPeerMessageIDMatchesOutgoingID(t *testing.T) {
+	session := newRecordingSession()
+	defer func() { require.NoError(t, session.Close()) }()
+	completed := make(chan struct{}, 2)
+	var calls atomic.Int32
+	cfg := DefaultConfig
+	cfg.Errors = func(err error) { assert.NoError(t, err) }
+	cfg.Handler = func(w *responsewriter.ResponseWriter[*Conn], _ *pool.Message) {
+		calls.Add(1)
+		assert.NoError(t, w.SetResponse(codes.Content, message.TextPlain, nil))
+	}
+	cfg.ProcessReceivedMessage = func(req *pool.Message, cc *Conn, handler config.HandlerFunc[*Conn]) {
+		cc.ProcessReceivedMessageWithHandler(req, handler)
+		completed <- struct{}{}
+	}
+	cc := NewConnWithOpts(session, &cfg)
+	cc.msgID.Store(41)
+	pong := make(chan struct{}, 1)
+	cancel, err := cc.AsyncPing(func() { pong <- struct{}{} })
+	require.NoError(t, err)
+	defer cancel()
+	require.Equal(t, int32(42), session.lastWritten().MessageID())
+	req := cc.AcquireMessage(context.Background())
+	defer cc.ReleaseMessage(req)
+	req.SetType(message.Confirmable)
+	req.SetCode(codes.GET)
+	req.SetToken([]byte{1})
+	req.SetMessageID(42)
+	datagram, err := req.MarshalWithEncoder(coder.DefaultCoder)
+	require.NoError(t, err)
+	for range 2 {
+		require.NoError(t, cc.Process(nil, datagram))
+		select {
+		case <-completed:
+		case <-time.After(time.Second):
+			t.Fatal("request was not processed")
+		}
+		waitForNoPendingMessages(t, cc)
+	}
+	require.Equal(t, int32(1), calls.Load())
+	require.Equal(t, 3, session.writtenCount())
+	require.Equal(t, message.Acknowledgement, session.lastWritten().Type())
+	require.Equal(t, int32(42), session.lastWritten().MessageID())
+	req.SetType(message.Reset)
+	req.SetCode(codes.Empty)
+	req.SetToken(nil)
+	datagram, err = req.MarshalWithEncoder(coder.DefaultCoder)
+	require.NoError(t, err)
+	require.NoError(t, cc.Process(nil, datagram))
+	select {
+	case <-pong:
+	case <-time.After(time.Second):
+		t.Fatal("outgoing ping was not matched by its reset")
+	}
+	require.Equal(t, int32(43), cc.GetMessageID())
+}
+
 func TestConnDropsPendingDuplicates(t *testing.T) {
 	for _, typ := range []message.Type{message.Confirmable, message.NonConfirmable} {
 		t.Run(typ.String(), func(t *testing.T) {

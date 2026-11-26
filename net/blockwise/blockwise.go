@@ -845,6 +845,15 @@ func (b *BlockWise[C]) handleReceiveError(w *responsewriter.ResponseWriter[C], r
 	b.errors(fmt.Errorf("handleReceivedMessage(%v): %w", r, err))
 }
 
+func handleBlock2Request[C Client](w *responsewriter.ResponseWriter[C], r *pool.Message, next func(*responsewriter.ResponseWriter[C], *pool.Message), startBlock uint32) uint32 {
+	block, err := r.GetOptionUint32(message.Block2)
+	next(w, r)
+	if w.Message().Code() == codes.Content && err == nil {
+		return block
+	}
+	return startBlock
+}
+
 func (b *BlockWise[C]) handleReceivedMessage(w *responsewriter.ResponseWriter[C], r *pool.Message, maxSZX SZX, maxMessageSize uint32, remoteAddr net.Addr, exchangeKey uint64, next func(w *responsewriter.ResponseWriter[C], r *pool.Message)) error {
 	startSendingMessageBlock, err := EncodeBlockOption(maxSZX, 0, true)
 	if err != nil {
@@ -857,11 +866,7 @@ func (b *BlockWise[C]) handleReceivedMessage(w *responsewriter.ResponseWriter[C]
 		return nil
 	case codes.GET, codes.DELETE:
 		maxSZX = fitSZX(r, message.Block2, maxSZX)
-		block, errG := r.GetOptionUint32(message.Block2)
-		next(w, r)
-		if w.Message().Code() == codes.Content && errG == nil {
-			startSendingMessageBlock = block
-		}
+		startSendingMessageBlock = handleBlock2Request(w, r, next, startSendingMessageBlock)
 	case codes.POST, codes.PUT, codes.FETCH, codes.PATCH, codes.IPATCH:
 		if isBlock2Continuation(r) && !r.HasOption(message.Block1) {
 			return fmt.Errorf("cannot resume Block2 response: %w", ErrRequestEntityIncomplete)

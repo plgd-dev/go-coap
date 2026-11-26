@@ -1,13 +1,22 @@
 package server
 
 import (
+	"context"
+	"errors"
 	"net"
+	"strconv"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/plgd-dev/go-coap/v3/message"
+	"github.com/plgd-dev/go-coap/v3/message/codes"
+	"github.com/plgd-dev/go-coap/v3/message/pool"
 	coapNet "github.com/plgd-dev/go-coap/v3/net"
+	"github.com/plgd-dev/go-coap/v3/net/responsewriter"
+	"github.com/plgd-dev/go-coap/v3/options/config"
 	"github.com/plgd-dev/go-coap/v3/udp/client"
+	"github.com/plgd-dev/go-coap/v3/udp/coder"
 	"github.com/stretchr/testify/require"
 )
 
@@ -41,8 +50,10 @@ func TestServerMessageIDsSurviveReconnectAndOtherPeers(t *testing.T) {
 	first, created := s.getOrCreateConn(listener, victim, local)
 	require.True(t, created)
 	var last int32
+	previous := make(map[int32]bool)
 	for range 20 {
 		last = first.GetMessageID()
+		previous[last] = true
 	}
 	getClose(first)()
 
@@ -55,7 +66,11 @@ func TestServerMessageIDsSurviveReconnectAndOtherPeers(t *testing.T) {
 
 	reconnected, created := s.getOrCreateConn(listener, victim, local)
 	require.True(t, created)
-	require.Equal(t, (last+1)&0xffff, reconnected.GetMessageID())
+	for i := int32(1); i <= 20; i++ {
+		id := reconnected.GetMessageID()
+		require.Equal(t, (last+i)&0xffff, id)
+		require.False(t, previous[id], "reconnected peer must not reuse a previous message ID")
+	}
 	getClose(reconnected)()
 	getClose(other)()
 }
@@ -95,4 +110,80 @@ func TestServerMessageIDsSharedAcrossLocalAddresses(t *testing.T) {
 	}
 	getClose(first)()
 	getClose(second)()
+}
+
+func TestIncomingMessageIDsDoNotAdvanceSharedSequence(t *testing.T) {
+	const errorMode = "error"
+	for _, mode := range []string{"accepted", "dropped", errorMode} {
+		for _, seed := range []uint32{1000, 65534} {
+			t.Run(mode+"/"+strconv.FormatUint(uint64(seed), 10), func(t *testing.T) {
+				s := New()
+				defer s.Stop()
+				completed := make(chan struct{}, 2)
+				monitorErr := errors.New("monitor rejected request")
+				s.cfg.RequestMonitor = func(_ *client.Conn, _ *pool.Message) (bool, error) {
+					switch mode {
+					case "dropped":
+						return true, nil
+					case errorMode:
+						return false, monitorErr
+					default:
+						return false, nil
+					}
+				}
+				s.cfg.Handler = func(w *responsewriter.ResponseWriter[*client.Conn], _ *pool.Message) {
+					if err := w.SetResponse(codes.Content, message.TextPlain, nil); err != nil {
+						t.Errorf("set response: %v", err)
+					}
+				}
+				s.cfg.ProcessReceivedMessage = func(req *pool.Message, cc *client.Conn, handler config.HandlerFunc[*client.Conn]) {
+					cc.ProcessReceivedMessageWithHandler(req, handler)
+					completed <- struct{}{}
+				}
+				listener, err := coapNet.NewListenUDP("udp4", "127.0.0.1:0")
+				require.NoError(t, err)
+				defer listener.Close()
+				remote := &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 12345}
+				local1 := &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 5683}
+				local2 := &net.UDPAddr{IP: net.IPv4(127, 0, 0, 2), Port: 5683}
+				s.messageIDs.get(remote.String(), func() uint32 { return seed })
+				first, created := s.getOrCreateConn(listener, remote, local1)
+				require.True(t, created)
+				second, created := s.getOrCreateConn(listener, remote, local2)
+				require.True(t, created)
+				last := first.GetMessageID()
+				req := second.AcquireMessage(context.Background())
+				defer second.ReleaseMessage(req)
+				req.SetType(message.Confirmable)
+				req.SetCode(codes.GET)
+				req.SetToken([]byte{1})
+				for _, mid := range []int32{last, (last + 32767) & 0xffff} {
+					req.SetMessageID(mid)
+					datagram, err := req.MarshalWithEncoder(coder.DefaultCoder)
+					require.NoError(t, err)
+					err = second.Process(nil, datagram)
+					if mode == errorMode {
+						require.ErrorIs(t, err, monitorErr)
+					} else {
+						require.NoError(t, err)
+					}
+					if mode == "accepted" {
+						select {
+						case <-completed:
+						case <-time.After(time.Second):
+							t.Fatal("request was not processed")
+						}
+					}
+				}
+				require.Equal(t, (last+1)&0xffff, first.GetMessageID())
+				require.Equal(t, (last+2)&0xffff, second.GetMessageID())
+				getClose(first)()
+				reconnected, created := s.getOrCreateConn(listener, remote, local1)
+				require.True(t, created)
+				require.Equal(t, (last+3)&0xffff, reconnected.GetMessageID())
+				getClose(reconnected)()
+				getClose(second)()
+			})
+		}
+	}
 }

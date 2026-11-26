@@ -183,6 +183,14 @@ func TestQBlockConfirmableIndependentUploadsReorderRequestTags(t *testing.T) {
 			clients := []*client.Conn{dial()}
 			if nstart == 1 {
 				clients = append(clients, dial())
+				// The relay presents both clients as one upstream endpoint, so
+				// their independent MID sequences must not overlap.
+				firstMID := clients[0].GetMessageID()
+				secondMID := clients[1].GetMessageID()
+				distance := (firstMID + 32768 - secondMID) & 0xffff
+				for range distance {
+					clients[1].GetMessageID()
+				}
 			}
 
 			type result struct {
