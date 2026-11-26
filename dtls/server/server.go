@@ -72,7 +72,8 @@ func New(opt ...Option) *Server {
 	errorsFunc := cfg.Errors
 	// assign updated func to cfg.errors so cfg.handler also uses the updated error handler
 	cfg.Errors = func(err error) {
-		if coapNet.IsCancelOrCloseError(err) {
+		var acceptErr *coapNet.DTLSAcceptError
+		if !errors.As(err, &acceptErr) && coapNet.IsCancelOrCloseError(err) {
 			// this error was produced by cancellation context or closing connection.
 			return
 		}
@@ -108,7 +109,11 @@ func (s *Server) checkAcceptError(err error) bool {
 	if err == nil {
 		return true
 	}
+	var acceptErr *coapNet.DTLSAcceptError
 	switch {
+	case errors.As(err, &acceptErr):
+		s.cfg.Errors(fmt.Errorf("cannot accept connection: %w", err))
+		return true
 	case errors.Is(err, coapNet.ErrListenerIsClosed):
 		s.Stop()
 		return false

@@ -2,6 +2,7 @@ package net
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 
@@ -13,6 +14,20 @@ import (
 type DTLSListener struct {
 	listener net.Listener
 	closed   atomic.Bool
+}
+
+// DTLSAcceptError identifies an accept error returned while the DTLS listener
+// was open. Its cause is available through Unwrap.
+type DTLSAcceptError struct {
+	err error
+}
+
+func (e *DTLSAcceptError) Error() string {
+	return e.err.Error()
+}
+
+func (e *DTLSAcceptError) Unwrap() error {
+	return e.err
 }
 
 // newNetDTLSListener is the internal helper for the legacy *dtls.Config-based path.
@@ -65,7 +80,9 @@ func NewDTLSListener[T DTLSServerConfig](network, addr string, cfg T) (*DTLSList
 	}
 }
 
-// AcceptWithContext waits with context for a generic Conn.
+// AcceptWithContext waits with context for a generic Conn. An error that
+// matches ErrListenerIsClosed while the listener is open is returned as a
+// DTLSAcceptError, preserving its original error chain.
 func (l *DTLSListener) AcceptWithContext(ctx context.Context) (net.Conn, error) {
 	select {
 	case <-ctx.Done():
@@ -75,7 +92,11 @@ func (l *DTLSListener) AcceptWithContext(ctx context.Context) (net.Conn, error) 
 	if l.closed.Load() {
 		return nil, ErrListenerIsClosed
 	}
-	return l.listener.Accept()
+	conn, err := l.listener.Accept()
+	if err != nil && errors.Is(err, ErrListenerIsClosed) && !l.closed.Load() {
+		return conn, &DTLSAcceptError{err: err}
+	}
+	return conn, err
 }
 
 // Accept waits for a generic Conn.
