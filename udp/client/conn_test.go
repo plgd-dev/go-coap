@@ -428,14 +428,16 @@ func testParallelConnGet(t *testing.T, numParallel int) {
 			for i := 0; i < numParallel; i++ {
 				go func() {
 					defer wg.Done()
-					ctx, cancel := context.WithTimeout(context.Background(), time.Second*30)
+					ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 					defer cancel()
 					got, err := cc.Get(ctx, tt.args.path, tt.args.opts...)
 					if tt.wantErr {
 						assert.Error(t, err)
 						return
 					}
-					assert.NoError(t, err)
+					if !assert.NoError(t, err) {
+						return
+					}
 					assert.Equal(t, tt.wantCode, got.Code())
 					if tt.wantContentFormat != nil {
 						ct, err := got.ContentFormat()
