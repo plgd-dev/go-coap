@@ -1052,6 +1052,59 @@ func TestBlockWiseFetchObserveResponseBlock2(t *testing.T) {
 	require.Equal(t, 1, handlerCalls, "Block2 continuations must use the cached FETCH Observe representation")
 }
 
+func TestObserveRegistrationDoesNotInvalidateDifferentResourceBlock2Transfer(t *testing.T) {
+	r := newBlock1Receiver(t, time.Minute)
+	const responseSize = 3 * testBlock1Size
+	version := byte('A')
+	handlerCalls := 0
+	handler := func(w *responsewriter.ResponseWriter[*testClient], req *pool.Message) {
+		if req.HasOption(message.Observe) {
+			require.NoError(t, w.SetResponse(codes.Content, message.TextPlain, bytes.NewReader([]byte("observed"))))
+			w.Message().SetObserve(0)
+			return
+		}
+		handlerCalls++
+		body := bytes.Repeat([]byte{version}, responseSize)
+		require.NoError(t, w.SetResponse(codes.Content, message.TextPlain, bytes.NewReader(body)))
+	}
+	send := func(path string, token message.Token, blockNum *int64, observe bool) []byte {
+		t.Helper()
+		req := r.cc.AcquireMessage(t.Context())
+		defer r.cc.ReleaseMessage(req)
+		req.SetCode(codes.GET)
+		req.SetToken(token)
+		require.NoError(t, req.SetPath(path))
+		if blockNum != nil {
+			block, err := EncodeBlockOption(SZX1024, *blockNum, false)
+			require.NoError(t, err)
+			req.SetOptionUint32(message.Block2, block)
+		}
+		if observe {
+			req.SetObserve(0)
+		}
+
+		w := responsewriter.New(r.cc.AcquireMessage(t.Context()), r.cc)
+		defer func() { r.cc.ReleaseMessage(w.Message()) }()
+		r.bw.Handle(w, req, SZX1024, 64*1024, r.remote, handler)
+		require.Equal(t, codes.Content, w.Message().Code())
+		body, err := w.Message().ReadBody()
+		require.NoError(t, err)
+		return body
+	}
+
+	require.Equal(t, bytes.Repeat([]byte{'A'}, testBlock1Size),
+		send("/a", message.Token{0x01}, nil, false))
+
+	version = 'B'
+	require.Equal(t, []byte("observed"),
+		send("/b", message.Token{0x10}, nil, true))
+
+	blockNum := int64(1)
+	require.Equal(t, bytes.Repeat([]byte{'A'}, testBlock1Size),
+		send("/a", message.Token{0x02}, &blockNum, false))
+	require.Equal(t, 1, handlerCalls, "the /a continuation must use its cached representation")
+}
+
 func TestGetRequestMatchingKey(t *testing.T) {
 	cc := newTestClient()
 	remote := &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 5683}
