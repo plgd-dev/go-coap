@@ -476,15 +476,27 @@ func isBlock2Continuation(r *pool.Message) bool {
 }
 
 // mayResumeBlock2 reports whether r can continue a stored Block2 response.
-// An observe registration always starts a new transfer.
+// An Observe request with Block2 num 0 starts a new transfer.
 func mayResumeBlock2(r *pool.Message) bool {
 	switch r.Code() {
 	case codes.POST, codes.PUT, codes.PATCH, codes.IPATCH:
 		return isBlock2Continuation(r)
-	case codes.GET, codes.FETCH:
+	case codes.GET:
 		return !r.HasOption(message.Observe) && isBlock2Continuation(r)
+	case codes.FETCH:
+		return isBlock2Continuation(r)
 	}
 	return false
+}
+
+func matchesBlock2Request(sending *sendingMessage, requestKey, fetchObserveKey uint64, isFetch bool) bool {
+	sending.mutex.Lock()
+	defer sending.mutex.Unlock()
+	if sending.Message == nil {
+		return false
+	}
+	return sending.matchingKey == requestKey ||
+		(isFetch && isObserveResponse(sending.Message) && sending.matchingKey == fetchObserveKey)
 }
 
 // resolveBlock2ExchangeKey finds the Block2 transfer continued by a request with a
@@ -496,6 +508,10 @@ func (b *BlockWise[C]) resolveBlock2ExchangeKey(r *pool.Message, remoteAddr net.
 	}
 	isGet := r.Code() == codes.GET
 	requestKey := getRequestMatchingKey(r, remoteAddr)
+	fetchObserveKey := uint64(0)
+	if r.Code() == codes.FETCH {
+		fetchObserveKey = getRequestMatchingKeyWithObserve(r, remoteAddr, false)
+	}
 	now := time.Now()
 	var matchingKey uint64
 	matches := 0
@@ -503,11 +519,7 @@ func (b *BlockWise[C]) resolveBlock2ExchangeKey(r *pool.Message, remoteAddr net.
 		if element.IsExpired(now) {
 			return true
 		}
-		sending := element.Data()
-		sending.mutex.Lock()
-		isMatch := sending.Message != nil && sending.matchingKey == requestKey
-		sending.mutex.Unlock()
-		if isMatch {
+		if matchesBlock2Request(element.Data(), requestKey, fetchObserveKey, r.Code() == codes.FETCH) {
 			matchingKey = key
 			matches++
 		}
@@ -740,6 +752,7 @@ func (b *BlockWise[C]) Handle(w *responsewriter.ResponseWriter[C], r *pool.Messa
 		b.errors(fmt.Errorf("cannot resolve exchange key for request(%v): %w", r, err))
 		return
 	}
+	requestExchangeKey := exchangeKey
 	exchangeKey, err = b.resolveBlock2ExchangeKey(r, remoteAddr, exchangeKey)
 	if err != nil {
 		b.sendEntityIncomplete(w, token)
@@ -759,15 +772,23 @@ func (b *BlockWise[C]) Handle(w *responsewriter.ResponseWriter[C], r *pool.Messa
 		}
 		return
 	}
-	more, err := b.continueSendingMessage(w, r, maxSZX, maxMessageSize, sendingMessageCode, exchangeKey)
+	more, element, err := b.continueSendingMessage(w, r, maxSZX, maxMessageSize, sendingMessageCode, exchangeKey)
 	if err != nil {
-		b.sendingMessagesCache.Delete(exchangeKey)
 		b.errors(fmt.Errorf("continueSendingMessage(%v): %w", r, err))
 		return
 	}
 	// Keep request transfers until their paired response completes; clean up completed responses.
 	if !more && !isRequestCode(sendingMessageCode) {
-		b.sendingMessagesCache.Delete(exchangeKey)
+		if requestExchangeKey != exchangeKey {
+			sending := element.Data()
+			sending.mutex.Lock()
+			sending.matchingKey = 0
+			sending.mutex.Unlock()
+		} else {
+			b.sendingMessagesCache.ReplaceWithFunc(exchangeKey, func(current *cache.Element[*sendingMessage], loaded bool) (*cache.Element[*sendingMessage], bool) {
+				return current, !loaded || current == element
+			})
+		}
 	}
 }
 
@@ -945,7 +966,7 @@ func getSendingMessageBody(sendingMessage *pool.Message) (int64, io.ReadSeeker, 
 	return payloadSize, body, nil
 }
 
-func (b *BlockWise[C]) continueSendingMessage(w *responsewriter.ResponseWriter[C], r *pool.Message, maxSZX SZX, maxMessageSize uint32, sendingMessageCode codes.Code, exchangeKey uint64) (bool, error) {
+func (b *BlockWise[C]) continueSendingMessage(w *responsewriter.ResponseWriter[C], r *pool.Message, maxSZX SZX, maxMessageSize uint32, sendingMessageCode codes.Code, exchangeKey uint64) (bool, *cache.Element[*sendingMessage], error) {
 	blockType := message.Block2
 	if isBodyMethod(sendingMessageCode) {
 		blockType = message.Block1
@@ -953,29 +974,29 @@ func (b *BlockWise[C]) continueSendingMessage(w *responsewriter.ResponseWriter[C
 
 	block, err := r.GetOptionUint32(blockType)
 	if err != nil {
-		return false, fmt.Errorf("cannot get %v option: %w", blockType, err)
+		return false, nil, fmt.Errorf("cannot get %v option: %w", blockType, err)
 	}
 	value := b.sendingMessagesCache.Load(exchangeKey)
 	if value == nil {
-		return false, fmt.Errorf("handleSendingMessage: cannot find sending message for token(%v)", r.Token())
+		return false, nil, fmt.Errorf("handleSendingMessage: cannot find sending message for token(%v)", r.Token())
 	}
 	sending := value.Data()
 	// Do not hold the cache lock while waiting for or reading a body.
 	sending.mutex.Lock()
 	defer sending.mutex.Unlock()
 	if sending.Message == nil {
-		return false, fmt.Errorf("handleSendingMessage: cannot find sending message for token(%v)", r.Token())
+		return false, nil, fmt.Errorf("handleSendingMessage: cannot find sending message for token(%v)", r.Token())
 	}
 	sendMessage, more, err := b.createSendingMessage(sending.Message, maxSZX, maxMessageSize, block)
 	if err != nil {
-		return false, fmt.Errorf("handleSendingMessage: cannot create sending message: %w", err)
+		return false, nil, fmt.Errorf("handleSendingMessage: cannot create sending message: %w", err)
 	}
 	if isRequestCode(r.Code()) {
 		// the continuation may use a new token, the response must echo it (RFC 7252 §5.3.2)
 		sendMessage.SetToken(r.Token())
 	}
 	w.SetMessage(sendMessage)
-	return more, err
+	return more, value, nil
 }
 
 func isObserveResponse(msg *pool.Message) bool {

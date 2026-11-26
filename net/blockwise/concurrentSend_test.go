@@ -108,7 +108,7 @@ func continueSendingBlock(b *BlockWise[*testClient], token message.Token, code c
 	}
 	r.SetOptionUint32(blockType, block)
 	w := responsewriter.New(b.cc.AcquireMessage(context.Background()), b.cc)
-	more, err := b.continueSendingMessage(w, r, SZX16, 1152, code, token.Hash())
+	more, _, err := b.continueSendingMessage(w, r, SZX16, 1152, code, token.Hash())
 	if err != nil {
 		b.cc.ReleaseMessage(w.Message())
 		return nil, false, err
