@@ -1358,17 +1358,9 @@ func (b *BlockWise[C]) processReceivedBlock(w *responsewriter.ResponseWriter[C],
 		return err
 	}
 	if cachedReceivedMessageGuard == nil {
-		// RFC 7959 §2.9.2: reject non-initial blocks without transfer state.
-		if block.blockType == message.Block1 && block.num != 0 {
-			return fmt.Errorf("%w: block %v received without transfer context", ErrRequestEntityIncomplete, block.num)
-		}
-		// if there is no more then just forward req to next handler
-		if !block.more {
-			if tooLarge, errS := b.rejectTooLarge(w, r, block.blockType, block.token, 0); tooLarge || errS != nil {
-				return errS
-			}
-			next(w, r)
-			return nil
+		handled, handleErr := b.handleUncachedReceivedBlock(w, r, next, block, sentRequest)
+		if handled || handleErr != nil {
+			return handleErr
 		}
 		block.szx = getSzx(block.szx, block.maxSzx)
 	}
@@ -1379,6 +1371,56 @@ func (b *BlockWise[C]) processReceivedBlock(w *responsewriter.ResponseWriter[C],
 	defer closeCachedReceivedMessage()
 
 	return b.processCachedReceivedBlock(w, r, cachedReceivedMessageGuard, next, block, sentRequest)
+}
+
+func (b *BlockWise[C]) handleUncachedReceivedBlock(
+	w *responsewriter.ResponseWriter[C], r *pool.Message, next func(*responsewriter.ResponseWriter[C], *pool.Message),
+	block receivedBlock, sentRequest *pool.Message,
+) (bool, error) {
+	forward, err := forwardUncachedBlock(sentRequest, block)
+	if err != nil {
+		return true, err
+	}
+	if forward {
+		if tooLarge, errS := b.rejectTooLarge(w, r, block.blockType, block.token, 0); tooLarge || errS != nil {
+			return true, errS
+		}
+		next(w, r)
+		return true, nil
+	}
+	if block.blockType == message.Block2 && block.num != 0 && !block.more {
+		// Restart without retaining metadata from the discarded final block.
+		return true, b.sendReceivedBlockContinue(w, r, block, sentRequest, 0)
+	}
+	return false, nil
+}
+
+func forwardUncachedBlock(request *pool.Message, block receivedBlock) (bool, error) {
+	if block.blockType == message.Block1 && block.num != 0 {
+		return false, fmt.Errorf("%w: block %v received without transfer context", ErrRequestEntityIncomplete, block.num)
+	}
+	if block.more {
+		return false, nil
+	}
+	if block.blockType == message.Block2 && block.num != 0 {
+		return requestedBlock2(request, block)
+	}
+	return true, nil
+}
+
+func requestedBlock2(request *pool.Message, block receivedBlock) (bool, error) {
+	value, err := request.GetOptionUint32(message.Block2)
+	if errors.Is(err, message.ErrOptionNotFound) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("cannot get requested Block2 option: %w", err)
+	}
+	szx, num, _, err := DecodeBlockOption(value)
+	if err != nil {
+		return false, fmt.Errorf("cannot decode requested Block2 option: %w", err)
+	}
+	return num*szx.Size() == block.num*block.szx.Size(), nil
 }
 
 func (b *BlockWise[C]) validateReceivedBlockBeforeProcessing(
