@@ -1019,6 +1019,20 @@ func TestBlockWiseFetchObserveResponseBlock2(t *testing.T) {
 	require.True(t, more)
 	require.Equal(t, responseBody[:SZX128.Size()], got.body)
 
+	registration := cc.AcquireMessage(t.Context())
+	registration.SetCode(codes.GET)
+	registration.SetToken(message.Token{0x80})
+	registration.SetObserve(0)
+	require.NoError(t, registration.SetPath("/other"))
+	w := responsewriter.New(cc.AcquireMessage(t.Context()), cc)
+	bw.Handle(w, registration, SZX128, 1024, remote, func(w *responsewriter.ResponseWriter[*testClient], _ *pool.Message) {
+		require.NoError(t, w.SetResponse(codes.Content, message.TextPlain, bytes.NewReader([]byte("observed"))))
+		w.Message().SetObserve(0)
+	})
+	require.Equal(t, codes.Content, w.Message().Code())
+	cc.ReleaseMessage(w.Message())
+	cc.ReleaseMessage(registration)
+
 	var assembled []byte
 	assembled = append(assembled, got.body...)
 	for blockNum := int64(1); ; blockNum++ {

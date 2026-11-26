@@ -607,7 +607,7 @@ func (b *BlockWise[C]) WriteMessage(request *pool.Message, maxSZX SZX, maxMessag
 	}
 
 	if isObserveResponse(request) && remoteAddr != nil {
-		b.invalidateObservationTransfers(remoteAddr.String())
+		b.invalidateObservationTransfers(remoteAddr.String(), true)
 	}
 	w := newWriteRequestResponse(b.cc, request)
 	err = b.startSendingMessage(w, maxSZX, maxMessageSize, startSendingMessageBlock, exchangeKey, sendingMatch{})
@@ -621,12 +621,12 @@ func (b *BlockWise[C]) WriteMessage(request *pool.Message, maxSZX SZX, maxMessag
 // (RFC 7641 §4.2). Continuations of notifications (RFC 7959 §2.6, §3.4) must not be
 // resumed from an older GET or FETCH response: transfers keyed by the request itself
 // (tokenless) are dropped, others are only kept for continuations with their own token.
-func (b *BlockWise[C]) invalidateObservationTransfers(endpoint string) {
+func (b *BlockWise[C]) invalidateObservationTransfers(endpoint string, includeFETCH bool) {
 	var drop []uint64
 	b.sendingMessagesCache.Range(func(key uint64, element *cache.Element[*sendingMessage]) bool {
 		sending := element.Data()
 		sending.mutex.Lock()
-		if (sending.requestCode == codes.GET || sending.requestCode == codes.FETCH) &&
+		if (sending.requestCode == codes.GET || (includeFETCH && sending.requestCode == codes.FETCH)) &&
 			sending.endpoint == endpoint && sending.matchingKey != 0 {
 			if key == sending.matchingKey {
 				drop = append(drop, key)
@@ -816,8 +816,8 @@ func (b *BlockWise[C]) handleReceivedMessage(w *responsewriter.ResponseWriter[C]
 		}
 	}
 	match := getSendingMatch(r, w.Message(), receivedCode, remoteAddr)
-	if isObserveResponse(w.Message()) && match.endpoint != "" {
-		b.invalidateObservationTransfers(match.endpoint)
+	if receivedCode == codes.GET && isObserveResponse(w.Message()) && match.endpoint != "" {
+		b.invalidateObservationTransfers(match.endpoint, false)
 	}
 	if err = b.startSendingMessage(w, maxSZX, maxMessageSize, startSendingMessageBlock, exchangeKey, match); err != nil {
 		return err
