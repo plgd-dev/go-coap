@@ -3,8 +3,10 @@
 package store
 
 import (
+	"errors"
 	"fmt"
 	"os"
+	"runtime"
 	"syscall"
 )
 
@@ -25,9 +27,20 @@ func withFileLockAt(root *os.Root, path string, action func() error) (err error)
 	if root == nil {
 		return withFileLock(path, action)
 	}
-	file, err := openFileAtRoot(root, path, os.O_CREATE|os.O_RDWR, 0o600)
-	if err != nil {
-		return fmt.Errorf("open rooted OSCORE store lock: %w", err)
+	var file *os.File
+	var openErr error
+	for range 10 {
+		file, openErr = openFileAtRoot(root, path, os.O_CREATE|os.O_RDWR, 0o600)
+		if openErr == nil {
+			break
+		}
+		if !errors.Is(openErr, os.ErrNotExist) {
+			break
+		}
+		runtime.Gosched()
+	}
+	if openErr != nil {
+		return fmt.Errorf("open rooted OSCORE store lock: %w", openErr)
 	}
 	return withLockedFile(file, action)
 }
