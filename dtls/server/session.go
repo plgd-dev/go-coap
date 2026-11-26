@@ -6,9 +6,9 @@ import (
 	"errors"
 	"fmt"
 	"net"
-	"sync"
 	"sync/atomic"
 
+	"github.com/plgd-dev/go-coap/v3/internal/onclose"
 	"github.com/plgd-dev/go-coap/v3/message"
 	"github.com/plgd-dev/go-coap/v3/message/pool"
 	coapNet "github.com/plgd-dev/go-coap/v3/net"
@@ -21,7 +21,7 @@ import (
 type EventFunc = func()
 
 type Session struct {
-	onClose []EventFunc
+	onClose onclose.Callbacks
 
 	ctx atomic.Pointer[context.Context]
 
@@ -29,8 +29,6 @@ type Session struct {
 	connection *coapNet.Conn
 
 	done chan struct{}
-
-	mutex sync.Mutex
 
 	maxMessageSize uint32
 
@@ -65,24 +63,12 @@ func (s *Session) Done() <-chan struct{} {
 }
 
 func (s *Session) AddOnClose(f EventFunc) {
-	s.mutex.Lock()
-	defer s.mutex.Unlock()
-	s.onClose = append(s.onClose, f)
-}
-
-func (s *Session) popOnClose() []EventFunc {
-	s.mutex.Lock()
-	defer s.mutex.Unlock()
-	tmp := s.onClose
-	s.onClose = nil
-	return tmp
+	s.onClose.Add(f)
 }
 
 func (s *Session) shutdown() {
 	defer close(s.done)
-	for _, f := range s.popOnClose() {
-		f()
-	}
+	s.onClose.Close()
 }
 
 func (s *Session) Close() error {
