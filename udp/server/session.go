@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"net"
-	"sync"
 	"sync/atomic"
 
 	"github.com/plgd-dev/go-coap/v3/internal/onclose"
@@ -36,7 +35,6 @@ type Session struct {
 
 	closeSocket bool
 	errors      client.ErrorFunc
-	writeMu     sync.RWMutex
 }
 
 // NewSession creates a UDP session. Optional error handlers receive recoverable
@@ -100,14 +98,10 @@ func (s *Session) shutdown() {
 
 func (s *Session) Close() error {
 	s.cancel()
-	var err error
 	if s.closeSocket {
-		err = s.connection.Close()
+		return s.connection.Close()
 	}
-	// Drain in-flight writes before the server releases this peer's MID sequence.
-	s.writeMu.Lock()
-	defer s.writeMu.Unlock()
-	return err
+	return nil
 }
 
 func (s *Session) Context() context.Context {
@@ -115,8 +109,6 @@ func (s *Session) Context() context.Context {
 }
 
 func (s *Session) WriteMessage(req *pool.Message) error {
-	s.writeMu.RLock()
-	defer s.writeMu.RUnlock()
 	if s.Context().Err() != nil {
 		return &netClient.RequestNotSentError{Err: net.ErrClosed}
 	}
@@ -146,8 +138,6 @@ func (s *Session) WriteMulticastMessage(req *pool.Message, address *net.UDPAddr,
 		}))
 	}
 	writeErr := func() error {
-		s.writeMu.RLock()
-		defer s.writeMu.RUnlock()
 		if s.Context().Err() != nil {
 			return net.ErrClosed
 		}

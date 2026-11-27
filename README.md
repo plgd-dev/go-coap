@@ -108,8 +108,10 @@ advisory's DTLS reconnect scenario the peer establishes a new DTLS session and
 CoAP connection, so the prior connection's duplicate-response cache is not
 retained; this does not imply MID reuse is generally harmless.
 
-On connection close, pending UDP writes are drained before the endpoint's
-retention period starts; a slow multicast write can delay closing the connection.
+Closing a connection does not wait for writes already in progress. A delayed
+write can therefore complete after the endpoint's retention period starts; if
+it remains blocked for at least that period, its MID may be reused too early
+after the cache entry is evicted.
 The server's `GetMID` callback runs under the connection lock and must not block
 or re-enter the server. A random offset is added to its value, so it cannot
 deterministically select the initial MID.

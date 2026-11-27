@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"fmt"
+	"io"
 	"net"
 	"testing"
 	"time"
@@ -14,37 +15,68 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestSessionCloseWaitsForWritesAndRejectsLaterWrites(t *testing.T) {
+type blockingCloseTestBody struct {
+	started chan struct{}
+	release chan struct{}
+	read    bool
+}
+
+func (b *blockingCloseTestBody) Read(p []byte) (int, error) {
+	if b.read {
+		return 0, io.EOF
+	}
+	b.read = true
+	close(b.started)
+	<-b.release
+	p[0] = 1
+	return 1, nil
+}
+
+func (*blockingCloseTestBody) Seek(_ int64, whence int) (int64, error) {
+	if whence == io.SeekEnd {
+		return 1, nil
+	}
+	return 0, nil
+}
+
+func TestSessionCloseDoesNotWaitForWritesAndRejectsLaterWrites(t *testing.T) {
 	listener, err := coapNet.NewListenUDP("udp4", "127.0.0.1:0")
 	require.NoError(t, err)
 	defer listener.Close()
 	s := NewSession(context.Background(), context.Background(), listener, listener.LocalAddr().(*net.UDPAddr), 1024, 1024, false)
-	s.writeMu.RLock()
-	closed := make(chan error, 1)
-	go func() { closed <- s.Close() }()
-	select {
-	case <-s.Context().Done():
-	case <-time.After(time.Second):
-		t.Fatal("session was not cancelled")
-	}
-	select {
-	case closeErr := <-closed:
-		t.Fatalf("session closed before its write completed: %v", closeErr)
-	default:
-	}
-	s.writeMu.RUnlock()
-	select {
-	case err = <-closed:
-		require.NoError(t, err)
-	case <-time.After(time.Second):
-		t.Fatal("session did not close")
-	}
 	messages := pool.New(0, 0)
 	req := messages.AcquireMessage(context.Background())
 	defer messages.ReleaseMessage(req)
 	req.SetType(message.Confirmable)
-	req.SetCode(codes.GET)
+	req.SetCode(codes.POST)
 	req.SetMessageID(42)
+	body := &blockingCloseTestBody{started: make(chan struct{}), release: make(chan struct{})}
+	req.SetBody(body)
+	written := make(chan error, 1)
+	go func() { written <- s.WriteMessage(req) }()
+	select {
+	case <-body.started:
+	case <-time.After(time.Second):
+		close(body.release)
+		t.Fatal("write did not start")
+	}
+	closed := make(chan error, 1)
+	go func() { closed <- s.Close() }()
+	select {
+	case err = <-closed:
+		require.NoError(t, err)
+	case <-time.After(time.Second):
+		close(body.release)
+		t.Logf("pending write returned: %v", <-written)
+		t.Fatal("session waited for the pending write")
+	}
+	close(body.release)
+	select {
+	case err = <-written:
+		require.NoError(t, err)
+	case <-time.After(time.Second):
+		t.Fatal("write did not finish")
+	}
 	require.ErrorIs(t, s.WriteMessage(req), net.ErrClosed)
 	require.ErrorIs(t, s.WriteMulticastMessage(req, &net.UDPAddr{IP: net.IPv4(224, 0, 1, 187), Port: 5683}), net.ErrClosed)
 }
