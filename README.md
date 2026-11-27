@@ -79,6 +79,8 @@ ago cannot be evicted.
 When the cache is full and no entry can be evicted, the default fail-open mode
 admits new endpoints using untracked random sequences. A warning is sent to
 the server error handler at most once per minute while overflow occurs.
+No overflow warning is emitted when retention is intentionally disabled with
+`MaxEntries: 0` and `Unlimited: false`.
 Untracked connections to the same endpoint can use different sequences, and
 reconnections can reuse MIDs within the exchange lifetime.
 Setting `OverflowMode` to `options.EndpointMessageIDFailClosed` instead rejects

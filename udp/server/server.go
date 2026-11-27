@@ -489,6 +489,48 @@ func toWildcardLocalAddr(laddr *net.UDPAddr) *net.UDPAddr {
 }
 
 // Caller holds connsMutex.
+func (s *Server) findConn(key string, raddr, laddr *net.UDPAddr) *client.Conn {
+	if cc := s.conns[key]; cc != nil {
+		return cc
+	}
+	// NewConn on a wildcard listener is keyed by wildcard local address, but
+	// incoming packets can carry a concrete destination address.
+	if localAddrCanFallbackToWildcard(laddr) {
+		return s.conns[getConnKey(raddr, toWildcardLocalAddr(laddr))]
+	}
+	return nil
+}
+
+func (s *Server) blockWiseFactory() func(*client.Conn) *blockwise.BlockWise[*client.Conn] {
+	if !s.cfg.BlockwiseEnable {
+		return func(*client.Conn) *blockwise.BlockWise[*client.Conn] { return nil }
+	}
+	return func(cc *client.Conn) *blockwise.BlockWise[*client.Conn] {
+		bw := blockwise.New(
+			cc,
+			s.cfg.BlockwiseTransferTimeout,
+			s.cfg.Errors,
+			func(token message.Token) (*pool.Message, bool) {
+				msg, ok := cc.GetObservationRequest(token)
+				if ok {
+					return msg, ok
+				}
+				return s.multicastRequests.LoadWithFunc(token.Hash(), func(m *pool.Message) *pool.Message {
+					msg := cc.AcquireMessage(m.Context())
+					msg.ResetOptionsTo(m.Options())
+					msg.SetCode(m.Code())
+					msg.SetToken(m.Token())
+					msg.SetMessageID(m.MessageID())
+					return msg
+				})
+			},
+		)
+		bw.SetReceivingMessagesCacheMaxEntries(s.cfg.BlockwiseReceivingMessagesCacheMaxEntries)
+		return bw
+	}
+}
+
+// Caller holds connsMutex.
 func (s *Server) acquireEndpointMessageID(endpoint string) (*atomic.Uint32, bool, bool, error) {
 	if err := s.validateEndpointMessageIDCache(); err != nil {
 		return nil, false, false, err
@@ -522,20 +564,10 @@ func (s *Server) getOrCreateConn(udpConn *coapNet.UDPConn, raddr, laddr *net.UDP
 		}
 	}()
 	key := getConnKey(raddr, laddr)
-	cc = s.conns[key]
+	cc = s.findConn(key, raddr, laddr)
 
 	if cc != nil {
 		return cc, false, nil
-	}
-
-	// When a client connection is created via NewConn() on a wildcard-bound listener,
-	// it is keyed by wildcard local address. Incoming datagrams can carry the concrete
-	// destination address in control messages, so fallback keeps these packets on the
-	// same conn instead of creating a second server-side conn.
-	if localAddrCanFallbackToWildcard(laddr) {
-		if cc = s.conns[getConnKey(raddr, toWildcardLocalAddr(laddr))]; cc != nil {
-			return cc, false, nil
-		}
 	}
 
 	endpoint := getEndpointKey(raddr)
@@ -545,35 +577,7 @@ func (s *Server) getOrCreateConn(udpConn *coapNet.UDPConn, raddr, laddr *net.UDP
 	}
 	warnOverflow = warn
 
-	createBlockWise := func(*client.Conn) *blockwise.BlockWise[*client.Conn] {
-		return nil
-	}
-	if s.cfg.BlockwiseEnable {
-		createBlockWise = func(cc *client.Conn) *blockwise.BlockWise[*client.Conn] {
-			v := cc
-			bw := blockwise.New(
-				v,
-				s.cfg.BlockwiseTransferTimeout,
-				s.cfg.Errors,
-				func(token message.Token) (*pool.Message, bool) {
-					msg, ok := v.GetObservationRequest(token)
-					if ok {
-						return msg, ok
-					}
-					return s.multicastRequests.LoadWithFunc(token.Hash(), func(m *pool.Message) *pool.Message {
-						msg := v.AcquireMessage(m.Context())
-						msg.ResetOptionsTo(m.Options())
-						msg.SetCode(m.Code())
-						msg.SetToken(m.Token())
-						msg.SetMessageID(m.MessageID())
-						return msg
-					})
-				},
-			)
-			bw.SetReceivingMessagesCacheMaxEntries(s.cfg.BlockwiseReceivingMessagesCacheMaxEntries)
-			return bw
-		}
-	}
+	createBlockWise := s.blockWiseFactory()
 	session := NewSession(
 		s.ctx,
 		s.doneCtx,
