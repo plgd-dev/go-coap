@@ -47,6 +47,7 @@ type OptionID uint16
    |  17 | x  |   |   |   | Accept         | uint   | 0-2    | (none)  |
    |  19 | x  | x | - |   | Q-Block1       | uint   | 0-3    | (none)  |
    |  20 |    |   |   | x | Location-Query | string | 0-255  | (none)  |
+   |  21 | x  |   |   |   | EDHOC          | empty  | 0      | (none)  |
    |  23 | x  | x | - | - | Block2         | uint   | 0-3    | (none)  |
    |  27 | x  | x | - | - | Block1         | uint   | 0-3    | (none)  |
    |  28 |    |   | x |   | Size2          | uint   | 0-4    | (none)  |
@@ -80,6 +81,7 @@ const (
 	Accept        OptionID = 17
 	QBlock1       OptionID = 19
 	LocationQuery OptionID = 20
+	EDHOC         OptionID = 21 // RFC 9668; kept out of CoapOptionDefs so it is an unrecognized critical option unless OSCORE processing consumes it
 	Block2        OptionID = 23
 	Block1        OptionID = 27
 	Size2         OptionID = 28
@@ -109,6 +111,7 @@ var optionIDToString = map[OptionID]string{
 	Accept:        "Accept",
 	QBlock1:       "QBlock1",
 	LocationQuery: "LocationQuery",
+	EDHOC:         "EDHOC",
 	Block2:        "Block2",
 	Block1:        "Block1",
 	Size2:         "Size2",

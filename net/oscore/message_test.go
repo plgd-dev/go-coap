@@ -190,6 +190,7 @@ func TestClassifyOption(t *testing.T) {
 		{name: "OSCORE", id: message.OSCORE, want: ClassU},
 		{name: "Proxy-URI", id: message.ProxyURI, want: ClassU},
 		{name: "Proxy-Scheme", id: message.ProxyScheme, want: ClassU},
+		{name: "EDHOC (RFC 9668)", id: message.EDHOC, want: ClassU},
 		{name: "Observe", id: message.Observe, want: ClassBoth},
 		{name: "Max-Age", id: message.MaxAge, want: ClassBoth},
 		{name: "Block1", id: message.Block1, want: ClassBoth},
