@@ -257,6 +257,48 @@ func TestProcessorIncomingRequestHookSkipsUnprotectedRequests(t *testing.T) {
 	}
 }
 
+func TestProcessorRejectsEDHOCWithoutOSCORE(t *testing.T) {
+	_, server := pairedContexts(t, 0, 0)
+	var calls atomic.Int32
+	hook := func(_ *Processor, request message.Message) (message.Message, error) {
+		calls.Add(1)
+		return request, nil
+	}
+	request := message.Message{Code: codes.POST, Options: message.Options{{ID: message.EDHOC}}}
+	for _, test := range []struct {
+		name    string
+		policy  PlaintextPolicy
+		hook    IncomingRequestHook
+		wantErr error
+	}{
+		{name: "hook, plaintext allowed", policy: PlaintextAllowed, hook: hook, wantErr: ErrEDHOCWithoutOSCORE},
+		{name: "hook, plaintext disabled", policy: PlaintextDisabled, hook: hook, wantErr: ErrEDHOCWithoutOSCORE},
+		{name: "hook, plaintext only", policy: PlaintextOnly, hook: hook},
+		{name: "no hook", policy: PlaintextAllowed},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			processor, err := NewProcessor(ProcessorConfig{
+				Contexts:            []*Context{server},
+				PlaintextPolicy:     test.policy,
+				IncomingRequestHook: test.hook,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, _, _, err = processor.ProcessIncomingRequest(request)
+			if test.wantErr == nil && err != nil || test.wantErr != nil && !errors.Is(err, test.wantErr) {
+				t.Fatalf("ProcessIncomingRequest error = %v, want %v", err, test.wantErr)
+			}
+			if disabled := errors.Is(err, ErrPlaintextDisabled); disabled != (test.policy == PlaintextDisabled && test.hook != nil) {
+				t.Fatalf("ProcessIncomingRequest error = %v, wraps ErrPlaintextDisabled = %v", err, disabled)
+			}
+		})
+	}
+	if got := calls.Load(); got != 0 {
+		t.Fatalf("hook called %d times for requests without the OSCORE option", got)
+	}
+}
+
 func TestUnprotectResponseDropsOuterEDHOCOption(t *testing.T) {
 	client, server := pairedContexts(t, 0, 0)
 	protected, clientExchange, err := client.ProtectRequest(message.Message{Code: codes.GET, Token: message.Token{1}})

@@ -20,6 +20,7 @@ var (
 	ErrReplayRecoveryRequired    = errors.New("OSCORE replay recovery Echo is required")
 	ErrReplayRecoveryRateLimited = errors.New("OSCORE replay recovery challenge rate limited")
 	ErrUnprocessedEDHOCOption    = errors.New("EDHOC option was not processed")
+	ErrEDHOCWithoutOSCORE        = errors.New("EDHOC option without OSCORE option")
 )
 
 type replayRecoveryRequiredError struct {
@@ -114,6 +115,8 @@ func ProcessingErrorCode(err error) codes.Code {
 		return codes.Unauthorized
 	case errors.Is(err, ErrInvalidOSCOREOption), errors.Is(err, ErrUnprocessedEDHOCOption):
 		return codes.BadOption
+	case errors.Is(err, ErrEDHOCWithoutOSCORE):
+		return codes.BadRequest
 	default:
 		return codes.BadRequest
 	}
@@ -178,7 +181,12 @@ type OutgoingContextSelector func(request message.Message, contexts []*Context) 
 // ErrInvalidContext and ErrInvalidReplayState, such as from AddContext, are
 // treated as internal processing errors. A request that carries the EDHOC
 // option more than once, or still carries it after the hook, is rejected with
-// ErrUnprocessedEDHOCOption.
+// ErrUnprocessedEDHOCOption. While a hook is set and the plaintext policy is not
+// PlaintextOnly, a request that carries the EDHOC option without the OSCORE
+// option is rejected with ErrEDHOCWithoutOSCORE (4.00 Bad Request), which
+// also wraps ErrPlaintextDisabled under PlaintextDisabled. Without OSCORE
+// error responses, transports handle such a request as they would without a
+// hook.
 type IncomingRequestHook func(processor *Processor, request message.Message) (message.Message, error)
 
 // PlaintextPolicy defines which incoming message protection modes a Processor
@@ -496,12 +504,19 @@ func containsContext(contexts []*Context, selected *Context) bool {
 }
 
 // ProcessIncomingRequest returns plaintext requests unchanged only when the
-// configured policy allows them. Once an OSCORE option is present, all parse,
+// configured policy allows them and, with an IncomingRequestHook, they do not
+// carry the EDHOC option. Once an OSCORE option is present, all parse,
 // context, replay, and authentication failures are returned without fallback.
 // For protected requests, the returned context and Exchange must be retained
 // to protect any corresponding response.
 func (p *Processor) ProcessIncomingRequest(request message.Message) (message.Message, *Context, Exchange, error) {
 	if !request.Options.HasOption(message.OSCORE) {
+		if p.incomingHook != nil && p.plaintextPolicy != PlaintextOnly && request.Options.HasOption(message.EDHOC) {
+			if p.plaintextPolicy == PlaintextDisabled {
+				return message.Message{}, nil, Exchange{}, fmt.Errorf("%w: %w", ErrEDHOCWithoutOSCORE, ErrPlaintextDisabled)
+			}
+			return message.Message{}, nil, Exchange{}, ErrEDHOCWithoutOSCORE
+		}
 		switch p.plaintextPolicy {
 		case PlaintextDisabled:
 			return message.Message{}, nil, Exchange{}, ErrPlaintextDisabled

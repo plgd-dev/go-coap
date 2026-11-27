@@ -4,6 +4,9 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
+	"net"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -16,6 +19,7 @@ import (
 	"github.com/plgd-dev/go-coap/v3/options"
 	"github.com/plgd-dev/go-coap/v3/udp"
 	"github.com/plgd-dev/go-coap/v3/udp/client"
+	udpServer "github.com/plgd-dev/go-coap/v3/udp/server"
 	"github.com/stretchr/testify/require"
 )
 
@@ -160,4 +164,116 @@ func TestOSCOREUDPUnprocessedEDHOCOptionIsBadOption(t *testing.T) {
 		require.FailNow(t, "request with an unprocessed EDHOC option reached the handler")
 	default:
 	}
+}
+
+func TestOSCOREUDPEDHOCWithoutOSCORE(t *testing.T) {
+	for _, test := range []struct {
+		policy         oscore.PlaintextPolicy
+		errorResponses bool
+		requestType    message.Type
+		want           codes.Code // codes.Empty: no response
+	}{
+		{oscore.PlaintextAllowed, false, message.Confirmable, codes.BadOption},
+		{oscore.PlaintextAllowed, true, message.Confirmable, codes.BadRequest},
+		{oscore.PlaintextDisabled, false, message.Confirmable, codes.Empty},
+		{oscore.PlaintextDisabled, true, message.Confirmable, codes.BadRequest},
+		{oscore.PlaintextAllowed, false, message.NonConfirmable, codes.Empty},
+		{oscore.PlaintextAllowed, true, message.NonConfirmable, codes.Empty},
+	} {
+		errorResponses := test.errorResponses
+		t.Run(fmt.Sprintf("policy %d error responses %v %v", test.policy, errorResponses, test.requestType), func(t *testing.T) {
+			processor, err := oscore.NewProcessor(oscore.ProcessorConfig{
+				PlaintextPolicy: test.policy,
+				IncomingRequestHook: func(_ *oscore.Processor, request message.Message) (message.Message, error) {
+					return request, nil
+				},
+			})
+			require.NoError(t, err)
+			listener, err := coapNet.NewListenUDP("udp", "127.0.0.1:0")
+			require.NoError(t, err)
+			var handled atomic.Int32
+			serverOptions := []udpServer.Option{
+				options.WithOSCORE(processor),
+				options.WithHandlerFunc(func(*responsewriter.ResponseWriter[*client.Conn], *pool.Message) {
+					handled.Add(1)
+				}),
+			}
+			if errorResponses {
+				serverOptions = append(serverOptions, options.WithOSCOREErrorResponses())
+			}
+			server := udp.NewServer(serverOptions...)
+			serverDone := make(chan error, 1)
+			go func() { serverDone <- server.Serve(listener) }()
+			defer func() {
+				server.Stop()
+				require.NoError(t, <-serverDone)
+			}()
+			wantResponse := test.want != codes.Empty
+			timeout := 500 * time.Millisecond
+			if wantResponse {
+				timeout = 5 * time.Second
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), timeout)
+			defer cancel()
+
+			cc, err := udp.Dial(listener.LocalAddr().String())
+			require.NoError(t, err)
+			defer func() { require.NoError(t, cc.Close()) }()
+			request := cc.AcquireMessage(ctx)
+			defer cc.ReleaseMessage(request)
+			request.SetCode(codes.POST)
+			request.SetToken(message.Token{0x22})
+			request.SetType(test.requestType)
+			request.SetMessageID(cc.GetMessageID())
+			request.ResetOptionsTo(message.Options{{ID: message.EDHOC}})
+			request.SetBody(bytes.NewReader(udpTestEDHOCMessage3))
+			response, err := cc.Do(request)
+			require.Zero(t, handled.Load())
+			if !wantResponse {
+				require.ErrorIs(t, err, context.DeadlineExceeded)
+				return
+			}
+			require.NoError(t, err)
+			defer cc.ReleaseMessage(response)
+			require.Equal(t, test.want, response.Code())
+		})
+	}
+}
+
+func TestOSCOREUDPEDHOCWithoutOSCOREKeepsPlaintextDisabled(t *testing.T) {
+	processor, err := oscore.NewProcessor(oscore.ProcessorConfig{
+		PlaintextPolicy: oscore.PlaintextDisabled,
+		IncomingRequestHook: func(_ *oscore.Processor, request message.Message) (message.Message, error) {
+			return request, nil
+		},
+	})
+	require.NoError(t, err)
+	listener, err := coapNet.NewListenUDP("udp", "127.0.0.1:0")
+	require.NoError(t, err)
+	var handled atomic.Int32
+	server := udp.NewServer(
+		options.WithOSCORE(processor),
+		options.WithHandlerFunc(func(*responsewriter.ResponseWriter[*client.Conn], *pool.Message) {
+			handled.Add(1)
+		}),
+	)
+	serverDone := make(chan error, 1)
+	go func() { serverDone <- server.Serve(listener) }()
+	defer func() {
+		server.Stop()
+		require.NoError(t, <-serverDone)
+	}()
+
+	conn, err := net.Dial("udp", listener.LocalAddr().String())
+	require.NoError(t, err)
+	defer func() { require.NoError(t, conn.Close()) }()
+	// POST with token 0x24 and an empty EDHOC option (21), typed ACK and RST.
+	for _, datagram := range [][]byte{
+		{0x61, byte(codes.POST), 0x12, 0x34, 0x24, 0xd0, 0x08},
+		{0x71, byte(codes.POST), 0x12, 0x35, 0x24, 0xd0, 0x08},
+	} {
+		_, err = conn.Write(datagram)
+		require.NoError(t, err)
+	}
+	require.Never(t, func() bool { return handled.Load() != 0 }, 500*time.Millisecond, 10*time.Millisecond)
 }

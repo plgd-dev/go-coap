@@ -674,6 +674,10 @@ func (cc *Conn) unprotectIncomingRequest(req *pool.Message) error {
 		return fmt.Errorf("read incoming request: %w", err)
 	}
 	plaintext, securityContext, exchange, err := cc.oscoreProcessor.ProcessIncomingRequest(outer)
+	if errors.Is(err, oscore.ErrEDHOCWithoutOSCORE) && !errors.Is(err, oscore.ErrPlaintextDisabled) &&
+		!cc.oscoreErrorResponses {
+		return nil
+	}
 	if err != nil {
 		return err
 	}
@@ -697,7 +701,8 @@ func (cc *Conn) unprotectIncomingRequest(req *pool.Message) error {
 
 func (cc *Conn) respondToOSCOREProcessingError(req *pool.Message, processingErr error) error {
 	_, requiresEchoRecovery := oscore.ReplayRecoveryEcho(processingErr)
-	if oscore.IsInternalProcessingError(processingErr) || !req.HasOption(message.OSCORE) ||
+	if oscore.IsInternalProcessingError(processingErr) ||
+		!req.HasOption(message.OSCORE) && !errors.Is(processingErr, oscore.ErrEDHOCWithoutOSCORE) ||
 		!cc.oscoreErrorResponses && !requiresEchoRecovery {
 		return nil
 	}

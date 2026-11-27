@@ -24,6 +24,8 @@ func TestProcessingErrorCode(t *testing.T) {
 		{name: "replay recovery", err: ErrReplayRecoveryRequired, want: codes.Unauthorized},
 		{name: "malformed option", err: fmt.Errorf("%w: malformed", ErrInvalidOSCOREOption), want: codes.BadOption},
 		{name: "unprocessed EDHOC option", err: ErrUnprocessedEDHOCOption, want: codes.BadOption},
+		{name: "EDHOC option without OSCORE option", err: ErrEDHOCWithoutOSCORE, want: codes.BadRequest},
+		{name: "EDHOC option without OSCORE option, plaintext disabled", err: fmt.Errorf("%w: %w", ErrEDHOCWithoutOSCORE, ErrPlaintextDisabled), want: codes.BadRequest},
 		{name: "decrypt failure", err: errors.New("authentication failed"), want: codes.BadRequest},
 		{name: "internal persistence failure", err: fmt.Errorf("%w: storage unavailable", ErrInternalProcessing), want: codes.InternalServerError},
 	}

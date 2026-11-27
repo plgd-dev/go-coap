@@ -130,11 +130,15 @@ whose OSCORE option is valid and carries a KID. Hook errors are returned from
 treated as internal processing errors. The EDHOC
 option (21) is Class U. A protected request that carries it more than once, or
 still carries it after the hook, fails with `ErrUnprocessedEDHOCOption`, which
-`ProcessingErrorCode` maps to 4.02 Bad Option. The option is not in
-`message.CoapOptionDefs`, so a plaintext request carrying it is rejected as an
-unrecognized critical option. An outer EDHOC option on a protected response is
-discarded. With a hook, `PlaintextDisabled` does not require pre-established
-contexts.
+`ProcessingErrorCode` maps to 4.02 Bad Option. With a hook and a plaintext
+policy other than `PlaintextOnly`, a request that carries it without the OSCORE
+option fails with `ErrEDHOCWithoutOSCORE` (4.00 Bad Request), which TCP and,
+for Confirmable requests, UDP send when OSCORE error responses are enabled.
+Otherwise the request is handled as without a hook: the option is not in
+`message.CoapOptionDefs`, so under `PlaintextAllowed` a plaintext request
+carrying it is rejected as an unrecognized critical option. An outer EDHOC
+option on a protected response is discarded. With a hook, `PlaintextDisabled`
+does not require pre-established contexts.
 
 Low-level primitives such as `SealResponseWithRequestNonce`,
 `OpenResponseForExchange`, `BuildAAD`, and `EncodeInner` remain exported for
