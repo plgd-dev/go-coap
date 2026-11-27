@@ -65,6 +65,57 @@ session and calling `OnNewConn`. Plain TCP is unaffected. A sustained flood can
 still prevent slow handshakes from completing; large fleets may need a higher
 limit for simultaneous reconnects.
 
+## UDP server message IDs
+
+UDP servers retain outgoing message ID sequences per remote endpoint across
+connections. `options.WithEndpointMessageIDCache` configures the cache limit
+(4096 by default) and overflow mode. With `MaxEntries: 0` and fail-open,
+no endpoint sequences are cached; connections use untracked sequences.
+Set `Unlimited: true` and `MaxEntries: 0` for an unlimited cache. Unlimited
+with a nonzero limit, or a zero limit with fail-closed, is invalid. Omitting
+the option preserves the default. Active endpoints and
+endpoints whose last connection closed less than `client.ExchangeLifetime`
+ago cannot be evicted.
+When the cache is full and no entry can be evicted, the default fail-open mode
+admits new endpoints using untracked random sequences. A warning is sent to
+the server error handler at most once per minute while overflow occurs.
+No overflow warning is emitted when retention is intentionally disabled with
+`MaxEntries: 0` and `Unlimited: false`.
+Untracked connections to the same endpoint can use different sequences, and
+reconnections can reuse MIDs within the exchange lifetime.
+Setting `OverflowMode` to `options.EndpointMessageIDFailClosed` instead rejects
+new endpoints: `NewConn` returns an error and incoming
+datagrams are reported through the error handler at most once per minute.
+
+```go
+cache := options.DefaultEndpointMessageIDCacheConfig()
+cache.MaxEntries = 8192
+cache.OverflowMode = options.EndpointMessageIDFailClosed
+server := udp.NewServer(options.WithEndpointMessageIDCache(cache))
+```
+
+For an unlimited cache, use
+`options.EndpointMessageIDCacheConfig{Unlimited: true}` instead. An unlimited
+cache can grow without bound.
+
+Plain UDP does not authenticate source addresses: spoofed endpoints can fill
+the cache, reducing MID protection in fail-open mode or preventing new peers
+from connecting in fail-closed mode. An unlimited cache instead allows
+unbounded memory growth. Retention does not prevent reuse after 16-bit
+MID wraparound, when applications assign their own MIDs, or across server
+restarts. The endpoint cache applies to UDP servers, not DTLS servers. In the
+advisory's DTLS reconnect scenario the peer establishes a new DTLS session and
+CoAP connection, so the prior connection's duplicate-response cache is not
+retained; this does not imply MID reuse is generally harmless.
+
+Closing a connection does not wait for writes already in progress. A delayed
+write can therefore complete after the endpoint's retention period starts; if
+it remains blocked for at least that period, its MID may be reused too early
+after the cache entry is evicted.
+The server's `GetMID` callback runs under the connection lock and must not block
+or re-enter the server. A random offset is added to its value, so it cannot
+deterministically select the initial MID.
+
 ## Experimental Q-Block transfers
 
 Q-Block is opt-in for UDP/DTLS; existing blockwise defaults are unchanged.

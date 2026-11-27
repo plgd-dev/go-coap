@@ -28,12 +28,39 @@ func TestMaxPendingMessagesDefaultsAndDisable(t *testing.T) {
 	require.Zero(t, dtlsCfg.MaxPendingMessages)
 }
 
+func TestEndpointMessageIDCacheOption(t *testing.T) {
+	cfg := udpServer.DefaultConfig
+	defaults := options.DefaultEndpointMessageIDCacheConfig()
+	require.Equal(t, uint32(4096), defaults.MaxEntries)
+	require.Equal(t, options.EndpointMessageIDFailOpen, defaults.OverflowMode)
+	require.Equal(t, defaults, cfg.EndpointMessageIDCache)
+	custom := defaults
+	custom.MaxEntries = 2
+	custom.OverflowMode = options.EndpointMessageIDFailClosed
+	opt := options.WithEndpointMessageIDCache(custom)
+	custom.MaxEntries = 3
+	opt.UDPServerApply(&cfg)
+	require.Equal(t, uint32(2), cfg.EndpointMessageIDCache.MaxEntries)
+	require.Equal(t, options.EndpointMessageIDFailClosed, cfg.EndpointMessageIDCache.OverflowMode)
+	require.Equal(t, defaults, options.DefaultEndpointMessageIDCacheConfig())
+	options.WithEndpointMessageIDCache(options.EndpointMessageIDCacheConfig{}).UDPServerApply(&cfg)
+	require.Zero(t, cfg.EndpointMessageIDCache.MaxEntries)
+	require.False(t, cfg.EndpointMessageIDCache.Unlimited)
+	require.Equal(t, options.EndpointMessageIDFailOpen, cfg.EndpointMessageIDCache.OverflowMode)
+	options.WithEndpointMessageIDCache(options.EndpointMessageIDCacheConfig{Unlimited: true}).UDPServerApply(&cfg)
+	require.Zero(t, cfg.EndpointMessageIDCache.MaxEntries)
+	require.True(t, cfg.EndpointMessageIDCache.Unlimited)
+}
+
 func TestUDPServerApply(t *testing.T) {
 	cfg := udpServer.Config{}
 	opt := []udpServer.Option{
 		options.WithTransmission(10, time.Second, 5, 2.0),
 		options.WithMTU(1500),
 		options.WithMaxPendingMessages(7),
+		options.WithEndpointMessageIDCache(options.EndpointMessageIDCacheConfig{
+			MaxEntries: 8, OverflowMode: options.EndpointMessageIDFailClosed,
+		}),
 	}
 	for _, o := range opt {
 		o.UDPServerApply(&cfg)
@@ -46,6 +73,8 @@ func TestUDPServerApply(t *testing.T) {
 	// WithMTU
 	require.Equal(t, uint16(1500), cfg.MTU)
 	require.Equal(t, uint32(7), cfg.MaxPendingMessages)
+	require.Equal(t, uint32(8), cfg.EndpointMessageIDCache.MaxEntries)
+	require.Equal(t, options.EndpointMessageIDFailClosed, cfg.EndpointMessageIDCache.OverflowMode)
 }
 
 func TestDTLSServerApply(t *testing.T) {

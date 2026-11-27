@@ -17,6 +17,7 @@ import (
 	"github.com/plgd-dev/go-coap/v3/net/responsewriter"
 	pkgMath "github.com/plgd-dev/go-coap/v3/pkg/math"
 	coapSync "github.com/plgd-dev/go-coap/v3/pkg/sync"
+	"github.com/plgd-dev/go-coap/v3/pkg/sync/atomic"
 	"github.com/plgd-dev/go-coap/v3/udp/client"
 	"github.com/plgd-dev/go-coap/v3/udp/coder"
 )
@@ -30,8 +31,10 @@ type Server struct {
 	doneCancel        context.CancelFunc
 	cancel            context.CancelFunc
 
-	connsMutex sync.Mutex
-	conns      map[string]*client.Conn
+	connsMutex             sync.Mutex
+	conns                  map[string]*client.Conn
+	messageIDs             *endpointMessageIDs
+	nextMIDOverflowWarning time.Time
 
 	listenMutex sync.Mutex
 	listen      *coapNet.UDPConn
@@ -94,6 +97,7 @@ func New(opt ...Option) *Server {
 		doneCtx:           doneCtx,
 		doneCancel:        doneCancel,
 		conns:             make(map[string]*client.Conn),
+		messageIDs:        newEndpointMessageIDs(cfg.EndpointMessageIDCache.MaxEntries, cfg.EndpointMessageIDCache.Unlimited),
 
 		cfg: &cfg,
 	}
@@ -243,13 +247,7 @@ func (s *Server) handleProcessError(l *coapNet.UDPConn, cc *client.Conn, cm *coa
 }
 
 func (s *Server) Serve(l *coapNet.UDPConn) error {
-	if s.cfg.BlockwiseSZX > blockwise.SZX1024 {
-		return errors.New("invalid blockwiseSZX")
-	}
-	if _, err := s.cfg.QBlockwiseConfig.Resolve(); err != nil {
-		return err
-	}
-	if err := blockwise.ValidateQBlockwiseConfig(s.cfg.QBlockwiseMode, s.cfg.BlockwiseEnable); err != nil {
+	if err := s.validateConfig(); err != nil {
 		return err
 	}
 
@@ -300,7 +298,7 @@ func (s *Server) Serve(l *coapNet.UDPConn) error {
 
 		cc, created, err := s.getConn(l, packet.raddr, laddr, true)
 		if err != nil {
-			s.cfg.Errors(fmt.Errorf("%v: cannot get client connection: %w", packet.raddr, err))
+			s.reportGetConnError(packet.raddr, err)
 			continue
 		}
 		err = cc.Process(packet.cm, packet.buf)
@@ -312,6 +310,49 @@ func (s *Server) Serve(l *coapNet.UDPConn) error {
 			continue
 		}
 	}
+}
+
+func (s *Server) validateConfig() error {
+	if err := s.validateEndpointMessageIDCache(); err != nil {
+		return err
+	}
+	if s.cfg.BlockwiseSZX > blockwise.SZX1024 {
+		return errors.New("invalid blockwiseSZX")
+	}
+	if _, err := s.cfg.QBlockwiseConfig.Resolve(); err != nil {
+		return err
+	}
+	return blockwise.ValidateQBlockwiseConfig(s.cfg.QBlockwiseMode, s.cfg.BlockwiseEnable)
+}
+
+func (s *Server) reportGetConnError(addr *net.UDPAddr, err error) {
+	if !errors.Is(err, ErrEndpointMessageIDsFull) || s.shouldReportMIDOverflow(time.Now()) {
+		s.cfg.Errors(fmt.Errorf("%v: cannot get client connection: %w", addr, err))
+	}
+}
+
+func (s *Server) validateEndpointMessageIDCache() error {
+	cfg := s.cfg.EndpointMessageIDCache
+	if cfg.OverflowMode != EndpointMessageIDFailOpen && cfg.OverflowMode != EndpointMessageIDFailClosed {
+		return fmt.Errorf("invalid endpoint message ID overflow mode: %d", cfg.OverflowMode)
+	}
+	if cfg.Unlimited && cfg.MaxEntries != 0 {
+		return errors.New("unlimited endpoint message ID cache requires MaxEntries to be zero")
+	}
+	if !cfg.Unlimited && cfg.MaxEntries == 0 && cfg.OverflowMode == EndpointMessageIDFailClosed {
+		return errors.New("zero endpoint message ID cache capacity requires fail-open overflow mode")
+	}
+	return nil
+}
+
+func (s *Server) shouldReportMIDOverflow(now time.Time) bool {
+	s.connsMutex.Lock()
+	defer s.connsMutex.Unlock()
+	if now.Before(s.nextMIDOverflowWarning) {
+		return false
+	}
+	s.nextMIDOverflowWarning = now.Add(time.Minute)
+	return true
 }
 
 func (s *Server) getListener() *coapNet.UDPConn {
@@ -419,7 +460,15 @@ func getConnKey(raddr, laddr *net.UDPAddr) string {
 		normalizedLocalAddr.IP = nil
 		normalizedLocalAddr.Zone = ""
 	}
-	return raddr.String() + "-" + normalizedLocalAddr.String()
+	return getEndpointKey(raddr) + "-" + normalizedLocalAddr.String()
+}
+
+func getEndpointKey(addr *net.UDPAddr) string {
+	normalized := *addr
+	if normalized.IP.To4() != nil {
+		normalized.Zone = ""
+	}
+	return normalized.String()
 }
 
 func localAddrCanFallbackToWildcard(laddr *net.UDPAddr) bool {
@@ -439,55 +488,96 @@ func toWildcardLocalAddr(laddr *net.UDPAddr) *net.UDPAddr {
 	return &wildcard
 }
 
-func (s *Server) getOrCreateConn(udpConn *coapNet.UDPConn, raddr *net.UDPAddr, laddr *net.UDPAddr) (cc *client.Conn, created bool) {
+// Caller holds connsMutex.
+func (s *Server) findConn(key string, raddr, laddr *net.UDPAddr) *client.Conn {
+	if cc := s.conns[key]; cc != nil {
+		return cc
+	}
+	// NewConn on a wildcard listener is keyed by wildcard local address, but
+	// incoming packets can carry a concrete destination address.
+	if localAddrCanFallbackToWildcard(laddr) {
+		return s.conns[getConnKey(raddr, toWildcardLocalAddr(laddr))]
+	}
+	return nil
+}
+
+func (s *Server) blockWiseFactory() func(*client.Conn) *blockwise.BlockWise[*client.Conn] {
+	if !s.cfg.BlockwiseEnable {
+		return func(*client.Conn) *blockwise.BlockWise[*client.Conn] { return nil }
+	}
+	return func(cc *client.Conn) *blockwise.BlockWise[*client.Conn] {
+		bw := blockwise.New(
+			cc,
+			s.cfg.BlockwiseTransferTimeout,
+			s.cfg.Errors,
+			func(token message.Token) (*pool.Message, bool) {
+				msg, ok := cc.GetObservationRequest(token)
+				if ok {
+					return msg, ok
+				}
+				return s.multicastRequests.LoadWithFunc(token.Hash(), func(m *pool.Message) *pool.Message {
+					msg := cc.AcquireMessage(m.Context())
+					msg.ResetOptionsTo(m.Options())
+					msg.SetCode(m.Code())
+					msg.SetToken(m.Token())
+					msg.SetMessageID(m.MessageID())
+					return msg
+				})
+			},
+		)
+		bw.SetReceivingMessagesCacheMaxEntries(s.cfg.BlockwiseReceivingMessagesCacheMaxEntries)
+		return bw
+	}
+}
+
+// Caller holds connsMutex.
+func (s *Server) acquireEndpointMessageID(endpoint string) (*atomic.Uint32, bool, bool, error) {
+	if err := s.validateEndpointMessageIDCache(); err != nil {
+		return nil, false, false, err
+	}
+	initial := func() uint32 {
+		return pkgMath.CastTo[uint32](s.cfg.GetMID() + message.RandMID() - 0xffff/2)
+	}
+	now := time.Now()
+	counter, err := s.messageIDs.acquire(endpoint, initial, now)
+	if err == nil {
+		return counter, true, false, nil
+	}
+	if !errors.Is(err, ErrEndpointMessageIDsFull) || s.cfg.EndpointMessageIDCache.OverflowMode == EndpointMessageIDFailClosed {
+		return nil, false, false, fmt.Errorf("cannot track endpoint %s: %w", endpoint, err)
+	}
+	cache := s.cfg.EndpointMessageIDCache
+	warn := (cache.MaxEntries != 0 || cache.Unlimited) && !now.Before(s.nextMIDOverflowWarning)
+	if warn {
+		s.nextMIDOverflowWarning = now.Add(time.Minute)
+	}
+	return atomic.NewUint32(initial()), false, warn, nil
+}
+
+func (s *Server) getOrCreateConn(udpConn *coapNet.UDPConn, raddr, laddr *net.UDPAddr) (cc *client.Conn, created bool, err error) {
 	s.connsMutex.Lock()
-	defer s.connsMutex.Unlock()
+	warnOverflow := false
+	defer func() {
+		s.connsMutex.Unlock()
+		if warnOverflow {
+			s.cfg.Errors(fmt.Errorf("%w: admitting peers with untracked message ID sequences", ErrEndpointMessageIDsFull))
+		}
+	}()
 	key := getConnKey(raddr, laddr)
-	cc = s.conns[key]
+	cc = s.findConn(key, raddr, laddr)
 
 	if cc != nil {
-		return cc, false
+		return cc, false, nil
 	}
 
-	// When a client connection is created via NewConn() on a wildcard-bound listener,
-	// it is keyed by wildcard local address. Incoming datagrams can carry the concrete
-	// destination address in control messages, so fallback keeps these packets on the
-	// same conn instead of creating a second server-side conn.
-	if localAddrCanFallbackToWildcard(laddr) {
-		if cc = s.conns[getConnKey(raddr, toWildcardLocalAddr(laddr))]; cc != nil {
-			return cc, false
-		}
+	endpoint := getEndpointKey(raddr)
+	counter, tracked, warn, err := s.acquireEndpointMessageID(endpoint)
+	if err != nil {
+		return nil, false, err
 	}
+	warnOverflow = warn
 
-	createBlockWise := func(*client.Conn) *blockwise.BlockWise[*client.Conn] {
-		return nil
-	}
-	if s.cfg.BlockwiseEnable {
-		createBlockWise = func(cc *client.Conn) *blockwise.BlockWise[*client.Conn] {
-			v := cc
-			bw := blockwise.New(
-				v,
-				s.cfg.BlockwiseTransferTimeout,
-				s.cfg.Errors,
-				func(token message.Token) (*pool.Message, bool) {
-					msg, ok := v.GetObservationRequest(token)
-					if ok {
-						return msg, ok
-					}
-					return s.multicastRequests.LoadWithFunc(token.Hash(), func(m *pool.Message) *pool.Message {
-						msg := v.AcquireMessage(m.Context())
-						msg.ResetOptionsTo(m.Options())
-						msg.SetCode(m.Code())
-						msg.SetToken(m.Token())
-						msg.SetMessageID(m.MessageID())
-						return msg
-					})
-				},
-			)
-			bw.SetReceivingMessagesCacheMaxEntries(s.cfg.BlockwiseReceivingMessagesCacheMaxEntries)
-			return bw
-		}
-	}
+	createBlockWise := s.blockWiseFactory()
 	session := NewSession(
 		s.ctx,
 		s.doneCtx,
@@ -537,6 +627,7 @@ func (s *Server) getOrCreateConn(udpConn *coapNet.UDPConn, raddr *net.UDPAddr, l
 		client.WithInactivityMonitor(monitor),
 		client.WithRequestMonitor(requestMonitor),
 		client.WithBlockWise(createBlockWise),
+		client.WithMessageIDCounter(counter),
 	)
 	cc.SetContextValue(closeKey, func() {
 		if err := session.Close(); err != nil {
@@ -546,13 +637,20 @@ func (s *Server) getOrCreateConn(udpConn *coapNet.UDPConn, raddr *net.UDPAddr, l
 	})
 	cc.AddOnClose(func() {
 		s.connsMutex.Lock()
-		defer s.connsMutex.Unlock()
+		var releaseErr error
+		if tracked {
+			releaseErr = s.messageIDs.release(endpoint, time.Now())
+		}
 		if cc == s.conns[key] {
 			delete(s.conns, key)
 		}
+		s.connsMutex.Unlock()
+		if releaseErr != nil {
+			s.cfg.Errors(releaseErr)
+		}
 	})
 	s.conns[key] = cc
-	return cc, true
+	return cc, true, nil
 }
 
 func (s *Server) getConn(l *coapNet.UDPConn, raddr *net.UDPAddr, laddr *net.UDPAddr, firstTime bool) (*client.Conn, bool, error) {
@@ -567,7 +665,10 @@ func (s *Server) getConn(l *coapNet.UDPConn, raddr *net.UDPAddr, laddr *net.UDPA
 		}
 	}
 
-	cc, created := s.getOrCreateConn(l, raddr, laddr)
+	cc, created, err := s.getOrCreateConn(l, raddr, laddr)
+	if err != nil {
+		return nil, false, err
+	}
 	if created {
 		if s.cfg.OnNewConn != nil {
 			s.cfg.OnNewConn(cc)

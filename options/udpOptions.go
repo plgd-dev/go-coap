@@ -98,6 +98,44 @@ func WithMaxPendingMessages(maxPendingMessages uint32) MaxPendingMessagesOpt {
 	return MaxPendingMessagesOpt{maxPendingMessages: maxPendingMessages}
 }
 
+// EndpointMessageIDOverflowMode selects the UDP server MID cache overflow policy.
+type EndpointMessageIDOverflowMode = udpServer.EndpointMessageIDOverflowMode
+
+// EndpointMessageIDCacheConfig configures the UDP server MID cache.
+type EndpointMessageIDCacheConfig = udpServer.EndpointMessageIDCacheConfig
+
+const (
+	EndpointMessageIDFailOpen   = udpServer.EndpointMessageIDFailOpen
+	EndpointMessageIDFailClosed = udpServer.EndpointMessageIDFailClosed
+)
+
+// DefaultEndpointMessageIDCacheConfig returns the default bounded, fail-open configuration.
+func DefaultEndpointMessageIDCacheConfig() EndpointMessageIDCacheConfig {
+	return udpServer.DefaultEndpointMessageIDCacheConfig()
+}
+
+// EndpointMessageIDCacheOpt configures the UDP server's per-peer MID cache.
+type EndpointMessageIDCacheOpt struct {
+	config EndpointMessageIDCacheConfig
+}
+
+func (o EndpointMessageIDCacheOpt) UDPServerApply(cfg *udpServer.Config) {
+	cfg.EndpointMessageIDCache = o.config
+}
+
+// WithEndpointMessageIDCache configures UDP server peer MID retention.
+// The default is 4096 entries with fail-open overflow. MaxEntries zero disables
+// retention and requires fail-open, unless Unlimited is true. Unlimited
+// requires MaxEntries zero and may cause unbounded memory growth.
+// Active peers and peers whose last connection closed less than
+// client.ExchangeLifetime ago are retained. Fail-open admits new peers with
+// untracked sequences, potentially reusing MIDs; fail-closed rejects them.
+// Spoofed UDP addresses can trigger the overflow policy or exhaust memory.
+// MID wraparound, caller-assigned IDs and process restarts are not tracked.
+func WithEndpointMessageIDCache(config EndpointMessageIDCacheConfig) EndpointMessageIDCacheOpt {
+	return EndpointMessageIDCacheOpt{config: config}
+}
+
 // TransmissionOpt transmission options.
 type TransmissionOpt struct {
 	transmissionNStart                  uint32

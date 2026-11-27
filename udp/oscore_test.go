@@ -817,13 +817,13 @@ func TestOSCOREOuterBlockwiseClientRejectsPlaintextBlock2Responses(t *testing.T)
 type outerBlockwiseProxyRoundTripper struct {
 	context         *oscore.Context
 	expectedPayload []byte
-	called          bool
+	called          atomic.Bool
 }
 
 func (r *outerBlockwiseProxyRoundTripper) RoundTrip(
 	_ context.Context, target oscore.ProxyTarget, request message.Message,
 ) (message.Message, error) {
-	r.called = true
+	r.called.Store(true)
 	if target.Host != "origin.example" {
 		return message.Message{}, fmt.Errorf("unexpected origin target %q", target.Host)
 	}
@@ -909,7 +909,7 @@ func TestOSCOREOuterBlockwiseUDPProxy(t *testing.T) {
 	response, err := cc.Do(request)
 	require.NoError(t, err)
 	defer cc.ReleaseMessage(response)
-	require.True(t, origin.called, "proxy did not forward the reassembled request")
+	require.True(t, origin.called.Load(), "proxy did not forward the reassembled request")
 	require.Equal(t, codes.Content, response.Code())
 	body, err := response.ReadBody()
 	require.NoError(t, err)

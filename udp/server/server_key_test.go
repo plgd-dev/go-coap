@@ -4,6 +4,8 @@ import (
 	"net"
 	"testing"
 
+	coapNet "github.com/plgd-dev/go-coap/v3/net"
+	"github.com/plgd-dev/go-coap/v3/udp/client"
 	"github.com/stretchr/testify/require"
 )
 
@@ -33,4 +35,64 @@ func TestGetConnKeyNormalizesUnspecifiedLocalAddress(t *testing.T) {
 
 	require.Equal(t, getConnKey(raddr, unspecifiedV4), getConnKey(raddr, normalized))
 	require.Equal(t, getConnKey(raddr, unspecifiedV6), getConnKey(raddr, normalized))
+}
+
+func TestFindConnPrefersExactMatchAndFallsBackToWildcard(t *testing.T) {
+	s := New()
+	defer s.Stop()
+	remote := &net.UDPAddr{IP: net.IPv4(192, 0, 2, 1), Port: 12345}
+	local := &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 5683}
+	wildcard := &net.UDPAddr{Port: local.Port}
+	exactConn := &client.Conn{}
+	wildcardConn := &client.Conn{}
+	key := getConnKey(remote, local)
+	wildcardKey := getConnKey(remote, wildcard)
+
+	s.conns[wildcardKey] = wildcardConn
+	require.Same(t, wildcardConn, s.findConn(key, remote, local))
+	s.conns[key] = exactConn
+	require.Same(t, exactConn, s.findConn(key, remote, local))
+	delete(s.conns, key)
+	delete(s.conns, wildcardKey)
+	require.Nil(t, s.findConn(key, remote, local))
+}
+
+func TestEndpointKeyNormalizesIPv4AndPreservesIPv6Zone(t *testing.T) {
+	ipv4 := &net.UDPAddr{IP: net.IP{192, 0, 2, 1}, Port: 5683}
+	mapped := &net.UDPAddr{IP: net.ParseIP("::ffff:192.0.2.1"), Port: 5683, Zone: "ignored"}
+	local := &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 5683}
+	require.Equal(t, getEndpointKey(ipv4), getEndpointKey(mapped))
+	require.Equal(t, getConnKey(ipv4, local), getConnKey(mapped, local))
+	require.NotEqual(t, getEndpointKey(ipv4), getEndpointKey(&net.UDPAddr{IP: ipv4.IP, Port: 5684}))
+
+	zone1 := &net.UDPAddr{IP: net.ParseIP("fe80::1"), Port: 5683, Zone: "eth0"}
+	zone2 := &net.UDPAddr{IP: net.ParseIP("fe80::1"), Port: 5683, Zone: "eth1"}
+	require.NotEqual(t, getEndpointKey(zone1), getEndpointKey(zone2))
+}
+
+func TestNormalizedEndpointSharesSequenceAcrossConnections(t *testing.T) {
+	s := New(endpointMessageIDCacheOption{MaxEntries: 1})
+	defer s.Stop()
+	listener, err := coapNet.NewListenUDP("udp4", "127.0.0.1:0")
+	require.NoError(t, err)
+	defer listener.Close()
+	ipv4 := &net.UDPAddr{IP: net.IP{192, 0, 2, 1}, Port: 5683}
+	mapped := &net.UDPAddr{IP: net.ParseIP("::ffff:192.0.2.1"), Port: 5683, Zone: "ignored"}
+	local1 := &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 5683}
+	local2 := &net.UDPAddr{IP: net.IPv4(127, 0, 0, 2), Port: 5683}
+	first, created, err := s.getOrCreateConn(listener, ipv4, local1)
+	require.NoError(t, err)
+	require.True(t, created)
+	last := first.GetMessageID()
+	second, created, err := s.getOrCreateConn(listener, mapped, local2)
+	require.NoError(t, err)
+	require.True(t, created)
+	require.Equal(t, (last+1)&0xffff, second.GetMessageID())
+	getClose(first)()
+	getClose(second)()
+	reconnected, created, err := s.getOrCreateConn(listener, mapped, local1)
+	require.NoError(t, err)
+	require.True(t, created)
+	require.Equal(t, (last+2)&0xffff, reconnected.GetMessageID())
+	getClose(reconnected)()
 }

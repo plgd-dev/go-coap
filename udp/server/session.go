@@ -109,6 +109,9 @@ func (s *Session) Context() context.Context {
 }
 
 func (s *Session) WriteMessage(req *pool.Message) error {
+	if s.Context().Err() != nil {
+		return &netClient.RequestNotSentError{Err: net.ErrClosed}
+	}
 	data, err := req.MarshalWithEncoder(coder.DefaultCoder)
 	if err != nil {
 		return &netClient.RequestNotSentError{Err: fmt.Errorf("cannot marshal: %w", err)}
@@ -120,12 +123,34 @@ func (s *Session) WriteMessage(req *pool.Message) error {
 // By default it is sent over all network interfaces and all compatible source IP addresses with hop limit 1.
 // Via opts you can specify the network interface, source IP address, and hop limit.
 func (s *Session) WriteMulticastMessage(req *pool.Message, address *net.UDPAddr, opts ...coapNet.MulticastOption) error {
-	data, err := req.MarshalWithEncoder(coder.DefaultCoder)
-	if err != nil {
-		return fmt.Errorf("cannot marshal: %w", err)
+	multicastOpts := coapNet.DefaultMulticastOptions()
+	for _, opt := range opts {
+		multicastOpts.Apply(opt)
 	}
-
-	return s.connection.WriteMulticast(req.Context(), address, data, opts...)
+	type interfaceFailure struct {
+		iface *net.Interface
+		err   error
+	}
+	var failures []interfaceFailure
+	if multicastOpts.InterfaceError != nil {
+		opts = append(append([]coapNet.MulticastOption(nil), opts...), coapNet.WithMulticastInterfaceError(func(iface *net.Interface, err error) {
+			failures = append(failures, interfaceFailure{iface: iface, err: err})
+		}))
+	}
+	writeErr := func() error {
+		if s.Context().Err() != nil {
+			return net.ErrClosed
+		}
+		data, err := req.MarshalWithEncoder(coder.DefaultCoder)
+		if err != nil {
+			return fmt.Errorf("cannot marshal: %w", err)
+		}
+		return s.connection.WriteMulticast(req.Context(), address, data, opts...)
+	}()
+	for _, failure := range failures {
+		multicastOpts.InterfaceError(failure.iface, failure.err)
+	}
+	return writeErr
 }
 
 // rejectMalformedConfirmable replies with RST to a malformed confirmable message

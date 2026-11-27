@@ -19,6 +19,25 @@ type qObserveExchange struct {
 	sent     []uint32
 }
 
+type qRecoveryOptionsExchange struct {
+	qObserveExchange
+	options []uint32
+}
+
+func (e *qRecoveryOptionsExchange) Send(request *pool.Message) error {
+	for _, option := range request.Options() {
+		if option.ID != message.QBlock2 {
+			continue
+		}
+		value, _, err := message.DecodeUint32(option.Value)
+		if err != nil {
+			return err
+		}
+		e.options = append(e.options, value)
+	}
+	return nil
+}
+
 func (*qObserveExchange) NewToken() (message.Token, error) { return []byte("recovery"), nil }
 func (e *qObserveExchange) Send(request *pool.Message) error {
 	value, err := request.GetOptionUint32(message.QBlock2)
@@ -74,6 +93,50 @@ func TestQBlockConfirmableRecoveryResumesBody(t *testing.T) {
 	require.EqualValues(t, -1, receiver.requestedSet)
 	require.NoError(t, receiver.advance(9))
 	require.Len(t, exchange.sent, 1, "duplicate progress cannot repeat a completed-set continuation")
+}
+
+func TestQBlockNonConfirmableRecoveryRequestsOnlyMissingBlocks(t *testing.T) {
+	cc := &qTestTransport{testClient: newTestClient(), jobs: make(map[string]qBlockTestJob)}
+	b := New(cc, nil)
+	b.config.MaxPayloads = 3
+	defer b.CloseQBlockTransfers()
+	req := pool.NewMessage(context.Background())
+	req.SetCode(codes.GET)
+	req.SetToken([]byte("original"))
+	req.SetType(message.NonConfirmable)
+	assembly, err := NewAssembly(SZX16, 160, 1024, 100)
+	require.NoError(t, err)
+	exchange := new(qRecoveryOptionsExchange)
+	receiver := q2BodyReceiver[*qTestTransport]{
+		b: b, req: req, exchange: exchange, assembly: assembly, szx: SZX16, maxSZX: SZX16,
+		requestedSet: -1,
+	}
+	for _, step := range []struct {
+		arrivals []int64
+		missing  int64
+	}{
+		{[]int64{0, 2, 3}, 1},
+		{[]int64{5, 6}, 4},
+		{[]int64{8, 9}, 7},
+	} {
+		for _, num := range step.arrivals {
+			_, _, err := assembly.Add(num, num != 9, bytes.Repeat([]byte{7}, 16))
+			require.NoError(t, err)
+			require.NoError(t, receiver.advance(num))
+		}
+		require.Len(t, exchange.options, 1)
+		szx, num, more, err := DecodeQBlockOption(exchange.options[0])
+		require.NoError(t, err)
+		require.Equal(t, SZX16, szx)
+		require.Equal(t, step.missing, num)
+		require.False(t, more, "recovery must request only the missing payload")
+		exchange.options = nil
+		_, _, err = assembly.Add(step.missing, true, bytes.Repeat([]byte{7}, 16))
+		require.NoError(t, err)
+		require.NoError(t, receiver.advance(step.missing))
+		require.Empty(t, exchange.options)
+	}
+	require.True(t, assembly.Complete())
 }
 
 func qObservePayload(t *testing.T, szx SZX, num int64, size int, value byte, sequence *uint32) *pool.Message {
