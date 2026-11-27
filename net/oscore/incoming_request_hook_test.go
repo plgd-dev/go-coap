@@ -138,6 +138,16 @@ func TestProcessorRejectsUnprocessedEDHOCOption(t *testing.T) {
 			},
 			request: single,
 		},
+		{
+			name: "hook returns unsorted options",
+			hook: func(_ *Processor, request message.Message) (message.Message, error) {
+				for range 4 {
+					request.Options = append(request.Options, message.Option{ID: message.URIPath, Value: []byte("a")})
+				}
+				return request, nil
+			},
+			request: single,
+		},
 		{name: "repeated EDHOC option", hook: edhocHook(newTestContext(t, []byte{3}, []byte{4})), request: repeated},
 	}
 	for _, test := range tests {

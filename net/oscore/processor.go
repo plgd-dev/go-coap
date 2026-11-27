@@ -555,8 +555,10 @@ func (p *Processor) runIncomingHook(request message.Message) (message.Message, e
 			return message.Message{}, classifyLocalFault(err)
 		}
 	}
-	if request.Options.HasOption(message.EDHOC) {
-		return message.Message{}, ErrUnprocessedEDHOCOption
+	for _, option := range request.Options {
+		if option.ID == message.EDHOC {
+			return message.Message{}, ErrUnprocessedEDHOCOption
+		}
 	}
 	return request, nil
 }
