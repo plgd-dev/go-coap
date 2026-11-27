@@ -1733,3 +1733,103 @@ func TestConnObserveNotificationRejectedByReset(t *testing.T) {
 		require.False(t, isNotification(m), "notification %v sent after RST", m)
 	}
 }
+
+// TestConnUnmatchedResponseIsNotAnswered checks that a response matching no request is
+// rejected with Reset when confirmable and ignored otherwise (RFC 7252 section 5.3.2).
+// Answering it with the handler's 4.04 let one spoofed datagram start an endless
+// CON/ACK loop between two servers.
+func TestConnUnmatchedResponseIsNotAnswered(t *testing.T) {
+	l, err := coapNet.NewListenUDP("udp", "")
+	require.NoError(t, err)
+	defer func() {
+		errC := l.Close()
+		require.NoError(t, errC)
+	}()
+	var wg sync.WaitGroup
+	defer wg.Wait()
+
+	s := udp.NewServer()
+	defer s.Stop()
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		errS := s.Serve(l)
+		assert.NoError(t, errS)
+	}()
+
+	conn, err := net.Dial("udp", l.LocalAddr().String())
+	require.NoError(t, err)
+	defer func() {
+		errC := conn.Close()
+		require.NoError(t, errC)
+	}()
+
+	exchange := func(m message.Message) *pool.Message {
+		data := make([]byte, 64)
+		n, errE := coder.DefaultCoder.Encode(m, data)
+		require.NoError(t, errE)
+		_, errW := conn.Write(data[:n])
+		require.NoError(t, errW)
+		errD := conn.SetReadDeadline(time.Now().Add(time.Millisecond * 500))
+		require.NoError(t, errD)
+		buf := make([]byte, 1024)
+		n, errR := conn.Read(buf)
+		var netErr net.Error
+		if errors.As(errR, &netErr) && netErr.Timeout() {
+			return nil
+		}
+		require.NoError(t, errR)
+		resp := pool.NewMessage(context.Background())
+		_, errU := resp.UnmarshalWithDecoder(coder.DefaultCoder, buf[:n])
+		require.NoError(t, errU)
+		return resp
+	}
+
+	tests := []struct {
+		name      string
+		msg       message.Message
+		wantReset bool
+	}{
+		{
+			name: "NON response",
+			msg:  message.Message{Code: codes.NotFound, Token: []byte{0x01}, MessageID: 0x1234, Type: message.NonConfirmable},
+		},
+		{
+			name: "ACK response",
+			msg:  message.Message{Code: codes.NotFound, Token: []byte{0x01}, MessageID: 0x1235, Type: message.Acknowledgement},
+		},
+		{
+			name: "Reset",
+			msg:  message.Message{Code: codes.Empty, MessageID: 0x1236, Type: message.Reset},
+		},
+		{
+			name:      "CON response",
+			msg:       message.Message{Code: codes.NotFound, Token: []byte{0x01}, MessageID: 0x1237, Type: message.Confirmable},
+			wantReset: true,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			resp := exchange(tc.msg)
+			if !tc.wantReset {
+				if resp != nil {
+					require.Failf(t, "unmatched message answered", "%v %v was answered with %v %v", tc.msg.Type, tc.msg.Code, resp.Type(), resp.Code())
+				}
+				return
+			}
+			require.NotNil(t, resp)
+			require.Equal(t, message.Reset, resp.Type())
+			require.Equal(t, codes.Empty, resp.Code())
+			require.Equal(t, tc.msg.MessageID, resp.MessageID())
+			require.Empty(t, resp.Token())
+		})
+	}
+
+	// requests are still answered by the handler
+	resp := exchange(message.Message{Code: codes.GET, Token: []byte{0x02}, MessageID: 0x1238, Type: message.Confirmable})
+	require.NotNil(t, resp)
+	require.Equal(t, message.Acknowledgement, resp.Type())
+	require.Equal(t, codes.NotFound, resp.Code())
+	require.Equal(t, int32(0x1238), resp.MessageID())
+}
