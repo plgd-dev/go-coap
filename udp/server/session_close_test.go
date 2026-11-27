@@ -113,18 +113,16 @@ func TestMulticastInterfaceErrorCallbackCanCloseSession(t *testing.T) {
 		)
 	}()
 	select {
-	case callbackErr := <-callbacks:
-		require.NoError(t, callbackErr)
-	case writeErr := <-written:
-		t.Fatalf("multicast returned before callback: %v", writeErr)
-	case <-time.After(time.Second):
-		t.Fatal("multicast interface error callback did not complete")
-	}
-	select {
 	case writeErr := <-written:
 		require.NoError(t, writeErr)
 	case <-time.After(time.Second):
 		t.Fatal("multicast write did not finish")
+	}
+	select {
+	case callbackErr := <-callbacks:
+		require.NoError(t, callbackErr)
+	default:
+		t.Fatal("multicast interface error callback did not run")
 	}
 	require.ErrorIs(t, s.WriteMulticastMessage(req, &net.UDPAddr{IP: net.IPv4(224, 0, 1, 187), Port: 5683}), net.ErrClosed)
 }
