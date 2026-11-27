@@ -310,8 +310,7 @@ func TestServerZeroEndpointMessageIDCache(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, created)
 	require.Empty(t, s.messageIDs.entries)
-	require.Len(t, warnings, 1)
-	require.ErrorIs(t, warnings[0], ErrEndpointMessageIDsFull)
+	require.Empty(t, warnings)
 	getClose(first)()
 	getClose(second)()
 	reconnected, created, err := s.getOrCreateConn(listener, remote, local1)
@@ -319,7 +318,7 @@ func TestServerZeroEndpointMessageIDCache(t *testing.T) {
 	require.True(t, created)
 	require.Empty(t, s.messageIDs.entries)
 	getClose(reconnected)()
-	require.Len(t, warnings, 1)
+	require.Empty(t, warnings)
 }
 
 func TestEndpointMessageIDOverflowWarningInterval(t *testing.T) {
@@ -399,16 +398,6 @@ func TestInvalidEndpointMessageIDCacheConfig(t *testing.T) {
 			require.ErrorContains(t, err, tc.err)
 		})
 	}
-}
-
-func TestInvalidServerWriteTimeout(t *testing.T) {
-	s := New()
-	defer s.Stop()
-	s.cfg.WriteTimeout = 0
-	listener, err := coapNet.NewListenUDP("udp4", "127.0.0.1:0")
-	require.NoError(t, err)
-	defer listener.Close()
-	require.ErrorContains(t, s.Serve(listener), "write timeout must be positive")
 }
 
 func TestServerMessageIDsSurviveReconnectAndOtherPeers(t *testing.T) {

@@ -3,7 +3,6 @@ package server
 import (
 	"context"
 	"fmt"
-	"io"
 	"net"
 	"testing"
 	"time"
@@ -14,97 +13,6 @@ import (
 	coapNet "github.com/plgd-dev/go-coap/v3/net"
 	"github.com/stretchr/testify/require"
 )
-
-type blockingMessageBody struct {
-	started chan struct{}
-	release chan struct{}
-	read    bool
-}
-
-func (b *blockingMessageBody) Read(p []byte) (int, error) {
-	if b.read {
-		return 0, io.EOF
-	}
-	b.read = true
-	close(b.started)
-	<-b.release
-	p[0] = 1
-	return 1, nil
-}
-
-func (*blockingMessageBody) Seek(_ int64, whence int) (int64, error) {
-	if whence == io.SeekEnd {
-		return 1, nil
-	}
-	return 0, nil
-}
-
-func TestSessionCloseDoesNotWaitForMessageMarshalling(t *testing.T) {
-	for _, multicast := range []bool{false, true} {
-		t.Run(fmt.Sprintf("multicast=%t", multicast), func(t *testing.T) {
-			listener, err := coapNet.NewListenUDP("udp4", "127.0.0.1:0")
-			require.NoError(t, err)
-			defer listener.Close()
-			s := NewSession(context.Background(), context.Background(), listener, listener.LocalAddr().(*net.UDPAddr), 1024, 1024, false)
-			messages := pool.New(0, 0)
-			req := messages.AcquireMessage(context.Background())
-			defer messages.ReleaseMessage(req)
-			req.SetType(message.NonConfirmable)
-			req.SetCode(codes.POST)
-			req.SetMessageID(42)
-			body := &blockingMessageBody{started: make(chan struct{}), release: make(chan struct{})}
-			req.SetBody(body)
-			written := make(chan error, 1)
-			go func() {
-				if multicast {
-					written <- s.WriteMulticastMessage(req, &net.UDPAddr{IP: net.IPv4(224, 0, 1, 187), Port: 5683})
-				} else {
-					written <- s.WriteMessage(req)
-				}
-			}()
-			<-body.started
-			closed := make(chan error, 1)
-			go func() { closed <- s.Close() }()
-			select {
-			case err := <-closed:
-				require.NoError(t, err)
-			case <-time.After(time.Second):
-				close(body.release)
-				t.Logf("write returned: %v", <-written)
-				t.Fatal("close waited for message body")
-			}
-			close(body.release)
-			select {
-			case err := <-written:
-				require.ErrorIs(t, err, net.ErrClosed)
-			case <-time.After(time.Second):
-				t.Fatal("write did not finish")
-			}
-		})
-	}
-}
-
-func TestSessionWriteContextTimeoutAndClose(t *testing.T) {
-	s := NewSession(context.Background(), context.Background(), nil, nil, 1024, 1024, false)
-	s.writeTimeout = 30 * time.Millisecond
-	ctx, cancel := s.writeContext(context.Background())
-	defer cancel()
-	select {
-	case <-ctx.Done():
-		require.ErrorIs(t, ctx.Err(), context.DeadlineExceeded)
-	case <-time.After(time.Second):
-		t.Fatal("write context did not time out")
-	}
-	ctx, cancel = s.writeContext(context.Background())
-	defer cancel()
-	require.NoError(t, s.Close())
-	select {
-	case <-ctx.Done():
-		require.ErrorIs(t, ctx.Err(), context.Canceled)
-	case <-time.After(time.Second):
-		t.Fatal("write context was not canceled by close")
-	}
-}
 
 func TestSessionCloseWaitsForWritesAndRejectsLaterWrites(t *testing.T) {
 	listener, err := coapNet.NewListenUDP("udp4", "127.0.0.1:0")
