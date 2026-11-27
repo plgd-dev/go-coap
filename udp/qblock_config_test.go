@@ -92,12 +92,15 @@ func TestQBlockConfiguredSelectiveRecovery(t *testing.T) {
 			relay.mu.Lock()
 			defer relay.mu.Unlock()
 			require.Empty(t, relay.drops)
-			for num, count := range relay.observed {
-				want := 1
+			for num := int64(0); num < int64((len(payload)+127)/128); num++ {
+				minCount := 1
 				if num == 1 || num == 4 || num == 7 {
-					want = 2
+					minCount = 2
 				}
-				require.Equal(t, want, count, "NUM %d", num)
+				count := relay.observed[num]
+				require.GreaterOrEqual(t, count, minCount, "NUM %d", num)
+				// An in-flight set can overlap a continuation or recovery request.
+				require.LessOrEqual(t, count, config.NonMaxRetransmit+2, "NUM %d", num)
 			}
 		})
 	}
