@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	coapNet "github.com/plgd-dev/go-coap/v3/net"
+	"github.com/plgd-dev/go-coap/v3/udp/client"
 	"github.com/stretchr/testify/require"
 )
 
@@ -34,6 +35,26 @@ func TestGetConnKeyNormalizesUnspecifiedLocalAddress(t *testing.T) {
 
 	require.Equal(t, getConnKey(raddr, unspecifiedV4), getConnKey(raddr, normalized))
 	require.Equal(t, getConnKey(raddr, unspecifiedV6), getConnKey(raddr, normalized))
+}
+
+func TestFindConnPrefersExactMatchAndFallsBackToWildcard(t *testing.T) {
+	s := New()
+	defer s.Stop()
+	remote := &net.UDPAddr{IP: net.IPv4(192, 0, 2, 1), Port: 12345}
+	local := &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 5683}
+	wildcard := &net.UDPAddr{Port: local.Port}
+	exactConn := &client.Conn{}
+	wildcardConn := &client.Conn{}
+	key := getConnKey(remote, local)
+	wildcardKey := getConnKey(remote, wildcard)
+
+	s.conns[wildcardKey] = wildcardConn
+	require.Same(t, wildcardConn, s.findConn(key, remote, local))
+	s.conns[key] = exactConn
+	require.Same(t, exactConn, s.findConn(key, remote, local))
+	delete(s.conns, key)
+	delete(s.conns, wildcardKey)
+	require.Nil(t, s.findConn(key, remote, local))
 }
 
 func TestEndpointKeyNormalizesIPv4AndPreservesIPv6Zone(t *testing.T) {

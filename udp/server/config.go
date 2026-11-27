@@ -82,6 +82,7 @@ var DefaultConfig = func() Config {
 		MTU:                                 udpClient.DefaultMTU,
 		MaxPendingMessages:                  udpClient.DefaultMaxPendingMessages,
 		EndpointMessageIDCache:              DefaultEndpointMessageIDCacheConfig(),
+		WriteTimeout:                        5 * time.Second,
 	}
 	opts.Handler = func(w *responsewriter.ResponseWriter[*udpClient.Conn], r *pool.Message) {
 		if r.Type() == message.Confirmable && r.Code() >= 64 && r.Code() < 192 {
@@ -115,6 +116,9 @@ type Config struct {
 	// MaxPendingMessages limits in-flight duplicate suppression per connection.
 	// Zero disables in-flight tracking.
 	MaxPendingMessages uint32
+	// WriteTimeout bounds a UDP write, including time waiting for the shared
+	// socket. It must be positive and defaults to five seconds.
+	WriteTimeout time.Duration
 	// EndpointMessageIDCache configures retained per-peer outgoing MID sequences.
 	// Active peers and peers whose last connection closed less than
 	// client.ExchangeLifetime ago cannot be evicted.

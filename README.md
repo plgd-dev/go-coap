@@ -106,8 +106,14 @@ advisory's DTLS reconnect scenario the peer establishes a new DTLS session and
 CoAP connection, so the prior connection's duplicate-response cache is not
 retained; this does not imply MID reuse is generally harmless.
 
-On connection close, pending UDP writes are drained before the endpoint's
-retention period starts; a slow multicast write can delay closing the connection.
+UDP server writes have a five-second timeout by default, configurable with
+`options.WithUDPServerWriteTimeout` (the value must be positive). The timeout
+includes time waiting for the shared socket. Writes through the same UDPConn
+are serialized so their deadlines do not interfere. Closing a session cancels its
+pending writes and drains them before the endpoint's retention period starts.
+Message marshalling, network interface discovery and application callbacks are
+not subject to the socket write deadline. Do not modify the underlying socket's
+write deadline or wrap the same socket in multiple UDPConn instances.
 The server's `GetMID` callback runs under the connection lock and must not block
 or re-enter the server. A random offset is added to its value, so it cannot
 deterministically select the initial MID.

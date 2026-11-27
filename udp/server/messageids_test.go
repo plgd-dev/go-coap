@@ -401,6 +401,16 @@ func TestInvalidEndpointMessageIDCacheConfig(t *testing.T) {
 	}
 }
 
+func TestInvalidServerWriteTimeout(t *testing.T) {
+	s := New()
+	defer s.Stop()
+	s.cfg.WriteTimeout = 0
+	listener, err := coapNet.NewListenUDP("udp4", "127.0.0.1:0")
+	require.NoError(t, err)
+	defer listener.Close()
+	require.ErrorContains(t, s.Serve(listener), "write timeout must be positive")
+}
+
 func TestServerMessageIDsSurviveReconnectAndOtherPeers(t *testing.T) {
 	s := New()
 	defer s.Stop()

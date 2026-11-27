@@ -98,6 +98,21 @@ func WithMaxPendingMessages(maxPendingMessages uint32) MaxPendingMessagesOpt {
 	return MaxPendingMessagesOpt{maxPendingMessages: maxPendingMessages}
 }
 
+// UDPServerWriteTimeoutOpt configures the UDP server socket write timeout.
+type UDPServerWriteTimeoutOpt struct {
+	timeout time.Duration
+}
+
+func (o UDPServerWriteTimeoutOpt) UDPServerApply(cfg *udpServer.Config) {
+	cfg.WriteTimeout = o.timeout
+}
+
+// WithUDPServerWriteTimeout sets the timeout for a server UDP write, including
+// time waiting for the shared socket. It must be positive; the default is 5s.
+func WithUDPServerWriteTimeout(timeout time.Duration) UDPServerWriteTimeoutOpt {
+	return UDPServerWriteTimeoutOpt{timeout: timeout}
+}
+
 // EndpointMessageIDOverflowMode selects the UDP server MID cache overflow policy.
 type EndpointMessageIDOverflowMode = udpServer.EndpointMessageIDOverflowMode
 

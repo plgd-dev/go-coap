@@ -53,11 +53,13 @@ func TestEndpointMessageIDCacheOption(t *testing.T) {
 }
 
 func TestUDPServerApply(t *testing.T) {
+	require.Equal(t, 5*time.Second, udpServer.DefaultConfig.WriteTimeout)
 	cfg := udpServer.Config{}
 	opt := []udpServer.Option{
 		options.WithTransmission(10, time.Second, 5, 2.0),
 		options.WithMTU(1500),
 		options.WithMaxPendingMessages(7),
+		options.WithUDPServerWriteTimeout(3 * time.Second),
 		options.WithEndpointMessageIDCache(options.EndpointMessageIDCacheConfig{
 			MaxEntries: 8, OverflowMode: options.EndpointMessageIDFailClosed,
 		}),
@@ -73,6 +75,7 @@ func TestUDPServerApply(t *testing.T) {
 	// WithMTU
 	require.Equal(t, uint16(1500), cfg.MTU)
 	require.Equal(t, uint32(7), cfg.MaxPendingMessages)
+	require.Equal(t, 3*time.Second, cfg.WriteTimeout)
 	require.Equal(t, uint32(8), cfg.EndpointMessageIDCache.MaxEntries)
 	require.Equal(t, options.EndpointMessageIDFailClosed, cfg.EndpointMessageIDCache.OverflowMode)
 }

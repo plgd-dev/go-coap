@@ -70,16 +70,15 @@ func (s *Server) DiscoveryRequest(req *pool.Message, address string, receiverFun
 		_, _ = s.multicastHandler.LoadAndDelete(token.Hash())
 	}()
 
+	writeCtx, cancelWrite := newWriteContext(req.Context(), s.ctx, s.cfg.WriteTimeout)
 	if addr.IP.IsMulticast() {
-		err = c.WriteMulticast(req.Context(), addr, data, opts...)
-		if err != nil {
-			return err
-		}
+		err = c.WriteMulticast(writeCtx, addr, data, opts...)
 	} else {
-		err = c.WriteWithContext(req.Context(), addr, data)
-		if err != nil {
-			return err
-		}
+		err = c.WriteWithContext(writeCtx, addr, data)
+	}
+	cancelWrite()
+	if err != nil {
+		return err
 	}
 
 	select {
