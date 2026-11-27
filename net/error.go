@@ -5,12 +5,16 @@ import (
 	"errors"
 	"io"
 	"net"
+
+	"github.com/plgd-dev/go-coap/v3/internal/writecontext"
 )
 
 var (
 	ErrListenerIsClosed   = io.EOF
 	ErrConnectionIsClosed = io.EOF
 	ErrWriteInterrupted   = errors.New("only part data was written to socket")
+	// ErrWriteTimeout identifies expiration of the configured server write timeout.
+	ErrWriteTimeout = writecontext.ErrWriteTimeout
 )
 
 func IsCancelOrCloseError(err error) bool {

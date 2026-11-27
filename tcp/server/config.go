@@ -48,6 +48,7 @@ var DefaultConfig = func() Config {
 		ConnectionCacheSize:  2 * 1024,
 		HandshakeTimeout:     handshake.DefaultTimeout,
 		MaxPendingHandshakes: handshake.DefaultLimit,
+		WriteTimeout:         5 * time.Second,
 	}
 	opts.Handler = func(w *responsewriter.ResponseWriter[*client.Conn], _ *pool.Message) {
 		if err := w.SetResponse(codes.NotFound, message.TextPlain, nil); err != nil {
@@ -70,4 +71,6 @@ type Config struct {
 	HandshakeTimeout time.Duration
 	// MaxPendingHandshakes limits concurrent TLS handshakes; zero disables the limit.
 	MaxPendingHandshakes uint32
+	// WriteTimeout bounds network writes. It must be positive.
+	WriteTimeout time.Duration
 }

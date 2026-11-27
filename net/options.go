@@ -116,7 +116,10 @@ func (m MulticastInterfaceErrorOpt) applyMC(o *MulticastOptions) {
 	o.InterfaceError = m.interfaceError
 }
 
-// WithMulticastInterfaceError sets the callback for interface errors. If it is set error is not propagated as result of WriteMulticast.
+// WithMulticastInterfaceError sets the callback for interface errors. Callbacks
+// run after socket writes finish. Interface errors are not returned by
+// WriteMulticast when a callback is set, but context cancellation and deadline
+// errors are returned.
 func WithMulticastInterfaceError(interfaceError InterfaceError) MulticastOption {
 	return &MulticastInterfaceErrorOpt{interfaceError: interfaceError}
 }

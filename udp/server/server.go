@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/plgd-dev/go-coap/v3/internal/writecontext"
 	"github.com/plgd-dev/go-coap/v3/message"
 	"github.com/plgd-dev/go-coap/v3/message/pool"
 	coapNet "github.com/plgd-dev/go-coap/v3/net"
@@ -178,7 +179,9 @@ func (s *Server) maybeRejectMalformedConfirmable(l *coapNet.UDPConn, cc *client.
 		s.cfg.Errors(fmt.Errorf("%v: cannot build reset for malformed confirmable packet: %w", cc.RemoteAddr(), err))
 		return
 	}
-	writeOpts := []coapNet.UDPWriteOption{coapNet.WithContext(s.ctx), coapNet.WithRemoteAddr(raddr)}
+	ctx, cancel := writecontext.New(context.Background(), s.ctx, s.cfg.WriteTimeout)
+	defer cancel()
+	writeOpts := []coapNet.UDPWriteOption{coapNet.WithContext(ctx), coapNet.WithRemoteAddr(raddr)}
 	if cm != nil {
 		writeOpts = append(writeOpts, coapNet.WithControlMessage(&coapNet.ControlMessage{
 			IfIndex: cm.GetIfIndex(),
@@ -313,6 +316,9 @@ func (s *Server) Serve(l *coapNet.UDPConn) error {
 }
 
 func (s *Server) validateConfig() error {
+	if s.cfg.WriteTimeout <= 0 {
+		return errors.New("server write timeout must be positive")
+	}
 	if err := s.validateEndpointMessageIDCache(); err != nil {
 		return err
 	}
@@ -578,7 +584,7 @@ func (s *Server) getOrCreateConn(udpConn *coapNet.UDPConn, raddr, laddr *net.UDP
 	warnOverflow = warn
 
 	createBlockWise := s.blockWiseFactory()
-	session := NewSession(
+	session := newSession(
 		s.ctx,
 		s.doneCtx,
 		udpConn,
@@ -586,6 +592,7 @@ func (s *Server) getOrCreateConn(udpConn *coapNet.UDPConn, raddr, laddr *net.UDP
 		s.cfg.MaxMessageSize,
 		s.cfg.MTU,
 		false,
+		s.cfg.WriteTimeout,
 		s.cfg.Errors,
 	)
 	monitor := s.cfg.CreateInactivityMonitor()

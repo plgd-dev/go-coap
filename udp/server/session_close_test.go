@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/plgd-dev/go-coap/v3/internal/writecontext"
 	"github.com/plgd-dev/go-coap/v3/message"
 	"github.com/plgd-dev/go-coap/v3/message/codes"
 	"github.com/plgd-dev/go-coap/v3/message/pool"
@@ -15,13 +16,15 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-type blockingCloseTestBody struct {
+const nonexistentInterface = "nonexistent-interface"
+
+type blockingMessageBody struct {
 	started chan struct{}
 	release chan struct{}
 	read    bool
 }
 
-func (b *blockingCloseTestBody) Read(p []byte) (int, error) {
+func (b *blockingMessageBody) Read(p []byte) (int, error) {
 	if b.read {
 		return 0, io.EOF
 	}
@@ -32,51 +35,110 @@ func (b *blockingCloseTestBody) Read(p []byte) (int, error) {
 	return 1, nil
 }
 
-func (*blockingCloseTestBody) Seek(_ int64, whence int) (int64, error) {
+func (*blockingMessageBody) Seek(_ int64, whence int) (int64, error) {
 	if whence == io.SeekEnd {
 		return 1, nil
 	}
 	return 0, nil
 }
 
-func TestSessionCloseDoesNotWaitForWritesAndRejectsLaterWrites(t *testing.T) {
+func TestSessionCloseDoesNotWaitForMessageMarshalling(t *testing.T) {
+	for _, multicast := range []bool{false, true} {
+		t.Run(fmt.Sprintf("multicast=%t", multicast), func(t *testing.T) {
+			listener, err := coapNet.NewListenUDP("udp4", "127.0.0.1:0")
+			require.NoError(t, err)
+			defer listener.Close()
+			s := NewSession(context.Background(), context.Background(), listener, listener.LocalAddr().(*net.UDPAddr), 1024, 1024, false)
+			messages := pool.New(0, 0)
+			req := messages.AcquireMessage(context.Background())
+			defer messages.ReleaseMessage(req)
+			req.SetType(message.NonConfirmable)
+			req.SetCode(codes.POST)
+			req.SetMessageID(42)
+			body := &blockingMessageBody{started: make(chan struct{}), release: make(chan struct{})}
+			req.SetBody(body)
+			written := make(chan error, 1)
+			go func() {
+				if multicast {
+					written <- s.WriteMulticastMessage(req, &net.UDPAddr{IP: net.IPv4(224, 0, 1, 187), Port: 5683})
+				} else {
+					written <- s.WriteMessage(req)
+				}
+			}()
+			<-body.started
+			closed := make(chan error, 1)
+			go func() { closed <- s.Close() }()
+			select {
+			case err := <-closed:
+				require.NoError(t, err)
+			case <-time.After(time.Second):
+				close(body.release)
+				t.Logf("write returned: %v", <-written)
+				t.Fatal("close waited for message body")
+			}
+			close(body.release)
+			select {
+			case err := <-written:
+				require.ErrorIs(t, err, net.ErrClosed)
+			case <-time.After(time.Second):
+				t.Fatal("write did not finish")
+			}
+		})
+	}
+}
+
+func TestSessionWriteContextTimeoutAndClose(t *testing.T) {
+	s := newSession(context.Background(), context.Background(), nil, nil, 1024, 1024, false, 200*time.Millisecond)
+	ctx, cancel := writecontext.New(context.Background(), s.Context(), s.writeTimeout)
+	defer cancel()
+	select {
+	case <-ctx.Done():
+		require.ErrorIs(t, ctx.Err(), context.DeadlineExceeded)
+	case <-time.After(2 * time.Second):
+		t.Fatal("write context did not time out")
+	}
+	ctx, cancel = writecontext.New(context.Background(), s.Context(), s.writeTimeout)
+	defer cancel()
+	require.NoError(t, s.Close())
+	select {
+	case <-ctx.Done():
+		require.ErrorIs(t, ctx.Err(), context.Canceled)
+	case <-time.After(2 * time.Second):
+		t.Fatal("write context was not canceled by close")
+	}
+}
+
+func TestSessionCloseWaitsForWritesAndRejectsLaterWrites(t *testing.T) {
 	listener, err := coapNet.NewListenUDP("udp4", "127.0.0.1:0")
 	require.NoError(t, err)
 	defer listener.Close()
 	s := NewSession(context.Background(), context.Background(), listener, listener.LocalAddr().(*net.UDPAddr), 1024, 1024, false)
-	messages := pool.New(0, 0)
-	req := messages.AcquireMessage(context.Background())
-	defer messages.ReleaseMessage(req)
-	req.SetType(message.Confirmable)
-	req.SetCode(codes.POST)
-	req.SetMessageID(42)
-	body := &blockingCloseTestBody{started: make(chan struct{}), release: make(chan struct{})}
-	req.SetBody(body)
-	written := make(chan error, 1)
-	go func() { written <- s.WriteMessage(req) }()
-	select {
-	case <-body.started:
-	case <-time.After(time.Second):
-		close(body.release)
-		t.Fatal("write did not start")
-	}
+	s.writeMu.RLock()
 	closed := make(chan error, 1)
 	go func() { closed <- s.Close() }()
+	select {
+	case <-s.Context().Done():
+	case <-time.After(time.Second):
+		t.Fatal("session was not cancelled")
+	}
+	select {
+	case closeErr := <-closed:
+		t.Fatalf("session closed before its write completed: %v", closeErr)
+	default:
+	}
+	s.writeMu.RUnlock()
 	select {
 	case err = <-closed:
 		require.NoError(t, err)
 	case <-time.After(time.Second):
-		close(body.release)
-		t.Logf("pending write returned: %v", <-written)
-		t.Fatal("session waited for the pending write")
+		t.Fatal("session did not close")
 	}
-	close(body.release)
-	select {
-	case err = <-written:
-		require.NoError(t, err)
-	case <-time.After(time.Second):
-		t.Fatal("write did not finish")
-	}
+	messages := pool.New(0, 0)
+	req := messages.AcquireMessage(context.Background())
+	defer messages.ReleaseMessage(req)
+	req.SetType(message.Confirmable)
+	req.SetCode(codes.GET)
+	req.SetMessageID(42)
 	require.ErrorIs(t, s.WriteMessage(req), net.ErrClosed)
 	require.ErrorIs(t, s.WriteMulticastMessage(req, &net.UDPAddr{IP: net.IPv4(224, 0, 1, 187), Port: 5683}), net.ErrClosed)
 }
@@ -92,7 +154,7 @@ func TestMulticastInterfaceErrorCallbackCanCloseSession(t *testing.T) {
 	req.SetType(message.NonConfirmable)
 	req.SetCode(codes.GET)
 	req.SetMessageID(42)
-	iface := net.Interface{Index: -1, Name: "nonexistent-interface"}
+	iface := net.Interface{Index: -1, Name: nonexistentInterface}
 	callbacks := make(chan error, 1)
 	written := make(chan error, 1)
 	go func() {
@@ -113,18 +175,82 @@ func TestMulticastInterfaceErrorCallbackCanCloseSession(t *testing.T) {
 		)
 	}()
 	select {
+	case callbackErr := <-callbacks:
+		require.NoError(t, callbackErr)
+	case writeErr := <-written:
+		t.Fatalf("multicast returned before callback: %v", writeErr)
+	case <-time.After(time.Second):
+		t.Fatal("multicast interface error callback did not complete")
+	}
+	select {
 	case writeErr := <-written:
 		require.NoError(t, writeErr)
 	case <-time.After(time.Second):
 		t.Fatal("multicast write did not finish")
 	}
-	select {
-	case callbackErr := <-callbacks:
-		require.NoError(t, callbackErr)
-	default:
-		t.Fatal("multicast interface error callback did not run")
-	}
 	require.ErrorIs(t, s.WriteMulticastMessage(req, &net.UDPAddr{IP: net.IPv4(224, 0, 1, 187), Port: 5683}), net.ErrClosed)
+}
+
+func TestConcurrentSessionWritesAndClose(t *testing.T) {
+	listener, err := coapNet.NewListenUDP("udp4", "127.0.0.1:0")
+	require.NoError(t, err)
+	defer listener.Close()
+	s := NewSession(context.Background(), context.Background(), listener, listener.LocalAddr().(*net.UDPAddr), 1024, 1024, false)
+	newMessage := func(mid int32) *pool.Message {
+		req := pool.NewMessage(context.Background())
+		req.SetType(message.NonConfirmable)
+		req.SetCode(codes.GET)
+		req.SetMessageID(mid)
+		return req
+	}
+	callbackStarted := make(chan struct{})
+	start := make(chan struct{})
+	callbackDone := make(chan error, 1)
+	multicastDone := make(chan error, 1)
+	go func() {
+		multicastDone <- s.WriteMulticastMessage(newMessage(42), &net.UDPAddr{IP: net.IPv4(224, 0, 1, 187), Port: 5683},
+			coapNet.WithMulticastInterface(net.Interface{Index: -1, Name: nonexistentInterface}),
+			coapNet.WithMulticastSource(net.IPv4(127, 0, 0, 1)),
+			coapNet.WithMulticastInterfaceError(func(*net.Interface, error) {
+				close(callbackStarted)
+				<-start
+				callbackDone <- s.Close()
+			}),
+		)
+	}()
+	select {
+	case <-callbackStarted:
+	case <-time.After(2 * time.Second):
+		close(start)
+		t.Fatal("multicast callback did not start")
+	}
+	unicastDone := make(chan error, 1)
+	closeDone := make(chan error, 1)
+	go func() {
+		<-start
+		unicastDone <- s.WriteMessage(newMessage(43))
+	}()
+	go func() {
+		<-start
+		closeDone <- s.Close()
+	}()
+	close(start)
+	for _, result := range []<-chan error{callbackDone, multicastDone, closeDone} {
+		select {
+		case err := <-result:
+			require.NoError(t, err)
+		case <-time.After(2 * time.Second):
+			t.Fatal("concurrent close or multicast write did not finish")
+		}
+	}
+	select {
+	case err := <-unicastDone:
+		if err != nil {
+			require.ErrorIs(t, err, net.ErrClosed)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("concurrent unicast write did not finish")
+	}
 }
 
 func TestMulticastCallbacksPreserveCallerOptions(t *testing.T) {
@@ -141,7 +267,7 @@ func TestMulticastCallbacksPreserveCallerOptions(t *testing.T) {
 	req.SetMessageID(42)
 	var firstCalls, lastCalls int
 	opts := make([]coapNet.MulticastOption, 4, 5)
-	opts[0] = coapNet.WithMulticastInterface(net.Interface{Index: -1, Name: "nonexistent-interface"})
+	opts[0] = coapNet.WithMulticastInterface(net.Interface{Index: -1, Name: nonexistentInterface})
 	opts[1] = coapNet.WithMulticastSource(net.IPv4(127, 0, 0, 1))
 	opts[2] = coapNet.WithMulticastInterfaceError(func(*net.Interface, error) { firstCalls++ })
 	opts[3] = coapNet.WithMulticastInterfaceError(func(*net.Interface, error) { lastCalls++ })

@@ -145,7 +145,9 @@ func TestServerDiscover(t *testing.T) {
 			break
 		}
 	}
-	require.NotEmpty(t, iface)
+	if iface.Index == 0 {
+		t.Skip("no suitable multicast-capable IPv4 interface found")
+	}
 	const goosDarwin = "darwin"
 	type args struct {
 		opts []coapNet.MulticastOption

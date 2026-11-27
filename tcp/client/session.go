@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/plgd-dev/go-coap/v3/internal/onclose"
+	"github.com/plgd-dev/go-coap/v3/internal/writecontext"
 	"github.com/plgd-dev/go-coap/v3/message"
 	"github.com/plgd-dev/go-coap/v3/message/codes"
 	"github.com/plgd-dev/go-coap/v3/message/pool"
@@ -38,6 +39,7 @@ type Session struct {
 	connectionCacheSize        uint16
 	disableTCPSignalMessageCSM bool
 	closeSocket                bool
+	writeTimeout               time.Duration
 }
 
 func NewSession(
@@ -51,6 +53,23 @@ func NewSession(
 	requestMonitor RequestMonitorFunc,
 	connectionCacheSize uint16,
 	messagePool *pool.Pool,
+) *Session {
+	return newSession(ctx, connection, maxMessageSize, errors, disableTCPSignalMessageCSM,
+		closeSocket, inactivityMonitor, requestMonitor, connectionCacheSize, messagePool, 0)
+}
+
+func newSession(
+	ctx context.Context,
+	connection *coapNet.Conn,
+	maxMessageSize uint32,
+	errors ErrorFunc,
+	disableTCPSignalMessageCSM bool,
+	closeSocket bool,
+	inactivityMonitor InactivityMonitor,
+	requestMonitor RequestMonitorFunc,
+	connectionCacheSize uint16,
+	messagePool *pool.Pool,
+	writeTimeout time.Duration,
 ) *Session {
 	ctx, cancel := context.WithCancel(ctx)
 	if errors == nil {
@@ -79,6 +98,7 @@ func NewSession(
 		done:                       make(chan struct{}),
 		connectionCacheSize:        connectionCacheSize,
 		messagePool:                messagePool,
+		writeTimeout:               writeTimeout,
 	}
 	s.ctx.Store(&ctx)
 
@@ -263,7 +283,13 @@ func (s *Session) WriteMessage(req *pool.Message) error {
 	if err != nil {
 		return &netClient.RequestNotSentError{Err: fmt.Errorf("cannot marshal: %w", err)}
 	}
-	err = s.connection.WriteWithContext(req.Context(), data)
+	closeCtx := req.Context()
+	if sessionCtx := s.ctx.Load(); sessionCtx != nil {
+		closeCtx = *sessionCtx
+	}
+	ctx, cancel := writecontext.New(req.Context(), closeCtx, s.writeTimeout)
+	defer cancel()
+	err = s.connection.WriteWithContext(ctx, data)
 	if err != nil {
 		return fmt.Errorf("cannot write to connection: %w", err)
 	}

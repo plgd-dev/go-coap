@@ -206,7 +206,7 @@ func NewConnWithOpts(connection *coapNet.Conn, cfg *Config, opts ...Option) *Con
 	cc.observationHandler = observation.NewHandler(&cc, cfg.Handler, limitParallelRequests.Do)
 	cc.Client = client.New(&cc, cc.observationHandler, cfg.GetToken, limitParallelRequests)
 	cc.blockWise = cfgOpts.CreateBlockWise(&cc)
-	session := NewSession(cfg.Ctx,
+	session := newSession(cfg.Ctx,
 		connection,
 		cfg.MaxMessageSize,
 		cfg.Errors,
@@ -216,6 +216,7 @@ func NewConnWithOpts(connection *coapNet.Conn, cfg *Config, opts ...Option) *Con
 		cfgOpts.RequestMonitor,
 		cfg.ConnectionCacheSize,
 		cfg.MessagePool,
+		cfg.WriteTimeout,
 	)
 	cc.session = session
 	if cc.processReceivedMessage == nil {

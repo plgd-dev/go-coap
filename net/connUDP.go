@@ -6,8 +6,11 @@ import (
 	"fmt"
 	"net"
 	"strings"
+	"sync"
 	"time"
 
+	"github.com/plgd-dev/go-coap/v3/internal/requestnotsent"
+	"github.com/plgd-dev/go-coap/v3/internal/writecontext"
 	"github.com/plgd-dev/go-coap/v3/pkg/sync/atomic"
 	"golang.org/x/net/ipv4"
 	"golang.org/x/net/ipv6"
@@ -16,12 +19,16 @@ import (
 // UDPConn is a udp connection provides Read/Write with context.
 //
 // Multiple goroutines may invoke methods on a UDPConn simultaneously.
+// Writes are serialized to coordinate context deadlines. The underlying socket
+// must not have its write deadline changed or be wrapped by another UDPConn.
 type UDPConn struct {
 	packetConn packetConn
 	network    string
 	connection *net.UDPConn
 	errors     func(err error)
 	closed     atomic.Bool
+	writeOnce  sync.Once
+	writeGate  chan struct{}
 }
 
 type ControlMessage struct {
@@ -380,6 +387,68 @@ func convAddrsToIps(ifaceAddrs []net.Addr) []net.IP {
 	return ips
 }
 
+var multicastInterfaces = net.Interfaces
+
+type multicastTarget struct {
+	iface   *net.Interface
+	sources []*net.IP
+	err     error
+}
+
+func multicastInterfaceTarget(iface *net.Interface, source *net.IP, raddr *net.UDPAddr) multicastTarget {
+	target := multicastTarget{iface: iface}
+	if iface == nil {
+		target.err = errors.New("invalid interface")
+		return target
+	}
+	if source != nil {
+		target.sources = []*net.IP{source}
+		return target
+	}
+	addrs, err := iface.Addrs()
+	if err != nil {
+		target.err = err
+		return target
+	}
+	network := "udp4"
+	if IsIPv6(raddr.IP) {
+		network = "udp6"
+	}
+	for _, ip := range convAddrsToIps(filterAddressesByNetwork(network, addrs)) {
+		ipAddr := ip
+		target.sources = append(target.sources, &ipAddr)
+	}
+	return target
+}
+
+func discoverMulticastTargets(ctx context.Context, raddr *net.UDPAddr, opt MulticastOptions) ([]multicastTarget, error) {
+	switch opt.IFaceMode {
+	case MulticastAnyInterface:
+		return []multicastTarget{{sources: []*net.IP{opt.Source}}}, nil
+	case MulticastSpecificInterface:
+		return []multicastTarget{multicastInterfaceTarget(opt.Iface, opt.Source, raddr)}, nil
+	case MulticastAllInterface:
+		ifaces, err := multicastInterfaces()
+		if err != nil {
+			return nil, fmt.Errorf("cannot get interfaces for multicast connection: %w", err)
+		}
+		var targets []multicastTarget
+		for i := range ifaces {
+			if err := udpWriteContextError(ctx); err != nil {
+				return nil, &requestnotsent.Error{Err: err}
+			}
+			iface := &ifaces[i]
+			if iface.Flags&net.FlagMulticast == 0 || iface.Flags&net.FlagUp == 0 {
+				continue
+			}
+			targets = append(targets, multicastInterfaceTarget(iface, opt.Source, raddr))
+		}
+		return targets, nil
+	default:
+		return nil, nil
+	}
+}
+
 // WriteMulticast sends multicast to the remote multicast address.
 // By default it is sent over all network interfaces and all compatible source IP addresses with hop limit 1.
 // Via opts you can specify the network interface, source IP address, and hop limit.
@@ -390,30 +459,56 @@ func (c *UDPConn) WriteMulticast(ctx context.Context, raddr *net.UDPAddr, buffer
 	for _, o := range opts {
 		o.applyMC(&opt)
 	}
-	return c.writeMulticast(ctx, raddr, buffer, opt)
-}
-
-func (c *UDPConn) writeMulticastWithInterface(raddr *net.UDPAddr, buffer []byte, opt MulticastOptions) error {
-	if opt.Iface == nil && opt.IFaceMode == MulticastSpecificInterface {
-		return errors.New("invalid interface")
+	type failure struct {
+		iface *net.Interface
+		err   error
 	}
-	if opt.Source != nil {
-		return c.writeToAddr(opt.Iface, opt.Source, opt.HopLimit, raddr, buffer)
+	var failures []failure
+	callback := opt.InterfaceError
+	if callback != nil {
+		opt.InterfaceError = func(iface *net.Interface, err error) {
+			failures = append(failures, failure{iface: iface, err: err})
+		}
 	}
-	ifaceAddrs, err := opt.Iface.Addrs()
-	if err != nil {
+	if err := c.validateMulticast(ctx, raddr, opt); err != nil {
+		if ctxErr := udpWriteContextError(ctx); ctxErr != nil {
+			return &requestnotsent.Error{Err: ctxErr}
+		}
 		return err
 	}
-	netType := "udp4"
-	if IsIPv6(raddr.IP) {
-		netType = "udp6"
+	targets, err := discoverMulticastTargets(ctx, raddr, opt)
+	if err != nil {
+		if opt.IFaceMode == MulticastAllInterface {
+			return fmt.Errorf("cannot write multicast to all interfaces: %w", err)
+		}
+		return err
+	}
+	if ctxErr := udpWriteContextError(ctx); ctxErr != nil {
+		return &requestnotsent.Error{Err: ctxErr}
+	}
+	err = c.withWriteContext(ctx, func() error {
+		return c.writeMulticast(ctx, raddr, buffer, opt, targets)
+	})
+	for _, f := range failures {
+		callback(f.iface, f.err)
+	}
+	return err
+}
+
+func (c *UDPConn) writeMulticastWithInterface(ctx context.Context, raddr *net.UDPAddr, buffer []byte, opt MulticastOptions, target multicastTarget) error {
+	if target.err != nil {
+		return target.err
 	}
 	var errs []error
-	for _, ip := range convAddrsToIps(filterAddressesByNetwork(netType, ifaceAddrs)) {
-		ipAddr := ip
-		opt.Source = &ipAddr
-		err = c.writeToAddr(opt.Iface, opt.Source, opt.HopLimit, raddr, buffer)
+	for _, source := range target.sources {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return ctxErr
+		}
+		err := c.writeToAddr(target.iface, source, opt.HopLimit, raddr, buffer)
 		if err != nil {
+			if ctxErr := udpWriteContextError(ctx); ctxErr != nil {
+				return errors.Join(ctxErr, err)
+			}
 			errs = append(errs, err)
 		}
 	}
@@ -426,28 +521,22 @@ func (c *UDPConn) writeMulticastWithInterface(raddr *net.UDPAddr, buffer []byte,
 	return fmt.Errorf("%v", errs)
 }
 
-func (c *UDPConn) writeMulticastToAllInterfaces(raddr *net.UDPAddr, buffer []byte, opt MulticastOptions) error {
-	ifaces, err := net.Interfaces()
-	if err != nil {
-		return fmt.Errorf("cannot get interfaces for multicast connection: %w", err)
-	}
-
+func (c *UDPConn) writeMulticastToAllInterfaces(ctx context.Context, raddr *net.UDPAddr, buffer []byte, opt MulticastOptions, targets []multicastTarget) error {
 	var errs []error
-	for i := range ifaces {
-		iface := ifaces[i]
-		if iface.Flags&net.FlagMulticast == 0 {
-			continue
-		}
-		if iface.Flags&net.FlagUp != net.FlagUp {
-			continue
+	for _, target := range targets {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return ctxErr
 		}
 		specificOpt := opt
-		specificOpt.Iface = &iface
+		specificOpt.Iface = target.iface
 		specificOpt.IFaceMode = MulticastSpecificInterface
-		err = c.writeMulticastWithInterface(raddr, buffer, specificOpt)
+		err := c.writeMulticastWithInterface(ctx, raddr, buffer, specificOpt, target)
 		if err != nil {
+			if ctxErr := udpWriteContextError(ctx); ctxErr != nil {
+				return errors.Join(ctxErr, err)
+			}
 			if opt.InterfaceError != nil {
-				opt.InterfaceError(&iface, err)
+				opt.InterfaceError(target.iface, err)
 				continue
 			}
 			errs = append(errs, err)
@@ -480,15 +569,10 @@ func (c *UDPConn) validateMulticast(ctx context.Context, raddr *net.UDPAddr, opt
 	return nil
 }
 
-func (c *UDPConn) writeMulticast(ctx context.Context, raddr *net.UDPAddr, buffer []byte, opt MulticastOptions) error {
-	err := c.validateMulticast(ctx, raddr, opt)
-	if err != nil {
-		return err
-	}
-
+func (c *UDPConn) writeMulticast(ctx context.Context, raddr *net.UDPAddr, buffer []byte, opt MulticastOptions, targets []multicastTarget) error {
 	switch opt.IFaceMode {
 	case MulticastAllInterface:
-		err := c.writeMulticastToAllInterfaces(raddr, buffer, opt)
+		err := c.writeMulticastToAllInterfaces(ctx, raddr, buffer, opt, targets)
 		if err != nil {
 			return fmt.Errorf("cannot write multicast to all interfaces: %w", err)
 		}
@@ -498,11 +582,17 @@ func (c *UDPConn) writeMulticast(ctx context.Context, raddr *net.UDPAddr, buffer
 			return fmt.Errorf("cannot write multicast to any: %w", err)
 		}
 	case MulticastSpecificInterface:
-		err := c.writeMulticastWithInterface(raddr, buffer, opt)
+		err := c.writeMulticastWithInterface(ctx, raddr, buffer, opt, targets[0])
 		if err != nil {
+			if ctxErr := udpWriteContextError(ctx); ctxErr != nil {
+				return errors.Join(ctxErr, err)
+			}
 			if opt.InterfaceError != nil {
 				opt.InterfaceError(opt.Iface, err)
 				return nil
+			}
+			if opt.Iface == nil {
+				return fmt.Errorf("cannot write multicast to invalid interface: %w", err)
 			}
 			return fmt.Errorf("cannot write multicast to %v: %w", opt.Iface.Name, err)
 		}
@@ -540,6 +630,55 @@ func (c *UDPConn) writeTo(raddr *net.UDPAddr, cm *ControlMessage, buffer []byte)
 }
 
 var udpConnWriteTo = (*UDPConn).writeTo
+
+func udpWriteContextError(ctx context.Context) error {
+	return writecontext.Error(ctx)
+}
+
+func (c *UDPConn) withWriteContext(ctx context.Context, write func() error) (err error) {
+	c.writeOnce.Do(func() {
+		c.writeGate = make(chan struct{}, 1)
+	})
+	select {
+	case c.writeGate <- struct{}{}:
+		defer func() { <-c.writeGate }()
+	case <-ctx.Done():
+		return &requestnotsent.Error{Err: udpWriteContextError(ctx)}
+	}
+	if err := udpWriteContextError(ctx); err != nil {
+		return &requestnotsent.Error{Err: err}
+	}
+	if ctx.Done() == nil {
+		return write()
+	}
+	return withUDPWriteDeadline(ctx, c.connection.SetWriteDeadline, c.closed.Load, write)
+}
+
+func withUDPWriteDeadline(ctx context.Context, setDeadline func(time.Time) error, isClosed func() bool, write func() error) (err error) {
+	deadline, _ := ctx.Deadline()
+	if deadlineErr := setDeadline(deadline); deadlineErr != nil {
+		return errors.Join(udpWriteContextError(ctx), fmt.Errorf("cannot set UDP write deadline: %w", deadlineErr))
+	}
+	interrupted := make(chan error, 1)
+	stop := context.AfterFunc(ctx, func() {
+		interrupted <- setDeadline(time.Now())
+	})
+	defer func() {
+		if !stop() {
+			if deadlineErr := <-interrupted; deadlineErr != nil && !isClosed() {
+				err = errors.Join(err, fmt.Errorf("cannot interrupt UDP write: %w", deadlineErr))
+			}
+		}
+		if deadlineErr := setDeadline(time.Time{}); deadlineErr != nil && !isClosed() {
+			err = errors.Join(err, fmt.Errorf("cannot clear UDP write deadline: %w", deadlineErr))
+		}
+	}()
+	err = write()
+	if ctxErr := udpWriteContextError(ctx); ctxErr != nil && err != nil {
+		return errors.Join(ctxErr, err)
+	}
+	return err
+}
 
 type UDPWriteCfg struct {
 	Ctx            context.Context
@@ -636,23 +775,27 @@ func (c *UDPConn) writeWithCfg(buffer []byte, cfg UDPWriteCfg) error {
 	if cfg.RemoteAddr == nil {
 		return errors.New("cannot write with context: invalid raddr")
 	}
+	if cfg.Ctx == nil {
+		return errors.New("cannot write with context: nil context")
+	}
 	select {
 	case <-cfg.Ctx.Done():
-		return cfg.Ctx.Err()
+		return &requestnotsent.Error{Err: udpWriteContextError(cfg.Ctx)}
 	default:
 	}
 	if c.closed.Load() {
 		return ErrConnectionIsClosed
 	}
-	n, err := udpConnWriteTo(c, cfg.RemoteAddr, cfg.ControlMessage, buffer)
-	if err != nil {
-		return err
-	}
-	if n != len(buffer) {
-		return ErrWriteInterrupted
-	}
-
-	return nil
+	return c.withWriteContext(cfg.Ctx, func() error {
+		n, err := udpConnWriteTo(c, cfg.RemoteAddr, cfg.ControlMessage, buffer)
+		if err != nil {
+			return err
+		}
+		if n != len(buffer) {
+			return ErrWriteInterrupted
+		}
+		return nil
+	})
 }
 
 // WriteWithOptions writes data with options. Via opts you can specify the remote address and control message.
