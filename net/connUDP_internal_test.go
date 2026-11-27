@@ -273,7 +273,7 @@ func getFirstUpMulticastInterface(t *testing.T) net.Interface {
 			return i
 		}
 	}
-	require.FailNow(t, "No suitable multicast interface found")
+	t.Skip("no suitable multicast interface found")
 	return net.Interface{}
 }
 
@@ -396,7 +396,7 @@ func getInterfaceIndex(t *testing.T) net.Interface {
 			return i
 		}
 	}
-	require.Fail(t, "No suitable interface found")
+	t.Skip("no suitable multicast interface found")
 	return net.Interface{}
 }
 
@@ -811,6 +811,11 @@ func TestUDPConnWriteWithCfgBranches(t *testing.T) {
 	t.Run("missing remote addr", func(t *testing.T) {
 		err := conn.writeWithCfg([]byte("x"), UDPWriteCfg{Ctx: context.Background()})
 		require.Error(t, err)
+	})
+
+	t.Run("nil context", func(t *testing.T) {
+		err := conn.writeWithCfg([]byte("x"), UDPWriteCfg{RemoteAddr: &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 1234}})
+		require.ErrorContains(t, err, "nil context")
 	})
 
 	t.Run("canceled context", func(t *testing.T) {

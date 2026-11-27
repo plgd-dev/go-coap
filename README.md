@@ -108,13 +108,45 @@ advisory's DTLS reconnect scenario the peer establishes a new DTLS session and
 CoAP connection, so the prior connection's duplicate-response cache is not
 retained; this does not imply MID reuse is generally harmless.
 
-Closing a connection does not wait for writes already in progress. A delayed
-write can therefore complete after the endpoint's retention period starts; if
-it remains blocked for at least that period, its MID may be reused too early
-after the cache entry is evicted.
+TCP, UDP, and DTLS server writes use a five-second write timeout by default,
+configurable with `options.WithServerWriteTimeout` (the value must be positive).
+For DTLS, a timed-out write makes the connection unusable and returns without
+waiting for Pion's underlying write or close to finish; those operations can
+remain blocked until the shared UDP socket write completes.
+For TCP and DTLS, the timeout also includes waiting for the connection's write
+gate.
+For UDP, the timeout includes time waiting for the shared socket. Writes through
+the same UDPConn are serialized so their deadlines do not interfere. Closing a
+UDP session cancels its pending writes and drains them before the endpoint's
+retention period starts. Multicast interface discovery runs outside the socket
+write gate; it and message marshalling and application callbacks cannot be
+interrupted by the network write deadline. The write context may expire during
+discovery and is checked before transmission.
 The server's `GetMID` callback runs under the connection lock and must not block
 or re-enter the server. A random offset is added to its value, so it cannot
 deterministically select the initial MID.
+
+## Connection write deadlines
+
+Library connection wrappers manage write deadlines to support context
+cancellation. Do not change the underlying connection's write deadline or wrap
+the same stream connection in multiple library `Conn` instances or the same
+socket in multiple library `UDPConn` instances: those operations bypass the
+coordination and can interfere with writes.
+
+This applies to both `net.Conn` wrappers used by TCP/DTLS and UDP connections.
+For clients created by `udp.Dial`, do not change the write deadline on the
+connection returned by `Conn.NetConn()`. For `udp.Client`, do not independently
+modify the deadline or wrap the supplied socket again. Use request contexts to
+control write cancellation instead.
+
+### Behavior changes
+
+- Write deadlines are managed by the library. After a cancellable write, any
+  write deadline previously set directly on the underlying connection is
+  cleared rather than restored.
+- A hand-built server `Config` with a zero `WriteTimeout` is rejected by
+  `Serve`. Use the default configuration or set a positive timeout explicitly.
 
 ## Experimental Q-Block transfers
 

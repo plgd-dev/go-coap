@@ -5,9 +5,12 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/plgd-dev/go-coap/v3/internal/onclose"
+	"github.com/plgd-dev/go-coap/v3/internal/writecontext"
 	"github.com/plgd-dev/go-coap/v3/message"
 	"github.com/plgd-dev/go-coap/v3/message/pool"
 	coapNet "github.com/plgd-dev/go-coap/v3/net"
@@ -33,8 +36,10 @@ type Session struct {
 	maxMessageSize uint32
 	mtu            uint16
 
-	closeSocket bool
-	errors      client.ErrorFunc
+	closeSocket  bool
+	errors       client.ErrorFunc
+	writeMu      sync.RWMutex
+	writeTimeout time.Duration
 }
 
 // NewSession creates a UDP session. Optional error handlers receive recoverable
@@ -47,6 +52,20 @@ func NewSession(
 	maxMessageSize uint32,
 	mtu uint16,
 	closeSocket bool,
+	errorHandlers ...client.ErrorFunc,
+) *Session {
+	return newSession(ctx, doneCtx, connection, raddr, maxMessageSize, mtu, closeSocket, 0, errorHandlers...)
+}
+
+func newSession(
+	ctx context.Context,
+	doneCtx context.Context,
+	connection *coapNet.UDPConn,
+	raddr *net.UDPAddr,
+	maxMessageSize uint32,
+	mtu uint16,
+	closeSocket bool,
+	writeTimeout time.Duration,
 	errorHandlers ...client.ErrorFunc,
 ) *Session {
 	ctx, cancel := context.WithCancel(ctx)
@@ -62,6 +81,7 @@ func NewSession(
 		doneCtx:        doneCtx,
 		doneCancel:     doneCancel,
 		errors:         client.DefaultConfig.Errors,
+		writeTimeout:   writeTimeout,
 	}
 	if len(errorHandlers) > 0 {
 		s.errors = func(err error) {
@@ -96,12 +116,18 @@ func (s *Session) shutdown() {
 	s.onClose.Close()
 }
 
+// Close cancels the session and blocks until in-flight writes have drained.
+// It must not be called while holding the session write lock.
 func (s *Session) Close() error {
 	s.cancel()
+	var err error
 	if s.closeSocket {
-		return s.connection.Close()
+		err = s.connection.Close()
 	}
-	return nil
+	// Drain in-flight writes before the server releases this peer's MID sequence.
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	return err
 }
 
 func (s *Session) Context() context.Context {
@@ -109,14 +135,21 @@ func (s *Session) Context() context.Context {
 }
 
 func (s *Session) WriteMessage(req *pool.Message) error {
-	if s.Context().Err() != nil {
-		return &netClient.RequestNotSentError{Err: net.ErrClosed}
+	if err := s.Context().Err(); err != nil {
+		return &netClient.RequestNotSentError{Err: errors.Join(err, net.ErrClosed)}
 	}
 	data, err := req.MarshalWithEncoder(coder.DefaultCoder)
 	if err != nil {
 		return &netClient.RequestNotSentError{Err: fmt.Errorf("cannot marshal: %w", err)}
 	}
-	return s.connection.WriteWithOptions(data, coapNet.WithContext(req.Context()), coapNet.WithRemoteAddr(s.raddr), coapNet.WithControlMessage(req.ControlMessage()))
+	ctx, cancel := writecontext.New(req.Context(), s.Context(), s.writeTimeout)
+	defer cancel()
+	s.writeMu.RLock()
+	defer s.writeMu.RUnlock()
+	if err := s.Context().Err(); err != nil {
+		return &netClient.RequestNotSentError{Err: errors.Join(err, net.ErrClosed)}
+	}
+	return s.connection.WriteWithOptions(data, coapNet.WithContext(ctx), coapNet.WithRemoteAddr(s.raddr), coapNet.WithControlMessage(req.ControlMessage()))
 }
 
 // WriteMulticastMessage sends multicast to the remote multicast address.
@@ -145,7 +178,14 @@ func (s *Session) WriteMulticastMessage(req *pool.Message, address *net.UDPAddr,
 		if err != nil {
 			return fmt.Errorf("cannot marshal: %w", err)
 		}
-		return s.connection.WriteMulticast(req.Context(), address, data, opts...)
+		ctx, cancel := writecontext.New(req.Context(), s.Context(), s.writeTimeout)
+		defer cancel()
+		s.writeMu.RLock()
+		defer s.writeMu.RUnlock()
+		if s.Context().Err() != nil {
+			return net.ErrClosed
+		}
+		return s.connection.WriteMulticast(ctx, address, data, opts...)
 	}()
 	for _, failure := range failures {
 		multicastOpts.InterfaceError(failure.iface, failure.err)
@@ -167,7 +207,9 @@ func (s *Session) rejectMalformedConfirmable(cm *coapNet.ControlMessage, malform
 	if err != nil {
 		return
 	}
-	writeOpts := []coapNet.UDPWriteOption{coapNet.WithContext(s.Context()), coapNet.WithRemoteAddr(s.raddr)}
+	ctx, cancel := writecontext.New(context.Background(), s.Context(), s.writeTimeout)
+	defer cancel()
+	writeOpts := []coapNet.UDPWriteOption{coapNet.WithContext(ctx), coapNet.WithRemoteAddr(s.raddr)}
 	if cm != nil {
 		writeOpts = append(writeOpts, coapNet.WithControlMessage(&coapNet.ControlMessage{
 			IfIndex: cm.GetIfIndex(),

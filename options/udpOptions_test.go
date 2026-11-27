@@ -6,6 +6,7 @@ import (
 
 	dtlsServer "github.com/plgd-dev/go-coap/v3/dtls/server"
 	"github.com/plgd-dev/go-coap/v3/options"
+	tcpServer "github.com/plgd-dev/go-coap/v3/tcp/server"
 	"github.com/plgd-dev/go-coap/v3/udp"
 	"github.com/plgd-dev/go-coap/v3/udp/client"
 	udpServer "github.com/plgd-dev/go-coap/v3/udp/server"
@@ -53,11 +54,13 @@ func TestEndpointMessageIDCacheOption(t *testing.T) {
 }
 
 func TestUDPServerApply(t *testing.T) {
+	require.Equal(t, 5*time.Second, udpServer.DefaultConfig.WriteTimeout)
 	cfg := udpServer.Config{}
 	opt := []udpServer.Option{
 		options.WithTransmission(10, time.Second, 5, 2.0),
 		options.WithMTU(1500),
 		options.WithMaxPendingMessages(7),
+		options.WithServerWriteTimeout(3 * time.Second),
 		options.WithEndpointMessageIDCache(options.EndpointMessageIDCacheConfig{
 			MaxEntries: 8, OverflowMode: options.EndpointMessageIDFailClosed,
 		}),
@@ -73,8 +76,26 @@ func TestUDPServerApply(t *testing.T) {
 	// WithMTU
 	require.Equal(t, uint16(1500), cfg.MTU)
 	require.Equal(t, uint32(7), cfg.MaxPendingMessages)
+	require.Equal(t, 3*time.Second, cfg.WriteTimeout)
 	require.Equal(t, uint32(8), cfg.EndpointMessageIDCache.MaxEntries)
 	require.Equal(t, options.EndpointMessageIDFailClosed, cfg.EndpointMessageIDCache.OverflowMode)
+}
+
+func TestServerWriteTimeoutOption(t *testing.T) {
+	require.Equal(t, 5*time.Second, tcpServer.DefaultConfig.WriteTimeout)
+	require.Equal(t, 5*time.Second, udpServer.DefaultConfig.WriteTimeout)
+	require.Equal(t, 5*time.Second, dtlsServer.DefaultConfig.WriteTimeout)
+
+	opt := options.WithServerWriteTimeout(3 * time.Second)
+	tcpCfg := tcpServer.Config{}
+	udpCfg := udpServer.Config{}
+	dtlsCfg := dtlsServer.Config{}
+	opt.TCPServerApply(&tcpCfg)
+	opt.UDPServerApply(&udpCfg)
+	opt.DTLSServerApply(&dtlsCfg)
+	require.Equal(t, 3*time.Second, tcpCfg.WriteTimeout)
+	require.Equal(t, 3*time.Second, udpCfg.WriteTimeout)
+	require.Equal(t, 3*time.Second, dtlsCfg.WriteTimeout)
 }
 
 func TestDTLSServerApply(t *testing.T) {

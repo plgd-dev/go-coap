@@ -51,6 +51,7 @@ var DefaultConfig = func() Config {
 		GetMID:                              message.GetMID,
 		MTU:                                 udpClient.DefaultMTU,
 		MaxPendingMessages:                  udpClient.DefaultMaxPendingMessages,
+		WriteTimeout:                        5 * time.Second,
 	}
 	opts.Handler = func(w *responsewriter.ResponseWriter[*udpClient.Conn], r *pool.Message) {
 		if r.Type() == message.Confirmable && r.Code() >= 64 && r.Code() < 192 {
@@ -83,6 +84,8 @@ type Config struct {
 	// MaxPendingMessages limits in-flight duplicate suppression per connection.
 	// Zero disables in-flight tracking.
 	MaxPendingMessages uint32
+	// WriteTimeout bounds network writes. It must be positive.
+	WriteTimeout time.Duration
 	// QBlockwiseMode is Disabled by default.
 	QBlockwiseMode   blockwise.QBlockwiseMode
 	QBlockwiseConfig blockwise.QBlockwiseConfig

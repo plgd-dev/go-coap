@@ -154,6 +154,9 @@ func (s *Server) serveConnection(connections *connections.Connections, rw net.Co
 }
 
 func (s *Server) Serve(l Listener) error {
+	if s.cfg.WriteTimeout <= 0 {
+		return errors.New("server write timeout must be positive")
+	}
 	if _, err := s.cfg.QBlockwiseConfig.Resolve(); err != nil {
 		return err
 	}
@@ -237,12 +240,13 @@ func (s *Server) createConn(connection *coapNet.Conn, inactivityMonitor udpClien
 			return bw
 		}
 	}
-	session := NewSession(
+	session := newSession(
 		s.ctx,
 		connection,
 		s.cfg.MaxMessageSize,
 		s.cfg.MTU,
 		true,
+		s.cfg.WriteTimeout,
 	)
 	cfg := udpClient.DefaultConfig
 	cfg.TransmissionNStart = s.cfg.TransmissionNStart

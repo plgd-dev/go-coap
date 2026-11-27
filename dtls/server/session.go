@@ -7,8 +7,10 @@ import (
 	"fmt"
 	"net"
 	"sync/atomic"
+	"time"
 
 	"github.com/plgd-dev/go-coap/v3/internal/onclose"
+	"github.com/plgd-dev/go-coap/v3/internal/writecontext"
 	"github.com/plgd-dev/go-coap/v3/message"
 	"github.com/plgd-dev/go-coap/v3/message/pool"
 	coapNet "github.com/plgd-dev/go-coap/v3/net"
@@ -34,7 +36,8 @@ type Session struct {
 
 	mtu uint16
 
-	closeSocket bool
+	closeSocket  bool
+	writeTimeout time.Duration
 }
 
 func NewSession(
@@ -44,6 +47,17 @@ func NewSession(
 	mtu uint16,
 	closeSocket bool,
 ) *Session {
+	return newSession(ctx, connection, maxMessageSize, mtu, closeSocket, 0)
+}
+
+func newSession(
+	ctx context.Context,
+	connection *coapNet.Conn,
+	maxMessageSize uint32,
+	mtu uint16,
+	closeSocket bool,
+	writeTimeout time.Duration,
+) *Session {
 	ctx, cancel := context.WithCancel(ctx)
 	s := &Session{
 		cancel:         cancel,
@@ -52,6 +66,7 @@ func NewSession(
 		closeSocket:    closeSocket,
 		mtu:            mtu,
 		done:           make(chan struct{}),
+		writeTimeout:   writeTimeout,
 	}
 	s.ctx.Store(&ctx)
 	return s
@@ -94,7 +109,13 @@ func (s *Session) WriteMessage(req *pool.Message) error {
 	if err != nil {
 		return &netClient.RequestNotSentError{Err: fmt.Errorf("cannot marshal: %w", err)}
 	}
-	err = s.connection.WriteWithContext(req.Context(), data)
+	closeCtx := req.Context()
+	if sessionCtx := s.ctx.Load(); sessionCtx != nil {
+		closeCtx = *sessionCtx
+	}
+	ctx, cancel := writecontext.New(req.Context(), closeCtx, s.writeTimeout)
+	defer cancel()
+	err = s.connection.WriteWithContext(ctx, data)
 	if err != nil {
 		return fmt.Errorf("cannot write to connection: %w", err)
 	}
@@ -132,7 +153,9 @@ func (s *Session) rejectMalformedConfirmable(malformedErr *client.MalformedMessa
 	// Ver=1, Type=RST(3), TKL=0, Code=0.00 Empty
 	rst := []byte{0x70, 0x00, 0, 0}
 	binary.BigEndian.PutUint16(rst[2:4], mid)
-	_ = s.connection.WriteWithContext(s.Context(), rst)
+	ctx, cancel := writecontext.New(context.Background(), s.Context(), s.writeTimeout)
+	defer cancel()
+	_ = s.connection.WriteWithContext(ctx, rst)
 }
 
 // Run reads and processes requests from a connection, until the connection is closed.

@@ -140,6 +140,9 @@ func (s *Server) serveConnection(connections *connections.Connections, rw net.Co
 }
 
 func (s *Server) Serve(l Listener) error {
+	if s.cfg.WriteTimeout <= 0 {
+		return errors.New("server write timeout must be positive")
+	}
 	if s.cfg.BlockwiseSZX > blockwise.SZXBERT {
 		return errors.New("invalid blockwiseSZX")
 	}
@@ -230,6 +233,7 @@ func (s *Server) createConn(connection *coapNet.Conn, inactivityMonitor client.I
 	cfg.GetToken = s.cfg.GetToken
 	cfg.OSCORE = s.cfg.OSCORE
 	cfg.OSCOREErrorResponses = s.cfg.OSCOREErrorResponses
+	cfg.WriteTimeout = s.cfg.WriteTimeout
 	cfg.ProcessReceivedMessage = s.cfg.ProcessReceivedMessage
 	cfg.ReceivedMessageQueueSize = s.cfg.ReceivedMessageQueueSize
 	cc := client.NewConnWithOpts(

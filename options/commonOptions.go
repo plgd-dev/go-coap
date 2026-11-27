@@ -24,6 +24,29 @@ import (
 
 type ErrorFunc = config.ErrorFunc
 
+// ServerWriteTimeoutOpt configures a server connection write timeout.
+type ServerWriteTimeoutOpt struct {
+	timeout time.Duration
+}
+
+func (o ServerWriteTimeoutOpt) TCPServerApply(cfg *tcpServer.Config) {
+	cfg.WriteTimeout = o.timeout
+}
+
+func (o ServerWriteTimeoutOpt) UDPServerApply(cfg *udpServer.Config) {
+	cfg.WriteTimeout = o.timeout
+}
+
+func (o ServerWriteTimeoutOpt) DTLSServerApply(cfg *dtlsServer.Config) {
+	cfg.WriteTimeout = o.timeout
+}
+
+// WithServerWriteTimeout sets the maximum duration of a server network write.
+// It must be positive; the default is five seconds.
+func WithServerWriteTimeout(timeout time.Duration) ServerWriteTimeoutOpt {
+	return ServerWriteTimeoutOpt{timeout: timeout}
+}
+
 // OSCOREOpt applies an OSCORE processor to client or server configuration.
 type OSCOREOpt struct {
 	processor *oscore.Processor

@@ -69,6 +69,71 @@ func TestEndpointMessageIDsRetentionAfterLastConnection(t *testing.T) {
 	require.NoError(t, err)
 }
 
+func TestEndpointMessageIDRetentionStartsAfterCloseDrains(t *testing.T) {
+	s := New(endpointMessageIDCacheOption{MaxEntries: 1, OverflowMode: EndpointMessageIDFailClosed})
+	defer s.Stop()
+	listener, err := coapNet.NewListenUDP("udp4", "127.0.0.1:0")
+	require.NoError(t, err)
+	defer listener.Close()
+	remote := &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 12345}
+	cc, created, err := s.getConn(listener, remote, listener.LocalAddr().(*net.UDPAddr), true)
+	require.NoError(t, err)
+	require.True(t, created)
+	session := cc.Session().(*Session)
+	session.writeMu.RLock()
+	locked := true
+	defer func() {
+		if locked {
+			session.writeMu.RUnlock()
+		}
+	}()
+	closeReturned := make(chan time.Time, 1)
+	closed := make(chan struct{})
+	go func() {
+		closeErr := session.Close()
+		if closeErr != nil {
+			t.Errorf("cannot close session: %v", closeErr)
+		}
+		closeReturned <- time.Now()
+		getClose(cc)()
+		close(closed)
+	}()
+	select {
+	case <-session.Context().Done():
+	case <-time.After(2 * time.Second):
+		t.Fatal("session was not cancelled")
+	}
+	s.connsMutex.Lock()
+	entry := s.messageIDs.entries[remote.String()]
+	users, expires := entry.users, entry.expires
+	s.connsMutex.Unlock()
+	require.Equal(t, 1, users)
+	require.True(t, expires.IsZero())
+	select {
+	case <-closed:
+		t.Fatal("session closed before its write drained")
+	default:
+	}
+	session.writeMu.RUnlock()
+	locked = false
+	var closedAt time.Time
+	select {
+	case closedAt = <-closeReturned:
+	case <-time.After(2 * time.Second):
+		t.Fatal("session close did not return")
+	}
+	select {
+	case <-closed:
+	case <-time.After(2 * time.Second):
+		t.Fatal("session did not close")
+	}
+	s.connsMutex.Lock()
+	users, expires = entry.users, entry.expires
+	s.connsMutex.Unlock()
+	require.Zero(t, users)
+	require.False(t, expires.Before(closedAt.Add(client.ExchangeLifetime)))
+}
+
 func TestEndpointMessageIDsReleaseRequiresActiveEntry(t *testing.T) {
 	ids := newEndpointMessageIDs(1, false)
 	now := time.Now()
@@ -398,6 +463,16 @@ func TestInvalidEndpointMessageIDCacheConfig(t *testing.T) {
 			require.ErrorContains(t, err, tc.err)
 		})
 	}
+}
+
+func TestInvalidServerWriteTimeout(t *testing.T) {
+	s := New()
+	defer s.Stop()
+	s.cfg.WriteTimeout = 0
+	listener, err := coapNet.NewListenUDP("udp4", "127.0.0.1:0")
+	require.NoError(t, err)
+	defer listener.Close()
+	require.ErrorContains(t, s.Serve(listener), "write timeout must be positive")
 }
 
 func TestServerMessageIDsSurviveReconnectAndOtherPeers(t *testing.T) {

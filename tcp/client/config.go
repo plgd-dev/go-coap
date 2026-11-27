@@ -52,4 +52,6 @@ type Config struct {
 	DisableTCPSignalMessageCSM      bool
 	CSMExchangeTimeout              time.Duration
 	OSCOREExchangeTimeout           time.Duration
+	// WriteTimeout bounds network writes. Nonpositive values disable the timeout.
+	WriteTimeout time.Duration
 }
