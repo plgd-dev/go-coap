@@ -28,6 +28,36 @@ type GetMIDFunc = func() int32
 // DefaultMaxEndpointMessageIDs is the default number of retained peer sequences.
 const DefaultMaxEndpointMessageIDs uint32 = 4096
 
+// EndpointMessageIDOverflowMode controls admission when the MID cache is full.
+type EndpointMessageIDOverflowMode uint8
+
+const (
+	// EndpointMessageIDFailOpen admits peers with an untracked random sequence.
+	EndpointMessageIDFailOpen EndpointMessageIDOverflowMode = iota
+	// EndpointMessageIDFailClosed rejects peers until a cache entry can be evicted.
+	EndpointMessageIDFailClosed
+)
+
+// EndpointMessageIDCacheConfig controls retention of outgoing peer sequences.
+type EndpointMessageIDCacheConfig struct {
+	// MaxEntries limits retained peers. Zero disables retention when Unlimited is false.
+	MaxEntries uint32
+	// Unlimited removes the limit and requires MaxEntries to be zero.
+	// It may allow unbounded memory growth.
+	Unlimited bool
+	// OverflowMode selects behavior when no entry can be evicted.
+	// A zero limit without Unlimited requires EndpointMessageIDFailOpen.
+	OverflowMode EndpointMessageIDOverflowMode
+}
+
+// DefaultEndpointMessageIDCacheConfig returns the default bounded, fail-open configuration.
+func DefaultEndpointMessageIDCacheConfig() EndpointMessageIDCacheConfig {
+	return EndpointMessageIDCacheConfig{
+		MaxEntries:   DefaultMaxEndpointMessageIDs,
+		OverflowMode: EndpointMessageIDFailOpen,
+	}
+}
+
 var DefaultConfig = func() Config {
 	opts := Config{
 		Common: config.NewCommon[*udpClient.Conn](),
@@ -51,7 +81,7 @@ var DefaultConfig = func() Config {
 		GetMID:                              message.GetMID,
 		MTU:                                 udpClient.DefaultMTU,
 		MaxPendingMessages:                  udpClient.DefaultMaxPendingMessages,
-		MaxEndpointMessageIDs:               DefaultMaxEndpointMessageIDs,
+		EndpointMessageIDCache:              DefaultEndpointMessageIDCacheConfig(),
 	}
 	opts.Handler = func(w *responsewriter.ResponseWriter[*udpClient.Conn], r *pool.Message) {
 		if r.Type() == message.Confirmable && r.Code() >= 64 && r.Code() < 192 {
@@ -71,6 +101,8 @@ type Config struct {
 	// GetMID contributes to the initial message ID for a newly tracked peer.
 	// A random offset is added; subsequent connections reuse the peer's counter
 	// while it remains in the server's endpoint cache.
+	// It is called while the server's connection lock is held and must not block
+	// or call back into the server. Its result does not determine the initial MID.
 	GetMID                              GetMIDFunc
 	Handler                             HandlerFunc
 	OnNewConn                           OnNewConnFunc
@@ -83,13 +115,11 @@ type Config struct {
 	// MaxPendingMessages limits in-flight duplicate suppression per connection.
 	// Zero disables in-flight tracking.
 	MaxPendingMessages uint32
-	// MaxEndpointMessageIDs limits retained per-peer outgoing MID sequences.
+	// EndpointMessageIDCache configures retained per-peer outgoing MID sequences.
 	// Active peers and peers whose last connection closed less than
-	// client.ExchangeLifetime ago cannot be evicted. New peers are rejected
-	// when the cache is full and no entry can be evicted. Zero means unlimited
-	// and may allow unbounded memory growth.
+	// client.ExchangeLifetime ago cannot be evicted.
 	// MID wraparound, caller-assigned IDs and process restarts are not tracked.
-	MaxEndpointMessageIDs uint32
+	EndpointMessageIDCache EndpointMessageIDCacheConfig
 	// QBlockwiseMode is Disabled by default and supports plain UDP.
 	QBlockwiseMode   blockwise.QBlockwiseMode
 	QBlockwiseConfig blockwise.QBlockwiseConfig

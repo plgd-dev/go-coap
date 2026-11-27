@@ -104,6 +104,7 @@ func (s *Session) Close() error {
 	if s.closeSocket {
 		err = s.connection.Close()
 	}
+	// Drain in-flight writes before the server releases this peer's MID sequence.
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
 	return err

@@ -3,6 +3,7 @@ package server
 import (
 	"container/list"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/plgd-dev/go-coap/v3/pkg/sync/atomic"
@@ -22,15 +23,16 @@ type endpointMessageID struct {
 
 // Access is serialized by Server.connsMutex.
 type endpointMessageIDs struct {
-	limit   uint32
-	entries map[string]*endpointMessageID
-	byOrder map[*list.Element]*endpointMessageID
-	order   list.List
+	limit     uint32
+	unlimited bool
+	entries   map[string]*endpointMessageID
+	byOrder   map[*list.Element]*endpointMessageID
+	order     list.List
 }
 
-func newEndpointMessageIDs(limit uint32) *endpointMessageIDs {
+func newEndpointMessageIDs(limit uint32, unlimited bool) *endpointMessageIDs {
 	return &endpointMessageIDs{
-		limit: limit, entries: make(map[string]*endpointMessageID),
+		limit: limit, unlimited: unlimited, entries: make(map[string]*endpointMessageID),
 		byOrder: make(map[*list.Element]*endpointMessageID),
 	}
 }
@@ -45,7 +47,7 @@ func (m *endpointMessageIDs) acquire(endpoint string, initial func() uint32, now
 		entry.users++
 		return entry.counter, nil
 	}
-	if m.limit > 0 && int64(len(m.entries)) >= int64(m.limit) {
+	if !m.unlimited && uint64(len(m.entries)) >= uint64(m.limit) {
 		oldest := m.order.Front()
 		if oldest == nil || now.Before(m.byOrder[oldest].expires) {
 			return nil, ErrEndpointMessageIDsFull
@@ -61,12 +63,16 @@ func (m *endpointMessageIDs) acquire(endpoint string, initial func() uint32, now
 	return counter, nil
 }
 
-func (m *endpointMessageIDs) release(endpoint string, now time.Time) {
+func (m *endpointMessageIDs) release(endpoint string, now time.Time) error {
 	entry := m.entries[endpoint]
+	if entry == nil || entry.users <= 0 {
+		return fmt.Errorf("cannot release endpoint message ID sequence %q: not acquired", endpoint)
+	}
 	entry.users--
 	if entry.users == 0 {
 		entry.expires = now.Add(client.ExchangeLifetime)
 		entry.element = m.order.PushBack(nil)
 		m.byOrder[entry.element] = entry
 	}
+	return nil
 }

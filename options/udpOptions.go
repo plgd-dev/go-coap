@@ -98,26 +98,42 @@ func WithMaxPendingMessages(maxPendingMessages uint32) MaxPendingMessagesOpt {
 	return MaxPendingMessagesOpt{maxPendingMessages: maxPendingMessages}
 }
 
-// MaxEndpointMessageIDsOpt configures the UDP server's per-peer MID cache.
-type MaxEndpointMessageIDsOpt struct {
-	maxEntries uint32
+// EndpointMessageIDOverflowMode selects the UDP server MID cache overflow policy.
+type EndpointMessageIDOverflowMode = udpServer.EndpointMessageIDOverflowMode
+
+// EndpointMessageIDCacheConfig configures the UDP server MID cache.
+type EndpointMessageIDCacheConfig = udpServer.EndpointMessageIDCacheConfig
+
+const (
+	EndpointMessageIDFailOpen   = udpServer.EndpointMessageIDFailOpen
+	EndpointMessageIDFailClosed = udpServer.EndpointMessageIDFailClosed
+)
+
+// DefaultEndpointMessageIDCacheConfig returns the default bounded, fail-open configuration.
+func DefaultEndpointMessageIDCacheConfig() EndpointMessageIDCacheConfig {
+	return udpServer.DefaultEndpointMessageIDCacheConfig()
 }
 
-func (o MaxEndpointMessageIDsOpt) UDPServerApply(cfg *udpServer.Config) {
-	cfg.MaxEndpointMessageIDs = o.maxEntries
+// EndpointMessageIDCacheOpt configures the UDP server's per-peer MID cache.
+type EndpointMessageIDCacheOpt struct {
+	config EndpointMessageIDCacheConfig
 }
 
-// WithMaxEndpointMessageIDs limits the number of remote peers whose outgoing
-// Message ID sequences a UDP server retains (default: 4096). Zero means
-// unlimited, which may cause unbounded memory growth. Active peers and peers
-// whose last connection closed less than client.ExchangeLifetime ago are
-// retained. New peers are rejected if the limit is reached and no entry can be
-// evicted. This does not prevent reuse after MID wraparound, when IDs are
-// assigned by callers, or across process restarts.
-// Plain UDP peers are unauthenticated: spoofed addresses can exhaust the cache
-// and prevent new peers from connecting; an unlimited cache can exhaust memory.
-func WithMaxEndpointMessageIDs(maxEntries uint32) MaxEndpointMessageIDsOpt {
-	return MaxEndpointMessageIDsOpt{maxEntries: maxEntries}
+func (o EndpointMessageIDCacheOpt) UDPServerApply(cfg *udpServer.Config) {
+	cfg.EndpointMessageIDCache = o.config
+}
+
+// WithEndpointMessageIDCache configures UDP server peer MID retention.
+// The default is 4096 entries with fail-open overflow. MaxEntries zero disables
+// retention and requires fail-open, unless Unlimited is true. Unlimited
+// requires MaxEntries zero and may cause unbounded memory growth.
+// Active peers and peers whose last connection closed less than
+// client.ExchangeLifetime ago are retained. Fail-open admits new peers with
+// untracked sequences, potentially reusing MIDs; fail-closed rejects them.
+// Spoofed UDP addresses can trigger the overflow policy or exhaust memory.
+// MID wraparound, caller-assigned IDs and process restarts are not tracked.
+func WithEndpointMessageIDCache(config EndpointMessageIDCacheConfig) EndpointMessageIDCacheOpt {
+	return EndpointMessageIDCacheOpt{config: config}
 }
 
 // TransmissionOpt transmission options.

@@ -50,7 +50,7 @@ func TestEndpointKeyNormalizesIPv4AndPreservesIPv6Zone(t *testing.T) {
 }
 
 func TestNormalizedEndpointSharesSequenceAcrossConnections(t *testing.T) {
-	s := New(endpointMessageIDLimitOption(1))
+	s := New(endpointMessageIDCacheOption{MaxEntries: 1})
 	defer s.Stop()
 	listener, err := coapNet.NewListenUDP("udp4", "127.0.0.1:0")
 	require.NoError(t, err)

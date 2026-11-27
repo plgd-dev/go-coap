@@ -17,6 +17,7 @@ import (
 	"github.com/plgd-dev/go-coap/v3/net/responsewriter"
 	pkgMath "github.com/plgd-dev/go-coap/v3/pkg/math"
 	coapSync "github.com/plgd-dev/go-coap/v3/pkg/sync"
+	"github.com/plgd-dev/go-coap/v3/pkg/sync/atomic"
 	"github.com/plgd-dev/go-coap/v3/udp/client"
 	"github.com/plgd-dev/go-coap/v3/udp/coder"
 )
@@ -30,9 +31,10 @@ type Server struct {
 	doneCancel        context.CancelFunc
 	cancel            context.CancelFunc
 
-	connsMutex sync.Mutex
-	conns      map[string]*client.Conn
-	messageIDs *endpointMessageIDs
+	connsMutex             sync.Mutex
+	conns                  map[string]*client.Conn
+	messageIDs             *endpointMessageIDs
+	nextMIDOverflowWarning time.Time
 
 	listenMutex sync.Mutex
 	listen      *coapNet.UDPConn
@@ -95,7 +97,7 @@ func New(opt ...Option) *Server {
 		doneCtx:           doneCtx,
 		doneCancel:        doneCancel,
 		conns:             make(map[string]*client.Conn),
-		messageIDs:        newEndpointMessageIDs(cfg.MaxEndpointMessageIDs),
+		messageIDs:        newEndpointMessageIDs(cfg.EndpointMessageIDCache.MaxEntries, cfg.EndpointMessageIDCache.Unlimited),
 
 		cfg: &cfg,
 	}
@@ -245,13 +247,7 @@ func (s *Server) handleProcessError(l *coapNet.UDPConn, cc *client.Conn, cm *coa
 }
 
 func (s *Server) Serve(l *coapNet.UDPConn) error {
-	if s.cfg.BlockwiseSZX > blockwise.SZX1024 {
-		return errors.New("invalid blockwiseSZX")
-	}
-	if _, err := s.cfg.QBlockwiseConfig.Resolve(); err != nil {
-		return err
-	}
-	if err := blockwise.ValidateQBlockwiseConfig(s.cfg.QBlockwiseMode, s.cfg.BlockwiseEnable); err != nil {
+	if err := s.validateConfig(); err != nil {
 		return err
 	}
 
@@ -302,7 +298,7 @@ func (s *Server) Serve(l *coapNet.UDPConn) error {
 
 		cc, created, err := s.getConn(l, packet.raddr, laddr, true)
 		if err != nil {
-			s.cfg.Errors(fmt.Errorf("%v: cannot get client connection: %w", packet.raddr, err))
+			s.reportGetConnError(packet.raddr, err)
 			continue
 		}
 		err = cc.Process(packet.cm, packet.buf)
@@ -314,6 +310,49 @@ func (s *Server) Serve(l *coapNet.UDPConn) error {
 			continue
 		}
 	}
+}
+
+func (s *Server) validateConfig() error {
+	if err := s.validateEndpointMessageIDCache(); err != nil {
+		return err
+	}
+	if s.cfg.BlockwiseSZX > blockwise.SZX1024 {
+		return errors.New("invalid blockwiseSZX")
+	}
+	if _, err := s.cfg.QBlockwiseConfig.Resolve(); err != nil {
+		return err
+	}
+	return blockwise.ValidateQBlockwiseConfig(s.cfg.QBlockwiseMode, s.cfg.BlockwiseEnable)
+}
+
+func (s *Server) reportGetConnError(addr *net.UDPAddr, err error) {
+	if !errors.Is(err, ErrEndpointMessageIDsFull) || s.shouldReportMIDOverflow(time.Now()) {
+		s.cfg.Errors(fmt.Errorf("%v: cannot get client connection: %w", addr, err))
+	}
+}
+
+func (s *Server) validateEndpointMessageIDCache() error {
+	cfg := s.cfg.EndpointMessageIDCache
+	if cfg.OverflowMode != EndpointMessageIDFailOpen && cfg.OverflowMode != EndpointMessageIDFailClosed {
+		return fmt.Errorf("invalid endpoint message ID overflow mode: %d", cfg.OverflowMode)
+	}
+	if cfg.Unlimited && cfg.MaxEntries != 0 {
+		return errors.New("unlimited endpoint message ID cache requires MaxEntries to be zero")
+	}
+	if !cfg.Unlimited && cfg.MaxEntries == 0 && cfg.OverflowMode == EndpointMessageIDFailClosed {
+		return errors.New("zero endpoint message ID cache capacity requires fail-open overflow mode")
+	}
+	return nil
+}
+
+func (s *Server) shouldReportMIDOverflow(now time.Time) bool {
+	s.connsMutex.Lock()
+	defer s.connsMutex.Unlock()
+	if now.Before(s.nextMIDOverflowWarning) {
+		return false
+	}
+	s.nextMIDOverflowWarning = now.Add(time.Minute)
+	return true
 }
 
 func (s *Server) getListener() *coapNet.UDPConn {
@@ -449,9 +488,38 @@ func toWildcardLocalAddr(laddr *net.UDPAddr) *net.UDPAddr {
 	return &wildcard
 }
 
+// Caller holds connsMutex.
+func (s *Server) acquireEndpointMessageID(endpoint string) (*atomic.Uint32, bool, bool, error) {
+	if err := s.validateEndpointMessageIDCache(); err != nil {
+		return nil, false, false, err
+	}
+	initial := func() uint32 {
+		return pkgMath.CastTo[uint32](s.cfg.GetMID() + message.RandMID() - 0xffff/2)
+	}
+	now := time.Now()
+	counter, err := s.messageIDs.acquire(endpoint, initial, now)
+	if err == nil {
+		return counter, true, false, nil
+	}
+	if !errors.Is(err, ErrEndpointMessageIDsFull) || s.cfg.EndpointMessageIDCache.OverflowMode == EndpointMessageIDFailClosed {
+		return nil, false, false, fmt.Errorf("cannot track endpoint %s: %w", endpoint, err)
+	}
+	warn := !now.Before(s.nextMIDOverflowWarning)
+	if warn {
+		s.nextMIDOverflowWarning = now.Add(time.Minute)
+	}
+	return atomic.NewUint32(initial()), false, warn, nil
+}
+
 func (s *Server) getOrCreateConn(udpConn *coapNet.UDPConn, raddr, laddr *net.UDPAddr) (cc *client.Conn, created bool, err error) {
 	s.connsMutex.Lock()
-	defer s.connsMutex.Unlock()
+	warnOverflow := false
+	defer func() {
+		s.connsMutex.Unlock()
+		if warnOverflow {
+			s.cfg.Errors(fmt.Errorf("%w: admitting peers with untracked message ID sequences", ErrEndpointMessageIDsFull))
+		}
+	}()
 	key := getConnKey(raddr, laddr)
 	cc = s.conns[key]
 
@@ -470,12 +538,11 @@ func (s *Server) getOrCreateConn(udpConn *coapNet.UDPConn, raddr, laddr *net.UDP
 	}
 
 	endpoint := getEndpointKey(raddr)
-	counter, err := s.messageIDs.acquire(endpoint, func() uint32 {
-		return pkgMath.CastTo[uint32](s.cfg.GetMID() + message.RandMID() - 0xffff/2)
-	}, time.Now())
+	counter, tracked, warn, err := s.acquireEndpointMessageID(endpoint)
 	if err != nil {
-		return nil, false, fmt.Errorf("cannot track endpoint %s: %w", endpoint, err)
+		return nil, false, err
 	}
+	warnOverflow = warn
 
 	createBlockWise := func(*client.Conn) *blockwise.BlockWise[*client.Conn] {
 		return nil
@@ -565,10 +632,16 @@ func (s *Server) getOrCreateConn(udpConn *coapNet.UDPConn, raddr, laddr *net.UDP
 	})
 	cc.AddOnClose(func() {
 		s.connsMutex.Lock()
-		defer s.connsMutex.Unlock()
-		s.messageIDs.release(endpoint, time.Now())
+		var releaseErr error
+		if tracked {
+			releaseErr = s.messageIDs.release(endpoint, time.Now())
+		}
 		if cc == s.conns[key] {
 			delete(s.conns, key)
+		}
+		s.connsMutex.Unlock()
+		if releaseErr != nil {
+			s.cfg.Errors(releaseErr)
 		}
 	})
 	s.conns[key] = cc
