@@ -882,6 +882,7 @@ func (c *Context) unprotectResponse(response message.Message, exchange Exchange)
 	inner.MessageID = response.MessageID
 	outerOptions = removeObserveOption(outerOptions)
 	outerOptions = removeOption(outerOptions, message.Echo)
+	outerOptions = removeOption(outerOptions, message.EDHOC)
 	if inner.Options.HasOption(message.MaxAge) {
 		outerOptions = removeOption(outerOptions, message.MaxAge)
 	}

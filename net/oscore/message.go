@@ -38,7 +38,9 @@ var (
 func ClassifyOption(id message.OptionID) OptionClass {
 	switch id {
 	// Hop-Limit needs to be available to proxies to decrement it (RFC 8768).
-	case message.URIHost, message.URIPort, message.OSCORE, message.ProxyURI, message.ProxyScheme, message.HopLimit:
+	// EDHOC signals a combined EDHOC + OSCORE request (RFC 9668).
+	case message.URIHost, message.URIPort, message.OSCORE, message.ProxyURI, message.ProxyScheme, message.HopLimit,
+		message.EDHOC:
 		return ClassU
 	// Echo may be Inner or Outer, with independent values (RFC 9175).
 	case message.Echo, message.Observe, message.MaxAge, message.Block1, message.Block2, message.Size1, message.Size2,

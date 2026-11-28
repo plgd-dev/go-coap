@@ -117,6 +117,29 @@ same Context instance that created the supplied Exchange. An Exchange remains
 usable for an in-flight response after that Context is removed from the
 Processor.
 
+`ProcessorConfig.IncomingRequestHook` runs for each incoming OSCORE-protected
+request before the context lookup, so a key establishment mechanism outside
+this package can create the context from the request itself, such as the
+RFC 9668 EDHOC + OSCORE request. The hook receives the Processor, adds any new
+context with `AddContext`, and returns the request to unprotect, which may be
+modified; its options are a copy owned by the hook. The context is then looked
+up by the returned request's OSCORE option. The hook runs only for requests
+whose OSCORE option is valid and carries a KID. Hook errors are returned from
+`ProcessIncomingRequest` and classified by `ProcessingErrorCode`;
+`ErrInvalidContext` and `ErrInvalidReplayState`, such as from `AddContext`, are
+treated as internal processing errors. The EDHOC
+option (21) is Class U. A protected request that carries it more than once, or
+still carries it after the hook, fails with `ErrUnprocessedEDHOCOption`, which
+`ProcessingErrorCode` maps to 4.02 Bad Option. With a hook and a plaintext
+policy other than `PlaintextOnly`, a request that carries it without the OSCORE
+option fails with `ErrEDHOCWithoutOSCORE` (4.00 Bad Request), which TCP and,
+for Confirmable requests, UDP send when OSCORE error responses are enabled.
+Otherwise the request is handled as without a hook: the option is not in
+`message.CoapOptionDefs`, so under `PlaintextAllowed` a plaintext request
+carrying it is rejected as an unrecognized critical option. An outer EDHOC
+option on a protected response is discarded. With a hook, `PlaintextDisabled`
+does not require pre-established contexts.
+
 Low-level primitives such as `SealResponseWithRequestNonce`,
 `OpenResponseForExchange`, `BuildAAD`, and `EncodeInner` remain exported for
 advanced use. Encryption/decryption primitives do not provide the same
@@ -602,7 +625,9 @@ timeouts, and response-size limits.
   UDP integration tests cover protected Q-Block2 Observe fragment loss,
   recovery, reordering, and duplication.
 - Pre-established unicast contexts only. Group OSCORE, automatic context
-  establishment (including EDHOC), and multicast OSCORE are unsupported. The
+  establishment (including EDHOC), and multicast OSCORE are unsupported;
+  `ProcessorConfig.IncomingRequestHook` lets an external mechanism establish
+  contexts from incoming requests. The
   `net/oscore/proxy` package provides only the minimal forwarding scope above;
   the surrounding UDP/DTLS Blockwise transport handles Outer Blockwise
   fragments. A `RoundTripper` forwarding large envelopes must likewise use a

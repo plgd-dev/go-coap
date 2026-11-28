@@ -19,6 +19,8 @@ var (
 	ErrOSCOREDisabled            = errors.New("OSCORE-protected CoAP is not permitted")
 	ErrReplayRecoveryRequired    = errors.New("OSCORE replay recovery Echo is required")
 	ErrReplayRecoveryRateLimited = errors.New("OSCORE replay recovery challenge rate limited")
+	ErrUnprocessedEDHOCOption    = errors.New("EDHOC option was not processed")
+	ErrEDHOCWithoutOSCORE        = errors.New("EDHOC option without OSCORE option")
 )
 
 type replayRecoveryRequiredError struct {
@@ -111,8 +113,10 @@ func ProcessingErrorCode(err error) codes.Code {
 		return codes.Unauthorized
 	case errors.Is(err, ErrReplayRecoveryRequired):
 		return codes.Unauthorized
-	case errors.Is(err, ErrInvalidOSCOREOption):
+	case errors.Is(err, ErrInvalidOSCOREOption), errors.Is(err, ErrUnprocessedEDHOCOption):
 		return codes.BadOption
+	case errors.Is(err, ErrEDHOCWithoutOSCORE):
+		return codes.BadRequest
 	default:
 		return codes.BadRequest
 	}
@@ -162,6 +166,29 @@ func IsUnprotectedProxyErrorCode(code codes.Code) bool {
 // treated as ErrNoSecurityContext.
 type OutgoingContextSelector func(request message.Message, contexts []*Context) (*Context, error)
 
+// IncomingRequestHook runs for each incoming OSCORE-protected request whose
+// OSCORE option is valid and carries a KID, before the Processor looks up its
+// security context. It allows a mechanism such as
+// the RFC 9668 EDHOC + OSCORE request to establish the context from data
+// carried in the request itself, by adding it with processor.AddContext. The
+// hook must be safe for concurrent use.
+//
+// The hook returns the request to unprotect, which may be a modified copy of
+// the input; its options are a copy owned by the hook. The context is then
+// looked up by the returned request's OSCORE option. A returned error stops
+// processing and is returned by ProcessIncomingRequest; wrap
+// ErrInternalProcessing for local faults. As for UnprotectRequest errors,
+// ErrInvalidContext and ErrInvalidReplayState, such as from AddContext, are
+// treated as internal processing errors. A request that carries the EDHOC
+// option more than once, or still carries it after the hook, is rejected with
+// ErrUnprocessedEDHOCOption. While a hook is set and the plaintext policy is not
+// PlaintextOnly, a request that carries the EDHOC option without the OSCORE
+// option is rejected with ErrEDHOCWithoutOSCORE (4.00 Bad Request), which
+// also wraps ErrPlaintextDisabled under PlaintextDisabled. Without OSCORE
+// error responses, transports handle such a request as they would without a
+// hook.
+type IncomingRequestHook func(processor *Processor, request message.Message) (message.Message, error)
+
 // PlaintextPolicy defines which incoming message protection modes a Processor
 // accepts. The zero value rejects plaintext.
 type PlaintextPolicy uint8
@@ -185,6 +212,10 @@ type ProcessorConfig struct {
 	// PlaintextPolicy selects the accepted incoming message protection modes.
 	// Its zero value is PlaintextDisabled.
 	PlaintextPolicy PlaintextPolicy
+	// IncomingRequestHook optionally runs before the context lookup for
+	// incoming OSCORE-protected requests. With a hook, PlaintextDisabled
+	// does not require pre-established contexts.
+	IncomingRequestHook IncomingRequestHook
 }
 
 type contextKey struct {
@@ -205,6 +236,7 @@ type Processor struct {
 	outgoingContexts []*Context
 	outgoingSelector OutgoingContextSelector
 	plaintextPolicy  PlaintextPolicy
+	incomingHook     IncomingRequestHook
 }
 
 // NewProcessor validates the configured contexts and plaintext policy.
@@ -221,6 +253,7 @@ func NewProcessor(cfg ProcessorConfig) (*Processor, error) {
 		senderContexts:      make(map[[32]byte]*senderSequenceState, len(cfg.Contexts)),
 		outgoingSelector:    cfg.OutgoingContextSelector,
 		plaintextPolicy:     policy,
+		incomingHook:        cfg.IncomingRequestHook,
 	}
 	for _, context := range cfg.Contexts {
 		if context == nil {
@@ -239,7 +272,7 @@ func NewProcessor(cfg ProcessorConfig) (*Processor, error) {
 		processor.senderContexts[context.senderContextFingerprint] = context.senderSequence
 		processor.outgoingContexts = append(processor.outgoingContexts, context)
 	}
-	if policy == PlaintextDisabled && len(cfg.Contexts) == 0 {
+	if policy == PlaintextDisabled && len(cfg.Contexts) == 0 && cfg.IncomingRequestHook == nil {
 		return nil, fmt.Errorf("%w: required OSCORE has no security contexts", ErrInvalidContext)
 	}
 	return processor, nil
@@ -471,12 +504,19 @@ func containsContext(contexts []*Context, selected *Context) bool {
 }
 
 // ProcessIncomingRequest returns plaintext requests unchanged only when the
-// configured policy allows them. Once an OSCORE option is present, all parse,
+// configured policy allows them and, with an IncomingRequestHook, they do not
+// carry the EDHOC option. Once an OSCORE option is present, all parse,
 // context, replay, and authentication failures are returned without fallback.
 // For protected requests, the returned context and Exchange must be retained
 // to protect any corresponding response.
 func (p *Processor) ProcessIncomingRequest(request message.Message) (message.Message, *Context, Exchange, error) {
 	if !request.Options.HasOption(message.OSCORE) {
+		if p.incomingHook != nil && p.plaintextPolicy != PlaintextOnly && request.Options.HasOption(message.EDHOC) {
+			if p.plaintextPolicy == PlaintextDisabled {
+				return message.Message{}, nil, Exchange{}, fmt.Errorf("%w: %w", ErrEDHOCWithoutOSCORE, ErrPlaintextDisabled)
+			}
+			return message.Message{}, nil, Exchange{}, ErrEDHOCWithoutOSCORE
+		}
 		switch p.plaintextPolicy {
 		case PlaintextDisabled:
 			return message.Message{}, nil, Exchange{}, ErrPlaintextDisabled
@@ -490,19 +530,52 @@ func (p *Processor) ProcessIncomingRequest(request message.Message) (message.Mes
 	if p.plaintextPolicy == PlaintextOnly {
 		return message.Message{}, nil, Exchange{}, ErrOSCOREDisabled
 	}
+	request, err := p.runIncomingHook(request)
+	if err != nil {
+		return message.Message{}, nil, Exchange{}, err
+	}
 	context, err := p.contextForRequest(request.Options)
 	if err != nil {
 		return message.Message{}, nil, Exchange{}, err
 	}
 	plaintext, exchange, err := context.UnprotectRequest(request)
 	if err != nil {
-		if !IsInternalProcessingError(err) &&
-			(errors.Is(err, ErrInvalidContext) || errors.Is(err, ErrInvalidReplayState)) {
-			err = fmt.Errorf("%w: %w", ErrInternalProcessing, err)
-		}
-		return message.Message{}, nil, Exchange{}, err
+		return message.Message{}, nil, Exchange{}, classifyLocalFault(err)
 	}
 	return plaintext, context, exchange, nil
+}
+
+func classifyLocalFault(err error) error {
+	if !IsInternalProcessingError(err) &&
+		(errors.Is(err, ErrInvalidContext) || errors.Is(err, ErrInvalidReplayState)) {
+		return fmt.Errorf("%w: %w", ErrInternalProcessing, err)
+	}
+	return err
+}
+
+func (p *Processor) runIncomingHook(request message.Message) (message.Message, error) {
+	if start, end, err := request.Options.Find(message.EDHOC); err == nil && end-start > 1 {
+		return message.Message{}, fmt.Errorf("%w: repeated EDHOC option", ErrUnprocessedEDHOCOption)
+	}
+	if p.incomingHook != nil {
+		option, _, err := parseOSCOREOuter(request.Options)
+		if err != nil {
+			return message.Message{}, err
+		}
+		if !option.SenderIDSet {
+			return message.Message{}, fmt.Errorf("%w: request has no KID", ErrInvalidOSCOREMessage)
+		}
+		request.Options = CloneOptions(request.Options)
+		if request, err = p.incomingHook(p, request); err != nil {
+			return message.Message{}, classifyLocalFault(err)
+		}
+	}
+	for _, option := range request.Options {
+		if option.ID == message.EDHOC {
+			return message.Message{}, ErrUnprocessedEDHOCOption
+		}
+	}
+	return request, nil
 }
 
 // IsInternalProcessingError reports whether processing failed because of a

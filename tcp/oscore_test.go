@@ -1099,3 +1099,71 @@ func newTCPOSCOREContextPair(t *testing.T, clientID, serverID string) (*oscore.C
 	require.NoError(t, err)
 	return clientContext, serverContext
 }
+
+func TestOSCORETCPEDHOCWithoutOSCORE(t *testing.T) {
+	for _, test := range []struct {
+		policy         oscore.PlaintextPolicy
+		errorResponses bool
+		want           codes.Code // codes.Empty: no response
+	}{
+		{oscore.PlaintextAllowed, false, codes.BadOption},
+		{oscore.PlaintextAllowed, true, codes.BadRequest},
+		{oscore.PlaintextDisabled, false, codes.Empty},
+		{oscore.PlaintextDisabled, true, codes.BadRequest},
+	} {
+		errorResponses := test.errorResponses
+		t.Run(fmt.Sprintf("policy %d error responses %v", test.policy, errorResponses), func(t *testing.T) {
+			processor, err := oscore.NewProcessor(oscore.ProcessorConfig{
+				PlaintextPolicy: test.policy,
+				IncomingRequestHook: func(_ *oscore.Processor, request message.Message) (message.Message, error) {
+					return request, nil
+				},
+			})
+			require.NoError(t, err)
+			listener, err := coapNet.NewTCPListener("tcp", "127.0.0.1:0")
+			require.NoError(t, err)
+			var handled atomic.Int32
+			serverOptions := []tcpserver.Option{
+				options.WithOSCORE(processor),
+				options.WithHandlerFunc(func(*responsewriter.ResponseWriter[*client.Conn], *pool.Message) {
+					handled.Add(1)
+				}),
+			}
+			if errorResponses {
+				serverOptions = append(serverOptions, options.WithOSCOREErrorResponses())
+			}
+			server := tcp.NewServer(serverOptions...)
+			serverDone := make(chan error, 1)
+			go func() { serverDone <- server.Serve(listener) }()
+			defer func() {
+				server.Stop()
+				require.NoError(t, <-serverDone)
+			}()
+
+			cc, err := tcp.Dial(listener.Addr().String())
+			require.NoError(t, err)
+			defer func() { require.NoError(t, cc.Close()) }()
+			timeout := 5 * time.Second
+			if test.want == codes.Empty {
+				timeout = 500 * time.Millisecond
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), timeout)
+			defer cancel()
+			request := cc.AcquireMessage(ctx)
+			defer cc.ReleaseMessage(request)
+			request.SetCode(codes.POST)
+			request.SetToken(message.Token{0x22})
+			request.ResetOptionsTo(message.Options{{ID: message.EDHOC}})
+			request.SetBody(bytes.NewReader([]byte{0x43, 0x01, 0x02, 0x03}))
+			response, err := cc.Do(request)
+			require.Zero(t, handled.Load())
+			if test.want == codes.Empty {
+				require.ErrorIs(t, err, context.DeadlineExceeded)
+				return
+			}
+			require.NoError(t, err)
+			defer cc.ReleaseMessage(response)
+			require.Equal(t, test.want, response.Code())
+		})
+	}
+}

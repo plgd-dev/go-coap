@@ -493,15 +493,9 @@ func (cc *Conn) processIncomingOSCORERequest(req *pool.Message, datagram []byte)
 	}
 	plaintext, securityContext, exchange, err := cc.oscoreProcessor.ProcessIncomingRequest(outer)
 	if err != nil {
-		responded, responseErr := cc.respondToOSCOREProcessingError(req, err)
-		if responded {
-			_, isEchoChallenge := oscore.ReplayRecoveryEcho(err)
-			processed = responseErr == nil && isEchoChallenge &&
-				req.Type() == message.Confirmable
-			cc.errors(fmt.Errorf("cannot process incoming OSCORE request: %w", err))
-			return true, responseErr
-		}
-		return false, err
+		var handled bool
+		handled, processed, err = cc.handleIncomingOSCORERequestError(req, err)
+		return handled, err
 	}
 	requestInfo := oscore.RequestInfo{}
 	if securityContext != nil {
@@ -520,6 +514,23 @@ func (cc *Conn) processIncomingOSCORERequest(req *pool.Message, datagram []byte)
 	req.SetContext(oscore.ContextWithRequestInfo(req.Context(), requestInfo))
 	setMessagePreservingControlMessage(req, plaintext)
 	return false, nil
+}
+
+// handleIncomingOSCORERequestError reports whether the request was answered,
+// and whether it counts as processed for retransmissions.
+func (cc *Conn) handleIncomingOSCORERequestError(req *pool.Message, processingErr error) (bool, bool, error) {
+	if errors.Is(processingErr, oscore.ErrEDHOCWithoutOSCORE) && !errors.Is(processingErr, oscore.ErrPlaintextDisabled) &&
+		!cc.oscoreErrorResponses {
+		return false, false, nil
+	}
+	responded, responseErr := cc.respondToOSCOREProcessingError(req, processingErr)
+	if !responded {
+		return false, false, processingErr
+	}
+	_, isEchoChallenge := oscore.ReplayRecoveryEcho(processingErr)
+	processed := responseErr == nil && isEchoChallenge && req.Type() == message.Confirmable
+	cc.errors(fmt.Errorf("cannot process incoming OSCORE request: %w", processingErr))
+	return true, processed, responseErr
 }
 
 func (cc *Conn) beginOSCORERequest(req *pool.Message, digest [sha256.Size]byte) (bool, error) {
@@ -598,7 +609,7 @@ func shouldRespondToOSCOREProcessingError(
 	requiresEchoRecovery bool,
 ) bool {
 	if oscore.IsInternalProcessingError(processingErr) ||
-		!req.HasOption(message.OSCORE) ||
+		!req.HasOption(message.OSCORE) && !errors.Is(processingErr, oscore.ErrEDHOCWithoutOSCORE) ||
 		!sendProcessingErrors && !requiresEchoRecovery {
 		return false
 	}

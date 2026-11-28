@@ -328,3 +328,72 @@ func validProtectedProxyRequest(t *testing.T) message.Message {
 	}
 	return request
 }
+
+func TestForwarderRelaysEDHOCCombinedRequest(t *testing.T) {
+	secret := []byte("0123456789abcdef")
+	clientContext, err := oscore.NewContext(oscore.ContextConfig{
+		UnsafeVolatileSenderSequence: true,
+		AcceptReplayStateLoss:        true,
+		MasterSecret:                 secret,
+		SenderID:                     []byte{0},
+		RecipientID:                  []byte{1},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	originContext, err := oscore.NewContext(oscore.ContextConfig{
+		UnsafeVolatileSenderSequence: true,
+		AcceptReplayStateLoss:        true,
+		MasterSecret:                 secret,
+		SenderID:                     []byte{1},
+		RecipientID:                  []byte{0},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request, exchange, err := clientContext.ProtectRequest(message.Message{
+		Code: codes.GET,
+		Options: message.Options{{
+			ID:    message.ProxyURI,
+			Value: []byte("coap://" + testOriginHost + ":5683"),
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	message3 := []byte{0x43, 0x01, 0x02, 0x03}
+	request.Options = request.Options.Add(message.Option{ID: message.EDHOC})
+	request.Payload = append(append([]byte(nil), message3...), request.Payload...)
+	combinedPayload := append([]byte(nil), request.Payload...)
+	forwarder := Forwarder{
+		RoundTripper: RoundTripperFunc(func(_ context.Context, _ oscore.ProxyTarget, forwarded message.Message) (message.Message, error) {
+			if !forwarded.Options.HasOption(message.EDHOC) {
+				return message.Message{}, errors.New("forwarder removed the EDHOC option")
+			}
+			if !bytes.Equal(forwarded.Payload, combinedPayload) {
+				return message.Message{}, errors.New("forwarder changed the EDHOC + OSCORE payload")
+			}
+			forwarded.Options = oscore.CloneOptions(forwarded.Options).Remove(message.EDHOC)
+			forwarded.Payload = forwarded.Payload[len(message3):]
+			_, originExchange, unprotectErr := originContext.UnprotectRequest(forwarded)
+			if unprotectErr != nil {
+				return message.Message{}, unprotectErr
+			}
+			return originContext.ProtectResponse(message.Message{Code: codes.Content}, originExchange)
+		}),
+		AllowTarget: func(_ context.Context, target oscore.ProxyTarget) bool {
+			return target.Host == testOriginHost
+		},
+	}
+	response, err := forwarder.Forward(context.Background(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	opened, err := clientContext.UnprotectResponse(response, exchange)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if opened.Code != codes.Content {
+		t.Fatalf("opened response = %+v", opened)
+	}
+}

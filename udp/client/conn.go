@@ -1867,7 +1867,7 @@ func (cc *Conn) processUnknownCriticalOptions(req *pool.Message) (bool, error) {
 	if (cc.oscoreProxy || cc.oscoreOuterBlockwise) && req.HasOption(message.OSCORE) {
 		filtered := unknownCriticalOpts[:0]
 		for _, optionID := range unknownCriticalOpts {
-			if optionID != message.OSCORE {
+			if optionID != message.OSCORE && optionID != message.EDHOC {
 				filtered = append(filtered, optionID)
 			}
 		}
